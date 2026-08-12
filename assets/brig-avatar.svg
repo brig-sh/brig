@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="brig">
+  <title>brig</title>
+  <rect width="256" height="256" fill="#0E2233"/>
+  <defs><clipPath id="brig-av-in"><circle cx="128" cy="128" r="70"/></clipPath></defs>
+  <circle cx="128" cy="128" r="72" fill="#071521"/>
+  <g clip-path="url(#brig-av-in)" fill="#E7A33E">
+  <rect x="73" y="40" width="22" height="176" rx="11"/>
+  <rect x="117" y="40" width="22" height="176" rx="11"/>
+  <rect x="161" y="40" width="22" height="176" rx="11"/>
+  </g>
+  <circle cx="128" cy="128" r="84" fill="none" stroke="#F2EFE6" stroke-width="22"/>
+  <g fill="#0E2233">
+  <circle cx="212" cy="128" r="6"/>
+  <circle cx="187.396" cy="187.396" r="6"/>
+  <circle cx="128" cy="212" r="6"/>
+  <circle cx="68.6036" cy="187.396" r="6"/>
+  <circle cx="44" cy="128" r="6"/>
+  <circle cx="68.6036" cy="68.6036" r="6"/>
+  <circle cx="128" cy="44" r="6"/>
+  <circle cx="187.396" cy="68.6036" r="6"/>
+  </g>
+</svg>

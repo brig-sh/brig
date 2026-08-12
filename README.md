@@ -1,4 +1,9 @@
-# brig
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brig-lockup-on-dark.svg">
+    <img alt="brig" src="assets/brig-lockup-on-light.svg" width="300">
+  </picture>
+</p>
 
 **Run a coding agent in a sandbox it cannot escape, with the credentials it
 needs and none of the ones it does not.**
