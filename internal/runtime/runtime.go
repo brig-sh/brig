@@ -140,13 +140,23 @@ func splitEnv(flag string, vars []Var) (args []string, env []string) {
 // telemetryEnv attributes events to brig and suppresses the wrapper's own
 // plumbing -- reachability probes, ps lookups, cleanup -- so one brig command
 // counts once. Only the operations a user asked for are counted. DO_NOT_TRACK
-// and URUNC_TELEMETRY_DISABLED pass through untouched and always win.
+// and the runtime's own opt-out pass through untouched and always win.
+//
+// Both spellings are set. hull reads HULL_TELEMETRY_*; the urunc-macos builds
+// brig still falls back to read URUNC_TELEMETRY_*, and a variable the runtime
+// does not know is simply ignored. Drop the URUNC_ pair when that fallback
+// goes.
 func telemetryEnv(counted bool) []string {
-	env := []string{"URUNC_TELEMETRY_PRODUCT=brig"}
+	suppress := "1"
 	if counted {
-		return append(env, "URUNC_TELEMETRY_SUPPRESS=")
+		suppress = ""
 	}
-	return append(env, "URUNC_TELEMETRY_SUPPRESS=1")
+	return []string{
+		"HULL_TELEMETRY_PRODUCT=brig",
+		"HULL_TELEMETRY_SUPPRESS=" + suppress,
+		"URUNC_TELEMETRY_PRODUCT=brig",
+		"URUNC_TELEMETRY_SUPPRESS=" + suppress,
+	}
 }
 
 // mergeEnv layers additions onto the current environment, last one winning.

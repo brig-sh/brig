@@ -47,12 +47,24 @@ func TestSplitEnvArgvEscapeHatch(t *testing.T) {
 	}
 }
 
+// Both spellings travel: hull reads HULL_TELEMETRY_*, and the urunc-macos
+// builds brig falls back to read URUNC_TELEMETRY_*. Getting this wrong does
+// not break a run, it just misattributes or double-counts, which is exactly
+// the kind of thing nobody notices for months.
 func TestTelemetrySuppressesPlumbing(t *testing.T) {
-	if got := telemetryEnv(false); got[1] != "URUNC_TELEMETRY_SUPPRESS=1" {
-		t.Errorf("plumbing call is counted: %v", got)
-	}
-	if got := telemetryEnv(true); got[1] != "URUNC_TELEMETRY_SUPPRESS=" {
-		t.Errorf("user action is suppressed: %v", got)
+	for _, prefix := range []string{"HULL", "URUNC"} {
+		plumbing := strings.Join(telemetryEnv(false), " ")
+		if !strings.Contains(plumbing, prefix+"_TELEMETRY_SUPPRESS=1") {
+			t.Errorf("plumbing call is counted for %s: %v", prefix, plumbing)
+		}
+		if !strings.Contains(plumbing, prefix+"_TELEMETRY_PRODUCT=brig") {
+			t.Errorf("%s attribution missing: %v", prefix, plumbing)
+		}
+		counted := strings.Join(telemetryEnv(true), " ")
+		if !strings.Contains(counted, prefix+"_TELEMETRY_SUPPRESS= ") &&
+			!strings.HasSuffix(counted, prefix+"_TELEMETRY_SUPPRESS=") {
+			t.Errorf("user action is suppressed for %s: %v", prefix, counted)
+		}
 	}
 }
 

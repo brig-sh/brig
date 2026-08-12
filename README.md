@@ -32,21 +32,23 @@ it, guest images cannot be verified and brig says so on every boot.
 
 ## macOS
 
-On macOS the sandbox is a microVM, booted by `hull`. hull is not published
-yet. It ships today as `urunc-macos`, from a private tap:
+On macOS the sandbox is a microVM, booted by
+[hull](https://github.com/brig-sh/hull) over Virtualization.framework. The
+Homebrew cask depends on it, so `brew install --cask brig` brings it along.
+
+Building both from source works too:
 
 ```bash
-brew tap nofireai/nofire git@github.com:NOFireAI/homebrew-nofire.git
-brew install urunc-macos
+git clone https://github.com/brig-sh/hull && cd hull && make build
 ```
 
-That is the one piece of brig's macOS path you cannot get publicly at the
-moment. It is going open source, just not yet, and the Homebrew cask will
-depend on it directly once it is.
+hull ships a `vz-runner` helper that needs the
+`com.apple.security.virtualization` entitlement, so a from-source build has to
+be signed with a Developer ID certificate to boot a VM. The released build is
+signed, notarized and stapled, which is the path to prefer.
 
-On Linux there is nothing equivalent to wait for. brig drives `nerdctl` over
-containerd, and the guest images are public, so the Linux path has no private
-dependencies at all.
+On Linux there is no equivalent piece. brig drives `nerdctl` over containerd,
+so the Linux path is `brig` and nothing else.
 
 ## What brig is
 
@@ -390,7 +392,7 @@ radius (one workspace, a fine-grained token) rather than a sentinel value.
 | `BRIG_RUNTIME_BIN` | first of `hull`, `urunc-macos` / `nerdctl`, `docker` on PATH | Path to that binary |
 | `BRIG_HYPERVISOR` | `vz` | Hypervisor backend, macOS only |
 | `BRIG_ENV_ARGV` | `0` | Put forwarded values back on the runtime's command line, where `ps` can read them. For a runtime build that does not accept a bare `--env KEY`. Opt-in, and it costs you the `ps` guarantee |
-| `DO_NOT_TRACK`, `URUNC_TELEMETRY_DISABLED` | | Passed through to the runtime untouched, and always win |
+| `DO_NOT_TRACK`, `HULL_TELEMETRY_DISABLED` | | Passed through to the runtime untouched, and always win. `URUNC_TELEMETRY_DISABLED` still works on urunc-macos builds |
 
 ## Coming from the Homebrew wrappers
 

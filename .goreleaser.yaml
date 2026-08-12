@@ -121,17 +121,13 @@ homebrew_casks:
       # Guest-image signature verification degrades to a warning without it,
       # so ship it rather than let the check quietly do nothing.
       - formula: cosign
+      # The microVM runtime brig drives on macOS. It lives in the same public
+      # tap as this cask, so `brew install --cask brig` brings it along.
       #
-      # hull, the microVM runtime, is NOT listed here yet, and its absence is
-      # the reason this comment exists. It ships today as
-      # nofireai/nofire/urunc-macos, from a private tap: depending on it would
-      # fail every install by anyone outside the org, at tap time, before brig
-      # itself is even fetched. The caveat below tells macOS users where to get
-      # it instead.
-      #
-      # RESTORE `- formula: nofireai/nofire/urunc-macos` (or the hull formula
-      # it becomes) once that tap is public. Linux needs nothing from here:
-      # nerdctl and the guest images are already public.
+      # Both casks land in the tap on their first stable release: brig's from
+      # this config, hull's from its own sign-and-notarize workflow. Until
+      # then neither is published, so nothing here is half-wired.
+      - cask: brig-sh/brig/hull
     hooks:
       post:
         install: |
@@ -149,13 +145,8 @@ homebrew_casks:
     # follows.
     skip_upload: auto
     caveats: |
-      On macOS, brig drives the hull microVM runtime, which is not published
-      yet. It ships today as urunc-macos, from a private tap:
-
-        brew tap nofireai/nofire git@github.com:NOFireAI/homebrew-nofire.git
-        brew install urunc-macos
-
-      On Linux, brig drives nerdctl and needs nothing else.
+      On Linux, brig drives nerdctl and needs nothing else. On macOS it drives
+      hull, which brew installed alongside this cask.
 
       Guest images are verified with cosign before boot. An image brig-sh did
       not publish is reported and booted anyway -- bring-your-own images are a
