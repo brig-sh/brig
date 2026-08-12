@@ -7,7 +7,8 @@ needs and none of the ones it does not.**
 
 ```bash
 brew tap brig-sh/brig
-brew install --cask brig      # pulls in urunc-macos and cosign
+brew trust brig-sh/brig       # brew refuses untrusted third-party taps
+brew install --cask brig
 
 brig run claude               # boots a sandbox, starts Claude Code in it
 ```
