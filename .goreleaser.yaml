@@ -1,0 +1,166 @@
+# goreleaser builds and publishes brig.
+#
+# Two binaries from one module: brig, the CLI, and brigd, the session daemon.
+# Both are pure Go with no cgo, so one Linux runner cross-compiles every
+# target -- including darwin/arm64, which is the one that matters most. The
+# keychain is read by shelling out to `security` rather than through cgo
+# precisely so this stays true.
+#
+#   goreleaser check                 validate this file
+#   goreleaser release --snapshot    build everything without publishing
+#   git tag v0.1.0 && git push --tags   the real thing, via CI
+version: 2
+
+project_name: brig
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: brig
+    main: ./cmd/brig
+    binary: brig
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: brigd
+    main: ./cmd/brigd
+    binary: brigd
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: brig
+    ids: [brig, brigd]
+    # One archive per platform carrying both binaries, named the way the
+    # Homebrew tap already expects to find a release asset.
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+# Keyless signing, the same way the guest images are signed.
+#
+# There is no key to distribute and none for us to lose: cosign takes a
+# short-lived certificate from Sigstore against this workflow's OIDC identity,
+# and the signature is recorded in a public transparency log. What a consumer
+# verifies is not "this was signed" but "this was built by that workflow, in
+# that repo" -- the verify command is in the README.
+#
+# Only checksums.txt is signed, which is the standard shape: the checksum file
+# covers every archive, so one signature vouches for all of them.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
+    output: true
+
+# An SBOM per archive, so what is inside a release is inspectable without
+# unpacking it.
+sboms:
+  - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # The repository is private and so are its releases; a consumer needs a
+  # token with contents:read either way. Drafts, so a tag never publishes
+  # itself before someone has looked at the notes.
+  draft: true
+  prerelease: auto
+
+# The Homebrew tap. `brews` generated formulas that installed pre-compiled
+# binaries; goreleaser deprecated that in favour of casks, which is what
+# Homebrew itself now wants for a downloaded binary.
+homebrew_casks:
+  - name: brig
+    ids: [brig]
+    binaries: [brig, brigd]
+    repository:
+      owner: brig-sh
+      name: homebrew-brig
+      branch: main
+      # The tap is a different repository, so the release job's built-in
+      # GITHUB_TOKEN cannot write to it. This is a fine-grained PAT with
+      # contents:write on brig-sh/homebrew-brig, stored as a secret on this
+      # repository.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/brig-sh/brig
+    description: Run a coding agent in a sandbox, with the credentials it needs and none of the ones it does not
+    dependencies:
+      # Guest-image signature verification degrades to a warning without it,
+      # so ship it rather than let the check quietly do nothing.
+      - formula: cosign
+      #
+      # hull, the microVM runtime, is NOT listed here yet, and its absence is
+      # the reason this comment exists. It ships today as
+      # nofireai/nofire/urunc-macos, from a private tap: depending on it would
+      # fail every install by anyone outside the org, at tap time, before brig
+      # itself is even fetched. The caveat below tells macOS users where to get
+      # it instead.
+      #
+      # RESTORE `- formula: nofireai/nofire/urunc-macos` (or the hull formula
+      # it becomes) once that tap is public. Linux needs nothing from here:
+      # nerdctl and the guest images are already public.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            # STOPGAP. The release archives are signed with keyless cosign,
+            # which proves where they came from -- but macOS Gatekeeper wants
+            # a Developer ID signature and a notarisation ticket, which these
+            # binaries do not have yet, so a quarantined download refuses to
+            # run at all. urunc-macos is already signed and notarised; brig
+            # should follow, and this hook should then be deleted.
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/brig"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/brigd"]
+          end
+    # auto: never on a prerelease. An rc should not move what `brew upgrade`
+    # follows.
+    skip_upload: auto
+    caveats: |
+      On macOS, brig drives the hull microVM runtime, which is not published
+      yet. It ships today as urunc-macos, from a private tap:
+
+        brew tap nofireai/nofire git@github.com:NOFireAI/homebrew-nofire.git
+        brew install urunc-macos
+
+      On Linux, brig drives nerdctl and needs nothing else.
+
+      Guest images are verified with cosign before boot. An image brig-sh did
+      not publish is reported and booted anyway -- bring-your-own images are a
+      supported way to use brig. One that claims to be ours and fails
+      verification stops and asks.
+
+      Start with:
+        brig run claude

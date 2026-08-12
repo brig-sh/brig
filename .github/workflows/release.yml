@@ -1,0 +1,55 @@
+name: Release
+
+# Publish binaries when a version tag lands.
+#
+# The built-in GITHUB_TOKEN is enough: the release goes to this repository,
+# which is where the token already has write access. No signing key and no
+# registry secret are involved.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release"
+        required: true
+
+permissions:
+  contents: write
+  # Sigstore hands out the signing certificate against this token, so the
+  # release is signed with no key anywhere.
+  id-token: write
+
+jobs:
+  release:
+    name: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # goreleaser derives the version and the changelog from the tag
+          # history, so a shallow clone gives it the wrong answer.
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      # goreleaser shells out to syft for the SBOMs.
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Absent until someone adds it; goreleaser then skips publishing the
+          # formula rather than failing the release.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
