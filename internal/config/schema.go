@@ -1,11 +1,16 @@
-// Package config holds brig's global user configuration: the schema that
-// declares every setting, and the loader over $XDG_CONFIG_HOME/brig/config.yaml.
+// Package config declares brig's global user configuration.
+//
+// What is here today is the schema and the value handling over it: the table of
+// declared settings, the types they hold, and the expansion of ${VAR}
+// expressions found in them. The loader over $XDG_CONFIG_HOME/brig/config.yaml
+// and the `brig config` command are not written yet; this package is the layer
+// they will both read, and it is deliberately usable and testable without them.
 //
 // The schema is a table, not a struct. A declared Key carries its own type, its
-// default and its one-line documentation, which makes the `brig config` CLI
-// generic over it: adding a section later is adding rows, never adding CLI code.
-// It also means the documentation and the validation cannot drift apart,
-// because they are the same declaration.
+// default and its one-line documentation, which is what will let one generic set
+// of CLI verbs serve every section: adding a section is adding rows. It also
+// keeps the documentation and the validation from drifting apart, because they
+// are the same declaration.
 //
 // Nothing here reads a file. A Key turns text into a typed value; where that
 // text came from -- a YAML node or a command line -- is the caller's problem.
@@ -23,6 +28,11 @@ import (
 type Kind int
 
 const (
+	// invalid is the zero value, so a Key that forgot to declare its Kind is a
+	// schema error rather than a silent Bool. The schema is hand-written data
+	// and an omitted field is the easiest mistake to make in it; Schema.Validate
+	// is what turns that mistake into a message.
+	invalid Kind = iota
 	// Bool is parsed strictly: true/false/1/0 and the other spellings
 	// strconv.ParseBool accepts, nothing else.
 	//
@@ -30,7 +40,7 @@ const (
 	// anything but "0" as true. That looseness is right for a shell variable
 	// and wrong for a typed file: BRIG_SKILLS=maybe is a shrug, but
 	// skills.import.auto: maybe is a mistake worth reporting.
-	Bool Kind = iota
+	Bool
 	Int
 	String
 	// Enum is a string constrained to Key.Enum.
@@ -47,6 +57,8 @@ const (
 // String names the kind the way an error message needs it: "expected bool".
 func (k Kind) String() string {
 	switch k {
+	case invalid:
+		return "no kind"
 	case Bool:
 		return "bool"
 	case Int:
@@ -75,8 +87,10 @@ type Key struct {
 	// idea as ${VAR:-fallback}, which applies when the variable is unset; a key
 	// can be present and still resolve through a fallback.
 	Default any
-	// Doc is one line, and is the only description of this setting anywhere:
-	// `brig config list` prints it and the shipped docs are generated from it.
+	// Doc is one line, and is the only description of this setting anywhere.
+	// Validate requires it, because a setting that cannot be explained in one
+	// line is a setting nobody will be able to use. It is what a `config list`
+	// verb and the generated reference will print once those exist.
 	Doc string
 }
 
@@ -90,17 +104,107 @@ type Schema []Key
 // Lookup returns the key declaring path. The returned Key keeps its Path as
 // declared, wildcards intact, so a caller can tell mcp.servers.github.command
 // from the mcp.servers.*.command row that permits it.
+//
+// An exact declaration wins over a wildcard that also admits the path, whatever
+// order the two appear in. Without that rule the answer depends on slice
+// position, so moving two rows apart would silently change a key's type.
+// Ambiguity between two *wildcards* is a schema bug rather than something to
+// resolve here; Validate rejects duplicate paths, and overlapping wildcards
+// resolve first-declared.
 func (s Schema) Lookup(path string) (Key, bool) {
 	if path == "" {
 		return Key{}, false
 	}
 	segs := strings.Split(path, ".")
+	var wildcard Key
+	var viaWildcard bool
 	for _, k := range s {
-		if matchPath(strings.Split(k.Path, "."), segs) {
+		if !matchPath(strings.Split(k.Path, "."), segs) {
+			continue
+		}
+		if k.Path == path {
 			return k, true
 		}
+		if !viaWildcard {
+			wildcard, viaWildcard = k, true
+		}
 	}
-	return Key{}, false
+	return wildcard, viaWildcard
+}
+
+// Validate checks that a schema is usable before anything reads it.
+//
+// The schema is hand-written data, so its mistakes are the mistakes people make
+// in data: a forgotten field, a duplicated row, a default that does not match
+// the type beside it. Each one is silent at runtime and confusing at the point
+// it surfaces, which is why they are caught here instead.
+//
+// Same role as agent.Template.Validate (internal/agent/custom.go:127), and for
+// the same reason: data that configures behaviour should refuse to be wrong.
+func (s Schema) Validate() error {
+	seen := map[string]bool{}
+	for _, k := range s {
+		if k.Path == "" {
+			return fmt.Errorf("a key has an empty path")
+		}
+		if slices.Contains(strings.Split(k.Path, "."), "") {
+			return fmt.Errorf("%s: a path segment is empty", k.Path)
+		}
+		if seen[k.Path] {
+			return fmt.Errorf("%s: declared twice", k.Path)
+		}
+		seen[k.Path] = true
+
+		if k.Kind == invalid {
+			return fmt.Errorf("%s: no kind declared", k.Path)
+		}
+		if k.Kind == Enum && len(k.Enum) == 0 {
+			// Otherwise every value fails against an empty set, with an error
+			// that trails off after "is not one of".
+			return fmt.Errorf("%s: an enum key needs its enum values", k.Path)
+		}
+		if k.Kind != Enum && len(k.Enum) > 0 {
+			return fmt.Errorf("%s: enum values on a %s key", k.Path, k.Kind)
+		}
+		if k.Doc == "" {
+			// The only description of this setting anywhere, so an empty one is
+			// a setting nobody can explain.
+			return fmt.Errorf("%s: no doc line", k.Path)
+		}
+		if err := k.validateDefault(); err != nil {
+			return fmt.Errorf("%s: %w", k.Path, err)
+		}
+	}
+	return nil
+}
+
+// validateDefault checks Default against Kind. Default is `any`, so nothing
+// else stops a string default on an Int key reaching a consumer that asserts an
+// int and panicking there instead of here.
+func (k Key) validateDefault() error {
+	if k.Default == nil {
+		return nil // no default is a valid state: the key is simply unset
+	}
+	var ok bool
+	switch k.Kind {
+	case Bool:
+		_, ok = k.Default.(bool)
+	case Int:
+		_, ok = k.Default.(int)
+	case String, EnvVar:
+		_, ok = k.Default.(string)
+	case Enum:
+		var s string
+		if s, ok = k.Default.(string); ok && !slices.Contains(k.Enum, s) {
+			return fmt.Errorf("default %q is not one of %s", s, strings.Join(k.Enum, ", "))
+		}
+	case StringList:
+		_, ok = k.Default.([]string)
+	}
+	if !ok {
+		return fmt.Errorf("default is %T, want %s", k.Default, k.Kind)
+	}
+	return nil
 }
 
 // matchPath reports whether a declared path admits a concrete one. A "*"
@@ -196,12 +300,41 @@ func (k Key) ParseValue(raw string) (any, error) {
 		return out, nil
 	case EnvVar:
 		if !validVarName(raw) {
-			return nil, fmt.Errorf("%q is not a variable name; this field takes a "+
-				"name such as ACME_TOKEN, never the value", raw)
+			// The value is described, never repeated. This is the error that
+			// fires when somebody pastes a credential into a field that wants a
+			// variable name, so echoing the input would print the credential
+			// into a terminal, a CI log or a bug report. Same rule as
+			// creds.go:102-106, which reports a reference's scheme and never
+			// its value.
+			return nil, fmt.Errorf("this field takes a variable NAME such as "+
+				"ACME_TOKEN, not a value (got %s)", shapeOf(raw))
 		}
 		return raw, nil
 	}
-	return nil, fmt.Errorf("unknown kind %s for %s", k.Kind, k.Path)
+	return nil, fmt.Errorf("no value kind declared for %s", k.Path)
+}
+
+// shapeOf describes a rejected value without reproducing any of it: the length,
+// and which rule it broke. Length alone cannot reconstruct a secret, and a
+// character class is enough to spot a typo.
+func shapeOf(s string) string {
+	if s == "" {
+		return "an empty value"
+	}
+	for _, r := range s {
+		switch {
+		case r == '_',
+			r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9':
+		default:
+			return fmt.Sprintf("%d characters, including one that cannot appear "+
+				"in a variable name", len(s))
+		}
+	}
+	// Every character is legal, so validVarName can only have failed on the
+	// leading digit.
+	return fmt.Sprintf("%d characters, starting with a digit", len(s))
 }
 
 // Resolve expands env expressions in raw text and then type-checks the result.
@@ -213,14 +346,20 @@ func (k Key) ParseValue(raw string) (any, error) {
 // EnvVar is the exception: it holds a variable name, and expanding it would
 // turn a declared credential reference into the credential. ParseValue then
 // rejects an expression outright, because "$" and "{" cannot appear in a name.
+// Note what that guard is worth: a token whose text happens to be letters,
+// digits and underscores would otherwise expand, pass as a name, and be stored
+// where a reference belongs.
 //
-// Writers want ParseValue instead. A value being written may reference a
+// A writer wants ParseValue instead. A value being written may reference a
 // variable that is unset in the shell doing the writing but set when the agent
-// runs, so `brig config set` checks the expression's syntax rather than
-// resolving it.
+// runs, so a writer should check the expression's syntax rather than resolve it.
 func (k Key) Resolve(raw string, lookup func(string) (string, bool)) (any, error) {
 	if k.Kind == EnvVar {
-		return k.ParseValue(raw)
+		v, err := k.ParseValue(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", k.Path, err)
+		}
+		return v, nil
 	}
 	expanded, err := Expand(raw, lookup)
 	if err != nil {

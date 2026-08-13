@@ -30,6 +30,13 @@ import (
 //
 // lookup defaults to os.LookupEnv. One level only: a default may not itself
 // contain an expression.
+//
+// Two limits worth knowing, both from the closing brace being found by a plain
+// scan for the first "}". A default cannot contain "}" -- write the literal
+// outside the expression instead of ${X:-{"a":1}}. And ":-" is recognised
+// before "-", so ${VAR-a:-b} reads as the name "VAR-a" and is rejected, where a
+// shell would read VAR with the default "a:-b". Rejecting beats guessing: the
+// alternative is silently resolving something the author did not write.
 func Expand(s string, lookup func(string) (string, bool)) (string, error) {
 	if lookup == nil {
 		lookup = os.LookupEnv
