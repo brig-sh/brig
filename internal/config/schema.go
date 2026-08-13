@@ -28,29 +28,23 @@ import (
 type Kind int
 
 const (
-	// invalid is the zero value, so a Key that forgot to declare its Kind is a
-	// schema error rather than a silent Bool. The schema is hand-written data
-	// and an omitted field is the easiest mistake to make in it; Schema.Validate
-	// is what turns that mistake into a message.
+	// invalid is the zero value, so a Key that forgot its Kind is a schema error
+	// rather than a silent Bool. Schema.Validate reports it.
 	invalid Kind = iota
-	// Bool is parsed strictly: true/false/1/0 and the other spellings
-	// strconv.ParseBool accepts, nothing else.
-	//
-	// Deliberately unlike wrap.Env.Bool (internal/wrap/env.go:51), which reads
-	// anything but "0" as true. That looseness is right for a shell variable
-	// and wrong for a typed file: BRIG_SKILLS=maybe is a shrug, but
-	// skills.import.auto: maybe is a mistake worth reporting.
+	// Bool is strict: what strconv.ParseBool accepts, nothing else. Unlike
+	// wrap.Env.Bool (internal/wrap/env.go:51), which reads anything but "0" as
+	// true -- right for a shell variable, wrong for a typed file.
 	Bool
 	Int
 	String
 	// Enum is a string constrained to Key.Enum.
 	Enum
-	// StringList is a list of strings. From a command line it is written
-	// comma-separated; from YAML it arrives as a sequence.
+	// StringList is comma-separated from a command line, a sequence from YAML.
 	StringList
-	// EnvVar holds the NAME of an environment variable, never its value. The
-	// shape check is what stops a token being pasted where a name belongs, so
-	// it is a type rather than a convention.
+	// EnvVar holds the NAME of an environment variable, never its value, and is
+	// never expanded: expanding it would turn a credential reference into the
+	// credential. The shape check is a type rather than a convention because it
+	// is what catches a pasted token.
 	EnvVar
 )
 
@@ -300,12 +294,6 @@ func (k Key) ParseValue(raw string) (any, error) {
 		return out, nil
 	case EnvVar:
 		if !validVarName(raw) {
-			// The value is described, never repeated. This is the error that
-			// fires when somebody pastes a credential into a field that wants a
-			// variable name, so echoing the input would print the credential
-			// into a terminal, a CI log or a bug report. Same rule as
-			// creds.go:102-106, which reports a reference's scheme and never
-			// its value.
 			return nil, fmt.Errorf("this field takes a variable NAME such as "+
 				"ACME_TOKEN, not a value (got %s)", shapeOf(raw))
 		}
@@ -314,9 +302,11 @@ func (k Key) ParseValue(raw string) (any, error) {
 	return nil, fmt.Errorf("no value kind declared for %s", k.Path)
 }
 
-// shapeOf describes a rejected value without reproducing any of it: the length,
-// and which rule it broke. Length alone cannot reconstruct a secret, and a
-// character class is enough to spot a typo.
+// shapeOf describes a rejected value without reproducing any of it. This error
+// fires when somebody pastes a credential where a variable name belongs, so
+// echoing the input would print that credential into a terminal or a CI log.
+// Same rule as creds.go:102-106, which reports a reference's scheme and never
+// its value. Length and a broken rule are enough to spot a typo.
 func shapeOf(s string) string {
 	if s == "" {
 		return "an empty value"
@@ -339,20 +329,13 @@ func shapeOf(s string) string {
 
 // Resolve expands env expressions in raw text and then type-checks the result.
 //
-// The order is the point. mem: ${BRIG_MEM:-4096} has to expand to "4096" before
-// anything can call it an int, so expansion cannot be a String-only
-// convenience -- it belongs before the type check for every kind.
+// The order is the point: mem: ${BRIG_MEM:-4096} has to expand to "4096" before
+// anything can call it an int, so expansion precedes the type check for every
+// kind. EnvVar skips both, for the reason given where it is declared.
 //
-// EnvVar is the exception: it holds a variable name, and expanding it would
-// turn a declared credential reference into the credential. ParseValue then
-// rejects an expression outright, because "$" and "{" cannot appear in a name.
-// Note what that guard is worth: a token whose text happens to be letters,
-// digits and underscores would otherwise expand, pass as a name, and be stored
-// where a reference belongs.
-//
-// A writer wants ParseValue instead. A value being written may reference a
-// variable that is unset in the shell doing the writing but set when the agent
-// runs, so a writer should check the expression's syntax rather than resolve it.
+// Reading takes this path; writing takes ParseValue, because a value being
+// written may name a variable that is unset in the writing shell and set when
+// the agent runs.
 func (k Key) Resolve(raw string, lookup func(string) (string, bool)) (any, error) {
 	if k.Kind == EnvVar {
 		v, err := k.ParseValue(raw)

@@ -13,30 +13,19 @@ import (
 //	${VAR-default}    default only if VAR is unset
 //	$$                a literal $
 //
-// Braces are required. A bare $VAR is not an expression, because $ turns up in
-// real values -- an image tag, a shell snippet -- and guessing which dollars
-// are ours would make those values unwriteable.
+// Braces are required: $ turns up in real values, so guessing which dollars are
+// ours would make those values unwriteable.
 //
-// A variable that is unset and has no default is an error rather than an empty
-// string. Values here are policy: skills.deny resolving quietly to nothing
-// would be a fail-open, and the whole point of a deny list is that it does not
-// fail open.
+// An unset variable with no default is an error, not an empty string. These
+// values are policy, and skills.deny resolving quietly to nothing is a
+// fail-open.
 //
-// Expansion happens at load time and in memory only. The file keeps the
-// expression, never the expansion, so a referenced token is never written to
-// disk. It is still not the credentials path: a value pulled in this way is a
-// value, and secrets stay declared as references (fromEnv:, from:) on keys of
-// Kind EnvVar, which are never expanded.
+// The file keeps the expression and never the expansion, so a referenced token
+// is never written to disk. This is still not the credentials path: what comes
+// back here is a value, and secrets stay references on EnvVar keys.
 //
-// lookup defaults to os.LookupEnv. One level only: a default may not itself
-// contain an expression.
-//
-// Two limits worth knowing, both from the closing brace being found by a plain
-// scan for the first "}". A default cannot contain "}" -- write the literal
-// outside the expression instead of ${X:-{"a":1}}. And ":-" is recognised
-// before "-", so ${VAR-a:-b} reads as the name "VAR-a" and is rejected, where a
-// shell would read VAR with the default "a:-b". Rejecting beats guessing: the
-// alternative is silently resolving something the author did not write.
+// lookup defaults to os.LookupEnv. A default may not contain "}" or a nested
+// expression, both because the closing brace is the first one found.
 func Expand(s string, lookup func(string) (string, bool)) (string, error) {
 	if lookup == nil {
 		lookup = os.LookupEnv
@@ -78,12 +67,14 @@ func Expand(s string, lookup func(string) (string, bool)) (string, error) {
 }
 
 // resolveExpr resolves the inside of one ${...}.
+//
+// ":-" is cut before "-" so a default may contain a dash: ${SET-a-b} is SET with
+// the default "a-b". The cost is that ${VAR-a:-b} reads as the name "VAR-a" and
+// is rejected, where a shell would read VAR defaulting to "a:-b". Rejecting
+// beats guessing at which the author meant.
 func resolveExpr(expr string, lookup func(string) (string, bool)) (string, error) {
 	name, def := expr, ""
 	hasDefault, emptyCounts := false, false
-	// ":-" is checked before "-" so a default may itself contain a dash, and a
-	// dash alone reads as the shell's ${VAR-default}: "${SET-a-b}" is SET with
-	// the default "a-b", not a variable called "SET-a".
 	if before, after, found := strings.Cut(expr, ":-"); found {
 		name, def = before, after
 		hasDefault, emptyCounts = true, true
