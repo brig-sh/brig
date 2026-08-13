@@ -49,8 +49,10 @@ func TestKeyParseValue(t *testing.T) {
 
 		{name: "env var name", key: Key{Kind: EnvVar}, raw: "ACME_TOKEN", want: "ACME_TOKEN"},
 		{name: "env var lowercase ok", key: Key{Kind: EnvVar}, raw: "_x1", want: "_x1"},
-		// The guard that stops a token being pasted where a name belongs.
-		{name: "env var rejects value", key: Key{Kind: EnvVar}, raw: "sk-ant-abc123", bad: true},
+		// The guard that stops a token being pasted where a name belongs. The
+		// literal is deliberately not shaped like any real vendor's key format,
+		// so it cannot trip a secret scanner on a public clone.
+		{name: "env var rejects value", key: Key{Kind: EnvVar}, raw: "pasted-value-not-a-name", bad: true},
 		{name: "env var rejects leading digit", key: Key{Kind: EnvVar}, raw: "1X", bad: true},
 		{name: "env var rejects empty", key: Key{Kind: EnvVar}, raw: "", bad: true},
 	}
@@ -354,11 +356,19 @@ func TestEnvVarErrorNeverEchoesTheValue(t *testing.T) {
 	// This error exists to catch someone pasting a credential where a variable
 	// name belongs, so it must not print the credential. creds.go:102-106 sets
 	// the house rule: report the scheme, never the value.
-	secrets := []string{
-		"sk-live-51H8xKlSecretValue", // rejected on the dash
-		"51H8xKlSecretValue",         // rejected on the leading digit
+	// Stand-ins for a pasted credential, deliberately not shaped like any real
+	// vendor's key format so they cannot trip a secret scanner on a public clone.
+	// The fragments must not appear in the error's own wording or in the key
+	// path, or the check fires on text that was never the secret.
+	secrets := []struct {
+		value string
+		frags []string
+	}{
+		{value: "pasted-value-not-a-name", frags: []string{"pasted", "not-a-name"}},
+		{value: "9PastedValue", frags: []string{"9Pasted", "PastedValue"}},
 	}
-	for _, secret := range secrets {
+	for _, tc := range secrets {
+		secret := tc.value
 		k := Key{Path: "memories.providers.acme.credential.fromEnv", Kind: EnvVar}
 		_, err := k.Resolve(secret, nil)
 		if err == nil {
@@ -368,7 +378,7 @@ func TestEnvVarErrorNeverEchoesTheValue(t *testing.T) {
 			t.Errorf("error echoes the whole secret: %q", err)
 		}
 		// Not even a recognisable fragment.
-		for _, frag := range []string{"sk-live", "51H8", "SecretValue"} {
+		for _, frag := range tc.frags {
 			if strings.Contains(err.Error(), frag) {
 				t.Errorf("error leaks the fragment %q: %q", frag, err)
 			}
