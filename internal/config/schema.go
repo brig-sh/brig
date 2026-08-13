@@ -14,6 +14,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -77,6 +78,84 @@ type Key struct {
 	// Doc is one line, and is the only description of this setting anywhere:
 	// `brig config list` prints it and the shipped docs are generated from it.
 	Doc string
+}
+
+// Schema is a set of declared keys.
+//
+// A value rather than a package global so tests can declare their own: the
+// promise that a new section needs no CLI change is only worth something if a
+// test can invent a section and drive it.
+type Schema []Key
+
+// Lookup returns the key declaring path. The returned Key keeps its Path as
+// declared, wildcards intact, so a caller can tell mcp.servers.github.command
+// from the mcp.servers.*.command row that permits it.
+func (s Schema) Lookup(path string) (Key, bool) {
+	if path == "" {
+		return Key{}, false
+	}
+	segs := strings.Split(path, ".")
+	for _, k := range s {
+		if matchPath(strings.Split(k.Path, "."), segs) {
+			return k, true
+		}
+	}
+	return Key{}, false
+}
+
+// matchPath reports whether a declared path admits a concrete one. A "*"
+// segment matches exactly one non-empty segment -- never zero, never several,
+// which is what keeps features.a.b from passing as features.*.
+func matchPath(declared, actual []string) bool {
+	if len(declared) != len(actual) {
+		return false
+	}
+	for i, d := range declared {
+		if actual[i] == "" {
+			return false
+		}
+		if d == "*" {
+			continue
+		}
+		if d != actual[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Sections returns the declared top-level section names, sorted.
+//
+// A section exists because a key declares it. That is what makes security and
+// introspection reserved for free: nothing declares them, so they are unknown
+// sections, and the loader's warn-and-ignore path already covers them.
+func (s Schema) Sections() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, k := range s {
+		name := k.Path
+		if i := strings.IndexByte(name, '.'); i >= 0 {
+			name = name[:i]
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Keys returns the keys declared under a section, sorted by path.
+func (s Schema) Keys(section string) []Key {
+	var out []Key
+	for _, k := range s {
+		if k.Path == section || strings.HasPrefix(k.Path, section+".") {
+			out = append(out, k)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
 }
 
 // ParseValue converts raw text to the key's type.
