@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -149,6 +150,69 @@ func TestSchemaKeys(t *testing.T) {
 	}
 	if len(testSchema.Keys("nope")) != 0 {
 		t.Error("Keys of an undeclared section should be empty")
+	}
+}
+
+func TestKeyResolveExpandsBeforeTypeChecking(t *testing.T) {
+	vars := env(map[string]string{"MEM": "8192", "FLAG": "true", "MODE": "http"})
+
+	tests := []struct {
+		name string
+		key  Key
+		raw  string
+		want any
+		bad  bool
+	}{
+		// The ordering that makes expressions usable on non-string keys.
+		{name: "int from var", key: Key{Kind: Int}, raw: "${MEM}", want: 8192},
+		{name: "int from default", key: Key{Kind: Int}, raw: "${NOPE:-4096}", want: 4096},
+		{name: "bool from var", key: Key{Kind: Bool}, raw: "${FLAG}", want: true},
+		{
+			name: "enum from var",
+			key:  Key{Kind: Enum, Enum: []string{"stdio", "http"}},
+			raw:  "${MODE}", want: "http",
+		},
+		{name: "list from default", key: Key{Kind: StringList}, raw: "${NOPE:-a,b}", want: []string{"a", "b"}},
+		{name: "plain value still works", key: Key{Kind: Int}, raw: "512", want: 512},
+
+		// Expansion succeeds, the type check then fails: both errors reachable.
+		{name: "expands to a bad int", key: Key{Kind: Int}, raw: "${MODE}", bad: true},
+		{name: "expansion itself fails", key: Key{Kind: Int}, raw: "${NOPE}", bad: true},
+
+		// EnvVar holds a name, so it is never expanded -- otherwise declaring a
+		// credential reference would resolve the credential.
+		{name: "env var kind not expanded", key: Key{Kind: EnvVar}, raw: "MEM", want: "MEM"},
+		{name: "env var kind rejects an expression", key: Key{Kind: EnvVar}, raw: "${MEM}", bad: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.key.Resolve(tc.raw, vars)
+			if tc.bad {
+				if err == nil {
+					t.Fatalf("Resolve(%q) = %#v, want an error", tc.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Resolve(%q): %v", tc.raw, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Resolve(%q) = %#v, want %#v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestKeyResolveErrorNamesTheKey(t *testing.T) {
+	// A type error has to say which setting is wrong; the raw text alone does
+	// not tell anyone where to look in the file.
+	k := Key{Path: "skills.import.auto", Kind: Bool}
+	_, err := k.Resolve("maybe", env(nil))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "skills.import.auto") {
+		t.Errorf("error %q does not name the key", err)
 	}
 }
 

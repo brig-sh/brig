@@ -204,6 +204,35 @@ func (k Key) ParseValue(raw string) (any, error) {
 	return nil, fmt.Errorf("unknown kind %s for %s", k.Kind, k.Path)
 }
 
+// Resolve expands env expressions in raw text and then type-checks the result.
+//
+// The order is the point. mem: ${BRIG_MEM:-4096} has to expand to "4096" before
+// anything can call it an int, so expansion cannot be a String-only
+// convenience -- it belongs before the type check for every kind.
+//
+// EnvVar is the exception: it holds a variable name, and expanding it would
+// turn a declared credential reference into the credential. ParseValue then
+// rejects an expression outright, because "$" and "{" cannot appear in a name.
+//
+// Writers want ParseValue instead. A value being written may reference a
+// variable that is unset in the shell doing the writing but set when the agent
+// runs, so `brig config set` checks the expression's syntax rather than
+// resolving it.
+func (k Key) Resolve(raw string, lookup func(string) (string, bool)) (any, error) {
+	if k.Kind == EnvVar {
+		return k.ParseValue(raw)
+	}
+	expanded, err := Expand(raw, lookup)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", k.Path, err)
+	}
+	v, err := k.ParseValue(expanded)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", k.Path, err)
+	}
+	return v, nil
+}
+
 // validVarName reports whether s is shaped like an environment variable name.
 func validVarName(s string) bool {
 	if s == "" {
