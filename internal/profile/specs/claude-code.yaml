@@ -1,0 +1,47 @@
+name: claude-code
+desc: Claude Code (Anthropic)
+binary: claude
+image: ghcr.io/brig-sh/claude-code:latest
+guestHome: /home/claude
+
+# ~/.claude/skills and ~/.claude/plugins are read-only in the guest under
+# --skills. Memory is deliberately absent: it is keyed by host project path
+# (~/.claude/projects/<slug>/memory), and that slug does not exist in the
+# guest, so projecting it would put the files somewhere the agent never looks.
+hostConfigDir: ~/.claude
+projectPaths: [skills, plugins]
+
+# CLAUDE_CODE_OAUTH_TOKEN authenticates Claude Code outright. The refresh-token
+# pair is the documented way to provision auth without a browser: with both
+# set, `claude auth login` exchanges the refresh token instead of opening one,
+# which the guest cannot do. GH_TOKEN is for git over HTTPS, not for the agent.
+forward:
+  - CLAUDE_CODE_OAUTH_TOKEN
+  - CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+  - CLAUDE_CODE_OAUTH_SCOPES
+  - GH_TOKEN
+
+# Both outrank CLAUDE_CODE_OAUTH_TOKEN in Claude Code's auth precedence, so
+# forwarding either would move the sandbox off the subscription and onto
+# metered API billing without saying so.
+deny: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN]
+
+statePaths: [.claude, .claude.json]
+staleCredentialFiles: [.claude/.credentials.json]
+headless: true
+mem: 4096
+cpus: 4
+
+onboarding:
+  file: .claude.json
+  seed:
+    hasCompletedOnboarding: true
+    hasTrustDialogAccepted: true
+  trustKey: [projects, hasTrustDialogAccepted]
+
+hostCredential:
+  keychainService: Claude Code-credentials
+  tokenField: accessToken
+  expiryField: expiresAt
+  targetVar: CLAUDE_CODE_OAUTH_TOKEN
+  renewHint: run claude on the host once to renew it
