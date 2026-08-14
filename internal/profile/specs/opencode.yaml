@@ -1,0 +1,10 @@
+name: opencode
+desc: opencode (OSS, provider-agnostic) -- example profile
+binary: opencode
+image: ghcr.io/brig-sh/opencode:latest
+guestHome: /home/opencode
+forward: [OPENROUTER_API_KEY, GH_TOKEN]
+statePaths: [.local/share/opencode, .config/opencode]
+headless: true
+mem: 4096
+cpus: 4

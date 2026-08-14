@@ -1,0 +1,15 @@
+name: ubuntu
+desc: A plain Ubuntu shell, running as root
+kind: shell
+binary: bash
+image: ghcr.io/nofireai/urunc-ubuntu:aarch64
+
+# The workspace is mounted at /root/work rather than over the home directory:
+# this guest runs as root and the point of it is the machine, not an agent's
+# state. guestHome names where the workspace lands, which is what every path
+# calculation needs.
+guestHome: /root/work
+
+forward: [GH_TOKEN]
+mem: 2048
+cpus: 2

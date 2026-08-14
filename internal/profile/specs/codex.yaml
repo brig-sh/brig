@@ -1,0 +1,18 @@
+name: codex
+desc: Codex (OpenAI)
+binary: codex
+image: ghcr.io/brig-sh/codex:latest
+guestHome: /home/codex
+forward: [GH_TOKEN]
+
+# Codex signs in with `codex login --device-auth` and keeps the result in
+# ~/.codex/auth.json, inside the persisted home. A forwarded OPENAI_API_KEY is
+# the metered path and would take that decision away from you, so it is denied
+# for the same reason ANTHROPIC_API_KEY is: put it in BRIG_FORWARD_ENV together
+# with BRIG_ALLOW_DENIED=1 if metered billing is what you want.
+deny: [OPENAI_API_KEY]
+
+statePaths: [.codex]
+headless: true
+mem: 4096
+cpus: 4
