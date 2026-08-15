@@ -1,0 +1,15 @@
+name: gemini
+desc: Gemini CLI (Google) -- example profile
+binary: gemini
+image: ghcr.io/brig-sh/gemini-stock:latest
+
+# Boots as an ordinary OCI image: the image carries no kernel, so the
+# runtime supplies one. hvi is the backend that path is built around.
+hypervisor: hvi
+genericBoot: true
+guestHome: /home/gemini
+forward: [GEMINI_API_KEY, GH_TOKEN]
+statePaths: [.gemini]
+headless: true
+mem: 4096
+cpus: 4

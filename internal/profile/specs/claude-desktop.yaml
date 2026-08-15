@@ -1,0 +1,21 @@
+name: claude-desktop
+desc: Claude Desktop (Anthropic), in a graphical window
+# kind: gui -- the app owns the console, so there is no binary to exec and
+# nothing to pass arguments to.
+kind: gui
+guiTitle: Claude Desktop
+image: ghcr.io/nofireai/urunc-claude-desktop:aarch64
+guestHome: /home/claude
+forward:
+  - CLAUDE_CODE_OAUTH_TOKEN
+  - CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+  - CLAUDE_CODE_OAUTH_SCOPES
+  - GH_TOKEN
+deny: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN]
+statePaths: [.config/Claude, .claude]
+mem: 6144
+cpus: 4
+# This profile owns ~/brig/claude-desktop, so a session called "desktop" is
+# refused rather than landing a Claude Code session on the Desktop app's
+# workspace.
+reserved: true
