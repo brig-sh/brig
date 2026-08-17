@@ -38,27 +38,48 @@ func Bind(
 		// different fixes, so the lookup keeps the two apart.
 		secretPresent := false
 
-		if b.Ref == "" {
+		refs := b.RefList()
+		if len(refs) == 0 {
 			value = b.Value
 		} else {
-			var err error
-			r, _, err = b.Resolved()
-			if err != nil {
-				s.Warnings = append(s.Warnings,
-					fmt.Sprintf("not forwarding %s: %v", b.Name, err))
-				continue
-			}
-			switch r.Namespace {
-			case profile.NamespaceSecrets:
-				value, secretPresent = secrets[r.Name]
-				annotation = "(secret)"
-				fromSecret = true
-			case profile.NamespaceEnv:
-				v, ok := lookup(r.Name)
-				if !ok {
-					continue
+			// The chain is walked in order and stops at the first element that
+			// yields a value, which is what makes `refs: [env.X, secrets.x]`
+			// mean "the shell wins, the store catches". An element that missed
+			// is ordinary fall-through and says nothing: only the LAST one is
+			// worth a warning, because only there is a miss the end of the
+			// road rather than a step along it.
+			unparsable := false
+			for i, raw := range refs {
+				parsed, err := profile.ParseRef(raw)
+				if err != nil {
+					s.Warnings = append(s.Warnings,
+						fmt.Sprintf("not forwarding %s: %v", b.Name, err))
+					unparsable = true
+					break
 				}
-				value, fromEnv = v, true
+				last := i == len(refs)-1
+				switch parsed.Namespace {
+				case profile.NamespaceSecrets:
+					v, present := secrets[parsed.Name]
+					if v == "" && !last {
+						continue
+					}
+					r, value, secretPresent = parsed, v, present
+					annotation = "(secret)"
+					fromSecret = true
+				case profile.NamespaceEnv:
+					v, ok := lookup(parsed.Name)
+					if !ok || v == "" {
+						continue
+					}
+					r, value, fromEnv = parsed, v, true
+				}
+				if value != "" || fromSecret {
+					break
+				}
+			}
+			if unparsable {
+				continue
 			}
 		}
 

@@ -186,3 +186,40 @@ func TestBindMarksOnlySecretsSourcedVarsSecret(t *testing.T) {
 		t.Error("MODE is a literal value and should not be marked Secret")
 	}
 }
+
+// A chain takes the first element that yields a value, which is what lets one
+// variable keep a shell override and gain a store fallback at the same time.
+func TestBindWalksAChainInOrder(t *testing.T) {
+	p := profileWith(t, "secrets:\n  - gh\nenv:\n  - name: GH_TOKEN\n"+
+		"    refs: [env.GH_TOKEN, secrets.gh]\n")
+	shell := Bind(p, p.Env, map[string]string{"gh": "from-the-store"},
+		lookupFrom(map[string]string{"GH_TOKEN": "from-the-shell"}), Options{})
+	if len(shell.Vars) != 1 || shell.Vars[0].Value != "from-the-shell" {
+		t.Errorf("the shell override lost to the store: %+v", shell.Vars)
+	}
+	// The shell's copy is not a secret, so it keeps the plain annotation and
+	// the argv exemption a store secret gets does not apply to it.
+	if len(shell.Names) != 1 || shell.Names[0] != "GH_TOKEN" {
+		t.Errorf("Names = %v, want [GH_TOKEN]", shell.Names)
+	}
+
+	store := Bind(p, p.Env, map[string]string{"gh": "from-the-store"}, lookupFrom(nil), Options{})
+	if len(store.Vars) != 1 || store.Vars[0].Value != "from-the-store" {
+		t.Errorf("the store fallback was not reached: %+v", store.Vars)
+	}
+	if len(store.Names) != 1 || store.Names[0] != "GH_TOKEN(secret)" {
+		t.Errorf("Names = %v, want [GH_TOKEN(secret)]", store.Names)
+	}
+}
+
+// An element that missed is a step along the road, not the end of it: only a
+// last element that is a secrets. ref has anything to complain about, or every
+// chained binding would warn on every run that used its first element.
+func TestBindDoesNotWarnAboutAnEarlierChainElement(t *testing.T) {
+	p := profileWith(t, "secrets:\n  - gh\nenv:\n  - name: GH_TOKEN\n"+
+		"    refs: [env.GH_TOKEN, secrets.gh]\n")
+	set := Bind(p, p.Env, map[string]string{"gh": "from-the-store"}, lookupFrom(nil), Options{})
+	if len(set.Warnings) != 0 {
+		t.Errorf("warnings = %v; want none: the chain resolved", set.Warnings)
+	}
+}

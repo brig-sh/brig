@@ -93,7 +93,7 @@ func TestEnvNamesAreChecked(t *testing.T) {
 	}
 }
 
-// D5's parse-time rules. Each of these is a mistake a profile author makes
+// Each of these is a mistake a profile author makes
 // once; the point of checking at parse time is that they find out at import
 // rather than at the run that needed the credential.
 func TestSecretSourceRules(t *testing.T) {

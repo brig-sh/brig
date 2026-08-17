@@ -623,8 +623,22 @@ func listProfiles() error {
 		// Listed separately from the bindings above because these are the ones
 		// you have to create before the sandbox will start at all.
 		if len(p.Secrets) > 0 {
-			fmt.Printf("%-15s secrets: %s (brig secret create <name>)\n", "",
-				strings.Join(p.Secrets, " "))
+			fmt.Printf("%-15s secrets: %s\n", "", strings.Join(profile.SecretNames(p.Secrets), " "))
+			// Which ones brig can fill from your host and which ones only you
+			// can: the old single line said "create them" for both, which for
+			// an importable secret is the long way round.
+			// Named rather than told to import: the verb that fills these does
+			// not exist yet, and printing a command that answers "unknown
+			// secret subcommand" is worse than printing none. The PR that adds
+			// the dispatch names it here too.
+			if importable := importableNames(p); len(importable) > 0 {
+				fmt.Printf("%-15s   brig can read from your host: %s\n", "",
+					strings.Join(importable, " "))
+			}
+			if hand := handCreatedNames(p); len(hand) > 0 {
+				fmt.Printf("%-15s   by hand: brig secret create <name> (%s)\n", "",
+					strings.Join(hand, " "))
+			}
 		}
 		if len(p.Deny) > 0 {
 			fmt.Printf("%-15s never forwarded: %s\n", "", strings.Join(p.Deny, " "))
@@ -635,6 +649,30 @@ func listProfiles() error {
 	fmt.Printf("to add your own:  brig profile export claude-code mytool, then brig profile edit mytool (change name:)\n")
 	fmt.Printf("to build an image for one: %s\n", profile.BringYourOwnImageDoc)
 	return nil
+}
+
+// importableNames and handCreatedNames split a profile's requirement list the
+// way the two commands that fill it do. A secret with no sources is
+// hand-created by definition, so the listing points at the command that can
+// actually supply it rather than at whichever one the reader tries first.
+func importableNames(p profile.Profile) []string {
+	var names []string
+	for _, d := range p.Secrets {
+		if d.Importable() {
+			names = append(names, d.Name)
+		}
+	}
+	return names
+}
+
+func handCreatedNames(p profile.Profile) []string {
+	var names []string
+	for _, d := range p.Secrets {
+		if !d.Importable() {
+			names = append(names, d.Name)
+		}
+	}
+	return names
 }
 
 // profileCmd groups the profile verbs, which is where someone coming from

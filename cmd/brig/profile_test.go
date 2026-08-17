@@ -155,8 +155,18 @@ func TestListProfilesReportsBindingsAndRequiredSecrets(t *testing.T) {
 	if !strings.Contains(out, "environment: FOO GH_TOKEN") {
 		t.Errorf("listing does not report the env bindings by name:\n%s", out)
 	}
-	if !strings.Contains(out, "secrets: gh_token (brig secret create <name>)") {
-		t.Errorf("listing does not name the required secret and how to create it:\n%s", out)
+	if !strings.Contains(out, "secrets: gh_token") {
+		t.Errorf("listing does not name the required secret:\n%s", out)
+	}
+	// gh_token declares no sources, so it is hand-created by definition and
+	// the listing points at the one command that can supply it. A secret that
+	// declares sources gets the other line instead -- which is the split the
+	// old single "(brig secret create <name>)" suffix could not make.
+	if !strings.Contains(out, "by hand: brig secret create <name> (gh_token)") {
+		t.Errorf("listing does not say how to create the hand-created secret:\n%s", out)
+	}
+	if strings.Contains(out, "read from your host") {
+		t.Errorf("a secret with no sources is offered as importable:\n%s", out)
 	}
 	// "never forwarded:" is the deny list, untouched by this change, so the
 	// check is for the removed "forwards:" label specifically.
@@ -370,5 +380,43 @@ func TestRemoveProfileResolvesFileAndAlias(t *testing.T) {
 	err := removeProfile([]string{"codex"})
 	if err == nil || !strings.Contains(err.Error(), "built-in") {
 		t.Errorf("wrong error for a built-in: %v", err)
+	}
+}
+
+// The other half of the split: a secret that declares where brig could read it
+// on the host is not something you have to mint by hand, and the listing says
+// so. It does not name the import verb -- that arrives with the dispatch, and
+// a listing that printed a command answering "unknown secret subcommand" would
+// be worse than one that printed none.
+func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	blob := []byte("name: mine\nimage: i\nguestHome: /home/mine\nbinary: m\nmem: 1\ncpus: 1\n" +
+		"secrets:\n" +
+		"  - name: from-the-host\n    from: keychain\n    service: Some Service\n" +
+		"  - by-hand\n")
+	if err := os.WriteFile(filepath.Join(dir, "mine.yaml"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureStdout(t, listProfiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "brig can read from your host: from-the-host") {
+		t.Errorf("listing does not report the importable secret:\n%s", out)
+	}
+	if !strings.Contains(out, "by hand: brig secret create <name> (by-hand)") {
+		t.Errorf("listing does not report the hand-created secret:\n%s", out)
+	}
+	if strings.Contains(out, "secret import") {
+		t.Errorf("listing names a verb that does not exist yet:\n%s", out)
+	}
+	// A keychain service name is not a value, but it is the user's own
+	// vocabulary rather than brig's, and a listing is names.
+	if strings.Contains(out, "Some Service") {
+		t.Errorf("listing printed a source locator:\n%s", out)
 	}
 }

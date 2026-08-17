@@ -59,6 +59,10 @@ type Config struct {
 	// profile offers, not a mistake, and the one place worth naming them is
 	// the preview of what a sandbox receives.
 	HeldOptIn []string
+	// secrets is what the store gave this run, kept so file delivery does not
+	// read it twice -- and cleared the moment delivery is done, because a
+	// plaintext refresh token has no business outliving its use.
+	secrets creds.Resolution
 
 	GitConfig       bool
 	GitHosts        []string

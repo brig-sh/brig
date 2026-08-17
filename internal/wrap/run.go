@@ -30,11 +30,20 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	// fail, saying which secret is missing and how to create it, instead of
 	// creating a sandbox that will fail later and less legibly. Both callers
 	// (cmd/brig and cmd/brigd) return this before EnsureRunning.
-	secrets, err := c.resolveSecrets()
+	res, err := c.resolveSecrets()
 	if err != nil {
 		return creds.Set{}, err
 	}
-	set := creds.Bind(c.Profile, c.Env, secrets, os.LookupEnv, creds.Options{
+	c.secrets = res
+	for _, w := range res.Warnings {
+		// Multi-line by construction: each of these is a sentence about what
+		// will happen plus the command that changes it, and warnf prefixes
+		// every line so a copied one still reads as brig's.
+		for _, line := range strings.Split(w, "\n") {
+			c.warnf("%s", line)
+		}
+	}
+	set := creds.Bind(c.Profile, c.Env, res.Values, os.LookupEnv, creds.Options{
 		AllowRefs:   c.AllowRefs,
 		AllowDenied: c.AllowDenied,
 	})
@@ -82,6 +91,7 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	if err := c.SetupGit(&set); err != nil {
 		return set, err
 	}
+	c.warnExpiredSecrets()
 	return set, nil
 }
 
@@ -129,9 +139,13 @@ func (c *Config) admitHostCredential(hc *profile.HostCredential, host *creds.Hos
 	set.AddSecret(hc.TargetVar, host.Token, hc.TargetVar+"(host)")
 }
 
-// resolveSecrets reads the profile's requirement list, opening the store only if
-// there is one -- so a run that needs no secret raises no keychain prompt, the
-// same property BuildEnv already protects for the host credential.
+// resolveSecrets reads what this run needs out of the store, opening it only
+// when something needs it -- so a run that needs no secret raises no keychain
+// prompt, the same property BuildEnv already protects for the host credential.
+//
+// The decision to open is creds.Needed's rather than a length check here, and
+// it is a better one: a profile declaring secrets that this run's environment
+// already answers no longer opens the store either.
 //
 // The list is read off the profile rather than copied onto Config: two fields
 // holding one list is two fields that can disagree, and the one that would then
@@ -140,19 +154,12 @@ func (c *Config) admitHostCredential(hc *profile.HostCredential, host *creds.Hos
 // The sandbox name goes into the error rather than the profile name: the user
 // asked to create this sandbox, and that is the name every other brig command
 // takes.
-func (c *Config) resolveSecrets() (map[string]string, error) {
-	if len(c.Profile.Secrets) == 0 {
-		return nil, nil
-	}
+func (c *Config) resolveSecrets() (creds.Resolution, error) {
 	open := c.OpenStore
 	if open == nil {
 		open = openStore
 	}
-	store, err := open()
-	if err != nil {
-		return nil, err
-	}
-	return creds.ResolveSecrets(c.Profile, c.VMName, store)
+	return creds.ResolveSecrets(c.Profile, c.VMName, open, os.LookupEnv)
 }
 
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
@@ -170,7 +177,11 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 			if c.Profile.IsGUI() {
 				focusWindow()
 			}
-			return nil
+			// Delivered on this path too: the tmpfs dies with the sandbox but
+			// a running one may have been booted before the secret existed,
+			// and rewriting a file the agent already read is how a rotated
+			// credential reaches a live session.
+			return c.deliverSecretFiles()
 		}
 		// Recreate rather than fail: all persistent state lives in the
 		// workspace on the host, so restarting costs nothing but the boot.
@@ -245,7 +256,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if c.Profile.IsGUI() {
 		focusWindow()
 	}
-	return nil
+	return c.deliverSecretFiles()
 }
 
 // waitReady waits for the in-guest agent.
