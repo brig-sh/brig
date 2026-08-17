@@ -34,6 +34,12 @@ type Secret struct {
 	// inventing a date: a made-up timestamp is worse than a visibly missing
 	// one, and is the "tidy-up" this comment exists to prevent.
 	Modified time.Time
+	// Provenance is what brig knows about where this secret came from, read
+	// from the backend's own metadata without decrypting the value. The zero
+	// value means absent -- a hand-created secret, or a backend that cannot
+	// carry it -- and callers render that as absent rather than guessing. Same
+	// contract as Modified above.
+	Provenance Provenance
 }
 
 // Store is the backend seam. A Vault, 1Password or cloud implementation is an
@@ -55,6 +61,31 @@ type Store interface {
 	// are never read: the names are not sensitive, and reading each value
 	// would be a separate decrypt of something the caller did not ask for.
 	List() ([]Secret, error)
+}
+
+// Annotator is a backend that can attach provenance to a value it stores.
+//
+// Optional rather than part of Store, and that is the point: a backend that
+// cannot carry metadata implements Store alone and callers fall back to
+// Create/Update, where provenance is simply absent. Same contract as
+// Secret.Modified -- the zero value means absent and is rendered as such --
+// so this follows a precedent rather than inventing one. A future backend
+// (libsecret items carry arbitrary string attributes; see #8) can implement
+// it without every other backend changing.
+type Annotator interface {
+	// Write stores a value with its provenance, creating or updating.
+	Write(name string, value []byte, p Provenance, update bool) error
+}
+
+// Sizer is a backend with a value-size ceiling worth checking before writing.
+//
+// The keychain has one, and it truncates silently on a four-byte boundary --
+// so a truncated value still base64-decodes and still resolves. Checking
+// before the write is what stops a re-import destroying a good value and
+// leaving a resolvable bad one behind, which is the failure verify cannot roll
+// back on an update.
+type Sizer interface {
+	MaxValue(name string, update bool) int
 }
 
 // Open returns the store for this host. The platform files supply open(),

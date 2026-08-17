@@ -14,11 +14,11 @@ package creds
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/jsonfind"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 )
@@ -256,58 +256,7 @@ func firstLines(s string, n int) string {
 	return strings.Join(lines, " ")
 }
 
-// findString and findNumber search the blob for a field at any depth, so a
-// credential wrapped in an envelope needs no path configured. The first match
-// in document order wins.
-func findString(blob []byte, field string) (string, bool) {
-	v, ok := find(blob, field)
-	if !ok {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
-}
-
-func findNumber(blob []byte, field string) (int64, bool) {
-	v, ok := find(blob, field)
-	if !ok {
-		return 0, false
-	}
-	n, ok := v.(float64)
-	if !ok {
-		return 0, false
-	}
-	return int64(n), true
-}
-
-func find(blob []byte, field string) (any, bool) {
-	var doc any
-	if err := json.Unmarshal(blob, &doc); err != nil {
-		return nil, false
-	}
-	return walk(doc, field)
-}
-
-func walk(node any, field string) (any, bool) {
-	switch n := node.(type) {
-	case map[string]any:
-		if v, ok := n[field]; ok {
-			return v, true
-		}
-		// Map iteration order is random, so a nested hit is only stable when
-		// the field appears once below this level. Profiles name fields that
-		// are unique in their blob, which is the case this serves.
-		for _, v := range n {
-			if got, ok := walk(v, field); ok {
-				return got, true
-			}
-		}
-	case []any:
-		for _, v := range n {
-			if got, ok := walk(v, field); ok {
-				return got, true
-			}
-		}
-	}
-	return nil, false
-}
+// findString and findNumber are jsonfind under the names ReadHost already
+// uses. Both go when ReadHost does.
+func findString(blob []byte, field string) (string, bool) { return jsonfind.String(blob, field) }
+func findNumber(blob []byte, field string) (int64, bool)  { return jsonfind.Number(blob, field) }
