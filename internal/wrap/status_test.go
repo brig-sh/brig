@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/secret"
 )
 
 // fakeRuntime answers the two questions a status report asks. The interface is
@@ -92,5 +94,51 @@ func TestStatusNamesTheBindingsWhenNothingIsForwarded(t *testing.T) {
 	got := statusOutput(t, "env:\n  - name: A\n    ref: env.A\n", creds.Set{})
 	if !strings.Contains(got, "forwarding no credentials (none of: A)") {
 		t.Errorf("the empty report does not name the bindings:\n%s", got)
+	}
+}
+
+// The status report says where the guest login comes from and whether it is
+// still good, without reading a value -- the same question the old
+// HostCredential block answered, asked of the store instead.
+func TestStatusReportsTheImportedLogin(t *testing.T) {
+	const now = 1755436980000
+	old := nowMilli
+	nowMilli = func() int64 { return now }
+	t.Cleanup(func() { nowMilli = old })
+
+	newConfig := func(expiresAt int64) *Config {
+		return &Config{
+			Out:     &bytes.Buffer{},
+			Err:     &bytes.Buffer{},
+			Runtime: fakeRuntime{},
+			Profile: profile.Profile{
+				Name:    "claude-code",
+				Secrets: []profile.SecretDecl{{Name: "claude-credentials", Required: ptr(false)}},
+			},
+			OpenStore: func() (creds.SecretReader, error) {
+				return listingStore{{
+					Name: "claude-credentials",
+					Provenance: secret.Provenance{
+						V:         secret.ProvenanceVersion,
+						From:      "keychain:Claude Code-credentials",
+						ExpiresAt: expiresAt,
+					},
+				}}, nil
+			},
+		}
+	}
+
+	good := newConfig(now + 3*60*60*1000)
+	good.Status(creds.Set{})
+	if got := good.Out.(*bytes.Buffer).String(); !strings.Contains(got,
+		"guest login: claude-credentials, imported from keychain:Claude Code-credentials\n") {
+		t.Errorf("a good login was not reported:\n%s", got)
+	}
+
+	expired := newConfig(now - 1)
+	expired.Status(creds.Set{})
+	if got := expired.Out.(*bytes.Buffer).String(); !strings.Contains(got,
+		"guest login: claude-credentials, imported from keychain:Claude Code-credentials (EXPIRED)\n") {
+		t.Errorf("an expired login was not reported:\n%s", got)
 	}
 }

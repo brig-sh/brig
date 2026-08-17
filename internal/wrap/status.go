@@ -67,6 +67,31 @@ func (c *Config) Status(set creds.Set) {
 		}
 	}
 
+	// Where an imported login comes from, and whether it is still good --
+	// the same question the block above answers from Profile.HostCredential,
+	// asked instead of the store's own provenance for a profile that has
+	// moved to secrets: rather than hostCredential:. Both can report at once
+	// while a profile still carries the old field; a later PR drops it, and
+	// this block keeps reporting on its own. listSecrets (expiry.go) is the
+	// same no-decrypt read warnExpiredSecrets uses, so a status report raises
+	// no keychain dialog either.
+	if secrets, ok := c.listSecrets(); ok {
+		for _, decl := range c.Profile.Secrets {
+			s, found := secrets[decl.Name]
+			if !found || s.Provenance.From == "" {
+				// Not present, or hand-created: provenance is the only thing
+				// that says a secret was imported rather than typed in by
+				// hand, and this line is about an imported login.
+				continue
+			}
+			if s.Provenance.ExpiresAt != 0 && s.Provenance.ExpiresAt < nowMilli() {
+				c.sayf("guest login: %s, imported from %s (EXPIRED)", s.Name, s.Provenance.From)
+			} else {
+				c.sayf("guest login: %s, imported from %s", s.Name, s.Provenance.From)
+			}
+		}
+	}
+
 	// Identity is resolved from the invoking directory, so report which one:
 	// with per-directory includeIf rules the answer changes as you move
 	// around the filesystem.
