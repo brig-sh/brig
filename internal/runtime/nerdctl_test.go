@@ -92,6 +92,20 @@ func TestBootKernelNameFollowsArch(t *testing.T) {
 	}
 }
 
+// nerdctl's tmpfs is a real --tmpfs at create time; there is no privileged
+// exec to mount one. The flag has to reach runArgs or a files: delivery
+// writes onto the container's own writable layer.
+func TestTmpfsReachesTheCreateLine(t *testing.T) {
+	n := &nerdctl{bin: "nerdctl"}
+	args, _, err := n.runArgs(RunSpec{Name: "x", Image: "i", Tmpfs: []string{"/run/brig/secrets:size=1m,mode=0700"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(args, " "), "--tmpfs /run/brig/secrets:size=1m,mode=0700") {
+		t.Errorf("args = %v", args)
+	}
+}
+
 func TestBootArtifactsReportsWhichFileIsMissing(t *testing.T) {
 	dir := t.TempDir()
 	// Only the initrd: the kernel is the one that should be named.

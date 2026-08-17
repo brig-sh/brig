@@ -256,6 +256,9 @@ func (h *hull) execArgs(spec ExecSpec) (args, env []string) {
 	if spec.Cwd != "" {
 		args = append(args, "--cwd", spec.Cwd)
 	}
+	if spec.User != "" {
+		args = append(args, "-u", spec.User)
+	}
 	envArgs, envVals := splitEnv("--env", spec.Env)
 	args = append(args, envArgs...)
 	args = append(args, spec.Name, "--")
@@ -321,6 +324,27 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 		return "", err
 	}
 	return out.String(), nil
+}
+
+// Feed runs a command with a value on its standard input.
+//
+// Bounded like every other agent call: the socket accepts before the guest
+// does, so an unbounded write into that window blocks forever with nothing
+// printed.
+func (h *hull) Feed(spec ExecSpec) error {
+	cmd, cancel, envVals := h.agentCall(spec)
+	defer cancel()
+	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
+	cmd.Stdin = spec.Stdin
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(errb.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 // Replace hands the process over. On success it does not return: the agent's

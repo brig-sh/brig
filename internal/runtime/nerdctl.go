@@ -148,6 +148,9 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		}
 		args = append(args, "-v", mount)
 	}
+	for _, t := range spec.Tmpfs {
+		args = append(args, "--tmpfs", t)
+	}
 	envArgs, envVals := splitEnv("-e", spec.Env)
 	args = append(args, envArgs...)
 	// A container exits when its command does, and the sandbox has to outlive
@@ -164,6 +167,9 @@ func (n *nerdctl) execArgs(spec ExecSpec) (args, env []string) {
 	}
 	if spec.Cwd != "" {
 		args = append(args, "-w", spec.Cwd)
+	}
+	if spec.User != "" {
+		args = append(args, "-u", spec.User)
 	}
 	envArgs, envVals := splitEnv("-e", spec.Env)
 	args = append(args, envArgs...)
@@ -188,6 +194,26 @@ func (n *nerdctl) Output(spec ExecSpec) (string, error) {
 		return "", err
 	}
 	return out.String(), nil
+}
+
+// Feed runs a command with a value on its standard input. execArgs already
+// carries -i, so the exec's stdin is open for spec.Stdin to fill; there is no
+// agent-socket accept-before-guest window here, so unlike hull's Feed this
+// needs no separate deadline.
+func (n *nerdctl) Feed(spec ExecSpec) error {
+	args, envVals := n.execArgs(spec)
+	cmd := exec.Command(n.bin, args...)
+	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
+	cmd.Stdin = spec.Stdin
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(errb.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 func (n *nerdctl) Replace(spec ExecSpec) error {

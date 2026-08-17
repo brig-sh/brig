@@ -151,6 +151,43 @@ func TestSupportsRefusesGUIOffVz(t *testing.T) {
 	}
 }
 
+// The value goes on stdin and never in argv, because hull durably logs every
+// exec's argv to a host file that outlives the sandbox. This is the same rule
+// Var.Secret already enforces for the environment channel, applied to the
+// channel that is about to carry the same credentials.
+func TestFeedKeepsTheValueOutOfArgv(t *testing.T) {
+	h := &hull{bin: "hull"}
+	args, _ := h.execArgs(ExecSpec{
+		Name:  "brig-claude-code",
+		User:  "root",
+		Cmd:   []string{"sh", "-c", "cat > /run/brig/secrets/claude-credentials"},
+		Stdin: strings.NewReader("super-secret-value"),
+	})
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "super-secret-value") {
+		t.Fatalf("the value reached argv: %s", joined)
+	}
+	if !strings.Contains(joined, "-u root") {
+		t.Errorf("privileged exec lost its user: %s", joined)
+	}
+	// hull parses `sh -c ...` as its own flags without this.
+	i := indexOf(args, "--")
+	if i < 0 || args[i-1] != "brig-claude-code" {
+		t.Errorf("-- does not separate the guest command: %s", joined)
+	}
+}
+
+// indexOf is the position of s in args, or -1. A small local helper rather
+// than slices.Index so the test reads without a second import just for this.
+func indexOf(args []string, s string) int {
+	for i, a := range args {
+		if a == s {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestQemuGatewaySocketMatchesHullConvention(t *testing.T) {
 	if got := qemuGatewaySocket("/a/gw.sock"); got != "/a/gw.sock.qemu" {
 		t.Errorf("qemuGatewaySocket = %q, want /a/gw.sock.qemu", got)

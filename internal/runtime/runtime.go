@@ -11,6 +11,7 @@ package runtime
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,13 @@ type RunSpec struct {
 	// when the sandbox installs packages and needs a real writable disk.
 	// Meaningless to a container runtime, which ignores it.
 	RootfsType string
+	// Tmpfs are tmpfs mounts to create with the sandbox, as
+	// "<path>:<options>". Only the container runtimes take these: hull has no
+	// create-time tmpfs, so brig mounts one there with a privileged exec
+	// instead. A runtime that cannot honour it ignores it, and the caller
+	// verifies the result in the guest either way -- which is what makes the
+	// asymmetry safe rather than merely tolerated.
+	Tmpfs []string
 	// GenericBoot asks the runtime to boot this image as an ordinary OCI
 	// image rather than one built to be a guest -- no kernel inside it, no
 	// urunc metadata. The runtime supplies the kernel and initrd; see
@@ -84,6 +92,15 @@ type ExecSpec struct {
 	TTY     bool
 	Env     []Var
 	Counted bool
+	// Stdin, when set, is fed to the command inside the guest. It is how a
+	// credential reaches the guest without appearing in argv: hull durably
+	// logs every exec's argv to a host file, so a value there outlives the
+	// sandbox in a file the user never sees. Only Feed reads it.
+	Stdin io.Reader
+	// User runs the command as a guest user other than the image's own --
+	// "root", for the one privileged exec that mounts the tmpfs. Empty leaves
+	// the image's configured user, which is what every other exec wants.
+	User string
 }
 
 // Instance is one sandbox as the runtime sees it.
@@ -109,6 +126,10 @@ type Runtime interface {
 	Probe(spec ExecSpec) bool
 	// Output runs a command and returns its stdout.
 	Output(spec ExecSpec) (string, error)
+	// Feed runs a command with spec.Stdin on its standard input and discards
+	// its output, returning only whether it succeeded. The one method that
+	// carries a value into the guest off the command line.
+	Feed(spec ExecSpec) error
 	// Replace hands this process over to the runtime: the exec'd binary takes
 	// the terminal, the signals and the exit status. It does not return on
 	// success. This is how the agent's own TUI gets a real tty without brig
