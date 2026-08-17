@@ -92,3 +92,56 @@ func TestEnvNamesAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// D5's parse-time rules. Each of these is a mistake a profile author makes
+// once; the point of checking at parse time is that they find out at import
+// rather than at the run that needed the credential.
+func TestSecretSourceRules(t *testing.T) {
+	no := false
+	cases := []struct {
+		name string
+		p    Profile
+		want string
+	}{
+		{"unknown from", Profile{Secrets: []SecretDecl{{Name: "s", From: "vault", Var: "X"}}}, "vault"},
+		{"both spellings", Profile{Secrets: []SecretDecl{{
+			Name: "s", From: SourceEnv, Var: "X",
+			Sources: []Source{{From: SourceEnv, Var: "X"}}}}}, "sources"},
+		{"empty sources", Profile{Secrets: []SecretDecl{{Name: "s", Sources: []Source{}}}}, "empty"},
+		{"wrong locator", Profile{Secrets: []SecretDecl{{
+			Name: "s", Sources: []Source{{From: SourceKeychain, Path: "/x"}}}}}, "path"},
+		{"missing locator", Profile{Secrets: []SecretDecl{{
+			Name: "s", Sources: []Source{{From: SourceKeychain}}}}}, "service"},
+		{"optional is fine", Profile{Secrets: []SecretDecl{{Name: "s", Required: &no}}}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.p.validateBindings()
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("valid profile rejected: %v", err)
+			case c.want == "":
+			case err == nil:
+				t.Fatalf("accepted, want an error naming %q", c.want)
+			case !strings.Contains(err.Error(), c.want):
+				t.Errorf("error %v does not name %q", err, c.want)
+			}
+		})
+	}
+}
+
+// Binding one secret through both channels is legal, and sometimes correct.
+// The test for it arrives with files: in PR 6; recorded here so nobody adds a
+// "one secret, one channel" rule in the meantime: brig's git credential helper
+// could read a file while the gh CLI inside the guest reads the variable and
+// will not look at /run/brig/secrets.
+
+func TestChainRules(t *testing.T) {
+	p := Profile{
+		Secrets: []SecretDecl{{Name: "gh-token"}},
+		Env:     []EnvBinding{{Name: "GH_TOKEN", Ref: "env.GH_TOKEN", Refs: []string{"secrets.gh-token"}}},
+	}
+	if err := p.validateBindings(); err == nil || !strings.Contains(err.Error(), "refs") {
+		t.Errorf("err = %v; want one naming refs", err)
+	}
+}
