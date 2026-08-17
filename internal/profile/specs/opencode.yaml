@@ -1,0 +1,15 @@
+name: opencode
+desc: opencode (OSS, provider-agnostic) -- example profile
+binary: opencode
+image: ghcr.io/brig-sh/opencode-stock:latest
+
+# Boots as an ordinary OCI image: the image carries no kernel, so the
+# runtime supplies one. hvi is the backend that path is built around.
+hypervisor: hvi
+genericBoot: true
+guestHome: /home/opencode
+forward: [OPENROUTER_API_KEY, GH_TOKEN]
+statePaths: [.local/share/opencode, .config/opencode]
+headless: true
+mem: 4096
+cpus: 4
