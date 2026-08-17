@@ -13,14 +13,14 @@ import (
 // profile there is exactly one mechanism to check.
 func (p Profile) validateBindings() error {
 	declared := make(map[string]bool, len(p.Secrets))
-	for _, name := range p.Secrets {
-		if err := secret.ValidName(name); err != nil {
+	for _, d := range p.Secrets {
+		if err := secret.ValidName(d.Name); err != nil {
 			return fmt.Errorf("secrets: %w", err)
 		}
-		if declared[name] {
-			return fmt.Errorf("secrets lists %q twice", name)
+		if declared[d.Name] {
+			return fmt.Errorf("secrets lists %q twice", d.Name)
 		}
-		declared[name] = true
+		declared[d.Name] = true
 	}
 
 	bound := make(map[string]bool, len(p.Env))

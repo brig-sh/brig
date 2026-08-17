@@ -99,7 +99,7 @@ env:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Secrets) != 1 || p.Secrets[0] != "gh_token" {
+	if len(p.Secrets) != 1 || p.Secrets[0].Name != "gh_token" {
 		t.Fatalf("Secrets = %v", p.Secrets)
 	}
 	if len(p.Env) != 2 || p.Env[0].Ref != "secrets.gh_token" || p.Env[1].Value != "fast" {
@@ -119,11 +119,11 @@ func TestFilesIsNotYetAKey(t *testing.T) {
 // clone is what keeps two profiles from sharing a backing array, and a new
 // slice field that misses it is a bug that only shows up under mutation.
 func TestCloneCopiesTheNewSlices(t *testing.T) {
-	p := Profile{Secrets: []string{"a"}, Env: []EnvBinding{{Name: "V", Ref: "env.V"}}}
+	p := Profile{Secrets: []SecretDecl{{Name: "a"}}, Env: []EnvBinding{{Name: "V", Ref: "env.V"}}}
 	c := p.clone()
-	c.Secrets[0] = "b"
+	c.Secrets[0].Name = "b"
 	c.Env[0].Name = "W"
-	if p.Secrets[0] != "a" || p.Env[0].Name != "V" {
+	if p.Secrets[0].Name != "a" || p.Env[0].Name != "V" {
 		t.Errorf("clone shares its backing arrays: %+v", p)
 	}
 }

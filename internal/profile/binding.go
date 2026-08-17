@@ -76,6 +76,26 @@ type EnvBinding struct {
 	// it is the billing guard, one switch covers all of it, and a variable on
 	// it may not be bound at all.
 	OptIn bool `json:"optIn,omitempty"`
+	// Refs is an ordered chain: the first element that resolves non-empty
+	// wins. It is how one variable gets a shell override and a store fallback,
+	// which BRIG_FORWARD_ENV cannot give it once a profile binds the name.
+	// Exactly one of Value, Ref and Refs is set.
+	//
+	// Scoped to env: deliberately. A file has one source, so files: takes ref:
+	// and never refs:.
+	Refs []string `json:"refs,omitempty"`
+}
+
+// RefList is the binding's sources in order, with the singular ref: expanded
+// into a chain of one, so every caller walks one shape.
+func (b EnvBinding) RefList() []string {
+	if len(b.Refs) > 0 {
+		return b.Refs
+	}
+	if b.Ref == "" {
+		return nil
+	}
+	return []string{b.Ref}
 }
 
 // Resolved reports where the binding's value comes from: the parsed ref, and

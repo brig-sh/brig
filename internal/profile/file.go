@@ -261,12 +261,14 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig profile import <thi
 #   guestHome  where the workspace is mounted. The agent's state lands here,
 #              which is what makes the workspace the unit of persistence
 #   binary     the CLI inside the guest, for kind: agent
-#   secrets    names this profile needs from brig's own store. Resolved before
-#              the sandbox is created: a missing one fails the run and names
-#              every missing secret at once. brig secret create <name> adds one
+#   secrets    names this profile needs from brig's own store. A bare name is
+#              required: a missing one fails the run. {name: x, required: false}
+#              warns instead and boots. sources: says where brig can find it on
+#              your host -- from: keychain|file|env, first hit wins
 #   env        what the guest sees. Each entry has a name and exactly one of
-#              value: (a literal) or ref: -- secrets.<name> reads brig's store,
-#              env.<name> reads brig's own environment
+#              value: (a literal), ref: or refs: -- secrets.<name> reads brig's
+#              store, env.<name> reads brig's own environment, and a refs:
+#              chain takes the first that resolves
 #   forward    deprecated: forward: [X] now means env: [{name: X, ref: env.X}],
 #              which says the same thing. Still read, still works
 #   deny       variables never bound, whatever env or forward says. This is the
@@ -293,11 +295,16 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig profile import <thi
 # ` + BringYourOwnImageDoc + `
 `
 
-// Source returns the bytes a profile was read from, which is what export
+// SourceBytes returns the bytes a profile was read from, which is what export
 // hands back: a profile is a file someone wrote, and re-serialising it from
 // the parsed struct would drop their comments and reorder their fields for
 // no gain.
-func Source(name string) ([]byte, bool) {
+//
+// Named SourceBytes rather than Source because Source is now the type naming
+// one place `brig secret import` may read a value from, and a package cannot
+// have both. The type wins the short name: it is written by hand in every
+// profile that declares a source, while this is called once, here.
+func SourceBytes(name string) ([]byte, bool) {
 	e, ok := registry[name]
 	if !ok || len(e.source) == 0 {
 		return nil, false
@@ -468,7 +475,7 @@ func looksLikePath(s string) bool {
 // Only p.Name is read: a modified copy exports as the file on record, not as
 // the copy. ExportJSON marshals the value it is given.
 func Export(p Profile) ([]byte, error) {
-	body, ok := Source(p.Name)
+	body, ok := SourceBytes(p.Name)
 	if !ok {
 		var err error
 		if body, err = yaml.Marshal(p); err != nil {

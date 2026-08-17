@@ -1,6 +1,9 @@
 package profile
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // The registry hands out profiles by value, which copies the struct but not
 // what its slices point at. Without a deep copy a caller that edits Deny is
@@ -30,7 +33,7 @@ func TestLookupDoesNotHandOutTheRegistrysOwnSlices(t *testing.T) {
 	if second.Env[0].Name == "CLOBBERED" {
 		t.Error("Env was overwritten through a caller's copy")
 	}
-	if second.Env[0] != wantEnv {
+	if !reflect.DeepEqual(second.Env[0], wantEnv) {
 		t.Errorf("Env[0] = %+v after a caller edited its copy, want %+v", second.Env[0], wantEnv)
 	}
 	if !second.Denied(wantDeny) {

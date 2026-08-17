@@ -107,11 +107,15 @@ type Profile struct {
 	// came through Parse, and reading it is a bug.
 	Forward []string `json:"forward,omitempty"`
 	// Secrets is the requirement list: the names this profile needs out of the
-	// store brig owns. Kept separate from the bindings below so a missing
-	// secret names every one of them at once rather than dying on the first
-	// ref -- the difference between one error you can act on and one failed
-	// run per secret.
-	Secrets []string `json:"secrets,omitempty"`
+	// store brig owns, and for each one whether a run without it should stop
+	// and where `brig secret import` may find it. A bare string in YAML is
+	// {name: <it>, required: true}, so every profile written before this
+	// schema parses unchanged.
+	//
+	// Kept separate from the bindings below so a missing secret names every
+	// one of them at once rather than dying on the first ref -- the difference
+	// between one error you can act on and one failed run per secret.
+	Secrets []SecretDecl `json:"secrets,omitempty"`
 	// Env is what the guest actually sees. Each entry has exactly one of
 	// value: (a literal, for non-secret configuration) or ref: (resolved --
 	// secrets.<name> from the store, env.<name> from brig's own environment).
@@ -213,9 +217,24 @@ type Profile struct {
 // needs, never a nested document.
 func (p Profile) clone() Profile {
 	p.Forward = slices.Clone(p.Forward)
+	// A SecretDecl holds a []Source and a *bool, so a shallow element copy is
+	// not a full one: a caller flipping Required through a clone would be
+	// editing the registry's own answer for every later caller.
 	p.Secrets = slices.Clone(p.Secrets)
-	// EnvBinding holds only strings, so a shallow element copy is a full one.
+	for i, d := range p.Secrets {
+		p.Secrets[i].Sources = slices.Clone(d.Sources)
+		if d.Required != nil {
+			required := *d.Required
+			p.Secrets[i].Required = &required
+		}
+	}
+	// An EnvBinding carries a Refs chain, so the elements need cloning too:
+	// the shallow copy that sufficed while a binding held only strings would
+	// hand two profiles the same chain.
 	p.Env = slices.Clone(p.Env)
+	for i, b := range p.Env {
+		p.Env[i].Refs = slices.Clone(b.Refs)
+	}
 	p.Deny = slices.Clone(p.Deny)
 	p.StatePaths = slices.Clone(p.StatePaths)
 	p.ProjectPaths = slices.Clone(p.ProjectPaths)

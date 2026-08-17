@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -24,7 +25,7 @@ func TestForwardTranslatesToEnvBindings(t *testing.T) {
 		t.Fatalf("Env = %+v, want %+v", p.Env, want)
 	}
 	for i := range want {
-		if p.Env[i] != want[i] {
+		if !reflect.DeepEqual(p.Env[i], want[i]) {
 			t.Errorf("Env[%d] = %+v, want %+v", i, p.Env[i], want[i])
 		}
 	}

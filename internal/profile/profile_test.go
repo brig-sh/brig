@@ -124,3 +124,17 @@ func TestGuestUser(t *testing.T) {
 		t.Errorf("GuestUser() = %q, want codex", got)
 	}
 }
+
+// A clone whose Required pointer is shared is a registry-wide behaviour change
+// one caller can make for every later caller in the process, which is the bug
+// clone exists for.
+func TestCloneDoesNotShareSecretInternals(t *testing.T) {
+	no := false
+	p := Profile{Secrets: []SecretDecl{{Name: "s", Required: &no, Sources: []Source{{From: SourceEnv, Var: "X"}}}}}
+	c := p.clone()
+	*c.Secrets[0].Required = true
+	c.Secrets[0].Sources[0].Var = "Y"
+	if *p.Secrets[0].Required || p.Secrets[0].Sources[0].Var != "X" {
+		t.Error("a clone shares the original's secret internals")
+	}
+}
