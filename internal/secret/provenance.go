@@ -24,7 +24,7 @@ const provenancePrefix = "brig1:"
 // where it came from and when it expires.
 //
 // It exists because sources are read only on demand, so the stored copy drifts
-// from BOTH directions -- the host renews and brig never re-reads it, while
+// from both directions -- the host renews and brig never re-reads it, while
 // the guest refreshes onto tmpfs and loses it at shutdown. Nothing else in the
 // system would notice.
 //

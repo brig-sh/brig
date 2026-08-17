@@ -99,3 +99,14 @@ once it has code that actually calls `Feed`.
 
 The sandbox was removed after this test (`brig rm claude-code`), so nothing
 from this session is left running.
+
+## Correction (reviewed after the fact)
+
+The finding above is about the *probe snippet*, which omitted a `chown`. It is not
+a finding about the delivery design: `internal/wrap`'s delivery mounts `0700` and
+then `chown`s the directory to the guest user, and guest-owned `0700` accepts the
+unprivileged write. Confirmed by re-running the probe with the chown added.
+
+`mode=0755` is NOT the right fix and must not reach the delivery path: it lets any
+uid in the guest list the staging directory and read the names, sizes and mtimes of
+every credential delivered, which the `0600` on the files themselves does not cover.
