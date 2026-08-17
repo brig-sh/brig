@@ -1,6 +1,9 @@
 package secret
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProvenanceRoundTrips(t *testing.T) {
 	want := Provenance{V: ProvenanceVersion, From: "keychain:Claude Code-credentials", ExpiresAt: 1755436980000}
@@ -47,5 +50,58 @@ func TestForeignCommentIsNotProvenance(t *testing.T) {
 func TestZeroProvenanceIsAbsent(t *testing.T) {
 	if !(Provenance{}).IsZero() {
 		t.Error("the zero provenance does not report itself absent")
+	}
+}
+
+// The comment attribute is attacker-controlled input, not brig's own: any
+// process running as this user can write an item into brig's namespace (see
+// keychain_darwin.go's comment on service), and From is about to be printed
+// into `brig secret ls` and into a warning that tells the user to run a
+// command. A From holding a control character or an escape sequence would
+// reach a terminal unfiltered -- a lever aimed at whoever reads brig's
+// output -- so DecodeProvenance drops it to the zero value rather than
+// passing it through. That is the value every caller already renders as
+// absent, not a new failure mode for them to handle.
+func TestHostileFromIsSanitised(t *testing.T) {
+	cases := []struct {
+		name string
+		from string
+	}{
+		{"ansi escape", "keychain:\x1b[31mnot a color\x1b[0m"},
+		{"too long", "keychain:" + strings.Repeat("x", 4096)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			encoded, err := Provenance{V: ProvenanceVersion, From: c.from, ExpiresAt: 1}.Encode()
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			got, ok := DecodeProvenance(encoded)
+			if !ok {
+				t.Fatalf("DecodeProvenance(%q) failed outright, want a sanitised zero-value From", encoded)
+			}
+			if got.From != "" {
+				t.Errorf("From = %q, want it rejected to the zero value", got.From)
+			}
+		})
+	}
+}
+
+// The locators this feature actually produces -- Source.Locator's shapes --
+// must still survive, or every real secret would show FROM as "-".
+func TestLegitimateLocatorsSurviveSanitising(t *testing.T) {
+	for _, from := range []string{
+		"keychain:Claude Code-credentials",
+		"file:~/.claude/.credentials.json",
+		"env:GH_TOKEN",
+	} {
+		encoded, err := Provenance{V: ProvenanceVersion, From: from}.Encode()
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		got, ok := DecodeProvenance(encoded)
+		if !ok || got.From != from {
+			t.Errorf("DecodeProvenance(%q) = %+v, %v; want From = %q", encoded, got, ok, from)
+		}
 	}
 }

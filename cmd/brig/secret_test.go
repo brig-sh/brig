@@ -18,8 +18,9 @@ import (
 // running them against the real store would make `go test ./...` write to the
 // developer's login keychain from two packages instead of one.
 type fakeStore struct {
-	items map[string][]byte
-	order []string
+	items      map[string][]byte
+	order      []string
+	provenance map[string]secret.Provenance
 }
 
 // The double is the thing most likely to drift: adding a method to Store
@@ -30,7 +31,7 @@ var _ secret.Store = (*fakeStore)(nil)
 
 func newFake(t *testing.T) *fakeStore {
 	t.Helper()
-	f := &fakeStore{items: map[string][]byte{}}
+	f := &fakeStore{items: map[string][]byte{}, provenance: map[string]secret.Provenance{}}
 	old := openStore
 	openStore = func() (secret.Store, error) { return f, nil }
 	t.Cleanup(func() { openStore = old })
@@ -43,6 +44,14 @@ func newFake(t *testing.T) *fakeStore {
 func (f *fakeStore) seed(name, value string) {
 	f.items[name] = []byte(value)
 	f.order = append(f.order, name)
+}
+
+// seedWithProvenance is seed plus a stored source, for the one ls test that
+// needs to see something in the FROM column other than the dash every other
+// fixture leaves it at.
+func (f *fakeStore) seedWithProvenance(name, value string, p secret.Provenance) {
+	f.seed(name, value)
+	f.provenance[name] = p
 }
 
 func (f *fakeStore) Kind() string { return "fake" }
@@ -84,8 +93,9 @@ func (f *fakeStore) List() ([]secret.Secret, error) {
 	for _, n := range f.order {
 		if _, ok := f.items[n]; ok {
 			out = append(out, secret.Secret{
-				Name:     n,
-				Modified: time.Date(2026, 8, 14, 16, 23, 30, 0, time.UTC),
+				Name:       n,
+				Modified:   time.Date(2026, 8, 14, 16, 23, 30, 0, time.UTC),
+				Provenance: f.provenance[n], // the zero value for anything not seeded with one
 			})
 		}
 	}
@@ -564,7 +574,7 @@ func TestListShowsNamesAndDates(t *testing.T) {
 	if err := secretCmd(&out, []string{"ls"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"NAME", "UPDATED", "alpha", "beta", "2026-08-14"} {
+	for _, want := range []string{"NAME", "UPDATED", "FROM", "alpha", "beta", "2026-08-14"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("ls output is missing %q:\n%s", want, out.String())
 		}
@@ -576,6 +586,49 @@ func TestListShowsNamesAndDates(t *testing.T) {
 				t.Errorf("ls printed a value: %q", line)
 			}
 		}
+	}
+}
+
+// A hand-created secret carries no provenance, and the FROM column says so
+// with a dash -- the same way an absent date does -- rather than inventing a
+// source it does not know.
+func TestListShowsADashForNoProvenance(t *testing.T) {
+	f := newFake(t)
+	f.seed("plain", "v")
+	var out bytes.Buffer
+	if err := secretCmd(&out, []string{"ls"}); err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "plain") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("ls did not list plain:\n%s", out.String())
+	}
+	// UPDATED's own date has a space in it ("2026-08-14 19:23"), so the FROM
+	// column is the last field, not a fixed index.
+	fields := strings.Fields(line)
+	if got := fields[len(fields)-1]; got != "-" {
+		t.Errorf("ls row = %q, want a dash in the FROM column, got %q", line, got)
+	}
+}
+
+// This is the whole reason the FROM column exists: a secret import wrote
+// carries its source, and ls names it.
+func TestListShowsTheStoredProvenance(t *testing.T) {
+	f := newFake(t)
+	f.seedWithProvenance("claude-credentials", "v", secret.Provenance{
+		V: secret.ProvenanceVersion, From: "keychain:Claude Code-credentials",
+	})
+	var out bytes.Buffer
+	if err := secretCmd(&out, []string{"ls"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "keychain:Claude Code-credentials") {
+		t.Errorf("ls did not show the stored provenance:\n%s", out.String())
 	}
 }
 

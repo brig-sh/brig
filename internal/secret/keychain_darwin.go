@@ -51,6 +51,8 @@ type keychain struct{ service string }
 // a Store: a method that stops matching the interface fails here, in the file
 // that has to change, instead of at some distant call site.
 var _ Store = keychain{}
+var _ Annotator = keychain{}
+var _ Sizer = keychain{}
 
 func open() (Store, error) { return keychain{service: service}, nil }
 
@@ -64,14 +66,17 @@ func (k keychain) Kind() string { return "keychain" }
 const maxLine = 4096
 
 // writePrefix is the write command up to and including the "-w " that the
-// value follows. Splitting it out is what lets maxValue price the value
+// value follows. Splitting it out is what lets MaxValueFor price the value
 // against the command that will actually carry it.
 //
 // Quoting is safe to do by hand here because nothing variable on this line
 // needs it: the service is a constant, the value is base64, and the name has
 // been through ValidName, so it holds only letters, digits, - and _. The
-// label is the one argument with a space in it, and its shape is fixed.
-func (k keychain) writePrefix(name string, update bool) string {
+// label is the one argument with a space in it, and its shape is fixed. -j's
+// argument is safe unquoted for the same reason: Encode's base64url output
+// holds only letters, digits, - and _, which is the whole point of that
+// encoding (see Provenance.Encode).
+func (k keychain) writePrefix(name string, update bool, p Provenance) (string, error) {
 	args := []string{
 		"add-generic-password",
 		"-s", k.service,
@@ -80,23 +85,62 @@ func (k keychain) writePrefix(name string, update bool) string {
 		"-l", `"brig: ` + name + `"`,
 		"-D", `"brig secret"`,
 	}
+	if !p.IsZero() {
+		encoded, err := p.Encode()
+		if err != nil {
+			return "", err
+		}
+		args = append(args, "-j", encoded)
+	}
 	if update {
 		args = append(args, "-U")
 	}
 	// -w must be the last option: getopt stops at the first non-option, which
 	// is also why no keychain can be named here and why the tests use the
 	// default one.
-	return strings.Join(append(args, "-w"), " ") + " "
+	return strings.Join(append(args, "-w"), " ") + " ", nil
 }
 
-// maxValue is the largest raw value that fits on the command line for this
-// name. Base64 turns three bytes into four characters, so the budget divides
-// by four and multiplies by three.
-func (k keychain) maxValue(name string, update bool) int {
-	return (maxLine - 1 - len(k.writePrefix(name, update))) / 4 * 3
+// assumedFromLen is what MaxValue prices against before it knows what
+// provenance an import will attach: generous for a keychain service name or
+// a file path, and pessimistic enough that Write's real ceiling --
+// MaxValueFor, priced against the provenance actually being attached -- is
+// never smaller than what this promised a caller that has not chosen one
+// yet.
+const assumedFromLen = 128
+
+// MaxValue is the Sizer's provenance-free ceiling: for a caller, such as a
+// CLI pre-check, that wants to size a value before it has decided what
+// provenance goes with it. It must not be the ceiling Write itself uses --
+// see MaxValueFor and Write's own comment on why.
+func (k keychain) MaxValue(name string, update bool) int {
+	return k.MaxValueFor(name, update, Provenance{V: ProvenanceVersion, From: strings.Repeat("x", assumedFromLen)})
 }
 
-// write stores a value, creating or updating.
+// MaxValueFor is the largest raw value that fits on the command line for this
+// name together with this provenance. Base64 turns three bytes into four
+// characters, so the budget divides by four and multiplies by three.
+//
+// Write prices against this, with the provenance it is actually about to
+// attach, rather than against MaxValue's provenance-free number -- the
+// comment now rides the same line as the value, so a ceiling that does not
+// know about it would pass a write the line cannot carry.
+func (k keychain) MaxValueFor(name string, update bool, p Provenance) int {
+	prefix, err := k.writePrefix(name, update, p)
+	if err != nil {
+		// Encode fails only if json.Marshal does, which cannot happen for
+		// this fixed shape. Reporting no room is safer than dividing by a
+		// length that was never computed.
+		return 0
+	}
+	return (maxLine - 1 - len(prefix)) / 4 * 3
+}
+
+// Write stores a value together with its provenance, creating or updating.
+// Create and Update are this with the zero Provenance, which writePrefix
+// encodes as no -j at all -- so a hand-created secret's comment is empty,
+// not a zero-value JSON document, and DecodeProvenance reads that back as
+// absent rather than as a provenance of nothing.
 //
 // The value is base64-encoded because security's command line is line-based:
 // a newline in a raw value would end the line early, so an SSH key or any
@@ -112,12 +156,28 @@ func (k keychain) maxValue(name string, update bool) int {
 // failed anywhere. Interactive mode raises that ceiling to a whole line but
 // does not remove it, which is why the length is checked below rather than
 // trusted.
-func (k keychain) write(name string, value []byte, update bool) error {
-	if max := k.maxValue(name, update); len(value) > max {
-		return fmt.Errorf("the value for %q is %d bytes, and the keychain takes at most %d",
+//
+// The ceiling checked is MaxValueFor(name, update, p) -- priced against the
+// provenance actually being attached -- and not MaxValue's provenance-free
+// number. Pricing against the wrong one is the obvious minimal edit and it is
+// wrong: the comment now shares the line with the value, so a value that
+// alone fits the provenance-free budget can still push the whole line past
+// security's buffer once a long provenance is appended. security answers
+// that by truncating the line silently on a four-byte boundary, not by
+// refusing it -- so the short value still base64-decodes, still resolves,
+// and verify (below) cannot roll back an update that landed on top of a good
+// value. Checking the real ceiling here is what turns that into a refusal
+// before anything is sent to security at all.
+func (k keychain) Write(name string, value []byte, p Provenance, update bool) error {
+	if max := k.MaxValueFor(name, update, p); len(value) > max {
+		return fmt.Errorf("the value for %q is %d bytes, and with its provenance the keychain takes at most %d",
 			name, len(value), max)
 	}
-	line := k.writePrefix(name, update) + base64.StdEncoding.EncodeToString(value)
+	prefix, err := k.writePrefix(name, update, p)
+	if err != nil {
+		return err
+	}
+	line := prefix + base64.StdEncoding.EncodeToString(value)
 	cmd := exec.Command(securityBin, "-i")
 	cmd.Stdin = strings.NewReader(line + "\n")
 	var errb bytes.Buffer
@@ -129,6 +189,13 @@ func (k keychain) write(name string, value []byte, update bool) error {
 		return securityError(err, errb.String())
 	}
 	return k.verify(name, value, update)
+}
+
+// write is Create and Update's path: the zero Provenance, so a plain secret
+// created before this field existed -- or created by hand -- carries no
+// comment at all rather than one describing an absent source.
+func (k keychain) write(name string, value []byte, update bool) error {
+	return k.Write(name, value, Provenance{}, update)
 }
 
 // verify reads back what write just stored.
@@ -274,7 +341,7 @@ func parseDump(dump, service string) []Secret {
 		if ValidName(name) != nil {
 			continue
 		}
-		list = append(list, Secret{Name: name, Modified: modified(block)})
+		list = append(list, Secret{Name: name, Modified: modified(block), Provenance: provenance(block)})
 	}
 	slices.SortFunc(list, func(a, b Secret) int { return strings.Compare(a.Name, b.Name) })
 	return list
@@ -296,6 +363,20 @@ func attr(block, key string) string {
 		return strings.TrimSuffix(value, `"`)
 	}
 	return ""
+}
+
+// provenance reads the icmt attribute through DecodeProvenance, which reads
+// attributes only -- no -d, no decrypt, no keychain-access prompt -- and
+// answers false for anything brig did not write: an item another process
+// planted in the namespace, or one written before this field existed. Either
+// way the zero value is what List reports, the same contract Modified
+// follows below.
+func provenance(block string) Provenance {
+	p, ok := DecodeProvenance(attr(block, "icmt"))
+	if !ok {
+		return Provenance{}
+	}
+	return p
 }
 
 // modified reads the mdat attribute, which prints as hex followed by the same

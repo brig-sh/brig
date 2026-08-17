@@ -98,6 +98,14 @@ func (k *testKeychain) Update(name string, value []byte) error {
 	return k.keychain.Update(name, value)
 }
 
+// Write registers cleanup the same way Create and Update do, so a test
+// exercising the Annotator path directly does not litter the developer's
+// keychain when it fails partway through.
+func (k *testKeychain) Write(name string, value []byte, p Provenance, update bool) error {
+	k.cleanup(name)
+	return k.keychain.Write(name, value, p, update)
+}
+
 func (k *testKeychain) cleanup(name string) {
 	k.t.Cleanup(func() { _ = k.keychain.Delete(name) })
 }
@@ -145,6 +153,24 @@ func TestCreateAndReadRoundTrip(t *testing.T) {
 	}
 }
 
+// find is List filtered to one name, for a test that wants a secret's
+// metadata rather than its value: Read never returns Provenance or Modified,
+// and List is the only path that does.
+func find(t *testing.T, k *testKeychain, name string) Secret {
+	t.Helper()
+	list, err := k.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, s := range list {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("List did not include %q: %+v", name, list)
+	return Secret{}
+}
+
 func randomBytes(t *testing.T, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)
@@ -177,15 +203,19 @@ func TestWriteKeepsTheValueOutOfArgv(t *testing.T) {
 	if err := k.Create("canary", []byte(value)); err != nil {
 		t.Fatal(err)
 	}
+	prefix, err := k.writePrefix("canary", false, Provenance{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The whole of what security is invoked with. Anything the value could
 	// hide in would have to be here.
-	for _, a := range []string{"-i", k.writePrefix("canary", false)} {
+	for _, a := range []string{"-i", prefix} {
 		if strings.Contains(a, value) || strings.Contains(a, base64.StdEncoding.EncodeToString([]byte(value))) {
 			t.Fatalf("the value reached argv: %q", a)
 		}
 	}
-	if !strings.HasSuffix(k.writePrefix("canary", false), "-w ") {
-		t.Errorf("-w is not last, so security would not read the value: %q", k.writePrefix("canary", false))
+	if !strings.HasSuffix(prefix, "-w ") {
+		t.Errorf("-w is not last, so security would not read the value: %q", prefix)
 	}
 }
 
@@ -196,9 +226,9 @@ func TestWriteKeepsTheValueOutOfArgv(t *testing.T) {
 // different secret than the one that went in.
 func TestWriteRefusesAValueTooBigForTheCommandLine(t *testing.T) {
 	k := testStore(t)
-	max := k.maxValue("big", false)
+	max := k.MaxValueFor("big", false, Provenance{})
 	if max < 1024 {
-		t.Fatalf("maxValue = %d, too small to be carrying keys", max)
+		t.Fatalf("MaxValueFor = %d, too small to be carrying keys", max)
 	}
 	if err := k.Create("big", bytes.Repeat([]byte("a"), max)); err != nil {
 		t.Fatalf("a value of exactly %d bytes was refused: %v", max, err)
@@ -227,12 +257,97 @@ func TestWriteRefusesAValueTooBigForTheCommandLine(t *testing.T) {
 // The limit shrinks as the name grows, because the name is on the same line.
 func TestMaxValueLeavesRoomForTheName(t *testing.T) {
 	k := testStore(t)
-	short, long := k.maxValue("a", false), k.maxValue(strings.Repeat("a", 41), false)
+	short := k.MaxValueFor("a", false, Provenance{})
+	long := k.MaxValueFor(strings.Repeat("a", 41), false, Provenance{})
 	if long >= short {
-		t.Errorf("maxValue did not fall with a longer name: %d then %d", short, long)
+		t.Errorf("MaxValueFor did not fall with a longer name: %d then %d", short, long)
 	}
 	if diff := short - long; diff < 30 {
 		t.Errorf("a name 40 characters longer only cost %d bytes", diff)
+	}
+}
+
+// D9. The comment attribute is read without decrypting, which is what lets
+// ls report provenance with no keychain dialog.
+func TestProvenanceSurvivesWriteAndList(t *testing.T) {
+	k := testStore(t)
+	want := Provenance{V: ProvenanceVersion, From: "keychain:Claude Code-credentials", ExpiresAt: 1755436980000}
+	if err := k.Write("prov-a", []byte("value"), want, false); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got := find(t, k, "prov-a")
+	if got.Provenance != want {
+		t.Errorf("provenance = %+v, want %+v", got.Provenance, want)
+	}
+}
+
+// The update path is the one that loses metadata by default, and it is the
+// path every re-import takes.
+func TestProvenanceSurvivesUpdate(t *testing.T) {
+	k := testStore(t)
+	if err := k.Write("prov-b", []byte("v1"), Provenance{V: ProvenanceVersion, From: "file:/a"}, false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	second := Provenance{V: ProvenanceVersion, From: "keychain:svc", ExpiresAt: 42}
+	if err := k.Write("prov-b", []byte("v2"), second, true); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got := find(t, k, "prov-b").Provenance; got != second {
+		t.Errorf("provenance after update = %+v, want %+v", got, second)
+	}
+}
+
+// A hand-created secret carries none, and that has to read as absent rather
+// than as an empty provenance that claims a source of "".
+func TestHandCreatedSecretHasNoProvenance(t *testing.T) {
+	k := testStore(t)
+	if err := k.Create("plain", []byte("v")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := find(t, k, "plain").Provenance; !got.IsZero() {
+		t.Errorf("provenance = %+v, want the zero value", got)
+	}
+}
+
+// The size ceiling is priced against the whole command line, and the comment
+// now rides on it -- so MaxValue has to account for the comment or the
+// pre-check passes a write that security silently truncates.
+func TestMaxValueAccountsForTheComment(t *testing.T) {
+	k := keychain{service: "sh.brig.test"}
+	long := Provenance{V: ProvenanceVersion, From: "keychain:" + strings.Repeat("x", 200)}
+	if k.MaxValueFor("n", false, long) >= k.MaxValueFor("n", false, Provenance{}) {
+		t.Error("a longer comment did not reduce the value budget")
+	}
+}
+
+// Step 5c: the write path must price its ceiling against the provenance it is
+// actually attaching, not the provenance-free ceiling MaxValue offers a
+// caller that has not chosen one yet. Wiring Write to that number while still
+// appending -j <encoded> is the obvious minimal edit, and it is wrong: the
+// line exceeds security's buffer, security truncates it silently on a
+// four-byte boundary, the short value still base64-decodes and still
+// resolves, and verify cannot roll back an update. The assertion that matters
+// is on the stored bytes -- here, that nothing was stored at all -- not on
+// the error alone.
+func TestWriteRefusesWhenProvenanceOverflowsTheLine(t *testing.T) {
+	k := testStore(t)
+	// A value that exactly fills the provenance-free budget: the old
+	// maxValue would have waved this through.
+	bare := k.MaxValueFor("prov-big", false, Provenance{})
+	value := bytes.Repeat([]byte("a"), bare)
+	long := Provenance{V: ProvenanceVersion, From: "keychain:" + strings.Repeat("x", 200)}
+
+	err := k.Write("prov-big", value, long, false)
+	if err == nil {
+		t.Fatal("a value plus provenance that overflows the line was accepted")
+	}
+	if !strings.Contains(err.Error(), "at most") {
+		t.Errorf("refusal = %v, want it to say what the limit is", err)
+	}
+	// The point of 5c: nothing was silently truncated and stored under a name
+	// that now resolves to a value shorter than the one asked for.
+	if _, err := k.Read("prov-big"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the refused write left something behind")
 	}
 }
 
@@ -407,17 +522,38 @@ func TestListSkipsNamesOutsideTheGrammar(t *testing.T) {
 }
 
 // plant writes an item directly, bypassing the store, to stand in for whatever
-// else on the host might write into brig's namespace.
-func plant(t *testing.T, service, name, value string) {
+// else on the host might write into brig's namespace. An optional comment
+// stands in for a hostile icmt attribute -- the same namespace any process
+// running as this user can write into carries the comment too.
+func plant(t *testing.T, service, name, value string, comment ...string) {
 	t.Helper()
 	t.Cleanup(func() {
 		_ = exec.Command("security", "delete-generic-password", "-s", service, "-a", name).Run()
 	})
+	line := fmt.Sprintf("add-generic-password -s %s -a %q", service, name)
+	if len(comment) > 0 {
+		line += fmt.Sprintf(" -j %q", comment[0])
+	}
+	line += fmt.Sprintf(" -w %q\n", value)
 	cmd := exec.Command("security", "-i")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf(
-		"add-generic-password -s %s -a %q -w %q\n", service, name, value))
+	cmd.Stdin = strings.NewReader(line)
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Step 5b, end to end: the comment attribute is not brig's private space,
+// and this is what it looks like when something else uses it. A From that
+// survived unsanitised would be printed by `brig secret ls` and by a warning
+// telling the user to run a command -- exactly where a hidden escape
+// sequence would do its work.
+func TestListSanitisesAHostilePlantedComment(t *testing.T) {
+	k := testStore(t)
+	plant(t, k.service, "hostile", "dg==", "brig1:"+base64.RawURLEncoding.EncodeToString(
+		[]byte(`{"v":1,"from":"`+"\x1b[31mnot a color\x1b[0m"+`","expiresAt":1}`)))
+	got := find(t, k, "hostile")
+	if got.Provenance.From != "" {
+		t.Errorf("From = %q, want the planted escape sequence rejected to the zero value", got.Provenance.From)
 	}
 }
 

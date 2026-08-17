@@ -66,6 +66,15 @@ func (p Provenance) Encode() (string, error) {
 
 // DecodeProvenance reads a comment attribute back, reporting false for
 // anything brig did not write.
+//
+// The prefix and the base64 decode only prove the comment is *shaped* like
+// brig's own -- they are not proof of authorship. keychain_darwin.go's own
+// comment on service says why: any process running as this user can add an
+// item under brig's namespace, so a decoded From is attacker-controlled
+// input, not brig's. It is about to be printed into `brig secret ls` and
+// into a warning that tells the user to run a command, so a From that fails
+// validFrom is dropped to the zero value here, once, rather than trusted by
+// every place that later prints it.
 func DecodeProvenance(comment string) (Provenance, bool) {
 	rest, ok := strings.CutPrefix(comment, provenancePrefix)
 	if !ok {
@@ -79,5 +88,39 @@ func DecodeProvenance(comment string) (Provenance, bool) {
 	if err := json.Unmarshal(blob, &p); err != nil {
 		return Provenance{}, false
 	}
+	if !validFrom(p.From) {
+		// The zero value is what every caller already renders as absent --
+		// see Secret.Modified's contract, which Provenance follows too --
+		// so a rejected From needs no new handling anywhere else.
+		p.From = ""
+	}
 	return p, true
+}
+
+// maxFromLen bounds From well past any real keychain service name or file
+// path, and short enough that a decoded comment cannot hand a caller an
+// arbitrarily large string to print.
+const maxFromLen = 256
+
+// validFrom reports whether a decoded From is safe to print as-is: short
+// enough, and holding nothing but letters, digits, and the handful of
+// punctuation a keychain service name or a file path legitimately carries.
+// Never a control character, never an escape sequence -- From reaches a
+// terminal through `brig secret ls` and through a warning that tells the
+// user to run a command, which is exactly where a hidden escape sequence
+// would do its work.
+func validFrom(from string) bool {
+	if len(from) > maxFromLen {
+		return false
+	}
+	for i := 0; i < len(from); i++ {
+		c := from[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte(" -_.:/~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }

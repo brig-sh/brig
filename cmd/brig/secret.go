@@ -218,7 +218,7 @@ func listSecrets(out io.Writer, args []string) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tUPDATED")
+	fmt.Fprintln(w, "NAME\tUPDATED\tFROM")
 	for _, s := range list {
 		// A backend that cannot supply a date returns the zero time, and a
 		// dash is what that looks like. See secret.Secret.Modified: inventing
@@ -227,7 +227,15 @@ func listSecrets(out io.Writer, args []string) error {
 		if !s.Modified.IsZero() {
 			updated = s.Modified.Local().Format("2006-01-02 15:04")
 		}
-		fmt.Fprintf(w, "%s\t%s\n", s.Name, updated)
+		// A hand-created secret has no provenance and reads as a dash, the
+		// same way an absent date does. Inventing "manual" would claim brig
+		// knows something it does not: an item another tool wrote into the
+		// namespace looks identical.
+		from := "-"
+		if s.Provenance.From != "" {
+			from = s.Provenance.From
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, updated, from)
 	}
 	return w.Flush()
 }
