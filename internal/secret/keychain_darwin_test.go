@@ -267,7 +267,7 @@ func TestMaxValueLeavesRoomForTheName(t *testing.T) {
 	}
 }
 
-// D9. The comment attribute is read without decrypting, which is what lets
+// The comment attribute is read without decrypting, which is what lets
 // ls report provenance with no keychain dialog.
 func TestProvenanceSurvivesWriteAndList(t *testing.T) {
 	k := testStore(t)

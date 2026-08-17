@@ -39,8 +39,17 @@ func (c *Config) warnExpiredSecrets() {
 			// about every hand-created secret on every run.
 			continue
 		}
-		c.warnf("the imported credential for %s expired %s.", c.Profile.Name, ago(now-s.Provenance.ExpiresAt))
-		c.warnf("Renew it on the host, then: brig secret import %s", c.Profile.Name)
+		// Names the SECRET, not just the profile: a profile may declare more
+		// than one, and two lines differing in nothing would leave the reader
+		// unable to tell which credential to renew.
+		//
+		// It does not name `brig secret import`, deliberately. That verb does
+		// not exist yet, and a warning that sends the user at `unknown secret
+		// subcommand` is worse than one that stops at what it knows. The line
+		// naming it arrives with the verb.
+		c.warnf("the imported credential %s (%s) expired %s.",
+			s.Name, c.Profile.Name, ago(now-s.Provenance.ExpiresAt))
+		c.warnf("Renew it on the host, then import it again.")
 	}
 }
 

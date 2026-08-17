@@ -34,8 +34,8 @@ func TestExpiredImportedCredentialWarnsBeforeBoot(t *testing.T) {
 	}
 	c.warnExpiredSecrets()
 
-	want := "brig: the imported credential for claude-code expired 3h ago.\n" +
-		"brig: Renew it on the host, then: brig secret import claude-code\n"
+	want := "brig: the imported credential claude-credentials (claude-code) expired 3h ago.\n" +
+		"brig: Renew it on the host, then import it again.\n"
 	if errb.String() != want {
 		t.Errorf("warning was:\n%s\nwant:\n%s", errb.String(), want)
 	}
