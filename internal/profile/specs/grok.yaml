@@ -1,0 +1,15 @@
+name: grok
+desc: Grok CLI (xAI) -- example profile
+binary: grok
+image: ghcr.io/brig-sh/grok-stock:latest
+
+# Boots as an ordinary OCI image: the image carries no kernel, so the
+# runtime supplies one. hvi is the backend that path is built around.
+hypervisor: hvi
+genericBoot: true
+guestHome: /home/grok
+forward: [XAI_API_KEY, GH_TOKEN]
+statePaths: [.grok]
+headless: true
+mem: 4096
+cpus: 4

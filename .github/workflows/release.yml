@@ -1,0 +1,96 @@
+name: Release
+
+# Publish binaries when a version tag lands.
+#
+# The built-in GITHUB_TOKEN is enough: the release goes to this repository,
+# which is where the token already has write access. No signing key and no
+# registry secret are involved.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release"
+        required: true
+
+permissions:
+  contents: write
+  # Sigstore hands out the signing certificate against this token, so the
+  # release is signed with no key anywhere.
+  id-token: write
+
+jobs:
+  release:
+    name: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # goreleaser derives the version and the changelog from the tag
+          # history, so a shallow clone gives it the wrong answer.
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # The VERSION file is what a reader and the docs see; the tag is what
+      # goreleaser builds from. Assert they agree, or the file quietly drifts
+      # into being decorative.
+      - name: Check the tag matches VERSION
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          [ "${{ github.event.inputs.tag }}" = "" ] || TAG="${{ github.event.inputs.tag }}"
+          TAG="${TAG#v}"
+          [ "$(cat VERSION)" = "$TAG" ] || {
+            echo "VERSION file ($(cat VERSION)) does not match tag $TAG" >&2; exit 1; }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      # goreleaser shells out to syft for the SBOMs.
+      - uses: anchore/sbom-action/download-syft@v0
+
+      # The notary key is stored as the raw .p8, because hull's own signing
+      # workflow writes it straight to disk. GoReleaser wants base64 or a file
+      # path, so give it a path rather than keeping two copies of one secret.
+      - name: Stage the notary key
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          printf '%s' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary-key.p8"
+          chmod 600 "$RUNNER_TEMP/notary-key.p8"
+
+      # A token for the tap, minted from the bot App rather than a long-lived
+      # PAT. continue-on-error because a release must not fail just because
+      # the App is not installed yet -- goreleaser then falls back to the PAT
+      # secret, and skips publishing the cask if neither exists.
+      - uses: actions/create-github-app-token@v3
+        id: tap-token
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.NOFIRE_BOT_APP_ID }}
+          private-key: ${{ secrets.NOFIRE_BOT_PRIVATE_KEY }}
+          owner: brig-sh
+          repositories: homebrew-brig
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The same Developer ID certificate and App Store Connect key hull
+          # signs with, under the names goreleaser reads.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ runner.temp }}/notary-key.p8
+          MACOS_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          # Absent until someone adds it; goreleaser then skips publishing the
+          # formula rather than failing the release.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token || secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
