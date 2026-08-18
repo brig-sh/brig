@@ -105,6 +105,13 @@ files:
 # where --skills copies your own, so leaving either off would make that flag
 # silently do nothing.
 #
+# What a live workspace also held and does NOT get one, so these are decisions
+# rather than omissions: cache/, .last-update-result.json, policy-limits.json
+# and remote-settings.json are all re-fetched, and backups/ holds snapshots of
+# .claude.json -- which sits BESIDE .claude rather than inside it, so it
+# persists on its own and the snapshots are derived from something that
+# survives.
+#
 # settings.json and CLAUDE.md are the user's own configuration -- the
 # permission allowlist and the user-level memory -- written by hand or by the
 # agent on the user's instruction, not re-fetched from anywhere. Without a
