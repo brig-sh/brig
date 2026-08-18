@@ -26,7 +26,7 @@ var openStore = secret.Open
 // on the store instead, which is the one thing these tests are not about.
 func secretCmd(out io.Writer, args []string) error {
 	if len(args) == 0 {
-		return errors.New("secret needs a subcommand: create, read, update, delete or ls")
+		return errors.New("secret needs a subcommand: create, read, update, delete, ls or import")
 	}
 	var err error
 	switch args[0] {
@@ -43,8 +43,10 @@ func secretCmd(out io.Writer, args []string) error {
 		err = deleteSecret(out, args[1:])
 	case "ls", "list":
 		err = listSecrets(out, args[1:])
+	case "import":
+		err = importSecrets(out, args[1:])
 	default:
-		return fmt.Errorf("unknown secret subcommand %q (create, read, update, delete, ls)", args[0])
+		return fmt.Errorf("unknown secret subcommand %q (create, read, update, delete, ls, import)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how the
 	// flag package says it. Asking for help is not a mistake, so it is answered
@@ -66,11 +68,17 @@ usage:
   brig secret read   <name>             print the value
   brig secret delete <name> [-y]        remove it, after asking
   brig secret ls                        list names and dates, never values
+  brig secret import <profile> [name...] fill a profile's secrets from your host
 
 flags:
   -f, --file FILE   read the value from a file, verbatim. ` + "`-`" + ` is stdin
       --stdin       read the value from stdin, which is the default
   -y, --yes         with delete: the answer, given in advance
+                    with import: replace a hand-created secret without asking
+      --dry-run     with import: report what would be imported, and read the
+                    sources to check them
+      --from-command '<sh>'
+                    with import: take one secret's value from a command's stdout
 
 The value is never an argument, so it stays out of ps and out of your shell
 history. Without -f the value is read from stdin, and one trailing line ending

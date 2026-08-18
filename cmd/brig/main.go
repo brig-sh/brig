@@ -50,7 +50,8 @@ usage:
   brig profile ls|export|import|edit|rm          manage profiles
   brig export <profile> [name] [--json]          print a profile, or save it
                                                  as <name> in the profile dir
-  brig secret create|read|update|delete|ls       keep secrets in your keyring
+  brig secret create|read|update|delete|ls|import
+                                                 keep secrets in your keyring
   brig version
 
 flags (before the agent's own arguments; -- ends brig's parsing):
@@ -768,6 +769,18 @@ func importProfile(args []string) error {
 		blob, err = io.ReadAll(os.Stdin)
 	} else {
 		blob, err = os.ReadFile(args[0])
+		// `brig import claude` is someone reaching for `brig secret import
+		// claude`: this verb takes a file, that one takes a profile, and the
+		// word they typed is a profile that already exists. Saying so costs
+		// one branch, and the alternative is "no such file or directory" for
+		// a command that was nearly right.
+		if os.IsNotExist(err) {
+			if p, ok := profile.Lookup(args[0]); ok {
+				return fmt.Errorf("there is no file %q, and %s is a profile brig already has. "+
+					"To fill its secrets from your host: brig secret import %s",
+					args[0], p.Name, p.Name)
+			}
+		}
 	}
 	if err != nil {
 		return err

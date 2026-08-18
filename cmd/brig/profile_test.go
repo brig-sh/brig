@@ -34,6 +34,19 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 	return buf.String(), fnErr
 }
 
+// writeProfile writes one profile body into a fresh directory and returns it,
+// for the tests that need a profile the registry will load. A directory of its
+// own per call, because the registry reads every yaml in it and a leftover
+// from another test would silently join the merged set.
+func writeProfile(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "profile.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // export with a destination writes the file, verbatim: the comments are the
 // reason export writes YAML at all.
 func TestExportProfileToAFile(t *testing.T) {
