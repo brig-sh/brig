@@ -168,6 +168,13 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if err := c.PrepareWorkspace(); err != nil {
 		return err
 	}
+	// Before the sandbox exists, not only before delivery: a container runtime
+	// takes its mounts at create time, so a hostmount whose host path is not
+	// there yet is a boot that fails or a directory the runtime invents
+	// somewhere brig never looked. Symlink-safe, through the workspace root.
+	if err := c.prepareVolumeTargets(); err != nil {
+		return err
+	}
 
 	if c.Runtime.Running(c.VMName) {
 		if c.guestMountsWorkspace() {
@@ -221,6 +228,10 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	}
 
 	fmt.Fprintf(c.Err, "brig: starting sandbox %s...\n", c.VMName)
+	// What a runtime that cannot mount after boot needs handed to it now
+	// instead. Empty for hull, which execs as root and does the three-phase
+	// mount itself; see createTimeVolumes.
+	tmpfs, volumeShares := c.createTimeVolumes()
 	spec := runtime.RunSpec{
 		Name:  c.VMName,
 		Image: c.Image,
@@ -228,10 +239,13 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		Net:   "shared",
 		Mem:   c.Mem,
 		CPUs:  c.CPUs,
-		// One share: the workspace, which is the guest's home. The host's
-		// agent configuration is copied into it rather than mounted, so it
-		// needs no share of its own -- see seedHostConfig.
-		Shares:   []runtime.Share{{Host: ws.dir, Guest: c.Profile.GuestHome}},
+		// The workspace, which is the guest's home. The host's agent
+		// configuration is copied into it rather than mounted, so it needs no
+		// share of its own -- see seedHostConfig. volumeShares is empty on
+		// hull and carries the profile's hostmounts on a container runtime.
+		Shares: append([]runtime.Share{{Host: ws.dir, Guest: c.Profile.GuestHome}},
+			volumeShares...),
+		Tmpfs:    tmpfs,
 		Env:      set.Vars,
 		GUI:      c.Profile.IsGUI(),
 		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
