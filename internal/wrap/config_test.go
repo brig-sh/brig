@@ -300,3 +300,38 @@ func mustMkdir(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+// BRIG_CREDENTIALS_CMD is ReadHost's only consumer and would otherwise stop
+// doing anything silently: it is reachable only through hostCredential:, which
+// no shipped profile declares any more. It warns when set and names
+// --from-command, which is the verb that does the same job once instead of on
+// every run.
+func TestCredentialsCmdWarnsAndNamesFromCommand(t *testing.T) {
+	c := bindingConfig(t, credentialProfile)
+	c.CredentialsCmd = `printf '{"accessToken":"tok"}'`
+
+	if _, err := c.BuildEnv(); err != nil {
+		t.Fatal(err)
+	}
+	warning := c.Err.(*bytes.Buffer).String()
+	if !strings.Contains(warning, "BRIG_CREDENTIALS_CMD is deprecated") {
+		t.Errorf("nothing said BRIG_CREDENTIALS_CMD is going:\n%s", warning)
+	}
+	if !strings.Contains(warning, "--from-command") {
+		t.Errorf("the warning does not name what replaces it:\n%s", warning)
+	}
+}
+
+// And it says nothing when it is not set. A deprecation warning on every run
+// of a setting nobody uses is the kind of noise that trains people to stop
+// reading brig's stderr.
+func TestCredentialsCmdIsSilentWhenUnset(t *testing.T) {
+	c := bindingConfig(t, credentialProfile)
+
+	if _, err := c.BuildEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if warning := c.Err.(*bytes.Buffer).String(); strings.Contains(warning, "BRIG_CREDENTIALS_CMD") {
+		t.Errorf("warned about a setting that is not set:\n%s", warning)
+	}
+}

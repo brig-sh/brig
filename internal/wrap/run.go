@@ -25,6 +25,17 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 		c.warnf("%s", w)
 	}
 
+	// BRIG_CREDENTIALS_CMD is ReadHost's only consumer, and ReadHost is only
+	// reached through hostCredential:, which no built-in declares any more --
+	// so on a shipped profile this variable already does nothing. Said out
+	// loud rather than left to be discovered: it is documented in the
+	// top-level usage and the README, and a setting that silently stopped
+	// working is worse than one that is going away.
+	if c.CredentialsCmd != "" {
+		c.warnf("BRIG_CREDENTIALS_CMD is deprecated and goes in the next release. " +
+			"Store the value once instead: brig secret import <profile> --from-command '<command>'")
+	}
+
 	// Resolved before anything else touches the sandbox, and returned as an
 	// error rather than a warning: a run whose secret cannot be resolved must
 	// fail, saying which secret is missing and how to create it, instead of
