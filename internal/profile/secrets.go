@@ -37,8 +37,8 @@ type Source struct {
 	// level `name:` is already the secret's own, so the shorthand form would
 	// be ambiguous.
 	Var string `json:"var,omitempty"`
-	// Hint is what to tell the user when this source held nothing, e.g.
-	// "run `claude` on the host once to log in".
+	// Hint is what to tell the user when this source held nothing, for
+	// example "run `claude` on the host once to log in".
 	Hint string `json:"hint,omitempty"`
 }
 

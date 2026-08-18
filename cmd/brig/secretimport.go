@@ -452,7 +452,7 @@ func importFailure(failures []error, selected int) error {
 // unknownImportTarget answers the mistake this verb invites. import is the
 // only secret verb whose first argument is not a secret name, so
 // `brig secret import claude-credentials` -- typed by someone who has just
-// read a message naming that secret -- is the line people will actually write.
+// read a message naming that secret -- is the line people actually type.
 func unknownImportTarget(name string) error {
 	for _, p := range profile.All() {
 		if _, ok := p.Secret(name); ok {

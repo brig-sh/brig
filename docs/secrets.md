@@ -77,8 +77,8 @@ modification date. A backend that cannot supply one renders as `-` rather than
 as an invented date -- the keychain always supplies one, so you will not see
 that today, but a future backend may not.
 
-`FROM` is provenance: where `brig secret import` read the value. It is recorded
-in the keychain item's comment attribute, which is why listing it costs no
+`FROM` is provenance: where `brig secret import` read the value. `import`
+records it in the keychain item's comment attribute, which is why listing costs no
 decrypt. A dash means brig did not put the value there -- you created it by
 hand -- and it is deliberately not spelled `manual`: an item another tool wrote
 into brig's namespace looks identical, and claiming otherwise would be claiming
@@ -151,7 +151,7 @@ Four rules worth knowing before you build anything on it:
 - **The copy does not track its source.** Renewing the login on the host does
   not update brig's copy, and revoking it does not invalidate it. Re-import to
   refresh; `brig secret delete` to be rid of it.
-- **A value brig did not write is not replaced silently.** No provenance means
+- **`import` does not replace a value brig did not write.** No provenance means
   you created it by hand, and import stops rather than discarding something it
   cannot recover:
 

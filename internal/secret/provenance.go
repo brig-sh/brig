@@ -33,7 +33,7 @@ const provenancePrefix = "brig1:"
 // callers render it as missing rather than inventing one.
 type Provenance struct {
 	V int `json:"v"`
-	// From is the source locator, e.g. "keychain:Claude Code-credentials" or
+	// From is the source locator, for example, "keychain:Claude Code-credentials" or
 	// "file:~/.claude/.credentials.json". Empty for a hand-created secret,
 	// which is how `import` tells one it wrote from one it must not replace
 	// without -y.

@@ -41,7 +41,7 @@ var errToolMissing = errors.New("the keychain tool could not be run")
 // Value is what a source yielded, and which source that was.
 type Value struct {
 	Bytes []byte
-	// From is the source's locator, e.g. "keychain:Claude Code-credentials".
+	// From is the source's locator, for example "keychain:Claude Code-credentials".
 	// It is what the import output names and what provenance records, so the
 	// two cannot disagree.
 	From string

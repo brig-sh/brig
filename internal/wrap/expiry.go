@@ -11,7 +11,7 @@ import (
 // creds.SecretReader: the ability to list every stored secret's provenance.
 // SecretReader stays read-only on purpose (see internal/creds/reader.go) --
 // it is the seam the run path is allowed to touch -- so a backend that
-// cannot list this way simply produces no warning, the same
+// cannot list this way produces no warning, the same
 // zero-value-means-absent contract secret.Secret.Provenance already follows.
 type lister interface {
 	List() ([]secret.Secret, error)

@@ -378,7 +378,7 @@ from one, and `env:` where it cannot.** A file stays out of
 can be rewritten under a running agent, so a rotated secret can reach a live
 session. An environment variable can do none of those.
 
-The env channel is **not** deprecated, and will not be: `GEMINI_API_KEY`,
+The env channel is **not** deprecated and stays supported: `GEMINI_API_KEY`,
 `XAI_API_KEY`, `OPENROUTER_API_KEY` and `CURSOR_API_KEY` are env-only by their
 agents' own design, and a file for them would be a file nothing reads. Binding
 one secret through both channels is legal, and the exposure is the union of the

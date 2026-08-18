@@ -11,7 +11,7 @@ func ptr(b bool) *bool { return &b }
 
 // listingStore is a SecretReader that can also list, which is what the expiry
 // warning type-asserts for. creds.SecretReader is deliberately read-only, so a
-// backend that cannot list simply produces no warning.
+// backend that cannot list produces no warning.
 type listingStore []secret.Secret
 
 func (l listingStore) Read(name string) ([]byte, error) {

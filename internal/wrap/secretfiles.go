@@ -163,7 +163,7 @@ func kindWord(file bool) string {
 // mountVolumes does the three phases, in the one order that works.
 //
 // Once tmpfs covers the directory the host copies underneath are unreachable,
-// so every hostmount has to be pinned first -- bound to a path outside the
+// so brig pins every hostmount first -- binding it to a path outside the
 // directory about to be covered -- and bound back in afterwards. Proven in a
 // guest in this order; any other loses the state it was meant to keep.
 func (c *Config) mountVolumes() error {

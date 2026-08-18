@@ -67,7 +67,7 @@ func (v Volume) TmpfsOptions() string {
 // the hostmount it had just made, and silently lose the state it named.
 type Volume struct {
 	Kind string `json:"kind"`
-	// Path is relative to GuestHome, e.g. ".claude/sessions". Not absolute,
+	// Path is relative to GuestHome, for example ".claude/sessions". Not absolute,
 	// and it may not escape: the same rules a files: binding carries.
 	Path string `json:"path,omitempty"`
 	// Source is where the mount comes from, and it is the field that only the
@@ -177,9 +177,9 @@ type FileBinding struct {
 	// value out of brig's own environment to write it into the guest would be
 	// the shell-wrapper habit this feature removes.
 	Ref string `json:"ref"`
-	// Path is relative to GuestHome, e.g. ".claude/.credentials.json".
+	// Path is relative to GuestHome, for example, ".claude/.credentials.json".
 	Path string `json:"path"`
-	// Mode is the octal permission the file is created with, e.g. "0600".
+	// Mode is the octal permission the file is created with, for example, "0600".
 	// A string rather than a number because YAML reads 0600 as decimal 600,
 	// which is 0o1130 -- a mode nobody meant and that nothing would report.
 	Mode string `json:"mode,omitempty"`

@@ -40,7 +40,7 @@ brig secret import claude-code     # carry the host login in, once
 That is a change from earlier releases, which read Claude Code's own keychain
 item on every invocation as a fallback. The profile key that did it,
 `hostCredential:`, is deprecated and leaves the shipped profiles in this
-release; the field and `BRIG_CREDENTIALS_CMD` are removed in the next.
+release; brig removes the field and `BRIG_CREDENTIALS_CMD` in the next.
 
 A credential reaches the guest by one of two channels, and the profile picks
 per secret. `files:` writes it into the guest at the path the agent already
@@ -85,7 +85,7 @@ Four costs, and none of them is small enough to leave implied.
   you reads it back with no dialog at all. Narrowing the ACL does not fix this
   -- any process can invoke `security` -- so the only real mitigation is
   keeping the stored copy low-value, and a refresh token is not low-value.
-  Delete it when you are not using it: `brig secret delete claude-credentials`.
+  When you are not using it, delete it: `brig secret delete claude-credentials`.
 - **The denylist stays env-scoped.** A `files:` binding bypasses the deny check
   entirely, and no name check could fix that: a profile could deliver a metered
   API key inside a `settings.json` and nothing would see it. That is defensible
