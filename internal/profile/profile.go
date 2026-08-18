@@ -129,9 +129,30 @@ type Profile struct {
 	// metered usage without saying so. Overriding a deny is deliberate and
 	// needs BRIG_ALLOW_DENIED=1.
 	Deny []string `json:"deny,omitempty"`
+	// Files is what the guest sees as files: each entry names a stored secret
+	// and where inside the guest it is written. See FileBinding.
+	//
+	// The bytes land in a tmpfs the profile declares under Volumes, which is
+	// what keeps them off host disk -- a files: target that is not covered by
+	// one is a validation error rather than a warning, because an
+	// uncovered target writes a credential into the workspace.
+	Files []FileBinding `json:"files,omitempty"`
+	// Volumes is what is mounted inside GuestHome, and it is the list that
+	// decides what reaches host disk: a tmpfs covers a directory so nothing
+	// written there can, and a hostmount names an exception worth keeping
+	// across boots. See Volume.
+	//
+	// This is StatePaths made load-bearing. The two must not both be
+	// declared: one list that is documentation and one that is enforced can
+	// disagree about what persists, which is the failure worth removing
+	// rather than the duplication.
+	Volumes []Volume `json:"volumes,omitempty"`
 	// StatePaths are the paths under GuestHome holding the agent's persistent
-	// state. Documentation today; the unit that #1251's clone/overlay and
-	// explicit-apply will move.
+	// state.
+	//
+	// Deprecated: use Volumes, which says the same thing and is acted on.
+	// Still read, so every profile written before Volumes existed keeps
+	// parsing; a profile declaring both is an error rather than a merge.
 	StatePaths []string `json:"statePaths,omitempty"`
 	// Headless is whether the agent supports a non-interactive run.
 	Headless bool `json:"headless,omitempty"`
@@ -236,6 +257,13 @@ func (p Profile) clone() Profile {
 		p.Env[i].Refs = slices.Clone(b.Refs)
 	}
 	p.Deny = slices.Clone(p.Deny)
+	// A FileBinding and a Volume hold only strings and a bool, so cloning the
+	// element slices is the whole job -- but the slices themselves are shared
+	// without it, and a caller appending a files: binding would be handing
+	// every later caller in the process a credential target the profile never
+	// declared.
+	p.Files = slices.Clone(p.Files)
+	p.Volumes = slices.Clone(p.Volumes)
 	p.StatePaths = slices.Clone(p.StatePaths)
 	p.ProjectPaths = slices.Clone(p.ProjectPaths)
 	p.StaleCredentialFiles = slices.Clone(p.StaleCredentialFiles)

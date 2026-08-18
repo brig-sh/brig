@@ -269,12 +269,22 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig profile import <thi
 #              value: (a literal), ref: or refs: -- secrets.<name> reads brig's
 #              store, env.<name> reads brig's own environment, and a refs:
 #              chain takes the first that resolves
+#   files      credential files the guest sees. Each entry has a ref:, a path:
+#              under guestHome and an optional mode: (default "0600"). The
+#              target must sit inside a tmpfs volume below, so the bytes stay
+#              in memory and never reach the workspace
+#   volumes    what is mounted inside guestHome, one primitive per entry:
+#              {kind: tmpfs, path: x} makes x memory-only, so nothing written
+#              there reaches host disk, and {kind: hostmount, path: x/y} names
+#              an exception kept across boots. Parents mount before children by
+#              path depth, so the order you write them in is taste
 #   forward    deprecated: forward: [X] now means env: [{name: X, ref: env.X}],
 #              which says the same thing. Still read, still works
 #   deny       variables never bound, whatever env or forward says. This is the
 #              billing guard: a metered API key that outranks a subscription
 #              token belongs here
-#   statePaths paths under guestHome holding the agent's state, for reference
+#   statePaths deprecated: volumes: above says the same thing and is acted on.
+#              A profile may declare one or the other, never both
 #   hypervisor macOS backend to boot on: vz (the default, the one with a
 #              graphical console), hvi or qemu. BRIG_HYPERVISOR wins over it
 #   runtimeBin the runtime binary to drive instead of the one on PATH. About

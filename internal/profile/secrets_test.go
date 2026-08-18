@@ -143,13 +143,18 @@ func TestRefListExpandsTheSingularRef(t *testing.T) {
 	}
 }
 
-// files: does not exist yet, and must not parse. PR 6 adds it together with
-// the delivery that honours it -- a binding that parses and delivers nothing
-// is the worst failure mode this feature has.
-func TestFilesIsNotYetASchemaKey(t *testing.T) {
+// files: now parses, together with the delivery that honours it. The test that
+// pinned its ABSENCE lived here until this commit, so that landing the schema
+// had to be a deliberate deletion rather than something discovered -- a
+// binding that parses and delivers nothing is the worst failure mode this
+// feature has. See volumes_test.go for what replaced it.
+func TestFilesParsesNowThatItIsDelivered(t *testing.T) {
 	var p Profile
-	err := yaml.UnmarshalStrict([]byte("files:\n  - ref: secrets.x\n"), &p)
-	if err == nil {
-		t.Fatal("files: parsed; it must be an unknown field until delivery lands")
+	doc := "files:\n  - ref: secrets.x\n    path: .config/x\n    mode: \"0600\"\n"
+	if err := yaml.UnmarshalStrict([]byte(doc), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(p.Files) != 1 || p.Files[0].Path != ".config/x" {
+		t.Errorf("got %+v", p.Files)
 	}
 }

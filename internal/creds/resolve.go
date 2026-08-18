@@ -142,11 +142,20 @@ func Needed(p profile.Profile, lookup func(string) (string, bool)) []profile.Sec
 			wanted[r.Name] = true
 		}
 	}
-	// PR 6 adds the files: walk here. A file binding has no earlier env source
-	// to fall back to, so it unconditionally needs its secret -- which is what
-	// makes the unavailable-store outcomes below load-bearing rather than
-	// theoretical. Until then only env bindings and required secrets reach the
-	// store.
+	// A file binding has no earlier env source to fall back to, so it
+	// unconditionally needs its secret -- which is what makes the
+	// unavailable-store outcomes below load-bearing rather than theoretical:
+	// a profile delivering a credential as a file opens the store on every
+	// run, on every platform, including the one that has none.
+	for _, b := range p.Files {
+		r, err := profile.ParseRef(b.Ref)
+		if err != nil {
+			continue // Validate refuses these
+		}
+		if r.Namespace == profile.NamespaceSecrets {
+			wanted[r.Name] = true
+		}
+	}
 	var out []profile.SecretDecl
 	for _, d := range p.Secrets {
 		if d.IsRequired() || wanted[d.Name] {

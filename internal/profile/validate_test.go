@@ -131,10 +131,8 @@ func TestSecretSourceRules(t *testing.T) {
 }
 
 // Binding one secret through both channels is legal, and sometimes correct.
-// The test for it arrives with files: in PR 6; recorded here so nobody adds a
-// "one secret, one channel" rule in the meantime: brig's git credential helper
-// could read a file while the gh CLI inside the guest reads the variable and
-// will not look at /run/brig/secrets.
+// TestOneSecretMayTakeBothChannels in volumes_test.go pins it, now that files:
+// exists to bind through.
 
 func TestChainRules(t *testing.T) {
 	p := Profile{
