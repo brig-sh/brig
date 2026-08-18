@@ -83,12 +83,13 @@ no concept of:
 - **Workspace as guest home.** One host directory is the agent's whole world
   and the unit of persistence: its logins, its settings and your projects live
   there and survive a restart.
-- **Host-resolved credentials, forwarded per exec.** The guest cannot reach
+- **Host-resolved credentials, handed in explicitly.** The guest cannot reach
   your keychain, your secret manager or your SSH agent -- that inaccessibility
   *is* the isolation boundary -- so brig resolves credentials on the host and
-  passes them in. Re-read on every exec, so a rotated token needs no restart,
-  never written into the workspace, and never placed in a command line where
-  `ps` could read it.
+  passes them in. Only from its own store, and only what a profile names: you
+  say once that a host login may enter a sandbox (`brig secret import`), and a
+  run never reads another application's keychain. Never written into the
+  workspace, and never placed in a command line where `ps` could read it.
 - **A billing denylist.** `ANTHROPIC_API_KEY` outranks the OAuth token in
   Claude Code's own precedence, so forwarding it would move a sandbox from
   your subscription onto metered API billing without saying so. It is refused
@@ -115,6 +116,7 @@ separate Linux re-implementation of it.
 | `brig profiles` | the profiles, their images, and what each one refuses to forward |
 | `brig profile ls\|export\|import\|edit\|rm` | manage profiles (`brig export` is the short form of `brig profile export`). `export --json` for JSON instead of YAML |
 | `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring. macOS only for now |
+| `brig secret import <profile>` | fill that profile's secrets from your host, once. macOS only for now |
 | `brig version` | |
 
 `brig template …` and `brig agents` are the older spellings and still work
@@ -204,25 +206,35 @@ radius (one workspace, a fine-grained token) rather than a sentinel value.
 
 ## Credentials
 
-A credential reaches the guest one of two ways. A profile can bind it from
-[brig's own store](#the-secret-store), which brig reads before the sandbox is
-created. Or it can name a variable to read from brig's own environment, so any
-backend works:
+**A sandbox with no credential still boots.** `brig run claude-code` starts the
+agent and the agent asks you to log in, in there, exactly as it would on a
+machine you had just set up. Everything below is optional.
 
 ```bash
-CLAUDE_CODE_OAUTH_TOKEN=$(your-secret-tool read claude/token) brig run claude
-<your secret manager's run-with-env command> -- brig run claude
+brig run claude-code               # log in inside the sandbox, or:
+brig secret import claude-code     # carry the login already on this Mac in, once
 ```
 
-Prefer the store when you have the choice -- a value brig resolved itself can
-never be pushed onto the runtime's command line, and an ambient one can (see
-`BRIG_ENV_ARGV`).
+`import` reads your host login **once, when you type it**, and copies it into
+brig's own store. Every run after that reads only that store. brig never opens
+another application's keychain item on the run path, so a run raises no
+approval dialog and performs no host read you did not ask for.
 
-With nothing set, brig falls back to the login already on this Mac, read from
-the keychain on every invocation. `BRIG_CREDENTIALS_CMD` points that at any
-command printing the same JSON, for any other backend.
+The copy is a copy: renewing or revoking the login on the host does not change
+it. Run `brig secret import claude-code` again to refresh it, or
+`brig secret delete claude-credentials` to be rid of it. brig warns before boot
+when the stored copy has expired.
 
-Three rules apply to every forwarded variable:
+Claude Code's credential arrives as a **file**, at the path the agent already
+reads -- `~/.claude/.credentials.json` in the guest -- on memory-backed storage
+that never reaches your disk. The agent refreshes it in there on its own, so a
+long session does not break every few hours. `docs/security.md` states what
+that costs, because it is not free: the document brig stores and hands over
+contains a **refresh token**.
+
+Credentials that no agent reads from a file still travel as environment
+variables -- `GH_TOKEN` for git over HTTPS, and the API keys that are env-only
+by their own tools' design. Three rules apply to every one of them:
 
 - **Unset or empty is skipped**, so it cannot shadow a value baked into the
   image.
@@ -236,8 +248,8 @@ Three rules apply to every forwarded variable:
   if metered billing is genuinely what you want.
 
 `brig env <agent>` reports what would be forwarded, by name, and whether the
-guest will actually be authenticated -- an expired host token is exactly what
-sends a sandbox back to its login screen.
+guest will actually be authenticated -- an expired stored credential is exactly
+what sends a sandbox back to its login screen.
 
 Values reach the runtime through its environment, not its command line, so a
 forwarded credential is not readable in `ps`. Inside the sandbox it is
@@ -247,10 +259,11 @@ sandbox cannot use a credential it cannot see. Prefer a fine-grained
 
 ### The secret store
 
-`brig secret` is a store of brig's own, for when you have no secret manager to
-point the line above at. On macOS it keeps each secret in your login keychain;
-there is no Linux backend yet, and brig says so rather than falling back to a
-file.
+`brig secret` is a store of brig's own, and it is the only store a run reads.
+`brig secret import` fills it from your host; these verbs are how you fill it
+by hand, from any backend you like. On macOS it keeps each secret in your login
+keychain; there is no Linux backend yet, and brig says so rather than falling
+back to a file.
 
 ```bash
 printf %s "$TOKEN" | brig secret create gh-token   # the value comes from stdin
@@ -264,16 +277,22 @@ The value is never an argument, so it stays out of `ps` and out of your shell
 history. `create` refuses to overwrite and `update` refuses to create, so a
 typo in a name is a message rather than a silently lost secret.
 
-A profile binds a stored secret to a guest variable, so the value goes from
-the keychain into the sandbox without your shell ever seeing it:
+A profile declares the names it wants out of this store, so a stored secret
+reaches a sandbox on its own -- as a file where the agent reads one, and as an
+environment variable where it does not. `brig profiles` prints each profile's
+list, and which of those names `brig secret import` can fill for you:
 
-```yaml
-secrets:
-  - gh-token
-env:
-  - name: GH_TOKEN
-    ref: secrets.gh-token
 ```
+claude-code     Claude Code (Anthropic)
+                secrets: claude-credentials gh-token
+                  from your host: brig secret import claude-code (claude-credentials)
+                  by hand: brig secret create <name> (gh-token)
+```
+
+A secret that is missing does not stop `claude-code` from booting: both of its
+names are optional, and the run says what it could not find and carries on.
+[docs/profiles.md](docs/profiles.md) is how to declare them in a profile of
+your own.
 
 ```console
 $ brig env claude
@@ -497,7 +516,7 @@ Booleans are shell-style: anything except `0` is on.
 | variable | default | what it does |
 | --- | --- | --- |
 | `BRIG_FORWARD_ENV` | per profile | Space-separated list of variables to forward. Replaces the profile's list rather than adding to it |
-| `BRIG_CREDENTIALS_CMD` | (keychain) | Command printing the host credential JSON on stdout. Any backend: `op read`, `vault kv get`, a script |
+| `BRIG_CREDENTIALS_CMD` | unset | **Deprecated, removed next release.** Command printing the host credential JSON on stdout, for a profile still using `hostCredential:`. `brig secret import <profile> --from-command '<command>'` does the same job once, instead of on every run |
 | `BRIG_ALLOW_REFS` | `0` | Forward a value that looks like an unresolved `scheme://` secret reference |
 | `BRIG_ALLOW_DENIED` | `0` | Forward a variable on the profile's billing denylist |
 | `BRIG_ALLOW_EXPIRED` | `0` | Forward the host credential even though it reports as expired. brig withholds one by default, because a dead token turns into a confusing failure inside the guest rather than a clear one on the host. Set this if your clock is the thing that is wrong |

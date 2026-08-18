@@ -27,24 +27,83 @@ them for itself.
 
 ## Credentials
 
-brig resolves one thing itself: whatever a profile's `secrets:` list
-declares, read from brig's own store before the sandbox is created. There is
-no store on Linux yet, so a profile that declares `secrets:` fails outright
-there rather than silently forwarding nothing.
-
-Everything else still works the way it always did: for an `env.<name>`
-binding -- or the deprecated `forward:` spelling of one -- brig reads the
-named variable from its own environment, so whatever populates that
-environment is your secret backend:
+**A run reads no host source.** Nothing on the `brig run`, `exec` or `shell`
+path reaches a keychain item brig did not write, a file outside the workspace,
+or a host command. Your host login enters brig's own store once, when you type
+`brig secret import <profile>`, and every run afterwards reads only that store:
 
 ```bash
-CLAUDE_CODE_OAUTH_TOKEN=$(your-secret-tool read claude/token) brig run claude
-<your secret manager's run-with-env command> -- brig run claude
+brig run claude-code               # log in inside the sandbox, or:
+brig secret import claude-code     # carry the host login in, once
 ```
 
-Values are re-read on every exec, so a rotated credential -- from either
-source -- is picked up without restarting the sandbox. Nothing is written
-into the workspace.
+That is a change from earlier releases, which read Claude Code's own keychain
+item on every invocation as a fallback. The profile key that did it,
+`hostCredential:`, is deprecated and leaves the shipped profiles in this
+release; the field and `BRIG_CREDENTIALS_CMD` are removed in the next.
+
+A credential reaches the guest by one of two channels, and the profile picks
+per secret. `files:` writes it into the guest at the path the agent already
+reads; `env:` binds it as an environment variable, for credentials whose
+consumer offers no file interface. For an `env.<name>` binding -- or the
+deprecated `forward:` spelling of one -- brig still reads the named variable
+from its own environment, so whatever populates that environment remains a
+usable backend for those.
+
+There is no secret store on Linux yet. A profile whose secrets are *optional*
+degrades there rather than failing: the run boots and the agent asks for a
+login, which is what `claude-code` does. A **required** secret does fail
+outright, because there is nowhere on that host to read it from.
+
+Values are re-read on every exec, so a rotated credential is picked up without
+restarting the sandbox. Nothing is written into the workspace.
+
+### What file delivery buys, and what it costs
+
+A credential delivered as a file stays out of `/proc/<pid>/environ`, is not
+inherited by processes the agent spawns, and can be rewritten under a running
+agent -- so a rotated secret can reach a live session, which no environment
+variable can. The bytes land on a memory-backed mount covering the agent's
+whole config directory, verified to be `tmpfs` with no swap before anything is
+written, so there is no path from the credential to your disk to check.
+
+Four costs, and none of them is small enough to leave implied.
+
+- **brig stores and hands over a refresh token.** There is no way to give
+  Claude Code a working `.credentials.json` without `refreshToken` and
+  `refreshTokenExpiresAt` -- a file carrying only an access token is *worse*
+  than an environment variable, because the agent attempts a refresh, fails,
+  and prompts. So a compromised agent inside the sandbox can mint access
+  tokens indefinitely, and keeps doing so after the host's own token has
+  expired. The compensating argument is real and belongs beside it: the guest
+  refreshes for itself, so a long session stops breaking every few hours. It
+  is a trade, taken deliberately.
+- **brig's copy is less protected than the item it came from.** The host's
+  Claude item is ACL-scoped to the application that wrote it, which is why it
+  raises a dialog the first time something else reads it. The copy brig writes
+  carries the **default ACL**, so anything that can run `/usr/bin/security` as
+  you reads it back with no dialog at all. Narrowing the ACL does not fix this
+  -- any process can invoke `security` -- so the only real mitigation is
+  keeping the stored copy low-value, and a refresh token is not low-value.
+  Delete it when you are not using it: `brig secret delete claude-credentials`.
+- **The denylist stays env-scoped.** A `files:` binding bypasses the deny check
+  entirely, and no name check could fix that: a profile could deliver a metered
+  API key inside a `settings.json` and nothing would see it. That is defensible
+  rather than a hole, because `deny` exists to catch **accident** -- an ambient
+  variable swept into the guest because it happened to be in your shell. A file
+  binding takes an explicit stored secret and an explicit binding written by
+  the profile author; nobody file-binds an `ANTHROPIC_API_KEY` by mistake. The
+  two names on `claude-code`'s denylist are env-shaped by the agent's own
+  design, so the guard still covers the channel the risk uses.
+- **The stored copy does not rotate.** A credential renewed on the host does
+  not update brig's copy, and one *revoked* on the host stays valid in brig's
+  store until you re-import or delete it. brig warns before boot when the
+  stored copy has expired, and names the command that refreshes it; it cannot
+  see a revocation at all.
+
+A `0600` file is also still readable by anything running as the agent's uid
+inside the sandbox. Files narrow the exposure; they do not draw a boundary.
+See [what is still exposed](#what-is-still-exposed) below.
 
 Three rules apply, though the second only to a value read from the ambient
 environment:
@@ -64,7 +123,8 @@ environment:
 `brig env <agent>` reports the guest's environment, by name, and fails the
 same way a run would if a declared secret cannot be resolved. It never
 prints a value: a secret-sourced variable comes back annotated, e.g.
-`CLAUDE_CODE_OAUTH_TOKEN(secret)`, never with the value itself.
+`GH_TOKEN(secret)`, never with the value itself. A credential delivered as a
+file is not an environment variable and does not appear in that list at all.
 
 ### Not in argv
 
@@ -94,10 +154,10 @@ classic PAT carrying your whole account.
 
 ## The secret store
 
-`brig secret` is the one place brig stores something rather than reading it.
-A profile reaches into it: `secrets:` declares what the profile requires and
-an `env:` binding spells `ref: secrets.<name>`, so a stored value reaches the
-guest without passing through your shell at all.
+`brig secret` is the one place brig stores something rather than reading it,
+and after the switchover above it is the **only** store a run reads. A profile
+names what it wants out of it under `secrets:`, and `brig secret import` is how
+a host login gets in.
 
 Prefer that over composing a value into brig's environment, for one concrete
 reason: a value brig resolved on your behalf is exempt from the
@@ -196,10 +256,12 @@ What that means for the things this document is about:
   brig does instead is degrade honestly. `read` says plainly when a value is
   not in brig's encoding, and `ls` skips a name outside brig's grammar, so an
   item brig did not write is either reported or passed over rather than
-  presented as yours. The `hostCredential` item a profile reads -- Claude
-  Code's own, say -- belongs to the application that wrote it and is read,
-  never written. That one *does* raise a dialog on first read, for exactly the
-  ACL reason above: `security` did not create it.
+  presented as yours. An item belonging to another application -- Claude Code's
+  own, say -- is read by `brig secret import` and never written, and that read
+  *does* raise a dialog, for exactly the ACL reason above: `security` did not
+  create it. A run never performs that read at all, which is the point of the
+  import verb: the dialog appears when you asked for it, once, and never again
+  on the boot path.
 
 There is no store on Linux yet; `brig secret` says so rather than falling back
 to a file, which would be a downgrade nothing told you about.

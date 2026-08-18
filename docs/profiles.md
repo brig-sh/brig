@@ -105,11 +105,13 @@ with the same parser and neither has to guess.
 | `binary` | yes, for `kind: agent` | The agent CLI inside the guest |
 | `mem`, `cpus` | yes | Guest size. Both must be greater than zero |
 | `desc` | no | One line, shown by `brig profiles` |
-| `secrets` | no | Names this profile requires out of brig's own secret store, checked before the sandbox is created. See below |
+| `secrets` | no | Names this profile wants out of brig's own secret store, checked before the sandbox is created. Each entry says whether a run without it should stop, and where `brig secret import` may find it. See below |
 | `env` | no | The variables the guest sees, and where each one's value comes from: a literal, a stored secret, or brig's own environment. See below |
 | `forward` | no | Deprecated spelling of `env` for the environment case. Still works; folded into `env` when the file is read. See below |
+| `files` | no | Credential files the guest sees: which stored secret fills each one, and where under `guestHome` it is written. See below |
+| `volumes` | no | What is mounted inside `guestHome`: a `tmpfs` that nothing written to can reach host disk, and the `hostmount` exceptions kept across boots. See below |
 | `deny` | no | Variables never bound, whatever `env` or `forward` says. See below |
-| `statePaths` | no | Paths under `guestHome` holding the agent's state. Reference only at the moment |
+| `statePaths` | no | Deprecated: `volumes` says the same thing and is acted on. Still read, so an older file keeps parsing; declaring both is an error rather than a merge |
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. brig never does, so finding one is worth a warning rather than a deletion |
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
@@ -119,7 +121,7 @@ with the same parser and neither has to guess.
 | `genericBoot` | no | The image was never built to be a guest -- a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See below |
 | `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the workspace. Only when the run passes `--skills` or sets `BRIG_SKILLS=1`. See below |
 | `onboarding` | no | A first-run state file to seed. See below |
-| `hostCredential` | no | A credential to read from the host when the environment carries none |
+| `hostCredential` | no | **Deprecated, removed next release.** A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
 | `reserved` | no | Marks a profile that owns the workspace a session name could otherwise slug onto. See below |
 
 A misspelled field is refused rather than ignored. `forwards:` instead of
@@ -155,6 +157,78 @@ separate is what lets brig check the whole list up front: one error names
 every missing secret, rather than the run dying on the first `ref` it
 happens to resolve.
 
+### The object form: `required:` and `sources:`
+
+A bare string is the short spelling of a required, hand-created secret:
+`secrets: [gh_token]` means `{name: gh_token, required: true}`, so every
+profile written before this schema keeps parsing unchanged. The object form
+says two more things:
+
+```yaml
+secrets:
+  - name: claude-credentials
+    required: false                     # warn and boot, instead of refusing
+    expiryField: expiresAt              # found at any depth; drives the stale warning
+    sources:                            # where `brig secret import` may look
+      - from: keychain
+        service: Claude Code-credentials
+      - from: file
+        path: ~/.claude/.credentials.json
+        hint: run `claude` on the host once to log in
+```
+
+**`required:` decides whether the run stops.** Absent means required, which is
+why a bare string keeps meaning what it always meant. `required: false` warns
+and boots -- which is what the shipped `claude-code` does, because an agent
+that can complete its own login inside the sandbox should not be prevented
+from trying.
+
+**`sources:` decides which command the error names.** They are tried in order
+and the first that exists wins, which is what makes a profile portable without
+a per-platform predicate: the same entry names the macOS keychain and the Linux
+file, and brig never has to know which host maps to which. A secret with **no**
+`sources:` is hand-created by definition, and its message names
+`brig secret create` rather than `brig secret import`.
+
+Three `from:` values exist, each taking exactly one locator -- a `keychain`
+source carrying a `path:` is a parse error rather than something ignored, since
+ignoring it reads as a working portable chain that resolves nothing:
+
+| `from:` | locator | what it reads |
+| --- | --- | --- |
+| `keychain` | `service:` | a macOS keychain generic-password item. macOS only; a Linux backend is [#8](https://github.com/brig-sh/brig/issues/8) |
+| `file` | `path:` | a host file, verbatim. A leading `~` is expanded when it is read, so a profile carries no one host's home directory |
+| `env` | `var:` | a host environment variable, **copied once at import** |
+
+That last row is the one to read twice. `from: env` and `ref: env.<name>` are
+the same word with opposite temporal semantics: a `ref:` is read live on every
+run, while a `from: env` source copies the value into the store when you type
+`brig secret import` and never looks again. Prefer the `refs:` chain below for
+anything that expires. The shipped `claude-code` uses no `from: env` source for
+exactly this reason.
+
+`field:` and `expiryField:` say how to read a secret's value and its expiry out
+of whatever a source yields, and they sit on the **secret** rather than on a
+source -- which is only possible because every source for one secret must yield
+the same document shape. An absent `field:` stores the value verbatim, which is
+what a file-shaped secret wants: the host keychain blob *is* the format the
+agent's credentials file takes, so nothing is extracted and no field brig does
+not understand is lost.
+
+The boundary that follows from that is worth stating rather than leaving to be
+discovered: **a credential whose two host locations differ in shape needs two
+secrets** -- and a `files:` binding can name only one, with two bindings on one
+`path:` refused. So an agent whose credential file differs per platform cannot
+be expressed as a single portable profile today. Claude's two locations happen
+to share a shape.
+
+On macOS the keychain source answers first, so nothing in a supported
+configuration today ever reaches `path: ~/.claude/.credentials.json`. That path
+is the **documented** Linux location rather than an observed one, and a Linux
+host has no store to import into yet ([#8](https://github.com/brig-sh/brig/issues/8)),
+so it is data that costs three lines and makes the profile portable the day the
+backend lands.
+
 ### What happens when a secret is missing
 
 The run fails before any sandbox is created, and the error names the secret,
@@ -179,17 +253,60 @@ This is not a warning and not a skipped binding. A sandbox whose environment
 was built without a credential it was told it needs is exactly what the
 requirement list exists to prevent.
 
-There is no secret store on Linux yet, so a profile declaring `secrets:`
-fails every run on the nerdctl backend, the same way and for the same
-reason: failing closed is correct, but it is worth knowing before your first
-run of such a profile there rather than after.
+An **optional** secret is not that. It warns, names what it could not find and
+the command that supplies it, and the run boots:
 
-### The `ref` grammar
+```
+$ brig run claude-code
+brig: no value for the secret "claude-credentials", and claude-code will run without it.
+brig: To carry it in from your host: brig secret import claude-code
+brig: run `claude` on the host once to log in
+```
+
+A secret with no `sources:` gets the other verb, because import cannot fill it:
+
+```
+brig: no value for the secret "gh-token", and claude-code will run without it.
+brig: To supply one: brig secret create gh-token
+```
+
+There is no secret store on Linux yet. A **required** secret therefore fails
+every run on the nerdctl backend, for the same reason and in the same way --
+failing closed is correct, but it is worth knowing before your first run of
+such a profile there rather than after. An **optional** one is silent there
+instead of warning on every run: there is no store to create it in, so nothing
+the user does on that host would change the outcome, and a warning about it
+would be noise rather than information. That is why the shipped `claude-code`
+still boots on Linux.
+
+### The `ref` grammar, and `refs:` chains
 
 `ref: secrets.<name>` reads the named secret out of brig's own store.
 `ref: env.<name>` reads the named variable out of brig's own environment --
 the same place `forward:` always read from. A namespace that is neither is a
 parse error naming the two that exist.
+
+`refs:` is a list of those, and the first that resolves wins. `ref:` **is** a
+`refs:` of length one, so a binding carries one spelling or the other and never
+both:
+
+```yaml
+env:
+  - name: GH_TOKEN
+    refs: [env.GH_TOKEN, secrets.gh-token]   # shell override first, store second
+```
+
+That order is not decoration. A name a profile binds is dropped from the
+ambient forward, so a bare `ref: secrets.gh-token` would make
+`GH_TOKEN=$(gh auth token) brig run claude-code` stop reaching the guest, and
+`BRIG_FORWARD_ENV` could not restore it. The chain is what lets a profile add a
+store fallback without taking the shell override away, and it is why the
+shipped `claude-code` binds `GH_TOKEN` this way.
+
+A chain also decides what a run has to read: if an earlier `env.` element
+resolves, the later `secrets.` element is not needed, and a run the environment
+already satisfies never opens the store at all -- so no keychain is touched for
+a value the shell already supplied.
 
 A `secrets.<name>` ref whose name is absent from `secrets:` is a parse error
 too: the requirement list is what makes the up-front check complete, and a
@@ -243,18 +360,121 @@ mechanism, so overriding it replaced everything a profile could forward. Now
 a `ref: secrets.<name>` binding is the profile's own declaration of what the
 workload needs, and it survives the override untouched.
 
+## `files`, for a credential the agent reads from disk
+
+A `files:` entry names a stored secret and where inside the guest it is
+written:
+
+```yaml
+files:
+  - ref: secrets.claude-credentials
+    path: .claude/.credentials.json    # relative to guestHome
+    mode: "0600"                       # default "0600"; quoted, see below
+```
+
+**The author's rule: use `files:` wherever the agent can read a credential
+from one, and `env:` where it cannot.** A file stays out of
+`/proc/<pid>/environ`, is not inherited by the processes the agent spawns, and
+can be rewritten under a running agent, so a rotated secret can reach a live
+session. An environment variable can do none of those.
+
+The env channel is **not** deprecated, and will not be: `GEMINI_API_KEY`,
+`XAI_API_KEY`, `OPENROUTER_API_KEY` and `CURSOR_API_KEY` are env-only by their
+agents' own design, and a file for them would be a file nothing reads. Binding
+one secret through both channels is legal, and the exposure is the union of the
+two -- so do it only when something genuinely reads both.
+
+Four rules the parser enforces:
+
+- **`ref:` only, never `refs:`.** A chain exists to give one environment
+  *variable* a shell override and a store fallback, and a file has no shell to
+  override it. `env.<name>` is refused as well: a file binding exists to put a
+  *stored* credential where an agent reads one.
+- **`mode:` is a quoted string.** YAML reads an unquoted `0600` as decimal
+  600, which is `0o1130` -- a mode nobody meant and that nothing would report.
+- **The target must sit inside a `tmpfs` volume**, and must not be carved back
+  out by a `hostmount` under it. This is refused at parse time rather than at
+  delivery, where it would be a live token already on your disk.
+- **One binding per `path:`.** A file has one source.
+
+`field:` on a file-bound secret is legal and almost always wrong: it writes a
+bare token where the agent expects a document, the agent attempts a refresh,
+fails, and prompts. Leave `field:` off unless the agent really does read a
+one-line file.
+
+An **unresolved** binding leaves nothing behind: no file, no mount, no empty
+target. An empty file at a credential path is indistinguishable from a real
+leak to whoever finds it, and it is a login prompt the agent cannot explain.
+
+## `volumes`, for what reaches host disk
+
+`volumes:` is what is mounted inside `guestHome`, one primitive per entry:
+
+```yaml
+volumes:
+  - kind: tmpfs
+    path: .claude               # memory-only: nothing written here reaches the host
+  - kind: hostmount
+    path: .claude/sessions      # ... except these, kept across boots
+  - kind: hostmount
+    path: .claude/projects
+  - kind: hostmount
+    path: .claude/history.jsonl
+    file: true                  # the target is a file, not a directory
+```
+
+A `tmpfs` covers a directory so that nothing written under it can reach your
+disk. That is what makes a `files:` binding safe: the safety is
+**fail-closed by construction** rather than by inspection, because there is no
+path from the credential to the host to check. brig still verifies it -- the
+covered path must read as `tmpfs` and `/proc/swaps` must be empty, or the run
+stops rather than handing over a credential.
+
+A `hostmount` names an exception: one path bound back out to the same path in
+the workspace, which is where that state already lives. Its source is implicit,
+so `source:` is refused on it. A `hostmount` **not** nested under a `tmpfs` is
+a parse error: the workspace is already `guestHome`, so such an entry mounts a
+path onto itself and reads as protection that is not there.
+
+Order in the file is taste. brig mounts parents before children by path depth,
+because declaration order would be a trap -- a profile listing `.claude/sessions`
+above `.claude` would otherwise mount the tmpfs over the hostmount it had just
+made and silently lose the state it named.
+
+`kind: volume` is reserved for a named volume several sandboxes share. It is
+parsed and refused as not yet supported, so a profile written against it fails
+with the reason it fails and lands unchanged when it is implemented.
+
+### What this costs
+
+**Anything a future agent version starts writing under a covered directory is
+silently ephemeral until someone adds a `hostmount` for it.** That is real, and
+it is the trade this design makes: the arrangement it replaced lost nothing by
+default and leaked by default; this one leaks nothing by default and loses by
+default. The second is the better failure, but it is a failure -- if the agent
+you sandbox gains a new state directory, its state disappears at shutdown and
+nothing says so.
+
+The corollary for `--skills`: those host directories are copied into the
+workspace, so a profile that covers the directory they land in needs a
+`hostmount` for each, or the copy is hidden and the flag does nothing.
+
+`volumes:` replaces `statePaths:`, which was reference-only documentation.
+Declaring both is an error rather than a merge: two lists that can disagree
+about what persists is worse than the duplication.
+
 ### What is not here yet
 
-`files:` bindings -- handing the guest a file instead of an environment
-variable -- and `brig secret push` are not part of this. They are coming,
-and this page will say so once they land.
+`brig secret push` -- rotating a file binding in a running sandbox -- is not
+part of this. The mechanism is built (a re-run rewrites the file under a live
+agent); the verb is not.
 
 ## `brig env`, to see what a run would send
 
 `brig env <profile>` reports what the guest would be handed, by name --
 never a value, on any path. A variable sourced from the secret store is
-annotated `(secret)`; one from a host credential (see `hostCredential`
-below) is annotated `(host)`; an ambient or literal one is reported bare:
+annotated `(secret)`; one from the deprecated `hostCredential:` is annotated
+`(host)`; an ambient or literal one is reported bare:
 
 ```
 $ brig env alex
@@ -302,13 +522,20 @@ refused as a collision, even though nothing on brig's side is called that.
 ## `deny` is the billing guard
 
 Some provider variables outrank the credential you actually want the sandbox
-to use. `ANTHROPIC_API_KEY` beats `CLAUDE_CODE_OAUTH_TOKEN` in Claude Code's
-own precedence, so forwarding it would move the sandbox off your subscription
+to use. `ANTHROPIC_API_KEY` beats Claude Code's own subscription credential in
+its precedence, so forwarding it would move the sandbox off your subscription
 and onto metered API billing without telling you.
 
 Put anything with that property in `deny`. It is refused with an explanation,
 and `BRIG_ALLOW_DENIED=1` is the deliberate override for someone who does want
 metered billing.
+
+`deny` guards the **environment** channel, and only that one. A `files:`
+binding is not checked against it, and no name check could be: a profile could
+deliver a metered key inside a `settings.json` and nothing would see it. That
+is deliberate rather than an oversight -- `deny` exists to catch *accident*, an
+ambient variable swept in because it happened to be in your shell, and a file
+binding takes an explicit stored secret plus an explicit binding you wrote.
 
 The guard applies the same way when the value arrives by `ref:` instead of
 straight from the environment -- see `secrets` and `env` above. The billing
@@ -338,49 +565,13 @@ that records trust per directory. brig sets it for the directory each run
 starts in, resolved to the git repository root as the guest sees it. Nothing
 is ever seeded that contains a credential.
 
-## `hostConfigDir` and `projectPaths`, for the user's own skills
+## `hostCredential`, deprecated
+
+**Removed in the next release.** No built-in profile carries it any more, and
+brig warns when a profile file does.
 
 ```yaml
-hostConfigDir: ~/.claude
-projectPaths: [skills, plugins]
-```
-
-This is what `--skills` (or `BRIG_SKILLS=1`) acts on. Without it the two
-fields do nothing: the guest gets nothing from your host configuration unless
-the run asks.
-
-`hostConfigDir` is the root, `~` expanded. Each of `projectPaths` is seeded
-into the workspace at the same relative place under the root's own base name,
-so `~/.claude/skills` becomes `<workspace>/.claude/skills` -- which the guest
-sees at `<guestHome>/.claude/skills`, because the workspace is the guest home.
-That is where the agent already looks, so nothing has to be told about it.
-
-**Seeded means copied**, not mounted read-only. Read-only was the
-safer-looking choice and the wrong one: agents write inside these directories,
-installing a plugin or populating a cache, and a read-only mount turns that
-into an I/O error rather than a refusal the agent can handle. Copying gives
-the guest its own writable copy while the host's stays untouched, which was
-the point of read-only in the first place.
-
-The copy is per entry, and only of what is not there yet -- the guest's copy
-of an entry always wins. Copying the directory wholesale would clobber
-whatever the guest had done since, every single start; per entry means a skill
-you add on the host later still arrives, and one the guest changed is left
-alone. A path the user does not have is skipped rather than refused, so a
-profile can list `plugins` for the benefit of the people who have one.
-
-Sockets, devices and anything else that is not a regular file, a directory or
-a symlink are not copied. A symlink is recreated as a symlink, and every
-destination goes through the workspace root, so a link the guest planted is
-refused rather than written through -- see
-[security.md](security.md#writing-into-the-workspace).
-
-## `hostCredential`, for reusing a login you already have
-
-This is what lets a fresh sandbox work without anyone minting a token first:
-
-```yaml
-hostCredential:
+hostCredential:                                  # deprecated
   keychainService: Claude Code-credentials
   tokenField: accessToken
   expiryField: expiresAt
@@ -388,13 +579,37 @@ hostCredential:
   renewHint: run claude on the host once to renew it
 ```
 
-brig reads the macOS keychain by default and searches the blob for those
-fields at any depth, so a credential wrapped in an envelope needs no path.
-`BRIG_CREDENTIALS_CMD` points the same machinery at any command that prints
-equivalent JSON, for any other backend.
+It read another application's keychain item on **every run**, whenever the
+environment carried no value for `targetVar`, and forwarded what it found as an
+environment variable. That is the automatic host read this release retires: a
+run should not reach a credential store you did not point it at.
 
-The value is read fresh on every invocation and forwarded as environment. It
-is never written into the workspace.
+Say the same thing with a secret and a source instead, and fill it once:
+
+```yaml
+secrets:
+  - name: mytool-credentials
+    required: false
+    field: accessToken                  # drop this to store the whole document
+    expiryField: expiresAt
+    sources:
+      - from: keychain
+        service: My Tool-credentials
+        hint: run mytool on the host once to log in
+env:
+  - name: MYTOOL_TOKEN
+    ref: secrets.mytool-credentials
+```
+
+```bash
+brig secret import mytool
+```
+
+The difference is when the host is read: at import, once, when you asked --
+rather than on every boot. `BRIG_CREDENTIALS_CMD`, which pointed the old
+machinery at any command printing equivalent JSON, is replaced by
+`brig secret import <profile> --from-command '<command>'` and goes in the same
+release.
 
 ## A worked example
 
@@ -423,6 +638,10 @@ cpus: 4
 brig profile import mytool.yaml
 MYTOOL_TOKEN=$(pass show mytool/token) brig run mytool
 ```
+
+`forward:` and `statePaths:` above are the deprecated spellings, kept here
+because this is what most existing profiles look like. Written today the same
+profile says `env:` with a `ref:`, and `volumes:` in place of `statePaths:`.
 
 brig cannot verify the signature of an image outside `ghcr.io/brig-sh`, so it
 will say so on every boot. That is a warning, not a refusal -- see

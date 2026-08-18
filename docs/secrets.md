@@ -1,77 +1,30 @@
 # Keeping secrets in your keyring
 
-`brig secret` is a store of brig's own, for when you have no secret manager to
-point `brig run` at. It keeps named values in your login keychain, and gives
-you five verbs to put them there and get them back.
+`brig secret` is brig's own store, and it is the **only** store a run reads. A
+profile declares the names it wants under `secrets:`, and what is in this store
+under those names reaches the sandbox -- as a file where the agent reads one,
+as an environment variable where it does not.
 
-If you already have 1Password, Vault, `pass` or anything like them, this is
-probably not the page you want. A profile can name a variable to read from
-brig's own environment instead, so putting a value in that environment is the
-whole integration, and it is a shorter road than storing a second copy here:
+Most people never fill it by hand. One command carries the login already on
+your Mac into it:
 
 ```bash
-CLAUDE_CODE_OAUTH_TOKEN=$(op read op://vault/claude/token) brig run claude
+brig run claude-code               # log in inside the sandbox, or:
+brig secret import claude-code     # carry your host login in, once
 ```
 
-See [Credentials](../README.md#credentials) in the README for that path. The
-store exists for the case where there is no such command to write.
+If you keep credentials in 1Password, Vault or `pass`, you have two roads.
+Either pipe the value in once (`op read ... | brig secret create <name>`, or
+`brig secret import <profile> <name> --from-command 'op read ...'`), or keep
+using the environment: an `env.<name>` binding still reads brig's own
+environment on every run, so `<your secret manager's run-with-env command> --
+brig run claude-code` remains a working integration for the variables a profile
+binds that way.
 
 What the keychain does and does not protect is
 [security.md](security.md#the-secret-store). This page is about using it.
 
-## Stored is not forwarded until a profile asks for it
-
-Worth knowing before you build anything on top of it. Storing a value under
-the name `gh-token` does not on its own make `GH_TOKEN` appear in the guest --
-the store holds names, and a profile decides which of them the workload needs:
-
-```console
-$ brig secret ls
-NAME      UPDATED
-gh-token  2026-08-15 21:09
-$ brig env claude
-...
-brig: forwarding to guest:
-brig:   CLAUDE_CODE_OAUTH_TOKEN(host)
-```
-
-Two lines in the profile connect them. `secrets:` is the requirement list and
-`env:` is the binding:
-
-```yaml
-secrets:
-  - gh-token
-env:
-  - name: GH_TOKEN
-    ref: secrets.gh-token
-```
-
-```console
-$ brig env claude
-...
-brig: forwarding to guest:
-brig:   GH_TOKEN(secret)
-brig:   CLAUDE_CODE_OAUTH_TOKEN(host)
-```
-
-The value never passes through your shell, and it is never put on the
-runtime's command line -- `BRIG_ENV_ARGV` cannot reach a value brig resolved
-itself. A declared secret the store does not have fails the run before any
-sandbox is created, naming every one that is missing. See
-[profiles.md](profiles.md#secrets-and-env-for-a-credential-brig-resolves-itself)
-for the grammar and the errors.
-
-Composing it in the shell still works, and is the answer for a one-off:
-
-```bash
-GH_TOKEN=$(brig secret read gh-token) brig run claude
-```
-
-It is the weaker of the two, though. A value that came in from the ambient
-environment is the one `BRIG_ENV_ARGV=1` can put in argv, and it is the one
-the unresolved-`scheme://` guard has to second-guess. Prefer the profile.
-
-## The five verbs
+## The six verbs
 
 | verb | what it does |
 | --- | --- |
@@ -79,11 +32,19 @@ the unresolved-`scheme://` guard has to second-guess. Prefer the profile.
 | `brig secret read <name>` | print the value |
 | `brig secret update <name>` | replace an existing value. Refuses if the name is not there |
 | `brig secret delete <name>` | remove it, after asking. `-y` answers in advance |
-| `brig secret ls` | names and dates, never values |
+| `brig secret ls` | names, dates and where each value came from. Never values |
+| `brig secret import <profile>` | fill that profile's secrets from your host, once |
 
 `delete` also answers to `rm`, and `ls` to `list`. Neither `create` nor
 `update` takes the value as an argument -- see
-[Getting a value in](#getting-a-value-in).
+[Getting a value in](#getting-a-value-in). `import` is the one verb whose
+argument is a **profile** rather than a secret name, and it says so when you
+give it a name by mistake:
+
+```console
+$ brig secret import claude-credentials
+brig: "claude-credentials" is a secret, not a profile, and import takes the profile that declares it: brig secret import claude-code claude-credentials
+```
 
 `create` and `update` are each other's mirror, and neither will do the other's
 job: `create` refuses a name that is taken, `update` refuses one that is not
@@ -100,13 +61,14 @@ brig: no secret named "gh-tokne". To create it: brig secret create gh-tokne
 
 A successful write prints nothing. Silence is the report.
 
-`ls` prints two columns and no values:
+`ls` prints three columns and no values:
 
 ```console
 $ brig secret ls
-NAME        UPDATED
-deploy-key  2026-08-15 21:09
-gh-token    2026-08-15 21:09
+NAME                UPDATED           FROM
+claude-credentials  2026-08-18 12:31  keychain:Claude Code-credentials
+deploy-key          2026-08-15 21:09  -
+gh-token            2026-08-15 21:09  -
 ```
 
 It reads keychain attributes only, never a value, which is why it raises no
@@ -114,6 +76,19 @@ access prompt however many secrets you have. `UPDATED` is the item's own
 modification date. A backend that cannot supply one renders as `-` rather than
 as an invented date -- the keychain always supplies one, so you will not see
 that today, but a future backend may not.
+
+`FROM` is provenance: where `brig secret import` read the value. It is recorded
+in the keychain item's comment attribute, which is why listing it costs no
+decrypt. A dash means brig did not put the value there -- you created it by
+hand -- and it is deliberately not spelled `manual`: an item another tool wrote
+into brig's namespace looks identical, and claiming otherwise would be claiming
+brig knows something it does not. A `--from-command` value reads as
+`command (a command you gave)` rather than the command line itself, because the
+line can hold a quote, a pipe or a credential.
+
+Provenance also carries the credential's expiry when the profile declared an
+`expiryField:`, which is what lets a run warn before boot that the stored copy
+has gone stale -- again without decrypting anything.
 
 An empty store is an ordinary state, not an error, and says how to leave it:
 
@@ -140,6 +115,78 @@ make the scripted case the one that cannot be stopped:
 $ echo | brig secret delete gh-token
 brig: deleting "gh-token" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: brig secret delete gh-token -y
 ```
+
+## `import`, to fill a profile from your host
+
+`brig secret import <profile>` reads where your host already keeps that
+profile's credentials and copies them into brig's store, so that every run
+afterwards reads only the store:
+
+```console
+$ brig secret import claude-code
+claude-code: importing 1 secret
+  claude-credentials: stored from keychain:Claude Code-credentials (expires in 11h)
+  gh-token: no source on your host, so it is one you supply: brig secret create gh-token
+note: claude-desktop also declares claude-credentials, so this fills it there too
+```
+
+Where it looks is data in the profile, not knowledge in brig: each secret
+carries a `sources:` list and the first that exists wins. `brig profiles` shows
+which names a profile can import and which it cannot, and
+[profiles.md](profiles.md) is how to declare them in one of your own.
+
+| flag | what it does |
+| --- | --- |
+| `--dry-run` | report what would happen, and **read the sources** to check them. Writes nothing |
+| `-y` | replace a value brig did not write, without asking |
+| `--from-command '<sh>'` | take one named secret's value from a command's stdout instead of from its declared sources |
+
+`[name...]` after the profile narrows it to the names you list.
+
+Four rules worth knowing before you build anything on it:
+
+- **It reads your host when you type it, and never again.** That is the whole
+  point of the verb: a run performs no host read, so it raises no keychain
+  approval dialog. The dialog you may see belongs to `import` itself, once.
+- **The copy does not track its source.** Renewing the login on the host does
+  not update brig's copy, and revoking it does not invalidate it. Re-import to
+  refresh; `brig secret delete` to be rid of it.
+- **A value brig did not write is not replaced silently.** No provenance means
+  you created it by hand, and import stops rather than discarding something it
+  cannot recover:
+
+  ```console
+  $ brig secret import claude-code
+  brig: "claude-credentials" is already stored and brig did not put it there, so importing would replace a value you supplied. To replace it: brig secret import claude-code claude-credentials -y
+  ```
+
+- **An unchanged value is skipped rather than rewritten**, so `UPDATED` keeps
+  meaning "the value last changed" rather than "an import last ran".
+
+### The exit status
+
+Non-zero when a secret that **has** an importer could not be filled -- the
+source was there and gave nothing, or reading it failed. A name with no
+importer at all is informational and does not fail the command, so
+`brig secret import x && brig run x` works for a profile that mixes imported
+and hand-created secrets.
+
+The consequence to plan around: on a machine that has never run the agent,
+there is nothing to import and the command exits non-zero. That is why these
+docs lead with `brig run claude-code` -- putting `import` first would greet a
+fresh machine with a red exit code for a state that is perfectly normal.
+
+### The size ceiling is a real limit, and `codex` hits it
+
+A stored value is capped at about 3KB (see [the size limit](#the-size-limit)),
+and that is enough for every API key, every OAuth credential document and every
+ed25519 key. It is **not** enough for `codex`: its `~/.codex/auth.json` carries
+two JWTs and runs to 4-8KB, so it does not fit and cannot be delivered as a
+file today.
+
+This is not a constant to raise. The limit is a *line length* in `security -i`,
+which is how brig keeps a value out of `argv`; lifting it means changing how
+values are written, not editing a number.
 
 ## Getting a value in
 
@@ -344,6 +391,11 @@ point of the table: the error is the second entry point into these docs.
 | `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. `-y` is the answer given ahead |
 | `a secret name holds letters, digits, - and _, ...` | see [Naming a secret](#naming-a-secret) |
 | `no secret store on this platform: brig secret needs the macOS keychain so far` | Linux, [#8](https://github.com/brig-sh/brig/issues/8) |
+| `"x" is a secret, not a profile, and import takes the profile that declares it: …` | `import`'s first argument is a profile. The message names the one that declares the secret you typed |
+| `nothing to import for "x": … held no value` | the profile's sources exist and none of them had anything. Usually: run the agent on the host once to log in |
+| `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. `-y` if replacing it is what you meant |
+| `the value for "x" is N bytes and the store takes at most M, so nothing was written` | over [the size limit](#the-size-limit), checked before the write so a re-import cannot destroy a good value |
+| `--from-command fills one secret, so it needs one name` | it supplies a value, and nothing in the command says which secret it is for |
 
 ## A worked example
 
@@ -359,31 +411,25 @@ NAME      UPDATED
 gh-token  2026-08-15 21:09
 ```
 
-Use it. Point a profile at it, once:
-
-```yaml
-secrets:
-  - gh-token
-env:
-  - name: GH_TOKEN
-    ref: secrets.gh-token
-```
+Use it. `claude-code` declares `gh-token`, so nothing else is needed -- the
+name in the store is the binding:
 
 ```console
-$ brig env claude
+$ brig env claude-code
 ...
 brig: forwarding to guest:
 brig:   GH_TOKEN(secret)
-brig:   CLAUDE_CODE_OAUTH_TOKEN(host)
 brig: never forwarded for claude-code: ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN (they would move this sandbox onto metered billing)
 ```
 
-`brig env` reports; `brig run` does it, with nothing to remember at the
-prompt:
+`(secret)` says the value came from brig's store rather than from your shell.
+`brig env` reports; `brig run claude-code` does it.
 
-```bash
-brig run claude
-```
+An exported `GH_TOKEN` still wins, because the profile binds the name as a
+chain -- `refs: [env.GH_TOKEN, secrets.gh-token]` -- so
+`GH_TOKEN=$(gh auth token) brig run claude-code` keeps working exactly as it
+did before the store existed, and the stored value is the fallback for a shell
+that exports nothing.
 
 Rotate it. `update` refuses to create, so a typo here cannot quietly leave you
 with two secrets and the old one still in use:
@@ -392,9 +438,9 @@ with two secrets and the old one still in use:
 $ printf %s 'ghp_9a1FfE0d5B7c4A2e8D3b6C1a0F5e9D8c7B6a' | brig secret update gh-token
 ```
 
-Nothing else has to change. brig re-reads what it forwards on every exec, so
-the next command picks up the new value from the store and the sandbox does
-not need restarting.
+Nothing else has to change. brig re-reads what it hands the guest on every
+exec, so the next command picks up the new value and the sandbox does not need
+restarting.
 
 Remove it:
 
