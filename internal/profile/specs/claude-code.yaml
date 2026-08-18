@@ -9,61 +9,144 @@ hypervisor: hvi
 genericBoot: true
 guestHome: /home/claude
 
-# ~/.claude/skills and ~/.claude/plugins are read-only in the guest under
+# ~/.claude/skills and ~/.claude/plugins are copied into the guest under
 # --skills. Memory is deliberately absent: it is keyed by host project path
 # (~/.claude/projects/<slug>/memory), and that slug does not exist in the
 # guest, so projecting it would put the files somewhere the agent never looks.
 hostConfigDir: ~/.claude
 projectPaths: [skills, plugins]
 
-# CLAUDE_CODE_OAUTH_TOKEN authenticates Claude Code outright, and it is what
-# the host credential supplies too: short-lived, renewed on the host, and
-# re-read on every invocation, so nothing in the guest ever refreshes anything.
-# GH_TOKEN is for git over HTTPS, not for the agent.
+# What this profile needs out of brig's own store, and whether a run without
+# it should stop.
 #
-# CLAUDE_CODE_OAUTH_REFRESH_TOKEN is the exception, and it is opt-in rather
-# than forwarded by default. The refresh-token pair is the documented way to
-# provision auth without a browser -- with both set, `claude auth login`
-# exchanges the refresh token instead of opening one, which the guest cannot do
-# -- but a refresh token is durable account access, not a short-lived
-# credential: it mints new access tokens for as long as it lives, so handing it
-# to a sandbox with unrestricted egress gives that sandbox the account rather
-# than this session. A zero-config `brig run claude` must not do that silently.
-# Ask for it when a flow needs it:
+# Both optional, deliberately. Claude Code completes its own login inside the
+# sandbox when nothing supplies a credential -- which is what a host that has
+# never run `claude` has always done -- and git reports its own auth error
+# without a token. Requiring either would turn both into a refused boot.
 #
-#   BRIG_FORWARD_OPTIN=CLAUDE_CODE_OAUTH_REFRESH_TOKEN brig run claude
-env:
-  - name: CLAUDE_CODE_OAUTH_TOKEN
-    ref: env.CLAUDE_CODE_OAUTH_TOKEN
-  - name: CLAUDE_CODE_OAUTH_REFRESH_TOKEN
-    ref: env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN
-    optIn: true
-  - name: CLAUDE_CODE_OAUTH_SCOPES
-    ref: env.CLAUDE_CODE_OAUTH_SCOPES
-  - name: GH_TOKEN
-    ref: env.GH_TOKEN
+# sources: are tried in order and the first that exists wins, which is what
+# makes this portable without a per-platform predicate. gh-token has none: it
+# is hand-created, because `ref: env.GH_TOKEN` below reads the variable LIVE on
+# every run while a source would copy it into the keychain once, at import --
+# same word, opposite temporal semantics, and the snapshot is the one that goes
+# stale without saying so.
+secrets:
+  - name: claude-credentials
+    required: false
+    expiryField: expiresAt              # found at any depth; drives the stale warning
+    sources:
+      - from: keychain
+        service: Claude Code-credentials    # macOS keeps it here
+      - from: file
+        path: ~/.claude/.credentials.json   # the documented Linux location
+        hint: run `claude` on the host once to log in
 
-# Both outrank CLAUDE_CODE_OAUTH_TOKEN in Claude Code's auth precedence, so
-# forwarding either would move the sandbox off the subscription and onto
-# metered API billing without saying so.
+  - name: gh-token
+    required: false
+    hint: "export GH_TOKEN before running brig, or store one: gh auth token | brig secret create gh-token"
+
+# The whole credential document, byte for byte, at the path Claude Code reads.
+#
+# Verbatim rather than field-by-field: the host keychain blob IS the format
+# .credentials.json takes -- {"claudeAiOauth": {accessToken, refreshToken,
+# expiresAt, refreshTokenExpiresAt, scopes[], subscriptionType, rateLimitTier}}
+# -- so nothing needs extracting and no field brig does not understand is lost.
+#
+# The guest is Linux and has no keychain, so this file is the agent's only
+# credential store there. File delivery is the native shape, not a workaround
+# for the environment variable.
+#
+# It is an ordinary file, written into the tmpfs declared under volumes: below.
+# NOT bind-mounted onto its own path: measured 2026-08-18, Claude Code writes
+# this file atomically (temp file + renameat), and renameat onto a mountpoint
+# returns EBUSY -- so a bind mount there breaks in-guest refresh, and the temp
+# file lands on the workspace, which is host disk.
+files:
+  - ref: secrets.claude-credentials     # name: defaults to the secret's own
+    path: .claude/.credentials.json
+    mode: "0600"                        # measured: what claude itself writes
+
+# What reaches host disk, and what does not.
+#
+# .claude is tmpfs, so the credential above -- and the temp file the agent
+# renames onto it -- never touch the workspace. That is fail-closed by
+# construction rather than by inspection: there is no path to the host to
+# check.
+#
+# The hostmounts are the exceptions: state worth keeping across boots, and the
+# list is what was actually in a live workspace rather than a guess. sessions,
+# projects and history.jsonl are the conversation; plugins and skills are also
+# where --skills copies your own, so leaving either off would make that flag
+# silently do nothing. Anything under .claude NOT named here is ephemeral,
+# including anything a future Claude Code version starts writing -- which is
+# the cost of this design and is documented rather than hidden.
+#
+# Order here is taste: brig mounts parents before children by path depth, so a
+# hostmount listed above its tmpfs cannot silently lose the state it names.
+volumes:
+  - kind: tmpfs
+    path: .claude
+  - kind: hostmount
+    path: .claude/sessions
+  - kind: hostmount
+    path: .claude/projects
+  - kind: hostmount
+    path: .claude/plugins
+  - kind: hostmount
+    path: .claude/skills
+  - kind: hostmount
+    path: .claude/history.jsonl
+    file: true
+
+# GH_TOKEN travels as environment because brig's own git credential helper
+# reads it there (internal/wrap/git.go: `[ -n "${GH_TOKEN:-}" ] || exit 0`), so
+# moving it to a file means changing the helper first. Worth doing later -- the
+# helper runs at credential-query time, so a file would let a rotated token
+# reach a running agent -- but it is a code change, not a profile change.
+#
+# The chain is not decoration: env. first keeps `GH_TOKEN=$(gh auth token) brig
+# run claude-code` working exactly as it always has, because a bound name is
+# dropped from the ambient forward. secrets. second is the fallback for a shell
+# that exports nothing.
+#
+# For git over HTTPS, not for the agent.
+env:
+  - name: GH_TOKEN
+    refs: [env.GH_TOKEN, secrets.gh-token]
+
+# Both outrank Claude Code's subscription credential in its auth precedence, so
+# forwarding either would move the sandbox onto metered API billing without
+# saying so.
+#
+# The denylist guards the environment channel, and that is the channel that
+# matters: these two are env-shaped by the agent's own design, and the risk it
+# exists for is an ambient variable being swept in by accident. A files:
+# binding cannot be an accident -- it takes an explicit stored secret and an
+# explicit binding written by the profile author.
 deny: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN]
 
-statePaths: [.claude, .claude.json]
+# Kept, and it now means what it always said. brig never writes to this host
+# path -- the credential lives in the tmpfs above -- so a .credentials.json
+# found in the workspace is a real token left on disk by an older brig or an
+# older workspace. It is the warning this migration most needs.
 staleCredentialFiles: [.claude/.credentials.json]
+
+# statePaths is gone: volumes: above is the same list made load-bearing, and
+# two lists that can disagree about what persists is the failure worth
+# removing. .claude.json is not in it because it sits beside .claude rather
+# than inside it, so no tmpfs covers it and the workspace keeps it as it always
+# did.
+
 headless: true
 mem: 4096
 cpus: 4
 
+# Not authentication: a first-run screen the guest cannot complete, because
+# choosing a login method there opens a browser the microVM does not have.
+# Never a credential -- those go through files: and env: above.
 onboarding:
   file: .claude.json
   seed:
     hasCompletedOnboarding: true
     hasTrustDialogAccepted: true
   trustKey: [projects, hasTrustDialogAccepted]
-
-hostCredential:
-  keychainService: Claude Code-credentials
-  tokenField: accessToken
-  expiryField: expiresAt
-  targetVar: CLAUDE_CODE_OAUTH_TOKEN
-  renewHint: run claude on the host once to renew it

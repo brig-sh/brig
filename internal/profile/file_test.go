@@ -48,7 +48,40 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if back.Onboarding == nil || back.Onboarding.TrustKey != original.Onboarding.TrustKey {
 		t.Errorf("the onboarding block did not survive: %+v", back.Onboarding)
 	}
-	if back.HostCredential == nil || back.HostCredential.TargetVar != original.HostCredential.TargetVar {
+}
+
+// hostCredential: is deprecated and no built-in carries it any more, but a
+// user's own file may -- for one more release -- and export/import is how such
+// a file is edited. A round trip that silently dropped the block would
+// un-authenticate a working profile, so it is checked against a fixture rather
+// than against a shipped spec that no longer has one.
+func TestHostCredentialSurvivesARoundTrip(t *testing.T) {
+	reset(t)
+	dir := t.TempDir()
+	original, err := Parse([]byte(`name: mytool
+image: i
+guestHome: /home/x
+binary: x
+mem: 1
+cpus: 1
+hostCredential:
+  keychainService: My Tool-credentials
+  tokenField: accessToken
+  targetVar: MYTOOL_TOKEN
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := Export(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, _, err := Import(blob, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.HostCredential == nil ||
+		back.HostCredential.TargetVar != original.HostCredential.TargetVar {
 		t.Errorf("the host credential block did not survive: %+v", back.HostCredential)
 	}
 }

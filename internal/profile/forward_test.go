@@ -97,7 +97,11 @@ func TestBuiltInProfilesTranslateCleanly(t *testing.T) {
 			t.Errorf("%s: translation produced no bindings", tmpl.Name)
 		}
 		for _, b := range tmpl.Env {
-			if b.Ref == "" && b.Value == "" {
+			// len(RefList()) rather than Ref alone: claude-code binds
+			// GH_TOKEN through a refs: chain, and a check that only knew
+			// about the singular spelling read brig's own built-in as a
+			// binding with nothing behind it.
+			if len(b.RefList()) == 0 && b.Value == "" {
 				t.Errorf("%s: binding %s has no source", tmpl.Name, b.Name)
 			}
 		}

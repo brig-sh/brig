@@ -22,8 +22,8 @@ func TestExportIsVerbatim(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"outrank CLAUDE_CODE_OAUTH_TOKEN", // the billing-precedence comment
-		"Memory is deliberately absent",   // why memory is not projected
+		"outrank Claude Code's subscription credential", // the billing-precedence comment
+		"Memory is deliberately absent",                 // why memory is not projected
 		"name: claude-code",
 	} {
 		if !strings.Contains(string(blob), want) {

@@ -66,7 +66,7 @@ func TestExportProfileToAFile(t *testing.T) {
 	if !strings.Contains(string(blob), "name: claude-code") {
 		t.Errorf("the export is not a profile:\n%s", blob)
 	}
-	if !strings.Contains(string(blob), "outrank CLAUDE_CODE_OAUTH_TOKEN") {
+	if !strings.Contains(string(blob), "outrank Claude Code's subscription credential") {
 		t.Error("the destination file lost the comments")
 	}
 }
@@ -178,7 +178,11 @@ func TestListProfilesReportsBindingsAndRequiredSecrets(t *testing.T) {
 	if !strings.Contains(out, "by hand: brig secret create <name> (gh_token)") {
 		t.Errorf("listing does not say how to create the hand-created secret:\n%s", out)
 	}
-	if strings.Contains(out, "secret import") {
+	// Scoped to this profile's own name: the shipped claude-code declares an
+	// importable secret and prints the other line, so an unscoped search for
+	// "secret import" asserts nothing about mine and fails on someone else's
+	// correct output.
+	if strings.Contains(out, "brig secret import mine") {
 		t.Errorf("a secret with no sources is offered as importable:\n%s", out)
 	}
 	// "never forwarded:" is the deny list, untouched by this change, so the

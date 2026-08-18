@@ -352,11 +352,10 @@ func newMissing(d profile.SecretDecl, reason error) Missing {
 // import a credential when the store could not be opened sends them at a wall
 // they have already hit.
 //
-// The importable misses are collected into ONE block rather than one each. The
-// shipped claude-code declares two optional importable secrets, both always
-// needed, so a block per secret printed the same "brig secret import
-// claude-code" line twice with nothing but the name to tell them apart -- and
-// the command is the same command, because import takes the profile.
+// The importable misses are collected into ONE block rather than one each,
+// because the command is the same command: import takes the PROFILE, so a
+// block per secret would print the identical "brig secret import claude-code"
+// line once per name with nothing but the name to tell them apart.
 func warnOptional(p profile.Profile, misses []Missing) []string {
 	var out []string
 	var importable []Missing

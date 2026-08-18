@@ -1,6 +1,10 @@
 package profile
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 // The denylist is the billing guard: a variable that outranks the
 // subscription credential must never be in the forward list, or a sandbox
@@ -23,7 +27,8 @@ func TestDeniedVarsAreNotForwarded(t *testing.T) {
 	}
 }
 
-// Claude Code's own precedence puts both of these ahead of the OAuth token.
+// Claude Code's own precedence puts both of these ahead of the credential
+// brig delivers, so they stay denied whatever channel that credential takes.
 func TestClaudeDeniesTheMeteredKeys(t *testing.T) {
 	reset(t)
 	tmpl, ok := Lookup("claude-code")
@@ -35,20 +40,81 @@ func TestClaudeDeniesTheMeteredKeys(t *testing.T) {
 			t.Errorf("claude-code does not deny %s", want)
 		}
 	}
-	for _, want := range []string{
-		"CLAUDE_CODE_OAUTH_TOKEN",
-		"CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-		"CLAUDE_CODE_OAUTH_SCOPES",
-		"GH_TOKEN",
-	} {
-		found := false
-		for _, b := range tmpl.Env {
-			if b.Name == want {
-				found = true
-			}
+}
+
+// GH_TOKEN keeps its chain, and the chain's ORDER is the whole compatibility
+// argument for the switchover: `GH_TOKEN=$(gh auth token) brig run claude-code`
+// worked for every user before this profile bound the name at all, and a bound
+// name is dropped from the ambient forward. env. first is what keeps that
+// working; the store is the fallback for a shell that exports nothing.
+func TestClaudeReadsGHTokenFromTheShellFirst(t *testing.T) {
+	reset(t)
+	tmpl, ok := Lookup("claude-code")
+	if !ok {
+		t.Fatal("claude-code profile is missing")
+	}
+	for _, b := range tmpl.Env {
+		if b.Name != "GH_TOKEN" {
+			continue
 		}
-		if !found {
-			t.Errorf("claude-code no longer forwards %s", want)
+		want := []string{"env.GH_TOKEN", "secrets.gh-token"}
+		if !slices.Equal(b.RefList(), want) {
+			t.Fatalf("GH_TOKEN refs = %v, want %v", b.RefList(), want)
+		}
+		return
+	}
+	t.Error("claude-code no longer binds GH_TOKEN")
+}
+
+// The switchover: the OAuth variables leave the profile entirely. The
+// credential is a file now, and a binding left behind would keep sweeping an
+// ambient CLAUDE_CODE_OAUTH_TOKEN into the guest where it outranks the
+// document brig writes.
+func TestClaudeNoLongerBindsTheOAuthVariables(t *testing.T) {
+	reset(t)
+	tmpl, ok := Lookup("claude-code")
+	if !ok {
+		t.Fatal("claude-code profile is missing")
+	}
+	for _, b := range tmpl.Env {
+		if strings.HasPrefix(b.Name, "CLAUDE_CODE_OAUTH_") {
+			t.Errorf("claude-code still binds %s", b.Name)
+		}
+	}
+	if tmpl.HostCredential != nil {
+		t.Error("claude-code still carries hostCredential:, so brig would read " +
+			"the Claude keychain item on every run")
+	}
+}
+
+// The credential is delivered as a file, into a directory nothing can write
+// through to the host. EphemeralPath is the predicate the whole design rests
+// on, so it is asserted against the shipped spec and not only against
+// fixtures.
+func TestClaudeDeliversItsCredentialIntoATmpfs(t *testing.T) {
+	reset(t)
+	tmpl, ok := Lookup("claude-code")
+	if !ok {
+		t.Fatal("claude-code profile is missing")
+	}
+	if len(tmpl.Files) != 1 || tmpl.Files[0].Path != ".claude/.credentials.json" {
+		t.Fatalf("files = %+v, want the credential document", tmpl.Files)
+	}
+	if !tmpl.EphemeralPath(tmpl.Files[0].Path) {
+		t.Errorf("%s reaches host disk", tmpl.Files[0].Path)
+	}
+	// --skills copies the host's own skills and plugins into the workspace at
+	// these paths. Without a hostmount each the tmpfs covers the copy and the
+	// flag silently does nothing, which is the failure mode this design trades
+	// the old leak for.
+	kept := map[string]bool{}
+	for _, v := range tmpl.HostMounts() {
+		kept[v.Path] = true
+	}
+	for _, rel := range tmpl.ProjectPaths {
+		if !kept[".claude/"+rel] {
+			t.Errorf("--skills copies .claude/%s into the workspace and no hostmount "+
+				"keeps it, so the tmpfs hides it", rel)
 		}
 	}
 }
