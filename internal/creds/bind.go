@@ -96,11 +96,23 @@ func Bind(
 						"`brig secret delete %s` if it should not exist",
 					b.Name, r.Name, r.Name, r.Name))
 			case fromSecret:
-				// Nothing resolved this one. A profile read from a file cannot
-				// get here -- Validate refuses a secrets. ref the list does not
-				// declare, and ResolveSecrets fails the run before Bind when the
-				// store does not have a declared name -- so this is a Profile
-				// built in Go whose secrets list does not cover its own
+				if _, declared := p.Secret(r.Name); declared {
+					// An OPTIONAL secret the store does not have. Resolution
+					// has already said so, naming the secret and the command
+					// that supplies it, so a second line here is at best a
+					// repetition -- and the one this replaced was worse than
+					// that: it told the reader the name was not on the
+					// profile's secrets list while it was sitting there in the
+					// file. Silent, deliberately.
+					//
+					// A required one never reaches Bind at all: ResolveSecrets
+					// fails the run first.
+					break
+				}
+				// Nothing declared this one, so nothing ever looked for it.
+				// Validate refuses a secrets. ref the list does not declare, so
+				// a profile read from a file cannot get here -- this is a
+				// Profile built in Go whose secrets list does not cover its own
 				// bindings. Same class as an unparsable ref: warn and carry on
 				// rather than refuse to create the sandbox.
 				s.Warnings = append(s.Warnings, fmt.Sprintf(

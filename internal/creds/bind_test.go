@@ -127,24 +127,6 @@ func TestBindWarnsOnEmptySecretValue(t *testing.T) {
 	}
 }
 
-// A secret nothing resolved is a different mistake from an emptied one, and
-// says so: telling the caller a name absent from the map "is empty, not
-// absent" would send them to `brig secret update` for a secret their profile
-// never declared.
-func TestBindWarnsDifferentlyOnAnUnresolvedSecret(t *testing.T) {
-	p := profileWith(t, "secrets:\n  - gh\nenv:\n  - name: GH_TOKEN\n    ref: secrets.gh\n")
-	set := Bind(p, p.Env, nil, lookupFrom(nil), Options{})
-	if len(set.Warnings) != 1 {
-		t.Fatalf("warnings = %v, want exactly one", set.Warnings)
-	}
-	if !strings.Contains(set.Warnings[0], "never resolved") {
-		t.Errorf("warning does not say the secret was unresolved: %s", set.Warnings[0])
-	}
-	if strings.Contains(set.Warnings[0], "not absent") {
-		t.Errorf("an absent secret is reported as an emptied one: %s", set.Warnings[0])
-	}
-}
-
 // A ref that does not parse is reachable from a profile built in Go rather
 // than read from a file -- Validate rejects it at parse time, but a hand-built
 // binding (the same shape TestDenyAppliesToRefdValues constructs) skips that
@@ -221,5 +203,59 @@ func TestBindDoesNotWarnAboutAnEarlierChainElement(t *testing.T) {
 	set := Bind(p, p.Env, map[string]string{"gh": "from-the-store"}, lookupFrom(nil), Options{})
 	if len(set.Warnings) != 0 {
 		t.Errorf("warnings = %v; want none: the chain resolved", set.Warnings)
+	}
+}
+
+// A declared, optional secret the store does not have is Bind's business to
+// stay quiet about: resolution has already said so, naming the secret and the
+// command that supplies it.
+//
+// The message this replaced said the name was "not on this profile's secrets
+// list" while it was sitting there in the file -- which nothing could reach
+// until a shipped profile bound an optional secret through a chain, and then
+// `brig env claude-code` said it on any host with no stored gh-token.
+func TestBindIsSilentAboutADeclaredOptionalSecret(t *testing.T) {
+	p := profile.Profile{
+		Name:    "mine",
+		Secrets: []profile.SecretDecl{{Name: "gh-token", Required: ptr(false)}},
+	}
+	bindings := []profile.EnvBinding{{Name: "GH_TOKEN", Refs: []string{"env.GH_TOKEN", "secrets.gh-token"}}}
+
+	set := Bind(p, bindings, map[string]string{}, lookupFrom(nil), Options{})
+
+	if set.Has("GH_TOKEN") {
+		t.Errorf("bound a secret that was never resolved: %+v", set.Names)
+	}
+	for _, w := range set.Warnings {
+		if strings.Contains(w, "not on this profile's secrets list") {
+			t.Errorf("said a declared secret is not declared: %s", w)
+		}
+	}
+	if len(set.Warnings) != 0 {
+		t.Errorf("warned twice about one missing optional secret: %v", set.Warnings)
+	}
+}
+
+// A ref to a name nothing declared still warns, because nothing ever looked
+// for it: Validate refuses that in a file, so it means a Profile built in Go
+// whose secrets list does not cover its own bindings.
+//
+// And it is a different mistake from an emptied secret, so it says so: telling
+// the caller a name absent from the map "is empty, not absent" would send them
+// to `brig secret update` for a secret nothing declared.
+func TestBindWarnsAboutAnUndeclaredSecretRef(t *testing.T) {
+	p := profile.Profile{Name: "mine"}
+	bindings := []profile.EnvBinding{{Name: "GH_TOKEN", Ref: "secrets.gh-token"}}
+
+	set := Bind(p, bindings, map[string]string{}, lookupFrom(nil), Options{})
+
+	if len(set.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly one", set.Warnings)
+	}
+	if !strings.Contains(set.Warnings[0], "not on this profile's secrets list") {
+		t.Errorf("said nothing about a ref no secrets list covers: %s", set.Warnings[0])
+	}
+	if strings.Contains(set.Warnings[0], "not absent") {
+		t.Errorf("an absent secret is reported as an emptied one: %s", set.Warnings[0])
 	}
 }
