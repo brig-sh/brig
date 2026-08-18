@@ -1,0 +1,69 @@
+name: claude-code
+desc: Claude Code (Anthropic)
+binary: claude
+image: ghcr.io/brig-sh/claude-code-stock:latest
+
+# Boots as an ordinary OCI image: the image carries no kernel, so the
+# runtime supplies one. hvi is the backend that path is built around.
+hypervisor: hvi
+genericBoot: true
+guestHome: /home/claude
+
+# ~/.claude/skills and ~/.claude/plugins are read-only in the guest under
+# --skills. Memory is deliberately absent: it is keyed by host project path
+# (~/.claude/projects/<slug>/memory), and that slug does not exist in the
+# guest, so projecting it would put the files somewhere the agent never looks.
+hostConfigDir: ~/.claude
+projectPaths: [skills, plugins]
+
+# CLAUDE_CODE_OAUTH_TOKEN authenticates Claude Code outright, and it is what
+# the host credential supplies too: short-lived, renewed on the host, and
+# re-read on every invocation, so nothing in the guest ever refreshes anything.
+# GH_TOKEN is for git over HTTPS, not for the agent.
+#
+# CLAUDE_CODE_OAUTH_REFRESH_TOKEN is the exception, and it is opt-in rather
+# than forwarded by default. The refresh-token pair is the documented way to
+# provision auth without a browser -- with both set, `claude auth login`
+# exchanges the refresh token instead of opening one, which the guest cannot do
+# -- but a refresh token is durable account access, not a short-lived
+# credential: it mints new access tokens for as long as it lives, so handing it
+# to a sandbox with unrestricted egress gives that sandbox the account rather
+# than this session. A zero-config `brig run claude` must not do that silently.
+# Ask for it when a flow needs it:
+#
+#   BRIG_FORWARD_OPTIN=CLAUDE_CODE_OAUTH_REFRESH_TOKEN brig run claude
+env:
+  - name: CLAUDE_CODE_OAUTH_TOKEN
+    ref: env.CLAUDE_CODE_OAUTH_TOKEN
+  - name: CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+    ref: env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+    optIn: true
+  - name: CLAUDE_CODE_OAUTH_SCOPES
+    ref: env.CLAUDE_CODE_OAUTH_SCOPES
+  - name: GH_TOKEN
+    ref: env.GH_TOKEN
+
+# Both outrank CLAUDE_CODE_OAUTH_TOKEN in Claude Code's auth precedence, so
+# forwarding either would move the sandbox off the subscription and onto
+# metered API billing without saying so.
+deny: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN]
+
+statePaths: [.claude, .claude.json]
+staleCredentialFiles: [.claude/.credentials.json]
+headless: true
+mem: 4096
+cpus: 4
+
+onboarding:
+  file: .claude.json
+  seed:
+    hasCompletedOnboarding: true
+    hasTrustDialogAccepted: true
+  trustKey: [projects, hasTrustDialogAccepted]
+
+hostCredential:
+  keychainService: Claude Code-credentials
+  tokenField: accessToken
+  expiryField: expiresAt
+  targetVar: CLAUDE_CODE_OAUTH_TOKEN
+  renewHint: run claude on the host once to renew it

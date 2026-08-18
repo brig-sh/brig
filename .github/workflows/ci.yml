@@ -1,0 +1,103 @@
+name: CI
+
+# Build, vet and test on every change, and prove the release config still
+# assembles before a tag depends on it.
+#
+# Linux only, deliberately. brig is pure Go with no cgo, so one ubuntu runner
+# cross-compiles every target including darwin/arm64; a macOS runner would buy
+# nothing here and self-hosted mac capacity is for work that genuinely needs a
+# Mac.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+          # sigs.k8s.io/yaml is the only dependency, but there is a go.sum
+          # to key the cache on now.
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
+
+      # The macOS path is the one that ships first, and it is also the one no
+      # Linux runner can execute. Compiling it is the part CI can do, and it
+      # catches a darwin-only build tag going stale.
+      # Drives the real binary end to end -- workspace preparation, credential
+      # resolution, boot, readiness, share check, exec -- against a stub
+      # runtime, so everything except the VM itself is covered on a Linux
+      # runner.
+      - name: smoke test
+        run: ./script/smoke.sh
+
+      - name: cross-compile darwin/arm64
+        run: GOOS=darwin GOARCH=arm64 go build ./...
+
+      - name: cross-compile linux/amd64
+        run: GOOS=linux GOARCH=amd64 go build ./...
+
+  release-config:
+    name: release config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+          # sigs.k8s.io/yaml is the only dependency, but there is a go.sum
+          # to key the cache on now.
+          cache: true
+
+      # A release config that only runs on a tag is a config nobody has run.
+      # Validate it and build a full snapshot here, so the first real tag is
+      # not the first time goreleaser sees this file.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+
+      # sign and sbom are skipped here: signing needs an OIDC identity a pull
+      # request does not have, and both are exercised on the release path.
+      # The point of this job is that the build and archive config assembles.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish,sign,sbom
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ""
