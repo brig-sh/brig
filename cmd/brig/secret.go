@@ -68,7 +68,8 @@ usage:
   brig secret read   <name>             print the value
   brig secret delete <name> [-y]        remove it, after asking
   brig secret ls                        list names and dates, never values
-  brig secret import <profile> [name...] fill a profile's secrets from your host
+  brig secret import <profile>          fill its secrets from your host, once
+  brig secret import <profile> <name>   fill just the ones you name
 
 flags:
   -f, --file FILE   read the value from a file, verbatim. ` + "`-`" + ` is stdin

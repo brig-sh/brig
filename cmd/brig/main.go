@@ -50,8 +50,9 @@ usage:
   brig profile ls|export|import|edit|rm          manage profiles
   brig export <profile> [name] [--json]          print a profile, or save it
                                                  as <name> in the profile dir
-  brig secret create|read|update|delete|ls|import
-                                                 keep secrets in your keyring
+  brig secret create|read|update|delete|ls       keep secrets in your keyring
+  brig secret import <profile>                   fill a profile's secrets from
+                                                 your host, once
   brig version
 
 flags (before the agent's own arguments; -- ends brig's parsing):
@@ -79,7 +80,8 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
   BRIG_PULL            missing (default) | always | never
   BRIG_SKILLS          1 to project your ~/.claude skills and plugins read-only
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
-  BRIG_CREDENTIALS_CMD command printing the host credential JSON on stdout
+  BRIG_CREDENTIALS_CMD deprecated, goes next release: brig secret import
+                       --from-command does the same job once instead of per run
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off -- guest image signature
   BRIG_PROFILE_DIR     where your own profiles live (BRIG_TEMPLATE_DIR still works)
