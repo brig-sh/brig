@@ -205,8 +205,9 @@ func (d *daemon) ensure(req Request) Response {
 
 	// BuildEnv fails the whole request rather than booting a sandbox missing a
 	// binding it needs -- same rule as the CLI's own path. A run naming several
-	// absent secrets makes this Error multi-line, one "brig secret create" per
-	// secret; there is no brigd client in this repo today, so whatever renders
+	// absent secrets makes this Error multi-line, one fix per secret -- import
+	// or create, depending on the secret; there is no brigd client in this
+	// repo today, so whatever renders
 	// Response.Error next must not collapse those newlines onto one line.
 	set, err := cfg.BuildEnv()
 	if err != nil {

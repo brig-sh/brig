@@ -246,11 +246,13 @@ func TestTheStorelessHintIsComputedFromTheBindings(t *testing.T) {
 // required: decides whether the run stops; sources: decides which
 // command is named. Nothing crosses over.
 //
-// Both quadrants name `brig secret create` here, including the importable one:
-// `brig secret import` does not exist until the PR that adds the dispatch, and
-// a message naming a verb that answers "unknown secret subcommand" is worse
-// than one naming a verb that works. The absent-strings check is what makes
-// that PR flip the wording deliberately rather than discover it.
+// The importable quadrant names `brig secret import <profile>` and the
+// hand-created one `brig secret create <name>`, and each says the other is
+// absent. The absent-strings check is the point: the two commands are not
+// interchangeable, and a message that named the wrong one would send a user to
+// a command that cannot fill the secret it is talking about. Import takes the
+// PROFILE because one import fills every source the profile declares; create
+// takes the name because nothing but the user knows the value.
 func TestMissingSecretMessages(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -260,8 +262,8 @@ func TestMissingSecretMessages(t *testing.T) {
 	}{
 		{"required, importable",
 			Missing{Name: "mytool-token", Required: true, Importable: true, Reason: secret.ErrNotFound},
-			[]string{`missing secret "mytool-token"`, "brig-mytool sandbox", "brig secret create mytool-token"},
-			[]string{"secret import"}},
+			[]string{`missing secret "mytool-token"`, "brig-mytool sandbox", "brig secret import mytool"},
+			[]string{"secret create"}},
 		{"required, hand-created",
 			Missing{Name: "mytool-token", Required: true, Reason: secret.ErrNotFound},
 			[]string{"brig secret create mytool-token"},
@@ -324,5 +326,74 @@ func TestOptionalWithNoSourcesNamesCreateNotImport(t *testing.T) {
 	}
 	if strings.Contains(joined, "secret import") {
 		t.Errorf("warnings name import for a secret with no sources:\n%s", joined)
+	}
+}
+
+// Two optional importable secrets are one block naming both, not two blocks
+// naming the profile twice.
+//
+// This is the shipped claude-code exactly: two optional importable secrets,
+// both always needed. Import takes the profile, so a block per secret prints
+// the identical `brig secret import claude-code` line twice with nothing but
+// the name to tell the two apart -- which reads as a warning repeated rather
+// than as two secrets missing.
+func TestTwoOptionalImportableMissesAreOneBlock(t *testing.T) {
+	p := profile.Profile{
+		Name: "claude-code",
+		Secrets: []profile.SecretDecl{
+			{Name: "claude-credentials", Required: ptr(false), From: "keychain",
+				Service: "Claude Code-credentials", Hint: "run `claude` on the host once to log in"},
+			{Name: "gh-token", Required: ptr(false), From: "env", Var: "GH_TOKEN"},
+		},
+		Env: []profile.EnvBinding{
+			{Name: "TOK", Ref: "secrets.claude-credentials"},
+			{Name: "GH_TOKEN", Ref: "secrets.gh-token"},
+		},
+	}
+	res, err := ResolveSecrets(p, "brig-claude-code",
+		func() (SecretReader, error) { return fakeStore{}, nil }, noEnv)
+	if err != nil {
+		t.Fatalf("two optional secrets failed the run: %v", err)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("warnings = %#v; want one block", res.Warnings)
+	}
+	block := res.Warnings[0]
+	for _, want := range []string{`"claude-credentials"`, `"gh-token"`,
+		"brig secret import claude-code", "run `claude` on the host once to log in"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("%q missing from the block:\n%s", want, block)
+		}
+	}
+	if n := strings.Count(block, "brig secret import claude-code"); n != 1 {
+		t.Errorf("the import command appears %d times:\n%s", n, block)
+	}
+	// The hint belongs to one of the two, so it says which.
+	if !strings.Contains(block, "claude-credentials: run `claude`") {
+		t.Errorf("the hint is not attributed to its secret:\n%s", block)
+	}
+}
+
+// An optional importable secret carries the declaration's own hint:, which is
+// the only thing that knows what makes the credential appear -- and it lives on
+// the source in the shipped spelling, not on the secret.
+func TestTheHintOnASourceReachesTheWarning(t *testing.T) {
+	p := profile.Profile{
+		Name: "mytool",
+		Secrets: []profile.SecretDecl{{Name: "mytool-token", Required: ptr(false),
+			Sources: []profile.Source{
+				{From: "keychain", Service: "Mytool-credentials"},
+				{From: "file", Path: "~/.mytool/creds", Hint: "run `mytool login` on the host once"},
+			}}},
+		Env: []profile.EnvBinding{{Name: "MYTOOL_TOKEN", Ref: "secrets.mytool-token"}},
+	}
+	res, err := ResolveSecrets(p, "brig-mytool",
+		func() (SecretReader, error) { return fakeStore{}, nil }, noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(res.Warnings, "\n")
+	if !strings.Contains(joined, "run `mytool login` on the host once") {
+		t.Errorf("the source's hint did not reach the warning:\n%s", joined)
 	}
 }

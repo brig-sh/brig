@@ -23,6 +23,11 @@ type Missing struct {
 	// advice when importing would fail for the same reason the run could not
 	// read the store, so the message reads this rather than assuming absence.
 	Reason error
+	// Hint is the declaration's own hint: -- "run `claude` on the host once to
+	// log in". Carried on the miss rather than looked up again where the
+	// message is built, because only the profile knows what makes its
+	// credential appear and the message is built from Missing alone.
+	Hint string
 }
 
 // MissingSecretsError is every REQUIRED secret a run could not resolve,
@@ -77,16 +82,18 @@ func (e *MissingSecretsError) Unwrap() []error {
 // against its own, one per line: the two commands are not interchangeable and
 // a single trailing hint would send half the names the wrong way.
 //
-// Importable is read but not yet acted on: `brig secret import` does not exist
-// until PR 5, and a message naming a verb that answers "unknown secret
-// subcommand" is worse than one naming a verb that works. PR 5 adds the arm in
-// the same change that adds the dispatch.
+// The import arm names the PROFILE, because that is what the verb takes, and
+// the profile is the canonical one rather than the word the user typed -- see
+// MissingSecretsError.Profile.
 func (e *MissingSecretsError) fix(m Missing) string {
 	// A reason other than absence is not something creating a secret fixes:
 	// the store refused to answer, and "create it first" would send the user
 	// to a command that hits the same wall. Say what happened instead.
 	if m.Reason != nil && !errors.Is(m.Reason, secret.ErrNotFound) {
 		return fmt.Sprintf("could not be read: %v", m.Reason)
+	}
+	if m.Importable {
+		return fmt.Sprintf("import it from your host with: brig secret import %s", e.Profile)
 	}
 	return fmt.Sprintf("create it first with: brig secret create %s", m.Name)
 }
@@ -107,19 +114,17 @@ type Resolution struct {
 // Walk the bindings first: a chain whose earlier env. element resolves does
 // not contribute its secrets. element, so a run the environment already
 // satisfies never touches the store. Every required secret is needed whatever
-// the bindings do with it -- the requirement list is a statement about the
-// workload, not about one binding.
+// the bindings do with it -- the requirement list describes the workload, not
+// one binding.
 //
-// Computed BEFORE resolving rather than resolving lazily, which is the
-// property up-front resolution exists for: laziness would report the first
-// miss and hide the rest, while a needed set still yields one collected error
-// naming every genuine miss.
+// Computed before resolving rather than resolving lazily: laziness would
+// report the first miss and hide the rest, while a needed set still yields one
+// collected error naming every genuine miss.
 //
-// Note what this does not save. A files: binding has no earlier env source to
-// fall back to, so it unconditionally needs its secret -- which means a
-// profile delivering a credential as a file opens the store on every run, on
-// every platform. That is why the unavailable-store outcomes below have to
-// tell a platform invariant from an actionable failure.
+// A files: binding has no earlier env source to fall back to, so it always
+// needs its secret -- which is why a profile delivering a credential as a file
+// opens the store on every run, and why the unavailable-store outcomes below
+// must tell a platform invariant from something the user can act on.
 func Needed(p profile.Profile, lookup func(string) (string, bool)) []profile.SecretDecl {
 	wanted := map[string]bool{}
 	for _, b := range p.Env {
@@ -175,7 +180,7 @@ func ResolveSecrets(
 	}
 
 	res := Resolution{Values: make(map[string]string, len(needed))}
-	var missing []Missing
+	var missing, optional []Missing
 	for _, d := range needed {
 		value, err := store.Read(d.Name)
 		switch {
@@ -185,15 +190,14 @@ func ResolveSecrets(
 		case errors.Is(err, secret.ErrNotFound):
 			err = secret.ErrNotFound
 		}
-		m := Missing{Name: d.Name, Required: d.IsRequired(), Importable: d.Importable(), Reason: err}
+		m := newMissing(d, err)
 		if m.Required {
 			missing = append(missing, m)
 			continue
 		}
-		if w := warn(p, m); w != "" {
-			res.Warnings = append(res.Warnings, w)
-		}
+		optional = append(optional, m)
 	}
+	res.Warnings = warnOptional(p, optional)
 	// The required failures win the report: a run that stopped must say why it
 	// stopped, not bury it under advice about something that did not stop it.
 	if len(missing) > 0 {
@@ -205,25 +209,20 @@ func ResolveSecrets(
 // unavailable decides what a store that could not be opened means, which is
 // three different things.
 func unavailable(p profile.Profile, sandbox string, needed []profile.SecretDecl, err error) (Resolution, error) {
-	var required []Missing
+	var required, optional []Missing
 	var res Resolution
 	for _, d := range needed {
-		m := Missing{Name: d.Name, Required: d.IsRequired(), Importable: d.Importable(), Reason: err}
+		m := newMissing(d, err)
 		if m.Required {
 			required = append(required, m)
 			continue
 		}
-		// ErrUnsupported is a platform invariant: there is nothing the user can
-		// do about it on this run, and saying so every time is noise rather
-		// than information. Silent. Everything else -- a locked keychain, a
-		// denied access dialog -- is a state the user can change.
-		if errors.Is(err, secret.ErrUnsupported) {
-			continue
-		}
-		res.Warnings = append(res.Warnings, fmt.Sprintf(
-			"could not read brig's secret store: %v. %s will run without %s",
-			err, p.Name, m.Name))
+		optional = append(optional, m)
 	}
+	// Through the same builder as an ordinary miss, so a store that could not
+	// be opened says what a store that answered ErrNotFound says: ErrUnsupported
+	// silent, everything else a state the user can change.
+	res.Warnings = warnOptional(p, optional)
 	if len(required) > 0 {
 		// storeError unwraps to the backend's own error, so a caller can still
 		// tell ErrUnsupported from a lock.
@@ -327,26 +326,96 @@ func envSpelling(p profile.Profile, name string) (variable string, readsTheShell
 	return "", false
 }
 
-// warn is what an optional miss says. The three reasons need three sentences:
-// telling someone to import a credential when the store could not be opened
-// sends them at a wall they have already hit.
-func warn(p profile.Profile, m Missing) string {
-	switch {
-	case errors.Is(m.Reason, secret.ErrUnsupported):
-		return ""
-	case errors.Is(m.Reason, secret.ErrNotFound):
-		// Names the SECRET, not the profile. An earlier draft formatted p.Name
-		// twice and m.Name never, which on the shipped claude-code -- two
-		// optional importable secrets, both always needed -- printed the same
-		// two lines twice with nothing to tell them apart, and told a user who
-		// had imported one of them that they had no credential at all.
-		//
-		// The importable arm, and the per-secret hint that goes with it,
-		// arrives in PR 5 with the verb.
-		return fmt.Sprintf("no value for the secret %q, and %s will run without it.\n"+
-			"To supply one: brig secret create %s", m.Name, p.Name, m.Name)
-	default:
-		return fmt.Sprintf("could not read brig's secret store: %v. %s will run without %s",
-			m.Reason, p.Name, m.Name)
+// newMissing is one unresolved secret, with everything a message about it
+// needs read off the declaration in one place.
+func newMissing(d profile.SecretDecl, reason error) Missing {
+	return Missing{
+		Name:       d.Name,
+		Required:   d.IsRequired(),
+		Importable: d.Importable(),
+		Reason:     reason,
+		Hint:       d.HintText(),
 	}
+}
+
+// warnOptional is what a run says about the secrets it could not resolve and
+// did not stop for. The three reasons need three sentences: telling someone to
+// import a credential when the store could not be opened sends them at a wall
+// they have already hit.
+//
+// The importable misses are collected into ONE block rather than one each. The
+// shipped claude-code declares two optional importable secrets, both always
+// needed, so a block per secret printed the same "brig secret import
+// claude-code" line twice with nothing but the name to tell them apart -- and
+// the command is the same command, because import takes the profile.
+func warnOptional(p profile.Profile, misses []Missing) []string {
+	var out []string
+	var importable []Missing
+	for _, m := range misses {
+		switch {
+		case errors.Is(m.Reason, secret.ErrUnsupported):
+			// A platform invariant: there is nothing the user can do about it
+			// on this run, and saying so every time is noise rather than
+			// information. Silent. Everything else -- a locked keychain, a
+			// denied access dialog -- is a state the user can change.
+		case errors.Is(m.Reason, secret.ErrNotFound) && m.Importable:
+			importable = append(importable, m)
+		case errors.Is(m.Reason, secret.ErrNotFound):
+			// Names the secret, not the profile: a profile may declare
+			// several, and two lines differing in nothing leave the reader
+			// unable to tell which one to supply.
+			out = append(out, fmt.Sprintf("no value for the secret %q, and %s will run "+
+				"without it.\nTo supply one: brig secret create %s", m.Name, p.Name, m.Name))
+		default:
+			out = append(out, fmt.Sprintf("could not read brig's secret store: %v. "+
+				"%s will run without %s", m.Reason, p.Name, m.Name))
+		}
+	}
+	if len(importable) > 0 {
+		out = append(out, importBlock(p, importable))
+	}
+	return out
+}
+
+// importBlock is the one block the importable misses share.
+//
+// It does not assert what the sandbox will do about it: a profile with two
+// optional secrets has no business claiming a missing gh-token means the agent
+// will ask you to log in. It names them, says the one command that fills them,
+// and carries each declaration's own hint: -- attributed to its secret where
+// there is more than one, because an unattributed list of hints under a list of
+// names is a puzzle rather than advice.
+func importBlock(p profile.Profile, misses []Missing) string {
+	names := make([]string, 0, len(misses))
+	for _, m := range misses {
+		names = append(names, fmt.Sprintf("%q", m.Name))
+	}
+	var msg string
+	if len(misses) == 1 {
+		msg = fmt.Sprintf("no value for the secret %s, and %s will run without it.\n"+
+			"To carry it in from your host: brig secret import %s", names[0], p.Name, p.Name)
+	} else {
+		msg = fmt.Sprintf("no value for the secrets %s, and %s will run without them.\n"+
+			"To carry them in from your host: brig secret import %s",
+			list(names), p.Name, p.Name)
+	}
+	for _, m := range misses {
+		switch {
+		case m.Hint == "":
+		case len(misses) == 1:
+			msg += "\n" + m.Hint
+		default:
+			msg += fmt.Sprintf("\n%s: %s", m.Name, m.Hint)
+		}
+	}
+	return msg
+}
+
+// list joins names the way a sentence does, because this one is read as a
+// sentence rather than scanned as a column.
+func list(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }

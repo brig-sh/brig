@@ -628,13 +628,14 @@ func listProfiles() error {
 			// Which ones brig can fill from your host and which ones only you
 			// can: the old single line said "create them" for both, which for
 			// an importable secret is the long way round.
-			// Named rather than told to import: the verb that fills these does
-			// not exist yet, and printing a command that answers "unknown
-			// secret subcommand" is worse than printing none. The PR that adds
-			// the dispatch names it here too.
+			//
+			// Both lines are the command plus the names it covers, which is
+			// what makes them comparable at a glance. Import takes the PROFILE
+			// -- one command fills every importable name on this line -- while
+			// create takes a name at a time.
 			if importable := importableNames(p); len(importable) > 0 {
-				fmt.Printf("%-15s   brig can read from your host: %s\n", "",
-					strings.Join(importable, " "))
+				fmt.Printf("%-15s   from your host: brig secret import %s (%s)\n", "",
+					p.Name, strings.Join(importable, " "))
 			}
 			if hand := handCreatedNames(p); len(hand) > 0 {
 				fmt.Printf("%-15s   by hand: brig secret create <name> (%s)\n", "",

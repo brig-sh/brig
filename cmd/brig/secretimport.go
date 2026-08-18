@@ -486,16 +486,12 @@ func sourceNames(d profile.SecretDecl, o importOptions) string {
 }
 
 // advice is the profile's own hint for a source that held nothing -- "run
-// `claude` on the host once to log in". The declaration carries it because
-// only the profile knows what makes its credential appear.
+// `claude` on the host once to log in". The same text the run path's warning
+// carries, through the same accessor, because a user who reads both must not
+// be told two different things about one secret.
 func advice(d profile.SecretDecl) string {
-	for _, s := range d.SourceList() {
-		if s.Hint != "" {
-			return ". " + s.Hint
-		}
-	}
-	if d.Hint != "" {
-		return ". " + d.Hint
+	if hint := d.HintText(); hint != "" {
+		return ". " + hint
 	}
 	return ""
 }

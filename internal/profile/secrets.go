@@ -119,6 +119,26 @@ func (d SecretDecl) SourceList() []Source {
 	return []Source{{From: d.From, Service: d.Service, Path: d.Path, Var: d.Var, Hint: d.Hint}}
 }
 
+// HintText is what to tell a user whose sources held nothing -- "run `claude`
+// on the host once to log in". Only the profile knows what makes its
+// credential appear, which is what the field is for.
+//
+// The declaration's own hint: comes first and a source's second, because the
+// singular shorthand copies the declaration's into the one source it expands
+// to -- so reading only one of the two would leave the shipped spellings
+// answering differently depending on which form they were written in.
+func (d SecretDecl) HintText() string {
+	if d.Hint != "" {
+		return d.Hint
+	}
+	for _, s := range d.SourceList() {
+		if s.Hint != "" {
+			return s.Hint
+		}
+	}
+	return ""
+}
+
 // Importable reports whether `brig secret import` can fill this one. A secret
 // with no sources is hand-created by definition, and its error names
 // `brig secret create` instead -- which keeps the hint local to the failing

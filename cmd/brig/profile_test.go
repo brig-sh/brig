@@ -178,7 +178,7 @@ func TestListProfilesReportsBindingsAndRequiredSecrets(t *testing.T) {
 	if !strings.Contains(out, "by hand: brig secret create <name> (gh_token)") {
 		t.Errorf("listing does not say how to create the hand-created secret:\n%s", out)
 	}
-	if strings.Contains(out, "read from your host") {
+	if strings.Contains(out, "secret import") {
 		t.Errorf("a secret with no sources is offered as importable:\n%s", out)
 	}
 	// "never forwarded:" is the deny list, untouched by this change, so the
@@ -397,10 +397,10 @@ func TestRemoveProfileResolvesFileAndAlias(t *testing.T) {
 }
 
 // The other half of the split: a secret that declares where brig could read it
-// on the host is not something you have to mint by hand, and the listing says
-// so. It does not name the import verb -- that arrives with the dispatch, and
-// a listing that printed a command answering "unknown secret subcommand" would
-// be worse than one that printed none.
+// on the host is not something you have to mint by hand, and the listing names
+// the command that fills it. That command takes the PROFILE, so the line reads
+// `brig secret import mine (from-the-host)` -- one command, then the names it
+// covers -- against the create line's name at a time.
 func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
@@ -418,14 +418,16 @@ func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "brig can read from your host: from-the-host") {
+	if !strings.Contains(out, "from your host: brig secret import mine (from-the-host)") {
 		t.Errorf("listing does not report the importable secret:\n%s", out)
 	}
 	if !strings.Contains(out, "by hand: brig secret create <name> (by-hand)") {
 		t.Errorf("listing does not report the hand-created secret:\n%s", out)
 	}
-	if strings.Contains(out, "secret import") {
-		t.Errorf("listing names a verb that does not exist yet:\n%s", out)
+	// One import line for the profile, not one per importable name: the
+	// command is the same command for every name on it.
+	if n := strings.Count(out, "brig secret import mine"); n != 1 {
+		t.Errorf("the import command appears %d times:\n%s", n, out)
 	}
 	// A keychain service name is not a value, but it is the user's own
 	// vocabulary rather than brig's, and a listing is names.
