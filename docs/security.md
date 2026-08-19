@@ -27,10 +27,11 @@ them for itself.
 
 ## Credentials
 
-**A run reads no host source.** Nothing on the `brig run`, `exec` or `shell`
-path reaches a keychain item brig did not write, a file outside the workspace,
-or a host command. Your host login enters brig's own store once, when you type
-`brig secret import <profile>`, and every run afterwards reads only that store:
+**A run on a shipped profile reads no host source.** Nothing on the `brig run`,
+`exec` or `shell` path reaches a keychain item brig did not write, a file
+outside the workspace, or a host command. Your host login enters brig's own
+store once, when you type `brig secret import <profile>`, and every run
+afterwards reads only that store:
 
 ```bash
 brig run claude-code               # log in inside the sandbox, or:
@@ -41,6 +42,13 @@ That is a change from earlier releases, which read Claude Code's own keychain
 item on every invocation as a fallback. The profile key that did it,
 `hostCredential:`, is deprecated and leaves the shipped profiles in this
 release; brig removes the field and `BRIG_CREDENTIALS_CMD` in the next.
+
+Until it does, the sentence above is about the profiles brig ships. A profile
+of your own still carrying `hostCredential:` keeps the old behaviour, because
+that is what deprecating rather than deleting the key means: every run reads
+the host item it names, and raises the approval dialog that comes with it.
+`brig run` warns when it finds one. Moving it to `secrets:` with `sources:` is
+what makes the promise above true for your profile too.
 
 A credential reaches the guest by one of two channels, and the profile picks
 per secret. `files:` writes it into the guest at the path the agent already

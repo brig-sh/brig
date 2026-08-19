@@ -215,6 +215,13 @@ brig run claude-code               # log in inside the sandbox, or:
 brig secret import claude-code     # carry the login already on this Mac in, once
 ```
 
+That in-sandbox login lasts as long as the sandbox does. It is written inside
+`~/.claude`, which is memory-only so that no credential reaches host disk, so
+`brig stop` takes it with the rest of the VM and the next `brig run` asks
+again. Importing is what makes a login outlive a stop: brig keeps that copy in
+your keyring and writes it back in on every boot. If you log in inside the
+sandbox on a host that has no login of its own, expect to repeat it.
+
 `import` reads your host login **once, when you type it**, and copies it into
 brig's own store. Every run after that reads only that store. brig never opens
 another application's keychain item on the run path, so a run raises no
@@ -519,7 +526,7 @@ Booleans are shell-style: anything except `0` is on.
 | `BRIG_CREDENTIALS_CMD` | unset | **Deprecated, removed next release.** Command printing the host credential JSON on stdout, for a profile still using `hostCredential:`. `brig secret import <profile> --from-command '<command>'` does the same job once, instead of on every run |
 | `BRIG_ALLOW_REFS` | `0` | Forward a value that looks like an unresolved `scheme://` secret reference |
 | `BRIG_ALLOW_DENIED` | `0` | Forward a variable on the profile's billing denylist |
-| `BRIG_ALLOW_EXPIRED` | `0` | Forward the host credential even though it reports as expired. brig withholds one by default, because a dead token turns into a confusing failure inside the guest rather than a clear one on the host. Set this if your clock is the thing that is wrong |
+| `BRIG_ALLOW_EXPIRED` | `0` | Forward the host credential even though it reports as expired. brig withholds one by default, because a dead token turns into a confusing failure inside the guest rather than a clear one on the host. Set this if your clock is the thing that is wrong. Scoped to the deprecated `hostCredential:` path, and goes with it: an imported credential that has expired warns and is still delivered, so there is nothing to override |
 | `GIT_TERMINAL_PROMPT` | `0` | Forwarded as-is; set it to `1` on the host to let git prompt in the guest |
 
 ### Guest git

@@ -13,6 +13,10 @@ brig run claude-code               # log in inside the sandbox, or:
 brig secret import claude-code     # carry your host login in, once
 ```
 
+The first of those does not persist: an in-sandbox login is written inside the
+memory-only `~/.claude`, which is what keeps credentials off host disk, so it
+dies with the sandbox on `brig stop`. Importing is what survives a stop.
+
 If you keep credentials in 1Password, Vault or `pass`, you have two roads.
 Either pipe the value in once (`op read ... | brig secret create <name>`, or
 `brig secret import <profile> <name> --from-command 'op read ...'`), or keep
