@@ -48,7 +48,18 @@ func (c *Config) warnExpiredSecrets() {
 		// and nothing re-reads the host until an import says so.
 		c.warnf("the imported credential %s (%s) expired %s.",
 			s.Name, c.Profile.Name, ago(now-s.Provenance.ExpiresAt))
-		c.warnf("Renew it on the host, then: brig secret import %s", c.Profile.Name)
+		// The profile-wide import only fills declarations that carry
+		// sources:. A secret stored with --from-command records an expiry
+		// just the same -- Extract reads expiryField whatever the source was
+		// -- so sending its owner to `brig secret import <profile>` is
+		// sending them to a command that reports importing nothing and
+		// leaves the credential expired.
+		if decl.Importable() {
+			c.warnf("Renew it on the host, then: brig secret import %s", c.Profile.Name)
+			continue
+		}
+		c.warnf("Renew it, then store it again: brig secret import %s %s --from-command '<command>'",
+			c.Profile.Name, s.Name)
 	}
 }
 

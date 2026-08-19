@@ -22,8 +22,14 @@ func TestExpiredImportedCredentialWarnsBeforeBoot(t *testing.T) {
 	c := &Config{
 		Err: &errb,
 		Profile: profile.Profile{
-			Name:    "claude-code",
-			Secrets: []profile.SecretDecl{{Name: "claude-credentials", Required: ptr(false)}},
+			Name: "claude-code",
+			// Carries sources:, like the profile it names -- the advice below
+			// is only true for a declaration the profile-wide import covers.
+			Secrets: []profile.SecretDecl{{
+				Name:     "claude-credentials",
+				Required: ptr(false),
+				Sources:  []profile.Source{{From: profile.SourceKeychain, Service: "Claude Code-credentials"}},
+			}},
 		},
 		OpenStore: func() (creds.SecretReader, error) {
 			return listingStore{{
@@ -36,6 +42,39 @@ func TestExpiredImportedCredentialWarnsBeforeBoot(t *testing.T) {
 
 	want := "brig: the imported credential claude-credentials (claude-code) expired 3h ago.\n" +
 		"brig: Renew it on the host, then: brig secret import claude-code\n"
+	if errb.String() != want {
+		t.Errorf("warning was:\n%s\nwant:\n%s", errb.String(), want)
+	}
+}
+
+// A secret with no sources: was filled by --from-command, and the profile-wide
+// import does not cover it -- it fills only what an importer can find on the
+// host. Sending its owner there reports importing nothing and leaves the
+// credential expired, so the advice has to name the form that works.
+func TestExpiredSecretWithNoSourcesIsSentToTheCommandForm(t *testing.T) {
+	const now = 1755436980000
+	old := nowMilli
+	nowMilli = func() int64 { return now }
+	t.Cleanup(func() { nowMilli = old })
+
+	var errb bytes.Buffer
+	c := &Config{
+		Err: &errb,
+		Profile: profile.Profile{
+			Name:    "mytool",
+			Secrets: []profile.SecretDecl{{Name: "vault-token", Required: ptr(false)}},
+		},
+		OpenStore: func() (creds.SecretReader, error) {
+			return listingStore{{
+				Name:       "vault-token",
+				Provenance: secret.Provenance{V: secret.ProvenanceVersion, ExpiresAt: now - 3*60*60*1000},
+			}}, nil
+		},
+	}
+	c.warnExpiredSecrets()
+
+	want := "brig: the imported credential vault-token (mytool) expired 3h ago.\n" +
+		"brig: Renew it, then store it again: brig secret import mytool vault-token --from-command '<command>'\n"
 	if errb.String() != want {
 		t.Errorf("warning was:\n%s\nwant:\n%s", errb.String(), want)
 	}
