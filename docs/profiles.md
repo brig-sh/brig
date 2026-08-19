@@ -109,7 +109,7 @@ with the same parser and neither has to guess.
 | `env` | no | The variables the guest sees, and where each one's value comes from: a literal, a stored secret, or brig's own environment. See below |
 | `forward` | no | Deprecated spelling of `env` for the environment case. Still works; folded into `env` when the file is read. See below |
 | `files` | no | Credential files the guest sees: which stored secret fills each one, and where under `guestHome` it is written. See below |
-| `volumes` | no | What is mounted inside `guestHome`: a `tmpfs` that nothing written to can reach host disk, and the `hostmount` exceptions kept across boots. See below |
+| `volumes` | no | What is mounted inside `guestHome`: a `tmpfs` that nothing written to can reach host disk, how big it may grow, and the `hostmount` exceptions kept across boots. See below |
 | `deny` | no | Variables never bound, whatever `env` or `forward` says. See below |
 | `statePaths` | no | Deprecated: `volumes` says the same thing and is acted on. Still read, so an older file keeps parsing; declaring both is an error rather than a merge |
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. brig never does, so finding one is worth a warning rather than a deletion |
@@ -123,6 +123,7 @@ with the same parser and neither has to guess.
 | `onboarding` | no | A first-run state file to seed. See below |
 | `hostCredential` | no | **Deprecated, removed next release.** A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
 | `reserved` | no | Marks a profile that owns the workspace a session name could otherwise slug onto. See below |
+| `unpublished` | no | We ship the profile but not an image for it. `brig run` says so and stops, rather than letting the pull fail against the registry with a 404 that reads like an outage. Pass `--image` with one you built, and `brig profiles` marks it. `cursor` is the one that carries it |
 
 A misspelled field is refused rather than ignored. `forwards:` instead of
 `forward:` would otherwise decode into nothing, forward no credentials, and
@@ -414,6 +415,7 @@ leak to whoever finds it, and it is a login prompt the agent cannot explain.
 volumes:
   - kind: tmpfs
     path: .claude               # memory-only: nothing written here reaches the host
+    size: 512m                  # optional, default 64m
   - kind: hostmount
     path: .claude/sessions      # ... except these, kept across boots
   - kind: hostmount
@@ -440,6 +442,15 @@ Order in the file is taste. brig mounts parents before children by path depth,
 because declaration order would be a trap -- a profile listing `.claude/sessions`
 above `.claude` would otherwise mount the tmpfs over the hostmount it had just
 made and silently lose the state it named.
+
+`size:` is how big a `tmpfs` may grow, `64m` when a volume does not say. Only
+a `tmpfs` takes one -- a `hostmount` is as large as the workspace it comes
+from. It is a ceiling the guest meets as `ENOSPC` from its own tools, with
+nothing on the host watching for it, so size it for what the mount actually
+holds: a directory of configuration is not the same as an agent's home, where
+edit history and per-job scratch accumulate. A value that is not a number
+optionally followed by `k`, `m` or `g` is refused at parse time, because
+`mount(8)` answers an option it cannot parse by failing the boot.
 
 `kind: volume` is reserved for a named volume several sandboxes share. It is
 parsed and refused as not yet supported, so a profile written against it fails
