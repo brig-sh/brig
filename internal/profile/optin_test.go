@@ -1,13 +1,20 @@
 package profile
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// The refresh token is the one credential in these profiles that is not
-// short-lived: it mints new access tokens for as long as it lives, so a
-// sandbox holding one holds the account rather than the session. It stays in
-// the spec, because the refresh-token pair is how a headless flow provisions
-// auth, and it stays marked so nothing forwards it without being asked.
-func TestTheClaudeSpecsMarkTheRefreshTokenOptIn(t *testing.T) {
+// The Claude profiles no longer carry the refresh token as an environment
+// binding at all. They deliver the whole credential document as a file into a
+// tmpfs (see volumes: and files: in the specs), which is what lets the agent
+// refresh in place without the token ever reaching host disk -- so there is no
+// env binding left for optIn: to hold back.
+//
+// optIn: itself is unchanged and still applies to any profile that binds a
+// durable credential as a variable; TestOptInHoldsABindingBack covers the
+// mechanism against a fixture rather than against a shipped spec.
+func TestTheClaudeSpecsDeliverTheCredentialAsAFile(t *testing.T) {
 	if err := Load(); err != nil {
 		t.Fatal(err)
 	}
@@ -16,26 +23,24 @@ func TestTheClaudeSpecsMarkTheRefreshTokenOptIn(t *testing.T) {
 		if !ok {
 			t.Fatalf("no profile %q", name)
 		}
-		var found bool
 		for _, b := range p.Env {
-			switch b.Name {
-			case "CLAUDE_CODE_OAUTH_REFRESH_TOKEN":
-				found = true
-				if !b.OptIn {
-					t.Errorf("%s forwards a refresh token by default", name)
-				}
-			case "CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN":
-				// The short-lived credentials are unchanged: this is about
-				// which of them a zero-config run hands over, not about
-				// making the profile ask for everything.
-				if b.OptIn {
-					t.Errorf("%s made %s opt-in, which breaks the default login", name, b.Name)
-				}
+			if strings.HasPrefix(b.Name, "CLAUDE_CODE_OAUTH") {
+				t.Errorf("%s still binds %s as a variable; the credential travels "+
+					"as a file now", name, b.Name)
 			}
 		}
-		if !found {
-			t.Errorf("%s no longer offers the refresh token at all, so a headless "+
-				"login has no way to provision one", name)
+		if len(p.Files) == 0 {
+			t.Errorf("%s delivers no credential file", name)
+		}
+		var covered bool
+		for _, v := range p.Volumes {
+			if v.Kind == VolumeTmpfs {
+				covered = true
+			}
+		}
+		if !covered {
+			t.Errorf("%s writes a credential without covering the directory it "+
+				"lands in, so it would reach host disk", name)
 		}
 	}
 }

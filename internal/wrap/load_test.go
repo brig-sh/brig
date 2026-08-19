@@ -62,32 +62,50 @@ func TestWorkspaceFromTheEnvironmentIsMadeAbsolute(t *testing.T) {
 	}
 }
 
-// A refresh token is durable account access rather than the short-lived
-// credential beside it, so a zero-config run does not hand one to a sandbox
-// with unrestricted egress.
-func TestTheRefreshTokenIsNotForwardedByDefault(t *testing.T) {
-	for _, name := range []string{"claude-code", "claude-desktop"} {
-		c := loadFor(t, name)
-		if bound(c, "CLAUDE_CODE_OAUTH_REFRESH_TOKEN") {
-			t.Errorf("%s forwards a refresh token with nothing asked for", name)
-		}
-		// The short-lived half is still forwarded: this is about which of the
-		// two a sandbox gets by default, not about breaking the login.
-		if !bound(c, "CLAUDE_CODE_OAUTH_TOKEN") {
-			t.Errorf("%s stopped forwarding the access token", name)
-		}
-		if len(c.HeldOptIn) == 0 {
-			t.Errorf("%s held the binding back without recording it for the report", name)
-		}
+// optIn: holds a binding back until the run asks for it by name.
+//
+// Tested against a fixture rather than a shipped profile: which credentials a
+// built-in offers is a policy that changes -- the Claude profiles now deliver
+// theirs as a file -- while the mechanism has to keep working for any profile
+// that binds a durable credential as a variable.
+func optInFixture(t *testing.T) profile.Profile {
+	t.Helper()
+	return profile.Profile{
+		Name: "fixture", Image: "x", GuestHome: "/home/u", Binary: "x", Mem: 1, CPUs: 1,
+		Env: []profile.EnvBinding{
+			{Name: "SHORT_LIVED", Ref: "env.SHORT_LIVED"},
+			{Name: "DURABLE", Ref: "env.DURABLE", OptIn: true},
+		},
 	}
 }
 
-// Held back, not removed: the refresh-token pair is the documented way to
-// provision auth without a browser, and a user who needs it says so.
-func TestTheRefreshTokenIsForwardedWhenAskedFor(t *testing.T) {
-	t.Setenv("BRIG_FORWARD_OPTIN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN")
-	c := loadFor(t, "claude-code")
-	if !bound(c, "CLAUDE_CODE_OAUTH_REFRESH_TOKEN") {
+func loadFixture(t *testing.T) *Config {
+	t.Helper()
+	c, err := Load(optInFixture(t), Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestOptInIsNotForwardedByDefault(t *testing.T) {
+	c := loadFixture(t)
+	if bound(c, "DURABLE") {
+		t.Error("an opt-in binding was forwarded with nothing asked for")
+	}
+	if !bound(c, "SHORT_LIVED") {
+		t.Error("holding one binding back dropped the others")
+	}
+	if len(c.HeldOptIn) == 0 {
+		t.Error("the binding was held back without recording it for the report")
+	}
+}
+
+// Held back, not removed: a user who needs it says so.
+func TestOptInIsForwardedWhenAskedFor(t *testing.T) {
+	t.Setenv("BRIG_FORWARD_OPTIN", "DURABLE")
+	c := loadFixture(t)
+	if !bound(c, "DURABLE") {
 		t.Error("BRIG_FORWARD_OPTIN did not bring the opt-in binding back")
 	}
 	if len(c.HeldOptIn) != 0 {
@@ -96,13 +114,10 @@ func TestTheRefreshTokenIsForwardedWhenAskedFor(t *testing.T) {
 }
 
 // The per-profile spelling every other setting has works here too.
-func TestTheRefreshTokenOptInIsPerProfileToo(t *testing.T) {
-	t.Setenv("BRIG_CLAUDE_CODE_FORWARD_OPTIN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN")
-	if c := loadFor(t, "claude-code"); !bound(c, "CLAUDE_CODE_OAUTH_REFRESH_TOKEN") {
+func TestOptInIsPerProfileToo(t *testing.T) {
+	t.Setenv("BRIG_FIXTURE_FORWARD_OPTIN", "DURABLE")
+	if c := loadFixture(t); !bound(c, "DURABLE") {
 		t.Error("the per-profile setting did not opt in")
-	}
-	if c := loadFor(t, "claude-desktop"); bound(c, "CLAUDE_CODE_OAUTH_REFRESH_TOKEN") {
-		t.Error("a setting for one profile opted another one in")
 	}
 }
 
@@ -120,14 +135,13 @@ func TestBrigForwardEnvCanAskForTheRefreshTokenToo(t *testing.T) {
 // The report is what makes a held binding discoverable: a capability the
 // profile offers and this run did not take.
 func TestStatusNamesWhatIsHeldBack(t *testing.T) {
-	c := loadFor(t, "claude-code")
+	c := loadFixture(t)
 	c.Runtime = fakeRuntime{}
 	out := &strings.Builder{}
 	c.Out = out
 	c.Status(creds.Set{})
 	got := out.String()
-	if !strings.Contains(got, "CLAUDE_CODE_OAUTH_REFRESH_TOKEN") ||
-		!strings.Contains(got, "BRIG_FORWARD_OPTIN") {
-		t.Errorf("the report does not say the refresh token exists and how to ask for it:\n%s", got)
+	if !strings.Contains(got, "DURABLE") || !strings.Contains(got, "BRIG_FORWARD_OPTIN") {
+		t.Errorf("the report does not say the held binding exists and how to ask for it:\n%s", got)
 	}
 }
