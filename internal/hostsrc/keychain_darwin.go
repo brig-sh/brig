@@ -17,6 +17,15 @@ import (
 // pattern is reused, the code is not shared.
 const codeNotFound = 44
 
+// securityBin is pinned for the reason internal/secret and internal/creds pin
+// theirs, and this package is the one where it matters most: a host source
+// hands the tool the service name of a credential brig is about to store, and
+// takes its stdout as that credential verbatim. A file called `security`
+// earlier in $PATH therefore chooses what brig imports and delivers into the
+// guest. The tool is part of macOS and lives at a fixed path, so there is
+// nothing to look up.
+const securityBin = "/usr/bin/security"
+
 // readKeychain reads a generic-password item by service name only: a host
 // source names the item the agent itself wrote, and the importer has no
 // account name of its own to filter on the way internal/secret's namespaced
@@ -28,12 +37,20 @@ const codeNotFound = 44
 // Reader.read relies on that to keep a refusal from being treated as
 // ordinary absence.
 func readKeychain(service string) ([]byte, error) {
-	cmd := exec.Command("security", "find-generic-password", "-s", service, "-w")
+	cmd := exec.Command(securityBin, "find-generic-password", "-s", service, "-w")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
 		if status(err) == codeNotFound {
 			return nil, errNoSuchItem
+		}
+		// The tool not running at all is an *exec.Error, never an
+		// *exec.ExitError, so status() reports -1 for it and it would
+		// otherwise be described as a refusal -- telling the reader to
+		// approve a dialog that no missing binary ever raised.
+		var ee *exec.Error
+		if errors.As(err, &ee) {
+			return nil, fmt.Errorf("%w: %s: %w", errToolMissing, securityBin, err)
 		}
 		return nil, securityError(err, errb.String())
 	}

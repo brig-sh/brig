@@ -32,6 +32,12 @@ import (
 // and must not be confused with it.
 var errNoSuchItem = errors.New("no such keychain item")
 
+// errToolMissing is the keychain tool never having run at all, as opposed to
+// running and refusing. It is neither absence nor a refusal: falling through
+// to the next source would hide a broken host, and reporting it as a refusal
+// tells somebody to approve a dialog that was never raised.
+var errToolMissing = errors.New("the keychain tool could not be run")
+
 // Value is what a source yielded, and which source that was.
 type Value struct {
 	Bytes []byte
@@ -99,6 +105,8 @@ func (r *Reader) read(s profile.Source) (Value, bool, error) {
 			// Not having run the agent on this host is the common case, and on
 			// a platform with no keychain there is nothing to read. Absence.
 			return Value{}, false, nil
+		case errors.Is(err, errToolMissing):
+			return Value{}, false, fmt.Errorf("the keychain read for %q could not run: %w", s.Service, err)
 		case err != nil:
 			return Value{}, false, fmt.Errorf("the keychain read for %q was refused: %w. "+
 				"Approve the dialog, or unlock your login keychain, then run the import again",
