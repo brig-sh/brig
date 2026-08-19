@@ -211,7 +211,7 @@ func (c *Config) mountVolumes() error {
 		// planted at a credential's path, so the race has no window rather
 		// than a small one.
 		for _, t := range cover {
-			if err := c.guestRoot("mount", "-t", "tmpfs", "-o", profile.TmpfsOptions,
+			if err := c.guestRoot("mount", "-t", "tmpfs", "-o", t.TmpfsOptions(),
 				"tmpfs", c.guestPath(t.Path)); err != nil {
 				return fmt.Errorf("could not make %s ephemeral: %w", t.Path, err)
 			}
@@ -567,7 +567,7 @@ func (c *Config) createTimeVolumes() (tmpfs []string, shares []runtime.Share) {
 	for _, v := range profile.MountOrder(c.Profile.Volumes) {
 		switch v.Kind {
 		case profile.VolumeTmpfs:
-			tmpfs = append(tmpfs, c.guestPath(v.Path)+":"+profile.TmpfsOptions)
+			tmpfs = append(tmpfs, c.guestPath(v.Path)+":"+v.TmpfsOptions())
 		case profile.VolumeHostMount:
 			shares = append(shares, runtime.Share{
 				Host:  filepath.Join(c.Workspace, filepath.FromSlash(v.Path)),
