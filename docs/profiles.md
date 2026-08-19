@@ -207,33 +207,6 @@ see it.
 a credential -- `EDITOR: vi` above, say. An entry has exactly one of
 `value:` or `ref:`; both or neither is refused.
 
-### `optIn:`, for a binding that is more than the sandbox needs
-
-`optIn: true` marks a binding brig will resolve but not forward until you ask
-for it by name. The agent still runs without it; it just runs with less.
-
-```yaml
-env:
-  - name: CLAUDE_CODE_OAUTH_TOKEN
-    ref: env.CLAUDE_CODE_OAUTH_TOKEN
-  - name: CLAUDE_CODE_OAUTH_REFRESH_TOKEN
-    ref: env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN
-    optIn: true
-```
-
-The distinction the flag exists for is lifetime. An access token expires on
-its own and the blast radius of losing one is bounded by that. A refresh
-token is durable account access: whatever holds it can mint new access
-tokens for as long as it is valid, so handing one to a sandbox is a
-materially larger decision than handing over the token beside it. The
-shipped `claude-code` profile makes exactly that distinction, and the
-comment there says so.
-
-Forward a held binding with `BRIG_FORWARD_OPTIN`, with the per-profile
-`BRIG_<PROFILE>_FORWARD_OPTIN`, or by naming it in `BRIG_FORWARD_ENV`.
-`brig env` lists what is being held, so a binding that is missing because you
-did not ask for it does not look like one that is missing because it broke.
-
 ### The `forward:` migration
 
 `forward: [GH_TOKEN]` still works, and still means exactly what it always

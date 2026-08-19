@@ -68,14 +68,6 @@ type EnvBinding struct {
 	Value string `json:"value,omitempty"`
 	// Ref is `secrets.<name>` or `env.<name>`. See ParseRef.
 	Ref string `json:"ref,omitempty"`
-	// OptIn holds a binding back until the user asks for it by name, in
-	// BRIG_FORWARD_OPTIN or in BRIG_FORWARD_ENV. It is for a value that is
-	// genuinely useful to some flows and too powerful to hand a sandbox by
-	// default -- a refresh token, which is durable account access rather than
-	// the short-lived credential beside it. deny: is the wrong tool for that:
-	// it is the billing guard, one switch covers all of it, and a variable on
-	// it may not be bound at all.
-	OptIn bool `json:"optIn,omitempty"`
 	// Refs is an ordered chain: the first element that resolves non-empty
 	// wins. It is how one variable gets a shell override and a store fallback,
 	// which BRIG_FORWARD_ENV cannot give it once a profile binds the name.

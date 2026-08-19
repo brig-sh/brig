@@ -32,11 +32,6 @@ func (c *Config) Status(set creds.Set) {
 	c.reportDeny(set)
 	c.reportOverride()
 
-	if len(c.HeldOptIn) > 0 {
-		c.sayf("available but not forwarded (opt in with BRIG_FORWARD_OPTIN=<name>): %s",
-			strings.Join(c.HeldOptIn, " "))
-	}
-
 	if c.GitConfig {
 		c.sayf("guest git over HTTPS: on, user %q (hosts: %s)", c.GitUser,
 			strings.Join(c.GitHosts, " "))

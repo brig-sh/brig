@@ -500,7 +500,6 @@ Booleans are shell-style: anything except `0` is on.
 | `BRIG_CREDENTIALS_CMD` | (keychain) | Command printing the host credential JSON on stdout. Any backend: `op read`, `vault kv get`, a script |
 | `BRIG_ALLOW_REFS` | `0` | Forward a value that looks like an unresolved `scheme://` secret reference |
 | `BRIG_ALLOW_DENIED` | `0` | Forward a variable on the profile's billing denylist |
-| `BRIG_FORWARD_OPTIN` | (none) | Space-separated list of held bindings to forward. A profile marks a binding `optIn: true` when it is more than the sandbox needs by default -- a refresh token, say -- and it stays behind until you name it here. `BRIG_<PROFILE>_FORWARD_OPTIN` works too, and naming the variable in `BRIG_FORWARD_ENV` has the same effect |
 | `BRIG_ALLOW_EXPIRED` | `0` | Forward the host credential even though it reports as expired. brig withholds one by default, because a dead token turns into a confusing failure inside the guest rather than a clear one on the host. Set this if your clock is the thing that is wrong |
 | `GIT_TERMINAL_PROMPT` | `0` | Forwarded as-is; set it to `1` on the host to let git prompt in the guest |
 

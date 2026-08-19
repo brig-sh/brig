@@ -54,11 +54,6 @@ type Config struct {
 	// envWarnings are what building Env decided to drop, held until BuildEnv
 	// has somewhere to print them: Load has no writer yet.
 	envWarnings []string
-	// HeldOptIn are the opt-in bindings this run did not ask for. Reported by
-	// Status rather than warned about on every run: they are a capability the
-	// profile offers, not a mistake, and the one place worth naming them is
-	// the preview of what a sandbox receives.
-	HeldOptIn []string
 	// secrets is what the store gave this run, kept so file delivery does not
 	// read it twice -- and cleared the moment delivery is done, because a
 	// plaintext refresh token has no business outliving its use.
@@ -157,7 +152,6 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	}
 
 	bindings, envWarnings := envOverride(t.Env, env.Fields("FORWARD_ENV", nil))
-	bindings, held := optIn(bindings, env.Fields("FORWARD_OPTIN", nil))
 
 	c := &Config{
 		Profile:        t,
@@ -173,7 +167,6 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		ReadyTimeout:   time.Duration(env.Int("READY_TIMEOUT", 30)) * time.Second,
 		Env:            bindings,
 		envWarnings:    envWarnings,
-		HeldOptIn:      held,
 		OpenStore:      openStore,
 		GitConfig:      env.Bool("GIT_CONFIG", false),
 		HostConfig:     hostProjections(t, o.Skills || env.Bool("SKILLS", false)),
@@ -258,37 +251,6 @@ func envOverride(bindings []profile.EnvBinding, names []string) ([]profile.EnvBi
 		})
 	}
 	return kept, warnings
-}
-
-// optIn drops the bindings a profile marked opt-in unless the user named them,
-// and returns the ones it held back so the report can say they exist.
-//
-// The mechanism is here rather than in the profile package because "did the
-// user ask" is a question about this invocation. Two spellings answer it, and
-// both fall out of what is already there: BRIG_FORWARD_OPTIN names one without
-// disturbing anything else the profile forwards, and BRIG_FORWARD_ENV names it
-// as part of replacing the env-sourced set -- envOverride has already turned
-// that into an ordinary binding by the time this runs, so it arrives here with
-// no OptIn flag on it and passes straight through.
-//
-// What this exists to prevent: a profile that forwards a refresh token by
-// default hands every zero-config `brig run` durable account access, in a
-// sandbox with unrestricted egress, in exchange for a convenience most runs
-// never use.
-func optIn(bindings []profile.EnvBinding, asked []string) (kept []profile.EnvBinding, held []string) {
-	want := make(map[string]bool, len(asked))
-	for _, name := range asked {
-		want[name] = true
-	}
-	kept = make([]profile.EnvBinding, 0, len(bindings))
-	for _, b := range bindings {
-		if b.OptIn && !want[b.Name] {
-			held = append(held, b.Name)
-			continue
-		}
-		kept = append(kept, b)
-	}
-	return kept, held
 }
 
 // bindingNames is what a run could hand the guest, for reporting. Names only,

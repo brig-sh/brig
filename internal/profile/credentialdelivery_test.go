@@ -5,15 +5,10 @@ import (
 	"testing"
 )
 
-// The Claude profiles no longer carry the refresh token as an environment
-// binding at all. They deliver the whole credential document as a file into a
-// tmpfs (see volumes: and files: in the specs), which is what lets the agent
-// refresh in place without the token ever reaching host disk -- so there is no
-// env binding left for optIn: to hold back.
-//
-// optIn: itself is unchanged and still applies to any profile that binds a
-// durable credential as a variable; TestOptInHoldsABindingBack covers the
-// mechanism against a fixture rather than against a shipped spec.
+// The Claude profiles carry no OAuth credential as an environment binding.
+// They deliver the whole credential document as a file into a tmpfs (see
+// volumes: and files: in the specs), which is what lets the agent refresh it
+// in place without the token reaching host disk.
 func TestTheClaudeSpecsDeliverTheCredentialAsAFile(t *testing.T) {
 	if err := Load(); err != nil {
 		t.Fatal(err)
@@ -42,24 +37,6 @@ func TestTheClaudeSpecsDeliverTheCredentialAsAFile(t *testing.T) {
 			t.Errorf("%s writes a credential without covering the directory it "+
 				"lands in, so it would reach host disk", name)
 		}
-	}
-}
-
-// A denied variable and an opt-in one are different things, and conflating
-// them would put a metered API key one BRIG_ALLOW_DENIED=1 away from the same
-// switch that forwards a refresh token.
-func TestOptInIsNotTheDenylist(t *testing.T) {
-	if err := Load(); err != nil {
-		t.Fatal(err)
-	}
-	p, _ := Lookup("claude-code")
-	for _, want := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
-		if !p.Denied(want) {
-			t.Errorf("%s is no longer denied", want)
-		}
-	}
-	if p.Denied("CLAUDE_CODE_OAUTH_REFRESH_TOKEN") {
-		t.Error("the refresh token was put on the billing denylist, which is not what it is")
 	}
 }
 
