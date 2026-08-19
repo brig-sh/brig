@@ -60,11 +60,51 @@ case "$verb" in
   exec)
     # Everything after -- is the guest command. /bin/true is the readiness
     # probe; a cat of the marker is answered from the bound share.
+    #
+    # The mount cases below exist because brig's volume delivery is
+    # fail-closed: it mounts, then reads the guest's own mount table back and
+    # refuses the run if what it asked for is not there. A stub that accepts a
+    # mount and then reports nothing mounted is indistinguishable from a mount
+    # that silently failed, which is precisely what the check is for -- so the
+    # stub has to remember what it was told to mount.
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
     shift
     case "$1" in
       /bin/true) exit 0 ;;
-      cat) cat "$(cat "$STUB_STATE.share")/.brig-workspace" 2>/dev/null ;;
+      cat)
+        case "${2:-}" in
+          /proc/self/mountinfo) [ -f "$STUB_STATE.mounts" ] && cat "$STUB_STATE.mounts" ;;
+          /proc/swaps) printf 'Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n' ;;
+          *) cat "$(cat "$STUB_STATE.share")/.brig-workspace" 2>/dev/null ;;
+        esac
+        ;;
+      stat)
+        # `stat -f -c %T <path>` asks what a path sits on; `stat -c ...` asks
+        # about the file itself.
+        if [ "${2:-}" = -f ]; then
+          target="${5:-}"
+          line=$(grep " $target " "$STUB_STATE.mounts" 2>/dev/null | tail -1)
+          case "$line" in
+            *tmpfs) printf 'tmpfs\n' ;;
+            *fuseblk) printf 'fuseblk\n' ;;
+            *) printf 'virtiofs\n' ;;
+          esac
+        else
+          case "${3:-}" in
+            %s) printf '512\n' ;;
+            *) printf 'regular file|claude|600\n' ;;
+          esac
+        fi
+        ;;
+      mount)
+        # `mount -t tmpfs -o ... tmpfs <target>` or `mount --bind <src> <target>`.
+        target="${!#}"
+        if [ "${2:-}" = -t ]; then
+          printf '1 1 0:1 / %s rw - tmpfs\n' "$target" >> "$STUB_STATE.mounts"
+        else
+          printf '1 1 0:2 / %s rw - fuseblk\n' "$target" >> "$STUB_STATE.mounts"
+        fi
+        ;;
       *) printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG" ;;
     esac
     ;;
@@ -72,7 +112,7 @@ case "$verb" in
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
   rm)
-    rm -f "$STUB_STATE" "$STUB_STATE.stopped"
+    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts"
     ;;
 esac
 exit 0
@@ -130,7 +170,10 @@ else
 fi
 grep -q 'env-token:env-token-secret' "$STUB_LOG" \
   && ok "the environment token is forwarded" || bad "the environment token is forwarded"
-grep '^argv:' "$STUB_LOG" | grep -q -- '--env CLAUDE_CODE_OAUTH_TOKEN --env GH_TOKEN' \
+# GH_TOKEN alone: claude-code delivers its OAuth credential as a file into a
+# tmpfs rather than as a variable, so the only thing left on the env line is
+# the token brig's git helper reads.
+grep '^argv:' "$STUB_LOG" | grep -q -- '--env GH_TOKEN' \
   && ok "argv names the variables only" || bad "argv names the variables only"
 
 grep -q -- "--shared-dir $WS:/home/claude" "$STUB_LOG" \
