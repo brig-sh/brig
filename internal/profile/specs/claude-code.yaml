@@ -69,18 +69,26 @@ secrets:
 # blast radius we accept in exchange is one workspace and whatever the guest
 # can reach, which is the same trade the fine-grained GH_TOKEN advice makes.
 #
-# Two things this does NOT rest on, so nobody re-derives them the hard way:
+# Two things this rested on and no longer has to. Both measured 2026-08-19,
+# in the guest, against a real account:
 #
-#   - Whether the agent refreshes in place has not been demonstrated. The
-#     manual-test step named "in-guest refresh works" measures that renameat
-#     onto the credential path succeeds, which is the mount mechanics, not a
-#     token exchange. Three attempts to measure the exchange itself came back
-#     inconclusive.
-#   - What the provider does on refresh is likewise unknown. If refresh tokens
-#     rotate single-use, a refresh in the guest invalidates the copy in the
-#     host keychain. That needs a disposable account to answer.
+#   - The agent DOES refresh in place. With the access token corrupted and the
+#     refresh token intact, it recovered and rewrote this file. With the
+#     refresh token removed it could not: "401 OAuth access token is invalid",
+#     and the file was left untouched. So the refresh token is what buys a
+#     sandbox more than one access token's worth of life, and delivering only
+#     the access token would strand a run when that token expired.
+#   - The provider rotates the refresh token single-use. The refresh above
+#     invalidated the copy on the host, which needed a fresh login -- and the
+#     document the guest wrote carries a NEW refresh token that only the guest
+#     has. So a refresh in the sandbox costs the host its login.
 #
-# Both are reasons to revisit this, not reasons the current shape is wrong.
+# That last point has a consequence this profile cannot fix on its own, and it
+# is worth knowing before trusting a long run: brig re-delivers the stored
+# credential on every exec, so once a guest has refreshed, the next brig
+# command overwrites the guest's new token with the stored one -- which the
+# rotation just invalidated. The sandbox then holds a dead credential, and the
+# fix is `brig secret import` on the host after a fresh login there.
 #
 # It is an ordinary file, written into the tmpfs declared under volumes: below.
 # NOT bind-mounted onto its own path: measured 2026-08-18, Claude Code writes
