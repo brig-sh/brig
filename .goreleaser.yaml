@@ -110,16 +110,48 @@ snapshot:
 changelog:
   use: github
   sort: asc
+  # Grouped by what the change was, because a flat list of thirty commits is
+  # not a changelog -- it is a git log with bullet points, and a reader has to
+  # classify every line themselves to answer "what is new and what got fixed".
+  #
+  # The scope is optional in each pattern: this project writes both `feat:` and
+  # `feat(profile):`, and a pattern that only matched the bare form would drop
+  # every scoped commit into Others -- which is exactly what the exclude
+  # filters below did before.
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([^)]+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\([^)]+\))??!?:.+$'
+      order: 1
+    - title: Refactors
+      regexp: '^.*?refactor(\([^)]+\))??!?:.+$'
+      order: 2
+    # Kept rather than excluded, unlike the usual advice: in this repo a docs:
+    # commit is often where a design decision and its measurements are
+    # recorded, and a reader deciding whether to upgrade wants those.
+    - title: Documentation
+      regexp: '^.*?docs(\([^)]+\))??!?:.+$'
+      order: 3
+    - title: Others
+      order: 999
   filters:
+    # Anchored with an optional scope for the same reason as the groups above.
+    # The previous "^test:" never matched `test(smoke):`, so the mechanics this
+    # list exists to hide were being published.
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+      - '^test(\([^)]+\))?!?:'
+      - '^chore(\([^)]+\))?!?:'
+      - '^ci(\([^)]+\))?!?:'
+      - '^build(\([^)]+\))?!?:'
+      - '^style(\([^)]+\))?!?:'
 
 release:
-  # The repository is private and so are its releases; a consumer needs a
-  # token with contents:read either way. Drafts, so a tag never publishes
-  # itself before someone has looked at the notes.
+  # Drafts, so a tag never publishes itself before someone has looked at the
+  # notes. That mattered more when this repository was private; it is public
+  # now, which makes the review the only thing standing between a tag and
+  # something the world can download.
   draft: true
   prerelease: auto
 
