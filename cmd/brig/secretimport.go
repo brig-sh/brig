@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -202,7 +203,10 @@ func importOne(
 	// fail with "missing secret" while the very command that fills it is
 	// running, and lets one of two concurrent imports read back the other's
 	// value in verify and delete it.
-	prov := secret.Provenance{V: secret.ProvenanceVersion, From: v.From, ExpiresAt: expiry}
+	// SafeFrom, not v.From: the locator comes from profile data and the
+	// decoder drops anything outside its charset, which would make brig's own
+	// import read back as hand-created and refuse the next one without -y.
+	prov := secret.Provenance{V: secret.ProvenanceVersion, From: secret.SafeFrom(v.From), ExpiresAt: expiry}
 	if err := writeValue(store, d.Name, value, prov, exists); err != nil {
 		return err
 	}
@@ -244,29 +248,74 @@ func readFor(reader hostReader, d profile.SecretDecl, o importOptions) (hostsrc.
 	return hostsrc.Value{}, false, nil
 }
 
+// capped is an io.Writer that stops at a limit and says so, which is what
+// makes it safe to hand to exec: os/exec propagates a write error out of
+// Wait, so the command is torn down instead of being read to the end.
+type capped struct {
+	buf   bytes.Buffer
+	limit int
+	what  string
+	// err is kept because the caller cannot get it from Run: closing the pipe
+	// on the writing process kills it with SIGPIPE, and an *ExitError takes
+	// precedence over a copy error in Wait's return. Reporting "exit status
+	// 141" for a value that was too long would name the signal instead of the
+	// reason.
+	err error
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if c.buf.Len()+len(p) > c.limit {
+		if room := c.limit - c.buf.Len(); room > 0 {
+			c.buf.Write(p[:room])
+		}
+		c.err = fmt.Errorf("the value on %s is over %d bytes, which is larger than any "+
+			"secret brig can store. If that is a file or a stream rather than a "+
+			"credential, this is the wrong one", c.what, c.limit)
+		return 0, c.err
+	}
+	return c.buf.Write(p)
+}
+
 // runImportCommand runs the string the user typed and takes its stdout.
 //
-// `sh -c` is safe here in the way `from: command` in profile data would not
-// be: the string always came from this user's own command line, never from an
-// imported profile that carried it onto their host.
+// /bin/sh rather than a bare `sh` for the reason internal/secret pins
+// securityBin: this call decides what byte string becomes a stored
+// credential, so a shell earlier in $PATH would choose it.
+//
+// `sh -c` at all is safe here in the way `from: command` in profile data
+// would not be: the string always came from this user's own command line,
+// never from an imported profile that carried it onto their host.
+//
+// stdout is capped. Reading first and refusing afterwards is what `brig
+// secret create` already stopped doing -- pointed at /dev/zero it read until
+// it had 12.5 GB in memory -- and a command is the easier way to reach that,
+// because nobody has to redirect anything.
+//
+// stderr is passed straight through rather than captured and quoted into the
+// error. What a failing command says there is what makes it fixable -- an
+// expired vault session says so -- but it is not brig's to repeat: a wrapper
+// that logs the credential it fetched before exiting non-zero would put the
+// value into a brig error message, and no output of brig's own ever holds a
+// value. Passing it through shows the user exactly what their command wrote,
+// as their command wrote it, and leaves brig holding none of it.
 func runImportCommand(script string) ([]byte, error) {
-	cmd := exec.Command("sh", "-c", script)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		// The command's own stderr is what makes this fixable -- an expired
-		// vault session says so there -- and it is not the value, which came
-		// on stdout and is not in this message.
-		if msg := strings.TrimSpace(errb.String()); msg != "" {
-			return nil, fmt.Errorf("--from-command failed: %w: %s", err, msg)
-		}
-		return nil, fmt.Errorf("--from-command failed: %w", err)
+	cmd := exec.Command("/bin/sh", "-c", script)
+	out := &capped{limit: maxValueBytes, what: "--from-command stdout"}
+	cmd.Stdout, cmd.Stderr = out, os.Stderr
+	err := cmd.Run()
+	// The cap first: it is the reason the command died, and the signal it
+	// died of is not what the reader needs to know.
+	if out.err != nil {
+		return nil, out.err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("--from-command failed: %w (anything it reported is above)", err)
 	}
 	// One trailing line ending, the same rule `brig secret create` applies to
 	// stdin: `--from-command 'gh auth token'` is the line people type, and a
 	// stored newline breaks an auth header in a way that reads like a bad
 	// token.
-	value := out.Bytes()
+	value := out.buf.Bytes()
 	if v, ok := bytes.CutSuffix(value, []byte("\n")); ok {
 		return bytes.TrimSuffix(v, []byte("\r")), nil
 	}

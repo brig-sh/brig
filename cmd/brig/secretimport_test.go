@@ -546,6 +546,40 @@ func TestNoOutputEverHoldsAValue(t *testing.T) {
 			t.Errorf("%v printed the source document:\n%s", args, out.String())
 		}
 	}
+
+	// The error path too, and it is the one the writer above cannot see: a
+	// failing command's stderr is quoted into the error, and a wrapper that
+	// logs what it fetched before exiting non-zero puts a value there.
+	var out bytes.Buffer
+	err := importSecrets(&out, []string{"mytool", "mytool-manual",
+		"--from-command", "printf %s " + value + " >&2; exit 1"})
+	if err == nil {
+		t.Fatal("a failing command imported successfully")
+	}
+	if strings.Contains(err.Error(), value) {
+		t.Errorf("the error held the value: %v", err)
+	}
+}
+
+// A command that does not stop is the failure readCapped exists for, reached
+// here without anyone having to redirect anything: `brig secret create`
+// pointed at /dev/zero once read 12.5 GB before refusing. The assertion is on
+// the message as much as the refusal -- closing the pipe kills the writer
+// with SIGPIPE, and reporting "exit status 141" would name the signal instead
+// of the reason.
+func TestFromCommandRefusesAValueThatDoesNotEnd(t *testing.T) {
+	importable(t)
+	newAnnotating(t)
+	useHost(t, nil)
+	var out bytes.Buffer
+	err := importSecrets(&out, []string{"mytool", "mytool-manual",
+		"--from-command", `dd if=/dev/zero bs=1024 count=64 2>/dev/null | tr "\0" a`})
+	if err == nil {
+		t.Fatal("stored a value larger than the store takes")
+	}
+	if !strings.Contains(err.Error(), "larger than any secret brig can store") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
 }
 
 // Provenance is optional, so a plain Store still imports: the value is what
