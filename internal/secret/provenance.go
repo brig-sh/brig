@@ -109,16 +109,48 @@ const maxFromLen = 256
 // terminal through `brig secret ls` and through a warning that tells the
 // user to run a command, which is exactly where a hidden escape sequence
 // would do its work.
+// SafeFrom renders a locator so that DecodeProvenance will hand it back
+// rather than drop it.
+//
+// The write side has to do this because the read side is deliberately strict
+// and silent: a From outside validFrom decodes to "", which reads downstream
+// as "brig did not write this". An ordinary locator reaches that state --
+// `file:~/Library/Application Support/My,Tool/creds.json` has a comma -- and
+// the consequence is not cosmetic: `brig secret ls` shows a dash for a secret
+// brig imported, and the next import refuses it as hand-created and demands
+// -y, for good. Replacing the few bytes validFrom does not take keeps the
+// locator legible and keeps the round trip total.
+func SafeFrom(from string) string {
+	if len(from) > maxFromLen {
+		// The scheme and the leading path components identify the source; the
+		// tail is what a person can still recognise once it is this long.
+		from = from[:maxFromLen]
+	}
+	b := []byte(from)
+	for i, c := range b {
+		if !validFromByte(c) {
+			b[i] = '_'
+		}
+	}
+	return string(b)
+}
+
+func validFromByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case strings.IndexByte(" -_.:/~", c) >= 0:
+		return true
+	}
+	return false
+}
+
 func validFrom(from string) bool {
 	if len(from) > maxFromLen {
 		return false
 	}
 	for i := 0; i < len(from); i++ {
-		c := from[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case strings.IndexByte(" -_.:/~", c) >= 0:
-		default:
+		if !validFromByte(from[i]) {
 			return false
 		}
 	}

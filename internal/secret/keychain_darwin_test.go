@@ -297,6 +297,53 @@ func TestProvenanceSurvivesUpdate(t *testing.T) {
 	}
 }
 
+// The gap the tests above leave: they only ever update WITH a provenance.
+// security's -U rewrites the attributes named on the line and leaves the rest
+// alone, so an update carrying no -j keeps whatever comment the previous
+// value had -- and `brig secret update` is exactly that call. An imported
+// credential renewed by hand would otherwise keep the old expiresAt for good,
+// reporting as expired for as long as it existed.
+func TestUpdateWithNoProvenanceClearsTheOldOne(t *testing.T) {
+	k := testStore(t)
+	stale := Provenance{V: ProvenanceVersion, From: "keychain:svc", ExpiresAt: 1}
+	if err := k.Write("prov-c", []byte("imported"), stale, false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := k.Update("prov-c", []byte("renewed-by-hand")); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got := find(t, k, "prov-c")
+	if !got.Provenance.IsZero() {
+		t.Errorf("provenance after a hand update = %+v, want the zero value: "+
+			"the comment still describes the value that was replaced", got.Provenance)
+	}
+	if stored, err := k.Read("prov-c"); err != nil || string(stored) != "renewed-by-hand" {
+		t.Errorf("value = %q, %v; want the updated one", stored, err)
+	}
+}
+
+// MaxValue promises a caller that has not chosen a provenance yet a ceiling
+// Write will not undercut, for any From up to assumedFromLen. ExpiresAt is
+// omitempty, so leaving it zero in the assumed provenance dropped it out of
+// the encoded document and broke that promise from about 105 characters on --
+// the caller was told a value fit and then refused.
+//
+// Past assumedFromLen no fixed assumption can hold, and the failure there is
+// a spurious refusal carrying Write's own accurate ceiling, never a truncated
+// write. That boundary is the thing worth pinning.
+func TestMaxValueIsNeverLargerThanWhatWriteApplies(t *testing.T) {
+	k := keychain{service: "sh.brig.test"}
+	for _, n := range []int{len("keychain:svc"), 105, assumedFromLen} {
+		real := Provenance{V: ProvenanceVersion, From: strings.Repeat("x", n), ExpiresAt: 1755436980000}
+		for _, update := range []bool{false, true} {
+			if got, want := k.MaxValueFor("n", update, real), k.MaxValue("n", update); got < want {
+				t.Errorf("From=%d update=%v: Write's ceiling %d is below MaxValue's %d",
+					n, update, got, want)
+			}
+		}
+	}
+}
+
 // A hand-created secret carries none, and that has to read as absent rather
 // than as an empty provenance that claims a source of "".
 func TestHandCreatedSecretHasNoProvenance(t *testing.T) {

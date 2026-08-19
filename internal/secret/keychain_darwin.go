@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"slices"
 	"strings"
@@ -85,12 +86,24 @@ func (k keychain) writePrefix(name string, update bool, p Provenance) (string, e
 		"-l", `"brig: ` + name + `"`,
 		"-D", `"brig secret"`,
 	}
-	if !p.IsZero() {
+	switch {
+	case !p.IsZero():
 		encoded, err := p.Encode()
 		if err != nil {
 			return "", err
 		}
 		args = append(args, "-j", encoded)
+	case update:
+		// -U rewrites only the attributes named on the line, so leaving -j
+		// off an update keeps whatever comment was already there. Measured on
+		// macOS 15: the value changes and the comment does not. That is wrong
+		// for every update, because the provenance describes the value being
+		// replaced -- `brig secret update` on an imported credential would
+		// otherwise keep the old expiresAt forever, and a freshly renewed
+		// token would report as expired for as long as it existed. An empty
+		// -j clears the comment to <NULL>, which DecodeProvenance already
+		// reads back as absent.
+		args = append(args, "-j", `""`)
 	}
 	if update {
 		args = append(args, "-U")
@@ -107,6 +120,12 @@ func (k keychain) writePrefix(name string, update bool, p Provenance) (string, e
 // MaxValueFor, priced against the provenance actually being attached -- is
 // never smaller than what this promised a caller that has not chosen one
 // yet.
+//
+// That promise holds up to this length and no further, which is the honest
+// limit of a fixed assumption. A longer locator makes MaxValueFor the smaller
+// number, and the caller gets a refusal from Write carrying Write's own
+// accurate ceiling -- never a write security truncates, which is the outcome
+// this arithmetic exists to prevent.
 const assumedFromLen = 128
 
 // MaxValue is the Sizer's provenance-free ceiling: for a caller, such as a
@@ -114,7 +133,16 @@ const assumedFromLen = 128
 // provenance goes with it. It must not be the ceiling Write itself uses --
 // see MaxValueFor and Write's own comment on why.
 func (k keychain) MaxValue(name string, update bool) int {
-	return k.MaxValueFor(name, update, Provenance{V: ProvenanceVersion, From: strings.Repeat("x", assumedFromLen)})
+	// ExpiresAt is set, not left at zero, because it is omitempty: a zero one
+	// disappears from the encoded document and makes this ceiling LARGER than
+	// the one Write will apply to a real import that carries an expiry --
+	// which is the opposite of the promise assumedFromLen is written against.
+	// The value is only a length; math.MaxInt64 is the longest it encodes to.
+	return k.MaxValueFor(name, update, Provenance{
+		V:         ProvenanceVersion,
+		From:      strings.Repeat("x", assumedFromLen),
+		ExpiresAt: math.MaxInt64,
+	})
 }
 
 // MaxValueFor is the largest raw value that fits on the command line for this
@@ -137,10 +165,10 @@ func (k keychain) MaxValueFor(name string, update bool, p Provenance) int {
 }
 
 // Write stores a value together with its provenance, creating or updating.
-// Create and Update are this with the zero Provenance, which writePrefix
-// encodes as no -j at all -- so a hand-created secret's comment is empty,
-// not a zero-value JSON document, and DecodeProvenance reads that back as
-// absent rather than as a provenance of nothing.
+// Create and Update are this with the zero Provenance: on a create that is no
+// -j at all, so a hand-created secret's comment is empty rather than a
+// zero-value JSON document; on an update it is an empty -j, which clears any
+// comment the previous value had. DecodeProvenance reads both back as absent.
 //
 // The value is base64-encoded because security's command line is line-based:
 // a newline in a raw value would end the line early, so an SSH key or any
