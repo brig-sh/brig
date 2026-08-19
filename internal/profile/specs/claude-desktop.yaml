@@ -50,6 +50,13 @@ files:
 volumes:
   - kind: tmpfs
     path: .claude
+    size: 512m
+  - kind: hostmount
+    path: .claude/settings.json
+    file: true
+  - kind: hostmount
+    path: .claude/CLAUDE.md
+    file: true
   - kind: hostmount
     path: .claude/sessions
   - kind: hostmount

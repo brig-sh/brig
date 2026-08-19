@@ -31,9 +31,15 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	// loud rather than left to be discovered: it is documented in the
 	// top-level usage and the README, and a setting that silently stopped
 	// working is worse than one that is going away.
+	// The replacement is two steps, and naming only the second sends the
+	// reader into an error: --from-command fills one secret so it needs a
+	// name, and a profile still on hostCredential: has no secrets: list for
+	// that name to be in. Say both, in order.
 	if c.CredentialsCmd != "" {
-		c.warnf("BRIG_CREDENTIALS_CMD is deprecated and goes in the next release. " +
-			"Store the value once instead: brig secret import <profile> --from-command '<command>'")
+		c.warnf("BRIG_CREDENTIALS_CMD is deprecated and goes in the next release. "+
+			"Declare the credential under secrets: in %s, then store it once: "+
+			"brig secret import %s <name> --from-command '<command>'",
+			c.Profile.Name, c.Profile.Name)
 	}
 
 	// Resolved before anything else touches the sandbox, and returned as an

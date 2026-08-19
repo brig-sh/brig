@@ -62,7 +62,7 @@ secrets:
 # returns EBUSY -- so a bind mount there breaks in-guest refresh, and the temp
 # file lands on the workspace, which is host disk.
 files:
-  - ref: secrets.claude-credentials     # name: defaults to the secret's own
+  - ref: secrets.claude-credentials
     path: .claude/.credentials.json
     mode: "0600"                        # measured: what claude itself writes
 
@@ -77,15 +77,35 @@ files:
 # list is what was actually in a live workspace rather than a guess. sessions,
 # projects and history.jsonl are the conversation; plugins and skills are also
 # where --skills copies your own, so leaving either off would make that flag
-# silently do nothing. Anything under .claude NOT named here is ephemeral,
-# including anything a future Claude Code version starts writing -- which is
-# the cost of this design and is documented rather than hidden.
+# silently do nothing.
+#
+# settings.json and CLAUDE.md are the user's own configuration -- the
+# permission allowlist and the user-level memory -- written by hand or by the
+# agent on the user's instruction, not re-fetched from anywhere. Without a
+# hostmount the agent re-asks for permissions it was already granted on every
+# boot, so they are exceptions for the same reason the conversation is.
+#
+# Anything under .claude NOT named here is ephemeral, including anything a
+# future Claude Code version starts writing -- which is the cost of this design
+# and is documented rather than hidden.
+#
+# size: is above 64m because this mount is an agent's home rather than a
+# config directory: file-history grows with every edit and per-job scratch
+# lands here too, and exhausting it surfaces as ENOSPC from the agent's own
+# tools with nothing on the host watching.
 #
 # Order here is taste: brig mounts parents before children by path depth, so a
 # hostmount listed above its tmpfs cannot silently lose the state it names.
 volumes:
   - kind: tmpfs
     path: .claude
+    size: 512m
+  - kind: hostmount
+    path: .claude/settings.json
+    file: true
+  - kind: hostmount
+    path: .claude/CLAUDE.md
+    file: true
   - kind: hostmount
     path: .claude/sessions
   - kind: hostmount
