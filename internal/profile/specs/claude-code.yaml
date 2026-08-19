@@ -56,6 +56,32 @@ secrets:
 # credential store there. File delivery is the native shape, not a workaround
 # for the environment variable.
 #
+# That includes the refresh token, and this is the part worth saying out loud,
+# because an earlier design deliberately withheld it: an access token expires
+# on its own, while a refresh token mints new ones until the grant is revoked.
+# So the guest holds durable account access rather than one session's worth.
+#
+# Kept anyway, and the reason is the lifetimes. Measured 2026-08-19 on a live
+# credential: the access token had 2.9 hours left and the refresh token 98.
+# Delivering only the access token would give the sandbox a credential that
+# dies within hours, with no way to renew it in the guest -- so every long run
+# would stop mid-work and wait for someone to import again on the host. The
+# blast radius we accept in exchange is one workspace and whatever the guest
+# can reach, which is the same trade the fine-grained GH_TOKEN advice makes.
+#
+# Two things this does NOT rest on, so nobody re-derives them the hard way:
+#
+#   - Whether the agent refreshes in place has not been demonstrated. The
+#     manual-test step named "in-guest refresh works" measures that renameat
+#     onto the credential path succeeds, which is the mount mechanics, not a
+#     token exchange. Three attempts to measure the exchange itself came back
+#     inconclusive.
+#   - What the provider does on refresh is likewise unknown. If refresh tokens
+#     rotate single-use, a refresh in the guest invalidates the copy in the
+#     host keychain. That needs a disposable account to answer.
+#
+# Both are reasons to revisit this, not reasons the current shape is wrong.
+#
 # It is an ordinary file, written into the tmpfs declared under volumes: below.
 # NOT bind-mounted onto its own path: measured 2026-08-18, Claude Code writes
 # this file atomically (temp file + renameat), and renameat onto a mountpoint
