@@ -276,8 +276,11 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig profile import <thi
 #   volumes    what is mounted inside guestHome, one primitive per entry:
 #              {kind: tmpfs, path: x} makes x memory-only, so nothing written
 #              there reaches host disk, and {kind: hostmount, path: x/y} names
-#              an exception kept across boots. Parents mount before children by
-#              path depth, so the order you write them in is taste
+#              an exception kept across boots. A tmpfs takes an optional
+#              size: ("256m", default "64m") -- it is a ceiling the guest
+#              hits as ENOSPC, so size it for what the mount holds. Parents
+#              mount before children by path depth, so the order you write
+#              them in is taste
 #   forward    deprecated: forward: [X] now means env: [{name: X, ref: env.X}],
 #              which says the same thing. Still read, still works
 #   deny       variables never bound, whatever env or forward says. This is the

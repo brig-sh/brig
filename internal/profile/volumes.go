@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,13 +30,34 @@ const (
 	VolumeNamed = "volume"
 )
 
-// TmpfsOptions are the mount options every tmpfs brig creates takes.
+// defaultTmpfsSize is what a tmpfs takes when its volume names no size:.
 //
 // size= is not decoration, and is why this is tmpfs and not ramfs: ramfs
 // silently ignores it, so a guest process could exhaust VM memory through
-// brig's own mount. nodev and
-// nosuid are the ordinary hygiene for a directory the sandbox writes to.
-const TmpfsOptions = "size=64m,mode=0700,nodev,nosuid"
+// brig's own mount.
+//
+// 64m suits a directory holding configuration. It does not suit every one a
+// profile might cover: an agent's home accumulates caches and per-job scratch,
+// and exhaustion surfaces inside the guest as ENOSPC from the agent's own
+// tools, with nothing on the host watching for it. That is why size: exists
+// rather than a larger constant -- the right number is a property of what the
+// profile puts under the mount, and only its author knows that.
+const defaultTmpfsSize = "64m"
+
+// tmpfsSizePattern is a mount size: digits, optionally k, m or g. Kept strict
+// because mount(8) answers an option it cannot parse by failing the mount,
+// which surfaces as a boot failure rather than as a profile error.
+var tmpfsSizePattern = regexp.MustCompile(`^[1-9][0-9]*[kKmMgG]?$`)
+
+// TmpfsOptions are the mount options this tmpfs takes. nodev and nosuid are
+// the ordinary hygiene for a directory the sandbox writes to.
+func (v Volume) TmpfsOptions() string {
+	size := v.Size
+	if size == "" {
+		size = defaultTmpfsSize
+	}
+	return "size=" + size + ",mode=0700,nodev,nosuid"
+}
 
 // Volume is one mount brig makes inside the guest, under GuestHome.
 //
@@ -54,6 +76,10 @@ type Volume struct {
 	// spelling it is either a no-op or a redirection brig does not implement.
 	// For kind: volume it names the volume.
 	Source string `json:"source,omitempty"`
+	// Size is the tmpfs size, for example "256m". Empty takes
+	// defaultTmpfsSize. Only kind: tmpfs has one -- a hostmount's size is the
+	// workspace's, which is the host filesystem's.
+	Size string `json:"size,omitempty"`
 	// File marks a hostmount whose target is a file rather than a directory:
 	// history.jsonl needs a touch where sessions needs a mkdir, and a bind
 	// onto a target of the wrong kind fails. Decided by what is already in

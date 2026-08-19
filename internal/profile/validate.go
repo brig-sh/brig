@@ -75,6 +75,21 @@ func (p Profile) validateVolumes() error {
 			return fmt.Errorf("volume %q is kind: %s and sets file:, which only %s takes",
 				v.Path, v.Kind, VolumeHostMount)
 		}
+		if v.Size != "" {
+			if v.Kind != VolumeTmpfs {
+				return fmt.Errorf("volume %q is kind: %s and sets size:, which only %s takes -- "+
+					"a %s is as large as the workspace it comes from",
+					v.Path, v.Kind, VolumeTmpfs, VolumeHostMount)
+			}
+			// Refused here rather than at mount time: mount(8) answers an
+			// option it cannot parse by failing, so an unchecked size: turns
+			// a typo into a sandbox that will not boot.
+			if !tmpfsSizePattern.MatchString(v.Size) {
+				return fmt.Errorf("volume %q has size: %q, which is not a number "+
+					"optionally followed by k, m or g -- for example \"256m\"",
+					v.Path, v.Size)
+			}
+		}
 		if v.Kind == VolumeTmpfs {
 			tmpfs = append(tmpfs, v)
 		}
