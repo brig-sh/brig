@@ -311,8 +311,11 @@ When reporting a bug, please include:
   maintainers.
 
 For feature requests, use the `enhancement` label and describe the proposed
-feature and its motivation. Proposals for improvements are always welcome,
-including proposals to change this document.
+feature and its motivation. Read [docs/non-goals.md](docs/non-goals.md) first:
+it lists what brig will not do for now, with the reason and the change in
+circumstances that would reopen each one, so a proposal can start from the
+existing answer. Proposals for improvements are always welcome, including
+proposals to change this document.
 
 ## A few words on flexibility
 
