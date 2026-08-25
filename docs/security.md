@@ -8,6 +8,9 @@ to give it, and nothing else on the host.
 This page is about where that boundary actually is. Some of it is weaker than
 it looks, and we would rather write that down than let someone find out later.
 
+The specific, testable claims on this page each have a test that defends them,
+listed in [docs/claims.md](claims.md); CI fails when a claim loses its test.
+
 If you have found a flaw in one of these boundaries, [SECURITY.md](../SECURITY.md)
 is how to report it privately. The section below on
 [things brig does not claim](#things-brig-does-not-claim) is the line between a

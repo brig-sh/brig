@@ -530,5 +530,41 @@ grep -q -- '-- bash -lc echo hi there' "$STUB_LOG" \
   && ok "a trailing command reaches bash as one argument" \
   || bad "a trailing command reaches bash as one argument"
 
+echo "== claims: run-path forwarding =="
+# These cases defend named sentences in docs/security.md, cross-referenced from
+# docs/claims.md. They assert on the run's argv rather than on the stub's
+# inherited environment: brig hands the runtime child its own whole environment,
+# so a value merely being visible to the stub proves nothing about the guest.
+# The `--env <name>` arguments are the only thing that tells the runtime which
+# names to inject into the guest, so that list is the guest's environment.
+"$WORK/brig" reset > /dev/null 2>&1
+: > "$STUB_LOG"
+# ANTHROPIC_API_KEY is on claude-code's denylist. Naming it in BRIG_FORWARD_ENV
+# is the accident the denylist exists to catch: a metered key that outranks the
+# subscription credential, swept in from the ambient shell. SNEAKY_SECRET stands
+# for any ambient variable the profile never declared.
+SNEAKY_SECRET=sk-ambient ANTHROPIC_API_KEY=sk-metered \
+  BRIG_FORWARD_ENV='ANTHROPIC_API_KEY GH_TOKEN' GH_TOKEN=gh-secret \
+  CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude -p hi > /dev/null 2>&1
+runline="$(grep '^argv: run ' "$STUB_LOG")"
+
+case "$runline" in
+  *"--env ANTHROPIC_API_KEY"*) bad "a denied billing key reached the guest env line" ;;
+  *) ok "a denied billing key never reaches the guest env line" ;;
+esac
+grep '^argv: run ' "$STUB_LOG" | grep -q 'sk-metered' \
+  && bad "the denied key's value reached argv" \
+  || ok "the denied key's value never reaches argv"
+
+case "$runline" in
+  *"--env GH_TOKEN"*) ok "the declared credential name reaches the guest" ;;
+  *) bad "the declared credential name reaches the guest -- got: $runline" ;;
+esac
+case "$runline" in
+  *SNEAKY_SECRET*|*sk-ambient*) bad "an undeclared ambient variable reached the guest" ;;
+  *) ok "only declared names reach the guest, ambient ones are dropped" ;;
+esac
+
 [ "$fail" = 0 ] && echo PASS || echo FAILURES
 exit "$fail"
