@@ -293,6 +293,12 @@ on drafts. Check each repository's docs for the labels it supports.
 We use issues to track bugs and feature requests, and to anchor PRs to a
 discussion.
 
+**A security vulnerability is not a public issue.** brig handles credentials,
+so a flaw in how it does that should reach the maintainers privately before it
+reaches everyone else. Do not open an issue or a pull request for one: follow
+[SECURITY.md](SECURITY.md), which routes it through GitHub's private
+vulnerability reporting instead. The rest of this section is for ordinary bugs.
+
 When reporting a bug, please include:
 
 - A short, clear description of the problem.
