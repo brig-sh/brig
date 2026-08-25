@@ -383,6 +383,8 @@ a terms check. `brig run cursor` says so rather than failing on a registry
 
 The README is the overview. The details live in [docs/](docs/):
 
+- [quickstart.md](docs/quickstart.md) -- from install to a running agent, one page
+- [troubleshooting.md](docs/troubleshooting.md) -- when a run fails, organised by what you saw
 - [profiles.md](docs/profiles.md) -- writing an agent profile, field by field
 - [secrets.md](docs/secrets.md) -- `brig secret`, verb by verb, with a worked example
 - [security.md](docs/security.md) -- what the boundary is, and what it is not
