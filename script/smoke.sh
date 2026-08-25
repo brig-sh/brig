@@ -33,6 +33,11 @@ cat > "$WORK/hull" <<'STUB'
 { printf 'argv:'; printf ' %s' "$@"; printf '\n'; } >> "$STUB_LOG"
 verb="$1"; shift
 case "$verb" in
+  --version)
+    # What the real one prints. rc23 is the first that resolves a digest
+    # reference against its store; a case below drives an older one.
+    printf 'hull version %s\n' "${STUB_HULL_VERSION:-0.1.0-rc23}"
+    ;;
   ps)
     # `ps -a` also lists an instance that is merely holding its name.
     [ -f "$STUB_STATE" ] && printf '%s running\n' "$(cat "$STUB_STATE")"
@@ -464,6 +469,12 @@ echo "== image verification =="
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/cosign" <<'COSIGN'
 #!/bin/bash
+# `triangulate <ref>` names the signature tag for the digest a reference
+# resolves to, which is how brig learns the digest to verify and boot.
+if [ "$1" = triangulate ]; then
+  printf '%s:sha256-%s.sig\n' "${2%%:*}" "$(printf 'a%.0s' $(seq 64))"
+  exit 0
+fi
 [ "${COSIGN_FAIL:-0}" = 1 ] && { echo "Error: no matching signatures"; exit 1; }
 exit 0
 COSIGN
@@ -478,6 +489,19 @@ case "$out" in
   *"signature verified"*) ok "a signature that checks out is reported" ;;
   *) bad "a signature that checks out is reported -- got: $out" ;;
 esac
+grep 'argv: run ' "$STUB_LOG" | tail -1 | grep -q '@sha256:' \
+  && ok "the verified digest is what hull was told to boot" \
+  || bad "hull was told to boot the tag, not the verified digest: $(grep 'argv: run ' "$STUB_LOG" | tail -1)"
+
+fresh
+out="$(STUB_HULL_VERSION=0.1.0-rc21 BRIG_VERIFY=warn "$WORK/brig" run claude -p hi 2>&1)"
+case "$out" in
+  *"cannot boot by digest"*) ok "an older hull is told why the tag is booted" ;;
+  *) bad "an older hull is told why the tag is booted -- got: $out" ;;
+esac
+grep 'argv: run ' "$STUB_LOG" | tail -1 | grep -q '@sha256:' \
+  && bad "an older hull was handed a digest it cannot resolve" \
+  || ok "an older hull boots the tag"
 
 fresh
 out="$(BRIG_VERIFY=warn COSIGN_FAIL=1 "$WORK/brig" run claude -p hi 2>&1)"; rc=$?
