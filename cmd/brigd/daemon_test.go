@@ -105,6 +105,50 @@ func TestASecondDaemonRefusesTheSocketOfARunningOne(t *testing.T) {
 	}
 }
 
+// A request past the limit is answered rather than dropped. The scanner used
+// to end the scan on one, which closed the connection with nothing written to
+// the client and nothing written to the log: a client that sent too much saw
+// exactly what a crashed daemon looks like.
+func TestAnOverlongRequestIsAnswered(t *testing.T) {
+	stubRuntime(t)
+	socket := filepath.Join(t.TempDir(), "brigd.sock")
+	startDaemon(t, socket)
+
+	// A request of exactly the limit is still served. Without this the test
+	// below would pass against a daemon that refused everything.
+	atTheLimit := `{"op":"version"}`
+	atTheLimit += strings.Repeat(" ", maxRequestBytes-len(atTheLimit))
+	if resp := ask(t, socket, atTheLimit); !resp.OK {
+		t.Errorf("a request of exactly the limit was refused: %+v", resp)
+	}
+
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// One byte over, written from a goroutine: the daemon answers and closes
+	// as soon as it knows the request is too long, so the tail of the write
+	// may well have nowhere to go.
+	go func() {
+		_, _ = io.WriteString(conn, strings.Repeat("a", maxRequestBytes+1)+"\n")
+	}()
+
+	var resp Response
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatalf("an over-length request got no response at all: %v", err)
+	}
+	if resp.OK {
+		t.Errorf("an over-length request was reported as served: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, strconv.Itoa(maxRequestBytes)) {
+		t.Errorf("the error does not say what the limit is: %q", resp.Error)
+	}
+}
+
 // TestServeInAHelperProcess is not a test. It is how the test above starts a
 // second daemon in a second process, which is the only honest way to ask the
 // question: a lock is held against other processes, and this one already holds

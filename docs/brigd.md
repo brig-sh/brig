@@ -55,6 +55,13 @@ A response looks like:
 Errors come back as `{"ok":false,"error":"..."}` rather than as a closed
 connection.
 
+A request line is at most 1 MiB, newline excluded. That is far more than an op,
+a profile name and a session name need; the limit exists so a client that never
+sends a newline cannot make the daemon buffer without bound. A longer one is
+answered with an error saying so and the connection is then closed, because
+what follows an over-length request in the stream cannot be told apart from the
+tail of it.
+
 For instance, with `socat`:
 
 ```bash

@@ -16,6 +16,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -33,6 +34,17 @@ import (
 )
 
 var version = "dev"
+
+// maxRequestBytes is the longest request line brigd reads, newline excluded.
+//
+// A request is an op, a profile name and a session name, so a megabyte is far
+// more than one can honestly need; the limit is there so a client that never
+// sends a newline cannot make the daemon buffer without bound. It is a raised
+// bufio.Scanner default rather than an invented number, and it is a documented
+// part of the protocol precisely because exceeding it used to be invisible:
+// the scan ended, the connection closed, and neither the client nor the log
+// was told anything.
+const maxRequestBytes = 1 << 20
 
 // Request is one line of JSON on the socket.
 type Request struct {
@@ -230,6 +242,10 @@ func serve(socket string) error {
 func (d *daemon) handle(conn net.Conn) {
 	defer conn.Close()
 	scan := bufio.NewScanner(conn)
+	// One byte more than the limit, for the newline. The scanner's cap is on
+	// what it buffers rather than on the token it hands back, and a request of
+	// exactly the limit is only buffered whole if its terminator fits too.
+	scan.Buffer(make([]byte, 0, 64*1024), maxRequestBytes+1)
 	enc := json.NewEncoder(conn)
 	for scan.Scan() {
 		var req Request
@@ -238,6 +254,23 @@ func (d *daemon) handle(conn net.Conn) {
 			continue
 		}
 		_ = enc.Encode(d.dispatch(req))
+	}
+	// A scan that stops on an error rather than on end of input is the one case
+	// a client cannot see for itself: it wrote a request and the connection
+	// closed, with nothing said here and nothing said in the daemon's log
+	// either. Say both.
+	//
+	// The connection is not read any further after this. What follows an
+	// over-length request in the stream is the tail of that request, and there
+	// is no way to tell where it ends and the next one begins, so answering and
+	// closing is the only honest thing to do with it.
+	if err := scan.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			err = fmt.Errorf("request is longer than the %d byte limit, so it was "+
+				"not read", maxRequestBytes)
+		}
+		_ = enc.Encode(Response{Error: err.Error()})
+		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
 	}
 }
 
