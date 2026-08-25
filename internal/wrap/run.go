@@ -36,7 +36,7 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	// name, and a profile still on hostCredential: has no secrets: list for
 	// that name to be in. Say both, in order.
 	if c.CredentialsCmd != "" {
-		c.warnf("BRIG_CREDENTIALS_CMD is deprecated and goes in the next release. "+
+		c.warnf("BRIG_CREDENTIALS_CMD is deprecated and goes in v0.1.0-rc17. "+
 			"Declare the credential under secrets: in %s, then store it once: "+
 			"brig secret import %s <name> --from-command '<command>'",
 			c.Profile.Name, c.Profile.Name)

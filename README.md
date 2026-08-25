@@ -387,6 +387,7 @@ The README is the overview. The details live in [docs/](docs/):
 - [secrets.md](docs/secrets.md) -- `brig secret`, verb by verb, with a worked example
 - [security.md](docs/security.md) -- what the boundary is, and what it is not
 - [brigd.md](docs/brigd.md) -- the session daemon and its protocol
+- [compatibility.md](docs/compatibility.md) -- what a version number promises, and what it does not
 
 Found a security problem? [SECURITY.md](SECURITY.md) is how to report it
 privately, rather than in a public issue.

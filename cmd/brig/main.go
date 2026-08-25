@@ -83,7 +83,7 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
   BRIG_PULL            missing (default) | always | never
   BRIG_SKILLS          1 to project your ~/.claude skills and plugins read-only
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
-  BRIG_CREDENTIALS_CMD deprecated, goes next release: declare the credential
+  BRIG_CREDENTIALS_CMD deprecated, goes in v0.1.0-rc17: declare the credential
                        under secrets:, then brig secret import <profile> <name>
                        --from-command does the same job once instead of per run
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
@@ -972,7 +972,7 @@ func deprecated(old, replacement string) {
 
 // warnDeprecatedProfileKeys says that a profile FILE still carries
 // hostCredential:, which reads another application's keychain on every run and
-// goes in the next release.
+// goes in v0.1.0-rc17.
 //
 // Only for file-backed profiles, and that scoping is the whole point: no
 // built-in carries the key any more, so an unscoped check would have brig warn
@@ -992,8 +992,8 @@ func warnDeprecatedProfileKeys() {
 		if path, ok := profile.Path(p.Name); ok {
 			where = path
 		}
-		fmt.Fprintf(os.Stderr, "brig: hostCredential: in %s is deprecated and goes in the "+
-			"next release -- it reads another application's keychain on every run. "+
+		fmt.Fprintf(os.Stderr, "brig: hostCredential: in %s is deprecated and goes in "+
+			"v0.1.0-rc17 -- it reads another application's keychain on every run. "+
 			"Declare the credential under secrets: with sources: instead, then: "+
 			"brig secret import %s\n", where, p.Name)
 	}

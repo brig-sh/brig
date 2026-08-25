@@ -320,6 +320,11 @@ func TestCredentialsCmdWarnsAndNamesFromCommand(t *testing.T) {
 	if !strings.Contains(warning, "--from-command") {
 		t.Errorf("the warning does not name what replaces it:\n%s", warning)
 	}
+	// It names the release that removes it, not "next release". See
+	// docs/compatibility.md.
+	if !strings.Contains(warning, "v0.1.0-rc17") {
+		t.Errorf("the warning does not name the release that removes it:\n%s", warning)
+	}
 }
 
 // And it says nothing when it is not set. A deprecation warning on every run
