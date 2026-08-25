@@ -139,7 +139,7 @@ func (c *Config) admitHostCredential(hc *profile.HostCredential, host *creds.Hos
 		c.warnf("%s (from %s)", warning, host.Source)
 		return
 	}
-	if host.Expired(time.Now().UnixMilli()) && !c.env.Bool("ALLOW_EXPIRED", false) {
+	if host.Expired(time.Now().UnixMilli()) && !c.AllowExpired {
 		c.warnf("NOT forwarding the host's credential: it has expired, so it would "+
 			"authenticate nothing and the sandbox would ask you to log in anyway. "+
 			"%s, or set BRIG_ALLOW_EXPIRED=1 to send it as it is", hc.RenewHint)

@@ -119,16 +119,21 @@ func (c *Config) reportDeny(set creds.Set) {
 		}
 		withheld = append(withheld, name)
 	}
+	// Quote the setting the user actually wrote, not a hardcoded =1: with the
+	// strict reading BRIG_ALLOW_DENIED=true is what turned this on, and a report
+	// that answers "why is my sandbox on metered billing" with a value the user
+	// never set sends them looking for a variable that is not there.
+	override := c.env.setting("ALLOW_DENIED")
 	if len(forwarded) > 0 {
-		c.sayf("DENYLIST OVERRIDDEN by BRIG_ALLOW_DENIED=1, forwarding: %s "+
-			"(this moves the sandbox onto metered billing)", strings.Join(forwarded, " "))
+		c.sayf("DENYLIST OVERRIDDEN by %s, forwarding: %s "+
+			"(this moves the sandbox onto metered billing)", override, strings.Join(forwarded, " "))
 	}
 	if len(withheld) == 0 {
 		return
 	}
 	if c.AllowDenied {
-		c.sayf("denylist off for %s (BRIG_ALLOW_DENIED=1), so these would be forwarded "+
-			"if set: %s", c.Profile.Name, strings.Join(withheld, " "))
+		c.sayf("denylist off for %s (%s), so these would be forwarded "+
+			"if set: %s", c.Profile.Name, override, strings.Join(withheld, " "))
 		return
 	}
 	c.sayf("never forwarded for %s: %s (they would move this sandbox onto metered billing)",

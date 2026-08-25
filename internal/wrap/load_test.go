@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/internal/profile"
@@ -57,5 +58,26 @@ func TestWorkspaceFromTheEnvironmentIsMadeAbsolute(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("workspace resolved under %q, want %q", got, want)
+	}
+}
+
+// A security switch set to a value brig cannot read refuses the run rather than
+// guessing. Under the old rule BRIG_ALLOW_DENIED=false read as on, so a user
+// turning the guard off turned it on; now Load returns the refusal, and it
+// returns it before boot rather than at the moment a denied variable turns up.
+func TestLoadRefusesAnUnreadableSecuritySwitch(t *testing.T) {
+	t.Setenv("BRIG_ALLOW_DENIED", "maybe")
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	_, err := Load(p, Options{}, nil)
+	if err == nil {
+		t.Fatal("an unreadable BRIG_ALLOW_DENIED did not refuse the run")
+	}
+	for _, want := range []string{"BRIG_ALLOW_DENIED", "maybe"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
 	}
 }
