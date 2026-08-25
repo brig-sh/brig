@@ -22,6 +22,18 @@ var errPlantedSymlink = errors.New("a symlink in the workspace leads out of it")
 // nothing outside tests; see openWorkspace.
 var afterWorkspaceCheck = func() {}
 
+// duringWorkspaceWalk runs while the path is being resolved, after the
+// ancestors have been dealt with and before the final component. It does
+// nothing outside tests.
+//
+// It exists because the two seams are not the same window. afterWorkspaceCheck
+// opens the gap between a finished walk and the open, which the identity
+// comparison closes. This one opens the gap *inside* the walk, which is the
+// gap an attacker actually gets: a resolution that re-reads the prefix can be
+// poisoned before it reaches the leaf, and then everything downstream agrees
+// with itself about the wrong directory.
+var duringWorkspaceWalk = func() {}
+
 // workspaceRoot is the workspace opened once as an [os.Root]. Every host-side
 // read and write brig makes inside the workspace goes through it.
 //
@@ -80,39 +92,127 @@ func (c *Config) openWorkspace() (*workspaceRoot, error) {
 		return nil, err
 	}
 
-	// The walk hands back the identity of the directory it ended on, taken at
-	// the moment it had just proved that no component on the way to it is a
-	// symlink. That value is the whole fix.
+	// Walk down by handle rather than by path. Each step names one component
+	// relative to a directory that is already open, so no step re-reads the
+	// components above it, and there is no longer a resolution for an attacker
+	// to poison between the check and its result.
 	//
-	// The previous version compared the open root against os.Stat(path), and
-	// os.Stat re-resolves the path from scratch. So the guest only had to have
-	// its symlink present during OpenRoot, absent during the re-walk, and
-	// present again during the comparison: both sides then resolved to the
-	// attacker's directory and agreed. It escaped in about 0.6s, every time.
-	// Nothing is re-resolved now -- the value being compared against was
-	// captured when the path was known good, and a later swap cannot reach back
-	// and change it.
-	want, err := c.checkWorkspacePath()
+	// Two earlier versions of this guard were defeated by variations of one
+	// trick. The first compared the open root against os.Stat(path), and
+	// os.Stat re-resolves from scratch, so a symlink present during the open
+	// and absent during the comparison made both sides agree. The second
+	// captured the identity during the walk, which was better but not enough:
+	// the walk itself resolved a string per component, so flipping a parent
+	// between the last two steps poisoned the captured value, and the
+	// comparison then had two wrong answers to agree about. Descending by
+	// handle removes the class rather than the instance.
+	root, want, err := openWorkspaceHandle(c.Workspace)
 	if err != nil {
 		return nil, err
 	}
 
-	// A seam, so the window between the walk and the open can be opened
-	// deliberately in a test. Without it the identity check below is only
-	// reachable by winning a real race, and a guard that can only be tested by
-	// racing is a guard that goes untested -- which is exactly what happened to
-	// the last one.
+	// A seam, so a test can swap the directory after brig is holding it. The
+	// swap is meant to do nothing now: the handle references the directory it
+	// opened, not the name it was reached by.
 	afterWorkspaceCheck()
 
-	root, err := os.OpenRoot(c.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	if err := rootIs(root, want, c.Workspace); err != nil {
-		_ = root.Close()
-		return nil, err
-	}
 	return &workspaceRoot{root: root, dir: c.Workspace, ident: want}, nil
+}
+
+// openWorkspaceHandle opens the workspace by descending one component at a
+// time, and hands back the directory it ended on together with that
+// directory's identity.
+//
+// The rule at every step is the same: look at one name inside a directory brig
+// already holds open, refuse it if it is a symlink, then open it and repeat.
+// Because each name is a single component resolved against an open descriptor,
+// nothing above it is read again. A component swapped after brig has passed it
+// cannot change where brig ends up, and one swapped before it is passed is seen
+// for what it is.
+//
+// A symlink owned by root is followed rather than refused, which is what lets
+// this work on macOS at all: /var is a link to private/var and /tmp is a link
+// to it, so every temporary directory on the platform sits behind one. A guest
+// writes as the user brig runs as and cannot create a root-owned link in a
+// directory it can reach, so the exception costs nothing it protects.
+func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %w", path, err)
+	}
+	components := workspaceComponents(abs)
+
+	root, err := os.OpenRoot(components[0])
+	if err != nil {
+		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: cannot open %s: %w",
+			abs, components[0], err)
+	}
+	for i, p := range components[1:] {
+		if i == len(components)-2 {
+			duringWorkspaceWalk()
+		}
+		name := filepath.Base(p)
+		info, err := root.Lstat(name)
+		if err != nil {
+			// A component that is not there is a component being moved. The
+			// leaf was created moments ago and every parent had to exist for
+			// that to work, so absence here is not a race brig can wait out.
+			_ = root.Close()
+			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s could not be "+
+				"read while brig was checking the path (%v), so something is moving it: %w",
+				abs, p, err, errPlantedSymlink)
+		}
+		if info.Mode()&os.ModeSymlink != 0 && !ownedByRoot(info) {
+			target, _ := root.Readlink(name)
+			_ = root.Close()
+			if p == abs {
+				return nil, nil, fmt.Errorf("refusing to use %s as the workspace: it is a symlink "+
+					"to %q, and the workspace is mounted read-write as the sandbox's home, so brig "+
+					"will not write a guest's home through a link. Point BRIG_WORKSPACE (or "+
+					"--workspace) at the real directory: %w", abs, target, errPlantedSymlink)
+			}
+			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s on the way to it "+
+				"is a symlink to %q, so the sandbox's home would be created somewhere other than "+
+				"where you asked for it. Point BRIG_WORKSPACE (or --workspace) at the real "+
+				"directory: %w", abs, p, target, errPlantedSymlink)
+		}
+		next, err := root.OpenRoot(name)
+		_ = root.Close()
+		if err != nil {
+			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: cannot open %s: %w",
+				abs, p, err)
+		}
+		root = next
+	}
+
+	ident, err := root.Stat(".")
+	if err != nil {
+		_ = root.Close()
+		return nil, nil, fmt.Errorf("cannot stat the opened workspace %s: %w", abs, err)
+	}
+
+	// The descent is holding the right directory. The path is a separate
+	// question, and it is the one that matters downstream: the share handed to
+	// the runtime is a string, resolved in another process later, so a path
+	// that has stopped naming this directory is a path brig must not pass on.
+	//
+	// Resolving it again here is safe in a way the old walk was not. The value
+	// it is checked against came from the descent, so a poisoned resolution can
+	// only disagree, and disagreement only ever refuses. There is no reading of
+	// this that lets a swapped component be accepted.
+	byPath, err := os.Stat(abs)
+	if err != nil {
+		_ = root.Close()
+		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: it could not be read "+
+			"after brig opened it (%v), so something is moving it: %w", abs, err, errPlantedSymlink)
+	}
+	if !os.SameFile(byPath, ident) {
+		_ = root.Close()
+		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: the name stopped "+
+			"pointing at the directory brig opened, so the sandbox would be handed somewhere "+
+			"else as its home: %w", abs, errPlantedSymlink)
+	}
+	return root, ident, nil
 }
 
 // rootIs reports whether an open root refers to the directory the walk ended
@@ -236,41 +336,12 @@ func workspaceComponents(workspace string) []string {
 // checks nothing here; running an agent sandbox as root is its own problem,
 // and this is not the control that would fix it.)
 func (c *Config) checkWorkspacePath() (os.FileInfo, error) {
-	var last os.FileInfo
-	for _, p := range workspaceComponents(c.Workspace) {
-		info, err := os.Lstat(p)
-		if err != nil {
-			// Previously this skipped. That was the hole: making a component
-			// briefly VANISH -- a rename, or a symlink removed and put back --
-			// walked past the check for free, which is how the identity
-			// comparison downstream was defeated. Every component of a path
-			// whose leaf we have just created must exist; one that does not is
-			// being moved underneath us right now.
-			return nil, fmt.Errorf("refusing to use %s as the workspace: %s could not be "+
-				"read while brig was checking the path (%v), so something is moving it: %w",
-				c.Workspace, p, err, errPlantedSymlink)
-		}
-		last = info
-		if info.Mode()&os.ModeSymlink == 0 || ownedByRoot(info) {
-			continue
-		}
-		target, _ := os.Readlink(p)
-		if p == filepath.Clean(c.Workspace) {
-			return nil, fmt.Errorf("refusing to use %s as the workspace: it is a symlink to %q, "+
-				"and the workspace is mounted read-write as the sandbox's home, so brig will not "+
-				"write a guest's home through a link. Point BRIG_WORKSPACE (or --workspace) at the "+
-				"real directory: %w", c.Workspace, target, errPlantedSymlink)
-		}
-		return nil, fmt.Errorf("refusing to use %s as the workspace: %s on the way to it is a "+
-			"symlink to %q, so the sandbox's home would be created somewhere other than where "+
-			"you asked for it. Point BRIG_WORKSPACE (or --workspace) at the real directory: %w",
-			c.Workspace, p, target, errPlantedSymlink)
+	root, ident, err := openWorkspaceHandle(c.Workspace)
+	if err != nil {
+		return nil, err
 	}
-	if last == nil {
-		return nil, fmt.Errorf("refusing to use %s as the workspace: it has no components",
-			c.Workspace)
-	}
-	return last, nil
+	_ = root.Close()
+	return ident, nil
 }
 
 // Close releases the directory handle the root holds open.
