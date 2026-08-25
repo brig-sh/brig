@@ -109,6 +109,9 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 		return set, err
 	}
 	c.warnExpiredSecrets()
+	// Last, so the list it names is the whole of what the runtime will be
+	// handed: the git plumbing above and SetupGit both add to the set.
+	c.warnArgvExposure(set)
 	return set, nil
 }
 

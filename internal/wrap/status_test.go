@@ -88,6 +88,98 @@ func TestStatusStillDistinguishesTheEnvironmentAndTheHost(t *testing.T) {
 	}
 }
 
+// The hatch is opted into once, in a shell profile, and then said nowhere. A
+// run that puts a credential on the command line has to say so on the run, not
+// only in the documentation for the setting -- and it has to name the variable,
+// because "some value" is not something a user can act on.
+func TestBuildEnvWarnsWhenValuesWouldReachArgv(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	t.Setenv("GH_TOKEN", "ghp_secret")
+	c := bindingConfig(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
+
+	set, err := c.BuildEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The premise of the warning: this value really is the one that lands on
+	// the command line, which is what an ambient value not being marked Secret
+	// means.
+	for _, v := range set.Vars {
+		if v.Name == "GH_TOKEN" && v.Secret {
+			t.Fatal("GH_TOKEN is exempt from the hatch, so there is nothing to warn about")
+		}
+	}
+
+	var warnings []string
+	for _, line := range strings.Split(c.Err.(*bytes.Buffer).String(), "\n") {
+		if strings.Contains(line, "BRIG_ENV_ARGV") {
+			warnings = append(warnings, line)
+		}
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("want exactly one warning, got %d:\n%s", len(warnings),
+			strings.Join(warnings, "\n"))
+	}
+	if !strings.Contains(warnings[0], "GH_TOKEN") {
+		t.Errorf("the warning does not name the variable: %s", warnings[0])
+	}
+	if strings.Contains(warnings[0], "ghp_secret") {
+		t.Errorf("the warning printed the value it is warning about: %s", warnings[0])
+	}
+}
+
+// Off is the default, and the default run must be exactly as quiet as it was.
+func TestBuildEnvSaysNothingWithTheHatchOff(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "")
+	t.Setenv("GH_TOKEN", "ghp_secret")
+	c := bindingConfig(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
+
+	if _, err := c.BuildEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Err.(*bytes.Buffer).String(); strings.Contains(got, "BRIG_ENV_ARGV") {
+		t.Errorf("a run with the hatch off mentioned it:\n%s", got)
+	}
+}
+
+// `brig env` is where a user asks what a sandbox is about to be handed, so it
+// is where the setting that decides how those values travel belongs.
+func TestStatusReportsTheArgvHatch(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	var set creds.Set
+	set.Add("GH_TOKEN", "ghp_secret", "GH_TOKEN")
+	set.AddSecret("TOK", "s3cr3t", "TOK(secret)")
+
+	got := statusOutput(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n", set)
+	if !strings.Contains(got, "BRIG_ENV_ARGV=1") {
+		t.Errorf("the report does not mention the setting:\n%s", got)
+	}
+	if !strings.Contains(got, "GH_TOKEN") {
+		t.Errorf("the report does not name what goes on the command line:\n%s", got)
+	}
+	// A value brig resolved is exempt whatever the hatch says, so naming it
+	// here would be a false statement about the command line.
+	for _, v := range []string{"TOK ", "ghp_secret", "s3cr3t"} {
+		if strings.Contains(got, v) {
+			t.Errorf("the report carries %q, which does not reach argv:\n%s", v, got)
+		}
+	}
+}
+
+// With the hatch off, nothing about it is reported: brig keeps values out of
+// argv as a matter of course, and a line saying so on every preview would bury
+// the lines that are about this run.
+func TestStatusIsSilentAboutTheArgvHatchWhenItIsOff(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "")
+	var set creds.Set
+	set.Add("GH_TOKEN", "ghp_secret", "GH_TOKEN")
+
+	got := statusOutput(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n", set)
+	if strings.Contains(got, "BRIG_ENV_ARGV") {
+		t.Errorf("the hatch was reported while off:\n%s", got)
+	}
+}
+
 // What a run could hand the guest is reported by name, and the "forwarding
 // nothing" line names the bindings rather than the retired Forward list.
 func TestStatusNamesTheBindingsWhenNothingIsForwarded(t *testing.T) {
