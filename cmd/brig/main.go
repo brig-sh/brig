@@ -68,10 +68,13 @@ flags (before the agent's own arguments; -- ends brig's parsing):
 Workspaces persist. The sandbox keeps running between commands, so a second
 run is immediate; state lives in the workspace on the host either way.
 
-Any Linux CLI in an OCI image already runs under brig. A profile just saves you
-spelling out the image and its credential variables every time: export the
-closest one, edit it, import it back. Building an image for one is documented
-at
+Any Linux CLI in an OCI image runs under brig, if the image also carries the
+utilities brig uses to set the sandbox up and deliver the credential: a shell
+(sh and bash), plus cat, stat, chown, mkdir, mount and /bin/true. A stock
+distro image has them; a scratch image with only your binary does not. A
+profile just saves you spelling out the image and its credential variables
+every time: export the closest one, edit it, import it back. Building an image
+for one is documented at
   https://github.com/brig-sh/community-images/blob/main/docs/bring-your-own-image.md
 
 settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
