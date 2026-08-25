@@ -19,12 +19,13 @@ duplicates.
 ## To reproduce
 
 <!--
-The exact steps, including the command line. `brig env <agent>` prints what
-would be forwarded, by name and never by value, and is usually the quickest way
-to show a credential problem without pasting a secret.
+The exact steps, including the command line. `brig info <agent>` prints the
+execution envelope and everything that would be forwarded, by name and never by
+value, and is usually the quickest way to show a credential problem without
+pasting a secret.
 
 If the sandbox boots but misbehaves, say which runtime is underneath: `brig
-status` reports the backend, and `hull ps` / `nerdctl ps` shows the instance.
+info` reports the backend, and `hull ps` / `nerdctl ps` shows the instance.
 -->
 
 1.
@@ -56,6 +57,6 @@ status` reports the backend, and `hull ps` / `nerdctl ps` shows the instance.
 Relevant output, fenced. Link related issues inline with #NN.
 
 Please do not paste credential values. brig is careful never to print one --
-`brig env` shows names only -- so if you find a value in output anywhere, that
+`brig info` shows names only -- so if you find a value in output anywhere, that
 is itself the bug, and worth saying so rather than pasting it.
 -->

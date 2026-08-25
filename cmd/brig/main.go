@@ -44,7 +44,8 @@ usage:
   brig rm     <profile>                          stop and remove the sandbox
   brig ls                                        list sandboxes
   brig reset                                     stop and remove every brig sandbox
-  brig env    <profile>                          report the environment, by name -- fails
+  brig info   <profile>                          print the execution envelope and the
+                                                 full environment, by name -- fails
                                                  if a declared secret is missing
   brig profiles                                  list the profiles
   brig profile ls|export|import|edit|rm          manage profiles
@@ -62,6 +63,8 @@ flags (before the agent's own arguments; -- ends brig's parsing):
   -m, --memory MB        guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
+  -q, --quiet            with run or create: do not print the execution
+                         envelope before the agent starts
       --skills           project your own ~/.claude skills and plugins into
                          the guest, read-only (or BRIG_SKILLS=1)
 
@@ -151,7 +154,7 @@ func run(args []string) error {
 		return listSandboxes()
 	case "reset":
 		return reset()
-	case "run", "create", "exec", "shell", "stop", "rm", "env":
+	case "run", "create", "exec", "shell", "stop", "rm", "info", "env":
 	default:
 		return fmt.Errorf("unknown command %q (try `brig help`)", verb)
 	}
@@ -208,9 +211,26 @@ func run(args []string) error {
 		return err
 	}
 
+	// The execution envelope: the boundary this run is about to trust, printed
+	// before the sandbox boots so the user sees it before it matters. Only run
+	// and create print it -- exec and shell attach to a sandbox whose envelope
+	// the user already saw, so repeating it would be noise. --quiet drops it for
+	// a script or a returning session.
+	if (verb == "run" || verb == "create") && !opts.quiet {
+		cfg.PrintPreRunEnvelope(set)
+	}
+
 	switch verb {
+	case "info":
+		cfg.Info(set)
+		return nil
 	case "env":
-		cfg.Status(set)
+		// Kept for one release as a spelling of `brig info`, with the single
+		// line the other deprecated verbs print. The bug report template used
+		// to send reporters to `brig status`, which was never a command; info
+		// is the name that work settled on.
+		deprecated("brig env", "brig info")
+		cfg.Info(set)
 		return nil
 	case "create":
 		if err := cfg.EnsureRunning(set); err != nil {
@@ -278,6 +298,7 @@ type options struct {
 	load      wrap.Options
 	nameGiven bool
 	detach    bool
+	quiet     bool
 }
 
 // brigFlags is what brig owns on a run line. Everything else on that line
@@ -297,6 +318,7 @@ var brigFlags = []struct {
 	{long: "cpus", value: true},
 	{long: "detach", short: "d"},
 	{long: "skills"},
+	{long: "quiet", short: "q"},
 }
 
 // ours reports whether a token is one of brig's flags, and whether that flag
@@ -384,6 +406,9 @@ func parse(args []string) (o options, profileName string, tail []string, err err
 		// Opt-in, and only ever opt-in: this hands the guest the user's real
 		// skills and plugins, read-only.
 		{"skills", "", func(n string) { fs.BoolVar(&o.load.Skills, n, false, "") }},
+		// Suppresses the execution envelope on run and create, for a script or
+		// a returning session that has already seen it.
+		{"quiet", "q", func(n string) { fs.BoolVar(&o.quiet, n, false, "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
 		// lands in one place and the last one on the line wins.

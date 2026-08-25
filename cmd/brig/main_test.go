@@ -93,6 +93,28 @@ func TestParseSandboxFlags(t *testing.T) {
 	}
 }
 
+// --quiet is brig's own flag, read off the run line like the other bare flags
+// and never handed to the agent. It suppresses the execution envelope.
+func TestParseReadsQuiet(t *testing.T) {
+	for _, args := range [][]string{{"claude", "--quiet"}, {"claude", "-q"}} {
+		o, name, tail, err := parse(args)
+		if err != nil {
+			t.Fatalf("parse(%q): %v", args, err)
+		}
+		if !o.quiet || name != "claude" || len(tail) != 0 {
+			t.Errorf("parse(%q) = quiet %v, name %q, tail %q", args, o.quiet, name, tail)
+		}
+	}
+	// Absent by default, and after the agent's arguments begin it is the
+	// agent's word rather than brig's.
+	if o, _, _, _ := parse([]string{"claude"}); o.quiet {
+		t.Error("quiet defaulted to on")
+	}
+	if o, _, _, _ := parse([]string{"claude", "-p", "hi", "--quiet"}); o.quiet {
+		t.Error("--quiet was read out of the agent's own arguments")
+	}
+}
+
 func TestParseRejectsBadValues(t *testing.T) {
 	cases := [][]string{
 		{"claude", "--name"},     // nothing after it
