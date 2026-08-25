@@ -69,6 +69,53 @@ func TestSplitEnvArgvEscapeHatchNeverExposesSecrets(t *testing.T) {
 	}
 }
 
+// The exposure has to be reportable before anything is spawned, and reported
+// from the same rule the command line is built from: a warning that names one
+// set of variables while argv carries another is wrong in exactly the case it
+// exists for. So the check is against the argv splitEnv actually produces,
+// rather than against a second list that merely looks right.
+func TestArgvExposedNamesWhatReachesArgv(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	vars := []Var{
+		{Name: "GH_TOKEN", Value: "ghp_secret"},
+		{Name: "OAUTH", Value: "sk-fromkeychain", Secret: true},
+		{Name: "GIT_TERMINAL_PROMPT", Value: "0"},
+	}
+
+	got := ArgvExposed(vars)
+	want := []string{"GH_TOKEN", "GIT_TERMINAL_PROMPT"}
+	if len(got) != len(want) {
+		t.Fatalf("ArgvExposed = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ArgvExposed = %v, want %v", got, want)
+		}
+	}
+
+	args, _ := splitEnv("--env", vars)
+	joined := strings.Join(args, " ")
+	for _, name := range got {
+		if !strings.Contains(joined, "--env "+name+"=") {
+			t.Errorf("%s was reported as reaching argv but did not: %q", name, joined)
+		}
+	}
+	// The other half of the claim: nothing the report left out carries a value
+	// on the command line either.
+	if strings.Contains(joined, "sk-fromkeychain") {
+		t.Errorf("a value not named by the report reached argv: %q", joined)
+	}
+}
+
+// Off, there is nothing to warn about: every value travels in the child's
+// environment, which is what the report has to say by saying nothing.
+func TestArgvExposedIsSilentWithTheHatchOff(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "")
+	if got := ArgvExposed([]Var{{Name: "GH_TOKEN", Value: "ghp_secret"}}); len(got) != 0 {
+		t.Errorf("ArgvExposed = %v with the hatch off, want nothing", got)
+	}
+}
+
 // hull reads HULL_TELEMETRY_*. Getting this wrong does not break a run, it
 // just misattributes or double-counts, which is exactly the kind of thing
 // nobody notices for months.

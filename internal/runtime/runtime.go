@@ -253,6 +253,36 @@ func runtimeBinFromProfile(bin string) (string, error) {
 // them, so it is opt-in and says so.
 func envInArgv() bool { return os.Getenv("BRIG_ENV_ARGV") == "1" }
 
+// inArgv is the single rule for whether a value travels on the command line:
+// the hatch is on, and brig did not resolve the value on the user's behalf.
+//
+// Written once because two callers need it. splitEnv builds the command line
+// from it, and ArgvExposed reports what that command line will carry before
+// anything is spawned. A report derived from a second copy of the rule is a
+// report that can be wrong in exactly the case it exists for.
+func inArgv(v Var) bool { return envInArgv() && !v.Secret }
+
+// ArgvExposed names the variables whose values this invocation would put on
+// the runtime's command line, in the order they were given. It returns nothing
+// when the hatch is off, and never names a Var marked Secret: splitEnv keeps
+// those off the command line whatever the setting says.
+//
+// Exported so the exposure can be said out loud before the runtime is invoked.
+// BRIG_ENV_ARGV is opted into once, in a shell profile, and then remembered by
+// nobody: months later such a run looks like every other one, and the only
+// places the difference shows are `ps` and the host's own argv log, neither of
+// which anyone reads until after something has gone wrong. The names are what
+// a caller can act on; the values stay here.
+func ArgvExposed(vars []Var) []string {
+	var names []string
+	for _, v := range vars {
+		if inArgv(v) {
+			names = append(names, v.Name)
+		}
+	}
+	return names
+}
+
 // splitEnv turns guest variables into the argv flags and the child-process
 // environment that carry them, keeping values out of argv unless the escape
 // hatch is set -- and even then, a Var marked Secret stays out of argv, because
@@ -260,7 +290,7 @@ func envInArgv() bool { return os.Getenv("BRIG_ENV_ARGV") == "1" }
 // ambient shell values, not keychain secrets.
 func splitEnv(flag string, vars []Var) (args []string, env []string) {
 	for _, v := range vars {
-		if envInArgv() && !v.Secret {
+		if inArgv(v) {
 			args = append(args, flag, v.Name+"="+v.Value)
 			continue
 		}
