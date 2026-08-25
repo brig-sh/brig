@@ -477,12 +477,13 @@ privately, rather than in a public issue.
 ## Custom agents and your own images
 
 Any Linux CLI in an OCI image runs under brig, as long as the image also
-carries the few utilities brig uses to set the sandbox up and deliver the
-credential: a shell (`sh` and `bash`), plus `cat`, `stat`, `chown`, `mkdir`,
-`mount` and `/bin/true`. A stock distribution image has them; a `FROM scratch`
-image holding only your static binary does not. A profile just saves you
-spelling out the image, the guest home and the credential variables every
-time:
+carries the utilities brig invokes to set the sandbox up and deliver the
+credential. [docs/guest-image.md](docs/guest-image.md) is the list, with the
+file that runs each one, and `script/check-guest-image.sh <image>` checks an
+image against it. A stock distribution image passes as it ships; a
+`FROM scratch` image holding only your static binary fails every line. A
+profile just saves you spelling out the image, the guest home and the
+credential variables every time:
 
 ```bash
 brig profile export claude-code mine   # start from the closest one
