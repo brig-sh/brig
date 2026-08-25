@@ -348,6 +348,35 @@ rc=$?
   || bad "a corrupt index failed the run -- got: $(cat "$WORK/corrupt.out")"
 "$WORK/brig" reset > /dev/null 2>&1
 
+echo "== argument hygiene =="
+# A flag typed to make a destructive command safe must not be read past and
+# ignored. reset has no flags today, so --dry-run is refused (exit 2) and
+# removes nothing rather than stopping every sandbox.
+"$WORK/brig" run claude -d > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" reset --dry-run > "$WORK/dry.out" 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "reset --dry-run exits 2" || bad "reset --dry-run exits 2 -- got $rc"
+grep -q -- '--dry-run' "$WORK/dry.out" \
+  && ok "reset --dry-run names the token" || bad "reset --dry-run names the token"
+grep -q '^argv: rm ' "$STUB_LOG" \
+  && bad "reset --dry-run removed a sandbox" || ok "reset --dry-run removes nothing"
+"$WORK/brig" reset > /dev/null 2>&1
+
+# An unknown flag to the left of the profile is refused and named, rather than
+# consuming the profile and blaming it for being absent.
+out="$("$WORK/brig" run --nope claude 2>&1)"; rc=$?
+[ "$rc" = 2 ] && ok "run --nope claude exits 2" || bad "run --nope claude exits 2 -- got $rc"
+case "$out" in
+  *--nope*) ok "run --nope claude names the flag" ;;
+  *) bad "run --nope claude names the flag -- got: $out" ;;
+esac
+
+# A verb that takes a profile and nothing more refuses a stray argument.
+out="$("$WORK/brig" ls claude 2>&1)"; rc=$?
+[ "$rc" = 2 ] && ok "ls refuses an argument" || bad "ls refuses an argument -- got $rc: $out"
+out="$("$WORK/brig" stop claude extra 2>&1)"; rc=$?
+[ "$rc" = 2 ] && ok "stop refuses a stray argument" || bad "stop refuses a stray argument -- got $rc: $out"
+
 echo "== flags =="
 : > "$STUB_LOG"
 "$WORK/brig" run claude -t ghcr.io/me/img:latest -w "$WORK/other" -m 8192 --cpus 2 -d \

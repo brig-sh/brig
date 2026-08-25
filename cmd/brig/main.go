@@ -95,9 +95,28 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
+		// A mistake in how the command was typed exits 2, the conventional
+		// usage-error code, kept apart from 1 so a script can tell "you asked
+		// for the wrong thing" from "it ran and failed". A run that stops and
+		// removes nothing because it was refused must not read as success.
+		var ue *usageError
+		if errors.As(err, &ue) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }
+
+// usageError is a command that was typed wrong: an unknown flag, a stray
+// argument, a token in a place nothing consumes it. It carries the exit code
+// apart from an ordinary failure, and its message names the token at fault so
+// the reader knows which word to fix.
+type usageError struct{ msg string }
+
+func (e *usageError) Error() string { return e.msg }
+
+// usagef builds a usageError the way fmt.Errorf builds an ordinary one.
+func usagef(format string, a ...any) error { return &usageError{fmt.Sprintf(format, a...)} }
 
 func run(args []string) error {
 	if len(args) == 0 {
@@ -151,9 +170,9 @@ func run(args []string) error {
 		}
 		return profileCmd(rest)
 	case "ls":
-		return listSandboxes()
+		return listSandboxes(rest)
 	case "reset":
-		return reset()
+		return reset(rest)
 	case "run", "create", "exec", "shell", "stop", "rm", "env":
 	default:
 		return fmt.Errorf("unknown command %q (try `brig help`)", verb)
@@ -161,6 +180,9 @@ func run(args []string) error {
 
 	opts, profileName, tail, err := parse(rest)
 	if err != nil {
+		return err
+	}
+	if err := rejectTail(verb, tail); err != nil {
 		return err
 	}
 	t, ok := profile.Lookup(profileName)
@@ -328,25 +350,38 @@ func ours(arg string) (mine bool, takesValue bool) {
 // unrecognised flag is not a mistake but the agent's -- `brig run claude -p hi`
 // runs the agent with -p hi. So the boundary is decided here, from the table,
 // and the flag package parses what is left of it.
-func split(args []string) (mine []string, profileName string, tail []string) {
+func split(args []string) (mine []string, profileName string, tail []string, err error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--":
 			// An explicit end to brig's parsing, so an agent argument spelled
 			// like one of brig's flags still reaches the agent.
-			return mine, profileName, args[i+1:]
+			return mine, profileName, args[i+1:], nil
 		case !strings.HasPrefix(a, "-"):
 			if profileName == "" {
 				profileName = a
 				continue
 			}
 			// A second bare word is the agent's command, not a second profile.
-			return mine, profileName, args[i:]
+			return mine, profileName, args[i:], nil
 		default:
 			isOurs, takesValue := ours(a)
 			if !isOurs {
-				return mine, profileName, args[i:]
+				// An unknown flag once the profile is named is the agent's:
+				// `brig run claude --resume` runs the agent with --resume, and
+				// brig forwards everything from here on. Before the profile is
+				// named there is no agent yet to own it, so a flag brig does not
+				// recognise in that position is not passed through -- it is a
+				// brig flag that does not exist. Forwarding it would make the
+				// profile look like the flag's value and leave the line blaming
+				// the one word on it that was right, so refuse it and name it.
+				if profileName == "" {
+					return nil, "", nil, usagef("unknown flag %q before the profile name. "+
+						"brig's own flags come before the profile and the agent's after it; "+
+						"put %q after the profile to pass it through, or -- to end brig's flags", a, a)
+				}
+				return mine, profileName, args[i:], nil
 			}
 			mine = append(mine, a)
 			if takesValue && i+1 < len(args) {
@@ -358,14 +393,36 @@ func split(args []string) (mine []string, profileName string, tail []string) {
 			}
 		}
 	}
-	return mine, profileName, nil
+	return mine, profileName, nil, nil
+}
+
+// rejectTail refuses a token a verb has no use for, rather than dropping it.
+//
+// run forwards the tail to the agent, and shell and exec turn it into the guest
+// command, so those keep whatever follows the profile. create, stop, rm and env
+// take a profile and nothing after it: a word left there is a mistake to name,
+// not an operand to swallow. create is grouped with the others rather than with
+// run because it does not attach -- split hands it the same agent tail run gets,
+// but there is no agent here to receive it, so a tail is still a mistake.
+func rejectTail(verb string, tail []string) error {
+	switch verb {
+	case "run", "shell", "exec":
+		return nil
+	}
+	if len(tail) > 0 {
+		return usagef("unexpected argument %q; `brig %s` takes a profile and nothing more", tail[0], verb)
+	}
+	return nil
 }
 
 // parse reads brig's own flags off the run line in any order and leaves
 // whatever remains for the agent. split decides where brig's arguments end;
 // the flag package turns them into values.
 func parse(args []string) (o options, profileName string, tail []string, err error) {
-	mine, profileName, tail := split(args)
+	mine, profileName, tail, err := split(args)
+	if err != nil {
+		return options{}, "", nil, err
+	}
 
 	fs := flag.NewFlagSet("brig", flag.ContinueOnError)
 	// The flag package's own output is a usage dump on every error. brig's
@@ -518,7 +575,14 @@ func spell(name string) string {
 // listSandboxes shows what is running, and what is merely holding a name. A
 // stopped sandbox still owns its name, which is exactly the thing to see
 // before wondering why a name is taken.
-func listSandboxes() error {
+func listSandboxes(args []string) error {
+	// ls names no profile and takes no flags, so anything here is a token it
+	// would otherwise read and discard -- `brig ls claude` looks like it filters
+	// to one profile and does not. Refuse it rather than answer a question that
+	// was not asked.
+	if len(args) > 0 {
+		return usagef("unexpected argument %q; `brig ls` takes no arguments", args[0])
+	}
 	rt, err := runtime.Detect()
 	if err != nil {
 		return err
@@ -587,7 +651,17 @@ func workspaceOf(vmName string, rt runtime.Runtime) string {
 // reset stops and removes every sandbox brig started. Workspaces are left
 // alone: they are on the host, they hold your work, and this is a command
 // about sandboxes.
-func reset() error {
+func reset(args []string) error {
+	// reset stops and removes every brig sandbox, so a flag typed to make it
+	// safer -- `brig reset --dry-run` -- must not be read past and ignored,
+	// which is exactly how a command meant to preview ends up removing
+	// everything. It has no flags and no operands today; refuse anything here so
+	// a flag that gains a meaning later is one this release declined rather than
+	// silently swallowed.
+	if len(args) > 0 {
+		return usagef("unexpected argument %q; `brig reset` takes no arguments and removes "+
+			"every brig sandbox", args[0])
+	}
 	rt, err := runtime.Detect()
 	if err != nil {
 		return err
