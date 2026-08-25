@@ -24,6 +24,12 @@ brigd --socket /tmp/brigd.sock
 The socket is created 0600. It carries lifecycle control over sandboxes
 holding live credentials, so it belongs to the invoking user alone.
 
+One daemon serves one socket path. Starting a second on a path that is already
+being served exits non-zero and names the process in the way, rather than
+taking the path over: two daemons on one socket would each keep an inventory
+of half the sandboxes. The lock is a `brigd.sock.lock` file beside the socket,
+held for as long as the daemon runs and released by the kernel if it dies.
+
 ## Protocol
 
 Line-delimited JSON, one request per line, one response per line.

@@ -22,6 +22,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -85,6 +87,65 @@ func defaultSocket() string {
 	return filepath.Join(home, ".brig", "brigd.sock")
 }
 
+// lockSocket takes the exclusive lock that makes this process the daemon for
+// one socket path, and returns the file holding it.
+//
+// The lock lives on a sidecar file rather than on the socket, because a unix
+// socket cannot carry one: the kernel drops the socket's inode from the
+// filesystem the moment somebody unlinks the path, and the listener keeps
+// working, so there is nothing there for a second daemon to test. flock on a
+// plain file is dropped when the process dies however it dies, which is what
+// makes a crashed daemon leave nothing behind to clean up and no stale pid to
+// second-guess.
+//
+// The pid goes into the file as well. Nothing reads it to decide anything --
+// the lock decides -- but a refusal that names the process in the way is the
+// difference between "it is already running" and a hunt through ps.
+//
+// The file is deliberately not removed on shutdown. Unlinking it would let a
+// daemon starting at that moment hold a lock on a file that no longer has a
+// name, while a third one creates a new file at the same path and locks that:
+// two daemons, two locks, one socket, which is the bug this exists to stop.
+func lockSocket(socket string) (*os.File, error) {
+	path := socket + ".lock"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		holder := lockHolder(path)
+		_ = f.Close()
+		return nil, fmt.Errorf("another brigd%s is already serving %s. Stop it, or "+
+			"start this one on a socket of its own with --socket", holder, socket)
+	}
+	// Truncated before the pid is written, so a shorter pid than the last one
+	// cannot leave the tail of the old one behind for the next reader.
+	if err := f.Truncate(0); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if _, err := f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// lockHolder names the process holding the lock, as " (pid 123)", or says
+// nothing at all when the file has no readable pid in it. It is only ever part
+// of a message, so an unreadable file is not worth an error of its own.
+func lockHolder(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	pid := strings.TrimSpace(string(b))
+	if pid == "" {
+		return ""
+	}
+	return " (pid " + pid + ")"
+}
+
 type daemon struct {
 	rt runtime.Runtime
 
@@ -118,9 +179,21 @@ func serve(socket string) error {
 	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
 		return err
 	}
-	// A socket left behind by a crashed daemon would block the bind. Removing
-	// it is safe only because a live daemon holds a lock on it, which the
-	// bind below re-establishes.
+	// One daemon per socket path, and the lock is what decides it. Binding a
+	// unix socket takes no lock of any kind, so nothing in the listen below
+	// keeps a second daemon out: both stay up, both report listening, and the
+	// second one answers -- which leaves the first holding an inventory that no
+	// longer matches reality and a per-VM mutex that serialises nothing,
+	// because the two processes do not share it.
+	lock, err := lockSocket(socket)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+
+	// Only now that the lock is held. A socket left behind by a crashed daemon
+	// would block the bind and has to go; one that a live daemon is serving
+	// must not, and holding the lock is the difference between the two.
 	_ = os.Remove(socket)
 
 	ln, err := net.Listen("unix", socket)
