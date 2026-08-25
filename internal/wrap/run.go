@@ -250,12 +250,16 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// mount itself; see createTimeVolumes.
 	tmpfs, volumeShares := c.createTimeVolumes()
 	spec := runtime.RunSpec{
-		Name:  c.VMName,
-		Image: c.Image,
-		Pull:  c.Pull,
-		Net:   "shared",
-		Mem:   c.Mem,
-		CPUs:  c.CPUs,
+		Name: c.VMName,
+		// The tag stays as the image; the resolved digest rides alongside it and
+		// the runtime boots Image@Digest when it can pin one. Empty Digest boots
+		// the tag, which is the hull path and any run that resolved no digest.
+		Image:  c.Image,
+		Digest: c.BootDigest,
+		Pull:   c.Pull,
+		Net:    "shared",
+		Mem:    c.Mem,
+		CPUs:   c.CPUs,
 		// The workspace, which is the guest's home. The host's agent
 		// configuration is copied into it rather than mounted, so it needs no
 		// share of its own -- see seedHostConfig. volumeShares is empty on

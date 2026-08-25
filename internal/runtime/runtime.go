@@ -47,8 +47,14 @@ type Var struct {
 
 // RunSpec is a request to boot a sandbox.
 type RunSpec struct {
-	Name     string
-	Image    string
+	Name  string
+	Image string
+	// Digest is the registry digest verify resolved and checked for Image, or
+	// "" when none was resolved. A runtime whose store is addressable by digest
+	// boots Image@Digest instead of the tag, so the bytes that boot are the ones
+	// that verified; one that is not ignores it and boots the tag. See
+	// PinsDigest, and the note on the nerdctl and hull adapters.
+	Digest   string
 	Pull     string // missing (default) | always | never
 	Net      string // none | shared
 	Mem      int    // MB
@@ -121,6 +127,19 @@ type Runtime interface {
 	List() ([]Instance, error)
 	// Run boots a sandbox, detached.
 	Run(spec RunSpec) error
+	// PinsDigest reports whether Run honours RunSpec.Digest -- that is, whether
+	// this runtime's store is addressable by digest, so that booting
+	// Image@Digest boots that exact object and resolves it against the local
+	// store the way containerd does. brig only claims digest-level verification
+	// on a runtime that returns true; on one that returns false it verifies and
+	// boots the tag, and says so, rather than promise bytes it cannot pin.
+	PinsDigest() bool
+	// LocalDigest reports the digest the local store already holds for ref, or
+	// "" when it holds nothing under that reference or cannot say. It is how the
+	// verify path learns that the copy on disk is a different object from the
+	// one the registry serves. Only meaningful on a PinsDigest runtime; the
+	// caller does not ask the others.
+	LocalDigest(ref string) (string, error)
 	// Probe runs a command and reports only whether it succeeded, with all
 	// output discarded. Used for reachability checks.
 	Probe(spec ExecSpec) bool
@@ -230,6 +249,29 @@ func splitEnv(flag string, vars []Var) (args []string, env []string) {
 		env = append(env, v.Name+"="+v.Value)
 	}
 	return args, env
+}
+
+// withDigest rewrites image to name digest in place of its tag, so the runtime
+// boots the exact object verify checked. An empty digest leaves image as it is:
+// a runtime that cannot pin, or a path that resolved no digest, still boots the
+// tag it was given.
+//
+// A digest and a tag do not coexist on a reference, so the tag goes first: an
+// existing @digest is replaced, and a trailing :tag is cut -- but not a ":port"
+// on the registry host, which the slash after the colon distinguishes from a
+// tag. verify.refWithDigest does the same for the reference cosign checks; the
+// two are kept apart because this one speaks the runtime's ref grammar and that
+// one cosign's, and neither package should reach into the other for six lines.
+func withDigest(image, digest string) string {
+	if digest == "" {
+		return image
+	}
+	if i := strings.IndexByte(image, '@'); i >= 0 {
+		image = image[:i]
+	} else if i := strings.LastIndexByte(image, ':'); i >= 0 && !strings.Contains(image[i+1:], "/") {
+		image = image[:i]
+	}
+	return image + "@" + digest
 }
 
 // telemetryEnv attributes events to brig and suppresses the wrapper's own

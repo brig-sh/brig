@@ -8,12 +8,20 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // hull drives the macOS microVM runtime.
-type hull struct{ bin string }
+type hull struct {
+	bin string
+	// pins caches the one question PinsDigest asks the binary, because the
+	// verify path may ask more than once per run and the answer cannot change
+	// while brig is running.
+	pinsOnce sync.Once
+	pins     bool
+}
 
 func newHull(bin string) (Runtime, error) {
 	if bin != "" {
@@ -29,6 +37,98 @@ func newHull(bin string) (Runtime, error) {
 
 func (h *hull) Kind() string { return "hull" }
 func (h *hull) Bin() string  { return h.bin }
+
+// PinsDigest asks the hull on this machine whether it can boot a digest
+// reference from its own store, which it can from 0.1.0-rc23. Before that a
+// repo@sha256:... boot missed the cache and re-pulled every run, and failed
+// outright under --pull=never with the bytes on disk, so brig verified and
+// booted the tag there and said so rather than claim a pin it did not make.
+//
+// The binary is asked, not a build-time constant, because the hull brig drives
+// is whatever is on PATH or in BRIG_RUNTIME_BIN, and it may be older than brig.
+// See hullVersionPinsDigest for how the answer is read and why an unreadable
+// one pins.
+//
+// One thing to know when upgrading: an image pulled under an older hull has no
+// index digest on record, and a multi-arch tag resolves to its index digest,
+// so the first pinned boot of such an image misses the cache and pulls once.
+// From then on the store answers. Under --pull=never that first boot fails
+// until the image is pulled again.
+func (h *hull) PinsDigest() bool {
+	h.pinsOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, h.bin, "--version")
+		cmd.Env = mergeEnv(telemetryEnv(false))
+		out, _ := cmd.Output()
+		h.pins = hullVersionPinsDigest(string(out))
+	})
+	return h.pins
+}
+
+// LocalDigest answers "" on hull, which the verify path reads as "cannot say"
+// and raises no mismatch over. The boot is still pinned; what is missing is
+// the report that the copy on disk differs from what the registry serves.
+//
+// It cannot answer yet because hull exposes nothing brig could compare: `hull
+// images` prints a truncated manifest digest and no index digest, and a
+// multi-arch tag resolves to its index digest, which is a different object
+// from the per-platform manifest the store is keyed by. Handing back the
+// manifest digest would make every multi-arch image look like a mismatch and
+// stop a first-party boot with a prompt for nothing. Silence is the honest
+// answer until hull prints the index digest it recorded.
+func (h *hull) LocalDigest(string) (string, error) { return "", nil }
+
+// hullVersionPinsDigest reads `hull --version` and reports whether that hull
+// resolves a digest reference against its own store.
+//
+// Before 0.1.0-rc23 the store lookup compared the reference as a string, so a
+// repo@sha256:... boot missed the cache and re-pulled every run, and failed
+// outright under --pull=never with the bytes on disk. From rc23 the lookup
+// parses the reference and answers a digest, the index digest included, so a
+// pinned boot finds its bytes.
+//
+// Anything that does not read as a version is a build from source, and it
+// pins. A wrong guess in that direction costs a re-pull, never a weaker check:
+// a digest the store cannot answer is fetched from the registry, and that is
+// the verified bytes either way. A wrong guess the other way would silently
+// leave a capable hull on the tag, which is the outcome this function exists
+// to avoid.
+func hullVersionPinsDigest(out string) bool {
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return true
+	}
+	base, pre, _ := strings.Cut(fields[len(fields)-1], "-")
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return true
+	}
+	var v [3]int
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return true
+		}
+		v[i] = n
+	}
+	switch {
+	case v[0] > 0 || v[1] > 1 || (v[1] == 1 && v[2] > 0):
+		return true // past 0.1.0 altogether
+	case v[0] == 0 && v[1] == 1 && v[2] == 0:
+		if pre == "" {
+			return true // 0.1.0 final
+		}
+		rc, ok := strings.CutPrefix(pre, "rc")
+		if !ok {
+			return true
+		}
+		n, err := strconv.Atoi(rc)
+		return err != nil || n >= 23
+	default:
+		return false // 0.0.x, which never shipped a digest-aware store
+	}
+}
 
 // hypervisor is vz because that is the backend with a graphical console, a
 // virtiofs share per directory and the notarised runner. A profile names
@@ -242,7 +342,9 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	}
 	envArgs, envVals := splitEnv("--env", spec.Env)
 	args = append(args, envArgs...)
-	args = append(args, spec.Image)
+	// The verified digest when one was resolved, so the bytes that boot are the
+	// bytes cosign checked; hull resolves it against its store from rc23.
+	args = append(args, withDigest(spec.Image, spec.Digest))
 	return args, envVals, nil
 }
 

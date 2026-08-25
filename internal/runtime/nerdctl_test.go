@@ -106,6 +106,69 @@ func TestTmpfsReachesTheCreateLine(t *testing.T) {
 	}
 }
 
+// A resolved digest is what boots: the image on the command line is
+// repo@sha256:..., not the tag, so containerd boots the object verify checked.
+func TestNerdctlBootsTheVerifiedDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	n := &nerdctl{bin: "nerdctl"}
+	args, _, err := n.runArgs(RunSpec{Name: "s", Image: "ghcr.io/brig-sh/claude-code:arm64", Digest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "ghcr.io/brig-sh/claude-code@"+digest+" sleep infinity") {
+		t.Errorf("the tag was booted instead of the digest: %s", got)
+	}
+	if strings.Contains(got, ":arm64") {
+		t.Errorf("the tag was left on the reference alongside the digest: %s", got)
+	}
+}
+
+// With no digest resolved -- the hull path, or a run that could not reach the
+// registry -- the tag boots as given, unchanged.
+func TestNerdctlBootsTheTagWhenNoDigestResolved(t *testing.T) {
+	n := &nerdctl{bin: "nerdctl"}
+	args, _, err := n.runArgs(RunSpec{Name: "s", Image: "ghcr.io/brig-sh/claude-code:arm64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(args, " "); !strings.HasSuffix(got, "ghcr.io/brig-sh/claude-code:arm64 sleep infinity") {
+		t.Errorf("the tag was not booted as given: %s", got)
+	}
+}
+
+func TestWithDigest(t *testing.T) {
+	d := "sha256:" + strings.Repeat("a", 64)
+	cases := map[string]string{
+		"ghcr.io/brig-sh/x:arm64":     "ghcr.io/brig-sh/x@" + d,
+		"ghcr.io/brig-sh/x":           "ghcr.io/brig-sh/x@" + d,
+		"ghcr.io:443/brig-sh/x:arm64": "ghcr.io:443/brig-sh/x@" + d,
+		"repo@sha256:old":             "repo@" + d,
+	}
+	for in, want := range cases {
+		if got := withDigest(in, d); got != want {
+			t.Errorf("withDigest(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// An empty digest leaves the reference untouched.
+	if got := withDigest("ghcr.io/brig-sh/x:arm64", ""); got != "ghcr.io/brig-sh/x:arm64" {
+		t.Errorf("withDigest with no digest = %q, want the tag unchanged", got)
+	}
+}
+
+func TestRepoDigest(t *testing.T) {
+	d := "sha256:" + strings.Repeat("a", 64)
+	if got := repoDigest("ghcr.io/brig-sh/claude-code@" + d + "\n"); got != d {
+		t.Errorf("repoDigest = %q, want the bare digest %q", got, d)
+	}
+	// A miss must read as no local copy, not as a digest.
+	for _, in := range []string{"", "<no value>", "no-at-sign"} {
+		if got := repoDigest(in); got != "" {
+			t.Errorf("repoDigest(%q) = %q, want empty", in, got)
+		}
+	}
+}
+
 func TestBootArtifactsReportsWhichFileIsMissing(t *testing.T) {
 	dir := t.TempDir()
 	// Only the initrd: the kernel is the one that should be named.
