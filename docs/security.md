@@ -8,6 +8,11 @@ to give it, and nothing else on the host.
 This page is about where that boundary actually is. Some of it is weaker than
 it looks, and we would rather write that down than let someone find out later.
 
+If you have found a flaw in one of these boundaries, [SECURITY.md](../SECURITY.md)
+is how to report it privately. The section below on
+[things brig does not claim](#things-brig-does-not-claim) is the line between a
+vulnerability and a known limitation.
+
 ## The boundary
 
 The sandbox is a microVM on both. On macOS it is booted by

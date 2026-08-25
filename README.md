@@ -388,6 +388,9 @@ The README is the overview. The details live in [docs/](docs/):
 - [security.md](docs/security.md) -- what the boundary is, and what it is not
 - [brigd.md](docs/brigd.md) -- the session daemon and its protocol
 
+Found a security problem? [SECURITY.md](SECURITY.md) is how to report it
+privately, rather than in a public issue.
+
 ## Custom agents and your own images
 
 Any Linux CLI in an OCI image runs under brig, as long as the image also
