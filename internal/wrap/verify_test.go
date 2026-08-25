@@ -3,12 +3,27 @@ package wrap
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/ttytest"
 	"github.com/brig-sh/brig/internal/verify"
 )
+
+// verifyRuntime is the seam the verify decision reaches through: whether the
+// runtime boots by digest, and what digest it already holds. Everything else
+// panics through the embedded nil interface, which is louder than a stub that
+// answers questions it was never asked.
+type verifyRuntime struct {
+	runtime.Runtime
+	pins  bool
+	local string
+}
+
+func (v verifyRuntime) PinsDigest() bool                   { return v.pins }
+func (v verifyRuntime) LocalDigest(string) (string, error) { return v.local, nil }
 
 func verifyConfig(t *testing.T, image string, mode verify.Mode) *Config {
 	t.Helper()
@@ -19,7 +34,123 @@ func verifyConfig(t *testing.T, image string, mode verify.Mode) *Config {
 	// No cosign on the machine running the tests, which is itself one of the
 	// cases worth pinning.
 	c.VerifyPolicy.Cosign = "cosign-that-does-not-exist"
+	// These cases are about the tag path, which is the runtime that does not
+	// pin a digest. The digest path has its own cases below.
+	c.Runtime = verifyRuntime{pins: false}
 	return c
+}
+
+// fakeCosign writes a cosign stand-in that resolves every reference to digest
+// and either passes or fails verification, so the digest decision runs without
+// a network. It mirrors the stub script script/smoke.sh installs.
+func fakeCosign(t *testing.T, digest string, verifyFails bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cosign")
+	script := "#!/bin/bash\n" +
+		"case \"$1\" in\n" +
+		"  triangulate) echo \"ghcr.io/example/image:$(echo " + digest + " | sed 's/:/-/').sig\" ;;\n"
+	if verifyFails {
+		script += "  verify) echo 'Error: no matching signatures' >&2; exit 1 ;;\n"
+	} else {
+		script += "  verify) exit 0 ;;\n"
+	}
+	script += "esac\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// digestConfig is verifyConfig for the runtime that boots by digest, with a
+// working fake cosign and a chosen local-store digest.
+func digestConfig(t *testing.T, image string, mode verify.Mode, cosign, local string) *Config {
+	t.Helper()
+	c := testConfig(t, t.TempDir(), t.TempDir())
+	c.Image = image
+	c.Verify = mode
+	c.VerifyPolicy = verify.DefaultPolicy()
+	c.VerifyPolicy.Cosign = cosign
+	c.Runtime = verifyRuntime{pins: true, local: local}
+	return c
+}
+
+const testDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+// The digest brig resolved and verified is the digest it records to boot, and
+// the line names it.
+func TestVerifyDigestPinsAndReportsTheDigest(t *testing.T) {
+	cosign := fakeCosign(t, testDigest, false)
+	c := digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn, cosign, testDigest)
+	if err := c.verifyImage(); err != nil {
+		t.Fatalf("a verified image was refused: %v", err)
+	}
+	if c.BootDigest != testDigest {
+		t.Errorf("BootDigest = %q, want the resolved digest so EnsureRunning boots it", c.BootDigest)
+	}
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, testDigest) {
+		t.Errorf("the message did not name the digest: %q", said)
+	}
+}
+
+// Our own tag over a local copy that is not the verified digest stops, and on
+// a boot it boots the verified digest rather than the copy on disk.
+func TestVerifyDigestFirstPartyMismatchFailsClosed(t *testing.T) {
+	other := "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	cosign := fakeCosign(t, testDigest, false)
+	c := digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn, cosign, other)
+	err := c.verifyImage()
+	if err == nil {
+		t.Fatal("a first-party mismatch booted without stopping (no terminal to say yes)")
+	}
+	if c.BootDigest != testDigest {
+		t.Errorf("a yes would boot %q, not the verified digest", c.BootDigest)
+	}
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "NOT the") {
+		t.Errorf("the warning did not say the local copy is not the verified one: %q", said)
+	}
+}
+
+// A third party's tag over a differing local copy warns and boots.
+func TestVerifyDigestThirdPartyMismatchWarnsAndBoots(t *testing.T) {
+	other := "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	cosign := fakeCosign(t, testDigest, false)
+	c := digestConfig(t, "docker.io/library/ubuntu:24.04", verify.Warn, cosign, other)
+	if err := c.verifyImage(); err != nil {
+		t.Fatalf("a third-party mismatch was refused: %v", err)
+	}
+	if c.BootDigest != testDigest {
+		t.Errorf("BootDigest = %q, want the registry digest", c.BootDigest)
+	}
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "not the") {
+		t.Errorf("nothing was said about the differing copy: %q", said)
+	}
+}
+
+// A registry that cannot be reached resolves nothing, so the tag boots unpinned
+// and only require refuses. cosign-that-does-not-exist stands in for a cosign
+// that is present but whose resolve fails, by being absent -- which lands on
+// NoTooling, the same warn-and-boot row -- so here a real failing resolve is
+// used instead.
+func TestVerifyDigestUnreachableRegistryWarnsButRequireRefuses(t *testing.T) {
+	// A cosign whose triangulate always fails: a resolve that cannot reach the
+	// registry.
+	dir := t.TempDir()
+	cosign := filepath.Join(dir, "cosign")
+	if err := os.WriteFile(cosign, []byte("#!/bin/bash\ncase \"$1\" in triangulate) echo 'dial tcp: timeout' >&2; exit 1 ;; esac\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn, cosign, "")
+	if err := c.verifyImage(); err != nil {
+		t.Fatalf("an unreachable registry blocked a warn-mode boot: %v", err)
+	}
+	if c.BootDigest != "" {
+		t.Errorf("nothing resolved, so nothing should be pinned: %q", c.BootDigest)
+	}
+	c = digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Require, cosign, "")
+	if err := c.verifyImage(); err == nil {
+		t.Error("BRIG_VERIFY=require booted an image it could not resolve")
+	}
 }
 
 // A bring-your-own image is reported and booted. Blocking it would make the

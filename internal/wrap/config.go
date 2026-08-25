@@ -71,8 +71,14 @@ type Config struct {
 
 	// Verify is how strictly the guest image is checked before boot, and
 	// VerifyPolicy is what counts as ours.
-	Verify         verify.Mode
-	VerifyPolicy   verify.Policy
+	Verify       verify.Mode
+	VerifyPolicy verify.Policy
+	// BootDigest is the registry digest verifyDigest resolved and checked, set
+	// only on a runtime that boots by digest. EnsureRunning hands it to the
+	// runtime so the object that boots is the object that verified; empty means
+	// boot the tag as given, which is every hull run and any path that could not
+	// resolve a digest.
+	BootDigest     string
 	AllowRefs      bool
 	AllowDenied    bool
 	CredentialsCmd string

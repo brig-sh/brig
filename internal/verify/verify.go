@@ -16,6 +16,7 @@ package verify
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -96,12 +97,34 @@ const (
 	NoTooling
 	// Failed: it claims to be ours and the signature does not check out.
 	Failed
+	// Mismatch: the reference resolved to one digest in the registry, and the
+	// copy already in the local store is a different one. Treated as the
+	// signature-failure row of the table -- fail-closed for our own images,
+	// warn for a third party's -- because a tag that names one object in the
+	// registry and another on disk is exactly the gap booting by digest closes.
+	Mismatch
+	// Unresolved: the reference could not be resolved to a registry digest, so
+	// there was nothing to pin or verify. A registry that cannot be reached
+	// lands here, and that is "could not check", not "failed": like NoTooling
+	// it warns and boots the tag, and only Require refuses it.
+	Unresolved
 )
 
 // Result carries the outcome and the detail worth printing.
 type Result struct {
 	Outcome Outcome
 	Image   string
+	// Digest is the registry digest the reference resolved to, and -- for a
+	// Verified result -- the digest whose signature checked out. Empty when the
+	// reference could not be resolved (NoTooling, Unresolved).
+	Digest string
+	// Local is the digest the local store already held for the reference, set
+	// only on a Mismatch so the message can name both sides.
+	Local string
+	// Ours reports whether the image sits under the policy's registry prefix.
+	// It is what turns a Mismatch into a stop rather than a warning, the same
+	// way it separates Failed from NotOurs.
+	Ours bool
 	// Detail is cosign's own output when it failed, trimmed.
 	Detail string
 }
@@ -110,7 +133,9 @@ type Result struct {
 func (r Result) Message() string {
 	switch r.Outcome {
 	case Verified:
-		return fmt.Sprintf("image %s: signature verified", r.Image)
+		// Naming the digest is the point of this whole path: the line vouches
+		// for the bytes that boot, not for a tag that can move under them.
+		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, r.Digest)
 	case NotOurs:
 		return fmt.Sprintf("image %s is not published by brig-sh, so there is no "+
 			"signature of ours to check. That is expected for your own image -- "+
@@ -118,6 +143,18 @@ func (r Result) Message() string {
 	case NoTooling:
 		return fmt.Sprintf("cannot verify image %s: cosign is not installed "+
 			"(`brew install cosign`). Booting it unchecked", r.Image)
+	case Unresolved:
+		return fmt.Sprintf("cannot resolve image %s to a registry digest, so there "+
+			"was nothing to verify or pin: %s. Booting the tag as given, unchecked",
+			r.Image, r.Detail)
+	case Mismatch:
+		if r.Ours {
+			return fmt.Sprintf("image %s claims to be published by brig-sh, but the copy "+
+				"in your local store is %s, NOT the %s that verified. Booting the verified "+
+				"digest", r.Image, r.Local, r.Digest)
+		}
+		return fmt.Sprintf("image %s in your local store is %s, not the %s the registry "+
+			"now serves. Booting the registry digest", r.Image, r.Local, r.Digest)
 	default:
 		return fmt.Sprintf("image %s claims to be published by brig-sh, but its "+
 			"signature DID NOT VERIFY: %s", r.Image, r.Detail)
@@ -168,6 +205,144 @@ func (p Policy) Image(ref string) Result {
 		return Result{Outcome: Failed, Image: ref, Detail: firstLine(out, err)}
 	}
 	return Result{Outcome: Verified, Image: ref}
+}
+
+// Verify resolves the reference to a registry digest, verifies that digest,
+// and reports whether the copy already in the local store is the same object.
+//
+// This is the stronger sibling of Image. Image checks the tag, and under the
+// default pull policy the tag cosign checks and the copy the runtime boots are
+// not required to be the same bytes. Verify closes that gap: it resolves the
+// tag to the digest the registry serves right now, checks the signature on
+// THAT digest, and hands the digest back so the caller can boot it rather than
+// the tag. The digest resolved is the digest verified is the digest booted.
+//
+// localDigest is what brig's runtime already holds for the reference in its
+// local store, or "" when the runtime holds nothing or cannot say. When it is
+// present and differs from the digest we resolved, the local copy is not the
+// object we verified, and that is a Mismatch -- fail-closed for our own images,
+// a warning for a third party's.
+//
+// Only the runtimes whose store is addressable by digest use this path; see
+// Runtime.PinsDigest. hull's is not, so on macOS brig stays on Image and the
+// tag it names, rather than claim a guarantee that runtime cannot deliver.
+func (p Policy) Verify(ref, localDigest string) Result {
+	subject := normalizeRef(ref)
+	ours := strings.HasPrefix(subject, p.Registry)
+
+	// cosign resolves the digest as well as the signature here, so its absence
+	// stops both halves at once, exactly as it does for Image.
+	if _, err := lookPath(p.Cosign); err != nil {
+		return Result{Outcome: NoTooling, Image: ref, Ours: ours}
+	}
+
+	// Resolve the reference to a digest BEFORE the check. A registry that cannot
+	// be reached fails here, and that is "could not check" rather than "failed":
+	// it must not read like a bad signature, so it lands on Unresolved.
+	digest, err := p.resolveDigest(ref)
+	if err != nil {
+		return Result{Outcome: Unresolved, Image: ref, Ours: ours, Detail: err.Error()}
+	}
+
+	// The signature check, on the digest rather than the tag. Only our own
+	// images carry a signature of ours to check; a third party's does not, so
+	// for it the resolve above is the whole of what cosign can say.
+	if ours {
+		out, verr := run(p.Cosign,
+			"verify",
+			"--certificate-identity-regexp", p.Identity,
+			"--certificate-oidc-issuer", p.Issuer,
+			refWithDigest(ref, digest),
+		)
+		if verr != nil {
+			return Result{Outcome: Failed, Image: ref, Digest: digest, Ours: ours, Detail: firstLine(out, verr)}
+		}
+	}
+
+	// The copy on disk must be the object we just resolved -- and, for our own
+	// images, verified. A local digest that differs is the tag pointing at one
+	// thing in the registry and another in the store, which is the case this
+	// path exists to catch.
+	if localDigest != "" && localDigest != digest {
+		return Result{Outcome: Mismatch, Image: ref, Digest: digest, Local: localDigest, Ours: ours}
+	}
+
+	if !ours {
+		return Result{Outcome: NotOurs, Image: ref, Digest: digest, Ours: ours}
+	}
+	return Result{Outcome: Verified, Image: ref, Digest: digest, Ours: ours}
+}
+
+// resolveDigest asks cosign for the digest the registry serves for ref.
+//
+// cosign is already the one tool brig links its trust to, and it can name the
+// digest without a second registry client or a new dependency. `cosign
+// triangulate ref` prints where cosign would look for the signature, which is
+// <repo>:sha256-<the image's own digest>.sig -- so the digest is right there in
+// the tag it prints. A cosign new enough to take `--type=digest` prints
+// <repo>@sha256:<digest> instead; digestFromOutput reads either spelling, so
+// brig does not have to know which cosign it is driving.
+//
+// Resolving through cosign, not the runtime, is deliberate: the runtime's store
+// is on disk and is the very thing we are checking the registry against, so
+// asking it to resolve the tag would compare the local copy with itself.
+func (p Policy) resolveDigest(ref string) (string, error) {
+	out, err := run(p.Cosign, "triangulate", ref)
+	if err != nil {
+		return "", errors.New(firstLine(out, err))
+	}
+	if d := digestFromOutput(out); d != "" {
+		return d, nil
+	}
+	return "", fmt.Errorf("cosign named no digest for %s", ref)
+}
+
+// digestFromOutput pulls a sha256 digest out of cosign's triangulate output.
+//
+// Both spellings cosign uses -- the "sha256-<hex>.sig" signature tag and the
+// "sha256:<hex>" of --type=digest -- carry the same 64 hex characters after a
+// single separator, so the first "sha256" followed by ":" or "-" and 64 hex
+// characters is the digest in either. Scanning for that rather than splitting
+// on a fixed position steps over cosign's own warning lines, which mention no
+// such run of hex.
+func digestFromOutput(out string) string {
+	const marker = "sha256"
+	for i := strings.Index(out, marker); i >= 0; {
+		rest := out[i+len(marker):]
+		if len(rest) >= 1+64 && (rest[0] == ':' || rest[0] == '-') && isHex(rest[1:1+64]) {
+			return marker + ":" + rest[1:1+64]
+		}
+		next := strings.Index(out[i+len(marker):], marker)
+		if next < 0 {
+			return ""
+		}
+		i += len(marker) + next
+	}
+	return ""
+}
+
+func isHex(s string) bool {
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// refWithDigest rewrites ref to name a digest in place of its tag, so cosign
+// verifies the exact object the tag resolved to. A digest and a tag cannot both
+// sit on a reference (repo:tag@sha256:... is not a thing), so the tag is
+// dropped first: an existing @digest is replaced, and a trailing :tag is cut --
+// but only when the colon is a tag separator and not the ":port" of a registry
+// host, which is what the slash test distinguishes.
+func refWithDigest(ref, digest string) string {
+	if i := strings.IndexByte(ref, '@'); i >= 0 {
+		ref = ref[:i]
+	} else if i := strings.LastIndexByte(ref, ':'); i >= 0 && !strings.Contains(ref[i+1:], "/") {
+		ref = ref[:i]
+	}
+	return ref + "@" + digest
 }
 
 // lookPath and run are variables so tests can drive the decision table

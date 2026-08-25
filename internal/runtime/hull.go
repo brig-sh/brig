@@ -30,6 +30,37 @@ func newHull(bin string) (Runtime, error) {
 func (h *hull) Kind() string { return "hull" }
 func (h *hull) Bin() string  { return h.bin }
 
+// PinsDigest is false, on purpose, and this is the reason brig does not claim
+// digest-level verification on macOS.
+//
+// hull accepts a repo@sha256:... reference and will boot it -- go-containerregistry
+// parses the digest form and pulls it. What it does not do is resolve that
+// digest against its own store the way containerd does. hull's cache lookup is a
+// string match on the reference a previous pull was recorded under, plus the
+// bare manifest digest; a digest reference matches neither the tag an image was
+// pulled under nor, for a multi-arch image, the index digest a user pins,
+// because the digest hull stores is the per-platform manifest's. So booting by
+// digest on hull misses the cache and re-pulls over the network on every run,
+// and under --pull=never it fails outright even when the very bytes are already
+// on disk under the tag.
+//
+// Pinning the digest here would therefore trade a real, working offline boot
+// for a guarantee brig cannot honour without a network round trip it did not
+// used to need. Until hull resolves a digest against its store as containerd
+// does, macOS stays on the tag: brig verifies the tag with cosign as it always
+// has (see wrap.verifyTag and verify.Image), and does not tell the user it
+// pinned a digest it did not. The gap this leaves -- the tag cosign checks need
+// not be the copy hull boots under the default pull policy -- is the one
+// documented in docs/security.md, with BRIG_PULL=always as the workaround.
+func (h *hull) PinsDigest() bool { return false }
+
+// LocalDigest is never consulted on this runtime: the verify path only asks a
+// PinsDigest runtime for its local digest, because only there can it act on the
+// answer. hull returns nothing rather than shell out to read a digest that,
+// stored per-platform, would not compare against the index digest cosign
+// resolves anyway -- a comparison that could only mislead.
+func (h *hull) LocalDigest(string) (string, error) { return "", nil }
+
 // hypervisor is vz because that is the backend with a graphical console, a
 // virtiofs share per directory and the notarised runner. A profile names
 // another -- hvi for the Hypervisor Virtualization Interface, qemu for a qemu

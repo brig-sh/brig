@@ -336,10 +336,14 @@ third-party images included. `BRIG_VERIFY=off` skips the check.
 [docs/security.md](docs/security.md) explains the reasoning, and what brig does
 not protect you from.
 
-Two limitations worth knowing: under the default `missing` pull policy cosign
-verifies the tag in the registry, not necessarily the copy already in your
-local store; and `claude-desktop` and `ubuntu` still point at
-`ghcr.io/nofireai/` images, so they warn on every boot until those move.
+Where the runtime's store is addressable by digest -- Linux, over containerd --
+brig resolves the tag to a digest, verifies that digest, and boots it, so the
+image it checked is the image that runs and the line saying so names the digest.
+On macOS the runtime is hull, whose store is not addressable that way, so brig
+verifies the tag instead: under the default `missing` pull policy cosign checks
+the tag in the registry, not necessarily the copy already in your store, and
+`BRIG_PULL=always` is the workaround there. `claude-desktop` and `ubuntu` still
+point at `ghcr.io/nofireai/` images, so they warn on every boot until those move.
 
 ### Image tags
 

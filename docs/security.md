@@ -371,11 +371,28 @@ setting falls back to `warn` rather than silently disabling it.
 Point `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
 at your own registry and workflow if you publish signed images yourself.
 
-### Two limitations
+### The digest, not the tag
 
-Under the default `missing` pull policy, cosign verifies the tag in the
-registry, not necessarily the copy already in your local store. Use
-`BRIG_PULL=always` when that distinction matters to you.
+A tag is a name, and a name can resolve to different bytes in the registry and
+in your local store. The provenance claim is about the bytes that run, so brig
+resolves the reference to the digest the registry serves before the check,
+verifies that digest, and boots it. The object cosign checked is the object that
+runs, and the success line names the digest rather than the tag it came from. A
+local store holding a different digest under the tag is treated as the
+signature-failure row above: it stops for an image under `ghcr.io/brig-sh/` and
+warns for anyone else's, and either way brig boots the digest it verified rather
+than the copy on disk.
+
+This holds on Linux, where the containerd store is addressable by digest. On
+macOS the runtime is hull, whose store is not: a digest reference there misses
+the cache, re-pulls on every boot, and fails outright under `BRIG_PULL=never`
+even when the bytes are already present. So brig does not pin the digest on
+macOS. It verifies the tag, as it always has, and the gap remains there: under
+the default `missing` pull policy cosign checks the tag in the registry, not
+necessarily the copy hull already holds. `BRIG_PULL=always` is the workaround
+when that distinction matters to you on macOS. brig never prints the
+digest-named line on a boot that did not pin a digest, so the message never
+claims more than the runtime delivered.
 
 `claude-desktop` and `ubuntu` still point at `ghcr.io/nofireai` images, which
 brig has no signing policy for, so they warn on every boot until those images
