@@ -99,6 +99,11 @@ type Config struct {
 	BootDigest  string
 	AllowRefs   bool
 	AllowDenied bool
+	// AllowExpired forwards the host credential even when its own expiry says it
+	// is dead. Read here rather than where it is used so a typo in it refuses the
+	// run before boot, like the other security switches, instead of at the moment
+	// an expired credential happens to turn up.
+	AllowExpired bool
 
 	// Cwd is the host directory the command was invoked from, and GuestCwd is
 	// where that lands inside the guest.
@@ -230,6 +235,20 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 
 	bindings, envWarnings := envOverride(t.Env, env.Fields("FORWARD_ENV", nil))
 
+	// The security switches are read strictly: an unrecognised value on any of
+	// them refuses the run rather than being guessed either way. strict marks
+	// them at the call site so it is clear which knobs fail open (env.Bool) and
+	// which fail closed (env.StrictBool). The first refusal wins; nothing built
+	// below is used until strictErr is checked, so reading the rest is harmless.
+	var strictErr error
+	strict := func(key string, fallback bool) bool {
+		b, err := env.StrictBool(key, fallback)
+		if err != nil && strictErr == nil {
+			strictErr = err
+		}
+		return b
+	}
+
 	c := &Config{
 		Profile:        t,
 		Runtime:        rt,
@@ -246,19 +265,23 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		envWarnings:    envWarnings,
 		OpenStore:      openStore,
 		MacOSVersion:   macOSVersion,
-		GitConfig:      env.Bool("GIT_CONFIG", false),
+		GitConfig:      strict("GIT_CONFIG", false),
 		HostConfig:     hostProjections(t, o.Skills || env.Bool("SKILLS", false)),
 		GitHosts:       env.Fields("GIT_HOSTS", []string{"github.com"}),
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
-		TrustWorkspace: env.Bool("TRUST_WORKSPACE", true),
+		TrustWorkspace: strict("TRUST_WORKSPACE", true),
 		Verify:         verify.ParseMode(env.String("VERIFY", string(verify.Warn))),
 		VerifyPolicy:   verifyPolicy(env),
-		AllowRefs:      env.Bool("ALLOW_REFS", false),
-		AllowDenied:    env.Bool("ALLOW_DENIED", false),
+		AllowRefs:      strict("ALLOW_REFS", false),
+		AllowDenied:    strict("ALLOW_DENIED", false),
+		AllowExpired:   strict("ALLOW_EXPIRED", false),
 		Cwd:            cwd,
 		Out:            os.Stdout,
 		Err:            os.Stderr,
 		env:            env,
+	}
+	if strictErr != nil {
+		return nil, strictErr
 	}
 	c.GuestCwd = GuestCwd(cwd, c.Workspace, t.GuestHome)
 	c.resolveGitIdentity()

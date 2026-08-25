@@ -64,6 +64,29 @@ func TestHostCredentialIsForwardedWhenTheDenylistIsOverridden(t *testing.T) {
 	}
 }
 
+// The switch off, spelled every way a shell offers, keeps a denied variable
+// out. Under the old rule "false", "no", "off", "FALSE" and "0" all but "0"
+// read as on, so a user turning the guard off forwarded the very credential the
+// denylist exists to hold back. The value flows through StrictBool into
+// AllowDenied exactly as Load wires it, and the denied credential stays out.
+func TestOffSpellingsDoNotForwardADeniedCredential(t *testing.T) {
+	for _, v := range []string{"false", "no", "off", "FALSE", "0"} {
+		c := hostCredConfig(t, "deny: [TOK]\n", `{"accessToken":"tok"}`)
+		on, err := NewEnv(c.Profile.Name, oneVar("BRIG_ALLOW_DENIED", v)).StrictBool("ALLOW_DENIED", false)
+		if err != nil {
+			t.Fatalf("BRIG_ALLOW_DENIED=%s was refused: %v", v, err)
+		}
+		c.AllowDenied = on
+		set, err := c.BuildEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if set.Has("TOK") {
+			t.Errorf("BRIG_ALLOW_DENIED=%s forwarded a denied variable", v)
+		}
+	}
+}
+
 // The other guard: a credentials command that is not logged in prints its
 // secret-manager reference rather than a token. Forwarded verbatim it fails in
 // the guest as "invalid token", which is indistinguishable from a real
@@ -125,12 +148,10 @@ func TestHostCredentialWithoutAnExpiryIsForwarded(t *testing.T) {
 func TestExpiredHostCredentialIsForwardedWhenAskedFor(t *testing.T) {
 	expired := time.Now().Add(-time.Hour).UnixMilli()
 	c := hostCredConfig(t, "", fmt.Sprintf(`{"accessToken":"stale","expiresAt":%d}`, expired))
-	c.env = NewEnv(c.Profile.Name, func(name string) (string, bool) {
-		if name == "BRIG_ALLOW_EXPIRED" {
-			return "1", true
-		}
-		return "", false
-	})
+	// The switch is read strictly at Load and kept on the Config, so the escape
+	// hatch is that field being on, the same shape the denylist override test
+	// uses. StrictBool's own parsing of "1" is covered by the env table test.
+	c.AllowExpired = true
 	set, err := c.BuildEnv()
 	if err != nil {
 		t.Fatal(err)
