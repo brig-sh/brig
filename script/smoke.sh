@@ -192,6 +192,28 @@ grep -q -- "--shared-dir $WS:/home/claude" "$STUB_LOG" \
 grep -q -- '-- claude -p hi' "$STUB_LOG" \
   && ok "agent arguments pass through" || bad "agent arguments pass through"
 
+echo "== envelope =="
+# The block is a notice, printed to stderr so it never pollutes the agent's
+# stdout or a scripted create's sandbox name. It names the boundary before the
+# boot noise.
+grep -q '^SANDBOX .*brig-claude-code' "$WORK/run.err" \
+  && ok "run prints the execution envelope" \
+  || bad "run prints the execution envelope: $(cat "$WORK/run.err")"
+grep -q '^WORKSPACE ' "$WORK/run.err" \
+  && ok "the envelope names the workspace" || bad "the envelope names the workspace"
+# A value must never reach the block, the same promise argv keeps.
+grep '^SANDBOX \|^WORKSPACE \|^IMAGE \|^CREDENTIALS ' "$WORK/run.err" \
+  | grep -q 'env-token-secret\|gh-secret\|host-token' \
+  && bad "the envelope printed a credential value" \
+  || ok "the envelope names credentials, never values"
+
+# --quiet drops the block and changes nothing else about the run.
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret GH_TOKEN=gh-secret \
+  "$WORK/brig" run claude --quiet -p hi > /dev/null 2> "$WORK/quiet.err"
+grep -q '^SANDBOX ' "$WORK/quiet.err" \
+  && bad "--quiet still printed the envelope" || ok "--quiet suppresses the envelope"
+
 echo "== workspace =="
 [ -f "$WS/.claude.json" ] && ok "onboarding is seeded" || bad "onboarding is seeded"
 grep -q hasCompletedOnboarding "$WS/.claude.json" \
@@ -247,6 +269,42 @@ case "$out" in
   *) bad "the failure names the import that replaces it -- got: $out" ;;
 esac
 
+echo "== info =="
+# The full report: the envelope, then everything env has always printed.
+"$WORK/brig" info claude > "$WORK/info.out" 2> "$WORK/info.err"
+grep -q '^SANDBOX .*brig-claude-code' "$WORK/info.out" \
+  && ok "info prints the envelope" || bad "info prints the envelope: $(cat "$WORK/info.out")"
+grep -q 'forwarding' "$WORK/info.out" \
+  && ok "info prints the full report too" || bad "info prints the full report: $(cat "$WORK/info.out")"
+grep -q 'is now `brig info`' "$WORK/info.err" \
+  && bad "info printed a deprecation line about itself" || ok "info is not deprecated"
+
+# info is the preview of what a run is about to trust, so the envelope it shows
+# has to be the envelope the run prints. Compare the rows themselves rather than
+# one grep each: a row that drifts between the preview and the run makes the
+# preview a claim about a boundary nobody is going to use.
+"$WORK/brig" run claude -d > "$WORK/runenv.out" 2>&1
+"$WORK/brig" reset > /dev/null 2>&1
+envelope_rows() { grep -E '^(SESSION|PROFILE|SANDBOX|WORKSPACE|IMAGE|CREDENTIALS) ' "$1"; }
+envelope_rows "$WORK/info.out" > "$WORK/rows.info"
+envelope_rows "$WORK/runenv.out" > "$WORK/rows.run"
+[ -s "$WORK/rows.info" ] \
+  && ok "the info envelope has rows to compare" \
+  || bad "the info envelope has rows to compare: $(cat "$WORK/info.out")"
+if diff -q "$WORK/rows.info" "$WORK/rows.run" > /dev/null 2>&1; then
+  ok "info shows the same envelope the run prints"
+else
+  bad "info and run disagree about the envelope:
+$(diff "$WORK/rows.info" "$WORK/rows.run")"
+fi
+
+# env is the old spelling: the same output plus one line naming the new one.
+"$WORK/brig" env claude > "$WORK/env.out" 2> "$WORK/env.err"
+grep -q 'is now `brig info`' "$WORK/env.err" \
+  && ok "env names the new spelling" || bad "env names the new spelling: $(cat "$WORK/env.err")"
+grep -q '^SANDBOX .*brig-claude-code' "$WORK/env.out" \
+  && ok "env still prints the report" || bad "env still prints the report: $(cat "$WORK/env.out")"
+
 echo "== named session =="
 : > "$STUB_LOG"
 "$WORK/brig" run claude --name 'My Big Refactor' -p hi > /dev/null 2>&1
@@ -269,11 +327,21 @@ grep -q 'CLAUDE_CODE_OAUTH_TOKEN' "$STUB_LOG" \
 
 echo "== lifecycle verbs =="
 : > "$STUB_LOG"
-out="$("$WORK/brig" create claude 2>/dev/null)"
+out="$("$WORK/brig" create claude 2>"$WORK/create.err")"
 [ "$out" = brig-claude-code ] && ok "create prints the sandbox name" \
   || bad "create prints the sandbox name -- got '$out'"
+# The envelope is on stderr, so the scriptable name on stdout stays clean.
+grep -q '^SANDBOX .*brig-claude-code' "$WORK/create.err" \
+  && ok "create prints the execution envelope" \
+  || bad "create prints the execution envelope: $(cat "$WORK/create.err")"
 grep -q -- '-- claude' "$STUB_LOG" \
   && bad "create started the agent" || ok "create starts the sandbox, not the agent"
+
+# exec and shell attach to a sandbox whose envelope the user already saw, so
+# they do not repeat it. The sandbox created just above is still running.
+"$WORK/brig" exec claude -- true > /dev/null 2>"$WORK/exec.err"
+grep -q '^SANDBOX ' "$WORK/exec.err" \
+  && bad "exec printed the envelope" || ok "exec does not print the envelope"
 
 listing="$("$WORK/brig" ls 2>/dev/null)"
 case "$listing" in
@@ -424,6 +492,15 @@ echo "== no runtime =="
 # exit 0: the person most likely to run them is the one whose runtime is broken.
 out="$(PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" env claude 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "env with no runtime exits 0" || bad "env with no runtime exits 0 -- got $rc: $out"
+# info is the new spelling of the same report, so it degrades the same way. A
+# recommended spelling that failed where the deprecated one worked would send
+# the person whose runtime is broken to the wrong command.
+out="$(PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" info claude 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "info with no runtime exits 0" || bad "info with no runtime exits 0 -- got $rc: $out"
+case "$out" in
+  *"runtime unavailable"*) ok "the envelope marks the runtime unavailable" ;;
+  *) bad "the envelope marks the runtime unavailable -- got: $out" ;;
+esac
 case "$out" in
   *"runtime unavailable"*) ok "env marks the runtime line unavailable" ;;
   *) bad "env marks the runtime line unavailable -- got: $out" ;;
@@ -763,10 +840,12 @@ export BRIG_HYPERVISOR=vz
 
 echo "== shell =="
 : > "$STUB_LOG"
-"$WORK/brig" shell claude echo hi there > /dev/null 2>&1
+"$WORK/brig" shell claude echo hi there > /dev/null 2>"$WORK/shell.err"
 grep -q -- '-- bash -lc echo hi there' "$STUB_LOG" \
   && ok "a trailing command reaches bash as one argument" \
   || bad "a trailing command reaches bash as one argument"
+grep -q '^SANDBOX ' "$WORK/shell.err" \
+  && bad "shell printed the envelope" || ok "shell does not print the envelope"
 
 [ "$fail" = 0 ] && echo PASS || echo FAILURES
 exit "$fail"

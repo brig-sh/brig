@@ -97,3 +97,31 @@ func TestLsWithoutARuntimeSaysNothingToList(t *testing.T) {
 		t.Errorf("ls with no runtime on PATH failed instead of listing nothing: %v", err)
 	}
 }
+
+// info is the new spelling of env, so it answers without a runtime for the same
+// reason: the runtime is one line of the report, and the person reading it is
+// often the one whose runtime is what broke. A new verb that fails where the
+// one it deprecates succeeds would make the recommended spelling the worse one.
+func TestInfoReportsWithoutARuntime(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	emptyPath(t)
+
+	if err := run([]string{"info", "claude-code"}); err != nil {
+		t.Errorf("brig info with no runtime on PATH failed instead of reporting: %v", err)
+	}
+}
+
+// And the exemption stays narrow for info too: an unknown BRIG_RUNTIME is a
+// mistake to fix, not a missing install.
+func TestInfoSurfacesUnknownRuntime(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	t.Setenv("BRIG_RUNTIME", "podman")
+
+	err := run([]string{"info", "claude-code"})
+	if err == nil {
+		t.Fatal("brig info with an unknown BRIG_RUNTIME was accepted")
+	}
+	if want := `unknown BRIG_RUNTIME "podman" (want hull or nerdctl)`; !strings.Contains(err.Error(), want) {
+		t.Errorf("info error = %v, want it to name the bad value: %q", err, want)
+	}
+}

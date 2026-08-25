@@ -34,6 +34,19 @@ name for the `claude-code` profile.
 
 The first run is the slow one. In order:
 
+- **The envelope is printed.** Before anything boots, brig names the boundary
+  the run is about to trust:
+
+  ```
+  PROFILE      claude-code
+  SANDBOX      brig-claude-code (hull)
+  WORKSPACE    /Users/you/brig/claude-code (read-write)
+  IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
+  CREDENTIALS  GH_TOKEN
+  ```
+
+  Credentials are named, never printed. `brig info claude` shows the same block
+  without starting anything, and `--quiet` drops it.
 - **The image is pulled.** The guest image comes down from the registry once.
   Later runs use the copy already on disk.
 - **The image is verified.** brig checks that the image was built by the
