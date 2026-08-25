@@ -1,8 +1,10 @@
 package wrap
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,10 +23,19 @@ func trustDirs(t *testing.T, dirs ...string) {
 	t.Helper()
 	trusted := map[string]bool{}
 	for _, d := range dirs {
-		for p := filepath.Clean(d); ; p = filepath.Dir(p) {
-			trusted[p] = true
-			if p == filepath.Dir(p) {
-				break
+		// The walk asks about real directories, so a temp dir under macOS's
+		// /var -> private/var has to be declared by its resolved name as well
+		// as by the name the test spelled.
+		real, err := filepath.EvalSymlinks(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, top := range []string{filepath.Clean(d), real} {
+			for p := top; ; p = filepath.Dir(p) {
+				trusted[p] = true
+				if p == filepath.Dir(p) {
+					break
+				}
 			}
 		}
 	}
@@ -124,5 +135,104 @@ func TestWorkspaceRefusesAnUntrustedSymlinkInTheTail(t *testing.T) {
 	if r, err := c.openWorkspace(); err == nil {
 		_ = r.Close()
 		t.Fatal("a symlink in a writable directory was followed")
+	}
+}
+
+// TestWorkspaceBehindATrustedLinkThroughWritableTerritoryIsRefused is the
+// admin layout gone wrong: a root-owned /data that points into a user's home.
+// The link itself sits where the guest cannot touch it, but what it names is
+// reached through a directory the guest can write, where the entry can be
+// swapped like any other. Opening that by name would let the kernel resolve
+// through the guest's territory, so trust has to stop above the link.
+func TestWorkspaceBehindATrustedLinkThroughWritableTerritoryIsRefused(t *testing.T) {
+	base := t.TempDir()
+	gate := filepath.Join(base, "gate")
+	mine := filepath.Join(base, "mine") // ours, so writable
+	real := filepath.Join(mine, "stuff")
+	work := filepath.Join(real, "ws")
+	if err := os.MkdirAll(gate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(gate, "data")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	trustDirs(t, base, gate)
+
+	c := &Config{Workspace: filepath.Join(link, "ws")}
+	r, err := c.openWorkspace()
+	if err == nil {
+		_ = r.Close()
+		t.Fatal("a trusted link into writable territory was followed")
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}
+
+// TestWorkspaceThatIsATrustedSymlinkIsRefused: the workspace itself is never
+// part of the trusted prefix, however safe the directory holding it. It is
+// the string handed to the runtime as the share, which another process
+// resolves later, and the security doc says a link there is refused.
+func TestWorkspaceThatIsATrustedSymlinkIsRefused(t *testing.T) {
+	base := t.TempDir()
+	gate := filepath.Join(base, "gate")
+	real := filepath.Join(base, "real")
+	for _, d := range []string{gate, real} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(gate, "ws")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	trustDirs(t, base, gate)
+
+	c := &Config{Workspace: link}
+	r, err := c.openWorkspace()
+	if err == nil {
+		_ = r.Close()
+		t.Fatal("a workspace that is itself a symlink was opened")
+	}
+	if !errors.Is(err, errPlantedSymlink) || !strings.Contains(err.Error(), "it is a symlink") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}
+
+// TestANonDirectoryOnThePathIsAPlainError: a typo in BRIG_WORKSPACE that puts
+// a regular file on the path is a configuration error, not a planted link,
+// and must not carry the sentinel that makes callers treat it as one.
+func TestANonDirectoryOnThePathIsAPlainError(t *testing.T) {
+	for _, trusted := range []bool{false, true} {
+		name := "in writable territory"
+		if trusted {
+			name = "in trusted territory"
+		}
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			file := filepath.Join(base, "notes.txt")
+			if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if trusted {
+				trustDirs(t, base)
+			}
+			c := &Config{Workspace: filepath.Join(file, "ws")}
+			r, err := c.openWorkspace()
+			if err == nil {
+				_ = r.Close()
+				t.Fatal("a workspace under a regular file was opened")
+			}
+			if errors.Is(err, errPlantedSymlink) {
+				t.Fatalf("a plain not-a-directory was reported as a planted link: %v", err)
+			}
+			if !strings.Contains(err.Error(), "not a directory") {
+				t.Fatalf("the message does not say what is wrong: %v", err)
+			}
+		})
 	}
 }

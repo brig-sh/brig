@@ -12,27 +12,34 @@ import (
 	"syscall"
 )
 
-// errPlantedSymlink marks a refusal caused by a symlink inside the workspace
-// that leads out of it, so a caller that otherwise shrugs off an I/O error --
-// trustGuestCwd treats an unreadable state file as nothing to do -- can tell
-// this one apart and fail the run instead of quietly carrying on.
+// errPlantedSymlink marks a refusal because the workspace, or the path to it,
+// cannot be trusted: a symlink inside it that leads out, one on the way to it
+// that the guest could have planted, or a component that moved while brig was
+// looking. A caller that otherwise shrugs off an I/O error -- trustGuestCwd
+// treats an unreadable state file as nothing to do -- can tell this one apart
+// and fail the run instead of quietly carrying on. A plain configuration
+// error, such as a regular file where a directory was named, does not carry
+// it.
 var errPlantedSymlink = errors.New("a symlink in the workspace leads out of it")
 
-// afterWorkspaceCheck runs between the path check and the open. It does
-// nothing outside tests; see openWorkspace.
+// afterWorkspaceCheck runs after the workspace has been opened and before the
+// root is handed back. It does nothing outside tests; see openWorkspace.
 var afterWorkspaceCheck = func() {}
 
-// duringWorkspaceWalk runs while the path is being resolved, after the
-// ancestors have been dealt with and before the final component. It does
-// nothing outside tests.
+// duringWorkspaceWalk runs at the start of the last step of the descent,
+// before the workspace itself is looked at. It does nothing outside tests.
 //
-// It exists because the two seams are not the same window. afterWorkspaceCheck
-// opens the gap between a finished walk and the open, which the identity
-// comparison closes. This one opens the gap *inside* the walk, which is the
-// gap an attacker actually gets: a resolution that re-reads the prefix can be
-// poisoned before it reaches the leaf, and then everything downstream agrees
-// with itself about the wrong directory.
+// This is the gap an attacker gets against a walk that resolves strings: a
+// parent flipped here poisons everything a by-name walk does next, and then
+// everything downstream agrees with itself about the wrong directory. Against
+// the descent it is meant to do nothing, and the test that drives it says so.
 var duringWorkspaceWalk = func() {}
+
+// betweenLstatAndOpen runs inside one step of the descent, after the entry has
+// been looked at and before it is opened, with the entry's name. It does
+// nothing outside tests. This is the one window a step has, and the identity
+// check after the open is what closes it.
+var betweenLstatAndOpen = func(name string) {}
 
 // workspaceRoot is the workspace opened once as an [os.Root]. Every host-side
 // read and write brig makes inside the workspace goes through it.
@@ -54,25 +61,16 @@ var duringWorkspaceWalk = func() {}
 type workspaceRoot struct {
 	root *os.Root
 	dir  string
-	// ident is the directory the path check ended on, captured while the path
-	// was known to be symlink-free. Everything that asks "is this still our
-	// workspace?" compares against this, never against a fresh resolution of
-	// the path.
+	// ident is the directory the descent ended on, read from the handle it
+	// holds. Before the path is handed to the runtime, verifyStillOurs resolves
+	// it afresh and compares against this: a resolution can only disagree with
+	// the handle, and disagreement refuses.
 	ident os.FileInfo
 }
 
 // openWorkspace creates the workspace if it is not there yet and opens it as a
 // root.
 func (c *Config) openWorkspace() (*workspaceRoot, error) {
-	// The walk below inspects a path *string*; MkdirAll and OpenRoot then
-	// resolve that same string again, from scratch. Two resolutions, and the
-	// guest owns a component in between them whenever a workspace is nested
-	// under a directory a sandbox can write -- which is the case the walk's own
-	// doc comment names as the reachable one. Flipping that component between
-	// the check and the open redirected everything brig writes next, and one of
-	// those things is a mode-0755 credential helper, so the race was worth
-	// running: it landed outside the workspace in 43 attempts.
-	//
 	// Cleaning first because the walk cleans and the callers did not, so
 	// `<tmp>/link/../real` was checked as `<tmp>/real` -- skipping `link`
 	// entirely -- and then opened as written, through the link.
@@ -140,11 +138,12 @@ func (c *Config) openWorkspace() (*workspaceRoot, error) {
 // again and there is no resolution left for a swap to poison. Every symlink in
 // this part is refused, whoever owns it: a root-owned link here would have to
 // have been placed inside a directory the user controls, which is not a layout
-// worth following blind.
+// worth following blind. The workspace itself is always in this part, since it
+// is the string handed to the runtime as the share, so a link there is refused
+// wherever it sits.
 //
-// Running as root makes every directory writable, so the trusted prefix
-// shrinks to the root of the filesystem and the whole path is walked. Slower,
-// and root can read everything, so nothing is lost.
+// Whether a directory is ours to write is the kernel's answer, plus ownership;
+// see writableBy, which also says what the rule degrades to as root.
 func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -158,9 +157,6 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 	}
 	prefix, tail := components[k], components[k+1:]
 
-	if len(tail) == 0 {
-		duringWorkspaceWalk()
-	}
 	root, err := os.OpenRoot(prefix)
 	if err != nil {
 		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: cannot open %s: %w",
@@ -184,22 +180,28 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, _ := root.Readlink(name)
 			_ = root.Close()
-			if p == abs {
-				return nil, nil, fmt.Errorf("refusing to use %s as the workspace: it is a symlink "+
-					"to %q, and the workspace is mounted read-write as the sandbox's home, so brig "+
-					"will not write a guest's home through a link. Point BRIG_WORKSPACE (or "+
-					"--workspace) at the real directory: %w", abs, target, errPlantedSymlink)
-			}
-			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s on the way to it "+
-				"is a symlink to %q, so the sandbox's home would be created somewhere other than "+
-				"where you asked for it. Point BRIG_WORKSPACE (or --workspace) at the real "+
-				"directory: %w", abs, p, target, errPlantedSymlink)
+			return nil, nil, plantedSymlinkErr(abs, p, target)
 		}
+		betweenLstatAndOpen(name)
 		next, err := root.OpenRoot(name)
 		_ = root.Close()
 		if err != nil {
 			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: cannot open %s: %w",
 				abs, p, err)
+		}
+		// The look and the open are two calls, and os.Root follows a link that
+		// stays under the root, so a link swapped in between them was followed
+		// just now. The handle cannot be redirected after the fact, though: ask
+		// it what it holds and refuse anything but the directory the look saw.
+		opened, err := next.Stat(".")
+		if err != nil {
+			_ = next.Close()
+			return nil, nil, fmt.Errorf("cannot stat %s after opening it: %w", p, err)
+		}
+		if !os.SameFile(opened, info) {
+			_ = next.Close()
+			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s changed between "+
+				"the look and the open, so something is moving it: %w", abs, p, errPlantedSymlink)
 		}
 		root = next
 	}
@@ -235,61 +237,106 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 }
 
 // trustedPrefix returns the index of the last component an attacker cannot
-// redirect: for every i up to it, the directory components[i-1] holding the
-// entry components[i] is not ours to write.
+// redirect: for every i up to it, opening components[i] by name resolves
+// through directories none of which is ours to write.
 //
 // Trust runs from the top and never resumes. Once a directory we can write is
 // reached, every entry below it can be swapped out wholesale at that level,
 // however the lower directories are owned, so the walk stops there for good.
-// The parent is stat'ed following links, because what matters is the directory
-// the entry actually lives in, and a link this far up is itself trusted or the
-// walk would already have stopped below it. A parent that does not exist yet
-// ends the prefix too: it is about to be created, in territory that is ours.
+//
+// The judgement is made on the directories the kernel will pass through, not
+// on the spelling. A link met on the way is resolved here by the same rule, so
+// a root-owned /data that points into a user's home ends trust above /data
+// rather than extending it through the home: the link itself cannot be
+// touched, but the entry it names can, and a by-name open would resolve
+// through it. The link is then refused by the walk below, like any other link
+// in territory the guest can reach, and the message says to name the real
+// directory instead.
+//
+// The workspace itself is never part of the prefix. It is the string handed to
+// the runtime as the share, resolved by another process later, so a link
+// there is refused wherever it sits. A component that does not exist yet ends
+// the prefix too: it is about to be created.
 func trustedPrefix(components []string) (int, error) {
-	k := 0
-	for i := 1; i < len(components); i++ {
-		parent := components[i-1]
-		info, err := os.Stat(parent)
+	k, dir := 0, components[0]
+	for i := 1; i < len(components)-1; i++ {
+		real, ok, err := resolveTrusted(dir, filepath.Base(components[i]))
 		if err != nil {
-			if os.IsNotExist(err) {
-				break
-			}
-			return 0, fmt.Errorf("%s could not be read while brig was checking the path (%v): %w",
-				parent, err, errPlantedSymlink)
+			return 0, err
 		}
-		if !info.IsDir() {
-			return 0, fmt.Errorf("%s is not a directory: %w", parent, errPlantedSymlink)
-		}
-		if dirWritableByUs(parent, info) {
+		if !ok {
 			break
 		}
-		k = i
+		k, dir = i, real
 	}
 	return k, nil
 }
 
-// rootIs reports whether an open root refers to the directory the walk ended
-// on.
+// resolveTrusted follows name inside dir the way the kernel would and returns
+// the real directory it lands on. It reports ok=false the moment the
+// resolution passes through a directory this user can write, or reaches an
+// entry that is not there. dir must itself be real, which is what lets a
+// relative link target and a ".." be applied to it lexically.
 //
-// `want` must come from checkWorkspacePath and nowhere else. Comparing against
-// a fresh os.Stat of the path is what made the previous version useless: that
-// re-resolves, so an attacker who can flip a component controls both sides of
-// the comparison.
-func rootIs(root *os.Root, want os.FileInfo, path string) error {
-	opened, err := root.Stat(".")
-	if err != nil {
-		return fmt.Errorf("cannot stat the opened workspace: %w", err)
+// Everything here is checked by name, which is fine for the same reason the
+// prefix is opened by name: every directory looked at has just been found to
+// be one the guest cannot write, so there is nothing for a race to swap.
+func resolveTrusted(dir, name string) (real string, ok bool, err error) {
+	names := []string{name}
+	hops := 0
+	for len(names) > 0 {
+		n := names[0]
+		names = names[1:]
+		switch n {
+		case "", ".":
+			continue
+		case "..":
+			dir = filepath.Dir(dir)
+			continue
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			return "", false, fmt.Errorf("%s could not be read while brig was checking the "+
+				"path (%v): %w", dir, err, errPlantedSymlink)
+		}
+		if dirWritableByUs(dir, info) {
+			return "", false, nil
+		}
+		p := filepath.Join(dir, n)
+		entry, err := os.Lstat(p)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", false, nil
+			}
+			return "", false, fmt.Errorf("%s could not be read while brig was checking the "+
+				"path (%v): %w", p, err, errPlantedSymlink)
+		}
+		if entry.Mode()&os.ModeSymlink != 0 {
+			hops++
+			if hops > 40 {
+				return "", false, fmt.Errorf("%s: too many levels of symbolic links", p)
+			}
+			target, err := os.Readlink(p)
+			if err != nil {
+				return "", false, fmt.Errorf("%s could not be read while brig was checking "+
+					"the path (%v): %w", p, err, errPlantedSymlink)
+			}
+			if filepath.IsAbs(target) {
+				dir = filepath.VolumeName(target) + string(filepath.Separator)
+			}
+			names = append(strings.Split(filepath.ToSlash(filepath.Clean(target)), "/"), names...)
+			continue
+		}
+		if !entry.IsDir() {
+			return "", false, fmt.Errorf("%s is not a directory", p)
+		}
+		dir = p
 	}
-	if !os.SameFile(opened, want) {
-		return fmt.Errorf("refusing to use %s as the workspace: it changed between the check "+
-			"and the open, so the directory brig holds is not the one it checked. Something "+
-			"with write access to a parent directory moved it: %w", path, errPlantedSymlink)
-	}
-	return nil
+	return dir, true, nil
 }
 
-// verifyStillOurs re-walks the path and reports whether it still names the
-// directory this root holds.
+// verifyStillOurs reports whether the path still names the directory this
+// root holds.
 //
 // This is NOT a narrow window. The share handed to the runtime is a path
 // string, and hull resolves it on its own time -- after the image digest is
@@ -299,62 +346,75 @@ func rootIs(root *os.Root, want os.FileInfo, path string) error {
 // the resolution that matters happens in another process later.
 //
 // What it does buy is that brig refuses to hand over a path that has ALREADY
-// stopped meaning what it checked. That is worth doing and worth being honest
-// about: closing the rest needs hull to accept a descriptor rather than a path.
+// stopped meaning what it checked. Resolving the path afresh is safe here
+// because the value it is compared with came from the handle: a poisoned
+// resolution can only disagree, and disagreement only refuses. Closing the
+// rest needs hull to accept a descriptor rather than a path.
 func (r *workspaceRoot) verifyStillOurs() error {
-	c := &Config{Workspace: r.dir}
-	want, err := c.checkWorkspacePath()
+	now, err := os.Stat(r.dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("refusing to hand %s to the runtime: it could not be read (%v), so "+
+			"something is moving it: %w", r.dir, err, errPlantedSymlink)
 	}
-	if !os.SameFile(want, r.ident) {
+	if !os.SameFile(now, r.ident) {
 		return fmt.Errorf("refusing to hand %s to the runtime: it no longer names the "+
 			"directory brig prepared, so the sandbox would get somewhere else as its home: %w",
 			r.dir, errPlantedSymlink)
 	}
-	return rootIs(r.root, r.ident, r.dir)
+	return nil
 }
 
 // checkWorkspacePathBeforeCreate walks the path before the workspace exists.
 //
-// It is the same refusal as checkWorkspacePath with one difference: a component
-// that is simply absent is fine here, because MkdirAll is about to create it.
-// Everything else -- a symlink, or a stat that fails for any other reason -- is
-// a refusal, so nothing is ever created through a planted link.
+// It is the same refusal as openWorkspaceHandle with one difference: a
+// component that is simply absent is fine here, because MkdirAll is about to
+// create it. A symlink below the trusted prefix, or a stat that fails for any
+// other reason, is a refusal, so nothing is ever created through a planted
+// link. It walks by string, which leaves one thing on the table: an empty
+// directory created through a link planted between this pass and the descent,
+// in a directory the attacker could write anyway, before the run is refused.
 func (c *Config) checkWorkspacePathBeforeCreate() error {
 	components := workspaceComponents(c.Workspace)
+	workspace := components[len(components)-1]
 	k, err := trustedPrefix(components)
 	if err != nil {
-		return fmt.Errorf("refusing to use %s as the workspace: %w", c.Workspace, err)
+		return fmt.Errorf("refusing to use %s as the workspace: %w", workspace, err)
 	}
-	for i, p := range components {
+	for _, p := range components[k+1:] {
 		info, err := os.Lstat(p)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return fmt.Errorf("refusing to use %s as the workspace: %s could not be read "+
-				"(%v): %w", c.Workspace, p, err, errPlantedSymlink)
+				"(%v): %w", workspace, p, err, errPlantedSymlink)
 		}
-		// A link inside the trusted prefix was put there by the system or an
-		// administrator, in a directory the guest cannot write, and is followed.
-		// One below it sits where the guest could have planted it, and is not.
-		if info.Mode()&os.ModeSymlink == 0 || i <= k {
-			continue
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, _ := os.Readlink(p)
+			return plantedSymlinkErr(workspace, p, target)
 		}
-		target, _ := os.Readlink(p)
-		if p == filepath.Clean(c.Workspace) {
-			return fmt.Errorf("refusing to use %s as the workspace: it is a symlink to %q, "+
-				"and the workspace is mounted read-write as the sandbox's home, so brig will not "+
-				"write a guest's home through a link. Point BRIG_WORKSPACE (or --workspace) at the "+
-				"real directory: %w", c.Workspace, target, errPlantedSymlink)
+		if !info.IsDir() {
+			return fmt.Errorf("refusing to use %s as the workspace: %s is not a directory",
+				workspace, p)
 		}
-		return fmt.Errorf("refusing to use %s as the workspace: %s on the way to it is a "+
-			"symlink to %q, so the sandbox's home would be created somewhere other than where "+
-			"you asked for it. Point BRIG_WORKSPACE (or --workspace) at the real directory: %w",
-			c.Workspace, p, target, errPlantedSymlink)
 	}
 	return nil
+}
+
+// plantedSymlinkErr is the refusal for a symlink at or on the way to the
+// workspace, in the part of the path the guest can reach. Both walks produce
+// it, so the advice stays the same whether or not the workspace existed yet.
+func plantedSymlinkErr(workspace, component, target string) error {
+	if component == workspace {
+		return fmt.Errorf("refusing to use %s as the workspace: it is a symlink to %q, and the "+
+			"workspace is mounted read-write as the sandbox's home, so brig will not write a "+
+			"guest's home through a link. Point BRIG_WORKSPACE (or --workspace) at the real "+
+			"directory: %w", workspace, target, errPlantedSymlink)
+	}
+	return fmt.Errorf("refusing to use %s as the workspace: %s on the way to it is a symlink "+
+		"to %q, so the sandbox's home would be created somewhere other than where you asked "+
+		"for it. Point BRIG_WORKSPACE (or --workspace) at the real directory: %w",
+		workspace, component, target, errPlantedSymlink)
 }
 
 // workspaceComponents returns the path and every ancestor, outermost first, so
@@ -375,34 +435,6 @@ func workspaceComponents(workspace string) []string {
 		components[i], components[j] = components[j], components[i]
 	}
 	return components
-}
-
-// checkWorkspacePath walks the workspace path a component at a time and
-// refuses a symlink in any of them.
-//
-// Lstat'ing the workspace itself catches a link AT the workspace and nothing
-// else, and it is not the last component that matters -- it is every one of
-// them. `MkdirAll` and `OpenRoot` resolve the whole path, so a link at any
-// level redirects the guest's home just as completely, and the case that makes
-// it reachable is ordinary: a workspace nested under another sandbox's
-// workspace, or under any directory a guest can write, is a path whose parent
-// components the guest chooses. The root cannot see this -- by the time it has
-// a directory handle, the redirection has already happened.
-//
-// Links the machine itself is made of are skipped, by owner: /tmp and /var on
-// macOS are symlinks, root-owned, and nothing a sandbox can replace, so
-// refusing them would refuse every workspace under a temporary directory for a
-// hazard that does not exist. What a guest plants is owned by the user brig
-// runs as, and that is what this looks at. (brig running as root therefore
-// checks nothing here; running an agent sandbox as root is its own problem,
-// and this is not the control that would fix it.)
-func (c *Config) checkWorkspacePath() (os.FileInfo, error) {
-	root, ident, err := openWorkspaceHandle(c.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	_ = root.Close()
-	return ident, nil
 }
 
 // Close releases the directory handle the root holds open.

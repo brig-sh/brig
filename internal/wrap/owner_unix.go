@@ -3,58 +3,66 @@
 package wrap
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"syscall"
 )
 
-// writableBy reports whether a directory can be written by the given user,
-// from its POSIX mode bits and ownership alone.
+// wOK is W_OK from <unistd.h>, which the syscall package does not export on
+// every platform this file builds for.
+const wOK = 0x2
+
+// writableBy reports whether a directory is the given user's to write: to
+// rename an entry out of and plant something in its place.
 //
 // This is the question that decides how far up a workspace path an attacker
 // can reach. The guest writes as the user brig runs as, so a directory that
-// user can write is a directory the guest can rename an entry out of and plant
-// something in its place, and every entry inside it is therefore suspect. A
-// directory that user cannot write is one the guest cannot touch at all, and
-// its entries can be trusted to stay what they are.
+// user can write is one where every entry is suspect, and a directory that
+// user cannot write is one the guest cannot touch at all.
 //
-// Only the mode bits are consulted. An ACL that grants write to a directory
-// whose bits say otherwise is not seen, so a workspace under such a directory
-// is treated as safer than it is. That is a known limit rather than an
-// oversight: reading ACLs portably is a project of its own.
-func writableBy(info fs.FileInfo, uid int, groups []int) bool {
-	if uid == 0 {
-		return true
-	}
+// The owner can always write it, whatever the mode bits say, because the owner
+// can put the bits back. For anyone else the kernel is asked, and access is
+// the result of access(2) on the directory. The kernel weighs the full group
+// list and any ACL, neither of which brig can read for itself: os.Getgroups
+// stops at NGROUPS_MAX on macOS while Open Directory membership does not, and
+// an ACL grants write without touching the bits. The answer is a policy about
+// the directory, not a check before a write, so the usual warning about
+// access(2) does not apply. A read-only filesystem counts as not writable,
+// since nothing can be swapped there either; any other failure counts as
+// writable, which is the safe direction.
+//
+// Root is a different question. Root can write everything, and as root the
+// guest's host-side writes are root's too, so ownership tells brig nothing
+// about who put a link where. Trust then covers only what nobody but root
+// could have written: root-owned, with no write bit for group or other. That
+// keeps the links the machine is made of usable -- /tmp and /var on macOS,
+// /home on an ostree system -- and protects nothing: a sandbox run as root
+// can reach a nested workspace's parents like anything else, and nothing here
+// is the control for that.
+func writableBy(info fs.FileInfo, uid int, access error) bool {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return true
 	}
+	if uid == 0 {
+		return st.Uid != 0 || info.Mode().Perm()&0o022 != 0
+	}
 	if int(st.Uid) == uid {
 		return true
 	}
-	perm := info.Mode().Perm()
-	if perm&0o002 != 0 {
+	switch {
+	case access == nil:
 		return true
+	case errors.Is(access, syscall.EACCES), errors.Is(access, syscall.EROFS):
+		return false
 	}
-	if perm&0o020 != 0 {
-		for _, g := range groups {
-			if int(st.Gid) == g {
-				return true
-			}
-		}
-	}
-	return false
+	return true
 }
 
 // dirWritableByUs is writableBy for the user brig is running as. A variable so
 // a test can declare a directory it owns to be one it cannot write, which is
 // the only way to exercise the trusted-prefix walk without running as root.
-// The path is there for the test's benefit; production ignores it.
 var dirWritableByUs = func(path string, info os.FileInfo) bool {
-	groups, err := os.Getgroups()
-	if err != nil {
-		groups = nil
-	}
-	return writableBy(info, os.Getuid(), append(groups, os.Getgid()))
+	return writableBy(info, os.Getuid(), syscall.Access(path, wOK))
 }

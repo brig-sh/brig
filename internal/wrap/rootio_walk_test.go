@@ -112,3 +112,90 @@ func TestWorkspaceParentVanishesDuringTheWalk(t *testing.T) {
 		t.Fatalf("refused for the wrong reason: %v", err)
 	}
 }
+
+// TestWorkspaceSwappedBetweenLstatAndOpen drives the one window left inside a
+// step of the descent. A step looks at a name, sees a directory, and opens it.
+// os.Root follows a symlink that stays under the root, so a link swapped in
+// between those two calls is followed, and the path check that comes after
+// agrees with it, because the name now resolves to where the handle landed.
+// The step has to ask the handle what it opened and compare that with what it
+// looked at.
+func TestWorkspaceSwappedBetweenLstatAndOpen(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "parent")
+	work := filepath.Join(parent, "work")
+	outside := filepath.Join(parent, "outside") // under the same root, so os.Root follows a link to it
+	for _, d := range []string{work, outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	old := betweenLstatAndOpen
+	t.Cleanup(func() { betweenLstatAndOpen = old })
+	betweenLstatAndOpen = func(name string) {
+		if name != "work" {
+			return
+		}
+		betweenLstatAndOpen = func(string) {}
+		if err := os.Rename(work, filepath.Join(parent, "work.real")); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := os.Symlink("outside", work); err != nil {
+			t.Error(err)
+		}
+	}
+
+	c := &Config{Workspace: work}
+	r, err := c.openWorkspace()
+	if err != nil {
+		if !errors.Is(err, errPlantedSymlink) {
+			t.Fatalf("refused for the wrong reason: %v", err)
+		}
+		return
+	}
+	defer func() { _ = r.Close() }()
+	if err := r.writeFile(".brig-git-credential", []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write through the root failed: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, ".brig-git-credential")); err == nil {
+		t.Fatal("the workspace was swapped for a link between the look and the open, and brig wrote through it")
+	}
+}
+
+// TestVerifyStillOursRefusesAWorkspaceThatMoved pins the check made just
+// before the path is handed to the runtime: the name must still resolve to the
+// directory brig holds.
+func TestVerifyStillOursRefusesAWorkspaceThatMoved(t *testing.T) {
+	base := t.TempDir()
+	work := filepath.Join(base, "work")
+	other := filepath.Join(base, "other")
+	for _, d := range []string{work, other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &Config{Workspace: work}
+	r, err := c.openWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	if err := r.verifyStillOurs(); err != nil {
+		t.Fatalf("an untouched workspace was refused: %v", err)
+	}
+	if err := os.Rename(work, filepath.Join(base, "work.real")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(other, work); err != nil {
+		t.Fatal(err)
+	}
+	err = r.verifyStillOurs()
+	if err == nil {
+		t.Fatal("a workspace whose name now points elsewhere was handed on")
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}
