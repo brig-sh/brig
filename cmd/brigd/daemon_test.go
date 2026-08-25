@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/ttytest"
 )
 
 // stubRuntime points the daemon at a runtime binary that exists and does
@@ -146,6 +149,70 @@ func TestAnOverlongRequestIsAnswered(t *testing.T) {
 	}
 	if !strings.Contains(resp.Error, strconv.Itoa(maxRequestBytes)) {
 		t.Errorf("the error does not say what the limit is: %q", resp.Error)
+	}
+}
+
+// testProfile registers one profile of the test's own and returns its name.
+// The registry is global and built from files, exactly as it is in main.
+func testProfile(t *testing.T, name string, extra ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	spec := "name: " + name + "\n" +
+		"image: ghcr.io/brig-sh/claude-code:arm64\n" +
+		"guestHome: /home/agent\n" +
+		"binary: agent\n" +
+		"mem: 1024\ncpus: 1\n" +
+		strings.Join(extra, "\n")
+	if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(spec+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	if err := profile.Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
+// A daemon never prompts. The image check is the one thing in a run that stops
+// to ask, and asking on the daemon's own terminal puts the question where the
+// client cannot see it, holds the sandbox's lock across the wait, and times
+// the client out. The refusal comes back as a request's answer instead.
+func TestARequestThatWouldPromptIsRefusedRatherThanAsked(t *testing.T) {
+	stubRuntime(t)
+	agent := testProfile(t, "promptcheck")
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(t.TempDir(), "ws"))
+	// A real terminal on the daemon's stdin, the way starting brigd from a
+	// shell leaves one, and nothing written to it. This is what makes the test
+	// about the fix rather than about `go test` running without a terminal: a
+	// daemon that still asks reads from here, blocks, and the request below
+	// times out instead of being answered.
+	ttytest.AsStdin(t)
+	// An image under our own registry whose signature does not check out: the
+	// one case that stops to ask.
+	t.Setenv("BRIG_VERIFY", "warn")
+	t.Setenv("BRIG_COSIGN_BIN", "false")
+
+	socket := filepath.Join(t.TempDir(), "brigd.sock")
+	startDaemon(t, socket)
+
+	resp := ask(t, socket, `{"op":"ensure","agent":"`+agent+`"}`)
+	if resp.OK {
+		t.Fatalf("an image that failed verification was booted: %+v", resp)
+	}
+	// Named, not merely refused: a client that gets "aborted" with no reason
+	// has nothing to act on.
+	if !strings.Contains(resp.Error, "failed verification") {
+		t.Errorf("the error does not say what went wrong: %q", resp.Error)
+	}
+	if !strings.Contains(resp.Error, "BRIG_VERIFY=off") {
+		t.Errorf("the error does not name the setting that overrides it: %q", resp.Error)
+	}
+	said := strings.Join(resp.Warnings, "\n")
+	if !strings.Contains(said, "DID NOT VERIFY") {
+		t.Errorf("the client was not told what the check concluded: %q", said)
+	}
+	if strings.Contains(said, "Boot it anyway?") || strings.Contains(resp.Error, "Boot it anyway?") {
+		t.Errorf("the daemon asked a question: %q %q", said, resp.Error)
 	}
 }
 

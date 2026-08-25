@@ -15,6 +15,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -46,6 +48,15 @@ var version = "dev"
 // was told anything.
 const maxRequestBytes = 1 << 20
 
+// idleTimeout is how long a connection may sit without sending a request
+// before the daemon closes it.
+//
+// It bounds the silence between requests, not the work: the deadline is reset
+// before each read, so an ensure that spends a minute booting a sandbox is not
+// racing it. A client that opens a connection and then says nothing costs a
+// goroutine and a descriptor until this runs out.
+const idleTimeout = 5 * time.Minute
+
 // Request is one line of JSON on the socket.
 type Request struct {
 	Op    string `json:"op"`    // ensure | status | stop | version
@@ -55,8 +66,15 @@ type Request struct {
 
 // Response is one line of JSON back.
 type Response struct {
-	OK       bool      `json:"ok"`
-	Error    string    `json:"error,omitempty"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	// Warnings is what the run said about itself: a credential that was not
+	// forwarded and why, an expiring secret, an image that could not be
+	// verified. The CLI prints these on the terminal of the person who typed
+	// the command; a daemon has no such terminal, and its own is nobody's, so
+	// they travel back to the client that asked instead. One line each, in the
+	// order they were said.
+	Warnings []string  `json:"warnings,omitempty"`
 	Version  string    `json:"version,omitempty"`
 	Sessions []Session `json:"sessions,omitempty"`
 }
@@ -247,7 +265,17 @@ func (d *daemon) handle(conn net.Conn) {
 	// exactly the limit is only buffered whole if its terminator fits too.
 	scan.Buffer(make([]byte, 0, 64*1024), maxRequestBytes+1)
 	enc := json.NewEncoder(conn)
-	for scan.Scan() {
+	for {
+		// Set before every read and not once for the connection: it bounds how
+		// long a client may hold a handler goroutine open saying nothing, and
+		// the time a request spends being served is not the client's silence.
+		// A connection that goes quiet is closed rather than kept forever.
+		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+			return
+		}
+		if !scan.Scan() {
+			break
+		}
 		var req Request
 		if err := json.Unmarshal(scan.Bytes(), &req); err != nil {
 			_ = enc.Encode(Response{Error: "bad request: " + err.Error()})
@@ -264,11 +292,17 @@ func (d *daemon) handle(conn net.Conn) {
 	// over-length request in the stream is the tail of that request, and there
 	// is no way to tell where it ends and the next one begins, so answering and
 	// closing is the only honest thing to do with it.
-	if err := scan.Err(); err != nil {
-		if errors.Is(err, bufio.ErrTooLong) {
-			err = fmt.Errorf("request is longer than the %d byte limit, so it was "+
-				"not read", maxRequestBytes)
-		}
+	switch err := scan.Err(); {
+	case err == nil:
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		// An idle client is not a failure and has nothing to be told: it is
+		// still holding its end of a connection nobody is using.
+	case errors.Is(err, bufio.ErrTooLong):
+		tooLong := fmt.Errorf("request is longer than the %d byte limit, so it was "+
+			"not read", maxRequestBytes)
+		_ = enc.Encode(Response{Error: tooLong.Error()})
+		fmt.Fprintln(os.Stderr, "brigd: "+tooLong.Error())
+	default:
 		_ = enc.Encode(Response{Error: err.Error()})
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
 	}
@@ -289,19 +323,52 @@ func (d *daemon) dispatch(req Request) Response {
 	}
 }
 
-func (d *daemon) config(req Request) (*wrap.Config, error) {
+// config resolves one request into a run, and hands back the buffer that run
+// says things into.
+//
+// Two things separate a daemon's run from the CLI's, and both are settings on
+// the Config rather than behaviour of their own. It has no terminal to put a
+// question to, so it declares that up front and the image check takes the path
+// it already has for having nobody to ask: refuse, and say which setting lets
+// a caller proceed deliberately. And what it says belongs to the client that
+// asked rather than to whatever terminal brigd was started from, so both
+// writers go to a buffer this request owns; concurrent requests each get their
+// own.
+func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	t, ok := profile.Lookup(req.Agent)
 	if !ok {
-		return nil, fmt.Errorf("unknown agent %q", req.Agent)
+		return nil, nil, fmt.Errorf("unknown agent %q", req.Agent)
 	}
-	return wrap.Load(t, wrap.Options{Name: req.Name}, d.rt)
+	cfg, err := wrap.Load(t, wrap.Options{Name: req.Name}, d.rt)
+	if err != nil {
+		return nil, nil, err
+	}
+	said := &bytes.Buffer{}
+	cfg.Out = said
+	cfg.Err = said
+	cfg.NoTerminal = true
+	return cfg, said, nil
+}
+
+// warnings turns what a run wrote into the response's warnings, one line each.
+func warnings(buf *bytes.Buffer) []string {
+	if buf == nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // ensure boots the sandbox if it is not already up, using exactly the CLI's
 // path: same workspace preparation, same credential resolution, same
 // stale-share check.
 func (d *daemon) ensure(req Request) Response {
-	cfg, err := d.config(req)
+	cfg, said, err := d.config(req)
 	if err != nil {
 		return Response{Error: err.Error()}
 	}
@@ -317,17 +384,17 @@ func (d *daemon) ensure(req Request) Response {
 	// Response.Error next must not collapse those newlines onto one line.
 	set, err := cfg.BuildEnv()
 	if err != nil {
-		return Response{Error: err.Error()}
+		return Response{Error: err.Error(), Warnings: warnings(said)}
 	}
 	if err := cfg.EnsureRunning(set); err != nil {
-		return Response{Error: err.Error()}
+		return Response{Error: err.Error(), Warnings: warnings(said)}
 	}
 	d.remember(cfg)
-	return Response{OK: true, Sessions: d.status()}
+	return Response{OK: true, Warnings: warnings(said), Sessions: d.status()}
 }
 
 func (d *daemon) stop(req Request) Response {
-	cfg, err := d.config(req)
+	cfg, said, err := d.config(req)
 	if err != nil {
 		return Response{Error: err.Error()}
 	}
@@ -336,12 +403,12 @@ func (d *daemon) stop(req Request) Response {
 	defer lock.Unlock()
 
 	if err := cfg.Stop(); err != nil {
-		return Response{Error: err.Error()}
+		return Response{Error: err.Error(), Warnings: warnings(said)}
 	}
 	d.mu.Lock()
 	delete(d.sessions, cfg.VMName)
 	d.mu.Unlock()
-	return Response{OK: true, Sessions: d.status()}
+	return Response{OK: true, Warnings: warnings(said), Sessions: d.status()}
 }
 
 func (d *daemon) remember(cfg *wrap.Config) {

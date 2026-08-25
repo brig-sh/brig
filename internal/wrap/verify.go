@@ -56,8 +56,14 @@ func (c *Config) verifyImage() error {
 // one check that stops into one that does not. So it answers no and says
 // which setting overrides it -- a scripted run that genuinely wants to
 // proceed can say so in advance.
+//
+// A caller that has no terminal of its own says so with NoTerminal rather than
+// leaving it to be guessed from this process's stdin. The two are not the same
+// question for a daemon: brigd's stdin may well be a terminal, it is simply
+// not the one the request came from, and asking there puts the question in
+// front of nobody while the client waits.
 func (c *Config) confirm(question string) bool {
-	if !IsTerminal(os.Stdin) {
+	if c.NoTerminal || !IsTerminal(os.Stdin) {
 		c.warnf("not a terminal, so there is nobody to ask: refusing. " +
 			"Set BRIG_VERIFY=off to boot it regardless.")
 		return false

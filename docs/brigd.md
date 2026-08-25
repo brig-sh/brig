@@ -55,6 +55,17 @@ A response looks like:
 Errors come back as `{"ok":false,"error":"..."}` rather than as a closed
 connection.
 
+Anything the run says about itself comes back with it, as `warnings`, one line
+each: a credential that was not forwarded and why, a secret about to expire, an
+image that could not be verified. The CLI prints these on the terminal of the
+person who typed the command, and the daemon has no such terminal, so they
+travel to the client that asked rather than to whatever terminal brigd happens
+to have been started from.
+
+A connection that sends nothing for five minutes is closed. The deadline is
+reset before each request, so it bounds the silence between requests and not
+the work: an `ensure` that spends a minute booting is not racing it.
+
 A request line is at most 1 MiB, newline excluded. That is far more than an op,
 a profile name and a session name need; the limit exists so a client that never
 sends a newline cannot make the daemon buffer without bound. A longer one is
@@ -74,6 +85,13 @@ echo '{"op":"ensure","agent":"claude"}' | socat - UNIX-CONNECT:$HOME/.brig/brigd
 credentials, verifies the image and checks the share, then boots only if
 needed. Work on one sandbox is serialised, so two clients asking for the same
 one at the same moment get one boot rather than two.
+
+The daemon never asks a question. The image check stops to ask when an image
+claiming to be ours fails verification, and there is nobody on the other end of
+brigd's terminal to answer: the client is somewhere else and the sandbox's lock
+would be held across the wait. So a request that would have prompted is refused
+instead, with the reason and the setting that overrides it in `error`. Setting
+`BRIG_VERIFY=off`, or fixing the image, is how such a request goes through.
 
 `status` re-reads liveness from the runtime instead of trusting the inventory.
 A sandbox can be stopped by anything, including a `brig stop` that never went

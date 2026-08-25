@@ -87,6 +87,13 @@ type Config struct {
 	// paying for a second keychain read.
 	HostCred *creds.HostCredential
 
+	// NoTerminal declares that this run has no terminal to put a question to,
+	// whatever this process's own stdin happens to be. brigd sets it: started
+	// from a shell its stdin is a terminal, but it is the daemon's terminal and
+	// not the client's, so a question asked there is asked of nobody while the
+	// caller waits for an answer that cannot arrive. See confirm.
+	NoTerminal bool
+
 	Out io.Writer
 	Err io.Writer
 
