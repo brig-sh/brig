@@ -371,11 +371,46 @@ setting falls back to `warn` rather than silently disabling it.
 Point `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
 at your own registry and workflow if you publish signed images yourself.
 
-### Two limitations
+### The digest, not the tag
 
-Under the default `missing` pull policy, cosign verifies the tag in the
-registry, not necessarily the copy already in your local store. Use
-`BRIG_PULL=always` when that distinction matters to you.
+A tag is a name, and a name can resolve to different bytes in the registry and
+in your local store. The provenance claim is about the bytes that run, so brig
+resolves the reference to the digest the registry serves before the check,
+verifies that digest, and boots it. The object cosign checked is the object that
+runs, and the success line names the digest rather than the tag it came from. A
+local store holding a different digest under the tag is treated as the
+signature-failure row above: it stops, and a yes boots the verified digest
+rather than the copy on disk. A registry that cannot be reached stops in the
+same way, because one of our images could not be checked, and a network
+failure must not be what turns the default mode into "unchecked";
+`BRIG_VERIFY=require` refuses outright. Every cosign call is bounded, so an
+outage fails in seconds rather than hanging the boot.
+
+All of this is for images under `ghcr.io/brig-sh/`. An image brig did not
+publish carries no signature of ours to check, so brig makes no cosign call for
+it at all: it boots by tag, as it always has, with the one line saying whose
+image it is. Resolving a digest for it would cost a registry round trip on every
+boot and buy a pin brig cannot vouch for.
+
+This holds wherever the runtime's store answers a digest: containerd on Linux,
+and hull from 0.1.0-rc23 on macOS. brig asks the hull it is driving rather than
+assuming, because the one on PATH may be older than brig. An older hull cannot
+find a digest reference in its store, so a pinned boot there would re-pull on
+every run and fail outright under `BRIG_PULL=never` with the bytes on disk.
+brig therefore verifies and boots the tag on such a hull, prints one line
+saying so, and the gap remains there until you upgrade: under the default
+`missing` pull policy cosign checks the tag in the registry, not necessarily
+the copy hull already holds, and `BRIG_PULL=always` is the workaround. brig
+never prints the digest-named line on a boot that did not pin a digest, so the
+message never claims more than the runtime delivered.
+
+Two things are still narrower on macOS than on Linux. An image pulled under an
+older hull has no index digest on record, and a multi-arch tag resolves to its
+index digest, so the first pinned boot of such an image after upgrading hull
+misses the cache and pulls once; under `BRIG_PULL=never` it fails until the
+image is pulled again. And hull does not yet expose the digest its store holds
+for a reference, so the report that the local copy differs from what the
+registry serves is Linux-only for now. The boot is pinned either way.
 
 `claude-desktop` and `ubuntu` still point at `ghcr.io/nofireai` images, which
 brig has no signing policy for, so they warn on every boot until those images

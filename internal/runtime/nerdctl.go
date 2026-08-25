@@ -49,6 +49,56 @@ func newNerdctl(bin string) (Runtime, error) {
 func (n *nerdctl) Kind() string { return "nerdctl" }
 func (n *nerdctl) Bin() string  { return n.bin }
 
+// PinsDigest is true here: containerd's store is content-addressed, so a
+// reference of the form repo@sha256:... resolves to that exact object and, when
+// it is already present, is served from the store without a re-pull. That is
+// what lets brig boot the digest it verified rather than the tag, and it is the
+// property hull's store does not share -- see the hull adapter.
+func (n *nerdctl) PinsDigest() bool { return true }
+
+// LocalDigest reports the digest the local store holds for ref.
+//
+// image inspect's RepoDigests is the reference the image was pulled by, digest
+// and all: for a tag that is repo@sha256:<the digest the registry served then>,
+// which is the same object cosign resolves the tag to now, so the two are
+// comparable. Both nerdctl and docker answer the dockercompat shape, so one
+// format string serves whichever binary newNerdctl settled on.
+//
+// A miss is not an error: an image that was never pulled, or one built locally
+// with no repo digest at all, simply has nothing on disk to compare, so the
+// verify path treats "" as "no local copy" and does not raise a mismatch over
+// it. Only a genuine failure to ask is worth returning.
+func (n *nerdctl) LocalDigest(ref string) (string, error) {
+	cmd := exec.Command(n.bin, "image", "inspect", "--format", "{{index .RepoDigests 0}}", ref)
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		// The overwhelmingly common cause is that the tag is simply not in the
+		// store yet, which inspect reports as a failure. That is a miss, not a
+		// fault, so it must not stop a boot.
+		return "", nil
+	}
+	return repoDigest(out.String()), nil
+}
+
+// repoDigest pulls the bare digest out of an image inspect RepoDigests entry.
+//
+// The entry is repo@sha256:..., and only the digest half is comparable against
+// what cosign resolved -- the repo half is just a name. A pulled-by-tag image
+// with no recorded digest prints Go's zero value for the missing slice element
+// rather than an empty string, so that is a miss too, reported as "".
+func repoDigest(out string) string {
+	line := strings.TrimSpace(out)
+	if line == "" || line == "<no value>" {
+		return ""
+	}
+	if _, digest, found := strings.Cut(line, "@"); found {
+		return digest
+	}
+	return ""
+}
+
 func (n *nerdctl) Running(name string) bool {
 	cmd := exec.Command(n.bin, "ps", "--filter", "name=^"+name+"$", "--format", "{{.Names}}")
 	cmd.Env = mergeEnv(telemetryEnv(false))
@@ -156,7 +206,12 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 	// A container exits when its command does, and the sandbox has to outlive
 	// the exec that uses it -- the whole point is that the VM keeps running
 	// between invocations. Park it on a shell that never returns.
-	args = append(args, spec.Image, "sleep", "infinity")
+	//
+	// The image is booted by the verified digest when verify resolved one, so
+	// the object that boots is the object that was checked, whatever the tag has
+	// moved to since. containerd resolves the digest against its store, so a
+	// copy already present is not re-pulled.
+	args = append(args, withDigest(spec.Image, spec.Digest), "sleep", "infinity")
 	return args, envVals, nil
 }
 
