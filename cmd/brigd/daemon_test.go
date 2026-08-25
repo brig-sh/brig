@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/ttytest"
 )
 
 // stubRuntime points the daemon at a runtime binary that exists and does
-// nothing. The machine running the tests has neither hull nor nerdctl, and
-// detection is the first thing the daemon does.
+// nothing. The machine running the tests has neither hull nor nerdctl, and a
+// request whose profile names no runtimeBin of its own has to find one.
 func stubRuntime(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "hull")
@@ -213,6 +214,45 @@ func TestARequestThatWouldPromptIsRefusedRatherThanAsked(t *testing.T) {
 	}
 	if strings.Contains(said, "Boot it anyway?") || strings.Contains(resp.Error, "Boot it anyway?") {
 		t.Errorf("the daemon asked a question: %q %q", said, resp.Error)
+	}
+}
+
+// A profile's runtimeBin has to reach the same binary through the daemon as it
+// does through the CLI. It did not: the daemon detected a runtime once at
+// startup, with no profile in hand to take a preference from, so a profile
+// pinning a build was honoured when you typed `brig run` and ignored when a
+// client asked brigd for the same sandbox.
+func TestAProfilesRuntimeBinReachesTheSameBinaryThroughTheDaemon(t *testing.T) {
+	// Nothing in the environment: BRIG_RUNTIME_BIN beats the profile, which is
+	// the usual order, and would answer this question for the wrong reason.
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+	pinned := filepath.Join(t.TempDir(), "hull-of-my-own")
+	if err := os.WriteFile(pinned, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent := testProfile(t, "pinnedruntime", "runtimeBin: "+pinned)
+
+	cfg, _, err := newDaemon().config(Request{Agent: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runtime.Bin() != pinned {
+		t.Errorf("the daemon drives %q, want the profile's %q", cfg.Runtime.Bin(), pinned)
+	}
+
+	// The CLI's own resolution, spelled as cmd/brig spells it. The two paths
+	// agreeing is the property; either one being right on its own is not.
+	p, ok := profile.Lookup(agent)
+	if !ok {
+		t.Fatalf("profile %q did not register", agent)
+	}
+	rt, err := runtime.DetectFor(runtime.Preference{Bin: p.RuntimeBin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Bin() != cfg.Runtime.Bin() {
+		t.Errorf("the CLI drives %q and the daemon %q", rt.Bin(), cfg.Runtime.Bin())
 	}
 }
 

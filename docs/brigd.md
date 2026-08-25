@@ -93,6 +93,11 @@ would be held across the wait. So a request that would have prompted is refused
 instead, with the reason and the setting that overrides it in `error`. Setting
 `BRIG_VERIFY=off`, or fixing the image, is how such a request goes through.
 
+The runtime is resolved per request, from the profile the request names, so a
+profile carrying `runtimeBin` drives the same binary through the daemon as it
+does through the CLI. A profile naming a binary that is not there fails that
+request and no other.
+
 `status` re-reads liveness from the runtime instead of trusting the inventory.
 A sandbox can be stopped by anything, including a `brig stop` that never went
 through the daemon.

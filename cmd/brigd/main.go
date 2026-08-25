@@ -177,11 +177,25 @@ func lockHolder(path string) string {
 }
 
 type daemon struct {
-	rt runtime.Runtime
-
 	mu       sync.Mutex
-	sessions map[string]Session     // keyed by VM name
+	sessions map[string]entry       // keyed by VM name
 	locks    map[string]*sync.Mutex // one per VM name, see lockFor
+}
+
+// entry is one remembered sandbox and the runtime that booted it.
+//
+// The runtime is per sandbox because it is per profile: two profiles can name
+// two different runtime binaries, and asking the wrong one whether a sandbox is
+// running gets a truthful answer to a different question. It is kept beside the
+// Session rather than in it because Session is the wire type, and which binary
+// brig drove is the daemon's business.
+type entry struct {
+	Session
+	rt runtime.Runtime
+}
+
+func newDaemon() *daemon {
+	return &daemon{sessions: map[string]entry{}, locks: map[string]*sync.Mutex{}}
 }
 
 // lockFor serialises work on one sandbox.
@@ -202,10 +216,6 @@ func (d *daemon) lockFor(vm string) *sync.Mutex {
 }
 
 func serve(socket string) error {
-	rt, err := runtime.Detect()
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
 		return err
 	}
@@ -237,7 +247,7 @@ func serve(socket string) error {
 		return err
 	}
 
-	d := &daemon{rt: rt, sessions: map[string]Session{}, locks: map[string]*sync.Mutex{}}
+	d := newDaemon()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -247,7 +257,9 @@ func serve(socket string) error {
 		os.Remove(socket)
 	}()
 
-	fmt.Fprintf(os.Stderr, "brigd %s listening on %s (runtime %s)\n", version, socket, rt.Kind())
+	// No runtime named here any more: there is one per request, resolved from
+	// the profile the request names, so there is no single answer to give.
+	fmt.Fprintf(os.Stderr, "brigd %s listening on %s\n", version, socket)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -326,6 +338,13 @@ func (d *daemon) dispatch(req Request) Response {
 // config resolves one request into a run, and hands back the buffer that run
 // says things into.
 //
+// The runtime is resolved here, per request and from the profile, in the same
+// call the CLI makes for the same reason: a profile that names a runtimeBin is
+// asking for that binary, and detecting once at startup with no profile in hand
+// meant the daemon honoured it for nobody and bound one runtime for its whole
+// life. Doing it per request also means a daemon can serve a profile that names
+// a binary installed after it started.
+//
 // Two things separate a daemon's run from the CLI's, and both are settings on
 // the Config rather than behaviour of their own. It has no terminal to put a
 // question to, so it declares that up front and the image check takes the path
@@ -339,7 +358,11 @@ func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	if !ok {
 		return nil, nil, fmt.Errorf("unknown agent %q", req.Agent)
 	}
-	cfg, err := wrap.Load(t, wrap.Options{Name: req.Name}, d.rt)
+	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin})
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg, err := wrap.Load(t, wrap.Options{Name: req.Name}, rt)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -414,11 +437,16 @@ func (d *daemon) stop(req Request) Response {
 func (d *daemon) remember(cfg *wrap.Config) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.sessions[cfg.VMName] = Session{
-		Agent:     cfg.Profile.Name,
-		Name:      cfg.RawName,
-		VM:        cfg.VMName,
-		Workspace: cfg.Workspace,
+	d.sessions[cfg.VMName] = entry{
+		Session: Session{
+			Agent:     cfg.Profile.Name,
+			Name:      cfg.RawName,
+			VM:        cfg.VMName,
+			Workspace: cfg.Workspace,
+		},
+		// The runtime this sandbox was booted with, so asking whether it is
+		// still running asks the binary that booted it.
+		rt: cfg.Runtime,
 	}
 }
 
@@ -429,9 +457,9 @@ func (d *daemon) status() []Session {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make([]Session, 0, len(d.sessions))
-	for vm, s := range d.sessions {
-		s.Running = d.rt.Running(vm)
-		out = append(out, s)
+	for vm, e := range d.sessions {
+		e.Running = e.rt.Running(vm)
+		out = append(out, e.Session)
 	}
 	return out
 }
