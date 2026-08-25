@@ -51,6 +51,31 @@ func TestStatusDoesNotContradictItselfWhenTheDenylistIsOverridden(t *testing.T) 
 	}
 }
 
+// The override message quotes the value the user set, not a hardcoded =1. With
+// the strict reading BRIG_ALLOW_DENIED=true is what turns the guard off, and a
+// report answering "why is my sandbox on metered billing" with a =1 the user
+// never wrote sends them looking for a variable that is not there.
+func TestStatusOverrideMessageReportsTheValueTheUserSet(t *testing.T) {
+	c := bindingConfig(t, "deny: [ANTHROPIC_API_KEY]\n")
+	c.env = NewEnv(c.Profile.Name, oneVar("BRIG_ALLOW_DENIED", "true"))
+	c.AllowDenied = true
+	c.Runtime = fakeRuntime{}
+	out := &bytes.Buffer{}
+	c.Out = out
+
+	var set creds.Set
+	set.Add("ANTHROPIC_API_KEY", "sk-x", "ANTHROPIC_API_KEY")
+	c.Status(set)
+
+	got := out.String()
+	if !strings.Contains(got, "BRIG_ALLOW_DENIED=true") {
+		t.Errorf("the override message does not quote what the user set:\n%s", got)
+	}
+	if strings.Contains(got, "BRIG_ALLOW_DENIED=1") {
+		t.Errorf("the override message still quotes a hardcoded =1:\n%s", got)
+	}
+}
+
 // With the guard on, the report reads as it always did.
 func TestStatusStillNamesTheDenylistWhenItIsOn(t *testing.T) {
 	c := bindingConfig(t, "deny: [ANTHROPIC_API_KEY]\n")
