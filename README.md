@@ -5,8 +5,11 @@
   </picture>
 </p>
 
-**Run a coding agent in a sandbox it cannot escape, with the credentials it
-needs and none of the ones it does not.**
+**Run a coding agent in a sandbox where one directory is its whole world and
+the rest of the host is out of reach from inside it.** It boots with no
+credential at all, which is what keeps trying it cheap: log in inside the
+sandbox and that login lives in memory, so `brig stop` takes it with the VM and
+the next run asks again.
 
 ## TL;DR
 
@@ -19,8 +22,9 @@ brig run claude               # boots a sandbox, starts Claude Code in it
 ```
 
 Put the projects the agent should work on in `~/brig/claude-code`. That
-directory is the agent's entire world; the rest of your machine is invisible
-to it. The sandbox stays up between commands, so the second `brig run` is
+directory is the agent's entire world; no other directory on your machine is
+mounted into it, and it cannot reach your keychain, SSH agent or secret
+manager. The sandbox stays up between commands, so the second `brig run` is
 immediate.
 
 <details>
@@ -88,8 +92,10 @@ no concept of:
   *is* the isolation boundary -- so brig resolves credentials on the host and
   passes them in. Only from its own store, and only what a profile names: you
   say once that a host login may enter a sandbox (`brig secret import`), and a
-  run never reads another application's keychain. Never written into the
-  workspace, and never placed in a command line where `ps` could read it.
+  run on a shipped profile never reads another application's keychain. A
+  profile of your own still carrying the deprecated `hostCredential:` is the
+  exception, and reads the host item it names on every run. Never written into
+  the workspace, and never placed in a command line where `ps` could read it.
 - **A billing denylist.** `ANTHROPIC_API_KEY` outranks the OAuth token in
   Claude Code's own precedence, so forwarding it would move a sandbox from
   your subscription onto metered API billing without saying so. It is refused
@@ -225,9 +231,11 @@ copy in your keyring and writes it back in on every boot. If you log in inside
 the sandbox on a host that has no login of its own, expect to repeat it.
 
 `import` reads your host login **once, when you type it**, and copies it into
-brig's own store. Every run after that reads only that store. brig never opens
-another application's keychain item on the run path, so a run raises no
-approval dialog and performs no host read you did not ask for.
+brig's own store. Every run after that reads only that store. On a shipped
+profile brig never opens another application's keychain item on the run path,
+so a run raises no approval dialog and performs no host read you did not ask
+for. A profile of your own still on the deprecated `hostCredential:` is the
+exception: it reads the host item it names on every run.
 
 The copy is a copy: renewing or revoking the login on the host does not change
 it. Run `brig secret import claude-code` again to refresh it, or
@@ -382,8 +390,12 @@ The README is the overview. The details live in [docs/](docs/):
 
 ## Custom agents and your own images
 
-Any Linux CLI in an OCI image already runs under brig. A profile just saves
-you spelling out the image, the guest home and the credential variables every
+Any Linux CLI in an OCI image runs under brig, as long as the image also
+carries the few utilities brig uses to set the sandbox up and deliver the
+credential: a shell (`sh` and `bash`), plus `cat`, `stat`, `chown`, `mkdir`,
+`mount` and `/bin/true`. A stock distribution image has them; a `FROM scratch`
+image holding only your static binary does not. A profile just saves you
+spelling out the image, the guest home and the credential variables every
 time:
 
 ```bash
