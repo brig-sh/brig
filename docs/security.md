@@ -32,11 +32,20 @@ them for itself.
 
 ## Credentials
 
-**A run on a shipped profile reads no host source.** Nothing on the `brig run`,
-`exec` or `shell` path reaches a keychain item brig did not write, a file
-outside the workspace, or a host command. Your host login enters brig's own
-store once, when you type `brig secret import <profile>`, and every run
-afterwards reads only that store:
+**A run on a shipped profile reads no host credential source.** Nothing on the
+`brig run`, `exec` or `shell` path reaches a keychain item brig did not write,
+a credential file outside the workspace, or a host command that produces one.
+Two host reads do happen, and no setting turns either off. brig runs `git
+config --get` in the directory you invoked it from, for `user.name`,
+`user.email` and `github.user`, to resolve the commit identity forwarded into
+the guest. If `github.user` comes back empty it then reads the `user:` line
+from the stanza for your git host in gh's `hosts.yml`, under `$GH_CONFIG_DIR`
+or `~/.config/gh`, to find the login that pairs with the forwarded token. That
+file usually carries gh's own OAuth token as well; brig takes the login and
+nothing else. `BRIG_GIT_IDENTITY=0`, `BRIG_GIT_CONFIG=0` and `BRIG_GIT_USER`
+change what brig does with the answers, not whether it asks. Your host login
+enters brig's own store once, when you type `brig secret import <profile>`,
+and every run afterwards reads only that store:
 
 ```bash
 brig run claude-code               # log in inside the sandbox, or:
