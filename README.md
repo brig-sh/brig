@@ -215,12 +215,14 @@ brig run claude-code               # log in inside the sandbox, or:
 brig secret import claude-code     # carry the login already on this Mac in, once
 ```
 
-That in-sandbox login lasts as long as the sandbox does. It is written inside
-`~/.claude`, which is memory-only so that no credential reaches host disk, so
-`brig stop` takes it with the rest of the VM and the next `brig run` asks
-again. Importing is what makes a login outlive a stop: brig keeps that copy in
-your keyring and writes it back in on every boot. If you log in inside the
-sandbox on a host that has no login of its own, expect to repeat it.
+That in-sandbox login lasts as long as the sandbox does. It is written to
+`~/.claude/.credentials.json`, which sits on a memory-backed mount and never
+reaches host disk, so `brig stop` takes it with the rest of the VM and the next
+`brig run` asks again. Other paths under `~/.claude` do reach host disk by
+design; [docs/security.md](docs/security.md#what-reaches-host-disk) names them
+and says why. Importing is what makes a login outlive a stop: brig keeps that
+copy in your keyring and writes it back in on every boot. If you log in inside
+the sandbox on a host that has no login of its own, expect to repeat it.
 
 `import` reads your host login **once, when you type it**, and copies it into
 brig's own store. Every run after that reads only that store. brig never opens
