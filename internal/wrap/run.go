@@ -181,6 +181,13 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if err := c.preflightHypervisor(hypervisor); err != nil {
 		return err
 	}
+	// Said on the run, not in BuildEnv: BuildEnv resolves the set for every
+	// verb, brig env included, so a warning from there prints on a preview that
+	// spawns nothing and lands twice on env next to reportArgv. Here it is the
+	// run, once, before the workspace is prepared or a value reaches a command
+	// line. The set is the whole of what the runtime will be handed: the git
+	// plumbing and SetupGit have both added to it.
+	c.warnArgvExposure(set)
 	if err := c.PrepareWorkspace(); err != nil {
 		return err
 	}

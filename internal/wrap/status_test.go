@@ -108,6 +108,159 @@ func TestStatusStillDistinguishesTheEnvironmentAndTheHost(t *testing.T) {
 	}
 }
 
+// The warning belongs to the run, not to BuildEnv. BuildEnv resolves the set
+// for every verb, brig env included, so a warning from there is printed on a
+// preview that spawns nothing and lands twice on env, next to reportArgv.
+// BuildEnv stays silent about the hatch; EnsureRunning is where the run says it.
+func TestBuildEnvDoesNotWarnAboutArgv(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	t.Setenv("GH_TOKEN", "ghp_secret")
+	c := bindingConfig(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
+
+	if _, err := c.BuildEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Err.(*bytes.Buffer).String(); strings.Contains(got, "BRIG_ENV_ARGV") {
+		t.Errorf("BuildEnv warned about the hatch, which doubles it on brig env:\n%s", got)
+	}
+}
+
+// The hatch is opted into once, in a shell profile, and then said nowhere. A
+// run that puts a credential on the command line has to say so on the run, and
+// name the variable, because "some value" is not something a user can act on.
+// The run says it, not BuildEnv, so a preview does not repeat it. Forced to
+// refuse at the hypervisor floor, EnsureRunning still warns first: the warning
+// is before anything the runtime touches.
+func TestEnsureRunningWarnsWhenValuesWouldReachArgv(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	t.Setenv("GH_TOKEN", "ghp_secret")
+	c := bindingConfig(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
+	// A space in the workspace makes PrepareWorkspace refuse at the very start
+	// of EnsureRunning, so the run stops before it touches a runtime and the
+	// test can assert the warning was printed first.
+	c.Workspace = "/brig warns first/ws"
+
+	set, err := c.BuildEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range set.Vars {
+		if v.Name == "GH_TOKEN" && v.Secret {
+			t.Fatal("GH_TOKEN is exempt from the hatch, so there is nothing to warn about")
+		}
+	}
+	// Clear whatever BuildEnv said, so the warning this test finds can only have
+	// come from EnsureRunning. Without this the test passes on the old code too,
+	// where BuildEnv is the one warning.
+	c.Err.(*bytes.Buffer).Reset()
+	if err := c.EnsureRunning(set); err == nil {
+		t.Fatal("a workspace with a space must refuse, so the test can assert the warning came first")
+	}
+
+	var warnings []string
+	for _, line := range strings.Split(c.Err.(*bytes.Buffer).String(), "\n") {
+		if strings.Contains(line, "BRIG_ENV_ARGV") {
+			warnings = append(warnings, line)
+		}
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("want exactly one warning, got %d:\n%s", len(warnings),
+			strings.Join(warnings, "\n"))
+	}
+	if !strings.Contains(warnings[0], "GH_TOKEN") {
+		t.Errorf("the warning does not name the variable: %s", warnings[0])
+	}
+	if strings.Contains(warnings[0], "ghp_secret") {
+		t.Errorf("the warning printed the value it is warning about: %s", warnings[0])
+	}
+}
+
+// Off is the default, and a run with the hatch off must be exactly as quiet as
+// it was.
+func TestEnsureRunningSaysNothingWithTheHatchOff(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "")
+	t.Setenv("GH_TOKEN", "ghp_secret")
+	c := bindingConfig(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
+	c.Workspace = "/brig warns first/ws"
+
+	set, err := c.BuildEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnsureRunning(set); err == nil {
+		t.Fatal("a workspace with a space must refuse")
+	}
+	if got := c.Err.(*bytes.Buffer).String(); strings.Contains(got, "BRIG_ENV_ARGV") {
+		t.Errorf("a run with the hatch off mentioned it:\n%s", got)
+	}
+}
+
+// brig env resolves the set with BuildEnv, like every verb, then previews it
+// with Status. The hatch line must appear once, from reportArgv, not also from
+// a run warning BuildEnv should not be making.
+func TestEnvReportsTheArgvHatchExactlyOnce(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	t.Setenv("GH_TOKEN", "ghp_secret")
+	c := bindingConfig(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
+	c.Runtime = fakeRuntime{}
+
+	set, err := c.BuildEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Status(set)
+
+	lines := 0
+	for _, w := range []*bytes.Buffer{c.Out.(*bytes.Buffer), c.Err.(*bytes.Buffer)} {
+		for _, line := range strings.Split(w.String(), "\n") {
+			if strings.Contains(line, "command line") {
+				lines++
+			}
+		}
+	}
+	if lines != 1 {
+		t.Fatalf("brig env should mention the command line once, got %d", lines)
+	}
+}
+
+// `brig env` is where a user asks what a sandbox is about to be handed, so it
+// is where the setting that decides how those values travel belongs.
+func TestStatusReportsTheArgvHatch(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	var set creds.Set
+	set.Add("GH_TOKEN", "ghp_secret", "GH_TOKEN")
+	set.AddSecret("TOK", "s3cr3t", "TOK(secret)")
+
+	got := statusOutput(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n", set)
+	if !strings.Contains(got, "BRIG_ENV_ARGV=1") {
+		t.Errorf("the report does not mention the setting:\n%s", got)
+	}
+	if !strings.Contains(got, "GH_TOKEN") {
+		t.Errorf("the report does not name what goes on the command line:\n%s", got)
+	}
+	// A value brig resolved is exempt whatever the hatch says, so naming it
+	// here would be a false statement about the command line.
+	for _, v := range []string{"TOK ", "ghp_secret", "s3cr3t"} {
+		if strings.Contains(got, v) {
+			t.Errorf("the report carries %q, which does not reach argv:\n%s", v, got)
+		}
+	}
+}
+
+// With the hatch off, nothing about it is reported: brig keeps values out of
+// argv as a matter of course, and a line saying so on every preview would bury
+// the lines that are about this run.
+func TestStatusIsSilentAboutTheArgvHatchWhenItIsOff(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "")
+	var set creds.Set
+	set.Add("GH_TOKEN", "ghp_secret", "GH_TOKEN")
+
+	got := statusOutput(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n", set)
+	if strings.Contains(got, "BRIG_ENV_ARGV") {
+		t.Errorf("the hatch was reported while off:\n%s", got)
+	}
+}
+
 // What a run could hand the guest is reported by name, and the "forwarding
 // nothing" line names the bindings rather than the retired Forward list.
 func TestStatusNamesTheBindingsWhenNothingIsForwarded(t *testing.T) {

@@ -36,6 +36,26 @@ type Set struct {
 }
 
 // Add appends a variable and records its reporting name.
+//
+// Add rather than AddSecret for a credential that came out of the ambient
+// environment, and the asymmetry is deliberate rather than an oversight worth
+// closing. Marking every resolved credential Secret whatever its source was
+// considered: it would have left BRIG_ENV_ARGV applying only to values that are
+// not credentials, which is every value that has no need of it. GH_TOKEN and the
+// agent's own token are the whole of what a run forwards from the environment;
+// what would be left for the hatch to carry is GIT_TERMINAL_PROMPT and the git
+// identity. A runtime build that cannot take a bare `--env KEY` -- the one thing
+// the hatch exists for -- would go on being handed `--env GH_TOKEN` with no
+// value attached, and the sandbox would come up unauthenticated with nothing
+// said about why. A hatch that silently stops carrying the values it was built
+// to carry is worse than one whose cost is visible.
+//
+// So the cost is made visible instead: a run that puts values in argv says which
+// ones, every time, before the runtime is invoked, and `brig env` reports the
+// setting. See wrap.warnArgvExposure and wrap.reportArgv. What stays true either
+// way is that a value brig resolved on the user's behalf -- one the user never
+// chose to expose anywhere -- is never on the command line, whatever the hatch
+// says; see AddSecret.
 func (s *Set) Add(name, value, reportAs string) {
 	s.Vars = append(s.Vars, runtime.Var{Name: name, Value: value})
 	if reportAs == "" {
