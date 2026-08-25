@@ -134,6 +134,29 @@ prints a value: a secret-sourced variable comes back annotated, e.g.
 `GH_TOKEN(secret)`, never with the value itself. A credential delivered as a
 file is not an environment variable and does not appear in that list at all.
 
+### What reaches host disk
+
+The credential file is the part that does not. It lands on a `tmpfs` mount
+covering `~/.claude`, checked to be `tmpfs` with no swap before anything is
+written, so `~/.claude/.credentials.json` and the temp file the agent renames
+onto it never touch your disk. `brig stop` takes that mount with the VM, which
+is why an in-sandbox login does not outlive a stop.
+
+The rest of `~/.claude` is not on that mount. Seven paths under it are
+hostmounted, so they live in the workspace on host disk and persist across
+boots:
+
+- `settings.json` and `CLAUDE.md`, your permission allowlist and your
+  user-level memory, written by hand or by the agent on your instruction.
+- `sessions`, `projects` and `history.jsonl`, which are the conversation.
+- `plugins` and `skills`, which are also where `--skills` copies your own, so
+  leaving either off would make that flag do nothing.
+
+Anything else under `~/.claude` is ephemeral, including anything a future
+Claude Code version starts writing there. This list is the `volumes:` block of
+the `claude-code` profile, which is the source it follows rather than a
+restatement that can drift from it.
+
 ### Not in argv
 
 Forwarded values go into the runtime process's own environment, and only the
