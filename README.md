@@ -403,6 +403,8 @@ The README is the overview. The details live in [docs/](docs/):
 - [profiles.md](docs/profiles.md) -- writing an agent profile, field by field
 - [secrets.md](docs/secrets.md) -- `brig secret`, verb by verb, with a worked example
 - [security.md](docs/security.md) -- what the boundary is, and what it is not
+- [non-goals.md](docs/non-goals.md) -- what brig will not do, with the reason
+  and what would reopen each one
 - [brigd.md](docs/brigd.md) -- the session daemon and its protocol
 
 Found a security problem? [SECURITY.md](SECURITY.md) is how to report it
