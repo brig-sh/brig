@@ -2364,7 +2364,7 @@ func warnf(format string, a ...any) {
 
 // warnDeprecatedProfileKeys says that a profile FILE still carries
 // hostCredential:, which reads another application's keychain on every run and
-// goes in the next release.
+// goes in v0.1.0-rc17.
 //
 // Only for file-backed profiles, and that scoping is the whole point: no
 // built-in carries the key any more, so an unscoped check would have brig warn
@@ -2384,8 +2384,8 @@ func warnDeprecatedProfileKeys() {
 		if path, ok := profile.Path(p.Name); ok {
 			where = path
 		}
-		warnf("hostCredential: in %s is deprecated and goes in the "+
-			"next release -- it reads another application's keychain on every run. "+
+		warnf("hostCredential: in %s is deprecated and goes in "+
+			"v0.1.0-rc17 -- it reads another application's keychain on every run. "+
 			"Declare the credential under secrets: with sources: instead, then: "+
 			"brig secret import %s", where, p.Name)
 	}
