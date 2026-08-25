@@ -5,6 +5,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // Status reports what this invocation would do, by name only -- never a
@@ -38,6 +39,7 @@ func (c *Config) Status(set creds.Set) {
 	} else {
 		c.sayf("guest git over HTTPS: off (BRIG_GIT_CONFIG=1 to enable)")
 	}
+	c.reportArgv(set)
 
 	// Where the guest's login comes from, and whether it is usable: an
 	// expired host token is exactly what sends the sandbox back to its login
@@ -94,6 +96,58 @@ func (c *Config) Status(set creds.Set) {
 		c.sayf("guest commit identity, as resolved in %s:", c.Cwd)
 		c.sayf("  %s <%s> (unsigned)", orUnset(c.GitName), orUnset(c.GitEmail))
 	}
+}
+
+// reportArgv says that BRIG_ENV_ARGV is on and which values it will put on the
+// runtime's command line, and says nothing at all when it is off.
+//
+// It is reported here because this preview is where a user asks what a sandbox
+// is about to be handed, and until now the answer left out the one setting that
+// changes where those values end up. The silence when the hatch is off is
+// deliberate rather than an omission: brig keeps values out of argv as a matter
+// of course, and a line restating that on every `brig env` would bury the lines
+// that are about this run.
+//
+// Named from the resolved set for the same reason reportDeny is: the hatch on
+// its own is a claim about the future, and what this run will actually put on
+// the command line is the thing worth knowing.
+func (c *Config) reportArgv(set creds.Set) {
+	names := runtime.ArgvExposed(set.Vars)
+	if len(names) == 0 {
+		return
+	}
+	c.sayf("BRIG_ENV_ARGV=1, so these values go on the runtime's command line, "+
+		"where `ps` can read them: %s", strings.Join(names, " "))
+}
+
+// warnArgvExposure is reportArgv on stderr, for a run rather than a preview.
+//
+// The hatch says it is opt-in in a comment, and the opting in happens once, in
+// a shell profile, for a runtime build that has since been replaced. Nothing
+// has said a word about it since. The shipped codex and claude-code profiles
+// resolve GH_TOKEN from the environment first, and an environment-sourced value
+// is not one brig resolved on the user's behalf, so the common case is a real
+// credential going onto the command line on every run with nothing said -- while
+// the credential deliberately imported into brig's own store, the rarer of the
+// two, is the one the exemption protects.
+//
+// One line, before the runtime is invoked, so it is on screen before the value
+// is anywhere anything else can read it. BuildEnv is the last point where the
+// whole forwarded set is known and nothing has been spawned yet.
+//
+// The list is everything whose value lands on the command line, brig's own
+// plumbing included -- GIT_TERMINAL_PROMPT is not a credential and is on there
+// all the same. A warning that named only the interesting half would be a false
+// statement about the command line, and the command line is the whole subject.
+func (c *Config) warnArgvExposure(set creds.Set) {
+	names := runtime.ArgvExposed(set.Vars)
+	if len(names) == 0 {
+		return
+	}
+	c.warnf("BRIG_ENV_ARGV=1 puts these values on the runtime's command line, where "+
+		"`ps` can read them and the host's argv log keeps them after the sandbox is "+
+		"gone: %s. Unset BRIG_ENV_ARGV to forward them by name only",
+		strings.Join(names, " "))
 }
 
 // reportDeny says what the denylist did to THIS run, rather than reciting the
