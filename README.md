@@ -121,7 +121,7 @@ separate Linux re-implementation of it.
 | `brig rm <agent>` | stop and remove the sandbox. The workspace is untouched |
 | `brig ls` | every brig sandbox, running or merely holding its name, with its workspace |
 | `brig reset` | stop and remove every brig sandbox. Workspaces are untouched |
-| `brig env <agent>` | what would be forwarded, **by name only**, and whether the guest will be authenticated |
+| `brig info <agent>` | the boundary a run would trust -- sandbox, workspace, image, credentials **by name only** -- and whether the guest will be authenticated (`brig env` is the old spelling) |
 | `brig profiles` | the profiles, their images, and what each one refuses to forward |
 | `brig profile ls\|export\|import\|edit\|rm` | manage profiles (`brig export` is the short form of `brig profile export`). `export --json` for JSON instead of YAML |
 | `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring. macOS only for now |
@@ -169,7 +169,7 @@ underscore, ten characters -- so `my_project` and `my-project` stay separate,
 while `Foo` and `foo` do not (macOS filesystems ignore case, and two names
 sharing one directory but not one VM is a bug waiting to happen). If the slug
 differs from what you typed, brig says which directory it used.
-`brig env claude --name refactor` prints the one in use.
+`brig info claude --name refactor` prints the one in use.
 
 **Every other verb needs the same `--name`.** A named session is addressed by
 its agent *plus* its name, not by the name alone:
@@ -185,7 +185,7 @@ the sandbox's own name and is not what the verbs take -- `brig rm refactor`
 and `brig rm brig-claude-code-refactor` both fail with "unknown agent". Pass
 the agent and `--name`, as above.
 
-To drop the workspace too, remove the directory `brig env` prints. And
+To drop the workspace too, remove the directory `brig info` prints. And
 `brig reset` stops and removes every brig sandbox at once, named ones
 included, leaving all workspaces alone.
 
@@ -277,7 +277,7 @@ by their own tools' design. Three rules apply to every one of them:
 - **A denylisted variable is refused**, with the reason. `BRIG_ALLOW_DENIED=1`
   if metered billing is genuinely what you want.
 
-`brig env <agent>` reports what would be forwarded, by name, and whether the
+`brig info <agent>` reports what would be forwarded, by name, and whether the
 guest will actually be authenticated -- an expired stored credential is exactly
 what sends a sandbox back to its login screen.
 
@@ -325,10 +325,20 @@ names are optional, and the run says what it could not find and carries on.
 your own.
 
 ```console
-$ brig env claude
+$ brig info claude
+PROFILE      claude-code
+SANDBOX      brig-claude-code (hull)
+WORKSPACE    /Users/you/brig/claude-code (read-write)
+IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
+CREDENTIALS  GH_TOKEN
 brig: forwarding to guest:
 brig:   GH_TOKEN(secret)
 ```
+
+The block at the top is the execution envelope: the boundary the run would
+trust, printed before the sandbox boots. `brig run` and `brig create` print the
+same block before they start one, so what you preview is what you get. Names
+only, never values. `--quiet` drops it.
 
 A secret a profile declares but the store does not have fails the run before
 any sandbox is created, naming every one that is missing and the command that
