@@ -76,18 +76,27 @@ Depending on any of these is depending on something we intend to move.
 
 ## How long a deprecated spelling lives
 
-When a replacement ships, the old spelling keeps working for two releases and
-is removed in the third. While it works, brig prints a notice that names the
-release which removes it, so the deadline is a version number you can read and
-not a vague "soon".
+When a replacement ships, the old spelling keeps working for at least one
+further release, and the removal release is named in the deprecation notice or
+here. That named release is the authority, so the deadline is a version number
+you can read rather than a vague "soon".
 
-The spellings deprecated before this policy are already scheduled: `brig
-agents`, `brig template`, the profile keys `hostCredential:`, `forward:` and
-`statePaths:`, and the setting `BRIG_TEMPLATE_DIR`. Their notices name
-`v0.1.0-rc17` as the release that removes them.
+The spellings deprecated before this policy are scheduled unevenly, and this is
+what each actually does today:
 
-`BRIG_CREDENTIALS_CMD` is gone already. A run that still sets it fails and
-names the replacement, rather than warning and carrying on.
+- `BRIG_CREDENTIALS_CMD` is gone. It was deprecated in `v0.1.0-rc16` and
+  removed; a run that still sets it fails and names the replacement, rather
+  than warning and carrying on.
+- The `hostCredential:` profile key prints a runtime notice naming
+  `v0.1.0-rc17` as the release that removes it. It was deprecated in
+  `v0.1.0-rc16` and has left the shipped profiles.
+- `brig agents` and `brig template` print a one-line notice pointing at the new
+  spelling (`brig profiles`, `brig profile`), with no removal release named yet.
+  They keep working until one is.
+- The profile keys `forward:` and `statePaths:` are noted only in the exported
+  profile header, not at runtime, and carry no removal release yet.
+- `BRIG_TEMPLATE_DIR` is not deprecated: it is an accepted alias for
+  `BRIG_PROFILE_DIR` and keeps working.
 
 ## Where breaking changes are recorded
 
