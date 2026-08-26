@@ -23,7 +23,7 @@ import (
 // request whose profile names no runtimeBin of its own has to find one.
 func stubRuntime(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "hull")
+	bin := filepath.Join(shortDir(t), "hull")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -83,9 +83,25 @@ func ask(t *testing.T, socket, request string) Response {
 // A second daemon must not take a socket path a live one is serving. Binding a
 // unix socket takes no lock, so without one of its own both daemons stay up
 // and the second answers requests the first believes it is handling.
+
+// shortDir is a temporary directory whose path stays under the unix socket
+// limit. t.TempDir puts the test's own name in the path, and on macOS that
+// lands the socket past 104 bytes, where bind fails with "invalid argument"
+// and the daemon looks broken for a reason that has nothing to do with it.
+// See #80 for the daemon-side check that should name this limit.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "brigd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestASecondDaemonRefusesTheSocketOfARunningOne(t *testing.T) {
 	stubRuntime(t)
-	socket := filepath.Join(t.TempDir(), "brigd.sock")
+	socket := filepath.Join(shortDir(t), "brigd.sock")
 	startDaemon(t, socket)
 
 	// Bounded, because the failure this asserts against is a second daemon
@@ -115,7 +131,7 @@ func TestASecondDaemonRefusesTheSocketOfARunningOne(t *testing.T) {
 // exactly what a crashed daemon looks like.
 func TestAnOverlongRequestIsAnswered(t *testing.T) {
 	stubRuntime(t)
-	socket := filepath.Join(t.TempDir(), "brigd.sock")
+	socket := filepath.Join(shortDir(t), "brigd.sock")
 	startDaemon(t, socket)
 
 	// A request of exactly the limit is still served. Without this the test
@@ -157,7 +173,7 @@ func TestAnOverlongRequestIsAnswered(t *testing.T) {
 // The registry is global and built from files, exactly as it is in main.
 func testProfile(t *testing.T, name string, extra ...string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortDir(t)
 	spec := "name: " + name + "\n" +
 		"image: ghcr.io/brig-sh/claude-code:arm64\n" +
 		"guestHome: /home/agent\n" +
@@ -181,7 +197,7 @@ func testProfile(t *testing.T, name string, extra ...string) string {
 func TestARequestThatWouldPromptIsRefusedRatherThanAsked(t *testing.T) {
 	stubRuntime(t)
 	agent := testProfile(t, "promptcheck")
-	t.Setenv("BRIG_WORKSPACE", filepath.Join(t.TempDir(), "ws"))
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(shortDir(t), "ws"))
 	// A real terminal on the daemon's stdin, the way starting brigd from a
 	// shell leaves one, and nothing written to it. This is what makes the test
 	// about the fix rather than about `go test` running without a terminal: a
@@ -193,7 +209,7 @@ func TestARequestThatWouldPromptIsRefusedRatherThanAsked(t *testing.T) {
 	t.Setenv("BRIG_VERIFY", "warn")
 	t.Setenv("BRIG_COSIGN_BIN", "false")
 
-	socket := filepath.Join(t.TempDir(), "brigd.sock")
+	socket := filepath.Join(shortDir(t), "brigd.sock")
 	startDaemon(t, socket)
 
 	resp := ask(t, socket, `{"op":"ensure","agent":"`+agent+`"}`)
@@ -227,7 +243,7 @@ func TestAProfilesRuntimeBinReachesTheSameBinaryThroughTheDaemon(t *testing.T) {
 	// the usual order, and would answer this question for the wrong reason.
 	t.Setenv("BRIG_RUNTIME", "hull")
 	t.Setenv("BRIG_RUNTIME_BIN", "")
-	pinned := filepath.Join(t.TempDir(), "hull-of-my-own")
+	pinned := filepath.Join(shortDir(t), "hull-of-my-own")
 	if err := os.WriteFile(pinned, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
