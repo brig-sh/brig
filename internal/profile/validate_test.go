@@ -39,6 +39,17 @@ func TestEnvRefNeedsNoDeclaration(t *testing.T) {
 	}
 }
 
+// A policy name ends up in a file path wherever it is resolved, so an
+// unsafe one is refused.
+func TestPolicyNameRejectsUnsafeCharacters(t *testing.T) {
+	if _, err := Parse([]byte(bindingBase + "policy: [no-net]\n")); err != nil {
+		t.Errorf("a well-formed policy name was rejected: %v", err)
+	}
+	if _, err := Parse([]byte(bindingBase + "policy: [\"../escape\"]\n")); err == nil {
+		t.Error("an unsafe policy name was accepted")
+	}
+}
+
 // A malformed ref is caught at parse time, so nothing downstream has to decide
 // what to do with one.
 func TestMalformedRefIsRejectedAtParse(t *testing.T) {

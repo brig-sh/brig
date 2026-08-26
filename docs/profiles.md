@@ -136,6 +136,7 @@ with the same parser and neither has to guess.
 | `hostCredential` | no | **Deprecated, removed next release.** A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
 | `reserved` | no | Marks a profile that owns the workspace a session name could otherwise slug onto. See below |
 | `unpublished` | no | We ship the profile but not an image for it. `brig run` says so and stops, rather than letting the pull fail against the registry with a 404 that reads like an outage. Pass `--image` with one you built, and `brig profiles` marks it. `cursor` is the one that carries it |
+| `policy` | no | Names of policies attached to this profile inline: every run carries all of them, unioned with whatever is attached separately by name |
 
 A misspelled field is refused rather than ignored. `forwards:` instead of
 `forward:` would otherwise decode into nothing, forward no credentials, and

@@ -204,3 +204,12 @@ func TestCloneDoesNotShareSecretInternals(t *testing.T) {
 		t.Error("a clone shares the original's secret internals")
 	}
 }
+
+func TestCloneDoesNotSharePolicy(t *testing.T) {
+	p := Profile{Policy: []string{"no-net"}}
+	c := p.clone()
+	c.Policy[0] = "CLOBBERED"
+	if p.Policy[0] != "no-net" {
+		t.Error("a clone shares the original's policy list")
+	}
+}

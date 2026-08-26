@@ -176,6 +176,14 @@ func (p Profile) Validate() error {
 	default:
 		return fmt.Errorf("rootfsType %q is not one of block, virtiofs or 9pfs", p.RootfsType)
 	}
+	// A policy name ends up in a file path wherever it is resolved, so it
+	// has to be safe there.
+	for _, name := range p.Policy {
+		if !safeName(name) {
+			return fmt.Errorf("policy %q may use only lowercase letters, digits, dot, "+
+				"dash and underscore, and must start with a letter or digit", name)
+		}
+	}
 	return nil
 }
 
@@ -308,6 +316,9 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this 
 #   reserved   marks a profile that owns the workspace a session name could
 #              otherwise slug onto. The trailing word is reserved too, so
 #              claude-desktop reserves "desktop" as well as its own name
+#   policy     names of policies attached to this profile inline, e.g.
+#              [no-net]. Every run carries all of them, unioned with
+#              whatever is attached separately by name
 #
 # Building an image for a profile:
 # ` + BringYourOwnImageDoc + `

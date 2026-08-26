@@ -235,6 +235,11 @@ type Profile struct {
 	// otherwise slug onto. See the Reserved function. Exported so a file can
 	// set it, and so it survives export and import.
 	Reserved bool `json:"reserved,omitempty"`
+	// Policy names the policies attached to this profile: every run of it
+	// carries all of them, unioned with whatever is attached separately by
+	// name rather than declared here. A name, not a document -- this
+	// package does not read what a policy says, only that one is claimed.
+	Policy []string `json:"policy,omitempty"`
 }
 
 // clone returns a copy that shares nothing mutable with the original.
@@ -281,6 +286,7 @@ func (p Profile) clone() Profile {
 	p.StatePaths = slices.Clone(p.StatePaths)
 	p.ProjectPaths = slices.Clone(p.ProjectPaths)
 	p.StaleCredentialFiles = slices.Clone(p.StaleCredentialFiles)
+	p.Policy = slices.Clone(p.Policy)
 	if p.Onboarding != nil {
 		o := *p.Onboarding
 		o.Seed = maps.Clone(o.Seed)
