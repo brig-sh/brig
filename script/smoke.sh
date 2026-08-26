@@ -157,8 +157,10 @@ export BRIG_BOOT_ASSETS="$WORK/assets"
 export BRIG_HYPERVISOR=vz
 # Your own profiles go in a scratch directory, never the caller's own.
 export BRIG_PROFILE_DIR="$WORK/profiles"
-# Never touch the real keychain from a test.
-export BRIG_CREDENTIALS_CMD='printf {"claudeAiOauth":{"accessToken":"host-token","expiresAt":99999999999999}}'
+# The keychain is never read here, and nothing below arranges for it to be: no
+# shipped profile declares hostCredential:, which is the only thing that reads
+# it. BRIG_CREDENTIALS_CMD used to stand in for that read from this script; it
+# is removed, and the case below is what is left to assert about it.
 
 echo "== run =="
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret GH_TOKEN=gh-secret \
@@ -168,8 +170,8 @@ rc=$?
 
 # The whole reason brig builds the command line itself: a forwarded value
 # must never be readable in `ps`.
-if grep -q 'env-token-secret\|gh-secret\|host-token' "$STUB_LOG"; then
-  if grep '^argv:' "$STUB_LOG" | grep -q 'env-token-secret\|gh-secret\|host-token'; then
+if grep -q 'env-token-secret\|gh-secret' "$STUB_LOG"; then
+  if grep '^argv:' "$STUB_LOG" | grep -q 'env-token-secret\|gh-secret'; then
     bad "a credential value reached argv"
   else
     ok "credential values reach the runtime, but never through argv"
@@ -229,6 +231,20 @@ out="$(GH_TOKEN='op://vault/item/field' "$WORK/brig" env claude 2>&1)"
 case "$out" in
   *"unresolved secret reference"*) ok "a secret-manager reference is not forwarded" ;;
   *) bad "a secret-manager reference is not forwarded -- got: $out" ;;
+esac
+
+echo "== removed settings =="
+# BRIG_CREDENTIALS_CMD named a command brig ran on every boot to read the host
+# credential. It is removed, and a run that still sets it fails here rather
+# than booting a sandbox without the login its user believes they configured --
+# a failure that would otherwise surface as the guest asking them to log in.
+out="$(BRIG_CREDENTIALS_CMD='printf {}' "$WORK/brig" env claude 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "a run still setting BRIG_CREDENTIALS_CMD fails" \
+  || bad "a run still setting BRIG_CREDENTIALS_CMD started anyway"
+case "$out" in
+  *"brig secret import claude-code <name> --from-command"*)
+    ok "the failure names the import that replaces it" ;;
+  *) bad "the failure names the import that replaces it -- got: $out" ;;
 esac
 
 echo "== named session =="

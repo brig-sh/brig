@@ -618,9 +618,9 @@ brig secret import mytool
 
 The difference is when the host is read: at import, once, when you asked --
 rather than on every boot. `BRIG_CREDENTIALS_CMD`, which pointed the old
-machinery at any command printing equivalent JSON, is replaced by
-`brig secret import <profile> --from-command '<command>'` and goes in the same
-release.
+machinery at any command printing equivalent JSON, is gone; brig refuses to
+start when it is set and names what replaces it,
+`brig secret import <profile> <name> --from-command '<command>'`.
 
 ## A worked example
 
