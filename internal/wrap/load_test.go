@@ -139,3 +139,23 @@ func TestEveryStrictSwitchIsWired(t *testing.T) {
 		})
 	}
 }
+
+// TestVerifyAndSkillsFailClosedOnATypo extends the strict-switch guarantee to
+// the two settings of the same shape that #27 left out: BRIG_VERIFY (a mode)
+// and BRIG_SKILLS (a boolean). An unrecognised value on either must refuse the
+// load, not degrade verification to a warning or seed skills the user did not
+// ask for.
+func TestVerifyAndSkillsFailClosedOnATypo(t *testing.T) {
+	for _, key := range []string{"BRIG_VERIFY", "BRIG_SKILLS"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "maybe")
+			pr, ok := profile.Lookup("claude-code")
+			if !ok {
+				t.Fatal("no claude-code profile")
+			}
+			if _, err := Load(pr, Options{}, nil); err == nil {
+				t.Fatalf("%s=maybe did not refuse the load", key)
+			}
+		})
+	}
+}

@@ -38,16 +38,22 @@ const (
 	Require Mode = "require"
 )
 
-// ParseMode reads a mode, falling back to Warn for anything unrecognised: a
-// typo in this setting must not silently disable the check.
-func ParseMode(s string) Mode {
+// ParseModeStrict reads a mode and refuses anything it does not recognise.
+// BRIG_VERIFY is the switch the whole image-verification path turns on, so a
+// typo in it must stop the run, not quietly fall back to Warn and weaken the
+// check. The empty string is the unset case and keeps the Warn default.
+func ParseModeStrict(s string) (Mode, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return Warn, nil
+	case "warn":
+		return Warn, nil
 	case "off", "none", "0":
-		return Off
+		return Off, nil
 	case "require", "strict":
-		return Require
+		return Require, nil
 	default:
-		return Warn
+		return Warn, fmt.Errorf("BRIG_VERIFY=%q is not a mode: use off, warn, or require", s)
 	}
 }
 

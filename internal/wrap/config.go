@@ -249,6 +249,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return b
 	}
 
+	verifyMode, err := verify.ParseModeStrict(env.String("VERIFY", ""))
+	if err != nil && strictErr == nil {
+		strictErr = err
+	}
+
 	c := &Config{
 		Profile:        t,
 		Runtime:        rt,
@@ -266,11 +271,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		OpenStore:      openStore,
 		MacOSVersion:   macOSVersion,
 		GitConfig:      strict("GIT_CONFIG", false),
-		HostConfig:     hostProjections(t, o.Skills || env.Bool("SKILLS", false)),
+		HostConfig:     hostProjections(t, o.Skills || strict("SKILLS", false)),
 		GitHosts:       env.Fields("GIT_HOSTS", []string{"github.com"}),
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
-		Verify:         verify.ParseMode(env.String("VERIFY", string(verify.Warn))),
+		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
 		AllowRefs:      strict("ALLOW_REFS", false),
 		AllowDenied:    strict("ALLOW_DENIED", false),

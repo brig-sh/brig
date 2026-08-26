@@ -254,19 +254,6 @@ func TestDefaultPolicyPinsRepoAndWorkflow(t *testing.T) {
 	}
 }
 
-// A typo in the setting must not silently disable the check.
-func TestParseModeFallsBackToWarn(t *testing.T) {
-	for in, want := range map[string]Mode{
-		"off": Off, "none": Off, "0": Off,
-		"require": Require, "strict": Require,
-		"warn": Warn, "": Warn, "yes-please": Warn, "OFF": Off,
-	} {
-		if got := ParseMode(in); got != want {
-			t.Errorf("ParseMode(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestMessagesNameTheImageAndTheRemedy(t *testing.T) {
 	cases := map[Outcome]string{
 		NotOurs:   "not published by brig-sh",
@@ -306,5 +293,20 @@ func TestRunGivesUpOnAHangingCosign(t *testing.T) {
 	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("run waited %v for a cosign that never answers", took)
+	}
+}
+
+// TestParseModeStrictRefusesATypo pins that an unrecognised verify mode is an
+// error, not a silent fall back to Warn. BRIG_VERIFY is the one setting the
+// whole image-verification path leans on, so a typo must stop the run rather
+// than quietly weaken the check to a warning.
+func TestParseModeStrictRefusesATypo(t *testing.T) {
+	for _, ok := range []string{"warn", "require", "strict", "off", "none", "0", "WARN", " require "} {
+		if _, err := ParseModeStrict(ok); err != nil {
+			t.Errorf("ParseModeStrict(%q) errored: %v", ok, err)
+		}
+	}
+	if _, err := ParseModeStrict("requrie"); err == nil {
+		t.Error("ParseModeStrict(requrie) did not refuse a typo")
 	}
 }
