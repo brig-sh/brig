@@ -58,6 +58,16 @@ const maxRequestBytes = 1 << 20
 // until this runs out.
 const idleTimeout = 5 * time.Minute
 
+// writeTimeout is how long the daemon will spend delivering one response.
+//
+// A response is a line of JSON, so it fits the socket buffer and this never
+// comes near being reached by a client that reads its answers. One that does
+// not read them is the case it exists for: once the buffer fills, the write
+// blocks, and with no deadline it blocks for as long as that client cares to
+// leave it there, holding a goroutine and a descriptor the read deadline says
+// nothing about.
+const writeTimeout = 30 * time.Second
+
 // Request is one line of JSON on the socket.
 type Request struct {
 	Op    string `json:"op"`    // ensure | status | stop | version
@@ -186,10 +196,12 @@ type daemon struct {
 	sessions map[string]entry       // keyed by VM name
 	locks    map[string]*sync.Mutex // one per VM name, see lockFor
 
-	// idle is how long a connection may sit silent, a field rather than the
-	// constant so a test can ask what happens on either side of it without
-	// waiting five minutes for the answer.
-	idle time.Duration
+	// idle is how long a connection may sit silent and write is how long one
+	// response may take to deliver. Fields rather than the constants so a test
+	// can ask what happens on either side of them without waiting minutes for
+	// the answer.
+	idle  time.Duration
+	write time.Duration
 }
 
 // entry is one remembered sandbox and the runtime that booted it.
@@ -209,6 +221,7 @@ func newDaemon() *daemon {
 		sessions: map[string]entry{},
 		locks:    map[string]*sync.Mutex{},
 		idle:     idleTimeout,
+		write:    writeTimeout,
 	}
 }
 
@@ -319,6 +332,30 @@ func (c idleConn) Read(p []byte) (int, error) {
 	return c.conn.Read(p)
 }
 
+// replier writes one response per call, each bounded by a deadline of its own.
+//
+// Nothing bounded a write before this. A client that sends a request and then
+// stops reading fills the socket buffer, and Encode then blocks in a write that
+// no read deadline covers, holding a goroutine and a descriptor for as long as
+// that client leaves the connection there.
+//
+// A failed write ends the connection rather than being retried: part of the
+// answer is already on the wire with no way to say where it stopped, so a
+// client reading again would find the tail of one response where the next one
+// should start.
+type replier struct {
+	conn net.Conn
+	enc  *json.Encoder
+	d    time.Duration
+}
+
+func (r replier) reply(resp Response) error {
+	if err := r.conn.SetWriteDeadline(time.Now().Add(r.d)); err != nil {
+		return err
+	}
+	return r.enc.Encode(resp)
+}
+
 func (d *daemon) handle(conn net.Conn) {
 	defer conn.Close()
 	scan := bufio.NewScanner(idleConn{conn: conn, idle: d.idle})
@@ -326,17 +363,21 @@ func (d *daemon) handle(conn net.Conn) {
 	// what it buffers rather than on the token it hands back, and a request of
 	// exactly the limit is only buffered whole if its terminator fits too.
 	scan.Buffer(make([]byte, 0, 64*1024), maxRequestBytes+1)
-	enc := json.NewEncoder(conn)
+	out := replier{conn: conn, enc: json.NewEncoder(conn), d: d.write}
 	for {
 		if !scan.Scan() {
 			break
 		}
 		var req Request
 		if err := json.Unmarshal(scan.Bytes(), &req); err != nil {
-			_ = enc.Encode(Response{Error: "bad request: " + err.Error()})
+			if err := out.reply(Response{Error: "bad request: " + err.Error()}); err != nil {
+				return
+			}
 			continue
 		}
-		_ = enc.Encode(d.dispatch(req))
+		if err := out.reply(d.dispatch(req)); err != nil {
+			return
+		}
 	}
 	// A scan that stops on an error rather than on end of input is the one case
 	// a client cannot see for itself: it wrote a request and the connection
@@ -355,10 +396,10 @@ func (d *daemon) handle(conn net.Conn) {
 	case errors.Is(err, bufio.ErrTooLong):
 		tooLong := fmt.Errorf("request is longer than the %d byte limit, so it was "+
 			"not read", maxRequestBytes)
-		_ = enc.Encode(Response{Error: tooLong.Error()})
+		_ = out.reply(Response{Error: tooLong.Error()})
 		fmt.Fprintln(os.Stderr, "brigd: "+tooLong.Error())
 	default:
-		_ = enc.Encode(Response{Error: err.Error()})
+		_ = out.reply(Response{Error: err.Error()})
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
 	}
 }

@@ -71,6 +71,12 @@ reset on every read, so it bounds the silence and not the work: an `ensure`
 that spends a minute booting is not racing it, and neither is a request that
 arrives in pieces.
 
+A response has thirty seconds to be delivered. A response is a line of JSON and
+fits the socket buffer, so a client that reads its answers never comes near
+this; one that asks and then stops reading would hold a goroutine and a
+descriptor open indefinitely once the buffer filled, and has its connection
+closed instead.
+
 A request line is at most 1 MiB, newline excluded. That is far more than an op,
 a profile name and a session name need; the limit exists so a client that never
 sends a newline cannot make the daemon buffer without bound. A longer one is

@@ -308,6 +308,43 @@ func TestAConnectionThatSaysNothingIsClosed(t *testing.T) {
 	}
 }
 
+// A client that asks and then stops reading must not park the handler in a
+// write forever. Nothing bounded a write: the read deadline says nothing about
+// one, so once the socket buffer filled, Encode blocked for as long as the
+// client left the connection sitting there, holding a goroutine and a
+// descriptor apiece.
+//
+// net.Pipe is unbuffered, so the fill is immediate and the test does not have
+// to guess how much a socket takes before it blocks.
+func TestAClientThatStopsReadingDoesNotPinTheHandler(t *testing.T) {
+	d := newDaemon()
+	// Generous next to the write deadline, so a handler that comes back does so
+	// because the write gave up and not because the read did.
+	d.idle = 30 * time.Second
+	d.write = 100 * time.Millisecond
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	done := make(chan struct{})
+	go func() {
+		d.handle(server)
+		close(done)
+	}()
+
+	if err := client.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(client, `{"op":"version"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately no read of the response.
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the handler is still blocked writing to a client that never read")
+	}
+}
+
 // testProfile registers one profile of the test's own and returns its name.
 // The registry is global and built from files, exactly as it is in main.
 func testProfile(t *testing.T, name string, extra ...string) string {
