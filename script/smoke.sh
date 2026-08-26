@@ -389,10 +389,21 @@ ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
   && bad "a file was written for a mistyped flag" \
   || ok "no file is written for a mistyped flag"
 # rm resolves the name inside the file, not the file name: rename what
-# bare.yaml declares, and codex is the word that reaches it.
+# bare.yaml declares, and codex is the word that reaches it. Nothing is deleted
+# for that word without a question first, though -- the file it would take is
+# not the file anyone named, and stdin here has nobody on it to ask.
 sed 's/^name: bare$/name: codex/' "$BRIG_PROFILE_DIR/bare.yaml" > "$WORK/bare.yaml"
 cp "$WORK/bare.yaml" "$BRIG_PROFILE_DIR/bare.yaml"
-"$WORK/brig" profile rm codex > /dev/null 2>&1
+"$WORK/brig" profile rm codex < /dev/null > "$WORK/rm.out" 2>&1 \
+  && bad "rm deleted a file nobody named, without asking" \
+  || ok "rm refuses to delete a file you did not name with no terminal to ask on"
+grep -q 'bare.yaml' "$WORK/rm.out" \
+  && ok "rm names the file it would delete" \
+  || bad "rm names the file it would delete: $(cat "$WORK/rm.out")"
+[ -f "$BRIG_PROFILE_DIR/bare.yaml" ] \
+  && ok "the file nobody named is still there" \
+  || bad "the file nobody named was deleted anyway"
+"$WORK/brig" profile rm codex -y < /dev/null > /dev/null 2>&1
 [ -f "$BRIG_PROFILE_DIR/bare.yaml" ] \
   && bad "rm did not resolve the profile inside the file" \
   || ok "rm resolves the profile a file declares, not its file name"
@@ -408,7 +419,9 @@ cp "$WORK/dup2.yaml" "$BRIG_PROFILE_DIR/dupother.yaml"
 grep -q 'duplicate profile name' "$WORK/dup.out" \
   && ok "two files claiming one profile are reported" \
   || bad "two files claiming one profile are reported: $(cat "$WORK/dup.out")"
-"$WORK/brig" profile rm dupagent > /dev/null 2>&1
+# -y: neither file is named after the profile they both declare, and rm asks
+# before deleting a file the argument did not name.
+"$WORK/brig" profile rm dupagent -y < /dev/null > /dev/null 2>&1
 { [ -f "$BRIG_PROFILE_DIR/dup.yaml" ] || [ -f "$BRIG_PROFILE_DIR/dupother.yaml" ]; } \
   && bad "rm left a file still declaring the profile" \
   || ok "rm takes every file declaring the profile"
@@ -471,7 +484,7 @@ grep -q -- '--name brig-mytool' "$STUB_LOG" \
 grep -q -- '-- claude -p hi' "$STUB_LOG" \
   && ok "the run is the profile it was copied from, renamed" \
   || bad "the run is the profile it was copied from, renamed"
-"$WORK/brig" profile rm mytool > /dev/null 2>&1
+"$WORK/brig" profile rm mytool < /dev/null > /dev/null 2>&1
 [ -f "$BRIG_PROFILE_DIR/mytool.yaml" ] \
   && bad "rm did not remove the profile under the name it was exported as" \
   || ok "rm removes the profile under the name it was exported as, asking nothing"

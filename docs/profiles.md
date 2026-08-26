@@ -61,7 +61,8 @@ A profile may be backed by more than one file, because a file need not be
 named after the profile inside it. Two files declaring one name is a mistake
 with no winner worth having -- which survives depends on where the names
 happen to sort -- so brig reports it and says which one won.
-`brig profile rm` takes all of them.
+`brig profile rm` takes all of them, after asking: a second file is by
+definition not the file you named.
 
 A file may take a built-in's name. That is deliberate: it is how you pin your
 own image for a profile brig already knows about, without inventing a second
@@ -746,6 +747,17 @@ merged set, so it takes aliases and it finds the file whatever that file is
 called. If more than one file declares the name, it takes all of them --
 removing only the one that loaded would promote the other and leave the
 profile listed exactly as before.
+
+That resolution is why `rm` asks. `mytool.yaml` for `brig profile rm mytool`
+is the file you named, and it goes without a word. Anything else -- an alias,
+a second file declaring the same profile, a file renamed by hand -- is a file
+brig found and you did not type, so it is named and the delete waits for a
+`y`. `-y` answers in advance, the way `brig secret delete` spells it, and with
+no terminal to ask on `rm` refuses and says so rather than assuming yes:
+
+```bash
+brig profile rm claude -y   # the alias resolves to claude-code's file
+```
 
 Built-in profiles are compiled in, so there is nothing to remove -- import a
 profile of the same name to shadow one instead.

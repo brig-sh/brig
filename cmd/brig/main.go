@@ -964,21 +964,28 @@ func stemOf(path string) string {
 // removeProfile deletes a profile of your own. A built-in is compiled in and
 // cannot be removed, only shadowed -- say so rather than reporting a missing
 // file.
+//
+// -y is the answer to the question below, given in advance, and it is spelled
+// the way the secret verbs spell it.
 func removeProfile(args []string) error {
-	if len(args) == 0 {
-		return errors.New("profile rm needs a name")
+	name, yes, err := nameAndYes("profile rm", "brig profile rm mine", args)
+	if err != nil {
+		return err
 	}
 	// Resolve through the registry rather than trusting the argument: it takes
 	// aliases, and it names the file actually loaded, which need not be
 	// <name>.yaml -- a file someone renamed by hand is an override whose
 	// basename says nothing about which profile it serves.
-	p, ok := profile.Lookup(args[0])
+	p, ok := profile.Lookup(name)
 	if !ok {
-		return fmt.Errorf("no profile of your own named %q", args[0])
+		return fmt.Errorf("no profile of your own named %q", name)
 	}
 	if _, ok := profile.Path(p.Name); !ok {
 		return fmt.Errorf("%s is a built-in profile, so there is nothing to remove. "+
 			"Import a profile of the same name to shadow it", p.Name)
+	}
+	if err := confirmRemoveProfile(name, p.Name, profile.Files(p.Name), yes); err != nil {
+		return err
 	}
 	// Every file that declares the name, not just the one that loaded: see
 	// profile.Remove. Two of them is a mistake brig reports at load time and
@@ -989,6 +996,66 @@ func removeProfile(args []string) error {
 		fmt.Printf("removed %s\n", f)
 	}
 	return err
+}
+
+// confirmRemoveProfile names the files an rm is about to delete, and asks
+// before deleting one the argument did not name.
+//
+// rm resolves the argument through the registry, which is what lets it work on
+// an alias and on a file whose basename says nothing about the profile inside
+// it. That resolution is also how `brig profile rm claude-code` could delete a
+// file called mytool.yaml and exit 0 without a word: the file the person had a
+// name for and the file brig found were different files, and only brig knew
+// which.
+//
+// So the test is the file name and not the profile name. A file is one the
+// argument named when its basename is that argument -- mytool.yaml for
+// `brig profile rm mytool`, which is what export writes and the only case
+// where nothing can surprise you. An alias, a second file shadowing the first,
+// a file renamed by hand: each of those is a delete of something the person
+// did not type, and each stops to ask.
+//
+// Without a terminal there is nobody to answer, and assuming yes would make
+// the scripted case the one that cannot be stopped, so it refuses and names
+// the flag that answers in advance -- the shape confirmDelete already uses,
+// for the same reason.
+func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error {
+	var unnamed []string
+	for _, f := range files {
+		if stemOf(f) != arg {
+			unnamed = append(unnamed, f)
+		}
+	}
+	if len(unnamed) == 0 {
+		return nil
+	}
+	list := strings.Join(unnamed, ", ")
+	// Named on stderr either way, so an rm inside a pipeline still says which
+	// files it means where a person can see them. A run that answered in
+	// advance is told rather than asked, because -y is an answer to this
+	// question and not a reason to stop naming the files.
+	if yes {
+		fmt.Fprintf(os.Stderr, "brig: removing %s, which declares the %s profile\n", list, resolved)
+		return nil
+	}
+	if !wrap.IsTerminal(os.Stdin) {
+		return fmt.Errorf("removing %q would delete %s, which you did not name, and there "+
+			"is no terminal to ask on. Pass -y to answer in advance: brig profile rm %s -y",
+			arg, list, arg)
+	}
+	fmt.Fprintf(os.Stderr, "brig: %s declares the %s profile, and is not the file you "+
+		"named. Remove it? [y/N] ", list, resolved)
+	line, err := readAnswer(os.Stdin)
+	if err != nil {
+		// EOF is the answer a closed stdin gives, and it is not yes.
+		return fmt.Errorf("aborted: nothing was removed. To answer in advance: "+
+			"brig profile rm %s -y", arg)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	}
+	return errors.New("aborted: nothing was removed")
 }
 
 // deprecated notes an old spelling once, on stderr so it never lands in

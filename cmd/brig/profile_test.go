@@ -375,7 +375,10 @@ func TestRemoveProfileTakesEveryFileDeclaringTheName(t *testing.T) {
 	}
 	_ = profile.Load(profile.Dir()) // duplicates are reported, not fatal
 
-	if err := removeProfile([]string{"codex"}); err != nil {
+	// -y because pinned.yaml is not the file the argument names, and rm asks
+	// before deleting one of those. The second file is the whole point here,
+	// so answering the question in advance is the way to reach the case.
+	if err := removeProfile([]string{"codex", "-y"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := profile.Load(profile.Dir()); err != nil {
@@ -402,9 +405,10 @@ func TestRemoveProfileResolvesFileAndAlias(t *testing.T) {
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
-	// By alias, not even by the profile's own name.
-	if err := removeProfile([]string{"claude"}); err != nil {
-		t.Fatalf("could not remove an override the CLI itself creates: %v", err)
+	// By alias, not even by the profile's own name -- which is a file the
+	// argument did not name, so the answer comes with it.
+	if err := removeProfile([]string{"claude", "-y"}); err != nil {
+		t.Fatalf("could not remove an override by alias: %v", err)
 	}
 	if _, err := os.Stat(pinned); !os.IsNotExist(err) {
 		t.Error("the override file is still there")
@@ -518,5 +522,55 @@ func TestExportedProfileIsEditableAndRemovableByItsNewName(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "mytool.yaml")); !os.IsNotExist(err) {
 		t.Error("the file is still there after rm")
+	}
+}
+
+// rm resolves through the registry, so the file it deletes need not be the one
+// the argument spells. That is worth keeping -- it is what makes rm work on an
+// alias -- but it must not delete a file nobody named without a word: the bug
+// this guards was `brig profile rm claude-code` removing mytool.yaml, silently
+// and with exit 0.
+func TestRemoveProfileAsksBeforeDeletingAFileYouDidNotName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	pinned := filepath.Join(dir, "pinned.yaml")
+	blob := []byte("name: mytool\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n")
+	if err := os.WriteFile(pinned, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	// A stdin of the test's own, closed: nothing to ask on, and an answer that
+	// is not yes if anything did ask. `go test` usually hands the binary
+	// /dev/null, but a test binary run from a terminal would otherwise sit
+	// waiting for someone to type.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	orig := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = orig; r.Close() }()
+
+	err = removeProfile([]string{"mytool"})
+	if err == nil {
+		t.Fatal("rm deleted a file the argument did not name, without asking")
+	}
+	if !strings.Contains(err.Error(), "-y") || !strings.Contains(err.Error(), pinned) {
+		t.Errorf("the refusal names neither the file nor the way through: %v", err)
+	}
+	if _, statErr := os.Stat(pinned); statErr != nil {
+		t.Error("the file was removed anyway")
+	}
+
+	// -y is that question answered in advance, the way the secret verbs spell
+	// it.
+	if err := removeProfile([]string{"mytool", "-y"}); err != nil {
+		t.Fatalf("-y did not answer the question: %v", err)
+	}
+	if _, err := os.Stat(pinned); !os.IsNotExist(err) {
+		t.Error("-y left the file in place")
 	}
 }
