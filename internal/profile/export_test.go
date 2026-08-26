@@ -260,3 +260,44 @@ func TestExportJSONAsRenames(t *testing.T) {
 		t.Errorf("ExportJSONAs renamed the caller's profile: %q", p.Name)
 	}
 }
+
+// A profile written on Windows, or edited by something that keeps CRLF, comes
+// back as it went in. The rename is a text edit on one line, and the export is
+// verbatim everywhere else -- so a line that arrived ending in \r\n has to
+// leave ending in \r\n. Rebuilding it with a bare \n leaves one LF line in a
+// CRLF file, which is a byte the export was never asked to change and enough
+// to make a diff of the two files noise.
+func TestExportAsKeepsTheLineEndingsItWasGiven(t *testing.T) {
+	reset(t)
+	dir := t.TempDir()
+	src := firstHeaderLine + " Edit it, then: brig profile import <this file>\r\n" +
+		"name: mytool\r\n" +
+		"image: docker.io/me/mine:latest\r\n" +
+		"guestHome: /home/mytool\r\n" +
+		"binary: mytool\r\n" +
+		"mem: 1\r\n" +
+		"cpus: 1\r\n"
+	if err := os.WriteFile(filepath.Join(dir, "mytool.yaml"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := Lookup("mytool")
+	if !ok {
+		t.Fatal("the CRLF profile did not load")
+	}
+	blob, err := ExportAs(p, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(src, "name: mytool\r\n", "name: other\r\n", 1)
+	if string(blob) != want {
+		t.Errorf("the export is not the file it was given, renamed:\ngot  %q\nwant %q", blob, want)
+	}
+	// Stated separately because it is the failure someone reads in a diff: one
+	// line of a CRLF file ending differently from the rest.
+	if strings.Count(string(blob), "\n") != strings.Count(string(blob), "\r\n") {
+		t.Errorf("the rename left a bare LF among the CRLF lines:\n%q", blob)
+	}
+}

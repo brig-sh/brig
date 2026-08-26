@@ -563,14 +563,25 @@ func ExportAs(p Profile, name string) ([]byte, error) {
 // # keep in sync with the workspace` is a note someone wrote, and a rename is
 // not a reason to drop it. It may of course now be wrong, but so is deleting
 // it, and only one of those is visible to the person editing the file.
+//
+// The line's own terminator is kept too. Splitting on \n alone leaves the \r
+// of a CRLF file at the end of the line, and rebuilding the line without it
+// would put one LF line in the middle of a CRLF file -- a byte the export was
+// not asked to change, and enough to make a diff of before and after read as
+// two changes rather than one.
 func renameField(blob []byte, name string) ([]byte, bool) {
 	lines := bytes.Split(blob, []byte("\n"))
 	for i, line := range lines {
-		key, rest, ok := bytes.Cut(line, []byte(":"))
+		body, eol := line, []byte(nil)
+		if bytes.HasSuffix(body, []byte("\r")) {
+			body, eol = body[:len(body)-1], []byte("\r")
+		}
+		key, rest, ok := bytes.Cut(body, []byte(":"))
 		if !ok || string(key) != "name" {
 			continue
 		}
-		lines[i] = append([]byte("name: "+name), trailingComment(rest)...)
+		renamed := append([]byte("name: "+name), trailingComment(rest)...)
+		lines[i] = append(renamed, eol...)
 		return bytes.Join(lines, []byte("\n")), true
 	}
 	return nil, false
