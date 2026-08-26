@@ -79,10 +79,16 @@ closed instead.
 
 A request line is at most 1 MiB, newline excluded. That is far more than an op,
 a profile name and a session name need; the limit exists so a client that never
-sends a newline cannot make the daemon buffer without bound. A longer one is
-answered with an error saying so and the connection is then closed, because
+sends a newline cannot make the daemon buffer without bound. A longer one gets
+an error saying so written to it, and the connection is then closed, because
 what follows an over-length request in the stream cannot be told apart from the
 tail of it.
+
+Whether that error is read is another matter. It goes out the moment the limit
+is reached, which is while the client is usually still writing, so a client that
+does not read until its write returns sees the broken pipe rather than the
+error. The error is there for one that reads as it writes; the closed connection
+is what everybody else gets.
 
 For instance, with `socat`:
 
