@@ -51,6 +51,12 @@ type Config struct {
 	// declares secrets -- opening it unconditionally would raise a keychain
 	// prompt for runs that read nothing. Replaced in tests.
 	OpenStore func() (creds.SecretReader, error)
+	// ReadKeychain reads the blob behind a profile's deprecated
+	// hostCredential:, and is nil outside tests, where nil means the host's own
+	// keychain. It exists because a test must not read the login keychain of
+	// whoever runs the suite, and because the blob a test wants is one it wrote
+	// itself. BRIG_CREDENTIALS_CMD used to serve that purpose by accident.
+	ReadKeychain creds.KeychainRead
 	// envWarnings are what building Env decided to drop, held until BuildEnv
 	// has somewhere to print them: Load has no writer yet.
 	envWarnings []string
@@ -71,11 +77,10 @@ type Config struct {
 
 	// Verify is how strictly the guest image is checked before boot, and
 	// VerifyPolicy is what counts as ours.
-	Verify         verify.Mode
-	VerifyPolicy   verify.Policy
-	AllowRefs      bool
-	AllowDenied    bool
-	CredentialsCmd string
+	Verify       verify.Mode
+	VerifyPolicy verify.Policy
+	AllowRefs    bool
+	AllowDenied  bool
 
 	// Cwd is the host directory the command was invoked from, and GuestCwd is
 	// where that lands inside the guest.
@@ -110,6 +115,24 @@ type Options struct {
 // Load resolves the configuration for one invocation.
 func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	env := NewEnv(t.Name, os.LookupEnv)
+
+	// BRIG_CREDENTIALS_CMD is gone, and a run that still sets it fails here
+	// rather than proceeding. The variable named a command brig ran on every
+	// boot to read the host credential, so a run that ignored it would boot a
+	// sandbox with no login and no explanation -- the failure would surface
+	// inside the guest, as a prompt to authenticate, which is the last place
+	// anyone would connect back to a setting on the host.
+	//
+	// The replacement is two steps, and naming only the second sends the reader
+	// into an error: --from-command fills one secret so it needs a name, and a
+	// profile still on hostCredential: has no secrets: list for that name to be
+	// in. Say both, in order.
+	if cmd, ok := env.Get("CREDENTIALS_CMD"); ok && cmd != "" {
+		return nil, fmt.Errorf("BRIG_CREDENTIALS_CMD has been removed. Declare the "+
+			"credential under secrets: in %s, then store it once: brig secret import "+
+			"%s <name> --from-command '<command>'", t.Name, t.Name)
+	}
+
 	rawName := o.Name
 
 	slug := ""
@@ -177,7 +200,6 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		VerifyPolicy:   verifyPolicy(env),
 		AllowRefs:      env.Bool("ALLOW_REFS", false),
 		AllowDenied:    env.Bool("ALLOW_DENIED", false),
-		CredentialsCmd: env.String("CREDENTIALS_CMD", ""),
 		Cwd:            cwd,
 		Out:            os.Stdout,
 		Err:            os.Stderr,

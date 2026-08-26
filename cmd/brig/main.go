@@ -83,9 +83,6 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
   BRIG_PULL            missing (default) | always | never
   BRIG_SKILLS          1 to project your ~/.claude skills and plugins read-only
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
-  BRIG_CREDENTIALS_CMD deprecated, goes next release: declare the credential
-                       under secrets:, then brig secret import <profile> <name>
-                       --from-command does the same job once instead of per run
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off -- guest image signature
   BRIG_PROFILE_DIR     where your own profiles live (BRIG_TEMPLATE_DIR still works)

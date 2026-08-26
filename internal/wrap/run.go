@@ -25,23 +25,6 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 		c.warnf("%s", w)
 	}
 
-	// BRIG_CREDENTIALS_CMD is ReadHost's only consumer, and ReadHost is only
-	// reached through hostCredential:, which no built-in declares any more --
-	// so on a shipped profile this variable already does nothing. Said out
-	// loud rather than left to be discovered: it is documented in the
-	// top-level usage and the README, and a setting that silently stopped
-	// working is worse than one that is going away.
-	// The replacement is two steps, and naming only the second sends the
-	// reader into an error: --from-command fills one secret so it needs a
-	// name, and a profile still on hostCredential: has no secrets: list for
-	// that name to be in. Say both, in order.
-	if c.CredentialsCmd != "" {
-		c.warnf("BRIG_CREDENTIALS_CMD is deprecated and goes in the next release. "+
-			"Declare the credential under secrets: in %s, then store it once: "+
-			"brig secret import %s <name> --from-command '<command>'",
-			c.Profile.Name, c.Profile.Name)
-	}
-
 	// Resolved before anything else touches the sandbox, and returned as an
 	// error rather than a warning: a run whose secret cannot be resolved must
 	// fail, saying which secret is missing and how to create it, instead of
@@ -73,11 +56,14 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	// mint one. Read fresh every invocation: the token is short-lived, the
 	// host renews it as a matter of course, and nothing in the guest has to
 	// refresh anything.
+	//
+	// Only a profile still carrying the deprecated hostCredential: gets here,
+	// and no built-in carries one any more. The keychain is the only backend
+	// this reads: BRIG_CREDENTIALS_CMD, which used to point it at a command of
+	// the user's own, is gone, and Load fails a run that still sets it rather
+	// than booting a sandbox without the login the variable used to supply.
 	if hc := c.Profile.HostCredential; hc != nil && !set.Has(hc.TargetVar) {
-		host, err := creds.ReadHost(hc, c.CredentialsCmd)
-		if err != nil {
-			c.warnf("%s", err)
-		} else if host != nil {
+		if host := creds.ReadHost(hc, c.ReadKeychain); host != nil {
 			c.HostCred = host
 			c.admitHostCredential(hc, host, &set)
 		}

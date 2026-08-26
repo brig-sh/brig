@@ -45,11 +45,10 @@ func (s *Set) Add(name, value, reportAs string) {
 }
 
 // AddSecret appends a variable whose value brig resolved on the user's behalf:
-// from the store it owns, or from the host credential -- however that was
-// obtained, keychain or BRIG_CREDENTIALS_CMD. It is reported like any other
-// credential, but it never travels in argv: the host durably logs every exec's
-// argv, so such a value there would outlive the sandbox in a file the user
-// never sees.
+// from the store it owns, or from the host credential it read out of the
+// keychain. It is reported like any other credential, but it never travels in
+// argv: the host durably logs every exec's argv, so such a value there would
+// outlive the sandbox in a file the user never sees.
 func (s *Set) AddSecret(name, value, reportAs string) {
 	s.Vars = append(s.Vars, runtime.Var{Name: name, Value: value, Secret: true})
 	if reportAs == "" {
@@ -122,16 +121,15 @@ func admit(t profile.Profile, name, value string, fromEnv bool, opt Options) (st
 // exported because that one is resolved in wrap rather than in Bind.
 //
 // It was the one value that reached the guest without passing either guard:
-// the keychain read and BRIG_CREDENTIALS_CMD called AddSecret directly, so a
-// profile that denies its own target variable did not deny this path, and a
-// credentials command that printed "op://vault/item" -- which is exactly what
-// a secret-manager helper prints when it is not logged in -- forwarded that
-// string as the login and left the guest failing to authenticate for a reason
-// nothing said out loud.
+// the keychain read called AddSecret directly, so a profile that denies its own
+// target variable did not deny this path, and a blob whose token field held
+// "op://vault/item" -- a secret-manager reference rather than a token -- was
+// forwarded as the login and left the guest failing to authenticate for a
+// reason nothing said out loud.
 //
 // Treated as ambient, like an environment-sourced value, because that is what
-// it is: brig did not write this blob, it read whatever the keychain or the
-// user's own command handed back.
+// it is: brig did not write this blob, it read whatever the keychain handed
+// back.
 func AdmitHost(p profile.Profile, name, value string, opt Options) (string, bool) {
 	return admit(p, name, value, true, opt)
 }
@@ -163,49 +161,51 @@ type HostCredential struct {
 	Source string
 }
 
+// KeychainRead reads the raw credential blob a host keychain holds for one
+// service. Only ReadHost calls it, and only a test supplies one of its own:
+// the real read talks to the login keychain of whoever is running brig.
+type KeychainRead func(service string) ([]byte, error)
+
 // ReadHost resolves the profile's host credential.
 //
-// The default backend is the macOS keychain, which is where the host's own
-// login already lives -- that is what lets a fresh sandbox work without
-// anyone minting a token. Any other backend is a command that prints the same
-// JSON on stdout:
+// The backend is the macOS keychain, which is where the host's own login
+// already lives -- that is what lets a fresh sandbox work without anyone
+// minting a token. Any other backend is imported once, into brig's own store,
+// rather than read on every run:
 //
-//	BRIG_CREDENTIALS_CMD='your-secret-tool read claude/credentials'
+//	brig secret import <profile> <name> --from-command '<command>'
 //
-// Absence is ordinary: nobody has run the agent on this host. It is reported
-// as (nil, nil), not as an error. A failing custom command IS an error,
-// because its stderr is the only explanation the caller will ever get.
-func ReadHost(hc *profile.HostCredential, command string) (*HostCredential, error) {
+// That import is what replaced BRIG_CREDENTIALS_CMD, which used to point this
+// read at a command of the user's own and ran it on every boot.
+//
+// read is nil everywhere but in tests, where it stands in for the keychain: a
+// suite must not read, or depend on, the keychain of whoever runs it.
+//
+// Absence is ordinary: nobody has run the agent on this host, or this is not a
+// Mac. It is reported as a nil credential rather than as a failure, and there
+// is nothing else left to report: the keychain's own stderr is noise rather
+// than an explanation when the common case is an item that was never created.
+func ReadHost(hc *profile.HostCredential, read KeychainRead) *HostCredential {
 	if hc == nil {
-		return nil, nil
+		return nil
 	}
-	var blob []byte
-	source := ""
-	if command != "" {
-		out, err := runShell(command)
-		if err != nil {
-			return nil, fmt.Errorf("BRIG_CREDENTIALS_CMD failed: %w", err)
-		}
-		blob, source = out, "BRIG_CREDENTIALS_CMD"
-	} else {
-		out, err := keychain(hc.KeychainService)
-		if err != nil {
-			// The keychain's own stderr is noise rather than an explanation
-			// here: not having run the agent on this host is the common case.
-			return nil, nil
-		}
-		blob, source = out, "the host keychain"
+	if read == nil {
+		read = keychain
 	}
-	blob = bytes.TrimSpace(blob)
+	out, err := read(hc.KeychainService)
+	if err != nil {
+		return nil
+	}
+	blob := bytes.TrimSpace(out)
 	if len(blob) == 0 {
-		return nil, nil
+		return nil
 	}
 	token, _ := findString(blob, hc.TokenField)
 	if token == "" {
-		return nil, nil
+		return nil
 	}
 	expiry, _ := findNumber(blob, hc.ExpiryField)
-	return &HostCredential{Token: token, ExpiresAt: expiry, Source: source}, nil
+	return &HostCredential{Token: token, ExpiresAt: expiry, Source: "the host keychain"}
 }
 
 // Expired reports whether the credential is past its expiry. A blob carrying
@@ -231,29 +231,6 @@ func keychain(service string) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
-}
-
-func runShell(command string) ([]byte, error) {
-	cmd := exec.Command("sh", "-c", command)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errb.String())
-		if msg != "" {
-			return nil, fmt.Errorf("%w: %s", err, firstLines(msg, 3))
-		}
-		return nil, err
-	}
-	return out.Bytes(), nil
-}
-
-func firstLines(s string, n int) string {
-	lines := strings.Split(s, "\n")
-	if len(lines) > n {
-		lines = lines[:n]
-	}
-	return strings.Join(lines, " ")
 }
 
 // findString and findNumber are jsonfind under the names ReadHost already
