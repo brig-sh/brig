@@ -201,9 +201,10 @@ grep -q '^SANDBOX .*brig-claude-code' "$WORK/run.err" \
   || bad "run prints the execution envelope: $(cat "$WORK/run.err")"
 grep -q '^WORKSPACE ' "$WORK/run.err" \
   && ok "the envelope names the workspace" || bad "the envelope names the workspace"
-# A value must never reach the block, the same promise argv keeps.
-grep '^SANDBOX \|^WORKSPACE \|^IMAGE \|^CREDENTIALS ' "$WORK/run.err" \
-  | grep -q 'env-token-secret\|gh-secret\|host-token' \
+# A value must never reach the block, the same promise argv keeps. Scan the
+# whole envelope output rather than a fixed list of rows, so a row added later
+# is covered without touching this check.
+grep -q 'env-token-secret\|gh-secret\|host-token' "$WORK/run.err" \
   && bad "the envelope printed a credential value" \
   || ok "the envelope names credentials, never values"
 

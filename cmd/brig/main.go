@@ -260,9 +260,10 @@ func run(args []string) error {
 
 	// The execution envelope: the boundary this run is about to trust, printed
 	// before the sandbox boots so the user sees it before it matters. Only run
-	// and create print it -- exec and shell attach to a sandbox whose envelope
-	// the user already saw, so repeating it would be noise. --quiet drops it for
-	// a script or a returning session.
+	// and create print it. exec and shell continue an existing session and stay
+	// quiet; when there is no sandbox yet they let EnsureRunning start one
+	// without printing the block, so a scripted brig exec is not interrupted.
+	// --quiet drops it for a script or a returning session.
 	if (verb == "run" || verb == "create") && !opts.quiet {
 		cfg.PrintPreRunEnvelope(set)
 	}
