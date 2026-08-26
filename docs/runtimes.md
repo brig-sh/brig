@@ -79,8 +79,16 @@ hull exec [-t] [--cwd <dir>] [-u <user>] [--env <NAME>]... <name> -- <cmd>...
 hull stop <name>
 hull rm <name>
 hull network-gateway --socket <path> --qemu-socket <path>.qemu
-     --subnet 10.87.0.0/24 --gateway-ip 10.87.0.1   # internal/runtime/gateway.go
+     --subnet 198.18.0.0/24 --gateway-ip 198.18.0.1   # internal/runtime/gateway.go
 ```
+
+brig picks that subnet from 198.18.0.0/15, the range RFC 2544 reserves for
+network benchmarking: it is never routed on the public internet and almost
+nothing claims it, so a sandbox network is unlikely to collide with something
+the workspace needs to reach. The alternatives are all crowded -- 10.0.0.0/8 by
+corporate VPNs and cloud VPCs, 172.16.0.0/12 by Docker, 192.168.0.0/16 by home
+routers and by vmnet on macOS, and 100.64.0.0/10 by Tailscale. The sibling
+198.19.0.0/16 is left alone because OrbStack uses it.
 
 `hull exec` is the whole exec path: the reachability probe, the captured read,
 the credential written over stdin and the terminal handover all build the same

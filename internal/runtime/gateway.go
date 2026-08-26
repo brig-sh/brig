@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -25,12 +26,26 @@ const (
 	gatewayReadyTimeout = 10 * time.Second
 	gatewayPollInterval = 100 * time.Millisecond
 
-	// The virtual network the gateway serves. hull defaults to exactly this,
-	// but brig passes it explicitly: brig also hands out the addresses on it,
+	// The virtual network the gateway serves. brig passes it explicitly rather
+	// than leaning on hull's default: brig also hands out the addresses on it,
 	// and an allocator working from a different subnet than the gateway is a
-	// failure nobody would find quickly.
-	gatewaySubnet = "10.87.0.0/24"
-	gatewayAddr   = "10.87.0.1"
+	// failure nobody would find quickly. formatGatewayCIDR derives guest
+	// addresses from this rather than repeating it, so the two cannot drift.
+	//
+	// 198.18.0.0/15 is the range RFC 2544 reserves for network benchmarking.
+	// It is never routed on the public internet and almost nothing claims it,
+	// which is the property that matters here: a sandbox network that collides
+	// with something real takes the workspace's own traffic with it. The
+	// obvious candidates all lose. 10.0.0.0/8 is where corporate VPNs and
+	// cloud VPCs live, and the previous 10.87.0.0/24 sat one octet from
+	// Podman's default 10.88.0.0/16. 172.16.0.0/12 is Docker's, which walks up
+	// from 172.17 as networks are created. 192.168.0.0/16 is home routers, and
+	// on macOS vmnet already uses 192.168.64.0/24. 100.64.0.0/10 looks unused
+	// until you notice Tailscale lives there.
+	//
+	// The sibling 198.19.0.0/16 is left alone: OrbStack uses it.
+	gatewaySubnet = "198.18.0.0/24"
+	gatewayAddr   = "198.18.0.1"
 	gatewayPrefix = 24
 
 	// Guests start at .2. The gateway is the network address plus one, which
@@ -52,7 +67,20 @@ func gatewaySocket() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("no home directory to place the gateway socket in: %w", err)
 	}
-	return filepath.Join(home, ".brig", "gateway.sock"), nil
+	// The network the gateway serves is part of the name. ensureGateway reuses
+	// whatever is already listening here without asking what it serves, so a
+	// gateway left over from a different subnet would be reused for guests
+	// that are not on it: brig would hand out an address the process on the
+	// other end does not route, and the sandbox would come up with no network
+	// and nothing pointing at the cause. A different network is a different
+	// socket, which also lets sandboxes from before a subnet move keep the
+	// gateway they were booted against until they are removed.
+	return filepath.Join(home, ".brig", "gateway-"+socketTag(gatewaySubnet)+".sock"), nil
+}
+
+// socketTag turns a subnet into something that can sit in a filename.
+func socketTag(subnet string) string {
+	return strings.NewReplacer("/", "_", ".", "-").Replace(subnet)
 }
 
 // qemuGatewaySocket mirrors hull's own derivation. hull takes the control

@@ -21,7 +21,7 @@ brig-claude-code
 
 $ hull ps
 ID                STATUS   EXIT  PID    IP         CREATED
-brig-claude-code  running  -     34585  10.87.0.2  2026-08-17 18:34:19
+brig-claude-code  running  -     34585  198.18.0.2  2026-08-17 18:34:19
 ```
 
 The sandbox came up on the first attempt; no image-pull or boot problems, so
