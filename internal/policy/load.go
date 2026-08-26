@@ -15,10 +15,21 @@ type Entry struct {
 	Path   string
 }
 
+// reservedBasenames are the files in the policy directory that are not
+// policies. The directory is flat, so every yaml/json in it would
+// otherwise be read as one -- attachmentsBasename would be reported as a
+// broken policy rather than read as what it actually is.
+var reservedBasenames = map[string]bool{
+	attachmentsBasename: true,
+}
+
 // isPolicyFile reports whether a directory entry is a policy. Anything else
-// in the directory -- a README, an editor's backup -- is ignored rather than
-// reported as broken.
+// in the directory -- a README, an editor's backup, a reserved basename --
+// is ignored rather than reported as broken.
 func isPolicyFile(name string) bool {
+	if reservedBasenames[name] {
+		return false
+	}
 	switch filepath.Ext(name) {
 	case ".yaml", ".yml", ".json":
 		return true
