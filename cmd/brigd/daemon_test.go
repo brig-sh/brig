@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -123,6 +124,83 @@ func TestASecondDaemonRefusesTheSocketOfARunningOne(t *testing.T) {
 	if resp := ask(t, socket, `{"op":"version"}`); !resp.OK {
 		t.Errorf("the running daemon stopped serving: %+v", resp)
 	}
+}
+
+// The socket is unlinked by closing the listener, and net does that unlink
+// before it closes the descriptor -- which is what makes the unlink ordered
+// before Accept returns and therefore before serve releases the flock. That
+// ordering is the entire argument that a daemon on its way out cannot unlink
+// the socket of the one that replaces it, and it is a property of the standard
+// library rather than of anything here, so it is asserted rather than assumed.
+func TestClosingTheListenerUnlinksTheSocket(t *testing.T) {
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(socket); err != nil {
+		t.Fatalf("the listener bound but left nothing at %s: %v", socket, err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(socket); !os.IsNotExist(err) {
+		t.Fatalf("closing the listener left the socket at %s (%v), so shutdown "+
+			"would need a removal of its own, outside the lock", socket, err)
+	}
+}
+
+// A signalled daemon cleans up after itself and leaves the path free for the
+// next one. This is the half of the removal's job that had to survive dropping
+// it: the shutdown no longer names the path, so if closing the listener did not
+// unlink it, a successor would find a stale socket in the way.
+func TestASignalledDaemonLeavesThePathFreeForItsSuccessor(t *testing.T) {
+	stubRuntime(t)
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+
+	// In a process of its own, because a signal is process-wide: delivering
+	// SIGTERM to this one would take the test binary with it.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	first := exec.CommandContext(ctx, os.Args[0], "-test.run=TestServeInAHelperProcess")
+	first.Env = append(os.Environ(), "BRIGD_HELPER_SOCKET="+socket)
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Process.Kill() }()
+	waitUntilServing(t, socket)
+
+	if err := first.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Wait(); err != nil {
+		t.Fatalf("the daemon did not exit cleanly on SIGTERM: %v", err)
+	}
+	if _, err := os.Stat(socket); !os.IsNotExist(err) {
+		t.Errorf("a signalled daemon left its socket behind at %s (%v)", socket, err)
+	}
+
+	// The successor is what the removal was for. It has to bind the same path
+	// and answer on it.
+	startDaemon(t, socket)
+	if resp := ask(t, socket, `{"op":"version"}`); !resp.OK {
+		t.Errorf("the successor is not serving: %+v", resp)
+	}
+}
+
+// waitUntilServing returns once something answers on socket.
+func waitUntilServing(t *testing.T, socket string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.Dial("unix", socket)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("nothing ever started serving %s", socket)
 }
 
 // A request past the limit is answered rather than dropped. The scanner used

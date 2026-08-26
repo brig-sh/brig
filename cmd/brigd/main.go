@@ -253,8 +253,24 @@ func serve(socket string) error {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
+		// Closing the listener is the whole of the shutdown, and the socket is
+		// unlinked by that close rather than by a removal of our own. The
+		// removal used to be here, one statement later, and one statement later
+		// is outside the lock: this goroutine could be descheduled between the
+		// two, the accept loop return, the deferred Close release the flock, a
+		// second daemon start and bind a socket of its own at the same path, and
+		// the removal then unlink the successor's live socket. The successor
+		// keeps serving a socket with no name, and every client that dials the
+		// path gets a connection refused to a daemon that is running.
+		//
+		// A close cannot do that, because the unlink is what net does before it
+		// closes the descriptor -- and it is that descriptor closing which makes
+		// Accept return. So the unlink is ordered before the accept loop returns
+		// and therefore before the lock is released, which is the same rule the
+		// stale-socket removal above follows. See
+		// TestClosingTheListenerUnlinksTheSocket for the assertion that this
+		// ordering is real.
 		ln.Close()
-		os.Remove(socket)
 	}()
 
 	// No runtime named here any more: there is one per request, resolved from
