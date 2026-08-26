@@ -87,6 +87,10 @@ func (e Env) Bool(key string, fallback bool) bool {
 // user says otherwise -- the same meaning Bool gives them.
 func (e Env) StrictBool(key string, fallback bool) (bool, error) {
 	name, v, ok := e.getNamed(key)
+	// Trim first, the same as ParseMode next door: a value that arrived through
+	// $(cat flag) carries a trailing newline, and a switch that refuses the run
+	// over whitespace is a worse surprise than the typo it is guarding against.
+	v = strings.TrimSpace(v)
 	if !ok || v == "" {
 		return fallback, nil
 	}

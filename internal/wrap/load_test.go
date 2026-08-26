@@ -116,3 +116,26 @@ func TestLoadRefusesAnUnreadableSecuritySwitch(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryStrictSwitchIsWired asserts each security switch is actually routed
+// through the strict reader by Load, not merely that StrictBool works. A switch
+// reverted to env.Bool would still parse a good value and would silently stop
+// failing closed on a typo; this catches that by feeding each one an
+// unrecognised value and requiring Load to refuse.
+func TestEveryStrictSwitchIsWired(t *testing.T) {
+	for _, key := range []string{
+		"BRIG_GIT_CONFIG", "BRIG_TRUST_WORKSPACE",
+		"BRIG_ALLOW_REFS", "BRIG_ALLOW_DENIED", "BRIG_ALLOW_EXPIRED",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "maybe")
+			pr, ok := profile.Lookup("claude-code")
+			if !ok {
+				t.Fatal("no claude-code profile")
+			}
+			if _, err := Load(pr, Options{}, nil); err == nil {
+				t.Fatalf("%s=maybe did not refuse the load, so it is not wired through the strict reader", key)
+			}
+		})
+	}
+}
