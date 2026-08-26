@@ -270,7 +270,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		Image:  c.Image,
 		Digest: c.BootDigest,
 		Pull:   c.Pull,
-		Net:    "shared",
+		Net:    c.Network.RuntimeNet(),
 		Mem:    c.Mem,
 		CPUs:   c.CPUs,
 		// The workspace, which is the guest's home. The host's agent

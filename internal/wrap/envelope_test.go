@@ -167,3 +167,32 @@ func TestEnvelopeUnderReportsAMalformedFileRefAndTheRunThenFails(t *testing.T) {
 		t.Error("a malformed file ref was written rather than failing the run")
 	}
 }
+
+// The posture is a fact about the sandbox, so it belongs in the block that
+// names the boundary rather than in a setting a reader has to go looking for.
+func TestEnvelopeNamesTheNetworkPosture(t *testing.T) {
+	for _, tc := range []struct{ posture, want string }{
+		{"shared", "shared"},
+		{"offline", "offline"},
+	} {
+		c := envelopeConfig()
+		c.Network = Network(tc.posture)
+		block := &bytes.Buffer{}
+		c.renderEnvelope(block, creds.Set{})
+		got := block.String()
+		if !strings.Contains(got, "NETWORK") {
+			t.Fatalf("%s: no NETWORK row:\n%s", tc.posture, got)
+		}
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: the row does not name the posture:\n%s", tc.posture, got)
+		}
+	}
+	// Offline says what it means for the reader, not only the word.
+	c := envelopeConfig()
+	c.Network = NetOffline
+	block := &bytes.Buffer{}
+	c.renderEnvelope(block, creds.Set{})
+	if !strings.Contains(block.String(), "no egress") {
+		t.Errorf("the offline row does not say what it costs:\n%s", block.String())
+	}
+}

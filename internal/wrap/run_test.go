@@ -78,3 +78,19 @@ func TestEnsureRunningRefusesBeforePreparingTheWorkspace(t *testing.T) {
 		t.Errorf("the workspace was prepared before the refusal: marker present (%v)", statErr)
 	}
 }
+
+// The posture the run resolved to is the posture the runtime is told about.
+// Net was a hardcoded "shared" for the whole life of the field, so nothing
+// downstream had ever seen anything else.
+func TestRunSpecCarriesTheResolvedNetwork(t *testing.T) {
+	for _, tc := range []struct{ posture, want string }{
+		{"shared", "shared"},
+		{"offline", "none"},
+	} {
+		c := testConfig(t, t.TempDir(), t.TempDir())
+		c.Network = Network(tc.posture)
+		if got := c.Network.RuntimeNet(); got != tc.want {
+			t.Errorf("%s: runtime net = %q, want %q", tc.posture, got, tc.want)
+		}
+	}
+}

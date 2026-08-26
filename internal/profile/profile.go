@@ -177,6 +177,18 @@ type Profile struct {
 	// than whichever the host defaults to -- hvi for its introspection, say.
 	// Ignored on Linux, where the shim decides.
 	Hypervisor string `json:"hypervisor,omitempty"`
+	// Network is the posture this workload wants: shared or offline. Empty
+	// means shared, which is what every sandbox has had until now: one network
+	// for every sandbox on the host. Whether the sandboxes on it can reach
+	// each other is the backend's answer rather than brig's, and it is not the
+	// same answer everywhere -- see docs/security.md. offline is a sandbox
+	// with no route out at all: the agent runs, the workspace is there,
+	// nothing leaves.
+	//
+	// A profile states it when the workload's posture is a property of the
+	// work rather than of the run: a formatter that only ever touches the
+	// workspace has no business holding a route to the internet.
+	Network string `json:"network,omitempty"`
 	// RuntimeBin is the runtime binary to drive instead of the one on PATH.
 	//
 	// Unlike every other field this one is about your machine rather than the

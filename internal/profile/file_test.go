@@ -295,3 +295,21 @@ func TestLoadIgnoresAMissingDirectory(t *testing.T) {
 		t.Errorf("a missing directory was an error: %v", err)
 	}
 }
+
+// The network field is an enum, checked at load like hypervisor: a typo must
+// not travel to a boot whose posture nobody meant.
+func TestValidateChecksTheNetworkEnum(t *testing.T) {
+	base := Profile{Name: "x", Image: "i", GuestHome: "/home/x", Binary: "x", Mem: 1, CPUs: 1}
+	for _, ok := range []string{"", "shared", "offline"} {
+		p := base
+		p.Network = ok
+		if err := p.Validate(); err != nil {
+			t.Errorf("network %q was rejected: %v", ok, err)
+		}
+	}
+	p := base
+	p.Network = "airgapped"
+	if err := p.Validate(); err == nil {
+		t.Error("network \"airgapped\" was accepted")
+	}
+}
