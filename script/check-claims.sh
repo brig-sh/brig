@@ -94,16 +94,21 @@ EOF
 	echo "$file: $n_go go tests, $n_smoke smoke checks, $n_vm vm rows, $n_pending pending"
 }
 
-# --self-test builds a table with one row naming a test that cannot exist and
-# confirms the checker rejects it. This is the "dry run" the acceptance criteria
-# asks for: proof the guard is live, not just present, runnable from CI.
+# --self-test builds a table with one go: row and one smoke: row, each naming a
+# reference that cannot exist, and confirms the checker rejects BOTH. This is the
+# "dry run" the acceptance criteria asks for: proof each guard is live, not just
+# present, runnable from CI. Both token kinds are covered because they resolve
+# through independent code paths (go test -list vs a grep over script/*.sh); a
+# self-test that exercised only one could stay green while the other silently
+# auto-passed every row.
 if [ "${1:-}" = "--self-test" ]; then
 	load_go_tests
 	tmp="$(mktemp)"
 	cat >"$tmp" <<'EOF'
 | Claim | Where | Defended by | Status |
 | --- | --- | --- | --- |
-| a claim no test defends | nowhere | `go:TestThatCannotExist_ClaimsSelfCheck` | new |
+| a claim no go test defends | nowhere | `go:TestThatCannotExist_ClaimsSelfCheck` | new |
+| a claim no smoke check defends | nowhere | `smoke:this smoke check cannot exist -- claims self-test` | new |
 EOF
 	out="$(
 		fail=0
@@ -112,11 +117,19 @@ EOF
 	)"
 	rm -f "$tmp"
 	printf '%s\n' "$out"
-	if printf '%s\n' "$out" | grep -q 'SELFTEST_FAIL=1'; then
-		echo "self-test: PASS -- the checker rejects a row naming a missing test"
+	# Each guard must fire independently: the go: row and the smoke: row must
+	# each be reported missing. Asserting only SELFTEST_FAIL=1 would let a broken
+	# smoke branch hide behind the go branch's failure (and vice versa).
+	saw_go=0
+	saw_smoke=0
+	printf '%s\n' "$out" | grep -q 'MISSING go test: TestThatCannotExist_ClaimsSelfCheck' && saw_go=1
+	printf '%s\n' "$out" | grep -q 'MISSING smoke check: this smoke check cannot exist' && saw_smoke=1
+	if [ "$saw_go" = 1 ] && [ "$saw_smoke" = 1 ]; then
+		echo "self-test: PASS -- the checker rejects a missing go test and a missing smoke check"
 		exit 0
 	fi
-	echo "self-test: FAIL -- the checker missed a row naming a missing test"
+	[ "$saw_go" = 0 ] && echo "self-test: FAIL -- the go-token guard did not report the missing test"
+	[ "$saw_smoke" = 0 ] && echo "self-test: FAIL -- the smoke-token guard did not report the missing check"
 	exit 1
 fi
 
