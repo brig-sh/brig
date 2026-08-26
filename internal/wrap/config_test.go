@@ -230,8 +230,7 @@ func TestBuildEnvBindsAResolvedSecret(t *testing.T) {
 // host durably logs every exec's argv -- a token in there outlives the sandbox
 // in a file nobody thinks to look at.
 func TestBuildEnvKeepsTheHostCredentialOutOfArgv(t *testing.T) {
-	c := bindingConfig(t, credentialProfile)
-	c.CredentialsCmd = `printf '{"accessToken":"tok"}'`
+	c := hostCredConfig(t, "", `{"accessToken":"tok"}`)
 
 	set, err := c.BuildEnv()
 	if err != nil {
@@ -301,37 +300,49 @@ func mustMkdir(t *testing.T, path string) {
 	}
 }
 
-// BRIG_CREDENTIALS_CMD is ReadHost's only consumer and would otherwise stop
-// doing anything silently: it is reachable only through hostCredential:, which
-// no shipped profile declares any more. It warns when set and names
-// --from-command, which is the verb that does the same job once instead of on
-// every run.
-func TestCredentialsCmdWarnsAndNamesFromCommand(t *testing.T) {
-	c := bindingConfig(t, credentialProfile)
-	c.CredentialsCmd = `printf '{"accessToken":"tok"}'`
+// BRIG_CREDENTIALS_CMD is removed, and a run that still sets it fails rather
+// than ignoring it: the variable named the command that read the host
+// credential, so a run that carried on would boot a sandbox without the login
+// the user believes they configured, and the only symptom would be the guest
+// asking them to authenticate.
+//
+// Both spellings, because the per-profile prefix is how a shell carries a
+// setting for one profile and the removal has to reach the same names the
+// setting did.
+func TestCredentialsCmdFailsTheRunAndNamesTheImport(t *testing.T) {
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	for _, name := range []string{"BRIG_CREDENTIALS_CMD", "BRIG_CLAUDE_CODE_CREDENTIALS_CMD"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "your-secret-tool read claude/credentials")
 
-	if _, err := c.BuildEnv(); err != nil {
-		t.Fatal(err)
-	}
-	warning := c.Err.(*bytes.Buffer).String()
-	if !strings.Contains(warning, "BRIG_CREDENTIALS_CMD is deprecated") {
-		t.Errorf("nothing said BRIG_CREDENTIALS_CMD is going:\n%s", warning)
-	}
-	if !strings.Contains(warning, "--from-command") {
-		t.Errorf("the warning does not name what replaces it:\n%s", warning)
+			_, err := Load(p, Options{}, nil)
+			if err == nil {
+				t.Fatal("a run with BRIG_CREDENTIALS_CMD set was loaded anyway")
+			}
+			for _, want := range []string{"BRIG_CREDENTIALS_CMD", "removed",
+				"brig secret import claude-code <name> --from-command"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the error does not carry %q: %v", want, err)
+				}
+			}
+		})
 	}
 }
 
-// And it says nothing when it is not set. A deprecation warning on every run
-// of a setting nobody uses is the kind of noise that trains people to stop
-// reading brig's stderr.
-func TestCredentialsCmdIsSilentWhenUnset(t *testing.T) {
-	c := bindingConfig(t, credentialProfile)
-
-	if _, err := c.BuildEnv(); err != nil {
-		t.Fatal(err)
+// And an unset one loads, including the empty spelling: `export
+// BRIG_CREDENTIALS_CMD=` is how a shell profile turns the setting off, and
+// failing on it would refuse the very state the user moved to.
+func TestLoadAcceptsAnEmptyCredentialsCmd(t *testing.T) {
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
 	}
-	if warning := c.Err.(*bytes.Buffer).String(); strings.Contains(warning, "BRIG_CREDENTIALS_CMD") {
-		t.Errorf("warned about a setting that is not set:\n%s", warning)
+	t.Setenv("BRIG_CREDENTIALS_CMD", "")
+
+	if _, err := Load(p, Options{}, nil); err != nil {
+		t.Fatalf("an empty BRIG_CREDENTIALS_CMD failed the run: %v", err)
 	}
 }

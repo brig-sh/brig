@@ -623,11 +623,12 @@ Booleans are shell-style: anything except `0` is on.
 | variable | default | what it does |
 | --- | --- | --- |
 | `BRIG_FORWARD_ENV` | per profile | Space-separated list of variables to forward. Replaces the profile's list rather than adding to it |
-| `BRIG_CREDENTIALS_CMD` | unset | **Deprecated, removed next release.** Command printing the host credential JSON on stdout, for a profile still using `hostCredential:`. `brig secret import <profile> --from-command '<command>'` does the same job once, instead of on every run |
 | `BRIG_ALLOW_REFS` | `0` | Forward a value that looks like an unresolved `scheme://` secret reference |
 | `BRIG_ALLOW_DENIED` | `0` | Forward a variable on the profile's billing denylist |
 | `BRIG_ALLOW_EXPIRED` | `0` | Forward the host credential even though it reports as expired. brig withholds one by default, because a dead token turns into a confusing failure inside the guest rather than a clear one on the host. Set this if your clock is the thing that is wrong. Scoped to the deprecated `hostCredential:` path, and goes with it: an imported credential that has expired warns and is still delivered, so there is nothing to override |
 | `GIT_TERMINAL_PROMPT` | `0` | Forwarded as-is; set it to `1` on the host to let git prompt in the guest |
+
+Removed: `BRIG_CREDENTIALS_CMD` ran a command of yours on every boot to read the host credential. brig now refuses to start when it is set, and names the replacement, which reads your command once instead: `brig secret import <profile> <name> --from-command '<command>'`.
 
 ### Guest git
 

@@ -8,20 +8,23 @@ import (
 	"time"
 )
 
-// hostCredConfig builds a run whose host credential comes from a command
-// printing the blob given, which is the BRIG_CREDENTIALS_CMD path a user with
-// any other secret backend takes. The keychain path resolves the same value
-// through the same code.
+// hostCredConfig builds a run whose host credential is the blob given. The
+// keychain read is replaced rather than performed: these cases are about what
+// BuildEnv does with a blob, and a suite must not read, or depend on, the login
+// keychain of whoever is running it.
 func hostCredConfig(t *testing.T, body, blob string) *Config {
 	t.Helper()
 	c := bindingConfig(t, "hostCredential:\n  keychainService: s\n  tokenField: accessToken\n"+
 		"  expiryField: expiresAt\n  targetVar: TOK\n  renewHint: run it once\n"+body)
-	c.CredentialsCmd = "printf %s " + shellQuote(blob)
+	c.ReadKeychain = func(service string) ([]byte, error) {
+		if service != "s" {
+			t.Errorf("the keychain was read for %q, not the service the profile names", service)
+		}
+		return []byte(blob), nil
+	}
 	c.Err = &bytes.Buffer{}
 	return c
 }
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 func warnings(t *testing.T, c *Config) string {
 	t.Helper()

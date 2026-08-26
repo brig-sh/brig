@@ -45,13 +45,16 @@ brig secret import claude-code     # carry the host login in, once
 
 That is a change from earlier releases, which read Claude Code's own keychain
 item on every invocation as a fallback. The profile key that did it,
-`hostCredential:`, is deprecated and leaves the shipped profiles in this
-release; brig removes the field and `BRIG_CREDENTIALS_CMD` in the next.
+`hostCredential:`, is deprecated and has left the shipped profiles; brig
+removes the field in the next release. `BRIG_CREDENTIALS_CMD`, which pointed
+that read at a host command of your own, is already gone: a run that sets it
+fails, naming `brig secret import <profile> <name> --from-command '<command>'`.
 
-Until it does, the sentence above is about the profiles brig ships. A profile
-of your own still carrying `hostCredential:` keeps the old behaviour, because
-that is what deprecating rather than deleting the key means: every run reads
-the host item it names, and raises the approval dialog that comes with it.
+Until the field goes too, the sentence above is about the profiles brig ships.
+A profile of your own still carrying `hostCredential:` keeps the old
+behaviour, because that is what deprecating rather than deleting the key
+means: every run reads the host item it names, and raises the approval dialog
+that comes with it.
 `brig run` warns when it finds one. Moving it to `secrets:` with `sources:` is
 what makes the promise above true for your profile too.
 
