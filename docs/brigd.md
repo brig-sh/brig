@@ -67,8 +67,9 @@ line saying a boot has started, goes to brigd's stderr and not to the client, so
 an `ensure` that went entirely well comes back with no `warnings` at all.
 
 A connection that sends nothing for five minutes is closed. The deadline is
-reset before each request, so it bounds the silence between requests and not
-the work: an `ensure` that spends a minute booting is not racing it.
+reset on every read, so it bounds the silence and not the work: an `ensure`
+that spends a minute booting is not racing it, and neither is a request that
+arrives in pieces.
 
 A request line is at most 1 MiB, newline excluded. That is far more than an op,
 a profile name and a session name need; the limit exists so a client that never

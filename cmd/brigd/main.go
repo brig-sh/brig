@@ -48,13 +48,14 @@ var version = "dev"
 // was told anything.
 const maxRequestBytes = 1 << 20
 
-// idleTimeout is how long a connection may sit without sending a request
-// before the daemon closes it.
+// idleTimeout is how long a connection may sit silent before the daemon closes
+// it.
 //
-// It bounds the silence between requests, not the work: the deadline is reset
-// before each read, so an ensure that spends a minute booting a sandbox is not
-// racing it. A client that opens a connection and then says nothing costs a
-// goroutine and a descriptor until this runs out.
+// It bounds the silence, not the work: the deadline is reset on every read of
+// the connection, so an ensure that spends a minute booting a sandbox is not
+// racing it, and neither is a request that arrives in pieces. A client that
+// opens a connection and then says nothing costs a goroutine and a descriptor
+// until this runs out.
 const idleTimeout = 5 * time.Minute
 
 // Request is one line of JSON on the socket.
@@ -184,6 +185,11 @@ type daemon struct {
 	mu       sync.Mutex
 	sessions map[string]entry       // keyed by VM name
 	locks    map[string]*sync.Mutex // one per VM name, see lockFor
+
+	// idle is how long a connection may sit silent, a field rather than the
+	// constant so a test can ask what happens on either side of it without
+	// waiting five minutes for the answer.
+	idle time.Duration
 }
 
 // entry is one remembered sandbox and the runtime that booted it.
@@ -199,7 +205,11 @@ type entry struct {
 }
 
 func newDaemon() *daemon {
-	return &daemon{sessions: map[string]entry{}, locks: map[string]*sync.Mutex{}}
+	return &daemon{
+		sessions: map[string]entry{},
+		locks:    map[string]*sync.Mutex{},
+		idle:     idleTimeout,
+	}
 }
 
 // lockFor serialises work on one sandbox.
@@ -289,22 +299,35 @@ func serve(socket string) error {
 	}
 }
 
+// idleConn arms the read deadline afresh before every read of the connection.
+//
+// The deadline used to be set once per scan, and a scan reads a whole line, so
+// what it bounded was how long a request took to arrive rather than how long
+// the client was silent: a client trickling one request across the window was
+// cut off however recently its last byte had landed. The daemon has no quarrel
+// with a slow writer -- what costs it a goroutine and a descriptor is a
+// connection nobody is using -- so the deadline belongs on each read.
+type idleConn struct {
+	conn net.Conn
+	idle time.Duration
+}
+
+func (c idleConn) Read(p []byte) (int, error) {
+	if err := c.conn.SetReadDeadline(time.Now().Add(c.idle)); err != nil {
+		return 0, err
+	}
+	return c.conn.Read(p)
+}
+
 func (d *daemon) handle(conn net.Conn) {
 	defer conn.Close()
-	scan := bufio.NewScanner(conn)
+	scan := bufio.NewScanner(idleConn{conn: conn, idle: d.idle})
 	// One byte more than the limit, for the newline. The scanner's cap is on
 	// what it buffers rather than on the token it hands back, and a request of
 	// exactly the limit is only buffered whole if its terminator fits too.
 	scan.Buffer(make([]byte, 0, 64*1024), maxRequestBytes+1)
 	enc := json.NewEncoder(conn)
 	for {
-		// Set before every read and not once for the connection: it bounds how
-		// long a client may hold a handler goroutine open saying nothing, and
-		// the time a request spends being served is not the client's silence.
-		// A connection that goes quiet is closed rather than kept forever.
-		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
-			return
-		}
 		if !scan.Scan() {
 			break
 		}

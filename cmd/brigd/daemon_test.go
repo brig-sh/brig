@@ -247,6 +247,67 @@ func TestAnOverlongRequestIsAnswered(t *testing.T) {
 	}
 }
 
+// A request that arrives in pieces is served. The deadline was set once per
+// scan and a scan reads a whole line, so what it bounded was how long the
+// request took to arrive: a client trickling one across the window was cut off
+// however recently its last byte had landed, which is not what an idle timeout
+// means and not what the daemon is protecting itself against.
+//
+// net.Pipe rather than a socket, because it is unbuffered: every byte written
+// here is a read on the daemon's side, which is what makes the reset per read
+// the thing under test.
+func TestARequestThatArrivesInPiecesIsServed(t *testing.T) {
+	d := newDaemon()
+	d.idle = 100 * time.Millisecond
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	go d.handle(server)
+
+	// Longer than the timeout in total, with every gap well inside it.
+	req := []byte(`{"op":"version"}` + "\n")
+	for i := range req {
+		if err := client.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Write(req[i : i+1]); err != nil {
+			t.Fatalf("the daemon stopped reading after byte %d of %d: %v", i, len(req), err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if err := client.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var resp Response
+	if err := json.NewDecoder(client).Decode(&resp); err != nil {
+		t.Fatalf("a request that arrived in pieces got no response: %v", err)
+	}
+	if !resp.OK {
+		t.Errorf("a request that arrived in pieces was refused: %+v", resp)
+	}
+}
+
+// The other side of the same timeout: a client that opens a connection and then
+// says nothing must not hold a goroutine and a descriptor for as long as it
+// likes. Dropping the timeout entirely would pass the test above.
+func TestAConnectionThatSaysNothingIsClosed(t *testing.T) {
+	d := newDaemon()
+	d.idle = 100 * time.Millisecond
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	done := make(chan struct{})
+	go func() {
+		d.handle(server)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a connection that sent nothing was held open past the idle timeout")
+	}
+}
+
 // testProfile registers one profile of the test's own and returns its name.
 // The registry is global and built from files, exactly as it is in main.
 func testProfile(t *testing.T, name string, extra ...string) string {
