@@ -375,10 +375,16 @@ func (c *Config) Remove() error {
 // on success.
 func (c *Config) Exec(set creds.Set, argv []string, tty bool) error {
 	return c.Runtime.Replace(runtime.ExecSpec{
-		Name:    c.VMName,
-		Cmd:     argv,
-		Cwd:     c.GuestCwd,
-		TTY:     tty,
+		Name: c.VMName,
+		Cmd:  argv,
+		Cwd:  c.GuestCwd,
+		TTY:  tty,
+		// Whether hull may ask its consent question is a fact about brig's own
+		// stdin, not about the guest's pty. Shell forces TTY on so a login shell
+		// gets its terminal, but a `brig shell -- cmd` from a script still has
+		// no one to answer, so it must not read as askable. Compute it here,
+		// once, from the real stdin rather than reusing tty. See telemetryEnvFor.
+		CanAsk:  IsTerminal(os.Stdin),
 		Env:     set.Vars,
 		Counted: true,
 	})

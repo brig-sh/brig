@@ -363,14 +363,28 @@ func (h *hull) Feed(spec ExecSpec) error {
 // TUI gets the real terminal, ^C reaches it rather than brig, and its exit
 // status is brig's exit status without any relaying.
 func (h *hull) Replace(spec ExecSpec) error {
+	argv, env := h.replaceCmd(spec)
+	return syscall.Exec(h.bin, argv, env)
+}
+
+// replaceCmd builds the handover argv and environment in one place, so a test
+// can assert both what a shell handover runs (`-t` for the guest pty) and
+// whether the boot gate lets it be counted, neither of which survives the
+// syscall.Exec in Replace itself.
+//
+// canAsk is spec.CanAsk, not spec.TTY. This is the one invocation that inherits
+// the user's terminal, but only a real terminal on brig's own stdin means there
+// is anyone to answer hull's consent question. A login shell wants a pty even
+// when brig is driven from a script, so TTY is true there while CanAsk is not;
+// reading TTY for both left a scripted `brig shell` looking askable and let
+// hull's on-by-default send the first-boot event. When CanAsk is false and no
+// answer is on file the boot rule applies and the exec is suppressed. See
+// telemetryEnvFor.
+func (h *hull) replaceCmd(spec ExecSpec) (argv, env []string) {
 	args, envVals := h.execArgs(spec)
-	argv := append([]string{h.bin}, args...)
-	// This is the one invocation that inherits the user's terminal, and TTY is
-	// set from whether brig's own stdin is one. When it is, hull can put its
-	// consent question to a person before it sends anything, so brig leaves it
-	// unsuppressed and lets that happen; when it is not, the same rule as the
-	// boot applies. See telemetryEnvFor.
-	return syscall.Exec(h.bin, argv, mergeEnv(h.telemetryEnvFor(spec.Counted, spec.TTY), envVals))
+	argv = append([]string{h.bin}, args...)
+	env = mergeEnv(h.telemetryEnvFor(spec.Counted, spec.CanAsk), envVals)
+	return argv, env
 }
 
 func (h *hull) Stop(name string) error { return h.quiet("stop", name, true) }
