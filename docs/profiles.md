@@ -92,6 +92,14 @@ and nowhere else, so a path -- or a typo that looks like one -- is refused
 rather than honoured. Wanting a copy elsewhere already has a spelling: export
 to stdout and redirect it, under the shell's rules rather than brig's.
 
+A destination that is already spoken for is refused too, because the
+destination is the name written into the file. `claude` is how brig spells
+`claude-code`, and a profile actually called `claude` wins the lookup over
+that alias, so `brig profile export claude-code claude` would make every
+`brig run claude` mean the copy and leave the built-in reachable only under
+its full name. A name a `reserved:` profile owns is refused for the same
+reason. Both say what the collision is; pick another name.
+
 Export writes YAML because a profile is a file a person edits, and YAML has
 comments. Use `brig profile export --json` if something downstream consumes
 profiles programmatically -- JSON is a subset of YAML, so import reads both

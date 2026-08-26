@@ -943,6 +943,16 @@ func exportProfile(args []string) error {
 		return fmt.Errorf("a profile named %q would collide with the %s profile, which "+
 			"reserves that word. Export it under another name", as, owner)
 	}
+	// An alias is the same collision one step further out: the word is already
+	// how people spell a profile, and a profile of that name wins the lookup,
+	// so the copy takes every run of the name it was copied from. Refused
+	// rather than warned about, because the export that causes it is the first
+	// step of the recipe brig prints and the shadowing shows up much later, as
+	// a run booting an image nobody chose.
+	if owner, ok := profile.Alias(as); ok {
+		return fmt.Errorf("a profile named %q would collide with %s, which is what brig "+
+			"already runs for that word. Export it under another name", as, owner)
+	}
 	render := profile.ExportAs
 	if asJSON {
 		render = profile.ExportJSONAs

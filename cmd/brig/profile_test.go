@@ -671,3 +671,27 @@ func TestRemoveProfileNamesEveryFileItWouldDelete(t *testing.T) {
 		}
 	}
 }
+
+// Export writes the name into the file, so a destination that is an alias is a
+// profile that answers to a word already spoken for. Lookup prefers a registry
+// hit over an alias, so `brig profile export claude-code claude` would make
+// every `brig run claude` mean the copy, with the built-in reachable only
+// under its full name. Same collision as a reserved name, refused the same
+// way.
+func TestExportRefusesADestinationThatIsAnAlias(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	err := exportProfile([]string{"claude-code", "claude"})
+	if err == nil {
+		t.Fatal("export wrote a profile named after an alias")
+	}
+	if !strings.Contains(err.Error(), "claude-code") {
+		t.Errorf("the refusal does not say what the name collides with: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "claude.yaml")); !os.IsNotExist(statErr) {
+		t.Error("the file was written anyway")
+	}
+}

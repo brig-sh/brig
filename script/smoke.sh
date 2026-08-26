@@ -388,6 +388,15 @@ grep -q 'metered path' "$WORK/codex.yaml" 2>/dev/null \
 ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
   && bad "a file was written for a mistyped flag" \
   || ok "no file is written for a mistyped flag"
+# The destination is the name written into the file, and a profile of that name
+# wins the lookup over an alias -- so exporting onto one would take every
+# `brig run claude` from claude-code.
+"$WORK/brig" profile export claude-code claude > /dev/null 2>&1 \
+  && bad "export wrote a profile named after an alias" \
+  || ok "export refuses a destination that is an alias"
+[ -f "$BRIG_PROFILE_DIR/claude.yaml" ] \
+  && bad "the aliased destination was written anyway" \
+  || ok "no file is written for an aliased destination"
 # Asking for help is not a mistake, though the flag package calls it an error.
 "$WORK/brig" profile rm --help > "$WORK/rmhelp.out" 2>&1 \
   && ok "profile rm --help exits 0" \

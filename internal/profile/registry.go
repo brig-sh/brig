@@ -232,6 +232,19 @@ func Lookup(name string) (Profile, bool) {
 	return Profile{}, false
 }
 
+// Alias reports the profile a short spelling stands for, and whether the word
+// is a spelling at all.
+//
+// Export asks, because it writes the name into the file it creates. Lookup
+// prefers a registry hit over an alias, so a profile actually called claude
+// takes every `brig run claude` from claude-code, which is the profile that
+// word has always meant -- and the built-in stays reachable only under its
+// full name, by someone who has worked out what happened.
+func Alias(name string) (string, bool) {
+	canonical, ok := aliases[name]
+	return canonical, ok
+}
+
 // All returns every profile, in name order. Copies, as Lookup returns.
 func All() []Profile {
 	out := make([]Profile, 0, len(registry))
