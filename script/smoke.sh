@@ -130,6 +130,10 @@ export BRIG_RUNTIME=hull
 export BRIG_RUNTIME_BIN="$WORK/hull"
 export BRIG_WORKSPACE="$WS"
 export BRIG_READY_TIMEOUT=5
+# brig remembers which workspace each sandbox was started with, in a file under
+# its state directory. Scratch, like the profile directory: the test creates and
+# removes sandboxes, and it must not edit the state of whoever is running it.
+export BRIG_STATE_DIR="$WORK/state"
 # The image checks get their own cases below, with a stub cosign. Everywhere
 # else they are off: a CI runner has no cosign and must not reach a registry.
 export BRIG_VERIFY=off
@@ -287,6 +291,62 @@ out="$("$WORK/brig" run claude -d 2>/dev/null)"
 "$WORK/brig" reset > /dev/null 2>&1
 grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
   && ok "reset removes brig sandboxes" || bad "reset removes brig sandboxes"
+
+echo "== remembered workspace =="
+# A session created with -w used to be restarted by the next verb that left the
+# flag off: the workspace resolved back to the default, the running sandbox was
+# mounting something else, and that read as a stale share. The workspace
+# survives a restart because it is on the host; the guest's memory-only state
+# does not, an in-sandbox login included.
+#
+# BRIG_WORKSPACE is removed from the environment for these, because it is a
+# setting that names a directory and this is about the case where nothing does.
+RC="$WORK/ws-rc23"
+brig_bare() { env -u BRIG_WORKSPACE "$WORK/brig" "$@"; }
+brig_bare create claude --name rc23 -w "$RC" > /dev/null 2>&1
+: > "$STUB_LOG"
+brig_bare exec claude --name rc23 -- uname -a > /dev/null 2>&1
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "exec without -w restarted the session" \
+  || ok "exec without -w finds the workspace the session was created with"
+
+# The listing says what the sandbox is mounting, so the remembered directory
+# wins there over the one the sandbox name would derive -- and over the
+# BRIG_WORKSPACE this shell is carrying, which names neither.
+listing="$("$WORK/brig" ls 2>/dev/null)"
+case "$listing" in
+  *"$RC-rc23"*) ok "ls names the workspace the session was created with" ;;
+  *) bad "ls names the workspace the session was created with -- got: $listing" ;;
+esac
+
+# An explicit directory is a request rather than a guess, so it still wins and
+# still restarts: a share cannot be moved on a live guest.
+: > "$STUB_LOG"
+brig_bare exec claude --name rc23 -w "$WORK/ws-other" -- uname -a > /dev/null 2>&1
+grep -q '^argv: run ' "$STUB_LOG" \
+  && ok "a -w naming a different directory still restarts the sandbox" \
+  || bad "a -w naming a different directory still restarts the sandbox"
+
+brig_bare rm claude --name rc23 > /dev/null 2>&1
+grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/workspaces.json" \
+  && bad "rm left the sandbox in the workspace index" \
+  || ok "rm drops the remembered workspace"
+
+brig_bare create claude --name rc23 -w "$RC" > /dev/null 2>&1
+"$WORK/brig" reset > /dev/null 2>&1
+grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/workspaces.json" \
+  && bad "reset left a sandbox in the workspace index" \
+  || ok "reset drops the remembered workspaces"
+
+# The index is bookkeeping, so an unusable one costs a restart and nothing
+# more: every command still works, and the workspace resolves as it did before
+# the file existed.
+printf '{not json at all' > "$BRIG_STATE_DIR/workspaces.json"
+brig_bare run claude -d > "$WORK/corrupt.out" 2>&1
+rc=$?
+[ "$rc" = 0 ] && ok "a corrupt index is ignored rather than fatal" \
+  || bad "a corrupt index failed the run -- got: $(cat "$WORK/corrupt.out")"
+"$WORK/brig" reset > /dev/null 2>&1
 
 echo "== flags =="
 : > "$STUB_LOG"

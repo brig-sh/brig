@@ -195,6 +195,10 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 
 	if c.Runtime.Running(c.VMName) {
 		if c.guestMountsWorkspace() {
+			// The guest has confirmed this workspace, so record it. Nothing has
+			// changed for a session brig already knows about; for one created
+			// before the index existed, this is where its entry appears.
+			c.rememberWorkspace()
 			// Running a graphical agent again is how you get back to its
 			// window, so the focus is not part of the boot -- it belongs on
 			// every path that leaves a sandbox running.
@@ -284,6 +288,12 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if err := c.Runtime.Run(spec); err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
 	}
+	// The share is bound now and cannot be changed on a live sandbox, so this
+	// is the moment the path becomes a fact about the instance. Recorded before
+	// the readiness wait for that reason: a sandbox that boots and never answers
+	// still has this workspace, and the next command has to resolve the same one
+	// to find out.
+	c.rememberWorkspace()
 	if !c.waitReady() {
 		return fmt.Errorf("sandbox did not become ready; check '%s'",
 			c.Runtime.LogsHint(c.VMName))
@@ -369,10 +379,20 @@ func (c *Config) Stop() error {
 }
 
 // Remove stops the sandbox and clears the instance holding its name. The
-// workspace is untouched: it lives on the host and holds your work.
+// workspace is untouched: it lives on the host and holds your work. Only the
+// index entry goes, so the next sandbox to take this name resolves its
+// workspace the ordinary way instead of inheriting one chosen for a sandbox
+// that no longer exists.
+//
+// Pruned whether or not the runtime could remove the instance, which is how
+// hull releases the gateway address it hands out: the entry describes a sandbox
+// the user has asked to be rid of either way, and a removal that failed is
+// reported on its own.
 func (c *Config) Remove() error {
 	_ = c.Runtime.Stop(c.VMName)
-	return c.Runtime.Remove(c.VMName)
+	err := c.Runtime.Remove(c.VMName)
+	ForgetWorkspace(c.VMName)
+	return err
 }
 
 // Exec hands the terminal to a command inside the sandbox. It does not return

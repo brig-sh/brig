@@ -185,6 +185,15 @@ To drop the workspace too, remove the directory `brig env` prints. And
 `brig reset` stops and removes every brig sandbox at once, named ones
 included, leaving all workspaces alone.
 
+**`-w` is remembered.** A session created with `--workspace` keeps that
+directory for every later verb, so `brig exec claude --name refactor -- ls`
+finds it without repeating the flag. brig records the path a sandbox was
+started with under `~/.brig`, and reads it back when neither `--workspace` nor
+`BRIG_WORKSPACE` names one; `brig rm` and `brig reset` drop the entry with the
+sandbox. Pass either of them a directory that is not the one the sandbox is
+mounting and it restarts, as it always has -- a share cannot be moved on a
+running guest, and you asked for a different directory.
+
 ### If you know Docker Sandboxes (`sbx`)
 
 The verbs line up deliberately, so muscle memory carries over:
@@ -530,6 +539,7 @@ Booleans are shell-style: anything except `0` is on.
 | `BRIG_WORKSPACE` | `~/brig/<agent>` | Host directory mounted as the guest home. A named session appends `-<slug>` |
 | `BRIG_NAME` | `brig-<agent>` | Sandbox (VM or container) name. A named session appends `-<slug>` |
 | `BRIG_PROFILE_DIR` | `~/.config/brig` | Where custom profiles are read from and written to (`BRIG_TEMPLATE_DIR` still works) |
+| `BRIG_STATE_DIR` | `~/.brig` | Where brig keeps what has to outlive one command, including the workspace each sandbox was started with. Bookkeeping only: an unusable file there costs a restart, never a failed command |
 
 ### Image and guest
 

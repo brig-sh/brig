@@ -131,9 +131,23 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, fmt.Errorf("cannot determine the current directory: %w", err)
 	}
 
-	base := env.String("WORKSPACE", defaultWorkspace(t))
+	// The sandbox name is settled first because the workspace may be read back
+	// from an index keyed by it. See index.go.
+	vmName := env.String("NAME", "brig-"+t.Name)
+	if slug != "" {
+		vmName += "-" + slug
+	}
+
+	// Whether this invocation named a directory at all, tracked apart from the
+	// value: the default is a directory too, and telling a chosen one from a
+	// derived one is what lets the remembered path beat the second and not the
+	// first.
+	base, given := defaultWorkspace(t), false
+	if v, ok := env.Get("WORKSPACE"); ok && v != "" {
+		base, given = v, true
+	}
 	if o.Workspace != "" {
-		base = o.Workspace
+		base, given = o.Workspace, true
 	}
 	// Made absolute whichever of the two supplied it. A relative
 	// --workspace was already resolved here and a relative BRIG_WORKSPACE was
@@ -151,10 +165,19 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// an exported BRIG_WORKSPACE keeps working alongside --name instead of
 	// fighting it. An unnamed run adds nothing.
 	workspace := base
-	vmName := env.String("NAME", "brig-"+t.Name)
 	if slug != "" {
 		workspace += "-" + slug
-		vmName += "-" + slug
+	}
+	// Nothing on this invocation named a directory, so the one the sandbox was
+	// started with beats the default just computed. Without this, a session
+	// created with --workspace matches its own default on no later command, and
+	// every flagless verb takes that for a stale share and restarts it -- see
+	// index.go. The suffix is not reapplied: what was recorded is the workspace
+	// as it was finally resolved, slug and all.
+	if !given {
+		if remembered := RememberedWorkspace(vmName); remembered != "" {
+			workspace = remembered
+		}
 	}
 
 	bindings, envWarnings := envOverride(t.Env, env.Fields("FORWARD_ENV", nil))

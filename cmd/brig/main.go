@@ -543,9 +543,20 @@ func listSandboxes() error {
 	return nil
 }
 
-// workspaceOf recovers the workspace for a sandbox by asking the profile it
-// was named after. A sandbox brig did not name has none to report.
+// workspaceOf recovers the workspace for a sandbox: what it was started with
+// if brig recorded that, and otherwise the path the profile it was named after
+// would derive. A sandbox brig did not name has none to report.
+//
+// The recorded path wins over the derivation, and over an ambient
+// BRIG_WORKSPACE that the derivation would otherwise pick up. This column says
+// what a sandbox is mounting, not what a run started from this shell would
+// mount: a session created with -w has a directory neither of those two can
+// name, and reporting the derived one was reporting the wrong directory with
+// no sign that it was wrong.
 func workspaceOf(vmName string, rt runtime.Runtime) string {
+	if ws := wrap.RememberedWorkspace(vmName); ws != "" {
+		return ws
+	}
 	rest := strings.TrimPrefix(vmName, sandboxPrefix)
 	// Longest profile name first, so claude-code wins over a hypothetical
 	// claude when both could prefix-match.
@@ -591,7 +602,13 @@ func reset() error {
 			continue
 		}
 		_ = rt.Stop(inst.Name)
-		if err := rt.Remove(inst.Name); err != nil {
+		err := rt.Remove(inst.Name)
+		// The same pruning `brig rm` does, for the same reason and on the same
+		// terms: this goes through the runtime directly rather than through a
+		// Config, because reset works from the instance list and a stopped
+		// sandbox need not correspond to a profile brig can still look up.
+		wrap.ForgetWorkspace(inst.Name)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "brig: could not remove %s: %v\n", inst.Name, err)
 			continue
 		}
