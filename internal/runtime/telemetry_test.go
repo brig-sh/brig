@@ -145,6 +145,34 @@ func TestTerminalHandoverStaysAskable(t *testing.T) {
 	}
 }
 
+// A shell handover always gives the guest a pty, but only a real terminal on
+// brig's own stdin means hull has someone to answer its consent question. The
+// two are separate signals: TTY drives `hull exec -t`, CanAsk drives the boot
+// gate. A scripted `brig shell -- cmd` sets TTY (a login shell wants a pty)
+// without CanAsk, and on a fresh install that must still suppress -- the exact
+// case the boot gate closes and which reading TTY for both jobs had left open.
+func TestShellHandoverSeparatesPtyFromConsent(t *testing.T) {
+	h, _ := stubTelemetryHull(t, "not configured (on by default; interactive runs will be asked)")
+
+	argv, env := h.replaceCmd(ExecSpec{Name: "vm", Cmd: []string{"bash", "-lc", "ls"}, Counted: true, TTY: true, CanAsk: false})
+	if line := strings.Join(argv, " "); !strings.Contains(line, "exec -t") {
+		t.Errorf("the guest lost its pty when brig's stdin was not a terminal: %s", line)
+	}
+	if got := strings.Join(env, " "); !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
+		t.Errorf("a scripted shell on a fresh install was counted: %s", got)
+	}
+
+	// Same handover with a terminal on brig's stdin: hull can put the question
+	// to a person, so the gate leaves it unsuppressed, and the pty is unchanged.
+	argv, env = h.replaceCmd(ExecSpec{Name: "vm", Cmd: []string{"bash", "-l"}, Counted: true, TTY: true, CanAsk: true})
+	if got := strings.Join(env, " "); strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
+		t.Errorf("an interactive shell could not be asked the consent question: %s", got)
+	}
+	if line := strings.Join(argv, " "); !strings.Contains(line, "exec -t") {
+		t.Errorf("an interactive shell lost its pty: %s", line)
+	}
+}
+
 // Plumbing stays suppressed whatever the answer is: one user command counts
 // once, which is the rule that predates the gate.
 func TestPlumbingStaysSuppressedWithConsent(t *testing.T) {
