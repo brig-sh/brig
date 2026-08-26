@@ -63,6 +63,9 @@ hull ships a `vz-runner` helper that needs the
 `com.apple.security.virtualization` entitlement, so a from-source build has to
 be signed with a Developer ID certificate to boot a VM. The released build is
 signed, notarized and stapled, which is the path to prefer.
+[docs/runtimes.md](docs/runtimes.md#building-hull-from-source-on-macos) states
+the signing requirement exactly, including the separate entitlement that the
+`hvi` backend the shipped profiles ask for carries.
 
 On Linux brig drives `nerdctl` over containerd, and hands the container to
 the [urunc](https://github.com/urunc-dev/urunc) shim
@@ -406,6 +409,7 @@ The README is the overview. The details live in [docs/](docs/):
 - [non-goals.md](docs/non-goals.md) -- what brig will not do, with the reason
   and what would reopen each one
 - [brigd.md](docs/brigd.md) -- the session daemon and its protocol
+- [runtimes.md](docs/runtimes.md) -- hull, nerdctl and urunc: what each one is, its licence, and every command brig runs against it
 
 Found a security problem? [SECURITY.md](SECURITY.md) is how to report it
 privately, rather than in a public issue.
