@@ -133,8 +133,11 @@ func (c *Config) admitHostCredential(hc *profile.HostCredential, host *creds.Hos
 		return
 	}
 	if host.Expired(time.Now().UnixMilli()) {
-		c.warnf("the host's credential has expired and BRIG_ALLOW_EXPIRED=1 is set, "+
-			"so it is being forwarded anyway -- %s", hc.RenewHint)
+		// Quote what the user set, not a hardcoded =1: with the strict reading
+		// BRIG_ALLOW_EXPIRED=true is what turned this on, and echoing a value
+		// they never wrote sends them looking for a variable that is not there.
+		c.warnf("the host's credential has expired and %s is set, "+
+			"so it is being forwarded anyway -- %s", c.env.setting("ALLOW_EXPIRED"), hc.RenewHint)
 	}
 	// AddSecret, not Add: this token came out of the host's keychain, so it
 	// wants the same argv exemption a store secret gets. BRIG_ENV_ARGV is a
