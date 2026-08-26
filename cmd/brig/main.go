@@ -684,26 +684,68 @@ func handCreatedNames(p profile.Profile) []string {
 	return names
 }
 
+// profileUsage is what `brig profile --help` prints. Held here rather than in
+// the top-level usage text for the same reason secretUsage is: it names the
+// flags of five verbs, which is more than the one line the command list can
+// give them.
+const profileUsage = `brig profile -- manage profiles
+
+usage:
+  brig profile ls                        list the profiles
+  brig profile export <profile>          print one, to edit or to pipe
+  brig profile export <profile> <name>   save it as <name> in the profile dir
+  brig profile import <file>             add one of your own (- reads stdin)
+  brig profile edit <name>               open yours in $VISUAL or $EDITOR
+  brig profile rm <name> [-y]            delete yours, after asking
+
+flags:
+      --json        with export: render JSON rather than YAML
+  -f, --force       with export: replace a file that is already there
+  -y, --yes         with rm: the answer, given in advance
+
+A destination is a name and never a path: export writes the profile directory
+and nowhere else, because that is the only place a profile file does anything.
+Redirect the no-destination form to put a copy of your own anywhere.
+
+A profile saves you spelling out the image, the guest home and the credential
+variables on every run. Export the closest one, edit it, import it back.
+Building an image for one is documented at
+  ` + profile.BringYourOwnImageDoc + `
+`
+
 // profileCmd groups the profile verbs, which is where someone coming from
 // another sandbox tool will look for them.
 func profileCmd(args []string) error {
 	if len(args) == 0 {
 		return errors.New("profile needs a subcommand: ls, export, import, edit or rm")
 	}
+	var err error
 	switch args[0] {
+	case "--help", "-h", "help":
+		fmt.Print(profileUsage)
+		return nil
 	case "ls", "list":
 		return listProfiles()
 	case "export", "save":
-		return exportProfile(args[1:])
+		err = exportProfile(args[1:])
 	case "import", "load":
-		return importProfile(args[1:])
+		err = importProfile(args[1:])
 	case "edit":
-		return editProfile(args[1:])
+		err = editProfile(args[1:])
 	case "rm":
-		return removeProfile(args[1:])
+		err = removeProfile(args[1:])
 	default:
 		return fmt.Errorf("unknown profile subcommand %q (ls, export, import, edit, rm)", args[0])
 	}
+	// A verb's own parser reports --help as an error, because that is how the
+	// flag package says it. Asking for help is not a mistake, so it is answered
+	// with the help and an exit code of zero -- the same translation the secret
+	// group makes, and for the same reason.
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Print(profileUsage)
+		return nil
+	}
+	return err
 }
 
 // editProfile opens a file-backed profile in your editor.

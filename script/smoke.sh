@@ -388,6 +388,13 @@ grep -q 'metered path' "$WORK/codex.yaml" 2>/dev/null \
 ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
   && bad "a file was written for a mistyped flag" \
   || ok "no file is written for a mistyped flag"
+# Asking for help is not a mistake, though the flag package calls it an error.
+"$WORK/brig" profile rm --help > "$WORK/rmhelp.out" 2>&1 \
+  && ok "profile rm --help exits 0" \
+  || bad "profile rm --help exits 0: $(cat "$WORK/rmhelp.out")"
+grep -q 'brig profile rm' "$WORK/rmhelp.out" \
+  && ok "profile rm --help prints the usage" \
+  || bad "profile rm --help prints the usage: $(cat "$WORK/rmhelp.out")"
 # rm resolves the name inside the file, not the file name: rename what
 # bare.yaml declares, and codex is the word that reaches it. Nothing is deleted
 # for that word without a question first, though -- the file it would take is

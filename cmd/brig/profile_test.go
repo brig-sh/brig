@@ -574,3 +574,27 @@ func TestRemoveProfileAsksBeforeDeletingAFileYouDidNotName(t *testing.T) {
 		t.Error("-y left the file in place")
 	}
 }
+
+// Asking for help is not a mistake. The verbs parse their own flags, and the
+// flag package reports --help as an error, so without translating it here
+// `brig profile rm --help` answers a reasonable question with
+// `brig: flag: help requested` and exits 1. The secret group already answers
+// its own the other way.
+func TestProfileHelpPrintsUsageAndSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"rm", "--help"}, {"rm", "-h"}, {"--help"}, {"-h"}, {"help"},
+	} {
+		out, err := captureStdout(t, func() error { return profileCmd(args) })
+		if err != nil {
+			t.Errorf("profile %v: %v", args, err)
+		}
+		if !strings.Contains(out, "brig profile rm") {
+			t.Errorf("profile %v printed no usage:\n%s", args, out)
+		}
+	}
+}
