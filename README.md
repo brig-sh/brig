@@ -469,6 +469,7 @@ The README is the overview. The details live in [docs/](docs/):
   and what would reopen each one
 - [brigd.md](docs/brigd.md) -- the session daemon and its protocol
 - [runtimes.md](docs/runtimes.md) -- hull, nerdctl and urunc: what each one is, its licence, and every command brig runs against it
+- [support.md](docs/support.md) -- which computers brig runs on
 
 Found a security problem? [SECURITY.md](SECURITY.md) is how to report it
 privately, rather than in a public issue.

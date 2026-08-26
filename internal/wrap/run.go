@@ -3,6 +3,7 @@ package wrap
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -168,6 +169,18 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) error {
+	// BRIG_HYPERVISOR (or BRIG_<PROFILE>_HYPERVISOR) beats what the profile
+	// asked for, which is the same order every other setting follows. Resolved
+	// once here so the preflight below and the spec built later cannot disagree
+	// about which backend this run wants.
+	hypervisor := c.env.String("HYPERVISOR", c.Profile.Hypervisor)
+	// Refuse a backend the host cannot boot before the workspace is prepared or
+	// an image is pulled, so the floor lands as one sentence that names the way
+	// past it rather than as the runtime dying at boot with no name. See
+	// preflightHypervisor.
+	if err := c.preflightHypervisor(hypervisor); err != nil {
+		return err
+	}
 	if err := c.PrepareWorkspace(); err != nil {
 		return err
 	}
@@ -265,10 +278,9 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		// decided in the runtime adapter.
 		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
 		GenericBoot: c.Profile.GenericBoot,
-		// BRIG_HYPERVISOR (or BRIG_<PROFILE>_HYPERVISOR) beats what the
-		// profile asked for, which is the same order every other setting
-		// follows.
-		Hypervisor: c.env.String("HYPERVISOR", c.Profile.Hypervisor),
+		// Resolved once at the top of EnsureRunning, where the preflight also
+		// read it, so the backend this spec boots is the one that was checked.
+		Hypervisor: hypervisor,
 		Counted:    true,
 	}
 	if err := c.Runtime.Run(spec); err != nil {
@@ -288,6 +300,66 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		focusWindow()
 	}
 	return c.deliverSecretFiles()
+}
+
+// preflightHypervisor refuses a run whose hypervisor the host cannot boot,
+// before the runtime is asked to start anything. It is the host-version
+// sibling of runtime.supports, which refuses a graphical profile on a
+// console-less backend: same idea, a floor turned into a sentence that names
+// the way past it, moved ahead of the runtime so the refusal lands before a
+// workspace is prepared or an image is pulled.
+//
+// It is not the first thing the command does. BuildEnv has already resolved
+// credentials by the time EnsureRunning runs, so a keychain prompt, or a
+// managed-gitconfig write under BRIG_GIT_CONFIG, can happen before this. What
+// it stays ahead of is the runtime's own work, where the unnamed crash lived.
+//
+// The one floor that exists today is hvi on macOS. The hvi backend drives
+// Apple's in-kernel interrupt controller, the hv_gic_* family, which Apple
+// shipped first in macOS 15. On macOS 14 those symbols are absent and the VMM
+// dies at start with `dyld: missing symbol called` -- a failure with no name
+// on it, which reads like a brig bug rather than an OS floor. That is the
+// report in #4, seen on 14.5. Six of the eight shipped profiles ask for hvi,
+// so the default first run on macOS 14 hits this, and it is worth catching
+// here rather than leaving to an unnamed crash.
+//
+// It refuses rather than quietly falling back to vz. The profile named hvi for
+// a reason, and a downgrade nobody chose is its own surprise; naming
+// BRIG_HYPERVISOR=vz leaves that choice with the person who can weigh it.
+//
+// The version is read through c.MacOSVersion, a seam a test can pin. Off macOS
+// it reports "", and there is nothing to refuse: hvi is a macOS backend, and
+// the Linux runtime ignores the field entirely. A version brig cannot parse
+// also proceeds -- blocking a run over a version string we could not read
+// would trade the boot crash for a refusal that is just as opaque.
+func (c *Config) preflightHypervisor(hv string) error {
+	if hv != "hvi" {
+		return nil
+	}
+	version := ""
+	if c.MacOSVersion != nil {
+		version = c.MacOSVersion()
+	}
+	if version == "" {
+		return nil
+	}
+	if major, ok := majorVersion(version); !ok || major >= 15 {
+		return nil
+	}
+	return fmt.Errorf("the hvi hypervisor needs macOS 15 or newer (this is %s): "+
+		"its in-kernel interrupt controller does not exist here. "+
+		"Set BRIG_HYPERVISOR=vz for this run, or upgrade macOS", version)
+}
+
+// majorVersion pulls the major number out of a "15.4.1"-style version string,
+// reporting false when there is no number to read.
+func majorVersion(v string) (int, bool) {
+	major, _, _ := strings.Cut(v, ".")
+	n, err := strconv.Atoi(strings.TrimSpace(major))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // waitReady waits for the in-guest agent.

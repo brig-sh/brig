@@ -63,6 +63,12 @@ type Config struct {
 	// whoever runs the suite, and because the blob a test wants is one it wrote
 	// itself. BRIG_CREDENTIALS_CMD used to serve that purpose by accident.
 	ReadKeychain creds.KeychainRead
+
+	// MacOSVersion reports the host's macOS version like "14.5", or "" off
+	// macOS. A field so a test can pin the version the hypervisor preflight
+	// sees without running on the OS in question; Load sets it to the real
+	// host reader. See preflightHypervisor.
+	MacOSVersion func() string
 	// envWarnings are what building Env decided to drop, held until BuildEnv
 	// has somewhere to print them: Load has no writer yet.
 	envWarnings []string
@@ -239,6 +245,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Env:            bindings,
 		envWarnings:    envWarnings,
 		OpenStore:      openStore,
+		MacOSVersion:   macOSVersion,
 		GitConfig:      env.Bool("GIT_CONFIG", false),
 		HostConfig:     hostProjections(t, o.Skills || env.Bool("SKILLS", false)),
 		GitHosts:       env.Fields("GIT_HOSTS", []string{"github.com"}),
