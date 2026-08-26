@@ -206,7 +206,22 @@ func run(args []string) error {
 
 	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin})
 	if err != nil {
-		return err
+		// brig env is the report worth giving when the runtime is the thing
+		// that is broken: only one of its lines comes from the runtime, and the
+		// person most likely to run it is the one whose runtime is not on PATH.
+		// So env carries on without one, and Status marks that single line
+		// unavailable. Every other verb needs the runtime to do its work, so
+		// they still fail here, naming what is missing.
+		//
+		// But only "no runtime on PATH" is a state env should paper over. An
+		// unknown BRIG_RUNTIME or a runtimeBin that is not there is a mistake to
+		// fix, and env is the verb people run to find it -- so those surface
+		// here as they do for run, naming the real cause. Match the sentinel,
+		// not any error, or a future error type silently rejoins the swallow.
+		if verb != "env" || !errors.Is(err, runtime.ErrNoRuntime) {
+			return err
+		}
+		rt = nil
 	}
 	cfg, err := wrap.Load(t, opts.load, rt)
 	if err != nil {
@@ -587,7 +602,25 @@ func listSandboxes(args []string) error {
 	}
 	rt, err := runtime.Detect()
 	if err != nil {
-		return err
+		if !errors.Is(err, runtime.ErrNoRuntime) {
+			// An unknown BRIG_RUNTIME is a mistake, not an empty list: reading a
+			// typo as "you have no sandboxes" hides it. Fail with the value
+			// named, exactly as run does, rather than answering a question that
+			// was not asked.
+			return err
+		}
+		// No runtime on PATH means nothing is running and nothing is holding a
+		// name: there is nothing to list. Answer the question that was asked --
+		// there are no sandboxes -- and exit 0, rather than failing a read-only
+		// query with the error of the thing it would have queried.
+		// Print the same header the runtime-present empty case does, so the
+		// shape of `brig ls` does not change with the runtime, and surface the
+		// platform-specific way to get one -- the hint run gives -- so a fresh
+		// box is told how rather than only that there is nothing.
+		fmt.Printf("%-28s %-10s %s\n", "SANDBOX", "STATE", "WORKSPACE")
+		fmt.Println("(none -- no runtime found on PATH, so there are no sandboxes)")
+		fmt.Printf("  %s\n", strings.TrimPrefix(err.Error(), "no runtime found on PATH: "))
+		return nil
 	}
 	list, err := rt.List()
 	if err != nil {

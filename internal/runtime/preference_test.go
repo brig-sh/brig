@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,47 @@ func TestDetectForRefusesADirectoryAsRuntimeBin(t *testing.T) {
 
 	if _, err := DetectFor(Preference{Bin: t.TempDir()}); err == nil {
 		t.Fatal("expected a directory to be refused")
+	}
+}
+
+// Only "no runtime binary on PATH" carries ErrNoRuntime. That is the seam env
+// and ls degrade on -- exit 0, report what they can -- so an unknown
+// BRIG_RUNTIME and a runtimeBin that is not there must NOT match it, or those
+// mistakes would be swallowed as "nothing installed". This test is what stops a
+// future change to the error type or message from silently widening that
+// swallow: it asserts the sentinel is the seam, not "err != nil".
+func TestDetectForSentinelMarksOnlyTheMissingRuntime(t *testing.T) {
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+
+	// No runtime on PATH: LookPath finds nothing, so both backends report the
+	// sentinel.
+	t.Setenv("PATH", t.TempDir())
+	for _, kind := range []string{"hull", "nerdctl"} {
+		t.Setenv("BRIG_RUNTIME", kind)
+		_, err := DetectFor(Preference{})
+		if err == nil {
+			t.Fatalf("BRIG_RUNTIME=%s with an empty PATH was accepted", kind)
+		}
+		if !errors.Is(err, ErrNoRuntime) {
+			t.Errorf("BRIG_RUNTIME=%s: %v does not match ErrNoRuntime", kind, err)
+		}
+	}
+
+	// An unknown BRIG_RUNTIME is a mistake, not a missing install.
+	t.Setenv("BRIG_RUNTIME", "podman")
+	if _, err := DetectFor(Preference{}); errors.Is(err, ErrNoRuntime) {
+		t.Errorf("unknown BRIG_RUNTIME matched ErrNoRuntime, so env/ls would swallow it: %v", err)
+	}
+
+	// A runtimeBin that is not there is a misconfiguration, not a missing
+	// install.
+	t.Setenv("BRIG_RUNTIME", "hull")
+	_, err := DetectFor(Preference{Bin: filepath.Join(t.TempDir(), "not-there")})
+	if err == nil {
+		t.Fatal("a missing runtimeBin was accepted")
+	}
+	if errors.Is(err, ErrNoRuntime) {
+		t.Errorf("a bad runtimeBin matched ErrNoRuntime, so env/ls would swallow it: %v", err)
 	}
 }
 
