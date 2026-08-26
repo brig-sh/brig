@@ -97,6 +97,18 @@ type Config struct {
 	Out io.Writer
 	Err io.Writer
 
+	// Progress is where the run narrates what it is doing -- the line that says
+	// a boot has started, and nothing that anybody has to act on.
+	//
+	// Separate from Err because a caller that collects what a run said and
+	// hands it to somebody else has to be able to tell the two apart. brigd is
+	// that caller: it returns Err to the client as the request's warnings, and
+	// with the narration in there a boot that went perfectly came back carrying
+	// "starting sandbox ..." as a warning about itself. On a terminal the
+	// distinction does not arise, both being lines on the same stderr, which is
+	// why it went unnoticed for as long as the CLI was the only caller.
+	Progress io.Writer
+
 	env Env
 }
 
@@ -188,6 +200,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Cwd:            cwd,
 		Out:            os.Stdout,
 		Err:            os.Stderr,
+		Progress:       os.Stderr,
 		env:            env,
 	}
 	c.GuestCwd = GuestCwd(cwd, c.Workspace, t.GuestHome)

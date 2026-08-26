@@ -74,6 +74,10 @@ type Response struct {
 	// the command; a daemon has no such terminal, and its own is nobody's, so
 	// they travel back to the client that asked instead. One line each, in the
 	// order they were said.
+	//
+	// Only things to act on. What the run narrated about its own progress is
+	// not among them, so an ensure that went entirely well comes back with no
+	// warnings at all and a client can treat any at all as worth showing.
 	Warnings []string  `json:"warnings,omitempty"`
 	Version  string    `json:"version,omitempty"`
 	Sessions []Session `json:"sessions,omitempty"`
@@ -368,7 +372,8 @@ func (d *daemon) dispatch(req Request) Response {
 // a caller proceed deliberately. And what it says belongs to the client that
 // asked rather than to whatever terminal brigd was started from, so both
 // writers go to a buffer this request owns; concurrent requests each get their
-// own.
+// own. Progress narration is the exception and stays on the daemon's stderr,
+// for the reason given where it is set.
 func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	t, ok := profile.Lookup(req.Agent)
 	if !ok {
@@ -385,6 +390,14 @@ func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	said := &bytes.Buffer{}
 	cfg.Out = said
 	cfg.Err = said
+	// Not into that buffer. What the run narrates about its own progress is not
+	// a warning, and the buffer is delivered to the client as the request's
+	// warnings: with the narration in it, an ensure that did everything right
+	// answered {"ok":true} carrying "starting sandbox ..." as a complaint about
+	// itself, and a client with any rule about a non-empty warnings list acted
+	// on it. It goes to the daemon's stderr instead, which is its log and the
+	// one place a line saying a boot has started is worth having.
+	cfg.Progress = os.Stderr
 	cfg.NoTerminal = true
 	return cfg, said, nil
 }

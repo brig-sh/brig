@@ -62,6 +62,10 @@ person who typed the command, and the daemon has no such terminal, so they
 travel to the client that asked rather than to whatever terminal brigd happens
 to have been started from.
 
+Only things to act on. What a run narrates about its own progress, such as the
+line saying a boot has started, goes to brigd's stderr and not to the client, so
+an `ensure` that went entirely well comes back with no `warnings` at all.
+
 A connection that sends nothing for five minutes is closed. The deadline is
 reset before each request, so it bounds the silence between requests and not
 the work: an `ensure` that spends a minute booting is not racing it.

@@ -311,6 +311,36 @@ func TestARequestThatWouldPromptIsRefusedRatherThanAsked(t *testing.T) {
 	}
 }
 
+// A boot that went well warns about nothing. The daemon collects what a run
+// says and returns it to the client as warnings, and the line narrating that
+// the boot has started went into the same buffer -- so a cold boot with nothing
+// wrong with it answered {"ok":true} carrying a complaint about itself, and a
+// client with any rule about a non-empty warnings list acted on it.
+//
+// The counterpart, that a real warning still travels, is
+// TestARequestThatWouldPromptIsRefusedRatherThanAsked: the image check's verdict
+// reaches the client in the same field.
+func TestACleanColdBootWarnsAboutNothing(t *testing.T) {
+	stubRuntime(t)
+	agent := testProfile(t, "cleanboot")
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(shortDir(t), "ws"))
+	// The image check is the other thing that speaks on a cold boot, and with
+	// no cosign on this machine it has something true to say. Off, so what is
+	// left in the buffer is the narration this test is about.
+	t.Setenv("BRIG_VERIFY", "off")
+
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	startDaemon(t, socket)
+
+	resp := ask(t, socket, `{"op":"ensure","agent":"`+agent+`"}`)
+	if !resp.OK {
+		t.Fatalf("the sandbox did not come up: %+v", resp)
+	}
+	if len(resp.Warnings) != 0 {
+		t.Errorf("a boot with nothing wrong with it warned anyway: %q", resp.Warnings)
+	}
+}
+
 // A profile's runtimeBin has to reach the same binary through the daemon as it
 // does through the CLI. It did not: the daemon detected a runtime once at
 // startup, with no profile in hand to take a preference from, so a profile

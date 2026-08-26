@@ -24,6 +24,20 @@ func (c *Config) sayf(format string, a ...any) {
 	fmt.Fprintf(c.Out, "brig: "+format+"\n", a...)
 }
 
+// progressf narrates what the run is doing. See Config.Progress for why this
+// is not warnf.
+//
+// A nil Progress is silence rather than a panic, unlike Out and Err: losing a
+// line of narration costs the reader nothing, and every test that builds a
+// Config by hand would otherwise have to declare where its progress goes to
+// ask a question about something else.
+func (c *Config) progressf(format string, a ...any) {
+	if c.Progress == nil {
+		return
+	}
+	fmt.Fprintf(c.Progress, "brig: "+format+"\n", a...)
+}
+
 // Marker identifies this workspace by path and inode.
 //
 // A share is bound at boot and cannot be changed on a live VM, so a
