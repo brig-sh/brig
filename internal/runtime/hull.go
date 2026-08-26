@@ -21,6 +21,13 @@ type hull struct {
 	// while brig is running.
 	pinsOnce sync.Once
 	pins     bool
+	// consent caches whether hull has an answer on file about telemetry, which
+	// decides whether an operation the user asked for may be counted. See
+	// consentRecorded.
+	consent struct {
+		once sync.Once
+		on   bool
+	}
 }
 
 func newHull(bin string) (Runtime, error) {
@@ -272,7 +279,9 @@ func (h *hull) Run(spec RunSpec) error {
 	}
 
 	cmd := exec.Command(h.bin, args...)
-	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
+	// The boot gets no terminal, so hull cannot ask anyone anything here: it
+	// is counted only once an answer is already on file. See telemetryEnvFor.
+	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
 	cmd.Stdout = nil // the instance id is not interesting; failures explain themselves
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -419,7 +428,7 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 	// as "cannot say" rather than waiting on it.
 	cmd, cancel, envVals := h.agentCall(spec)
 	defer cancel()
-	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
+	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -436,7 +445,7 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 func (h *hull) Feed(spec ExecSpec) error {
 	cmd, cancel, envVals := h.agentCall(spec)
 	defer cancel()
-	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
+	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
 	cmd.Stdin = spec.Stdin
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -455,7 +464,12 @@ func (h *hull) Feed(spec ExecSpec) error {
 func (h *hull) Replace(spec ExecSpec) error {
 	args, envVals := h.execArgs(spec)
 	argv := append([]string{h.bin}, args...)
-	return syscall.Exec(h.bin, argv, mergeEnv(telemetryEnv(spec.Counted), envVals))
+	// This is the one invocation that inherits the user's terminal, and TTY is
+	// set from whether brig's own stdin is one. When it is, hull can put its
+	// consent question to a person before it sends anything, so brig leaves it
+	// unsuppressed and lets that happen; when it is not, the same rule as the
+	// boot applies. See telemetryEnvFor.
+	return syscall.Exec(h.bin, argv, mergeEnv(h.telemetryEnvFor(spec.Counted, spec.TTY), envVals))
 }
 
 func (h *hull) Stop(name string) error { return h.quiet("stop", name, true) }
@@ -480,7 +494,9 @@ func (h *hull) Remove(name string) error {
 // failed `brig stop` will look.
 func (h *hull) quiet(verb, name string, counted bool) error {
 	cmd := exec.Command(h.bin, verb, name)
-	cmd.Env = mergeEnv(telemetryEnv(counted))
+	// Counted like the boot, and gated like it for the same reason: this runs
+	// with no terminal, so nothing can be asked here either.
+	cmd.Env = mergeEnv(h.telemetryEnvFor(counted, false))
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {

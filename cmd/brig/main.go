@@ -55,6 +55,8 @@ usage:
   brig secret create|read|update|delete|ls       keep secrets in your keyring
   brig secret import <profile>                   fill a profile's secrets from
                                                  your host, once
+  brig telemetry status|on|off                   report what is counted, or
+                                                 turn the counting on or off
   brig version
 
 flags (before the agent's own arguments; -- ends brig's parsing):
@@ -155,6 +157,8 @@ func run(args []string) error {
 		return profileCmd(rest)
 	case "secret":
 		return secretCmd(os.Stdout, rest)
+	case "telemetry":
+		return telemetryCmd(os.Stdout, rest)
 	case "import":
 		return importProfile(rest)
 	case "export":
