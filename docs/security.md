@@ -503,11 +503,11 @@ yes. `brig telemetry status` reports which of those is currently deciding.
 on when it cannot put the question to anyone, and brig's boot invocation gives
 it no terminal, so left alone a fresh install would report its first boot
 before anyone had been asked. brig suppresses counting for every operation
-that runs without a terminal until an answer is on file: the boot, the stop,
-the plumbing. The one invocation that does inherit your terminal -- the exec
-that hands the sandbox to the agent -- is left able to ask, which is where the
-question appears. A default is not consent, but neither is a prompt nobody can
-ever see.
+that runs without a terminal: the boot and the stop until an answer is on
+file, and the plumbing always. The one invocation that does inherit your
+terminal -- the exec that hands the sandbox to the agent -- is left able to
+ask, which is where the question appears. A default is not consent, but
+neither is a prompt nobody can ever see.
 
 An event carries a fixed envelope -- schema version, event type, product name
 and version, OS version, CPU architecture, an install identifier generated

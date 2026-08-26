@@ -425,7 +425,7 @@ rather than letting a default stand in for consent.
 An event carries the product name and version, the OS version and CPU
 architecture, an install identifier generated on your machine (delete
 `~/.hull/telemetry.json` to rotate it), a timestamp and a checksum. On top of
-that envelope: which brig subcommand ran and whether it succeeded, with
+that envelope: which runtime operation ran and whether it succeeded, with
 failures bucketed into coarse classes such as `network` or `permission` and
 never the error text; which hypervisor backend booted and whether the boot
 worked; how long a sandbox lived; sampled memory and CPU of the VM process

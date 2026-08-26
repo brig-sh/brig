@@ -214,6 +214,7 @@ func TestParseTelemetry(t *testing.T) {
 		{"telemetry: disabled\n", TelemetryOff, ""},
 		{"telemetry: disabled (DO_NOT_TRACK=1)\n", TelemetryOff, "DO_NOT_TRACK=1"},
 		{"telemetry: disabled (HULL_TELEMETRY_DISABLED=1)\n", TelemetryOff, "HULL_TELEMETRY_DISABLED=1"},
+		{"telemetry: enabled (HULL_TELEMETRY_ENABLED=1)\n", TelemetryOn, "HULL_TELEMETRY_ENABLED=1"},
 		{"telemetry: not configured (on by default; interactive runs will be asked)\n", TelemetryUnanswered, ""},
 		{"telemetry: enabled for an older schema (interactive runs will be re-asked)\n", TelemetryUnanswered, ""},
 		{"", TelemetryUnknown, ""},
