@@ -130,7 +130,7 @@ yourself and pass `--image`.
 ## cosign is not installed
 
 ```
-brig: cannot verify image ghcr.io/brig-sh/claude-code:latest: cosign is not
+brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:latest: cosign is not
 installed (`brew install cosign`). Booting it unchecked
 ```
 
@@ -150,7 +150,7 @@ If you would rather boot without it and stop the warning, that is
 ## The signature did not verify
 
 ```
-brig: image ghcr.io/brig-sh/claude-code:latest claims to be published by
+brig: image ghcr.io/brig-sh/claude-code-stock:latest claims to be published by
 brig-sh, but its signature DID NOT VERIFY: <detail>
 brig: Boot it anyway? [y/N]
 ```
