@@ -782,7 +782,7 @@ func listProfiles() error {
 	}
 	fmt.Printf("\nan unmarked profile is built in; your own live in %s\n", profile.Dir())
 	fmt.Printf("to override one:  brig profile export claude-code claude-code, then brig profile edit claude-code\n")
-	fmt.Printf("to add your own:  brig profile export claude-code mytool, then brig profile edit mytool (change name:)\n")
+	fmt.Printf("to add your own:  brig profile export claude-code mytool, then brig profile edit mytool\n")
 	fmt.Printf("to build an image for one: %s\n", profile.BringYourOwnImageDoc)
 	return nil
 }
@@ -811,26 +811,68 @@ func handCreatedNames(p profile.Profile) []string {
 	return names
 }
 
+// profileUsage is what `brig profile --help` prints. Held here rather than in
+// the top-level usage text for the same reason secretUsage is: it names the
+// flags of five verbs, which is more than the one line the command list can
+// give them.
+const profileUsage = `brig profile -- manage profiles
+
+usage:
+  brig profile ls                        list the profiles
+  brig profile export <profile>          print one, to edit or to pipe
+  brig profile export <profile> <name>   save it as <name> in the profile dir
+  brig profile import <file>             add one of your own (- reads stdin)
+  brig profile edit <name>               open yours in $VISUAL or $EDITOR
+  brig profile rm <name> [-y]            delete yours, after asking
+
+flags:
+      --json        with export: render JSON rather than YAML
+  -f, --force       with export: replace a file that is already there
+  -y, --yes         with rm: the answer, given in advance
+
+A destination is a name and never a path: export writes the profile directory
+and nowhere else, because that is the only place a profile file does anything.
+Redirect the no-destination form to put a copy of your own anywhere.
+
+A profile saves you spelling out the image, the guest home and the credential
+variables on every run. Export the closest one, edit it, import it back.
+Building an image for one is documented at
+  ` + profile.BringYourOwnImageDoc + `
+`
+
 // profileCmd groups the profile verbs, which is where someone coming from
 // another sandbox tool will look for them.
 func profileCmd(args []string) error {
 	if len(args) == 0 {
 		return errors.New("profile needs a subcommand: ls, export, import, edit or rm")
 	}
+	var err error
 	switch args[0] {
+	case "--help", "-h", "help":
+		fmt.Print(profileUsage)
+		return nil
 	case "ls", "list":
 		return listProfiles()
 	case "export", "save":
-		return exportProfile(args[1:])
+		err = exportProfile(args[1:])
 	case "import", "load":
-		return importProfile(args[1:])
+		err = importProfile(args[1:])
 	case "edit":
-		return editProfile(args[1:])
+		err = editProfile(args[1:])
 	case "rm":
-		return removeProfile(args[1:])
+		err = removeProfile(args[1:])
 	default:
 		return fmt.Errorf("unknown profile subcommand %q (ls, export, import, edit, rm)", args[0])
 	}
+	// A verb's own parser reports --help as an error, because that is how the
+	// flag package says it. Asking for help is not a mistake, so it is answered
+	// with the help and an exit code of zero -- the same translation the secret
+	// group makes, and for the same reason.
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Print(profileUsage)
+		return nil
+	}
+	return err
 }
 
 // editProfile opens a file-backed profile in your editor.
@@ -944,6 +986,11 @@ func importProfile(args []string) error {
 // writes mine.yaml into the profile directory, because that is the only place
 // a profile file does anything. See profile.ExportPath, which owns the rule.
 //
+// The destination is also the name written into the file. brig keys on the
+// name: field rather than on the file name, so the two disagreeing is the
+// difference between a profile of your own and a copy of someone else's under
+// a misleading file name -- see profile.ExportAs.
+//
 // With no destination it prints, which is what keeps
 // `brig profile export x | brig profile import -` working, what stops the
 // command writing anything you did not ask for, and how you get a copy
@@ -1002,20 +1049,47 @@ func exportProfile(args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown profile %q. `brig profiles` lists them", name)
 	}
-	render := profile.Export
-	if asJSON {
-		render = profile.ExportJSON
-	}
-	blob, err := render(p)
-	if err != nil {
-		return err
-	}
-	if dest == "" {
-		_, err = os.Stdout.Write(blob)
-		return err
-	}
 	path, err := profile.ExportPath(dest, asJSON)
 	if err != nil {
+		return err
+	}
+	// The name the exported profile carries: the file's own stem when there is
+	// a file, so that `brig profile export claude-code mytool` writes a profile
+	// called mytool and `brig profile edit mytool` can then open it. With no
+	// destination there is no file to agree with, and the export is the profile
+	// as it stands.
+	as := p.Name
+	if path != "" {
+		as = stemOf(path)
+	}
+	// The same collision profile.Import refuses, refused here for the same
+	// reason: a name that a reserved profile already answers to would take a
+	// workspace that is not its own. Export can reach it now that it writes the
+	// name rather than copying one that was already checked.
+	if owner, reserved := profile.Reserved(as); reserved && as != owner {
+		return fmt.Errorf("a profile named %q would collide with the %s profile, which "+
+			"reserves that word. Export it under another name", as, owner)
+	}
+	// An alias is the same collision one step further out: the word is already
+	// how people spell a profile, and a profile of that name wins the lookup,
+	// so the copy takes every run of the name it was copied from. Refused
+	// rather than warned about, because the export that causes it is the first
+	// step of the recipe brig prints and the shadowing shows up much later, as
+	// a run booting an image nobody chose.
+	if owner, ok := profile.Alias(as); ok {
+		return fmt.Errorf("a profile named %q would collide with %s, which is what brig "+
+			"already runs for that word. Export it under another name", as, owner)
+	}
+	render := profile.ExportAs
+	if asJSON {
+		render = profile.ExportJSONAs
+	}
+	blob, err := render(p, as)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		_, err = os.Stdout.Write(blob)
 		return err
 	}
 	// An export is generated bytes: it has none of the edits that are the
@@ -1037,19 +1111,25 @@ func exportProfile(args []string) error {
 	if err := os.WriteFile(path, blob, 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("wrote %s -> %s\n", p.Name, path)
-	if profile.Embedded(p.Name) {
-		fmt.Printf("it is in your profile directory, so it now overrides the built-in %s\n", p.Name)
+	if as == p.Name {
+		fmt.Printf("wrote %s -> %s\n", p.Name, path)
+	} else {
+		fmt.Printf("wrote %s as %s -> %s\n", p.Name, as, path)
 	}
-	// brig keys on the name field, not the file name, so a file called
-	// mine.yaml that still says "name: codex" is an override of codex however
-	// it is spelled. Say so where it is fixable, which is before the edit
-	// rather than after two of them fight over one name.
-	if stem := stemOf(path); stem != p.Name {
-		fmt.Printf("brig reads the name: field, not the file name, so this is still "+
-			"the %s profile. Change name: to %s if you meant a profile of your own\n",
-			p.Name, stem)
+	// Embedded is asked about the name the file now declares rather than the
+	// one it was copied from: an export under a new name shadows nothing, and
+	// saying it overrode the built-in it started from would be exactly wrong.
+	if profile.Embedded(as) {
+		fmt.Printf("it is in your profile directory, so it now overrides the built-in %s\n", as)
 	}
+	// The name agrees with the file, and nothing else does yet: the image, the
+	// guest home and every comment in there still describe the profile this was
+	// copied from. Say so where it is actionable, and name the command that
+	// opens it, which is the next step of the recipe brig prints.
+	if as != p.Name {
+		fmt.Printf("its image, guest home and comments still describe %s\n", p.Name)
+	}
+	fmt.Printf("edit it with: brig profile edit %s\n", as)
 	return nil
 }
 
@@ -1063,21 +1143,28 @@ func stemOf(path string) string {
 // removeProfile deletes a profile of your own. A built-in is compiled in and
 // cannot be removed, only shadowed -- say so rather than reporting a missing
 // file.
+//
+// -y is the answer to the question below, given in advance, and it is spelled
+// the way the secret verbs spell it.
 func removeProfile(args []string) error {
-	if len(args) == 0 {
-		return errors.New("profile rm needs a name")
+	name, yes, err := nameAndYes("profile rm", "brig profile rm mine", args)
+	if err != nil {
+		return err
 	}
 	// Resolve through the registry rather than trusting the argument: it takes
 	// aliases, and it names the file actually loaded, which need not be
-	// <name>.yaml -- `brig profile export claude-code pinned.yaml` is an
-	// override whose basename says nothing about which profile it serves.
-	p, ok := profile.Lookup(args[0])
+	// <name>.yaml -- a file someone renamed by hand is an override whose
+	// basename says nothing about which profile it serves.
+	p, ok := profile.Lookup(name)
 	if !ok {
-		return fmt.Errorf("no profile of your own named %q", args[0])
+		return fmt.Errorf("no profile of your own named %q", name)
 	}
 	if _, ok := profile.Path(p.Name); !ok {
 		return fmt.Errorf("%s is a built-in profile, so there is nothing to remove. "+
 			"Import a profile of the same name to shadow it", p.Name)
+	}
+	if err := confirmRemoveProfile(name, p.Name, profile.Files(p.Name), yes); err != nil {
+		return err
 	}
 	// Every file that declares the name, not just the one that loaded: see
 	// profile.Remove. Two of them is a mistake brig reports at load time and
@@ -1088,6 +1175,81 @@ func removeProfile(args []string) error {
 		fmt.Printf("removed %s\n", f)
 	}
 	return err
+}
+
+// confirmRemoveProfile names the files an rm is about to delete, and asks
+// before deleting one the argument did not name.
+//
+// rm resolves the argument through the registry, which is what lets it work on
+// an alias and on a file whose basename says nothing about the profile inside
+// it. That resolution is also how `brig profile rm claude-code` could delete a
+// file called mytool.yaml and exit 0 without a word: the file the person had a
+// name for and the file brig found were different files, and only brig knew
+// which.
+//
+// So the question is whether brig had to work anything out, and there are two
+// ways it does. The argument may not be the profile's own name, which is the
+// alias case: `brig profile rm claude` deletes whatever backs claude-code, and
+// a file called claude.yaml declaring claude-code carries the stem the
+// argument spells while being a profile the argument never said. And a file's
+// basename may not be the argument at all, which is the renamed-by-hand case
+// and the second-file-shadowing-the-first case. `brig profile rm mytool`
+// against mytool.yaml declaring mytool is the one combination that is exactly
+// what was typed -- what export writes, and the only case where nothing can
+// surprise you.
+//
+// The message names every file profile.Remove will take rather than only the
+// ones that raised the question: what is being agreed to is the delete, and a
+// list one file short of it is the wrong thing to agree to.
+//
+// Without a terminal there is nobody to answer, and assuming yes would make
+// the scripted case the one that cannot be stopped, so it refuses and names
+// the flag that answers in advance -- the shape confirmDelete already uses,
+// for the same reason.
+func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error {
+	surprising := arg != resolved
+	for _, f := range files {
+		if stemOf(f) != arg {
+			surprising = true
+		}
+	}
+	if !surprising {
+		return nil
+	}
+	list := strings.Join(files, ", ")
+	// A verb that agrees with the list, because two files declaring one profile
+	// is a case this message exists for rather than a curiosity.
+	declares := "declares"
+	if len(files) > 1 {
+		declares = "declare"
+	}
+	// Named on stderr either way, so an rm inside a pipeline still says which
+	// files it means where a person can see them. A run that answered in
+	// advance is told rather than asked, because -y is an answer to this
+	// question and not a reason to stop naming the files.
+	if yes {
+		fmt.Fprintf(os.Stderr, "brig: removing %s, which %s the %s profile\n",
+			list, declares, resolved)
+		return nil
+	}
+	if !wrap.IsTerminal(os.Stdin) {
+		return fmt.Errorf("removing %q would delete %s, which brig worked out from the "+
+			"name you typed rather than being told, and there is no terminal to ask on. "+
+			"Pass -y to answer in advance: brig profile rm %s -y", arg, list, arg)
+	}
+	fmt.Fprintf(os.Stderr, "brig: removing %q deletes %s, which %s the %s profile. "+
+		"Remove it? [y/N] ", arg, list, declares, resolved)
+	line, err := readAnswer(os.Stdin)
+	if err != nil {
+		// EOF is the answer a closed stdin gives, and it is not yes.
+		return fmt.Errorf("aborted: nothing was removed. To answer in advance: "+
+			"brig profile rm %s -y", arg)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	}
+	return errors.New("aborted: nothing was removed")
 }
 
 // deprecated notes an old spelling once, on stderr so it never lands in

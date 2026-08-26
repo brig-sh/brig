@@ -63,8 +63,13 @@ func TestExportProfileToAFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(blob), "name: claude-code") {
-		t.Errorf("the export is not a profile:\n%s", blob)
+	// The file and the profile in it agree: a destination is the name the
+	// exported profile carries, not only the name of the file it lands in.
+	if !strings.Contains(string(blob), "name: mine") {
+		t.Errorf("the export is not a profile called mine:\n%s", blob)
+	}
+	if strings.Contains(string(blob), "name: claude-code") {
+		t.Errorf("mine.yaml still declares the profile it was copied from:\n%s", blob)
 	}
 	if !strings.Contains(string(blob), "outrank Claude Code's subscription credential") {
 		t.Error("the destination file lost the comments")
@@ -252,16 +257,30 @@ func TestExportBareNameLandsInTheProfileDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("export did not write into the profile directory: %v", err)
 	}
-	if !strings.Contains(string(blob), "name: claude-code") {
-		t.Errorf("the export is not a profile:\n%s", blob)
+	if !strings.Contains(string(blob), "name: mine") {
+		t.Errorf("the export is not a profile called mine:\n%s", blob)
 	}
 	// And brig reads it back on the next load, which is the point of putting
-	// it there rather than wherever the user happened to be standing.
+	// it there rather than wherever the user happened to be standing. Under a
+	// name of its own it is a profile of your own, not an override: overriding
+	// the built-in is what exporting under the built-in's name does.
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if !profile.IsCustom("mine") {
+		t.Error("the exported file is not picked up as a profile of your own")
+	}
+	if profile.OverridesBuiltIn("claude-code") {
+		t.Error("an export under a new name shadowed the profile it was copied from")
+	}
+	if err := exportProfile([]string{"claude-code", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
 	if !profile.OverridesBuiltIn("claude-code") {
-		t.Error("the exported file is not picked up as an override")
+		t.Error("an export under the built-in's own name is not picked up as an override")
 	}
 	// --json names the file after the format it is in.
 	if err := exportProfile([]string{"codex", "robot", "--json"}); err != nil {
@@ -356,7 +375,10 @@ func TestRemoveProfileTakesEveryFileDeclaringTheName(t *testing.T) {
 	}
 	_ = profile.Load(profile.Dir()) // duplicates are reported, not fatal
 
-	if err := removeProfile([]string{"codex"}); err != nil {
+	// -y because pinned.yaml is not the file the argument names, and rm asks
+	// before deleting one of those. The second file is the whole point here,
+	// so answering the question in advance is the way to reach the case.
+	if err := removeProfile([]string{"codex", "-y"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := profile.Load(profile.Dir()); err != nil {
@@ -383,9 +405,10 @@ func TestRemoveProfileResolvesFileAndAlias(t *testing.T) {
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
-	// By alias, not even by the profile's own name.
-	if err := removeProfile([]string{"claude"}); err != nil {
-		t.Fatalf("could not remove an override the CLI itself creates: %v", err)
+	// By alias, not even by the profile's own name -- which is a file the
+	// argument did not name, so the answer comes with it.
+	if err := removeProfile([]string{"claude", "-y"}); err != nil {
+		t.Fatalf("could not remove an override by alias: %v", err)
 	}
 	if _, err := os.Stat(pinned); !os.IsNotExist(err) {
 		t.Error("the override file is still there")
@@ -437,5 +460,238 @@ func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T)
 	// vocabulary rather than brig's, and a listing is names.
 	if strings.Contains(out, "Some Service") {
 		t.Errorf("listing printed a source locator:\n%s", out)
+	}
+}
+
+// The recipe brig prints has to work as written: export the closest built-in
+// under a name of your own, edit it, run it, remove it by the name you chose.
+// Every step addresses that name, which is what did not work while the file
+// was called mytool.yaml and the profile inside it was still claude-code --
+// edit had no such profile to open, and rm reached the file only under the
+// name of the profile it was copied from. The run leg is script/smoke.sh,
+// which has a runtime to boot against; what a run needs from here is that the
+// name resolves to this file, with the settings it was copied from.
+func TestExportedProfileIsEditableAndRemovableByItsNewName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := exportProfile([]string{"claude-code", "mytool"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	p, ok := profile.Lookup("mytool")
+	if !ok {
+		t.Fatal("the exported profile is not there under the name it was exported as")
+	}
+	built, _ := profile.Lookup("claude-code")
+	if p.Name != "mytool" || p.Image != built.Image || p.GuestHome != built.GuestHome {
+		t.Errorf("mytool is not the profile it was copied from, renamed: %+v", p)
+	}
+	if path, ok := profile.Path("mytool"); !ok || path != filepath.Join(dir, "mytool.yaml") {
+		t.Errorf("Path(mytool) = %q, %v", path, ok)
+	}
+	// Renamed and nothing else: the comments are why anyone starts from an
+	// existing profile rather than a blank file.
+	blob, err := os.ReadFile(filepath.Join(dir, "mytool.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), "outrank Claude Code's subscription credential") {
+		t.Errorf("the rename cost the file its comments:\n%s", blob)
+	}
+
+	stubEditor(t, `printf '\n# tuned by hand\n' >> "$1"`)
+	if err := editProfile([]string{"mytool"}); err != nil {
+		t.Fatalf("editing the exported profile by its own name failed: %v", err)
+	}
+	if after, err := os.ReadFile(filepath.Join(dir, "mytool.yaml")); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(after), "tuned by hand") {
+		t.Errorf("the edit is not on disk:\n%s", after)
+	}
+
+	// And out again by the same name, with nothing asked: this is the file the
+	// argument names.
+	if err := removeProfile([]string{"mytool"}); err != nil {
+		t.Fatalf("removing the exported profile by its own name failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mytool.yaml")); !os.IsNotExist(err) {
+		t.Error("the file is still there after rm")
+	}
+}
+
+// rm resolves through the registry, so the file it deletes need not be the one
+// the argument spells. That is worth keeping -- it is what makes rm work on an
+// alias -- but it must not delete a file nobody named without a word: the bug
+// this guards was `brig profile rm claude-code` removing mytool.yaml, silently
+// and with exit 0.
+func TestRemoveProfileAsksBeforeDeletingAFileYouDidNotName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	pinned := filepath.Join(dir, "pinned.yaml")
+	blob := []byte("name: mytool\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n")
+	if err := os.WriteFile(pinned, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	noAnswer(t)
+
+	err := removeProfile([]string{"mytool"})
+	if err == nil {
+		t.Fatal("rm deleted a file the argument did not name, without asking")
+	}
+	if !strings.Contains(err.Error(), "-y") || !strings.Contains(err.Error(), pinned) {
+		t.Errorf("the refusal names neither the file nor the way through: %v", err)
+	}
+	if _, statErr := os.Stat(pinned); statErr != nil {
+		t.Error("the file was removed anyway")
+	}
+
+	// -y is that question answered in advance, the way the secret verbs spell
+	// it.
+	if err := removeProfile([]string{"mytool", "-y"}); err != nil {
+		t.Fatalf("-y did not answer the question: %v", err)
+	}
+	if _, err := os.Stat(pinned); !os.IsNotExist(err) {
+		t.Error("-y left the file in place")
+	}
+}
+
+// Asking for help is not a mistake. The verbs parse their own flags, and the
+// flag package reports --help as an error, so without translating it here
+// `brig profile rm --help` answers a reasonable question with
+// `brig: flag: help requested` and exits 1. The secret group already answers
+// its own the other way.
+func TestProfileHelpPrintsUsageAndSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"rm", "--help"}, {"rm", "-h"}, {"--help"}, {"-h"}, {"help"},
+	} {
+		out, err := captureStdout(t, func() error { return profileCmd(args) })
+		if err != nil {
+			t.Errorf("profile %v: %v", args, err)
+		}
+		if !strings.Contains(out, "brig profile rm") {
+			t.Errorf("profile %v printed no usage:\n%s", args, out)
+		}
+	}
+}
+
+// noAnswer gives a test a stdin of its own, closed: nothing to ask on, and an
+// answer that is not yes if anything asks anyway. `go test` usually hands the
+// binary /dev/null, but a test binary run from a terminal would otherwise sit
+// waiting for someone to type.
+func noAnswer(t *testing.T) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	orig := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = orig; r.Close() })
+}
+
+// The same silent delete the confirmation exists to stop, reached through an
+// alias: `brig profile rm claude` resolves to claude-code, and a file called
+// claude.yaml has the stem the argument spells, so the file-name test alone
+// waves it through. What the person typed is not the profile brig found, which
+// is the whole condition.
+func TestRemoveProfileAsksWhenAnAliasResolvedElsewhere(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	// The file is called claude.yaml and declares claude-code: the stem is the
+	// word typed, the profile inside it is not.
+	path := filepath.Join(dir, "claude.yaml")
+	blob := []byte("name: claude-code\nimage: docker.io/me/pinned:latest\n" +
+		"guestHome: /home/claude\nbinary: claude\nmem: 1\ncpus: 1\n")
+	if err := os.WriteFile(path, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	noAnswer(t)
+
+	err := removeProfile([]string{"claude"})
+	if err == nil {
+		t.Fatal("rm deleted the file an alias resolved to, without asking")
+	}
+	if !strings.Contains(err.Error(), "-y") || !strings.Contains(err.Error(), path) {
+		t.Errorf("the refusal names neither the file nor the way through: %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Error("the file was removed anyway")
+	}
+	// -y is the same answer given in advance, so the alias still works: this
+	// asks a question, it does not close the door.
+	if err := removeProfile([]string{"claude", "-y"}); err != nil {
+		t.Fatalf("-y did not answer the question: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("-y left the file in place")
+	}
+}
+
+// The message has to name every file the delete takes, not only the ones the
+// argument did not name. profile.Remove takes both files here, so a refusal
+// that names only pinned.yaml understates what was about to happen by one
+// file -- and that message is the only thing the person has to decide on.
+func TestRemoveProfileNamesEveryFileItWouldDelete(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	blob := []byte("name: mytool\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n")
+	for _, base := range []string{"mytool.yaml", "pinned.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, base), blob, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = profile.Load(profile.Dir()) // duplicates are reported, not fatal
+	noAnswer(t)
+
+	err := removeProfile([]string{"mytool"})
+	if err == nil {
+		t.Fatal("rm deleted two files without asking")
+	}
+	for _, base := range []string{"mytool.yaml", "pinned.yaml"} {
+		if !strings.Contains(err.Error(), filepath.Join(dir, base)) {
+			t.Errorf("the refusal does not name %s: %v", base, err)
+		}
+	}
+}
+
+// Export writes the name into the file, so a destination that is an alias is a
+// profile that answers to a word already spoken for. Lookup prefers a registry
+// hit over an alias, so `brig profile export claude-code claude` would make
+// every `brig run claude` mean the copy, with the built-in reachable only
+// under its full name. Same collision as a reserved name, refused the same
+// way.
+func TestExportRefusesADestinationThatIsAnAlias(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	err := exportProfile([]string{"claude-code", "claude"})
+	if err == nil {
+		t.Fatal("export wrote a profile named after an alias")
+	}
+	if !strings.Contains(err.Error(), "claude-code") {
+		t.Errorf("the refusal does not say what the name collides with: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "claude.yaml")); !os.IsNotExist(statErr) {
+		t.Error("the file was written anyway")
 	}
 }

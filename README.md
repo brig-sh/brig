@@ -488,12 +488,16 @@ credential variables every time:
 
 ```bash
 brig profile export claude-code mine   # start from the closest one
-brig profile edit mine                 # change name, image, forward/deny
+brig profile edit mine                 # change the image, forward/deny
 brig run mine
 ```
 
 The second word is a name, not a path: brig writes `~/.config/brig/mine.yaml`,
-which is where a profile file has to be for brig to read it back. Export
+which is where a profile file has to be for brig to read it back. It is the
+profile's name as well as the file's -- export writes `name: mine` into the
+file, so `mine` is what every later command takes, `brig profile rm mine`
+included. Everything else in there still describes claude-code, which is what
+the edit on the second line is for. Export
 writes that directory and nowhere else, so a path is refused rather than
 honoured -- redirect stdout (`brig profile export claude-code > mine.yaml`)
 if you want a copy of your own. It also refuses to overwrite an existing file
