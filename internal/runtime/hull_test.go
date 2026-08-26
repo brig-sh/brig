@@ -35,7 +35,7 @@ func TestRunArgsDefaultsStayOffTheCommandLine(t *testing.T) {
 }
 
 func TestRunArgsRootfsTypeAndGateway(t *testing.T) {
-	got := argv(t, RunSpec{Name: "s", Image: "img", RootfsType: "block"}, "hvi", "shared", "/tmp/gw.sock", "10.87.0.2/24")
+	got := argv(t, RunSpec{Name: "s", Image: "img", RootfsType: "block"}, "hvi", "shared", "/tmp/gw.sock", "198.18.0.2/24")
 	if !strings.Contains(got, "--rootfs-type block") {
 		t.Errorf("rootfs type not passed: %s", got)
 	}
@@ -46,7 +46,7 @@ func TestRunArgsRootfsTypeAndGateway(t *testing.T) {
 	if !strings.Contains(got, "--gateway-sock /tmp/gw.sock") {
 		t.Errorf("gateway socket not passed: %s", got)
 	}
-	if !strings.Contains(got, "--gateway-cidr 10.87.0.2/24") {
+	if !strings.Contains(got, "--gateway-cidr 198.18.0.2/24") {
 		t.Errorf("gateway CIDR not passed alongside the socket: %s", got)
 	}
 }
@@ -58,7 +58,7 @@ func TestRunArgsGatewayFlagsTravelTogether(t *testing.T) {
 		name, sock, cidr string
 	}{
 		{name: "neither"},
-		{name: "both", sock: "/tmp/gw.sock", cidr: "10.87.0.7/24"},
+		{name: "both", sock: "/tmp/gw.sock", cidr: "198.18.0.7/24"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := argv(t, RunSpec{Name: "s", Image: "img"}, "hvi", "shared", tt.sock, tt.cidr)

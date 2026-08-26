@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,5 +113,36 @@ func TestLowestFreeHostReportsAFullNetwork(t *testing.T) {
 		t.Fatal("expected a full network to be reported")
 	} else if !strings.Contains(err.Error(), "brig rm") {
 		t.Errorf("error does not say how to free one: %v", err)
+	}
+}
+
+// The addresses handed out must come from the subnet the gateway is told to
+// serve. They were two independent literals, so moving one and not the other
+// gave every guest an address on a network nothing was routing -- the failure
+// the subnet comment warns about, and one that shows up as "the sandbox has no
+// network" rather than as anything pointing here.
+func TestHandedOutAddressesSitInTheServedSubnet(t *testing.T) {
+	net, err := netip.ParsePrefix(gatewaySubnet)
+	if err != nil {
+		t.Fatalf("gatewaySubnet %q does not parse: %v", gatewaySubnet, err)
+	}
+	for _, host := range []int{firstGuestHost, 17, lastGuestHost} {
+		cidr := formatGatewayCIDR(host)
+		addr, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			t.Fatalf("formatGatewayCIDR(%d) = %q, which does not parse: %v", host, cidr, err)
+		}
+		if !net.Contains(addr.Addr()) {
+			t.Errorf("guest address %s is outside the served subnet %s", cidr, gatewaySubnet)
+		}
+		if addr.Bits() != net.Bits() {
+			t.Errorf("guest address %s has prefix /%d, the subnet is /%d", cidr, addr.Bits(), net.Bits())
+		}
+	}
+	// The gateway's own address has to be on it too, and hull derives it as
+	// the network address plus one.
+	gw, err := netip.ParseAddr(gatewayAddr)
+	if err != nil || !net.Contains(gw) {
+		t.Errorf("gateway address %s is not in %s (%v)", gatewayAddr, gatewaySubnet, err)
 	}
 }

@@ -560,7 +560,7 @@ guest is whatever the runtime allows, and there is no per-sandbox policy yet.
 It does not isolate one sandbox from another. Sandboxes share a network, not
 just a host: brig asks every runtime for its shared network, unconditionally
 and with no setting to say otherwise. On the `hvi` hypervisor that is one
-gateway serving every sandbox on `10.87.0.0/24`, with brig handing out the
+gateway serving every sandbox on `198.18.0.0/24`, with brig handing out the
 addresses on it; on `vz` and on Linux it is the runtime's own shared network.
 Members of one virtual network can reach each other, which is what makes two
 sandboxes able to talk at all -- and it means two agents you gave *different*

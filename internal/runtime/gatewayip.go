@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -129,6 +130,12 @@ func lowestFreeHost(assigned map[string]int) (int, error) {
 		"Remove some sandboxes with `brig rm`", gatewaySubnet, len(names), names)
 }
 
+// formatGatewayCIDR is the address for a guest, built from the subnet the
+// gateway serves rather than from a second copy of its octets. The two used to
+// be independent literals, which is one edit away from handing every guest an
+// address on a network nothing routes.
 func formatGatewayCIDR(host int) string {
-	return fmt.Sprintf("10.87.0.%d/%d", host, gatewayPrefix)
+	base := netip.MustParsePrefix(gatewaySubnet).Addr().As4()
+	base[3] = byte(host)
+	return fmt.Sprintf("%s/%d", netip.AddrFrom4(base), gatewayPrefix)
 }
