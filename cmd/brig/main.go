@@ -71,6 +71,9 @@ flags (before the agent's own arguments; -- ends brig's parsing):
                          envelope before the agent starts
       --skills           project your own ~/.claude skills and plugins into
                          the guest, read-only (or BRIG_SKILLS=1)
+      --network MODE     shared or offline (or BRIG_NETWORK)
+      --offline          shorthand for --network offline: the agent runs, the
+                         workspace is there, nothing leaves
 
 Workspaces persist. The sandbox keeps running between commands, so a second
 run is immediate; state lives in the workspace on the host either way.
@@ -347,6 +350,7 @@ type options struct {
 	nameGiven bool
 	detach    bool
 	quiet     bool
+	offline   bool
 }
 
 // brigFlags is what brig owns on a run line. Everything else on that line
@@ -366,6 +370,8 @@ var brigFlags = []struct {
 	{long: "cpus", value: true},
 	{long: "detach", short: "d"},
 	{long: "skills"},
+	{long: "network", value: true},
+	{long: "offline"},
 	{long: "quiet", short: "q"},
 }
 
@@ -489,6 +495,12 @@ func parse(args []string) (o options, profileName string, tail []string, err err
 		// Opt-in, and only ever opt-in: this hands the guest the user's real
 		// skills and plugins, read-only.
 		{"skills", "", func(n string) { fs.BoolVar(&o.load.Skills, n, false, "") }},
+		// The posture this run takes: shared or offline. Refused by name later
+		// if it is neither, in the one place every source of it is resolved.
+		{"network", "", func(n string) { fs.StringVar(&o.load.Network, n, "", "") }},
+		// Sugar for --network offline, which is the word the request is usually
+		// phrased in.
+		{"offline", "", func(n string) { fs.BoolVar(&o.offline, n, false, "") }},
 		// Suppresses the execution envelope on run and create, for a script or
 		// a returning session that has already seen it.
 		{"quiet", "q", func(n string) { fs.BoolVar(&o.quiet, n, false, "") }},
@@ -531,6 +543,17 @@ func parse(args []string) (o options, profileName string, tail []string, err err
 	o.nameGiven = seen(fs, "name", "n")
 	if o.nameGiven && o.load.Name == "" {
 		return options{}, "", nil, errors.New("--name needs a session name, for example `--name foo`")
+	}
+	// --offline is shorthand for one --network value, so the two agreeing is
+	// fine and the two disagreeing is a mistake worth naming: a silent winner
+	// would leave the run with a posture the line does not read like.
+	if o.offline {
+		if o.load.Network != "" && o.load.Network != "offline" {
+			return options{}, "", nil, fmt.Errorf(
+				"--offline and --network %s ask for different things; --offline is --network offline",
+				o.load.Network)
+		}
+		o.load.Network = "offline"
 	}
 	return o, profileName, tail, nil
 }

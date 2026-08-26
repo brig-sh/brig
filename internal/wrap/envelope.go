@@ -62,6 +62,10 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		// verify-mode row will carry, so it is deliberately not folded in here.
 		envelopeRow{"IMAGE", fmt.Sprintf("%s (pull %s)", c.Image, c.Pull)},
 		envelopeRow{"CREDENTIALS", c.credentialLine(set)},
+		// The posture, said out loud. It decides what the agent can reach, and
+		// until it appeared here the only way to know was to remember which
+		// setting the run was started with.
+		envelopeRow{"NETWORK", c.Network.Line()},
 	)
 	return rows
 }

@@ -100,3 +100,32 @@ func TestLsAndResetRefuseArguments(t *testing.T) {
 		}
 	}
 }
+
+// --network takes a value and --offline is its shorthand for one posture. The
+// pair exists because "offline" is the word the request is usually phrased in,
+// and a flag that reads like the sentence is worth two lines of plumbing.
+func TestParseNetworkAndOffline(t *testing.T) {
+	o, profileName, _, err := parse([]string{"--network", "offline", "claude"})
+	if err != nil {
+		t.Fatalf("--network offline: %v", err)
+	}
+	if profileName != "claude" {
+		t.Errorf("profile = %q, want claude", profileName)
+	}
+	if o.load.Network != "offline" {
+		t.Errorf("network = %q, want offline", o.load.Network)
+	}
+
+	if o, _, _, err = parse([]string{"--offline", "claude"}); err != nil {
+		t.Fatalf("--offline: %v", err)
+	}
+	if o.load.Network != "offline" {
+		t.Errorf("--offline gave network %q, want offline", o.load.Network)
+	}
+
+	// Saying both, and disagreeing, is a mistake worth naming rather than a
+	// silent precedence puzzle.
+	if _, _, _, err = parse([]string{"--offline", "--network", "shared", "claude"}); err == nil {
+		t.Error("--offline with --network shared was accepted")
+	}
+}
