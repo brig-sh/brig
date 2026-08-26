@@ -232,6 +232,36 @@ grep -q '^argv: run ' "$STUB_LOG" \
   && bad "a second run booted a second sandbox" \
   || ok "a running sandbox is reused, not rebooted"
 
+echo "== network =="
+# The posture the run resolved to is the posture the runtime is told about.
+# Net was a hardcoded "shared" for the whole life of the field, so this is the
+# check that the resolved value actually travels.
+"$WORK/brig" reset > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" run claude --offline -d > "$WORK/off.out" 2>&1
+grep -q -- '--net none' "$STUB_LOG" \
+  && ok "--offline reaches the runtime as --net none" \
+  || bad "--offline reaches the runtime as --net none -- got: $(grep '^argv: run' "$STUB_LOG")"
+grep -q '^NETWORK .*offline' "$WORK/off.out" \
+  && ok "the envelope says the sandbox is offline" \
+  || bad "the envelope says the sandbox is offline -- got: $(cat "$WORK/off.out")"
+
+"$WORK/brig" reset > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" run claude -d > "$WORK/on.out" 2>&1
+grep -q -- '--net shared' "$STUB_LOG" \
+  && ok "a default run still asks for the shared network" \
+  || bad "a default run still asks for the shared network -- got: $(grep '^argv: run' "$STUB_LOG")"
+grep -q '^NETWORK .*shared' "$WORK/on.out" \
+  && ok "the envelope names the shared posture" \
+  || bad "the envelope names the shared posture -- got: $(cat "$WORK/on.out")"
+
+# A posture brig does not know must stop the run rather than pick one.
+out="$(BRIG_NETWORK=airgapped "$WORK/brig" env claude 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "an unknown BRIG_NETWORK refuses the run" \
+  || bad "an unknown BRIG_NETWORK started anyway: $out"
+"$WORK/brig" reset > /dev/null 2>&1
+
 echo "== denylist =="
 : > "$STUB_LOG"
 out="$(ANTHROPIC_API_KEY=sk-metered BRIG_FORWARD_ENV='ANTHROPIC_API_KEY GH_TOKEN' \

@@ -159,3 +159,78 @@ func TestVerifyAndSkillsFailClosedOnATypo(t *testing.T) {
 		})
 	}
 }
+
+// BRIG_NETWORK decides the sandbox's network posture, so it is a security
+// switch: an unrecognised value refuses the load naming the valid words, the
+// same contract BRIG_VERIFY keeps.
+func TestNetworkFailsClosedOnATypo(t *testing.T) {
+	t.Setenv("BRIG_NETWORK", "maybe")
+	pr, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	if _, err := Load(pr, Options{}, nil); err == nil {
+		t.Fatal("BRIG_NETWORK=maybe did not refuse the load")
+	}
+}
+
+// Precedence is flag over env over profile over default, the order every other
+// setting keeps.
+func TestNetworkPrecedence(t *testing.T) {
+	pr, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	// Default: shared.
+	c, err := Load(pr, Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Network != "shared" {
+		t.Errorf("default network = %q, want shared", c.Network)
+	}
+	// Profile beats default.
+	pp := pr
+	pp.Network = "offline"
+	if c, err = Load(pp, Options{}, nil); err != nil || c.Network != "offline" {
+		t.Errorf("profile network: got %q, %v", c.Network, err)
+	}
+	// Env beats profile.
+	t.Setenv("BRIG_NETWORK", "shared")
+	if c, err = Load(pp, Options{}, nil); err != nil || c.Network != "shared" {
+		t.Errorf("env network: got %q, %v", c.Network, err)
+	}
+	// Flag beats env.
+	if c, err = Load(pp, Options{Network: "offline"}, nil); err != nil || c.Network != "offline" {
+		t.Errorf("flag network: got %q, %v", c.Network, err)
+	}
+}
+
+// The refusal names the source the value came from. Someone who typed a flag
+// and is told about an environment variable goes looking for a variable they
+// never set, which is the same misreporting the security switches were fixed
+// for in #27.
+func TestNetworkRefusalNamesWhatWasTyped(t *testing.T) {
+	pr, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	_, err := Load(pr, Options{Network: "wat"}, nil)
+	if err == nil {
+		t.Fatal("--network wat was accepted")
+	}
+	if !strings.Contains(err.Error(), "--network") {
+		t.Errorf("a flag refusal does not name the flag: %v", err)
+	}
+	if strings.Contains(err.Error(), "BRIG_NETWORK") {
+		t.Errorf("a flag refusal blames the environment variable: %v", err)
+	}
+
+	t.Setenv("BRIG_NETWORK", "wat")
+	if _, err = Load(pr, Options{}, nil); err == nil {
+		t.Fatal("BRIG_NETWORK=wat was accepted")
+	}
+	if !strings.Contains(err.Error(), "BRIG_NETWORK") {
+		t.Errorf("a setting refusal does not name the setting: %v", err)
+	}
+}

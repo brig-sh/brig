@@ -91,6 +91,10 @@ type Config struct {
 	// VerifyPolicy is what counts as ours.
 	Verify       verify.Mode
 	VerifyPolicy verify.Policy
+	// Network is the posture this run was resolved to. Held here so the
+	// envelope, the report and the spec handed to the runtime cannot disagree
+	// about what a reader was told.
+	Network Network
 	// BootDigest is the registry digest verifyDigest resolved and checked, set
 	// only on a runtime that boots by digest. EnsureRunning hands it to the
 	// runtime so the object that boots is the object that verified; empty means
@@ -133,6 +137,9 @@ type Options struct {
 	// plugins) read-only into the guest. Off unless asked for: it is the
 	// user's real config, and handing it to a sandbox should be a decision.
 	Skills bool
+	// Network is the posture asked for on the command line, and beats both the
+	// setting and the profile. Empty means nothing was asked for.
+	Network string
 }
 
 // Load resolves the configuration for one invocation.
@@ -254,6 +261,21 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		strictErr = err
 	}
 
+	// Flag beats setting beats profile, the order every other setting follows.
+	// Resolved once here so the envelope row and the spec cannot disagree. The
+	// source travels with the value so a refusal names what was actually typed.
+	netValue, netSource := o.Network, "--network"
+	if netValue == "" {
+		netValue, netSource = env.String("NETWORK", ""), env.settingName("NETWORK")
+	}
+	if netValue == "" {
+		netValue, netSource = t.Network, "the profile's network:"
+	}
+	network, err := ParseNetworkStrict(netValue, netSource)
+	if err != nil && strictErr == nil {
+		strictErr = err
+	}
+
 	c := &Config{
 		Profile:        t,
 		Runtime:        rt,
@@ -275,6 +297,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		GitHosts:       env.Fields("GIT_HOSTS", []string{"github.com"}),
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
+		Network:        network,
 		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
 		AllowRefs:      strict("ALLOW_REFS", false),

@@ -116,6 +116,15 @@ func (e Env) setting(key string) string {
 	return "BRIG_" + key
 }
 
+// settingName is setting without the value, for a message that quotes the
+// value itself and would otherwise print it twice.
+func (e Env) settingName(key string) string {
+	if name, _, ok := e.getNamed(key); ok {
+		return name
+	}
+	return "BRIG_" + key
+}
+
 // Int reads a setting as a number, falling back on anything unparseable
 // rather than failing the run over a typo in a tuning knob.
 func (e Env) Int(key string, fallback int) int {
