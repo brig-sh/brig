@@ -135,6 +135,12 @@ func parseTelemetry(out string) Telemetry {
 		return Telemetry{State: TelemetryOff}
 	case strings.HasPrefix(state, "disabled ("):
 		return Telemetry{State: TelemetryOff, Setting: insideParens(state)}
+	case strings.HasPrefix(state, "enabled ("):
+		// The mirror of "disabled (...)": the parens name the setting that
+		// turned it on (a variable, say), and the state is definite. Read it as
+		// on and carry the setting, rather than folding it into the older-schema
+		// case below and reporting a definite answer as unanswered.
+		return Telemetry{State: TelemetryOn, Setting: insideParens(state)}
 	case strings.HasPrefix(state, "not configured"):
 		return Telemetry{State: TelemetryUnanswered}
 	case strings.HasPrefix(state, "enabled "):
