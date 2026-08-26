@@ -7,8 +7,8 @@ image carries what those commands need.
 
 This page is that list, taken from the code that runs it rather than from
 memory, so each entry names the file you can go and read. There is also a
-script: `script/check-guest-image.sh <image>` runs the list against a real
-image and prints one line per requirement.
+script: `script/check-guest-image.sh <image> [profile]` runs the list against a
+real image and prints one line per requirement.
 
 Nothing here is a brig-specific format. A stock distribution image satisfies
 all of it without being told about brig, which is the point. What follows
@@ -112,6 +112,20 @@ the agent runs as. Set it to the guest user, and set its home to `guestHome`.
 carry `User: "root"` (`guestRootUser` in `internal/wrap/secretfiles.go`). Only
 the mount syscall actually needs the privilege; every target sits under a
 directory root already owns, which is what keeps the rest of it unprivileged.
+
+That privilege comes from the boot, and there are two boots to tell apart. A
+bare `hull run <image>` or `nerdctl run <image>` starts the image as an
+ordinary container, and root inside it holds the runtime's default capability
+set, `CapEff: 00000000a80425fb`, with no `CAP_SYS_ADMIN`: `mount -t tmpfs`
+there fails with `permission denied`, in an image brig mounts a tmpfs in every
+day. brig never boots that way. It passes the profile's hypervisor and rootfs
+type, and for a `genericBoot` profile the kernel and initrd annotations, so
+the image comes up as a microVM whose root holds everything,
+`CapEff: 000001ffffffffff` (`runArgs` in `internal/runtime/hull.go`, and the
+nerdctl equivalent in `internal/runtime/nerdctl.go`). Checking an image under
+the bare boot therefore reports failures against a boundary brig never gives
+it, which is why `script/check-guest-image.sh` boots through `brig create`
+rather than through the runtime.
 
 ## What `genericBoot` changes
 
@@ -247,12 +261,20 @@ image: docker.io/me/mine:latest
 guestHome: /home/mine
 binary: mine
 genericBoot: true
+mem: 2048
+cpus: 2
 ```
 
-Then check it rather than trusting this file:
+`mem:` and `cpus:` are not optional in a profile of your own: brig refuses one
+that leaves either at zero, so a file without them is skipped rather than
+imported.
+
+Then check it rather than trusting this file, naming the profile it will run
+under. That profile has to be one brig knows, so import it first:
 
 ```bash
-script/check-guest-image.sh docker.io/me/mine:latest /home/mine mine
+brig profile import mine.yaml
+script/check-guest-image.sh docker.io/me/mine:latest mine
 ```
 
 Debian and Ubuntu bases pass as they ship: bash, coreutils and util-linux are
@@ -295,10 +317,33 @@ further clue.
 ## Checking an image
 
 ```bash
-script/check-guest-image.sh <image> [guest-home] [binary]
+script/check-guest-image.sh <image> [profile]
 ```
 
-It uses the container runtime on your `PATH`, boots the image the way brig
-does, runs each requirement above as a separate exec, and prints one line per
-requirement. It is not part of CI, which has no registry access, so it is
-something you run yourself against an image you are building.
+The profile defaults to `claude-code`, and naming one is how the check gets
+the boot the contract describes. The script boots the image with
+`BRIG_IMAGE=<image> brig create <profile> --name image-check`, in a scratch
+workspace, and tears it down with `brig rm` when it is done. Going through
+brig is what supplies the hypervisor, the rootfs type, the generic-boot
+annotations and the capabilities described above; a bare `hull run` or
+`nerdctl run` supplies none of them and fails the mount line on an image that
+works.
+
+The profile also decides what is checked. Its `guestHome:` is the guest home,
+its last path element is the user `chown` has to resolve, and its `binary:` is
+the agent CLI the last line looks for. So the check is of this image under
+this profile rather than of an image in the abstract, which is the question
+you actually have. A profile of your own has to be one brig knows, through
+`brig profile import`.
+
+The requirements themselves run as root through the runtime's own exec against
+the sandbox brig created, one exec per line of the table above, so what they
+report is behaviour rather than a file being present. An image that will not
+come up falls back to listing the image filesystem, and says so: those checks
+are presence only. `BRIG_VERIFY=off` is set for the boot, so an image nobody
+has signed is not refused on the way in.
+
+It is not part of CI, which has no registry access and no runtime to boot
+with, so it is something you run yourself against an image you are building.
+Bear in mind that it is a real run of a real profile: the credentials that
+profile delivers are delivered into the image under test.
