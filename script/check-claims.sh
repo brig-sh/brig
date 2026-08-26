@@ -11,7 +11,7 @@
 # The Defended-by column names each test with a typed, backticked token:
 #
 #   `go:TestName`      a Go test, checked against `go test -list ./...`
-#   `smoke:<ok text>`  a named check in script/*.sh, matched as ok "<ok text>"
+#   `smoke:<ok text>`  a named check in script/smoke.sh, matched as ok "<ok text>"
 #   `vm` or `vm:...`   needs a real VM; defended by the `make claims-vm` target
 #   `pending` / `pending:...`  a test on an unmerged branch, not assertable yet
 #
@@ -65,10 +65,10 @@ check_file() {
 			;;
 		smoke:*)
 			text="${tok#smoke:}"
-			# A named check is ok "<text>" somewhere under script/. Match the
-			# literal text with -F so commas and dashes in the sentence stay
-			# text rather than becoming a pattern.
-			if grep -qF "ok \"$text\"" script/*.sh 2>/dev/null; then
+			# A named check is ok "<text>" in script/smoke.sh, the file the
+			# legend names. Match the literal text with -F so commas and dashes
+			# in the sentence stay text rather than becoming a pattern.
+			if grep -qF "ok \"$text\"" script/smoke.sh 2>/dev/null; then
 				n_smoke=$((n_smoke + 1))
 			else
 				echo "MISSING smoke check: $text"
@@ -98,7 +98,7 @@ EOF
 # reference that cannot exist, and confirms the checker rejects BOTH. This is the
 # "dry run" the acceptance criteria asks for: proof each guard is live, not just
 # present, runnable from CI. Both token kinds are covered because they resolve
-# through independent code paths (go test -list vs a grep over script/*.sh); a
+# through independent code paths (go test -list vs a grep over script/smoke.sh); a
 # self-test that exercised only one could stay green while the other silently
 # auto-passed every row.
 if [ "${1:-}" = "--self-test" ]; then
