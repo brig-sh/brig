@@ -479,8 +479,9 @@ privately, rather than in a public issue.
 Any Linux CLI in an OCI image runs under brig, as long as the image also
 carries the utilities brig invokes to set the sandbox up and deliver the
 credential. [docs/guest-image.md](docs/guest-image.md) is the list, with the
-file that runs each one, and `script/check-guest-image.sh <image>` checks an
-image against it. A stock distribution image passes as it ships; a
+file that runs each one, and `script/check-guest-image.sh <image> [profile]`
+checks an image against it by booting it as that profile's sandbox, default
+`claude-code`. A stock distribution image passes as it ships; a
 `FROM scratch` image holding only your static binary fails every line. A
 profile just saves you spelling out the image, the guest home and the
 credential variables every time:

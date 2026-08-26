@@ -7,20 +7,41 @@
 # meaninglessness. This is a tool you run yourself, against an image you are
 # building.
 #
-#   script/check-guest-image.sh <image> [guest-home] [binary]
+#   script/check-guest-image.sh <image> [profile]
 #
-#   <image>       the image reference, as you would pass it to `brig --image`
-#   [guest-home]  the profile's guestHome:, default /home/agent. The guest user
-#                 is its last path element, which is how brig derives it too
-#   [binary]      the profile's binary:, checked for if given
+#   <image>    the image reference, as you would pass it to `brig --image`
+#   [profile]  the profile to boot it under, default claude-code. Its
+#              guestHome: is the guest home, and the guest user is that path's
+#              last element, which is how brig derives it too. Its binary: is
+#              the agent CLI, checked for when the profile names one
 #
-# It boots the image the way brig does and runs each requirement as its own
-# exec, so what it reports is behaviour rather than a file being present. An
-# image that will not stay up (no `sleep`, most often) falls back to listing the
-# image filesystem, and says so: those checks are presence only.
+# The boot goes through brig: `BRIG_IMAGE=<image> brig create <profile>`, torn
+# down with `brig rm`. That is the point of the script rather than an
+# implementation detail. An image booted bare as a container -- `hull run
+# <image>` with no profile behind it -- runs with the runtime's default
+# capability set and no CAP_SYS_ADMIN, so `mount -t tmpfs` in it fails with
+# EPERM for images brig mounts a tmpfs in every day. Going through brig gets
+# the profile's hypervisor, rootfs type, generic-boot annotations and guest
+# home, and root in that sandbox holds every capability. It is also the only
+# boot mode brig has, so it is the one the contract describes.
 #
-# Exit status: 0 every requirement met, 1 something is missing, 2 there was no
-# runtime to check with. It never reports a pass it did not perform.
+# The checks run as root through the runtime's own exec against the sandbox
+# brig created, one exec per requirement, so what they report is behaviour
+# rather than a file being present. An image that will not boot falls back to
+# listing the image filesystem, and says so: those checks are presence only.
+#
+# The boot is a real run of a real profile, so whatever credentials that
+# profile delivers reach the image under test. Point this at an image you are
+# building, not at one you have a reason to distrust.
+#
+# BRIG_VERIFY=off is set for the boot, so an image under test that nobody has
+# signed is not refused. BRIG_DRY_RUN=1 prints what would be booted and stops
+# before booting it, which is how the argument handling and the profile lookup
+# can be checked on a machine with no runtime.
+#
+# Exit status: 0 every requirement met, 1 something is missing, 2 there was
+# nothing to check with -- no brig, no runtime, or no such profile. It never
+# reports a pass it did not perform.
 #
 # Not checked here, because neither is a property of the image: that the guest
 # has no swap, and that a tmpfs brig mounted reads back as tmpfs. brig verifies
@@ -28,48 +49,147 @@
 set -uo pipefail
 
 usage() {
-	printf 'usage: %s <image> [guest-home] [binary]\n' "$0" >&2
+	printf 'usage: %s <image> [profile]\n' "$0" >&2
 	exit 2
 }
 
 IMAGE="${1:-}"
 [ -n "$IMAGE" ] || usage
-GUEST_HOME="${2:-/home/agent}"
-BINARY="${3:-}"
+PROFILE="${2:-claude-code}"
+
+dry() { [ -n "${BRIG_DRY_RUN:-}" ] && [ "${BRIG_DRY_RUN}" != 0 ]; }
+
+# --- brig itself ---
+# $BRIG first, then PATH, then the binary a `make build` leaves in the
+# checkout. Which one answered is printed: running a checkout's brig against a
+# profile you edited in your installed one is the confusion worth ruling out
+# before reading any of the lines below.
+BRIG_BIN="${BRIG:-}"
+BRIG_FROM='$BRIG'
+if [ -z "$BRIG_BIN" ]; then
+	if BRIG_BIN="$(command -v brig 2>/dev/null)"; then
+		BRIG_FROM='PATH'
+	else
+		BRIG_BIN="$(cd "$(dirname "$0")/.." && pwd)/brig"
+		BRIG_FROM='this checkout'
+		if [ ! -x "$BRIG_BIN" ]; then
+			printf 'no brig found: put one on PATH, run `make build`, or set BRIG.\n' >&2
+			printf 'Nothing was checked.\n' >&2
+			exit 2
+		fi
+	fi
+fi
+
+# --- the profile ---
+# Read from brig rather than from internal/profile/specs, so a profile of your
+# own and a file that overrides a built-in are read the same way brig will read
+# them at boot. The JSON export is the resolved profile, one field per line.
+if ! SPEC="$("$BRIG_BIN" profile export "$PROFILE" --json 2>&1)"; then
+	printf '%s\n' "$SPEC" >&2
+	printf 'Nothing was checked.\n' >&2
+	exit 2
+fi
+field() {
+	printf '%s\n' "$SPEC" | sed -n 's/^  "'"$1"'": "\(.*\)",*$/\1/p' | head -1
+}
+GUEST_HOME="$(field guestHome)"
+BINARY="$(field binary)"
+PROFILE_RUNTIME_BIN="$(field runtimeBin)"
+if [ -z "$GUEST_HOME" ]; then
+	printf 'the %s profile declares no guestHome:, so there is no guest home to\n' "$PROFILE" >&2
+	printf 'check against. Nothing was checked.\n' >&2
+	exit 2
+fi
+# The last path element, which is how brig derives the account it chowns to.
+# See GuestUser in internal/profile/profile.go.
 GUEST_USER="${GUEST_HOME##*/}"
+# Whether this profile delivers anything as a file or a mount. Everything from
+# sh down to rm in the table is only run for a profile that does, so a missing
+# guest user costs a profile with neither nothing today -- which the line that
+# reports it should say rather than predicting a chown that never happens.
+DELIVERS=no
+if printf '%s\n' "$SPEC" | grep -q '^  "\(files\|volumes\)": \['; then
+	DELIVERS=yes
+fi
 
 # --- the runtime ---
-# The same order brig itself resolves in, plus podman, which takes the same
-# flags and is a reasonable thing to have when you are building an image.
-# BRIG_RUNTIME_BIN wins, as it does for brig.
-RT="${BRIG_RUNTIME_BIN:-}"
+# The checks exec into the sandbox brig booted, which means finding the same
+# runtime brig will find: BRIG_RUNTIME picks the backend, hull on macOS and
+# nerdctl elsewhere by default, and BRIG_RUNTIME_BIN then the profile's
+# runtimeBin pick the binary. See DetectFor in internal/runtime/runtime.go.
+KIND="${BRIG_RUNTIME:-}"
+if [ -z "$KIND" ]; then
+	case "$(uname -s)" in
+	Darwin) KIND=hull ;;
+	*) KIND=nerdctl ;;
+	esac
+fi
+case "$KIND" in
+hull) CANDIDATES='hull' ;;
+nerdctl) CANDIDATES='nerdctl docker' ;;
+*)
+	printf 'unknown BRIG_RUNTIME "%s" (want hull or nerdctl). Nothing was checked.\n' "$KIND" >&2
+	exit 2
+	;;
+esac
+RT="${BRIG_RUNTIME_BIN:-$PROFILE_RUNTIME_BIN}"
+case "$RT" in
+"~/"*) RT="$HOME/${RT#~/}" ;;
+esac
 if [ -z "$RT" ]; then
-	for candidate in nerdctl docker podman hull; do
+	for candidate in $CANDIDATES; do
 		if RT="$(command -v "$candidate" 2>/dev/null)"; then break; fi
 		RT=""
 	done
 fi
+
+printf 'brig guest image contract: %s\n' "$IMAGE"
+printf 'brig: %s (%s)\n' "$BRIG_BIN" "$BRIG_FROM"
+printf 'profile: %s, guest home %s, guest user %s\n' "$PROFILE" "$GUEST_HOME" "$GUEST_USER"
+printf 'runtime: %s (%s)\n' "$KIND" "${RT:-none found}"
+
+if dry; then
+	printf '\nBRIG_DRY_RUN is set, so nothing was booted and nothing was checked.\n'
+	printf 'The boot would be:\n'
+	printf '  BRIG_IMAGE=%s BRIG_VERIFY=off %s create %s --name image-check --workspace <scratch>\n' \
+		"$IMAGE" "$BRIG_BIN" "$PROFILE"
+	printf '  %s rm %s --name image-check --workspace <scratch>\n' "$BRIG_BIN" "$PROFILE"
+	printf 'and each requirement would run as `%s exec -u root <sandbox>`.\n' \
+		"$(basename "${RT:-$KIND}")"
+	exit 0
+fi
+
 if [ -z "$RT" ]; then
-	printf 'no container runtime found: install nerdctl, docker or podman, or set\n' >&2
-	printf 'BRIG_RUNTIME_BIN. Nothing was checked.\n' >&2
+	printf '\nno container runtime found: install %s, or set BRIG_RUNTIME_BIN.\n' \
+		"${CANDIDATES// / or }" >&2
+	printf 'Nothing was checked.\n' >&2
 	exit 2
 fi
-KIND="$(basename "$RT")"
 
-NAME="brig-image-check-$$"
 FAILED=0
-MODE=exec # or "list", when the image would not stay up
+MODE=exec      # or "list", when the image would not boot
+NAME=""        # the sandbox, once brig has named it
+BOOT_FAILED="" # brig's create returned an error, whatever came up
+LISTED=""      # the container the fallback listing was taken from
+
+WORK="$(mktemp -d)"
+# brig suffixes the session slug onto the workspace it is given, so the
+# directory it actually uses is <WORKSPACE>-image-chec. Keeping the base inside
+# a directory of our own means one rm -rf covers whatever it created.
+WORKSPACE="$WORK/workspace"
+LISTING="$WORK/listing"
+BOOTLOG="$WORK/boot.log"
 
 cleanup() {
-	if [ "$KIND" = hull ]; then
-		"$RT" stop "$NAME" >/dev/null 2>&1
-		"$RT" rm "$NAME" >/dev/null 2>&1
-	else
-		"$RT" rm -f "$NAME" >/dev/null 2>&1
+	# Unconditionally, not only when the boot printed a name: a create that
+	# failed after the sandbox was up leaves one behind holding the name, and
+	# `brig rm` on a sandbox that was never created is a no-op.
+	"$BRIG_BIN" rm "$PROFILE" --name image-check --workspace "$WORKSPACE" >/dev/null 2>&1
+	if [ -n "$LISTED" ]; then
+		"$RT" rm -f "$LISTED" >/dev/null 2>&1
 	fi
-	rm -f "$LISTING"
+	rm -rf "$WORK"
 }
-LISTING="$(mktemp)"
 trap cleanup EXIT
 
 # --- reporting ---
@@ -77,34 +197,33 @@ ok()   { printf '  ok   %-22s %s\n' "$1" "$2"; }
 bad()  { printf '  FAIL %-22s %s\n' "$1" "$2"; FAILED=1; }
 skip() { printf '  --   %-22s %s\n' "$1" "$2"; }
 
-printf 'brig guest image contract: %s\n' "$IMAGE"
-printf 'runtime: %s (%s)\n' "$KIND" "$RT"
-printf 'guest home: %s, guest user: %s\n\n' "$GUEST_HOME" "$GUEST_USER"
-
 # --- booting ---
-# Exactly what brig does: no entrypoint override, and `sleep infinity` as the
-# command on a container runtime, because that is the command brig parks the
-# sandbox on. hull takes no command and lets the image's own entrypoint run,
-# which is why `sleep` is not a hull requirement.
-boot() {
-	if [ "$KIND" = hull ]; then
-		"$RT" run --detach --name "$NAME" "$IMAGE" >/dev/null 2>&1
-	else
-		"$RT" run -d --name "$NAME" "$IMAGE" sleep infinity >/dev/null 2>&1
-	fi
-}
+# BRIG_VERIFY=off because the image under test is one you are building, and an
+# unsigned image is the normal case for that; the contract is about what is
+# inside the image, not about who signed it.
+#
+# The sandbox name comes back on brig's stdout rather than being spelled out
+# here. It is brig-<profile>-<slug>, and the slug is the session name cut to
+# ten characters, so `--name image-check` is brig-<profile>-image-chec --
+# taking what brig printed means this does not have to reimplement that.
+export BRIG_IMAGE="$IMAGE"
+export BRIG_VERIFY=off
 
-running() {
-	if [ "$KIND" = hull ]; then
-		"$RT" ps 2>/dev/null | grep -q "^$NAME[[:space:]]\+running"
-	else
-		"$RT" ps --filter "name=^${NAME}$" --format '{{.Names}}' 2>/dev/null |
-			grep -qx "$NAME"
-	fi
-}
+printf '\n'
+if BOOTED="$("$BRIG_BIN" create "$PROFILE" --name image-check --workspace "$WORKSPACE" 2>"$BOOTLOG")"; then
+	NAME="$(printf '%s\n' "$BOOTED" | tail -1 | tr -d '[:space:]')"
+else
+	# A create that fails during credential delivery leaves the sandbox
+	# running, and that is the failure this script exists to explain: the
+	# checks can run in it and name the requirement brig tripped over, which
+	# is more use than brig's one line about the step that hit it. brig names
+	# the sandbox as it starts it, so the name is in what it printed.
+	BOOT_FAILED=1
+	NAME="$(sed -n 's/^brig: starting sandbox \(.*\)\.\.\.$/\1/p' "$BOOTLOG" | tail -1)"
+fi
 
-# guest runs one command inside the sandbox as root, the way every brig setup
-# exec runs. Output on stdout, everything else discarded.
+# guest runs one command inside the sandbox as root, the way every privileged
+# brig exec runs. Output on stdout, everything else discarded.
 guest() {
 	if [ "$KIND" = hull ]; then
 		"$RT" exec -u root "$NAME" -- "$@" 2>/dev/null
@@ -115,23 +234,33 @@ guest() {
 
 # The fallback: create the container without starting it and list its
 # filesystem. This is the only thing that works for an image that cannot run at
-# all, which is exactly the scratch case worth reporting on.
+# all, which is exactly the scratch case worth reporting on. hull has no such
+# verb, so on macOS there is nothing to fall back to.
 build_listing() {
 	if [ "$KIND" = hull ]; then
 		return 1
 	fi
-	"$RT" create --name "$NAME" "$IMAGE" /bin/true >/dev/null 2>&1 || return 1
-	"$RT" export "$NAME" 2>/dev/null | tar -tf - >"$LISTING" 2>/dev/null || return 1
+	LISTED="brig-image-check-list-$$"
+	"$RT" create --name "$LISTED" "$IMAGE" /bin/true >/dev/null 2>&1 || return 1
+	"$RT" export "$LISTED" 2>/dev/null | tar -tf - >"$LISTING" 2>/dev/null || return 1
 	[ -s "$LISTING" ]
 }
 
-if boot && running; then
-	MODE=exec
-else
-	printf 'The image would not stay up, so there is nothing to exec into.\n'
-	if [ "$KIND" != hull ]; then
-		"$RT" rm -f "$NAME" >/dev/null 2>&1
+brig_said() { sed -n '1,10p' "$BOOTLOG" | sed 's/^/  /'; }
+
+if [ -n "$NAME" ] && guest /bin/true >/dev/null; then
+	printf 'sandbox: %s\n' "$NAME"
+	if [ -n "$BOOT_FAILED" ]; then
+		printf '\nbrig did not finish the boot, and said:\n\n'
+		brig_said
+		printf '\nThe sandbox is up, so the checks below ran inside it.\n'
 	fi
+	printf '\n'
+else
+	printf 'brig could not bring this image up as a %s sandbox, so there is nothing\n' "$PROFILE"
+	printf 'to exec into. What brig said:\n\n'
+	brig_said
+	printf '\n'
 	if build_listing; then
 		MODE=list
 		printf 'Falling back to the image filesystem: the checks below are presence\n'
@@ -198,6 +327,33 @@ expect() {
 	fi
 }
 
+# chown is the one check whose failure has two quite different causes, and the
+# useful one is the account rather than the binary. An image that has chown but
+# not the profile's user fails every run of that profile at credential
+# delivery, and the line that says so has to name the user it looked for.
+chown_check() {
+	local label='chown, guest user' note="hands directories to $GUEST_USER and back"
+	if [ "$MODE" = list ]; then
+		if have_binary chown; then ok "$label" "$note"; else bad "$label" "$note"; fi
+		return
+	fi
+	if guest chown "$GUEST_USER" "$SCRATCH/d" >/dev/null; then
+		ok "$label" "$note"
+		return
+	fi
+	# `id root` first: without it, an image with no id at all would be reported
+	# as an image with no guest user, which is a different repair.
+	if guest id -u root >/dev/null && ! guest id -u "$GUEST_USER" >/dev/null; then
+		local msg="the profile's guest home is $GUEST_HOME, so brig will chown to $GUEST_USER, and this image has no such user"
+		if [ "$DELIVERS" = no ]; then
+			msg="$msg (the $PROFILE profile declares no volumes: or files:, so nothing chowns in it today)"
+		fi
+		bad "$label" "$msg"
+		return
+	fi
+	bad "$label" "$note"
+}
+
 SCRATCH=/run/brig-image-check
 
 run '/bin/true' /bin/true 'readiness probe' -- /bin/true
@@ -209,8 +365,7 @@ run 'stat -f -c' stat 'which filesystem a path is on' -- stat -f -c %T /
 run 'mkdir, /run writable' mkdir 'mount targets, pin directory' -- mkdir -p "$SCRATCH/d"
 run 'dirname' dirname 'inside createGuestTarget' -- dirname /a/b
 run 'chmod' chmod 'the mode a files: binding declares' -- chmod 0700 "$SCRATCH/d"
-run 'chown, guest user' chown "hands directories to $GUEST_USER and back" -- \
-	chown "$GUEST_USER" "$SCRATCH/d"
+chown_check
 run 'rm' rm 'removes a planted symlink rather than following it' -- \
 	rm -f "$SCRATCH/absent"
 run 'mount, tmpfs' mount 'covers a directory so a credential stays off disk' -- \
@@ -221,19 +376,29 @@ run 'bash' bash 'brig shell' -- bash -lc 'exit 0'
 if [ -n "$BINARY" ]; then
 	run "$BINARY" "$BINARY" "the profile's binary:" -- "$BINARY" --version
 else
-	skip 'binary:' 'not given, so the agent CLI was not checked'
+	skip 'binary:' "the $PROFILE profile names none, so no agent CLI was checked"
 fi
 
 # The guest home is created by the workspace mount, so its absence is not a
 # failure. Said out loud because an image that ships content there is a mistake
-# worth knowing about: the mount hides all of it.
-if [ "$MODE" = exec ] && guest test -d "$GUEST_HOME"; then
+# worth knowing about: the mount hides all of it. Only visible in list mode --
+# in a booted sandbox the workspace is already over it, which is the whole
+# point.
+if [ "$MODE" = list ] && have_path "$GUEST_HOME"; then
 	printf '\nnote: %s exists in the image. The workspace is mounted over it, so\n' "$GUEST_HOME"
 	printf '      anything the image ships there is invisible in the sandbox.\n'
 fi
 
 printf '\n'
 if [ "$FAILED" -eq 0 ]; then
+	if [ -n "$BOOT_FAILED" ] && [ "$MODE" = exec ]; then
+		# Every requirement passed and brig still could not finish, so whatever
+		# stopped it is outside this list. Not a pass: the run it was asked
+		# about does not work.
+		printf 'Every requirement on the list is met, and brig still could not finish the\n'
+		printf 'boot. What stopped it is above and is not something this list covers.\n'
+		exit 1
+	fi
 	if [ "$MODE" = list ]; then
 		printf 'Every binary is present. Boot the image to check they work.\n'
 	else
