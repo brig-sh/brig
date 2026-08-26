@@ -104,3 +104,24 @@ func TestLoadAllIgnoresNonPolicyFiles(t *testing.T) {
 		t.Errorf("entries = %v, want exactly one", entries)
 	}
 }
+
+// attachments.yaml lives in the same directory LoadAll scans, so it has to
+// be ignored the same way a README is, not reported as a broken policy.
+func TestLoadAllIgnoresTheAttachmentsFile(t *testing.T) {
+	dir := t.TempDir()
+	var a Attachments
+	a.AttachToProfile("no-net", "claude-code")
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	writePolicy(t, dir, "no-net.yaml", "apiVersion: "+APIVersion+"\n"+
+		"name: no-net\negress:\n  default: deny\n")
+
+	entries, err := LoadAll(dir)
+	if err != nil {
+		t.Fatalf("LoadAll reported attachments.yaml as broken: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("entries = %v, want exactly one", entries)
+	}
+}

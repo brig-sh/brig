@@ -27,6 +27,11 @@ func configHome() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		// Returned deliberately, even though Dir treats a relative override
+		// as invalid: there is no home directory to anchor to, and failing
+		// outright would make brig unusable rather than merely misdirected.
+		// os.UserHomeDir failing means $HOME is unset, which is close to
+		// impossible on the platforms brig supports.
 		return ".config"
 	}
 	return filepath.Join(home, ".config")
