@@ -174,7 +174,7 @@ func readSecret(out io.Writer, args []string) error {
 }
 
 func deleteSecret(out io.Writer, args []string) error {
-	name, yes, err := nameAndYes(args)
+	name, yes, err := nameAndYes("delete", "brig secret delete gh-token", args)
 	if err != nil {
 		return err
 	}
@@ -317,14 +317,18 @@ func readAnswer(r io.Reader) (string, error) {
 	return bufio.NewReader(io.LimitReader(r, maxAnswerBytes)).ReadString('\n')
 }
 
-// nameAndYes parses a delete's arguments: the one name, and the -y that says
-// the question has already been answered.
+// nameAndYes parses the arguments of a verb that takes one name and the -y
+// that says its question has already been answered.
 //
 // Same shape as nameAndFile, and for the same reason: `delete -y gh-token` and
 // `delete gh-token -y` are both lines people type, and Parse stops at the
 // first bare word.
-func nameAndYes(args []string) (name string, yes bool, err error) {
-	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
+//
+// The verb and the example it prints are parameters because `brig profile rm`
+// asks a question of its own now, and every word of these messages is about
+// the command the person typed. Two copies of the loop below would drift.
+func nameAndYes(verb, example string, args []string) (name string, yes bool, err error) {
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	fs.BoolVar(&yes, "y", false, "")
@@ -342,7 +346,7 @@ func nameAndYes(args []string) (name string, yes bool, err error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return "", false, fmt.Errorf("%s (delete takes -y)", msg)
+			return "", false, fmt.Errorf("%s (%s takes -y)", msg, verb)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -352,11 +356,11 @@ func nameAndYes(args []string) (name string, yes bool, err error) {
 	}
 	switch len(words) {
 	case 0:
-		return "", false, errors.New("delete needs a name, for example `brig secret delete gh-token`")
+		return "", false, fmt.Errorf("%s needs a name, for example `%s`", verb, example)
 	case 1:
 		name = words[0]
 	default:
-		return "", false, fmt.Errorf("delete takes one name, not %q", words[1])
+		return "", false, fmt.Errorf("%s takes one name, not %q", verb, words[1])
 	}
 	return name, yes, nil
 }
