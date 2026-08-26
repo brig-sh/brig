@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -299,5 +300,36 @@ func TestParseSkillsIsOptIn(t *testing.T) {
 	// After the agent's arguments start it is the agent's word, not brig's.
 	if o, _, _, _ = parse([]string{"claude", "-p", "hi", "--skills"}); o.load.Skills {
 		t.Error("--skills was read out of the agent's own arguments")
+	}
+}
+
+// `brig ls` reports what a sandbox is mounting, so the recorded workspace beats
+// the one derived from the sandbox name -- and beats an ambient BRIG_WORKSPACE
+// that the derivation would otherwise pick up. A session created with -w has a
+// directory neither of those can name, and the column used to show the derived
+// one with no sign that it was wrong.
+func TestWorkspaceOfPrefersTheRecordedWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", dir)
+	t.Setenv("BRIG_WORKSPACE", "/somewhere/else")
+
+	index := filepath.Join(dir, "workspaces.json")
+	body := `{"brig-claude-code-rc23test": "/private/tmp/ws-rc23"}`
+	if err := os.WriteFile(index, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The runtime is never reached: the recorded path answers the question
+	// before anything has to resolve a profile.
+	if got := workspaceOf("brig-claude-code-rc23test", nil); got != "/private/tmp/ws-rc23" {
+		t.Errorf("ls reported %q, want the workspace the session was created with", got)
+	}
+
+	// With nothing recorded, the derivation still answers, which is what a
+	// sandbox created before the index existed relies on.
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
+	if got := workspaceOf("brig-claude-code", nil); got != "/somewhere/else" {
+		t.Errorf("ls reported %q for an unrecorded sandbox, want the derived path", got)
 	}
 }

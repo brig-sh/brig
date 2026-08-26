@@ -6,7 +6,12 @@ import "testing"
 // workspace of a session that happens to be called after the template is a
 // quiet lie: `brig ls` sent people to ~/brig/claude-code-claude-cod, which is
 // not where the running sandbox lives.
+//
+// The derivation these cases are about is the fallback now, so they run against
+// an empty state directory: an index recorded by whoever is running the tests
+// would answer first and the derivation would never be reached.
 func TestWorkspaceOfUnnamedSandbox(t *testing.T) {
+	t.Setenv("BRIG_STATE_DIR", t.TempDir())
 	for _, c := range []struct{ vm, want string }{
 		{"brig-claude-code", "/claude-code"},
 		{"brig-claude-code-skilltest", "/claude-code-skilltest"},
