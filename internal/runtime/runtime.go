@@ -236,6 +236,12 @@ func splitEnv(flag string, vars []Var) (args []string, env []string) {
 // plumbing -- reachability probes, ps lookups, cleanup -- so one brig command
 // counts once. Only the operations a user asked for are counted. DO_NOT_TRACK
 // and the runtime's own opt-out pass through untouched and always win.
+//
+// Being an operation the user asked for is necessary but not sufficient: an
+// operation that runs with no terminal is also not counted until an answer
+// about telemetry is on file, because a question nobody can be asked is not a
+// question anyone has answered. That second rule is telemetryEnvFor, in
+// telemetry.go, and every counted hull call goes through it.
 func telemetryEnv(counted bool) []string {
 	suppress := "1"
 	if counted {

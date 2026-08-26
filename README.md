@@ -123,6 +123,7 @@ separate Linux re-implementation of it.
 | `brig profile ls\|export\|import\|edit\|rm` | manage profiles (`brig export` is the short form of `brig profile export`). `export --json` for JSON instead of YAML |
 | `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring. macOS only for now |
 | `brig secret import <profile>` | fill that profile's secrets from your host, once. macOS only for now |
+| `brig telemetry status\|on\|off` | report what is counted, or turn the counting on or off. See [Telemetry](#telemetry) |
 | `brig version` | |
 
 `brig template …` and `brig agents` are the older spellings and still work
@@ -378,6 +379,62 @@ brig run claude --image ghcr.io/brig-sh/claude-code:arm64-98f4739
 `cursor` is built by community-images but deliberately not published, pending
 a terms check. `brig run cursor` says so rather than failing on a registry
 404; build the image yourself and pass `--image`.
+
+## Telemetry
+
+brig counts usage, and this section says so plainly because nothing else about
+the tool would lead you to expect it. There is no account and no server of
+brig's own, but the runtime brig drives on macOS reports a handful of events to
+a collector run by NOFire AI, tagged with brig's name because brig is the
+product you installed. On Linux, where the backend is `nerdctl`, nothing is
+sent at all.
+
+Turning it off is one line, and it is durable rather than per-shell:
+
+```bash
+brig telemetry off      # or: DO_NOT_TRACK=1 in your environment
+brig telemetry status   # what the current answer is, and what decided it
+```
+
+It is on by default once you answer yes, and the question is asked on the
+first command that hands your terminal to an agent. Until it has been
+answered, brig sends nothing: a sandbox boot happens with no terminal
+attached, so nobody could have been asked, and brig suppresses counting for it
+rather than letting a default stand in for consent.
+
+An event carries the product name and version, the OS version and CPU
+architecture, an install identifier generated on your machine (delete
+`~/.hull/telemetry.json` to rotate it), a timestamp and a checksum. On top of
+that envelope: which brig subcommand ran and whether it succeeded, with
+failures bucketed into coarse classes such as `network` or `permission` and
+never the error text; which hypervisor backend booted and whether the boot
+worked; how long a sandbox lived; sampled memory and CPU of the VM process
+while a command is attached; and, if brig or the runtime panics, the panic
+type with a stack trace whose paths are trimmed. Crash reports queue in
+`~/.hull/crashes/`, where you can read or delete them before they go anywhere.
+
+What is never collected, as a commitment rather than a description of the
+current build:
+
+- workspace paths, or any host path
+- repository names, branches or remotes
+- command arguments, including the agent's own
+- agent prompts, or anything the agent read or wrote
+- secret names, secret values, or which credentials were forwarded
+- image names and registry references
+- network destinations the guest reached
+- file metadata: names, sizes, timestamps, counts
+
+Your IP address is not stored: it is discarded at ingestion. Raw events are
+kept for a year. If a future version widens what it collects, the question is
+asked again with the new list, and nothing from the wider set is sent until
+you answer it.
+
+The full field-by-field description is
+[hull's telemetry documentation](https://github.com/brig-sh/hull/blob/main/docs/telemetry.md),
+since hull is what does the sending. `HULL_TELEMETRY_DISABLED=1` and
+`DO_NOT_TRACK=1` both reach it untouched and both win over anything recorded on
+disk.
 
 ## Documentation
 
