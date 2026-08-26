@@ -9,7 +9,7 @@ rather than from a blank file:
 
 ```bash
 brig profile export claude-code mine   # writes ~/.config/brig/mine.yaml
-brig profile edit mine                 # change name: to mine, and the image
+brig profile edit mine                 # change the image, and what it forwards
 brig run mine
 ```
 
@@ -17,10 +17,12 @@ The second word is a *name*, not a path: brig puts the file in your profile
 directory, which is the only place a profile file does anything. It writes
 nowhere else -- a destination with a `/` in it is refused, not honoured.
 
-Note that brig keys on the `name:` field inside the file, not on the file
-name, so a freshly exported `mine.yaml` still says `name: claude-code` and is
-still the claude-code profile until you change that line. Export says so when
-the two disagree.
+It is also the name the profile itself carries. brig keys on the `name:` field
+inside the file rather than on the file name, so export writes the name you
+gave it into the file: `mine.yaml` says `name: mine`, and every command that
+takes a profile takes `mine` from that point on. Nothing else in the file is
+touched, so the image, the guest home and the comments still describe the
+profile you copied -- that is what the edit in the second line is for.
 
 The exported file carries a header explaining every field, so you can edit it
 without coming back here. Once you have a profile of your own on disk,

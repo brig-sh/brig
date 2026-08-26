@@ -63,8 +63,13 @@ func TestExportProfileToAFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(blob), "name: claude-code") {
-		t.Errorf("the export is not a profile:\n%s", blob)
+	// The file and the profile in it agree: a destination is the name the
+	// exported profile carries, not only the name of the file it lands in.
+	if !strings.Contains(string(blob), "name: mine") {
+		t.Errorf("the export is not a profile called mine:\n%s", blob)
+	}
+	if strings.Contains(string(blob), "name: claude-code") {
+		t.Errorf("mine.yaml still declares the profile it was copied from:\n%s", blob)
 	}
 	if !strings.Contains(string(blob), "outrank Claude Code's subscription credential") {
 		t.Error("the destination file lost the comments")
@@ -252,16 +257,30 @@ func TestExportBareNameLandsInTheProfileDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("export did not write into the profile directory: %v", err)
 	}
-	if !strings.Contains(string(blob), "name: claude-code") {
-		t.Errorf("the export is not a profile:\n%s", blob)
+	if !strings.Contains(string(blob), "name: mine") {
+		t.Errorf("the export is not a profile called mine:\n%s", blob)
 	}
 	// And brig reads it back on the next load, which is the point of putting
-	// it there rather than wherever the user happened to be standing.
+	// it there rather than wherever the user happened to be standing. Under a
+	// name of its own it is a profile of your own, not an override: overriding
+	// the built-in is what exporting under the built-in's name does.
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if !profile.IsCustom("mine") {
+		t.Error("the exported file is not picked up as a profile of your own")
+	}
+	if profile.OverridesBuiltIn("claude-code") {
+		t.Error("an export under a new name shadowed the profile it was copied from")
+	}
+	if err := exportProfile([]string{"claude-code", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
 	if !profile.OverridesBuiltIn("claude-code") {
-		t.Error("the exported file is not picked up as an override")
+		t.Error("an export under the built-in's own name is not picked up as an override")
 	}
 	// --json names the file after the format it is in.
 	if err := exportProfile([]string{"codex", "robot", "--json"}); err != nil {
@@ -437,5 +456,67 @@ func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T)
 	// vocabulary rather than brig's, and a listing is names.
 	if strings.Contains(out, "Some Service") {
 		t.Errorf("listing printed a source locator:\n%s", out)
+	}
+}
+
+// The recipe brig prints has to work as written: export the closest built-in
+// under a name of your own, edit it, run it, remove it by the name you chose.
+// Every step addresses that name, which is what did not work while the file
+// was called mytool.yaml and the profile inside it was still claude-code --
+// edit had no such profile to open, and rm reached the file only under the
+// name of the profile it was copied from. The run leg is script/smoke.sh,
+// which has a runtime to boot against; what a run needs from here is that the
+// name resolves to this file, with the settings it was copied from.
+func TestExportedProfileIsEditableAndRemovableByItsNewName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := exportProfile([]string{"claude-code", "mytool"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	p, ok := profile.Lookup("mytool")
+	if !ok {
+		t.Fatal("the exported profile is not there under the name it was exported as")
+	}
+	built, _ := profile.Lookup("claude-code")
+	if p.Name != "mytool" || p.Image != built.Image || p.GuestHome != built.GuestHome {
+		t.Errorf("mytool is not the profile it was copied from, renamed: %+v", p)
+	}
+	if path, ok := profile.Path("mytool"); !ok || path != filepath.Join(dir, "mytool.yaml") {
+		t.Errorf("Path(mytool) = %q, %v", path, ok)
+	}
+	// Renamed and nothing else: the comments are why anyone starts from an
+	// existing profile rather than a blank file.
+	blob, err := os.ReadFile(filepath.Join(dir, "mytool.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), "outrank Claude Code's subscription credential") {
+		t.Errorf("the rename cost the file its comments:\n%s", blob)
+	}
+
+	stubEditor(t, `printf '\n# tuned by hand\n' >> "$1"`)
+	if err := editProfile([]string{"mytool"}); err != nil {
+		t.Fatalf("editing the exported profile by its own name failed: %v", err)
+	}
+	if after, err := os.ReadFile(filepath.Join(dir, "mytool.yaml")); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(after), "tuned by hand") {
+		t.Errorf("the edit is not on disk:\n%s", after)
+	}
+
+	// And out again by the same name, with nothing asked: this is the file the
+	// argument names.
+	if err := removeProfile([]string{"mytool"}); err != nil {
+		t.Fatalf("removing the exported profile by its own name failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mytool.yaml")); !os.IsNotExist(err) {
+		t.Error("the file is still there after rm")
 	}
 }

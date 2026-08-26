@@ -388,8 +388,10 @@ grep -q 'metered path' "$WORK/codex.yaml" 2>/dev/null \
 ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
   && bad "a file was written for a mistyped flag" \
   || ok "no file is written for a mistyped flag"
-# rm resolves the name inside the file, not the file name: bare.yaml declares
-# codex, so that is what removes it.
+# rm resolves the name inside the file, not the file name: rename what
+# bare.yaml declares, and codex is the word that reaches it.
+sed 's/^name: bare$/name: codex/' "$BRIG_PROFILE_DIR/bare.yaml" > "$WORK/bare.yaml"
+cp "$WORK/bare.yaml" "$BRIG_PROFILE_DIR/bare.yaml"
 "$WORK/brig" profile rm codex > /dev/null 2>&1
 [ -f "$BRIG_PROFILE_DIR/bare.yaml" ] \
   && bad "rm did not resolve the profile inside the file" \
@@ -399,7 +401,7 @@ ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
 # profile in it. brig says which won, and rm takes both -- removing only the
 # winner would promote the other and leave the profile listed.
 "$WORK/brig" profile export codex dup > /dev/null 2>&1
-sed 's/^name: codex$/name: dupagent/' "$BRIG_PROFILE_DIR/dup.yaml" > "$WORK/dup2.yaml"
+sed 's/^name: dup$/name: dupagent/' "$BRIG_PROFILE_DIR/dup.yaml" > "$WORK/dup2.yaml"
 cp "$WORK/dup2.yaml" "$BRIG_PROFILE_DIR/dup.yaml"
 cp "$WORK/dup2.yaml" "$BRIG_PROFILE_DIR/dupother.yaml"
 "$WORK/brig" profiles > "$WORK/dup.out" 2>&1
@@ -446,6 +448,34 @@ EDITOR="$WORK/bin/fake-editor" "$WORK/brig" profile edit mine > /dev/null 2>&1 \
 grep -q 'edited by the smoke test' "$BRIG_PROFILE_DIR/mine.yaml" \
   && ok "profile edit saves what the editor wrote" \
   || bad "profile edit saves what the editor wrote"
+
+# The recipe brig prints, end to end: export the closest built-in under a name
+# of your own, edit it, run it, remove it by the name you chose. Every step
+# addresses the name the person picked, which is why export writes that name
+# into the file rather than leaving the profile called what it was copied from.
+"$WORK/brig" profile export claude-code mytool > /dev/null 2>&1
+grep -q '^name: mytool$' "$BRIG_PROFILE_DIR/mytool.yaml" 2>/dev/null \
+  && ok "export writes the name it was given into the file" \
+  || bad "export writes the name it was given into the file"
+grep -q 'outrank' "$BRIG_PROFILE_DIR/mytool.yaml" 2>/dev/null \
+  && ok "a renamed export still carries the comments" \
+  || bad "a renamed export still carries the comments"
+EDITOR="$WORK/bin/fake-editor" "$WORK/brig" profile edit mytool > /dev/null 2>&1 \
+  && ok "the exported profile edits under the name it was exported as" \
+  || bad "the exported profile edits under the name it was exported as"
+: > "$STUB_LOG"
+"$WORK/brig" run mytool -w "$WORK/ws-mytool" -p hi > /dev/null 2>&1
+grep -q -- '--name brig-mytool' "$STUB_LOG" \
+  && ok "the exported profile runs under the name it was exported as" \
+  || bad "the exported profile runs under the name it was exported as"
+grep -q -- '-- claude -p hi' "$STUB_LOG" \
+  && ok "the run is the profile it was copied from, renamed" \
+  || bad "the run is the profile it was copied from, renamed"
+"$WORK/brig" profile rm mytool > /dev/null 2>&1
+[ -f "$BRIG_PROFILE_DIR/mytool.yaml" ] \
+  && bad "rm did not remove the profile under the name it was exported as" \
+  || ok "rm removes the profile under the name it was exported as, asking nothing"
+"$WORK/brig" reset > /dev/null 2>&1
 
 # The old spellings keep working for one release, and say so.
 "$WORK/brig" agents > "$WORK/dep.out" 2>&1

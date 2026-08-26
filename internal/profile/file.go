@@ -501,6 +501,95 @@ func Export(p Profile) ([]byte, error) {
 	return append([]byte(exportHeader), body...), nil
 }
 
+// ExportAs renders a profile under a name of the caller's choosing, so a file
+// written as mytool.yaml declares the mytool profile rather than the one it
+// was copied from.
+//
+// Starting from the closest existing profile is the documented way to write
+// one, and the recipe brig prints for it stopped at its second step until this
+// existed: export wrote the file under the name you gave it while the profile
+// inside kept the name it came from, so `brig profile edit mytool` had no such
+// profile to open and the only command that could reach the file named a
+// different profile and deleted it without asking.
+//
+// The rename is a rewrite of one line rather than a re-serialisation of the
+// parsed struct, because the comments are the reason export writes YAML at
+// all: why a deny list is what it is, which credential outranks which. Setting
+// Name and marshalling would produce a correct profile with every one of those
+// sentences gone.
+//
+// An empty name, or the profile's own, renders unchanged -- that is the plain
+// `brig profile export claude-code` case, where nothing was asked to be
+// renamed.
+func ExportAs(p Profile, name string) ([]byte, error) {
+	blob, err := Export(p)
+	if err != nil {
+		return nil, err
+	}
+	if name == "" || name == p.Name {
+		return blob, nil
+	}
+	// Parsed again rather than trusted: the line-based rewrite below is a
+	// text edit on a format that has more than one way to write the same
+	// mapping, so the returned bytes have to be checked to actually declare
+	// the name they were asked for. A body it cannot find a top-level name in
+	// -- a profile of your own that was written as JSON, a flow mapping on one
+	// line -- falls through to marshalling, which loses the comments and is
+	// still better than a file that lies about its own name.
+	if renamed, ok := renameField(blob, name); ok {
+		if got, err := Parse(renamed); err == nil && got.Name == name {
+			return renamed, nil
+		}
+	}
+	p.Name = name
+	body, err := yaml.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(exportHeader), body...), nil
+}
+
+// renameField rewrites the value of the top-level name: line and leaves every
+// other byte of the file alone.
+//
+// Column 0 is the whole test, and it is what keeps the rewrite off the two
+// other places the word appears in an export: the `- name:` entries under
+// secrets:, env: and files:, which are indented, and the field reference in
+// the header, where every line starts with a #. Only the first match is
+// rewritten -- a second top-level name: is a duplicate key, which the parser
+// rejects on the way back out.
+//
+// Anything written after the value is kept, comment included: `name: mine
+// # keep in sync with the workspace` is a note someone wrote, and a rename is
+// not a reason to drop it. It may of course now be wrong, but so is deleting
+// it, and only one of those is visible to the person editing the file.
+func renameField(blob []byte, name string) ([]byte, bool) {
+	lines := bytes.Split(blob, []byte("\n"))
+	for i, line := range lines {
+		key, rest, ok := bytes.Cut(line, []byte(":"))
+		if !ok || string(key) != "name" {
+			continue
+		}
+		lines[i] = append([]byte("name: "+name), trailingComment(rest)...)
+		return bytes.Join(lines, []byte("\n")), true
+	}
+	return nil, false
+}
+
+// trailingComment is what a value line carries after its value, from the
+// whitespace that separates the two so the alignment someone chose survives
+// the rename.
+func trailingComment(rest []byte) []byte {
+	i := bytes.IndexByte(rest, '#')
+	if i < 0 {
+		return nil
+	}
+	for i > 0 && (rest[i-1] == ' ' || rest[i-1] == '\t') {
+		i--
+	}
+	return rest[i:]
+}
+
 // ExportJSON renders a profile as JSON, for anything generating or consuming
 // profiles programmatically.
 func ExportJSON(p Profile) ([]byte, error) {
@@ -509,6 +598,15 @@ func ExportJSON(p Profile) ([]byte, error) {
 		return nil, err
 	}
 	return append(blob, '\n'), nil
+}
+
+// ExportJSONAs is ExportAs for the JSON spelling. JSON carries no comments, so
+// there is nothing to preserve and the name is simply set before marshalling.
+func ExportJSONAs(p Profile, name string) ([]byte, error) {
+	if name != "" {
+		p.Name = name
+	}
+	return ExportJSON(p)
 }
 
 // IsCustom reports whether a name is served by a file rather than by an
