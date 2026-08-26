@@ -40,7 +40,7 @@ The first run is the slow one. In order:
   workflow that publishes it, and prints one line:
 
   ```
-  brig: image ghcr.io/brig-sh/claude-code:latest: signature verified
+  brig: image ghcr.io/brig-sh/claude-code-stock:latest: signature verified
   ```
 
   Then it starts the sandbox:
