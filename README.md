@@ -543,7 +543,7 @@ Booleans are shell-style: anything except `0` is on.
 | variable | default | what it does |
 | --- | --- | --- |
 | `BRIG_WORKSPACE` | `~/brig/<agent>` | Host directory mounted as the guest home. A named session appends `-<slug>` |
-| `BRIG_NAME` | `brig-<agent>` | Sandbox (VM or container) name. A named session appends `-<slug>` |
+| `BRIG_NAME` | `brig-<agent>` | Sandbox (VM or container) name; must begin with `brig-`. A named session appends `-<slug>` |
 | `BRIG_PROFILE_DIR` | `~/.config/brig` | Where custom profiles are read from and written to (`BRIG_TEMPLATE_DIR` still works) |
 | `BRIG_STATE_DIR` | `~/.brig` | Where brig keeps what has to outlive one command, including the workspace each sandbox was started with. Bookkeeping only: an unusable file there costs a restart, never a failed command |
 
