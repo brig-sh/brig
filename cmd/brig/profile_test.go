@@ -541,20 +541,9 @@ func TestRemoveProfileAsksBeforeDeletingAFileYouDidNotName(t *testing.T) {
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
-	// A stdin of the test's own, closed: nothing to ask on, and an answer that
-	// is not yes if anything did ask. `go test` usually hands the binary
-	// /dev/null, but a test binary run from a terminal would otherwise sit
-	// waiting for someone to type.
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.Close()
-	orig := os.Stdin
-	os.Stdin = r
-	defer func() { os.Stdin = orig; r.Close() }()
+	noAnswer(t)
 
-	err = removeProfile([]string{"mytool"})
+	err := removeProfile([]string{"mytool"})
 	if err == nil {
 		t.Fatal("rm deleted a file the argument did not name, without asking")
 	}
@@ -595,6 +584,90 @@ func TestProfileHelpPrintsUsageAndSucceeds(t *testing.T) {
 		}
 		if !strings.Contains(out, "brig profile rm") {
 			t.Errorf("profile %v printed no usage:\n%s", args, out)
+		}
+	}
+}
+
+// noAnswer gives a test a stdin of its own, closed: nothing to ask on, and an
+// answer that is not yes if anything asks anyway. `go test` usually hands the
+// binary /dev/null, but a test binary run from a terminal would otherwise sit
+// waiting for someone to type.
+func noAnswer(t *testing.T) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	orig := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = orig; r.Close() })
+}
+
+// The same silent delete the confirmation exists to stop, reached through an
+// alias: `brig profile rm claude` resolves to claude-code, and a file called
+// claude.yaml has the stem the argument spells, so the file-name test alone
+// waves it through. What the person typed is not the profile brig found, which
+// is the whole condition.
+func TestRemoveProfileAsksWhenAnAliasResolvedElsewhere(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	// The file is called claude.yaml and declares claude-code: the stem is the
+	// word typed, the profile inside it is not.
+	path := filepath.Join(dir, "claude.yaml")
+	blob := []byte("name: claude-code\nimage: docker.io/me/pinned:latest\n" +
+		"guestHome: /home/claude\nbinary: claude\nmem: 1\ncpus: 1\n")
+	if err := os.WriteFile(path, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	noAnswer(t)
+
+	err := removeProfile([]string{"claude"})
+	if err == nil {
+		t.Fatal("rm deleted the file an alias resolved to, without asking")
+	}
+	if !strings.Contains(err.Error(), "-y") || !strings.Contains(err.Error(), path) {
+		t.Errorf("the refusal names neither the file nor the way through: %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Error("the file was removed anyway")
+	}
+	// -y is the same answer given in advance, so the alias still works: this
+	// asks a question, it does not close the door.
+	if err := removeProfile([]string{"claude", "-y"}); err != nil {
+		t.Fatalf("-y did not answer the question: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("-y left the file in place")
+	}
+}
+
+// The message has to name every file the delete takes, not only the ones the
+// argument did not name. profile.Remove takes both files here, so a refusal
+// that names only pinned.yaml understates what was about to happen by one
+// file -- and that message is the only thing the person has to decide on.
+func TestRemoveProfileNamesEveryFileItWouldDelete(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_PROFILE_DIR", dir)
+	blob := []byte("name: mytool\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n")
+	for _, base := range []string{"mytool.yaml", "pinned.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, base), blob, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = profile.Load(profile.Dir()) // duplicates are reported, not fatal
+	noAnswer(t)
+
+	err := removeProfile([]string{"mytool"})
+	if err == nil {
+		t.Fatal("rm deleted two files without asking")
+	}
+	for _, base := range []string{"mytool.yaml", "pinned.yaml"} {
+		if !strings.Contains(err.Error(), filepath.Join(dir, base)) {
+			t.Errorf("the refusal does not name %s: %v", base, err)
 		}
 	}
 }

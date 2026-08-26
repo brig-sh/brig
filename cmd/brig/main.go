@@ -1050,43 +1050,58 @@ func removeProfile(args []string) error {
 // name for and the file brig found were different files, and only brig knew
 // which.
 //
-// So the test is the file name and not the profile name. A file is one the
-// argument named when its basename is that argument -- mytool.yaml for
-// `brig profile rm mytool`, which is what export writes and the only case
-// where nothing can surprise you. An alias, a second file shadowing the first,
-// a file renamed by hand: each of those is a delete of something the person
-// did not type, and each stops to ask.
+// So the question is whether brig had to work anything out, and there are two
+// ways it does. The argument may not be the profile's own name, which is the
+// alias case: `brig profile rm claude` deletes whatever backs claude-code, and
+// a file called claude.yaml declaring claude-code carries the stem the
+// argument spells while being a profile the argument never said. And a file's
+// basename may not be the argument at all, which is the renamed-by-hand case
+// and the second-file-shadowing-the-first case. `brig profile rm mytool`
+// against mytool.yaml declaring mytool is the one combination that is exactly
+// what was typed -- what export writes, and the only case where nothing can
+// surprise you.
+//
+// The message names every file profile.Remove will take rather than only the
+// ones that raised the question: what is being agreed to is the delete, and a
+// list one file short of it is the wrong thing to agree to.
 //
 // Without a terminal there is nobody to answer, and assuming yes would make
 // the scripted case the one that cannot be stopped, so it refuses and names
 // the flag that answers in advance -- the shape confirmDelete already uses,
 // for the same reason.
 func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error {
-	var unnamed []string
+	surprising := arg != resolved
 	for _, f := range files {
 		if stemOf(f) != arg {
-			unnamed = append(unnamed, f)
+			surprising = true
 		}
 	}
-	if len(unnamed) == 0 {
+	if !surprising {
 		return nil
 	}
-	list := strings.Join(unnamed, ", ")
+	list := strings.Join(files, ", ")
+	// A verb that agrees with the list, because two files declaring one profile
+	// is a case this message exists for rather than a curiosity.
+	declares := "declares"
+	if len(files) > 1 {
+		declares = "declare"
+	}
 	// Named on stderr either way, so an rm inside a pipeline still says which
 	// files it means where a person can see them. A run that answered in
 	// advance is told rather than asked, because -y is an answer to this
 	// question and not a reason to stop naming the files.
 	if yes {
-		fmt.Fprintf(os.Stderr, "brig: removing %s, which declares the %s profile\n", list, resolved)
+		fmt.Fprintf(os.Stderr, "brig: removing %s, which %s the %s profile\n",
+			list, declares, resolved)
 		return nil
 	}
 	if !wrap.IsTerminal(os.Stdin) {
-		return fmt.Errorf("removing %q would delete %s, which you did not name, and there "+
-			"is no terminal to ask on. Pass -y to answer in advance: brig profile rm %s -y",
-			arg, list, arg)
+		return fmt.Errorf("removing %q would delete %s, which brig worked out from the "+
+			"name you typed rather than being told, and there is no terminal to ask on. "+
+			"Pass -y to answer in advance: brig profile rm %s -y", arg, list, arg)
 	}
-	fmt.Fprintf(os.Stderr, "brig: %s declares the %s profile, and is not the file you "+
-		"named. Remove it? [y/N] ", list, resolved)
+	fmt.Fprintf(os.Stderr, "brig: removing %q deletes %s, which %s the %s profile. "+
+		"Remove it? [y/N] ", arg, list, declares, resolved)
 	line, err := readAnswer(os.Stdin)
 	if err != nil {
 		// EOF is the answer a closed stdin gives, and it is not yes.
