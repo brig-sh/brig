@@ -109,6 +109,14 @@ type ExecSpec struct {
 	TTY     bool
 	Env     []Var
 	Counted bool
+	// CanAsk reports whether brig's own stdin is a terminal, so hull can put
+	// its consent question to a person before anything is sent. Kept apart from
+	// TTY on purpose: TTY gives the guest a pseudo-terminal, which a login shell
+	// wants even when brig is driven from a script, whereas the question can
+	// only be answered on a real terminal. Reading TTY for both jobs counted a
+	// scripted `brig shell` as askable and let hull's on-by-default send the
+	// first-boot event. Only Replace reads it; see telemetryEnvFor.
+	CanAsk bool
 	// Stdin, when set, is fed to the command inside the guest. It is how a
 	// credential reaches the guest without appearing in argv: hull durably
 	// logs every exec's argv to a host file, so a value there outlives the
