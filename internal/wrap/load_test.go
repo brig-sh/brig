@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/internal/profile"
@@ -27,6 +28,41 @@ func bound(c *Config, name string) bool {
 		}
 	}
 	return false
+}
+
+// BRIG_NAME replaces the whole sandbox name, and ls and reset find brig's own
+// sandboxes by the brig- prefix. A name without it boots and runs but is
+// invisible to both, so it is refused at creation with a message naming the
+// constraint -- the alternative to tracking the sandbox by a mark the runtime
+// does not hand back.
+func TestBrigNameMustCarryThePrefix(t *testing.T) {
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+
+	t.Setenv("BRIG_NAME", "custom")
+	_, err := Load(p, Options{}, nil)
+	if err == nil {
+		t.Fatal("Load accepted a BRIG_NAME without the brig- prefix")
+	}
+	if !strings.Contains(err.Error(), NamePrefix) {
+		t.Errorf("Load error %q does not name the required prefix %q", err, NamePrefix)
+	}
+
+	// The same name with the prefix is accepted and stamped onto the sandbox
+	// verbatim, so ls and reset select it the way they select any other.
+	t.Setenv("BRIG_NAME", "brig-custom")
+	c, err := Load(p, Options{}, nil)
+	if err != nil {
+		t.Fatalf("Load refused a prefixed BRIG_NAME: %v", err)
+	}
+	if c.VMName != "brig-custom" {
+		t.Errorf("VMName = %q, want brig-custom", c.VMName)
+	}
+	if !strings.HasPrefix(c.VMName, NamePrefix) {
+		t.Errorf("VMName = %q, which ls and reset would not find", c.VMName)
+	}
 }
 
 // --workspace was made absolute and BRIG_WORKSPACE was not, so one exported

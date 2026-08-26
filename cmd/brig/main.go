@@ -30,8 +30,10 @@ import (
 var version = "dev"
 
 // sandboxPrefix is how brig recognises its own sandboxes in a runtime that
-// may be running other things.
-const sandboxPrefix = "brig-"
+// may be running other things. It is the same mark wrap stamps onto every
+// sandbox name, taken from there so the two cannot drift: ls and reset select
+// on exactly what Load refuses to let BRIG_NAME drop.
+const sandboxPrefix = wrap.NamePrefix
 
 const usage = `brig -- run a coding agent in a sandbox
 

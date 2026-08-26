@@ -16,6 +16,12 @@ import (
 	"github.com/brig-sh/brig/internal/verify"
 )
 
+// NamePrefix is what every brig sandbox name begins with. It is how brig picks
+// its own sandboxes out of a runtime that may be running other things, so it is
+// the one part of the name that is not the caller's to drop -- see the BRIG_NAME
+// check in Load. cmd/brig reads the same prefix back when it lists and resets.
+const NamePrefix = "brig-"
+
 // Config is everything a run needs, resolved once.
 type Config struct {
 	Profile profile.Profile
@@ -145,7 +151,20 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// an exported BRIG_WORKSPACE keeps working alongside --name instead of
 	// fighting it. An unnamed run adds nothing.
 	workspace := base
-	vmName := env.String("NAME", "brig-"+t.Name)
+	vmName := env.String("NAME", NamePrefix+t.Name)
+	// BRIG_NAME replaces the whole sandbox name, and brig finds its own
+	// sandboxes by the brig- prefix: ls lists what carries it and reset removes
+	// what carries it. A name set through BRIG_NAME without the prefix boots and
+	// runs fine and is then invisible to both -- a sandbox brig started that it
+	// can no longer see or clean up. Refuse it at creation and say what it must
+	// carry, rather than track brig's own sandboxes through some second channel:
+	// the runtime hands back only the name `ps` prints, so the prefix is the one
+	// mark that survives a stop, a reboot and a brig that has forgotten it ever
+	// ran. See sandboxPrefix in cmd/brig, which reads the same mark back.
+	if !strings.HasPrefix(vmName, NamePrefix) {
+		return nil, fmt.Errorf("BRIG_NAME is %q, but a brig sandbox name must begin with %q so that "+
+			"`brig ls` and `brig reset` can find it; use %q instead", vmName, NamePrefix, NamePrefix+vmName)
+	}
 	if slug != "" {
 		workspace += "-" + slug
 		vmName += "-" + slug

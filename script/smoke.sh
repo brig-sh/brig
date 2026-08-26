@@ -312,6 +312,30 @@ out="$("$WORK/brig" ls claude 2>&1)"; rc=$?
 out="$("$WORK/brig" stop claude extra 2>&1)"; rc=$?
 [ "$rc" = 2 ] && ok "stop refuses a stray argument" || bad "stop refuses a stray argument -- got $rc: $out"
 
+echo "== BRIG_NAME =="
+"$WORK/brig" reset > /dev/null 2>&1
+# A name set through BRIG_NAME still carries the prefix, so ls lists it and
+# reset removes it the way they do any brig sandbox.
+BRIG_NAME=brig-custom "$WORK/brig" run claude -d > /dev/null 2>&1
+listing="$("$WORK/brig" ls 2>/dev/null)"
+case "$listing" in
+  *brig-custom*) ok "a BRIG_NAME sandbox appears in ls" ;;
+  *) bad "a BRIG_NAME sandbox appears in ls -- got: $listing" ;;
+esac
+: > "$STUB_LOG"
+"$WORK/brig" reset > /dev/null 2>&1
+grep -q '^argv: rm brig-custom' "$STUB_LOG" \
+  && ok "reset removes a BRIG_NAME sandbox" || bad "reset removes a BRIG_NAME sandbox"
+# A BRIG_NAME without the prefix would be invisible to both, so it is refused at
+# creation with a message naming the constraint.
+out="$(BRIG_NAME=custom "$WORK/brig" run claude -d 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "a BRIG_NAME without the prefix is refused" \
+  || bad "a BRIG_NAME without the prefix is refused -- got $rc"
+case "$out" in
+  *brig-*) ok "the refusal names the required prefix" ;;
+  *) bad "the refusal names the required prefix -- got: $out" ;;
+esac
+
 echo "== flags =="
 : > "$STUB_LOG"
 "$WORK/brig" run claude -t ghcr.io/me/img:latest -w "$WORK/other" -m 8192 --cpus 2 -d \
