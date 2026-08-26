@@ -22,9 +22,9 @@ func newHull(bin string) (Runtime, error) {
 	if p, err := exec.LookPath("hull"); err == nil {
 		return &hull{bin: p}, nil
 	}
-	return nil, fmt.Errorf("no microVM runtime found on PATH. brig drives hull " +
-		"on macOS: see https://github.com/brig-sh/brig#macos. " +
-		"Or point BRIG_RUNTIME_BIN at a build")
+	return nil, fmt.Errorf("%w: brig drives hull on macOS, and none was there. "+
+		"See https://github.com/brig-sh/brig#macos, "+
+		"or point BRIG_RUNTIME_BIN at a build", ErrNoRuntime)
 }
 
 func (h *hull) Kind() string { return "hull" }

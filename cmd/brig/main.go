@@ -212,7 +212,13 @@ func run(args []string) error {
 		// So env carries on without one, and Status marks that single line
 		// unavailable. Every other verb needs the runtime to do its work, so
 		// they still fail here, naming what is missing.
-		if verb != "env" {
+		//
+		// But only "no runtime on PATH" is a state env should paper over. An
+		// unknown BRIG_RUNTIME or a runtimeBin that is not there is a mistake to
+		// fix, and env is the verb people run to find it -- so those surface
+		// here as they do for run, naming the real cause. Match the sentinel,
+		// not any error, or a future error type silently rejoins the swallow.
+		if verb != "env" || !errors.Is(err, runtime.ErrNoRuntime) {
 			return err
 		}
 		rt = nil
@@ -596,6 +602,13 @@ func listSandboxes(args []string) error {
 	}
 	rt, err := runtime.Detect()
 	if err != nil {
+		if !errors.Is(err, runtime.ErrNoRuntime) {
+			// An unknown BRIG_RUNTIME is a mistake, not an empty list: reading a
+			// typo as "you have no sandboxes" hides it. Fail with the value
+			// named, exactly as run does, rather than answering a question that
+			// was not asked.
+			return err
+		}
 		// No runtime on PATH means nothing is running and nothing is holding a
 		// name: there is nothing to list. Answer the question that was asked --
 		// there are no sandboxes -- and exit 0, rather than failing a read-only

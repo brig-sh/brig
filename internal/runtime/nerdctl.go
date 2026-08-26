@@ -42,8 +42,8 @@ func newNerdctl(bin string) (Runtime, error) {
 			return &nerdctl{bin: p}, nil
 		}
 	}
-	return nil, fmt.Errorf("no container runtime found: install nerdctl, " +
-		"or point BRIG_RUNTIME_BIN at one")
+	return nil, fmt.Errorf("%w: install nerdctl, "+
+		"or point BRIG_RUNTIME_BIN at one", ErrNoRuntime)
 }
 
 func (n *nerdctl) Kind() string { return "nerdctl" }

@@ -10,12 +10,23 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrNoRuntime is the one DetectFor failure that means "nothing is installed"
+// rather than "you asked for the wrong thing": no runtime binary was on PATH
+// and none was pinned. env and ls degrade to it -- report what they can and
+// exit 0 -- and they must key off this with errors.Is, never off "err != nil".
+// An unknown BRIG_RUNTIME or a runtimeBin that is not there is a mistake to
+// fix, and env is the verb people run to find it, so those still surface with a
+// non-zero exit even there. Matching the sentinel rather than any error is what
+// stops the day the message or type changes from silently widening the swallow.
+var ErrNoRuntime = errors.New("no runtime found on PATH")
 
 // Share is a host directory made visible in the guest.
 type Share struct {
