@@ -481,6 +481,74 @@ xattr -l "$(which brig)"                 # com.apple.quarantine, still there
 A from-source build is neither signed nor notarized, so it is yours to trust
 by having built it.
 
+## Telemetry
+
+brig is local-first and asks you to create no account, and a reader who takes
+that at face value will not expect a network call to a collector. There is
+one, on macOS, so here is what it is.
+
+The runtime brig drives reports usage events over OTLP to an OpenTelemetry
+collector run by NOFire AI, with no third-party analytics service in the path.
+brig tags those events with its own name, because brig is what you installed
+and hull is an implementation detail of it. On Linux the backend is `nerdctl`,
+which has no telemetry of any kind, and nothing is sent.
+
+The switch is `brig telemetry off`, which records the answer where the runtime
+keeps it, so it holds for every later invocation whether brig is the caller or
+not. `DO_NOT_TRACK=1` or `HULL_TELEMETRY_DISABLED=1` in the environment does
+the same for one shell without writing anything down, and beats a recorded
+yes. `brig telemetry status` reports which of those is currently deciding.
+
+**Nothing is sent before you have answered.** The runtime defaults telemetry
+on when it cannot put the question to anyone, and brig's boot invocation gives
+it no terminal, so left alone a fresh install would report its first boot
+before anyone had been asked. brig suppresses counting for every operation
+that runs without a terminal until an answer is on file: the boot, the stop,
+the plumbing. The one invocation that does inherit your terminal -- the exec
+that hands the sandbox to the agent -- is left able to ask, which is where the
+question appears. A default is not consent, but neither is a prompt nobody can
+ever see.
+
+An event carries a fixed envelope -- schema version, event type, product name
+and version, OS version, CPU architecture, an install identifier generated
+locally, a timestamp, a checksum -- plus, depending on the event: the brig
+subcommand and whether it succeeded, with failures reduced to coarse classes
+and never the error text; the hypervisor backend and whether the boot worked;
+how long a sandbox lived; sampled RSS and CPU of the VM process while a
+command is attached; and a panic type with a path-trimmed stack trace when
+something crashes. The install identifier is a random value in
+`~/.hull/telemetry.json`; deleting the file rotates it. Crash reports queue in
+`~/.hull/crashes/` and can be read or deleted before they are uploaded. IP
+addresses are dropped at ingestion, raw events are kept for a year, and
+widening what is collected re-asks the question rather than proceeding on the
+old answer. Field by field, that is
+[hull's telemetry documentation](https://github.com/brig-sh/hull/blob/main/docs/telemetry.md).
+
+These are never collected, and this is a commitment about what brig will send
+rather than a note about what it happens to send today:
+
+- workspace paths, and host paths generally
+- repository names, branches or remotes
+- command arguments, brig's own and the agent's
+- agent prompts, and anything the agent read or wrote
+- secret names, secret values, and which credentials a run forwarded
+- image names and registry references
+- network destinations the guest reached
+- file metadata: names, sizes, timestamps, counts
+
+The list is the one that matters for this page, because each entry is
+something the sandbox boundary above exists to keep private. A workspace path
+names the project; an image reference names what you are building; a forwarded
+credential name says which vendor you have an account with. Telemetry that
+carried any of them would leak across the boundary the rest of this document
+describes, out of a channel the user did not think was there. If you find one
+of them in a payload, that is a bug and
+[SECURITY.md](../SECURITY.md) is how to report it.
+
+`HULL_TELEMETRY_DEBUG=1` prints payloads to stderr instead of sending them,
+which is how to check any of this for yourself rather than taking our word for
+it.
+
 ## Things brig does not claim
 
 It does not sandbox the agent from the network. Outbound traffic from the
