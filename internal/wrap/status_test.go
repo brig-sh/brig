@@ -34,6 +34,26 @@ func statusOutput(t *testing.T, body string, set creds.Set) string {
 	return out.String()
 }
 
+// With no runtime on PATH, env reports what it can and marks the one line that
+// needs a runtime unavailable, rather than failing the whole report -- the
+// reader is often the one whose runtime is what broke.
+func TestStatusReportsWithoutARuntime(t *testing.T) {
+	c := bindingConfig(t, credentialProfile)
+	out := &bytes.Buffer{}
+	c.Out = out
+	c.Runtime = nil // no runtime detected
+	c.Status(creds.Set{})
+	got := out.String()
+	if !strings.Contains(got, "runtime unavailable") {
+		t.Errorf("the runtime line was not marked unavailable:\n%s", got)
+	}
+	// The rest of the report is still there: the profile's image is knowable
+	// without a runtime, and is the kind of line env exists to print.
+	if !strings.Contains(got, "image ") {
+		t.Errorf("the report dropped the lines it could still give:\n%s", got)
+	}
+}
+
 // Set.Names annotates a store-sourced variable as "TOK(secret)", the way it
 // already annotates the host credential's as "TOK(host)". An exact-string
 // check against the bare name misses it, and because a secret-bound run

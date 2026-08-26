@@ -16,7 +16,16 @@ func (c *Config) Status(set creds.Set) {
 	} else {
 		c.sayf("workspace %s (sandbox %s)", c.Workspace, c.VMName)
 	}
-	c.sayf("runtime %s (%s)", c.Runtime.Kind(), c.Runtime.Bin())
+	// The runtime is the one line here that needs a runtime. When none is on
+	// PATH env still reports the rest -- the profile, the environment, the host
+	// git config -- and marks this line unavailable rather than failing the
+	// whole report, because the person reading it is often the one whose runtime
+	// is what broke.
+	if c.Runtime != nil {
+		c.sayf("runtime %s (%s)", c.Runtime.Kind(), c.Runtime.Bin())
+	} else {
+		c.sayf("runtime unavailable (no runtime found on PATH)")
+	}
 	c.sayf("image %s (pull %s)", c.Image, c.Pull)
 
 	names := credentialNames(set)

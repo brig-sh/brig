@@ -335,6 +335,28 @@ case "$out" in
   *brig-*) ok "the refusal names the required prefix" ;;
   *) bad "the refusal names the required prefix -- got: $out" ;;
 esac
+"$WORK/brig" reset > /dev/null 2>&1
+
+echo "== no runtime =="
+# With no runtime on PATH, env still reports what is knowable and marks only the
+# runtime line unavailable, and ls answers that there is nothing to list. Both
+# exit 0: the person most likely to run them is the one whose runtime is broken.
+out="$(PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" env claude 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "env with no runtime exits 0" || bad "env with no runtime exits 0 -- got $rc: $out"
+case "$out" in
+  *"runtime unavailable"*) ok "env marks the runtime line unavailable" ;;
+  *) bad "env marks the runtime line unavailable -- got: $out" ;;
+esac
+case "$out" in
+  *"image "*) ok "env still reports the lines it can" ;;
+  *) bad "env still reports the lines it can -- got: $out" ;;
+esac
+out="$(PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" ls 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "ls with no runtime exits 0" || bad "ls with no runtime exits 0 -- got $rc: $out"
+case "$out" in
+  *none*) ok "ls with no runtime says there is nothing to list" ;;
+  *) bad "ls with no runtime says there is nothing to list -- got: $out" ;;
+esac
 
 echo "== flags =="
 : > "$STUB_LOG"
