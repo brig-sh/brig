@@ -199,21 +199,30 @@ func (h *hull) assetDir() (string, error) {
 
 // Running parses `ps` rather than asking for one instance, because a stopped
 // instance still holds its name and must not read as running.
-func (h *hull) Running(name string) bool {
+//
+// A `ps` that did not run is returned as an error rather than folded into
+// false. The two are different events -- no sandbox is up, versus this hull
+// could not be asked -- and the caller acts on the difference; see the note on
+// Runtime.Running. hull's own explanation is captured and carried along,
+// because "exit status 1" on its own tells nobody which of the two it was.
+func (h *hull) Running(name string) (bool, error) {
 	cmd := exec.Command(h.bin, "ps")
 	cmd.Env = mergeEnv(telemetryEnv(false))
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return false
+		if said := strings.TrimSpace(errb.String()); said != "" {
+			return false, fmt.Errorf("%s ps: %w: %s", h.bin, err, firstLines(said, 3))
+		}
+		return false, fmt.Errorf("%s ps: %w", h.bin, err)
 	}
 	for _, line := range strings.Split(out.String(), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 2 && f[0] == name && f[1] == "running" {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // List reads the same table Running does. A stopped instance still holds its

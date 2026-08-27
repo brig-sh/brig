@@ -32,8 +32,8 @@ func (v verifyRuntime) LocalDigest(string) (string, error) { return v.local, nil
 // running and removing is a no-op, which is the state a first boot starts in.
 // Run is deliberately absent: a test that got that far would be booting, and
 // every case here is meant to refuse before then.
-func (v verifyRuntime) Running(string) bool { return false }
-func (v verifyRuntime) Remove(string) error { return nil }
+func (v verifyRuntime) Running(string) (bool, error) { return false, nil }
+func (v verifyRuntime) Remove(string) error          { return nil }
 
 // Stops the boot at the point a real runtime would start doing work, so a
 // test can drive EnsureRunning through the checks without booting anything.

@@ -101,6 +101,13 @@ type Session struct {
 	VM        string `json:"vm"`
 	Workspace string `json:"workspace"`
 	Running   bool   `json:"running"`
+	// RunningError is why the runtime could not be asked. When it is set,
+	// Running says nothing -- a runtime that failed to answer is not a runtime
+	// reporting a stopped sandbox, and a client that shows the second for the
+	// first sends its reader looking for a VM that may well still be up. It
+	// carries the reason rather than a bare flag because that reason is the only
+	// account of what broke, and the daemon has no terminal to print it on.
+	RunningError string `json:"runningError,omitempty"`
 }
 
 func main() {
@@ -560,7 +567,14 @@ func (d *daemon) status() []Session {
 	defer d.mu.Unlock()
 	out := make([]Session, 0, len(d.sessions))
 	for vm, e := range d.sessions {
-		e.Running = e.rt.Running(vm)
+		running, err := e.rt.Running(vm)
+		// Reported as unanswered rather than as stopped. The inventory says brig
+		// booted this sandbox, so "not running" is a claim that it exited, and a
+		// runtime nobody could reach never made that claim.
+		e.Running = running
+		if err != nil {
+			e.RunningError = err.Error()
+		}
 		out = append(out, e.Session)
 	}
 	return out
