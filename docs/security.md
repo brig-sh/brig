@@ -557,17 +557,16 @@ it.
 It does not sandbox the agent from the network. Outbound traffic from the
 guest is whatever the runtime allows, and there is no per-sandbox policy yet.
 
-It does not promise that one sandbox cannot reach another, and what actually
-happens depends on the backend. brig asks every runtime for its shared
-network, unconditionally and with no setting to say otherwise, so this is a
-property of what the runtime does with that request rather than of anything
-brig arranges. Measured, in
-[docs/manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md):
+It does not promise that one sandbox cannot reach another. What happens
+depends on the backend. brig asks every runtime for its shared network, with
+no setting to say otherwise. What the runtime then does with that request is
+the runtime's own behaviour, not brig's. The measurements are in
+[docs/manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md).
 
 | backend | can one sandbox reach another? |
 | --- | --- |
-| `hvi` on macOS | no. The gvisor gateway gives each guest a point-to-point link and translates outbound traffic; there is no segment between guests for one to reach another on |
-| `vz` on macOS | no. vmnet does not bridge guest to guest in the mode hull uses |
+| `hvi` on macOS | no. A packet capture in both guests shows why: an ARP broadcast from one guest does reach the other, and the other answers, but the gateway does not forward that unicast reply back. The first guest never learns the second's MAC address, so it never sends a packet, and the second guest sees no TCP at all |
+| `vz` on macOS | no. vmnet does not carry traffic from one guest to another in the mode hull uses |
 | Linux | **yes.** The CNI bridge is an ordinary layer 2 segment, and two sandboxes on it reach each other the way two containers do |
 
 So on Linux, two agents you gave *different* credentials sit on one broadcast
@@ -576,11 +575,12 @@ hole in the narrow-blast-radius argument above: there the radius is narrow per
 workspace and per token, not per sandbox. If it matters that two agents cannot
 reach each other, run them on separate hosts, or on macOS.
 
-On macOS the separation is real but incidental: it falls out of how the
-backends move packets, not from anything brig asks for, and nothing today
-would notice if a runtime change took it away. Treat it as a property that
-holds rather than a guarantee brig makes. #15 is the work that turns it into
-one, and that closes the Linux gap.
+On macOS the separation is real, but it is a property of the backend rather
+than something brig asks for. brig asks for a shared network and gets guests
+that cannot address each other. No test in brig would notice if a runtime
+change removed it. Treat it as a property that holds, not as a guarantee brig
+makes. On Linux, `--network isolated` gives a sandbox a network of its own and
+closes the gap.
 
 It does not filter what the agent writes to your terminal. `brig` hands the
 tty over with `syscall.Exec` and is gone before the agent produces a byte,
