@@ -258,9 +258,11 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// home. Re-checking here, holding a directory handle, is what makes the
 	// path we hand over mean what it meant when we looked.
 	//
-	// This does not make the handover atomic -- nothing can, short of passing a
-	// descriptor the runtime accepts -- but it moves the window from "the whole
-	// boot" to "between these two statements".
+	// This does not narrow the window and does not make the handover atomic:
+	// the resolution that matters happens in the runtime, another process,
+	// later. What it buys is that brig refuses to hand over a path that has
+	// already stopped meaning what it checked. Closing the rest needs the
+	// runtime to accept a descriptor rather than a path. See verifyStillOurs.
 	ws, err := c.openWorkspace()
 	if err != nil {
 		return err
