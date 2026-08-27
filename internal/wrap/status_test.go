@@ -9,6 +9,7 @@ import (
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/verify"
 )
 
 // fakeRuntime answers the two questions a status report asks. The interface is
@@ -314,4 +315,47 @@ func TestStatusReportsTheImportedLogin(t *testing.T) {
 		"guest login: claude-credentials, imported from keychain:Claude Code-credentials (EXPIRED)\n") {
 		t.Errorf("an expired login was not reported:\n%s", got)
 	}
+}
+
+// brig info is where a user asks what a sandbox is about to be handed, and the
+// verify mode decides whether any of it was checked. It was not in the report
+// at all, so no command would tell a user that checking was off or that the
+// policy had been replaced.
+func TestStatusReportsTheVerifyMode(t *testing.T) {
+	t.Run("off", func(t *testing.T) {
+		c := bindingConfig(t, "")
+		c.Runtime = fakeRuntime{}
+		c.Verify = verify.Off
+		out := &bytes.Buffer{}
+		c.Out = out
+		c.Status(creds.Set{})
+		if got := out.String(); !strings.Contains(got, "off") || !strings.Contains(got, "verif") {
+			t.Errorf("the report does not say verification is off:\n%s", got)
+		}
+	})
+	t.Run("replaced policy", func(t *testing.T) {
+		c := bindingConfig(t, "")
+		c.Runtime = fakeRuntime{}
+		c.Verify = verify.Warn
+		c.VerifyPolicy = verify.DefaultPolicy()
+		c.VerifyPolicy.Identity = `.*`
+		out := &bytes.Buffer{}
+		c.Out = out
+		c.Status(creds.Set{})
+		if got := out.String(); !strings.Contains(got, "replaced") {
+			t.Errorf("the report does not say the trust policy was replaced:\n%s", got)
+		}
+	})
+	t.Run("shipped policy", func(t *testing.T) {
+		c := bindingConfig(t, "")
+		c.Runtime = fakeRuntime{}
+		c.Verify = verify.Warn
+		c.VerifyPolicy = verify.DefaultPolicy()
+		out := &bytes.Buffer{}
+		c.Out = out
+		c.Status(creds.Set{})
+		if got := out.String(); strings.Contains(got, "replaced") {
+			t.Errorf("the shipped policy is reported as replaced:\n%s", got)
+		}
+	})
 }

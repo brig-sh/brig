@@ -340,3 +340,43 @@ func TestBootAssetsPolicyPinsItsOwnRepoAndWorkflow(t *testing.T) {
 		t.Errorf("the published bundle is not under the policy's prefix %q", p.Registry)
 	}
 }
+
+// A policy the user replaced cannot report itself in the same words as the one
+// brig ships. The settings that replace it accept anything, including an
+// identity expression that matches every certificate, and with that set brig
+// printed the identical "signature verified" line it prints for a real check.
+// The sentence a reader acts on has to differ when the thing it describes does.
+func TestAReplacedPolicyDoesNotSayTheSameThing(t *testing.T) {
+	shipped := DefaultPolicy()
+	if shipped.Replaced() {
+		t.Error("the shipped policy reports itself as replaced")
+	}
+	// brig ships more than one: the boot assets are their own trust root, and
+	// a policy that is shipped must not read as one the user swapped in.
+	if BootAssetsPolicy().Replaced() {
+		t.Error("the shipped boot-assets policy reports itself as replaced")
+	}
+
+	for what, p := range map[string]Policy{
+		"identity": {Registry: shipped.Registry, Identity: `.*`, Issuer: shipped.Issuer},
+		"registry": {Registry: "ghcr.io/someone/", Identity: shipped.Identity, Issuer: shipped.Issuer},
+		"issuer":   {Registry: shipped.Registry, Identity: shipped.Identity, Issuer: "https://example.com"},
+	} {
+		if !p.Replaced() {
+			t.Errorf("a policy with a replaced %s does not report itself as replaced", what)
+		}
+		res := Result{Outcome: Verified, Image: "ghcr.io/brig-sh/x:1", Digest: "sha256:abc", Policy: p}
+		if got := res.Message(); strings.Contains(got, "signature verified, booting") {
+			t.Errorf("a replaced %s printed the unqualified success line: %s", what, got)
+		}
+		if got := res.Message(); !strings.Contains(got, "replaced") {
+			t.Errorf("a replaced %s does not say the policy was replaced: %s", what, got)
+		}
+	}
+
+	// And the shipped policy still says exactly what it always said.
+	res := Result{Outcome: Verified, Image: "ghcr.io/brig-sh/x:1", Digest: "sha256:abc", Policy: shipped}
+	if got := res.Message(); !strings.Contains(got, "signature verified, booting") {
+		t.Errorf("the shipped policy stopped saying it verified: %s", got)
+	}
+}

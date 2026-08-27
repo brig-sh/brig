@@ -32,6 +32,11 @@ import (
 // path is owed the difference. See runtime.Runtime.PinsDigest.
 func (c *Config) verifyImage() error {
 	if c.Verify == verify.Off {
+		// Said out loud rather than passed over in silence. This was the only
+		// state no command mentioned: the check returned here, before any
+		// output, so a sandbox booted unchecked and nothing on screen said so.
+		// The quietest path was the one that most needed a line.
+		c.warnf("BRIG_VERIFY=off, so the guest image is not checked before it boots")
 		return nil
 	}
 	if c.Runtime.PinsDigest() {
@@ -67,8 +72,14 @@ func (c *Config) verifyTag() error {
 			return errors.New("refusing to boot an image that failed verification")
 		}
 		if !c.confirm("Boot it anyway?") {
-			return errors.New("aborted: the image failed verification. " +
-				"Pull it again, or set BRIG_VERIFY=off if you know why it fails")
+			// Not "turn the check off". A signature that is present and does
+			// not check out is the one outcome with no innocent reading, and
+			// disabling the control that caught it is not a remedy. Pulling
+			// again fixes a stale or truncated copy; naming a digest the user
+			// has checked themselves is the deliberate way past it.
+			return errors.New("aborted: the image failed verification. Pull it again " +
+				"(BRIG_PULL=always), or set BRIG_IMAGE to a digest you have checked " +
+				"yourself")
 		}
 		return nil
 	}
@@ -170,8 +181,14 @@ func (c *Config) verifyDigest() error {
 			return errors.New("refusing to boot an image that failed verification")
 		}
 		if !c.confirm("Boot it anyway?") {
-			return errors.New("aborted: the image failed verification. " +
-				"Pull it again, or set BRIG_VERIFY=off if you know why it fails")
+			// Not "turn the check off". A signature that is present and does
+			// not check out is the one outcome with no innocent reading, and
+			// disabling the control that caught it is not a remedy. Pulling
+			// again fixes a stale or truncated copy; naming a digest the user
+			// has checked themselves is the deliberate way past it.
+			return errors.New("aborted: the image failed verification. Pull it again " +
+				"(BRIG_PULL=always), or set BRIG_IMAGE to a digest you have checked " +
+				"yourself")
 		}
 		return nil
 	}
