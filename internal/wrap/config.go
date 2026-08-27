@@ -332,7 +332,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, strictErr
 	}
 	c.GuestCwd = GuestCwd(cwd, c.Workspace, t.GuestHome)
-	c.resolveGitIdentity()
+	if err := c.resolveGitIdentity(); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 

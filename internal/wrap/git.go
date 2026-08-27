@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/brig-sh/brig/internal/creds"
 )
@@ -38,14 +39,18 @@ const (
 // guest can neither execute nor reach, so forwarding commit.gpgsign would
 // make every guest commit fail rather than degrade. Guest commits are
 // unsigned.
-func (c *Config) resolveGitIdentity() {
+func (c *Config) resolveGitIdentity() error {
 	c.GitName = c.env.String("GIT_NAME", c.gitConfigValue("user.name"))
 	c.GitEmail = c.env.String("GIT_EMAIL", c.gitConfigValue("user.email"))
 
-	if user, ok := c.hostGitUser(); ok {
+	user, ok, err := c.hostGitUser()
+	if err != nil {
+		return err
+	}
+	if ok {
 		c.GitUserFromHost = true
 		c.GitUser = c.env.String("GIT_USER", user)
-		return
+		return nil
 	}
 	// GitHub requires exactly x-access-token for a GitHub App installation
 	// token and generally ignores the username for a PAT, so that is the
@@ -53,6 +58,7 @@ func (c *Config) resolveGitIdentity() {
 	// rather than letting a later "Invalid username or token" look like a
 	// broken sandbox.
 	c.GitUser = c.env.String("GIT_USER", "x-access-token")
+	return nil
 }
 
 func (c *Config) gitConfigValue(key string) string {
@@ -68,17 +74,20 @@ func (c *Config) gitConfigValue(key string) string {
 
 // hostGitUser finds the GitHub login to pair with the token: github.user
 // first, then the gh CLI's own record.
-func (c *Config) hostGitUser() (string, bool) {
+func (c *Config) hostGitUser() (string, bool, error) {
 	u := c.gitConfigValue("github.user")
 	if u == "" {
-		u = ghHostsUser(c.primaryGitHost())
+		var err error
+		if u, err = ghHostsUser(c.primaryGitHost()); err != nil {
+			return "", false, err
+		}
 	}
 	// A GitHub login never contains whitespace; ignore anything that does.
 	// user.name is a display name, and is the usual thing to get wrong here.
 	if u == "" || strings.ContainsAny(u, " \t") {
-		return "", false
+		return "", false, nil
 	}
-	return u, true
+	return u, true, nil
 }
 
 func (c *Config) primaryGitHost() string {
@@ -94,18 +103,24 @@ func (c *Config) primaryGitHost() string {
 // whichever host comes first -- an Enterprise login paired with a github.com
 // token, which is exactly the "Invalid username or token" this exists to
 // prevent. Only the stanza for the host being configured is read.
-func ghHostsUser(host string) string {
+func ghHostsUser(host string) (string, error) {
 	dir := os.Getenv("GH_CONFIG_DIR")
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return ""
+			return "", nil
 		}
 		dir = filepath.Join(home, ".config", "gh")
 	}
-	f, err := os.Open(filepath.Join(dir, "hosts.yml"))
+	f, err := openHostFile(filepath.Join(dir, "hosts.yml"))
 	if err != nil {
-		return ""
+		if errors.Is(err, errNotRegularFile) {
+			return "", err
+		}
+		// Anything else -- no file, no permission -- is the ordinary case of
+		// gh not being set up, and the caller falls back to a default
+		// username rather than failing the run.
+		return "", nil
 	}
 	defer f.Close()
 
@@ -125,10 +140,52 @@ func ghHostsUser(host string) string {
 			continue
 		}
 		if k, v, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && k == "user" {
-			return strings.TrimSpace(v)
+			return strings.TrimSpace(v), nil
 		}
 	}
-	return ""
+	return "", nil
+}
+
+// errNotRegularFile marks the refusal below, so a caller that treats every
+// other open failure as "gh is not set up" can tell this one apart.
+var errNotRegularFile = errors.New("not a regular file")
+
+// openHostFile opens one of the host's own configuration files and refuses
+// anything that is not a regular file, deciding from the OPEN DESCRIPTOR
+// rather than from a prior stat.
+//
+// This is the workspace rule from openRegular, applied to a path outside the
+// workspace. os.Root does not reach here -- hosts.yml is the host's file, not
+// the guest's home -- so nothing checked what was at the path, and a plain
+// os.Open of a FIFO waits for a writer that never comes. The read happens at
+// the end of Load, so one `mkfifo ~/.config/gh/hosts.yml` hung every verb that
+// loads a profile, with no output and nothing to diagnose. A directory or a
+// device did not hang but failed further along, in a kernel error that named
+// neither the file nor what was wrong with it.
+//
+// O_NONBLOCK is what makes the FIFO case return rather than park: Go opens
+// non-blocking and registers the descriptor with the poller anyway, so the
+// flag is belt and braces here, and it costs nothing on a regular file.
+// The fstat afterwards is what decides, and it cannot be raced: it asks about
+// the descriptor already held rather than about the path.
+func openHostFile(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("refusing to read %s: it is a %s, not a regular file, and "+
+			"brig would block on it or fail later with a kernel error. Point GH_CONFIG_DIR "+
+			"at a directory holding a real hosts.yml, or remove what is there: %w",
+			path, describeType(fi.Mode()), errNotRegularFile)
+	}
+	return f, nil
 }
 
 // SetupGit writes the managed git files into the workspace and adds the
