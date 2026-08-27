@@ -167,9 +167,9 @@ func (p Profile) Validate() error {
 		return fmt.Errorf("hypervisor %q is not one of vz, hvi or qemu", p.Hypervisor)
 	}
 	switch p.Network {
-	case "", "shared", "offline":
+	case "", "shared", "isolated", "offline":
 	default:
-		return fmt.Errorf("network %q is not one of shared or offline", p.Network)
+		return fmt.Errorf("network %q is not one of shared, isolated or offline", p.Network)
 	}
 	switch p.RootfsType {
 	case "", "block", "virtiofs", "9pfs":

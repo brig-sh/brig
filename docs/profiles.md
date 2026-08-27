@@ -126,7 +126,7 @@ with the same parser and neither has to guess.
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. brig never does, so finding one is worth a warning rather than a deletion |
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
-| `network` | no | the sandbox's network posture: `shared` (the default: one network for every sandbox on this host) or `offline` (no route out at all). `BRIG_NETWORK`, `--network` and `--offline` win over it |
+| `network` | no | the sandbox's network posture: `shared` (the default: one network for every sandbox on this host), `isolated` (a network of this sandbox's own) or `offline` (no route out at all). `BRIG_NETWORK`, `--network` and `--offline` win over it |
 | `hypervisor` | no | macOS backend to boot on: `vz` (the default, and the only one with a graphical console), `hvi` or `qemu`. `BRIG_HYPERVISOR` wins over it. Ignored on Linux, where the shim decides |
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. Unlike every other field this is about your machine rather than the workload, so it does not travel usefully to anyone else -- it is how you pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the VM: `block`, `virtiofs` or `9pfs`. Left unset the runtime picks its own default, which is what a profile that only runs an agent wants. Set `block` when the sandbox installs packages and needs a real writable disk rather than a share sized to the image |

@@ -145,7 +145,7 @@ so an agent flag spelled like one of brig's still reaches the agent.
 | `--cpus N` | guest vCPUs |
 | `-d, --detach` | with `run`: start the sandbox, print its name, exit |
 | `--skills` | seed your own `~/.claude` skills and plugins into the workspace |
-| `--network MODE` | `shared` or `offline` (or `BRIG_NETWORK`) |
+| `--network MODE` | `shared`, `isolated` or `offline` (or `BRIG_NETWORK`) |
 | `--offline` | shorthand for `--network offline`: no route out of the sandbox |
 
 Each flag overrides the corresponding `BRIG_*` setting, which overrides the
@@ -635,7 +635,7 @@ Booleans are shell-style: anything except `0` is on.
 | `BRIG_CPUS` | per profile (4) | Guest vCPUs |
 | `BRIG_READY_TIMEOUT` | `30` | Seconds to wait for the in-guest agent after the runtime reports the sandbox running. The two are not the same moment |
 | `BRIG_TITLE` | per profile | Window title, for a graphical agent |
-| `BRIG_NETWORK` | per profile (`shared`) | `shared` or `offline`. `offline` boots the sandbox with no route out: the agent runs, the workspace is there, nothing leaves. Same as `--network`; `--offline` is shorthand for `--network offline`. An unrecognised value refuses the run |
+| `BRIG_NETWORK` | per profile (`shared`) | `shared`, `isolated` or `offline`. `isolated` gives the sandbox a network of its own, which on Linux is what keeps two sandboxes from reaching each other; the macOS backends already keep them apart. `offline` boots the sandbox with no route out: the agent runs, the workspace is there, nothing leaves. Same as `--network`; `--offline` is shorthand for `--network offline`. An unrecognised value refuses the run |
 | `BRIG_SKILLS` | `0` | Seed the profile's `hostConfigDir`/`projectPaths` into the workspace -- for Claude Code, `~/.claude/skills` and `~/.claude/plugins`. Same as `--skills`; see [Your own skills in the guest](#your-own-skills-in-the-guest) |
 
 ### Credentials

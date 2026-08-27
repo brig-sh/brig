@@ -11,6 +11,9 @@ const (
 	// reach each other is the backend's answer, not brig's: on Linux they can,
 	// on both macOS backends they cannot. See docs/security.md.
 	NetShared Network = "shared"
+	// NetIsolated is a network of this sandbox's own, so no other sandbox is
+	// on it whatever the backend does with a shared one.
+	NetIsolated Network = "isolated"
 	// NetOffline is a sandbox with no route out. The agent runs, the workspace
 	// is mounted, nothing leaves.
 	NetOffline Network = "offline"
@@ -32,21 +35,33 @@ func ParseNetworkStrict(s, source string) (Network, error) {
 		return NetShared, nil
 	case string(NetShared):
 		return NetShared, nil
+	case string(NetIsolated):
+		return NetIsolated, nil
 	case string(NetOffline):
 		return NetOffline, nil
 	default:
-		return NetShared, fmt.Errorf("%s %q is not a posture: use shared or offline", source, s)
+		return NetShared, fmt.Errorf("%s %q is not a posture: use shared, isolated or offline",
+			source, s)
 	}
 }
+
+// AllNetworks is every posture that exists. A list rather than a comment, so a
+// test can walk it and catch a posture that gained a case in one switch and
+// not the other.
+func AllNetworks() []Network { return []Network{NetShared, NetIsolated, NetOffline} }
 
 // RuntimeNet is the word the runtime adapters take for this posture. The two
 // vocabularies are deliberately separate: "offline" is what a person asks for,
 // "none" is what a runtime is told.
 func (n Network) RuntimeNet() string {
-	if n == NetOffline {
+	switch n {
+	case NetOffline:
 		return "none"
+	case NetIsolated:
+		return "isolated"
+	default:
+		return "shared"
 	}
-	return "shared"
 }
 
 // Line is the posture as a reader is told it, with the consequence spelled
@@ -66,8 +81,12 @@ func (n Network) RuntimeNet() string {
 // is true everywhere: these sandboxes are on one network rather than each on
 // its own.
 func (n Network) Line() string {
-	if n == NetOffline {
+	switch n {
+	case NetOffline:
 		return "offline (no egress)"
+	case NetIsolated:
+		return "isolated (a network of this sandbox's own)"
+	default:
+		return "shared (one network for every sandbox on this host)"
 	}
-	return "shared (one network for every sandbox on this host)"
 }

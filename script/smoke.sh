@@ -256,6 +256,21 @@ grep -q '^NETWORK .*shared' "$WORK/on.out" \
   && ok "the envelope names the shared posture" \
   || bad "the envelope names the shared posture -- got: $(cat "$WORK/on.out")"
 
+# isolated asks the runtime for a network of this sandbox's own. The stub is a
+# hull stand-in, so what is checked here is that the posture reaches the
+# runtime; that two sandboxes on separate networks genuinely cannot reach each
+# other is a real-runtime fact, recorded in docs/manual-tests.
+"$WORK/brig" reset > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" run claude --network isolated -d > "$WORK/iso.out" 2>&1
+grep -q -- '--net isolated' "$STUB_LOG" \
+  && ok "--network isolated reaches the runtime" \
+  || bad "--network isolated reaches the runtime -- got: $(grep '^argv: run' "$STUB_LOG")"
+grep -q '^NETWORK .*isolated' "$WORK/iso.out" \
+  && ok "the envelope names the isolated posture" \
+  || bad "the envelope names the isolated posture -- got: $(cat "$WORK/iso.out")"
+"$WORK/brig" reset > /dev/null 2>&1
+
 # A posture brig does not know must stop the run rather than pick one.
 out="$(BRIG_NETWORK=airgapped "$WORK/brig" env claude 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "an unknown BRIG_NETWORK refuses the run" \

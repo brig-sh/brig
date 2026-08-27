@@ -369,3 +369,20 @@ func mergeEnv(additions ...[]string) []string {
 	}
 	return out
 }
+
+// sandboxPrefix is the mark every sandbox brig starts carries, and so the mark
+// on anything else brig creates for one. cmd/brig enforces it on the name; the
+// adapters read it back to recognise their own leftovers.
+const sandboxPrefix = "brig-"
+
+// NetworkPruner is a runtime that makes a network per sandbox and can tidy the
+// ones nothing is on any more.
+//
+// Optional for the same reason TelemetryReporter is: a backend that makes no
+// networks should not have to grow a stub method to say so. reset asserts for
+// it and skips a runtime that does not implement it.
+type NetworkPruner interface {
+	// PruneNetworks removes the networks brig made that none of inUse is on,
+	// and reports how many went.
+	PruneNetworks(inUse []string) int
+}

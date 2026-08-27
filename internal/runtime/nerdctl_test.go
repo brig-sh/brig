@@ -185,3 +185,69 @@ func TestBootArtifactsReportsWhichFileIsMissing(t *testing.T) {
 		t.Errorf("error does not name the missing kernel: %v", err)
 	}
 }
+
+// A sandbox asking for its own network gets one, by name. On Linux the default
+// bridge is an ordinary layer 2 segment and two sandboxes on it reach each
+// other, which is the gap isolated closes; on macOS the backends already keep
+// guests apart, so this is the one runtime where the posture has work to do.
+func TestNerdctlIsolatedAsksForItsOwnNetwork(t *testing.T) {
+	n := &nerdctl{bin: "nerdctl"}
+	args, _, err := n.runArgs(RunSpec{Name: "brig-x", Image: "img", Mem: 1, CPUs: 1, Net: "isolated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "--network "+sandboxNetwork("brig-x")) {
+		t.Errorf("isolated did not ask for its own network: %s", got)
+	}
+	// Shared stays as it was: no --network at all, so the runtime's default
+	// bridge is used and nothing about existing sandboxes changes.
+	args, _, err = n.runArgs(RunSpec{Name: "brig-x", Image: "img", Mem: 1, CPUs: 1, Net: "shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got = strings.Join(args, " "); strings.Contains(got, "--network") {
+		t.Errorf("shared asked for a network explicitly: %s", got)
+	}
+	// Offline is unchanged too.
+	args, _, err = n.runArgs(RunSpec{Name: "brig-x", Image: "img", Mem: 1, CPUs: 1, Net: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got = strings.Join(args, " "); !strings.Contains(got, "--network none") {
+		t.Errorf("offline did not ask for no network: %s", got)
+	}
+}
+
+// The network is named after the sandbox, so a leaked one is traceable to what
+// left it and `brig reset` can find every one brig made.
+func TestSandboxNetworkIsNamedAfterTheSandbox(t *testing.T) {
+	if got := sandboxNetwork("brig-claude-code-foo"); got != "brig-claude-code-foo" {
+		t.Errorf("network name = %q", got)
+	}
+	if !strings.HasPrefix(sandboxNetwork("brig-x"), "brig-") {
+		t.Error("a brig network is not identifiable as brig's")
+	}
+}
+
+// A network whose sandbox was removed outside brig is not reachable through
+// Remove, because the sandbox is not in the list any more. reset is the verb
+// whose whole job is leaving nothing behind, so it prunes those -- and must
+// leave alone both the networks still in use and every network brig did not
+// make.
+func TestPruneNetworksKeepsWhatIsInUseAndWhatIsNotOurs(t *testing.T) {
+	all := []string{"bridge", "host", "none", "brig-claude-code", "brig-claude-code-gone", "my-own-net"}
+	inUse := []string{"brig-claude-code"}
+
+	got := prunableNetworks(all, inUse)
+
+	want := map[string]bool{"brig-claude-code-gone": true}
+	if len(got) != len(want) {
+		t.Fatalf("prunable = %v, want just the leaked brig network", got)
+	}
+	for _, n := range got {
+		if !want[n] {
+			t.Errorf("would have removed %q, which is either in use or not brig's", n)
+		}
+	}
+}
