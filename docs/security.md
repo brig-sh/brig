@@ -328,9 +328,32 @@ file in. A symlink that stays *inside* the workspace is refused too: brig
 writes only regular files in there, so a link where a state file belongs was
 put there rather than left there.
 
-The one escape a root cannot see is a symlink *at* the workspace itself, since
-resolving that still leaves every path below it honestly "inside the root".
-That is checked separately, before anything is created.
+The one escape a root cannot see is a symlink *at* the workspace or on the
+way to it, since resolving that still leaves every path below it honestly
+"inside the root". That is checked separately, before anything is created,
+and the check has a shape worth knowing. The guest writes as you, so it can
+swap an entry only inside a directory you can write. The path to the
+workspace is split where the first such directory appears. Above it, every
+entry sits where the guest cannot reach, and that part is opened by name,
+following the links the system or an administrator put there (`/tmp` and
+`/var` on macOS are links). From there down, brig descends one component at a
+time against the directory it already holds, refuses every symlink, and
+confirms after each step that what it opened is what it looked at. The
+workspace itself is always in the descended part, so a link there is refused
+wherever it sits.
+
+Whether you can write a directory is what the kernel says, asked through
+`access(2)`, plus ownership: a directory you own you can always `chmod`. So a
+group membership past the first sixteen and an ACL both count, on both
+platforms. A link above the split whose target passes through a directory
+you can write, a root-owned `/data` pointing into your home, say, is refused
+like any other link the guest could reach; name the real directory instead.
+
+Running brig as root, ownership tells it nothing, because the guest's writes
+are root's too. It then trusts only what nobody but root could have written,
+which keeps the system's own links usable and protects nothing: a sandbox run
+as root can reach a nested workspace's parents like anything else, and this
+is not the control for that.
 
 What this looks like when it fires is a failed run, before anything is
 written, naming the link and where it points:

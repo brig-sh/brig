@@ -109,14 +109,16 @@ func TestAVanishingComponentIsRefused(t *testing.T) {
 	// Remove the parent between the pre-create pass and the strict walk, using
 	// the seam so this is deterministic rather than a race.
 	afterWorkspaceCheck = func() {}
-	c := &Config{Workspace: work}
-	if _, err := c.checkWorkspacePath(); err != nil {
+	if root, _, err := openWorkspaceHandle(work); err != nil {
 		t.Fatalf("the honest path should pass: %v", err)
+	} else {
+		_ = root.Close()
 	}
 	if err := os.Rename(parent, filepath.Join(base, "gone")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.checkWorkspacePath(); err == nil {
+	if root, _, err := openWorkspaceHandle(work); err == nil {
+		_ = root.Close()
 		t.Fatal("a component that vanished mid-check was accepted")
 	} else if !errors.Is(err, errPlantedSymlink) {
 		t.Fatalf("refused for the wrong reason: %v", err)
@@ -155,38 +157,5 @@ func TestWalkChecksEveryComponentNotJustTheParent(t *testing.T) {
 	}
 	if !errors.Is(err, errPlantedSymlink) {
 		t.Fatalf("refused for the wrong reason: %v", err)
-	}
-}
-
-// rootIs must compare against the identity captured during the walk, never a
-// fresh resolution of the path.
-func TestRootIsComparesAgainstTheCapturedIdentity(t *testing.T) {
-	base := t.TempDir()
-	a := filepath.Join(base, "a")
-	b := filepath.Join(base, "b")
-	for _, d := range []string{a, b} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	rootA, err := os.OpenRoot(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rootA.Close() }()
-
-	wantB, err := os.Lstat(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := rootIs(rootA, wantB, a); err == nil {
-		t.Fatal("a root was accepted as a directory it is not")
-	}
-	wantA, err := os.Lstat(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := rootIs(rootA, wantA, a); err != nil {
-		t.Fatalf("a root was rejected as the directory it is: %v", err)
 	}
 }

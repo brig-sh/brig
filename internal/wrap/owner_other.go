@@ -2,10 +2,9 @@
 
 package wrap
 
-import "io/fs"
+import "os"
 
-// ownedByRoot has no answer on a platform without POSIX ownership, so it says
-// no: every symlink on the path is then checked, which is the strict half of
-// the decision. brig ships for darwin and linux; this keeps the build honest
-// elsewhere.
-func ownedByRoot(fs.FileInfo) bool { return false }
+// dirWritableByUs has no answer without POSIX ownership either, so it says
+// yes: nothing is trusted, and the whole path is walked one component at a
+// time. Slower and stricter, which is the right way round for a guess.
+var dirWritableByUs = func(string, os.FileInfo) bool { return true }
