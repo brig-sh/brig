@@ -257,7 +257,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		return err
 	}
 
-	fmt.Fprintf(c.Err, "brig: starting sandbox %s...\n", c.VMName)
+	c.progressf("starting sandbox %s...", c.VMName)
 	// What a runtime that cannot mount after boot needs handed to it now
 	// instead. Empty for hull, which execs as root and does the three-phase
 	// mount itself; see createTimeVolumes.
