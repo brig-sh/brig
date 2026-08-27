@@ -131,7 +131,8 @@ func (c *Config) verifyDigest() error {
 		}
 		if !c.confirm("Boot the cached copy unverified?") {
 			return errors.New("aborted: the registry could not be reached, so the image " +
-				"could not be verified. Try again with the registry reachable")
+				"could not be verified. Try again with the registry reachable, or set " +
+				"BRIG_VERIFY=off to boot the cached copy unchecked")
 		}
 		return nil
 

@@ -347,3 +347,35 @@ func TestVerifyTagPathSaysWhyItIsNotPinned(t *testing.T) {
 		t.Errorf("nothing said why the digest was not pinned: %q", said)
 	}
 }
+
+// Every refusal names a way past it. A client that surfaces the error and
+// drops the warnings -- which is the ordinary client shape, and what brigd
+// does -- otherwise leaves the user with an abort and nothing to act on. The
+// unreachable-registry case said only to try again with the registry
+// reachable, which is not something a user in a sinkhole or behind a captive
+// portal can do.
+func TestEveryVerifyRefusalNamesAWayForward(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		pins bool
+	}{
+		// The digest path. A cosign that exits non-zero fails the resolve
+		// before it ever reaches the signature, which is Unresolved: could not
+		// check, rather than failed. That is the case that named nothing.
+		{"the registry could not be reached", true},
+		// And the tag path, so the case that always named its override keeps
+		// doing so.
+		{"the tag could not be verified", false},
+	} {
+		c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
+		c.Runtime = verifyRuntime{pins: tc.pins}
+		c.VerifyPolicy.Cosign = "false"
+		err := c.verifyImage()
+		if err == nil {
+			t.Fatalf("%s: booted rather than refusing", tc.what)
+		}
+		if !strings.Contains(err.Error(), "BRIG_VERIFY=off") {
+			t.Errorf("%s: the refusal names no way forward: %v", tc.what, err)
+		}
+	}
+}
