@@ -55,6 +55,21 @@ A response looks like:
 Errors come back as `{"ok":false,"error":"..."}` rather than as a closed
 connection.
 
+`running` is re-read from the runtime on every report rather than taken from
+the inventory, so a sandbox stopped by something else is still reported as
+stopped. When the runtime could not be asked at all -- its binary is gone, a
+permission error, containerd is down -- the session carries `runningError`
+instead, and `running` says nothing:
+
+```json
+{"agent":"claude-code","vm":"brig-claude-code","workspace":"/Users/me/brig/claude-code",
+  "running":false,"runningError":"nerdctl ps: exit status 1: cannot connect to containerd"}
+```
+
+Show that as "cannot tell", not as a stopped sandbox: the daemon booted this
+one, so `running:false` on its own would claim it exited, and a runtime nobody
+could reach never made that claim.
+
 Anything the run says about itself comes back with it, as `warnings`, one line
 each: a credential that was not forwarded and why, a secret about to expire, an
 image that could not be verified. The CLI prints these on the terminal of the

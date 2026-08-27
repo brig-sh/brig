@@ -13,13 +13,15 @@ import (
 // nothing.
 type stubRuntime struct {
 	runtime.Runtime
-	stopErr error
-	running bool
-	stops   int
+	stopErr    error
+	running    bool
+	runningErr error
+	stops      int
 }
 
-func (s *stubRuntime) Stop(string) error   { s.stops++; return s.stopErr }
-func (s *stubRuntime) Running(string) bool { return s.running }
+func (s *stubRuntime) Stop(string) error { s.stops++; return s.stopErr }
+
+func (s *stubRuntime) Running(string) (bool, error) { return s.running, s.runningErr }
 func (s *stubRuntime) LogsHint(name string) string {
 	return "hull logs " + name
 }
@@ -49,6 +51,30 @@ func TestStopReportsASandboxThatWouldNotStop(t *testing.T) {
 // The end state is what decides. A stop that failed against an instance which
 // is no longer running asked for the state it got, and reporting that as a
 // failure would make `brig stop` on an already-stopped sandbox an error.
+// A runtime that cannot say whether the sandbox is still up cannot clear a
+// stop that failed. Reading its silence as "gone anyway" is the same swallow
+// as #49 in the other direction: the user is told a VM holding a forwarded
+// credential is down when nothing established that.
+func TestStopReportsWhenTheRuntimeCannotSayIfItIsStillUp(t *testing.T) {
+	rt := &stubRuntime{
+		stopErr:    errors.New("hull: instance is busy"),
+		runningErr: errors.New("cannot connect to the daemon"),
+	}
+	c := testConfig(t, t.TempDir(), t.TempDir())
+	c.Runtime = rt
+
+	err := c.Stop()
+	if err == nil {
+		t.Fatal("a stop that failed with no way to check the end state was reported as success")
+	}
+	if !errors.Is(err, rt.stopErr) {
+		t.Errorf("the stop failure was dropped: %v", err)
+	}
+	if !errors.Is(err, rt.runningErr) {
+		t.Errorf("the reason the end state is unknown was dropped: %v", err)
+	}
+}
+
 func TestStopIsSilentWhenTheSandboxIsGoneAnyway(t *testing.T) {
 	c := testConfig(t, t.TempDir(), t.TempDir())
 	c.Runtime = &stubRuntime{stopErr: errors.New("no such instance"), running: false}
