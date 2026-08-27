@@ -19,6 +19,12 @@ const bootAssetsRepo = "ghcr.io/nofireai/hull-assets"
 // amd64 box boots an amd64 guest -- so GOOS-GOARCH is the right key.
 // BRIG_BOOT_ASSETS_REF overrides it whole, which is how a version gets pinned
 // or a mirror gets used.
+// BootAssetsRef is the bundle this host would boot, exported so the layer that
+// owns BRIG_VERIFY can name what it is checking. The fetch happens deep inside
+// a runtime adapter, but whether to trust what is fetched is a policy question
+// and belongs where the other one is answered.
+func BootAssetsRef() string { return bootAssetsRef() }
+
 func bootAssetsRef() string {
 	if r := os.Getenv("BRIG_BOOT_ASSETS_REF"); r != "" {
 		return r

@@ -366,6 +366,14 @@ repository *and* the workflow file, so a signature from anywhere else fails.
 | `cosign` not installed | **warning**, boots. "Could not check" is not "failed" |
 | image under `ghcr.io/brig-sh/`, signature does **not** verify | **stops and asks** `[y/N]`. With no terminal it refuses |
 
+Most profiles boot a kernel and an initrd brig downloads rather than their own
+image, and the initrd carries the in-guest agent. That bundle is checked the
+same way, against its own signing identity, under the same setting: a signature
+that does not verify stops the boot, a bundle brig does not publish warns, and
+`BRIG_VERIFY=require` refuses anything unchecked. The kernel is the more
+privileged of the two, so verifying the image alone was never the whole
+guarantee.
+
 `BRIG_VERIFY=require` refuses anything that cannot be positively verified,
 third-party images included. `BRIG_VERIFY=off` skips the check.
 [docs/security.md](docs/security.md) explains the reasoning, and what brig does
