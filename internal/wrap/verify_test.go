@@ -39,6 +39,21 @@ func (v verifyRuntime) Remove(string) error { return nil }
 // test can drive EnsureRunning through the checks without booting anything.
 func (v verifyRuntime) Run(runtime.RunSpec) error { return errors.New("stub runtime: not booting") }
 
+// namesAWayForward reports whether a refusal leaves the reader something to do.
+//
+// The requirement is that an abort is not a dead end, not that it names one
+// particular setting. For a signature that failed, "turn the check off" was
+// dropped deliberately (#29): disabling the control that caught it is not a
+// remedy, and pulling again or naming a digest you checked yourself is.
+func namesAWayForward(msg string) bool {
+	for _, remedy := range []string{"BRIG_VERIFY=off", "BRIG_PULL=always", "BRIG_IMAGE"} {
+		if strings.Contains(msg, remedy) {
+			return true
+		}
+	}
+	return false
+}
+
 func verifyConfig(t *testing.T, image string, mode verify.Mode) *Config {
 	t.Helper()
 	c := testConfig(t, t.TempDir(), t.TempDir())
@@ -225,8 +240,15 @@ func TestVerifyOffChecksNothing(t *testing.T) {
 	if err := c.verifyImage(); err != nil {
 		t.Fatalf("BRIG_VERIFY=off still checked: %v", err)
 	}
-	if said := c.Err.(*bytes.Buffer).String(); said != "" {
-		t.Errorf("BRIG_VERIFY=off still said something: %q", said)
+	// It says one thing, and only that: verification is off. Before #29 it
+	// said nothing at all, which made the one state worth announcing the
+	// quietest one.
+	said := c.Err.(*bytes.Buffer).String()
+	if !strings.Contains(said, "BRIG_VERIFY=off") {
+		t.Errorf("BRIG_VERIFY=off did not say so: %q", said)
+	}
+	if strings.Contains(said, "verified") || strings.Contains(said, "cosign") {
+		t.Errorf("BRIG_VERIFY=off still checked something: %q", said)
 	}
 }
 
@@ -256,8 +278,8 @@ func TestVerifyRefusesAFailedSignatureWithNoTerminal(t *testing.T) {
 	}
 	// Whatever the refusal was -- no terminal, or an answer of no -- it names
 	// the setting that lets a caller proceed deliberately.
-	if !strings.Contains(err.Error(), "BRIG_VERIFY=off") {
-		t.Errorf("the refusal did not name the override: %v", err)
+	if !namesAWayForward(err.Error()) {
+		t.Errorf("the refusal leaves the reader nothing to do: %v", err)
 	}
 	said := c.Err.(*bytes.Buffer).String()
 	if !strings.Contains(said, "DID NOT VERIFY") {
@@ -311,8 +333,8 @@ func TestVerifyDoesNotAskWhenTheCallerHasNoTerminal(t *testing.T) {
 	if err == nil {
 		t.Fatal("a failed signature was booted on a terminal the caller does not have")
 	}
-	if !strings.Contains(err.Error(), "BRIG_VERIFY=off") {
-		t.Errorf("the refusal did not name the override: %v", err)
+	if !namesAWayForward(err.Error()) {
+		t.Errorf("the refusal leaves the reader nothing to do: %v", err)
 	}
 	said := c.Err.(*bytes.Buffer).String()
 	if strings.Contains(said, "Boot it anyway?") {
@@ -387,7 +409,7 @@ func TestEveryVerifyRefusalNamesAWayForward(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: booted rather than refusing", tc.what)
 		}
-		if !strings.Contains(err.Error(), "BRIG_VERIFY=off") {
+		if !namesAWayForward(err.Error()) {
 			t.Errorf("%s: the refusal names no way forward: %v", tc.what, err)
 		}
 	}
@@ -447,5 +469,52 @@ func TestEnsureRunningVerifiesTheBundleBeforeBooting(t *testing.T) {
 
 	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "boot assets") {
 		t.Errorf("the run never looked at the kernel it was about to boot:\n%s", said)
+	}
+}
+
+// The advice for a signature that failed is not "stop checking". A bad
+// signature on an image claiming to be ours is the one outcome the verify
+// package describes as having no innocent reading, and the remedy on offer was
+// to disable the control that caught it. Pulling again is a real remedy, and
+// so is naming a digest the user has checked themselves.
+func TestAFailedSignatureIsNotToldToDisableTheCheck(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		pins bool
+	}{
+		{"the digest path", true},
+		{"the tag path", false},
+	} {
+		c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
+		c.Runtime = verifyRuntime{pins: tc.pins}
+		// Present, and always exits non-zero: a signature that is there and
+		// does not check out, rather than a tool that is missing.
+		c.VerifyPolicy.Cosign = "false"
+		err := c.verifyImage()
+		if err == nil {
+			continue // this path could not reach Failed; the other one covers it
+		}
+		if strings.Contains(err.Error(), "BRIG_VERIFY=off") && strings.Contains(err.Error(), "failed verification") {
+			t.Errorf("%s: a failed signature is told to turn the check off: %v", tc.what, err)
+		}
+	}
+}
+
+// Verification being off is the one state no command mentioned. verifyImage
+// returned before reaching any output, so a sandbox booted with no check and
+// nothing said about it -- the quietest possible version of the loudest
+// possible fact.
+func TestVerifyOffSaysSo(t *testing.T) {
+	c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Off)
+	c.Runtime = verifyRuntime{pins: false}
+	if err := c.verifyImage(); err != nil {
+		t.Fatalf("BRIG_VERIFY=off refused a boot: %v", err)
+	}
+	said := c.Err.(*bytes.Buffer).String()
+	if !strings.Contains(said, "BRIG_VERIFY=off") {
+		t.Errorf("nothing said verification was off:\n%s", said)
+	}
+	if !strings.Contains(said, "not checked") && !strings.Contains(said, "unchecked") {
+		t.Errorf("the line does not say what it costs:\n%s", said)
 	}
 }

@@ -430,7 +430,9 @@ func TestACleanColdBootWarnsAboutNothing(t *testing.T) {
 	t.Setenv("BRIG_WORKSPACE", filepath.Join(shortDir(t), "ws"))
 	// The image check is the other thing that speaks on a cold boot, and with
 	// no cosign on this machine it has something true to say. Off, so what is
-	// left in the buffer is the narration this test is about.
+	// left in the buffer is the narration this test is about -- and off says
+	// so itself, which is a warning a client should get: it is a control the
+	// user turned off, not something the run did along the way.
 	t.Setenv("BRIG_VERIFY", "off")
 
 	socket := filepath.Join(shortDir(t), "brigd.sock")
@@ -440,8 +442,17 @@ func TestACleanColdBootWarnsAboutNothing(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("the sandbox did not come up: %+v", resp)
 	}
-	if len(resp.Warnings) != 0 {
-		t.Errorf("a boot with nothing wrong with it warned anyway: %q", resp.Warnings)
+	// What this test is about: narration is not a warning. A boot that went
+	// perfectly used to come back reporting "starting sandbox ..." as a
+	// warning about itself, which is the confusion Config.Progress exists to
+	// end. Anything a client is told here has to be something to act on.
+	for _, w := range resp.Warnings {
+		if strings.Contains(w, "starting sandbox") || strings.Contains(w, "workspace ") {
+			t.Errorf("progress narration came back as a warning: %q", w)
+		}
+		if !strings.Contains(w, "BRIG_VERIFY") {
+			t.Errorf("a boot with nothing wrong with it warned anyway: %q", w)
+		}
 	}
 }
 

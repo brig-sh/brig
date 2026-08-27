@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"github.com/brig-sh/brig/internal/verify"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -28,6 +29,7 @@ func (c *Config) Status(set creds.Set) {
 		c.sayf("runtime unavailable (no runtime found on PATH)")
 	}
 	c.sayf("image %s (pull %s)", c.Image, c.Pull)
+	c.reportVerify()
 
 	names := credentialNames(set)
 	if len(names) == 0 {
@@ -284,3 +286,24 @@ func orUnset(s string) string {
 
 // nowMilli is split out so tests can reason about expiry without a clock.
 var nowMilli = defaultNowMilli
+
+// reportVerify says whether the image is checked before it boots, and whose
+// policy said so.
+//
+// Always, rather than on exception. The two states worth knowing -- checking
+// is off, and the policy is not brig's -- were both silent: verifyImage
+// returned before any output when off, and a replaced policy printed the same
+// success line as the shipped one. A reader who has to notice an absence to
+// learn either of those is not being told.
+func (c *Config) reportVerify() {
+	switch {
+	case c.Verify == verify.Off:
+		c.sayf("image verification: off (BRIG_VERIFY=off), so nothing is checked before it boots")
+	case c.VerifyPolicy.Replaced():
+		c.sayf("image verification: %s, against a replaced trust policy "+
+			"(BRIG_VERIFY_REGISTRY, BRIG_VERIFY_IDENTITY or BRIG_VERIFY_ISSUER is set, "+
+			"so this is not brig's own check)", c.Verify)
+	default:
+		c.sayf("image verification: %s, against brig's own trust policy", c.Verify)
+	}
+}

@@ -116,6 +116,33 @@ func BootAssetsPolicy() Policy {
 	}
 }
 
+// Replaced reports whether this policy differs from the one brig ships.
+//
+// Three settings can replace it: which prefix counts as ours, which
+// certificate identity is accepted, and which issuer vouched for it. Any of
+// them turns the check into a different question, and one of them --
+// an identity expression matching every certificate -- turns it into no
+// question at all while still succeeding. A reader cannot act on "verified"
+// without knowing which policy said so, so the answer travels with the result.
+//
+// Cosign is deliberately not compared: which binary runs the check is a fact
+// about the machine, not about what is being trusted.
+//
+// brig ships more than one policy -- images and boot assets are separate trust
+// roots -- so this asks whether the policy is any of the shipped ones rather
+// than whether it is the image one. Comparing against the image policy alone
+// would have the boot-assets policy report itself as replaced, which is the
+// opposite of true.
+func (p Policy) Replaced() bool {
+	for _, shipped := range []Policy{DefaultPolicy(), BootAssetsPolicy()} {
+		if p.Registry == shipped.Registry && p.Identity == shipped.Identity &&
+			p.Issuer == shipped.Issuer {
+			return false
+		}
+	}
+	return true
+}
+
 // Outcome is what the check concluded.
 type Outcome int
 
@@ -144,6 +171,10 @@ const (
 
 // Result carries the outcome and the detail worth printing.
 type Result struct {
+	// Policy is the policy that reached this conclusion, so the message can
+	// say whether it was the one brig ships. Without it a replaced check
+	// reports itself in the same words as a real one.
+	Policy  Policy
 	Outcome Outcome
 	Image   string
 	// Digest is the registry digest the reference resolved to, and -- for a
@@ -167,6 +198,15 @@ func (r Result) Message() string {
 	case Verified:
 		// Naming the digest is the point of this whole path: the line vouches
 		// for the bytes that boot, not for a tag that can move under them.
+		//
+		// Under a policy the user replaced it vouches for less, and says so in
+		// different words. The same sentence for both would let a check that
+		// accepts every certificate read exactly like one that accepts one.
+		if r.Policy.Replaced() {
+			return fmt.Sprintf("image %s: matched the replaced trust policy, booting %s "+
+				"(BRIG_VERIFY_REGISTRY, BRIG_VERIFY_IDENTITY or BRIG_VERIFY_ISSUER is set, "+
+				"so this is not brig's own check)", r.Image, r.Digest)
+		}
 		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, r.Digest)
 	case NotOurs:
 		return fmt.Sprintf("image %s is not published by brig-sh, so there is no "+
@@ -222,10 +262,10 @@ func normalizeRef(ref string) string {
 func (p Policy) Image(ref string) Result {
 	subject := normalizeRef(ref)
 	if !strings.HasPrefix(subject, p.Registry) {
-		return Result{Outcome: NotOurs, Image: ref}
+		return Result{Policy: p, Outcome: NotOurs, Image: ref}
 	}
 	if _, err := lookPath(p.Cosign); err != nil {
-		return Result{Outcome: NoTooling, Image: ref}
+		return Result{Policy: p, Outcome: NoTooling, Image: ref}
 	}
 	out, err := run(p.Cosign,
 		"verify",
@@ -234,9 +274,9 @@ func (p Policy) Image(ref string) Result {
 		subject,
 	)
 	if err != nil {
-		return Result{Outcome: Failed, Image: ref, Detail: firstLine(out, err)}
+		return Result{Policy: p, Outcome: Failed, Image: ref, Detail: firstLine(out, err)}
 	}
-	return Result{Outcome: Verified, Image: ref}
+	return Result{Policy: p, Outcome: Verified, Image: ref}
 }
 
 // Verify resolves the reference to a registry digest, verifies that digest,
@@ -269,13 +309,13 @@ func (p Policy) Verify(ref, localDigest string) Result {
 	// timeout, and bought a pin brig could not vouch for. The tag path never
 	// charged for an image it had nothing to say about, and neither does this.
 	if !ours {
-		return Result{Outcome: NotOurs, Image: ref}
+		return Result{Policy: p, Outcome: NotOurs, Image: ref}
 	}
 
 	// cosign resolves the digest as well as the signature here, so its absence
 	// stops both halves at once, exactly as it does for Image.
 	if _, err := lookPath(p.Cosign); err != nil {
-		return Result{Outcome: NoTooling, Image: ref, Ours: ours}
+		return Result{Policy: p, Outcome: NoTooling, Image: ref, Ours: ours}
 	}
 
 	// Resolve the reference to a digest BEFORE the check. A registry that cannot
@@ -283,7 +323,7 @@ func (p Policy) Verify(ref, localDigest string) Result {
 	// it must not read like a bad signature, so it lands on Unresolved.
 	digest, err := p.resolveDigest(ref)
 	if err != nil {
-		return Result{Outcome: Unresolved, Image: ref, Ours: ours, Detail: err.Error()}
+		return Result{Policy: p, Outcome: Unresolved, Image: ref, Ours: ours, Detail: err.Error()}
 	}
 
 	// The signature check, on the digest rather than the tag.
@@ -294,7 +334,7 @@ func (p Policy) Verify(ref, localDigest string) Result {
 		refWithDigest(ref, digest),
 	)
 	if verr != nil {
-		return Result{Outcome: Failed, Image: ref, Digest: digest, Ours: ours, Detail: firstLine(out, verr)}
+		return Result{Policy: p, Outcome: Failed, Image: ref, Digest: digest, Ours: ours, Detail: firstLine(out, verr)}
 	}
 
 	// The copy on disk must be the object we just resolved -- and, for our own
@@ -302,9 +342,9 @@ func (p Policy) Verify(ref, localDigest string) Result {
 	// thing in the registry and another in the store, which is the case this
 	// path exists to catch.
 	if localDigest != "" && localDigest != digest {
-		return Result{Outcome: Mismatch, Image: ref, Digest: digest, Local: localDigest, Ours: ours}
+		return Result{Policy: p, Outcome: Mismatch, Image: ref, Digest: digest, Local: localDigest, Ours: ours}
 	}
-	return Result{Outcome: Verified, Image: ref, Digest: digest, Ours: ours}
+	return Result{Policy: p, Outcome: Verified, Image: ref, Digest: digest, Ours: ours}
 }
 
 // resolveDigest asks cosign for the digest the registry serves for ref.
