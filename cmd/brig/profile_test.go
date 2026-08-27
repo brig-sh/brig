@@ -147,6 +147,66 @@ func TestListProfilesMarksOrigin(t *testing.T) {
 	}
 }
 
+// `brig run claude` runs claude-code, and the listing was the one place that
+// could say so and did not: it printed the canonical names alone, so the word
+// people actually type appeared nowhere in brig's own output.
+func TestListProfilesShowsTheAliases(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, listProfiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A column, not a suffix: the descriptions still start together, and a
+	// profile with no alias leaves the space rather than closing it up.
+	descAt := -1
+	for _, c := range []struct{ name, alias, desc string }{
+		{"claude-code", "claude", "Claude Code ("},
+		{"claude-desktop", "desktop", "Claude Desktop ("},
+		{"codex", "", "Codex ("},
+	} {
+		line := profileLine(t, out, c.name)
+		at := strings.Index(line, c.desc)
+		if at < 0 {
+			t.Fatalf("the %s line has no description:\n%s", c.name, line)
+		}
+		// Between the name and the description is the alias column and
+		// nothing else, so a profile with no alias reads as an empty one.
+		if got := strings.TrimSpace(line[len(c.name):at]); got != c.alias {
+			t.Errorf("the %s line shows %q where its alias goes, want %q:\n%s",
+				c.name, got, c.alias, line)
+		}
+		if descAt >= 0 && at != descAt {
+			t.Errorf("the %s line starts its description at column %d, the others at %d:\n%s",
+				c.name, at, descAt, out)
+		}
+		descAt = at
+	}
+	// The lines under a profile are its details, so they line up with the
+	// description rather than sitting in the alias column, where they would
+	// read as more spellings of the name.
+	image := profileLine(t, out, " ")
+	if at := strings.Index(image, "image "); at != descAt {
+		t.Errorf("the detail lines indent to column %d, the descriptions to %d:\n%s", at, descAt, out)
+	}
+}
+
+// profileLine returns the first line of a listing that starts with prefix.
+func profileLine(t *testing.T, out, prefix string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	t.Fatalf("no line starting with %q in:\n%s", prefix, out)
+	return ""
+}
+
 // The listing reports what a run actually needs: bindings by name and
 // secrets by name, with the command that creates a missing one. forward: is
 // what this replaces -- C1 folds every forward: entry into env: at parse

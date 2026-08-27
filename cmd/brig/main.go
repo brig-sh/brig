@@ -671,7 +671,7 @@ func listSandboxes(args []string) error {
 		// shape of `brig ls` does not change with the runtime, and surface the
 		// platform-specific way to get one -- the hint run gives -- so a fresh
 		// box is told how rather than only that there is nothing.
-		fmt.Printf("%-28s %-10s %s\n", "SANDBOX", "STATE", "WORKSPACE")
+		printSandboxes(os.Stdout, nil)
 		fmt.Println("(none -- no runtime found on PATH, so there are no sandboxes)")
 		fmt.Printf("  %s\n", strings.TrimPrefix(err.Error(), "no runtime found on PATH: "))
 		return nil
@@ -681,19 +681,52 @@ func listSandboxes(args []string) error {
 		return err
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
-	fmt.Printf("%-28s %-10s %s\n", "SANDBOX", "STATE", "WORKSPACE")
-	shown := 0
+	rows := make([]sandboxRow, 0, len(list))
 	for _, inst := range list {
 		if !strings.HasPrefix(inst.Name, sandboxPrefix) {
 			continue
 		}
-		shown++
-		fmt.Printf("%-28s %-10s %s\n", inst.Name, inst.State, workspaceOf(inst.Name, rt))
+		rows = append(rows, sandboxRow{
+			name:      inst.Name,
+			state:     inst.State,
+			workspace: workspaceOf(inst.Name, rt),
+		})
 	}
-	if shown == 0 {
+	printSandboxes(os.Stdout, rows)
+	if len(rows) == 0 {
 		fmt.Println("(none -- `brig run claude` starts one)")
 	}
 	return nil
+}
+
+// sandboxRow is one line of the listing, gathered before anything is printed
+// so the name column can be sized to the names it will actually hold.
+type sandboxRow struct {
+	name      string
+	state     string
+	workspace string
+}
+
+// printSandboxes writes the listing, header included, with the name column as
+// wide as the names in it.
+//
+// The width was a constant, and no constant is right: a sandbox is named after
+// its profile plus a session slug, so brig-claude-desktop with a ten-character
+// slug is already 30 characters against the 28 that were reserved -- and a
+// profile read from a file can be called anything, so a wider constant only
+// moves where it breaks. Measuring the names costs a pass over a list brig has
+// in hand and cannot be outgrown.
+func printSandboxes(w io.Writer, rows []sandboxRow) {
+	name := len("SANDBOX")
+	for _, r := range rows {
+		if len(r.name) > name {
+			name = len(r.name)
+		}
+	}
+	fmt.Fprintf(w, "%-*s %-10s %s\n", name, "SANDBOX", "STATE", "WORKSPACE")
+	for _, r := range rows {
+		fmt.Fprintf(w, "%-*s %-10s %s\n", name, r.name, r.state, r.workspace)
+	}
 }
 
 // workspaceOf recovers the workspace for a sandbox: what it was started with
@@ -807,7 +840,43 @@ func reset(args []string) error {
 // not what I expected" and "there is a file I forgot about" are the same
 // question.
 func listProfiles() error {
-	for _, p := range profile.All() {
+	all := profile.All()
+	// The short spellings, in a column of their own: `brig run claude` runs
+	// claude-code, and this listing is where someone finds that out. The
+	// column is as wide as the spellings in it and absent when there are none,
+	// because a column that is empty on every line says nothing and costs
+	// every description the width.
+	//
+	// The name column is measured the same way, floored at the width it has
+	// always had. A profile from a file can be called anything, and a name
+	// past the floor used to push its own description out; now it would push
+	// the alias out with it.
+	alias := make(map[string]string, len(all))
+	nameWidth, aliasWidth := 15, 0
+	for _, p := range all {
+		alias[p.Name] = strings.Join(profile.Aliases(p.Name), " ")
+		if len(p.Name) > nameWidth {
+			nameWidth = len(p.Name)
+		}
+		if len(alias[p.Name]) > aliasWidth {
+			aliasWidth = len(alias[p.Name])
+		}
+	}
+	// A gutter inside the column: the widest spelling is desktop, and without
+	// this it ends up against the description it is meant to be read apart
+	// from.
+	if aliasWidth > 0 {
+		aliasWidth++
+	}
+	// What a profile's own lines are indented by, so they sit under the
+	// description rather than in the alias column, where they would read as
+	// more spellings of the name.
+	indent := nameWidth + 1
+	if aliasWidth > 0 {
+		indent += aliasWidth + 1
+	}
+	pad := strings.Repeat(" ", indent)
+	for _, p := range all {
 		suffix := ""
 		switch {
 		case profile.OverridesBuiltIn(p.Name):
@@ -818,19 +887,23 @@ func listProfiles() error {
 		if p.Unpublished {
 			suffix += "  (no published image)"
 		}
-		fmt.Printf("%-15s %s%s\n", p.Name, p.Desc, suffix)
-		fmt.Printf("%-15s image %s, home %s\n", "", p.Image, p.GuestHome)
+		head := fmt.Sprintf("%-*s", nameWidth, p.Name)
+		if aliasWidth > 0 {
+			head += fmt.Sprintf(" %-*s", aliasWidth, alias[p.Name])
+		}
+		fmt.Printf("%s %s%s\n", head, p.Desc, suffix)
+		fmt.Printf("%simage %s, home %s\n", pad, p.Image, p.GuestHome)
 		if len(p.Env) > 0 {
 			names := make([]string, 0, len(p.Env))
 			for _, b := range p.Env {
 				names = append(names, b.Name)
 			}
-			fmt.Printf("%-15s environment: %s\n", "", strings.Join(names, " "))
+			fmt.Printf("%senvironment: %s\n", pad, strings.Join(names, " "))
 		}
 		// Listed separately from the bindings above because these are the ones
 		// you have to create before the sandbox will start at all.
 		if len(p.Secrets) > 0 {
-			fmt.Printf("%-15s secrets: %s\n", "", strings.Join(profile.SecretNames(p.Secrets), " "))
+			fmt.Printf("%ssecrets: %s\n", pad, strings.Join(profile.SecretNames(p.Secrets), " "))
 			// Which ones brig can fill from your host and which ones only you
 			// can: the old single line said "create them" for both, which for
 			// an importable secret is the long way round.
@@ -840,16 +913,16 @@ func listProfiles() error {
 			// -- one command fills every importable name on this line -- while
 			// create takes a name at a time.
 			if importable := importableNames(p); len(importable) > 0 {
-				fmt.Printf("%-15s   from your host: brig secret import %s (%s)\n", "",
+				fmt.Printf("%s  from your host: brig secret import %s (%s)\n", pad,
 					p.Name, strings.Join(importable, " "))
 			}
 			if hand := handCreatedNames(p); len(hand) > 0 {
-				fmt.Printf("%-15s   by hand: brig secret create <name> (%s)\n", "",
+				fmt.Printf("%s  by hand: brig secret create <name> (%s)\n", pad,
 					strings.Join(hand, " "))
 			}
 		}
 		if len(p.Deny) > 0 {
-			fmt.Printf("%-15s never forwarded: %s\n", "", strings.Join(p.Deny, " "))
+			fmt.Printf("%snever forwarded: %s\n", pad, strings.Join(p.Deny, " "))
 		}
 	}
 	fmt.Printf("\nan unmarked profile is built in; your own live in %s\n", profile.Dir())
