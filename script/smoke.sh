@@ -591,6 +591,44 @@ case "$out" in
   *) bad "ls with no runtime points at getting one -- got: $out" ;;
 esac
 
+echo "== exit codes =="
+# The documented set, checked end to end so the numbers a script keys on cannot
+# drift from the README. Each verb here fails in a different way and the status
+# is the whole point, so it is captured and compared rather than the message.
+# A usage mistake is 2, kept apart from the general failure it used to share.
+"$WORK/brig" run --nope claude > /dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "a usage error exits 2" || bad "a usage error exits 2 -- got $rc"
+# A profile that does not exist is 3: "no such thing", not "it ran and failed".
+"$WORK/brig" run nosuchprofile > /dev/null 2>&1; rc=$?
+[ "$rc" = 3 ] && ok "an unknown profile exits 3" || bad "an unknown profile exits 3 -- got $rc"
+# A runtime that is neither installed nor pinned is 4. run needs one to do its
+# work, so unlike env and ls it fails rather than degrading.
+PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" run claude -d > /dev/null 2>&1; rc=$?
+[ "$rc" = 4 ] && ok "a missing runtime exits 4" || bad "a missing runtime exits 4 -- got $rc"
+# A runtime that is named and broken is the same class to a script: also 4.
+BRIG_RUNTIME=podman "$WORK/brig" run claude -d > /dev/null 2>&1; rc=$?
+[ "$rc" = 4 ] && ok "an unknown BRIG_RUNTIME exits 4" || bad "an unknown BRIG_RUNTIME exits 4 -- got $rc"
+# A credential a run required but could not resolve is 6. A profile of our own
+# that declares a required secret nothing supplies fails at credential
+# resolution, before the sandbox boots -- whether the store is absent (Linux) or
+# present but empty (macOS), the class a script sees is the same.
+mkdir -p "$BRIG_PROFILE_DIR"
+cat > "$BRIG_PROFILE_DIR/needsecret.yaml" <<'YAML'
+name: needsecret
+image: docker.io/library/ubuntu:24.04
+guestHome: /home/x
+binary: bash
+mem: 1024
+cpus: 1
+secrets:
+  - name: NEEDSECRET_TOKEN
+    required: true
+YAML
+"$WORK/brig" run needsecret -d > /dev/null 2>&1; rc=$?
+[ "$rc" = 6 ] && ok "an unresolved required secret exits 6" \
+  || bad "an unresolved required secret exits 6 -- got $rc"
+rm -f "$BRIG_PROFILE_DIR/needsecret.yaml"
+
 echo "== flags =="
 : > "$STUB_LOG"
 "$WORK/brig" run claude -t ghcr.io/me/img:latest -w "$WORK/other" -m 8192 --cpus 2 -d \
@@ -871,8 +909,10 @@ case "$out" in
   *"DID NOT VERIFY"*) ok "a bad signature on our own image is reported" ;;
   *) bad "a bad signature is reported -- got: $out" ;;
 esac
-[ "$rc" != 0 ] && ok "a bad signature stops the boot with no terminal to ask" \
-  || bad "a bad signature booted anyway"
+# A boot refused over verification has its own documented code, so a script can
+# tell it apart from a run that started and failed.
+[ "$rc" = 5 ] && ok "a bad signature stops the boot (exit 5) with no terminal to ask" \
+  || bad "a bad signature stops the boot with exit 5 -- got $rc"
 
 fresh
 out="$(BRIG_VERIFY=warn BRIG_IMAGE=docker.io/library/ubuntu:24.04 \
@@ -886,7 +926,8 @@ esac
 fresh
 out="$(BRIG_VERIFY=require BRIG_IMAGE=docker.io/library/ubuntu:24.04 \
   "$WORK/brig" run claude -p hi 2>&1)"; rc=$?
-[ "$rc" != 0 ] && ok "require refuses what it cannot check" || bad "require booted an unchecked image"
+[ "$rc" = 5 ] && ok "require refuses what it cannot check (exit 5)" \
+  || bad "require refuses what it cannot check with exit 5 -- got $rc"
 
 unset BRIG_COSIGN_BIN
 export BRIG_VERIFY=off
