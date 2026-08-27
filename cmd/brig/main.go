@@ -71,7 +71,7 @@ flags (before the agent's own arguments; -- ends brig's parsing):
                          envelope before the agent starts
       --skills           project your own ~/.claude skills and plugins into
                          the guest, read-only (or BRIG_SKILLS=1)
-      --network MODE     shared or offline (or BRIG_NETWORK)
+      --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
 
@@ -779,6 +779,25 @@ func reset(args []string) error {
 		removed++
 	}
 	fmt.Fprintf(os.Stderr, "brig: removed %d sandbox(es). Workspaces are untouched.\n", removed)
+	// A network whose sandbox was removed outside brig is not reachable
+	// through Remove, because that sandbox is not in the list any more. reset
+	// is the verb that leaves nothing behind, so it prunes those too. Only the
+	// runtimes that make a network per sandbox implement this; the rest are
+	// skipped rather than asked.
+	if p, ok := rt.(runtime.NetworkPruner); ok {
+		// Asked again rather than reusing the list above: that one was taken
+		// before the removals, so every sandbox just removed would still look
+		// live and nothing would be pruned. What matters here is what survived,
+		// which is a sandbox whose removal failed and whose network is
+		// therefore still in use.
+		var live []string
+		if after, err := rt.List(); err == nil {
+			for _, inst := range after {
+				live = append(live, inst.Name)
+			}
+		}
+		p.PruneNetworks(live)
+	}
 	return nil
 }
 

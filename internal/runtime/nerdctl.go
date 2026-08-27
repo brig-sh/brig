@@ -150,6 +150,14 @@ func (n *nerdctl) Run(spec RunSpec) error {
 	if err != nil {
 		return err
 	}
+	// The network has to exist before the run references it: nerdctl will not
+	// create one on demand, and the failure if it is missing names the network
+	// rather than the posture that asked for it.
+	if spec.Net == "isolated" {
+		if err := n.ensureSandboxNetwork(spec.Name); err != nil {
+			return err
+		}
+	}
 	cmd := exec.Command(n.bin, args...)
 	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
 	cmd.Stderr = os.Stderr
@@ -158,6 +166,74 @@ func (n *nerdctl) Run(spec RunSpec) error {
 
 // runArgs is the one place the run command line is built, for the same reason
 // the hull adapter has one: a test and a boot cannot then drift apart.
+// sandboxNetwork is the name of the network belonging to one sandbox. It is
+// the sandbox's own name: brig's sandboxes already carry the brig- prefix, so
+// a network left behind is traceable to what left it, and `brig reset` can
+// recognise its own without keeping a second list.
+func sandboxNetwork(sandbox string) string { return sandbox }
+
+// prunableNetworks picks the networks brig made and nothing is using.
+//
+// Pure, so the decision can be tested without a runtime: naming what to delete
+// is the part worth being sure about, and the listing and the deleting around
+// it are one command each. Two things are never touched -- a network still
+// carrying a sandbox, and any network brig did not make, which is every name
+// without the sandbox prefix. The runtime's own bridge/host/none are excluded
+// by that same rule rather than by being listed here.
+func prunableNetworks(all, inUse []string) []string {
+	live := make(map[string]bool, len(inUse))
+	for _, n := range inUse {
+		live[sandboxNetwork(n)] = true
+	}
+	var out []string
+	for _, name := range all {
+		if strings.HasPrefix(name, sandboxPrefix) && !live[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// PruneNetworks removes the networks brig made that no sandbox is on, and
+// reports how many went.
+//
+// Optional on the same terms as TelemetryReporter: it is not part of running a
+// sandbox, and a backend that makes no networks should not grow a stub to say
+// so. reset type-asserts for it.
+func (n *nerdctl) PruneNetworks(inUse []string) int {
+	out, err := exec.Command(n.bin, "network", "ls", "--format", "{{.Name}}").Output()
+	if err != nil {
+		return 0
+	}
+	gone := 0
+	for _, name := range prunableNetworks(strings.Fields(string(out)), inUse) {
+		if exec.Command(n.bin, "network", "rm", name).Run() == nil {
+			gone++
+		}
+	}
+	return gone
+}
+
+// ensureSandboxNetwork creates the network a sandbox of its own needs.
+//
+// Already-exists is success rather than an error: a sandbox that was stopped
+// and started again wants the network it had, and two brigs racing to create
+// the same one is ordinary rather than a fault.
+func (n *nerdctl) ensureSandboxNetwork(name string) error {
+	out, err := exec.Command(n.bin, "network", "create", sandboxNetwork(name)).CombinedOutput()
+	if err == nil || strings.Contains(string(out), "already exists") {
+		return nil
+	}
+	return fmt.Errorf("could not create the network for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+}
+
+// removeSandboxNetwork drops it again. A failure is not worth failing the
+// removal over: the sandbox is the thing being removed, and a leftover network
+// is tidied by the next `brig reset` rather than left to block anything.
+func (n *nerdctl) removeSandboxNetwork(name string) {
+	_ = exec.Command(n.bin, "network", "rm", sandboxNetwork(name)).Run()
+}
+
 func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 	args = []string{"run", "--detach", "--name", spec.Name,
 		"--runtime", containerdRuntime(),
@@ -168,9 +244,23 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 	case "always", "never", "missing":
 		args = append(args, "--pull", spec.Pull)
 	}
-	if spec.Net == "none" {
+	switch spec.Net {
+	case "none":
 		args = append(args, "--network", "none")
+	case "isolated":
+		// A network of this sandbox's own. Unlike the macOS backends, which
+		// keep guests apart whatever they are asked for, the default bridge
+		// here is an ordinary layer 2 segment: two sandboxes on it reach each
+		// other the way two containers do. So this is the runtime where the
+		// posture has actual work to do, and the work is a network per
+		// sandbox. Created before the run, in Run, because nerdctl will not
+		// make one on demand.
+		args = append(args, "--network", sandboxNetwork(spec.Name))
 	}
+	// "shared" passes no --network at all, so the runtime's own default is
+	// used. Said as an absence rather than a flag because that is what every
+	// sandbox before this had, and naming the default explicitly would change
+	// behaviour for anyone who had configured a different one.
 	if spec.GenericBoot {
 		// urunc reads these from the container's OCI spec, so nerdctl only has
 		// to carry them through. docker is refused rather than attempted: it
@@ -277,8 +367,21 @@ func (n *nerdctl) Replace(spec ExecSpec) error {
 	return syscall.Exec(n.bin, argv, mergeEnv(telemetryEnv(spec.Counted), envVals))
 }
 
-func (n *nerdctl) Stop(name string) error   { return n.quiet("stop", name) }
-func (n *nerdctl) Remove(name string) error { return n.quiet("rm", name) }
+func (n *nerdctl) Stop(name string) error { return n.quiet("stop", name) }
+
+// Remove takes the sandbox's own network with it when there is one. Stop does
+// not: a stopped sandbox is started again, and it wants the network it had.
+//
+// The network is removed after the container, because a network with a
+// container still attached will not go. Whether this sandbox actually had one
+// is not tracked -- removing a network that was never created fails, and that
+// failure is ignored, which is cheaper than a second piece of state that can
+// disagree with the runtime.
+func (n *nerdctl) Remove(name string) error {
+	err := n.quiet("rm", name)
+	n.removeSandboxNetwork(name)
+	return err
+}
 
 func (n *nerdctl) quiet(verb, name string) error {
 	cmd := exec.Command(n.bin, verb, name)
