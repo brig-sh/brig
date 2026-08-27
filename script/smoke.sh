@@ -361,6 +361,31 @@ grep -q -- '--name brig-claude-code-my-big-ref' "$STUB_LOG" \
 grep -q -- "-- claude --name My Big Refactor -p hi" "$STUB_LOG" \
   && ok "the raw name reaches the agent" || bad "the raw name reaches the agent"
 
+echo "== session collision =="
+# Two names whose slugs shorten to one sandbox must not share it: the tight slug
+# budget used to drop the second into the first's home with its own credentials,
+# and brig only warned. Now the second is refused. See issue #26.
+"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" run claude --name acme-corp-prod -d > /dev/null 2>&1
+out="$("$WORK/brig" run claude --name acme-corp-staging -d 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "a colliding session name is refused" \
+  || bad "a colliding session name started anyway -- got rc $rc"
+case "$out" in
+  *acme-corp-prod*) ok "the refusal names the session already holding the sandbox" ;;
+  *) bad "the refusal names the other session -- got: $out" ;;
+esac
+# The same name returning is the ordinary repeat run, not a collision.
+"$WORK/brig" run claude --name acme-corp-prod -d > /dev/null 2>&1 \
+  && ok "the owning name runs again without complaint" \
+  || bad "the owning name was refused its own sandbox"
+# rm releases the claim, so the name that was refused can take the sandbox once
+# the first is gone.
+"$WORK/brig" rm claude --name acme-corp-prod > /dev/null 2>&1
+"$WORK/brig" run claude --name acme-corp-staging -d > /dev/null 2>&1 \
+  && ok "rm frees the sandbox for the other name" \
+  || bad "the sandbox stayed claimed after rm"
+"$WORK/brig" reset > /dev/null 2>&1
+
 echo "== stop =="
 : > "$STUB_LOG"
 "$WORK/brig" stop claude > /dev/null 2>&1

@@ -172,6 +172,12 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) error {
+	// Before anything is prepared or booted: a name that shortens to a sandbox
+	// another name already owns is refused here rather than dropped into that
+	// sandbox's home directory. See slugclaim.go.
+	if err := c.claimSlug(); err != nil {
+		return err
+	}
 	// BRIG_HYPERVISOR (or BRIG_<PROFILE>_HYPERVISOR) beats what the profile
 	// asked for, which is the same order every other setting follows. Resolved
 	// once here so the preflight below and the spec built later cannot disagree
@@ -467,6 +473,7 @@ func (c *Config) Remove() error {
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)
 	ForgetWorkspace(c.VMName)
+	ForgetSession(c.VMName)
 	return err
 }
 
