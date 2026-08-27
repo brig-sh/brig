@@ -236,6 +236,13 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if err := c.verifyImage(); err != nil {
 		return err
 	}
+	// And the kernel the sandbox boots, for a profile that boots a downloaded
+	// bundle rather than its own image. Checked here, beside the image, so the
+	// two refusals happen at the same point in the boot and under the same
+	// setting.
+	if err := c.verifyBootAssets(); err != nil {
+		return err
+	}
 
 	// The share below is a path, and the runtime resolves it again on its own
 	// time -- after the image pull, after the VM starts. PrepareWorkspace

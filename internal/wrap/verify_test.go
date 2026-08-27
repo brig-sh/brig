@@ -2,11 +2,13 @@ package wrap
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/ttytest"
 	"github.com/brig-sh/brig/internal/verify"
@@ -25,6 +27,17 @@ type verifyRuntime struct {
 func (v verifyRuntime) Kind() string                       { return "hull" }
 func (v verifyRuntime) PinsDigest() bool                   { return v.pins }
 func (v verifyRuntime) LocalDigest(string) (string, error) { return v.local, nil }
+
+// The little that EnsureRunning asks before it reaches the checks. Nothing is
+// running and removing is a no-op, which is the state a first boot starts in.
+// Run is deliberately absent: a test that got that far would be booting, and
+// every case here is meant to refuse before then.
+func (v verifyRuntime) Running(string) bool { return false }
+func (v verifyRuntime) Remove(string) error { return nil }
+
+// Stops the boot at the point a real runtime would start doing work, so a
+// test can drive EnsureRunning through the checks without booting anything.
+func (v verifyRuntime) Run(runtime.RunSpec) error { return errors.New("stub runtime: not booting") }
 
 func verifyConfig(t *testing.T, image string, mode verify.Mode) *Config {
 	t.Helper()
@@ -377,5 +390,62 @@ func TestEveryVerifyRefusalNamesAWayForward(t *testing.T) {
 		if !strings.Contains(err.Error(), "BRIG_VERIFY=off") {
 			t.Errorf("%s: the refusal names no way forward: %v", tc.what, err)
 		}
+	}
+}
+
+// A genericBoot profile boots a kernel and an initrd brig downloads, and the
+// initrd carries the in-guest agent. brig verified the image and not the
+// kernel that runs it, which is the more privileged of the two. The bundle is
+// signed, so there was a check to make and brig was not making it.
+func TestGenericBootVerifiesTheBundle(t *testing.T) {
+	// Require refuses what it cannot check, which is the cheapest way to prove
+	// the bundle is checked at all: with no cosign there is nothing to check,
+	// so a profile that boots a bundle must refuse and a profile that does not
+	// must proceed.
+	boots := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Require)
+	boots.Runtime = verifyRuntime{pins: false}
+	boots.Profile.GenericBoot = true
+	err := boots.verifyBootAssets()
+	if err == nil {
+		t.Error("a genericBoot profile booted a bundle that could not be checked")
+	}
+
+	// A profile that boots its own image has no bundle, so there is nothing to
+	// check and nothing to refuse.
+	plain := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Require)
+	plain.Runtime = verifyRuntime{pins: false}
+	plain.Profile.GenericBoot = false
+	if err := plain.verifyBootAssets(); err != nil {
+		t.Errorf("a profile with no bundle was refused: %v", err)
+	}
+
+	// Off means off, for the bundle as for the image.
+	skipped := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Off)
+	skipped.Runtime = verifyRuntime{pins: false}
+	skipped.Profile.GenericBoot = true
+	if err := skipped.verifyBootAssets(); err != nil {
+		t.Errorf("BRIG_VERIFY=off still checked the bundle: %v", err)
+	}
+}
+
+// And the check is actually reached on the way to a boot. Calling
+// verifyBootAssets directly proves what it decides, not that anything asks it:
+// with the call removed from EnsureRunning every test above still passed, which
+// is the whole failure mode this pins.
+func TestEnsureRunningVerifiesTheBundleBeforeBooting(t *testing.T) {
+	// Warn rather than Require, because under Require the image check refuses
+	// first and the run never reaches the bundle. What is being pinned is that
+	// the bundle is looked at on the way to a boot, and under Warn that shows
+	// up as a line about it rather than as a refusal.
+	c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
+	c.Runtime = verifyRuntime{pins: false}
+	c.Profile.GenericBoot = true
+	c.Workspace = t.TempDir()
+	c.Cwd = c.Workspace
+
+	_ = c.EnsureRunning(creds.Set{})
+
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "boot assets") {
+		t.Errorf("the run never looked at the kernel it was about to boot:\n%s", said)
 	}
 }

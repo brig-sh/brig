@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/verify"
 )
 
@@ -204,4 +205,72 @@ func (c *Config) confirm(question string) bool {
 		return true
 	}
 	return false
+}
+
+// verifyBootAssets checks the kernel and initrd a genericBoot profile starts.
+//
+// brig verified the guest image and not the kernel that runs it, which is the
+// more privileged of the two: the initrd carries the in-guest agent, and six
+// of the eight shipped profiles boot a bundle rather than their own image, so
+// this is the ordinary path rather than an edge case. The bundle is signed;
+// the check was simply never made.
+//
+// It is a trust root of its own, so it uses its own policy: another
+// repository, another registry prefix, another workflow. Running it through
+// the image policy would land on NotOurs, which inspects nothing and reports
+// success -- worse than no check, because it reads like one.
+//
+// The modes are the image's modes, so a reader has one rule to learn rather
+// than two. Nothing is pinned from the result: the bundle is fetched by oras
+// or by hull, neither of which brig hands a digest to, so what this buys is a
+// refusal before the boot rather than a pinned download. Naming the digest in
+// the report is the next step, and it needs the fetchers to take one.
+func (c *Config) verifyBootAssets() error {
+	if c.Verify == verify.Off || !c.Profile.GenericBoot {
+		return nil
+	}
+	ref := runtime.BootAssetsRef()
+	// Its own identity and registry, but the same cosign binary: which tool to
+	// run is a fact about the machine, set once by BRIG_COSIGN_BIN, and not
+	// something each trust root should answer differently. Hardcoding it here
+	// also made this unstubbable, so the check reached the real registry from a
+	// unit test.
+	policy := verify.BootAssetsPolicy()
+	policy.Cosign = c.VerifyPolicy.Cosign
+	res := policy.Verify(ref, "")
+
+	switch res.Outcome {
+	case verify.Verified:
+		c.warnf("boot assets %s: signature verified", ref)
+		return nil
+
+	case verify.NotOurs:
+		// The bundle was pointed somewhere else, with BRIG_BOOT_ASSETS_REF or a
+		// mirror. brig has nothing to check there and says so rather than
+		// implying it checked.
+		if c.Verify == verify.Require {
+			return fmt.Errorf("refusing to boot: the boot assets at %s are not published "+
+				"by brig, so their signature cannot be checked (BRIG_VERIFY=require)", ref)
+		}
+		c.warnf("boot assets %s are not published by brig, so nothing was checked "+
+			"about the kernel this sandbox boots", ref)
+		return nil
+
+	case verify.NoTooling, verify.Unresolved:
+		// Could not check, rather than failed. It follows the image's rule: a
+		// warning by default, a refusal under require.
+		if c.Verify == verify.Require {
+			return fmt.Errorf("refusing to boot: the boot assets at %s could not be "+
+				"verified (%s) (BRIG_VERIFY=require)", ref, res.Message())
+		}
+		c.warnf("the boot assets at %s could not be verified: %s", ref, res.Message())
+		return nil
+
+	default:
+		// A signature that is present and wrong on the kernel brig is about to
+		// boot. This one stops whatever the mode, short of off: there is no
+		// reading of a bad signature here that is worth a prompt.
+		return fmt.Errorf("refusing to boot: the boot assets at %s failed verification (%s). "+
+			"Set BRIG_VERIFY=off to boot them regardless", ref, res.Detail)
+	}
 }

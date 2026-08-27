@@ -310,3 +310,33 @@ func TestParseModeStrictRefusesATypo(t *testing.T) {
 		t.Error("ParseModeStrict(requrie) did not refuse a typo")
 	}
 }
+
+// The boot assets are a separate trust root from the guest images. They are
+// published by another repository, under another registry prefix, by another
+// workflow, so the image policy would refuse them as NotOurs and check
+// nothing. The identity below was read off the signature the published bundle
+// actually carries, not written from the repository layout.
+func TestBootAssetsPolicyPinsItsOwnRepoAndWorkflow(t *testing.T) {
+	p := BootAssetsPolicy()
+	for _, want := range []string{
+		"NOFireAI/hull-assets",
+		`build-assets\.yml`,
+		"token.actions.githubusercontent.com",
+	} {
+		if !strings.Contains(p.Identity+p.Issuer, want) {
+			t.Errorf("policy does not pin %q: %s %s", want, p.Identity, p.Issuer)
+		}
+	}
+	if !strings.HasPrefix(p.Identity, "^") || !strings.HasSuffix(p.Identity, "$") {
+		t.Errorf("identity regexp is not anchored at both ends: %s", p.Identity)
+	}
+	// The bundle lives under a different prefix from the images, so a policy
+	// carrying the image prefix would call the bundle NotOurs and check
+	// nothing at all -- a check that always passes.
+	if p.Registry == DefaultPolicy().Registry {
+		t.Error("the boot assets share the image registry prefix, so one policy would check both")
+	}
+	if !strings.HasPrefix("ghcr.io/nofireai/hull-assets:linux-amd64", p.Registry) {
+		t.Errorf("the published bundle is not under the policy's prefix %q", p.Registry)
+	}
+}

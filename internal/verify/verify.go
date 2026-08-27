@@ -92,6 +92,30 @@ func DefaultPolicy() Policy {
 	}
 }
 
+// BootAssetsPolicy matches the boot bundle: the kernel and the initrd a
+// genericBoot profile starts, which carry the in-guest agent.
+//
+// A separate policy rather than a second registry on the image one, because
+// the two are separate trust roots. The bundle is published by another
+// repository, under another registry prefix, by another workflow, and running
+// it through DefaultPolicy would land on NotOurs -- a check that inspects
+// nothing and reports success, which is worse than no check because it reads
+// like one.
+//
+// The identity here was read off the signature the published bundle carries
+// rather than written from the repository layout, because a regexp that names
+// a workflow which does not sign anything fails every boot, and one that is
+// too loose passes signatures nobody meant to trust. Anchored at both ends and
+// with the dots escaped, for the reason DefaultPolicy gives.
+func BootAssetsPolicy() Policy {
+	return Policy{
+		Registry: "ghcr.io/nofireai/",
+		Identity: `^https://github\.com/NOFireAI/hull-assets/\.github/workflows/build-assets\.yml@refs/heads/main$`,
+		Issuer:   "https://token.actions.githubusercontent.com",
+		Cosign:   "cosign",
+	}
+}
+
 // Outcome is what the check concluded.
 type Outcome int
 
