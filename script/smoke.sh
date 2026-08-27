@@ -201,6 +201,13 @@ grep -q '^SANDBOX .*brig-claude-code' "$WORK/run.err" \
   || bad "run prints the execution envelope: $(cat "$WORK/run.err")"
 grep -q '^WORKSPACE ' "$WORK/run.err" \
   && ok "the envelope names the workspace" || bad "the envelope names the workspace"
+# What the sandbox stands on, not only what drives it. The stub is a hull
+# stand-in and BRIG_HYPERVISOR is pinned to vz above, so the row names that
+# backend; which containerd shim maps to which boundary is settled in the
+# runtime package's own tests, there being no containerd here to ask.
+grep -q '^ISOLATION .*microVM (hull, vz backend)' "$WORK/run.err" \
+  && ok "the envelope names the isolation boundary" \
+  || bad "the envelope names the isolation boundary -- got: $(grep '^ISOLATION' "$WORK/run.err")"
 # A value must never reach the block, the same promise argv keeps. Scan the
 # whole envelope output rather than a fixed list of rows, so a row added later
 # is covered without touching this check.
@@ -331,7 +338,7 @@ grep -q 'is now `brig info`' "$WORK/info.err" \
 # preview a claim about a boundary nobody is going to use.
 "$WORK/brig" run claude -d > "$WORK/runenv.out" 2>&1
 "$WORK/brig" reset > /dev/null 2>&1
-envelope_rows() { grep -E '^(SESSION|PROFILE|SANDBOX|WORKSPACE|IMAGE|CREDENTIALS) ' "$1"; }
+envelope_rows() { grep -E '^(SESSION|PROFILE|SANDBOX|ISOLATION|WORKSPACE|IMAGE|CREDENTIALS) ' "$1"; }
 envelope_rows "$WORK/info.out" > "$WORK/rows.info"
 envelope_rows "$WORK/runenv.out" > "$WORK/rows.run"
 [ -s "$WORK/rows.info" ] \
@@ -550,6 +557,13 @@ esac
 case "$out" in
   *"runtime unavailable"*) ok "env marks the runtime line unavailable" ;;
   *) bad "env marks the runtime line unavailable -- got: $out" ;;
+esac
+# With nothing to ask, the isolation row says so. Printing the microVM a
+# working install would have given would be the documentation's claim rather
+# than this host's, on a report whose whole value is that it never does that.
+case "$out" in
+  *ISOLATION*"cannot tell"*) ok "the envelope will not name a boundary it cannot establish" ;;
+  *) bad "the envelope will not name a boundary it cannot establish -- got: $out" ;;
 esac
 case "$out" in
   *"image "*) ok "env still reports the lines it can" ;;
