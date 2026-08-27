@@ -149,6 +149,20 @@ type Runtime interface {
 	Kind() string
 	// Bin is the executable actually being driven.
 	Bin() string
+	// Isolation reports what a sandbox this runtime boots actually stands on:
+	// a kernel of its own, the host's, or something brig cannot establish.
+	//
+	// hypervisor is the macOS backend the run resolved to, or "" for the
+	// runtime's own default; a container runtime ignores it, the way it already
+	// ignores RootfsType. It is a parameter rather than a field because the
+	// backend is a property of the run and not of the binary in hand, and
+	// because the envelope is printed before any RunSpec exists.
+	//
+	// On the interface rather than an optional one asserted for, unlike
+	// NetworkPruner: every runtime knows what it gives a guest, and a backend
+	// that silently reported nothing would be read as a sandbox with no
+	// boundary worth naming.
+	Isolation(hypervisor string) Isolation
 	// Running reports whether a sandbox of this name is up, and returns an
 	// error when it could not find out at all.
 	//

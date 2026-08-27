@@ -7,6 +7,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // envelopeRow is one line of the execution envelope: a label and the value
@@ -52,6 +53,13 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 	rows = append(rows,
 		envelopeRow{"PROFILE", c.Profile.Name},
 		envelopeRow{"SANDBOX", fmt.Sprintf("%s (%s)", c.VMName, kind)},
+		// Directly under the sandbox, because it is the same subject: the row
+		// above says which runtime holds the sandbox, this one says what that
+		// actually gets you. The sentence brig's own documentation makes -- the
+		// sandbox is a microVM on both operating systems -- is true of a default
+		// install and not of every run, and this is the row that tells the two
+		// apart for the person in front of it.
+		envelopeRow{"ISOLATION", c.isolationLine()},
 		// The workspace is mounted as the guest's home, read-write. The
 		// annotation is here rather than implied so a later read-only mount has
 		// a place to say so in the row it already has, instead of needing a new
@@ -68,6 +76,26 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		envelopeRow{"NETWORK", c.Network.Line()},
 	)
 	return rows
+}
+
+// isolationLine is the ISOLATION row: what the sandbox this run would boot
+// actually stands on.
+//
+// The runtime answers it, because the runtime is what knows -- the hypervisor
+// under hull, the containerd shim under nerdctl or docker. brig only supplies
+// the backend this run resolved to, so the row names the one that would boot
+// rather than the one a profile happens to carry.
+//
+// No runtime is the one case brig answers itself, and it answers "cannot tell".
+// The alternative is to print what a working install would have given, which is
+// the documentation's claim rather than this host's, and this row is worth
+// having only if it never makes that claim on evidence it does not have.
+func (c *Config) isolationLine() string {
+	if c.Runtime == nil {
+		return string(runtime.BoundaryUnknown) +
+			" (no runtime, so brig cannot tell what a sandbox here would stand on)"
+	}
+	return c.Runtime.Isolation(c.hypervisor()).Line()
 }
 
 // credentialLine is the CREDENTIALS row: every credential this run hands the

@@ -46,8 +46,32 @@ func newNerdctl(bin string) (Runtime, error) {
 		"or point BRIG_RUNTIME_BIN at one", ErrNoRuntime)
 }
 
-func (n *nerdctl) Kind() string { return "nerdctl" }
+// Kind names the binary being driven rather than the adapter driving it. This
+// one adapter accepts nerdctl and docker both, and it reported "nerdctl" for
+// either, so a docker user read a report about a runtime they had not
+// installed. The adapter already knows the difference -- isDocker turns on it
+// -- so there was never anything to find out, only something to say.
+func (n *nerdctl) Kind() string { return n.driver() }
 func (n *nerdctl) Bin() string  { return n.bin }
+
+// Isolation is decided by the containerd shim, not by the driver: urunc boots
+// the container as a microVM, and BRIG_CONTAINERD_RUNTIME can point at one that
+// does not. containerdRuntime is the same call runArgs makes, so the row names
+// the shim the run will actually name.
+//
+// The hypervisor is nothing to this runtime: the backend is hull's business,
+// and what boots a microVM here is the shim.
+func (n *nerdctl) Isolation(string) Isolation {
+	return containerdIsolation(n.driver(), containerdRuntime())
+}
+
+// driver is the binary in hand, by name. newNerdctl takes either.
+func (n *nerdctl) driver() string {
+	if n.isDocker() {
+		return "docker"
+	}
+	return "nerdctl"
+}
 
 // PinsDigest is true here: containerd's store is content-addressed, so a
 // reference of the form repo@sha256:... resolves to that exact object and, when

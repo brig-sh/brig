@@ -350,6 +350,7 @@ your own.
 $ brig info claude
 PROFILE      claude-code
 SANDBOX      brig-claude-code (hull)
+ISOLATION    microVM (hull, vz backend)
 WORKSPACE    /Users/you/brig/claude-code (read-write)
 IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
 CREDENTIALS  GH_TOKEN

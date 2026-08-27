@@ -30,6 +30,10 @@ func envelopeConfig() *Config {
 		},
 		Out: &bytes.Buffer{},
 		Err: &bytes.Buffer{},
+		// A settings lookup that finds nothing, so the isolation row reports
+		// the backend a host with no BRIG_HYPERVISOR set would boot. Load
+		// always builds one; a zero Env has no lookup function at all.
+		env: NewEnv("claude-code", func(string) (string, bool) { return "", false }),
 	}
 }
 
@@ -50,6 +54,7 @@ func TestEnvelopeNamesTheBoundary(t *testing.T) {
 		"SESSION      review",
 		"PROFILE      claude-code",
 		"SANDBOX      brig-claude-code-review (hull)",
+		"ISOLATION    microVM (hull, vz backend)",
 		"WORKSPACE    /Users/me/src/brig (read-write)",
 		"IMAGE        ghcr.io/brig-sh/claude-code:latest (pull missing)",
 	} {
@@ -165,6 +170,44 @@ func TestEnvelopeUnderReportsAMalformedFileRefAndTheRunThenFails(t *testing.T) {
 	// The other half: the run does not quietly carry on past it.
 	if err := c.writeSecretFiles(); err == nil {
 		t.Error("a malformed file ref was written rather than failing the run")
+	}
+}
+
+// The row reports the boundary this run would get, so it has to be built from
+// the backend this run resolved to rather than from the runtime's default. The
+// preflight and the spec read the same resolution, which is what stops the
+// block describing a sandbox other than the one about to boot.
+func TestEnvelopeNamesTheResolvedHypervisor(t *testing.T) {
+	c := envelopeConfig()
+	c.env = NewEnv(c.Profile.Name, oneVar("BRIG_HYPERVISOR", "hvi"))
+
+	block := &bytes.Buffer{}
+	c.renderEnvelope(block, creds.Set{})
+
+	got := block.String()
+	if !strings.Contains(got, "ISOLATION    microVM (hull, hvi backend)") {
+		t.Errorf("the isolation row does not name the backend the run resolved to:\n%s", got)
+	}
+}
+
+// A row that guesses is worse than no row: it is the row a reader would rely
+// on. With no runtime there is nothing to ask, so the block says it cannot
+// tell rather than repeating the microVM the documentation promises.
+func TestEnvelopeDoesNotClaimIsolationItCannotEstablish(t *testing.T) {
+	c := testConfig(t, t.TempDir(), t.TempDir())
+	c.Runtime = nil
+	block := &bytes.Buffer{}
+	c.renderEnvelope(block, creds.Set{})
+
+	got := block.String()
+	if !strings.Contains(got, "ISOLATION") {
+		t.Fatalf("the envelope dropped the isolation row without a runtime:\n%s", got)
+	}
+	if !strings.Contains(got, "cannot tell") {
+		t.Errorf("the isolation row does not say it cannot tell:\n%s", got)
+	}
+	if strings.Contains(got, "microVM") {
+		t.Errorf("the isolation row claimed a microVM with no runtime to establish one:\n%s", got)
 	}
 }
 

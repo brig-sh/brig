@@ -24,6 +24,21 @@ too. `BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, which
 shares the host kernel: that is the weaker of the two, and it is something you
 have to choose rather than something you get.
 
+Which of them you got is the `ISOLATION` row of the execution envelope, printed
+before every boot and by `brig info`:
+
+```
+ISOLATION    microVM (hull, vz backend)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2)
+ISOLATION    container (docker over containerd, runc: the guest shares the host kernel)
+```
+
+The row reports what this run resolved -- the binary in hand, the backend it
+settled on, the shim it will name -- rather than what the paragraph above
+promises. A shim brig does not recognise may well boot a VM, and brig cannot
+establish that from a name, so the row says it cannot tell instead of claiming
+the stronger boundary.
+
 Inside it, the guest has your workspace mounted as its home. It does not have
 your keychain, your SSH agent, your secret manager, or any other directory on
 the host. That inaccessibility is the isolation boundary, and it is also the
