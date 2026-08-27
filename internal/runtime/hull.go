@@ -45,6 +45,18 @@ func newHull(bin string) (Runtime, error) {
 func (h *hull) Kind() string { return "hull" }
 func (h *hull) Bin() string  { return h.bin }
 
+// Isolation is a microVM on every hull backend: vz, hvi and qemu are all
+// hypervisors, so the guest has a kernel of its own whichever one boots it.
+// The backend is named anyway, because it decides what that VM can do -- the
+// graphical console, the shares, the gateway -- and a reader asking what their
+// sandbox is wants the whole answer in one row.
+//
+// The default is applied here rather than reported as blank, so the row names
+// the backend that will actually boot rather than the absence of a setting.
+func (h *hull) Isolation(hv string) Isolation {
+	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend", hypervisorOrDefault(hv))}
+}
+
 // PinsDigest asks the hull on this machine whether it can boot a digest
 // reference from its own store, which it can from 0.1.0-rc23. Before that a
 // repo@sha256:... boot missed the cache and re-pulled every run, and failed
@@ -142,7 +154,14 @@ func hullVersionPinsDigest(out string) bool {
 // another -- hvi for the Hypervisor Virtualization Interface, qemu for a qemu
 // host -- and BRIG_HYPERVISOR beats the profile. Both are resolved before they
 // reach here; see wrap.
-func hypervisor(spec RunSpec) string { return orDefault(spec.Hypervisor, "vz") }
+func hypervisor(spec RunSpec) string { return hypervisorOrDefault(spec.Hypervisor) }
+
+// hypervisorOrDefault is where the default lives, so the backend that boots and
+// the backend the envelope names are read off one line. Two copies of "vz"
+// would be two things to change, and the one that goes stale is a report about
+// a boundary rather than the boundary itself -- which is the worse half to get
+// wrong, because nothing fails to make it visible.
+func hypervisorOrDefault(hv string) string { return orDefault(hv, "vz") }
 
 // The kernel and initrd a genericBoot profile needs live in boot.go: both
 // backends take the same two annotations, so resolving them is not hull's

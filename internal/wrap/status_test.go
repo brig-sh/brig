@@ -21,6 +21,17 @@ type fakeRuntime struct{ runtime.Runtime }
 func (fakeRuntime) Kind() string { return "hull" }
 func (fakeRuntime) Bin() string  { return "hull" }
 
+// The envelope asks a third: what a sandbox this runtime boots stands on. It
+// answers what the real hull answers for the backend it is handed, so a row
+// asserted here is the row a macOS run prints. Which shim or backend maps to
+// which boundary is settled in the runtime package, where the mapping lives.
+func (fakeRuntime) Isolation(hv string) runtime.Isolation {
+	if hv == "" {
+		hv = "vz"
+	}
+	return runtime.Isolation{Boundary: runtime.BoundaryVM, Detail: "hull, " + hv + " backend"}
+}
+
 const credentialProfile = "hostCredential:\n  keychainService: s\n" +
 	"  tokenField: accessToken\n  expiryField: expiresAt\n" +
 	"  targetVar: TOK\n  renewHint: run it once\n"

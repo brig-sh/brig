@@ -179,11 +179,9 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if err := c.claimSlug(); err != nil {
 		return err
 	}
-	// BRIG_HYPERVISOR (or BRIG_<PROFILE>_HYPERVISOR) beats what the profile
-	// asked for, which is the same order every other setting follows. Resolved
-	// once here so the preflight below and the spec built later cannot disagree
-	// about which backend this run wants.
-	hypervisor := c.env.String("HYPERVISOR", c.Profile.Hypervisor)
+	// Read once, so the preflight below and the spec built later cannot
+	// disagree about which backend this run wants. See hypervisor.
+	hypervisor := c.hypervisor()
 	// Refuse a backend the host cannot boot before the workspace is prepared or
 	// an image is pulled, so the floor lands as one sentence that names the way
 	// past it rather than as the runtime dying at boot with no name. See
@@ -339,6 +337,19 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		focusWindow()
 	}
 	return c.deliverSecretFiles()
+}
+
+// hypervisor is the macOS backend this run wants: BRIG_HYPERVISOR (or
+// BRIG_<PROFILE>_HYPERVISOR) beats what the profile asked for, which is the
+// order every other setting follows. Empty means nothing was asked for, and the
+// runtime's own default applies.
+//
+// One function rather than a copy per caller, because three of them read it
+// now -- the preflight below, the spec handed to the runtime, and the envelope
+// row naming the isolation boundary. A row reporting a backend other than the
+// one that boots is worse than no row at all.
+func (c *Config) hypervisor() string {
+	return c.env.String("HYPERVISOR", c.Profile.Hypervisor)
 }
 
 // preflightHypervisor refuses a run whose hypervisor the host cannot boot,

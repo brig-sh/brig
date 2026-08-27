@@ -203,8 +203,9 @@ it is the same pair hull takes on its command line.
 
 **containerd** has to be running with the urunc shim installed.
 `BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, which shares
-the host kernel. That is the weaker boundary, and `docs/security.md` says what
-it costs.
+the host kernel. That is the weaker boundary, the envelope's `ISOLATION` row
+says which one a run got, and `docs/security.md` says what the weaker one
+costs.
 
 ### Versions and pins
 
@@ -232,7 +233,10 @@ Cheap swaps, no code:
 - docker instead of nerdctl: it is already in the PATH search, with the
   `genericBoot` limitation above.
 - a different containerd shim: `BRIG_CONTAINERD_RUNTIME`. Anything that reads
-  the two boot annotations replaces urunc without brig noticing.
+  the two boot annotations replaces urunc without brig noticing. The envelope's
+  `ISOLATION` row names the shim you put there, and calls the boundary unknown
+  rather than a microVM for any shim other than urunc's own that it cannot
+  place.
 - a different hypervisor backend under hull: `BRIG_HYPERVISOR`, or
   `hypervisor:` in a profile.
 
