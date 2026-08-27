@@ -246,6 +246,17 @@ func serve(socket string) error {
 	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
 		return err
 	}
+	// Armed before the socket exists, not after. Notify changes the process's
+	// disposition for these signals, and until it runs the default one applies:
+	// SIGTERM kills outright, no deferred close, no unlink, so the socket is
+	// left behind for the next daemon to trip over. The listen below is what
+	// makes brigd reachable, so anything watching for the socket can signal it
+	// from that moment, and the handler has to already be there. The channel is
+	// buffered, so a signal that arrives before the goroutine starts is held
+	// rather than dropped.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
 	// One daemon per socket path, and the lock is what decides it. Binding a
 	// unix socket takes no lock of any kind, so nothing in the listen below
 	// keeps a second daemon out: both stay up, both report listening, and the
@@ -276,8 +287,6 @@ func serve(socket string) error {
 
 	d := newDaemon()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
 		// Closing the listener is the whole of the shutdown, and the socket is
