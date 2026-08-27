@@ -238,9 +238,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	// A ten-character slug is a tight budget, so two long names can slug the
-	// same and share one sandbox. Say which directory a run actually uses
-	// whenever the slug differs from the name, so that sharing stays visible.
+	// The slug is shortened and sanitised, so the directory a named session
+	// gets rarely reads back as the name typed. Say which directory it actually
+	// is whenever the two differ. A name that shortens onto another session's
+	// sandbox is refused later, at EnsureRunning; this only names the directory.
 	if cfg.RawName != "" && cfg.RawName != cfg.Slug {
 		fmt.Fprintf(os.Stderr, "brig: session %q uses %s (sandbox %s)\n",
 			cfg.RawName, cfg.Workspace, cfg.VMName)
@@ -804,6 +805,7 @@ func reset(args []string) error {
 		// Config, because reset works from the instance list and a stopped
 		// sandbox need not correspond to a profile brig can still look up.
 		wrap.ForgetWorkspace(inst.Name)
+		wrap.ForgetSession(inst.Name)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "brig: could not remove %s: %v\n", inst.Name, err)
 			continue

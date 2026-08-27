@@ -55,24 +55,25 @@ func stateDir() (string, error) {
 	return filepath.Join(home, ".brig"), nil
 }
 
-func workspaceIndexPath() (string, error) {
+// indexPath is stateDir/name, for one of brig's small bookkeeping files.
+func indexPath(name string) (string, error) {
 	dir, err := stateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, workspaceIndexName), nil
+	return filepath.Join(dir, name), nil
 }
 
-// readWorkspaceIndex returns what has been recorded, and an empty map for
-// every way that can fail.
+// readIndex returns the string map recorded under name, and an empty one for
+// every way the read can fail.
 //
 // A file that is missing, unreadable or corrupt is not worth failing a command
-// over: an absent entry costs the sandbox one restart, and that is exactly the
-// behaviour of the release before this file existed. Failing instead would
+// over: at worst an absent entry costs one restart, which is exactly the
+// behaviour of the release before these files existed. Failing instead would
 // make a stray file in ~/.brig able to stop every brig command on the host.
-func readWorkspaceIndex() map[string]string {
+func readIndex(name string) map[string]string {
 	index := map[string]string{}
-	path, err := workspaceIndexPath()
+	path, err := indexPath(name)
 	if err != nil {
 		return index
 	}
@@ -86,9 +87,9 @@ func readWorkspaceIndex() map[string]string {
 	return index
 }
 
-// writeWorkspaceIndex replaces the file with the map it is given.
-func writeWorkspaceIndex(index map[string]string) error {
-	path, err := workspaceIndexPath()
+// writeIndex replaces the file named name with the map it is given.
+func writeIndex(name string, index map[string]string) error {
+	path, err := indexPath(name)
 	if err != nil {
 		return err
 	}
@@ -102,9 +103,9 @@ func writeWorkspaceIndex(index map[string]string) error {
 		return err
 	}
 	// Written through a temporary file and renamed, so a crash mid-write
-	// cannot leave a half-parsed map behind -- which would cost every sandbox
-	// on the host its entry rather than one of them.
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".workspaces-*")
+	// cannot leave a half-parsed map behind -- which would cost every entry in
+	// the file rather than one of them.
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+name+"-*")
 	if err != nil {
 		return err
 	}
@@ -117,6 +118,13 @@ func writeWorkspaceIndex(index map[string]string) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// readWorkspaceIndex and writeWorkspaceIndex are the workspace index's names
+// for the shared read and write above.
+func readWorkspaceIndex() map[string]string { return readIndex(workspaceIndexName) }
+func writeWorkspaceIndex(index map[string]string) error {
+	return writeIndex(workspaceIndexName, index)
 }
 
 // RememberedWorkspace is the workspace a sandbox was started with, or "" when
