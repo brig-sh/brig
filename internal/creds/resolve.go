@@ -30,6 +30,18 @@ type Missing struct {
 	Hint string
 }
 
+// CredentialError is the class of run-stopping credential failures: a required
+// secret the store did not have (MissingSecretsError) and a store that could
+// not be opened at all (storeError). The two read differently to a person but
+// are one thing to a script -- a credential this run needed could not be
+// resolved -- so a caller mapping a failure to an exit code matches on this
+// rather than on either concrete type. The marker is unexported, so nothing
+// outside this package can join the class.
+type CredentialError interface {
+	error
+	credentialFailure()
+}
+
 // MissingSecretsError is every REQUIRED secret a run could not resolve,
 // collected into one error.
 //
@@ -47,6 +59,8 @@ type MissingSecretsError struct {
 	Profile string
 	Missing []Missing
 }
+
+func (e *MissingSecretsError) credentialFailure() {}
 
 func (e *MissingSecretsError) Error() string {
 	// Singular gets one line, because one missing secret is the common case
@@ -266,6 +280,8 @@ func (e *storeError) Error() string {
 	}
 	return msg
 }
+
+func (e *storeError) credentialFailure() {}
 
 func (e *storeError) Unwrap() error { return e.cause }
 

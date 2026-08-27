@@ -11,6 +11,20 @@ import (
 	"github.com/brig-sh/brig/internal/verify"
 )
 
+// VerifyRefusedError marks a boot brig stopped because the guest image or the
+// kernel it boots did not verify: a bad signature, a mismatch, or a "could not
+// check" under BRIG_VERIFY=require, plus the interactive refusals of the same.
+//
+// It carries the underlying message unchanged and only adds a class a caller can
+// match, so a run refused for this reason gets an exit code of its own rather
+// than folding into the general failure. EnsureRunning wraps the verify step's
+// error in it, which is the one place both the image and the boot-asset checks
+// pass through.
+type VerifyRefusedError struct{ Err error }
+
+func (e *VerifyRefusedError) Error() string { return e.Err.Error() }
+func (e *VerifyRefusedError) Unwrap() error { return e.Err }
+
 // verifyImage checks the guest image before booting it, and decides what to
 // do about the answer.
 //

@@ -151,6 +151,26 @@ so an agent flag spelled like one of brig's still reaches the agent.
 Each flag overrides the corresponding `BRIG_*` setting, which overrides the
 profile.
 
+### Exit codes
+
+brig returns a small, stable set of exit codes so a script can tell what went
+wrong without reading the message. Anything a command prints on success stays on
+`stdout`; every failure below is reported on `stderr`.
+
+| code | meaning |
+| --- | --- |
+| `0` | success |
+| `1` | general failure -- something ran and did not finish |
+| `2` | usage error -- an unknown flag, a stray argument, a value in the wrong place |
+| `3` | no such profile or sandbox -- the name resolves to nothing |
+| `4` | runtime unavailable -- none is installed, or the one named is broken |
+| `5` | image verification refused the boot -- see [guest image verification](#guest-image-verification) |
+| `6` | a credential the run needed could not be resolved |
+
+`1` and `2` are unchanged from earlier releases. The rest name failures brig
+already produced under `1`, so a caller that only checked "zero or not" keeps
+working; one that wants to branch on the reason now can.
+
 ```bash
 brig run claude -p "summarise this repo"   # headless, arguments passed through
 brig run claude -- --name not-a-session    # --name reaches claude, not brig
