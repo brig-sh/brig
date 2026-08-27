@@ -145,14 +145,18 @@ github.com:
 	}
 	t.Setenv("GH_CONFIG_DIR", dir)
 
-	if got := ghHostsUser("github.com"); got != "octocat" {
-		t.Errorf("ghHostsUser(github.com) = %q, want octocat", got)
-	}
-	if got := ghHostsUser("github.enterprise.example"); got != "enterprise-login" {
-		t.Errorf("ghHostsUser(enterprise) = %q", got)
-	}
-	if got := ghHostsUser("github.absent.example"); got != "" {
-		t.Errorf("an absent host returned %q", got)
+	for _, tc := range []struct{ host, want string }{
+		{"github.com", "octocat"},
+		{"github.enterprise.example", "enterprise-login"},
+		{"github.absent.example", ""},
+	} {
+		got, err := ghHostsUser(tc.host)
+		if err != nil {
+			t.Fatalf("ghHostsUser(%s): %v", tc.host, err)
+		}
+		if got != tc.want {
+			t.Errorf("ghHostsUser(%s) = %q, want %q", tc.host, got, tc.want)
+		}
 	}
 }
 
