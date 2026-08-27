@@ -24,6 +24,11 @@ brigd --socket /tmp/brigd.sock
 The socket is created 0600. It carries lifecycle control over sandboxes
 holding live credentials, so it belongs to the invoking user alone.
 
+A unix socket path has a length limit the kernel enforces -- 103 bytes on
+macOS, 107 on Linux -- and a path over it is refused before the bind, with the
+limit, the length given, and where the path came from. The kernel's own answer
+to an over-long path is `bind: invalid argument`, which names none of those.
+
 One daemon serves one socket path. Starting a second on a path that is already
 being served exits non-zero and names the process in the way, rather than
 taking the path over: two daemons on one socket would each keep an inventory
