@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -208,7 +209,17 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		return err
 	}
 
-	if c.Runtime.Running(c.VMName) {
+	// Three answers, and the third one refuses. A runtime that could not be
+	// asked has said nothing about this workspace, and booting on that is the
+	// dangerous direction: it starts a second sandbox on a workspace the first
+	// is still holding, two guests writing the same home. Stopping here costs a
+	// run that might have been fine; proceeding costs the state of one that was.
+	running, err := c.Runtime.Running(c.VMName)
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the sandbox %s is already running, so "+
+			"refusing to start a second one over it: %w", c.VMName, err)
+	}
+	if running {
 		if c.guestMountsWorkspace() {
 			// The guest has confirmed this workspace, so record it. Nothing has
 			// changed for a session brig already knows about; for one created
@@ -452,10 +463,26 @@ func (c *Config) guestMountsWorkspace() bool {
 // the runtime complains was already in the state that was asked for -- so the
 // runtime is asked again before its error is believed, which is also what
 // keeps "it was not running to begin with" from becoming a failure.
+//
+// Only an answer clears a failed stop. A runtime that could not say whether the
+// sandbox is still up has not established the end state, and treating that as
+// "gone anyway" puts the swallow back: the user is told a VM holding a
+// forwarded credential is down when nothing checked.
 func (c *Config) Stop() error {
 	err := c.Runtime.Stop(c.VMName)
-	if err == nil || !c.Runtime.Running(c.VMName) {
+	if err == nil {
 		return nil
+	}
+	running, askErr := c.Runtime.Running(c.VMName)
+	if askErr == nil && !running {
+		return nil
+	}
+	if askErr != nil {
+		// Both, joined: what the stop said and why the end state could not be
+		// checked are two separate things to fix, and errors.Is finds either.
+		return fmt.Errorf("the sandbox %s would not stop, and whether it is still running "+
+			"could not be established (%s): %w", c.VMName, c.Runtime.LogsHint(c.VMName),
+			errors.Join(err, askErr))
 	}
 	return fmt.Errorf("the sandbox %s is still running and would not stop (%s): %w",
 		c.VMName, c.Runtime.LogsHint(c.VMName), err)

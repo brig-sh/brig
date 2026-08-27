@@ -99,20 +99,29 @@ func repoDigest(out string) string {
 	return ""
 }
 
-func (n *nerdctl) Running(name string) bool {
+// Running asks for the running containers under this exact name. The filter
+// already excludes a stopped one, so an empty listing is a genuine no.
+//
+// A `ps` that did not run is an error rather than a no, for the reason on
+// Runtime.Running: a containerd that is not up answers nothing, and reading
+// that as "no sandbox is running" is what booted a second one over the first.
+func (n *nerdctl) Running(name string) (bool, error) {
 	cmd := exec.Command(n.bin, "ps", "--filter", "name=^"+name+"$", "--format", "{{.Names}}")
 	cmd.Env = mergeEnv(telemetryEnv(false))
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return false
+		if said := strings.TrimSpace(errb.String()); said != "" {
+			return false, fmt.Errorf("%s ps: %w: %s", n.bin, err, firstLines(said, 3))
+		}
+		return false, fmt.Errorf("%s ps: %w", n.bin, err)
 	}
 	for _, line := range strings.Split(out.String(), "\n") {
 		if strings.TrimSpace(line) == name {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (n *nerdctl) List() ([]Instance, error) {

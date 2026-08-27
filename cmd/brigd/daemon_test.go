@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -492,6 +493,54 @@ func TestAProfilesRuntimeBinReachesTheSameBinaryThroughTheDaemon(t *testing.T) {
 	}
 	if rt.Bin() != cfg.Runtime.Bin() {
 		t.Errorf("the CLI drives %q and the daemon %q", rt.Bin(), cfg.Runtime.Bin())
+	}
+}
+
+// livenessRuntime answers the one question the inventory asks. Everything else
+// panics through the embedded nil interface, which is louder than a stub that
+// quietly answers something the status report never asked.
+type livenessRuntime struct {
+	runtime.Runtime
+	running bool
+	err     error
+}
+
+func (l livenessRuntime) Running(string) (bool, error) { return l.running, l.err }
+
+// The inventory re-reads liveness from the runtime on every report, so a
+// runtime that cannot be asked has to be reported as unanswered rather than as
+// a stopped sandbox. Folded into running:false it reads as a sandbox that
+// exited, and the operator goes looking for a VM that may well still be up.
+func TestStatusSaysWhenTheRuntimeCouldNotBeAsked(t *testing.T) {
+	d := newDaemon()
+	d.sessions["brig-broken"] = entry{
+		Session: Session{Agent: "claude-code", VM: "brig-broken"},
+		rt:      livenessRuntime{err: errors.New("cannot connect to the daemon")},
+	}
+	d.sessions["brig-up"] = entry{
+		Session: Session{Agent: "claude-code", VM: "brig-up"},
+		rt:      livenessRuntime{running: true},
+	}
+
+	byVM := map[string]Session{}
+	for _, s := range d.status() {
+		byVM[s.VM] = s
+	}
+
+	broken := byVM["brig-broken"]
+	if broken.RunningError == "" {
+		t.Error("a runtime that could not be asked was reported as a plain stopped sandbox")
+	}
+	if !strings.Contains(broken.RunningError, "cannot connect to the daemon") {
+		t.Errorf("the runtime's explanation was dropped: %q", broken.RunningError)
+	}
+	if broken.Running {
+		t.Error("a sandbox nothing could answer for was reported as running")
+	}
+
+	// The answers that were given are unchanged.
+	if up := byVM["brig-up"]; !up.Running || up.RunningError != "" {
+		t.Errorf("a running sandbox was misreported: %+v", up)
 	}
 }
 

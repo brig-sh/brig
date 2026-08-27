@@ -140,8 +140,17 @@ type Runtime interface {
 	Kind() string
 	// Bin is the executable actually being driven.
 	Bin() string
-	// Running reports whether a sandbox of this name is up.
-	Running(name string) bool
+	// Running reports whether a sandbox of this name is up, and returns an
+	// error when it could not find out at all.
+	//
+	// Three answers, not two, because a runtime that cannot be asked -- a binary
+	// that is not there, a permission error, a daemon that is down -- is not a
+	// runtime saying no. Both adapters used to fold the failure into false, so a
+	// broken runtime read as an empty machine and EnsureRunning booted a second
+	// sandbox onto a workspace the first was still holding (#49). A caller that
+	// cannot tell must not boot: false with a non-nil error means "unknown", and
+	// the boolean says nothing.
+	Running(name string) (bool, error)
 	// List returns every sandbox the runtime knows about, running or not.
 	List() ([]Instance, error)
 	// Run boots a sandbox, detached.
