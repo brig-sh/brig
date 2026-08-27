@@ -245,6 +245,29 @@ func Alias(name string) (string, bool) {
 	return canonical, ok
 }
 
+// Aliases is the other direction: the short spellings that reach a profile, in
+// order. The listing asks, because someone who only ever types `brig run
+// claude` has nowhere else to learn which profile that word runs.
+//
+// A spelling a profile has taken is left out rather than reported. Lookup
+// prefers a registry hit, so a file-backed profile called claude wins the word
+// outright, and listing it against claude-code would name the one profile that
+// word no longer reaches.
+func Aliases(canonical string) []string {
+	var out []string
+	for short, name := range aliases {
+		if name != canonical {
+			continue
+		}
+		if _, taken := registry[short]; taken {
+			continue
+		}
+		out = append(out, short)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // All returns every profile, in name order. Copies, as Lookup returns.
 func All() []Profile {
 	out := make([]Profile, 0, len(registry))

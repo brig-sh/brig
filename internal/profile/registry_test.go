@@ -166,3 +166,35 @@ func TestImportRefusesAReservedName(t *testing.T) {
 		t.Errorf("refused a name that only resembles the reserved one: %v", err)
 	}
 }
+
+// Aliases is the reverse of the table Lookup reads: the listing has a profile
+// in hand and needs the short spellings that reach it.
+func TestAliasesReportsTheSpellingsThatReachAProfile(t *testing.T) {
+	reset(t)
+	got := Aliases("claude-code")
+	if len(got) != 1 || got[0] != "claude" {
+		t.Errorf("Aliases(claude-code) = %v, want [claude]", got)
+	}
+	if got := Aliases("codex"); len(got) != 0 {
+		t.Errorf("Aliases(codex) = %v, want none", got)
+	}
+}
+
+// Lookup prefers a registry hit over an alias, so a profile of your own called
+// claude takes the word and claude-code no longer answers to it. Listing the
+// alias against claude-code anyway would name the one profile that word does
+// not reach.
+func TestAliasesDropsASpellingAProfileHasTaken(t *testing.T) {
+	reset(t)
+	dir := t.TempDir()
+	blob := []byte("name: claude\nimage: i\nguestHome: /home/c\nbinary: c\nmem: 1\ncpus: 1\n")
+	if err := os.WriteFile(filepath.Join(dir, "claude.yaml"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := Aliases("claude-code"); len(got) != 0 {
+		t.Errorf("Aliases(claude-code) = %v, but %q now looks up the file-backed profile", got, "claude")
+	}
+}

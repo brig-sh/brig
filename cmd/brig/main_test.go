@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -353,5 +354,51 @@ func TestWorkspaceOfPrefersTheRecordedWorkspace(t *testing.T) {
 	}
 	if got := workspaceOf("brig-claude-code", nil); got != "/somewhere/else" {
 		t.Errorf("ls reported %q for an unrecorded sandbox, want the derived path", got)
+	}
+}
+
+// The name column holds names, so it is as wide as the names it is printing.
+// A constant was wrong at both ends: brig-claude-desktop plus a ten-character
+// session slug is 30 characters, which ran into the state and pushed the rest
+// of the row out, and a listing of short names paid for the width anyway. A
+// profile from a file can be called anything, so there is no constant that
+// fits every name brig can generate.
+func TestSandboxListingSizesTheNameColumnToItsNames(t *testing.T) {
+	long := sandboxPrefix + "claude-desktop-" + strings.Repeat("s", 10)
+	for _, c := range []struct {
+		what  string
+		rows  []sandboxRow
+		width int
+	}{
+		{"the longest name brig can generate", []sandboxRow{
+			{name: long, state: "stopped", workspace: "/ws/long"},
+		}, len(long)},
+		{"names shorter than the heading", []sandboxRow{
+			{name: sandboxPrefix + "codex", state: "running", workspace: "/ws/codex"},
+		}, len(sandboxPrefix + "codex")},
+		// The no-runtime case prints the header and no rows, and a header with
+		// nothing under it is as wide as the heading.
+		{"a header on its own", nil, len("SANDBOX")},
+	} {
+		var buf bytes.Buffer
+		printSandboxes(&buf, c.rows)
+		lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+		if len(lines) != len(c.rows)+1 {
+			t.Fatalf("%s: listing has %d lines, want a header and %d row(s):\n%s",
+				c.what, len(lines), len(c.rows), buf.String())
+		}
+		for i, line := range lines {
+			name, state := "SANDBOX", "STATE"
+			if i > 0 {
+				name, state = c.rows[i-1].name, c.rows[i-1].state
+			}
+			if !strings.HasPrefix(line, name) {
+				t.Errorf("%s: line %d is %q, want it to start with %q", c.what, i, line, name)
+			}
+			if got := strings.Index(line, state); got != c.width+1 {
+				t.Errorf("%s: line %d puts %q at column %d, want %d:\n%s",
+					c.what, i, state, got, c.width+1, buf.String())
+			}
+		}
 	}
 }
