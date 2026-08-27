@@ -176,7 +176,12 @@ beyond them:
   (`internal/wrap/secretfiles.go`).
 - `network-gateway`, for the `hvi` backend. That backend has no egress of its
   own, so brig starts one shared gateway and joins every sandbox to it, and
-  hands out the addresses on that network itself.
+  hands out the addresses on that network itself. Sharing a gateway is not the
+  same as sharing a segment: the gateway gives each guest a point-to-point
+  link and translates outbound traffic, so guests reach the internet through
+  it and not each other. See
+  [security.md](security.md#things-brig-does-not-claim) for what that means per
+  backend, which is not the same answer on Linux.
 
 Six of the eight shipped profiles ask for `hvi` and set `genericBoot: true`
 (`internal/profile/specs`), so the default macOS path needs the `hvi` binary
