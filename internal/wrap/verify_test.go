@@ -277,6 +277,39 @@ func TestVerifyRefusesAFailedSignatureWithStdinOnDevNull(t *testing.T) {
 	}
 }
 
+// A caller with no terminal of its own is taken at its word, even sitting on a
+// real one. This is brigd's case: its stdin may well be a terminal, because it
+// was started from a shell, but that terminal belongs to whoever started the
+// daemon and not to the client whose request raised the question -- so asking
+// there puts a question in front of nobody while the client waits for an
+// answer that cannot come.
+func TestVerifyDoesNotAskWhenTheCallerHasNoTerminal(t *testing.T) {
+	// A real terminal on stdin, with an answer already waiting on it: the
+	// point is that neither is looked at.
+	master := ttytest.AsStdin(t)
+	if _, err := master.WriteString("y\n"); err != nil {
+		t.Fatal(err)
+	}
+	c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
+	c.VerifyPolicy.Cosign = "false" // present, and always exits non-zero
+	c.NoTerminal = true
+
+	err := c.verifyImage()
+	if err == nil {
+		t.Fatal("a failed signature was booted on a terminal the caller does not have")
+	}
+	if !strings.Contains(err.Error(), "BRIG_VERIFY=off") {
+		t.Errorf("the refusal did not name the override: %v", err)
+	}
+	said := c.Err.(*bytes.Buffer).String()
+	if strings.Contains(said, "Boot it anyway?") {
+		t.Errorf("the question was asked anyway: %q", said)
+	}
+	if !strings.Contains(said, "nobody to ask") {
+		t.Errorf("the refusal did not say why nobody was asked: %q", said)
+	}
+}
+
 // And with a real terminal the question is actually asked and the answer
 // actually read. This is the half the no-terminal tests cannot prove: a
 // confirm() that always refused would satisfy every assertion above.

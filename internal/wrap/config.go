@@ -119,8 +119,27 @@ type Config struct {
 	// paying for a second keychain read.
 	HostCred *creds.HostCredential
 
+	// NoTerminal declares that this run has no terminal to put a question to,
+	// whatever this process's own stdin happens to be. brigd sets it: started
+	// from a shell its stdin is a terminal, but it is the daemon's terminal and
+	// not the client's, so a question asked there is asked of nobody while the
+	// caller waits for an answer that cannot arrive. See confirm.
+	NoTerminal bool
+
 	Out io.Writer
 	Err io.Writer
+
+	// Progress is where the run narrates what it is doing -- the line that says
+	// a boot has started, and nothing that anybody has to act on.
+	//
+	// Separate from Err because a caller that collects what a run said and
+	// hands it to somebody else has to be able to tell the two apart. brigd is
+	// that caller: it returns Err to the client as the request's warnings, and
+	// with the narration in there a boot that went perfectly came back carrying
+	// "starting sandbox ..." as a warning about itself. On a terminal the
+	// distinction does not arise, both being lines on the same stderr, which is
+	// why it went unnoticed for as long as the CLI was the only caller.
+	Progress io.Writer
 
 	env Env
 }
@@ -306,6 +325,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Cwd:            cwd,
 		Out:            os.Stdout,
 		Err:            os.Stderr,
+		Progress:       os.Stderr,
 		env:            env,
 	}
 	if strictErr != nil {
