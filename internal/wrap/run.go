@@ -240,14 +240,17 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// Verify before boot, not after: the point is to decide whether to run
 	// this image at all.
 	if err := c.verifyImage(); err != nil {
-		return err
+		// Tagged so a caller can map a verification refusal to its own exit code:
+		// every non-nil return from verifyImage is a refusal to boot, never an
+		// incidental error, so the whole thing is the class.
+		return &VerifyRefusedError{Err: err}
 	}
 	// And the kernel the sandbox boots, for a profile that boots a downloaded
 	// bundle rather than its own image. Checked here, beside the image, so the
 	// two refusals happen at the same point in the boot and under the same
 	// setting.
 	if err := c.verifyBootAssets(); err != nil {
-		return err
+		return &VerifyRefusedError{Err: err}
 	}
 
 	// The share below is a path, and the runtime resolves it again on its own

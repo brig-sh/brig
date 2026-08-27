@@ -102,15 +102,13 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
-		// A mistake in how the command was typed exits 2, the conventional
-		// usage-error code, kept apart from 1 so a script can tell "you asked
-		// for the wrong thing" from "it ran and failed". A run that stops and
-		// removes nothing because it was refused must not read as success.
-		var ue *usageError
-		if errors.As(err, &ue) {
-			os.Exit(2)
-		}
-		os.Exit(1)
+		// The exit status is a stable, documented set: a script can tell "you
+		// asked for the wrong thing" from "it ran and failed" from "the sandbox
+		// could not be verified" without parsing the message. exitCode owns the
+		// mapping; the README documents it. A run refused for any reason still
+		// exits non-zero, so a stop or a boot that removed or started nothing
+		// never reads as success.
+		os.Exit(exitCode(err))
 	}
 }
 
@@ -124,6 +122,16 @@ func (e *usageError) Error() string { return e.msg }
 
 // usagef builds a usageError the way fmt.Errorf builds an ordinary one.
 func usagef(format string, a ...any) error { return &usageError{fmt.Sprintf(format, a...)} }
+
+// notFoundError is a name that resolves to nothing: a profile brig does not
+// have, or a sandbox that is not there. It carries its own exit code so a
+// script can tell "no such thing" apart from a run that started and failed.
+type notFoundError struct{ msg string }
+
+func (e *notFoundError) Error() string { return e.msg }
+
+// notFoundf builds a notFoundError the way fmt.Errorf builds an ordinary one.
+func notFoundf(format string, a ...any) error { return &notFoundError{fmt.Sprintf(format, a...)} }
 
 func run(args []string) error {
 	if len(args) == 0 {
@@ -200,7 +208,7 @@ func run(args []string) error {
 			return fmt.Errorf("%s needs a profile, for example `brig %s claude`. "+
 				"`brig profiles` lists them", verb, verb)
 		}
-		return fmt.Errorf("unknown profile %q. `brig profiles` lists them", profileName)
+		return notFoundf("unknown profile %q. `brig profiles` lists them", profileName)
 	}
 	// Say why up front. Without this the pull fails against the registry
 	// with a 404 that reads like an outage rather than a decision.
@@ -1036,7 +1044,7 @@ func editProfile(args []string) error {
 	name := args[0]
 	p, ok := profile.Lookup(name)
 	if !ok {
-		return fmt.Errorf("unknown profile %q. `brig profiles` lists them", name)
+		return notFoundf("unknown profile %q. `brig profiles` lists them", name)
 	}
 	path, ok := profile.Path(p.Name)
 	if !ok {
@@ -1194,7 +1202,7 @@ func exportProfile(args []string) error {
 	}
 	p, ok := profile.Lookup(name)
 	if !ok {
-		return fmt.Errorf("unknown profile %q. `brig profiles` lists them", name)
+		return notFoundf("unknown profile %q. `brig profiles` lists them", name)
 	}
 	path, err := profile.ExportPath(dest, asJSON)
 	if err != nil {
@@ -1304,7 +1312,7 @@ func removeProfile(args []string) error {
 	// basename says nothing about which profile it serves.
 	p, ok := profile.Lookup(name)
 	if !ok {
-		return fmt.Errorf("no profile of your own named %q", name)
+		return notFoundf("no profile of your own named %q", name)
 	}
 	if _, ok := profile.Path(p.Name); !ok {
 		return fmt.Errorf("%s is a built-in profile, so there is nothing to remove. "+

@@ -28,6 +28,15 @@ import (
 // stops the day the message or type changes from silently widening the swallow.
 var ErrNoRuntime = errors.New("no runtime found on PATH")
 
+// ErrBadRuntime is the other DetectFor failure: a runtime was asked for and is
+// wrong, rather than absent. An unknown BRIG_RUNTIME, or a runtimeBin that is
+// not on disk or is not executable, wrap this. It is kept apart from
+// ErrNoRuntime because the two want different handling -- env and ls degrade
+// over ErrNoRuntime and still fail over this -- and because a caller mapping a
+// failure to an exit code treats "you have no runtime" and "the runtime you
+// named is broken" as the same class to fix, so both reach it with errors.Is.
+var ErrBadRuntime = errors.New("runtime unavailable")
+
 // Share is a host directory made visible in the guest.
 type Share struct {
 	Host  string
@@ -219,7 +228,7 @@ func DetectFor(pref Preference) (Runtime, error) {
 	case "nerdctl":
 		return newNerdctl(bin)
 	default:
-		return nil, fmt.Errorf("unknown BRIG_RUNTIME %q (want hull or nerdctl)", kind)
+		return nil, fmt.Errorf("%w: unknown BRIG_RUNTIME %q (want hull or nerdctl)", ErrBadRuntime, kind)
 	}
 }
 
@@ -240,10 +249,10 @@ func runtimeBinFromProfile(bin string) (string, error) {
 	}
 	info, err := os.Stat(bin)
 	if err != nil {
-		return "", fmt.Errorf("this profile's runtimeBin is %s, which is not there: %w", bin, err)
+		return "", fmt.Errorf("%w: this profile's runtimeBin is %s, which is not there: %w", ErrBadRuntime, bin, err)
 	}
 	if info.IsDir() || info.Mode()&0o111 == 0 {
-		return "", fmt.Errorf("this profile's runtimeBin is %s, which is not an executable", bin)
+		return "", fmt.Errorf("%w: this profile's runtimeBin is %s, which is not an executable", ErrBadRuntime, bin)
 	}
 	return bin, nil
 }
