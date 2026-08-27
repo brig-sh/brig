@@ -111,8 +111,15 @@ type Session struct {
 }
 
 func main() {
-	socket := flag.String("socket", defaultSocket(), "unix socket to listen on")
+	flagSocket := flag.String("socket", "",
+		"unix socket to listen on (default $XDG_RUNTIME_DIR/brigd.sock, or ~/.brig/brigd.sock)")
 	flag.Parse()
+
+	socket, err := chooseSocket(*flagSocket)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
+		os.Exit(1)
+	}
 
 	// The daemon builds the registry from the same sources the CLI does. It
 	// looks profiles up by name, so without this it would know only the names
@@ -122,21 +129,60 @@ func main() {
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
 	}
 
-	if err := serve(*socket); err != nil {
+	if err := serve(socket); err != nil {
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
 		os.Exit(1)
 	}
 }
 
-func defaultSocket() string {
+// maxSocketPath is the longest path the kernel will bind a unix socket to.
+//
+// bind copies the path into sun_path, a fixed array in the address struct --
+// 104 bytes on macOS, 108 on Linux -- and the last byte has to be the
+// terminator, so what fits is one less than the array. Derived from the
+// platform's own struct rather than written out, because the two numbers
+// differ and a hard-coded 104 would turn away paths Linux binds happily.
+const maxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
+
+// chooseSocket settles which socket the daemon listens on -- the --socket
+// value if one was given, the default otherwise -- and refuses a path the
+// kernel cannot bind.
+//
+// Both sources go through the same check, because the default is not
+// automatically short: XDG_RUNTIME_DIR is whatever the session manager set,
+// and a home directory can be nested anywhere.
+//
+// The check is here, where the path is chosen, rather than around the bind.
+// bind answers an over-long path with EINVAL, and net renders that as "bind:
+// invalid argument" -- which names neither the path, nor the limit, nor the
+// fact that length is what is wrong with it, so the daemon looks broken for a
+// reason that has nothing to do with it. The one thing the reader needs is the
+// three numbers, and the only place all three are known is here.
+func chooseSocket(flagValue string) (string, error) {
+	socket, source := flagValue, "--socket"
+	if socket == "" {
+		socket, source = defaultSocket()
+	}
+	if len(socket) > maxSocketPath {
+		return "", fmt.Errorf("refusing to listen on %s: a unix socket path on this system "+
+			"can be at most %d bytes and this one is %d, so the kernel would turn the bind "+
+			"away without saying why. It came from %s; give brigd a shorter path with "+
+			"--socket", socket, maxSocketPath, len(socket), source)
+	}
+	return socket, nil
+}
+
+// defaultSocket is the socket brigd picks when it is not told one, and where
+// that choice came from.
+func defaultSocket() (string, string) {
 	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return filepath.Join(dir, "brigd.sock")
+		return filepath.Join(dir, "brigd.sock"), "XDG_RUNTIME_DIR"
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".brig", "brigd.sock")
+	return filepath.Join(home, ".brig", "brigd.sock"), "your home directory"
 }
 
 // lockSocket takes the exclusive lock that makes this process the daemon for

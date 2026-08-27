@@ -90,7 +90,9 @@ func ask(t *testing.T, socket, request string) Response {
 // limit. t.TempDir puts the test's own name in the path, and on macOS that
 // lands the socket past 104 bytes, where bind fails with "invalid argument"
 // and the daemon looks broken for a reason that has nothing to do with it.
-// See #80 for the daemon-side check that should name this limit.
+//
+// chooseSocket now refuses such a path by name, but refusing it is not binding
+// it: a test that wants a listener still needs one that fits.
 func shortDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "brigd")
