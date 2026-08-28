@@ -51,6 +51,8 @@ usage:
                                                  if a declared secret is missing
   brig profiles                                  list the profiles
   brig profile ls|export|import|edit|rm          manage profiles
+  brig policies                                  list the policies
+  brig policy ls|create|edit|show|rm             manage policies
   brig export <profile> [name] [--json]          print a profile, or save it
                                                  as <name> in the profile dir
   brig secret create|read|update|delete|ls       keep secrets in your keyring
@@ -158,6 +160,10 @@ func run(args []string) error {
 		return listProfiles()
 	case "profile":
 		return profileCmd(rest)
+	case "policies":
+		return listPolicies()
+	case "policy":
+		return policyCmd(rest)
 	case "secret":
 		return secretCmd(os.Stdout, rest)
 	case "telemetry":
