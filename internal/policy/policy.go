@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net"
 	"unicode"
+
+	"sigs.k8s.io/yaml"
 )
 
 // APIVersion is the only apiVersion a Policy document may declare. Parse
@@ -61,11 +63,8 @@ func (p Policy) Validate() error {
 	if p.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	// Name has to be safe as a bare word in a shell command and in a file
-	// path.
-	if !safeName(p.Name) {
-		return fmt.Errorf("name %q may use only lowercase letters, digits, dot, "+
-			"dash and underscore, and must start with a letter or digit", p.Name)
+	if err := CheckName(p.Name); err != nil {
+		return err
 	}
 	switch p.Egress.Default {
 	case "allow", "deny":
@@ -107,6 +106,29 @@ func (r Rule) validate() error {
 		if unicode.IsSpace(c) || unicode.IsControl(c) {
 			return fmt.Errorf("host %q contains whitespace or a control character", r.Host)
 		}
+	}
+	return nil
+}
+
+// CheckName reports whether name is safe to use as a policy name -- a bare
+// word in a shell command and in a file path -- rather than the reason it is
+// not. Exported so a command that builds a path from a name before a
+// document exists to validate (create, for one) can reject a bad one before
+// touching the filesystem.
+func CheckName(name string) error {
+	if !safeName(name) {
+		return fmt.Errorf("name %q may use only lowercase letters, digits, dot, "+
+			"dash and underscore, and must start with a letter or digit", name)
+	}
+	// safeName's charset still permits YAML's bare true/false/null/number
+	// words, which decode to that type instead of back to this string.
+	var decoded any
+	if err := yaml.Unmarshal([]byte(name), &decoded); err != nil {
+		return fmt.Errorf("name %q does not read back as itself in YAML: %w", name, err)
+	}
+	if decoded != name {
+		return fmt.Errorf("name %q reads as %#v when written unquoted in YAML, not as itself; "+
+			"pick a different name", name, decoded)
 	}
 	return nil
 }

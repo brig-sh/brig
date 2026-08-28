@@ -98,3 +98,46 @@ func TestValidatePolicyDoesNotJudgeGlobShape(t *testing.T) {
 		}
 	}
 }
+
+// CheckName is exported so a caller building a path from a name -- before
+// any document exists to run Validate against -- can reject an unsafe one
+// first. A name that would escape the directory it is joined into is
+// exactly the case that matters.
+func TestCheckName(t *testing.T) {
+	for _, name := range []string{"no-net", "a", "a.b-c_d", "9lives"} {
+		if err := CheckName(name); err != nil {
+			t.Errorf("CheckName(%q) = %v, want nil", name, err)
+		}
+	}
+	for _, name := range []string{"", "No-Net", "-no-net", "../escape", "a/b", "."} {
+		if err := CheckName(name); err == nil {
+			t.Errorf("CheckName(%q) = nil, want an error", name)
+		}
+	}
+}
+
+// Every string here is inside safeName's own charset, and fails only
+// because YAML resolves the whole token to a bool, null, or a number.
+func TestCheckNameRefusesAmbiguousNames(t *testing.T) {
+	ambiguous := []string{
+		"no", "yes", "true", "false", "on", "off", "null", // bare booleans and null
+		"123", "007", "00", "-0", // plain integers
+		"1.5", "0.0", "3.14", "1e10", // floats and exponents
+		"0x10", "0o17", "0b101", // hex, octal and binary
+		"1_000",  // digit-group separator
+		"y", "n", // single-letter booleans, distinct from yes/no
+	}
+	for _, name := range ambiguous {
+		if err := CheckName(name); err == nil {
+			t.Errorf("CheckName(%q) = nil, want an error: YAML reads this as something else", name)
+		}
+	}
+	// Only a whole-token match resolves this way. A word merely containing
+	// one of the above, or a date-shaped name, is read back as itself.
+	unambiguous := []string{"no-net", "yes-please", "off-hours", "0x10-backup", "2024-01-01"}
+	for _, name := range unambiguous {
+		if err := CheckName(name); err != nil {
+			t.Errorf("CheckName(%q) = %v, want nil", name, err)
+		}
+	}
+}
