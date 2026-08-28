@@ -124,6 +124,8 @@ separate Linux re-implementation of it.
 | `brig info <agent>` | the boundary a run would trust -- sandbox, workspace, image, credentials **by name only** -- and whether the guest will be authenticated (`brig env` is the old spelling) |
 | `brig profiles` | the profiles, their images, and what each one refuses to forward |
 | `brig profile ls\|export\|import\|edit\|rm` | manage profiles (`brig export` is the short form of `brig profile export`). `export --json` for JSON instead of YAML |
+| `brig policies` | every policy that parses, by name and description |
+| `brig policy ls\|create\|edit\|show\|rm` | manage policies. `show --json` for JSON instead of YAML |
 | `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring. macOS only for now |
 | `brig secret import <profile>` | fill that profile's secrets from your host, once. macOS only for now |
 | `brig telemetry status\|on\|off` | report what is counted, or turn the counting on or off. See [Telemetry](#telemetry) |
@@ -504,6 +506,7 @@ The README is the overview. The details live in [docs/](docs/):
 - [quickstart.md](docs/quickstart.md) -- from install to a running agent, one page
 - [troubleshooting.md](docs/troubleshooting.md) -- when a run fails, organised by what you saw
 - [profiles.md](docs/profiles.md) -- writing an agent profile, field by field
+- [policies.md](docs/policies.md) -- writing an egress policy, verb by verb, with a worked example
 - [secrets.md](docs/secrets.md) -- `brig secret`, verb by verb, with a worked example
 - [security.md](docs/security.md) -- what the boundary is, and what it is not
 - [non-goals.md](docs/non-goals.md) -- what brig will not do, with the reason

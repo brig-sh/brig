@@ -1,0 +1,219 @@
+# Writing an egress policy
+
+A policy is a named YAML (or JSON) document declaring what an agent may
+reach outbound: a default of `allow` or `deny`, plus `host` or `cidr`
+exceptions on either side. `brig policy create` writes a starter and opens
+it in your editor, the same way `brig profile edit` does:
+
+```bash
+brig policy create no-net   # writes ~/.config/brig/policies/no-net.yaml
+brig policy edit no-net     # change the rules
+```
+
+**This page is about the document and the commands that manage it.**
+Attaching a policy to a profile or a session, and anything actually
+enforcing it, is not built yet -- see
+[What this does not do yet](#what-this-does-not-do-yet).
+
+## Where policies live
+
+One file per policy in `$XDG_CONFIG_HOME/brig/policies`, default
+`~/.config/brig/policies`, flat: `~/.config/brig/policies/no-net.yaml`.
+`BRIG_POLICY_DIR` overrides the location outright, taken as given -- unlike
+`$XDG_CONFIG_HOME`, an explicit override is not second-guessed for
+absoluteness. This follows the
+[XDG Base Directory Specification, version 0.8](https://specifications.freedesktop.org/basedir/latest/):
+an empty or relative `$XDG_CONFIG_HOME` counts as unset.
+
+The directory starts empty, and brig never writes there unless you ask it
+to. `brig policy create` and `brig policy edit` are the only commands that
+write to it.
+
+`name:` inside the file wins over the filename, the same rule a profile
+already follows -- a file need not be named after the policy it declares,
+though `create` always names them the same way. A directory can hold any
+number of policies, and one file that fails to parse does not stop the
+others from loading: `brig policies` reports it on stderr and lists
+everything that did load. Two files declaring the same name is a mistake
+with no winner worth having, and is reported the same way.
+
+## The document
+
+A complete example:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+name: no-net
+desc: only Anthropic's API and one internal range
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+    - cidr: 10.0.0.0/8
+```
+
+| field | required | what it is |
+| --- | --- | --- |
+| `apiVersion` | yes | Pins the document shape. `brig.sh/v1alpha1` is the only value this build knows; anything else is refused rather than guessed at |
+| `name` | yes | The policy's identifier. Wins over the filename, and follows the same character rule as a profile name -- see [Naming a policy](#naming-a-policy) |
+| `desc` | no | One line, shown by `brig policies` |
+| `egress.default` | yes | `allow` or `deny`, applied to any traffic neither list below names |
+| `egress.allow` | no | Exceptions to a `deny` default |
+| `egress.deny` | no | Always wins over `allow` and over `default`: a host named here is refused regardless, and no other settings source restores it |
+
+Each entry in `allow` or `deny` names exactly one of `host:` or `cidr:` --
+both, or neither, is refused. `host:` is a domain, or a glob such as
+`"*.githubusercontent.com"`; `cidr:` is a network range such as
+`10.0.0.0/8`, checked with Go's own `net.ParseCIDR`, so a typo like
+`10.0.0/8` (an octet short) is refused rather than accepted and silently
+doing nothing once something enforces it.
+
+`host:` is not held to a pinned glob grammar yet -- which wildcard forms an
+eventual enforcer honours is enforcer-specific, and this document format is
+deliberately independent of that question (see the intro above). A host is
+refused only for what is unambiguously wrong however it ends up read:
+whitespace or a control character.
+
+Parsing is strict throughout: a field this format does not recognise --
+`engine:`, `mode:`, a plain typo like `dsc:` -- fails to parse rather than
+being silently dropped. The format carries no field naming how a rule gets
+applied; that is a deliberate limit, not an oversight, and stays that way as
+this feature grows.
+
+## Naming a policy
+
+The same character rule a profile name already follows: lowercase letters,
+digits, dot, dash and underscore, starting with a letter or digit. It is
+checked before a path is built from it, so a bad name never gets as far as
+touching disk.
+
+One rule is particular to policies. A bare word like `no`, `true` or `123`
+is inside that character set, but YAML reads an *unquoted* one of those as a
+boolean or a number rather than as the string you typed -- so a policy named
+`no` would actually be named `false`, unreachable by the name you gave it.
+`brig policy create` checks a name by writing it the way the starter
+template would and reading it back, and refuses one that does not come back
+as itself:
+
+```console
+$ brig policy create no
+brig: name "no" reads as false when written unquoted in YAML, not as itself; pick a different name
+```
+
+## The five verbs
+
+| verb | what it does |
+| --- | --- |
+| `brig policies` | every policy that parses, by name and description |
+| `brig policy ls` | same (parity with `brig profiles` / `brig profile ls`) |
+| `brig policy create <name>` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
+| `brig policy edit <name>` | open an existing one, and only replace it if the save still parses and validates |
+| `brig policy show <name> [--json]` | print the parsed document |
+| `brig policy rm <name>` | delete it. With no attachment concept yet, there is nothing else to check first |
+
+`create` refuses to overwrite a file that is already at the target path,
+unless you pass `--force`. It refuses a name already taken by some *other*
+file regardless of `--force` -- forcing would only leave two files
+declaring the same name, which is the thing this check exists to prevent.
+
+`edit` never touches the real file until the new content is known to be
+good: it opens a scratch copy, and only if that copy still parses and
+validates does it replace the original -- via a temp file and a rename in
+the same directory, so a crash or a full disk mid-write cannot leave the
+real file half written. A save that does not validate leaves the real file
+untouched and says where your edit still is, so it is not lost, only not
+yet saved:
+
+```console
+$ brig policy edit no-net
+brig: not saved, /home/you/.config/brig/policies/no-net.yaml is unchanged: cidr "10.0.0/8" is not a valid CIDR: invalid CIDR address: 10.0.0/8
+your edit is still at /tmp/brig-policy-edit-2427992151.yaml
+```
+
+## A worked example
+
+Starting from nothing:
+
+```console
+$ brig policies
+no policies yet; your own live in /home/you/.config/brig/policies
+brig policy create <name> writes a starter one
+```
+
+Create one. The starter opens in your editor; here it has already been
+filled in:
+
+```console
+$ brig policy create no-net
+/home/you/.config/brig/policies/no-net.yaml created
+$ brig policies
+no-net          only Anthropic's API and one internal range
+```
+
+Show it, as YAML or as JSON:
+
+```console
+$ brig policy show no-net
+apiVersion: brig.sh/v1alpha1
+desc: only Anthropic's API and one internal range
+egress:
+  allow:
+  - host: api.anthropic.com
+  - cidr: 10.0.0.0/8
+  default: deny
+name: no-net
+$ brig policy show no-net --json
+{
+  "apiVersion": "brig.sh/v1alpha1",
+  "name": "no-net",
+  "desc": "only Anthropic's API and one internal range",
+  "egress": {
+    "default": "deny",
+    "allow": [
+      { "host": "api.anthropic.com" },
+      { "cidr": "10.0.0.0/8" }
+    ]
+  }
+}
+```
+
+`show` prints the parsed document back out, not the file verbatim, which is
+why the field order differs from what you typed -- YAML's own marshalling
+sorts keys, the same way `brig profile export --json` does.
+
+Edit it, and remove it:
+
+```console
+$ brig policy edit no-net
+/home/you/.config/brig/policies/no-net.yaml updated
+$ brig policy rm no-net
+removed /home/you/.config/brig/policies/no-net.yaml
+```
+
+## Errors you are likely to meet
+
+| what brig says | what happened |
+| --- | --- |
+| ``unknown policy "x". `brig policies` lists them`` | `show`, `edit` or `rm` on a name that is not there |
+| `name "x" may use only lowercase letters, digits, dot, dash and underscore, and must start with a letter or digit` | see [Naming a policy](#naming-a-policy) |
+| `name "x" reads as false when written unquoted in YAML, not as itself; pick a different name` | the name is a bare YAML boolean, null or number word -- see [Naming a policy](#naming-a-policy) |
+| `<path> already exists. Edit it directly with brig policy edit x, or pass --force to replace it with a fresh starter` | `create` on a name whose file is already there |
+| `policy "x" already exists, declared in <path>. Edit it directly with brig policy edit x, or remove that file first` | `create` on a name a *different* file already declares. `--force` does not help here |
+| `a rule needs host: or cidr:` | a rule in `allow:`/`deny:` named neither |
+| `a rule takes host: or cidr:, not both …` | a rule named both |
+| `cidr "x" is not a valid CIDR: …` | a typo in a `cidr:` value, such as a missing octet |
+| `host "x" contains whitespace or a control character` | a `host:` value that cannot be a domain or glob under any grammar |
+| `apiVersion is required, and must be "brig.sh/v1alpha1"` | a document with no `apiVersion:`, or the wrong one |
+| `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate. The real file is untouched; the error names where your edit still is |
+
+## What this does not do yet
+
+This release ships the document format and the five commands above --
+nothing that reads a policy's rules and acts on them. `brig policy attach`,
+a policy bound to a profile or a session, `brig policy check`, and a boot
+that refuses an unenforceable rule are not built. Nothing today makes an
+agent's outbound traffic actually respect a policy you write.
+
+[docs/security.md](security.md#things-brig-does-not-claim) states this
+directly: brig does not sandbox the agent from the network, and outbound
+traffic from the guest is whatever the runtime allows.
