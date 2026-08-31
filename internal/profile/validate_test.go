@@ -50,6 +50,20 @@ func TestPolicyNameRejectsUnsafeCharacters(t *testing.T) {
 	}
 }
 
+// A shell or gui profile has no agent to hook an egress rule into --
+// `brig policy attach` enforces this, and an inline policy: list has to be
+// held to the same rule, or importing a profile is a way around it.
+func TestPolicyOnAShellOrGUIProfileIsRejected(t *testing.T) {
+	shell := bindingBase + "kind: shell\npolicy: [no-net]\n"
+	if _, err := Parse([]byte(shell)); err == nil {
+		t.Error("policy: on a kind: shell profile was accepted")
+	}
+	gui := bindingBase + "kind: gui\npolicy: [no-net]\n"
+	if _, err := Parse([]byte(gui)); err == nil {
+		t.Error("policy: on a kind: gui profile was accepted")
+	}
+}
+
 // A malformed ref is caught at parse time, so nothing downstream has to decide
 // what to do with one.
 func TestMalformedRefIsRejectedAtParse(t *testing.T) {

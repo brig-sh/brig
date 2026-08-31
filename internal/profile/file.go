@@ -184,6 +184,18 @@ func (p Profile) Validate() error {
 				"dash and underscore, and must start with a letter or digit", name)
 		}
 	}
+	// A shell or gui profile has no agent to hook an egress rule into --
+	// the same rule `brig policy attach` enforces via policy.CheckCoverage,
+	// repeated here (rather than called, which would import-cycle back into
+	// this package) so an inline policy: list is held to it too.
+	if len(p.Policy) > 0 {
+		switch {
+		case p.IsShell():
+			return fmt.Errorf("kind: shell has no agent to hook an egress rule into, so it cannot list policy: %s", p.Policy[0])
+		case p.IsGUI():
+			return fmt.Errorf("kind: gui has no agent to hook an egress rule into, so it cannot list policy: %s", p.Policy[0])
+		}
+	}
 	return nil
 }
 
