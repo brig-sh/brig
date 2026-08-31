@@ -112,6 +112,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy rm <name> [--force]` | delete it. Refuses one that is bound to anything -- inline, or attached -- unless `--force` |
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or -- with `-n` -- to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
+| `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session), and whether brig can enforce anything against it at all |
 
 `create` refuses to overwrite a file that is already at the target path,
 unless you pass `--force`. It refuses a name already taken by some *other*
@@ -139,6 +140,30 @@ never `attach`'s to add, so it is not `detach`'s to remove. Edit the
 profile's `policy:` list directly instead. A `-n` detach is unaffected --
 inline binds every run, `-n` narrows to one session, and the two do not
 name the same binding.
+
+`check` resolves the same union `attach`/`detach` write to -- inline,
+profile-level, session-level -- for one profile (or, with `-n`, one of its
+sessions), lists what applies, and runs the same `CheckCoverage` refusal
+`attach` does. It does not check anything about the rules those policies
+contain (see [What this does not do yet](#what-this-does-not-do-yet)):
+the only two things it can fail over are a `kind: shell`/`kind: gui`
+profile, which nothing could ever enforce against no matter what is
+bound, and a name bound to nothing -- `--force` on `rm`, or on this
+edit's rename check, can leave one behind, and `check` refuses to call
+that enforceable:
+
+```console
+$ brig policy check claude-code
+no-net
+$ brig policy check ubuntu
+no policy applies to ubuntu
+brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
+$ brig policy rm no-net --force
+removed /home/you/.config/brig/policies/no-net.yaml
+$ brig policy check claude-code
+no-net (no such policy)
+brig: claude-code is bound to no-net, which does not exist as a policy -- nothing can enforce what is not there
+```
 
 `brig policy ls` prints what binds a policy right under it, when anything
 does -- an inline `policy:` entry, a profile-level attach, or
@@ -277,8 +302,10 @@ removed /home/you/.config/brig/policies/no-net.yaml
 | `host "x" contains whitespace or a control character` | a `host:` value that cannot be a domain or glob under any grammar |
 | `apiVersion is required, and must be "brig.sh/v1alpha1"` | a document with no `apiVersion:`, or the wrong one |
 | `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate, or renamed a name that is bound to something, without `--force`. The real file is untouched; the error names where your edit still is |
-| ``unknown profile "x". `brig profiles` lists them`` | `attach` or `detach` naming a profile that is not there |
+| ``unknown profile "x". `brig profiles` lists them`` | `attach`, `detach` or `check` naming a profile that is not there |
 | `cannot attach x to y: y is kind: shell, which has no agent to hook an egress rule into. Nothing was written` | `attach` to a `kind: shell` or `kind: gui` profile |
+| `cannot enforce any policy on x: x is kind: shell, which has no agent to hook an egress rule into` | `check` on a `kind: shell` or `kind: gui` profile |
+| `x is bound to y, which does not exist as a policy -- nothing can enforce what is not there` | `check` on a profile bound to a name `--force` on `rm` or a rename left with no policy behind it |
 | `x is already declared inline in y's policy: list, which binds every run already. Nothing was written` | `attach` naming a policy the profile's own `policy:` list already declares |
 | `x is declared inline in y's policy: list, not attached; edit the profile directly to remove it` | `detach` naming a policy the profile's own `policy:` list declares, without `-n` |
 | `x is bound to y. Detach it first, or pass --force to remove it anyway` | `rm` on a policy attached to a profile or a session (a policy declared only inline says "edit the profile's policy: list" instead) |
@@ -287,11 +314,12 @@ removed /home/you/.config/brig/policies/no-net.yaml
 
 This release ships the document format, the commands above, and a record of
 what is bound to what -- nothing that reads a policy's rules at boot or
-runtime and acts on them. `attach` only refuses a binding brig already
-knows it cannot enforce (a `kind: shell`/`kind: gui` profile); it does not
-check anything beyond that, `brig policy check` does not exist, and a boot
-does not yet refuse to start over an unenforceable rule. Nothing today
-makes an agent's outbound traffic actually respect a policy you write.
+runtime and acts on them. `attach` and `check` only refuse what brig
+already knows it cannot enforce at all (a `kind: shell`/`kind: gui`
+profile); neither checks anything about the rules a policy actually
+contains, and a boot does not yet refuse to start over an unenforceable
+one. Nothing today makes an agent's outbound traffic actually respect a
+policy you write.
 
 [docs/security.md](security.md#things-brig-does-not-claim) states this
 directly: brig does not sandbox the agent from the network, and outbound

@@ -29,13 +29,14 @@ usage:
   brig policy rm <name> [--force]                   delete it
   brig policy attach <policy> <profile> [-n NAME]   bind it to a profile, or one session
   brig policy detach <policy> <profile> [-n NAME]   reverse an attach
+  brig policy check <profile> [-n NAME]             what is bound, and whether it can enforce anything
 
 flags:
   -f, --force   with create: replace a file already there
                 with edit: save a rename that would orphan a binding
                 with rm: delete one that is bound to something
       --json    with show: render JSON rather than YAML
-  -n, --name    with attach/detach: one session by name, not every run
+  -n, --name    with attach/detach/check: one session by name, not every run
 
 A policy is a named document declaring what an agent may reach outbound.
 attach binds it to a profile's every run, or -- with -n -- to one session;
@@ -45,7 +46,7 @@ a profile's own inline policy: field does the same without a separate attach.
 // policyCmd groups the policy verbs.
 func policyCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("policy needs a subcommand: ls, create, edit, show, rm, attach or detach")
+		return errors.New("policy needs a subcommand: ls, create, edit, show, rm, attach, detach or check")
 	}
 	var err error
 	switch args[0] {
@@ -71,8 +72,10 @@ func policyCmd(args []string) error {
 		err = attachPolicy(args[1:])
 	case "detach":
 		err = detachPolicy(args[1:])
+	case "check":
+		err = checkPolicy(args[1:])
 	default:
-		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach)", args[0])
+		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach, check)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how
 	// the flag package says it. Asking for help is not a mistake, so it is
@@ -563,6 +566,25 @@ func readPolicyFile(path string) (policy.Policy, error) {
 	return policy.Parse(blob)
 }
 
+// sessionGivenEmpty reports whether -n or --name was given on the command
+// line, registered on fs, with an empty value -- `-n ""`, or `-n
+// "$SESSION"` with an unset $SESSION. That is not the same as -n omitted,
+// and must not be read as one: silently falling through to the
+// profile-wide (or whole-profile check) path below would attach, detach
+// or check far more than a caller asking for one session meant.
+func sessionGivenEmpty(fs *flag.FlagSet, session string) bool {
+	if session != "" {
+		return false
+	}
+	given := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "n" || f.Name == "name" {
+			given = true
+		}
+	})
+	return given
+}
+
 // parseAttachArgs pulls a policy name, a profile name, and an optional -n
 // session out of args.
 func parseAttachArgs(verb string, args []string) (policyName, profileName, session string, err error) {
@@ -573,17 +595,7 @@ func parseAttachArgs(verb string, args []string) (policyName, profileName, sessi
 	if err != nil {
 		return "", "", "", err
 	}
-	// -n given but empty (`-n ""`, or `-n "$SESSION"` with an unset
-	// $SESSION) is not the same as -n omitted, and must not be read as
-	// one: silently falling through to the profile-wide bind below would
-	// attach or detach far more than a caller asking for one session meant.
-	nameGiven := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "n" || f.Name == "name" {
-			nameGiven = true
-		}
-	})
-	if nameGiven && session == "" {
+	if sessionGivenEmpty(fs, session) {
 		return "", "", "", fmt.Errorf("policy %s -n/--name needs a value", verb)
 	}
 	if len(words) < 2 {
@@ -692,4 +704,76 @@ func detachPolicy(args []string) error {
 	}
 	fmt.Printf("detached %s from %s\n", policyName, describe)
 	return a.Save(dir)
+}
+
+// parseCheckArgs pulls a profile name and an optional -n session out of
+// args.
+func parseCheckArgs(args []string) (profileName, session string, err error) {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs.StringVar(&session, "n", "", "")
+	fs.StringVar(&session, "name", "", "")
+	words, err := parseWords("check", "-n/--name", fs, args)
+	if err != nil {
+		return "", "", err
+	}
+	if sessionGivenEmpty(fs, session) {
+		return "", "", errors.New("policy check -n/--name needs a value")
+	}
+	if len(words) == 0 {
+		return "", "", errors.New("policy check needs a profile, for example `brig policy check claude-code`")
+	}
+	if len(words) > 1 {
+		return "", "", fmt.Errorf("policy check takes one profile, not %q", words[1])
+	}
+	return words[0], session, nil
+}
+
+// checkPolicy reports the policies effectively bound to a run of profile,
+// or -- with -n -- to one of its sessions, and whether brig can enforce
+// anything against it at all.
+//
+// This does not check anything about the rules those policies contain:
+// nothing today judges whether a specific host: or cidr: entry can be
+// enforced (see docs/policies.md, "What this does not do yet"). What it
+// does check is that a bound name still resolves to a policy at all --
+// --force on rm or on edit's rename can leave one that does not -- and
+// CheckCoverage's refusal of a kind: shell/kind: gui profile, which no
+// policy can bind regardless of what it says.
+func checkPolicy(args []string) error {
+	profileName, session, err := parseCheckArgs(args)
+	if err != nil {
+		return err
+	}
+	p, ok := profile.Lookup(profileName)
+	if !ok {
+		return notFoundf("unknown profile %q. `brig profiles` lists them", profileName)
+	}
+	names, err := policy.EffectivePolicies(p, session, policy.Dir())
+	if err != nil {
+		return err
+	}
+	entries, err := loadPolicies(policy.Dir())
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		fmt.Printf("no policy applies to %s\n", p.Name)
+	}
+	var missing []string
+	for _, name := range names {
+		if _, ok := entries[name]; ok {
+			fmt.Println(name)
+			continue
+		}
+		fmt.Printf("%s (no such policy)\n", name)
+		missing = append(missing, name)
+	}
+	if err := policy.CheckCoverage(p); err != nil {
+		return fmt.Errorf("cannot enforce any policy on %s: %w", p.Name, err)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%s is bound to %s, which does not exist as a policy -- "+
+			"nothing can enforce what is not there", p.Name, strings.Join(missing, ", "))
+	}
+	return nil
 }

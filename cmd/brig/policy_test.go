@@ -1430,3 +1430,121 @@ func TestPolicyCmdPrintsUsageForHelp(t *testing.T) {
 		t.Errorf("a verb's own -h did not print usage: %q", out)
 	}
 }
+
+// --force on rm (or on edit's rename check) can leave a name bound with no
+// policy behind it -- nothing can enforce what is not there, so check must
+// not report it as something that applies and exit 0.
+func TestCheckFailsWhenABoundPolicyDoesNotExist(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := removePolicy([]string{"no-net", "--force"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+	if err == nil {
+		t.Fatal("check accepted a binding to a policy that no longer exists")
+	}
+	if !strings.Contains(err.Error(), "no-net") || !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("the error does not say what is missing: %v", err)
+	}
+	if !strings.Contains(out, "no such policy") {
+		t.Errorf("check did not mark the missing name in its listing: %q", out)
+	}
+}
+
+func TestCheckListsTheEffectivePolicies(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+	if err != nil {
+		t.Fatalf("check failed: %v", err)
+	}
+	if !strings.Contains(out, "no-net") {
+		t.Errorf("check did not list the attached policy: %q", out)
+	}
+}
+
+// -n narrows to one session's effective set -- the profile-level policy
+// above must not leak into a check for a profile that never got it, and a
+// session-only attach must show up only with -n.
+func TestCheckWithNameChecksOnlyThatSession(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "work"}); err != nil {
+		t.Fatal(err)
+	}
+
+	without, err := captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(without, "no policy applies") {
+		t.Errorf("check without -n saw the session-only attach: %q", without)
+	}
+
+	with, err := captureStdout(t, func() error { return checkPolicy([]string{"claude-code", "-n", "work"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(with, "no-net") {
+		t.Errorf("check -n work did not see the session attach: %q", with)
+	}
+}
+
+func TestCheckFailsOnAShellProfile(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	loadTestProfiles(t)
+
+	err := checkPolicy([]string{"ubuntu"})
+	if err == nil {
+		t.Fatal("check on a shell profile was accepted")
+	}
+	if !strings.Contains(err.Error(), "shell") {
+		t.Errorf("the error does not say why: %v", err)
+	}
+}
+
+func TestCheckUnknownProfile(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	loadTestProfiles(t)
+
+	err := checkPolicy([]string{"ghost"})
+	if err == nil || !strings.Contains(err.Error(), "unknown profile") {
+		t.Errorf("wrong error for an unknown profile: %v", err)
+	}
+	if got := exitCode(err); got != exitNotFound {
+		t.Errorf("exitCode = %d, want %d (exitNotFound)", got, exitNotFound)
+	}
+}
+
+func TestCheckRejectsAnEmptySessionName(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	loadTestProfiles(t)
+
+	err := checkPolicy([]string{"claude-code", "-n", ""})
+	if err == nil {
+		t.Error("check with an empty -n value was accepted")
+	}
+}
+
+func TestCheckCmdDispatch(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	loadTestProfiles(t)
+	if err := policyCmd([]string{"check", "claude-code"}); err != nil {
+		t.Errorf("policy check dispatch failed: %v", err)
+	}
+}
