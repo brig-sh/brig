@@ -695,6 +695,107 @@ func TestEditPolicyAllowsARenameToAFreeName(t *testing.T) {
 	}
 }
 
+// A rename leaves whatever attach bound to the old name pointing at a
+// name this file no longer declares -- edit refuses it, the same way rm
+// refuses to delete a bound policy outright.
+func TestEditPolicyRefusesARenameThatWouldOrphanAnAttachment(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	path := writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	stubEditor(t, `sed -i.bak 's/^name: no-net$/name: totally-new/' "$1"`)
+
+	err := editPolicy([]string{"no-net"})
+	if err == nil {
+		t.Fatal("a rename that would orphan an attachment was accepted")
+	}
+	if !strings.Contains(err.Error(), "claude-code") {
+		t.Errorf("the error does not name what is bound to the old name: %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(after), "name: no-net") {
+		t.Errorf("the file was renamed despite the refusal:\n%s", after)
+	}
+}
+
+// --force renames it anyway, leaving the (now dangling) attachment in
+// place -- the same trade edit's --force already makes for other checks.
+func TestEditPolicyForceRenamesAnAttachedPolicy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	path := writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	stubEditor(t, `sed -i.bak 's/^name: no-net$/name: totally-new/' "$1"`)
+
+	if err := editPolicy([]string{"no-net", "--force"}); err != nil {
+		t.Fatalf("--force still refused the rename: %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(after), "name: totally-new") {
+		t.Errorf("the rename did not save:\n%s", after)
+	}
+}
+
+// The same refusal applies to a name declared only inline: renaming it
+// away leaves the profile's own policy: entry pointing at nothing.
+func TestEditPolicyRefusesARenameThatWouldOrphanAnInlineDeclaration(t *testing.T) {
+	policyDir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", policyDir)
+	writePolicyFile(t, policyDir, "no-net", noNetBody)
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: mytool
+image: ghcr.io/brig-sh/mytool:latest
+guestHome: /home/mytool
+binary: mytool
+mem: 1024
+cpus: 1
+policy: [no-net]
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	stubEditor(t, `sed -i.bak 's/^name: no-net$/name: totally-new/' "$1"`)
+
+	err := editPolicy([]string{"no-net"})
+	if err == nil {
+		t.Fatal("a rename that would orphan an inline declaration was accepted")
+	}
+	if !strings.Contains(err.Error(), "mytool (inline)") {
+		t.Errorf("the error does not say it is declared inline: %v", err)
+	}
+}
+
+// Renaming to a different name is not the only kind of save -- one that
+// keeps the same name (a rule change, a desc: edit) must not even ask
+// whether anything is bound, since the file the binding points at is
+// still right here either way.
+func TestEditPolicyDoesNotCheckAttachmentsWhenTheNameIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	stubEditor(t, `sed -i.bak 's/^desc:.*$/desc: updated/' "$1"`)
+
+	if err := editPolicy([]string{"no-net"}); err != nil {
+		t.Fatalf("an edit that keeps the same name was refused: %v", err)
+	}
+}
+
 func TestEditUnknownPolicy(t *testing.T) {
 	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
 	err := editPolicy([]string{"ghost"})
@@ -716,11 +817,193 @@ func TestRemovePolicyDeletesTheFile(t *testing.T) {
 	}
 }
 
+// A policy attach has bound to a profile would leave attachments.yaml
+// naming a policy that no longer resolves to anything -- rm refuses that,
+// unless --force, and removes nothing either way until it decides.
+func TestRemovePolicyRefusesOneAttachedToAProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	path := writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removePolicy([]string{"no-net"})
+	if err == nil {
+		t.Fatal("rm of an attached policy was accepted")
+	}
+	if !strings.Contains(err.Error(), "bound to") || !strings.Contains(err.Error(), "claude-code") {
+		t.Errorf("the error does not say what it is bound to: %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("the file was removed despite the refusal: %v", statErr)
+	}
+}
+
+// The same refusal applies to a session-level attach, described the same
+// way attach and brig policies already print it.
+func TestRemovePolicyRefusesOneAttachedToASession(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "work"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removePolicy([]string{"no-net"})
+	if err == nil || !strings.Contains(err.Error(), "claude-code -n work") {
+		t.Errorf("wrong error for a session-attached policy: %v", err)
+	}
+}
+
+// --force removes it anyway, leaving the (now dangling) attachment in
+// place: rm's job is the file, not attachments.yaml.
+func TestRemovePolicyForceRemovesAnAttachedPolicy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	path := writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removePolicy([]string{"no-net", "--force"}); err != nil {
+		t.Fatalf("--force still refused: %v", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Error("the file is still there")
+	}
+}
+
+// Deleting the file would leave the profile's own policy: entry pointing
+// at nothing, exactly the dangling reference this check exists to
+// prevent -- attach never having touched attachments.yaml here changes
+// nothing about that.
+func TestRemovePolicyRefusesOneDeclaredInline(t *testing.T) {
+	policyDir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", policyDir)
+	path := writePolicyFile(t, policyDir, "no-net", noNetBody)
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: mytool
+image: ghcr.io/brig-sh/mytool:latest
+guestHome: /home/mytool
+binary: mytool
+mem: 1024
+cpus: 1
+policy: [no-net]
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removePolicy([]string{"no-net"})
+	if err == nil {
+		t.Fatal("rm of an inline-declared policy was accepted")
+	}
+	if !strings.Contains(err.Error(), "mytool (inline)") {
+		t.Errorf("the error does not say it is declared inline: %v", err)
+	}
+	// detach explicitly refuses to touch an inline entry (see
+	// TestDetachRefusesAnInlineDeclaredPolicy), so telling the user to
+	// "detach it" here would send them in a circle.
+	if strings.Contains(err.Error(), "Detach it") {
+		t.Errorf("the error tells the user to detach something detach refuses to touch: %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("the file was removed despite the refusal: %v", statErr)
+	}
+
+	if err := removePolicy([]string{"no-net", "--force"}); err != nil {
+		t.Fatalf("--force still refused: %v", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Error("the file is still there")
+	}
+}
+
+// A policy that is both declared inline and attached needs both kinds of
+// guidance, not just one: "detach it" alone would leave the inline entry
+// unmentioned, and vice versa.
+func TestRemovePolicyGivesBothKindsOfGuidanceWhenBothApply(t *testing.T) {
+	policyDir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", policyDir)
+	writePolicyFile(t, policyDir, "no-net", noNetBody)
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: mytool
+image: ghcr.io/brig-sh/mytool:latest
+guestHome: /home/mytool
+binary: mytool
+mem: 1024
+cpus: 1
+policy: [no-net]
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removePolicy([]string{"no-net"})
+	if err == nil {
+		t.Fatal("rm of a policy that is both inline and attached was accepted")
+	}
+	if !strings.Contains(err.Error(), "Detach it and edit the profile's policy: list") {
+		t.Errorf("the error does not give both kinds of guidance: %v", err)
+	}
+}
+
 func TestRemoveUnknownPolicy(t *testing.T) {
 	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
 	err := removePolicy([]string{"ghost"})
 	if err == nil || !strings.Contains(err.Error(), "unknown policy") {
 		t.Errorf("wrong error for an unknown name: %v", err)
+	}
+}
+
+// parseNameAndForce takes one name; a second bare word is a mistake worth
+// reporting, not a silently ignored extra argument -- the same rule
+// create and show already hold rm to now that they share the parser.
+func TestRemovePolicyRejectsASecondName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+
+	err := removePolicy([]string{"no-net", "staging"})
+	if err == nil || !strings.Contains(err.Error(), `takes one name, not "staging"`) {
+		t.Errorf("wrong error for a second bare word: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "no-net.yaml")); statErr != nil {
+		t.Errorf("the file was removed despite the rejected extra argument: %v", statErr)
+	}
+}
+
+// rm cannot tell you it is safe to delete something when it cannot read
+// the record of what points at it -- unlike listPolicies, which only
+// degrades a display, rm without --force refuses outright.
+func TestRemovePolicyFailsClosedOnAMalformedAttachmentsFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := os.WriteFile(filepath.Join(dir, "attachments.yaml"),
+		[]byte("profiles: [this is not valid: yaml structure"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removePolicy([]string{"no-net"}); err == nil {
+		t.Error("rm proceeded despite a broken attachments.yaml it could not check")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "no-net.yaml")); statErr != nil {
+		t.Errorf("the file was removed despite the unreadable attachment record: %v", statErr)
+	}
+
+	// --force is the documented way past a check rm cannot perform, the
+	// same as it is past a check that ran and refused.
+	if err := removePolicy([]string{"no-net", "--force"}); err != nil {
+		t.Fatalf("--force still refused: %v", err)
 	}
 }
 
@@ -772,6 +1055,49 @@ func TestAttachWithNameBindsASessionInstead(t *testing.T) {
 	if len(a.Profiles["claude-code"]) != 0 {
 		t.Errorf("Profiles[claude-code] = %v, want none: -n binds the session, not the profile",
 			a.Profiles["claude-code"])
+	}
+}
+
+// claude-code -n work and codex -n work are different sandboxes, so the
+// confirmation has to name the profile, not just the session: "attached
+// to session work" alone cannot tell the two apart.
+func TestAttachWithNameNamesTheProfileInItsConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	out, err := captureStdout(t, func() error {
+		return attachPolicy([]string{"no-net", "claude-code", "-n", "work"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "claude-code -n work") {
+		t.Errorf("the confirmation does not name the profile: %q", out)
+	}
+}
+
+// -n given but empty -- a literal `-n ""`, or `-n "$SESSION"` with an
+// unset $SESSION -- is not the same as -n omitted. Reading it as omitted
+// would silently attach to every run of the profile instead of the one
+// session a caller who passed -n at all meant.
+func TestAttachRejectsAnEmptySessionName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	err := attachPolicy([]string{"no-net", "claude-code", "-n", ""})
+	if err == nil {
+		t.Fatal("attach with an empty -n value was accepted")
+	}
+	a, loadErr := policy.LoadAttachments(dir)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(a.Profiles) != 0 || len(a.Sessions) != 0 {
+		t.Errorf("attach wrote something despite the empty -n being refused: %+v", a)
 	}
 }
 
@@ -906,6 +1232,30 @@ func TestDetachSomethingNeverAttachedIsANoOp(t *testing.T) {
 	}
 }
 
+// A no-op detach must say so, not "detached" -- and must not write
+// attachments.yaml, or create the policy directory, over a run that
+// changed nothing.
+func TestDetachSomethingNeverAttachedSaysSoAndWritesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "policies")
+	t.Setenv("BRIG_POLICY_DIR", dir)
+
+	out, err := captureStdout(t, func() error {
+		return detachPolicy([]string{"ghost", "nowhere"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "was not attached") {
+		t.Errorf("a no-op detach did not say so: %q", out)
+	}
+	if strings.Contains(out, "detached ") {
+		t.Errorf("a no-op detach claimed a removal that did not happen: %q", out)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("a no-op detach created the policy directory: %v", statErr)
+	}
+}
+
 // A policy the profile already declares inline binds every run already --
 // attach would only write a redundant entry, one detach could never remove
 // (detach refuses to touch a name the inline list declares), so attach has
@@ -1030,11 +1380,53 @@ func TestAttachSessionDoesNotCrossProfiles(t *testing.T) {
 	}
 }
 
+// parseWords falls back to rewriteFlagError for anything other than an
+// unknown flag, the same as nameAndYes and nameAndFile already do, so a
+// malformed flag value reads the same way across every brig verb.
+func TestParseWordsPolishesAMalformedBoolFlag(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	stubEditor(t, `true`)
+
+	err := editPolicy([]string{"no-net", "--force=oops"})
+	if err == nil {
+		t.Fatal("a malformed --force value was accepted")
+	}
+	if !strings.Contains(err.Error(), "takes true or false") {
+		t.Errorf("the raw flag-package error leaked through unpolished: %v", err)
+	}
+}
+
 func TestPolicyCmdDispatch(t *testing.T) {
 	if err := policyCmd(nil); err == nil {
 		t.Error("no subcommand was accepted")
 	}
 	if err := policyCmd([]string{"bogus"}); err == nil {
 		t.Error("an unknown subcommand was accepted")
+	}
+}
+
+// Asking for help is not a mistake: `brig policy -h` and a verb's own -h
+// both print usage and exit clean, the same translation profileCmd and
+// secretCmd already make for flag.ErrHelp.
+func TestPolicyCmdPrintsUsageForHelp(t *testing.T) {
+	out, err := captureStdout(t, func() error { return policyCmd([]string{"-h"}) })
+	if err != nil {
+		t.Fatalf("bare -h returned an error: %v", err)
+	}
+	if !strings.Contains(out, "brig policy --") {
+		t.Errorf("bare -h did not print usage: %q", out)
+	}
+
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	out, err = captureStdout(t, func() error { return policyCmd([]string{"edit", "-h"}) })
+	if err != nil {
+		t.Fatalf("a verb's own -h returned an error: %v", err)
+	}
+	if !strings.Contains(out, "brig policy --") {
+		t.Errorf("a verb's own -h did not print usage: %q", out)
 	}
 }

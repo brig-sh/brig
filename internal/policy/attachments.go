@@ -105,15 +105,19 @@ func (a *Attachments) AttachToProfile(name, profile string) {
 }
 
 // DetachFromProfile removes name from the list bound to profile, if it is
-// there.
-func (a *Attachments) DetachFromProfile(name, profile string) {
+// there, and reports whether it was: a caller that wants to say what it
+// actually did, or skip a write that would change nothing, needs to know
+// that this was a no-op rather than infer it.
+func (a *Attachments) DetachFromProfile(name, profile string) bool {
 	if a.Profiles == nil {
-		return
+		return false
 	}
-	a.Profiles[profile] = remove(a.Profiles[profile], name)
+	names, removed := remove(a.Profiles[profile], name)
+	a.Profiles[profile] = names
 	if len(a.Profiles[profile]) == 0 {
 		delete(a.Profiles, profile)
 	}
+	return removed
 }
 
 // AttachToSession records that name binds the session called session,
@@ -129,18 +133,20 @@ func (a *Attachments) AttachToSession(name, profile, session string) {
 }
 
 // DetachFromSession removes name from the list bound to session under
-// profile, if it is there.
-func (a *Attachments) DetachFromSession(name, profile, session string) {
+// profile, if it is there, and reports whether it was.
+func (a *Attachments) DetachFromSession(name, profile, session string) bool {
 	if a.Sessions[profile] == nil {
-		return
+		return false
 	}
-	a.Sessions[profile][session] = remove(a.Sessions[profile][session], name)
+	names, removed := remove(a.Sessions[profile][session], name)
+	a.Sessions[profile][session] = names
 	if len(a.Sessions[profile][session]) == 0 {
 		delete(a.Sessions[profile], session)
 	}
 	if len(a.Sessions[profile]) == 0 {
 		delete(a.Sessions, profile)
 	}
+	return removed
 }
 
 func addOnce(names []string, name string) []string {
@@ -152,15 +158,19 @@ func addOnce(names []string, name string) []string {
 	return append(names, name)
 }
 
-// remove filters in place, reusing names' own backing array: safe here
+// remove filters in place, reusing names' own backing array (safe here
 // because every call site reassigns the result straight back into the map
-// entry names came from, with nothing else holding the old slice.
-func remove(names []string, name string) []string {
+// entry names came from, with nothing else holding the old slice), and
+// reports whether name was actually there to remove.
+func remove(names []string, name string) ([]string, bool) {
 	out := names[:0]
+	removed := false
 	for _, n := range names {
-		if n != name {
-			out = append(out, n)
+		if n == name {
+			removed = true
+			continue
 		}
+		out = append(out, n)
 	}
-	return out
+	return out, removed
 }

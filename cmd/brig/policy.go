@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -17,34 +18,71 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// policyUsage is what `brig policy --help` prints.
+const policyUsage = `brig policy -- manage egress policies and what they bind
+
+usage:
+  brig policy ls                                    every policy, and what binds it
+  brig policy create <name> [--force]               write a starter, then open it
+  brig policy edit <name> [--force]                 open yours in $VISUAL or $EDITOR
+  brig policy show <name> [--json]                  print the parsed document
+  brig policy rm <name> [--force]                   delete it
+  brig policy attach <policy> <profile> [-n NAME]   bind it to a profile, or one session
+  brig policy detach <policy> <profile> [-n NAME]   reverse an attach
+
+flags:
+  -f, --force   with create: replace a file already there
+                with edit: save a rename that would orphan a binding
+                with rm: delete one that is bound to something
+      --json    with show: render JSON rather than YAML
+  -n, --name    with attach/detach: one session by name, not every run
+
+A policy is a named document declaring what an agent may reach outbound.
+attach binds it to a profile's every run, or -- with -n -- to one session;
+a profile's own inline policy: field does the same without a separate attach.
+`
+
 // policyCmd groups the policy verbs.
 func policyCmd(args []string) error {
 	if len(args) == 0 {
 		return errors.New("policy needs a subcommand: ls, create, edit, show, rm, attach or detach")
 	}
+	var err error
 	switch args[0] {
+	case "--help", "-h", "help":
+		fmt.Print(policyUsage)
+		return nil
 	case "ls":
-		return listPolicies()
+		err = listPolicies()
 	// list was never in the help text, so it was found by accident and then
 	// scripted. Kept for one release, saying which spelling to keep.
 	case "list":
 		deprecated("brig policy list", "brig policy ls")
-		return listPolicies()
+		err = listPolicies()
 	case "create":
-		return createPolicy(args[1:])
+		err = createPolicy(args[1:])
 	case "edit":
-		return editPolicy(args[1:])
+		err = editPolicy(args[1:])
 	case "show":
-		return showPolicy(args[1:])
+		err = showPolicy(args[1:])
 	case "rm":
-		return removePolicy(args[1:])
+		err = removePolicy(args[1:])
 	case "attach":
-		return attachPolicy(args[1:])
+		err = attachPolicy(args[1:])
 	case "detach":
-		return detachPolicy(args[1:])
+		err = detachPolicy(args[1:])
 	default:
 		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach)", args[0])
 	}
+	// A verb's own parser reports --help as an error, because that is how
+	// the flag package says it. Asking for help is not a mistake, so it is
+	// answered with the help and an exit code of zero, the same translation
+	// profileCmd and secretCmd make.
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Print(policyUsage)
+		return nil
+	}
+	return err
 }
 
 // loadPolicies calls LoadAll and reports it the same way for every caller:
@@ -118,32 +156,49 @@ func lookupPolicy(name string) (policy.Entry, error) {
 	return e, nil
 }
 
-// showPolicy prints the parsed document for one policy: YAML by default,
-// --json for anything consuming it programmatically.
-func showPolicy(args []string) error {
-	asJSON := false
-	fs := flag.NewFlagSet("show", flag.ContinueOnError)
+// parseWords runs fs against args, lifting each bare word past whatever
+// flags fs defines, so `create no-net --force` and `create --force no-net`
+// -- either order anyone actually types -- parse the same. Parse alone
+// stops at the first bare word and would otherwise leave a flag that comes
+// after it sitting unparsed in Args.
+//
+// verb and takes name the subcommand and the flags it accepts, both only
+// for the error an unrecognised flag produces.
+func parseWords(verb, takes string, fs *flag.FlagSet, args []string) ([]string, error) {
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
-	fs.BoolVar(&asJSON, "json", false, "")
-
-	// Parse stops at the first bare word, so `brig policy show no-net
-	// --json` -- the order anyone actually types -- would otherwise leave
-	// --json sitting unparsed in Args. Lift the word and parse on.
 	var words []string
 	for rest := args; ; {
 		if err := fs.Parse(rest); err != nil {
-			msg := err.Error()
-			if name, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
-				msg = "unknown flag " + spell(name)
+			if errors.Is(err, flag.ErrHelp) {
+				return nil, err
 			}
-			return fmt.Errorf("%s (show takes --json)", msg)
+			msg := err.Error()
+			if flagName, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
+				msg = "unknown flag " + spell(flagName)
+			} else {
+				msg = rewriteFlagError(err).Error()
+			}
+			return nil, fmt.Errorf("%s (%s takes %s)", msg, verb, takes)
 		}
 		if fs.NArg() == 0 {
 			break
 		}
 		words = append(words, fs.Arg(0))
 		rest = fs.Args()[1:]
+	}
+	return words, nil
+}
+
+// showPolicy prints the parsed document for one policy: YAML by default,
+// --json for anything consuming it programmatically.
+func showPolicy(args []string) error {
+	asJSON := false
+	fs := flag.NewFlagSet("show", flag.ContinueOnError)
+	fs.BoolVar(&asJSON, "json", false, "")
+	words, err := parseWords("show", "--json", fs, args)
+	if err != nil {
+		return err
 	}
 	if len(words) == 0 {
 		return errors.New("policy show needs a name, for example `brig policy show no-net`")
@@ -169,41 +224,34 @@ func showPolicy(args []string) error {
 	return err
 }
 
+// parseNameAndForce pulls one name and an optional --force/-f out of args,
+// working the same way around a bare word landing after the flag that
+// showPolicy and parseAttachArgs also do. verb names the subcommand, for
+// its error messages.
+func parseNameAndForce(verb string, args []string) (name string, force bool, err error) {
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
+	fs.BoolVar(&force, "force", false, "")
+	fs.BoolVar(&force, "f", false, "")
+	words, err := parseWords(verb, "--force", fs, args)
+	if err != nil {
+		return "", false, err
+	}
+	if len(words) == 0 {
+		return "", false, fmt.Errorf("policy %s needs a name, for example `brig policy %s no-net`", verb, verb)
+	}
+	if len(words) > 1 {
+		return "", false, fmt.Errorf("policy %s takes one name, not %q", verb, words[1])
+	}
+	return words[0], force, nil
+}
+
 // createPolicy writes a starter policy document, then opens it in your
 // editor: $VISUAL, then $EDITOR, then vi.
 func createPolicy(args []string) error {
-	force := false
-	fs := flag.NewFlagSet("create", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.Usage = func() {}
-	fs.BoolVar(&force, "force", false, "")
-	fs.BoolVar(&force, "f", false, "")
-
-	// Parse stops at the first bare word, so `brig policy create no-net
-	// --force` -- the order anyone actually types -- would otherwise leave
-	// --force sitting unparsed in Args. Lift the word and parse on.
-	var words []string
-	for rest := args; ; {
-		if err := fs.Parse(rest); err != nil {
-			msg := err.Error()
-			if name, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
-				msg = "unknown flag " + spell(name)
-			}
-			return fmt.Errorf("%s (create takes --force)", msg)
-		}
-		if fs.NArg() == 0 {
-			break
-		}
-		words = append(words, fs.Arg(0))
-		rest = fs.Args()[1:]
+	name, force, err := parseNameAndForce("create", args)
+	if err != nil {
+		return err
 	}
-	if len(words) == 0 {
-		return errors.New("policy create needs a name, for example `brig policy create no-net`")
-	}
-	if len(words) > 1 {
-		return fmt.Errorf("policy create takes one name, not %q", words[1])
-	}
-	name := words[0]
 	if err := policy.CheckName(name); err != nil {
 		return err
 	}
@@ -307,10 +355,11 @@ egress:
 // real file is untouched until that check passes, rather than edited in
 // place and reported afterwards.
 func editPolicy(args []string) error {
-	if len(args) == 0 {
-		return errors.New("policy edit needs a name, for example `brig policy edit no-net`")
+	name, force, err := parseNameAndForce("edit", args)
+	if err != nil {
+		return err
 	}
-	entry, err := lookupPolicy(args[0])
+	entry, err := lookupPolicy(name)
 	if err != nil {
 		return err
 	}
@@ -366,6 +415,22 @@ func editPolicy(args []string) error {
 		return fmt.Errorf("not saved, %s is unchanged: name %q is already declared in %s\n"+
 			"your edit is still at %s", entry.Path, edited.Name, other.Path, scratchPath)
 	}
+	// A rename leaves whatever named entry.Policy.Name (an attach, or a
+	// profile's own inline policy: entry) pointing at a name this file no
+	// longer declares. A name unchanged by the edit needs no such check --
+	// the file it is bound to is still right here.
+	if !force && edited.Name != entry.Policy.Name {
+		b, err := boundTo(entry.Policy.Name)
+		if err != nil {
+			return err
+		}
+		if len(b) > 0 {
+			return fmt.Errorf("not saved, %s is unchanged: renaming %s to %s would leave %s "+
+				"pointing at a name nothing declares. %s first, or pass --force to rename it anyway\n"+
+				"your edit is still at %s",
+				entry.Path, entry.Policy.Name, edited.Name, strings.Join(b, ", "), howToUnbind(b), scratchPath)
+		}
+	}
 	editedBytes, err := os.ReadFile(scratchPath)
 	if err != nil {
 		return err
@@ -417,21 +482,75 @@ func editPolicy(args []string) error {
 	return nil
 }
 
-// removePolicy deletes the file backing a policy. With no attachment concept
-// yet, there is nothing else to check first.
+// removePolicy deletes a policy's file. It refuses one that is bound to
+// anything -- an inline policy: entry, a profile-level attach, or a
+// session-level attach -- unless --force: the file would be gone but
+// whatever named it would still be pointing at nothing.
+//
+// Bindings failing (an attachments.yaml that is unreadable or fails to
+// parse) refuses too, deliberately unlike listPolicies' warn-and-degrade:
+// listing is read-only and a partial answer is still useful, but rm is
+// destructive, and brig cannot tell you it is safe to delete something
+// when it cannot read the record of what points at it. --force skips the
+// check outright, the same as it does when the record reads fine.
 func removePolicy(args []string) error {
-	if len(args) == 0 {
-		return errors.New("policy rm needs a name")
-	}
-	entry, err := lookupPolicy(args[0])
+	name, force, err := parseNameAndForce("rm", args)
 	if err != nil {
 		return err
+	}
+	entry, err := lookupPolicy(name)
+	if err != nil {
+		return err
+	}
+	if !force {
+		b, err := boundTo(name)
+		if err != nil {
+			return err
+		}
+		if len(b) > 0 {
+			return fmt.Errorf("%s is bound to %s. %s first, or pass --force to remove it anyway",
+				name, strings.Join(b, ", "), howToUnbind(b))
+		}
 	}
 	if err := os.Remove(entry.Path); err != nil {
 		return err
 	}
 	fmt.Printf("removed %s\n", entry.Path)
 	return nil
+}
+
+// boundTo is what a name is bound to, for a caller about to make that name
+// stop declaring a policy (rm deleting the file, edit renaming it) and
+// needing to refuse first if anything still points at it.
+func boundTo(name string) ([]string, error) {
+	bound, err := policy.Bindings(policy.Dir())
+	if err != nil {
+		return nil, err
+	}
+	return bound[name], nil
+}
+
+// howToUnbind tells removePolicy's refusal what to say to actually clear
+// b: "detach it" is wrong advice for an inline entry, since detach
+// explicitly refuses to touch one -- policy.InlineSuffix is what tells one
+// apart from an attach, the same mark policy.Bindings used to print it.
+func howToUnbind(b []string) string {
+	var inline, attached bool
+	for _, x := range b {
+		if strings.HasSuffix(x, policy.InlineSuffix) {
+			inline = true
+		} else {
+			attached = true
+		}
+	}
+	switch {
+	case attached && inline:
+		return "Detach it and edit the profile's policy: list"
+	case inline:
+		return "Edit the profile's policy: list"
+	default:
+		return "Detach it"
+	}
 }
 
 // readPolicyFile reads and parses one policy file, for the re-check `create`
@@ -445,29 +564,27 @@ func readPolicyFile(path string) (policy.Policy, error) {
 }
 
 // parseAttachArgs pulls a policy name, a profile name, and an optional -n
-// session out of args, working the same way around a bare word landing
-// after a flag that showPolicy and createPolicy already do.
+// session out of args.
 func parseAttachArgs(verb string, args []string) (policyName, profileName, session string, err error) {
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.Usage = func() {}
 	fs.StringVar(&session, "n", "", "")
 	fs.StringVar(&session, "name", "", "")
-
-	var words []string
-	for rest := args; ; {
-		if err := fs.Parse(rest); err != nil {
-			msg := err.Error()
-			if name, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
-				msg = "unknown flag " + spell(name)
-			}
-			return "", "", "", fmt.Errorf("%s (%s takes -n/--name)", msg, verb)
+	words, err := parseWords(verb, "-n/--name", fs, args)
+	if err != nil {
+		return "", "", "", err
+	}
+	// -n given but empty (`-n ""`, or `-n "$SESSION"` with an unset
+	// $SESSION) is not the same as -n omitted, and must not be read as
+	// one: silently falling through to the profile-wide bind below would
+	// attach or detach far more than a caller asking for one session meant.
+	nameGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "n" || f.Name == "name" {
+			nameGiven = true
 		}
-		if fs.NArg() == 0 {
-			break
-		}
-		words = append(words, fs.Arg(0))
-		rest = fs.Args()[1:]
+	})
+	if nameGiven && session == "" {
+		return "", "", "", fmt.Errorf("policy %s -n/--name needs a value", verb)
 	}
 	if len(words) < 2 {
 		return "", "", "", fmt.Errorf(
@@ -497,15 +614,13 @@ func attachPolicy(args []string) error {
 	if err := policy.CheckCoverage(p); err != nil {
 		return fmt.Errorf("cannot attach %s to %s: %w. Nothing was written", policyName, p.Name, err)
 	}
-	// p's inline policy: list already binds every run of p -- attaching the
-	// same name on top would write an entry detach can never remove
-	// (detach refuses to touch a name the inline list declares), so refuse
-	// before that entry exists rather than after.
-	for _, name := range p.Policy {
-		if name == policyName {
-			return fmt.Errorf("%s is already declared inline in %s's policy: list, which binds "+
-				"every run already. Nothing was written", policyName, p.Name)
-		}
+	// p's inline policy: list already binds every run of p, in every
+	// session, so attaching the same name on top adds nothing to what is
+	// effectively bound -- refuse before writing an entry that would only
+	// be redundant.
+	if slices.Contains(p.Policy, policyName) {
+		return fmt.Errorf("%s is already declared inline in %s's policy: list, which binds "+
+			"every run already. Nothing was written", policyName, p.Name)
 	}
 
 	dir := policy.Dir()
@@ -515,7 +630,7 @@ func attachPolicy(args []string) error {
 	}
 	if session != "" {
 		a.AttachToSession(policyName, p.Name, session)
-		fmt.Printf("attached %s to session %s\n", policyName, session)
+		fmt.Printf("attached %s to %s -n %s\n", policyName, p.Name, session)
 	} else {
 		// p.Name, not profileName: profileName may be an alias (`claude`
 		// for `claude-code`), and attachments are keyed by the profile's
@@ -548,13 +663,9 @@ func detachPolicy(args []string) error {
 		// the thing that removes it. Session-scoped detach is exempt: the
 		// inline list binds every run, a session binding is narrower, and
 		// the two do not name the same thing to remove.
-		if session == "" {
-			for _, name := range p.Policy {
-				if name == policyName {
-					return fmt.Errorf("%s is declared inline in %s's policy: list, not attached; "+
-						"edit the profile directly to remove it", policyName, p.Name)
-				}
-			}
+		if session == "" && slices.Contains(p.Policy, policyName) {
+			return fmt.Errorf("%s is declared inline in %s's policy: list, not attached; "+
+				"edit the profile directly to remove it", policyName, p.Name)
 		}
 	}
 
@@ -563,12 +674,22 @@ func detachPolicy(args []string) error {
 	if err != nil {
 		return err
 	}
+	var removed bool
+	var describe string
 	if session != "" {
-		a.DetachFromSession(policyName, profileKey, session)
-		fmt.Printf("detached %s from session %s\n", policyName, session)
+		removed = a.DetachFromSession(policyName, profileKey, session)
+		describe = fmt.Sprintf("%s -n %s", profileKey, session)
 	} else {
-		a.DetachFromProfile(policyName, profileKey)
-		fmt.Printf("detached %s from %s\n", policyName, profileKey)
+		removed = a.DetachFromProfile(policyName, profileKey)
+		describe = profileKey
 	}
+	// Nothing changed: attach never bound this name here, so there is
+	// nothing to write back, and saying "detached" would claim a removal
+	// that did not happen.
+	if !removed {
+		fmt.Printf("%s was not attached to %s\n", policyName, describe)
+		return nil
+	}
+	fmt.Printf("detached %s from %s\n", policyName, describe)
 	return a.Save(dir)
 }
