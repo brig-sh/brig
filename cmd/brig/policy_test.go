@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/policy"
+	"github.com/brig-sh/brig/internal/profile"
 )
 
 func writePolicyFile(t *testing.T, dir, name, body string) string {
@@ -609,6 +612,312 @@ func TestRemoveUnknownPolicy(t *testing.T) {
 	err := removePolicy([]string{"ghost"})
 	if err == nil || !strings.Contains(err.Error(), "unknown policy") {
 		t.Errorf("wrong error for an unknown name: %v", err)
+	}
+}
+
+// loadTestProfiles points the profile registry at a fresh, empty directory
+// and loads it, so a test sees only the built-ins (claude-code, ubuntu, ...)
+// with nothing left over from another test.
+func loadTestProfiles(t *testing.T) {
+	t.Helper()
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAttachBindsAPolicyToAProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Profiles["claude-code"]; len(got) != 1 || got[0] != "no-net" {
+		t.Errorf("Profiles[claude-code] = %v, want [no-net]", got)
+	}
+}
+
+func TestAttachWithNameBindsASessionInstead(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "work"}); err != nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Sessions["claude-code"]["work"]; len(got) != 1 || got[0] != "no-net" {
+		t.Errorf("Sessions[claude-code][work] = %v, want [no-net]", got)
+	}
+	if len(a.Profiles["claude-code"]) != 0 {
+		t.Errorf("Profiles[claude-code] = %v, want none: -n binds the session, not the profile",
+			a.Profiles["claude-code"])
+	}
+}
+
+// ubuntu is kind: shell in the built-ins: no agent, so no tool-call surface
+// an egress rule could hook into. attach has to refuse before it writes
+// anything.
+func TestAttachRefusesAShellProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	err := attachPolicy([]string{"no-net", "ubuntu"})
+	if err == nil {
+		t.Fatal("attach to a shell profile was accepted")
+	}
+	if !strings.Contains(err.Error(), "shell") {
+		t.Errorf("the error does not say why: %v", err)
+	}
+	a, loadErr := policy.LoadAttachments(dir)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(a.Profiles) != 0 {
+		t.Errorf("attach wrote something despite refusing: %v", a.Profiles)
+	}
+}
+
+func TestAttachUnknownPolicy(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	loadTestProfiles(t)
+	err := attachPolicy([]string{"ghost", "claude-code"})
+	if err == nil || !strings.Contains(err.Error(), "unknown policy") {
+		t.Errorf("wrong error for an unknown policy: %v", err)
+	}
+}
+
+func TestAttachUnknownProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	err := attachPolicy([]string{"no-net", "ghost"})
+	if err == nil || !strings.Contains(err.Error(), "unknown profile") {
+		t.Errorf("wrong error for an unknown profile: %v", err)
+	}
+	// The same "unknown profile" message every other command in this
+	// codebase reports via notFoundf, which exitCode reads for exit 3 --
+	// a plain fmt.Errorf here would look identical on stderr but exit 1.
+	if got := exitCode(err); got != exitNotFound {
+		t.Errorf("exitCode = %d, want %d (exitNotFound)", got, exitNotFound)
+	}
+}
+
+func TestDetachUndoesAnAttach(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := detachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatalf("detach failed: %v", err)
+	}
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Profiles) != 0 {
+		t.Errorf("Profiles = %v, want none after detach", a.Profiles)
+	}
+}
+
+// attach resolves a profile alias to its canonical name before writing, so
+// the binding lands under the one name every other lookup (including
+// detach) agrees on -- not under whatever spelling was typed.
+func TestAttachResolvesAnAliasToTheCanonicalProfileName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	if err := attachPolicy([]string{"no-net", "claude"}); err != nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Profiles["claude-code"]; len(got) != 1 || got[0] != "no-net" {
+		t.Errorf("Profiles[claude-code] = %v, want [no-net]: attach must key by the canonical "+
+			"name, not the alias %q", got, "claude")
+	}
+	if len(a.Profiles["claude"]) != 0 {
+		t.Errorf("Profiles[claude] = %v, want none: the alias itself must not become a key",
+			a.Profiles["claude"])
+	}
+}
+
+// detach has to resolve the same alias attach did, or `attach ... claude`
+// followed by `detach ... claude` would leave the binding in place.
+func TestDetachResolvesAnAliasToMatchWhatAttachStored(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	if err := attachPolicy([]string{"no-net", "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := detachPolicy([]string{"no-net", "claude"}); err != nil {
+		t.Fatalf("detach failed: %v", err)
+	}
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Profiles) != 0 {
+		t.Errorf("Profiles = %v, want none after detach by the same alias attach used", a.Profiles)
+	}
+}
+
+// Detaching something that was never attached is a no-op, not an error --
+// there is nothing to validate against, only a binding to remove if it is
+// there.
+func TestDetachSomethingNeverAttachedIsANoOp(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	if err := detachPolicy([]string{"ghost", "nowhere"}); err != nil {
+		t.Errorf("detaching a name that was never attached failed: %v", err)
+	}
+}
+
+// A policy the profile already declares inline binds every run already --
+// attach would only write a redundant entry, one detach could never remove
+// (detach refuses to touch a name the inline list declares), so attach has
+// to refuse it too, before that entry exists.
+func TestAttachRefusesAPolicyAlreadyDeclaredInline(t *testing.T) {
+	policyDir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", policyDir)
+	writePolicyFile(t, policyDir, "no-net", noNetBody)
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: mytool
+image: ghcr.io/brig-sh/mytool:latest
+guestHome: /home/mytool
+binary: mytool
+mem: 1024
+cpus: 1
+policy: [no-net]
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	err := attachPolicy([]string{"no-net", "mytool"})
+	if err == nil {
+		t.Fatal("attach of an already-inline-declared policy was accepted")
+	}
+	if !strings.Contains(err.Error(), "inline") {
+		t.Errorf("the error does not say the policy is already inline: %v", err)
+	}
+	a, loadErr := policy.LoadAttachments(policyDir)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(a.Profiles) != 0 {
+		t.Errorf("attach wrote something despite refusing: %v", a.Profiles)
+	}
+}
+
+// A policy a profile declares inline was never attach's to add, so detach
+// has to refuse to remove it rather than reporting success over a no-op.
+func TestDetachRefusesAnInlineDeclaredPolicy(t *testing.T) {
+	policyDir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", policyDir)
+	writePolicyFile(t, policyDir, "no-net", noNetBody)
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: mytool
+image: ghcr.io/brig-sh/mytool:latest
+guestHome: /home/mytool
+binary: mytool
+mem: 1024
+cpus: 1
+policy: [no-net]
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	err := detachPolicy([]string{"no-net", "mytool"})
+	if err == nil {
+		t.Fatal("detach of an inline-declared policy was accepted")
+	}
+	if !strings.Contains(err.Error(), "inline") {
+		t.Errorf("the error does not say the policy is inline: %v", err)
+	}
+}
+
+// -n scopes a detach to one session, a narrower thing than the inline list
+// that binds every run -- the inline refusal above must not reach here.
+func TestDetachWithNameIgnoresTheInlineRefusal(t *testing.T) {
+	policyDir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", policyDir)
+	writePolicyFile(t, policyDir, "no-net", noNetBody)
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: mytool
+image: ghcr.io/brig-sh/mytool:latest
+guestHome: /home/mytool
+binary: mytool
+mem: 1024
+cpus: 1
+policy: [no-net]
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := detachPolicy([]string{"no-net", "mytool", "-n", "work"}); err != nil {
+		t.Errorf("session-scoped detach was refused over an unrelated inline policy: %v", err)
+	}
+}
+
+// claude-code -n work and codex -n work are different sandboxes
+// (brig-claude-code-work vs brig-codex-work), so a session name is only
+// unique within its profile. attach/detach must not let one profile's
+// "work" session see or remove what is bound to another profile's session
+// of the same name.
+func TestAttachSessionDoesNotCrossProfiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	writePolicyFile(t, dir, "staging", "apiVersion: brig.sh/v1alpha1\nname: staging\negress:\n  default: allow\n")
+	loadTestProfiles(t)
+
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := attachPolicy([]string{"staging", "codex", "-n", "work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := detachPolicy([]string{"staging", "codex", "-n", "work"}); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Sessions["claude-code"]["work"]; len(got) != 1 || got[0] != "no-net" {
+		t.Errorf("Sessions[claude-code][work] = %v, want [no-net]: codex's session "+
+			"was attached to and detached from, claude-code's must be untouched", got)
+	}
+	if len(a.Sessions["codex"]["work"]) != 0 {
+		t.Errorf("Sessions[codex][work] = %v, want none after detach", a.Sessions["codex"]["work"])
 	}
 }
 
