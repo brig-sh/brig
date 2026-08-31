@@ -64,7 +64,8 @@ func loadPolicies(dir string) (map[string]policy.Entry, error) {
 	return entries, nil
 }
 
-// listPolicies prints every policy that parses, by name and description.
+// listPolicies prints every policy that parses, by name and description,
+// and -- for one that is bound to anything -- what binds it.
 //
 // A directory holding one policy that fails to parse still lists the
 // others: LoadAll reports the failure on stderr and returns everything that
@@ -79,8 +80,22 @@ func listPolicies() error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+
+	// A policy.Bindings failure -- an attachments.yaml that is unreadable
+	// or fails to parse -- is not this command's to fail over: listing
+	// policies never depended on that file before attach existed, and a
+	// broken attachments.yaml is exactly the kind of thing someone would
+	// still want `brig policies` to work while diagnosing. Warn and list
+	// without the bound-to lines rather than print nothing at all.
+	bound, err := policy.Bindings(policy.Dir())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
+	}
 	for _, name := range names {
 		fmt.Printf("%-15s %s\n", name, entries[name].Policy.Desc)
+		if b := bound[name]; len(b) > 0 {
+			fmt.Printf("                bound to: %s\n", strings.Join(b, ", "))
+		}
 	}
 	if len(names) == 0 {
 		fmt.Printf("no policies yet; your own live in %s\n", policy.Dir())
