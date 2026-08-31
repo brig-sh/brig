@@ -54,6 +54,9 @@ usage:
                                                  if a declared secret is missing
   brig agent ls|show|new|edit|rm|import|export   the agents you can run
   brig policy ls|create|edit|show|rm             manage policies
+  brig policy attach|detach <policy> <profile>   bind or unbind a policy,
+                                                 [-n NAME] for one session
+                                                 instead of every run
   brig secret create|read|update|delete|ls       keep secrets in your keyring
   brig secret import <profile>                   fill a profile's secrets from
                                                  your host, once

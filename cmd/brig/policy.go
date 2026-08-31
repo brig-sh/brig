@@ -13,13 +13,14 @@ import (
 	"strings"
 
 	"github.com/brig-sh/brig/internal/policy"
+	"github.com/brig-sh/brig/internal/profile"
 	"sigs.k8s.io/yaml"
 )
 
 // policyCmd groups the policy verbs.
 func policyCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("policy needs a subcommand: ls, create, edit, show or rm")
+		return errors.New("policy needs a subcommand: ls, create, edit, show, rm, attach or detach")
 	}
 	switch args[0] {
 	case "ls":
@@ -37,8 +38,12 @@ func policyCmd(args []string) error {
 		return showPolicy(args[1:])
 	case "rm":
 		return removePolicy(args[1:])
+	case "attach":
+		return attachPolicy(args[1:])
+	case "detach":
+		return detachPolicy(args[1:])
 	default:
-		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm)", args[0])
+		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach)", args[0])
 	}
 }
 
@@ -422,4 +427,133 @@ func readPolicyFile(path string) (policy.Policy, error) {
 		return policy.Policy{}, err
 	}
 	return policy.Parse(blob)
+}
+
+// parseAttachArgs pulls a policy name, a profile name, and an optional -n
+// session out of args, working the same way around a bare word landing
+// after a flag that showPolicy and createPolicy already do.
+func parseAttachArgs(verb string, args []string) (policyName, profileName, session string, err error) {
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	fs.StringVar(&session, "n", "", "")
+	fs.StringVar(&session, "name", "", "")
+
+	var words []string
+	for rest := args; ; {
+		if err := fs.Parse(rest); err != nil {
+			msg := err.Error()
+			if name, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
+				msg = "unknown flag " + spell(name)
+			}
+			return "", "", "", fmt.Errorf("%s (%s takes -n/--name)", msg, verb)
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		words = append(words, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
+	if len(words) < 2 {
+		return "", "", "", fmt.Errorf(
+			"policy %s needs a policy and a profile, for example `brig policy %s no-net claude-code`",
+			verb, verb)
+	}
+	if len(words) > 2 {
+		return "", "", "", fmt.Errorf("policy %s takes a policy and a profile, not %q", verb, words[2])
+	}
+	return words[0], words[1], session, nil
+}
+
+// attachPolicy binds a policy to every run of a profile, or -- with -n --
+// to one session by name instead.
+func attachPolicy(args []string) error {
+	policyName, profileName, session, err := parseAttachArgs("attach", args)
+	if err != nil {
+		return err
+	}
+	if _, err := lookupPolicy(policyName); err != nil {
+		return err
+	}
+	p, ok := profile.Lookup(profileName)
+	if !ok {
+		return notFoundf("unknown profile %q. `brig profiles` lists them", profileName)
+	}
+	if err := policy.CheckCoverage(p); err != nil {
+		return fmt.Errorf("cannot attach %s to %s: %w. Nothing was written", policyName, p.Name, err)
+	}
+	// p's inline policy: list already binds every run of p -- attaching the
+	// same name on top would write an entry detach can never remove
+	// (detach refuses to touch a name the inline list declares), so refuse
+	// before that entry exists rather than after.
+	for _, name := range p.Policy {
+		if name == policyName {
+			return fmt.Errorf("%s is already declared inline in %s's policy: list, which binds "+
+				"every run already. Nothing was written", policyName, p.Name)
+		}
+	}
+
+	dir := policy.Dir()
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		return err
+	}
+	if session != "" {
+		a.AttachToSession(policyName, p.Name, session)
+		fmt.Printf("attached %s to session %s\n", policyName, session)
+	} else {
+		// p.Name, not profileName: profileName may be an alias (`claude`
+		// for `claude-code`), and attachments are keyed by the profile's
+		// canonical name so detach and any later lookup agree on it.
+		a.AttachToProfile(policyName, p.Name)
+		fmt.Printf("attached %s to %s\n", policyName, p.Name)
+	}
+	return a.Save(dir)
+}
+
+// detachPolicy reverses what attach did. It removes only what attach
+// added: a policy a profile declares inline, in its own file, is refused
+// rather than silently left in place, so the refusal is as loud as the
+// bind it cannot undo.
+func detachPolicy(args []string) error {
+	policyName, profileName, session, err := parseAttachArgs("detach", args)
+	if err != nil {
+		return err
+	}
+
+	// Resolve the same alias attach would have, so detaching by an alias
+	// (`claude` for `claude-code`) reaches the binding attach actually
+	// stored. A profile that no longer exists falls back to the typed
+	// name: detach is a no-op either way if nothing is bound under it.
+	profileKey := profileName
+	if p, ok := profile.Lookup(profileName); ok {
+		profileKey = p.Name
+		// Inline policy: is declared in the profile's own file, not in
+		// attachments.yaml -- attach never wrote it, so detach cannot be
+		// the thing that removes it. Session-scoped detach is exempt: the
+		// inline list binds every run, a session binding is narrower, and
+		// the two do not name the same thing to remove.
+		if session == "" {
+			for _, name := range p.Policy {
+				if name == policyName {
+					return fmt.Errorf("%s is declared inline in %s's policy: list, not attached; "+
+						"edit the profile directly to remove it", policyName, p.Name)
+				}
+			}
+		}
+	}
+
+	dir := policy.Dir()
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		return err
+	}
+	if session != "" {
+		a.DetachFromSession(policyName, profileKey, session)
+		fmt.Printf("detached %s from session %s\n", policyName, session)
+	} else {
+		a.DetachFromProfile(policyName, profileKey)
+		fmt.Printf("detached %s from %s\n", policyName, profileKey)
+	}
+	return a.Save(dir)
 }
