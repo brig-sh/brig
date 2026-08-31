@@ -107,9 +107,9 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policies` | every policy that parses, by name and description, and -- for one bound to anything -- what binds it |
 | `brig policy ls` | same (parity with `brig profiles` / `brig profile ls`) |
 | `brig policy create <name>` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
-| `brig policy edit <name>` | open an existing one, and only replace it if the save still parses and validates |
+| `brig policy edit <name> [--force]` | open an existing one, and only replace it if the save still parses and validates. Refuses a rename that would orphan anything bound to it -- inline or attached -- unless `--force` |
 | `brig policy show <name> [--json]` | print the parsed document |
-| `brig policy rm <name>` | delete it. Does not yet check whether it is attached to anything first |
+| `brig policy rm <name> [--force]` | delete it. Refuses one that is bound to anything -- inline, or attached -- unless `--force` |
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or -- with `-n` -- to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
 
@@ -129,7 +129,7 @@ add an entry `detach` could never remove:
 $ brig policy attach no-net claude-code
 attached no-net to claude-code
 $ brig policy attach no-net claude-code -n work
-attached no-net to session work
+attached no-net to claude-code -n work
 $ brig policy attach no-net ubuntu
 brig: cannot attach no-net to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
@@ -150,6 +150,30 @@ no-net          only Anthropic's API and one internal range
                 bound to: claude-code, claude-code -n work
 ```
 
+`rm` refuses a policy that is bound to anything -- an inline `policy:`
+entry, a profile-level attach, or a session-level one -- unless you pass
+`--force`: the file would be gone, but whatever named it would still be
+pointing at nothing. `--force` removes it anyway and leaves that now-
+dangling reference in place -- `rm`'s job is the file, not what points
+at it:
+
+```console
+$ brig policy rm no-net
+brig: no-net is bound to claude-code. Detach it first, or pass --force to remove it anyway
+$ brig policy rm no-net --force
+removed /home/you/.config/brig/policies/no-net.yaml
+```
+
+The instruction fits what is actually bound: "detach it" for an attach,
+"edit the profile's `policy:` list" for an inline entry, or both when a
+policy is bound both ways -- detach explicitly refuses to touch an inline
+entry (below), so telling you to detach one would be a dead end.
+
+Unlike `brig policy ls`, which only degrades to a plainer listing if
+`attachments.yaml` cannot be read, `rm` without `--force` refuses outright
+in that case: it would rather stop than delete something it could not
+confirm was safe to.
+
 `edit` never touches the real file until the new content is known to be
 good: it opens a scratch copy, and only if that copy still parses and
 validates does it replace the original -- via a temp file and a rename in
@@ -163,6 +187,20 @@ $ brig policy edit no-net
 brig: not saved, /home/you/.config/brig/policies/no-net.yaml is unchanged: cidr "10.0.0/8" is not a valid CIDR: invalid CIDR address: 10.0.0/8
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
+
+Renaming it (changing `name:` to something else) is refused the same way
+if the old name is bound to anything -- an attach, or a profile's own
+inline `policy:` entry -- since the binding would then be pointing at a
+name nothing declares:
+
+```console
+$ brig policy edit no-net
+brig: not saved, /home/you/.config/brig/policies/no-net.yaml is unchanged: renaming no-net to totally-new would leave claude-code pointing at a name nothing declares. Detach it first, or pass --force to rename it anyway
+your edit is still at /tmp/brig-policy-edit-2427992151.yaml
+```
+
+A save that keeps the same name never triggers this check: the file a
+binding points at is still right here either way.
 
 ## A worked example
 
@@ -238,11 +276,12 @@ removed /home/you/.config/brig/policies/no-net.yaml
 | `cidr "x" is not a valid CIDR: …` | a typo in a `cidr:` value, such as a missing octet |
 | `host "x" contains whitespace or a control character` | a `host:` value that cannot be a domain or glob under any grammar |
 | `apiVersion is required, and must be "brig.sh/v1alpha1"` | a document with no `apiVersion:`, or the wrong one |
-| `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate. The real file is untouched; the error names where your edit still is |
+| `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate, or renamed a name that is bound to something, without `--force`. The real file is untouched; the error names where your edit still is |
 | ``unknown profile "x". `brig profiles` lists them`` | `attach` or `detach` naming a profile that is not there |
 | `cannot attach x to y: y is kind: shell, which has no agent to hook an egress rule into. Nothing was written` | `attach` to a `kind: shell` or `kind: gui` profile |
 | `x is already declared inline in y's policy: list, which binds every run already. Nothing was written` | `attach` naming a policy the profile's own `policy:` list already declares |
 | `x is declared inline in y's policy: list, not attached; edit the profile directly to remove it` | `detach` naming a policy the profile's own `policy:` list declares, without `-n` |
+| `x is bound to y. Detach it first, or pass --force to remove it anyway` | `rm` on a policy attached to a profile or a session (a policy declared only inline says "edit the profile's policy: list" instead) |
 
 ## What this does not do yet
 
