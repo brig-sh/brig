@@ -57,6 +57,8 @@ usage:
   brig policy attach|detach <policy> <profile>   bind or unbind a policy,
                                                  [-n NAME] for one session
                                                  instead of every run
+  brig policy check <profile> [-n NAME]          what is bound to a run, and
+                                                 whether brig can enforce it
   brig secret create|read|update|delete|ls       keep secrets in your keyring
   brig secret import <profile>                   fill a profile's secrets from
                                                  your host, once
