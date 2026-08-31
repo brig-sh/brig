@@ -66,6 +66,115 @@ func TestListPoliciesSortedAndSkipsABadFile(t *testing.T) {
 	}
 }
 
+// A policy nothing binds gets no second line: the common case stays one
+// line per policy, the way it always has.
+func TestListPoliciesOmitsBoundToWhenNothingBinds(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	out, err := captureStdout(t, listPolicies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "bound to") {
+		t.Errorf("an unbound policy printed a bound to line: %q", out)
+	}
+}
+
+func TestListPoliciesShowsAProfileAttachment(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, listPolicies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "bound to: claude-code") {
+		t.Errorf("the profile attachment was not listed: %q", out)
+	}
+}
+
+func TestListPoliciesShowsASessionAttachment(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "work"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, listPolicies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "bound to: claude-code -n work") {
+		t.Errorf("the session attachment was not listed: %q", out)
+	}
+}
+
+func TestListPoliciesShowsAnInlineDeclaration(t *testing.T) {
+	policyDir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", policyDir)
+	writePolicyFile(t, policyDir, "no-net", noNetBody)
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: mytool
+image: ghcr.io/brig-sh/mytool:latest
+guestHome: /home/mytool
+binary: mytool
+mem: 1024
+cpus: 1
+policy: [no-net]
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, listPolicies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "bound to: mytool (inline)") {
+		t.Errorf("the inline declaration was not listed: %q", out)
+	}
+}
+
+// Listing policies never depended on attachments.yaml before attach
+// existed, and it must not start failing outright just because that file
+// is broken -- diagnosing a policy problem is exactly when brig policies
+// still needs to work.
+func TestListPoliciesToleratesAMalformedAttachmentsFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := os.WriteFile(filepath.Join(dir, "attachments.yaml"),
+		[]byte("profiles: [this is not valid: yaml structure"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out string
+	warning := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, listPolicies)
+		if err != nil {
+			t.Fatalf("listPolicies returned an error over a broken attachments.yaml: %v", err)
+		}
+	})
+	if !strings.Contains(out, "no-net") {
+		t.Errorf("the policy was not listed: %q", out)
+	}
+	if warning == "" {
+		t.Error("a broken attachments.yaml was not reported on stderr")
+	}
+}
+
 // A directory listPolicies cannot even read is a different failure from an
 // empty one: LoadAll returns a nil map only for that case, and "no policies
 // yet" would be the wrong thing to say -- the truth is brig could not look.

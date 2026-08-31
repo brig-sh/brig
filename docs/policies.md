@@ -104,7 +104,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 
 | verb | what it does |
 | --- | --- |
-| `brig policies` | every policy that parses, by name and description |
+| `brig policies` | every policy that parses, by name and description, and -- for one bound to anything -- what binds it |
 | `brig policy ls` | same (parity with `brig profiles` / `brig profile ls`) |
 | `brig policy create <name>` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
 | `brig policy edit <name>` | open an existing one, and only replace it if the save still parses and validates |
@@ -139,6 +139,16 @@ never `attach`'s to add, so it is not `detach`'s to remove. Edit the
 profile's `policy:` list directly instead. A `-n` detach is unaffected --
 inline binds every run, `-n` narrows to one session, and the two do not
 name the same binding.
+
+`brig policy ls` prints what binds a policy right under it, when anything
+does -- an inline `policy:` entry, a profile-level attach, or
+`<profile> -n <session>` for a session-level one:
+
+```console
+$ brig policy ls
+no-net          only Anthropic's API and one internal range
+                bound to: claude-code, claude-code -n work
+```
 
 `edit` never touches the real file until the new content is known to be
 good: it opens a scratch copy, and only if that copy still parses and
