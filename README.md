@@ -113,7 +113,7 @@ separate Linux re-implementation of it.
 
 | command | what it does |
 | --- | --- |
-| `brig run <ref> [args…]` | start the sandbox if needed, then run the agent. Arguments pass through untouched. `-d` starts it and exits, printing its name |
+| `brig run <ref> [project] [args…]` | start the sandbox if needed, then run the agent. A directory named after the ref is mounted as this run's project and the agent starts in it. Remaining arguments pass through untouched. `-d` starts it and exits, printing its name |
 | `brig sh <ref> [cmd…]` | a login shell inside the sandbox, or one command in it |
 | `brig stop <ref>` | stop the sandbox, keep it. Starting it again is a boot, not a fresh creation |
 | `brig rm <ref>` | stop and remove the sandbox. The workspace is untouched |
@@ -152,6 +152,11 @@ the label: `brig run claude@refactor` is what `brig run claude --name refactor`
 was. That one is mapped and warned about rather than quietly reinterpreted,
 because `--name` is also Claude Code's own flag.
 
+`-w`/`--workspace` is `--home`, on the same terms: both spellings keep working
+and each says so. The word went because there are two host directories on a run
+line now -- the guest's own home and the project you name -- and "workspace"
+could not say which of them it meant.
+
 `brig secret` keeps `create|read|update|delete`, and that is deliberate rather
 than an oversight. The tidier `set`/`get` pair would make one typo turn a read
 into a write, silently replacing a stored credential with no way back to the
@@ -162,7 +167,9 @@ of place. Left of the verb are brig's global flags, a closed set -- an unknown
 flag there is a usage error naming the token, rather than an operand quietly
 swallowed. Between the verb and the agent are the run-line flags below. Right of
 the agent the vocabulary is the agent's, and `--` ends brig's parsing outright,
-so an agent flag spelled like one of brig's still reaches it.
+so an agent flag spelled like one of brig's still reaches it. The one exception
+is `run`'s project directory, which is the second bare word on the line -- see
+[The project you name](#the-project-you-name).
 
 brig does still read its own flags after the agent, because `brig run claude -q`
 is a line that works. But once an unknown token has ended brig's reading, a brig
@@ -173,7 +180,7 @@ the token, so a line that works today keeps working.
 | --- | --- |
 | `-n, --name NAME` | a session of its own: own workspace, own sandbox. Also written `<agent>@<label>` |
 | `--image IMAGE` | guest image to boot (`-t` still works, with a note) |
-| `-w, --workspace PATH` | host directory to mount as the guest home |
+| `--home PATH` | host directory to mount as the guest home (`-w`/`--workspace` still work, each with a note) |
 | `--mem MB` | guest memory (`--memory` also works; `-m` works with a note) |
 | `--cpus N` | guest vCPUs |
 | `-d, --detach` | with `run`: start the sandbox, print its name, exit |
@@ -210,6 +217,47 @@ brig run claude -- --name not-a-session    # --name reaches claude, not brig
 brig sh codex 'ls -la ~'                   # one command, in a login shell
 brig sh codex                              # a login shell, no command
 ```
+
+### The project you name
+
+```bash
+cd ~/src/myproject
+brig run claude .
+```
+
+That line does what it looks like. The directory is mounted at
+`/work/myproject` in the guest and the agent starts there.
+
+`/work`, not the guest home. The home is the agent's own -- its dotfiles, its
+onboarding state, its caches -- so a project mounted there could be mistaken for
+home state or collide with the agent's files. Under `/work` it cannot, by the
+mount layout rather than by a convention anyone has to remember. Both mounts are
+read-write, and `brig info` and the pre-run envelope name each of them.
+
+The project is per run, not part of the session. The session is its ref, and the
+ref is the home: `brig run claude ~/src/a` and `brig run claude ~/src/b` are the
+same session with the same home, one after the other. The one consequence worth
+knowing is that the second one restarts the sandbox -- a share is bound at boot
+and cannot be attached to a live guest -- and brig says so when it does. Nothing
+persistent is lost: the home is a host directory that survives the restart, and
+so is each project.
+
+Only `run` takes one. On `sh` the second bare word is already the guest command,
+and brig's own parsing still stops at the project, so a flag after it is the
+agent's exactly as it was before.
+
+```bash
+brig run claude ~/src/myproject -p "what does this do?"  # project, then args
+brig run claude -- ~/src/myproject                      # a path FOR the agent
+brig run claude --home ~/homes/claude ~/src/myproject    # both, each named
+```
+
+**This is a breaking change, for one release.** That word used to end brig's
+parsing and reach the agent, so `brig run claude .` passed `.` to the agent.
+Anything brig now reads as a project it says so about, naming the reading it
+lost beside the one it gained, and `--` is how to keep the old one. The notice
+goes in the next release. A word that names no directory is refused rather than
+mounted, so a line that meant the agent gets an error and not a surprise.
 
 ### Named sessions
 
@@ -272,13 +320,14 @@ To drop the workspace too, remove the directory `brig info` prints. And
 `brig rm --all` stops and removes every brig sandbox at once, named ones
 included, leaving all workspaces alone.
 
-**`-w` is remembered.** A session created with `--workspace` keeps that
+**The home is remembered.** A session created with `--home` keeps that
 directory for every later verb, so `brig sh claude@refactor ls` finds it
 without repeating the flag. brig records it in `~/.brig/sessions.json`, filed
-under the session's ref, and reads it back when neither `--workspace` nor
+under the session's ref, and reads it back when neither `--home` nor
 `BRIG_WORKSPACE` names one; `brig rm` drops the entry with the sandbox, and
 `brig ls` drops any whose sandbox has gone. That file is also where `brig ls`
-reads the ref it prints.
+reads the ref it prints, and where the project a session last ran with is
+recorded -- which is how the next run knows whether it has to restart.
 
 That file is an index and not a record of the truth: the runtime stays the
 authority on what is actually mounted, and an unreadable index costs one restart
@@ -294,7 +343,7 @@ The verbs line up deliberately, so muscle memory carries over:
 
 | `sbx` | `brig` | note |
 | --- | --- | --- |
-| `sbx run <agent> [path]` | `brig run <agent> [-w path]` | brig takes the workspace as a flag rather than a positional, so it never has to guess where agent arguments begin |
+| `sbx run <agent> [path]` | same | the positional is the project brig mounts and starts the agent in; `--home` is the separate directory that is the guest's own |
 | `sbx create` | `brig run -d` | starts the sandbox and exits, printing its name |
 | `sbx ls` / `sbx stop` / `sbx rm` | same | |
 | `sbx exec` | `brig sh` | one verb for a command and for a login shell |
