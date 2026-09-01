@@ -22,7 +22,12 @@ func policyCmd(args []string) error {
 		return errors.New("policy needs a subcommand: ls, create, edit, show or rm")
 	}
 	switch args[0] {
-	case "ls", "list":
+	case "ls":
+		return listPolicies()
+	// list was never in the help text, so it was found by accident and then
+	// scripted. Kept for one release, saying which spelling to keep.
+	case "list":
+		deprecated("brig policy list", "brig policy ls")
 		return listPolicies()
 	case "create":
 		return createPolicy(args[1:])
@@ -88,7 +93,7 @@ func lookupPolicy(name string) (policy.Entry, error) {
 	}
 	e, ok := entries[name]
 	if !ok {
-		return policy.Entry{}, fmt.Errorf("unknown policy %q. `brig policies` lists them", name)
+		return policy.Entry{}, fmt.Errorf("unknown policy %q. `brig policy ls` lists them", name)
 	}
 	return e, nil
 }
@@ -296,7 +301,7 @@ func editPolicy(args []string) error {
 	}
 	// The system temp directory, not policy.Dir(): a scratch copy that
 	// failed to clean up would otherwise sit in the policy directory with a
-	// name isPolicyFile matches, and every later `brig policies` would
+	// name isPolicyFile matches, and every later `brig policy ls` would
 	// report it as a broken policy rather than leftover editor debris.
 	scratch, err := os.CreateTemp("", "brig-policy-edit-*"+filepath.Ext(entry.Path))
 	if err != nil {
@@ -353,7 +358,7 @@ func editPolicy(args []string) error {
 	// file is always the old content or the new one, never a partial
 	// write. The name does not end in .yaml/.yml/.json, so a rename that
 	// never happens leaves debris isPolicyFile ignores, not a policy
-	// brig policies reports as broken.
+	// brig policy ls reports as broken.
 	//
 	// os.WriteFile never changed entry.Path's mode -- an existing file
 	// keeps whatever it already had, and only a newly created one takes

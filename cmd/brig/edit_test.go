@@ -47,8 +47,8 @@ func TestEditOpensAFileBackedProfile(t *testing.T) {
 	}
 }
 
-// An embedded profile has no file. edit creates nothing -- import and export
-// with a destination stay the only two commands that write into the profile
+// An embedded profile has no file. edit creates nothing -- import, new and
+// export with a destination stay the only commands that write into the profile
 // directory -- and it names the command that would make one.
 func TestEditRefusesAnEmbeddedProfile(t *testing.T) {
 	dir := t.TempDir()
@@ -63,7 +63,7 @@ func TestEditRefusesAnEmbeddedProfile(t *testing.T) {
 		t.Fatal("editing a built-in was allowed")
 	}
 	if !strings.Contains(err.Error(), "built in") ||
-		!strings.Contains(err.Error(), "brig profile export claude-code") {
+		!strings.Contains(err.Error(), "brig agent new claude-code --from claude-code") {
 		t.Errorf("the error does not say how to make a file: %v", err)
 	}
 	entries, _ := os.ReadDir(dir)

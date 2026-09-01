@@ -19,9 +19,9 @@ import (
 // credential variables every time.
 //
 // They live as one file per profile in a directory, which makes them
-// diffable, reviewable and easy to share -- and means `brig export` followed
-// by an edit is the way to write one, rather than starting from a blank file
-// and a guess about the field names.
+// diffable, reviewable and easy to share -- and means `brig agent show`
+// followed by an edit is the way to write one, rather than starting from a
+// blank file and a guess about the field names.
 //
 // YAML or JSON, read the same way: JSON is a subset of YAML, so one parser
 // handles both and nothing has to guess at a format. Export writes YAML,
@@ -254,7 +254,7 @@ const firstHeaderLine = "# A brig profile."
 // exportHeader is what makes an exported profile a starting point rather
 // than a puzzle. It is the one thing JSON could not carry, and the reason
 // export writes YAML: the fields are explained where you are editing them.
-const exportHeader = firstHeaderLine + ` Edit it, then: brig profile import <this file>
+const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this file>
 #
 #   name       the profile name. Also the workspace directory and the sandbox
 #              name, so: lowercase letters, digits, dot, dash, underscore
@@ -361,7 +361,7 @@ func Files(name string) []string {
 // deleted.
 //
 // Every file, not only the one that loaded. Deleting the winner alone promotes
-// whichever file was shadowed by it, so `brig profile rm codex` would report
+// whichever file was shadowed by it, so `brig agent rm codex` would report
 // success and leave codex listed exactly as before -- the one outcome an rm
 // must not have.
 func Remove(name string) ([]string, error) {
@@ -422,7 +422,7 @@ func LegacyHint() string {
 		return ""
 	}
 	return fmt.Sprintf("%d profile(s) in %s are not read any more; they live in %s now. "+
-		"`brig profile import %s` moves one across.",
+		"`brig agent import %s` moves one across.",
 		n, old, Dir(), filepath.Join(old, "<file>"))
 }
 
@@ -436,9 +436,9 @@ func LegacyHint() string {
 // scatter files across the host on a typo.
 //
 // Wanting a copy somewhere else is a real thing to want, and it already has a
-// spelling: with no destination export writes stdout, so `brig profile export
-// codex > mine.yaml` puts it wherever you like, under the shell's rules rather
-// than brig's.
+// spelling: `brig agent show` writes stdout, so `brig agent show codex >
+// mine.yaml` puts it wherever you like, under the shell's rules rather than
+// brig's.
 //
 // An empty destination stays empty: that is the stdout case, and the caller
 // decides what to do with it.
@@ -448,7 +448,7 @@ func ExportPath(dest string, asJSON bool) (string, error) {
 	}
 	if looksLikePath(dest) {
 		return "", fmt.Errorf("%q is a path, and export takes a name: it writes into %s "+
-			"and nowhere else. Use `brig profile export <profile> > %s` to put a copy "+
+			"and nowhere else. Use `brig agent show <agent> > %s` to put a copy "+
 			"somewhere of your own", dest, Dir(), dest)
 	}
 	base := dest
@@ -485,7 +485,7 @@ func looksLikePath(s string) bool {
 // reference prepended.
 //
 // Verbatim, because starting from the closest existing profile is the
-// documented way to write one: `brig profile export claude-code` should hand
+// documented way to write one: `brig agent show claude-code` should hand
 // you the annotated file brig ships, not an alphabetised struct dump with
 // every comment stripped. A profile built in Go rather than read from a file
 // has no bytes to return, so that case still marshals.
@@ -513,7 +513,7 @@ func Export(p Profile) ([]byte, error) {
 // Starting from the closest existing profile is the documented way to write
 // one, and the recipe brig prints for it stopped at its second step until this
 // existed: export wrote the file under the name you gave it while the profile
-// inside kept the name it came from, so `brig profile edit mytool` had no such
+// inside kept the name it came from, so `brig agent edit mytool` had no such
 // profile to open and the only command that could reach the file named a
 // different profile and deleted it without asking.
 //
@@ -524,7 +524,7 @@ func Export(p Profile) ([]byte, error) {
 // sentences gone.
 //
 // An empty name, or the profile's own, renders unchanged -- that is the plain
-// `brig profile export claude-code` case, where nothing was asked to be
+// `brig agent show claude-code` case, where nothing was asked to be
 // renamed.
 func ExportAs(p Profile, name string) ([]byte, error) {
 	blob, err := Export(p)

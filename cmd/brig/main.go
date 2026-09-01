@@ -50,12 +50,8 @@ usage:
   brig info   <profile>                          print the execution envelope and the
                                                  full environment, by name -- fails
                                                  if a declared secret is missing
-  brig profiles                                  list the profiles
-  brig profile ls|export|import|edit|rm          manage profiles
-  brig policies                                  list the policies
+  brig agent ls|show|new|edit|rm|import|export   the agents you can run
   brig policy ls|create|edit|show|rm             manage policies
-  brig export <profile> [name] [--json]          print a profile, or save it
-                                                 as <name> in the profile dir
   brig secret create|read|update|delete|ls       keep secrets in your keyring
   brig secret import <profile>                   fill a profile's secrets from
                                                  your host, once
@@ -86,10 +82,11 @@ run is immediate; state lives in the workspace on the host either way.
 Any Linux CLI in an OCI image runs under brig, if the image also carries the
 utilities brig uses to set the sandbox up and deliver the credential: a shell
 (sh and bash), plus cat, stat, chown, mkdir, mount and /bin/true. A stock
-distro image has them; a scratch image with only your binary does not. A
-profile just saves you spelling out the image and its credential variables
-every time: export the closest one, edit it, import it back. Building an image
-for one is documented at
+distro image has them; a scratch image with only your binary does not. An
+agent entry just saves you spelling out the image and its credential variables
+every time: copy the closest one and edit it, with
+  brig agent new mine --from claude, then brig agent edit mine
+Building an image for one is documented at
   https://github.com/brig-sh/community-images/blob/main/docs/bring-your-own-image.md
 
 settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
@@ -174,34 +171,52 @@ func run(args []string) error {
 	case "version", "--version":
 		fmt.Printf("brig %s\n", version)
 		return nil
-	case "profiles":
-		return listProfiles()
-	case "profile":
-		return profileCmd(rest)
-	case "policies":
-		return listPolicies()
+	case "agent":
+		return agentCmd(rest)
 	case "policy":
 		return policyCmd(rest)
 	case "secret":
 		return secretCmd(os.Stdout, rest)
 	case "telemetry":
 		return telemetryCmd(os.Stdout, rest)
+	// Deprecated spellings, absent from the usage text.
+	//
+	// The three grammars this release settles are all here: a plural noun that
+	// is a command of its own, a noun command spelled again at the top level,
+	// and a group renamed. Each keeps working and says the one word that
+	// replaces it, because a spelling has to survive the commit that renames it
+	// or that commit breaks every script anyone has written.
+	case "profiles":
+		deprecated("brig profiles", "brig agent ls")
+		return listProfiles()
+	case "profile":
+		return deprecatedProfileCmd(rest)
+	case "policies":
+		deprecated("brig policies", "brig policy ls")
+		return listPolicies()
 	case "import":
+		deprecated("brig import", "brig agent import")
 		return importProfile(rest)
 	case "export":
+		// Named onto `brig agent export` rather than onto show or new, because
+		// this is the same command: it prints with no destination and writes
+		// with one, and the reader's line keeps working word for word. show and
+		// new are the taught spellings of those two halves, and the usage text
+		// is where someone meets them.
+		deprecated("brig export", "brig agent export")
 		return exportProfile(rest)
-	// Deprecated spellings, absent from the usage text. There is deliberately
-	// no `brig template edit`: the old group carries only the verbs it already
-	// had, so a command that never existed under that name does not gain one.
+	// There is deliberately no `brig template edit`: the old group carries only
+	// the verbs it already had, so a command that never existed under that name
+	// does not gain one.
 	case "agents":
-		deprecated("brig agents", "brig profiles")
+		deprecated("brig agents", "brig agent ls")
 		return listProfiles()
 	case "template":
-		deprecated("brig template", "brig profile")
+		deprecated("brig template", "brig agent")
 		if len(rest) > 0 && rest[0] == "edit" {
-			return fmt.Errorf("there is no `brig template edit`; use `brig profile edit`")
+			return fmt.Errorf("there is no `brig template edit`; use `brig agent edit`")
 		}
-		return profileCmd(rest)
+		return agentCmd(rest)
 	case "ls":
 		return listSandboxes(rest)
 	case "reset":
@@ -222,9 +237,9 @@ func run(args []string) error {
 	if !ok {
 		if profileName == "" {
 			return fmt.Errorf("%s needs a profile, for example `brig %s claude`. "+
-				"`brig profiles` lists them", verb, verb)
+				"`brig agent ls` lists them", verb, verb)
 		}
-		return notFoundf("unknown profile %q. `brig profiles` lists them", profileName)
+		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
 	}
 	// Say why up front. Without this the pull fails against the registry
 	// with a 404 that reads like an outage rather than a decision.
@@ -1160,8 +1175,8 @@ func listProfiles() error {
 		}
 	}
 	fmt.Printf("\nan unmarked profile is built in; your own live in %s\n", profile.Dir())
-	fmt.Printf("to override one:  brig profile export claude-code claude-code, then brig profile edit claude-code\n")
-	fmt.Printf("to add your own:  brig profile export claude-code mytool, then brig profile edit mytool\n")
+	fmt.Printf("to override one:  brig agent new claude-code --from claude-code, then brig agent edit claude-code\n")
+	fmt.Printf("to add your own:  brig agent new mytool --from claude-code, then brig agent edit mytool\n")
 	fmt.Printf("to build an image for one: %s\n", profile.BringYourOwnImageDoc)
 	return nil
 }
@@ -1190,68 +1205,140 @@ func handCreatedNames(p profile.Profile) []string {
 	return names
 }
 
-// profileUsage is what `brig profile --help` prints. Held here rather than in
-// the top-level usage text for the same reason secretUsage is: it names the
-// flags of five verbs, which is more than the one line the command list can
-// give them.
-const profileUsage = `brig profile -- manage profiles
+// agentUsage is what `brig agent --help` prints. Held here rather than in the
+// top-level usage text for the same reason secretUsage is: it names the flags
+// of seven verbs, which is more than the one line the command list can give
+// them.
+const agentUsage = `brig agent -- the agents you can run
 
 usage:
-  brig profile ls                        list the profiles
-  brig profile export <profile>          print one, to edit or to pipe
-  brig profile export <profile> <name>   save it as <name> in the profile dir
-  brig profile import <file>             add one of your own (- reads stdin)
-  brig profile edit <name>               open yours in $VISUAL or $EDITOR
-  brig profile rm <name> [-y]            delete yours, after asking
+  brig agent ls                          list the agents you can run
+  brig agent show <agent> [--json]       print one, to read or to pipe
+  brig agent new <name> --from <agent>   copy one under a name of your own
+  brig agent edit <name>                 open yours in $VISUAL or $EDITOR
+  brig agent rm <name> [-y]              delete yours, after asking
+  brig agent import <file>               add one of your own (- reads stdin)
+  brig agent export <agent> [name]       print one, or save it as <name>
 
 flags:
-      --json        with export: render JSON rather than YAML
-  -f, --force       with export: replace a file that is already there
+      --from AGENT  with new: the agent to copy
+      --json        with show, export and new: JSON rather than YAML
+  -f, --force       with new and export: replace a file that is already there
   -y, --yes         with rm: the answer, given in advance
 
-A destination is a name and never a path: export writes the profile directory
-and nowhere else, because that is the only place a profile file does anything.
-Redirect the no-destination form to put a copy of your own anywhere.
+An agent brig ships is built in and has no file. new gives you a copy that
+does, under a name of your own and with that name written into it, so
+` + "`brig agent edit`" + ` and ` + "`brig run`" + ` both reach it by the name you picked.
 
-A profile saves you spelling out the image, the guest home and the credential
-variables on every run. Export the closest one, edit it, import it back.
-Building an image for one is documented at
+A destination is a name and never a path: brig writes one directory of its own
+and nowhere else, because that is the only place one of these files does
+anything. Redirect ` + "`brig agent show`" + ` to put a copy anywhere of your own.
+
+An agent entry saves you spelling out the image, the guest home and the
+credential variables on every run. Copy the closest one and edit it. Building
+an image for one is documented at
   ` + profile.BringYourOwnImageDoc + `
 `
 
-// profileCmd groups the profile verbs, which is where someone coming from
-// another sandbox tool will look for them.
-func profileCmd(args []string) error {
+// agentCmd groups the verbs that manage the agents brig can run.
+//
+// One noun, one verb set: ls, show, new, edit, rm, import, export. The group
+// was called profile and its listing was also a top-level `brig profiles`,
+// while show and new were two shapes of one `brig export` -- three ways of
+// spelling the same group, none of which told a reader which of the three the
+// next command would want. deprecatedProfileCmd keeps every old spelling
+// working; this is the only one the help text teaches.
+//
+// The noun is the CLI's alone. internal/profile, BRIG_PROFILE_DIR and
+// ~/.brig/profiles/ keep their names: renaming them is a mechanical diff
+// across the tree that would land on top of this one and compete with it for
+// review, and it changes nothing anyone types.
+func agentCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("profile needs a subcommand: ls, export, import, edit or rm")
+		return errors.New("agent needs a subcommand: ls, show, new, edit, rm, import or export")
 	}
 	var err error
 	switch args[0] {
 	case "--help", "-h", "help":
-		fmt.Print(profileUsage)
+		fmt.Print(agentUsage)
 		return nil
-	case "ls", "list":
+	case "ls":
 		return listProfiles()
-	case "export", "save":
+	case "show":
+		err = showAgent(args[1:])
+	case "new":
+		err = newAgent(args[1:])
+	case "export":
 		err = exportProfile(args[1:])
-	case "import", "load":
+	case "import":
 		err = importProfile(args[1:])
 	case "edit":
 		err = editProfile(args[1:])
 	case "rm":
 		err = removeProfile(args[1:])
+	// The undocumented second spellings, kept for one release. They were never
+	// in the help text, so they were found by accident and then written into
+	// scripts, which is exactly why they cannot simply disappear.
+	case "list":
+		deprecated("brig agent list", "brig agent ls")
+		return listProfiles()
+	case "save":
+		deprecated("brig agent save", "brig agent export")
+		err = exportProfile(args[1:])
+	case "load":
+		deprecated("brig agent load", "brig agent import")
+		err = importProfile(args[1:])
 	default:
-		return fmt.Errorf("unknown profile subcommand %q (ls, export, import, edit, rm)", args[0])
+		return fmt.Errorf("unknown agent subcommand %q "+
+			"(ls, show, new, edit, rm, import, export)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how the
 	// flag package says it. Asking for help is not a mistake, so it is answered
 	// with the help and an exit code of zero -- the same translation the secret
 	// group makes, and for the same reason.
 	if errors.Is(err, flag.ErrHelp) {
-		fmt.Print(profileUsage)
+		fmt.Print(agentUsage)
 		return nil
 	}
 	return err
+}
+
+// deprecatedProfileCmd is `brig profile <verb>`, which is now
+// `brig agent <verb>`.
+//
+// The notice names the subcommand rather than the group, because the verbs do
+// not all retire onto the same word: export splits into show and new for the
+// two lines people actually type, and a notice reading "`brig profile` is now
+// `brig agent`" would leave the reader to work out which of the two theirs
+// became. Whatever they typed still runs -- agentCmd does the work -- so the
+// notice is the only difference between the old spelling and the new one.
+func deprecatedProfileCmd(args []string) error {
+	if len(args) == 0 {
+		deprecated("brig profile", "brig agent")
+		return agentCmd(args)
+	}
+	// The verb the old spelling maps onto, for the notice. Anything not listed
+	// is a mistake rather than a retired spelling, and agentCmd names the real
+	// verbs for it -- so it hears no notice, which is right: there is nothing
+	// to stop typing.
+	now := map[string]string{
+		"ls": "ls", "list": "ls",
+		"export": "export", "save": "export",
+		"import": "import", "load": "import",
+		"edit": "edit",
+		"rm":   "rm",
+	}
+	verb, known := now[args[0]]
+	if !known {
+		if isHelp(args[0]) {
+			deprecated("brig profile", "brig agent")
+		}
+		return agentCmd(args)
+	}
+	deprecated("brig profile "+args[0], "brig agent "+verb)
+	// Translated to the current verb, so `brig profile save` does not go on to
+	// hear agentCmd's notice for save as well: one command, one notice.
+	return agentCmd(append([]string{verb}, args[1:]...))
 }
 
 // editProfile opens a file-backed profile in your editor.
@@ -1263,19 +1350,19 @@ func profileCmd(args []string) error {
 // version and no longer picking up a deny entry added in a later release.
 func editProfile(args []string) error {
 	if len(args) == 0 {
-		return errors.New("profile edit needs a name, for example `brig profile edit mine`")
+		return errors.New("edit needs a name, for example `brig agent edit mine`")
 	}
 	name := args[0]
 	p, ok := profile.Lookup(name)
 	if !ok {
-		return notFoundf("unknown profile %q. `brig profiles` lists them", name)
+		return notFoundf("unknown profile %q. `brig agent ls` lists them", name)
 	}
 	path, ok := profile.Path(p.Name)
 	if !ok {
 		return fmt.Errorf("%s is built in, so there is no file to edit.\n"+
 			"To override it:\n"+
-			"  brig profile export %s %s\n"+
-			"  brig profile edit %s",
+			"  brig agent new %s --from %s\n"+
+			"  brig agent edit %s",
 			p.Name, p.Name, p.Name, p.Name)
 	}
 
@@ -1313,10 +1400,11 @@ func editorCommand() []string {
 }
 
 // importProfile adds a profile of your own. Reading from - lets it come out of
-// a pipe, which is what makes `brig export x | edit | brig import -` work.
+// a pipe, which is what makes `brig agent show x | edit | brig agent import -`
+// work.
 func importProfile(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("import needs a file, for example `brig profile import mine.yaml` "+
+		return fmt.Errorf("import needs a file, for example `brig agent import mine.yaml` "+
 			"(or - to read stdin). See %s", profile.BringYourOwnImageDoc)
 	}
 	var blob []byte
@@ -1345,7 +1433,7 @@ func importProfile(args []string) error {
 	p, path, err := profile.Import(blob, dir)
 	if err != nil {
 		return fmt.Errorf("%w\n\nA profile needs at least a name, an image, a guest home, "+
-			"a binary, mem and cpus. `brig profile export claude-code` prints a working one "+
+			"a binary, mem and cpus. `brig agent show claude-code` prints a working one "+
 			"to start from, and %s explains how to build the image", err, profile.BringYourOwnImageDoc)
 	}
 	fmt.Printf("imported %s -> %s\n", p.Name, path)
@@ -1357,86 +1445,200 @@ func importProfile(args []string) error {
 	return nil
 }
 
-// exportProfile prints a profile, or writes it to a file. YAML by default,
-// because the result is meant to be edited; --json for anything consuming it
-// programmatically.
+// exportLine is one line of show, new or export after parsing: the bare words
+// in the order they were typed, and the flags that were set.
 //
-// A destination is a name, never a path: `brig profile export codex mine`
-// writes mine.yaml into the profile directory, because that is the only place
-// a profile file does anything. See profile.ExportPath, which owns the rule.
+// The three verbs are one operation with different lines around it -- render a
+// profile, to stdout or into the profile directory -- so they share a parser
+// rather than keeping three copies of the loop below. Which flags a verb offers
+// is passed in, because the message an unknown flag gets has to name that
+// verb's own set: telling `brig agent show` it takes --force would advertise a
+// flag it does not have.
+type exportLine struct {
+	words  []string
+	asJSON bool
+	force  bool
+	from   string
+}
+
+// exportFlags is which of the optional flags a verb offers, and the prose that
+// names them when one is mistyped.
+type exportFlags struct {
+	force bool
+	from  bool
+	takes string
+}
+
+// parseExportLine reads a render verb's arguments.
 //
-// The destination is also the name written into the file. brig keys on the
-// name: field rather than on the file name, so the two disagreeing is the
-// difference between a profile of your own and a copy of someone else's under
-// a misleading file name -- see profile.ExportAs.
+// Parse stops at the first bare word, so a flag written after one -- `export
+// codex mine --json`, the order the docs use -- would otherwise be left
+// sitting in Args. Lift the word and parse on.
 //
-// With no destination it prints, which is what keeps
-// `brig profile export x | brig profile import -` working, what stops the
-// command writing anything you did not ask for, and how you get a copy
-// anywhere else: redirect it.
 // Unlike the run line, nothing here passes through to another program, so an
 // unrecognised flag is a mistake rather than someone else's argument and the
 // flag package can reject it outright. Without that, a mistyped flag falls
 // through to the destination and export writes a file called --jsonn.
-func exportProfile(args []string) error {
-	asJSON, force := false, false
-	fs := flag.NewFlagSet("export", flag.ContinueOnError)
+func parseExportLine(verb string, args []string, offers exportFlags) (exportLine, error) {
+	var line exportLine
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
-	fs.BoolVar(&asJSON, "json", false, "")
-	fs.BoolVar(&force, "force", false, "")
-	fs.BoolVar(&force, "f", false, "")
-
-	// Parse stops at the first bare word, so a flag written after the
-	// destination -- `export codex mine --json`, the order the docs use --
-	// would otherwise be left sitting in Args. Lift the word and parse on.
-	var words []string
+	fs.BoolVar(&line.asJSON, "json", false, "")
+	if offers.force {
+		fs.BoolVar(&line.force, "force", false, "")
+		fs.BoolVar(&line.force, "f", false, "")
+	}
+	if offers.from {
+		fs.StringVar(&line.from, "from", "", "")
+	}
 	for rest := args; ; {
 		if err := fs.Parse(rest); err != nil {
-			// The unknown flag is export's own case: on the run line one never
-			// reaches the flag package, because it belongs to the agent. Every
-			// other error the parser can raise here is one the run line already
-			// says in brig's voice, so say it the same way.
+			if errors.Is(err, flag.ErrHelp) {
+				return line, err
+			}
+			// The unknown flag is this group's own case: on the run line one
+			// never reaches the flag package, because it belongs to the agent.
+			// Every other error the parser can raise here is one the run line
+			// already says in brig's voice, so say it the same way.
 			msg := err.Error()
 			if name, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
 				msg = "unknown flag " + spell(name)
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return fmt.Errorf("%s (export takes --json and --force)", msg)
+			return line, fmt.Errorf("%s (%s takes %s)", msg, verb, offers.takes)
 		}
 		if fs.NArg() == 0 {
-			break
+			return line, nil
 		}
-		words = append(words, fs.Arg(0))
+		line.words = append(line.words, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
+}
+
+// showAgent prints one agent entry and writes nothing. It is the spelling
+// `brig export <profile>` had, under the noun it belongs to.
+//
+// A second word is refused rather than read as a destination, which is the one
+// place show and the old top-level export differ: `brig export claude mine`
+// wrote a file, so anyone with that in their fingers gets the command that took
+// the job over rather than a file they did not ask for.
+func showAgent(args []string) error {
+	line, err := parseExportLine("show", args, exportFlags{takes: "--json"})
+	if err != nil {
+		return err
+	}
+	switch len(line.words) {
+	case 0:
+		return errors.New("show needs an agent, for example `brig agent show claude-code`")
+	case 1:
+	default:
+		return fmt.Errorf("show prints one agent and writes nothing, so it takes no "+
+			"destination. To copy one under a name of your own: brig agent new %s --from %s",
+			line.words[1], line.words[0])
+	}
+	return renderProfile(line.words[0], "", line.asJSON, false)
+}
+
+// newAgent copies an agent entry under a name of your own, which is the
+// spelling `brig export <profile> <name>` had.
+//
+// --from rather than a second bare word, because the two words are not
+// interchangeable and the old line gave a reader no way to tell which order it
+// wanted. The name comes first here for the same reason it does in
+// `brig secret create <name>`: the thing being made is the operand.
+//
+// The name is written into the file, not just onto it -- see profile.ExportAs.
+// That is the defect this rename fixes: the recipe brig prints failed on its
+// own second step, because the copy still declared the profile it came from
+// and `brig agent edit <name>` had nothing of that name to open.
+func newAgent(args []string) error {
+	line, err := parseExportLine("new", args,
+		exportFlags{force: true, from: true, takes: "--from, --json and --force"})
+	if err != nil {
+		return err
+	}
+	switch len(line.words) {
+	case 0:
+		return errors.New("new needs a name, for example " +
+			"`brig agent new mine --from claude-code`")
+	case 1:
+	default:
+		// Both words are named and neither is guessed at. `new mine codex` and
+		// `new codex mine` are both lines someone types -- the second is the
+		// old `brig export codex mine` order -- and picking one would send half
+		// of them a corrected command with the two words the wrong way round.
+		return fmt.Errorf("new takes one name and takes the agent it copies from --from, "+
+			"so it cannot have both %q and %q: brig agent new <name> --from <agent>",
+			line.words[0], line.words[1])
+	}
+	if line.from == "" {
+		return fmt.Errorf("new copies an agent, so it needs one: "+
+			"brig agent new %s --from claude-code. `brig agent ls` lists them", line.words[0])
+	}
+	return renderProfile(line.from, line.words[0], line.asJSON, line.force)
+}
+
+// exportProfile prints a profile, or writes it to a file: the verb `brig agent
+// export` is, and the one `brig profile export` and the top-level `brig export`
+// were. show and new are the taught spellings of its two halves; this is kept
+// because it is the line already in everyone's scripts, word for word.
+func exportProfile(args []string) error {
+	line, err := parseExportLine("export", args,
+		exportFlags{force: true, takes: "--json and --force"})
+	if err != nil {
+		return err
+	}
 	var name, dest string
-	switch len(words) {
+	switch len(line.words) {
 	case 0:
 	case 1:
-		name = words[0]
+		name = line.words[0]
 	case 2:
-		name, dest = words[0], words[1]
+		name, dest = line.words[0], line.words[1]
 	default:
-		return fmt.Errorf("export takes a profile and at most one destination, not %q", words[2])
+		return fmt.Errorf("export takes an agent and at most one destination, not %q",
+			line.words[2])
 	}
 	if name == "" {
-		return errors.New("export needs a profile, for example `brig profile export claude-code`")
+		return errors.New("export needs an agent, for example `brig agent export claude-code`")
 	}
+	return renderProfile(name, dest, line.asJSON, line.force)
+}
+
+// renderProfile is what show, new and export all do: look one profile up and
+// render it, to stdout or into the profile directory. YAML by default, because
+// the result is meant to be edited; --json for anything consuming it
+// programmatically.
+//
+// A destination is a name, never a path: `brig agent new mine --from codex`
+// writes mine.yaml into the profile directory, because that is the only place
+// a profile file does anything. See profile.ExportPath, which owns the rule.
+//
+// The destination is also the name written into the file. brig keys on the
+// name: field rather than on the file name, so the two disagreeing is the
+// difference between an agent of your own and a copy of someone else's under
+// a misleading file name -- see profile.ExportAs.
+//
+// With no destination it prints, which is what keeps
+// `brig agent show x | brig agent import -` working, what stops the command
+// writing anything you did not ask for, and how you get a copy anywhere else:
+// redirect it.
+func renderProfile(name, dest string, asJSON, force bool) error {
 	p, ok := profile.Lookup(name)
 	if !ok {
-		return notFoundf("unknown profile %q. `brig profiles` lists them", name)
+		return notFoundf("unknown profile %q. `brig agent ls` lists them", name)
 	}
 	path, err := profile.ExportPath(dest, asJSON)
 	if err != nil {
 		return err
 	}
-	// The name the exported profile carries: the file's own stem when there is
-	// a file, so that `brig profile export claude-code mytool` writes a profile
-	// called mytool and `brig profile edit mytool` can then open it. With no
-	// destination there is no file to agree with, and the export is the profile
-	// as it stands.
+	// The name the rendered profile carries: the file's own stem when there is
+	// a file, so that `brig agent new mytool --from claude-code` writes a profile
+	// called mytool and `brig agent edit mytool` can then open it. With no
+	// destination there is no file to agree with, and what is printed is the
+	// profile as it stands.
 	as := p.Name
 	if path != "" {
 		as = stemOf(path)
@@ -1447,7 +1649,7 @@ func exportProfile(args []string) error {
 	// name rather than copying one that was already checked.
 	if owner, reserved := profile.Reserved(as); reserved && as != owner {
 		return fmt.Errorf("a profile named %q would collide with the %s profile, which "+
-			"reserves that word. Export it under another name", as, owner)
+			"reserves that word. Copy it under another name", as, owner)
 	}
 	// An alias is the same collision one step further out: the word is already
 	// how people spell a profile, and a profile of that name wins the lookup,
@@ -1457,7 +1659,7 @@ func exportProfile(args []string) error {
 	// a run booting an image nobody chose.
 	if owner, ok := profile.Alias(as); ok {
 		return fmt.Errorf("a profile named %q would collide with %s, which is what brig "+
-			"already runs for that word. Export it under another name", as, owner)
+			"already runs for that word. Copy it under another name", as, owner)
 	}
 	render := profile.ExportAs
 	if asJSON {
@@ -1481,7 +1683,7 @@ func exportProfile(args []string) error {
 				"to replace it with a fresh export of %s", path, p.Name)
 		}
 	}
-	// The directory may not exist yet: `brig profile edit` points a first-time
+	// The directory may not exist yet: `brig agent edit` points a first-time
 	// user straight here, and on a fresh install nothing has created it. 0700
 	// per the XDG spec, and the right mode for files naming credentials.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -1508,7 +1710,7 @@ func exportProfile(args []string) error {
 	if as != p.Name {
 		fmt.Printf("its image, guest home and comments still describe %s\n", p.Name)
 	}
-	fmt.Printf("edit it with: brig profile edit %s\n", as)
+	fmt.Printf("edit it with: brig agent edit %s\n", as)
 	return nil
 }
 
@@ -1526,7 +1728,7 @@ func stemOf(path string) string {
 // -y is the answer to the question below, given in advance, and it is spelled
 // the way the secret verbs spell it.
 func removeProfile(args []string) error {
-	name, yes, err := nameAndYes("profile rm", "brig profile rm mine", args)
+	name, yes, err := nameAndYes("rm", "brig agent rm mine", args)
 	if err != nil {
 		return err
 	}
@@ -1561,18 +1763,18 @@ func removeProfile(args []string) error {
 //
 // rm resolves the argument through the registry, which is what lets it work on
 // an alias and on a file whose basename says nothing about the profile inside
-// it. That resolution is also how `brig profile rm claude-code` could delete a
+// it. That resolution is also how `brig agent rm claude-code` could delete a
 // file called mytool.yaml and exit 0 without a word: the file the person had a
 // name for and the file brig found were different files, and only brig knew
 // which.
 //
 // So the question is whether brig had to work anything out, and there are two
 // ways it does. The argument may not be the profile's own name, which is the
-// alias case: `brig profile rm claude` deletes whatever backs claude-code, and
+// alias case: `brig agent rm claude` deletes whatever backs claude-code, and
 // a file called claude.yaml declaring claude-code carries the stem the
 // argument spells while being a profile the argument never said. And a file's
 // basename may not be the argument at all, which is the renamed-by-hand case
-// and the second-file-shadowing-the-first case. `brig profile rm mytool`
+// and the second-file-shadowing-the-first case. `brig agent rm mytool`
 // against mytool.yaml declaring mytool is the one combination that is exactly
 // what was typed -- what export writes, and the only case where nothing can
 // surprise you.
@@ -1614,7 +1816,7 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 	if !wrap.IsTerminal(os.Stdin) {
 		return fmt.Errorf("removing %q would delete %s, which brig worked out from the "+
 			"name you typed rather than being told, and there is no terminal to ask on. "+
-			"Pass -y to answer in advance: brig profile rm %s -y", arg, list, arg)
+			"Pass -y to answer in advance: brig agent rm %s -y", arg, list, arg)
 	}
 	fmt.Fprintf(os.Stderr, "brig: removing %q deletes %s, which %s the %s profile. "+
 		"Remove it? [y/N] ", arg, list, declares, resolved)
@@ -1622,7 +1824,7 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 	if err != nil {
 		// EOF is the answer a closed stdin gives, and it is not yes.
 		return fmt.Errorf("aborted: nothing was removed. To answer in advance: "+
-			"brig profile rm %s -y", arg)
+			"brig agent rm %s -y", arg)
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
