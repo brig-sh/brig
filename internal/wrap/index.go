@@ -83,8 +83,7 @@ const (
 // Home is the guest's home directory on the host -- the same path the run
 // calls the workspace. It is named for what it is to the session rather than
 // for the flag that supplies it, because it is the directory that makes the
-// session the session: an entry with a different home is a different session,
-// and #6 adds the per-run project mount beside it, which is not.
+// session the session: an entry with a different home is a different session.
 //
 // Sandbox is the instance carrying the session at the moment, which is the
 // part that is not identity: it is removed and recreated by an ordinary
@@ -93,9 +92,19 @@ const (
 // and ForgetSandbox -- and because it is what tells an entry about the sandbox
 // this invocation is addressing from one about a differently named sandbox of
 // the same session. See rememberedWorkspace.
+//
+// Project is the host directory the session LAST RAN with, and the only key
+// here that is not the session at all. It is omitted when there is none, which
+// is most sessions: the identity is the ref, and the ref is the agent plus the
+// label, which is the home. Two runs of one session on two projects are the
+// same session, so an entry with a different project is the same entry with a
+// new value -- which is exactly what makes it worth recording, because a share
+// cannot be attached to a live sandbox and this is what the next run compares
+// against to find out whether it has to recreate one. See projectShareStale.
 type sessionEntry struct {
 	Home    string `json:"home"`
 	Sandbox string `json:"sandbox"`
+	Project string `json:"project,omitempty"`
 }
 
 // stateDir is where brig keeps what has to outlive a single invocation.
@@ -241,6 +250,21 @@ func rememberedWorkspace(ref, vmName string) string {
 	return entry.Home
 }
 
+// rememberedProject is the project the sandbox of this session last ran with,
+// or "" when there was none, when nothing has been recorded, or when what is
+// recorded belongs to a differently named sandbox.
+//
+// The sandbox has to agree for the same reason rememberedWorkspace requires it:
+// BRIG_NAME renames the sandbox without changing the ref, and the mounts of one
+// instance say nothing about the mounts of another.
+func rememberedProject(ref, vmName string) string {
+	entry := readSessionIndex()[ref]
+	if entry.Sandbox != vmName {
+		return ""
+	}
+	return entry.Project
+}
+
 // WorkspaceOfSandbox is the workspace recorded for whichever session is
 // carrying this sandbox, or "" when none is.
 //
@@ -337,8 +361,8 @@ func PruneSessions(live []string) {
 }
 
 // rememberSession records what this run has just started: the ref it is filed
-// under, the directory the sandbox was given as its home, and the sandbox
-// carrying it.
+// under, the directory the sandbox was given as its home, the sandbox carrying
+// it, and the project it was started on if it named one.
 //
 // Also called when the running sandbox already matches, which is what fills
 // the index in for a session created before it existed: the entry is written
@@ -352,7 +376,7 @@ func PruneSessions(live []string) {
 func (c *Config) rememberSession() {
 	dropLegacyWorkspaceIndex()
 	key := sessionKey(c.Profile.Name, c.Slug)
-	entry := sessionEntry{Home: c.Workspace, Sandbox: c.VMName}
+	entry := sessionEntry{Home: c.Workspace, Sandbox: c.VMName, Project: c.Project}
 	index := readSessionIndex()
 	if index[key] == entry {
 		return

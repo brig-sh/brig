@@ -24,18 +24,25 @@ type livenessRuntime struct {
 	// workspace is the directory the guest is pretending to mount, so Output
 	// can read back the marker brig wrote there.
 	workspace string
-	boots     int
-	stops     int
-	removes   int
+	// spec is the last boot request, for the cases that ask what brig handed
+	// the runtime rather than only whether it booted at all.
+	spec    runtime.RunSpec
+	boots   int
+	stops   int
+	removes int
 }
 
 func (r *livenessRuntime) Kind() string                 { return "hull" }
 func (r *livenessRuntime) Running(string) (bool, error) { return r.running, r.runningErr }
 func (r *livenessRuntime) Stop(string) error            { r.stops++; return nil }
 func (r *livenessRuntime) Remove(string) error          { r.removes++; return nil }
-func (r *livenessRuntime) Run(runtime.RunSpec) error    { r.boots++; return nil }
-func (r *livenessRuntime) Probe(runtime.ExecSpec) bool  { return true }
-func (r *livenessRuntime) LogsHint(name string) string  { return "hull logs " + name }
+func (r *livenessRuntime) Run(spec runtime.RunSpec) error {
+	r.spec = spec
+	r.boots++
+	return nil
+}
+func (r *livenessRuntime) Probe(runtime.ExecSpec) bool { return true }
+func (r *livenessRuntime) LogsHint(name string) string { return "hull logs " + name }
 
 // Output stands in for the guest reading its own home: a guest that mounts the
 // workspace reads back the marker brig put there.

@@ -224,7 +224,22 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 			"refusing to start a second one over it: %w", c.VMName, err)
 	}
 	if running {
-		if c.guestMountsWorkspace() {
+		// Two things can be wrong with the mounts of a sandbox that is up, and
+		// both are answered the same way, so they share the one recreate below
+		// rather than growing a second path: a share is bound at boot and
+		// cannot be changed on a live guest, whichever of the two moved.
+		//
+		// Recreate rather than fail: all persistent state lives in the
+		// workspace on the host, so restarting costs nothing but the boot.
+		switch stale := c.projectShareStale(); {
+		case !c.guestMountsWorkspace():
+			c.warnf("the running sandbox is not mounting %s -- its share went stale (the "+
+				"directory was renamed or replaced, or the workspace changed). Restarting "+
+				"it; any other session using this sandbox will be disconnected.", c.Workspace)
+		case stale != "":
+			c.warnf("%s. A share cannot be attached to a live sandbox, so it is being "+
+				"restarted; any other session using this sandbox will be disconnected.", stale)
+		default:
 			// The guest has confirmed this workspace, so record it. Nothing has
 			// changed for a session brig already knows about; for one created
 			// before the index existed, this is where its entry appears.
@@ -241,11 +256,6 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 			// credential reaches a live session.
 			return c.deliverSecretFiles()
 		}
-		// Recreate rather than fail: all persistent state lives in the
-		// workspace on the host, so restarting costs nothing but the boot.
-		c.warnf("the running sandbox is not mounting %s -- its share went stale (the "+
-			"directory was renamed or replaced, or the workspace changed). Restarting "+
-			"it; any other session using this sandbox will be disconnected.", c.Workspace)
 		_ = c.Runtime.Stop(c.VMName)
 		_ = c.Runtime.Remove(c.VMName)
 	}
@@ -306,12 +316,12 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		Net:    c.Network.RuntimeNet(),
 		Mem:    c.Mem,
 		CPUs:   c.CPUs,
-		// The workspace, which is the guest's home. The host's agent
-		// configuration is copied into it rather than mounted, so it needs no
-		// share of its own -- see seedHostConfig. volumeShares is empty on
-		// hull and carries the profile's hostmounts on a container runtime.
-		Shares: append([]runtime.Share{{Host: ws.dir, Guest: c.Profile.GuestHome}},
-			volumeShares...),
+		// The workspace first, which is the guest's home, then this run's
+		// project if it named one. The host's agent configuration is copied
+		// into the workspace rather than mounted, so it needs no share of its
+		// own -- see seedHostConfig. volumeShares is empty on hull and carries
+		// the profile's hostmounts on a container runtime.
+		Shares:   c.shares(ws.dir, volumeShares),
 		Tmpfs:    tmpfs,
 		Env:      set.Vars,
 		GUI:      c.Profile.IsGUI(),
@@ -466,6 +476,59 @@ func (c *Config) guestMountsWorkspace() bool {
 		return false
 	}
 	return strings.TrimSpace(seen) == strings.TrimSpace(string(want))
+}
+
+// shares is the mount set this run hands the runtime: the guest home, the
+// project when there is one, then whatever the profile's volumes need on a
+// runtime that cannot mount after boot.
+//
+// The home is first and unconditional. It is what makes the session the
+// session -- the stale-share check reads its marker back out of it, and the
+// smoke test reads the first share as the home -- so a project arrives after
+// it rather than in front of it or instead of it.
+//
+// The home's host path comes from the caller rather than from c.Workspace: it
+// is the path re-resolved through a held directory handle just above, which is
+// the whole point of holding one. The project has no such handle. It is a
+// directory the user named on this command line, not one brig created and the
+// guest has had read-write for however long the sandbox has been up, so the
+// swap the workspace check defends against has nobody to do it.
+func (c *Config) shares(home string, volumes []runtime.Share) []runtime.Share {
+	shares := []runtime.Share{{Host: home, Guest: c.Profile.GuestHome}}
+	if c.Project != "" {
+		shares = append(shares, runtime.Share{Host: c.Project, Guest: c.GuestProject})
+	}
+	return append(shares, volumes...)
+}
+
+// projectShareStale says why the running sandbox cannot carry this run's
+// project, or "" when it can.
+//
+// The comparison is against the index rather than against the guest, and the
+// guest could not answer it anyway: a different project is mounted at a
+// different guest path, so there is nothing to ask about by name. The index
+// records the project a session last ran with for exactly this read -- see
+// sessionEntry -- and an absent or unusable entry reads as "no project", which
+// is the safe direction: it recreates a sandbox that might have been fine
+// rather than running an agent in a directory nothing mounted.
+//
+// Both directions are stale. A run that names no project against a sandbox
+// that has one has to lose the mount, or the agent would keep a host directory
+// this line said nothing about.
+func (c *Config) projectShareStale() string {
+	was := rememberedProject(sessionKey(c.Profile.Name, c.Slug), c.VMName)
+	switch {
+	case was == c.Project:
+		return ""
+	case c.Project == "":
+		return fmt.Sprintf("the running sandbox has %s mounted as its project and this "+
+			"run names none", was)
+	case was == "":
+		return fmt.Sprintf("the running sandbox has no project mounted and this run "+
+			"names %s", c.Project)
+	}
+	return fmt.Sprintf("the running sandbox has %s mounted as its project and this run "+
+		"names %s", was, c.Project)
 }
 
 // Stop shuts the sandbox down and leaves it there.

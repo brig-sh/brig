@@ -197,6 +197,27 @@ func TrustKey(cwd, workspace, guestHome string) string {
 	return guestCwd
 }
 
+// trustKey is the directory this run has to pre-trust: the guest path the
+// agent will actually be in.
+//
+// With a project mounted that is the project, not anything under the home.
+// Otherwise the agent starts in /work/<basename> and asks whether you trust a
+// directory brig just handed it, which is the one thing this seeding exists to
+// prevent.
+//
+// The project is passed as its own workspace, because to the guest that is what
+// it is: /work/<basename> is the mount, and nothing above it is visible in
+// there. So the repository walk has no room to move -- the same reason the
+// home's walk stops at the workspace -- and the key is the project's guest
+// path whether or not it is a git repository. Routed through TrustKey anyway,
+// so one function decides what a trust key is.
+func (c *Config) trustKey() string {
+	if c.Project != "" {
+		return TrustKey(c.Project, c.Project, c.GuestProject)
+	}
+	return TrustKey(c.Cwd, c.Workspace, c.Profile.GuestHome)
+}
+
 func under(cwd, workspace string) bool {
 	rel, err := filepath.Rel(workspace, cwd)
 	if err != nil {
@@ -241,7 +262,7 @@ func (c *Config) trustGuestCwd(r *workspaceRoot) error {
 		return nil // nothing to edit; the agent creates it on first run
 	}
 
-	key := TrustKey(c.Cwd, c.Workspace, c.Profile.GuestHome)
+	key := c.trustKey()
 
 	// UseNumber keeps every number exactly as written. Decoding into float64
 	// would round-trip a millisecond timestamp as 1.7e+12 and quietly rewrite
