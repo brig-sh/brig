@@ -46,7 +46,10 @@ func TestParse(t *testing.T) {
 		// of brig's flags still reaches the agent.
 		{[]string{"claude", "--", "--name", "notasession"}, "", false, "claude", "--name notasession"},
 		{[]string{}, "", false, "", ""},
-		{[]string{"claude", "echo", "hi", "there"}, "", false, "claude", "echo hi there"},
+		// The second bare word is the project now, and brig still stops
+		// reading its own line there, so what follows is the agent's. See
+		// TestRunTakesTheProjectAsAPositional for the whole grammar.
+		{[]string{"claude", "echo", "hi", "there"}, "", false, "claude", "hi there"},
 	}
 	for _, c := range cases {
 		o, template, tail, err := parse(c.args)
@@ -296,6 +299,10 @@ func TestParseBoolsTakeAnInlineValue(t *testing.T) {
 
 // A value is taken as given. `--name -p` is a session called -p, and guessing
 // otherwise would make what a flag means depend on what its value looks like.
+//
+// Which leaves "hi" as the second bare word on the line, and that is the
+// project: the flag swallowed -p, so nothing has ended brig's parsing before
+// it.
 func TestParseTakesAValueThatLooksLikeAFlag(t *testing.T) {
 	o, name, tail, err := parse([]string{"claude", "--name", "-p", "hi"})
 	if err != nil {
@@ -304,8 +311,11 @@ func TestParseTakesAValueThatLooksLikeAFlag(t *testing.T) {
 	if o.load.Name != "-p" || !o.nameGiven {
 		t.Errorf("name = %q, given = %v", o.load.Name, o.nameGiven)
 	}
-	if name != "claude" || strings.Join(tail, " ") != "hi" {
+	if name != "claude" || len(tail) != 0 {
 		t.Errorf("profile = %q, tail = %q", name, tail)
+	}
+	if o.load.Project != "hi" {
+		t.Errorf("project = %q, want hi", o.load.Project)
 	}
 }
 
