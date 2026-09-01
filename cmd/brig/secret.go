@@ -21,6 +21,16 @@ var openStore = secret.Open
 
 // secretCmd groups the secret verbs.
 //
+// create|update|read|delete|ls|import, and not the ls|show|set|rm the other
+// nouns settled on. That is a decision rather than the one group nobody got
+// round to: `set` means createOrUpdate, so a typo in the name writes a second
+// secret instead of failing, and the run that needed the first one fails much
+// later with a credential the sandbox never received. create and update each
+// refuse the case the other is for, and a secret is the one thing here where
+// silently writing the wrong item costs more than an inconsistent verb.
+// TestSecretKeepsItsOwnVerbSetOnPurpose pins it, so that the next reader who
+// notices the inconsistency finds the reason before changing it.
+//
 // Output goes to a writer rather than straight to stdout, because `read`
 // writes a credential: a test that could not capture it would have to assert
 // on the store instead, which is the one thing these tests are not about.
@@ -39,9 +49,20 @@ func secretCmd(out io.Writer, args []string) error {
 		err = writeSecret(args[1:], "update")
 	case "read":
 		err = readSecret(out, args[1:])
-	case "delete", "rm":
+	case "delete":
 		err = deleteSecret(out, args[1:])
-	case "ls", "list":
+	case "ls":
+		err = listSecrets(out, args[1:])
+	// The undocumented second spellings, kept for one release. delete and ls
+	// are the words this group settled on -- see the note on secretUsage about
+	// why the verb set here is not the one the other nouns use -- and rm and
+	// list were never in the help text, so they were found by accident and then
+	// written into scripts.
+	case "rm":
+		deprecated("brig secret rm", "brig secret delete")
+		err = deleteSecret(out, args[1:])
+	case "list":
+		deprecated("brig secret list", "brig secret ls")
 		err = listSecrets(out, args[1:])
 	case "import":
 		err = importSecrets(out, args[1:])
@@ -324,7 +345,7 @@ func readAnswer(r io.Reader) (string, error) {
 // `delete gh-token -y` are both lines people type, and Parse stops at the
 // first bare word.
 //
-// The verb and the example it prints are parameters because `brig profile rm`
+// The verb and the example it prints are parameters because `brig agent rm`
 // asks a question of its own now, and every word of these messages is about
 // the command the person typed. Two copies of the loop below would drift.
 func nameAndYes(verb, example string, args []string) (name string, yes bool, err error) {

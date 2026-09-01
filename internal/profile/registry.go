@@ -35,7 +35,7 @@ type entry struct {
 	path   string // the file this entry was read from; empty for a built-in
 
 	// shadowed are the files that also claim this name and lost. Kept
-	// because they are still on disk and still claim it: `brig profile rm`
+	// because they are still on disk and still claim it: `brig agent rm`
 	// has to take them too, or removing the winner just promotes the next
 	// one and the profile appears not to have been removed at all.
 	shadowed []string

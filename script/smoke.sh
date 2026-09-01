@@ -781,16 +781,16 @@ grep -q -- '-- bash -lc uname -a' "$STUB_LOG" \
 grep -q -- ':/root/work' "$STUB_LOG" \
   && ok "ubuntu mounts the workspace at /root/work" || bad "ubuntu mounts at /root/work"
 
-echo "== profiles =="
-# YAML is the default spelling, and the header is what makes an export a
+echo "== agents =="
+# YAML is the default spelling, and the header is what makes a printed agent a
 # starting point rather than a puzzle.
-"$WORK/brig" profile export claude-code > "$WORK/mine.yaml" 2>/dev/null
+"$WORK/brig" agent show claude-code > "$WORK/mine.yaml" 2>/dev/null
 grep -q '^# A brig profile' "$WORK/mine.yaml" \
-  && ok "export explains its own fields" || bad "export explains its own fields"
+  && ok "show explains its own fields" || bad "show explains its own fields"
 printf '\n# why: the vendored CLI needs a bigger guest\n' >> "$WORK/mine.yaml"
 sed -i.bak 's/^name: claude-code$/name: mine/; s|ghcr.io/brig-sh/claude-code[^ ]*|docker.io/me/mine:latest|' \
   "$WORK/mine.yaml"
-"$WORK/brig" profile import "$WORK/mine.yaml" > "$WORK/import.out" 2>&1 \
+"$WORK/brig" agent import "$WORK/mine.yaml" > "$WORK/import.out" 2>&1 \
   && ok "an edited YAML export imports back" || bad "an edited YAML export imports back: $(cat "$WORK/import.out")"
 grep -q 'why: the vendored CLI' "$BRIG_PROFILE_DIR/mine.yaml" 2>/dev/null \
   && ok "import keeps the comments you wrote" || bad "import keeps the comments you wrote"
@@ -798,11 +798,11 @@ grep -q 'why: the vendored CLI' "$BRIG_PROFILE_DIR/mine.yaml" 2>/dev/null \
 # JSON still parses, since it is a subset of YAML.
 printf '{"name":"jsonagent","image":"docker.io/me/j:latest","guestHome":"/home/j","binary":"j","mem":1024,"cpus":1}' \
   > "$WORK/j.json"
-"$WORK/brig" profile import "$WORK/j.json" > /dev/null 2>&1 \
+"$WORK/brig" agent import "$WORK/j.json" > /dev/null 2>&1 \
   && ok "a JSON profile still imports" || bad "a JSON profile still imports"
 [ -f "$BRIG_PROFILE_DIR/jsonagent.json" ] \
   && ok "a JSON profile keeps its own extension" || bad "JSON profile keeps its extension"
-profiles="$("$WORK/brig" profiles 2>/dev/null)"
+profiles="$("$WORK/brig" agent ls 2>/dev/null)"
 case "$profiles" in
   *"mine"*"(file)"*) ok "a profile of your own is listed, and marked" ;;
   *) bad "a profile of your own is listed -- got: $profiles" ;;
@@ -811,17 +811,17 @@ grep -q 'cannot verify its signature' "$WORK/import.out" \
   && ok "import says an outside image cannot be verified" \
   || bad "import says an outside image cannot be verified: $(cat "$WORK/import.out")"
 case "$profiles" in
-  *bring-your-own-image*) ok "profiles points at the image documentation" ;;
-  *) bad "profiles points at the image documentation" ;;
+  *bring-your-own-image*) ok "agent ls points at the image documentation" ;;
+  *) bad "agent ls points at the image documentation" ;;
 esac
 # A name that would escape the profile directory, or collide with a path.
 printf 'name: ../evil\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n' \
-  | "$WORK/brig" profile import - > /dev/null 2>&1 \
+  | "$WORK/brig" agent import - > /dev/null 2>&1 \
   && bad "an unsafe profile name was accepted" || ok "an unsafe profile name is refused"
 # A misspelled field would forward no credentials, which looks exactly like a
 # broken sandbox.
 printf 'name: typo\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\nforwards: [GH_TOKEN]\n' \
-  | "$WORK/brig" profile import - > /dev/null 2>&1 \
+  | "$WORK/brig" agent import - > /dev/null 2>&1 \
   && bad "a misspelled field was accepted" || ok "a misspelled field is refused"
 
 # The built-ins are embedded, so nothing is pre-seeded: every profile comes from
@@ -830,18 +830,36 @@ printf 'name: typo\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\nfo
   && bad "brig pre-seeded the profile directory" \
   || ok "brig does not pre-seed the profile directory"
 
-# Export writes the file brig ships, comments and all -- that is what makes
-# "start from the closest profile" work rather than handing back a struct dump.
-# With no destination it goes to stdout, which is also how you get a copy
-# anywhere other than the profile directory.
-"$WORK/brig" profile export codex > "$WORK/codex.yaml" 2>/dev/null
+# show writes the file brig ships, comments and all -- that is what makes
+# "start from the closest agent" work rather than handing back a struct dump.
+# It goes to stdout, which is also how you get a copy anywhere other than the
+# profile directory.
+"$WORK/brig" agent show codex > "$WORK/codex.yaml" 2>/dev/null
 grep -q 'metered path' "$WORK/codex.yaml" 2>/dev/null \
-  && ok "export keeps the comments explaining the deny list" \
-  || bad "export keeps the comments explaining the deny list"
+  && ok "show keeps the comments explaining the deny list" \
+  || bad "show keeps the comments explaining the deny list"
+
+# show prints one agent and writes nothing, so a second word is the old
+# `brig export <p> <name>` habit rather than a destination. It says which
+# command took that job over.
+"$WORK/brig" agent show codex spare > "$WORK/showdest.out" 2>&1 \
+  && bad "agent show took a destination" || ok "agent show refuses a destination"
+grep -q 'brig agent new spare --from codex' "$WORK/showdest.out" \
+  && ok "agent show names the command that copies one" \
+  || bad "agent show names the command that copies one: $(cat "$WORK/showdest.out")"
+[ -f "$BRIG_PROFILE_DIR/spare.yaml" ] \
+  && bad "agent show wrote a file" || ok "agent show wrote nothing"
+
+# new copies an agent, so it has to be told which one.
+"$WORK/brig" agent new lonely > "$WORK/nofrom.out" 2>&1 \
+  && bad "agent new was accepted without --from" || ok "agent new needs --from"
+grep -q -- '--from' "$WORK/nofrom.out" \
+  && ok "agent new names the flag it wants" \
+  || bad "agent new names the flag it wants: $(cat "$WORK/nofrom.out")"
 
 # A destination is a name and nothing else. brig writes one directory, so a
 # path -- or a typo that looks like one -- is refused rather than honoured.
-"$WORK/brig" profile export codex "$WORK/escape.yaml" > /dev/null 2>&1 \
+"$WORK/brig" agent export codex "$WORK/escape.yaml" > /dev/null 2>&1 \
   && bad "export wrote to a path outside the profile directory" \
   || ok "export refuses a path destination"
 [ -f "$WORK/escape.yaml" ] \
@@ -849,17 +867,17 @@ grep -q 'metered path' "$WORK/codex.yaml" 2>/dev/null \
   || ok "export writes the profile directory and nowhere else"
 
 # A bare destination is a name, and brig resolves it in the profile directory.
-"$WORK/brig" profile export codex bare > /dev/null 2>&1
+"$WORK/brig" agent export codex bare > /dev/null 2>&1
 [ -f "$BRIG_PROFILE_DIR/bare.yaml" ] \
   && ok "a bare export destination lands in the profile directory" \
   || bad "a bare export destination lands in the profile directory"
-"$WORK/brig" profile export codex bare > /dev/null 2>&1 \
+"$WORK/brig" agent export codex bare > /dev/null 2>&1 \
   && bad "export overwrote an existing file" \
   || ok "export refuses to overwrite without --force"
-"$WORK/brig" profile export codex bare --force > /dev/null 2>&1 \
+"$WORK/brig" agent export codex bare --force > /dev/null 2>&1 \
   && ok "--force overwrites" || bad "--force overwrites"
 # A mistyped flag must not become a file name.
-"$WORK/brig" profile export codex --jsonn > /dev/null 2>&1 \
+"$WORK/brig" agent export codex --jsonn > /dev/null 2>&1 \
   && bad "a mistyped flag was taken as a destination" \
   || ok "a mistyped flag is refused rather than written"
 ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
@@ -868,26 +886,26 @@ ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
 # The destination is the name written into the file, and a profile of that name
 # wins the lookup over an alias -- so exporting onto one would take every
 # `brig run claude` from claude-code.
-"$WORK/brig" profile export claude-code claude > /dev/null 2>&1 \
+"$WORK/brig" agent export claude-code claude > /dev/null 2>&1 \
   && bad "export wrote a profile named after an alias" \
   || ok "export refuses a destination that is an alias"
 [ -f "$BRIG_PROFILE_DIR/claude.yaml" ] \
   && bad "the aliased destination was written anyway" \
   || ok "no file is written for an aliased destination"
 # Asking for help is not a mistake, though the flag package calls it an error.
-"$WORK/brig" profile rm --help > "$WORK/rmhelp.out" 2>&1 \
-  && ok "profile rm --help exits 0" \
-  || bad "profile rm --help exits 0: $(cat "$WORK/rmhelp.out")"
-grep -q 'brig profile rm' "$WORK/rmhelp.out" \
-  && ok "profile rm --help prints the usage" \
-  || bad "profile rm --help prints the usage: $(cat "$WORK/rmhelp.out")"
+"$WORK/brig" agent rm --help > "$WORK/rmhelp.out" 2>&1 \
+  && ok "agent rm --help exits 0" \
+  || bad "agent rm --help exits 0: $(cat "$WORK/rmhelp.out")"
+grep -q 'brig agent rm' "$WORK/rmhelp.out" \
+  && ok "agent rm --help prints the usage" \
+  || bad "agent rm --help prints the usage: $(cat "$WORK/rmhelp.out")"
 # rm resolves the name inside the file, not the file name: rename what
 # bare.yaml declares, and codex is the word that reaches it. Nothing is deleted
 # for that word without a question first, though -- the file it would take is
 # not the file anyone named, and stdin here has nobody on it to ask.
 sed 's/^name: bare$/name: codex/' "$BRIG_PROFILE_DIR/bare.yaml" > "$WORK/bare.yaml"
 cp "$WORK/bare.yaml" "$BRIG_PROFILE_DIR/bare.yaml"
-"$WORK/brig" profile rm codex < /dev/null > "$WORK/rm.out" 2>&1 \
+"$WORK/brig" agent rm codex < /dev/null > "$WORK/rm.out" 2>&1 \
   && bad "rm deleted a file nobody named, without asking" \
   || ok "rm refuses to delete a file you did not name with no terminal to ask on"
 grep -q 'bare.yaml' "$WORK/rm.out" \
@@ -896,7 +914,7 @@ grep -q 'bare.yaml' "$WORK/rm.out" \
 [ -f "$BRIG_PROFILE_DIR/bare.yaml" ] \
   && ok "the file nobody named is still there" \
   || bad "the file nobody named was deleted anyway"
-"$WORK/brig" profile rm codex -y < /dev/null > /dev/null 2>&1
+"$WORK/brig" agent rm codex -y < /dev/null > /dev/null 2>&1
 [ -f "$BRIG_PROFILE_DIR/bare.yaml" ] \
   && bad "rm did not resolve the profile inside the file" \
   || ok "rm resolves the profile a file declares, not its file name"
@@ -904,42 +922,45 @@ grep -q 'bare.yaml' "$WORK/rm.out" \
 # Two files can declare one profile, because a file need not be named after the
 # profile in it. brig says which won, and rm takes both -- removing only the
 # winner would promote the other and leave the profile listed.
-"$WORK/brig" profile export codex dup > /dev/null 2>&1
+"$WORK/brig" agent export codex dup > /dev/null 2>&1
 sed 's/^name: dup$/name: dupagent/' "$BRIG_PROFILE_DIR/dup.yaml" > "$WORK/dup2.yaml"
 cp "$WORK/dup2.yaml" "$BRIG_PROFILE_DIR/dup.yaml"
 cp "$WORK/dup2.yaml" "$BRIG_PROFILE_DIR/dupother.yaml"
-"$WORK/brig" profiles > "$WORK/dup.out" 2>&1
+"$WORK/brig" agent ls > "$WORK/dup.out" 2>&1
 grep -q 'duplicate profile name' "$WORK/dup.out" \
   && ok "two files claiming one profile are reported" \
   || bad "two files claiming one profile are reported: $(cat "$WORK/dup.out")"
 # -y: neither file is named after the profile they both declare, and rm asks
 # before deleting a file the argument did not name.
-"$WORK/brig" profile rm dupagent -y < /dev/null > /dev/null 2>&1
+"$WORK/brig" agent rm dupagent -y < /dev/null > /dev/null 2>&1
 { [ -f "$BRIG_PROFILE_DIR/dup.yaml" ] || [ -f "$BRIG_PROFILE_DIR/dupother.yaml" ]; } \
   && bad "rm left a file still declaring the profile" \
   || ok "rm takes every file declaring the profile"
 
 # A file of your own shadows the built-in, and the listing says so rather than
 # leaving you to wonder which image is booting.
-"$WORK/brig" profile export claude-code claude-code > /dev/null 2>&1
+"$WORK/brig" agent export claude-code claude-code > /dev/null 2>&1
 sed -i.bak 's|ghcr.io/brig-sh/claude-code:[^ ]*|docker.io/me/pinned:latest|' \
   "$BRIG_PROFILE_DIR/claude-code.yaml"
 rm -f "$BRIG_PROFILE_DIR/claude-code.yaml.bak"
-case "$("$WORK/brig" profiles 2>/dev/null)" in
+case "$("$WORK/brig" agent ls 2>/dev/null)" in
   *"overrides built-in"*) ok "a file shadowing a built-in is marked as one" ;;
   *) bad "a file shadowing a built-in is marked as one" ;;
 esac
 rm -f "$BRIG_PROFILE_DIR/claude-code.yaml"
 
 # edit needs a file. A built-in has none, and nothing is created for it.
-EDITOR=true "$WORK/brig" profile edit codex > "$WORK/edit.out" 2>&1 \
-  && bad "profile edit accepted a built-in" || ok "profile edit refuses a built-in"
+EDITOR=true "$WORK/brig" agent edit codex > "$WORK/edit.out" 2>&1 \
+  && bad "agent edit accepted a built-in" || ok "agent edit refuses a built-in"
 grep -q 'built in' "$WORK/edit.out" \
-  && ok "profile edit says how to make a file" \
-  || bad "profile edit says how to make a file: $(cat "$WORK/edit.out")"
+  && ok "agent edit says how to make a file" \
+  || bad "agent edit says how to make a file: $(cat "$WORK/edit.out")"
+grep -q 'brig agent new codex --from codex' "$WORK/edit.out" \
+  && ok "agent edit names the command that makes one" \
+  || bad "agent edit names the command that makes one: $(cat "$WORK/edit.out")"
 [ -f "$BRIG_PROFILE_DIR/codex.yaml" ] \
-  && bad "profile edit created a file for a built-in" \
-  || ok "profile edit creates nothing for a built-in"
+  && bad "agent edit created a file for a built-in" \
+  || ok "agent edit creates nothing for a built-in"
 
 # ...and opens one that exists, honouring the editor's own arguments.
 mkdir -p "$WORK/bin"
@@ -948,52 +969,114 @@ cat > "$WORK/bin/fake-editor" <<'EDIT'
 printf '\n# edited by the smoke test\n' >> "$1"
 EDIT
 chmod +x "$WORK/bin/fake-editor"
-EDITOR="$WORK/bin/fake-editor" "$WORK/brig" profile edit mine > /dev/null 2>&1 \
-  && ok "profile edit opens a file-backed profile" \
-  || bad "profile edit opens a file-backed profile"
+EDITOR="$WORK/bin/fake-editor" "$WORK/brig" agent edit mine > /dev/null 2>&1 \
+  && ok "agent edit opens a file-backed profile" \
+  || bad "agent edit opens a file-backed profile"
 grep -q 'edited by the smoke test' "$BRIG_PROFILE_DIR/mine.yaml" \
-  && ok "profile edit saves what the editor wrote" \
-  || bad "profile edit saves what the editor wrote"
+  && ok "agent edit saves what the editor wrote" \
+  || bad "agent edit saves what the editor wrote"
 
-# The recipe brig prints, end to end: export the closest built-in under a name
-# of your own, edit it, run it, remove it by the name you chose. Every step
-# addresses the name the person picked, which is why export writes that name
-# into the file rather than leaving the profile called what it was copied from.
-"$WORK/brig" profile export claude-code mytool > /dev/null 2>&1
+# The recipe brig prints, end to end: copy the closest built-in under a name of
+# your own, edit it, run it, remove it by the name you chose. Every step
+# addresses the name the person picked, which is why new writes that name into
+# the file rather than leaving the profile called what it was copied from.
+"$WORK/brig" agent new mytool --from claude-code > /dev/null 2>&1
 grep -q '^name: mytool$' "$BRIG_PROFILE_DIR/mytool.yaml" 2>/dev/null \
-  && ok "export writes the name it was given into the file" \
-  || bad "export writes the name it was given into the file"
+  && ok "agent new writes the name it was given into the file" \
+  || bad "agent new writes the name it was given into the file"
+grep -q '^name: claude-code$' "$BRIG_PROFILE_DIR/mytool.yaml" 2>/dev/null \
+  && bad "the copy still declares the agent it came from" \
+  || ok "the copy no longer declares the agent it came from"
 grep -q 'outrank' "$BRIG_PROFILE_DIR/mytool.yaml" 2>/dev/null \
-  && ok "a renamed export still carries the comments" \
-  || bad "a renamed export still carries the comments"
-EDITOR="$WORK/bin/fake-editor" "$WORK/brig" profile edit mytool > /dev/null 2>&1 \
-  && ok "the exported profile edits under the name it was exported as" \
-  || bad "the exported profile edits under the name it was exported as"
+  && ok "a renamed copy still carries the comments" \
+  || bad "a renamed copy still carries the comments"
+EDITOR="$WORK/bin/fake-editor" "$WORK/brig" agent edit mytool > /dev/null 2>&1 \
+  && ok "the copy edits under the name it was given" \
+  || bad "the copy edits under the name it was given"
 : > "$STUB_LOG"
 "$WORK/brig" run mytool -w "$WORK/ws-mytool" -p hi > /dev/null 2>&1
 grep -q -- '--name brig-mytool' "$STUB_LOG" \
-  && ok "the exported profile runs under the name it was exported as" \
-  || bad "the exported profile runs under the name it was exported as"
+  && ok "the copy runs under the name it was given" \
+  || bad "the copy runs under the name it was given"
 grep -q -- '-- claude -p hi' "$STUB_LOG" \
-  && ok "the run is the profile it was copied from, renamed" \
-  || bad "the run is the profile it was copied from, renamed"
-"$WORK/brig" profile rm mytool < /dev/null > /dev/null 2>&1
+  && ok "the run is the agent it was copied from, renamed" \
+  || bad "the run is the agent it was copied from, renamed"
+"$WORK/brig" agent rm mytool < /dev/null > /dev/null 2>&1
 [ -f "$BRIG_PROFILE_DIR/mytool.yaml" ] \
-  && bad "rm did not remove the profile under the name it was exported as" \
-  || ok "rm removes the profile under the name it was exported as, asking nothing"
+  && bad "rm did not remove the copy under the name it was given" \
+  || ok "rm removes the copy under the name it was given, asking nothing"
 "$WORK/brig" reset > /dev/null 2>&1
 
-# The old spellings keep working for one release, and say so.
-"$WORK/brig" agents > "$WORK/dep.out" 2>&1
-grep -q 'is now `brig profiles`' "$WORK/dep.out" \
-  && ok "brig agents works and names the new spelling" \
-  || bad "brig agents works and names the new spelling: $(cat "$WORK/dep.out")"
-"$WORK/brig" template ls > "$WORK/dep2.out" 2>&1
-grep -q 'is now `brig profile`' "$WORK/dep2.out" \
-  && ok "brig template works and names the new spelling" \
-  || bad "brig template works and names the new spelling"
+# Every spelling this release retires keeps working, and says the one that
+# replaces it. Both halves matter: a spelling that fails breaks every script
+# that has it, and one that works silently never teaches anyone the new word.
+#
+# The replacement is matched as a whole command line, which also catches a
+# notice pointing at another retired spelling -- `brig agents` used to say
+# "is now `brig profiles`", one hop short of an answer.
+"$WORK/brig" agent new dep --from codex > /dev/null 2>&1
+while IFS='|' read -r line replacement; do
+  [ -n "$line" ] || continue
+  # shellcheck disable=SC2086 -- the table holds whole command lines.
+  "$WORK/brig" $line < /dev/null > "$WORK/dep.out" 2>&1
+  rc=$?
+  [ "$rc" = 0 ] \
+    && ok "brig $line still works" \
+    || bad "brig $line still works -- exit $rc: $(cat "$WORK/dep.out")"
+  grep -q "is now \`$replacement\`" "$WORK/dep.out" \
+    && ok "brig $line names $replacement" \
+    || bad "brig $line names $replacement -- got: $(cat "$WORK/dep.out")"
+done <<'TABLE'
+profiles|brig agent ls
+policies|brig policy ls
+agents|brig agent ls
+profile ls|brig agent ls
+profile list|brig agent ls
+profile export codex|brig agent export
+profile save codex|brig agent export
+agent list|brig agent ls
+agent save codex|brig agent export
+policy list|brig policy ls
+export codex|brig agent export
+template ls|brig agent
+TABLE
+# import reads a file rather than stdin, so it is spelled out rather than
+# driven from the table above.
+for spelling in "import" "profile import" "profile load" "agent load"; do
+  # shellcheck disable=SC2086 -- $spelling is a command line, not a word.
+  "$WORK/brig" $spelling "$WORK/codex.yaml" > "$WORK/dep.out" 2>&1 \
+    && ok "brig $spelling still works" \
+    || bad "brig $spelling still works: $(cat "$WORK/dep.out")"
+  grep -q 'is now `brig agent import`' "$WORK/dep.out" \
+    && ok "brig $spelling names brig agent import" \
+    || bad "brig $spelling names brig agent import -- got: $(cat "$WORK/dep.out")"
+done
+# The verbs that need a file of their own to work on, so they run last: edit
+# and rm each take the copy made above.
+EDITOR=true "$WORK/brig" profile edit dep > "$WORK/dep.out" 2>&1 \
+  && ok "brig profile edit still works" \
+  || bad "brig profile edit still works: $(cat "$WORK/dep.out")"
+grep -q 'is now `brig agent edit`' "$WORK/dep.out" \
+  && ok "brig profile edit names brig agent edit" \
+  || bad "brig profile edit names brig agent edit -- got: $(cat "$WORK/dep.out")"
+"$WORK/brig" profile rm dep -y < /dev/null > "$WORK/dep.out" 2>&1 \
+  && ok "brig profile rm still works" \
+  || bad "brig profile rm still works: $(cat "$WORK/dep.out")"
+grep -q 'is now `brig agent rm`' "$WORK/dep.out" \
+  && ok "brig profile rm names brig agent rm" \
+  || bad "brig profile rm names brig agent rm -- got: $(cat "$WORK/dep.out")"
 "$WORK/brig" template edit mine > /dev/null 2>&1 \
   && bad "brig template edit exists" || ok "there is no brig template edit"
+
+# And the current spellings say nothing. A notice on a command that is not
+# going anywhere is how a reader learns to ignore the ones that are.
+for line in "agent ls" "agent show codex" "policy ls"; do
+  # shellcheck disable=SC2086 -- $line is a command line, not a word.
+  "$WORK/brig" $line > "$WORK/cur.out" 2>&1
+  grep -q 'is now' "$WORK/cur.out" \
+    && bad "brig $line printed a deprecation notice: $(cat "$WORK/cur.out")" \
+    || ok "brig $line printed no deprecation notice"
+done
 
 echo "== image verification =="
 # A stub cosign, so the decision table is exercised without a network.

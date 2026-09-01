@@ -460,7 +460,7 @@ func unknownImportTarget(name string) error {
 				"declares it: brig secret import %s %s", name, p.Name, name)
 		}
 	}
-	return fmt.Errorf("unknown profile %q. `brig profiles` lists them", name)
+	return fmt.Errorf("unknown profile %q. `brig agent ls` lists them", name)
 }
 
 // describe renders a locator for a person. A command's provenance is the bare

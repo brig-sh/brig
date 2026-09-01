@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,135 @@ func TestDeprecatedVerbsStillWork(t *testing.T) {
 	for _, args := range [][]string{{"agents"}, {"template", "ls"}} {
 		if err := run(args); err != nil {
 			t.Errorf("brig %s: %v", strings.Join(args, " "), err)
+		}
+	}
+}
+
+// The whole retired vocabulary, in one table: every spelling this release
+// renames still runs, and every one says what replaces it.
+//
+// Both halves matter and neither is enough alone. A spelling that fails breaks
+// every script that has it; a spelling that works silently never teaches
+// anyone the new word, so the old one is still in those scripts at the release
+// that removes it.
+//
+// The replacement is asserted as a whole command line rather than as the noun,
+// because that is the thing a reader can paste. It also catches a notice
+// pointing at another retired spelling: `brig agents` used to say
+// "is now `brig profiles`", which after this change would have been one hop
+// short of an answer.
+func TestRetiredSpellingsWorkAndNameTheirReplacement(t *testing.T) {
+	for _, c := range []struct {
+		args        []string
+		replacement string
+	}{
+		// The plural nouns.
+		{[]string{"profiles"}, "brig agent ls"},
+		{[]string{"policies"}, "brig policy ls"},
+		// The whole profile group, verb by verb: they retire onto different
+		// words, so a notice naming only the group would leave the reader to
+		// work out which.
+		{[]string{"profile", "ls"}, "brig agent ls"},
+		{[]string{"profile", "export", "codex"}, "brig agent export"},
+		{[]string{"profile", "import", "-"}, "brig agent import"},
+		{[]string{"profile", "edit", "mine"}, "brig agent edit"},
+		{[]string{"profile", "rm", "mine", "-y"}, "brig agent rm"},
+		{[]string{"profile", "--help"}, "brig agent"},
+		// The top-level spellings of a noun command.
+		{[]string{"export", "codex"}, "brig agent export"},
+		{[]string{"import", "-"}, "brig agent import"},
+		// The undocumented second spellings. None of them were ever in the
+		// help text, so they were found by accident and then scripted.
+		{[]string{"profile", "list"}, "brig agent ls"},
+		{[]string{"profile", "save", "codex"}, "brig agent export"},
+		{[]string{"profile", "load", "-"}, "brig agent import"},
+		{[]string{"agent", "list"}, "brig agent ls"},
+		{[]string{"agent", "save", "codex"}, "brig agent export"},
+		{[]string{"agent", "load", "-"}, "brig agent import"},
+		{[]string{"policy", "list"}, "brig policy ls"},
+	} {
+		line := "brig " + strings.Join(c.args, " ")
+		dir := t.TempDir()
+		t.Setenv("BRIG_PROFILE_DIR", dir)
+		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+		// A profile of the caller's own, for the verbs that need one to work
+		// on. import reads stdin, so it gets the same profile down the pipe.
+		blob := "name: mine\nimage: i\nguestHome: /home/mine\nbinary: m\nmem: 1\ncpus: 1\n"
+		if err := os.WriteFile(filepath.Join(dir, "mine.yaml"), []byte(blob), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stubEditor(t, "true")
+		pipeStdin(t, blob)
+
+		var err error
+		notice := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(c.args) })
+		})
+		if err != nil {
+			t.Errorf("%s stopped working: %v", line, err)
+		}
+		if !strings.Contains(notice, c.replacement) {
+			t.Errorf("%s does not name %q as its replacement:\n%s", line, c.replacement, notice)
+		}
+		// The notice is the deprecation notice and not some other line of
+		// stderr that happens to contain the words.
+		if !strings.Contains(notice, "brig: `") {
+			t.Errorf("%s printed no deprecation notice:\n%s", line, notice)
+		}
+	}
+}
+
+// `brig secret rm` is the one retired spelling inside a group whose verb set
+// is otherwise staying: delete is the documented word, rm was the accident.
+// Kept separate from the table above because it needs a store rather than a
+// profile directory.
+func TestSecretRmIsRetiredButStillWorks(t *testing.T) {
+	f := newFake(t)
+	f.seed("gh-token", "value")
+	var err error
+	notice := captureStderr(t, func() {
+		err = secretCmd(&bytes.Buffer{}, []string{"rm", "gh-token", "-y"})
+	})
+	if err != nil {
+		t.Errorf("brig secret rm stopped working: %v", err)
+	}
+	if _, ok := f.items["gh-token"]; ok {
+		t.Error("brig secret rm did not remove the secret")
+	}
+	if !strings.Contains(notice, "brig secret delete") {
+		t.Errorf("brig secret rm does not name what replaces it:\n%s", notice)
+	}
+	// And the documented spelling says nothing.
+	f.seed("gh-token", "value")
+	notice = captureStderr(t, func() {
+		err = secretCmd(&bytes.Buffer{}, []string{"delete", "gh-token", "-y"})
+	})
+	if err != nil {
+		t.Errorf("brig secret delete: %v", err)
+	}
+	if strings.Contains(notice, "is now") {
+		t.Errorf("the documented spelling printed a deprecation notice:\n%s", notice)
+	}
+}
+
+// The current spellings say nothing. A notice on a command that is not going
+// anywhere is how a reader learns to ignore the ones that are.
+func TestCurrentSpellingsPrintNoNotice(t *testing.T) {
+	for _, args := range [][]string{
+		{"agent", "ls"}, {"agent", "show", "codex"}, {"agent", "export", "codex"},
+		{"policy", "ls"}, {"telemetry", "--help"},
+	} {
+		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+		var err error
+		notice := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		if err != nil {
+			t.Errorf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if strings.Contains(notice, "is now") {
+			t.Errorf("brig %s printed a deprecation notice:\n%s", strings.Join(args, " "), notice)
 		}
 	}
 }

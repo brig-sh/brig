@@ -262,16 +262,17 @@ func TestListProfilesReportsBindingsAndRequiredSecrets(t *testing.T) {
 	}
 }
 
-// ls and list are the same listing. There is no reason to make anyone guess
-// which spelling brig wants.
-func TestProfileLsAndListAreSynonyms(t *testing.T) {
+// ls and list are the same listing. list is retiring and says so -- see
+// TestRetiredSpellingsWorkAndNameTheirReplacement -- but it still lists, which
+// is the half this test is about.
+func TestAgentLsAndListAreSynonyms(t *testing.T) {
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
 	for _, verb := range []string{"ls", "list"} {
-		if err := profileCmd([]string{verb}); err != nil {
-			t.Errorf("brig profile %s: %v", verb, err)
+		if err := agentCmd([]string{verb}); err != nil {
+			t.Errorf("brig agent %s: %v", verb, err)
 		}
 	}
-	if err := profileCmd([]string{"nonsense"}); err == nil {
+	if err := agentCmd([]string{"nonsense"}); err == nil {
 		t.Error("an unknown subcommand was accepted")
 	}
 }
@@ -523,7 +524,7 @@ func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T)
 	}
 }
 
-// The recipe brig prints has to work as written: export the closest built-in
+// The recipe brig prints has to work as written: copy the closest built-in
 // under a name of your own, edit it, run it, remove it by the name you chose.
 // Every step addresses that name, which is what did not work while the file
 // was called mytool.yaml and the profile inside it was still claude-code --
@@ -531,14 +532,30 @@ func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T)
 // name of the profile it was copied from. The run leg is script/smoke.sh,
 // which has a runtime to boot against; what a run needs from here is that the
 // name resolves to this file, with the settings it was copied from.
-func TestExportedProfileIsEditableAndRemovableByItsNewName(t *testing.T) {
+//
+// Driven through run() and `brig agent new`, which is the command the recipe
+// now names. That is the spelling whose whole reason to exist is the rename in
+// the file, so it is the one worth pinning end to end rather than the library
+// call underneath it.
+func TestNewAgentIsEditableAndRemovableByItsNewName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
-	if err := exportProfile([]string{"claude-code", "mytool"}); err != nil {
+	if _, err := captureStdout(t, func() error {
+		return run([]string{"agent", "new", "mytool", "--from", "claude-code"})
+	}); err != nil {
 		t.Fatal(err)
+	}
+	// The name is written into the file, not merely onto it: brig keys on the
+	// name: field, so a copy still declaring claude-code is a file that only
+	// the profile it came from can reach.
+	if blob, err := os.ReadFile(filepath.Join(dir, "mytool.yaml")); err != nil {
+		t.Fatalf("brig agent new wrote nothing into the profile directory: %v", err)
+	} else if !strings.Contains(string(blob), "name: mytool") ||
+		strings.Contains(string(blob), "name: claude-code") {
+		t.Errorf("the copy does not declare the name it was given:\n%s", blob)
 	}
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
@@ -626,10 +643,10 @@ func TestRemoveProfileAsksBeforeDeletingAFileYouDidNotName(t *testing.T) {
 
 // Asking for help is not a mistake. The verbs parse their own flags, and the
 // flag package reports --help as an error, so without translating it here
-// `brig profile rm --help` answers a reasonable question with
+// `brig agent rm --help` answers a reasonable question with
 // `brig: flag: help requested` and exits 1. The secret group already answers
 // its own the other way.
-func TestProfileHelpPrintsUsageAndSucceeds(t *testing.T) {
+func TestAgentGroupHelpPrintsUsageAndSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
 	if err := profile.Load(profile.Dir()); err != nil {
@@ -637,13 +654,14 @@ func TestProfileHelpPrintsUsageAndSucceeds(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"rm", "--help"}, {"rm", "-h"}, {"--help"}, {"-h"}, {"help"},
+		{"new", "--help"}, {"show", "--help"},
 	} {
-		out, err := captureStdout(t, func() error { return profileCmd(args) })
+		out, err := captureStdout(t, func() error { return agentCmd(args) })
 		if err != nil {
-			t.Errorf("profile %v: %v", args, err)
+			t.Errorf("agent %v: %v", args, err)
 		}
-		if !strings.Contains(out, "brig profile rm") {
-			t.Errorf("profile %v printed no usage:\n%s", args, out)
+		if !strings.Contains(out, "brig agent rm") {
+			t.Errorf("agent %v printed no usage:\n%s", args, out)
 		}
 	}
 }

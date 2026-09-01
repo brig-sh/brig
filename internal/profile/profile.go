@@ -88,7 +88,7 @@ type Profile struct {
 	// Name is the profile name, the community-images image name, and the
 	// taxonomer AgentRuntime value: one string, three uses.
 	Name string `json:"name"`
-	// Desc is one line for `brig agents`.
+	// Desc is one line for `brig agent ls`.
 	Desc string `json:"desc,omitempty"`
 	// Binary is the agent CLI inside the guest.
 	Binary string `json:"binary,omitempty"`
