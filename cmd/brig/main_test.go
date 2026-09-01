@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/wrap"
 )
 
 // The registry is built at run time now rather than being a package-level
@@ -336,8 +338,11 @@ func TestWorkspaceOfPrefersTheRecordedWorkspace(t *testing.T) {
 	t.Setenv("BRIG_STATE_DIR", dir)
 	t.Setenv("BRIG_WORKSPACE", "/somewhere/else")
 
-	index := filepath.Join(dir, "workspaces.json")
-	body := `{"brig-claude-code-rc23test": "/private/tmp/ws-rc23"}`
+	// Keyed by the ref, and the sandbox is in the value: the listing has a
+	// sandbox name in hand and no ref, so this is the direction it reads.
+	index := filepath.Join(dir, "sessions.json")
+	body := `{"claude-code@rc23test":` +
+		`{"home": "/private/tmp/ws-rc23", "sandbox": "brig-claude-code-rc23test"}}`
 	if err := os.WriteFile(index, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -354,6 +359,39 @@ func TestWorkspaceOfPrefersTheRecordedWorkspace(t *testing.T) {
 	}
 	if got := workspaceOf("brig-claude-code", nil); got != "/somewhere/else" {
 		t.Errorf("ls reported %q for an unrecorded sandbox, want the derived path", got)
+	}
+}
+
+// `brig ls` is where brig learns that a sandbox went away without going
+// through `brig rm` -- removed with the runtime's own CLI, say -- so it is
+// where the index is pruned. An entry whose sandbox is still listed stays,
+// stopped or not: a stopped sandbox is the same session, and its home is where
+// the work is.
+func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", dir)
+
+	index := filepath.Join(dir, "sessions.json")
+	body := `{` +
+		`"claude-code@kept": {"home": "/ws/kept", "sandbox": "brig-claude-code-kept"},` +
+		`"claude-code@gone": {"home": "/ws/gone", "sandbox": "brig-claude-code-gone"}}`
+	if err := os.WriteFile(index, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// What the runtime lists: the stopped sandbox brig still has, and one
+	// container of somebody else's, which is why the prune is handed the whole
+	// list rather than brig's own share of it.
+	pruneSessionIndex([]runtime.Instance{
+		{Name: "brig-claude-code-kept", State: "stopped"},
+		{Name: "some-other-container", State: "running"},
+	})
+
+	if got := wrap.WorkspaceOfSandbox("brig-claude-code-kept"); got != "/ws/kept" {
+		t.Errorf("ls pruned a session whose sandbox it just listed: %q", got)
+	}
+	if got := wrap.WorkspaceOfSandbox("brig-claude-code-gone"); got != "" {
+		t.Errorf("ls kept %q for a sandbox the runtime does not have", got)
 	}
 }
 

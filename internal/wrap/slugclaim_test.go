@@ -76,7 +76,7 @@ func TestRemoveReleasesTheClaim(t *testing.T) {
 // `brig reset` works from the instance list, so it releases by name without a
 // Config -- the claim has to go on that path too, or a reset leaves every
 // sandbox it removed still claimed.
-func TestForgetSessionPrunesByName(t *testing.T) {
+func TestForgetSlugClaimPrunesByName(t *testing.T) {
 	isolateState(t)
 
 	prod := mustLoad(t, Options{Name: "acme-corp-prod"})
@@ -85,12 +85,83 @@ func TestForgetSessionPrunesByName(t *testing.T) {
 	}
 
 	// A name never claimed is not an error: reset walks every brig sandbox.
-	ForgetSession("brig-claude-code-neverseen")
-	ForgetSession(prod.VMName)
+	ForgetSlugClaim("brig-claude-code-neverseen")
+	ForgetSlugClaim(prod.VMName)
 
 	staging := mustLoad(t, Options{Name: "acme-corp-staging"})
 	if err := staging.claimSlug(); err != nil {
 		t.Errorf("reset did not release the claim: %v", err)
+	}
+}
+
+// The claims an older release wrote are carried across the rename rather than
+// dropped: the old file's shape is this file's shape, so there is nothing to
+// guess, and dropping them would turn the refusal off until every session had
+// run again -- which is the window in which two agents share one home.
+func TestTheOldClaimsAreCarriedAcrossTheRename(t *testing.T) {
+	dir := isolateState(t)
+
+	// sessions.json as the claim index had it: keyed by the sandbox name, with
+	// the owning session name as the value.
+	body := `{"brig-claude-code-acme-corp": "acme-corp-prod"}`
+	if err := os.WriteFile(filepath.Join(dir, sessionIndexName), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The claim is still in force, which is the whole point of carrying it:
+	// this name shortens to the sandbox acme-corp-prod owns.
+	staging := mustLoad(t, Options{Name: "acme-corp-staging"})
+	if staging.VMName != "brig-claude-code-acme-corp" {
+		t.Fatalf("this case is written around brig-claude-code-acme-corp, and the "+
+			"sandbox is %q", staging.VMName)
+	}
+	err := staging.claimSlug()
+	if err == nil {
+		t.Fatal("the carried claim did not refuse a colliding name")
+	}
+	if !strings.Contains(err.Error(), "acme-corp-prod") {
+		t.Errorf("the refusal does not name the session that owns the sandbox: %v", err)
+	}
+
+	// Moved rather than copied: what is left under the old name is a file the
+	// session index is about to write for itself.
+	if got := readIndex[string](slugClaimIndexName)["brig-claude-code-acme-corp"]; got != "acme-corp-prod" {
+		t.Errorf("the claim was carried over as %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sessionIndexName)); !os.IsNotExist(err) {
+		t.Errorf("the claims were left behind under the old name (%v)", err)
+	}
+}
+
+// The guard on that migration: a current sessions.json is a map of session
+// entries, whose values are objects rather than strings, so it cannot be read
+// as claims. Nothing is carried over and nothing is deleted -- a session index
+// mistaken for claims would cost every session in it its home.
+func TestASessionIndexIsNotMistakenForClaims(t *testing.T) {
+	dir := isolateState(t)
+
+	path := filepath.Join(dir, sessionIndexName)
+	body := `{"claude-code@rc23test":` +
+		`{"home": "/private/tmp/ws-rc23", "sandbox": "brig-claude-code-rc23test"}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := mustLoad(t, Options{Name: "acme-corp-prod"})
+	if err := c.claimSlug(); err != nil {
+		t.Fatalf("a run with a session index and no claims was refused: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the session index was deleted as though it held claims: %v", err)
+	}
+	if got := WorkspaceOfSandbox("brig-claude-code-rc23test"); got != "/private/tmp/ws-rc23" {
+		t.Errorf("the session entry reads back as %q, want its home", got)
+	}
+	// The only claim is this run's own: nothing was carried over.
+	claims := readIndex[string](slugClaimIndexName)
+	if len(claims) != 1 || claims[c.VMName] != "acme-corp-prod" {
+		t.Errorf("the claim index holds %v, want this run's claim alone", claims)
 	}
 }
 
@@ -99,7 +170,7 @@ func TestForgetSessionPrunesByName(t *testing.T) {
 // file existed.
 func TestACorruptClaimIndexDoesNotBreakARun(t *testing.T) {
 	dir := isolateState(t)
-	path := filepath.Join(dir, sessionIndexName)
+	path := filepath.Join(dir, slugClaimIndexName)
 	if err := os.WriteFile(path, []byte("{not json at all"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -895,6 +895,10 @@ func listSandboxes(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The one verb that knows what the runtime actually has, so the one place
+	// an entry for a sandbox that went away without going through `brig rm`
+	// can be dropped. See wrap.PruneSessions.
+	pruneSessionIndex(list)
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	rows := make([]sandboxRow, 0, len(list))
 	for _, inst := range list {
@@ -912,6 +916,20 @@ func listSandboxes(args []string) error {
 		fmt.Println("(none -- `brig run claude` starts one)")
 	}
 	return nil
+}
+
+// pruneSessionIndex hands the session index every instance the runtime has, so
+// that an entry naming a sandbox that is not among them goes.
+//
+// Every instance and not only brig's own: a sandbox brig would not recognise
+// still exists, and the question the index is asking is whether the sandbox is
+// there at all.
+func pruneSessionIndex(list []runtime.Instance) {
+	live := make([]string, 0, len(list))
+	for _, inst := range list {
+		live = append(live, inst.Name)
+	}
+	wrap.PruneSessions(live)
 }
 
 // sandboxRow is one line of the listing, gathered before anything is printed
@@ -955,7 +973,7 @@ func printSandboxes(w io.Writer, rows []sandboxRow) {
 // name, and reporting the derived one was reporting the wrong directory with
 // no sign that it was wrong.
 func workspaceOf(vmName string, rt runtime.Runtime) string {
-	if ws := wrap.RememberedWorkspace(vmName); ws != "" {
+	if ws := wrap.WorkspaceOfSandbox(vmName); ws != "" {
 		return ws
 	}
 	rest := strings.TrimPrefix(vmName, sandboxPrefix)
@@ -1018,8 +1036,8 @@ func reset(args []string) error {
 		// terms: this goes through the runtime directly rather than through a
 		// Config, because reset works from the instance list and a stopped
 		// sandbox need not correspond to a profile brig can still look up.
-		wrap.ForgetWorkspace(inst.Name)
-		wrap.ForgetSession(inst.Name)
+		wrap.ForgetSandbox(inst.Name)
+		wrap.ForgetSlugClaim(inst.Name)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "brig: could not remove %s: %v\n", inst.Name, err)
 			continue
