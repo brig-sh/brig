@@ -259,6 +259,26 @@ func WorkspaceOfSandbox(vmName string) string {
 	return ""
 }
 
+// RefOfSandbox is the ref of whichever session is carrying this sandbox, or ""
+// when none is.
+//
+// The key rather than the value, which is the other thing `brig ls` has to
+// recover from a sandbox name: the listing prints the ref every other verb
+// takes, and a sandbox name is not one -- brig-claude-code-refactor cannot say
+// which of its dashes separated the agent from the label, and that is the
+// ambiguity this index was keyed by ref to remove.
+//
+// Read on the same terms as WorkspaceOfSandbox: a sandbox carries one session,
+// so the first entry naming it is the only one.
+func RefOfSandbox(vmName string) string {
+	for ref, entry := range readSessionIndex() {
+		if entry.Sandbox == vmName {
+			return ref
+		}
+	}
+	return ""
+}
+
 // ForgetSandbox drops the entry of the session carrying a removed sandbox, so
 // the next session to take that name starts from the ordinary resolution
 // rather than inheriting a directory chosen for a different one.

@@ -395,28 +395,36 @@ func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
 	}
 }
 
-// The name column holds names, so it is as wide as the names it is printing.
-// A constant was wrong at both ends: brig-claude-desktop plus a ten-character
-// session slug is 30 characters, which ran into the state and pushed the rest
-// of the row out, and a listing of short names paid for the width anyway. A
-// profile from a file can be called anything, so there is no constant that
-// fits every name brig can generate.
-func TestSandboxListingSizesTheNameColumnToItsNames(t *testing.T) {
+// The two variable-width columns hold what is in them, so each is as wide as
+// its own widest value. A constant was wrong at both ends: brig-claude-desktop
+// plus a ten-character session slug is 30 characters, which ran into the state
+// and pushed the rest of the row out, and a listing of short names paid for the
+// width anyway. An agent from a file can be called anything, so there is no
+// constant that fits every name brig can generate -- nor every ref, which is
+// that name plus a label of up to ten characters.
+func TestSandboxListingSizesItsColumnsToTheirContents(t *testing.T) {
 	long := sandboxPrefix + "claude-desktop-" + strings.Repeat("s", 10)
+	longRef := "claude-desktop@" + strings.Repeat("s", 10)
+	short := sandboxPrefix + "codex"
 	for _, c := range []struct {
-		what  string
-		rows  []sandboxRow
-		width int
+		what      string
+		rows      []sandboxRow
+		ref, name int
 	}{
 		{"the longest name brig can generate", []sandboxRow{
-			{name: long, state: "stopped", workspace: "/ws/long"},
-		}, len(long)},
-		{"names shorter than the heading", []sandboxRow{
-			{name: sandboxPrefix + "codex", state: "running", workspace: "/ws/codex"},
-		}, len(sandboxPrefix + "codex")},
+			{ref: longRef, name: long, state: "stopped", workspace: "/ws/long"},
+		}, len(longRef), len(long)},
+		{"values shorter than their headings", []sandboxRow{
+			{ref: "codex", name: short, state: "running", workspace: "/ws/codex"},
+		}, len("codex"), len(short)},
+		// A sandbox with no ref prints the placeholder, and a column of
+		// placeholders is as wide as the heading over it.
+		{"a sandbox with no ref", []sandboxRow{
+			{name: short, state: "running", workspace: "/ws/codex"},
+		}, len("REF"), len(short)},
 		// The no-runtime case prints the header and no rows, and a header with
-		// nothing under it is as wide as the heading.
-		{"a header on its own", nil, len("SANDBOX")},
+		// nothing under it is as wide as the headings.
+		{"a header on its own", nil, len("REF"), len("SANDBOX")},
 	} {
 		var buf bytes.Buffer
 		printSandboxes(&buf, c.rows)
@@ -426,16 +434,23 @@ func TestSandboxListingSizesTheNameColumnToItsNames(t *testing.T) {
 				c.what, len(lines), len(c.rows), buf.String())
 		}
 		for i, line := range lines {
-			name, state := "SANDBOX", "STATE"
+			ref, name, state := "REF", "SANDBOX", "STATE"
 			if i > 0 {
-				name, state = c.rows[i-1].name, c.rows[i-1].state
+				r := c.rows[i-1]
+				ref, name, state = refCell(r.ref), r.name, r.state
 			}
-			if !strings.HasPrefix(line, name) {
-				t.Errorf("%s: line %d is %q, want it to start with %q", c.what, i, line, name)
+			// The ref leads the row: it is the column that is also the
+			// identifier every other verb takes.
+			if !strings.HasPrefix(line, ref) {
+				t.Errorf("%s: line %d is %q, want it to start with %q", c.what, i, line, ref)
 			}
-			if got := strings.Index(line, state); got != c.width+1 {
+			if got := strings.Index(line, name); got != c.ref+1 {
 				t.Errorf("%s: line %d puts %q at column %d, want %d:\n%s",
-					c.what, i, state, got, c.width+1, buf.String())
+					c.what, i, name, got, c.ref+1, buf.String())
+			}
+			if got := strings.Index(line, state); got != c.ref+1+c.name+1 {
+				t.Errorf("%s: line %d puts %q at column %d, want %d:\n%s",
+					c.what, i, state, got, c.ref+1+c.name+1, buf.String())
 			}
 		}
 	}

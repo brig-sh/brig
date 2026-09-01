@@ -498,6 +498,47 @@ case "$listing" in
   *) bad "ls names the workspace -- got: $listing" ;;
 esac
 
+# The listing leads with the ref, which is the identifier every other verb
+# takes. The sandbox's own name is not one, and printing only that is the fault
+# this was filed as: a reader who copied what they saw got "unknown profile".
+case "$listing" in
+  REF*SANDBOX*STATE*WORKSPACE*) ok "ls heads the listing with the ref" ;;
+  *) bad "ls heads the listing with the ref -- got: $listing" ;;
+esac
+"$WORK/brig" ls -q > "$WORK/refs.out" 2>&1
+[ "$(cat "$WORK/refs.out")" = claude-code ] \
+  && ok "ls -q prints the ref and nothing else" \
+  || bad "ls -q prints the ref and nothing else -- got: $(cat "$WORK/refs.out")"
+
+# The round trip, against the real binary: every ref the listing prints is a
+# word every verb takes.
+#
+# "Takes" is the absence of a refusal rather than a successful run, and the exit
+# codes are what say which: 2 is a usage error and 3 is a name that resolves to
+# nothing, so those two are brig declining the operand. Anything else is the verb
+# having gone on to do its work, which the cases around this one assert. Read
+# that way the loop does not depend on the host's credentials, which is what
+# makes it a check about the grammar.
+takes_ref() {
+  local what="$1"; shift
+  "$WORK/brig" "$@" > "$WORK/rt.out" 2>&1
+  local rc=$?
+  case "$rc" in
+    2|3) bad "$what refused a ref that ls -q printed -- rc $rc: $(cat "$WORK/rt.out")" ;;
+    *)   ok "$what takes a ref that ls -q printed" ;;
+  esac
+}
+while read -r ref; do
+  takes_ref "brig run"   run "$ref" -d
+  takes_ref "brig sh"    sh "$ref" -- true
+  takes_ref "brig info"  info "$ref"
+  takes_ref "brig stop"  stop "$ref"
+  takes_ref "brig rm"    rm "$ref"
+  # And the verbless form, which is taught nowhere and accepted anyway. Last,
+  # because it is what puts the sandbox back for the cases below.
+  takes_ref "brig <ref>" "$ref" -d
+done < "$WORK/refs.out"
+
 # A stopped sandbox still holds its name, which is the thing worth seeing.
 "$WORK/brig" stop claude > /dev/null 2>&1
 listing="$("$WORK/brig" ls 2>/dev/null)"
@@ -687,6 +728,21 @@ case "$out" in
   *) bad "the refusal names the required prefix -- got: $out" ;;
 esac
 
+# A sandbox brig cannot name a session for: BRIG_NAME took it off the
+# <prefix><agent>-<slug> shape the name would otherwise decompose along, and the
+# index entry that knew which session it was carrying is gone. The listing says
+# so with a dash rather than guessing, and `ls -q` leaves the row out entirely --
+# every line of that output has to be a word a verb takes.
+BRIG_NAME=brig-mystery "$WORK/brig" run claude -d > /dev/null 2>&1
+rm -f "$BRIG_STATE_DIR/sessions.json"
+"$WORK/brig" ls > "$WORK/mystery.out" 2>/dev/null
+grep -q '^-  *brig-mystery ' "$WORK/mystery.out" \
+  && ok "a sandbox with no ref is listed with a dash" \
+  || bad "a sandbox with no ref is listed with a dash -- got: $(cat "$WORK/mystery.out")"
+"$WORK/brig" ls -q > "$WORK/mystery-refs.out" 2>/dev/null
+[ -s "$WORK/mystery-refs.out" ] \
+  && bad "ls -q printed a line for a sandbox with no ref: $(cat "$WORK/mystery-refs.out")" \
+  || ok "ls -q leaves out a sandbox with no ref"
 "$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== no runtime =="
