@@ -122,18 +122,29 @@ separate Linux re-implementation of it.
 | `brig ls` | every brig sandbox, running or merely holding its name, with its workspace |
 | `brig reset` | stop and remove every brig sandbox. Workspaces are untouched |
 | `brig info <agent>` | the boundary a run would trust -- sandbox, workspace, image, credentials **by name only** -- and whether the guest will be authenticated (`brig env` is the old spelling) |
-| `brig profiles` | the profiles, their images, and what each one refuses to forward |
-| `brig profile ls\|export\|import\|edit\|rm` | manage profiles (`brig export` is the short form of `brig profile export`). `export --json` for JSON instead of YAML |
-| `brig policies` | every policy that parses, by name and description |
+| `brig agent ls` | the agents, their images, and what each one refuses to forward |
+| `brig agent show <agent>` | print one agent's spec. `--json` for JSON instead of YAML |
+| `brig agent new <name> --from <agent>` | copy an agent under a new name, ready to edit |
+| `brig agent edit\|rm\|import\|export` | manage agents |
 | `brig policy ls\|create\|edit\|show\|rm` | manage policies. `show --json` for JSON instead of YAML |
 | `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring. macOS only for now |
 | `brig secret import <profile>` | fill that profile's secrets from your host, once. macOS only for now |
 | `brig telemetry status\|on\|off` | report what is counted, or turn the counting on or off. See [Telemetry](#telemetry) |
 | `brig version` | |
 
-`brig template …` and `brig agents` are the older spellings and still work
-for one release, each printing a one-line note naming the new one; they no
-longer appear above. There is deliberately no `brig template edit`.
+The older spellings all still work and each prints a one-line note naming the
+new one, so nothing scripted breaks in this release; they no longer appear
+above. `brig profiles` and the whole `brig profile` group are now `brig agent`,
+`brig policies` is `brig policy ls`, and top-level `brig import` and
+`brig export` are `brig agent import` and `brig agent export`. So are the
+undocumented aliases that were never in this table -- `list`, `save`, `load`,
+`secret rm`. `brig template …` and `brig agents` remain from an earlier rename,
+and there is deliberately no `brig template edit`.
+
+`brig secret` keeps `create|read|update|delete`, and that is deliberate rather
+than an oversight. The tidier `set`/`get` pair would make one typo turn a read
+into a write, silently replacing a stored credential with no way back to the
+original value. The inconsistency is the cheaper of the two.
 
 A brig line has three places a token can stand, and they are not the same kind
 of place. Left of the verb are brig's global flags, a closed set -- an unknown
@@ -255,7 +266,7 @@ The verbs line up deliberately, so muscle memory carries over:
 | `sbx create` | `brig create` | |
 | `sbx exec` / `sbx ls` / `sbx stop` / `sbx rm` / `sbx reset` | same | |
 | `sbx cp` | n/a | the workspace is a live host directory, so there is nothing to copy across |
-| `sbx template ls\|save\|load\|rm` | `brig profile ls\|export\|import\|edit\|rm` | brig's profiles describe the *agent*, not just its image, and are YAML like sbx's kits |
+| `sbx template ls\|save\|load\|rm` | `brig agent ls\|export\|import\|edit\|rm` | brig's profiles describe the *agent*, not just its image, and are YAML like sbx's kits |
 | `sbx secret set` | `brig secret create` + a profile's `secrets:` | brig has a store of its own and binds from it. Or point a profile at your existing secret manager: whatever puts a value in brig's environment is enough |
 | `sbx -t/--template` | `brig -t/--image` | |
 | `sbx -m/--memory`, `--cpus`, `-d`, `--name` | same | |
@@ -356,7 +367,7 @@ typo in a name is a message rather than a silently lost secret.
 
 A profile declares the names it wants out of this store, so a stored secret
 reaches a sandbox on its own -- as a file where the agent reads one, and as an
-environment variable where it does not. `brig profiles` prints each profile's
+environment variable where it does not. `brig agent ls` prints each agent's
 list, and which of those names `brig secret import` can fill for you:
 
 ```
@@ -554,34 +565,33 @@ profile just saves you spelling out the image, the guest home and the
 credential variables every time:
 
 ```bash
-brig profile export claude-code mine   # start from the closest one
-brig profile edit mine                 # change the image, forward/deny
+brig agent new mine --from claude-code   # start from the closest one
+brig agent edit mine                     # change the image, forward/deny
 brig run mine
 ```
 
-The second word is a name, not a path: brig writes `~/.config/brig/mine.yaml`,
-which is where a profile file has to be for brig to read it back. It is the
-profile's name as well as the file's -- export writes `name: mine` into the
-file, so `mine` is what every later command takes, `brig profile rm mine`
-included. Everything else in there still describes claude-code, which is what
-the edit on the second line is for. Export
-writes that directory and nowhere else, so a path is refused rather than
-honoured -- redirect stdout (`brig profile export claude-code > mine.yaml`)
-if you want a copy of your own. It also refuses to overwrite an existing file
+The name is a name, not a path: brig writes `~/.config/brig/mine.yaml`, which
+is where a profile file has to be for brig to read it back. It is the agent's
+name as well as the file's -- `new` writes `name: mine` into the file, so `mine`
+is what every later command takes, `brig agent rm mine` included. Everything
+else in there still describes claude-code, which is what the edit on the second
+line is for. `new` writes that directory and nowhere else, so a path is refused
+rather than honoured -- redirect stdout (`brig agent show claude-code >
+mine.yaml`) if you want a copy of your own. It also refuses to overwrite an existing file
 unless you pass `--force`, since an export is generated bytes and the file it
 would replace is not.
 
 Profiles are **YAML or JSON** -- JSON is a subset of YAML, so one parser reads
 both and nothing has to guess. Export writes YAML, because a profile is a
 file a person edits and YAML has comments; the exported file carries a header
-explaining every field. `brig profile export --json` for anything consuming
+explaining every field. `brig agent show --json` for anything consuming
 profiles programmatically.
 
 An imported file is stored byte for byte as you wrote it, so your comments and
 your ordering survive:
 
 ```yaml
-# A brig profile. Edit it, then: brig profile import <this file>
+# A brig profile. Edit it, then: brig agent import <this file>
 # ...
 name: mine
 image: docker.io/me/mine:latest
@@ -597,7 +607,7 @@ otherwise decode into nothing and forward no credentials, which looks exactly
 like a broken sandbox.
 
 A custom profile may take a built-in's name -- that is how you pin your own
-image for an agent brig already knows about. `brig profiles` marks those
+image for an agent brig already knows about. `brig agent ls` marks those
 `(file, overrides built-in)`. Your own live in `$XDG_CONFIG_HOME/brig`
 (default `~/.config/brig`), one file each; the directory starts empty and
 brig never writes there unless you ask it to.
