@@ -366,14 +366,32 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, strictErr
 	}
 	c.GuestCwd = GuestCwd(cwd, c.Workspace, t.GuestHome)
-	// And then, if this run named a project, the project instead: it is a
-	// directory of its own, mounted beside the home, so the derivation above
-	// has nothing to say about it. Resolved after the Config exists because it
-	// reads the cwd this run resolved and writes three of its fields.
+	// And then the project, which replaces that derivation: it is a directory
+	// of its own, mounted beside the home, so the cwd-under-home rule has
+	// nothing to say about it. Resolved after the Config exists because it
+	// reads the workspace and the cwd this run resolved and writes three of its
+	// fields.
+	//
+	// A positional on this invocation wins, and when there is none the project
+	// the sandbox was started with stands -- the same two-step the workspace
+	// above follows, for the same reason and by the same read. An invocation
+	// that names no directory is not asking for a different one: `brig sh
+	// claude@x` said nothing about a project, and taking that for "no project"
+	// destroyed the mount, the guest's memory-only state and the index entry
+	// recording it. Looked up by ref and sandbox, so it has to happen here,
+	// after both are resolved. See rememberedProject and projectShareStale.
 	if o.Project != "" {
 		if err := c.mountProject(o.Project); err != nil {
 			return nil, err
 		}
+	} else if remembered := rememberedProject(sessionKey(t.Name, slug), vmName); remembered != "" {
+		// The error is dropped rather than returned, which is the one place the
+		// two steps differ. A directory this line never named is not the user's
+		// to fix, so a remembered project that has since been renamed or
+		// deleted leaves the run with no project instead of refusing it -- and
+		// EnsureRunning then names it, in the warning about the restart that
+		// takes the dead mount away.
+		_ = c.mountProject(remembered)
 	}
 	// After the Config is built, because the notice reads the pair this run
 	// resolved to and reports it against the pair the old one had.

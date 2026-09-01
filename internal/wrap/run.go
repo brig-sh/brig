@@ -512,9 +512,19 @@ func (c *Config) shares(home string, volumes []runtime.Share) []runtime.Share {
 // is the safe direction: it recreates a sandbox that might have been fine
 // rather than running an agent in a directory nothing mounted.
 //
-// Both directions are stale. A run that names no project against a sandbox
-// that has one has to lose the mount, or the agent would keep a host directory
-// this line said nothing about.
+// So what reaches here as a change is a user asking for a different directory,
+// which is a request rather than an accident, and restart and all is what they
+// asked for.
+//
+// The c.Project == "" branch is not how a flagless verb arrives. Load reads the
+// remembered project back when the invocation names none, exactly as it does
+// for the home, so `brig sh claude@x` carries the project the session was
+// started with and compares equal here. The branch is still reached, and still
+// right, in the two cases where nothing establishes that the sandbox has the
+// mount: an index entry that is missing or unusable, and a remembered project
+// that has since gone off disk. Asking for no project is not expressible on a
+// line today -- there is no flag for it -- which is a gap and not this branch's
+// job to fill.
 func (c *Config) projectShareStale() string {
 	was := rememberedProject(sessionKey(c.Profile.Name, c.Slug), c.VMName)
 	switch {

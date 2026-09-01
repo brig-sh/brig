@@ -289,3 +289,119 @@ func mustReadIndex(t *testing.T, dir string) string {
 	}
 	return string(blob)
 }
+
+// The defect real-runtime testing found. A session created with a project and
+// then addressed by a verb that names none -- `brig sh claude@x`, or a bare
+// `brig run` -- presented as project-less: the mount was destroyed, the guest's
+// in-memory state with it, and the index entry was overwritten without the key.
+//
+// The home already worked this way and the project did not. An invocation that
+// names no directory is not asking for the default one, so the path the sandbox
+// was started with is read back -- exactly what rememberedWorkspace does for
+// the home, and for the reason index.go's header gives.
+func TestAProjectGivenOnceIsFoundAgainWithoutThePositional(t *testing.T) {
+	dir := isolateState(t)
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "myproject")
+	mustMkdir(t, project)
+
+	mustLoad(t, Options{Workspace: home, Project: project}).rememberSession()
+
+	next := mustLoad(t, Options{})
+	if next.Project != project {
+		t.Errorf("a flagless verb resolved the project %q, want %q", next.Project, project)
+	}
+	if want := "/work/myproject"; next.GuestProject != want || next.GuestCwd != want {
+		t.Errorf("guest project %q and cwd %q, want %q for both",
+			next.GuestProject, next.GuestCwd, want)
+	}
+	// So the running sandbox is carrying what this run wants, and nothing is
+	// torn down.
+	if stale := next.projectShareStale(); stale != "" {
+		t.Errorf("a flagless verb read the sandbox as stale: %s", stale)
+	}
+	// And recording again keeps the key rather than dropping it, which is what
+	// the flagless verb was doing to the entry.
+	next.rememberSession()
+	if blob := mustReadIndex(t, dir); !strings.Contains(blob, `"project": "`+project+`"`) {
+		t.Errorf("a flagless verb dropped the project from the index:\n%s", blob)
+	}
+}
+
+// An explicit positional still beats what was recorded, and still recreates:
+// asking for a different directory is something a user is entitled to do,
+// restart and all. Same rule the home follows.
+func TestAnExplicitProjectBeatsTheRememberedOne(t *testing.T) {
+	isolateState(t)
+	home := t.TempDir()
+	first := filepath.Join(t.TempDir(), "first")
+	second := filepath.Join(t.TempDir(), "second")
+	mustMkdir(t, first)
+	mustMkdir(t, second)
+
+	mustLoad(t, Options{Workspace: home, Project: first}).rememberSession()
+
+	next := mustLoad(t, Options{Workspace: home, Project: second})
+	if next.Project != second {
+		t.Fatalf("the positional resolved %q, want %q", next.Project, second)
+	}
+	if stale := next.projectShareStale(); stale == "" {
+		t.Error("a different project did not read as stale, so the sandbox would keep the old mount")
+	} else if !strings.Contains(stale, first) || !strings.Contains(stale, second) {
+		t.Errorf("the reason names neither directory clearly: %s", stale)
+	}
+}
+
+// A remembered project that has since gone is dropped rather than refused. This
+// line named no directory, so there is nothing here for the user to fix; the
+// recreate that follows is what tells them the mount went, and it names the
+// directory.
+func TestARememberedProjectThatIsGoneIsDropped(t *testing.T) {
+	isolateState(t)
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "myproject")
+	mustMkdir(t, project)
+
+	mustLoad(t, Options{Workspace: home, Project: project}).rememberSession()
+	if err := os.Remove(project); err != nil {
+		t.Fatal(err)
+	}
+
+	next := mustLoad(t, Options{})
+	if next.Project != "" {
+		t.Errorf("a project that is no longer there was mounted: %q", next.Project)
+	}
+	if want := GuestCwd(next.Cwd, next.Workspace, next.Profile.GuestHome); next.GuestCwd != want {
+		t.Errorf("GuestCwd = %q, want the home derivation %q", next.GuestCwd, want)
+	}
+	if stale := next.projectShareStale(); stale == "" {
+		t.Error("the sandbox still mounting the vanished project did not read as stale")
+	}
+}
+
+// The staleness read itself, on the three answers it has. An entry with no
+// project against a run that has one is the case that survives the inheritance
+// above: nothing was recorded, so nothing establishes that the running sandbox
+// has this mount, and recreating is the safe direction.
+func TestProjectShareStaleReadsTheIndex(t *testing.T) {
+	isolateState(t)
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "myproject")
+	mustMkdir(t, project)
+
+	// Nothing recorded at all, and a project named: stale.
+	c := mustLoad(t, Options{Workspace: home, Project: project})
+	if c.projectShareStale() == "" {
+		t.Error("an unrecorded session with a project did not read as stale")
+	}
+	// Nothing recorded and no project named: not stale, which is every
+	// ordinary run of every session that has never had one.
+	if bare := mustLoad(t, Options{Workspace: home}); bare.projectShareStale() != "" {
+		t.Errorf("a session with no project read as stale: %s", bare.projectShareStale())
+	}
+	// Recorded and unchanged: not stale.
+	c.rememberSession()
+	if again := mustLoad(t, Options{Workspace: home, Project: project}); again.projectShareStale() != "" {
+		t.Errorf("the recorded project read as stale: %s", again.projectShareStale())
+	}
+}
