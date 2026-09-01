@@ -26,6 +26,12 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	for _, w := range c.envWarnings {
 		c.warnf("%s", w)
 	}
+	// Beside them, and for the same reason: this too was decided in Load, it
+	// is nobody's fault and no reason to fail, and the run it applies to is
+	// the one about to create the new directory. See slugMigrationNotice.
+	for _, w := range c.slugMigration {
+		c.warnf("%s", w)
+	}
 
 	// Resolved before anything else touches the sandbox, and returned as an
 	// error rather than a warning: a run whose secret cannot be resolved must
@@ -173,9 +179,9 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) error {
-	// Before anything is prepared or booted: a name that shortens to a sandbox
-	// another name already owns is refused here rather than dropped into that
-	// sandbox's home directory. See slugclaim.go.
+	// Before anything is prepared or booted: a name that sanitises onto a
+	// sandbox another name already owns is refused here rather than dropped
+	// into that sandbox's home directory. See slugclaim.go.
 	if err := c.claimSlug(); err != nil {
 		return err
 	}

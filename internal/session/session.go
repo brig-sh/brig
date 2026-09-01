@@ -13,14 +13,20 @@ import (
 	"github.com/brig-sh/brig/internal/profile"
 )
 
-// maxSlug keeps directory names short. It is a tight budget, so two long
-// names can slug the same and share one sandbox; callers report the
-// directory in use whenever the slug differs from the name.
-const maxSlug = 10
-
 // Slug turns a session name into something safe to put in a path. It returns
 // the empty string when the name holds no usable characters; the caller
 // decides what to do about that.
+//
+// Nothing is shortened. A slug used to be cut to ten characters to keep a
+// directory name short, and that cut is what made two long names one
+// directory: the same guest home and the same sandbox for two sessions, with
+// whichever credentials arrived last. A slug is now as long as the name makes
+// it, and the only ceiling left is the filesystem's own limit on a path
+// component.
+//
+// Sanitising still collapses names, which is a smaller class and not one a
+// budget was ever protecting against: Foo, foo! and foo are all foo. That is
+// what claimSlug refuses in internal/wrap -- see slugclaim.go.
 //
 // Replacing everything outside [A-Za-z0-9._-] is what makes this safe: it
 // takes out every '/', so a slug holds no path separator and cannot escape
@@ -39,19 +45,14 @@ func Slug(name string) string {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
 			b.WriteRune(r)
 		default:
-			// One dash per rune, collapsed below. A multi-byte rune is one
-			// character here, not one per byte, so a non-ASCII name does not
-			// blow the length budget on dashes.
+			// One dash per rune, collapsed below: a multi-byte rune becomes
+			// one dash rather than one per byte, so ünï reads as a name and
+			// not as a row of dashes.
 			b.WriteByte('-')
 		}
 	}
 	s := collapseDashes(b.String())
 	s = strings.TrimLeft(s, "-.")
-	s = strings.TrimRight(s, "-.")
-	if len(s) > maxSlug {
-		s = s[:maxSlug]
-	}
-	// Truncation can leave a trailing separator behind.
 	return strings.TrimRight(s, "-.")
 }
 
@@ -70,6 +71,29 @@ func collapseDashes(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// legacyBudget is the ten characters a slug used to be cut to. It is not a
+// limit any more -- see Slug -- and it survives only so that a session named
+// under it can be recognised. See LegacySlug.
+const legacyBudget = 10
+
+// LegacySlug is the slug an older release would have derived from this name:
+// today's slug cut to the old budget, with the trailing-separator trim that
+// release reapplied after the cut. It equals Slug for every name short enough
+// never to have been cut, which is how a caller tells a session whose
+// directory has moved from one whose has not.
+//
+// It exists for the migration notice and for nothing else. Nothing in a run
+// derives a path from it: the point is to name the directory the old release
+// left behind, so the reader can move or delete it.
+func LegacySlug(name string) string {
+	s := Slug(name)
+	if len(s) <= legacyBudget {
+		return s
+	}
+	// Counted in bytes, because bytes are the budget that release spent.
+	return strings.TrimRight(s[:legacyBudget], "-.")
 }
 
 // Resolve validates a session name and returns its slug.

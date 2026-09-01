@@ -61,7 +61,7 @@ usage:
 A <ref> is the session. claude is that agent's default session, and
 claude@refactor is a session of its own -- its own workspace, its own sandbox,
 and the label reaching the agent as its display name. A label brig would have
-to shorten is refused rather than shortened. brig ls prints the ref of every
+to rewrite is refused rather than rewritten. brig ls prints the ref of every
 sandbox, and every verb above takes one.
 
 flags (before the agent's own arguments; -- ends brig's parsing):
@@ -354,9 +354,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	// The slug is shortened and sanitised, so the directory a named session
-	// gets rarely reads back as the name typed. Say which directory it actually
-	// is whenever the two differ. A name that shortens onto another session's
+	// The slug is sanitised, so the directory a named session gets does not
+	// always read back as the name typed. Say which directory it actually is
+	// whenever the two differ. A name that sanitises onto another session's
 	// sandbox is refused later, at EnsureRunning; this only names the directory.
 	if cfg.RawName != "" && cfg.RawName != cfg.Slug {
 		fmt.Fprintf(os.Stderr, "brig: session %q uses %s (sandbox %s)\n",

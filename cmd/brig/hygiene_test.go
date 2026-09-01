@@ -306,7 +306,9 @@ func TestParseRefusesABadRef(t *testing.T) {
 		{"claude@"},
 		{"claude@a@b"},
 		{"claude@Refactor"},
-		{"claude@my-very-long-label"},
+		// Long is not what refuses this -- a label is not shortened, so there
+		// is no length to refuse -- the spaces are.
+		{"claude@my very long label"},
 		{"@refactor"},
 	} {
 		_, _, _, err := parse(args)

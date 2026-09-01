@@ -22,9 +22,11 @@ func TestParseRef(t *testing.T) {
 		{"claude@v1.2", Ref{Agent: "claude", Label: "v1.2"}},
 		{"claude@a-b", Ref{Agent: "claude", Label: "a-b"}},
 		{"claude@2", Ref{Agent: "claude", Label: "2"}},
-		// Exactly at the budget, which is the boundary the refusal below sits
-		// one character past.
-		{"claude@" + strings.Repeat("a", maxSlug), Ref{Agent: "claude", Label: strings.Repeat("a", maxSlug)}},
+		// Long, and slug-clean at that length. Nothing is cut any more, so a
+		// label is refused for what is in it and never for how much of it
+		// there is.
+		{"claude@a-really-rather-long-refactor-label",
+			Ref{Agent: "claude", Label: "a-really-rather-long-refactor-label"}},
 	}
 	for _, c := range cases {
 		got, err := ParseRef(c.in)
@@ -65,11 +67,11 @@ func TestParseRefRefusals(t *testing.T) {
 		// One '@' and no more: a second one is a typo, and picking a side
 		// would make `a@b@c` mean whichever side the parser happened to read.
 		{"claude@a@b", "claude@a@b"},
-		// One character past the budget.
-		{"claude@" + strings.Repeat("a", maxSlug+1), strings.Repeat("a", maxSlug+1)},
-		// Below the budget and not slug-clean: uppercase, a space, a path
-		// separator, a leading dash, a label with nothing usable in it, and a
-		// non-ASCII label.
+		// Long and not slug-clean. It is the uppercase that refuses this, not
+		// the length: the same label in lower case parses above.
+		{"claude@A-Really-Rather-Long-Refactor-Label", "A-Really-Rather-Long-Refactor-Label"},
+		// Not slug-clean: uppercase, a space, a path separator, a leading
+		// dash, a label with nothing usable in it, and a non-ASCII label.
 		{"claude@Refactor", "Refactor"},
 		{"claude@my ref", "my ref"},
 		{"claude@a/b", "a/b"},
@@ -107,15 +109,23 @@ func TestRefString(t *testing.T) {
 	}
 }
 
-// The cap is Slug's own budget, not a number of its own. A longer cap would
-// let two labels that differ only past the budget slug the same, which is the
-// collision the refusal exists to remove.
-func TestRefLabelCapIsTheSlugBudget(t *testing.T) {
-	long := strings.Repeat("a", maxSlug+1)
-	if Slug(long) == long {
-		t.Fatalf("Slug no longer truncates %q, so the cap needs rereading", long)
+// A label is refused for what is in it, not for how long it is. Both halves
+// are asserted together because they are one fact: Slug does not cut, so there
+// is no length at which ParseRef starts refusing -- and a budget put back into
+// Slug would make ParseRef refuse long labels again without a word being
+// changed here.
+func TestALongLabelIsRefusedOnlyForItsCharacters(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	if got := Slug(long); got != long {
+		t.Fatalf("Slug cut a %d-character label to %d, which is what ParseRef would refuse it for",
+			len(long), len(got))
 	}
-	if _, err := ParseRef("claude@" + long); err == nil {
-		t.Errorf("a label Slug would truncate was accepted")
+	if _, err := ParseRef("claude@" + long); err != nil {
+		t.Errorf("a long slug-clean label was refused: %v", err)
+	}
+	// And length excuses nothing: the character test is the whole of the rule,
+	// at any length.
+	if _, err := ParseRef("claude@" + strings.ToUpper(long)); err == nil {
+		t.Errorf("a long label Slug would rewrite was accepted")
 	}
 }

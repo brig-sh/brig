@@ -23,21 +23,19 @@ const refSep = "@"
 // places that have to agree: the sandbox name, which is the profile's name
 // plus "-" plus the slug (see internal/wrap/config.go), and the workspace
 // directory the guest gets as its home. Slug is what turns a name into both,
-// and Slug truncates at maxSlug -- so a cap any longer than that would let two
-// labels differing only past character maxSlug slug the same, land on one
-// sandbox and share one home directory. Refusing the label rather than
-// truncating it is what removes that collision, instead of detecting it later
-// and asking the user to pick again.
+// so a label Slug would rewrite is a label that addresses a directory nobody
+// typed. Refusing it is what keeps a ref an address, instead of quietly
+// mapping one spelling onto a session started under another.
 //
-// So the rule is: a label must already be what Slug would make of it. Below
-// the cap Slug cannot truncate, which is why the length check comes first and
-// why a single `label != Slug(label)` is then an exact test for "not
-// slug-clean" -- the character rules stay in Slug and are not restated here,
-// so the two cannot drift.
+// So the rule is: a label must already be what Slug would make of it. Slug
+// changes characters and nothing else -- it does not shorten -- so the single
+// `label != Slug(label)` is an exact test for "not slug-clean" at any length,
+// and there is no length for a label to be refused for. The character rules
+// stay in Slug and are not restated here, so the two cannot drift.
 //
 // --name is deliberately not held to this. It keeps its older, lenient
-// behaviour, truncation and the warning that names the directory it actually
-// got; the '@' form is the strict one.
+// behaviour, sanitising the name and reporting the directory it actually got;
+// the '@' form is the strict one.
 func ParseRef(s string) (Ref, error) {
 	agent, label, hasLabel := strings.Cut(s, refSep)
 	if strings.Contains(label, refSep) {
@@ -61,14 +59,6 @@ func ParseRef(s string) (Ref, error) {
 		return Ref{}, fmt.Errorf("session ref %q ends with %q and names no session. "+
 			"Drop the %q for the default session, or name one: `%s%srefactor`",
 			s, refSep, refSep, agent, refSep)
-	}
-	// Length before characters: see the doc comment. Counted in bytes because
-	// that is the budget Slug spends.
-	if len(label) > maxSlug {
-		return Ref{}, fmt.Errorf("session label %q is %d characters, and a label caps at %d. "+
-			"The label names a directory and a sandbox, so a longer one would have to be "+
-			"shortened -- and two labels shortened the same way would share one of each. "+
-			"Pick a shorter label", label, len(label), maxSlug)
 	}
 	if slug := Slug(label); slug != label {
 		if slug == "" {
