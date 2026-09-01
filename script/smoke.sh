@@ -243,7 +243,7 @@ echo "== network =="
 # The posture the run resolved to is the posture the runtime is told about.
 # Net was a hardcoded "shared" for the whole life of the field, so this is the
 # check that the resolved value actually travels.
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
 "$WORK/brig" run claude --offline -d > "$WORK/off.out" 2>&1
 grep -q -- '--net none' "$STUB_LOG" \
@@ -253,7 +253,7 @@ grep -q '^NETWORK .*offline' "$WORK/off.out" \
   && ok "the envelope says the sandbox is offline" \
   || bad "the envelope says the sandbox is offline -- got: $(cat "$WORK/off.out")"
 
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
 "$WORK/brig" run claude -d > "$WORK/on.out" 2>&1
 grep -q -- '--net shared' "$STUB_LOG" \
@@ -267,7 +267,7 @@ grep -q '^NETWORK .*shared' "$WORK/on.out" \
 # hull stand-in, so what is checked here is that the posture reaches the
 # runtime; that two sandboxes on separate networks genuinely cannot reach each
 # other is a real-runtime fact, recorded in docs/manual-tests.
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
 "$WORK/brig" run claude --network isolated -d > "$WORK/iso.out" 2>&1
 grep -q -- '--net isolated' "$STUB_LOG" \
@@ -276,18 +276,18 @@ grep -q -- '--net isolated' "$STUB_LOG" \
 grep -q '^NETWORK .*isolated' "$WORK/iso.out" \
   && ok "the envelope names the isolated posture" \
   || bad "the envelope names the isolated posture -- got: $(cat "$WORK/iso.out")"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 # A posture brig does not know must stop the run rather than pick one.
-out="$(BRIG_NETWORK=airgapped "$WORK/brig" env claude 2>&1)"; rc=$?
+out="$(BRIG_NETWORK=airgapped "$WORK/brig" info claude 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "an unknown BRIG_NETWORK refuses the run" \
   || bad "an unknown BRIG_NETWORK started anyway: $out"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== denylist =="
 : > "$STUB_LOG"
 out="$(ANTHROPIC_API_KEY=sk-metered BRIG_FORWARD_ENV='ANTHROPIC_API_KEY GH_TOKEN' \
-  GH_TOKEN=gh-secret "$WORK/brig" env claude 2>&1)"
+  GH_TOKEN=gh-secret "$WORK/brig" info claude 2>&1)"
 case "$out" in
   *ANTHROPIC_API_KEY*denylist*) ok "the metered key is refused, and says why" ;;
   *) bad "the metered key is refused -- got: $out" ;;
@@ -302,7 +302,7 @@ case "$out" in
 esac
 
 echo "== unresolved reference =="
-out="$(GH_TOKEN='op://vault/item/field' "$WORK/brig" env claude 2>&1)"
+out="$(GH_TOKEN='op://vault/item/field' "$WORK/brig" info claude 2>&1)"
 case "$out" in
   *"unresolved secret reference"*) ok "a secret-manager reference is not forwarded" ;;
   *) bad "a secret-manager reference is not forwarded -- got: $out" ;;
@@ -313,7 +313,7 @@ echo "== removed settings =="
 # credential. It is removed, and a run that still sets it fails here rather
 # than booting a sandbox without the login its user believes they configured --
 # a failure that would otherwise surface as the guest asking them to log in.
-out="$(BRIG_CREDENTIALS_CMD='printf {}' "$WORK/brig" env claude 2>&1)"; rc=$?
+out="$(BRIG_CREDENTIALS_CMD='printf {}' "$WORK/brig" info claude 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "a run still setting BRIG_CREDENTIALS_CMD fails" \
   || bad "a run still setting BRIG_CREDENTIALS_CMD started anyway"
 case "$out" in
@@ -337,7 +337,7 @@ grep -q 'is now `brig info`' "$WORK/info.err" \
 # one grep each: a row that drifts between the preview and the run makes the
 # preview a claim about a boundary nobody is going to use.
 "$WORK/brig" run claude -d > "$WORK/runenv.out" 2>&1
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 envelope_rows() { grep -E '^(SESSION|PROFILE|SANDBOX|ISOLATION|WORKSPACE|IMAGE|CREDENTIALS) ' "$1"; }
 envelope_rows "$WORK/info.out" > "$WORK/rows.info"
 envelope_rows "$WORK/runenv.out" > "$WORK/rows.run"
@@ -372,7 +372,7 @@ echo "== session collision =="
 # Two names whose slugs shorten to one sandbox must not share it: the tight slug
 # budget used to drop the second into the first's home with its own credentials,
 # and brig only warned. Now the second is refused. See issue #26.
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 "$WORK/brig" run claude --name acme-corp-prod -d > /dev/null 2>&1
 out="$("$WORK/brig" run claude --name acme-corp-staging -d 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "a colliding session name is refused" \
@@ -397,7 +397,7 @@ esac
 # there is nothing to guess, and dropping them would leave the refusal off
 # until every session had run again. Unlike the session index, whose keys
 # cannot be read back into a ref at all.
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
 printf '{"brig-claude-code-acme-corp": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
 out="$("$WORK/brig" run claude --name acme-corp-staging -d 2>&1)"
@@ -414,7 +414,7 @@ grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
 # that same boot would have replaced the file the claims were still sitting in,
 # which makes a plain `brig run claude` the one command that silently destroys
 # them.
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
 printf '{"brig-claude-code-acme-corp": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
 "$WORK/brig" run claude -d > /dev/null 2>&1
@@ -425,7 +425,7 @@ grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
 # And claims nothing of its own, which is the other half of that pair: every
 # unnamed run of a profile is meant to be the one session, so there is no name
 # for a later one to collide with and nothing to write down.
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
 "$WORK/brig" run claude -d > /dev/null 2>&1
 [ -e "$BRIG_STATE_DIR/slug-claims.json" ] \
@@ -436,7 +436,7 @@ rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
 # whose values are objects rather than the claims' strings, so it cannot be
 # read as claims. Mistaking one for the other deletes the file, and every
 # session in it loses its home.
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
 "$WORK/brig" run claude --name rc23guard -d > /dev/null 2>&1
 if [ -s "$BRIG_STATE_DIR/sessions.json" ]; then
@@ -458,7 +458,7 @@ if [ -s "$BRIG_STATE_DIR/sessions.json" ]; then
 else
   bad "no session index to guard: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 fi
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== stop =="
 : > "$STUB_LOG"
@@ -472,21 +472,21 @@ grep -q 'CLAUDE_CODE_OAUTH_TOKEN' "$STUB_LOG" \
 
 echo "== lifecycle verbs =="
 : > "$STUB_LOG"
-out="$("$WORK/brig" create claude 2>"$WORK/create.err")"
-[ "$out" = brig-claude-code ] && ok "create prints the sandbox name" \
-  || bad "create prints the sandbox name -- got '$out'"
+out="$("$WORK/brig" run claude -d 2>"$WORK/detach.err")"
+[ "$out" = brig-claude-code ] && ok "run -d prints the sandbox name" \
+  || bad "run -d prints the sandbox name -- got '$out'"
 # The envelope is on stderr, so the scriptable name on stdout stays clean.
-grep -q '^SANDBOX .*brig-claude-code' "$WORK/create.err" \
-  && ok "create prints the execution envelope" \
-  || bad "create prints the execution envelope: $(cat "$WORK/create.err")"
+grep -q '^SANDBOX .*brig-claude-code' "$WORK/detach.err" \
+  && ok "run -d prints the execution envelope" \
+  || bad "run -d prints the execution envelope: $(cat "$WORK/detach.err")"
 grep -q -- '-- claude' "$STUB_LOG" \
-  && bad "create started the agent" || ok "create starts the sandbox, not the agent"
+  && bad "run -d started the agent" || ok "run -d starts the sandbox, not the agent"
 
-# exec and shell attach to a sandbox whose envelope the user already saw, so
-# they do not repeat it. The sandbox created just above is still running.
-"$WORK/brig" exec claude -- true > /dev/null 2>"$WORK/exec.err"
-grep -q '^SANDBOX ' "$WORK/exec.err" \
-  && bad "exec printed the envelope" || ok "exec does not print the envelope"
+# sh attaches to a sandbox whose envelope the user already saw, so it does not
+# repeat it. The sandbox started just above is still running.
+"$WORK/brig" sh claude -- true > /dev/null 2>"$WORK/sh.err"
+grep -q '^SANDBOX ' "$WORK/sh.err" \
+  && bad "sh printed the envelope" || ok "sh does not print the envelope"
 
 listing="$("$WORK/brig" ls 2>/dev/null)"
 case "$listing" in
@@ -512,14 +512,13 @@ grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
   && ok "rm removes the sandbox" || bad "rm removes the sandbox"
 [ -d "$WS" ] && ok "rm leaves the workspace alone" || bad "rm deleted the workspace"
 
-out="$("$WORK/brig" run claude -d 2>/dev/null)"
-[ "$out" = brig-claude-code ] && ok "run -d prints the name and exits" \
-  || bad "run -d prints the name -- got '$out'"
+# A sandbox for `rm --all` to remove.
+"$WORK/brig" run claude -d > /dev/null 2>&1
 
 : > "$STUB_LOG"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
-  && ok "reset removes brig sandboxes" || bad "reset removes brig sandboxes"
+  && ok "rm --all removes brig sandboxes" || bad "rm --all removes brig sandboxes"
 
 echo "== remembered workspace =="
 # A session created with -w used to be restarted by the next verb that left the
@@ -532,9 +531,9 @@ echo "== remembered workspace =="
 # setting that names a directory and this is about the case where nothing does.
 RC="$WORK/ws-rc23"
 brig_bare() { env -u BRIG_WORKSPACE "$WORK/brig" "$@"; }
-brig_bare create claude --name rc23 -w "$RC" > /dev/null 2>&1
+brig_bare run claude --name rc23 -w "$RC" -d > /dev/null 2>&1
 : > "$STUB_LOG"
-brig_bare exec claude --name rc23 -- uname -a > /dev/null 2>&1
+brig_bare sh claude --name rc23 -- uname -a > /dev/null 2>&1
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "exec without -w restarted the session" \
   || ok "exec without -w finds the workspace the session was created with"
@@ -551,7 +550,7 @@ esac
 # An explicit directory is a request rather than a guess, so it still wins and
 # still restarts: a share cannot be moved on a live guest.
 : > "$STUB_LOG"
-brig_bare exec claude --name rc23 -w "$WORK/ws-other" -- uname -a > /dev/null 2>&1
+brig_bare sh claude --name rc23 -w "$WORK/ws-other" -- uname -a > /dev/null 2>&1
 grep -q '^argv: run ' "$STUB_LOG" \
   && ok "a -w naming a different directory still restarts the sandbox" \
   || bad "a -w naming a different directory still restarts the sandbox"
@@ -564,7 +563,7 @@ grep -q '"claude-code@rc23"' "$BRIG_STATE_DIR/sessions.json" \
   && ok "the session is filed under its ref" \
   || bad "the session is not filed under claude-code@rc23 -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 : > "$STUB_LOG"
-brig_bare exec claude-code --name rc23 -- uname -a > /dev/null 2>&1
+brig_bare sh claude-code --name rc23 -- uname -a > /dev/null 2>&1
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "the alias did not find the session's workspace" \
   || ok "the alias finds the workspace the session was created with"
@@ -574,8 +573,8 @@ grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/sessions.json" \
   && bad "rm left the sandbox in the session index" \
   || ok "rm drops the remembered workspace"
 
-brig_bare create claude --name rc23 -w "$RC" > /dev/null 2>&1
-"$WORK/brig" reset > /dev/null 2>&1
+brig_bare run claude --name rc23 -w "$RC" -d > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/sessions.json" \
   && bad "reset left a sandbox in the session index" \
   || ok "reset drops the remembered workspaces"
@@ -584,38 +583,38 @@ grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/sessions.json" \
 # spelling for a session that has no label, rather than a trailing '@' or an
 # invented default one, either of which would be a key no ref types.
 rm -f "$BRIG_STATE_DIR/sessions.json"
-brig_bare create claude -w "$WORK/ws-bare" > /dev/null 2>&1
+brig_bare run claude -w "$WORK/ws-bare" -d > /dev/null 2>&1
 grep -q '"claude-code":' "$BRIG_STATE_DIR/sessions.json" \
   && ok "an unlabelled session is filed under the bare agent name" \
   || bad "the unlabelled session is not keyed claude-code -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 grep -q 'claude-code@' "$BRIG_STATE_DIR/sessions.json" \
   && bad "the unlabelled session was given a label -- got: $(cat "$BRIG_STATE_DIR/sessions.json")" \
   || ok "the unlabelled session is given no label"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 # And the '@' form on the command line reaches the file: a session created as
 # claude@label is filed exactly as --name label files it, key and value both,
 # so the two spellings address one entry rather than two.
 rm -f "$BRIG_STATE_DIR/sessions.json"
-brig_bare create claude@rc23ref -w "$WORK/ws-ref" > /dev/null 2>&1
+brig_bare run claude@rc23ref -w "$WORK/ws-ref" -d > /dev/null 2>&1
 grep -q '"claude-code@rc23ref":' "$BRIG_STATE_DIR/sessions.json" \
   && ok "a session created as a ref is filed under that ref" \
   || bad "the ref form is not keyed claude-code@rc23ref -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 grep -q '"sandbox": "brig-claude-code-rc23ref"' "$BRIG_STATE_DIR/sessions.json" \
   && ok "the ref form records the sandbox --name would have named" \
   || bad "the ref form's sandbox is not brig-claude-code-rc23ref -- got: $(cat "$BRIG_STATE_DIR/sessions.json")"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 # The sandbox-keyed file the session index replaces is deleted rather than
 # migrated: its keys cannot be read back into a ref without guessing which dash
 # separated the agent from its label. One restart per session in it, which is
 # what an absent entry has always cost.
 printf '{"brig-claude-code-rc23": "%s"}' "$WORK/ws-legacy" > "$BRIG_STATE_DIR/workspaces.json"
-brig_bare create claude --name rc23 -w "$RC" > /dev/null 2>&1
+brig_bare run claude --name rc23 -w "$RC" -d > /dev/null 2>&1
 [ -e "$BRIG_STATE_DIR/workspaces.json" ] \
   && bad "the old sandbox-keyed index was left behind" \
   || ok "the old sandbox-keyed index is deleted on sight"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 # The index is bookkeeping, so an unusable one costs a restart and nothing
 # more: every command still works, and the workspace resolves as it did before
@@ -625,21 +624,29 @@ brig_bare run claude -d > "$WORK/corrupt.out" 2>&1
 rc=$?
 [ "$rc" = 0 ] && ok "a corrupt index is ignored rather than fatal" \
   || bad "a corrupt index failed the run -- got: $(cat "$WORK/corrupt.out")"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== argument hygiene =="
 # A flag typed to make a destructive command safe must not be read past and
-# ignored. reset has no flags today, so --dry-run is refused (exit 2) and
-# removes nothing rather than stopping every sandbox.
+# ignored. `rm --all` takes nothing beside --all, so --dry-run is refused
+# (exit 2) and removes nothing rather than stopping every sandbox.
 "$WORK/brig" run claude -d > /dev/null 2>&1
 : > "$STUB_LOG"
-"$WORK/brig" reset --dry-run > "$WORK/dry.out" 2>&1; rc=$?
-[ "$rc" = 2 ] && ok "reset --dry-run exits 2" || bad "reset --dry-run exits 2 -- got $rc"
+"$WORK/brig" rm --all --dry-run > "$WORK/dry.out" 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "rm --all --dry-run exits 2" || bad "rm --all --dry-run exits 2 -- got $rc"
 grep -q -- '--dry-run' "$WORK/dry.out" \
-  && ok "reset --dry-run names the token" || bad "reset --dry-run names the token"
+  && ok "rm --all --dry-run names the token" || bad "rm --all --dry-run names the token"
 grep -q '^argv: rm ' "$STUB_LOG" \
-  && bad "reset --dry-run removed a sandbox" || ok "reset --dry-run removes nothing"
-"$WORK/brig" reset > /dev/null 2>&1
+  && bad "rm --all --dry-run removed a sandbox" || ok "rm --all --dry-run removes nothing"
+# A ref beside --all is two requests on one line, so it is refused rather than
+# resolved to either of them.
+out="$("$WORK/brig" rm claude --all 2>&1)"; rc=$?
+[ "$rc" = 2 ] && ok "rm claude --all exits 2" || bad "rm claude --all exits 2 -- got $rc: $out"
+case "$out" in
+  *claude*) ok "rm claude --all names the ref it will not take" ;;
+  *) bad "rm claude --all names the ref -- got: $out" ;;
+esac
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 # An unknown flag to the left of the profile is refused and named, rather than
 # consuming the profile and blaming it for being absent.
@@ -657,9 +664,9 @@ out="$("$WORK/brig" stop claude extra 2>&1)"; rc=$?
 [ "$rc" = 2 ] && ok "stop refuses a stray argument" || bad "stop refuses a stray argument -- got $rc: $out"
 
 echo "== BRIG_NAME =="
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 # A name set through BRIG_NAME still carries the prefix, so ls lists it and
-# reset removes it the way they do any brig sandbox.
+# `rm --all` removes it the way they do any brig sandbox.
 BRIG_NAME=brig-custom "$WORK/brig" run claude -d > /dev/null 2>&1
 listing="$("$WORK/brig" ls 2>/dev/null)"
 case "$listing" in
@@ -667,9 +674,9 @@ case "$listing" in
   *) bad "a BRIG_NAME sandbox appears in ls -- got: $listing" ;;
 esac
 : > "$STUB_LOG"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 grep -q '^argv: rm brig-custom' "$STUB_LOG" \
-  && ok "reset removes a BRIG_NAME sandbox" || bad "reset removes a BRIG_NAME sandbox"
+  && ok "rm --all removes a BRIG_NAME sandbox" || bad "rm --all removes a BRIG_NAME sandbox"
 # A BRIG_NAME without the prefix would be invisible to both, so it is refused at
 # creation with a message naming the constraint.
 out="$(BRIG_NAME=custom "$WORK/brig" run claude -d 2>&1)"; rc=$?
@@ -679,7 +686,8 @@ case "$out" in
   *brig-*) ok "the refusal names the required prefix" ;;
   *) bad "the refusal names the required prefix -- got: $out" ;;
 esac
-"$WORK/brig" reset > /dev/null 2>&1
+
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== no runtime =="
 # With no runtime on PATH, env still reports what is knowable and marks only the
@@ -770,7 +778,7 @@ grep -q -- "--shared-dir $WORK/other:/home/claude" "$STUB_LOG" \
   && ok "-w overrides the workspace" || bad "-w overrides the workspace"
 grep -q 'ghcr.io/me/img:latest' "$STUB_LOG" \
   && ok "-t overrides the image" || bad "-t overrides the image"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== ubuntu =="
 : > "$STUB_LOG"
@@ -1005,7 +1013,7 @@ grep -q -- '-- claude -p hi' "$STUB_LOG" \
 [ -f "$BRIG_PROFILE_DIR/mytool.yaml" ] \
   && bad "rm did not remove the copy under the name it was given" \
   || ok "rm removes the copy under the name it was given, asking nothing"
-"$WORK/brig" reset > /dev/null 2>&1
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 # Every spelling this release retires keeps working, and says the one that
 # replaces it. Both halves matter: a spelling that fails breaks every script
@@ -1164,14 +1172,54 @@ export BRIG_BOOT_ASSETS="$WORK/assets"
 # to the one that needs no gateway rather than teach the stub to fake one.
 export BRIG_HYPERVISOR=vz
 
-echo "== shell =="
+echo "== sh =="
 : > "$STUB_LOG"
-"$WORK/brig" shell claude echo hi there > /dev/null 2>"$WORK/shell.err"
+"$WORK/brig" sh claude echo hi there > /dev/null 2>"$WORK/shell.err"
 grep -q -- '-- bash -lc echo hi there' "$STUB_LOG" \
   && ok "a trailing command reaches bash as one argument" \
   || bad "a trailing command reaches bash as one argument"
 grep -q '^SANDBOX ' "$WORK/shell.err" \
-  && bad "shell printed the envelope" || ok "shell does not print the envelope"
+  && bad "sh printed the envelope" || ok "sh does not print the envelope"
+
+# And with no command it is a login shell. One verb, and which of the two you
+# get is said by whether you typed a command -- not by which word you reached
+# for, which is what exec and shell made you choose.
+: > "$STUB_LOG"
+"$WORK/brig" sh claude > /dev/null 2>&1
+grep -q -- '-- bash -l$' "$STUB_LOG" \
+  && ok "sh with no command opens a login shell" \
+  || bad "sh with no command opens a login shell -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+
+echo "== retired spellings =="
+# Every spelling this release retires still works and says what replaces it. An
+# old spelling has to survive the commit that renames it, or that commit breaks
+# every script anyone has written.
+#
+# Both halves are asserted, and neither is enough alone: a spelling that fails
+# breaks those scripts, and one that works silently never teaches anyone the new
+# word, so the old one is still in them at the release that removes it.
+retired() {
+  local want="$1"; shift
+  local line="brig $*"
+  "$WORK/brig" "$@" > "$WORK/retired.out" 2>&1
+  local rc=$?
+  case "$rc" in
+    2|3) bad "$line was refused -- rc $rc: $(cat "$WORK/retired.out")" ;;
+    *)   ok "$line still works" ;;
+  esac
+  grep -q "is now \`$want\`" "$WORK/retired.out" \
+    && ok "$line names $want as its replacement" \
+    || bad "$line names $want -- got: $(cat "$WORK/retired.out")"
+}
+"$WORK/brig" run claude -d > /dev/null 2>&1
+retired 'brig sh' exec claude -- true
+retired 'brig sh' shell claude echo hi
+retired 'brig info' env claude
+retired 'brig run -d' create claude
+retired '<agent>@<label>' run claude --name retn -d
+retired '<agent>@<label>' run claude -n retn -d
+# Last of the group: it removes what the others were acting on.
+retired 'brig rm --all' reset
 
 [ "$fail" = 0 ] && echo PASS || echo FAILURES
 exit "$fail"

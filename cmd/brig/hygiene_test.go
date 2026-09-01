@@ -60,31 +60,35 @@ func TestRejectTail(t *testing.T) {
 			t.Errorf("rejectTail(%q): %v, want it to name the token", verb, err)
 		}
 	}
-	for _, verb := range []string{"run", "shell", "exec"} {
+	for _, verb := range []string{"run", "sh", "shell", "exec"} {
 		if err := rejectTail(verb, []string{"-p", "hi"}); err != nil {
 			t.Errorf("rejectTail(%q) refused an agent tail: %v", verb, err)
 		}
 	}
 	// No tail is fine for every verb.
-	for _, verb := range []string{"create", "stop", "rm", "env", "run", "shell", "exec"} {
+	for _, verb := range []string{"create", "stop", "rm", "env", "run", "sh", "shell", "exec"} {
 		if err := rejectTail(verb, nil); err != nil {
 			t.Errorf("rejectTail(%q, nil): %v", verb, err)
 		}
 	}
 }
 
-// ls and reset name no profile and take no flags, so an argument is a token
-// they would read and drop. reset is the sharp one: `brig reset --dry-run`
-// reads like a preview and removes everything, so it must refuse before it
-// reaches the runtime.
-func TestLsAndResetRefuseArguments(t *testing.T) {
+// ls names no session and takes only -q, and `rm --all` takes nothing at all,
+// so any other argument is a token they would read and drop. `rm --all` is the
+// sharp one: `brig rm --all --dry-run` reads like a preview and removes
+// everything, so it must refuse before it reaches the runtime. reset is the
+// retired spelling of the same command and refuses on the same terms.
+func TestLsAndRemoveAllRefuseArguments(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		fn   func([]string) error
 		args []string
 	}{
 		{"ls", listSandboxes, []string{"claude"}},
-		{"reset", reset, []string{"--dry-run"}},
+		{"rm --all", func(args []string) error { return removeAll("brig rm --all", args) },
+			[]string{"--dry-run"}},
+		{"reset", func(args []string) error { return removeAll("brig reset", args) },
+			[]string{"--dry-run"}},
 	} {
 		err := tc.fn(tc.args)
 		if err == nil {

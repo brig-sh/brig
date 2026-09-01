@@ -32,22 +32,21 @@ var version = "dev"
 
 // sandboxPrefix is how brig recognises its own sandboxes in a runtime that
 // may be running other things. It is the same mark wrap stamps onto every
-// sandbox name, taken from there so the two cannot drift: ls and reset select
-// on exactly what Load refuses to let BRIG_NAME drop.
+// sandbox name, taken from there so the two cannot drift: ls and `rm --all`
+// select on exactly what Load refuses to let BRIG_NAME drop.
 const sandboxPrefix = wrap.NamePrefix
 
 const usage = `brig -- run a coding agent in a sandbox
 
 usage:
-  brig run    <profile> [flags] [agent args...]  start the sandbox and run it
-  brig create <profile> [flags]                  start the sandbox without attaching
-  brig exec   <profile> -- cmd [args...]         run one command inside the sandbox
-  brig shell  <profile> [cmd...]                 open a shell inside the sandbox
-  brig stop   <profile>                          stop the sandbox, keep it
-  brig rm     <profile>                          stop and remove the sandbox
+  brig run  <ref> [flags] [agent args...]        start the sandbox and run it
+  brig sh   <ref> [command...]                   a login shell inside the sandbox,
+                                                 or one command in it
+  brig stop <ref>                                stop the sandbox, keep it
+  brig rm   <ref>                                stop and remove the sandbox
+  brig rm   --all                                stop and remove every brig sandbox
   brig ls                                        list sandboxes
-  brig reset                                     stop and remove every brig sandbox
-  brig info   <profile>                          print the execution envelope and the
+  brig info <ref>                                print the execution envelope and the
                                                  full environment, by name -- fails
                                                  if a declared secret is missing
   brig agent ls|show|new|edit|rm|import|export   the agents you can run
@@ -59,17 +58,20 @@ usage:
                                                  turn the counting on or off
   brig version
 
+A <ref> is the session. claude is that agent's default session, and
+claude@refactor is a session of its own -- its own workspace, its own sandbox,
+and the label reaching the agent as its display name. A label brig would have
+to shorten is refused rather than shortened. brig ls prints the ref of every
+sandbox, and every verb above takes one.
+
 flags (before the agent's own arguments; -- ends brig's parsing):
-  -n, --name NAME        a session of its own: own workspace, own sandbox.
-                         Also written <profile>@<label>, which refuses a label
-                         it would have to shorten rather than shortening it
       --image IMAGE      guest image to boot
   -w, --workspace PATH   host directory to mount as the guest home
       --mem MB           guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
-  -q, --quiet            with run or create: do not print the execution
-                         envelope before the agent starts
+  -q, --quiet            with run: do not print the execution envelope before
+                         the agent starts
       --skills           project your own ~/.claude skills and plugins into
                          the guest, read-only (or BRIG_SKILLS=1)
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
@@ -220,10 +222,72 @@ func run(args []string) error {
 	case "ls":
 		return listSandboxes(rest)
 	case "reset":
-		return reset(rest)
-	case "run", "create", "exec", "shell", "stop", "rm", "info", "env":
+		// reset was the one verb whose name did not say what it acts on, which
+		// is the whole of its problem: it removes every sandbox brig has, and it
+		// was spelled as if it were a setting being restored. --all is that
+		// word, on the verb that already removes one.
+		deprecated("brig reset", "brig rm --all")
+		return removeAll("brig reset", rest)
+	case "rm":
+		// --all is read here rather than on the run line, because it names no
+		// session: split would refuse it as a brig flag standing where brig's
+		// own flags go, and it is not one. Without --all this falls through to
+		// the run line and removes the one sandbox the ref names.
+		if others, all := takeAll(rest); all {
+			return removeAll("brig rm --all", others)
+		}
+	case "run", "sh", "stop", "info":
+		// The taught lifecycle spellings. They fall through to the run line
+		// below, which is where the ref and the flags are read.
+	case "create":
+		// create is `run -d`: start the sandbox, print its name, attach to
+		// nothing. It keeps a branch of its own below rather than being
+		// rewritten into run here, because run hands a trailing word to the
+		// agent and create has no agent to hand one to -- a word after the ref
+		// is still a mistake, and translating the verb would have swallowed it.
+		deprecated("brig create", "brig run -d")
+	case "exec", "shell":
+		// Two verbs for one question: exec ran a command, shell opened a login
+		// shell or ran one. sh is both, because which of the two you want is
+		// said by whether you typed a command, not by which word you reached
+		// for.
+		//
+		// Both keep their own branch below rather than being translated to sh.
+		// exec runs its argv directly where sh runs it through `bash -lc`, so a
+		// script that relies on its own quoting keeps it -- a rename must not
+		// change what a working line does.
+		deprecated("brig "+verb, "brig sh")
+	case "env":
+		// Kept for one release as a spelling of `brig info`. The bug report
+		// template used to send reporters to `brig status`, which was never a
+		// command; info is the name that work settled on.
+		//
+		// Said here rather than beside the report it prints, so the notice
+		// arrives whether or not the profile behind it resolves. What is retired
+		// is the word, and the word is known before anything is looked up.
+		deprecated("brig env", "brig info")
 	default:
-		return fmt.Errorf("unknown command %q (try `brig help`)", verb)
+		// A bare ref with no verb, and it is tried last on purpose. A token
+		// becomes a ref only once it has matched no verb, so a verb is always a
+		// verb: install an agent called `ls` and `brig ls` is still the listing.
+		// Read the other way round, brig's own vocabulary would depend on which
+		// agents happen to be on the host, and the same command line would mean
+		// two things on two machines.
+		//
+		// Deliberately in no help text and no example. Two spellings of one
+		// thing is what the rest of this change is undoing; this one exists
+		// because `brig claude@refactor` is what people type, not because brig
+		// is teaching it.
+		ref, refErr := session.ParseRef(verb)
+		_, known := profile.Lookup(ref.Agent)
+		if refErr != nil || !known {
+			// Reported as a command and not as a ref, whichever of the two it
+			// failed as. The reader typed the token where a command goes, and
+			// the ref parser's complaint about a mistyped verb would answer a
+			// question nobody asked.
+			return fmt.Errorf("unknown command %q (try `brig help`)", verb)
+		}
+		verb, rest = "run", verbLine
 	}
 
 	opts, profileName, tail, err := parse(rest)
@@ -303,9 +367,9 @@ func run(args []string) error {
 
 	// The execution envelope: the boundary this run is about to trust, printed
 	// before the sandbox boots so the user sees it before it matters. Only run
-	// and create print it. exec and shell continue an existing session and stay
-	// quiet; when there is no sandbox yet they let EnsureRunning start one
-	// without printing the block, so a scripted brig exec is not interrupted.
+	// and create print it. sh continues an existing session and stays quiet;
+	// when there is no sandbox yet it lets EnsureRunning start one without
+	// printing the block, so a scripted `brig sh` is not interrupted.
 	// --quiet drops it for a script or a returning session.
 	if (verb == "run" || verb == "create") && !opts.quiet {
 		cfg.PrintPreRunEnvelope(set)
@@ -316,11 +380,8 @@ func run(args []string) error {
 		cfg.Info(set)
 		return nil
 	case "env":
-		// Kept for one release as a spelling of `brig info`, with the single
-		// line the other deprecated verbs print. The bug report template used
-		// to send reporters to `brig status`, which was never a command; info
-		// is the name that work settled on.
-		deprecated("brig env", "brig info")
+		// The retired spelling of the same report; the notice for it is printed
+		// by the dispatch above.
 		cfg.Info(set)
 		return nil
 	case "create":
@@ -329,7 +390,10 @@ func run(args []string) error {
 		}
 		fmt.Println(cfg.VMName)
 		return nil
-	case "shell":
+	case "sh", "shell":
+		// One command or none, which is the whole of sh's grammar: Shell runs
+		// the trailing words through a login shell and opens one when there are
+		// no trailing words.
 		if err := cfg.EnsureRunning(set); err != nil {
 			return err
 		}
@@ -351,7 +415,7 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 	// through and nothing to exec into: starting it IS the command.
 	if t.IsGUI() && len(tail) > 0 {
 		return fmt.Errorf("%s is a graphical agent, so it takes no arguments "+
-			"(use `brig shell %s` or `brig stop %s`)", t.Name, t.Name, t.Name)
+			"(use `brig sh %s` or `brig stop %s`)", t.Name, t.Name, t.Name)
 	}
 	if err := cfg.EnsureRunning(set); err != nil {
 		return err
@@ -453,15 +517,26 @@ var brigFlags = []struct {
 	{long: "quiet", short: "q", position: posRun},
 }
 
-// deprecatedShorts are the short spellings on their way out, and the long ones
-// that replace them. #47 ships both grammars in v0.2 and removes the short
-// forms in v0.3, so these keep working and say so -- the same contract the
-// retiring verbs have. -n and -w are the other two; they are absent here
-// because #5 and #6 introduce what replaces them, and pointing at a flag that
-// does not exist yet is worse than saying nothing.
-var deprecatedShorts = map[string]string{
-	"-t": "--image",
-	"-m": "--mem",
+// deprecatedFlags are the spellings on their way out, and what replaces each.
+// #47 ships both grammars in v0.2 and removes these in v0.3, so they keep
+// working and say so -- the same contract the retiring verbs have.
+//
+// -n and --name retire onto the label rather than onto another flag: the ref is
+// what names a session now, and `brig run claude@refactor` is what `brig run
+// claude --name refactor` was. Both spellings are mapped and both are named,
+// rather than the long one being aliased quietly, because --name is also Claude
+// Code's own flag -- `brig run claude -- --name x` is the agent's --name today
+// -- and silently reinterpreting a flag two programs share is worse than saying
+// which of them read it.
+//
+// -w is the other short form going. It is absent here because #6 introduces
+// what replaces it, and pointing at a flag that does not exist yet is worse
+// than saying nothing.
+var deprecatedFlags = map[string]string{
+	"-t":     "--image",
+	"-m":     "--mem",
+	"-n":     "<agent>@<label>",
+	"--name": "<agent>@<label>",
 }
 
 // ours reports whether a token is one of brig's flags in the position it was
@@ -615,8 +690,8 @@ func split(args []string) (mine []string, ref session.Ref, tail []string, err er
 			// named before the value is taken, so the notice is never about a
 			// value that reads like a flag: `--name -t` is a session called -t
 			// and reaches this loop as a value, not as a token.
-			if spelling, _, _ := strings.Cut(a, "="); deprecatedShorts[spelling] != "" {
-				deprecated(spelling, deprecatedShorts[spelling])
+			if spelling, _, _ := strings.Cut(a, "="); deprecatedFlags[spelling] != "" {
+				deprecated(spelling, deprecatedFlags[spelling])
 			}
 			mine = append(mine, a)
 			if takesValue && i+1 < len(args) {
@@ -658,19 +733,20 @@ func agentTail(tail []string) []string {
 
 // rejectTail refuses a token a verb has no use for, rather than dropping it.
 //
-// run forwards the tail to the agent, and shell and exec turn it into the guest
-// command, so those keep whatever follows the profile. create, stop, rm and env
-// take a profile and nothing after it: a word left there is a mistake to name,
-// not an operand to swallow. create is grouped with the others rather than with
-// run because it does not attach -- split hands it the same agent tail run gets,
-// but there is no agent here to receive it, so a tail is still a mistake.
+// run forwards the tail to the agent, and sh -- with shell and exec, the two
+// spellings it replaces -- turns it into the guest command, so those keep
+// whatever follows the ref. create, stop, rm and env take a ref and nothing
+// after it: a word left there is a mistake to name, not an operand to swallow.
+// create is grouped with the others rather than with run because it does not
+// attach -- split hands it the same agent tail run gets, but there is no agent
+// here to receive it, so a tail is still a mistake.
 func rejectTail(verb string, tail []string) error {
 	switch verb {
-	case "run", "shell", "exec":
+	case "run", "sh", "shell", "exec":
 		return nil
 	}
 	if len(tail) > 0 {
-		return usagef("unexpected argument %q; `brig %s` takes a profile and nothing more", tail[0], verb)
+		return usagef("unexpected argument %q; `brig %s` takes a ref and nothing more", tail[0], verb)
 	}
 	return nil
 }
@@ -877,9 +953,9 @@ func spell(name string) string {
 // stopped sandbox still owns its name, which is exactly the thing to see
 // before wondering why a name is taken.
 func listSandboxes(args []string) error {
-	// ls names no profile and takes no flags, so anything here is a token it
+	// ls names no session and takes no flags, so anything here is a token it
 	// would otherwise read and discard -- `brig ls claude` looks like it filters
-	// to one profile and does not. Refuse it rather than answer a question that
+	// to one agent and does not. Refuse it rather than answer a question that
 	// was not asked.
 	if len(args) > 0 {
 		return usagef("unexpected argument %q; `brig ls` takes no arguments", args[0])
@@ -1018,19 +1094,46 @@ func workspaceOf(vmName string, rt runtime.Runtime) string {
 	return ""
 }
 
-// reset stops and removes every sandbox brig started. Workspaces are left
+// takeAll reads --all off a command line and reports whether it was there.
+//
+// A flag on rm rather than a verb of its own, because it is the same removal:
+// `brig rm <ref>` takes one sandbox and `brig rm --all` takes every one. The
+// long spelling only -- a short -a would be a second way to ask for the most
+// destructive thing brig does, and #47 is retiring short flags rather than
+// adding them.
+//
+// What is left of the line is handed back rather than dropped, so removeAll can
+// refuse it by name: `brig rm claude --all` is two different requests written on
+// one line, and picking either would act on something the line does not read
+// like.
+func takeAll(args []string) (rest []string, all bool) {
+	for _, a := range args {
+		if a == "--all" {
+			all = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return rest, all
+}
+
+// removeAll stops and removes every sandbox brig started. Workspaces are left
 // alone: they are on the host, they hold your work, and this is a command
 // about sandboxes.
-func reset(args []string) error {
-	// reset stops and removes every brig sandbox, so a flag typed to make it
-	// safer -- `brig reset --dry-run` -- must not be read past and ignored,
+//
+// spelling is the command as it was typed, for the message: this is reached as
+// `brig rm --all` and as the retired `brig reset`, and an error about the wrong
+// one of those sends the reader to fix a line they did not write.
+func removeAll(spelling string, args []string) error {
+	// This stops and removes every brig sandbox, so a flag typed to make it
+	// safer -- `brig rm --all --dry-run` -- must not be read past and ignored,
 	// which is exactly how a command meant to preview ends up removing
-	// everything. It has no flags and no operands today; refuse anything here so
-	// a flag that gains a meaning later is one this release declined rather than
-	// silently swallowed.
+	// everything. It has no flags and no operands beyond --all itself; refuse
+	// anything here so a flag that gains a meaning later is one this release
+	// declined rather than silently swallowed.
 	if len(args) > 0 {
-		return usagef("unexpected argument %q; `brig reset` takes no arguments and removes "+
-			"every brig sandbox", args[0])
+		return usagef("unexpected argument %q; `%s` takes no arguments and removes "+
+			"every brig sandbox", args[0], spelling)
 	}
 	rt, err := runtime.Detect()
 	if err != nil {
@@ -1047,10 +1150,11 @@ func reset(args []string) error {
 		}
 		_ = rt.Stop(inst.Name)
 		err := rt.Remove(inst.Name)
-		// The same pruning `brig rm` does, for the same reason and on the same
-		// terms: this goes through the runtime directly rather than through a
-		// Config, because reset works from the instance list and a stopped
-		// sandbox need not correspond to a profile brig can still look up.
+		// The same pruning `brig rm` of one sandbox does, for the same reason
+		// and on the same terms: this goes through the runtime directly rather
+		// than through a Config, because it works from the instance list and a
+		// stopped sandbox need not correspond to a profile brig can still look
+		// up.
 		wrap.ForgetSandbox(inst.Name)
 		wrap.ForgetSlugClaim(inst.Name)
 		if err != nil {
@@ -1062,9 +1166,9 @@ func reset(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "brig: removed %d sandbox(es). Workspaces are untouched.\n", removed)
 	// A network whose sandbox was removed outside brig is not reachable
-	// through Remove, because that sandbox is not in the list any more. reset
-	// is the verb that leaves nothing behind, so it prunes those too. Only the
-	// runtimes that make a network per sandbox implement this; the rest are
+	// through Remove, because that sandbox is not in the list any more. This is
+	// the one command that leaves nothing behind, so it prunes those too. Only
+	// the runtimes that make a network per sandbox implement this; the rest are
 	// skipped rather than asked.
 	if p, ok := rt.(runtime.NetworkPruner); ok {
 		// Asked again rather than reusing the list above: that one was taken
