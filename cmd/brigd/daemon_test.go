@@ -512,24 +512,25 @@ func (l livenessRuntime) Running(string) (bool, error) { return l.running, l.err
 // The inventory re-reads liveness from the runtime on every report, so a
 // runtime that cannot be asked has to be reported as unanswered rather than as
 // a stopped sandbox. Folded into running:false it reads as a sandbox that
-// exited, and the operator goes looking for a VM that may well still be up.
+// exited, and the operator goes looking for a sandbox that may well still be
+// up.
 func TestStatusSaysWhenTheRuntimeCouldNotBeAsked(t *testing.T) {
 	d := newDaemon()
 	d.sessions["brig-broken"] = entry{
-		Session: Session{Agent: "claude-code", VM: "brig-broken"},
+		Session: Session{Agent: "claude-code", Sandbox: "brig-broken"},
 		rt:      livenessRuntime{err: errors.New("cannot connect to the daemon")},
 	}
 	d.sessions["brig-up"] = entry{
-		Session: Session{Agent: "claude-code", VM: "brig-up"},
+		Session: Session{Agent: "claude-code", Sandbox: "brig-up"},
 		rt:      livenessRuntime{running: true},
 	}
 
-	byVM := map[string]Session{}
+	bySandbox := map[string]Session{}
 	for _, s := range d.status() {
-		byVM[s.VM] = s
+		bySandbox[s.Sandbox] = s
 	}
 
-	broken := byVM["brig-broken"]
+	broken := bySandbox["brig-broken"]
 	if broken.RunningError == "" {
 		t.Error("a runtime that could not be asked was reported as a plain stopped sandbox")
 	}
@@ -541,7 +542,7 @@ func TestStatusSaysWhenTheRuntimeCouldNotBeAsked(t *testing.T) {
 	}
 
 	// The answers that were given are unchanged.
-	if up := byVM["brig-up"]; !up.Running || up.RunningError != "" {
+	if up := bySandbox["brig-up"]; !up.Running || up.RunningError != "" {
 		t.Errorf("a running sandbox was misreported: %+v", up)
 	}
 }

@@ -98,13 +98,13 @@ type Response struct {
 type Session struct {
 	Agent     string `json:"agent"`
 	Name      string `json:"name,omitempty"`
-	VM        string `json:"vm"`
+	Sandbox   string `json:"sandbox"`
 	Workspace string `json:"workspace"`
 	Running   bool   `json:"running"`
 	// RunningError is why the runtime could not be asked. When it is set,
 	// Running says nothing -- a runtime that failed to answer is not a runtime
 	// reporting a stopped sandbox, and a client that shows the second for the
-	// first sends its reader looking for a VM that may well still be up. It
+	// first sends its reader looking for a sandbox that may well still be up. It
 	// carries the reason rather than a bare flag because that reason is the only
 	// account of what broke, and the daemon has no terminal to print it on.
 	RunningError string `json:"runningError,omitempty"`
@@ -596,7 +596,7 @@ func (d *daemon) remember(cfg *wrap.Config) {
 		Session: Session{
 			Agent:     cfg.Profile.Name,
 			Name:      cfg.RawName,
-			VM:        cfg.VMName,
+			Sandbox:   cfg.VMName,
 			Workspace: cfg.Workspace,
 		},
 		// The runtime this sandbox was booted with, so asking whether it is
