@@ -118,6 +118,24 @@ type Config struct {
 	Cwd      string
 	GuestCwd string
 
+	// Project is the host directory this run was told to mount beside the
+	// guest home, and GuestProject is where it lands in the guest. Both are
+	// empty on a run that named none, which is what every path below reads to
+	// tell the two shapes apart.
+	//
+	// A second mount rather than a redirection of the first, because the guest
+	// home IS the agent's home: its dotfiles, its onboarding state, its
+	// caches. Pointing that mount at a repository would put all of it in the
+	// repository. So the home stays brig's own and the project arrives
+	// alongside it, outside the home -- see GuestProject.
+	//
+	// Per run, not per session: the session's identity is its ref, which is
+	// the agent and the label, which is the home. Two runs of one session on
+	// two projects are the same session, so nothing here reaches the sandbox
+	// name or the slug. See mountProject and sessionEntry.
+	Project      string
+	GuestProject string
+
 	// HostCred is the credential read from the host during BuildEnv, kept so
 	// the status report can say where the guest login comes from without
 	// paying for a second keychain read.
@@ -154,8 +172,13 @@ type Options struct {
 	Name      string // session name, as typed
 	Image     string
 	Workspace string
-	Mem       int
-	CPUs      int
+	// Project is the directory named as run's positional argument, to be
+	// mounted beside the guest home. Relative is fine: it is resolved against
+	// the directory the command was invoked from, because `brig run claude .`
+	// is the line the positional exists for.
+	Project string
+	Mem     int
+	CPUs    int
 	// Skills opts in to projecting the host's own agent config (skills,
 	// plugins) read-only into the guest. Off unless asked for: it is the
 	// user's real config, and handing it to a sandbox should be a decision.
@@ -343,6 +366,15 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, strictErr
 	}
 	c.GuestCwd = GuestCwd(cwd, c.Workspace, t.GuestHome)
+	// And then, if this run named a project, the project instead: it is a
+	// directory of its own, mounted beside the home, so the derivation above
+	// has nothing to say about it. Resolved after the Config exists because it
+	// reads the cwd this run resolved and writes three of its fields.
+	if o.Project != "" {
+		if err := c.mountProject(o.Project); err != nil {
+			return nil, err
+		}
+	}
 	// After the Config is built, because the notice reads the pair this run
 	// resolved to and reports it against the pair the old one had.
 	c.slugMigration = c.slugMigrationNotice(base, vmBase)
@@ -539,6 +571,68 @@ func GuestCwd(cwd, workspace, guestHome string) string {
 // host uses.
 func path(base, rel string) string {
 	return strings.TrimSuffix(base, "/") + "/" + filepath.ToSlash(rel)
+}
+
+// guestProjectRoot is where a named project is mounted in the guest, and the
+// one thing about it that matters is that it is not under any profile's
+// GuestHome.
+//
+// That is the mechanical guarantee behind mounting a project at all: a
+// directory under /work cannot be mistaken for home state and cannot collide
+// with the agent's dotfiles, by layout rather than by a convention someone has
+// to remember. A constant rather than a profile field because it is a fact
+// about brig's mount layout, not about any one agent.
+const guestProjectRoot = "/work"
+
+// GuestProject is where the host directory dir is mounted in the guest:
+// /work/<basename>.
+//
+// The basename rather than the whole path, so the agent's prompt and every
+// path it prints name the project the way its owner does. Two projects with
+// one basename cannot be mounted at once, and nothing tries to: one run mounts
+// one project.
+func GuestProject(dir string) string {
+	return guestProjectRoot + "/" + filepath.Base(dir)
+}
+
+// mountProject resolves the project this run named: the host directory, the
+// guest path it is mounted at, and the working directory the agent starts in.
+//
+// The directory has to be there. Under the old grammar this word reached the
+// agent, so a line that passed one through is a line this release changes the
+// meaning of -- and failing here, naming both the directory and the way past
+// it, is what makes that legible. The alternative considered on #6 was to read
+// the word as a project only when it names an existing directory, which was
+// dropped for good reason: the meaning of an argument would then depend on the
+// filesystem, which is hard to explain and harder to script. The meaning is
+// fixed; a directory that is not there is simply an error.
+func (c *Config) mountProject(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(abs)
+	if err == nil && !info.IsDir() {
+		err = fmt.Errorf("it is not a directory")
+	}
+	if err != nil {
+		return fmt.Errorf("cannot mount %s as this run's project: %w. brig run reads the "+
+			"word after the ref as a directory to mount; if it is an argument for the "+
+			"agent, put it after -- instead", abs, err)
+	}
+	// A filesystem root has no basename to mount it under -- filepath.Base
+	// gives back the separator -- and /work// is not a guest path. Nobody means
+	// to hand an agent the whole machine, so say what to name instead.
+	if filepath.Base(abs) == string(filepath.Separator) {
+		return fmt.Errorf("cannot mount %s as this run's project: it has no name to "+
+			"mount it under; name a project directory rather than a filesystem root", abs)
+	}
+	c.Project = abs
+	c.GuestProject = GuestProject(abs)
+	// The point of naming a directory: the agent starts in it. The cwd-under-
+	// home derivation above still decides this for a run that names none.
+	c.GuestCwd = c.GuestProject
+	return nil
 }
 
 // hostProjections resolves the host directories a profile wants to hand the

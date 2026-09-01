@@ -65,6 +65,18 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		// a place to say so in the row it already has, instead of needing a new
 		// one.
 		envelopeRow{"WORKSPACE", fmt.Sprintf("%s (read-write)", c.Workspace)},
+	)
+	// Directly under the home, because it is the same subject read twice: two
+	// host directories this run is about to hand a sandbox read-write. Only
+	// when there is one -- a run that named no project has no second mount to
+	// report, and a row saying so on every ordinary run is a row people learn
+	// to skip. The guest path is named beside the host path because it is the
+	// answer to the question the row raises, which is where the agent will be.
+	if c.Project != "" {
+		rows = append(rows, envelopeRow{"PROJECT",
+			fmt.Sprintf("%s (read-write, mounted at %s)", c.Project, c.GuestProject)})
+	}
+	rows = append(rows,
 		// The pull policy, the same detail the full report prints beside the
 		// image. Whether the signature verified is a separate fact that the
 		// verify-mode row will carry, so it is deliberately not folded in here.
