@@ -113,15 +113,13 @@ separate Linux re-implementation of it.
 
 | command | what it does |
 | --- | --- |
-| `brig run <agent> [args…]` | start the sandbox if needed, then run the agent. Arguments pass through untouched |
-| `brig create <agent>` | start the sandbox without attaching; prints its name |
-| `brig shell <agent> [cmd…]` | a login shell inside the sandbox, or one command in it |
-| `brig exec <agent> -- cmd…` | run one command inside the sandbox |
-| `brig stop <agent>` | stop the sandbox, keep it. Starting it again is a boot, not a fresh creation |
-| `brig rm <agent>` | stop and remove the sandbox. The workspace is untouched |
-| `brig ls` | every brig sandbox, running or merely holding its name, with its workspace |
-| `brig reset` | stop and remove every brig sandbox. Workspaces are untouched |
-| `brig info <agent>` | the boundary a run would trust -- sandbox, workspace, image, credentials **by name only** -- and whether the guest will be authenticated (`brig env` is the old spelling) |
+| `brig run <ref> [args…]` | start the sandbox if needed, then run the agent. Arguments pass through untouched. `-d` starts it and exits, printing its name |
+| `brig sh <ref> [cmd…]` | a login shell inside the sandbox, or one command in it |
+| `brig stop <ref>` | stop the sandbox, keep it. Starting it again is a boot, not a fresh creation |
+| `brig rm <ref>` | stop and remove the sandbox. The workspace is untouched |
+| `brig rm --all` | stop and remove every brig sandbox. Workspaces are untouched |
+| `brig ls [-q]` | every brig sandbox, running or merely holding its name, with its ref and workspace. `-q` prints the refs alone, for a script |
+| `brig info <ref>` | the boundary a run would trust -- sandbox, workspace, image, credentials **by name only** -- and whether the guest will be authenticated |
 | `brig agent ls` | the agents, their images, and what each one refuses to forward |
 | `brig agent show <agent>` | print one agent's spec. `--json` for JSON instead of YAML |
 | `brig agent new <name> --from <agent>` | copy an agent under a new name, ready to edit |
@@ -132,6 +130,10 @@ separate Linux re-implementation of it.
 | `brig telemetry status\|on\|off` | report what is counted, or turn the counting on or off. See [Telemetry](#telemetry) |
 | `brig version` | |
 
+A `<ref>` is the session: `claude` is that agent's default session, and
+`claude@refactor` is a session of its own. `brig ls` prints the ref of every
+sandbox, and every verb above takes one -- see [Named sessions](#named-sessions).
+
 The older spellings all still work and each prints a one-line note naming the
 new one, so nothing scripted breaks in this release; they no longer appear
 above. `brig profiles` and the whole `brig profile` group are now `brig agent`,
@@ -140,6 +142,15 @@ above. `brig profiles` and the whole `brig profile` group are now `brig agent`,
 undocumented aliases that were never in this table -- `list`, `save`, `load`,
 `secret rm`. `brig template …` and `brig agents` remain from an earlier rename,
 and there is deliberately no `brig template edit`.
+
+The lifecycle verbs collapsed in the same way. `brig exec` and `brig shell` are
+both `brig sh`, which runs a command when you give it one and opens a login
+shell when you do not -- one verb, and which of the two you get is said by the
+line rather than by the word you reached for. `brig create` is `brig run -d`,
+`brig reset` is `brig rm --all`, and `brig env` is `brig info`. `-n`/`--name` is
+the label: `brig run claude@refactor` is what `brig run claude --name refactor`
+was. That one is mapped and warned about rather than quietly reinterpreted,
+because `--name` is also Claude Code's own flag.
 
 `brig secret` keeps `create|read|update|delete`, and that is deliberate rather
 than an oversight. The tidier `set`/`get` pair would make one typo turn a read
@@ -196,7 +207,8 @@ working; one that wants to branch on the reason now can.
 ```bash
 brig run claude -p "summarise this repo"   # headless, arguments passed through
 brig run claude -- --name not-a-session    # --name reaches claude, not brig
-brig shell codex 'ls -la ~'                # one command, in a login shell
+brig sh codex 'ls -la ~'                   # one command, in a login shell
+brig sh codex                              # a login shell, no command
 ```
 
 ### Named sessions
@@ -227,26 +239,46 @@ you did not ask for. `--name` keeps its older, lenient behaviour.
 everywhere it did:
 
 ```bash
-brig exec claude@refactor -- git status
+brig sh   claude@refactor git status
 brig stop claude@refactor
 brig rm   claude@refactor      # removes the sandbox, keeps the workspace
 ```
 
-`brig ls` shows the session as `brig-claude-code-refactor`, but that string is
-the sandbox's own name and is not what the verbs take -- `brig rm refactor`
-and `brig rm brig-claude-code-refactor` both fail with "unknown agent". Pass
-the agent and `--name`, as above.
+**`brig ls` prints the ref**, in the first column, and that is the string every
+verb takes:
+
+```
+REF                   SANDBOX                    STATE     WORKSPACE
+claude-code           brig-claude-code           running   /Users/you/brig/claude-code
+claude-code@refactor  brig-claude-code-refactor  stopped   /Users/you/brig/claude-code-refactor
+```
+
+`brig ls -q` prints the refs alone, one to a line, so a script can read the
+listing and hand what it finds straight back to a verb:
+
+```bash
+brig ls -q | while read -r ref; do brig stop "$ref"; done
+```
+
+The `SANDBOX` column is the sandbox's own name, which is not a ref: `brig rm
+brig-claude-code-refactor` fails with "unknown profile", and it is there to be
+recognised in the runtime's own output rather than to be typed at brig. A
+sandbox brig has no session recorded for and cannot read a ref out of the name
+of -- one renamed with `BRIG_NAME`, say -- shows a `-` in the `REF` column and is
+left out of `brig ls -q` entirely, because every line of that output is meant to
+be a word a verb takes. `brig rm --all` is what clears one of those.
 
 To drop the workspace too, remove the directory `brig info` prints. And
-`brig reset` stops and removes every brig sandbox at once, named ones
+`brig rm --all` stops and removes every brig sandbox at once, named ones
 included, leaving all workspaces alone.
 
 **`-w` is remembered.** A session created with `--workspace` keeps that
-directory for every later verb, so `brig exec claude --name refactor -- ls`
-finds it without repeating the flag. brig records it in
-`~/.brig/sessions.json`, filed under the session's ref, and reads it back when
-neither `--workspace` nor `BRIG_WORKSPACE` names one; `brig rm` and `brig reset`
-drop the entry with the sandbox, and `brig ls` drops any whose sandbox has gone.
+directory for every later verb, so `brig sh claude@refactor ls` finds it
+without repeating the flag. brig records it in `~/.brig/sessions.json`, filed
+under the session's ref, and reads it back when neither `--workspace` nor
+`BRIG_WORKSPACE` names one; `brig rm` drops the entry with the sandbox, and
+`brig ls` drops any whose sandbox has gone. That file is also where `brig ls`
+reads the ref it prints.
 
 That file is an index and not a record of the truth: the runtime stays the
 authority on what is actually mounted, and an unreadable index costs one restart
@@ -263,13 +295,16 @@ The verbs line up deliberately, so muscle memory carries over:
 | `sbx` | `brig` | note |
 | --- | --- | --- |
 | `sbx run <agent> [path]` | `brig run <agent> [-w path]` | brig takes the workspace as a flag rather than a positional, so it never has to guess where agent arguments begin |
-| `sbx create` | `brig create` | |
-| `sbx exec` / `sbx ls` / `sbx stop` / `sbx rm` / `sbx reset` | same | |
+| `sbx create` | `brig run -d` | starts the sandbox and exits, printing its name |
+| `sbx ls` / `sbx stop` / `sbx rm` | same | |
+| `sbx exec` | `brig sh` | one verb for a command and for a login shell |
+| `sbx reset` | `brig rm --all` | the same removal as `brig rm`, over every sandbox |
 | `sbx cp` | n/a | the workspace is a live host directory, so there is nothing to copy across |
 | `sbx template ls\|save\|load\|rm` | `brig agent ls\|export\|import\|edit\|rm` | brig's profiles describe the *agent*, not just its image, and are YAML like sbx's kits |
 | `sbx secret set` | `brig secret create` + a profile's `secrets:` | brig has a store of its own and binds from it. Or point a profile at your existing secret manager: whatever puts a value in brig's environment is enough |
 | `sbx -t/--template` | `brig -t/--image` | |
-| `sbx -m/--memory`, `--cpus`, `-d`, `--name` | same | |
+| `sbx -m/--memory`, `--cpus`, `-d` | same | |
+| `sbx --name <name>` | `brig <agent>@<name>` | brig's `--name` still works and says what replaces it |
 | `sbx --publish`, `--deny-network` | n/a | not yet; brig does not manage guest networking, and sandboxes share one network -- see [docs/security.md](docs/security.md#things-brig-does-not-claim) |
 | `sbx --clone` | n/a | not yet; the workspace is mounted directly |
 | `sbx login` | n/a | nothing to sign in to |
@@ -395,9 +430,9 @@ brig:   GH_TOKEN(secret)
 ```
 
 The block at the top is the execution envelope: the boundary the run would
-trust, printed before the sandbox boots. `brig run` and `brig create` print the
-same block before they start one, so what you preview is what you get. Names
-only, never values. `--quiet` drops it.
+trust, printed before the sandbox boots. `brig run` prints the same block before
+it starts one, so what you preview is what you get. Names only, never values.
+`--quiet` drops it.
 
 A secret a profile declares but the store does not have fails the run before
 any sandbox is created, naming every one that is missing and the command that
