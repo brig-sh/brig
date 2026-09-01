@@ -280,3 +280,114 @@ func TestDeprecatedShortFlagsStillWork(t *testing.T) {
 		t.Errorf("a --name value read as a deprecated flag:\n%s", warning)
 	}
 }
+
+// The retired lifecycle spellings: still working, and each naming the one that
+// replaces it. Kept apart from the table above because these verbs need a
+// runtime to finish their work, and the tests must not have one -- `brig reset`
+// on a machine with sandboxes on it removes every one of them.
+//
+// So what is asserted is the half that is about vocabulary: brig recognised the
+// spelling, said what it is now, and did not refuse the line. Everything after
+// that is the same code path the current spelling takes, and script/smoke.sh
+// drives it against a stub runtime.
+func TestRetiredLifecycleSpellingsWorkAndNameTheirReplacement(t *testing.T) {
+	for _, c := range []struct {
+		args        []string
+		replacement string
+	}{
+		{[]string{"create", "claude"}, "brig run -d"},
+		{[]string{"exec", "claude", "--", "true"}, "brig sh"},
+		{[]string{"shell", "claude"}, "brig sh"},
+		{[]string{"shell", "claude", "echo", "hi"}, "brig sh"},
+		{[]string{"reset"}, "brig rm --all"},
+		{[]string{"env", "claude"}, "brig info"},
+	} {
+		line := "brig " + strings.Join(c.args, " ")
+		scratchHost(t)
+		var err error
+		notice := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(c.args) })
+		})
+		if !took(err) {
+			t.Errorf("%s stopped working: %v", line, err)
+		}
+		if !strings.Contains(notice, c.replacement) {
+			t.Errorf("%s does not name %q as its replacement:\n%s", line, c.replacement, notice)
+		}
+		if !strings.Contains(notice, "brig: `") {
+			t.Errorf("%s printed no deprecation notice:\n%s", line, notice)
+		}
+	}
+}
+
+// The current lifecycle spellings say nothing. This is the other half of the
+// contract above: a notice on a command that is not going anywhere is how a
+// reader learns to ignore the ones that are.
+//
+// The verbless ref is here too. It is accepted and taught nowhere, which is not
+// the same as retired -- there is no older spelling of it to stop typing, so
+// there is nothing for brig to say.
+func TestCurrentLifecycleSpellingsPrintNoNotice(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "claude", "-d"}, {"sh", "claude"}, {"sh", "claude", "echo", "hi"},
+		{"stop", "claude"}, {"rm", "claude"}, {"rm", "--all"}, {"info", "claude"},
+		{"claude"}, {"claude@refactor"},
+	} {
+		scratchHost(t)
+		var err error
+		notice := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		if !took(err) {
+			t.Errorf("brig %s was refused: %v", strings.Join(args, " "), err)
+		}
+		if strings.Contains(notice, "is now") {
+			t.Errorf("brig %s printed a deprecation notice:\n%s",
+				strings.Join(args, " "), notice)
+		}
+	}
+}
+
+// -n and --name are mapped onto the label rather than aliased to it, and the
+// mapping is said out loud. Both halves are deliberate: the flag is Claude
+// Code's own as well as brig's, so a line that carries it keeps working, and
+// silently reinterpreting it would be worse than either failing or saying so.
+func TestNameFlagRetiresOntoTheLabel(t *testing.T) {
+	for _, c := range []struct{ args []string }{
+		{[]string{"claude", "-n", "refactor"}},
+		{[]string{"claude", "--name", "refactor"}},
+		{[]string{"claude", "--name=refactor"}},
+	} {
+		var (
+			o   options
+			err error
+		)
+		notice := captureStderr(t, func() { o, _, _, err = parse(c.args) })
+		if err != nil {
+			t.Errorf("parse(%q): %v", c.args, err)
+			continue
+		}
+		// Mapped: the label the flag carried is the label the run uses.
+		if o.load.Name != "refactor" || !o.nameGiven {
+			t.Errorf("parse(%q) stopped naming the session: %+v", c.args, o.load)
+		}
+		spelling, _, _ := strings.Cut(c.args[1], "=")
+		if !strings.Contains(notice, spelling) || !strings.Contains(notice, "@") {
+			t.Errorf("parse(%q) did not point %s at the label form:\n%s",
+				c.args, spelling, notice)
+		}
+	}
+	// The label form is the current spelling, so it says nothing.
+	notice := captureStderr(t, func() {
+		o, _, _, err := parse([]string{"claude@refactor"})
+		if err != nil {
+			t.Errorf("parse: %v", err)
+		}
+		if o.load.Name != "refactor" {
+			t.Errorf("the label did not land as the session name: %+v", o.load)
+		}
+	})
+	if notice != "" {
+		t.Errorf("the label form printed a notice:\n%s", notice)
+	}
+}
