@@ -181,6 +181,7 @@ the token, so a line that works today keeps working.
 | `-n, --name NAME` | a session of its own: own workspace, own sandbox. Also written `<agent>@<label>` |
 | `--image IMAGE` | guest image to boot (`-t` still works, with a note) |
 | `--home PATH` | host directory to mount as the guest home (`-w`/`--workspace` still work, each with a note) |
+| `--no-project` | with `run`: mount no project, whatever this session ran with last |
 | `--mem MB` | guest memory (`--memory` also works; `-m` works with a note) |
 | `--cpus N` | guest vCPUs |
 | `-d, --detach` | with `run`: start the sandbox, print its name, exit |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -130,6 +131,57 @@ func TestHomeReplacesWorkspace(t *testing.T) {
 		}
 		if !strings.Contains(notice, c.notice) {
 			t.Errorf("parse(%q) does not say %q:\n%s", c.args, c.notice, notice)
+		}
+	}
+}
+
+// --no-project is a run-line flag like the positional it answers, so it parses
+// between the verb and the ref and reaches wrap.Options.
+func TestNoProjectParses(t *testing.T) {
+	o, _, tail, err := parse([]string{"--no-project", "claude"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !o.load.NoProject {
+		t.Error("--no-project did not reach the options")
+	}
+	if len(tail) != 0 {
+		t.Errorf("--no-project left a tail: %q", tail)
+	}
+}
+
+// Both at once ask for two contradictory things, and either winner would be
+// silent about the other: the directory mounted with --no-project ignored, or
+// dropped with the word the line names ignored. Refuse and name both.
+func TestNoProjectWithAPositionalIsRefused(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	dir := t.TempDir()
+	err := run([]string{"run", "--no-project", "claude", dir})
+	if err == nil {
+		t.Fatal("--no-project alongside a project was accepted")
+	}
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Errorf("error is %T, want a usage error: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "--no-project") {
+		t.Errorf("the error does not name both: %v", err)
+	}
+}
+
+// Elsewhere the flag would do nothing, which is worse than being refused: a
+// user would think the session had been detached and find it still mounted.
+func TestNoProjectOnAnotherVerbIsRefused(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	for _, verb := range []string{"sh", "info", "stop"} {
+		err := run([]string{verb, "--no-project", "claude"})
+		if err == nil {
+			t.Errorf("brig %s --no-project was accepted", verb)
+			continue
+		}
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("brig %s --no-project: error is %T, want a usage error", verb, err)
 		}
 	}
 }

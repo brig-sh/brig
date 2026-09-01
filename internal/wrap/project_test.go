@@ -405,3 +405,75 @@ func TestProjectShareStaleReadsTheIndex(t *testing.T) {
 		t.Errorf("the recorded project read as stale: %s", again.projectShareStale())
 	}
 }
+
+// --no-project detaches a project a session is carrying, and it is the only
+// way to say so: a positional names a directory, and no directory names
+// absence. Without it a session handed a project once keeps it for the rest of
+// its life, because every later flagless verb inherits it.
+func TestNoProjectDropsTheRememberedOne(t *testing.T) {
+	dir := isolateState(t)
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "myproject")
+	mustMkdir(t, project)
+
+	mustLoad(t, Options{Workspace: home, Project: project}).rememberSession()
+
+	next := mustLoad(t, Options{NoProject: true})
+	if next.Project != "" || next.GuestProject != "" {
+		t.Errorf("--no-project kept project %q (guest %q)", next.Project, next.GuestProject)
+	}
+	// Back to the home, which is where a run with no project has always
+	// started.
+	if next.GuestCwd != next.Profile.GuestHome {
+		t.Errorf("--no-project left the cwd at %q, want the guest home %q",
+			next.GuestCwd, next.Profile.GuestHome)
+	}
+	// The running sandbox is still carrying the mount this run does not want,
+	// so it has to be rebuilt -- projectShareStale's c.Project == "" branch,
+	// reached deliberately rather than by an invocation that said nothing.
+	if next.projectShareStale() == "" {
+		t.Error("--no-project left the sandbox with its project mount standing")
+	}
+	// And the entry loses the key, so the detach outlives this one command.
+	next.rememberSession()
+	if blob := mustReadIndex(t, dir); strings.Contains(blob, `"project"`) {
+		t.Errorf("--no-project left the project in the index:\n%s", blob)
+	}
+}
+
+// The detach sticks: the flagless verb after it inherits nothing. This is the
+// pair to TestAProjectGivenOnceIsFoundAgainWithoutThePositional -- one proves
+// the project survives an invocation that says nothing, the other that it stays
+// gone once it has been dropped.
+func TestAFlaglessVerbAfterNoProjectInheritsNothing(t *testing.T) {
+	isolateState(t)
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "myproject")
+	mustMkdir(t, project)
+
+	mustLoad(t, Options{Workspace: home, Project: project}).rememberSession()
+	mustLoad(t, Options{NoProject: true}).rememberSession()
+
+	next := mustLoad(t, Options{})
+	if next.Project != "" {
+		t.Errorf("a flagless verb resurrected the project %q", next.Project)
+	}
+	if stale := next.projectShareStale(); stale != "" {
+		t.Errorf("a flagless verb after a detach read the sandbox as stale: %s", stale)
+	}
+}
+
+// A session that never had a project is unaffected, so the flag is a no-op
+// rather than an error where there is nothing to detach.
+func TestNoProjectOnASessionWithoutOneChangesNothing(t *testing.T) {
+	isolateState(t)
+	home := t.TempDir()
+
+	plain := mustLoad(t, Options{Workspace: home})
+	with := mustLoad(t, Options{Workspace: home, NoProject: true})
+
+	if with.Project != plain.Project || with.GuestCwd != plain.GuestCwd {
+		t.Errorf("--no-project changed a project-less run: project %q cwd %q, want %q and %q",
+			with.Project, with.GuestCwd, plain.Project, plain.GuestCwd)
+	}
+}
