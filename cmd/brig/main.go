@@ -23,6 +23,7 @@ import (
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/session"
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
@@ -63,10 +64,12 @@ usage:
   brig version
 
 flags (before the agent's own arguments; -- ends brig's parsing):
-  -n, --name NAME        a session of its own: own workspace, own sandbox
-  -t, --image IMAGE      guest image to boot
+  -n, --name NAME        a session of its own: own workspace, own sandbox.
+                         Also written <profile>@<label>, which refuses a label
+                         it would have to shorten rather than shortening it
+      --image IMAGE      guest image to boot
   -w, --workspace PATH   host directory to mount as the guest home
-  -m, --memory MB        guest memory
+      --mem MB           guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
   -q, --quiet            with run or create: do not print the execution
@@ -136,11 +139,18 @@ func (e *notFoundError) Error() string { return e.msg }
 func notFoundf(format string, a ...any) error { return &notFoundError{fmt.Sprintf(format, a...)} }
 
 func run(args []string) error {
-	if len(args) == 0 {
+	// The global position first, so a flag written left of the verb is named
+	// rather than read as a command.
+	verbLine, err := parseGlobal(args)
+	if err != nil {
+		return err
+	}
+	if len(verbLine) == 0 {
+		// No verb: a bare `brig`, or global flags and nothing to do with them.
 		fmt.Print(usage)
 		return nil
 	}
-	verb, rest := args[0], args[1:]
+	verb, rest := verbLine[0], verbLine[1:]
 
 	// Profiles are read before anything looks a name up, so a file can stand
 	// in for a built-in. A broken file is reported and skipped rather than
@@ -368,38 +378,91 @@ type options struct {
 	offline   bool
 }
 
-// brigFlags is what brig owns on a run line. Everything else on that line
+// position is where on a brig command line a flag is legal.
+//
+// A brig line has three places a token can stand -- left of the verb, between
+// the verb and the session ref, and right of the ref -- and they are not the
+// same kind of place. In the first two brig owns the vocabulary, so a token it
+// does not recognise is a mistake to name. In the third the vocabulary is the
+// agent's, so the same token is a word to forward untouched. Which set a flag
+// belongs to is therefore what decides how an unknown neighbour of it is read,
+// and that is why the table below carries it rather than leaving the boundary
+// to a single "have I seen the profile yet".
+//
+// The zero value is no position at all, so an entry has to say which one it
+// means. Defaulting would put a new flag in whichever set the zero value
+// happened to be, and both wrong answers are silent: a flag that is
+// accidentally global is refused everywhere it is documented to work, and one
+// that is accidentally on the run line is handed to the agent, which does not
+// have it.
+type position int
+
+const (
+	// posGlobal is left of the verb: `brig --json run claude`. Closed and
+	// empty today; see splitGlobal.
+	posGlobal position = iota + 1
+	// posRun is the run line, from the verb to the ref. Every flag brig has
+	// today is here.
+	posRun
+	// posAny matches a flag wherever brig would have read it. Only the tail
+	// warning uses it: right of the ref every token is the agent's whatever
+	// position brig would otherwise read it in, so what matters there is that
+	// the token is brig's at all, not where.
+	posAny
+)
+
+// brigFlags is what brig owns, and where. Everything else on a run line
 // belongs to the agent, so this table is also the boundary: split consults it
 // to find where brig's arguments stop, which is why it records whether a flag
-// takes a value. Adding a flag here and registering it in parse are the two
-// halves of adding a flag at all.
+// takes a value. Adding a flag here and registering it in parse -- or in
+// parseGlobal, for a global one -- are the two halves of adding a flag at all.
 var brigFlags = []struct {
-	long  string
-	short string
-	value bool // takes a value, so the next argument may belong to it
+	long     string
+	short    string
+	value    bool // takes a value, so the next argument may belong to it
+	position position
 }{
-	{long: "name", short: "n", value: true},
-	{long: "image", short: "t", value: true},
-	{long: "workspace", short: "w", value: true},
-	{long: "memory", short: "m", value: true},
-	{long: "cpus", value: true},
-	{long: "detach", short: "d"},
-	{long: "skills"},
-	{long: "network", value: true},
-	{long: "offline"},
-	{long: "quiet", short: "q"},
+	{long: "name", short: "n", value: true, position: posRun},
+	{long: "image", short: "t", value: true, position: posRun},
+	{long: "workspace", short: "w", value: true, position: posRun},
+	// --mem is the spelling; --memory is what it was called first and still
+	// answers, because a line that works today keeps working. Both write one
+	// value in parse, so the last one on the line wins.
+	{long: "mem", value: true, position: posRun},
+	{long: "memory", short: "m", value: true, position: posRun},
+	{long: "cpus", value: true, position: posRun},
+	{long: "detach", short: "d", position: posRun},
+	{long: "skills", position: posRun},
+	{long: "network", value: true, position: posRun},
+	{long: "offline", position: posRun},
+	{long: "quiet", short: "q", position: posRun},
 }
 
-// ours reports whether a token is one of brig's flags, and whether that flag
-// consumes the argument after it. A token carrying its own value (--name=foo)
-// consumes nothing further.
+// deprecatedShorts are the short spellings on their way out, and the long ones
+// that replace them. #47 ships both grammars in v0.2 and removes the short
+// forms in v0.3, so these keep working and say so -- the same contract the
+// retiring verbs have. -n and -w are the other two; they are absent here
+// because #5 and #6 introduce what replaces them, and pointing at a flag that
+// does not exist yet is worse than saying nothing.
+var deprecatedShorts = map[string]string{
+	"-t": "--image",
+	"-m": "--mem",
+}
+
+// ours reports whether a token is one of brig's flags in the position it was
+// written, and whether that flag consumes the argument after it. A token
+// carrying its own value (--name=foo) consumes nothing further.
+//
 // The two documented spellings and no others. The flag package would answer to
 // -name and --n as well, but brig forwards everything it does not own, so
 // being greedier here silently eats an agent's own flag: `brig run claude
 // -image x` has to stay the agent's -image.
-func ours(arg string) (mine bool, takesValue bool) {
+func ours(arg string, at position) (mine bool, takesValue bool) {
 	name, _, inline := strings.Cut(arg, "=")
 	for _, f := range brigFlags {
+		if at != posAny && f.position != at {
+			continue
+		}
 		if name == "--"+f.long || (f.short != "" && name == "-"+f.short) {
 			return true, f.value && !inline
 		}
@@ -407,47 +470,138 @@ func ours(arg string) (mine bool, takesValue bool) {
 	return false, false
 }
 
-// split divides a run line into brig's own arguments, the profile name, and
-// the agent's tail.
+// splitGlobal finds the verb and refuses anything standing left of it.
+//
+// The global position is closed and, today, empty: every entry in brigFlags is
+// on the run line, so ours answers no to every token here. Establishing it
+// while it is empty is the point. `brig --json run claude` is a line someone
+// will type, and the two ways to read a token brig does not own are "the
+// command is --json" and "the agent wants it" -- one reports a command that
+// does not exist and the other hands a word to an agent that does not have it.
+// Naming the token is the third reading, and it is the one that is true.
+// #24, #11 and #30 are what put flags in here.
+//
+// A flag-shaped verb -- -h, --help, --version -- is a verb, not a token in this
+// position: those are the spellings brig has always answered to.
+func splitGlobal(args []string) (mine []string, rest []string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") || verbSpelling(a) {
+			return mine, args[i:], nil
+		}
+		isOurs, takesValue := ours(a, posGlobal)
+		if !isOurs {
+			return nil, nil, usagef("unknown flag %q before the command. "+
+				"brig takes a command first: `brig run claude`, `brig ls`. "+
+				"If %q is the agent's, it goes after the profile", a, a)
+		}
+		mine = append(mine, a)
+		if takesValue && i+1 < len(args) {
+			i++
+			mine = append(mine, args[i])
+		}
+	}
+	return mine, nil, nil
+}
+
+// verbSpelling reports whether a token is one of brig's verbs written as a
+// flag. Only these three: they are read by the verb switch in run, and a
+// fourth would be a flag.
+func verbSpelling(arg string) bool {
+	switch arg {
+	case "-h", "--help", "--version":
+		return true
+	}
+	return false
+}
+
+// parseGlobal reads brig's global flags -- the ones legal left of the verb --
+// and returns the verb and everything after it.
+//
+// There are none yet, so this parses an empty list. It exists anyway so that
+// adding a global flag is the same two-step adding a run-line flag is, a table
+// entry and a registration, and so that doing only the first half fails here
+// with the flag package's "not defined" rather than accepting the flag and
+// dropping it on the floor.
+func parseGlobal(args []string) (rest []string, err error) {
+	mine, rest, err := splitGlobal(args)
+	if err != nil {
+		return nil, err
+	}
+	fs := flag.NewFlagSet("brig", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	// Nothing is registered here yet. See the doc comment.
+	if err := fs.Parse(mine); err != nil {
+		return nil, rewriteFlagError(err)
+	}
+	return rest, nil
+}
+
+// split divides a run line into brig's own arguments, the session ref, and the
+// agent's tail.
 //
 // This exists because the flag package stops at the first non-flag argument
 // and treats an unknown flag as an error, and brig's line is the opposite on
-// both counts: the profile name sits in the middle of brig's flags, and an
-// unrecognised flag is not a mistake but the agent's -- `brig run claude -p hi`
+// both counts: the ref sits in the middle of brig's flags, and an unrecognised
+// flag after the ref is not a mistake but the agent's -- `brig run claude -p hi`
 // runs the agent with -p hi. So the boundary is decided here, from the table,
 // and the flag package parses what is left of it.
-func split(args []string) (mine []string, profileName string, tail []string, err error) {
+//
+// The state that decides it is one bit: has the ref been passed. Before it,
+// brig owns every token and an unknown flag is a brig flag that does not
+// exist. After it, brig still answers to its own flags -- `brig run claude -q`
+// is a line that works today -- but the first token it does not own ends its
+// parsing and everything from there is the agent's, warnings included.
+func split(args []string) (mine []string, ref session.Ref, tail []string, err error) {
+	passed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--":
 			// An explicit end to brig's parsing, so an agent argument spelled
-			// like one of brig's flags still reaches the agent.
-			return mine, profileName, args[i+1:], nil
+			// like one of brig's flags still reaches the agent. Nothing is
+			// said about what follows: the line already said it.
+			return mine, ref, args[i+1:], nil
 		case !strings.HasPrefix(a, "-"):
-			if profileName == "" {
-				profileName = a
+			if !passed {
+				if ref, err = session.ParseRef(a); err != nil {
+					// A ref brig cannot read is a mistyped command, not a
+					// profile to go and look up: reporting it as a missing
+					// profile would name the whole token and say nothing about
+					// the part that is wrong.
+					return nil, session.Ref{}, nil, usagef("%s", err)
+				}
+				passed = true
 				continue
 			}
-			// A second bare word is the agent's command, not a second profile.
-			return mine, profileName, args[i:], nil
+			// A second bare word is the agent's command, not a second ref.
+			return mine, ref, agentTail(args[i:]), nil
 		default:
-			isOurs, takesValue := ours(a)
+			isOurs, takesValue := ours(a, posRun)
 			if !isOurs {
-				// An unknown flag once the profile is named is the agent's:
+				// An unknown flag once the ref is named is the agent's:
 				// `brig run claude --resume` runs the agent with --resume, and
-				// brig forwards everything from here on. Before the profile is
-				// named there is no agent yet to own it, so a flag brig does not
-				// recognise in that position is not passed through -- it is a
-				// brig flag that does not exist. Forwarding it would make the
-				// profile look like the flag's value and leave the line blaming
-				// the one word on it that was right, so refuse it and name it.
-				if profileName == "" {
-					return nil, "", nil, usagef("unknown flag %q before the profile name. "+
+				// brig forwards everything from here on. Before the ref there is
+				// no agent yet to own it, so a flag brig does not recognise in
+				// that position is not passed through -- it is a brig flag that
+				// does not exist. Forwarding it would make the profile look like
+				// the flag's value and leave the line blaming the one word on it
+				// that was right, so refuse it and name it.
+				if !passed {
+					return nil, session.Ref{}, nil, usagef("unknown flag %q before the profile name. "+
 						"brig's own flags come before the profile and the agent's after it; "+
 						"put %q after the profile to pass it through, or -- to end brig's flags", a, a)
 				}
-				return mine, profileName, args[i:], nil
+				return mine, ref, agentTail(args[i:]), nil
+			}
+			// Read off the spelling rather than the whole token, so the
+			// inline form is the same flag here as it is everywhere else, and
+			// named before the value is taken, so the notice is never about a
+			// value that reads like a flag: `--name -t` is a session called -t
+			// and reaches this loop as a value, not as a token.
+			if spelling, _, _ := strings.Cut(a, "="); deprecatedShorts[spelling] != "" {
+				deprecated(spelling, deprecatedShorts[spelling])
 			}
 			mine = append(mine, a)
 			if takesValue && i+1 < len(args) {
@@ -459,7 +613,32 @@ func split(args []string) (mine []string, profileName string, tail []string, err
 			}
 		}
 	}
-	return mine, profileName, nil, nil
+	return mine, ref, nil, nil
+}
+
+// agentTail hands the tail back as the agent's, saying so for any of brig's own
+// flags in it.
+//
+// Right of the boundary brig reads nothing, and that is the surprise worth
+// naming: `brig run claude -p hi --quiet` has always run the agent with
+// --quiet and left the envelope printed, and the line reads like it asked for
+// the opposite. So brig says which token it did not read. It does not take it:
+// a line that works today has to keep working, and capturing the token would
+// change what runs rather than explain it.
+//
+// Only the tail brig ended itself. A tail after -- was declared the agent's by
+// the person typing it, and there is nothing to point out about a decision
+// already made.
+func agentTail(tail []string) []string {
+	for _, a := range tail {
+		if mine, _ := ours(a, posAny); mine {
+			name, _, _ := strings.Cut(a, "=")
+			fmt.Fprintf(os.Stderr, "brig: %s is one of brig's own flags, but here it is the "+
+				"agent's: brig stopped reading the line at the argument before it. "+
+				"Put %s before the profile for brig to read it.\n", name, name)
+		}
+	}
+	return tail
 }
 
 // rejectTail refuses a token a verb has no use for, rather than dropping it.
@@ -485,7 +664,7 @@ func rejectTail(verb string, tail []string) error {
 // whatever remains for the agent. split decides where brig's arguments end;
 // the flag package turns them into values.
 func parse(args []string) (o options, profileName string, tail []string, err error) {
-	mine, profileName, tail, err := split(args)
+	mine, ref, tail, err := split(args)
 	if err != nil {
 		return options{}, "", nil, err
 	}
@@ -504,6 +683,11 @@ func parse(args []string) (o options, profileName string, tail []string, err err
 		{"name", "n", func(n string) { fs.StringVar(&o.load.Name, n, "", "") }},
 		{"image", "t", func(n string) { fs.StringVar(&o.load.Image, n, "", "") }},
 		{"workspace", "w", func(n string) { fs.StringVar(&o.load.Workspace, n, "", "") }},
+		// Two long spellings of one value: --mem is the one the usage text
+		// gives, --memory is what it was called first. They share mem, so the
+		// last one on the line wins and the error names the one that carried
+		// the bad value.
+		{"mem", "", func(n string) { fs.Var(numberFlag{spell(n), &mem}, n, "") }},
 		{"memory", "m", func(n string) { fs.Var(numberFlag{spell(n), &mem}, n, "") }},
 		{"cpus", "", func(n string) { fs.Var(numberFlag{spell(n), &cpus}, n, "") }},
 		{"detach", "d", func(n string) { fs.BoolVar(&o.detach, n, false, "") }},
@@ -570,7 +754,23 @@ func parse(args []string) (o options, profileName string, tail []string, err err
 		}
 		o.load.Network = "offline"
 	}
-	return o, profileName, tail, nil
+	// The label is the session, so it lands where --name lands rather than
+	// becoming a second way to hold one: `brig run claude@refactor` is `brig
+	// run claude --name refactor`, and everything downstream -- the slug, the
+	// workspace, the sandbox name, the display name the agent is given -- is
+	// reached by the one path it always was.
+	//
+	// Both on one line is two different sessions asked for at once. A silent
+	// winner would run one of them with the other still written on the command,
+	// so name them and stop.
+	if ref.Label != "" {
+		if o.nameGiven {
+			return options{}, "", nil, usagef("%s names the session %q and --name names %q. "+
+				"Use one or the other", ref, ref.Label, o.load.Name)
+		}
+		o.load.Name, o.nameGiven = ref.Label, true
+	}
+	return o, ref.Agent, tail, nil
 }
 
 // number is one of brig's numeric flags as it was given: the text typed, and
