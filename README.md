@@ -221,18 +221,18 @@ brig run claude --name refactor    # the same session, the older spelling
 A session of its own: its own workspace (`~/brig/claude-code-refactor`), its
 own sandbox, and the name you typed reaches the agent as its display name.
 
-Paths use a short lowercase form of the name -- letters, digits, dot, dash and
-underscore, ten characters -- so `my_project` and `my-project` stay separate,
-while `Foo` and `foo` do not (macOS filesystems ignore case, and two names
-sharing one directory but not one VM is a bug waiting to happen). If the slug
-differs from what you typed, brig says which directory it used.
-`brig info claude@refactor` prints the one in use.
+Paths use a lowercase form of the name -- letters, digits, dot, dash and
+underscore -- so `my_project` and `my-project` stay separate, while `Foo` and
+`foo` do not (macOS filesystems ignore case, and two names sharing one directory
+but not one VM is a bug waiting to happen). Nothing is shortened, so the name you
+pick is the directory you get. If the slug differs from what you typed, brig says
+which directory it used. `brig info claude@refactor` prints the one in use.
 
 The `@` form is the stricter of the two: a label brig would have to rewrite --
-uppercase, a space, more than ten characters -- is refused rather than quietly
-shortened, and the message names what it would have become. That is what makes
-the label safe to use as an address: nothing is silently mapped onto a directory
-you did not ask for. `--name` keeps its older, lenient behaviour.
+uppercase, a space, a slash -- is refused rather than quietly rewritten, and the
+message names what it would have become. That is what makes the label safe to use
+as an address: nothing is silently mapped onto a directory you did not ask for.
+`--name` keeps its older, lenient behaviour.
 
 **Every verb takes the ref.** A named session is addressed as
 `<agent>@<label>`, and the older agent-plus-`--name` spelling still works

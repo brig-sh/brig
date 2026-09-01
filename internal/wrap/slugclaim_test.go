@@ -7,9 +7,13 @@ import (
 	"testing"
 )
 
-// The transcript in issue #26: two different session names whose slugs shorten
-// to the same sandbox. The first claims it; the second must be refused rather
-// than dropped into the same guest home with different credentials.
+// The transcript in issue #26: two different session names whose slugs land on
+// the same sandbox. The first claims it; the second must be refused rather than
+// dropped into the same guest home with different credentials.
+//
+// The collision is sanitisation, which is the class that survives a slug no
+// longer being cut to a budget: the space and the case both go, so these two
+// names are one slug however long they are.
 func TestACollidingSessionNameIsRefused(t *testing.T) {
 	isolateState(t)
 
@@ -18,20 +22,20 @@ func TestACollidingSessionNameIsRefused(t *testing.T) {
 		t.Fatalf("the first name could not claim its own sandbox: %v", err)
 	}
 
-	staging := mustLoad(t, Options{Name: "acme-corp-staging"})
-	if staging.VMName != prod.VMName {
+	retyped := mustLoad(t, Options{Name: "Acme Corp Prod"})
+	if retyped.VMName != prod.VMName {
 		t.Fatalf("the two names did not collide: %q and %q -- pick names that do",
-			prod.VMName, staging.VMName)
+			prod.VMName, retyped.VMName)
 	}
 
-	err := staging.claimSlug()
+	err := retyped.claimSlug()
 	if err == nil {
 		t.Fatal("a name colliding with another was allowed to share the sandbox")
 	}
 	// The refusal has to name both sessions, so the reader knows what they are
 	// up against and which other name to look for.
 	if !strings.Contains(err.Error(), "acme-corp-prod") ||
-		!strings.Contains(err.Error(), "acme-corp-staging") {
+		!strings.Contains(err.Error(), "Acme Corp Prod") {
 		t.Errorf("the refusal does not name both sessions: %v", err)
 	}
 }
@@ -67,8 +71,8 @@ func TestRemoveReleasesTheClaim(t *testing.T) {
 		t.Fatalf("remove failed: %v", err)
 	}
 
-	staging := mustLoad(t, Options{Name: "acme-corp-staging"})
-	if err := staging.claimSlug(); err != nil {
+	retyped := mustLoad(t, Options{Name: "Acme Corp Prod"})
+	if err := retyped.claimSlug(); err != nil {
 		t.Errorf("the sandbox was not released by rm: %v", err)
 	}
 }
@@ -88,8 +92,8 @@ func TestForgetSlugClaimPrunesByName(t *testing.T) {
 	ForgetSlugClaim("brig-claude-code-neverseen")
 	ForgetSlugClaim(prod.VMName)
 
-	staging := mustLoad(t, Options{Name: "acme-corp-staging"})
-	if err := staging.claimSlug(); err != nil {
+	retyped := mustLoad(t, Options{Name: "Acme Corp Prod"})
+	if err := retyped.claimSlug(); err != nil {
 		t.Errorf("reset did not release the claim: %v", err)
 	}
 }
@@ -103,19 +107,19 @@ func TestTheOldClaimsAreCarriedAcrossTheRename(t *testing.T) {
 
 	// sessions.json as the claim index had it: keyed by the sandbox name, with
 	// the owning session name as the value.
-	body := `{"brig-claude-code-acme-corp": "acme-corp-prod"}`
+	body := `{"brig-claude-code-acme-corp-prod": "acme-corp-prod"}`
 	if err := os.WriteFile(filepath.Join(dir, sessionIndexName), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	// The claim is still in force, which is the whole point of carrying it:
-	// this name shortens to the sandbox acme-corp-prod owns.
-	staging := mustLoad(t, Options{Name: "acme-corp-staging"})
-	if staging.VMName != "brig-claude-code-acme-corp" {
-		t.Fatalf("this case is written around brig-claude-code-acme-corp, and the "+
-			"sandbox is %q", staging.VMName)
+	// this name sanitises to the sandbox acme-corp-prod owns.
+	retyped := mustLoad(t, Options{Name: "Acme Corp Prod"})
+	if retyped.VMName != "brig-claude-code-acme-corp-prod" {
+		t.Fatalf("this case is written around brig-claude-code-acme-corp-prod, and the "+
+			"sandbox is %q", retyped.VMName)
 	}
-	err := staging.claimSlug()
+	err := retyped.claimSlug()
 	if err == nil {
 		t.Fatal("the carried claim did not refuse a colliding name")
 	}
@@ -125,7 +129,7 @@ func TestTheOldClaimsAreCarriedAcrossTheRename(t *testing.T) {
 
 	// Moved rather than copied: what is left under the old name is a file the
 	// session index is about to write for itself.
-	if got := readIndex[string](slugClaimIndexName)["brig-claude-code-acme-corp"]; got != "acme-corp-prod" {
+	if got := readIndex[string](slugClaimIndexName)["brig-claude-code-acme-corp-prod"]; got != "acme-corp-prod" {
 		t.Errorf("the claim was carried over as %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(dir, sessionIndexName)); !os.IsNotExist(err) {

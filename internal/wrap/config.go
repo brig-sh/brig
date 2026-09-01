@@ -72,6 +72,10 @@ type Config struct {
 	// envWarnings are what building Env decided to drop, held until BuildEnv
 	// has somewhere to print them: Load has no writer yet.
 	envWarnings []string
+	// slugMigration is the notice for a session whose home has moved since it
+	// was created, held until BuildEnv for the same reason. See
+	// slugMigrationNotice.
+	slugMigration []string
 	// secrets is what the store gave this run, kept so file delivery does not
 	// read it twice -- and cleared the moment delivery is done, because a
 	// plaintext refresh token has no business outliving its use.
@@ -213,6 +217,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, fmt.Errorf("BRIG_NAME is %q, but a brig sandbox name must begin with %q so that "+
 			"`brig ls` and `brig reset` can find it; use %q instead", vmName, NamePrefix, NamePrefix+vmName)
 	}
+	// Kept before the suffix goes on, for the migration notice below: it has
+	// to name the sandbox an older release derived from this same profile.
+	vmBase := vmName
 	if slug != "" {
 		vmName += "-" + slug
 	}
@@ -336,10 +343,64 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, strictErr
 	}
 	c.GuestCwd = GuestCwd(cwd, c.Workspace, t.GuestHome)
+	// After the Config is built, because the notice reads the pair this run
+	// resolved to and reports it against the pair the old one had.
+	c.slugMigration = c.slugMigrationNotice(base, vmBase)
 	if err := c.resolveGitIdentity(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// slugMigrationNotice is what this run has to be told about a session created
+// before a slug stopped being cut to ten characters, or nothing when this run
+// is not one.
+//
+// A longer --name now keeps its name in full, so it derives a different slug
+// than it used to -- and both the sandbox name and the guest home come off the
+// slug on every run. The same command that worked yesterday therefore boots a
+// new sandbox on a new home directory, and the old pair is orphaned: the work
+// in the old workspace is on the host and is still there, but state inside the
+// guest is not, and a login made in the sandbox is the half of that people
+// notice.
+//
+// Both conditions have to hold before this says anything, because a notice
+// that reaches people it does not apply to is one they learn to skip. The slug
+// has to have actually moved -- a name of ten characters or fewer slugs today
+// exactly as it always did -- and the directory it moved from has to be on
+// disk, since a long name that never ran has nothing orphaned to name.
+//
+// The old home is read back from the session index first and derived only as a
+// fallback, so a session started under --workspace or BRIG_WORKSPACE is named
+// where it actually is rather than where this invocation's base would have put
+// it.
+func (c *Config) slugMigrationNotice(base, vmBase string) []string {
+	if c.RawName == "" {
+		return nil
+	}
+	old := session.LegacySlug(c.RawName)
+	if old == "" || old == c.Slug {
+		return nil
+	}
+	oldVM := vmBase + "-" + old
+	oldWorkspace := rememberedWorkspace(sessionKey(c.Profile.Name, old), oldVM)
+	if oldWorkspace == "" {
+		oldWorkspace = base + "-" + old
+	}
+	// Only a stat that says the directory is there. One that fails any other
+	// way has not established that there is anything to move, and guessing
+	// from it would put the notice in front of the run that cannot act on it.
+	if _, err := os.Stat(oldWorkspace); err != nil {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("session %q used to be shortened to %q and now keeps its name in full, "+
+			"so it has a new home and a new sandbox: %s (%s) instead of %s (%s).",
+			c.RawName, old, c.Workspace, c.VMName, oldWorkspace, oldVM),
+		fmt.Sprintf("Nothing reads %s now. The work in it is on the host, so move or delete "+
+			"it at your leisure -- but state inside the old sandbox does not come across, "+
+			"so this session may ask you to log in again.", oldWorkspace),
+	}
 }
 
 // envOverride applies BRIG_FORWARD_ENV, which replaces the env-sourced set,

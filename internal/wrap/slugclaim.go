@@ -7,20 +7,25 @@ import (
 
 // The session-claim index: which session name owns each sandbox.
 //
-// A session name is turned into a short slug for its paths, and the sandbox is
-// brig-<profile>-<slug>. The slug budget is tight, so two different names that
-// share their leading characters can shorten to one slug and land on one
-// sandbox and one workspace -- with whatever credentials each was handed. brig
-// used to warn about that and carry on, which left two agents in one guest home
-// with different logins. Refuse the second name instead.
+// A session name is turned into a slug for its paths, and the sandbox is
+// brig-<profile>-<slug>. Sanitising is not one-to-one: Foo, foo! and foo are
+// all foo, so two different names can land on one sandbox and one workspace --
+// with whatever credentials each was handed. brig used to warn about that and
+// carry on, which left two agents in one guest home with different logins.
+// Refuse the second name instead.
+//
+// A slug used to be cut to ten characters as well, which collided two long
+// names that shared their leading characters the same way. That cut is gone
+// (see session.Slug) and this refusal is not: what remains is the collapse,
+// which no length budget was ever protecting against.
 //
 // The first name to take a sandbox writes down that it owns it; a later run
-// whose name shortens to the same sandbox but is not that name is refused and
+// whose name lands on the same sandbox but is not that name is refused and
 // told to pick another --name. The same name returning is the ordinary repeat
 // run and is let through.
 //
 // Keyed by sandbox name, not by the bare slug: the sandbox name carries the
-// profile, and two profiles that shorten to one slug share nothing, since the
+// profile, and two profiles that sanitise to one slug share nothing, since the
 // sandbox and the workspace both include the profile. It is also the key rm and
 // reset already have in hand, so releasing a claim sits beside ForgetSandbox
 // on both paths. Same file conventions as the session index (see index.go):
@@ -123,7 +128,7 @@ func (c *Config) claimSlug() error {
 	}
 	owner, taken := index[c.VMName]
 	if taken && owner != c.RawName {
-		return fmt.Errorf("session %q shortens to %q, the sandbox session %q already "+
+		return fmt.Errorf("session %q becomes %q, the sandbox session %q already "+
 			"uses (%s). Sharing it would put both agents in one home directory with "+
 			"whichever credentials arrived last, so run one under a different --name",
 			c.RawName, c.Slug, owner, c.VMName)
@@ -134,13 +139,13 @@ func (c *Config) claimSlug() error {
 	index[c.VMName] = c.RawName
 	if err := writeIndex(slugClaimIndexName, index); err != nil {
 		c.warnf("could not record %s as the owner of %s (%v). A later run whose name "+
-			"shortens to the same sandbox will not be refused.", c.RawName, c.VMName, err)
+			"lands on the same sandbox will not be refused.", c.RawName, c.VMName, err)
 	}
 	return nil
 }
 
 // ForgetSlugClaim drops a removed sandbox's claim, so the next session name
-// that shortens to it can take it. Errors are dropped the way ForgetSandbox
+// that lands on it can take it. Errors are dropped the way ForgetSandbox
 // drops its own: a removal that worked must not report a failure because a
 // bookkeeping file could not be rewritten.
 func ForgetSlugClaim(vmName string) {

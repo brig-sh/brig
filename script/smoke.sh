@@ -361,20 +361,24 @@ grep -q '^SANDBOX .*brig-claude-code' "$WORK/env.out" \
 echo "== named session =="
 : > "$STUB_LOG"
 "$WORK/brig" run claude --name 'My Big Refactor' -p hi > /dev/null 2>&1
-grep -q -- "--shared-dir $WS-my-big-ref:/home/claude" "$STUB_LOG" \
+grep -q -- "--shared-dir $WS-my-big-refactor:/home/claude" "$STUB_LOG" \
   && ok "a named session gets its own workspace" || bad "named session gets its own workspace"
-grep -q -- '--name brig-claude-code-my-big-ref' "$STUB_LOG" \
+grep -q -- '--name brig-claude-code-my-big-refactor' "$STUB_LOG" \
   && ok "a named session gets its own sandbox" || bad "named session gets its own sandbox"
 grep -q -- "-- claude --name My Big Refactor -p hi" "$STUB_LOG" \
   && ok "the raw name reaches the agent" || bad "the raw name reaches the agent"
 
 echo "== session collision =="
-# Two names whose slugs shorten to one sandbox must not share it: the tight slug
-# budget used to drop the second into the first's home with its own credentials,
-# and brig only warned. Now the second is refused. See issue #26.
+# Two names whose slugs land on one sandbox must not share it: brig used to drop
+# the second into the first's home with its own credentials and only warn. Now
+# the second is refused. See issue #26.
+#
+# The collision is sanitisation, which is the class that survives a slug no
+# longer being cut to ten characters: the space and the case both go, so these
+# two names are one slug however long they are.
 "$WORK/brig" rm --all > /dev/null 2>&1
 "$WORK/brig" run claude --name acme-corp-prod -d > /dev/null 2>&1
-out="$("$WORK/brig" run claude --name acme-corp-staging -d 2>&1)"; rc=$?
+out="$("$WORK/brig" run claude --name 'Acme Corp Prod' -d 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "a colliding session name is refused" \
   || bad "a colliding session name started anyway -- got rc $rc"
 case "$out" in
@@ -388,7 +392,7 @@ esac
 # rm releases the claim, so the name that was refused can take the sandbox once
 # the first is gone.
 "$WORK/brig" rm claude --name acme-corp-prod > /dev/null 2>&1
-"$WORK/brig" run claude --name acme-corp-staging -d > /dev/null 2>&1 \
+"$WORK/brig" run claude --name 'Acme Corp Prod' -d > /dev/null 2>&1 \
   && ok "rm frees the sandbox for the other name" \
   || bad "the sandbox stayed claimed after rm"
 
@@ -399,8 +403,8 @@ esac
 # cannot be read back into a ref at all.
 "$WORK/brig" rm --all > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
-printf '{"brig-claude-code-acme-corp": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
-out="$("$WORK/brig" run claude --name acme-corp-staging -d 2>&1)"
+printf '{"brig-claude-code-acme-corp-prod": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
+out="$("$WORK/brig" run claude --name 'Acme Corp Prod' -d 2>&1)"
 case "$out" in
   *acme-corp-prod*) ok "a claim written under the old file name still refuses" ;;
   *) bad "the old claim was dropped -- got: $out" ;;
@@ -416,7 +420,7 @@ grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
 # them.
 "$WORK/brig" rm --all > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
-printf '{"brig-claude-code-acme-corp": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
+printf '{"brig-claude-code-acme-corp-prod": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
 "$WORK/brig" run claude -d > /dev/null 2>&1
 grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
   && ok "an unnamed run carries the old claims across" \
@@ -458,6 +462,59 @@ if [ -s "$BRIG_STATE_DIR/sessions.json" ]; then
 else
   bad "no session index to guard: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 fi
+"$WORK/brig" rm --all > /dev/null 2>&1
+
+echo "== the slug migration =="
+# A --name longer than ten characters used to be cut to that, so it had a
+# shorter sandbox and a shorter home than it gets now. Both come off the slug on
+# every run, so such a session boots a new pair and the old one is orphaned: the
+# work in the old workspace is on the host and is still there, state inside the
+# old guest is not. Say so, and name both directories so the old one can be
+# moved or deleted.
+"$WORK/brig" rm --all > /dev/null 2>&1
+mkdir -p "$WS-refactorin"
+"$WORK/brig" run claude --name refactoring -d > /dev/null 2> "$WORK/moved.err"
+grep -q -- "instead of $WS-refactorin (brig-claude-code-refactorin)" "$WORK/moved.err" \
+  && ok "the migration notice names the home that was left behind" \
+  || bad "the notice does not name the old home -- got: $(cat "$WORK/moved.err")"
+grep -q -- "new sandbox: $WS-refactoring (brig-claude-code-refactoring)" "$WORK/moved.err" \
+  && ok "the migration notice names the home in use now" \
+  || bad "the notice does not name the new home -- got: $(cat "$WORK/moved.err")"
+
+# Nothing orphaned, nothing said. This name slugs differently than it used to,
+# but no directory was ever created under the old slug, so there is nothing for
+# the reader to move -- and a notice that reaches people it does not apply to is
+# one they learn to skip.
+"$WORK/brig" rm --all > /dev/null 2>&1
+rm -rf "$WS-benchmarkin"
+"$WORK/brig" run claude --name benchmarking -d > /dev/null 2> "$WORK/fresh.err"
+grep -q 'used to be shortened' "$WORK/fresh.err" \
+  && bad "a session with nothing orphaned was warned -- got: $(cat "$WORK/fresh.err")" \
+  || ok "a session with nothing orphaned is not warned"
+
+# And a name the old budget left alone slugs exactly as it always did, so its
+# directory being there means nothing. Ten characters is the boundary, and this
+# is on the silent side of it.
+"$WORK/brig" rm --all > /dev/null 2>&1
+mkdir -p "$WS-exactlyten"
+"$WORK/brig" run claude --name exactlyten -d > /dev/null 2> "$WORK/short.err"
+grep -q 'used to be shortened' "$WORK/short.err" \
+  && bad "a name that was never cut was warned -- got: $(cat "$WORK/short.err")" \
+  || ok "a name the old budget left alone is not warned"
+
+# The ref form refused any label over ten characters. A long one is a sandbox
+# and a directory of its own now, and is refused only for what is in it.
+"$WORK/brig" rm --all > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" run 'claude@a-long-refactor-label' -d > /dev/null 2>&1
+grep -q -- '--name brig-claude-code-a-long-refactor-label' "$STUB_LOG" \
+  && ok "a long label gets a sandbox of its own" \
+  || bad "a long label did not reach the sandbox name"
+out="$("$WORK/brig" run 'claude@A-Long-Refactor-Label' -d 2>&1)"
+case "$out" in
+  *a-long-refactor-label*) ok "a long label brig would rewrite is still refused" ;;
+  *) bad "a long label brig would rewrite was not refused -- got: $out" ;;
+esac
 "$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== stop =="
