@@ -94,3 +94,59 @@ func TestBuiltInProfilesDoNotWarnAboutHostCredential(t *testing.T) {
 		}
 	}
 }
+
+// -t and -m keep working for one release and say what replaces them. They are
+// two of the four short flags #47 removes in v0.3, and the notice is the same
+// one the retiring verbs print: a working command and a line about it, not a
+// failure.
+func TestDeprecatedShortFlagsStillWork(t *testing.T) {
+	for _, c := range []struct {
+		args        []string
+		replacement string
+		check       func(options) bool
+	}{
+		{[]string{"claude", "-t", "img:1"}, "--image", func(o options) bool { return o.load.Image == "img:1" }},
+		{[]string{"claude", "-m", "2048"}, "--mem", func(o options) bool { return o.load.Mem == 2048 }},
+		// The inline form is the same flag, so it hears the same notice.
+		{[]string{"claude", "-t=img:1"}, "--image", func(o options) bool { return o.load.Image == "img:1" }},
+	} {
+		var (
+			o   options
+			err error
+		)
+		warning := captureStderr(t, func() { o, _, _, err = parse(c.args) })
+		if err != nil {
+			t.Errorf("parse(%q): %v", c.args, err)
+			continue
+		}
+		if !c.check(o) {
+			t.Errorf("parse(%q) stopped working: %+v", c.args, o.load)
+		}
+		// The notice names the spelling, not the token: the inline form's
+		// value is no part of what is being deprecated.
+		spelling, _, _ := strings.Cut(c.args[1], "=")
+		if !strings.Contains(warning, spelling) || !strings.Contains(warning, c.replacement) {
+			t.Errorf("parse(%q) did not point %s at %s:\n%s",
+				c.args, spelling, c.replacement, warning)
+		}
+	}
+	// The long spellings are current, so they say nothing.
+	warning := captureStderr(t, func() {
+		if _, _, _, err := parse([]string{"claude", "--image", "img:1", "--mem", "8"}); err != nil {
+			t.Errorf("parse: %v", err)
+		}
+	})
+	if warning != "" {
+		t.Errorf("the current spellings printed a deprecation notice:\n%s", warning)
+	}
+	// A value that happens to be spelled like a deprecated flag is a value.
+	// Warning on it would send the reader looking for a flag they did not type.
+	warning = captureStderr(t, func() {
+		if _, _, _, err := parse([]string{"claude", "--name", "-t"}); err != nil {
+			t.Errorf("parse: %v", err)
+		}
+	})
+	if strings.Contains(warning, "--image") {
+		t.Errorf("a --name value read as a deprecated flag:\n%s", warning)
+	}
+}
