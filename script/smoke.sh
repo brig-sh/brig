@@ -347,6 +347,57 @@ grep -q -- '-- bash -lc echo hi' "$STUB_LOG" \
 grep -q 'project directory this run mounts' "$WORK/shproj.err" \
   && bad "sh warned about its own guest command" \
   || ok "sh says nothing about its guest command"
+
+# The project is inherited by a verb that names none, the way the home already
+# is. Reading that silence as "no project" is what real-runtime testing caught:
+# `brig sh <ref>` after a run with a project stopped, removed and recreated the
+# sandbox without the mount, taking the guest's memory-only state with it and
+# overwriting the index entry that recorded the project.
+#
+# Driven on the ubuntu profile, which delivers no credential files and so
+# reaches the guest exec on any host -- which is what makes the working
+# directory assertable rather than only the boot.
+"$WORK/brig" rm --all > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" run ubuntu "$PROJ" -- pwd > /dev/null 2>&1
+grep -q -- "--shared-dir $PROJ:/work/myproject" "$STUB_LOG" \
+  && ok "a shell profile takes a project too" \
+  || bad "a shell profile takes a project too -- got: $(grep '^argv: run' "$STUB_LOG")"
+grep -q -- '--cwd /work/myproject' "$STUB_LOG" \
+  && ok "the run starts in the project" \
+  || bad "the run starts in the project -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+
+: > "$STUB_LOG"
+"$WORK/brig" sh ubuntu -- pwd > /dev/null 2>&1
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "a flagless sh recreated the sandbox" \
+  || ok "a flagless sh keeps the sandbox it was given"
+grep -q -- '--cwd /work/myproject' "$STUB_LOG" \
+  && ok "a flagless sh inherits the project" \
+  || bad "a flagless sh inherits the project -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+grep -q "\"project\": \"$PROJ\"" "$BRIG_STATE_DIR/sessions.json" \
+  && ok "the index keeps the project across a flagless verb" \
+  || bad "the index keeps the project -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
+
+: > "$STUB_LOG"
+"$WORK/brig" run ubuntu -- pwd > /dev/null 2>&1
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "a flagless run recreated the sandbox" \
+  || ok "a flagless run keeps the sandbox it was given"
+grep -q -- '--cwd /work/myproject' "$STUB_LOG" \
+  && ok "a flagless run inherits the project" \
+  || bad "a flagless run inherits the project -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+
+# Naming a different one is a request rather than an accident, so it still
+# recreates -- inheritance is only about a line that named nothing.
+: > "$STUB_LOG"
+"$WORK/brig" run ubuntu "$OTHER" -- pwd > /dev/null 2>&1
+grep -q '^argv: run ' "$STUB_LOG" \
+  && ok "a different project still recreates the sandbox" \
+  || bad "a different project still recreates the sandbox"
+grep -q -- '--cwd /work/otherproject' "$STUB_LOG" \
+  && ok "the recreated sandbox starts in the new project" \
+  || bad "the recreated sandbox starts in the new project -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
 "$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== the home flag =="
