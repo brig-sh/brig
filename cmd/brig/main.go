@@ -45,7 +45,7 @@ usage:
   brig stop <ref>                                stop the sandbox, keep it
   brig rm   <ref>                                stop and remove the sandbox
   brig rm   --all                                stop and remove every brig sandbox
-  brig ls                                        list sandboxes
+  brig ls   [-q]                                 list sandboxes; -q prints the refs
   brig info <ref>                                print the execution envelope and the
                                                  full environment, by name -- fails
                                                  if a declared secret is missing
@@ -71,7 +71,8 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
   -q, --quiet            with run: do not print the execution envelope before
-                         the agent starts
+                         the agent starts. With ls: print the refs and nothing
+                         else, one per line, for a script to read
       --skills           project your own ~/.claude skills and plugins into
                          the guest, read-only (or BRIG_SKILLS=1)
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
@@ -952,13 +953,30 @@ func spell(name string) string {
 // listSandboxes shows what is running, and what is merely holding a name. A
 // stopped sandbox still owns its name, which is exactly the thing to see
 // before wondering why a name is taken.
+//
+// It leads with the ref, which is what every other verb takes: a listing whose
+// identifier no verb accepts is a listing a reader cannot act on, and copying
+// what it printed used to be an error.
 func listSandboxes(args []string) error {
-	// ls names no session and takes no flags, so anything here is a token it
-	// would otherwise read and discard -- `brig ls claude` looks like it filters
-	// to one agent and does not. Refuse it rather than answer a question that
-	// was not asked.
-	if len(args) > 0 {
-		return usagef("unexpected argument %q; `brig ls` takes no arguments", args[0])
+	// ls names no session and -q is the only flag it has, so anything else here
+	// is a token it would otherwise read and discard -- `brig ls claude` looks
+	// like it filters to one agent and does not. Refuse it rather than answer a
+	// question that was not asked.
+	//
+	// Read here rather than through the flag package because ls is dispatched
+	// before the run line is parsed: it has no ref to parse, and the run line's
+	// parser exists to find where brig's arguments stop, which on this verb is
+	// immediately. Both spellings, because -q and --quiet are one flag
+	// everywhere else brig reads them.
+	quiet := false
+	for _, a := range args {
+		switch a {
+		case "-q", "--quiet":
+			quiet = true
+		default:
+			return usagef("unexpected argument %q; `brig ls` takes no arguments "+
+				"other than -q", a)
+		}
 	}
 	rt, err := runtime.Detect()
 	if err != nil {
@@ -977,6 +995,13 @@ func listSandboxes(args []string) error {
 		// shape of `brig ls` does not change with the runtime, and surface the
 		// platform-specific way to get one -- the hint run gives -- so a fresh
 		// box is told how rather than only that there is nothing.
+		//
+		// Except under -q, which is read by a script: no sandboxes is an empty
+		// list, and the note about why would be a line the loop reading this had
+		// to recognise and skip.
+		if quiet {
+			return nil
+		}
 		printSandboxes(os.Stdout, nil)
 		fmt.Println("(none -- no runtime found on PATH, so there are no sandboxes)")
 		fmt.Printf("  %s\n", strings.TrimPrefix(err.Error(), "no runtime found on PATH: "))
@@ -990,6 +1015,25 @@ func listSandboxes(args []string) error {
 	// an entry for a sandbox that went away without going through `brig rm`
 	// can be dropped. See wrap.PruneSessions.
 	pruneSessionIndex(list)
+	rows := sandboxRows(list, rt)
+	if quiet {
+		printRefs(os.Stdout, rows)
+		return nil
+	}
+	printSandboxes(os.Stdout, rows)
+	if len(rows) == 0 {
+		fmt.Println("(none -- `brig run claude` starts one)")
+	}
+	return nil
+}
+
+// sandboxRows turns what the runtime has into the listing: brig's own
+// sandboxes, in name order, each with the ref and the workspace it answers to.
+//
+// Separate from listSandboxes because it is the whole of what the listing
+// decides, and the only part of it a test can drive without a runtime: what the
+// two printers below are handed is exactly this.
+func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	rows := make([]sandboxRow, 0, len(list))
 	for _, inst := range list {
@@ -997,16 +1041,13 @@ func listSandboxes(args []string) error {
 			continue
 		}
 		rows = append(rows, sandboxRow{
+			ref:       refOf(inst.Name),
 			name:      inst.Name,
 			state:     inst.State,
 			workspace: workspaceOf(inst.Name, rt),
 		})
 	}
-	printSandboxes(os.Stdout, rows)
-	if len(rows) == 0 {
-		fmt.Println("(none -- `brig run claude` starts one)")
-	}
-	return nil
+	return rows
 }
 
 // pruneSessionIndex hands the session index every instance the runtime has, so
@@ -1024,33 +1065,152 @@ func pruneSessionIndex(list []runtime.Instance) {
 }
 
 // sandboxRow is one line of the listing, gathered before anything is printed
-// so the name column can be sized to the names it will actually hold.
+// so the two variable-width columns can be sized to what they will hold.
+//
+// ref is the session this sandbox is carrying, and empty when brig has none to
+// print for it -- see refOf. It is a string rather than a session.Ref because
+// the listing only ever writes it out, and an empty string is the one state a
+// Ref cannot hold: a Ref with an empty agent is not a ref, and it would have to
+// be checked for at every use rather than once, here.
 type sandboxRow struct {
+	ref       string
 	name      string
 	state     string
 	workspace string
 }
 
-// printSandboxes writes the listing, header included, with the name column as
-// wide as the names in it.
+// noRef is what the table shows for a sandbox with no ref to print.
+//
+// A dash rather than a blank, because the two say different things to whoever
+// is reading: an empty cell in a column that is full on every other line reads
+// as brig having lost the value, and this is brig saying it has none. Nothing
+// is guessed into the gap -- see refOf for what is derived and where the
+// deriving stops -- and the SANDBOX column beside it still names the thing, so
+// `brig rm --all` remains the way to be rid of it.
+const noRef = "-"
+
+// refCell is the ref as the table prints it, placeholder included.
+func refCell(ref string) string {
+	if ref == "" {
+		return noRef
+	}
+	return ref
+}
+
+// printSandboxes writes the listing, header included, with the ref and name
+// columns each as wide as what is in it.
+//
+// The ref leads, because it is the column that is also the identifier: it is
+// what every other verb takes, so it is the word a reader is here to copy. The
+// sandbox name is beside it for recognising brig's own sandboxes in the
+// runtime's output, which is the only thing that name is good for.
 //
 // The width was a constant, and no constant is right: a sandbox is named after
 // its profile plus a session slug, so brig-claude-desktop with a ten-character
 // slug is already 30 characters against the 28 that were reserved -- and a
 // profile read from a file can be called anything, so a wider constant only
-// moves where it breaks. Measuring the names costs a pass over a list brig has
+// moves where it breaks. Measuring the values costs a pass over a list brig has
 // in hand and cannot be outgrown.
 func printSandboxes(w io.Writer, rows []sandboxRow) {
-	name := len("SANDBOX")
+	ref, name := len("REF"), len("SANDBOX")
 	for _, r := range rows {
+		if n := len(refCell(r.ref)); n > ref {
+			ref = n
+		}
 		if len(r.name) > name {
 			name = len(r.name)
 		}
 	}
-	fmt.Fprintf(w, "%-*s %-10s %s\n", name, "SANDBOX", "STATE", "WORKSPACE")
+	fmt.Fprintf(w, "%-*s %-*s %-10s %s\n", ref, "REF", name, "SANDBOX", "STATE", "WORKSPACE")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%-*s %-10s %s\n", name, r.name, r.state, r.workspace)
+		fmt.Fprintf(w, "%-*s %-*s %-10s %s\n",
+			ref, refCell(r.ref), name, r.name, r.state, r.workspace)
 	}
+}
+
+// printRefs writes the refs and nothing else, one to a line: `brig ls -q`, the
+// form a script reads.
+//
+// A row with no ref is left out rather than printed as the table's placeholder.
+// Every line of this output is meant to be a word another verb takes, and a
+// loop reading it must not be handed one that is not -- which is the promise the
+// round-trip test pins. The table is where a person sees that the sandbox is
+// there at all.
+func printRefs(w io.Writer, rows []sandboxRow) {
+	for _, r := range rows {
+		if r.ref == "" {
+			continue
+		}
+		fmt.Fprintln(w, r.ref)
+	}
+}
+
+// refOf is the ref of whichever session is carrying a sandbox: the one brig
+// recorded, and otherwise the one the sandbox's own name decomposes into. Empty
+// when neither answers, which is the case the table prints noRef for.
+//
+// The recorded ref is the answer whenever there is one: the index is filed by
+// ref, so an entry naming this sandbox holds that sandbox's ref by
+// construction. The derivation is for a sandbox with no entry -- one created
+// before the index existed, or one whose entry was pruned -- and it is the same
+// decomposition the workspace column has always fallen back to.
+//
+// Deriving beats leaving the column empty because the derived ref cannot
+// address a sandbox other than the one on its row: a sandbox is named
+// <prefix><agent>-<slug>, so resolving the ref it decomposes into builds that
+// same name straight back. The ambiguity in a sandbox name -- claude-code plus
+// the slug "refactor" reads equally as an agent called claude-code-refactor
+// with no slug -- picks between two refs that reach the one sandbox either way.
+// What it can get wrong is which agent, and so which workspace the session
+// resolves to by default, and the cost of that is one restart.
+//
+// Whatever comes out is then checked rather than trusted, on both counts the
+// listing promises: it has to parse as a ref, and its agent has to be one brig
+// still has. A sandbox named through BRIG_NAME can decompose into a label no
+// verb would accept, and an agent whose file has been deleted leaves a ref that
+// every verb answers "unknown profile" to. Neither is a word to hand a script,
+// so neither is printed, and the check is what makes that structural instead of
+// something to remember.
+func refOf(vmName string) string {
+	ref := wrap.RefOfSandbox(vmName)
+	if ref == "" {
+		agent, slug, ok := splitSandboxName(vmName)
+		if !ok {
+			return ""
+		}
+		ref = session.Ref{Agent: agent, Label: slug}.String()
+	}
+	parsed, err := session.ParseRef(ref)
+	if err != nil {
+		return ""
+	}
+	if _, ok := profile.Lookup(parsed.Agent); !ok {
+		return ""
+	}
+	return ref
+}
+
+// splitSandboxName reads a sandbox name back into the profile and the session
+// slug it was built from, and reports whether any profile brig has fits.
+//
+// Longest profile name first, so claude-code wins over a hypothetical claude
+// when both could prefix-match. An unnamed sandbox is named exactly after its
+// profile, so there is no slug to recover: without the equality case here,
+// TrimPrefix would leave the profile name intact and the caller would answer
+// about a session called "claude-code", which is not the one running.
+func splitSandboxName(vmName string) (profileName, slug string, ok bool) {
+	rest := strings.TrimPrefix(vmName, sandboxPrefix)
+	names := profile.Names()
+	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+	for _, name := range names {
+		switch {
+		case rest == name:
+			return name, "", true
+		case strings.HasPrefix(rest, name+"-"):
+			return name, strings.TrimPrefix(rest, name+"-"), true
+		}
+	}
+	return "", "", false
 }
 
 // workspaceOf recovers the workspace for a sandbox: what it was started with
@@ -1067,31 +1227,16 @@ func workspaceOf(vmName string, rt runtime.Runtime) string {
 	if ws := wrap.WorkspaceOfSandbox(vmName); ws != "" {
 		return ws
 	}
-	rest := strings.TrimPrefix(vmName, sandboxPrefix)
-	// Longest profile name first, so claude-code wins over a hypothetical
-	// claude when both could prefix-match.
-	names := profile.Names()
-	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
-	for _, name := range names {
-		if rest != name && !strings.HasPrefix(rest, name+"-") {
-			continue
-		}
-		t, _ := profile.Lookup(name)
-		// An unnamed sandbox is named exactly after its profile, so there is
-		// no session name to recover. TrimPrefix would leave the profile
-		// name intact here and we would report the workspace of a session
-		// called "claude-code", which is not the one running.
-		session := ""
-		if rest != name {
-			session = strings.TrimPrefix(rest, name+"-")
-		}
-		cfg, err := wrap.Load(t, wrap.Options{Name: session}, rt)
-		if err != nil {
-			return ""
-		}
-		return cfg.Workspace
+	name, slug, ok := splitSandboxName(vmName)
+	if !ok {
+		return ""
 	}
-	return ""
+	t, _ := profile.Lookup(name)
+	cfg, err := wrap.Load(t, wrap.Options{Name: slug}, rt)
+	if err != nil {
+		return ""
+	}
+	return cfg.Workspace
 }
 
 // takeAll reads --all off a command line and reports whether it was there.
