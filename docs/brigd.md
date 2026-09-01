@@ -53,7 +53,7 @@ A response looks like:
 
 ```json
 {"ok":true,"sessions":[{"agent":"claude-code","name":"refactor",
-  "vm":"brig-claude-code-refactor","workspace":"/Users/me/brig/claude-code-refactor",
+  "sandbox":"brig-claude-code-refactor","workspace":"/Users/me/brig/claude-code-refactor",
   "running":true}]}
 ```
 
@@ -67,7 +67,7 @@ permission error, containerd is down -- the session carries `runningError`
 instead, and `running` says nothing:
 
 ```json
-{"agent":"claude-code","vm":"brig-claude-code","workspace":"/Users/me/brig/claude-code",
+{"agent":"claude-code","sandbox":"brig-claude-code","workspace":"/Users/me/brig/claude-code",
   "running":false,"runningError":"nerdctl ps: exit status 1: cannot connect to containerd"}
 ```
 
