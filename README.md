@@ -232,10 +232,16 @@ included, leaving all workspaces alone.
 
 **`-w` is remembered.** A session created with `--workspace` keeps that
 directory for every later verb, so `brig exec claude --name refactor -- ls`
-finds it without repeating the flag. brig records the path a sandbox was
-started with under `~/.brig`, and reads it back when neither `--workspace` nor
-`BRIG_WORKSPACE` names one; `brig rm` and `brig reset` drop the entry with the
-sandbox. Pass either of them a directory that is not the one the sandbox is
+finds it without repeating the flag. brig records it in
+`~/.brig/sessions.json`, filed under the session's ref, and reads it back when
+neither `--workspace` nor `BRIG_WORKSPACE` names one; `brig rm` and `brig reset`
+drop the entry with the sandbox, and `brig ls` drops any whose sandbox has gone.
+
+That file is an index and not a record of the truth: the runtime stays the
+authority on what is actually mounted, and an unreadable index costs one restart
+rather than failing the command. Because it is filed under the ref, a session is
+found under either spelling of its agent -- `claude` and `claude-code` are one
+agent through an alias, and both reach the one entry. Pass either of them a directory that is not the one the sandbox is
 mounting and it restarts, as it always has -- a share cannot be moved on a
 running guest, and you asked for a different directory.
 
