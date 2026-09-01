@@ -135,15 +135,24 @@ separate Linux re-implementation of it.
 for one release, each printing a one-line note naming the new one; they no
 longer appear above. There is deliberately no `brig template edit`.
 
-Flags go before the agent's own arguments; `--` ends brig's parsing outright,
-so an agent flag spelled like one of brig's still reaches the agent.
+A brig line has three places a token can stand, and they are not the same kind
+of place. Left of the verb are brig's global flags, a closed set -- an unknown
+flag there is a usage error naming the token, rather than an operand quietly
+swallowed. Between the verb and the agent are the run-line flags below. Right of
+the agent the vocabulary is the agent's, and `--` ends brig's parsing outright,
+so an agent flag spelled like one of brig's still reaches it.
+
+brig does still read its own flags after the agent, because `brig run claude -q`
+is a line that works. But once an unknown token has ended brig's reading, a brig
+flag further along belongs to the agent -- and brig now says so, without taking
+the token, so a line that works today keeps working.
 
 | flag | what it does |
 | --- | --- |
-| `-n, --name NAME` | a session of its own: own workspace, own sandbox |
-| `-t, --image IMAGE` | guest image to boot |
+| `-n, --name NAME` | a session of its own: own workspace, own sandbox. Also written `<agent>@<label>` |
+| `--image IMAGE` | guest image to boot (`-t` still works, with a note) |
 | `-w, --workspace PATH` | host directory to mount as the guest home |
-| `-m, --memory MB` | guest memory |
+| `--mem MB` | guest memory (`--memory` also works; `-m` works with a note) |
 | `--cpus N` | guest vCPUs |
 | `-d, --detach` | with `run`: start the sandbox, print its name, exit |
 | `--skills` | seed your own `~/.claude` skills and plugins into the workspace |
@@ -182,7 +191,8 @@ brig shell codex 'ls -la ~'                # one command, in a login shell
 ### Named sessions
 
 ```bash
-brig run claude --name refactor
+brig run claude@refactor
+brig run claude --name refactor    # the same session, the older spelling
 ```
 
 A session of its own: its own workspace (`~/brig/claude-code-refactor`), its
@@ -193,15 +203,22 @@ underscore, ten characters -- so `my_project` and `my-project` stay separate,
 while `Foo` and `foo` do not (macOS filesystems ignore case, and two names
 sharing one directory but not one VM is a bug waiting to happen). If the slug
 differs from what you typed, brig says which directory it used.
-`brig info claude --name refactor` prints the one in use.
+`brig info claude@refactor` prints the one in use.
 
-**Every other verb needs the same `--name`.** A named session is addressed by
-its agent *plus* its name, not by the name alone:
+The `@` form is the stricter of the two: a label brig would have to rewrite --
+uppercase, a space, more than ten characters -- is refused rather than quietly
+shortened, and the message names what it would have become. That is what makes
+the label safe to use as an address: nothing is silently mapped onto a directory
+you did not ask for. `--name` keeps its older, lenient behaviour.
+
+**Every verb takes the ref.** A named session is addressed as
+`<agent>@<label>`, and the older agent-plus-`--name` spelling still works
+everywhere it did:
 
 ```bash
-brig exec claude --name refactor -- git status
-brig stop claude --name refactor
-brig rm   claude --name refactor      # removes the sandbox, keeps the workspace
+brig exec claude@refactor -- git status
+brig stop claude@refactor
+brig rm   claude@refactor      # removes the sandbox, keeps the workspace
 ```
 
 `brig ls` shows the session as `brig-claude-code-refactor`, but that string is
