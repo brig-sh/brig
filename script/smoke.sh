@@ -391,6 +391,73 @@ esac
 "$WORK/brig" run claude --name acme-corp-staging -d > /dev/null 2>&1 \
   && ok "rm frees the sandbox for the other name" \
   || bad "the sandbox stayed claimed after rm"
+
+# The claims an older release wrote under sessions.json are carried across to
+# slug-claims.json rather than dropped: the two files have the same shape, so
+# there is nothing to guess, and dropping them would leave the refusal off
+# until every session had run again. Unlike the session index, whose keys
+# cannot be read back into a ref at all.
+"$WORK/brig" reset > /dev/null 2>&1
+rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
+printf '{"brig-claude-code-acme-corp": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
+out="$("$WORK/brig" run claude --name acme-corp-staging -d 2>&1)"
+case "$out" in
+  *acme-corp-prod*) ok "a claim written under the old file name still refuses" ;;
+  *) bad "the old claim was dropped -- got: $out" ;;
+esac
+grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
+  && ok "the old claims are carried over to slug-claims.json" \
+  || bad "the old claims are not in slug-claims.json"
+
+# An unnamed run carries them across too. It claims nothing itself, so it could
+# have skipped the claim index entirely -- and then the rememberSession later in
+# that same boot would have replaced the file the claims were still sitting in,
+# which makes a plain `brig run claude` the one command that silently destroys
+# them.
+"$WORK/brig" reset > /dev/null 2>&1
+rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
+printf '{"brig-claude-code-acme-corp": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
+"$WORK/brig" run claude -d > /dev/null 2>&1
+grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
+  && ok "an unnamed run carries the old claims across" \
+  || bad "an unnamed run dropped the old claims"
+
+# And claims nothing of its own, which is the other half of that pair: every
+# unnamed run of a profile is meant to be the one session, so there is no name
+# for a later one to collide with and nothing to write down.
+"$WORK/brig" reset > /dev/null 2>&1
+rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
+"$WORK/brig" run claude -d > /dev/null 2>&1
+[ -e "$BRIG_STATE_DIR/slug-claims.json" ] \
+  && bad "an unnamed run claimed a sandbox -- got: $(cat "$BRIG_STATE_DIR/slug-claims.json")" \
+  || ok "an unnamed run claims nothing"
+
+# The guard on all of that: a current sessions.json holds session entries,
+# whose values are objects rather than the claims' strings, so it cannot be
+# read as claims. Mistaking one for the other deletes the file, and every
+# session in it loses its home.
+"$WORK/brig" reset > /dev/null 2>&1
+rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
+"$WORK/brig" run claude --name rc23guard -d > /dev/null 2>&1
+if [ -s "$BRIG_STATE_DIR/sessions.json" ]; then
+  cp "$BRIG_STATE_DIR/sessions.json" "$WORK/sessions.before"
+  # Cleared after the session exists, not before: a named run claims its own
+  # slug, so the file it writes is the very thing that would stop the migration
+  # from being attempted. Absent is the condition the migration waits for.
+  rm -f "$BRIG_STATE_DIR/slug-claims.json"
+  # rm of some other session is the instrument: it reads the claim index, which
+  # is where the migration lives, and writes neither index -- so anything that
+  # changes below changed because the migration fired.
+  "$WORK/brig" rm claude --name rc23other > /dev/null 2>&1
+  cmp -s "$WORK/sessions.before" "$BRIG_STATE_DIR/sessions.json" \
+    && ok "a current session index is not mistaken for claims" \
+    || bad "the session index was rewritten by a migration that must not fire"
+  [ -e "$BRIG_STATE_DIR/slug-claims.json" ] \
+    && bad "claims were invented out of session entries -- got: $(tr -d '\n' < "$BRIG_STATE_DIR/slug-claims.json")" \
+    || ok "no claims are invented out of session entries"
+else
+  bad "no session index to guard: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
+fi
 "$WORK/brig" reset > /dev/null 2>&1
 
 echo "== stop =="
@@ -489,21 +556,71 @@ grep -q '^argv: run ' "$STUB_LOG" \
   && ok "a -w naming a different directory still restarts the sandbox" \
   || bad "a -w naming a different directory still restarts the sandbox"
 
+# The index is keyed by the ref, so a session started under one spelling of the
+# profile is the entry the other spelling reads -- claude and claude-code are
+# one profile through an alias, and two entries would be two homes drifting
+# apart.
+grep -q '"claude-code@rc23"' "$BRIG_STATE_DIR/sessions.json" \
+  && ok "the session is filed under its ref" \
+  || bad "the session is not filed under claude-code@rc23 -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
+: > "$STUB_LOG"
+brig_bare exec claude-code --name rc23 -- uname -a > /dev/null 2>&1
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "the alias did not find the session's workspace" \
+  || ok "the alias finds the workspace the session was created with"
+
 brig_bare rm claude --name rc23 > /dev/null 2>&1
-grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/workspaces.json" \
-  && bad "rm left the sandbox in the workspace index" \
+grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/sessions.json" \
+  && bad "rm left the sandbox in the session index" \
   || ok "rm drops the remembered workspace"
 
 brig_bare create claude --name rc23 -w "$RC" > /dev/null 2>&1
 "$WORK/brig" reset > /dev/null 2>&1
-grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/workspaces.json" \
-  && bad "reset left a sandbox in the workspace index" \
+grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/sessions.json" \
+  && bad "reset left a sandbox in the session index" \
   || ok "reset drops the remembered workspaces"
+
+# A session with no label is filed under the bare agent name -- the ref's own
+# spelling for a session that has no label, rather than a trailing '@' or an
+# invented default one, either of which would be a key no ref types.
+rm -f "$BRIG_STATE_DIR/sessions.json"
+brig_bare create claude -w "$WORK/ws-bare" > /dev/null 2>&1
+grep -q '"claude-code":' "$BRIG_STATE_DIR/sessions.json" \
+  && ok "an unlabelled session is filed under the bare agent name" \
+  || bad "the unlabelled session is not keyed claude-code -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
+grep -q 'claude-code@' "$BRIG_STATE_DIR/sessions.json" \
+  && bad "the unlabelled session was given a label -- got: $(cat "$BRIG_STATE_DIR/sessions.json")" \
+  || ok "the unlabelled session is given no label"
+"$WORK/brig" reset > /dev/null 2>&1
+
+# And the '@' form on the command line reaches the file: a session created as
+# claude@label is filed exactly as --name label files it, key and value both,
+# so the two spellings address one entry rather than two.
+rm -f "$BRIG_STATE_DIR/sessions.json"
+brig_bare create claude@rc23ref -w "$WORK/ws-ref" > /dev/null 2>&1
+grep -q '"claude-code@rc23ref":' "$BRIG_STATE_DIR/sessions.json" \
+  && ok "a session created as a ref is filed under that ref" \
+  || bad "the ref form is not keyed claude-code@rc23ref -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
+grep -q '"sandbox": "brig-claude-code-rc23ref"' "$BRIG_STATE_DIR/sessions.json" \
+  && ok "the ref form records the sandbox --name would have named" \
+  || bad "the ref form's sandbox is not brig-claude-code-rc23ref -- got: $(cat "$BRIG_STATE_DIR/sessions.json")"
+"$WORK/brig" reset > /dev/null 2>&1
+
+# The sandbox-keyed file the session index replaces is deleted rather than
+# migrated: its keys cannot be read back into a ref without guessing which dash
+# separated the agent from its label. One restart per session in it, which is
+# what an absent entry has always cost.
+printf '{"brig-claude-code-rc23": "%s"}' "$WORK/ws-legacy" > "$BRIG_STATE_DIR/workspaces.json"
+brig_bare create claude --name rc23 -w "$RC" > /dev/null 2>&1
+[ -e "$BRIG_STATE_DIR/workspaces.json" ] \
+  && bad "the old sandbox-keyed index was left behind" \
+  || ok "the old sandbox-keyed index is deleted on sight"
+"$WORK/brig" reset > /dev/null 2>&1
 
 # The index is bookkeeping, so an unusable one costs a restart and nothing
 # more: every command still works, and the workspace resolves as it did before
 # the file existed.
-printf '{not json at all' > "$BRIG_STATE_DIR/workspaces.json"
+printf '{not json at all' > "$BRIG_STATE_DIR/sessions.json"
 brig_bare run claude -d > "$WORK/corrupt.out" 2>&1
 rc=$?
 [ "$rc" = 0 ] && ok "a corrupt index is ignored rather than fatal" \

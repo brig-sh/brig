@@ -197,8 +197,8 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, fmt.Errorf("cannot determine the current directory: %w", err)
 	}
 
-	// The sandbox name is settled first because the workspace may be read back
-	// from an index keyed by it. See index.go.
+	// The sandbox name is settled first because the entry read back below is
+	// only good for the sandbox it was recorded against. See index.go.
 	vmName := env.String("NAME", NamePrefix+t.Name)
 	// BRIG_NAME replaces the whole sandbox name, and brig finds its own
 	// sandboxes by the brig- prefix: ls lists what carries it and reset removes
@@ -253,8 +253,12 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// every flagless verb takes that for a stale share and restarts it -- see
 	// index.go. The suffix is not reapplied: what was recorded is the workspace
 	// as it was finally resolved, slug and all.
+	//
+	// Looked up by ref, which is the profile as it resolved and the slug, so
+	// the entry a run under one spelling of the profile wrote is the entry a
+	// run under its alias reads. Both halves of the key are in hand here.
 	if !given {
-		if remembered := RememberedWorkspace(vmName); remembered != "" {
+		if remembered := rememberedWorkspace(sessionKey(t.Name, slug), vmName); remembered != "" {
 			workspace = remembered
 		}
 	}

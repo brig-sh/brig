@@ -222,7 +222,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 			// The guest has confirmed this workspace, so record it. Nothing has
 			// changed for a session brig already knows about; for one created
 			// before the index existed, this is where its entry appears.
-			c.rememberWorkspace()
+			c.rememberSession()
 			// Running a graphical agent again is how you get back to its
 			// window, so the focus is not part of the boot -- it belongs on
 			// every path that leaves a sandbox running.
@@ -328,7 +328,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// the readiness wait for that reason: a sandbox that boots and never answers
 	// still has this workspace, and the next command has to resolve the same one
 	// to find out.
-	c.rememberWorkspace()
+	c.rememberSession()
 	if !c.waitReady() {
 		return fmt.Errorf("sandbox did not become ready; check '%s'",
 			c.Runtime.LogsHint(c.VMName))
@@ -515,8 +515,8 @@ func (c *Config) Stop() error {
 func (c *Config) Remove() error {
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)
-	ForgetWorkspace(c.VMName)
-	ForgetSession(c.VMName)
+	ForgetSandbox(c.VMName)
+	ForgetSlugClaim(c.VMName)
 	return err
 }
 
