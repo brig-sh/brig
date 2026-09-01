@@ -39,7 +39,10 @@ const sandboxPrefix = wrap.NamePrefix
 const usage = `brig -- run a coding agent in a sandbox
 
 usage:
-  brig run  <ref> [flags] [agent args...]        start the sandbox and run it
+  brig run  <ref> [project] [args...]            start the sandbox and run it. A
+                                                 project is mounted at
+                                                 /work/<name>, and the agent
+                                                 starts there
   brig sh   <ref> [command...]                   a login shell inside the sandbox,
                                                  or one command in it
   brig stop <ref>                                stop the sandbox, keep it
@@ -66,7 +69,8 @@ sandbox, and every verb above takes one.
 
 flags (before the agent's own arguments; -- ends brig's parsing):
       --image IMAGE      guest image to boot
-  -w, --workspace PATH   host directory to mount as the guest home
+      --home PATH        host directory to mount as the guest home
+                         (-w and --workspace still work, with a note)
       --mem MB           guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
@@ -307,6 +311,13 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Only run takes a positional; every other verb gets the word back where
+	// split found it. Said out loud while the meaning is changing, and only
+	// when the word survived as a project -- which is only on run.
+	opts.load.Project, tail = projectFor(verb, opts.load.Project, tail)
+	if opts.load.Project != "" {
+		warnPositionalMeaning(opts.load.Project)
+	}
 	if err := rejectTail(verb, tail); err != nil {
 		return err
 	}
@@ -516,6 +527,11 @@ var brigFlags = []struct {
 }{
 	{long: "name", short: "n", value: true, position: posRun},
 	{long: "image", short: "t", value: true, position: posRun},
+	// --home is the guest home; -w and --workspace are the spellings it
+	// replaces, and all three write one value. The home and the project are
+	// two directories on one line now, and "workspace" could not say which of
+	// them it meant.
+	{long: "home", value: true, position: posRun},
 	{long: "workspace", short: "w", value: true, position: posRun},
 	// --mem is the spelling; --memory is what it was called first and still
 	// answers, because a line that works today keeps working. Both write one
@@ -542,14 +558,17 @@ var brigFlags = []struct {
 // -- and silently reinterpreting a flag two programs share is worse than saying
 // which of them read it.
 //
-// -w is the other short form going. It is absent here because #6 introduces
-// what replaces it, and pointing at a flag that does not exist yet is worse
-// than saying nothing.
+// -w and --workspace retire onto --home, both spellings named. The long one is
+// mapped and said out loud rather than aliased quietly because the word itself
+// is what is being retired: with a project on the same line there are two host
+// directories to talk about, and "workspace" never said which one it was.
 var deprecatedFlags = map[string]string{
-	"-t":     "--image",
-	"-m":     "--mem",
-	"-n":     "<agent>@<label>",
-	"--name": "<agent>@<label>",
+	"-t":          "--image",
+	"-m":          "--mem",
+	"-n":          "<agent>@<label>",
+	"--name":      "<agent>@<label>",
+	"-w":          "--home",
+	"--workspace": "--home",
 }
 
 // ours reports whether a token is one of brig's flags in the position it was
@@ -641,8 +660,13 @@ func parseGlobal(args []string) (rest []string, err error) {
 	return rest, nil
 }
 
-// split divides a run line into brig's own arguments, the session ref, and the
-// agent's tail.
+// split divides a run line into brig's own arguments, the session ref, the
+// second bare word, and the agent's tail.
+//
+// The second bare word is handed back on its own rather than at the head of the
+// tail because what it means depends on the verb, and split does not know the
+// verb: on run it is the project directory to mount, and on sh it is the guest
+// command. projectFor is where that is decided.
 //
 // This exists because the flag package stops at the first non-flag argument
 // and treats an unknown flag as an error, and brig's line is the opposite on
@@ -656,7 +680,7 @@ func parseGlobal(args []string) (rest []string, err error) {
 // exist. After it, brig still answers to its own flags -- `brig run claude -q`
 // is a line that works today -- but the first token it does not own ends its
 // parsing and everything from there is the agent's, warnings included.
-func split(args []string) (mine []string, ref session.Ref, tail []string, err error) {
+func split(args []string) (mine []string, ref session.Ref, word string, tail []string, err error) {
 	passed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -664,8 +688,9 @@ func split(args []string) (mine []string, ref session.Ref, tail []string, err er
 		case a == "--":
 			// An explicit end to brig's parsing, so an agent argument spelled
 			// like one of brig's flags still reaches the agent. Nothing is
-			// said about what follows: the line already said it.
-			return mine, ref, args[i+1:], nil
+			// said about what follows: the line already said it -- which is
+			// also why no word after it is ever read as a project.
+			return mine, ref, "", args[i+1:], nil
 		case !strings.HasPrefix(a, "-"):
 			if !passed {
 				if ref, err = session.ParseRef(a); err != nil {
@@ -673,13 +698,16 @@ func split(args []string) (mine []string, ref session.Ref, tail []string, err er
 					// profile to go and look up: reporting it as a missing
 					// profile would name the whole token and say nothing about
 					// the part that is wrong.
-					return nil, session.Ref{}, nil, usagef("%s", err)
+					return nil, session.Ref{}, "", nil, usagef("%s", err)
 				}
 				passed = true
 				continue
 			}
-			// A second bare word is the agent's command, not a second ref.
-			return mine, ref, agentTail(args[i:]), nil
+			// A second bare word, and it is still where brig stops reading its
+			// own line: the word has a meaning of its own now, and brig does
+			// not resume after it, so `brig run claude . -q` leaves -q the
+			// agent's exactly as it always did. agentTail says so.
+			return mine, ref, a, agentTail(args[i+1:]), nil
 		default:
 			isOurs, takesValue := ours(a, posRun)
 			if !isOurs {
@@ -692,11 +720,11 @@ func split(args []string) (mine []string, ref session.Ref, tail []string, err er
 				// the flag's value and leave the line blaming the one word on it
 				// that was right, so refuse it and name it.
 				if !passed {
-					return nil, session.Ref{}, nil, usagef("unknown flag %q before the profile name. "+
+					return nil, session.Ref{}, "", nil, usagef("unknown flag %q before the profile name. "+
 						"brig's own flags come before the profile and the agent's after it; "+
 						"put %q after the profile to pass it through, or -- to end brig's flags", a, a)
 				}
-				return mine, ref, agentTail(args[i:]), nil
+				return mine, ref, "", agentTail(args[i:]), nil
 			}
 			// Read off the spelling rather than the whole token, so the
 			// inline form is the same flag here as it is everywhere else, and
@@ -716,7 +744,41 @@ func split(args []string) (mine []string, ref session.Ref, tail []string, err er
 			}
 		}
 	}
-	return mine, ref, nil, nil
+	return mine, ref, "", nil, nil
+}
+
+// projectFor decides what a verb does with the second bare word on its line.
+//
+// run is the only verb that takes a positional. On sh -- and on exec and
+// shell, the two spellings it replaces -- a second bare word is already the
+// guest command, and on the verbs that take a ref and nothing more it is still
+// a stray token for rejectTail to name. Both of those get the word back at the
+// head of their tail, exactly where split found it, so nothing but run changes.
+func projectFor(verb, word string, tail []string) (project string, rest []string) {
+	if word == "" || verb == "run" {
+		return word, tail
+	}
+	return "", append([]string{word}, tail...)
+}
+
+// warnPositionalMeaning names both readings of a second bare word, for the one
+// release in which it changes meaning.
+//
+// Until now that word ended brig's parsing and reached the AGENT: `brig run
+// claude .` passed "." to claude. It is the project directory brig mounts from
+// here on, so anyone who was passing a positional through has a line that means
+// something else now -- and this is a breaking change however additive the
+// feature looks. Naming the reading it lost, beside the one it gained, is what
+// lets somebody pick the one they meant.
+//
+// Only a word brig read itself. A tail after -- was declared the agent's by the
+// person typing it, so there is nothing to point out -- the same rule agentTail
+// follows.
+func warnPositionalMeaning(word string) {
+	fmt.Fprintf(os.Stderr, "brig: `%s` is now the project directory this run mounts, "+
+		"and brig starts the agent in it. It used to be the agent's first argument "+
+		"instead. If that is what you meant, put it after --: `brig run <ref> -- %s`. "+
+		"This notice goes in the next release.\n", word, word)
 }
 
 // agentTail hands the tail back as the agent's, saying so for any of brig's own
@@ -768,10 +830,14 @@ func rejectTail(verb string, tail []string) error {
 // whatever remains for the agent. split decides where brig's arguments end;
 // the flag package turns them into values.
 func parse(args []string) (o options, profileName string, tail []string, err error) {
-	mine, ref, tail, err := split(args)
+	mine, ref, word, tail, err := split(args)
 	if err != nil {
 		return options{}, "", nil, err
 	}
+	// The positional as split found it. Which verb may keep it is the caller's
+	// decision, not this one's: parse reads one line's flags and does not know
+	// the verb they were typed under.
+	o.load.Project = word
 
 	fs := flag.NewFlagSet("brig", flag.ContinueOnError)
 	// The flag package's own output is a usage dump on every error. brig's
@@ -786,6 +852,10 @@ func parse(args []string) (o options, profileName string, tail []string, err err
 	}{
 		{"name", "n", func(n string) { fs.StringVar(&o.load.Name, n, "", "") }},
 		{"image", "t", func(n string) { fs.StringVar(&o.load.Image, n, "", "") }},
+		// Three spellings of the guest home: --home is the one, -w and
+		// --workspace are what it replaces. They share the value, so the last
+		// one on the line wins.
+		{"home", "", func(n string) { fs.StringVar(&o.load.Workspace, n, "", "") }},
 		{"workspace", "w", func(n string) { fs.StringVar(&o.load.Workspace, n, "", "") }},
 		// Two long spellings of one value: --mem is the one the usage text
 		// gives, --memory is what it was called first. They share mem, so the

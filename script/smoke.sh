@@ -47,11 +47,19 @@ case "$verb" in
   run)
     # Remember the instance name and the shared directory the way a real
     # runtime binds them at boot.
+    #
+    # Every share is logged, and the FIRST one is the home: brig puts the
+    # workspace first and a project after it, and it is the home the marker is
+    # read back out of below.
     name=""; share=""
+    : > "$STUB_STATE.shares"
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
-        --shared-dir) share="$2"; shift 2 ;;
+        --shared-dir)
+          printf '%s\n' "$2" >> "$STUB_STATE.shares"
+          [ -z "$share" ] && share="$2"
+          shift 2 ;;
         *) shift ;;
       esac
     done
@@ -238,6 +246,136 @@ CLAUDE_CODE_OAUTH_TOKEN=env-token-secret "$WORK/brig" run claude -p again \
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "a second run booted a second sandbox" \
   || ok "a running sandbox is reused, not rebooted"
+
+echo "== project =="
+# The positional: `brig run <ref> <project>` mounts that directory at
+# /work/<basename>, OUTSIDE the guest home, and starts the agent in it. Outside
+# is the property that matters -- the home is the agent's home, dotfiles and
+# state included, and a project under it could be mistaken for either.
+"$WORK/brig" rm --all > /dev/null 2>&1
+PROJ="$WORK/myproject"
+mkdir -p "$PROJ"
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude "$PROJ" -p hi > "$WORK/proj.out" 2> "$WORK/proj.err"
+rc=$?
+[ "$rc" = 0 ] && ok "a run with a project exits 0" \
+  || bad "a run with a project exits 0 -- got $rc: $(cat "$WORK/proj.err")"
+grep -q -- "--shared-dir $PROJ:/work/myproject" "$STUB_LOG" \
+  && ok "the project is mounted at /work/<basename>" \
+  || bad "the project is mounted at /work/<basename> -- got: $(grep '^argv: run' "$STUB_LOG")"
+grep -q -- "--shared-dir $WS:/home/claude" "$STUB_LOG" \
+  && ok "the home share is unchanged by a project" \
+  || bad "the home share is unchanged by a project -- got: $(grep '^argv: run' "$STUB_LOG")"
+grep -q -- '--cwd /work/myproject' "$STUB_LOG" \
+  && ok "the agent starts in the project" \
+  || bad "the agent starts in the project -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+grep -q -- '-- claude -p hi' "$STUB_LOG" \
+  && ok "agent arguments still pass through beside a project" \
+  || bad "agent arguments still pass through beside a project"
+grep -q "^PROJECT .*myproject (read-write, mounted at /work/myproject)" "$WORK/proj.err" \
+  && ok "the envelope names the project" \
+  || bad "the envelope names the project -- got: $(cat "$WORK/proj.err")"
+grep -q "\"project\": \"$PROJ\"" "$BRIG_STATE_DIR/sessions.json" \
+  && ok "the index records the project the session ran with" \
+  || bad "the index records the project -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
+
+# The one-release warning. That word used to reach the AGENT, so giving it a
+# new meaning is a breaking change, and the notice names both readings so
+# somebody can pick the one they meant before it goes.
+grep -q 'project directory this run mounts' "$WORK/proj.err" \
+  && ok "a second bare word says what it now means" \
+  || bad "a second bare word says what it now means -- got: $(cat "$WORK/proj.err")"
+grep -q -- 'put it after --' "$WORK/proj.err" \
+  && ok "the notice names the way to keep the old reading" \
+  || bad "the notice names the way to keep the old reading"
+
+# A share is bound at boot and cannot be attached to a live sandbox, so the
+# same project reuses the sandbox and a different one recreates it.
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude "$PROJ" -p again > /dev/null 2>&1
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "the same project restarted the sandbox" \
+  || ok "the same project reuses the sandbox"
+OTHER="$WORK/otherproject"
+mkdir -p "$OTHER"
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude "$OTHER" -p again > /dev/null 2> "$WORK/reproj.err"
+grep -q '^argv: run ' "$STUB_LOG" \
+  && ok "a different project recreates the sandbox" \
+  || bad "a different project recreates the sandbox -- got: $(cat "$WORK/reproj.err")"
+grep -q -- "--shared-dir $OTHER:/work/otherproject" "$STUB_LOG" \
+  && ok "the recreated sandbox mounts the new project" \
+  || bad "the recreated sandbox mounts the new project -- got: $(grep '^argv: run' "$STUB_LOG")"
+
+# And after an explicit -- there is nothing to point out: the line said the
+# word is the agent's, and it still reaches the agent untouched. This run names
+# no project, so it recreates the sandbox the block above left mounting one --
+# which is the same rule, read in the other direction.
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude --quiet -- --version > /dev/null 2> "$WORK/dashdash.err"
+grep -q 'project directory this run mounts' "$WORK/dashdash.err" \
+  && bad "a tail after -- was warned about -- got: $(cat "$WORK/dashdash.err")" \
+  || ok "a tail after -- is not warned about"
+grep -q -- '-- claude --version' "$STUB_LOG" \
+  && ok "a word after -- still reaches the agent" \
+  || bad "a word after -- still reaches the agent -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+
+# A word that names no directory is refused rather than mounted, and the
+# refusal carries the way past it. This is the line the grammar change breaks,
+# so it has to fail loudly instead of booting something odd.
+out="$("$WORK/brig" run claude notadirectory -p hi 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "a project that is not a directory refuses the run" \
+  || bad "a project that is not a directory started anyway: $out"
+case "$out" in
+  *"put it after --"*) ok "the refusal names the way past it" ;;
+  *) bad "the refusal names the way past it -- got: $out" ;;
+esac
+
+# sh takes no positional: a second bare word there is already the guest
+# command, and this change must not take it away.
+"$WORK/brig" rm --all > /dev/null 2>&1
+"$WORK/brig" run claude -d > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" sh claude echo hi > /dev/null 2> "$WORK/shproj.err"
+grep -q -- '-- bash -lc echo hi' "$STUB_LOG" \
+  && ok "sh still reads a second bare word as the guest command" \
+  || bad "sh still reads a second bare word as the guest command -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+grep -q 'project directory this run mounts' "$WORK/shproj.err" \
+  && bad "sh warned about its own guest command" \
+  || ok "sh says nothing about its guest command"
+"$WORK/brig" rm --all > /dev/null 2>&1
+
+echo "== the home flag =="
+# --home is what sets the guest home now. -w and --workspace keep working and
+# each say the one word that replaces them: a line that works today has to keep
+# working, and a spelling that works silently never teaches anyone the new one.
+HOMEDIR="$WORK/named-home"
+: > "$STUB_LOG"
+env -u BRIG_WORKSPACE "$WORK/brig" run claude --home "$HOMEDIR" -d \
+  > /dev/null 2> "$WORK/home.err"
+grep -q -- "--shared-dir $HOMEDIR:/home/claude" "$STUB_LOG" \
+  && ok "--home is mounted as the guest home" \
+  || bad "--home is mounted as the guest home -- got: $(grep '^argv: run' "$STUB_LOG")"
+grep -q 'is now' "$WORK/home.err" \
+  && bad "--home printed a deprecation notice -- got: $(cat "$WORK/home.err")" \
+  || ok "--home prints no notice"
+"$WORK/brig" rm --all > /dev/null 2>&1
+for spelling in -w --workspace; do
+  : > "$STUB_LOG"
+  env -u BRIG_WORKSPACE "$WORK/brig" run claude "$spelling" "$HOMEDIR" -d \
+    > /dev/null 2> "$WORK/oldhome.err"
+  grep -q -- "--shared-dir $HOMEDIR:/home/claude" "$STUB_LOG" \
+    && ok "$spelling still sets the guest home" \
+    || bad "$spelling still sets the guest home -- got: $(grep '^argv: run' "$STUB_LOG")"
+  grep -q "is now \`--home\`" "$WORK/oldhome.err" \
+    && ok "$spelling names --home as its replacement" \
+    || bad "$spelling names --home -- got: $(cat "$WORK/oldhome.err")"
+  "$WORK/brig" rm --all > /dev/null 2>&1
+done
 
 echo "== network =="
 # The posture the run resolved to is the posture the runtime is told about.
@@ -894,8 +1032,11 @@ grep -q 'ghcr.io/me/img:latest' "$STUB_LOG" \
 "$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== ubuntu =="
+# The command goes after --, because run's second bare word is the project
+# directory now: for a shell profile the trailing words are the guest command,
+# and -- is what still says so.
 : > "$STUB_LOG"
-"$WORK/brig" run ubuntu uname -a > /dev/null 2>&1
+"$WORK/brig" run ubuntu -- uname -a > /dev/null 2>&1
 grep -q -- '-- bash -lc uname -a' "$STUB_LOG" \
   && ok "a shell profile runs the command in a shell" \
   || bad "a shell profile runs the command in a shell"
