@@ -71,6 +71,8 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --image IMAGE      guest image to boot
       --home PATH        host directory to mount as the guest home
                          (-w and --workspace still work, with a note)
+      --no-project       with run: this session's project is not mounted,
+                         whatever it ran with last
       --mem MB           guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
@@ -315,6 +317,19 @@ func run(args []string) error {
 	// split found it. Said out loud while the meaning is changing, and only
 	// when the word survived as a project -- which is only on run.
 	opts.load.Project, tail = projectFor(verb, opts.load.Project, tail)
+	// Both at once asks for two contradictory things, and either winner would
+	// be silent about the other: the directory would be mounted with
+	// --no-project ignored, or dropped with the word the line names ignored.
+	if opts.load.Project != "" && opts.load.NoProject {
+		return usagef("--no-project and the project %q ask for different things; "+
+			"drop one", opts.load.Project)
+	}
+	// --no-project is run's, like the positional it answers. Elsewhere it is a
+	// flag that does nothing, which is worse than one that is refused.
+	if opts.load.NoProject && verb != "run" {
+		return usagef("--no-project belongs to `brig run`, not `brig %s`. "+
+			"A session runs without its project from the next `brig run --no-project` onwards", verb)
+	}
 	if opts.load.Project != "" {
 		warnPositionalMeaning(opts.load.Project)
 	}
@@ -539,6 +554,10 @@ var brigFlags = []struct {
 	{long: "mem", value: true, position: posRun},
 	{long: "memory", short: "m", value: true, position: posRun},
 	{long: "cpus", value: true, position: posRun},
+	// --no-project detaches the project a session is carrying. It takes no
+	// value: a directory is what the positional says, and this says the
+	// absence of one.
+	{long: "no-project", position: posRun},
 	{long: "detach", short: "d", position: posRun},
 	{long: "skills", position: posRun},
 	{long: "network", value: true, position: posRun},
@@ -868,6 +887,8 @@ func parse(args []string) (o options, profileName string, tail []string, err err
 		// Opt-in, and only ever opt-in: this hands the guest the user's real
 		// skills and plugins, read-only.
 		{"skills", "", func(n string) { fs.BoolVar(&o.load.Skills, n, false, "") }},
+		// Run this session with no project, whatever it ran with last.
+		{"no-project", "", func(n string) { fs.BoolVar(&o.load.NoProject, n, false, "") }},
 		// The posture this run takes: shared or offline. Refused by name later
 		// if it is neither, in the one place every source of it is resolved.
 		{"network", "", func(n string) { fs.StringVar(&o.load.Network, n, "", "") }},

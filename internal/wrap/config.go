@@ -177,8 +177,14 @@ type Options struct {
 	// the directory the command was invoked from, because `brig run claude .`
 	// is the line the positional exists for.
 	Project string
-	Mem     int
-	CPUs    int
+	// NoProject asks for this run to have no project at all, and is the only
+	// way to say so once a project is remembered: a positional names a
+	// directory, and no directory names absence. Without it a session handed a
+	// project keeps it for the rest of its life, since every later flagless
+	// verb inherits it.
+	NoProject bool
+	Mem       int
+	CPUs      int
 	// Skills opts in to projecting the host's own agent config (skills,
 	// plugins) read-only into the guest. Off unless asked for: it is the
 	// user's real config, and handing it to a sandbox should be a decision.
@@ -380,11 +386,25 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// destroyed the mount, the guest's memory-only state and the index entry
 	// recording it. Looked up by ref and sandbox, so it has to happen here,
 	// after both are resolved. See rememberedProject and projectShareStale.
-	if o.Project != "" {
+	//
+	// --no-project is the third answer, and the reason it exists: inheriting
+	// left no way to say "not this time". It is read here rather than as an
+	// empty Project, because empty is what an invocation that said nothing
+	// looks like and those two have to stay apart.
+	switch {
+	case o.NoProject:
+		// Nothing to mount, and nothing remembered is consulted. The sandbox
+		// recreates without the share, which is projectShareStale's
+		// c.Project == "" branch reached deliberately for once.
+	case o.Project != "":
 		if err := c.mountProject(o.Project); err != nil {
 			return nil, err
 		}
-	} else if remembered := rememberedProject(sessionKey(t.Name, slug), vmName); remembered != "" {
+	default:
+		remembered := rememberedProject(sessionKey(t.Name, slug), vmName)
+		if remembered == "" {
+			break
+		}
 		// The error is dropped rather than returned, which is the one place the
 		// two steps differ. A directory this line never named is not the user's
 		// to fix, so a remembered project that has since been renamed or
