@@ -120,6 +120,62 @@ func TestAProjectThatIsNotADirectoryIsRefused(t *testing.T) {
 	}
 }
 
+// A link is followed before the root is ruled out, and mounted under the name
+// that was typed.
+//
+// Both halves are the point. filepath.Abs cleans a path lexically and stops
+// there, so `~/mnt -> /` reached the guard as "mnt" and passed it: the guard
+// was reading the spelling rather than the directory. A path is what it
+// resolves to, and that is what has to be checked -- otherwise a link is a way
+// around every rule the guard makes, and the person who follows one is not
+// necessarily the person who made it.
+//
+// The mount keeps the typed basename all the same. The link is the name its
+// owner uses, so /work/<link> is the path the agent should see; resolving that
+// too would rename every legitimate link's mount to whatever it points at.
+func TestALinkIsResolvedBeforeTheRootGuardAndMountedUnderItsOwnName(t *testing.T) {
+	isolateState(t)
+	dir := t.TempDir()
+
+	root := filepath.Join(dir, "myroot")
+	if err := os.Symlink("/", root); err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{}
+	err := c.mountProject(root)
+	if err == nil {
+		t.Fatalf("a link to / was accepted, and mounted at %q", c.GuestProject)
+	}
+	// Named as what it resolves to as well as what was typed: "myroot has no
+	// name to mount it under" would read as nonsense on a path that plainly
+	// has one.
+	if !strings.Contains(err.Error(), root) || !strings.Contains(err.Error(), "filesystem root") {
+		t.Errorf("the refusal does not say what was typed and why it fails: %v", err)
+	}
+
+	// An ordinary link is not collateral: it mounts, under its own name, from
+	// the directory it resolves to.
+	target := filepath.Join(dir, "elsewhere")
+	mustMkdir(t, target)
+	link := filepath.Join(dir, "myproject")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	c = &Config{}
+	mustMountProject(t, c, link)
+	if want := "/work/myproject"; c.GuestProject != want {
+		t.Errorf("the link mounted at %q, want %q -- the name typed, not the one it points at",
+			c.GuestProject, want)
+	}
+	// And the host side is the path as typed. The link is what the share is
+	// asked for and what the VMM resolves; recording the target instead would
+	// rewrite every path under a symlinked parent -- /tmp on this host among
+	// them -- for no gain the mount does not already give.
+	if c.Project != link {
+		t.Errorf("the share exports %q, want the link as typed %q", c.Project, link)
+	}
+}
+
 // The project is a SECOND share. The home share is what makes the session the
 // session, so it stays exactly where it was -- first, and mounting the
 // workspace at the guest home.
