@@ -140,3 +140,42 @@ func TestVerblessRefIsLastInTheChain(t *testing.T) {
 		t.Errorf("brig nosuchthing: %v, want it to report an unknown command", err)
 	}
 }
+
+// A ref-shaped token that brig cannot use is diagnosed as the ref it plainly
+// is, and not as a command nobody typed.
+//
+// The separator is what settles it. '@' is brig's, reserved in
+// internal/session for exactly one job, and no verb has one -- so a token
+// carrying one has a single possible reading, and "unknown command" would be a
+// wrong answer rather than a cautious one. The bare word above keeps the
+// cautious answer, because `brig nosuchthing` really could be either.
+//
+// Asserted as equality with the verbed form rather than against fixed text.
+// The two spellings ask the same question, so a change to how brig answers it
+// has to reach both or the pair stops matching -- which no assertion on the
+// wording of one of them would catch.
+func TestARefShapedTokenIsDiagnosedAsARef(t *testing.T) {
+	for _, ref := range []string{
+		"claude@BAD",      // a label that is not slug-clean
+		"claude@a@b",      // two separators
+		"claude@",         // a label the typing stopped short of
+		"@refactor",       // no agent
+		"nosuch@refactor", // an agent brig does not have
+	} {
+		scratchHost(t)
+		verbless := run([]string{ref})
+		scratchHost(t)
+		verbed := run([]string{"run", ref})
+
+		if verbless == nil || verbed == nil {
+			t.Errorf("brig %s was accepted", ref)
+			continue
+		}
+		if verbless.Error() != verbed.Error() {
+			t.Errorf("brig %s said\n  %v\nbut brig run %s said\n  %v", ref, verbless, ref, verbed)
+		}
+		if strings.Contains(verbless.Error(), "unknown command") {
+			t.Errorf("brig %s was reported as an unknown command: %v", ref, verbless)
+		}
+	}
+}

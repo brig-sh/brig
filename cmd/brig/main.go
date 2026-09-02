@@ -281,13 +281,25 @@ func run(args []string) error {
 		// is teaching it.
 		ref, refErr := session.ParseRef(verb)
 		_, known := profile.Lookup(ref.Agent)
-		if refErr != nil || !known {
-			// Reported as a command and not as a ref, whichever of the two it
-			// failed as. The reader typed the token where a command goes, and
-			// the ref parser's complaint about a mistyped verb would answer a
-			// question nobody asked.
+		if (refErr != nil || !known) && !session.IsRefShaped(verb) {
+			// A bare word that failed is reported as a command and not as a
+			// ref. The reader typed it where a command goes, and it is a
+			// mistyped verb as readily as a mistyped agent -- so the ref
+			// parser's complaint would answer a question nobody asked.
 			return fmt.Errorf("unknown command %q (try `brig help`)", verb)
 		}
+		// A token carrying the separator is a ref that did not work, because
+		// nothing else it could be has an '@' in it. Answering that with the
+		// vocabulary of commands would send the reader looking for a verb they
+		// did not type, past a diagnosis that already names what is wrong with
+		// the ref.
+		if refErr != nil {
+			return refErr
+		}
+		// An agent brig does not have falls through to the run line rather
+		// than being reported here, which is where the verbed form reports it
+		// too. One message, not two spellings of one that have to be kept in
+		// step.
 		verb, rest = "run", verbLine
 	}
 
