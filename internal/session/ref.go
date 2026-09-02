@@ -90,6 +90,18 @@ func ParseRef(s string) (Ref, error) {
 	return Ref{Agent: agent, Label: label}, nil
 }
 
+// IsRefShaped reports whether a token carries the separator, which is the one
+// thing that tells a mistyped ref from a mistyped verb.
+//
+// It is here rather than a strings.Contains at the call site so that refSep
+// keeps one definition. The question it answers is only worth asking because
+// the separator is brig's: no verb has one, and ParseRef cuts on the first, so
+// an agent name cannot have one either. A token with an '@' in it therefore
+// has a single possible reading, however badly it is spelled.
+func IsRefShaped(s string) bool {
+	return strings.Contains(s, refSep)
+}
+
 // String writes a ref the way it is typed, so ParseRef reads back what String
 // prints. A ref with no label is the agent on its own rather than an agent
 // with a bare '@' after it, which ParseRef refuses.
