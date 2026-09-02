@@ -244,7 +244,7 @@ func TestDeprecatedShortFlagsStillWork(t *testing.T) {
 			o   options
 			err error
 		)
-		warning := captureStderr(t, func() { o, _, _, err = parse(c.args) })
+		warning := captureStderr(t, func() { o, _, _, err = parse("run", c.args) })
 		if err != nil {
 			t.Errorf("parse(%q): %v", c.args, err)
 			continue
@@ -262,7 +262,7 @@ func TestDeprecatedShortFlagsStillWork(t *testing.T) {
 	}
 	// The long spellings are current, so they say nothing.
 	warning := captureStderr(t, func() {
-		if _, _, _, err := parse([]string{"claude", "--image", "img:1", "--mem", "8"}); err != nil {
+		if _, _, _, err := parse("run", []string{"claude", "--image", "img:1", "--mem", "8"}); err != nil {
 			t.Errorf("parse: %v", err)
 		}
 	})
@@ -272,7 +272,7 @@ func TestDeprecatedShortFlagsStillWork(t *testing.T) {
 	// A value that happens to be spelled like a deprecated flag is a value.
 	// Warning on it would send the reader looking for a flag they did not type.
 	warning = captureStderr(t, func() {
-		if _, _, _, err := parse([]string{"claude", "--name", "-t"}); err != nil {
+		if _, _, _, err := parse("run", []string{"claude", "--name", "-t"}); err != nil {
 			t.Errorf("parse: %v", err)
 		}
 	})
@@ -362,7 +362,7 @@ func TestNameFlagRetiresOntoTheLabel(t *testing.T) {
 			o   options
 			err error
 		)
-		notice := captureStderr(t, func() { o, _, _, err = parse(c.args) })
+		notice := captureStderr(t, func() { o, _, _, err = parse("run", c.args) })
 		if err != nil {
 			t.Errorf("parse(%q): %v", c.args, err)
 			continue
@@ -379,7 +379,7 @@ func TestNameFlagRetiresOntoTheLabel(t *testing.T) {
 	}
 	// The label form is the current spelling, so it says nothing.
 	notice := captureStderr(t, func() {
-		o, _, _, err := parse([]string{"claude@refactor"})
+		o, _, _, err := parse("run", []string{"claude@refactor"})
 		if err != nil {
 			t.Errorf("parse: %v", err)
 		}

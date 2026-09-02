@@ -309,14 +309,10 @@ func run(args []string) error {
 		verb, rest = "run", verbLine
 	}
 
-	opts, profileName, tail, err := parse(rest)
+	opts, profileName, tail, err := parse(verb, rest)
 	if err != nil {
 		return err
 	}
-	// Only run takes a positional; every other verb gets the word back where
-	// split found it. Said out loud while the meaning is changing, and only
-	// when the word survived as a project -- which is only on run.
-	opts.load.Project, tail = projectFor(verb, opts.load.Project, tail)
 	// Both at once asks for two contradictory things, and either winner would
 	// be silent about the other: the directory would be mounted with
 	// --no-project ignored, or dropped with the word the line names ignored.
@@ -680,12 +676,12 @@ func parseGlobal(args []string) (rest []string, err error) {
 }
 
 // split divides a run line into brig's own arguments, the session ref, the
-// second bare word, and the agent's tail.
+// project positional, and the agent's tail.
 //
-// The second bare word is handed back on its own rather than at the head of the
-// tail because what it means depends on the verb, and split does not know the
-// verb: on run it is the project directory to mount, and on sh it is the guest
-// command. projectFor is where that is decided.
+// The verb is a parameter because only run takes a positional: on run the
+// second bare word is a directory to mount, and on sh it is the start of the
+// guest command. Every other verb gets that word back at the head of its tail,
+// where rejectTail names it.
 //
 // This exists because the flag package stops at the first non-flag argument
 // and treats an unknown flag as an error, and brig's line is the opposite on
@@ -694,12 +690,16 @@ func parseGlobal(args []string) (rest []string, err error) {
 // runs the agent with -p hi. So the boundary is decided here, from the table,
 // and the flag package parses what is left of it.
 //
-// The state that decides it is one bit: has the ref been passed. Before it,
-// brig owns every token and an unknown flag is a brig flag that does not
-// exist. After it, brig still answers to its own flags -- `brig run claude -q`
-// is a line that works today -- but the first token it does not own ends its
-// parsing and everything from there is the agent's, warnings included.
-func split(args []string) (mine []string, ref session.Ref, word string, tail []string, err error) {
+// The rule is that the first token brig does not own ends its parsing and
+// everything from there is the agent's, warnings included. Before the ref brig
+// owns every token, so an unknown flag there is a brig flag that does not
+// exist rather than something to forward. After the ref brig still answers to
+// its own flags -- `brig run claude -q` -- and on run it owns the positional
+// too, so that does not end the parsing either: `brig run claude ~/proj --mem
+// 4096 -d` is read by brig throughout. The next bare word after the positional
+// does end it, which is where the agent's argv starts.
+func split(verb string, args []string) (mine []string, ref session.Ref, word string, tail []string, err error) {
+	takesProject := verb == "run"
 	passed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -709,7 +709,11 @@ func split(args []string) (mine []string, ref session.Ref, word string, tail []s
 			// like one of brig's flags still reaches the agent. Nothing is
 			// said about what follows: the line already said it -- which is
 			// also why no word after it is ever read as a project.
-			return mine, ref, "", args[i+1:], nil
+			//
+			// A project already read stands. `brig run claude ~/proj -- pwd`
+			// named one before the marker, and the marker speaks for what
+			// comes after it rather than undoing what came before.
+			return mine, ref, word, args[i+1:], nil
 		case !strings.HasPrefix(a, "-"):
 			if !passed {
 				if ref, err = session.ParseRef(a); err != nil {
@@ -722,11 +726,14 @@ func split(args []string) (mine []string, ref session.Ref, word string, tail []s
 				passed = true
 				continue
 			}
-			// A second bare word, and it is still where brig stops reading its
-			// own line: the word has a meaning of its own now, and brig does
-			// not resume after it, so `brig run claude . -q` leaves -q the
-			// agent's exactly as it always did. agentTail says so.
-			return mine, ref, a, agentTail(args[i+1:]), nil
+			// A bare word after the ref. On run the first one is the
+			// project, which brig owns and so reads past; anywhere else, and
+			// for the next one on run, it is where the agent's argv starts.
+			if takesProject && word == "" {
+				word = a
+				continue
+			}
+			return mine, ref, word, agentTail(args[i:]), nil
 		default:
 			isOurs, takesValue := ours(a, posRun)
 			if !isOurs {
@@ -743,7 +750,7 @@ func split(args []string) (mine []string, ref session.Ref, word string, tail []s
 						"brig's own flags come before the profile and the agent's after it; "+
 						"put %q after the profile to pass it through, or -- to end brig's flags", a, a)
 				}
-				return mine, ref, "", agentTail(args[i:]), nil
+				return mine, ref, word, agentTail(args[i:]), nil
 			}
 			// Read off the spelling rather than the whole token, so the
 			// inline form is the same flag here as it is everywhere else, and
@@ -763,21 +770,7 @@ func split(args []string) (mine []string, ref session.Ref, word string, tail []s
 			}
 		}
 	}
-	return mine, ref, "", nil, nil
-}
-
-// projectFor decides what a verb does with the second bare word on its line.
-//
-// run is the only verb that takes a positional. On sh -- and on exec and
-// shell, the two spellings it replaces -- a second bare word is already the
-// guest command, and on the verbs that take a ref and nothing more it is still
-// a stray token for rejectTail to name. Both of those get the word back at the
-// head of their tail, exactly where split found it, so nothing but run changes.
-func projectFor(verb, word string, tail []string) (project string, rest []string) {
-	if word == "" || verb == "run" {
-		return word, tail
-	}
-	return "", append([]string{word}, tail...)
+	return mine, ref, word, nil, nil
 }
 
 // warnPositionalMeaning names both readings of a second bare word, for the one
@@ -848,14 +841,11 @@ func rejectTail(verb string, tail []string) error {
 // parse reads brig's own flags off the run line in any order and leaves
 // whatever remains for the agent. split decides where brig's arguments end;
 // the flag package turns them into values.
-func parse(args []string) (o options, profileName string, tail []string, err error) {
-	mine, ref, word, tail, err := split(args)
+func parse(verb string, args []string) (o options, profileName string, tail []string, err error) {
+	mine, ref, word, tail, err := split(verb, args)
 	if err != nil {
 		return options{}, "", nil, err
 	}
-	// The positional as split found it. Which verb may keep it is the caller's
-	// decision, not this one's: parse reads one line's flags and does not know
-	// the verb they were typed under.
 	o.load.Project = word
 
 	fs := flag.NewFlagSet("brig", flag.ContinueOnError)
