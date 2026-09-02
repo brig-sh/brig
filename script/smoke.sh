@@ -95,8 +95,23 @@ case "$verb" in
         # `stat -f -c %T <path>` asks what a path sits on; `stat -c ...` asks
         # about the file itself.
         if [ "${2:-}" = -f ]; then
+          # A path inherits the filesystem of the nearest mount point above
+          # it, so walk up until one matches rather than asking only about the
+          # path itself: a credential file created inside a tmpfs has no mount
+          # entry of its own, and answering virtiofs for it is a fstype the
+          # guest would never report. Match on field 5, the mount point --
+          # field 4 is the mount's root and reads `/` on every line, so a
+          # looser match answers for a path under no mount at all.
           target="${5:-}"
-          line=$(grep " $target " "$STUB_STATE.mounts" 2>/dev/null | tail -1)
+          line=""
+          probe="$target"
+          while [ -n "$probe" ]; do
+            line=$(awk -v p="$probe" '$5 == p' "$STUB_STATE.mounts" 2>/dev/null | tail -1)
+            [ -n "$line" ] && break
+            [ "$probe" = / ] && break
+            probe="${probe%/*}"
+            [ -z "$probe" ] && probe=/
+          done
           case "$line" in
             *tmpfs) printf 'tmpfs\n' ;;
             *fuseblk) printf 'fuseblk\n' ;;
