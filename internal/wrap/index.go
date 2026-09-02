@@ -136,6 +136,11 @@ func indexPath(name string) (string, error) {
 // make a stray file in ~/.brig able to stop every brig command on the host. A
 // file of the wrong shape for V -- an older release's index under a name this
 // one has reused -- is corrupt in exactly that sense and reads as empty too.
+//
+// The nil check is the one corrupt file the unmarshal accepts: the JSON
+// literal null parses without error and leaves the map nil, which would be a
+// panic at the first write rather than an empty read -- a louder version of
+// the failure this tolerance exists to avoid.
 func readIndex[V any](name string) map[string]V {
 	index := map[string]V{}
 	path, err := indexPath(name)
@@ -146,7 +151,7 @@ func readIndex[V any](name string) map[string]V {
 	if err != nil {
 		return index
 	}
-	if err := json.Unmarshal(blob, &index); err != nil {
+	if err := json.Unmarshal(blob, &index); err != nil || index == nil {
 		return map[string]V{}
 	}
 	return index

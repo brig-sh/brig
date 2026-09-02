@@ -382,6 +382,44 @@ func TestAnUnusableIndexIsIgnoredRatherThanFatal(t *testing.T) {
 	}
 }
 
+// The JSON literal `null` is the one corrupt file the unmarshal accepts: it
+// parses without error and leaves the map nil, so a reader that only checks
+// the error hands back a map that cannot be written to. Both writes above are
+// then a panic -- which is a louder version of exactly the failure the
+// tolerant read exists to avoid, since a stray file in ~/.brig would stop
+// every brig command on the host.
+func TestAnIndexHoldingJSONNullIsIgnoredRatherThanFatal(t *testing.T) {
+	dir := isolateState(t)
+
+	for _, name := range []string{sessionIndexName, slugClaimIndexName} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("null\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The read itself, which is where the nil would come from.
+	if index := readSessionIndex(); index == nil {
+		t.Error("a session index holding null read back as a nil map")
+	}
+	if index := readIndex[string](slugClaimIndexName); index == nil {
+		t.Error("a claim index holding null read back as a nil map")
+	}
+
+	// And the two writes that would take the nil, which is where the cost of
+	// it actually lands.
+	c := mustLoad(t, Options{Name: "rc23test"})
+	c.rememberSession()
+	if got := WorkspaceOfSandbox(c.VMName); got != c.Workspace {
+		t.Errorf("the session was recorded as %q, want %q", got, c.Workspace)
+	}
+	if err := c.claimSlug(); err != nil {
+		t.Errorf("the claim over a null index was refused: %v", err)
+	}
+	if got := readIndex[string](slugClaimIndexName)[c.VMName]; got != c.RawName {
+		t.Errorf("the sandbox was claimed by %q, want %q", got, c.RawName)
+	}
+}
+
 // Every entry survives a write, so recording one session does not cost another
 // its own -- the file is read, edited and written back whole.
 func TestRecordingOneSessionKeepsTheOthers(t *testing.T) {
