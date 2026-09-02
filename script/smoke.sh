@@ -10,6 +10,17 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# Nothing here is answered by a person. Several cases assert the outcome brig
+# reaches when it has nobody to ask -- a bad signature refused, a profile rm
+# that will not guess -- and brig decides that by looking at its own stdin.
+# `out="$(brig ... 2>&1)"` redirects stdout and stderr and leaves stdin alone,
+# so run from a terminal those same cases found one, printed a [y/N] into the
+# captured stream where nobody could see it, and blocked on the answer. CI has
+# no terminal and never hit it. Detach stdin once, here, so the script behaves
+# the same either way; the two `profile import -` cases feed brig through a
+# pipe and supply their own.
+exec < /dev/null
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export STUB_LOG="$WORK/argv.log"
