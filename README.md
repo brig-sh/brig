@@ -167,14 +167,15 @@ of place. Left of the verb are brig's global flags, a closed set -- an unknown
 flag there is a usage error naming the token, rather than an operand quietly
 swallowed. Between the verb and the agent are the run-line flags below. Right of
 the agent the vocabulary is the agent's, and `--` ends brig's parsing outright,
-so an agent flag spelled like one of brig's still reaches it. The one exception
-is `run`'s project directory, which is the second bare word on the line -- see
-[The project you name](#the-project-you-name).
+so an agent flag spelled like one of brig's still reaches it.
 
 brig does still read its own flags after the agent, because `brig run claude -q`
-is a line that works. But once an unknown token has ended brig's reading, a brig
-flag further along belongs to the agent -- and brig now says so, without taking
-the token, so a line that works today keeps working.
+is a line that works. What ends brig's reading is the first token it does not
+own. On `run` that is not the project directory -- the second bare word is
+brig's own operand, so brig reads past it and on to the next token; see
+[The project you name](#the-project-you-name). Once an unknown token has ended
+brig's reading, a brig flag further along belongs to the agent -- and brig says
+so, without taking the token, so a line that works today keeps working.
 
 | flag | what it does |
 | --- | --- |
@@ -243,14 +244,17 @@ and cannot be attached to a live guest -- and brig says so when it does. Nothing
 persistent is lost: the home is a host directory that survives the restart, and
 so is each project.
 
-Only `run` takes one. On `sh` the second bare word is already the guest command,
-and brig's own parsing still stops at the project, so a flag after it is the
-agent's exactly as it was before.
+Only `run` takes one. On `sh` the second bare word is already the guest command.
+
+The project is brig's own operand, like the ref, so brig keeps reading its own
+flags after it. Parsing ends at the next bare word or the first flag brig does
+not own -- everything from there is the agent's.
 
 ```bash
-brig run claude ~/src/myproject -p "what does this do?"  # project, then args
-brig run claude -- ~/src/myproject                      # a path FOR the agent
-brig run claude --home ~/homes/claude ~/src/myproject    # both, each named
+brig run claude ~/src/myproject -p "what does this do?"  # project, then agent args
+brig run claude ~/src/myproject --mem 4096 -d            # project, then brig flags
+brig run claude -- ~/src/myproject                       # a path FOR the agent
+brig run claude --home ~/homes/claude ~/src/myproject     # both, each named
 ```
 
 **This is a breaking change, for one release.** That word used to end brig's

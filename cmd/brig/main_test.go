@@ -52,7 +52,7 @@ func TestParse(t *testing.T) {
 		{[]string{"claude", "echo", "hi", "there"}, "", false, "claude", "hi there"},
 	}
 	for _, c := range cases {
-		o, template, tail, err := parse(c.args)
+		o, template, tail, err := parse("run", c.args)
 		if err != nil {
 			t.Errorf("parse(%q) failed: %v", c.args, err)
 			continue
@@ -67,7 +67,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestParseSandboxFlags(t *testing.T) {
-	o, template, tail, err := parse([]string{
+	o, template, tail, err := parse("run", []string{
 		"claude", "-t", "ghcr.io/me/img:latest", "-w", "/tmp/ws",
 		"-m", "8192", "--cpus", "2", "-d", "-p", "hi",
 	})
@@ -91,7 +91,7 @@ func TestParseSandboxFlags(t *testing.T) {
 		t.Errorf("tail = %q", tail)
 	}
 	// The inline form works for every value flag.
-	o, _, _, err = parse([]string{"claude", "--image=x", "--workspace=/w", "--memory=1024", "--cpus=1"})
+	o, _, _, err = parse("run", []string{"claude", "--image=x", "--workspace=/w", "--memory=1024", "--cpus=1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestParseSandboxFlags(t *testing.T) {
 // and never handed to the agent. It suppresses the execution envelope.
 func TestParseReadsQuiet(t *testing.T) {
 	for _, args := range [][]string{{"claude", "--quiet"}, {"claude", "-q"}} {
-		o, name, tail, err := parse(args)
+		o, name, tail, err := parse("run", args)
 		if err != nil {
 			t.Fatalf("parse(%q): %v", args, err)
 		}
@@ -114,10 +114,10 @@ func TestParseReadsQuiet(t *testing.T) {
 	}
 	// Absent by default, and after the agent's arguments begin it is the
 	// agent's word rather than brig's.
-	if o, _, _, _ := parse([]string{"claude"}); o.quiet {
+	if o, _, _, _ := parse("run", []string{"claude"}); o.quiet {
 		t.Error("quiet defaulted to on")
 	}
-	if o, _, _, _ := parse([]string{"claude", "-p", "hi", "--quiet"}); o.quiet {
+	if o, _, _, _ := parse("run", []string{"claude", "-p", "hi", "--quiet"}); o.quiet {
 		t.Error("--quiet was read out of the agent's own arguments")
 	}
 }
@@ -136,7 +136,7 @@ func TestParseRejectsBadValues(t *testing.T) {
 		{"claude", "--image"},     // value flag with nothing after it
 	}
 	for _, args := range cases {
-		if _, _, _, err := parse(args); err == nil {
+		if _, _, _, err := parse("run", args); err == nil {
 			t.Errorf("parse(%q) was accepted", args)
 		}
 	}
@@ -145,7 +145,7 @@ func TestParseRejectsBadValues(t *testing.T) {
 	for _, args := range [][]string{
 		{"claude", "--memory=0"}, {"claude", "--cpus=-1"}, {"claude", "--memory=lots"},
 	} {
-		if _, _, _, err := parse(args); err == nil {
+		if _, _, _, err := parse("run", args); err == nil {
 			t.Errorf("parse(%q) was accepted", args)
 		}
 	}
@@ -169,7 +169,7 @@ func TestParseErrorsNameTheFlagAsTyped(t *testing.T) {
 		{[]string{"claude", "-m", "8", "--memory", "0"}, "--memory needs"},
 	}
 	for _, c := range cases {
-		_, _, _, err := parse(c.args)
+		_, _, _, err := parse("run", c.args)
 		if err == nil {
 			t.Errorf("parse(%q) was accepted", c.args)
 			continue
@@ -197,7 +197,7 @@ func TestParseErrorsQuoteTheValueAsTyped(t *testing.T) {
 		{[]string{"claude", "--memory", "4 for flag x"}, `not "4 for flag x"`},
 		{[]string{"claude", "--detach=1 for x"}, `not "1 for x"`},
 	} {
-		_, _, _, err := parse(c.args)
+		_, _, _, err := parse("run", c.args)
 		if err == nil {
 			t.Errorf("parse(%q) was accepted", c.args)
 			continue
@@ -211,7 +211,7 @@ func TestParseErrorsQuoteTheValueAsTyped(t *testing.T) {
 // Numbers are decimal. Read base-0 instead, --memory 010 boots a guest a fifth
 // of the size asked for and says nothing about it.
 func TestParseReadsNumbersAsDecimal(t *testing.T) {
-	o, _, _, err := parse([]string{"claude", "--memory", "010", "--cpus", "08"})
+	o, _, _, err := parse("run", []string{"claude", "--memory", "010", "--cpus", "08"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestParseHandsUnknownFlagsToTheAgent(t *testing.T) {
 		{[]string{"claude", "-d", "--resume", "-n", "foo"}, "--resume -n foo"},
 	}
 	for _, c := range cases {
-		o, name, tail, err := parse(c.args)
+		o, name, tail, err := parse("run", c.args)
 		if err != nil {
 			t.Errorf("parse(%q): %v", c.args, err)
 			continue
@@ -262,7 +262,7 @@ func TestParseOnlyTakesTheDocumentedSpellings(t *testing.T) {
 		{"claude", "-skills"},
 		{"claude", "-cpus", "2"},
 	} {
-		o, name, tail, err := parse(args)
+		o, name, tail, err := parse("run", args)
 		if err != nil {
 			t.Errorf("parse(%q): %v", args, err)
 			continue
@@ -280,7 +280,7 @@ func TestParseOnlyTakesTheDocumentedSpellings(t *testing.T) {
 // as on would turn the guest's access to the host's skills back on.
 func TestParseBoolsTakeAnInlineValue(t *testing.T) {
 	for _, args := range [][]string{{"claude", "--detach=false"}, {"claude", "--skills=false"}} {
-		o, _, _, err := parse(args)
+		o, _, _, err := parse("run", args)
 		if err != nil {
 			t.Errorf("parse(%q): %v", args, err)
 			continue
@@ -290,7 +290,7 @@ func TestParseBoolsTakeAnInlineValue(t *testing.T) {
 		}
 	}
 	// And a value that is neither is a mistake worth saying out loud.
-	if _, _, _, err := parse([]string{"claude", "--detach=garbage"}); err == nil {
+	if _, _, _, err := parse("run", []string{"claude", "--detach=garbage"}); err == nil {
 		t.Error("--detach=garbage was accepted")
 	} else if !strings.Contains(err.Error(), "--detach") || strings.Contains(err.Error(), "parse error") {
 		t.Errorf("--detach=garbage: %v, want brig's own wording naming --detach", err)
@@ -304,7 +304,7 @@ func TestParseBoolsTakeAnInlineValue(t *testing.T) {
 // project: the flag swallowed -p, so nothing has ended brig's parsing before
 // it.
 func TestParseTakesAValueThatLooksLikeAFlag(t *testing.T) {
-	o, name, tail, err := parse([]string{"claude", "--name", "-p", "hi"})
+	o, name, tail, err := parse("run", []string{"claude", "--name", "-p", "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,18 +322,18 @@ func TestParseTakesAValueThatLooksLikeAFlag(t *testing.T) {
 // --skills hands the guest the user's real skills and plugins, so it is opt-in
 // and must never arrive from anywhere but the flag itself.
 func TestParseSkillsIsOptIn(t *testing.T) {
-	o, _, _, err := parse([]string{"claude"})
+	o, _, _, err := parse("run", []string{"claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.load.Skills {
 		t.Error("skills defaulted to on")
 	}
-	if o, _, _, _ = parse([]string{"claude", "--skills"}); !o.load.Skills {
+	if o, _, _, _ = parse("run", []string{"claude", "--skills"}); !o.load.Skills {
 		t.Error("--skills did not set it")
 	}
 	// After the agent's arguments start it is the agent's word, not brig's.
-	if o, _, _, _ = parse([]string{"claude", "-p", "hi", "--skills"}); o.load.Skills {
+	if o, _, _, _ = parse("run", []string{"claude", "-p", "hi", "--skills"}); o.load.Skills {
 		t.Error("--skills was read out of the agent's own arguments")
 	}
 }

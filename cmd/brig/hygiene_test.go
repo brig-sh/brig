@@ -16,7 +16,7 @@ func TestParseRefusesUnknownFlagBeforeProfile(t *testing.T) {
 		{"--dry-run", "claude"},
 		{"-x", "claude"},
 	} {
-		_, _, _, err := parse(args)
+		_, _, _, err := parse("run", args)
 		if err == nil {
 			t.Errorf("parse(%q) was accepted", args)
 			continue
@@ -34,7 +34,7 @@ func TestParseRefusesUnknownFlagBeforeProfile(t *testing.T) {
 // The same flag once the profile is named is the agent's, and still passes
 // through. This is the line the refusal above must not break.
 func TestParseKeepsUnknownFlagAfterProfileForTheAgent(t *testing.T) {
-	_, name, tail, err := parse([]string{"claude", "--nope"})
+	_, name, tail, err := parse("run", []string{"claude", "--nope"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestLsAndRemoveAllRefuseArguments(t *testing.T) {
 // pair exists because "offline" is the word the request is usually phrased in,
 // and a flag that reads like the sentence is worth two lines of plumbing.
 func TestParseNetworkAndOffline(t *testing.T) {
-	o, profileName, _, err := parse([]string{"--network", "offline", "claude"})
+	o, profileName, _, err := parse("run", []string{"--network", "offline", "claude"})
 	if err != nil {
 		t.Fatalf("--network offline: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestParseNetworkAndOffline(t *testing.T) {
 		t.Errorf("network = %q, want offline", o.load.Network)
 	}
 
-	if o, _, _, err = parse([]string{"--offline", "claude"}); err != nil {
+	if o, _, _, err = parse("run", []string{"--offline", "claude"}); err != nil {
 		t.Fatalf("--offline: %v", err)
 	}
 	if o.load.Network != "offline" {
@@ -129,7 +129,7 @@ func TestParseNetworkAndOffline(t *testing.T) {
 
 	// Saying both, and disagreeing, is a mistake worth naming rather than a
 	// silent precedence puzzle.
-	if _, _, _, err = parse([]string{"--offline", "--network", "shared", "claude"}); err == nil {
+	if _, _, _, err = parse("run", []string{"--offline", "--network", "shared", "claude"}); err == nil {
 		t.Error("--offline with --network shared was accepted")
 	}
 }
@@ -276,7 +276,7 @@ func TestGlobalPositionPassesTheVerbLineThrough(t *testing.T) {
 // claude --name refactor` already does, so the label lands on the same path
 // rather than becoming a second way to hold a session.
 func TestParseReadsASessionRef(t *testing.T) {
-	o, profileName, tail, err := parse([]string{"claude@refactor", "-p", "hi"})
+	o, profileName, tail, err := parse("run", []string{"claude@refactor", "-p", "hi"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestParseReadsASessionRef(t *testing.T) {
 		t.Errorf("tail = %q, want the agent's own arguments untouched", tail)
 	}
 	// The two spellings of one session agree.
-	viaFlag, _, _, err := parse([]string{"claude", "--name", "refactor"})
+	viaFlag, _, _, err := parse("run", []string{"claude", "--name", "refactor"})
 	if err != nil {
 		t.Fatalf("parse --name: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestParseRefusesABadRef(t *testing.T) {
 		{"claude@my very long label"},
 		{"@refactor"},
 	} {
-		_, _, _, err := parse(args)
+		_, _, _, err := parse("run", args)
 		if err == nil {
 			t.Errorf("parse(%q) was accepted", args)
 			continue
@@ -327,7 +327,7 @@ func TestParseRefusesABadRef(t *testing.T) {
 // different sessions. A silent winner would run one of them with the other
 // still written on the command.
 func TestParseRefusesARefAndNameTogether(t *testing.T) {
-	_, _, _, err := parse([]string{"claude@refactor", "--name", "other"})
+	_, _, _, err := parse("run", []string{"claude@refactor", "--name", "other"})
 	if err == nil {
 		t.Fatal("claude@refactor --name other was accepted")
 	}
@@ -349,7 +349,7 @@ func TestParseWarnsAboutItsOwnFlagsInTheAgentTail(t *testing.T) {
 		err  error
 	)
 	warning := captureStderr(t, func() {
-		o, _, tail, err = parse([]string{"claude", "-p", "hi", "--quiet", "--cpus=2"})
+		o, _, tail, err = parse("run", []string{"claude", "-p", "hi", "--quiet", "--cpus=2"})
 	})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -374,7 +374,7 @@ func TestParseWarnsAboutItsOwnFlagsInTheAgentTail(t *testing.T) {
 // for every scripted `brig exec claude -- ls` that happens to name one.
 func TestParseSaysNothingAfterAnExplicitEnd(t *testing.T) {
 	warning := captureStderr(t, func() {
-		if _, _, tail, err := parse([]string{"claude", "--", "--quiet"}); err != nil {
+		if _, _, tail, err := parse("run", []string{"claude", "--", "--quiet"}); err != nil {
 			t.Errorf("parse: %v", err)
 		} else if strings.Join(tail, " ") != "--quiet" {
 			t.Errorf("tail = %q", tail)
@@ -392,7 +392,7 @@ func TestParseReadsMemAndMemory(t *testing.T) {
 		{"claude", "--mem=2048"},
 		{"claude", "--memory", "2048"},
 	} {
-		o, _, _, err := parse(args)
+		o, _, _, err := parse("run", args)
 		if err != nil {
 			t.Errorf("parse(%q): %v", args, err)
 			continue
@@ -402,7 +402,7 @@ func TestParseReadsMemAndMemory(t *testing.T) {
 		}
 	}
 	// And it is brig's, so it is refused by name rather than forwarded.
-	if _, _, _, err := parse([]string{"claude", "--mem", "lots"}); err == nil {
+	if _, _, _, err := parse("run", []string{"claude", "--mem", "lots"}); err == nil {
 		t.Error("--mem lots was accepted")
 	} else if !strings.Contains(err.Error(), "--mem") {
 		t.Errorf("--mem lots: %v, want it to name --mem", err)
@@ -425,7 +425,7 @@ func TestParseKeepsTodaysLines(t *testing.T) {
 		{[]string{"claude", "--", "ls"}, "", "ls"},
 		{[]string{"--name", "x", "claude"}, "x", ""},
 	} {
-		o, profileName, tail, err := parse(c.args)
+		o, profileName, tail, err := parse("run", c.args)
 		if err != nil {
 			t.Errorf("parse(%q): %v", c.args, err)
 			continue
