@@ -658,13 +658,43 @@ func (c *Config) mountProject(dir string) error {
 			"word after the ref as a directory to mount; if it is an argument for the "+
 			"agent, put it after -- instead", abs, err)
 	}
+	// Resolved before it is judged, because filepath.Abs cleans a path
+	// lexically and stops there: `/Users/..` collapses to `/`, but `~/mnt ->
+	// /` does not, and the guard below was reading the spelling rather than
+	// the directory. A link is a way around every rule made about a path
+	// unless the rule is made about what the path resolves to -- and the
+	// person who follows a link is not necessarily the person who made it.
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		// It stats, so this is a path brig cannot establish the truth about
+		// rather than one that is not there. Refused rather than checked
+		// lexically and let through, because the lexical check is exactly the
+		// one that does not hold here.
+		return fmt.Errorf("cannot mount %s as this run's project: its real path could not be "+
+			"resolved: %w", abs, err)
+	}
 	// A filesystem root has no basename to mount it under -- filepath.Base
 	// gives back the separator -- and /work// is not a guest path. Nobody means
 	// to hand an agent the whole machine, so say what to name instead.
-	if filepath.Base(abs) == string(filepath.Separator) {
-		return fmt.Errorf("cannot mount %s as this run's project: it has no name to "+
-			"mount it under; name a project directory rather than a filesystem root", abs)
+	if filepath.Base(real) == string(filepath.Separator) {
+		// The resolution is named only when it is the thing the reader cannot
+		// see. `brig run claude /` needs no explaining; a link's own name
+		// plainly has a basename, so there "it has no name to mount it under"
+		// would read as nonsense against the word on the line.
+		subject := "it has"
+		if real != abs {
+			subject = fmt.Sprintf("it resolves to %s, which has", real)
+		}
+		return fmt.Errorf("cannot mount %s as this run's project: %s no name to "+
+			"mount it under; name a project directory rather than a filesystem root",
+			abs, subject)
 	}
+	// Resolved to judge it, and the path as typed is what gets mounted. A link
+	// is the name its owner uses for the project, so /work/<link> is the path
+	// the agent should see and the host path it came from is the one to record
+	// and print -- resolving those too would rewrite `/tmp/x` to `/private/tmp/x`
+	// on every macOS host, for a directory the VMM resolves at mount time
+	// anyway.
 	c.Project = abs
 	c.GuestProject = GuestProject(abs)
 	// The point of naming a directory: the agent starts in it. The cwd-under-
