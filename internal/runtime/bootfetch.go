@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	goruntime "runtime"
@@ -42,7 +43,11 @@ var lookPath = exec.LookPath
 // client in would cost brig its single-dependency go.mod, so brig shells out to
 // oras exactly as it shells out to cosign for signatures: use the tool when it
 // is present, say so plainly when it is not.
-func orasFetch(dir string) error {
+//
+// One line each end and the stream behind Progress, the same shape the hull
+// path takes: a first run downloads a bundle, and the reader is owed the fact
+// that it is downloading rather than every layer of how.
+func orasFetch(dir string, notice, progress io.Writer) error {
 	bin, err := lookPath("oras")
 	if err != nil {
 		return fmt.Errorf("oras is not installed, so the kernel and initrd cannot be downloaded. "+
@@ -52,13 +57,20 @@ func orasFetch(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create boot asset directory %s: %w", dir, err)
 	}
+	noticef(notice, "downloading the kernel and initrd this profile boots (once)...")
 	cmd := exec.Command(bin, "pull", bootAssetsRef(), "--output", dir)
-	// Progress belongs on stderr: brig's stdout is the workload's.
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	said := narrate(progress)
+	cmd.Stdout, cmd.Stderr = said, said
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("oras pull %s: %w (if the package is private, run "+
-			"`oras login ghcr.io` with a read:packages token)", bootAssetsRef(), err)
+		return said.explain(fmt.Errorf("oras pull %s: %w (if the package is private, run "+
+			"`oras login ghcr.io` with a read:packages token)", bootAssetsRef(), err))
 	}
+	noticef(notice, "kernel and initrd downloaded")
 	return nil
+}
+
+// orasFetcher binds the Linux download to one run's writers, the way the hull
+// adapter binds its own.
+func orasFetcher(spec RunSpec) assetFetcher {
+	return func(dir string) error { return orasFetch(dir, spec.Notice, spec.Progress) }
 }

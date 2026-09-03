@@ -193,8 +193,15 @@ func (n *nerdctl) Run(spec RunSpec) error {
 	}
 	cmd := exec.Command(n.bin, args...)
 	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// Held rather than passed through, for the reason the hull adapter gives:
+	// the pull progress is noise on a boot that works and the only evidence
+	// there is on one that does not.
+	said := narrate(spec.Progress)
+	cmd.Stderr = said
+	if err := cmd.Run(); err != nil {
+		return said.explain(fmt.Errorf("%s run: %w", n.bin, err))
+	}
+	return nil
 }
 
 // runArgs is the one place the run command line is built, for the same reason
@@ -306,7 +313,7 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		}
 		// oras rather than hull: hull does not build on Linux, so there is
 		// nothing to ask. See bootfetch.go.
-		annotations, err := bootAnnotations(nil, orasFetch)
+		annotations, err := bootAnnotations(nil, orasFetcher(spec))
 		if err != nil {
 			return nil, nil, err
 		}
