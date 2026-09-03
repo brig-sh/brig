@@ -88,7 +88,7 @@ func (c *Config) verifyTag() error {
 	case verify.Verified:
 		// The per-check detail narrates rather than warns: a signature that
 		// checked out is nothing to act on, and one line per check on every
-		// boot is the noise #24 is about. What the default run gets instead is
+		// boot is noise. What the default run gets instead is
 		// one summary line for the whole step, which is what recording it here
 		// is for. See sayVerified.
 		c.verified = append(c.verified, "image")

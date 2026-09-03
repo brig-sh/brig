@@ -19,9 +19,8 @@ const markerFile = ".brig-workspace"
 // warnf says something the reader has to act on: an expired credential, an
 // image that did not verify, a share that went stale.
 //
-// It stays in the default output, because a warning is an action -- that is the
-// half of #24's rule that keeps things on screen rather than taking them off.
-// Only -q drops it, and -q is a script asking for identifiers and errors and
+// It stays in the default output, because a warning is an action. Only -q
+// drops it, and -q is a script asking for identifiers and errors and
 // nothing between the two.
 func (c *Config) warnf(format string, a ...any) {
 	if c.Verbosity < Normal {
@@ -95,9 +94,9 @@ func (c *Config) runtimeOutput() io.Writer {
 // runtimeNotice is where a long operation says, in one line, that it has
 // started and that it is done.
 //
-// It sits at the default level rather than behind --verbose, which is the whole
-// of #24's sixth item: a first run downloads a kernel, and a minute of silence
-// with nothing on screen reads as a hang. The stream behind that line is
+// It sits at the default level rather than behind --verbose: a first run
+// downloads a kernel, and a minute of silence with nothing on screen reads as a
+// hang. The stream behind that line is
 // runtimeOutput's, and it stays behind --verbose.
 func (c *Config) runtimeNotice() io.Writer {
 	if c.Verbosity < Normal {

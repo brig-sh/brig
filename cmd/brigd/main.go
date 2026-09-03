@@ -524,10 +524,10 @@ func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	// on it. It goes to the daemon's stderr instead, which is its log and the
 	// one place a line saying a boot has started is worth having.
 	cfg.Progress = os.Stderr
-	// And it keeps narrating there. #24 puts brig's own progress and the
-	// runtime's output behind --verbose, which is a decision about a terminal
-	// somebody is reading; the daemon's stderr is a log, and a log with the
-	// boot lines missing is the wrong trade. The client is unaffected either
+	// And it keeps narrating there. Progress and the runtime's output sit behind
+	// --verbose for a terminal somebody is reading; the daemon's stderr is a
+	// log, and a log with the boot lines missing is the wrong trade. The client
+	// is unaffected either
 	// way: its warnings come from Err, which is the buffer above.
 	cfg.Verbosity = wrap.Verbose
 	cfg.NoTerminal = true

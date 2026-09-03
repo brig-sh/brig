@@ -214,9 +214,9 @@ echo "== envelope =="
 # stdout or a scripted create's sandbox name. It names the boundary before the
 # boot noise.
 #
-# Behind --verbose since #24: nine rows of boundary before the agent says
-# anything is machinery, and `brig info` is the command whose whole output it
-# is. So the assertions below read a --verbose run, and the first pair pins the
+# Behind --verbose: nine rows of boundary before the agent says anything is
+# machinery, and `brig info` is the command whose whole output it is. So the
+# assertions below read a --verbose run, and the first pair pins the
 # default: the block is absent, and what a quiet run still says about the
 # boundary is the verification line.
 grep -q '^SANDBOX ' "$WORK/run.err" \
@@ -1434,7 +1434,7 @@ fresh() { "$WORK/brig" stop claude > /dev/null 2>&1; }
 
 fresh
 # A signature that checks out is narration, not a warning: there is nothing for
-# anyone to act on, so #24 moved it behind --verbose. The default run below
+# anyone to act on, so it sits behind --verbose. The default run below
 # asserts the other half -- that the line is gone from the output a person gets
 # without asking for detail -- and everything else this section checks is a
 # refusal or a gap, which stays on screen either way.
@@ -1637,8 +1637,8 @@ retired '<agent>@<label>' run claude -n retn -d
 retired 'brig rm --all' reset
 
 echo "== what a run says =="
-# #24: by default, print what the user has to act on. brig's own progress and
-# the runtime's own output wait for --verbose; -q is identifiers and errors.
+# By default, print what the user has to act on. brig's own progress and the
+# runtime's own output wait for --verbose; -q is identifiers and errors.
 "$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \

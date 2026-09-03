@@ -177,7 +177,7 @@ func hypervisorOrDefault(hv string) string { return orDefault(hv, "vz") }
 // This is the one long operation brig starts on a first run, and it gets one
 // line each end rather than a stream: hull's own download progress goes to
 // Progress, which is empty unless somebody asked for it, and the two notices
-// say that a minute of silence is a download rather than a hang (#24).
+// say that a minute of silence is a download rather than a hang.
 func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
 	noticef(notice, "downloading the kernel and initrd this profile boots (once)...")
 	cmd := exec.Command(h.bin, "assets", "pull")

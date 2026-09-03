@@ -123,9 +123,9 @@ func (c *Config) isolationLine() string {
 // this row is written there is no outcome to report. sayVerified prints the
 // other half when the checks have run.
 //
-// The pair is what makes a quiet run readable. #24 put the per-check success
-// lines behind --verbose, on the rule that a check which passed is not an
-// action; without this row a default run saying nothing about verification
+// The pair is what makes a quiet run readable. The per-check success lines are
+// behind --verbose, on the rule that a check which passed is not an action;
+// without this row a default run saying nothing about verification
 // would be indistinguishable from one where nothing was checked, which is the
 // one reading that must never be available by accident. The row says what the
 // policy is, the line afterwards says it held, and everything that did not hold

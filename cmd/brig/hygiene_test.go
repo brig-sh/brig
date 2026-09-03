@@ -233,10 +233,12 @@ func TestBrigFlagsOverlapWithClaudeCodeOnlyWhereKnown(t *testing.T) {
 	}
 }
 
-// The global position -- left of the verb -- is closed. #24 filled it with
-// --verbose and -q; everything else is still a token to name rather than a
-// command to run or a word to forward, and #11 and #30 are what fill in the
-// rest.
+// Global flags go left of the verb, and the set is closed: an unknown token
+// there is a usage error naming it, not an operand and not an agent argument.
+// No agent is named yet at that point, so nothing else can claim it.
+//
+// The tokens below are not brig flags. Adding one as a global flag means
+// removing it here.
 func TestGlobalPositionRefusesAnUnknownToken(t *testing.T) {
 	for _, args := range [][]string{
 		{"--json", "run", "claude"},
