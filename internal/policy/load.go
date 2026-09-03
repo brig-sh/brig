@@ -23,6 +23,23 @@ var reservedBasenames = map[string]bool{
 	attachmentsBasename: true,
 }
 
+// IsReservedName reports whether a policy by this name would be written to
+// a file this package has reserved for something else.
+//
+// A caller that builds a path from a name before any document exists to
+// check -- create is the one case -- has to ask, because the file it would
+// write is the file LoadAll deliberately skips: the policy would be
+// invisible to every command, and writing it would destroy whatever the
+// reserved file actually held. CheckName cannot answer this, since it
+// judges the name's characters and says nothing about the directory.
+//
+// The extension is fixed here rather than taken from the caller: create
+// only ever writes .yaml, and a name is reserved because of the file it
+// produces, not because of the word itself.
+func IsReservedName(name string) bool {
+	return reservedBasenames[name+".yaml"]
+}
+
 // isPolicyFile reports whether a directory entry is a policy. Anything else
 // in the directory -- a README, an editor's backup, a reserved basename --
 // is ignored rather than reported as broken.

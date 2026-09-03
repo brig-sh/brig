@@ -258,6 +258,15 @@ func createPolicy(args []string) error {
 	if err := policy.CheckName(name); err != nil {
 		return err
 	}
+	// The file this name would produce is one the policy directory keeps
+	// for something else, so writing it would destroy that file's contents
+	// and the policy would be invisible anyway -- LoadAll skips the name.
+	// Refused regardless of --force: forcing is for replacing a policy you
+	// own, not for overwriting brig's own bookkeeping.
+	if policy.IsReservedName(name) {
+		return fmt.Errorf("%q is reserved: brig keeps %s.yaml in the policy directory for its own "+
+			"records, so a policy cannot be called that. Pick another name", name, name)
+	}
 
 	dir := policy.Dir()
 	path := filepath.Join(dir, name+".yaml")
@@ -417,6 +426,16 @@ func editPolicy(args []string) error {
 	if other, ok := others[edited.Name]; ok && other.Path != entry.Path {
 		return fmt.Errorf("not saved, %s is unchanged: name %q is already declared in %s\n"+
 			"your edit is still at %s", entry.Path, edited.Name, other.Path, scratchPath)
+	}
+	// The same refusal create makes. This file is not the reserved one, so
+	// saving the rename would destroy nothing -- but it would leave a
+	// policy under a name create cannot produce and brig keeps for its own
+	// records, reachable only because it came in through edit. Two ways in
+	// with different rules is the shape of a bug either way.
+	if policy.IsReservedName(edited.Name) {
+		return fmt.Errorf("not saved, %s is unchanged: %q is reserved -- brig keeps %s.yaml in "+
+			"the policy directory for its own records, so a policy cannot be called that\n"+
+			"your edit is still at %s", entry.Path, edited.Name, edited.Name, scratchPath)
 	}
 	// A rename leaves whatever named entry.Policy.Name (an attach, or a
 	// profile's own inline policy: entry) pointing at a name this file no
