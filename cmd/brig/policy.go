@@ -650,6 +650,11 @@ func attachPolicy(args []string) error {
 		a.AttachToProfile(policyName, p.Name)
 		fmt.Printf("attached %s to %s\n", policyName, p.Name)
 	}
+	// Said on the way out, not buried in the docs: "attached" on its own
+	// reads as a rule that is now in force. On stderr, where every other
+	// advisory in this CLI goes, so stdout stays the command's answer and
+	// nothing parsing it reads the note as part of one.
+	fmt.Fprintln(os.Stderr, policy.NotEnforcedNote)
 	return a.Save(dir)
 }
 
@@ -774,6 +779,15 @@ func checkPolicy(args []string) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("%s is bound to %s, which does not exist as a policy -- "+
 			"nothing can enforce what is not there", p.Name, strings.Join(missing, ", "))
+	}
+	// Only where the answer would otherwise read as a verdict: names
+	// printed and an exit code of zero, from a verb that means "confirm
+	// this is in force". A refusal above already says what cannot be
+	// enforced, and "no policy applies" leaves nothing to be misread, so
+	// neither needs it. On stderr: check prints one policy name per line,
+	// and anything looping over that would read the note as a name.
+	if len(names) > 0 {
+		fmt.Fprintln(os.Stderr, policy.NotEnforcedNote)
 	}
 	return nil
 }
