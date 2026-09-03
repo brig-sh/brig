@@ -1161,6 +1161,107 @@ func TestAttachWithNameNamesTheProfileInItsConfirmation(t *testing.T) {
 	}
 }
 
+// A session's sandbox and workspace are named from its slug, so a -n value
+// Slug would rewrite addresses a session that will never exist under the
+// name given: `-n "My Work"` would record "My Work" while `run -n "My
+// Work"` starts my-work. Refused rather than rewritten, the same rule
+// ParseRef holds the strict agent@label form to, so an attachment stays an
+// address instead of one spelling standing in for another.
+func TestAttachRefusesASessionNameThatIsNotSlugClean(t *testing.T) {
+	for _, c := range []struct{ name, session, wants string }{
+		{"needs rewriting", "My Work", "my-work"},
+		{"nothing usable", "!!!", "no usable characters"},
+		{"another profile's workspace", "desktop", "claude-desktop"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("BRIG_POLICY_DIR", dir)
+			writePolicyFile(t, dir, "no-net", noNetBody)
+			loadTestProfiles(t)
+
+			err := attachPolicy([]string{"no-net", "claude-code", "-n", c.session})
+			if err == nil {
+				t.Fatalf("attach -n %q was accepted", c.session)
+			}
+			if !strings.Contains(err.Error(), c.wants) {
+				t.Errorf("the error does not say what is wrong or what to type: %v", err)
+			}
+			// Nothing is written: the refusal happens while parsing, before
+			// any record is touched.
+			if _, statErr := os.Stat(filepath.Join(dir, "attachments.yaml")); !os.IsNotExist(statErr) {
+				t.Errorf("a record was written despite the refusal (stat err = %v)", statErr)
+			}
+		})
+	}
+}
+
+// A value that is already slug-clean is what run would start, so it binds.
+func TestAttachAcceptsASlugCleanSessionName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "my-work"}); err != nil {
+		t.Fatalf("a slug-clean session was refused: %v", err)
+	}
+	a, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Sessions["claude-code"]["my-work"]; len(got) != 1 || got[0] != "no-net" {
+		t.Errorf("Sessions[claude-code][my-work] = %v, want [no-net]", got)
+	}
+}
+
+// The strict rule is attach's alone. detach and check read the record, and
+// have to be able to name whatever key is in it -- a hand edit, or an
+// earlier build, can put a spelling there that attach would now refuse.
+// Holding the readers to the same rule would print a binding in ls that
+// nothing could then inspect or remove.
+func TestDetachAndCheckAcceptASessionNameAttachWouldRefuse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	// Written directly: attach is exactly what will not produce this.
+	var a policy.Attachments
+	a.AttachToSession("no-net", "claude-code", "My Work")
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// The listing names it, so the listing's own spelling has to work.
+	listed, err := captureStdout(t, listPolicies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listed, "claude-code -n My Work") {
+		t.Fatalf("the listing does not name the binding: %q", listed)
+	}
+
+	seen, err := captureStdout(t, func() error {
+		return checkPolicy([]string{"claude-code", "-n", "My Work"})
+	})
+	if err != nil {
+		t.Fatalf("check could not inspect a recorded binding: %v", err)
+	}
+	if !strings.Contains(seen, "no-net") {
+		t.Errorf("check did not report the recorded binding: %q", seen)
+	}
+
+	if err := detachPolicy([]string{"no-net", "claude-code", "-n", "My Work"}); err != nil {
+		t.Fatalf("detach could not remove a recorded binding: %v", err)
+	}
+	after, err := policy.LoadAttachments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Sessions) != 0 {
+		t.Errorf("the binding survived detach: %+v", after.Sessions)
+	}
+}
+
 // -n given but empty -- a literal `-n ""`, or `-n "$SESSION"` with an
 // unset $SESSION -- is not the same as -n omitted. Reading it as omitted
 // would silently attach to every run of the profile instead of the one
