@@ -1101,6 +1101,35 @@ func loadTestProfiles(t *testing.T) {
 	}
 }
 
+// "attached" is printed only once the record is on disk. A dir that cannot
+// be written would otherwise put success on stdout beside a non-zero exit,
+// and a script reading stdout would believe the binding landed.
+func TestAttachSaysNothingWhenTheSaveFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write a mode-500 directory, so this cannot be reproduced")
+	}
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	// Readable, so the policy still loads and every check passes; not
+	// writable, so only the Save fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+
+	out, err := captureStdout(t, func() error {
+		return attachPolicy([]string{"no-net", "claude-code"})
+	})
+	if err == nil {
+		t.Fatal("attach reported success with an unwritable policy directory")
+	}
+	if strings.Contains(out, "attached") {
+		t.Errorf("stdout claimed the attach landed while the command failed: %q", out)
+	}
+}
+
 func TestAttachBindsAPolicyToAProfile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)

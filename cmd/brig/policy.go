@@ -719,22 +719,30 @@ func attachPolicy(args []string) error {
 	if err != nil {
 		return err
 	}
+	// p.Name, not profileName: profileName may be an alias (`claude` for
+	// `claude-code`), and attachments are keyed by the profile's canonical
+	// name so detach and any later lookup agree on it.
+	describe := p.Name
 	if session != "" {
 		a.AttachToSession(policyName, p.Name, session)
-		fmt.Printf("attached %s to %s -n %s\n", policyName, p.Name, session)
+		describe = fmt.Sprintf("%s -n %s", p.Name, session)
 	} else {
-		// p.Name, not profileName: profileName may be an alias (`claude`
-		// for `claude-code`), and attachments are keyed by the profile's
-		// canonical name so detach and any later lookup agree on it.
 		a.AttachToProfile(policyName, p.Name)
-		fmt.Printf("attached %s to %s\n", policyName, p.Name)
 	}
+	// Saved before it is announced: a dir that cannot be written would
+	// otherwise put "attached" on stdout while the command exits non-zero,
+	// and anything reading stdout would believe the binding landed. create
+	// and rm print after the write for the same reason.
+	if err := a.Save(dir); err != nil {
+		return err
+	}
+	fmt.Printf("attached %s to %s\n", policyName, describe)
 	// Said on the way out, not buried in the docs: "attached" on its own
 	// reads as a rule that is now in force. On stderr, where every other
 	// advisory in this CLI goes, so stdout stays the command's answer and
 	// nothing parsing it reads the note as part of one.
 	fmt.Fprintln(os.Stderr, policy.NotEnforcedNote)
-	return a.Save(dir)
+	return nil
 }
 
 // detachPolicy reverses what attach did. It removes only what attach
@@ -786,8 +794,13 @@ func detachPolicy(args []string) error {
 		fmt.Printf("%s was not attached to %s\n", policyName, describe)
 		return nil
 	}
+	// Saved before it is announced, the same as attach: "detached" on
+	// stdout beside a non-zero exit would read as a removal that landed.
+	if err := a.Save(dir); err != nil {
+		return err
+	}
 	fmt.Printf("detached %s from %s\n", policyName, describe)
-	return a.Save(dir)
+	return nil
 }
 
 // parseCheckArgs pulls a profile name and an optional -n session out of
