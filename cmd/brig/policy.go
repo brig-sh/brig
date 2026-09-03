@@ -129,7 +129,7 @@ func listPolicies() error {
 	// broken attachments.yaml is exactly the kind of thing someone would
 	// still want `brig policies` to work while diagnosing. Warn and list
 	// without the bound-to lines rather than print nothing at all.
-	bound, err := policy.Bindings(policy.Dir())
+	bound, err := policy.Bindings(policy.Dir(), profile.All())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
 	}
@@ -563,7 +563,7 @@ func removePolicy(args []string) error {
 // stop declaring a policy (rm deleting the file, edit renaming it) and
 // needing to refuse first if anything still points at it.
 func boundTo(name string) ([]string, error) {
-	bound, err := policy.Bindings(policy.Dir())
+	bound, err := policy.Bindings(policy.Dir(), profile.All())
 	if err != nil {
 		return nil, err
 	}
@@ -609,17 +609,11 @@ func readPolicyFile(path string) (policy.Policy, error) {
 // and must not be read as one: silently falling through to the
 // profile-wide (or whole-profile check) path below would attach, detach
 // or check far more than a caller asking for one session meant.
+// Named rather than inlined at both call sites so the reason above is
+// written once; seen does the walking, the same helper brig run's own
+// --name uses to tell an empty one from an absent one.
 func sessionGivenEmpty(fs *flag.FlagSet, session string) bool {
-	if session != "" {
-		return false
-	}
-	given := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "n" || f.Name == "name" {
-			given = true
-		}
-	})
-	return given
+	return session == "" && seen(fs, "n", "name")
 }
 
 // checkSessionName refuses a -n value that cannot name a session brig would
@@ -898,8 +892,9 @@ func checkPolicy(args []string) error {
 	// printed and an exit code of zero, from a verb that means "confirm
 	// this is in force". A refusal above already says what cannot be
 	// enforced, and "no policy applies" leaves nothing to be misread, so
-	// neither needs it. On stderr: check prints one policy name per line,
-	// and anything looping over that would read the note as a name.
+	// neither needs it.
+	// On stderr: check prints one policy name per line, and anything
+	// looping over that would otherwise read the note as a name.
 	if len(names) > 0 {
 		fmt.Fprintln(os.Stderr, policy.NotEnforcedNote)
 	}

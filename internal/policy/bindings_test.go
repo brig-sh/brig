@@ -46,7 +46,7 @@ policy: [inline-only]
 		t.Fatal(err)
 	}
 
-	got, err := Bindings(policyDir)
+	got, err := Bindings(policyDir, profile.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ cpus: 1
 policy: [no-net, no-net]
 `))
 
-	got, err := Bindings(t.TempDir())
+	got, err := Bindings(t.TempDir(), profile.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,12 +88,27 @@ policy: [no-net, no-net]
 // slice a caller has to check for either way.
 func TestBindingsOmitsAnUnboundPolicy(t *testing.T) {
 	loadTestProfiles(t, t.TempDir())
-	got, err := Bindings(t.TempDir())
+	got, err := Bindings(t.TempDir(), profile.All())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := got["no-net"]; ok {
 		t.Errorf(`Bindings()["no-net"] = %v, want absent`, got["no-net"])
+	}
+}
+
+// A malformed attachments.yaml is a real failure, not silently ignored:
+// the caller decides how to degrade (see cmd/brig's listPolicies, which
+// still lists policies without the bound-to lines).
+func TestBindingsReturnsAnErrorForAMalformedAttachmentsFile(t *testing.T) {
+	loadTestProfiles(t, t.TempDir())
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "attachments.yaml"),
+		[]byte("profiles: [this is not valid: yaml structure"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Bindings(dir, profile.All()); err == nil {
+		t.Error("a malformed attachments.yaml was not reported as an error")
 	}
 }
 
@@ -130,17 +145,46 @@ func TestOrphanedIsSortedByName(t *testing.T) {
 	}
 }
 
-// A malformed attachments.yaml is a real failure, not silently ignored:
-// the caller decides how to degrade (see cmd/brig's listPolicies, which
-// still lists policies without the bound-to lines).
-func TestBindingsReturnsAnErrorForAMalformedAttachmentsFile(t *testing.T) {
-	loadTestProfiles(t, t.TempDir())
+func TestBindingsReadsTheProfilesItIsGiven(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "attachments.yaml"),
-		[]byte("profiles: [this is not valid: yaml structure"), 0o644); err != nil {
+	declares := []profile.Profile{{Name: "mytool", Policy: []string{"no-net"}}}
+
+	with, err := Bindings(dir, declares)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Bindings(dir); err == nil {
-		t.Error("a malformed attachments.yaml was not reported as an error")
+	if want := []string{"mytool" + InlineSuffix}; !reflect.DeepEqual(with["no-net"], want) {
+		t.Errorf(`Bindings(dir, declares)["no-net"] = %v, want %v`, with["no-net"], want)
+	}
+
+	without, err := Bindings(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(without) != 0 {
+		t.Errorf("Bindings(dir, nil) = %v, want none: no profiles means no inline bindings", without)
+	}
+}
+
+// The order profiles are walked in decides the order their names appear in
+// an entry, so it is settled here rather than assumed of the caller -- and
+// the caller's own slice is not reordered as a side effect.
+func TestBindingsSortsProfilesWithoutDisturbingTheCaller(t *testing.T) {
+	dir := t.TempDir()
+	given := []profile.Profile{
+		{Name: "zzz", Policy: []string{"shared"}},
+		{Name: "aaa", Policy: []string{"shared"}},
+	}
+
+	got, err := Bindings(dir, given)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"aaa" + InlineSuffix, "zzz" + InlineSuffix}
+	if !reflect.DeepEqual(got["shared"], want) {
+		t.Errorf(`Bindings()["shared"] = %v, want %v (sorted)`, got["shared"], want)
+	}
+	if given[0].Name != "zzz" {
+		t.Errorf("the caller's slice was reordered: first is now %q", given[0].Name)
 	}
 }
