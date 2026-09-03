@@ -1458,6 +1458,86 @@ func TestCheckFailsWhenABoundPolicyDoesNotExist(t *testing.T) {
 	}
 }
 
+// "attached" on its own reads as a rule that is now in force, and nothing
+// in the guest reads these bindings yet. The docs say so; so does attach,
+// because the terminal is where someone acts on it.
+func TestAttachSaysThePolicyIsNotEnforcedYet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+
+	// On stderr, where the CLI puts every advisory, so stdout stays the
+	// command's answer alone.
+	var out string
+	note := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, func() error {
+			return attachPolicy([]string{"no-net", "claude-code"})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(note, policy.NotEnforcedNote) {
+		t.Errorf("attach did not say the binding is not enforced: %q", note)
+	}
+	if strings.Contains(out, policy.NotEnforcedNote) {
+		t.Errorf("the note went to stdout, where it is not the answer: %q", out)
+	}
+}
+
+// check is the verb that means "confirm this is in force", and it prints
+// the names and exits zero -- the one answer most likely to be read as a
+// verdict, so it carries the note too.
+func TestCheckSaysThePolicyIsNotEnforcedYet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// check prints one policy name per line, so the note has to stay off
+	// stdout: anything looping over it would read the note as a name.
+	var out string
+	note := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(note, policy.NotEnforcedNote) {
+		t.Errorf("check did not say the binding is not enforced: %q", note)
+	}
+	if strings.TrimSpace(out) != "no-net" {
+		t.Errorf("stdout is not just the policy names: %q", out)
+	}
+}
+
+// Where nothing is bound, or where the answer is already a refusal naming
+// what cannot be enforced, the note is noise -- there is nothing to read as
+// a verdict in the first place.
+func TestCheckOmitsTheNoteWhenThereIsNothingToMisread(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	loadTestProfiles(t)
+
+	nothingBound, err := captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(nothingBound, policy.NotEnforcedNote) {
+		t.Errorf("the note was printed with nothing bound: %q", nothingBound)
+	}
+
+	refused, _ := captureStdout(t, func() error { return checkPolicy([]string{"ubuntu"}) })
+	if strings.Contains(refused, policy.NotEnforcedNote) {
+		t.Errorf("the note was printed beside a refusal: %q", refused)
+	}
+}
+
 func TestCheckListsTheEffectivePolicies(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)

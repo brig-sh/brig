@@ -129,11 +129,21 @@ add an entry `detach` could never remove:
 ```console
 $ brig policy attach no-net claude-code
 attached no-net to claude-code
+note: no policy is enforced at runtime yet; this records the binding only
 $ brig policy attach no-net claude-code -n work
 attached no-net to claude-code -n work
+note: no policy is enforced at runtime yet; this records the binding only
 $ brig policy attach no-net ubuntu
 brig: cannot attach no-net to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
+
+Both `attach` and `check` say that last line, because "attached" and a
+`check` that prints a policy name both read as a rule that is in force,
+and none of this constrains an agent yet -- see
+[What this does not do yet](#what-this-does-not-do-yet). It goes to
+stderr, where this CLI puts every advisory, so stdout stays the command's
+answer. Both commands print the same constant from `internal/policy`, so
+the two cannot drift into saying different things.
 
 `detach` refuses a policy the profile declares inline, the same way: it was
 never `attach`'s to add, so it is not `detach`'s to remove. Edit the
@@ -155,6 +165,7 @@ that enforceable:
 ```console
 $ brig policy check claude-code
 no-net
+note: no policy is enforced at runtime yet; this records the binding only
 $ brig policy check ubuntu
 no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
