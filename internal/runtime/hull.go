@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -174,21 +174,33 @@ func hypervisorOrDefault(hv string) string { return orDefault(hv, "vz") }
 // driving that is one implementation instead of two that have to agree, and it
 // means a genericBoot profile works on a clean machine with no manual step.
 //
-// Output goes to stderr: this is progress, and brig's stdout belongs to the
-// workload.
-func (h *hull) pullAssets(dir string) error {
+// This is the one long operation brig starts on a first run, and it gets one
+// line each end rather than a stream: hull's own download progress goes to
+// Progress, which is empty unless somebody asked for it, and the two notices
+// say that a minute of silence is a download rather than a hang (#24).
+func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
+	noticef(notice, "downloading the kernel and initrd this profile boots (once)...")
 	cmd := exec.Command(h.bin, "assets", "pull")
 	// Pin hull to the directory brig resolved. That directory came from hull
 	// itself via assetDir, so this is not brig overriding a choice -- it is
 	// brig making sure the place it checked and the place hull writes are the
 	// same one, even if something changed between the two calls.
 	cmd.Env = mergeEnv(telemetryEnv(false), []string{"HULL_BOOT_ASSETS=" + dir})
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	said := narrate(progress)
+	cmd.Stdout, cmd.Stderr = said, said
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s assets pull: %w", h.bin, err)
+		return said.explain(fmt.Errorf("%s assets pull: %w", h.bin, err))
 	}
+	noticef(notice, "kernel and initrd downloaded")
 	return nil
+}
+
+// assetFetcher binds the boot-asset download to one run's writers, so a fetch
+// that happens deep inside runArgs still narrates where that run's output
+// goes. The alternative is another two parameters threaded through runArgs,
+// which has enough of them.
+func (h *hull) assetFetcher(spec RunSpec) assetFetcher {
+	return func(dir string) error { return h.pullAssets(dir, spec.Notice, spec.Progress) }
 }
 
 // assetDir asks hull where its boot assets live.
@@ -301,7 +313,7 @@ func (h *hull) Run(spec RunSpec) error {
 		}
 		gatewaySock, gatewayCidr = sock, cidr
 	}
-	args, envVals, err := runArgs(spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.pullAssets)
+	args, envVals, err := runArgs(spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
 	if err != nil {
 		return err
 	}
@@ -311,8 +323,16 @@ func (h *hull) Run(spec RunSpec) error {
 	// is counted only once an answer is already on file. See telemetryEnvFor.
 	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
 	cmd.Stdout = nil // the instance id is not interesting; failures explain themselves
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// Held rather than passed through. What hull says on its way up is a pull
+	// progress bar and a boot message, which is noise on a boot that works and
+	// the only evidence there is on one that does not, so it is quoted back on
+	// the error and otherwise dropped. See narration.
+	said := narrate(spec.Progress)
+	cmd.Stderr = said
+	if err := cmd.Run(); err != nil {
+		return said.explain(fmt.Errorf("%s run: %w", h.bin, err))
+	}
+	return nil
 }
 
 // supports rejects a spec the chosen backend cannot honour, before anything

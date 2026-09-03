@@ -108,6 +108,22 @@ type RunSpec struct {
 	// Counted marks an operation that is a user action rather than brig's own
 	// plumbing, so telemetry counts one command once. See telemetryEnv.
 	Counted bool
+	// Progress is where the runtime's own output goes: the image pull, the
+	// boot messages, whatever the binary underneath writes on its way up.
+	//
+	// nil holds it instead. It is captured and quoted back on the error if the
+	// boot fails, where it is the evidence, and dropped if it does not -- see
+	// narration. That is the default because the output is worth reading in
+	// exactly two situations, and a boot that worked is neither of them (#24).
+	Progress io.Writer
+	// Notice is where a long operation says, in one line, that it has started
+	// and that it is done.
+	//
+	// Separate from Progress because the two answer different questions. The
+	// stream is detail and waits to be asked for; a download that takes a
+	// minute has to say so whether or not anyone asked, or the terminal looks
+	// hung. nil is silence.
+	Notice io.Writer
 }
 
 // ExecSpec is a request to run something inside a sandbox.

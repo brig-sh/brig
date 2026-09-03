@@ -33,7 +33,7 @@ func TestOrasFetchWithoutOrasExplainsItself(t *testing.T) {
 	t.Cleanup(func() { lookPath = orig })
 	lookPath = func(string) (string, error) { return "", errors.New("not found") }
 
-	err := orasFetch(t.TempDir())
+	err := orasFetch(t.TempDir(), nil, nil)
 	if err == nil {
 		t.Fatal("expected an error when oras is not installed")
 	}
@@ -64,7 +64,7 @@ func TestOrasFetchCreatesTheDirectoryItWasGiven(t *testing.T) {
 	lookPath = func(string) (string, error) { return stub, nil }
 
 	dir := filepath.Join(t.TempDir(), "not", "yet", "there")
-	if err := orasFetch(dir); err != nil {
+	if err := orasFetch(dir, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
@@ -85,7 +85,7 @@ func TestOrasFetchReportsFailure(t *testing.T) {
 	t.Cleanup(func() { lookPath = orig })
 	lookPath = func(string) (string, error) { return stub, nil }
 
-	err := orasFetch(t.TempDir())
+	err := orasFetch(t.TempDir(), nil, nil)
 	if err == nil {
 		t.Fatal("expected a failing oras to be reported")
 	}
