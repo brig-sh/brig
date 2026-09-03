@@ -213,31 +213,44 @@ echo "== envelope =="
 # The block is a notice, printed to stderr so it never pollutes the agent's
 # stdout or a scripted create's sandbox name. It names the boundary before the
 # boot noise.
-grep -q '^SANDBOX .*brig-claude-code' "$WORK/run.err" \
-  && ok "run prints the execution envelope" \
-  || bad "run prints the execution envelope: $(cat "$WORK/run.err")"
-grep -q '^WORKSPACE ' "$WORK/run.err" \
+#
+# Behind --verbose since #24: nine rows of boundary before the agent says
+# anything is machinery, and `brig info` is the command whose whole output it
+# is. So the assertions below read a --verbose run, and the first pair pins the
+# default: the block is absent, and what a quiet run still says about the
+# boundary is the verification line.
+grep -q '^SANDBOX ' "$WORK/run.err" \
+  && bad "a default run printed the envelope -- got: $(cat "$WORK/run.err")" \
+  || ok "a default run does not print the envelope"
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret GH_TOKEN=gh-secret \
+  "$WORK/brig" --verbose run claude -p hi > /dev/null 2> "$WORK/env.err"
+grep -q '^SANDBOX .*brig-claude-code' "$WORK/env.err" \
+  && ok "--verbose prints the execution envelope" \
+  || bad "--verbose prints the execution envelope: $(cat "$WORK/env.err")"
+grep -q '^WORKSPACE ' "$WORK/env.err" \
   && ok "the envelope names the workspace" || bad "the envelope names the workspace"
 # What the sandbox stands on, not only what drives it. The stub is a hull
 # stand-in and BRIG_HYPERVISOR is pinned to vz above, so the row names that
 # backend; which containerd shim maps to which boundary is settled in the
 # runtime package's own tests, there being no containerd here to ask.
-grep -q '^ISOLATION .*microVM (hull, vz backend)' "$WORK/run.err" \
+grep -q '^ISOLATION .*microVM (hull, vz backend)' "$WORK/env.err" \
   && ok "the envelope names the isolation boundary" \
-  || bad "the envelope names the isolation boundary -- got: $(grep '^ISOLATION' "$WORK/run.err")"
+  || bad "the envelope names the isolation boundary -- got: $(grep '^ISOLATION' "$WORK/env.err")"
 # A value must never reach the block, the same promise argv keeps. Scan the
 # whole envelope output rather than a fixed list of rows, so a row added later
 # is covered without touching this check.
-grep -q 'env-token-secret\|gh-secret\|host-token' "$WORK/run.err" \
+grep -q 'env-token-secret\|gh-secret\|host-token' "$WORK/env.err" \
   && bad "the envelope printed a credential value" \
   || ok "the envelope names credentials, never values"
 
-# --quiet drops the block and changes nothing else about the run.
+# -q prints no envelope either, which is no longer -q's doing -- the default
+# prints none. Kept as the guard that asking for less never yields more.
 : > "$STUB_LOG"
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret GH_TOKEN=gh-secret \
   "$WORK/brig" run claude --quiet -p hi > /dev/null 2> "$WORK/quiet.err"
 grep -q '^SANDBOX ' "$WORK/quiet.err" \
-  && bad "--quiet still printed the envelope" || ok "--quiet suppresses the envelope"
+  && bad "--quiet printed the envelope" || ok "--quiet prints no envelope"
 
 echo "== workspace =="
 [ -f "$WS/.claude.json" ] && ok "onboarding is seeded" || bad "onboarding is seeded"
@@ -266,7 +279,7 @@ PROJ="$WORK/myproject"
 mkdir -p "$PROJ"
 : > "$STUB_LOG"
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
-  "$WORK/brig" run claude "$PROJ" -p hi > "$WORK/proj.out" 2> "$WORK/proj.err"
+  "$WORK/brig" --verbose run claude "$PROJ" -p hi > "$WORK/proj.out" 2> "$WORK/proj.err"
 rc=$?
 [ "$rc" = 0 ] && ok "a run with a project exits 0" \
   || bad "a run with a project exits 0 -- got $rc: $(cat "$WORK/proj.err")"
@@ -443,7 +456,7 @@ echo "== network =="
 # check that the resolved value actually travels.
 "$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
-"$WORK/brig" run claude --offline -d > "$WORK/off.out" 2>&1
+"$WORK/brig" --verbose run claude --offline -d > "$WORK/off.out" 2>&1
 grep -q -- '--net none' "$STUB_LOG" \
   && ok "--offline reaches the runtime as --net none" \
   || bad "--offline reaches the runtime as --net none -- got: $(grep '^argv: run' "$STUB_LOG")"
@@ -453,7 +466,7 @@ grep -q '^NETWORK .*offline' "$WORK/off.out" \
 
 "$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
-"$WORK/brig" run claude -d > "$WORK/on.out" 2>&1
+"$WORK/brig" --verbose run claude -d > "$WORK/on.out" 2>&1
 grep -q -- '--net shared' "$STUB_LOG" \
   && ok "a default run still asks for the shared network" \
   || bad "a default run still asks for the shared network -- got: $(grep '^argv: run' "$STUB_LOG")"
@@ -467,7 +480,7 @@ grep -q '^NETWORK .*shared' "$WORK/on.out" \
 # other is a real-runtime fact, recorded in docs/manual-tests.
 "$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
-"$WORK/brig" run claude --network isolated -d > "$WORK/iso.out" 2>&1
+"$WORK/brig" --verbose run claude --network isolated -d > "$WORK/iso.out" 2>&1
 grep -q -- '--net isolated' "$STUB_LOG" \
   && ok "--network isolated reaches the runtime" \
   || bad "--network isolated reaches the runtime -- got: $(grep '^argv: run' "$STUB_LOG")"
@@ -534,9 +547,9 @@ grep -q 'is now `brig info`' "$WORK/info.err" \
 # has to be the envelope the run prints. Compare the rows themselves rather than
 # one grep each: a row that drifts between the preview and the run makes the
 # preview a claim about a boundary nobody is going to use.
-"$WORK/brig" run claude -d > "$WORK/runenv.out" 2>&1
+"$WORK/brig" --verbose run claude -d > "$WORK/runenv.out" 2>&1
 "$WORK/brig" rm --all > /dev/null 2>&1
-envelope_rows() { grep -E '^(SESSION|PROFILE|SANDBOX|ISOLATION|WORKSPACE|IMAGE|CREDENTIALS) ' "$1"; }
+envelope_rows() { grep -E '^(SESSION|PROFILE|SANDBOX|ISOLATION|WORKSPACE|IMAGE|VERIFY|CREDENTIALS) ' "$1"; }
 envelope_rows "$WORK/info.out" > "$WORK/rows.info"
 envelope_rows "$WORK/runenv.out" > "$WORK/rows.run"
 [ -s "$WORK/rows.info" ] \
@@ -727,7 +740,7 @@ grep -q 'CLAUDE_CODE_OAUTH_TOKEN' "$STUB_LOG" \
 
 echo "== lifecycle verbs =="
 : > "$STUB_LOG"
-out="$("$WORK/brig" run claude -d 2>"$WORK/detach.err")"
+out="$("$WORK/brig" --verbose run claude -d 2>"$WORK/detach.err")"
 [ "$out" = brig-claude-code ] && ok "run -d prints the sandbox name" \
   || bad "run -d prints the sandbox name -- got '$out'"
 # The envelope is on stderr, so the scriptable name on stdout stays clean.
@@ -1433,12 +1446,89 @@ esac
 fresh
 out="$(BRIG_VERIFY=warn "$WORK/brig" run claude -p hi 2>&1)"
 case "$out" in
-  *"signature verified"*) bad "a default run reported a signature that checked out -- got: $out" ;;
-  *) ok "a default run says nothing about a signature that checks out" ;;
+  *"signature verified"*) bad "a default run reported the per-check detail -- got: $out" ;;
+  *) ok "a default run holds back the per-check detail" ;;
 esac
 grep 'argv: run ' "$STUB_LOG" | tail -1 | grep -q '@sha256:' \
   && ok "the verified digest is what hull was told to boot" \
   || bad "hull was told to boot the tag, not the verified digest: $(grep 'argv: run ' "$STUB_LOG" | tail -1)"
+
+# What the default run gets instead of the detail is the outcome, in one line.
+# One line for the whole step, not one per check: the shipped profiles boot a
+# downloaded kernel as well as an image, so both checks reach the same summary.
+case "$out" in
+  *"brig: image and boot assets verified"*) ok "a default run says verification held" ;;
+  *) bad "a default run says verification held -- got: $out" ;;
+esac
+# The policy that outcome held under is the envelope's VERIFY row, which
+# --verbose carries. Stating neither would leave "it verified" to be inferred
+# from an absence, on the one subject where a reader must never have to.
+fresh
+out="$(BRIG_VERIFY=warn "$WORK/brig" --verbose run claude -p hi 2>&1)"
+case "$out" in
+  *"VERIFY       warn"*) ok "the envelope names the verify mode" ;;
+  *) bad "the envelope names the verify mode -- got: $out" ;;
+esac
+
+# -q takes the outcome with everything else between an identifier and an error.
+fresh
+out="$(BRIG_VERIFY=warn "$WORK/brig" -q run claude -p hi 2>&1)"
+case "$out" in
+  *" verified"*) bad "brig -q printed the verification outcome -- got: $out" ;;
+  *) ok "brig -q drops the verification outcome" ;;
+esac
+
+# But a verification PROBLEM is never suppressed, -q included. It is the one
+# claim brig exists to make, and the caller that asked for silence is the
+# unattended one where an unchecked image matters most.
+fresh
+out="$(BRIG_VERIFY=off "$WORK/brig" -q run claude -p hi 2>&1)"
+case "$out" in
+  *"BRIG_VERIFY=off"*) ok "brig -q still says nothing checked the image" ;;
+  *) bad "brig -q hid that the image was never checked -- got: $out" ;;
+esac
+# An older hull cannot boot the bytes it checked, which is a caveat on the
+# claim rather than a note beside it, so it survives -q too.
+fresh
+out="$(STUB_HULL_VERSION=0.1.0-rc21 BRIG_VERIFY=warn "$WORK/brig" -q run claude -p hi 2>&1)"
+case "$out" in
+  *"cannot boot by digest"*) ok "brig -q still says the boot is not pinned to what verified" ;;
+  *) bad "brig -q hid that the boot is not pinned -- got: $out" ;;
+esac
+# And an ordinary warning is still an ordinary warning: the level means
+# verification, not "important", or -q is back to printing what it suppresses.
+fresh
+out="$(GH_TOKEN='op://vault/item/field' "$WORK/brig" -q run claude -p hi 2>&1)"
+case "$out" in
+  *"unresolved secret reference"*) bad "brig -q printed an ordinary warning -- got: $out" ;;
+  *) ok "brig -q still drops an ordinary warning" ;;
+esac
+
+# And nothing is claimed when nothing was checked. Off says so itself, in the
+# default output, and a run that added "verified" beside it would be false.
+fresh
+out="$(BRIG_VERIFY=off "$WORK/brig" run claude -p hi 2>&1)"
+case "$out" in
+  *" verified"*) bad "BRIG_VERIFY=off claimed something verified -- got: $out" ;;
+  *) ok "BRIG_VERIFY=off claims no verification" ;;
+esac
+# Exactly once, whichever half says it. The default run has no envelope, so
+# the standalone line carries the fact; a --verbose run has the VERIFY row, so
+# the standalone line stands down. A fact stated twice is one a reader skips.
+count=$(printf '%s\n' "$out" | grep -c 'BRIG_VERIFY=off')
+[ "$count" = 1 ] \
+  && ok "BRIG_VERIFY=off is stated exactly once by default" \
+  || bad "BRIG_VERIFY=off stated $count times by default -- got: $out"
+fresh
+out="$(BRIG_VERIFY=off "$WORK/brig" --verbose run claude -p hi 2>&1)"
+case "$out" in
+  *"VERIFY       off"*) ok "the envelope names the mode when checking is off" ;;
+  *) bad "the envelope names the mode when checking is off -- got: $out" ;;
+esac
+count=$(printf '%s\n' "$out" | grep -c 'BRIG_VERIFY=off')
+[ "$count" = 1 ] \
+  && ok "BRIG_VERIFY=off is stated exactly once under --verbose" \
+  || bad "BRIG_VERIFY=off stated $count times under --verbose -- got: $out"
 
 fresh
 out="$(STUB_HULL_VERSION=0.1.0-rc21 BRIG_VERIFY=warn "$WORK/brig" run claude -p hi 2>&1)"
@@ -1554,8 +1644,8 @@ echo "== what a run says =="
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
   "$WORK/brig" run claude -d > "$WORK/say.out" 2> "$WORK/say.err"
 grep -q '^SANDBOX ' "$WORK/say.err" \
-  && ok "a default run prints the envelope" \
-  || bad "a default run prints the envelope -- got: $(cat "$WORK/say.err")"
+  && bad "a default run printed the envelope -- got: $(cat "$WORK/say.err")" \
+  || ok "a default run prints no envelope"
 grep -q 'starting sandbox' "$WORK/say.err" \
   && bad "a default run narrated the boot -- got: $(cat "$WORK/say.err")" \
   || ok "a default run does not narrate the boot"
@@ -1573,6 +1663,9 @@ grep -q 'starting sandbox' "$WORK/verbose.err" \
 grep -q 'pulling ghcr.io' "$WORK/verbose.err" \
   && ok "--verbose prints the runtime's own output" \
   || bad "--verbose prints the runtime's own output -- got: $(cat "$WORK/verbose.err")"
+grep -q '^SANDBOX ' "$WORK/verbose.err" \
+  && ok "--verbose prints the envelope" \
+  || bad "--verbose prints the envelope -- got: $(cat "$WORK/verbose.err")"
 
 # The one that matters most: a boot that fails still says what the runtime said,
 # with nothing asked for. Hold the output and lose it and a broken boot becomes

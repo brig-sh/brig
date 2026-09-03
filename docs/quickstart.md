@@ -34,8 +34,9 @@ name for the `claude-code` profile.
 
 The first run is the slow one. In order:
 
-- **The envelope is printed.** Before anything boots, brig names the boundary
-  the run is about to trust:
+- **The boundary is named, if you ask.** `brig info claude` prints the
+  execution envelope without starting anything, and `brig --verbose run` prints
+  it before the boot:
 
   ```
   PROFILE      claude-code
@@ -43,23 +44,31 @@ The first run is the slow one. In order:
   ISOLATION    microVM (hull, vz backend)
   WORKSPACE    /Users/you/brig/claude-code (read-write)
   IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
+  VERIFY       warn, against brig's own trust policy
   CREDENTIALS  GH_TOKEN
   ```
 
-  Credentials are named, never printed. `brig info claude` shows the same block
-  without starting anything, and `brig -q run` drops it.
+  Credentials are named, never printed. An ordinary run goes straight to the
+  work rather than printing this first.
 - **The image is pulled.** The guest image comes down from the registry once.
   Later runs use the copy already on disk.
-- **The image is verified.** brig checks that the image was built by the
-  workflow that publishes it. A check that passed says nothing -- there is
-  nothing to do about it -- and `brig --verbose run` shows the line:
+- **The image is verified.** brig checks that the image, and the kernel it
+  boots, were built by the workflow that publishes them. The run says so in one
+  line:
+
+  ```
+  brig: image and boot assets verified
+  ```
+
+  The `VERIFY` row above names the policy that line held under. A check that
+  did **not** hold prints at every level, `-q` included. The per-check detail
+  is `--verbose`'s:
 
   ```
   brig: image ghcr.io/brig-sh/claude-code-stock:latest: signature verified
   ```
 
-  A check that fails, or one that could not be made, prints without being
-  asked. Then it starts the sandbox, which is another line `--verbose` carries:
+  Then it starts the sandbox, which is another line `--verbose` carries:
 
   ```
   brig: starting sandbox brig-claude-code...

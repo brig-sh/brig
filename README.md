@@ -180,15 +180,23 @@ so, without taking the token, so a line that works today keeps working.
 
 | global flag | what it does |
 | --- | --- |
-| `--verbose` | brig's own progress and the runtime's own output. No short form: `-v` is Claude Code's version flag, codex's verbose flag and Docker's volume flag, so brig does not claim the letter |
-| `-q, --quiet` | identifiers and errors only, for a script. It drops the execution envelope and brig's warnings; on `ls` it prints the refs alone. Still read after the verb for this release, with a note |
+| `--verbose` | the execution envelope, brig's own progress and the runtime's own output. No short form: `-v` is Claude Code's version flag, codex's verbose flag and Docker's volume flag, so brig does not claim the letter |
+| `-q, --quiet` | identifiers and errors only, for a script. It drops brig's warnings; on `ls` it prints the refs alone. A verification that did not hold is printed even here. Still read after the verb for this release, with a note |
 
-By default a run prints the execution envelope, then anything you have to act
-on, then the agent. brig's own progress lines and the runtime's own output wait
-for `--verbose` -- except that a boot which fails quotes what the runtime said
-whether or not you asked, because that is the only evidence there is. A long
-download gets one line saying it started and one saying it finished, rather than
-a stream.
+By default a run prints what you have to act on, then the agent: warnings,
+errors, and one line saying verification held. The execution envelope, brig's
+own progress lines and the runtime's own output wait for `--verbose` -- except
+that a boot which fails quotes what the runtime said whether or not you asked,
+because that is the only evidence there is. A long download gets one line saying
+it started and one saying it finished, rather than a stream. `brig info` prints
+the envelope on demand, without booting anything.
+
+Verification is the exception at both ends. A check that did **not** hold --
+a signature that failed, a bundle brig does not publish, a missing `cosign`,
+`BRIG_VERIFY=off` -- prints at every level, `-q` included: it is the one claim
+brig exists to make, and a scripted run is where an unchecked image matters
+most. A check that held prints one line, which `-q` drops. The policy those
+held under is the envelope's `VERIFY` row.
 
 | flag | what it does |
 | --- | --- |
@@ -491,6 +499,7 @@ SANDBOX      brig-claude-code (hull)
 ISOLATION    microVM (hull, vz backend)
 WORKSPACE    /Users/you/brig/claude-code (read-write)
 IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
+VERIFY       warn, against brig's own trust policy
 CREDENTIALS  GH_TOKEN
 brig: forwarding to guest:
 brig:   GH_TOKEN(secret)
@@ -520,7 +529,7 @@ repository *and* the workflow file, so a signature from anywhere else fails.
 
 | situation | what happens |
 | --- | --- |
-| image under `ghcr.io/brig-sh/`, signature verifies | one line saying so, boots |
+| image under `ghcr.io/brig-sh/`, signature verifies | one line saying so, boots. `--verbose` adds the per-check detail |
 | image published by someone else | **warning**, boots. Bring-your-own images are a supported way to use brig |
 | `cosign` not installed | **warning**, boots. "Could not check" is not "failed" |
 | image under `ghcr.io/brig-sh/`, signature does **not** verify | **stops and asks** `[y/N]`. With no terminal it refuses |

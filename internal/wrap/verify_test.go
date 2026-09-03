@@ -24,7 +24,14 @@ type verifyRuntime struct {
 	local string
 }
 
-func (v verifyRuntime) Kind() string                       { return "hull" }
+func (v verifyRuntime) Kind() string { return "hull" }
+
+// Answered because the envelope asks it: the VERIFY row sits in the same block
+// as the ISOLATION row, so a test that prints the block needs both.
+func (v verifyRuntime) Isolation(string) runtime.Isolation {
+	return runtime.Isolation{Boundary: runtime.BoundaryVM, Detail: "hull, vz backend"}
+}
+
 func (v verifyRuntime) PinsDigest() bool                   { return v.pins }
 func (v verifyRuntime) LocalDigest(string) (string, error) { return v.local, nil }
 

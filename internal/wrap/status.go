@@ -1,7 +1,6 @@
 package wrap
 
 import (
-	"github.com/brig-sh/brig/internal/verify"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -295,15 +294,11 @@ var nowMilli = defaultNowMilli
 // returned before any output when off, and a replaced policy printed the same
 // success line as the shipped one. A reader who has to notice an absence to
 // learn either of those is not being told.
+//
+// The sentence comes from verifyLine, which the VERIFY row also reads. Two
+// copies of it is two things to change, and the one that goes stale is a
+// report about a check rather than the check itself -- the worse half to get
+// wrong, because nothing fails to make it visible.
 func (c *Config) reportVerify() {
-	switch {
-	case c.Verify == verify.Off:
-		c.sayf("image verification: off (BRIG_VERIFY=off), so nothing is checked before it boots")
-	case c.VerifyPolicy.Replaced():
-		c.sayf("image verification: %s, against a replaced trust policy "+
-			"(BRIG_VERIFY_REGISTRY, BRIG_VERIFY_IDENTITY or BRIG_VERIFY_ISSUER is set, "+
-			"so this is not brig's own check)", c.Verify)
-	default:
-		c.sayf("image verification: %s, against brig's own trust policy", c.Verify)
-	}
+	c.sayf("image verification: %s", c.verifyLine())
 }

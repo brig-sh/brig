@@ -129,7 +129,20 @@ type Config struct {
 	// runtime so the object that boots is the object that verified; empty means
 	// boot the tag as given, which is every hull run and any path that could not
 	// resolve a digest.
-	BootDigest  string
+	BootDigest string
+	// envelopeShown records that the execution envelope has been printed for
+	// this run, so the VERIFY row's fact is not then repeated as a standalone
+	// line. Set by PrintPreRunEnvelope, read by verifyImage.
+	envelopeShown bool
+	// verified is what actually checked out during this run's verification
+	// step, in the order it was checked: "image", "boot assets". Empty when
+	// nothing was positively verified -- BRIG_VERIFY=off, an image nobody
+	// claimed to publish, a machine with no cosign -- each of which says so on
+	// its own, at warning level, where it belongs.
+	//
+	// Collected rather than reported as it happens because the run says it in
+	// one line for the whole step. See sayVerified.
+	verified    []string
 	AllowRefs   bool
 	AllowDenied bool
 	// AllowExpired forwards the host credential even when its own expiry says it

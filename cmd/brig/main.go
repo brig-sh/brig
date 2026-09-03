@@ -68,11 +68,13 @@ to rewrite is refused rather than rewritten. brig ls prints the ref of every
 sandbox, and every verb above takes one.
 
 global flags (left of the command, as in: brig -q run claude):
-      --verbose          print brig's own progress and the runtime's own
-                         output. No short form: -v belongs to the agents
+      --verbose          the execution envelope, brig's own progress and the
+                         runtime's own output. No short form: -v belongs to
+                         the agents
   -q, --quiet            identifiers and errors only, for a script. It drops
-                         the execution envelope and brig's warnings; with ls
-                         it prints the refs, one per line
+                         brig's warnings; with ls it prints the refs, one per
+                         line. A verification that did not hold is printed
+                         even here
                          (-q after the verb still works this release)
 
 flags (before the agent's own arguments; -- ends brig's parsing):
@@ -90,10 +92,11 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
 
-By default a run prints the execution envelope, then anything you have to act
-on, then the agent. brig's own progress and the runtime's output are held back
-until --verbose asks for them -- and a boot that fails quotes what the runtime
-said whether or not you asked.
+By default a run prints what you have to act on, then the agent: warnings,
+errors, and one line saying verification held. The execution envelope, brig's
+own progress and the runtime's output wait for --verbose -- and a boot that
+fails quotes what the runtime said whether or not you asked. brig info prints
+the envelope on demand, without booting anything.
 
 Workspaces persist. The sandbox keeps running between commands, so a second
 run is immediate; state lives in the workspace on the host either way.
@@ -428,12 +431,26 @@ func run(args []string) error {
 	}
 
 	// The execution envelope: the boundary this run is about to trust, printed
-	// before the sandbox boots so the user sees it before it matters. Only run
-	// and create print it. sh continues an existing session and stays quiet;
+	// before the sandbox boots so the user sees it before it matters.
+	//
+	// Behind --verbose, which reverses part of #10 and part of #24's own text.
+	// The block was on every run, and reading a default run beside a quiet one
+	// settled it: nine rows of boundary before the agent says anything is the
+	// machinery this issue is about, whoever wrote the machinery. It is not
+	// gone and it is not harder to reach -- `brig info` is the command whose
+	// whole output it is, it answers without booting anything, and --verbose
+	// puts it back on a run. Do not restore it to the default: that is the
+	// user's decision, not an oversight.
+	//
+	// What a default run still says about the boundary is the part nobody can
+	// be asked to go and look up: a verification that did not hold prints at
+	// every level, and one that did prints above -q. See alertf and
+	// sayVerified.
+	//
+	// Only run and create, as before. sh continues an existing session, and
 	// when there is no sandbox yet it lets EnsureRunning start one without
 	// printing the block, so a scripted `brig sh` is not interrupted.
-	// --quiet drops it for a script or a returning session.
-	if (verb == "run" || verb == "create") && verbosity > wrap.Quiet {
+	if showsEnvelope(verb, verbosity) {
 		cfg.PrintPreRunEnvelope(set)
 	}
 
@@ -470,6 +487,21 @@ func run(args []string) error {
 		return cfg.Exec(set, tail, isTerminal())
 	}
 	return runAgent(cfg, set, t, tail, opts.detach)
+}
+
+// showsEnvelope reports whether this invocation prints the execution envelope
+// before it boots. Two rules, and they are independent: which verbs have a
+// boundary worth naming, and whether the reader asked to see it.
+//
+// A function rather than a condition at the call site because both rules have
+// caught something. sh was carved out when a scripted `brig sh` on a cold
+// sandbox printed a block nobody was reading, and the level is what #24 moved.
+func showsEnvelope(verb string, v wrap.Verbosity) bool {
+	switch verb {
+	case "run", "create":
+		return v >= wrap.Verbose
+	}
+	return false
 }
 
 func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string, detach bool) error {

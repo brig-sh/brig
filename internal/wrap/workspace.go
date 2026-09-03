@@ -30,6 +30,28 @@ func (c *Config) warnf(format string, a ...any) {
 	fmt.Fprintf(c.Err, "brig: "+format+"\n", a...)
 }
 
+// alertf says something about verification that has to reach the reader
+// whatever level was asked for.
+//
+// It outranks warnf, and the rank is the whole point. -q hides warnings because
+// a script asked for identifiers and errors, and that is a fair trade for an
+// expired credential or a stale share: the run still works, the fact keeps, and
+// the next interactive run says it again. It is not a fair trade for "nothing
+// checked the image this sandbox boots". Verification is the claim brig exists
+// to make, and a run that skipped the check, could not make it, or made it and
+// did not like the answer has to say so even to a caller that asked for
+// silence -- because the caller asking for silence is exactly the unattended
+// one where an unchecked image matters most.
+//
+// Only verification belongs here, and that scoping is not fussiness. A level
+// that means "important" collects everything within a release, and then -q is
+// back to printing what it was added to suppress. Everything else brig warns
+// about stays a warning: the credential expiry, the workspace notices, the
+// deprecations.
+func (c *Config) alertf(format string, a ...any) {
+	fmt.Fprintf(c.Err, "brig: "+format+"\n", a...)
+}
+
 // sayf writes one line of the report `brig info` prints.
 //
 // Deliberately not levelled, unlike the two below it. This is the answer to the
