@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/brig-sh/brig/internal/profile"
@@ -24,11 +25,25 @@ const InlineSuffix = " (inline)"
 // because it is Attachments' own shape (Profiles keyed by profile,
 // Sessions keyed by profile then session) that this inverts; a caller
 // should not have to know that shape to ask "what binds this policy."
-func Bindings(dir string) (map[string][]string, error) {
+//
+// The profiles to read inline policy: lists from are passed in rather than
+// fetched from the registry, the same way CheckCoverage and
+// EffectivePolicies take the profile they judge. A caller that had not
+// loaded the registry yet would otherwise get an answer with every inline
+// binding silently missing -- and removePolicy would then delete a policy
+// a profile declares inline without the refusal that exists to stop it.
+// Passing them makes that impossible to get wrong by accident.
+//
+// Sorted here rather than trusted from the caller, on a copy so the
+// caller's slice is left alone: the order profiles are walked in is the
+// order their names appear in each entry, which is what keeps the printed
+// line identical from one run to the next.
+func Bindings(dir string, profiles []profile.Profile) (map[string][]string, error) {
 	bound := map[string][]string{}
 
-	// profile.All() already returns its slice sorted by name.
-	for _, p := range profile.All() {
+	byName := slices.Clone(profiles)
+	sort.Slice(byName, func(i, j int) bool { return byName[i].Name < byName[j].Name })
+	for _, p := range byName {
 		seen := map[string]bool{}
 		for _, name := range p.Policy {
 			recordBinding(bound, seen, name, p.Name+InlineSuffix)
