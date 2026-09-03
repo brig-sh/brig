@@ -97,6 +97,39 @@ func TestBindingsOmitsAnUnboundPolicy(t *testing.T) {
 	}
 }
 
+// The profiles are a parameter, not the registry, so a caller that reads
+// inline bindings gets exactly the profiles it passed. Passing none is a
+// real answer -- no inline bindings -- rather than whatever the registry
+// happened to hold, which is what makes removePolicy's refusal depend on
+// its own argument instead of on init order somewhere else.
+func TestOrphanedFindsANameNothingDeclares(t *testing.T) {
+	bound := map[string][]string{"no-net": {"claude-code"}}
+	got := Orphaned(bound, map[string]Entry{})
+	if want := []string{"no-net"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Orphaned = %v, want %v", got, want)
+	}
+}
+
+func TestOrphanedIgnoresANameStillDeclared(t *testing.T) {
+	bound := map[string][]string{"no-net": {"claude-code"}}
+	if got := Orphaned(bound, map[string]Entry{"no-net": {}}); len(got) != 0 {
+		t.Errorf("Orphaned = %v, want none: no-net is still declared", got)
+	}
+}
+
+// Sorted, so the line a listing prints does not reorder itself between
+// runs just because the map iterated differently.
+func TestOrphanedIsSortedByName(t *testing.T) {
+	bound := map[string][]string{
+		"zzz": {"claude-code"},
+		"aaa": {"codex"},
+	}
+	got := Orphaned(bound, map[string]Entry{})
+	if want := []string{"aaa", "zzz"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Orphaned = %v, want %v", got, want)
+	}
+}
+
 // A malformed attachments.yaml is a real failure, not silently ignored:
 // the caller decides how to degrade (see cmd/brig's listPolicies, which
 // still lists policies without the bound-to lines).

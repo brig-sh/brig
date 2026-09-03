@@ -72,6 +72,29 @@ func Bindings(dir string) (map[string][]string, error) {
 	return bound, nil
 }
 
+// Orphaned reports every name that bound (as Bindings returns it) binds
+// something to, but that entries (as LoadAll returns it, for the same dir)
+// does not declare -- sorted by name.
+//
+// This happens on purpose: --force on rm, or on an edit's rename, lets a
+// bound name stop declaring a policy at all rather than refuse, and both
+// say so when they do it. Nothing reports it afterward, though, so a
+// listing is the one place the leftover would ever surface again.
+//
+// Takes bound and entries rather than a dir, so a caller that already has
+// both -- listPolicies always does, to print the ordinary listing -- does
+// not pay for a second Bindings and LoadAll pass just to ask this.
+func Orphaned(bound map[string][]string, entries map[string]Entry) []string {
+	var orphaned []string
+	for name := range bound {
+		if _, ok := entries[name]; !ok {
+			orphaned = append(orphaned, name)
+		}
+	}
+	sort.Strings(orphaned)
+	return orphaned
+}
+
 // recordBinding appends binder to bound[policyName], once. seen is fresh
 // per source list -- a profile's own policy: list, one profile's
 // attachments, or one session's -- and guards against a duplicate name

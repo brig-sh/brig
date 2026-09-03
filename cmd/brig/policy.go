@@ -139,9 +139,26 @@ func listPolicies() error {
 			fmt.Printf("                bound to: %s\n", strings.Join(b, ", "))
 		}
 	}
-	if len(names) == 0 {
+	// bound can name something entries does not: --force on rm, or on an
+	// edit's rename, leaves the binding behind on purpose. Both say so at
+	// the time, and then nothing does -- so a listing is the one place that
+	// leftover would ever surface again.
+	orphaned := policy.Orphaned(bound, entries)
+	// "no policies yet" would contradict the line under it: having nothing
+	// to manage and having a binding to clean up are different states.
+	if len(names) == 0 && len(orphaned) == 0 {
 		fmt.Printf("no policies yet; your own live in %s\n", policy.Dir())
 		fmt.Printf("brig policy create <name> writes a starter one\n")
+	}
+	// "not loaded" rather than "no such policy": a name is here because
+	// nothing loaded under it, and that has two causes brig cannot always
+	// tell apart. Either nothing declares it -- the --force case -- or the
+	// file that declares it would not parse, and an unparseable file has no
+	// readable name to match against. Claiming it does not exist would
+	// argue against the fix in that second case; LoadAll has already named
+	// the file and the parse error on stderr.
+	for _, name := range orphaned {
+		fmt.Printf("%-15s (not loaded; bound to %s)\n", name, strings.Join(bound[name], ", "))
 	}
 	return nil
 }
@@ -856,21 +873,26 @@ func checkPolicy(args []string) error {
 	if len(names) == 0 {
 		fmt.Printf("no policy applies to %s\n", p.Name)
 	}
+	// "not loaded", not "no such policy", for the reason listPolicies
+	// gives: a name absent from entries either is declared nowhere or is
+	// declared by a file that would not parse, and an unparseable file has
+	// no readable name to tell those apart by. LoadAll has already named
+	// the file and the error on stderr if that is what happened.
 	var missing []string
 	for _, name := range names {
 		if _, ok := entries[name]; ok {
 			fmt.Println(name)
 			continue
 		}
-		fmt.Printf("%s (no such policy)\n", name)
+		fmt.Printf("%s (not loaded)\n", name)
 		missing = append(missing, name)
 	}
 	if err := policy.CheckCoverage(p); err != nil {
 		return fmt.Errorf("cannot enforce any policy on %s: %w", p.Name, err)
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("%s is bound to %s, which does not exist as a policy -- "+
-			"nothing can enforce what is not there", p.Name, strings.Join(missing, ", "))
+		return fmt.Errorf("%s is bound to %s, which no policy loads under -- "+
+			"nothing can enforce what did not load", p.Name, strings.Join(missing, ", "))
 	}
 	// Only where the answer would otherwise read as a verdict: names
 	// printed and an exit code of zero, from a verb that means "confirm
