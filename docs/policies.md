@@ -172,8 +172,8 @@ brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no a
 $ brig policy rm no-net --force
 removed /home/you/.config/brig/policies/no-net.yaml
 $ brig policy check claude-code
-no-net (no such policy)
-brig: claude-code is bound to no-net, which does not exist as a policy -- nothing can enforce what is not there
+no-net (not loaded)
+brig: claude-code is bound to no-net, which no policy loads under -- nothing can enforce what did not load
 ```
 
 `brig policy ls` prints what binds a policy right under it, when anything
@@ -185,6 +185,22 @@ $ brig policy ls
 no-net          only Anthropic's API and one internal range
                 bound to: claude-code, claude-code -n work
 ```
+
+`--force` on `rm`, or on a rename, leaves a binding pointing at a name
+nothing loads under any more. Both say so at the time, and then nothing
+does, so the listing is where that leftover reappears:
+
+```console
+$ brig policy rm no-net --force
+removed /home/you/.config/brig/policies/no-net.yaml
+$ brig policy ls
+no-net          (not loaded; bound to claude-code)
+```
+
+"not loaded" rather than "no such policy", because there are two ways to
+get there and brig cannot always tell them apart: either nothing declares
+that name, or the file that declares it did not parse -- and in that
+second case the file and its parse error are named separately on stderr.
 
 `rm` refuses a policy that is bound to anything -- an inline `policy:`
 entry, a profile-level attach, or a session-level one -- unless you pass
@@ -316,7 +332,7 @@ removed /home/you/.config/brig/policies/no-net.yaml
 | ``unknown profile "x". `brig profiles` lists them`` | `attach`, `detach` or `check` naming a profile that is not there |
 | `cannot attach x to y: y is kind: shell, which has no agent to hook an egress rule into. Nothing was written` | `attach` to a `kind: shell` or `kind: gui` profile |
 | `cannot enforce any policy on x: x is kind: shell, which has no agent to hook an egress rule into` | `check` on a `kind: shell` or `kind: gui` profile |
-| `x is bound to y, which does not exist as a policy -- nothing can enforce what is not there` | `check` on a profile bound to a name `--force` on `rm` or a rename left with no policy behind it |
+| `x is bound to y, which no policy loads under -- nothing can enforce what did not load` | `check` on a profile bound to a name nothing loads under: either `--force` on `rm` or a rename left no policy behind it, or the file that declares it did not parse (named separately on stderr) |
 | `x is already declared inline in y's policy: list, which binds every run already. Nothing was written` | `attach` naming a policy the profile's own `policy:` list already declares |
 | `x is declared inline in y's policy: list, not attached; edit the profile directly to remove it` | `detach` naming a policy the profile's own `policy:` list declares, without `-n` |
 | `x is bound to y. Detach it first, or pass --force to remove it anyway` | `rm` on a policy attached to a profile or a session (a policy declared only inline says "edit the profile's policy: list" instead) |

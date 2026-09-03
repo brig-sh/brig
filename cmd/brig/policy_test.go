@@ -83,6 +83,38 @@ func TestListPoliciesOmitsBoundToWhenNothingBinds(t *testing.T) {
 	}
 }
 
+// --force on rm, or on an edit's rename, leaves a binding pointing at a
+// name nothing declares. Both say so at the time and then nothing does, so
+// the listing is where that leftover has to reappear -- otherwise the only
+// way to find it is running check against every profile in turn.
+func TestListPoliciesSurfacesAnOrphanedBinding(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := removePolicy([]string{"no-net", "--force"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, listPolicies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "no-net") || !strings.Contains(out, "not loaded") ||
+		!strings.Contains(out, "claude-code") {
+		t.Errorf("the orphaned binding was not surfaced: %q", out)
+	}
+	// no-net was the only policy and is gone, so the listing is otherwise
+	// empty -- but having nothing to manage and having a leftover to clean
+	// up are different states, and saying both at once contradicts itself.
+	if strings.Contains(out, "no policies yet") {
+		t.Errorf("said \"no policies yet\" above an orphaned binding: %q", out)
+	}
+}
+
 func TestListPoliciesShowsAProfileAttachment(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
@@ -1663,10 +1695,10 @@ func TestCheckFailsWhenABoundPolicyDoesNotExist(t *testing.T) {
 	if err == nil {
 		t.Fatal("check accepted a binding to a policy that no longer exists")
 	}
-	if !strings.Contains(err.Error(), "no-net") || !strings.Contains(err.Error(), "does not exist") {
+	if !strings.Contains(err.Error(), "no-net") || !strings.Contains(err.Error(), "no policy loads under") {
 		t.Errorf("the error does not say what is missing: %v", err)
 	}
-	if !strings.Contains(out, "no such policy") {
+	if !strings.Contains(out, "not loaded") {
 		t.Errorf("check did not mark the missing name in its listing: %q", out)
 	}
 }
