@@ -56,6 +56,15 @@ case "$verb" in
       printf '%s stopped\n' "$(cat "$STUB_STATE.stopped")"
     ;;
   run)
+    # What a real runtime says on its way up: a pull, then a boot. brig holds
+    # this rather than passing it through, so the cases below can ask where it
+    # ended up. STUB_RUN_FAIL turns the boot into the one that has to stay
+    # reportable however quiet brig is.
+    printf 'pulling ghcr.io/brig-sh/claude-code-stock:latest\n' >&2
+    if [ -n "${STUB_RUN_FAIL:-}" ]; then
+      printf 'FATAL: no space left on device\n' >&2
+      exit 1
+    fi
     # Remember the instance name and the shared directory the way a real
     # runtime binds them at boot.
     #
@@ -1437,10 +1446,21 @@ export BRIG_COSIGN_BIN="$WORK/bin/cosign"
 fresh() { "$WORK/brig" stop claude > /dev/null 2>&1; }
 
 fresh
+# A signature that checks out is narration, not a warning: there is nothing for
+# anyone to act on, so #24 moved it behind --verbose. The default run below
+# asserts the other half -- that the line is gone from the output a person gets
+# without asking for detail -- and everything else this section checks is a
+# refusal or a gap, which stays on screen either way.
+out="$(BRIG_VERIFY=warn "$WORK/brig" --verbose run claude -p hi 2>&1)"
+case "$out" in
+  *"signature verified"*) ok "a signature that checks out is reported under --verbose" ;;
+  *) bad "a signature that checks out is reported under --verbose -- got: $out" ;;
+esac
+fresh
 out="$(BRIG_VERIFY=warn "$WORK/brig" run claude -p hi 2>&1)"
 case "$out" in
-  *"signature verified"*) ok "a signature that checks out is reported" ;;
-  *) bad "a signature that checks out is reported -- got: $out" ;;
+  *"signature verified"*) bad "a default run reported a signature that checked out -- got: $out" ;;
+  *) ok "a default run says nothing about a signature that checks out" ;;
 esac
 grep 'argv: run ' "$STUB_LOG" | tail -1 | grep -q '@sha256:' \
   && ok "the verified digest is what hull was told to boot" \
@@ -1551,6 +1571,110 @@ retired '<agent>@<label>' run claude --name retn -d
 retired '<agent>@<label>' run claude -n retn -d
 # Last of the group: it removes what the others were acting on.
 retired 'brig rm --all' reset
+
+echo "== what a run says =="
+# #24: by default, print what the user has to act on. brig's own progress and
+# the runtime's own output wait for --verbose; -q is identifiers and errors.
+"$WORK/brig" rm --all > /dev/null 2>&1
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude -d > "$WORK/say.out" 2> "$WORK/say.err"
+grep -q '^SANDBOX ' "$WORK/say.err" \
+  && ok "a default run prints the envelope" \
+  || bad "a default run prints the envelope -- got: $(cat "$WORK/say.err")"
+grep -q 'starting sandbox' "$WORK/say.err" \
+  && bad "a default run narrated the boot -- got: $(cat "$WORK/say.err")" \
+  || ok "a default run does not narrate the boot"
+grep -q 'pulling ghcr.io' "$WORK/say.err" \
+  && bad "a default run passed the runtime's output through -- got: $(cat "$WORK/say.err")" \
+  || ok "a default run holds the runtime's output"
+
+# --verbose asks for both, and gets both.
+"$WORK/brig" rm --all > /dev/null 2>&1
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" --verbose run claude -d > /dev/null 2> "$WORK/verbose.err"
+grep -q 'starting sandbox' "$WORK/verbose.err" \
+  && ok "--verbose narrates the boot" \
+  || bad "--verbose narrates the boot -- got: $(cat "$WORK/verbose.err")"
+grep -q 'pulling ghcr.io' "$WORK/verbose.err" \
+  && ok "--verbose prints the runtime's own output" \
+  || bad "--verbose prints the runtime's own output -- got: $(cat "$WORK/verbose.err")"
+
+# The one that matters most: a boot that fails still says what the runtime said,
+# with nothing asked for. Hold the output and lose it and a broken boot becomes
+# unreportable.
+"$WORK/brig" rm --all > /dev/null 2>&1
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret STUB_RUN_FAIL=1 \
+  "$WORK/brig" run claude -d > /dev/null 2> "$WORK/failed.err"
+rc=$?
+[ "$rc" != 0 ] && ok "a boot the runtime refused fails the run" \
+  || bad "a boot the runtime refused exited 0"
+grep -q 'no space left on device' "$WORK/failed.err" \
+  && ok "a failed boot quotes what the runtime said" \
+  || bad "a failed boot quotes what the runtime said -- got: $(cat "$WORK/failed.err")"
+
+# -q is identifiers and errors only: the envelope goes, and so do the warnings
+# that stand in the default output.
+"$WORK/brig" rm --all > /dev/null 2>&1
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret GH_TOKEN='op://vault/item/field' \
+  "$WORK/brig" -q run claude -d > "$WORK/q.out" 2> "$WORK/q.err"
+grep -q '^SANDBOX ' "$WORK/q.err" \
+  && bad "brig -q printed the envelope" || ok "brig -q drops the envelope"
+grep -q 'unresolved secret reference' "$WORK/q.err" \
+  && bad "brig -q printed a warning -- got: $(cat "$WORK/q.err")" \
+  || ok "brig -q drops brig's warnings"
+# The other half of "identifiers and errors only": an error is not something -q
+# takes away, and neither is the evidence under it. A boot that fails has to be
+# reportable at every level brig has.
+"$WORK/brig" rm --all > /dev/null 2>&1
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret STUB_RUN_FAIL=1 \
+  "$WORK/brig" -q run claude -d > /dev/null 2> "$WORK/qfail.err"
+rc=$?
+[ "$rc" != 0 ] && ok "brig -q still fails a boot the runtime refused" \
+  || bad "brig -q exited 0 on a boot the runtime refused"
+grep -q 'no space left on device' "$WORK/qfail.err" \
+  && ok "brig -q still quotes what the runtime said" \
+  || bad "brig -q still quotes what the runtime said -- got: $(cat "$WORK/qfail.err")"
+
+# The same flag after the verb, which is where it used to live. It keeps
+# working for this release and names the position it moved to.
+"$WORK/brig" rm --all > /dev/null 2>&1
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude -q -d > /dev/null 2> "$WORK/runq.err"
+grep -q '^SANDBOX ' "$WORK/runq.err" \
+  && bad "run -q printed the envelope" || ok "-q after the verb still means quiet"
+grep -q 'is now `brig -q <verb> <ref>`' "$WORK/runq.err" \
+  && ok "-q after the verb names the global position" \
+  || bad "-q after the verb names the global position -- got: $(cat "$WORK/runq.err")"
+
+# -v is not brig's. It is Claude Code's version flag, codex's verbose flag and
+# Docker's volume flag, so brig claims neither reading: left of the verb it is
+# an unknown token, and right of the ref it is the agent's word.
+"$WORK/brig" -v run claude > "$WORK/dashv.out" 2>&1
+rc=$?
+[ "$rc" = 2 ] && ok "-v before the command is a usage error" \
+  || bad "-v before the command is a usage error -- rc $rc: $(cat "$WORK/dashv.out")"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude -v > /dev/null 2> "$WORK/agentv.err"
+rc=$?
+# Not a usage error: right of the ref the vocabulary is the agent's, and brig
+# hands the token over rather than reading it. Any other status is the run
+# itself, which the cases above assert.
+[ "$rc" != 2 ] && ok "-v after the ref is not brig's to refuse" \
+  || bad "-v after the ref was refused: $(cat "$WORK/agentv.err")"
+grep -q -- "-v is one of brig's own flags" "$WORK/agentv.err" \
+  && bad "brig claimed -v as its own -- got: $(cat "$WORK/agentv.err")" \
+  || ok "brig claims no reading of -v"
+
+# And the global -q reaches ls as the meaning ls already had: refs alone.
+"$WORK/brig" -q ls > "$WORK/globalq.out" 2>&1
+[ "$(cat "$WORK/globalq.out")" = claude-code ] \
+  && ok "brig -q ls prints the refs alone" \
+  || bad "brig -q ls prints the refs alone -- got: $(cat "$WORK/globalq.out")"
+"$WORK/brig" ls -q > "$WORK/lsq.out" 2>&1
+[ "$(cat "$WORK/lsq.out")" = claude-code ] \
+  && ok "ls -q is unchanged" || bad "ls -q is unchanged -- got: $(cat "$WORK/lsq.out")"
 
 [ "$fail" = 0 ] && echo PASS || echo FAILURES
 exit "$fail"

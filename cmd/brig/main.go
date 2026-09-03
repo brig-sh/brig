@@ -72,6 +72,14 @@ and the label reaching the agent as its display name. A label brig would have
 to rewrite is refused rather than rewritten. brig ls prints the ref of every
 sandbox, and every verb above takes one.
 
+global flags (left of the command, as in: brig -q run claude):
+      --verbose          print brig's own progress and the runtime's own
+                         output. No short form: -v belongs to the agents
+  -q, --quiet            identifiers and errors only, for a script. It drops
+                         the execution envelope and brig's warnings; with ls
+                         it prints the refs, one per line
+                         (-q after the verb still works this release)
+
 flags (before the agent's own arguments; -- ends brig's parsing):
       --image IMAGE      guest image to boot
       --home PATH        host directory to mount as the guest home
@@ -81,14 +89,16 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --mem MB           guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
-  -q, --quiet            with run: do not print the execution envelope before
-                         the agent starts. With ls: print the refs and nothing
-                         else, one per line, for a script to read
       --skills           project your own ~/.claude skills and plugins into
                          the guest, read-only (or BRIG_SKILLS=1)
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
+
+By default a run prints the execution envelope, then anything you have to act
+on, then the agent. brig's own progress and the runtime's output are held back
+until --verbose asks for them -- and a boot that fails quotes what the runtime
+said whether or not you asked.
 
 Workspaces persist. The sandbox keeps running between commands, so a second
 run is immediate; state lives in the workspace on the host either way.
@@ -152,10 +162,17 @@ func notFoundf(format string, a ...any) error { return &notFoundError{fmt.Sprint
 func run(args []string) error {
 	// The global position first, so a flag written left of the verb is named
 	// rather than read as a command.
-	verbLine, err := parseGlobal(args)
+	g, verbLine, err := parseGlobal(args)
 	if err != nil {
 		return err
 	}
+	// And how much this invocation says, before anything says it. That is what
+	// the global position buys: `brig -q run claude` is quiet from the first
+	// line, the notices about profiles below included. The run-line spelling of
+	// -q is read much later -- it sits on the far side of the ref -- so those
+	// notices have already printed by the time it is known, which is one more
+	// reason the flag has moved.
+	verbosity = g.verbosity()
 	if len(verbLine) == 0 {
 		// No verb: a bare `brig`, or global flags and nothing to do with them.
 		fmt.Print(usage)
@@ -167,14 +184,14 @@ func run(args []string) error {
 	// in for a built-in. A broken file is reported and skipped rather than
 	// taking down the profile you were actually asking for.
 	if err := profile.Load(profile.Dir()); err != nil {
-		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
+		warnf("%s", err)
 	}
 	// Files left in the pre-profile directory are read by nothing and look
 	// exactly like files that work: the profile they were pinning silently
 	// reverts to brig's own. Nothing is moved for you -- these name credential
 	// variables, and there is no safe guess about which you still want.
 	if hint := profile.LegacyHint(); hint != "" {
-		fmt.Fprintln(os.Stderr, "brig: "+hint)
+		warnf("%s", hint)
 	}
 	warnDeprecatedProfileKeys()
 
@@ -232,7 +249,11 @@ func run(args []string) error {
 		}
 		return agentCmd(rest)
 	case "ls":
-		return listSandboxes(rest)
+		// The global -q reaches ls as its own meaning: refs and nothing else.
+		// The two readings agree -- bare refs ARE identifiers only -- and ls
+		// still reads -q after the verb itself, which is the spelling #5
+		// documented and the round-trip test consumes.
+		return listSandboxes(rest, verbosity <= wrap.Quiet)
 	case "reset":
 		// reset was the one verb whose name did not say what it acts on, which
 		// is the whole of its problem: it removes every sandbox brig has, and it
@@ -331,6 +352,12 @@ func run(args []string) error {
 		return usagef("--no-project belongs to `brig run`, not `brig %s`. "+
 			"A session runs without its project from the next `brig run --no-project` onwards", verb)
 	}
+	// The run-line spelling of -q, for the one release in which both work. It
+	// is read here rather than in the global position, so everything above has
+	// already printed: that asymmetry is the notice's point, not a gap in it.
+	if opts.quiet {
+		verbosity = wrap.Quiet
+	}
 	if opts.load.Project != "" {
 		warnPositionalMeaning(opts.load.Project)
 	}
@@ -377,6 +404,7 @@ func run(args []string) error {
 		}
 		rt = nil
 	}
+	opts.load.Verbosity = verbosity
 	cfg, err := wrap.Load(t, opts.load, rt)
 	if err != nil {
 		return err
@@ -386,8 +414,7 @@ func run(args []string) error {
 	// whenever the two differ. A name that sanitises onto another session's
 	// sandbox is refused later, at EnsureRunning; this only names the directory.
 	if cfg.RawName != "" && cfg.RawName != cfg.Slug {
-		fmt.Fprintf(os.Stderr, "brig: session %q uses %s (sandbox %s)\n",
-			cfg.RawName, cfg.Workspace, cfg.VMName)
+		warnf("session %q uses %s (sandbox %s)", cfg.RawName, cfg.Workspace, cfg.VMName)
 	}
 
 	// Stopping and removing need nothing but the instance name, and are
@@ -411,7 +438,7 @@ func run(args []string) error {
 	// when there is no sandbox yet it lets EnsureRunning start one without
 	// printing the block, so a scripted `brig sh` is not interrupted.
 	// --quiet drops it for a script or a returning session.
-	if (verb == "run" || verb == "create") && !opts.quiet {
+	if (verb == "run" || verb == "create") && verbosity > wrap.Quiet {
 		cfg.PrintPreRunEnvelope(set)
 	}
 
@@ -462,8 +489,7 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 	}
 	switch {
 	case t.IsGUI():
-		fmt.Fprintf(os.Stderr, "brig: sandbox %s is running; the %s window should be visible.\n",
-			cfg.VMName, t.GUITitle)
+		warnf("sandbox %s is running; the %s window should be visible.", cfg.VMName, t.GUITitle)
 		return nil
 	case detach:
 		// The sandbox is up and will stay up; print the name so a script can
@@ -540,6 +566,16 @@ var brigFlags = []struct {
 	short    string
 	value    bool // takes a value, so the next argument may belong to it
 	position position
+	// retiredAs and retiredTo are the notice for a flag whose POSITION is
+	// going, rather than its spelling: what to stop writing, and what to write
+	// instead. Empty on a flag that is not retiring here.
+	//
+	// On the entry rather than in deprecatedFlags because that map is keyed by
+	// spelling and cannot say this: -q is not going anywhere, its place on the
+	// line is, and the same spelling in the other position is the replacement.
+	// The table already carries a position per flag, so this is a field on the
+	// row rather than a case in split.
+	retiredAs, retiredTo string
 }{
 	{long: "name", short: "n", value: true, position: posRun},
 	{long: "image", short: "t", value: true, position: posRun},
@@ -563,7 +599,26 @@ var brigFlags = []struct {
 	{long: "skills", position: posRun},
 	{long: "network", value: true, position: posRun},
 	{long: "offline", position: posRun},
-	{long: "quiet", short: "q", position: posRun},
+	// --verbose is brig's own progress and the runtime's own output, and it is
+	// global because it is a fact about the whole invocation rather than about
+	// one run line.
+	//
+	// It has NO short form, on purpose and permanently. -v is Claude Code's
+	// version flag, codex's verbose flag and Docker's volume flag: brig owns
+	// none of those readings, and taking the letter would make `brig run
+	// claude -v` mean one thing to brig and another to everything else the
+	// reader has ever typed it at. Do not add it back as an obvious
+	// convenience.
+	{long: "verbose", position: posGlobal},
+	// -q is global from this release. It was on the run line, and `brig run
+	// claude -q` is a line people have written, so the run-line spelling below
+	// keeps working for one release and says where the flag went -- the same
+	// two-release window every other retiring spelling took. Global-only would
+	// have sent that -q to the agent, silently changing what a working command
+	// does.
+	{long: "quiet", short: "q", position: posGlobal},
+	{long: "quiet", short: "q", position: posRun,
+		retiredAs: "brig <verb> <ref> -q", retiredTo: "brig -q <verb> <ref>"},
 }
 
 // deprecatedFlags are the spellings on their way out, and what replaces each.
@@ -600,28 +655,52 @@ var deprecatedFlags = map[string]string{
 // being greedier here silently eats an agent's own flag: `brig run claude
 // -image x` has to stay the agent's -image.
 func ours(arg string, at position) (mine bool, takesValue bool) {
+	mine, takesValue, _ = oursAt(arg, at)
+	return mine, takesValue
+}
+
+// oursAt is ours with the position the match was found in, which only matters
+// when the search was posAny: a flag brig read nowhere on this line still has a
+// place it belongs, and that is what the tail notice has to name.
+func oursAt(arg string, at position) (mine bool, takesValue bool, found position) {
 	name, _, inline := strings.Cut(arg, "=")
 	for _, f := range brigFlags {
 		if at != posAny && f.position != at {
 			continue
 		}
 		if name == "--"+f.long || (f.short != "" && name == "-"+f.short) {
-			return true, f.value && !inline
+			return true, f.value && !inline, f.position
 		}
 	}
-	return false, false
+	return false, false, 0
+}
+
+// retiredAt reports the notice for a flag written in a position it is leaving:
+// the spelling to stop writing and the one that replaces it, or two empty
+// strings when the flag is not retiring here. See brigFlags.
+func retiredAt(arg string, at position) (was, now string) {
+	name, _, _ := strings.Cut(arg, "=")
+	for _, f := range brigFlags {
+		if f.position != at || f.retiredTo == "" {
+			continue
+		}
+		if name == "--"+f.long || (f.short != "" && name == "-"+f.short) {
+			return f.retiredAs, f.retiredTo
+		}
+	}
+	return "", ""
 }
 
 // splitGlobal finds the verb and refuses anything standing left of it.
 //
-// The global position is closed and, today, empty: every entry in brigFlags is
-// on the run line, so ours answers no to every token here. Establishing it
-// while it is empty is the point. `brig --json run claude` is a line someone
-// will type, and the two ways to read a token brig does not own are "the
-// command is --json" and "the agent wants it" -- one reports a command that
-// does not exist and the other hands a word to an agent that does not have it.
-// Naming the token is the third reading, and it is the one that is true.
-// #24, #11 and #30 are what put flags in here.
+// The global position is closed, and #24 is what put the first flags in it:
+// --verbose and -q, both facts about the whole invocation rather than about one
+// run line. It stays closed. `brig --json run claude` is a line someone will
+// type, and the two ways to read a token brig does not own are "the command is
+// --json" and "the agent wants it" -- one reports a command that does not exist
+// and the other hands a word to an agent that does not have it. Naming the
+// token is the third reading, and it is the one that is true. #11 and #30 are
+// what fill the rest of it in.
 //
 // A flag-shaped verb -- -h, --help, --version -- is a verb, not a token in this
 // position: those are the spellings brig has always answered to.
@@ -657,27 +736,55 @@ func verbSpelling(arg string) bool {
 	return false
 }
 
+// globals are brig's flags in the global position: how much this invocation
+// says about itself, which is a property of the whole command rather than of
+// the run line inside it.
+type globals struct {
+	quiet   bool
+	verbose bool
+}
+
+// verbosity is the level these two flags ask for. Neither given is the default,
+// which is what a person reads.
+func (g globals) verbosity() wrap.Verbosity {
+	switch {
+	case g.quiet:
+		return wrap.Quiet
+	case g.verbose:
+		return wrap.Verbose
+	}
+	return wrap.Normal
+}
+
 // parseGlobal reads brig's global flags -- the ones legal left of the verb --
-// and returns the verb and everything after it.
+// and returns them with the verb and everything after it.
 //
-// There are none yet, so this parses an empty list. It exists anyway so that
-// adding a global flag is the same two-step adding a run-line flag is, a table
-// entry and a registration, and so that doing only the first half fails here
-// with the flag package's "not defined" rather than accepting the flag and
-// dropping it on the floor.
-func parseGlobal(args []string) (rest []string, err error) {
+// Registering a flag here is the second half of adding a global one; the table
+// entry in brigFlags is the first. Doing only the first half fails here with
+// the flag package's "not defined" rather than accepting the flag and dropping
+// it on the floor.
+func parseGlobal(args []string) (g globals, rest []string, err error) {
 	mine, rest, err := splitGlobal(args)
 	if err != nil {
-		return nil, err
+		return globals{}, nil, err
 	}
 	fs := flag.NewFlagSet("brig", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
-	// Nothing is registered here yet. See the doc comment.
-	if err := fs.Parse(mine); err != nil {
-		return nil, rewriteFlagError(err)
+	// No short form for --verbose, deliberately and permanently. See brigFlags.
+	fs.BoolVar(&g.verbose, "verbose", false, "")
+	for _, spelling := range []string{"quiet", "q"} {
+		fs.BoolVar(&g.quiet, spelling, false, "")
 	}
-	return rest, nil
+	if err := fs.Parse(mine); err != nil {
+		return globals{}, nil, rewriteFlagError(err)
+	}
+	// Both at once asks to be told more and less about the same run, and either
+	// winner would leave the line reading like it asked for the opposite.
+	if g.quiet && g.verbose {
+		return globals{}, nil, usagef("--quiet and --verbose ask for different things; drop one")
+	}
+	return g, rest, nil
 }
 
 // split divides a run line into brig's own arguments, the session ref, the
@@ -764,6 +871,12 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 			// and reaches this loop as a value, not as a token.
 			if spelling, _, _ := strings.Cut(a, "="); deprecatedFlags[spelling] != "" {
 				deprecated(spelling, deprecatedFlags[spelling])
+			} else if was, now := retiredAt(a, posRun); now != "" {
+				// A flag whose place on the line is what retires, not its
+				// spelling. Said here, where the position is known, rather than
+				// after the flag package has read it and forgotten where it
+				// stood.
+				deprecated(was, now)
 			}
 			mine = append(mine, a)
 			if takesValue && i+1 < len(args) {
@@ -792,10 +905,10 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 // person typing it, so there is nothing to point out -- the same rule agentTail
 // follows.
 func warnPositionalMeaning(word string) {
-	fmt.Fprintf(os.Stderr, "brig: `%s` is now the project directory this run mounts, "+
+	warnf("`%s` is now the project directory this run mounts, "+
 		"and brig starts the agent in it. It used to be the agent's first argument "+
 		"instead. If that is what you meant, put it after --: `brig run <ref> -- %s`. "+
-		"This notice goes in the next release.\n", word, word)
+		"This notice goes in the next release.", word, word)
 }
 
 // agentTail hands the tail back as the agent's, saying so for any of brig's own
@@ -813,12 +926,22 @@ func warnPositionalMeaning(word string) {
 // already made.
 func agentTail(tail []string) []string {
 	for _, a := range tail {
-		if mine, _ := ours(a, posAny); mine {
-			name, _, _ := strings.Cut(a, "=")
-			fmt.Fprintf(os.Stderr, "brig: %s is one of brig's own flags, but here it is the "+
-				"agent's: brig stopped reading the line at the argument before it. "+
-				"Put %s before the profile for brig to read it.\n", name, name)
+		mine, _, at := oursAt(a, posAny)
+		if !mine {
+			continue
 		}
+		// Where the flag actually belongs, which is not the same place for
+		// every flag any more: --verbose and -q stand left of the verb, and
+		// telling their reader to put one before the profile would send them to
+		// a position that refuses it.
+		where := "before the profile"
+		if at == posGlobal {
+			where = "before the command"
+		}
+		name, _, _ := strings.Cut(a, "=")
+		warnf("%s is one of brig's own flags, but here it is the "+
+			"agent's: brig stopped reading the line at the argument before it. "+
+			"Put %s %s for brig to read it.", name, name, where)
 	}
 	return tail
 }
@@ -1055,7 +1178,7 @@ func spell(name string) string {
 // It leads with the ref, which is what every other verb takes: a listing whose
 // identifier no verb accepts is a listing a reader cannot act on, and copying
 // what it printed used to be an error.
-func listSandboxes(args []string) error {
+func listSandboxes(args []string, quiet bool) error {
 	// ls names no session and -q is the only flag it has, so anything else here
 	// is a token it would otherwise read and discard -- `brig ls claude` looks
 	// like it filters to one agent and does not. Refuse it rather than answer a
@@ -1066,7 +1189,6 @@ func listSandboxes(args []string) error {
 	// parser exists to find where brig's arguments stop, which on this verb is
 	// immediately. Both spellings, because -q and --quiet are one flag
 	// everywhere else brig reads them.
-	quiet := false
 	for _, a := range args {
 		switch a {
 		case "-q", "--quiet":
@@ -1401,13 +1523,13 @@ func removeAll(spelling string, args []string) error {
 		wrap.ForgetSandbox(inst.Name)
 		wrap.ForgetSlugClaim(inst.Name)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "brig: could not remove %s: %v\n", inst.Name, err)
+			warnf("could not remove %s: %v", inst.Name, err)
 			continue
 		}
 		fmt.Println(inst.Name)
 		removed++
 	}
-	fmt.Fprintf(os.Stderr, "brig: removed %d sandbox(es). Workspaces are untouched.\n", removed)
+	warnf("removed %d sandbox(es). Workspaces are untouched.", removed)
 	// A network whose sandbox was removed outside brig is not reachable
 	// through Remove, because that sandbox is not in the list any more. This is
 	// the one command that leaves nothing behind, so it prunes those too. Only
@@ -2184,7 +2306,31 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 // something being piped. Kept for one release: one commit of published history
 // is not long enough to have broken anyone's muscle memory on purpose.
 func deprecated(old, replacement string) {
-	fmt.Fprintf(os.Stderr, "brig: `%s` is now `%s`\n", old, replacement)
+	warnf("`%s` is now `%s`", old, replacement)
+}
+
+// verbosity is how much this invocation says about itself, read off the global
+// position before anything prints. See wrap.Verbosity for the rule.
+//
+// Package state rather than a value threaded through, because every notice
+// below is at the top of its own call chain: there is nothing above them
+// holding a writer to hand in, and they are lines brig prints about a command
+// rather than values a command returns. run sets it on every invocation, so a
+// test that drives run twice does not inherit the first one's level.
+var verbosity = wrap.Normal
+
+// warnf prints one of brig's own notices to stderr: a warning, a deprecation, a
+// word about what a line now means.
+//
+// It stays in the default output -- a warning is an action -- and goes only
+// under -q, which is a script asking for identifiers and errors. An error is
+// never printed through here: errors are returned, and main prints them at
+// every level.
+func warnf(format string, a ...any) {
+	if verbosity < wrap.Normal {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "brig: "+format+"\n", a...)
 }
 
 // warnDeprecatedProfileKeys says that a profile FILE still carries
@@ -2209,10 +2355,10 @@ func warnDeprecatedProfileKeys() {
 		if path, ok := profile.Path(p.Name); ok {
 			where = path
 		}
-		fmt.Fprintf(os.Stderr, "brig: hostCredential: in %s is deprecated and goes in the "+
+		warnf("hostCredential: in %s is deprecated and goes in the "+
 			"next release -- it reads another application's keychain on every run. "+
 			"Declare the credential under secrets: with sources: instead, then: "+
-			"brig secret import %s\n", where, p.Name)
+			"brig secret import %s", where, p.Name)
 	}
 }
 

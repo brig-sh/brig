@@ -335,6 +335,12 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		// read it, so the backend this spec boots is the one that was checked.
 		Hypervisor: hypervisor,
 		Counted:    true,
+		// Where the runtime's own words go. Empty unless --verbose asked for
+		// them, which is what tells the adapter to hold them for the failure
+		// instead; the one line each end of a long download is separate and
+		// stays in the default output. See runtimeOutput and runtimeNotice.
+		Progress: c.runtimeOutput(),
+		Notice:   c.runtimeNotice(),
 	}
 	if err := c.Runtime.Run(spec); err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
