@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/verify"
 )
 
 // levelled builds a Config whose three writers a test can read back, at the
@@ -100,5 +103,147 @@ func TestNormalIsTheZeroValue(t *testing.T) {
 	var v Verbosity
 	if v != Normal {
 		t.Errorf("the zero Verbosity is %d, want Normal", v)
+	}
+}
+
+// The VERIFY row names the policy this run boots under, for every mode.
+//
+// It is the half of verification that is knowable when the envelope is
+// printed: the block goes out before the sandbox boots, which is the point of
+// it, and the checks happen afterwards inside EnsureRunning. See verifyLine.
+func TestTheEnvelopeNamesTheVerifyMode(t *testing.T) {
+	for _, mode := range []verify.Mode{verify.Require, verify.Warn, verify.Off} {
+		c := testConfig(t, t.TempDir(), t.TempDir())
+		c.Verify = mode
+		block := &bytes.Buffer{}
+		c.renderEnvelope(block, creds.Set{})
+
+		got := block.String()
+		if !strings.Contains(got, "VERIFY ") {
+			t.Errorf("%s: the envelope has no VERIFY row:\n%s", mode, got)
+			continue
+		}
+		if !strings.Contains(got, string(mode)) {
+			t.Errorf("%s: the VERIFY row does not name the mode:\n%s", mode, got)
+		}
+	}
+}
+
+// A replaced trust policy is the state the row most has to carry: the check
+// still runs and still reports success, and it is no longer brig's check.
+func TestTheVerifyRowSaysWhenThePolicyIsNotBrigsOwn(t *testing.T) {
+	c := testConfig(t, t.TempDir(), t.TempDir())
+	c.Verify = verify.Warn
+	c.VerifyPolicy = verify.Policy{Registry: "ghcr.io/someone-else"}
+	if !c.VerifyPolicy.Replaced() {
+		t.Fatal("the fixture policy does not read as replaced; the test proves nothing")
+	}
+
+	if got := c.verifyLine(); !strings.Contains(got, "replaced trust policy") {
+		t.Errorf("the VERIFY row does not say the policy is not brig's: %q", got)
+	}
+}
+
+// The outcome, which the row cannot carry. A default run states that
+// verification held, in one line, so that a quiet run is not asking the reader
+// to infer it from an absence.
+func TestADefaultRunSaysVerificationHeld(t *testing.T) {
+	c, said, _ := levelled(Normal)
+	c.verified = []string{"image"}
+	c.sayVerified()
+	if !strings.Contains(said.String(), "image verified") {
+		t.Errorf("a default run said nothing about verification holding: %q", said.String())
+	}
+}
+
+// One line for the whole step, however many checks reached it: a reader wants
+// to know that what boots verified, not to audit the checks.
+func TestTheOutcomeIsOneLineForEveryCheck(t *testing.T) {
+	c, said, _ := levelled(Normal)
+	c.verified = []string{"image", "boot assets"}
+	c.sayVerified()
+	if got := strings.Count(said.String(), "\n"); got != 1 {
+		t.Errorf("the outcome took %d lines, want 1: %q", got, said.String())
+	}
+	if !strings.Contains(said.String(), "image and boot assets verified") {
+		t.Errorf("the outcome does not name both checks: %q", said.String())
+	}
+}
+
+// And nothing is said when nothing was positively checked. BRIG_VERIFY=off, an
+// image nobody claimed to publish and a machine with no cosign each say so
+// themselves, in the default output; "verified" beside any of them is false.
+func TestNothingIsSaidWhenNothingVerified(t *testing.T) {
+	c, said, _ := levelled(Normal)
+	c.sayVerified()
+	if said.Len() != 0 {
+		t.Errorf("a run that verified nothing claimed it had: %q", said.String())
+	}
+}
+
+// -q takes the outcome with everything else between an identifier and an
+// error; --verbose keeps it and adds the per-check detail it summarises.
+func TestTheOutcomeFollowsTheLevel(t *testing.T) {
+	c, said, _ := levelled(Quiet)
+	c.verified = []string{"image"}
+	c.sayVerified()
+	if said.Len() != 0 {
+		t.Errorf("-q printed the verification outcome: %q", said.String())
+	}
+
+	c, said, progress := levelled(Verbose)
+	c.verified = []string{"image"}
+	c.progressf("image ghcr.io/x: signature verified")
+	c.sayVerified()
+	if !strings.Contains(said.String(), "image verified") {
+		t.Errorf("--verbose dropped the outcome: %q", said.String())
+	}
+	if !strings.Contains(progress.String(), "signature verified") {
+		t.Errorf("--verbose dropped the per-check detail: %q", progress.String())
+	}
+}
+
+// `brig info` does not boot, so it has no outcome to report: the row appears
+// and the line does not. That asymmetry is the report being honest about what
+// it knows rather than a gap in it -- the command answers what a run WOULD
+// trust, and whether a signature holds is not established until something
+// checks it.
+func TestInfoShowsTheModeAndNoOutcome(t *testing.T) {
+	c := testConfig(t, t.TempDir(), t.TempDir())
+	c.Verify = verify.Require
+	report, said := &bytes.Buffer{}, &bytes.Buffer{}
+	c.Out, c.Err = report, said
+
+	c.Info(creds.Set{})
+
+	if !strings.Contains(report.String(), "VERIFY ") {
+		t.Errorf("brig info has no VERIFY row:\n%s", report.String())
+	}
+	if !strings.Contains(report.String(), "image verification: require") {
+		t.Errorf("brig info dropped the verification line from the report:\n%s", report.String())
+	}
+	for _, w := range []*bytes.Buffer{report, said} {
+		if strings.Contains(w.String(), "image verified") {
+			t.Errorf("brig info claimed an outcome it never established:\n%s", w.String())
+		}
+	}
+}
+
+// The envelope is `brig info`'s output whatever level a run asks for. It is the
+// answer to a command asked by name, which is the same reason the report it
+// heads is not levelled -- see sayf. Only a RUN decides whether to print it,
+// and cmd/brig makes that decision; the block itself never goes quiet.
+func TestInfoPrintsTheEnvelopeAtEveryLevel(t *testing.T) {
+	for _, level := range []Verbosity{Quiet, Normal, Verbose} {
+		c := testConfig(t, t.TempDir(), t.TempDir())
+		c.Verbosity = level
+		report := &bytes.Buffer{}
+		c.Out = report
+
+		c.Info(creds.Set{})
+
+		if !strings.Contains(report.String(), "SANDBOX ") {
+			t.Errorf("level %d: brig info dropped the envelope:\n%s", level, report.String())
+		}
 	}
 }

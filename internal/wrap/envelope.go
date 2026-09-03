@@ -8,6 +8,7 @@ import (
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/verify"
 )
 
 // envelopeRow is one line of the execution envelope: a label and the value
@@ -78,9 +79,12 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 	}
 	rows = append(rows,
 		// The pull policy, the same detail the full report prints beside the
-		// image. Whether the signature verified is a separate fact that the
-		// verify-mode row will carry, so it is deliberately not folded in here.
+		// image. Whether the signature verified is a separate fact, and the row
+		// below carries the half of it that is knowable here.
 		envelopeRow{"IMAGE", fmt.Sprintf("%s (pull %s)", c.Image, c.Pull)},
+		// Directly under the image, because it is the same subject: that row
+		// names what boots and this one names whether anything checks it first.
+		envelopeRow{"VERIFY", c.verifyLine()},
 		envelopeRow{"CREDENTIALS", c.credentialLine(set)},
 		// The posture, said out loud. It decides what the agent can reach, and
 		// until it appeared here the only way to know was to remember which
@@ -108,6 +112,38 @@ func (c *Config) isolationLine() string {
 			" (no runtime, so brig cannot tell what a sandbox here would stand on)"
 	}
 	return c.Runtime.Isolation(c.hypervisor()).Line()
+}
+
+// verifyLine is the VERIFY row: whether the guest image and the kernel it boots
+// are checked before they run, and whose policy says so.
+//
+// The mode rather than the outcome, and that is forced rather than chosen. The
+// envelope is printed before the sandbox boots, which is the whole point of it,
+// and verification happens inside EnsureRunning afterwards -- so at the moment
+// this row is written there is no outcome to report. sayVerified prints the
+// other half when the checks have run.
+//
+// The pair is what makes a quiet run readable. #24 put the per-check success
+// lines behind --verbose, on the rule that a check which passed is not an
+// action; without this row a default run saying nothing about verification
+// would be indistinguishable from one where nothing was checked, which is the
+// one reading that must never be available by accident. The row says what the
+// policy is, the line afterwards says it held, and everything that did not hold
+// still prints unasked.
+//
+// The full report reads this too, so the block and `brig info` cannot come to
+// describe the same policy differently. See reportVerify.
+func (c *Config) verifyLine() string {
+	switch {
+	case c.Verify == verify.Off:
+		return "off (BRIG_VERIFY=off), so nothing is checked before it boots"
+	case c.VerifyPolicy.Replaced():
+		return fmt.Sprintf("%s, against a replaced trust policy "+
+			"(BRIG_VERIFY_REGISTRY, BRIG_VERIFY_IDENTITY or BRIG_VERIFY_ISSUER is set, "+
+			"so this is not brig's own check)", c.Verify)
+	default:
+		return fmt.Sprintf("%s, against brig's own trust policy", c.Verify)
+	}
 }
 
 // credentialLine is the CREDENTIALS row: every credential this run hands the
@@ -182,7 +218,12 @@ func (c *Config) renderEnvelope(w io.Writer, set creds.Set) {
 // sandbox, to stderr. Stderr rather than stdout so it never lands in the
 // agent's own output or in the sandbox name a scripted create captures; the
 // block is a notice, not the command's result. --quiet suppresses it entirely.
-func (c *Config) PrintPreRunEnvelope(set creds.Set) { c.renderEnvelope(c.Err, set) }
+func (c *Config) PrintPreRunEnvelope(set creds.Set) {
+	// Recorded so the checks below do not say a second time what the VERIFY row
+	// has just said. See verifyImage.
+	c.envelopeShown = true
+	c.renderEnvelope(c.Err, set)
+}
 
 // Info is `brig info`: the envelope, then everything `brig env` has always
 // printed, both to stdout because here the report is the point. `brig env` is

@@ -50,13 +50,29 @@ func (c *Config) verifyImage() error {
 		// state no command mentioned: the check returned here, before any
 		// output, so a sandbox booted unchecked and nothing on screen said so.
 		// The quietest path was the one that most needed a line.
-		c.warnf("BRIG_VERIFY=off, so the guest image is not checked before it boots")
+		//
+		// Unless the envelope has already said it. The VERIFY row carries the
+		// mode, so on a run that printed the block this line is the same fact a
+		// second time, four lines apart -- and a fact stated twice is one a
+		// reader starts skipping. Said exactly once at every level: by the row
+		// when there is one, by this line when there is not, which is every
+		// default run, every -q run and every cold `brig sh`.
+		if !c.envelopeShown {
+			c.alertf("BRIG_VERIFY=off, so the guest image is not checked before it boots")
+		}
 		return nil
 	}
 	if c.Runtime.PinsDigest() {
 		return c.verifyDigest()
 	}
-	c.warnf("this %s cannot boot by digest (hull 0.1.0-rc23 or newer can), so the tag "+
+	// An alert rather than a warning, on the same rule as "could not check": it
+	// is a caveat on the claim, not a note beside it. What verified and what
+	// boots are not provably the same bytes here -- under the default pull
+	// policy they need not be, which is the limitation docs/security.md
+	// records -- so a reader told nothing would believe a digest was pinned
+	// when none was. The upgrade advice in it is incidental; the substance is
+	// that brig's guarantee is weaker on this host than it otherwise is.
+	c.alertf("this %s cannot boot by digest (hull 0.1.0-rc23 or newer can), so the tag "+
 		"is verified and booted rather than a pinned digest", c.Runtime.Kind())
 	return c.verifyTag()
 }
@@ -70,9 +86,12 @@ func (c *Config) verifyTag() error {
 
 	switch res.Outcome {
 	case verify.Verified:
-		// A signature that checked out is nothing to act on, so it narrates
-		// rather than warns: the default output carries the refusals and the
-		// gaps, and no news here is the good news. See Verbosity.
+		// The per-check detail narrates rather than warns: a signature that
+		// checked out is nothing to act on, and one line per check on every
+		// boot is the noise #24 is about. What the default run gets instead is
+		// one summary line for the whole step, which is what recording it here
+		// is for. See sayVerified.
+		c.verified = append(c.verified, "image")
 		c.progressf("%s", res.Message())
 		return nil
 
@@ -80,11 +99,11 @@ func (c *Config) verifyTag() error {
 		if c.Verify == verify.Require {
 			return fmt.Errorf("%s (BRIG_VERIFY=require)", res.Message())
 		}
-		c.warnf("%s", res.Message())
+		c.alertf("%s", res.Message())
 		return nil
 
 	default:
-		c.warnf("%s", res.Message())
+		c.alertf("%s", res.Message())
 		if c.Verify == verify.Require {
 			return errors.New("refusing to boot an image that failed verification")
 		}
@@ -135,10 +154,11 @@ func (c *Config) verifyDigest() error {
 		// nothing to act on and narrates; an image nobody claimed to publish is
 		// a gap in what was checked, and that stays on screen.
 		if res.Outcome == verify.Verified {
+			c.verified = append(c.verified, "image")
 			c.progressf("%s", res.Message())
 			return nil
 		}
-		c.warnf("%s", res.Message())
+		c.alertf("%s", res.Message())
 		return nil
 
 	case verify.NoTooling:
@@ -149,7 +169,7 @@ func (c *Config) verifyDigest() error {
 		if c.Verify == verify.Require {
 			return fmt.Errorf("%s (BRIG_VERIFY=require)", res.Message())
 		}
-		c.warnf("%s", res.Message())
+		c.alertf("%s", res.Message())
 		return nil
 
 	case verify.Unresolved:
@@ -160,7 +180,7 @@ func (c *Config) verifyDigest() error {
 		// would let anyone who can make the registry unreachable, a captive
 		// portal or a sinkhole, turn the default mode into "unchecked". Nothing
 		// is pinned either way: a yes boots the cached tag.
-		c.warnf("%s", res.Message())
+		c.alertf("%s", res.Message())
 		if c.Verify == verify.Require {
 			return errors.New("refusing to boot an image that could not be verified " +
 				"(BRIG_VERIFY=require)")
@@ -176,11 +196,11 @@ func (c *Config) verifyDigest() error {
 		// Boot the resolved digest whatever we decide below: the object on disk
 		// is the one we are refusing to trust, so a "yes" must not boot it.
 		c.BootDigest = res.Digest
-		c.warnf("%s", res.Message())
+		c.alertf("%s", res.Message())
 		if !res.Ours {
-			// A third party's copy differing from the registry is a warning, the
-			// same weight as NotOurs -- unless Require, which trusts nothing it
-			// cannot positively verify.
+			// A third party's copy differing from the registry is said and
+			// booted, the same weight as NotOurs -- unless Require, which
+			// trusts nothing it cannot positively verify.
 			if c.Verify == verify.Require {
 				return errors.New("refusing under BRIG_VERIFY=require: the local image " +
 					"is not the digest the registry serves")
@@ -200,7 +220,7 @@ func (c *Config) verifyDigest() error {
 
 	default: // verify.Failed
 		c.BootDigest = res.Digest
-		c.warnf("%s", res.Message())
+		c.alertf("%s", res.Message())
 		if c.Verify == verify.Require {
 			return errors.New("refusing to boot an image that failed verification")
 		}
@@ -218,6 +238,35 @@ func (c *Config) verifyDigest() error {
 	}
 }
 
+// sayVerified is the one line a default run prints about verification that
+// held.
+//
+// It is the other half of the VERIFY row. The row names the policy before the
+// sandbox boots, because that is all that is knowable then; this names the
+// result after the checks have run. Without it a quiet run says nothing about
+// verification at all, and "nothing was said" would have to be read as "it
+// verified" -- an inference on an absence, about the one subject where a reader
+// must never have to make one.
+//
+// A warning rather than narration, unlike the per-check lines it summarises.
+// Those are detail about how the answer was reached and wait for --verbose;
+// this is the answer, and the default run is where it belongs. -q drops it with
+// everything else between an identifier and an error.
+//
+// One line for the whole step, not one per check. The image and the kernel are
+// two checks under one policy, and a reader wants to know that what boots
+// verified rather than to audit the checks -- which is also why nothing is said
+// when nothing was positively checked. BRIG_VERIFY=off, an image nobody
+// claimed to publish and a machine with no cosign have each already said so
+// themselves, in the default output, and a run that added "verified" beside
+// them would be false.
+func (c *Config) sayVerified() {
+	if len(c.verified) == 0 {
+		return
+	}
+	c.warnf("%s verified", strings.Join(c.verified, " and "))
+}
+
 // confirm asks a yes/no question, defaulting to no.
 //
 // Without a terminal there is nobody to ask, and assuming yes would turn the
@@ -232,7 +281,7 @@ func (c *Config) verifyDigest() error {
 // front of nobody while the client waits.
 func (c *Config) confirm(question string) bool {
 	if c.NoTerminal || !IsTerminal(os.Stdin) {
-		c.warnf("not a terminal, so there is nobody to ask: refusing. " +
+		c.alertf("not a terminal, so there is nobody to ask: refusing. " +
 			"Set BRIG_VERIFY=off to boot it regardless.")
 		return false
 	}
@@ -283,7 +332,9 @@ func (c *Config) verifyBootAssets() error {
 	switch res.Outcome {
 	case verify.Verified:
 		// Narration for the same reason the image's success line is: the kernel
-		// verified, and there is nothing here for anybody to do about it.
+		// verified, and there is nothing here for anybody to do about it. It
+		// joins the summary the run prints for the whole step.
+		c.verified = append(c.verified, "boot assets")
 		c.progressf("boot assets %s: signature verified", ref)
 		return nil
 
@@ -295,18 +346,18 @@ func (c *Config) verifyBootAssets() error {
 			return fmt.Errorf("refusing to boot: the boot assets at %s are not published "+
 				"by brig, so their signature cannot be checked (BRIG_VERIFY=require)", ref)
 		}
-		c.warnf("boot assets %s are not published by brig, so nothing was checked "+
+		c.alertf("boot assets %s are not published by brig, so nothing was checked "+
 			"about the kernel this sandbox boots", ref)
 		return nil
 
 	case verify.NoTooling, verify.Unresolved:
-		// Could not check, rather than failed. It follows the image's rule: a
-		// warning by default, a refusal under require.
+		// Could not check, rather than failed. It follows the image's rule: said
+		// out loud at every level by default, a refusal under require.
 		if c.Verify == verify.Require {
 			return fmt.Errorf("refusing to boot: the boot assets at %s could not be "+
 				"verified (%s) (BRIG_VERIFY=require)", ref, res.Message())
 		}
-		c.warnf("the boot assets at %s could not be verified: %s", ref, res.Message())
+		c.alertf("the boot assets at %s could not be verified: %s", ref, res.Message())
 		return nil
 
 	default:

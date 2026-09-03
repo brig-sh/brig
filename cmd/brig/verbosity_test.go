@@ -127,3 +127,33 @@ func TestQuietSuppressesBrigsOwnNotices(t *testing.T) {
 		t.Errorf("the default output dropped a notice: %q", said)
 	}
 }
+
+// The envelope is behind --verbose. Nine rows of boundary before the agent says
+// anything is the machinery #24 is about, whoever wrote the machinery, and the
+// block is not gone: `brig info` is the command whose whole output it is, and
+// it answers without booting anything.
+//
+// Both of showsEnvelope's rules are here, because a change to either is silent:
+// a verb that starts printing the block interrupts a script, and a level that
+// starts printing it undoes this issue.
+func TestTheEnvelopeIsBehindVerbose(t *testing.T) {
+	for _, tc := range []struct {
+		verb  string
+		level wrap.Verbosity
+		want  bool
+	}{
+		{"run", wrap.Quiet, false},
+		{"run", wrap.Normal, false},
+		{"run", wrap.Verbose, true},
+		{"create", wrap.Verbose, true},
+		// sh continues a session whose boundary the reader has already met, and
+		// a scripted one on a cold sandbox must not be interrupted by a block.
+		{"sh", wrap.Verbose, false},
+		{"info", wrap.Verbose, false},
+		{"stop", wrap.Verbose, false},
+	} {
+		if got := showsEnvelope(tc.verb, tc.level); got != tc.want {
+			t.Errorf("showsEnvelope(%q, %d) = %v, want %v", tc.verb, tc.level, got, tc.want)
+		}
+	}
+}

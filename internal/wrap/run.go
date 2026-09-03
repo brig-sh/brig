@@ -277,6 +277,10 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if err := c.verifyBootAssets(); err != nil {
 		return &VerifyRefusedError{Err: err}
 	}
+	// Both checks are in, so the run can state the outcome in one line. Here
+	// rather than inside either check, because there is one answer for the step
+	// and two checks that reach it. See sayVerified.
+	c.sayVerified()
 
 	// The share below is a path, and the runtime resolves it again on its own
 	// time -- after the image pull, after the VM starts. PrepareWorkspace
