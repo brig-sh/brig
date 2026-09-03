@@ -15,6 +15,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/session"
 	"sigs.k8s.io/yaml"
 )
 
@@ -604,6 +605,53 @@ func sessionGivenEmpty(fs *flag.FlagSet, session string) bool {
 	return given
 }
 
+// checkSessionName refuses a -n value that cannot name a session brig would
+// actually start.
+//
+// An attachment is an address: it says which session a policy binds, and a
+// session's sandbox and workspace are named from its slug (see
+// internal/wrap/config.go). A value Slug would rewrite therefore addresses
+// a session nobody typed -- `-n "My Work"` would record "My Work" while
+// `brig run -n "My Work"` starts my-work, so the binding would apply to
+// nothing and `check -n my-work` would report nothing bound. This is the
+// same reasoning ParseRef gives for refusing a label in the strict
+// agent@label form: refusing keeps an attachment an address, rather than
+// letting one spelling quietly stand in for a session started under
+// another.
+//
+// run's --name stays lenient and sanitises instead, but that is its older
+// behaviour kept for compatibility, and even it reports the directory it
+// landed on. -n here is new and carries no such debt, so it takes the
+// strict rule.
+//
+// The other two refusals are Resolve's, which is what run --name is held
+// to: a value with nothing usable in it, and one that is some profile's
+// own workspace. Both name a session run would refuse to start, so an
+// attachment to either could never apply.
+//
+// The character rules stay in Slug and are not restated here, so the two
+// cannot drift.
+func checkSessionName(name string) error {
+	slug := session.Slug(name)
+	if slug == "" {
+		return fmt.Errorf("session %q has no usable characters. "+
+			"Sessions use letters, digits, dot, dash and underscore", name)
+	}
+	// Reserved first, and against the slug, so a name is never turned away
+	// with advice that is itself refused: `-n Desktop` would otherwise be
+	// told to type "desktop", which is the workspace claude-desktop owns.
+	// Resolve tests it in this order for the same reason.
+	if owner, ok := profile.Reserved(slug); ok {
+		return fmt.Errorf("session %q becomes %q, which the %s profile already uses. "+
+			"Pick another name", name, slug, owner)
+	}
+	if slug != name {
+		return fmt.Errorf("session %q is not usable as it stands: it would have to become %q. "+
+			"Type %q if that is the session you want", name, slug, slug)
+	}
+	return nil
+}
+
 // parseAttachArgs pulls a policy name, a profile name, and an optional -n
 // session out of args.
 func parseAttachArgs(verb string, args []string) (policyName, profileName, session string, err error) {
@@ -634,6 +682,18 @@ func attachPolicy(args []string) error {
 	policyName, profileName, session, err := parseAttachArgs("attach", args)
 	if err != nil {
 		return err
+	}
+	// Checked here and not in the shared parser: this is the one command
+	// that writes a session name down, and it is writing an address that
+	// has to match a session brig would start. detach and check read the
+	// record instead, and have to be able to name whatever is in it --
+	// including a key some earlier build or a hand edit put there. Holding
+	// them to this rule would refuse the exact spelling a listing prints
+	// and leave nothing able to remove it.
+	if session != "" {
+		if err := checkSessionName(session); err != nil {
+			return err
+		}
 	}
 	if _, err := lookupPolicy(policyName); err != nil {
 		return err
