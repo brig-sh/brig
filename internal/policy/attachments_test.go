@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +16,37 @@ func TestLoadAttachmentsIgnoresAMissingFile(t *testing.T) {
 	}
 	if len(a.Profiles) != 0 || len(a.Sessions) != 0 {
 		t.Errorf("a.Profiles/Sessions = %v/%v, want both empty", a.Profiles, a.Sessions)
+	}
+}
+
+// A record that will not parse fails rather than reading as empty, and the
+// failure names the file: the parse error on its own says only that some
+// YAML somewhere was wrong, which leaves nothing to open and fix.
+//
+// Both shapes of unparseable are covered, because they come from different
+// layers and neither names the file on its own: YAML that does not parse at
+// all, and YAML that parses into the wrong type for a field.
+func TestLoadAttachmentsNamesTheFileItCouldNotParse(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+	}{
+		{"broken syntax", "not: [valid\n"},
+		{"wrong type", "profiles: \"a string\"\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, attachmentsBasename),
+				[]byte(c.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadAttachments(dir)
+			if err == nil {
+				t.Fatal("an unparseable record read as empty instead of failing")
+			}
+			if !strings.Contains(err.Error(), attachmentsPath(dir)) {
+				t.Errorf("the error does not name the file to fix: %v", err)
+			}
+		})
 	}
 }
 

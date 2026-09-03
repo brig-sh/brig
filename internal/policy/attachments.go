@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -34,17 +35,30 @@ func attachmentsPath(dir string) string {
 // LoadAttachments reads the attachment record from dir. A dir with no
 // attachments.yaml yet is not an error: it just means nothing has been
 // attached.
+//
+// A record that will not parse is an error rather than an empty read, on
+// purpose and unlike readIndex in internal/wrap: that one caches which
+// sandbox holds which workspace, where a corrupt file costs a restart, but
+// this one is what every refusal in the policy commands is checked
+// against. Reading a broken record as "nothing is bound" would report a
+// binding that exists as absent, which is the wrong direction to fail for
+// a record whose whole job is to say what is constrained.
+//
+// The path is named because the parse error on its own does not name it,
+// and a caller who cannot tell which file to open has nothing to act on.
 func LoadAttachments(dir string) (Attachments, error) {
-	blob, err := os.ReadFile(attachmentsPath(dir))
+	path := attachmentsPath(dir)
+	blob, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Attachments{}, nil
 		}
+		// os.ReadFile's error is a *PathError and names path already.
 		return Attachments{}, err
 	}
 	var a Attachments
 	if err := yaml.UnmarshalStrict(blob, &a); err != nil {
-		return Attachments{}, err
+		return Attachments{}, fmt.Errorf("%s is not a valid attachment record: %w", path, err)
 	}
 	return a, nil
 }
