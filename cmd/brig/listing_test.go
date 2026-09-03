@@ -90,11 +90,11 @@ func TestListingQuietPrintsRefsOnly(t *testing.T) {
 	// -q is a flag on ls, and the only one. Anything else is still refused.
 	scratchHost(t)
 	for _, args := range [][]string{{"-q"}, {"--quiet"}} {
-		if _, err := captureStdout(t, func() error { return listSandboxes(args) }); err != nil {
+		if _, err := captureStdout(t, func() error { return listSandboxes(args, false) }); err != nil {
 			t.Errorf("brig ls %s: %v", args[0], err)
 		}
 	}
-	if _, err := captureStdout(t, func() error { return listSandboxes([]string{"-x"}) }); err == nil {
+	if _, err := captureStdout(t, func() error { return listSandboxes([]string{"-x"}, false) }); err == nil {
 		t.Error("brig ls -x was accepted")
 	}
 }

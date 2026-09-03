@@ -45,7 +45,7 @@ func TestLsSurfacesUnknownRuntime(t *testing.T) {
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
 	t.Setenv("BRIG_RUNTIME", "podman")
 
-	err := listSandboxes(nil)
+	err := listSandboxes(nil, false)
 	if err == nil {
 		t.Fatal("brig ls with an unknown BRIG_RUNTIME was accepted")
 	}
@@ -93,7 +93,7 @@ func TestLsWithoutARuntimeSaysNothingToList(t *testing.T) {
 	t.Setenv("BRIG_RUNTIME", "")
 	emptyPath(t)
 
-	if err := listSandboxes(nil); err != nil {
+	if err := listSandboxes(nil, false); err != nil {
 		t.Errorf("ls with no runtime on PATH failed instead of listing nothing: %v", err)
 	}
 }

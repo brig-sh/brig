@@ -170,12 +170,25 @@ the agent the vocabulary is the agent's, and `--` ends brig's parsing outright,
 so an agent flag spelled like one of brig's still reaches it.
 
 brig does still read its own flags after the agent, because `brig run claude -q`
-is a line that works. What ends brig's reading is the first token it does not
-own. On `run` that is not the project directory -- the second bare word is
+is a line that works -- `-q` has moved left of the verb, and the old spelling
+keeps working for this release and says so. What ends brig's reading is the
+first token it does not own. On `run` that is not the project directory -- the second bare word is
 brig's own operand, so brig reads past it and on to the next token; see
 [The project you name](#the-project-you-name). Once an unknown token has ended
 brig's reading, a brig flag further along belongs to the agent -- and brig says
 so, without taking the token, so a line that works today keeps working.
+
+| global flag | what it does |
+| --- | --- |
+| `--verbose` | brig's own progress and the runtime's own output. No short form: `-v` is Claude Code's version flag, codex's verbose flag and Docker's volume flag, so brig does not claim the letter |
+| `-q, --quiet` | identifiers and errors only, for a script. It drops the execution envelope and brig's warnings; on `ls` it prints the refs alone. Still read after the verb for this release, with a note |
+
+By default a run prints the execution envelope, then anything you have to act
+on, then the agent. brig's own progress lines and the runtime's own output wait
+for `--verbose` -- except that a boot which fails quotes what the runtime said
+whether or not you asked, because that is the only evidence there is. A long
+download gets one line saying it started and one saying it finished, rather than
+a stream.
 
 | flag | what it does |
 | --- | --- |
@@ -486,7 +499,7 @@ brig:   GH_TOKEN(secret)
 The block at the top is the execution envelope: the boundary the run would
 trust, printed before the sandbox boots. `brig run` prints the same block before
 it starts one, so what you preview is what you get. Names only, never values.
-`--quiet` drops it.
+`brig -q` drops it.
 
 A secret a profile declares but the store does not have fails the run before
 any sandbox is created, naming every one that is missing and the command that

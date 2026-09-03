@@ -16,26 +16,72 @@ import (
 // markerFile identifies the workspace from inside the guest. See Marker.
 const markerFile = ".brig-workspace"
 
+// warnf says something the reader has to act on: an expired credential, an
+// image that did not verify, a share that went stale.
+//
+// It stays in the default output, because a warning is an action -- that is the
+// half of #24's rule that keeps things on screen rather than taking them off.
+// Only -q drops it, and -q is a script asking for identifiers and errors and
+// nothing between the two.
 func (c *Config) warnf(format string, a ...any) {
+	if c.Verbosity < Normal {
+		return
+	}
 	fmt.Fprintf(c.Err, "brig: "+format+"\n", a...)
 }
 
+// sayf writes one line of the report `brig info` prints.
+//
+// Deliberately not levelled, unlike the two below it. This is the answer to the
+// command rather than narration about one: somebody typed the verb whose whole
+// output this is, and a report that went quiet because it was not asked for
+// twice would be a command that does nothing.
 func (c *Config) sayf(format string, a ...any) {
 	fmt.Fprintf(c.Out, "brig: "+format+"\n", a...)
 }
 
 // progressf narrates what the run is doing. See Config.Progress for why this
-// is not warnf.
+// is not warnf, and Verbosity for why it waits: a line saying a boot has
+// started is not something anybody acts on, so it is printed for the reader who
+// asked for detail and to nobody else.
 //
 // A nil Progress is silence rather than a panic, unlike Out and Err: losing a
 // line of narration costs the reader nothing, and every test that builds a
 // Config by hand would otherwise have to declare where its progress goes to
 // ask a question about something else.
 func (c *Config) progressf(format string, a ...any) {
-	if c.Progress == nil {
+	if c.Progress == nil || c.Verbosity < Verbose {
 		return
 	}
 	fmt.Fprintf(c.Progress, "brig: "+format+"\n", a...)
+}
+
+// runtimeOutput is where the runtime's own output goes: the writer a run
+// narrates to when --verbose asked for it, and nil otherwise.
+//
+// nil is not "throw it away". It is what tells the runtime adapter to hold the
+// output and quote it back if the boot fails, which is the one situation a
+// reader who wanted none of the detail still needs all of it. See
+// runtime.RunSpec.Progress.
+func (c *Config) runtimeOutput() io.Writer {
+	if c.Verbosity < Verbose {
+		return nil
+	}
+	return c.Progress
+}
+
+// runtimeNotice is where a long operation says, in one line, that it has
+// started and that it is done.
+//
+// It sits at the default level rather than behind --verbose, which is the whole
+// of #24's sixth item: a first run downloads a kernel, and a minute of silence
+// with nothing on screen reads as a hang. The stream behind that line is
+// runtimeOutput's, and it stays behind --verbose.
+func (c *Config) runtimeNotice() io.Writer {
+	if c.Verbosity < Normal {
+		return nil
+	}
+	return c.Progress
 }
 
 // Marker identifies this workspace by path and inode.

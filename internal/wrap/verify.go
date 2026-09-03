@@ -70,7 +70,10 @@ func (c *Config) verifyTag() error {
 
 	switch res.Outcome {
 	case verify.Verified:
-		c.warnf("%s", res.Message())
+		// A signature that checked out is nothing to act on, so it narrates
+		// rather than warns: the default output carries the refusals and the
+		// gaps, and no news here is the good news. See Verbosity.
+		c.progressf("%s", res.Message())
 		return nil
 
 	case verify.NotOurs, verify.NoTooling:
@@ -127,6 +130,13 @@ func (c *Config) verifyDigest() error {
 		c.BootDigest = res.Digest
 		if res.Outcome == verify.NotOurs && c.Verify == verify.Require {
 			return fmt.Errorf("%s (BRIG_VERIFY=require)", res.Message())
+		}
+		// The two outcomes part company here. A signature that checked out is
+		// nothing to act on and narrates; an image nobody claimed to publish is
+		// a gap in what was checked, and that stays on screen.
+		if res.Outcome == verify.Verified {
+			c.progressf("%s", res.Message())
+			return nil
 		}
 		c.warnf("%s", res.Message())
 		return nil
@@ -272,7 +282,9 @@ func (c *Config) verifyBootAssets() error {
 
 	switch res.Outcome {
 	case verify.Verified:
-		c.warnf("boot assets %s: signature verified", ref)
+		// Narration for the same reason the image's success line is: the kernel
+		// verified, and there is nothing here for anybody to do about it.
+		c.progressf("boot assets %s: signature verified", ref)
 		return nil
 
 	case verify.NotOurs:

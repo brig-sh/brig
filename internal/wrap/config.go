@@ -16,6 +16,31 @@ import (
 	"github.com/brig-sh/brig/internal/verify"
 )
 
+// Verbosity is how much a run says about itself.
+//
+// The rule it encodes is the one #24 sets: by default, print what the user has
+// to act on. A warning is an action and stays; brig's own narration and the
+// runtime's own output are not, and wait to be asked for. Below the default is
+// the form a script reads, where the output is identifiers and the errors that
+// stopped them, and nothing in between.
+//
+// Ordered rather than a set of modes, so every print site asks the same
+// question -- is this worth saying at the level we are at -- with one
+// comparison instead of a switch that has to be kept exhaustive.
+type Verbosity int
+
+const (
+	// Quiet is identifiers and errors only, for a script. An error is never
+	// printed at this level; it is returned, and the caller prints it.
+	Quiet Verbosity = iota - 1
+	// Normal is the default: warnings, the execution envelope, and one line
+	// each end of a long operation. It is the zero value, so a Config built by
+	// hand is at the level a person reads rather than silent.
+	Normal
+	// Verbose adds brig's own progress and the runtime's own output.
+	Verbose
+)
+
 // NamePrefix is what every brig sandbox name begins with. It is how brig picks
 // its own sandboxes out of a runtime that may be running other things, so it is
 // the one part of the name that is not the caller's to drop -- see the BRIG_NAME
@@ -163,6 +188,12 @@ type Config struct {
 	// why it went unnoticed for as long as the CLI was the only caller.
 	Progress io.Writer
 
+	// Verbosity decides how much of the above is written. See the type: Err
+	// carries warnings and goes quiet only under -q, and Progress carries
+	// narration and stays empty until --verbose asks for it. Out is not
+	// levelled -- it is the report `brig info` was asked for by name.
+	Verbosity Verbosity
+
 	env Env
 }
 
@@ -192,6 +223,11 @@ type Options struct {
 	// Network is the posture asked for on the command line, and beats both the
 	// setting and the profile. Empty means nothing was asked for.
 	Network string
+	// Verbosity is how much this invocation was asked to say: --verbose and
+	// -q, which are read left of the verb. The zero value is the default
+	// level, so a caller with no opinion -- brigd, and every test that builds
+	// Options by hand -- gets what a person reads.
+	Verbosity Verbosity
 }
 
 // Load resolves the configuration for one invocation.
@@ -366,6 +402,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Out:            os.Stdout,
 		Err:            os.Stderr,
 		Progress:       os.Stderr,
+		Verbosity:      o.Verbosity,
 		env:            env,
 	}
 	if strictErr != nil {

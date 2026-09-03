@@ -108,17 +108,37 @@ const testDigest = "sha256:11111111111111111111111111111111111111111111111111111
 
 // The digest brig resolved and verified is the digest it records to boot, and
 // the line names it.
+//
+// The line is narration rather than a warning since #24 -- a signature that
+// checked out is nothing to act on -- so it is read off Progress, and the run
+// asks for the detail the way --verbose does.
 func TestVerifyDigestPinsAndReportsTheDigest(t *testing.T) {
 	cosign := fakeCosign(t, testDigest, false)
 	c := digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn, cosign, testDigest)
+	progress := &bytes.Buffer{}
+	c.Progress, c.Verbosity = progress, Verbose
 	if err := c.verifyImage(); err != nil {
 		t.Fatalf("a verified image was refused: %v", err)
 	}
 	if c.BootDigest != testDigest {
 		t.Errorf("BootDigest = %q, want the resolved digest so EnsureRunning boots it", c.BootDigest)
 	}
-	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, testDigest) {
+	if said := progress.String(); !strings.Contains(said, testDigest) {
 		t.Errorf("the message did not name the digest: %q", said)
+	}
+}
+
+// And the default run says nothing about it. A verification that succeeded is
+// not an action, so the absence of a line is the report: everything this switch
+// prints in the default output is a refusal or a gap in what was checked.
+func TestAVerifiedImageIsSilentByDefault(t *testing.T) {
+	cosign := fakeCosign(t, testDigest, false)
+	c := digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn, cosign, testDigest)
+	if err := c.verifyImage(); err != nil {
+		t.Fatalf("a verified image was refused: %v", err)
+	}
+	if said := c.Err.(*bytes.Buffer).String(); said != "" {
+		t.Errorf("a default run narrated a successful verification: %q", said)
 	}
 }
 

@@ -84,7 +84,7 @@ func TestLsAndRemoveAllRefuseArguments(t *testing.T) {
 		fn   func([]string) error
 		args []string
 	}{
-		{"ls", listSandboxes, []string{"claude"}},
+		{"ls", func(args []string) error { return listSandboxes(args, false) }, []string{"claude"}},
 		{"rm --all", func(args []string) error { return removeAll("brig rm --all", args) },
 			[]string{"--dry-run"}},
 		{"reset", func(args []string) error { return removeAll("brig reset", args) },
@@ -200,6 +200,15 @@ func TestBrigFlagsOverlapWithClaudeCodeOnlyWhereKnown(t *testing.T) {
 	}
 	found := map[string]bool{}
 	for _, f := range brigFlags {
+		// Only the run line can collide. A global flag stands left of the verb
+		// and the agent's words stand right of the ref, so the two never occupy
+		// the same place: `brig --verbose run claude` is brig's and `brig run
+		// claude --verbose` is claude's, and neither reading is in doubt. That
+		// is a reason to put a flag brig shares with an agent in the global
+		// position rather than a reason to list it here.
+		if f.position == posGlobal {
+			continue
+		}
 		spellings := []string{"--" + f.long}
 		if f.short != "" {
 			spellings = append(spellings, "-"+f.short)
@@ -224,17 +233,17 @@ func TestBrigFlagsOverlapWithClaudeCodeOnlyWhereKnown(t *testing.T) {
 	}
 }
 
-// The global position -- left of the verb -- is closed. It holds no flags yet:
-// every flag brig has is on the run line, and #24, #11 and #30 are what fill
-// this in. Closed and empty is the point, so that a flag written there is
-// named rather than read as a command.
+// The global position -- left of the verb -- is closed. #24 filled it with
+// --verbose and -q; everything else is still a token to name rather than a
+// command to run or a word to forward, and #11 and #30 are what fill in the
+// rest.
 func TestGlobalPositionRefusesAnUnknownToken(t *testing.T) {
 	for _, args := range [][]string{
 		{"--json", "run", "claude"},
 		{"--nope", "ls"},
 		{"-y", "rm", "claude"},
 	} {
-		_, err := parseGlobal(args)
+		_, _, err := parseGlobal(args)
 		if err == nil {
 			t.Errorf("parseGlobal(%q) was accepted", args)
 			continue
@@ -261,7 +270,7 @@ func TestGlobalPositionPassesTheVerbLineThrough(t *testing.T) {
 		{"version"},
 		{"run", "claude", "--json"},
 	} {
-		rest, err := parseGlobal(args)
+		_, rest, err := parseGlobal(args)
 		if err != nil {
 			t.Errorf("parseGlobal(%q): %v", args, err)
 			continue

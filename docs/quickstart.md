@@ -47,17 +47,19 @@ The first run is the slow one. In order:
   ```
 
   Credentials are named, never printed. `brig info claude` shows the same block
-  without starting anything, and `--quiet` drops it.
+  without starting anything, and `brig -q run` drops it.
 - **The image is pulled.** The guest image comes down from the registry once.
   Later runs use the copy already on disk.
 - **The image is verified.** brig checks that the image was built by the
-  workflow that publishes it, and prints one line:
+  workflow that publishes it. A check that passed says nothing -- there is
+  nothing to do about it -- and `brig --verbose run` shows the line:
 
   ```
   brig: image ghcr.io/brig-sh/claude-code-stock:latest: signature verified
   ```
 
-  Then it starts the sandbox:
+  A check that fails, or one that could not be made, prints without being
+  asked. Then it starts the sandbox, which is another line `--verbose` carries:
 
   ```
   brig: starting sandbox brig-claude-code...
