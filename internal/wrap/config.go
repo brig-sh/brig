@@ -18,8 +18,8 @@ import (
 
 // Verbosity is how much a run says about itself.
 //
-// The rule it encodes is the one #24 sets: by default, print what the user has
-// to act on. A warning is an action and stays; brig's own narration and the
+// The rule it encodes: by default, print what the user has to act on. A
+// warning is an action and stays; brig's own narration and the
 // runtime's own output are not, and wait to be asked for. Below the default is
 // the form a script reads, where the output is identifiers and the errors that
 // stopped them, and nothing in between.

@@ -23,9 +23,9 @@ func stubRuntimeBin(t *testing.T, said string, status int) string {
 	return path
 }
 
-// The single most important behaviour in #24: the runtime's output is captured
-// rather than passed through, so a boot that fails must still quote what the
-// runtime said. Losing it would make a broken boot unreportable.
+// The runtime's output is captured rather than passed through, so a boot that
+// fails must still quote what the runtime said. Losing it would make a broken
+// boot unreportable.
 func TestRunQuotesWhatTheRuntimeSaidWhenItFails(t *testing.T) {
 	h := &hull{bin: stubRuntimeBin(t, "pulling ghcr.io/x\nError: no space left on device", 1)}
 

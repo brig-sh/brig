@@ -116,8 +116,8 @@ const testDigest = "sha256:11111111111111111111111111111111111111111111111111111
 // The digest brig resolved and verified is the digest it records to boot, and
 // the line names it.
 //
-// The line is narration rather than a warning since #24 -- a signature that
-// checked out is nothing to act on -- so it is read off Progress, and the run
+// The line is narration rather than a warning -- a signature that checked out
+// is nothing to act on -- so it is read off Progress, and the run
 // asks for the detail the way --verbose does.
 func TestVerifyDigestPinsAndReportsTheDigest(t *testing.T) {
 	cosign := fakeCosign(t, testDigest, false)

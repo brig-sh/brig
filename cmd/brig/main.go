@@ -254,8 +254,8 @@ func run(args []string) error {
 	case "ls":
 		// The global -q reaches ls as its own meaning: refs and nothing else.
 		// The two readings agree -- bare refs ARE identifiers only -- and ls
-		// still reads -q after the verb itself, which is the spelling #5
-		// documented and the round-trip test consumes.
+		// still reads -q after the verb itself, which is the spelling the
+		// round-trip test consumes.
 		return listSandboxes(rest, verbosity <= wrap.Quiet)
 	case "reset":
 		// reset was the one verb whose name did not say what it acts on, which
@@ -438,10 +438,8 @@ func run(args []string) error {
 	// The execution envelope: the boundary this run is about to trust, printed
 	// before the sandbox boots so the user sees it before it matters.
 	//
-	// Behind --verbose, which reverses part of #10 and part of #24's own text.
-	// The block was on every run, and reading a default run beside a quiet one
-	// settled it: nine rows of boundary before the agent says anything is the
-	// machinery this issue is about, whoever wrote the machinery. It is not
+	// Behind --verbose. Nine rows of boundary before the agent says anything is
+	// the machinery a quiet default is meant to remove. It is not
 	// gone and it is not harder to reach -- `brig info` is the command whose
 	// whole output it is, it answers without booting anything, and --verbose
 	// puts it back on a run. Do not restore it to the default: that is the
@@ -499,8 +497,8 @@ func run(args []string) error {
 // boundary worth naming, and whether the reader asked to see it.
 //
 // A function rather than a condition at the call site because both rules have
-// caught something. sh was carved out when a scripted `brig sh` on a cold
-// sandbox printed a block nobody was reading, and the level is what #24 moved.
+// caught something: a scripted `brig sh` on a cold sandbox printed a block
+// nobody was reading, and the level moved after that.
 func showsEnvelope(verb string, v wrap.Verbosity) bool {
 	switch verb {
 	case "run", "create":
@@ -725,14 +723,13 @@ func retiredAt(arg string, at position) (was, now string) {
 
 // splitGlobal finds the verb and refuses anything standing left of it.
 //
-// The global position is closed, and #24 is what put the first flags in it:
-// --verbose and -q, both facts about the whole invocation rather than about one
-// run line. It stays closed. `brig --json run claude` is a line someone will
-// type, and the two ways to read a token brig does not own are "the command is
-// --json" and "the agent wants it" -- one reports a command that does not exist
-// and the other hands a word to an agent that does not have it. Naming the
-// token is the third reading, and it is the one that is true. #11 and #30 are
-// what fill the rest of it in.
+// The global position is closed. --verbose and -q live there, both facts about
+// the whole invocation rather than about one run line, and a token brig does
+// not own is refused rather than read as something else. `brig --json run
+// claude` is a line someone will type, and the two other readings are "the
+// command is --json" and "the agent wants it": one reports a command that does
+// not exist, the other hands a word to an agent that does not have it. Naming
+// the token is the reading that is true.
 //
 // A flag-shaped verb -- -h, --help, --version -- is a verb, not a token in this
 // position: those are the spellings brig has always answered to.

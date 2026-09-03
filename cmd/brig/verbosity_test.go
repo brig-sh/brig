@@ -17,9 +17,8 @@ func atLevel(t *testing.T, v wrap.Verbosity) {
 	verbosity = v
 }
 
-// The global position was built closed and empty by #108. --verbose and -q are
-// its first inhabitants, which is the thing that proves the mechanism was worth
-// building.
+// --verbose and -q are read left of the verb. Both are facts about the whole
+// invocation rather than about one run line.
 func TestGlobalPositionReadsVerboseAndQuiet(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
@@ -128,10 +127,8 @@ func TestQuietSuppressesBrigsOwnNotices(t *testing.T) {
 	}
 }
 
-// The envelope is behind --verbose. Nine rows of boundary before the agent says
-// anything is the machinery #24 is about, whoever wrote the machinery, and the
-// block is not gone: `brig info` is the command whose whole output it is, and
-// it answers without booting anything.
+// The envelope is behind --verbose. It is not gone: `brig info` is the command
+// whose whole output it is, and it answers without booting anything.
 //
 // Both of showsEnvelope's rules are here, because a change to either is silent:
 // a verb that starts printing the block interrupts a script, and a level that

@@ -114,7 +114,7 @@ type RunSpec struct {
 	// nil holds it instead. It is captured and quoted back on the error if the
 	// boot fails, where it is the evidence, and dropped if it does not -- see
 	// narration. That is the default because the output is worth reading in
-	// exactly two situations, and a boot that worked is neither of them (#24).
+	// exactly two situations, and a boot that worked is neither of them.
 	Progress io.Writer
 	// Notice is where a long operation says, in one line, that it has started
 	// and that it is done.

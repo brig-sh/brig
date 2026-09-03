@@ -23,7 +23,7 @@ const narrationLimit = 64 << 10
 // wanted to read it. It is held instead: streamed live only when the caller
 // asked to see it, and otherwise quoted back on the error, where it is the
 // evidence for why a boot failed. Dropping it altogether would make a broken
-// boot unreportable, which is the one outcome worse than the noise (#24).
+// boot unreportable.
 //
 // It is deliberately not an io.Writer somebody can hand around: a narration
 // belongs to one child process, and explain is the other half of it.
