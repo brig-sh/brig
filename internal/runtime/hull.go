@@ -581,6 +581,25 @@ func firstLines(s string, n int) string {
 	return strings.Join(lines, "; ")
 }
 
+// Logs streams the instance's log. hull writes it to its own stdout, so the
+// stream is handed straight to spec.Out; --follow and --tail are the two flags
+// hull offers, and brig offers only what both runtimes share. The instance is
+// the positional. Not counted: reading a log is not the user action telemetry
+// attributes, the same reason ps and rm read false.
+func (h *hull) Logs(spec LogsSpec) error {
+	args := []string{"logs"}
+	if spec.Follow {
+		args = append(args, "--follow")
+	}
+	// hull's own default is -1 (all), so spec.Tail passes straight through.
+	args = append(args, "--tail", strconv.Itoa(spec.Tail), spec.Name)
+	cmd := exec.Command(h.bin, args...)
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	cmd.Stdout = spec.Out
+	cmd.Stderr = spec.Out
+	return cmd.Run()
+}
+
 func (h *hull) LogsHint(name string) string {
 	return fmt.Sprintf("%s logs %s", h.bin, name)
 }

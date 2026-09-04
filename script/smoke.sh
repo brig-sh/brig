@@ -764,6 +764,22 @@ grep -q '^argv: stop brig-claude-code' "$STUB_LOG" \
 grep -q 'CLAUDE_CODE_OAUTH_TOKEN' "$STUB_LOG" \
   && bad "stop resolved credentials" || ok "stop resolves no credentials"
 
+echo "== logs =="
+# brig hands the runtime the log request built from the ref: the sandbox name
+# the ref resolves to, and the flags the line carried. The stub logs its argv
+# like every other verb, so this asserts what reached the runtime. --tail -1 is
+# the default brig passes, which both runtimes read as "all".
+: > "$STUB_LOG"
+"$WORK/brig" logs claude > /dev/null 2>&1
+grep -q '^argv: logs --tail -1 brig-claude-code' "$STUB_LOG" \
+  && ok "logs streams the sandbox log through the runtime" \
+  || bad "logs streams the sandbox log -- got: $(grep '^argv:' "$STUB_LOG")"
+: > "$STUB_LOG"
+"$WORK/brig" logs claude --follow > /dev/null 2>&1
+grep -q '^argv: logs --follow --tail -1 brig-claude-code' "$STUB_LOG" \
+  && ok "logs --follow passes --follow to the runtime" \
+  || bad "logs --follow passes --follow -- got: $(grep '^argv:' "$STUB_LOG")"
+
 echo "== lifecycle verbs =="
 : > "$STUB_LOG"
 out="$("$WORK/brig" --verbose run claude -d 2>"$WORK/detach.err")"

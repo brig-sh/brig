@@ -429,6 +429,27 @@ func (n *nerdctl) quiet(verb, name string) error {
 	return cmd.Run()
 }
 
+// Logs streams the container's log. nerdctl documents --follow, --tail,
+// --since and --timestamps, but brig drives it against --follow and --tail
+// only, so the two runtimes offer brig the same thing and brig does not promise
+// what only one of them has. nerdctl has no negative tail -- its default is
+// already all -- so a -1 is passed as an absent flag rather than the literal.
+func (n *nerdctl) Logs(spec LogsSpec) error {
+	args := []string{"logs"}
+	if spec.Follow {
+		args = append(args, "--follow")
+	}
+	if spec.Tail >= 0 {
+		args = append(args, "--tail", strconv.Itoa(spec.Tail))
+	}
+	args = append(args, spec.Name)
+	cmd := exec.Command(n.bin, args...)
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	cmd.Stdout = spec.Out
+	cmd.Stderr = spec.Out
+	return cmd.Run()
+}
+
 func (n *nerdctl) LogsHint(name string) string {
 	return fmt.Sprintf("%s logs %s", n.bin, name)
 }
