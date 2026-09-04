@@ -328,8 +328,14 @@ func run(args []string) error {
 		// vocabulary of commands would send the reader looking for a verb they
 		// did not type, past a diagnosis that already names what is wrong with
 		// the ref.
+		//
+		// Classed as a usage error, the same way split wraps the identical
+		// ParseRef failure on the verbed line: nothing ran, so this is a token
+		// in the wrong place rather than a run that started and failed. The
+		// message is refErr's own, untouched, so the two spellings still read
+		// the same word for word -- only the exit code joins them.
 		if refErr != nil {
-			return refErr
+			return usagef("%s", refErr)
 		}
 		// An agent brig does not have falls through to the run line rather
 		// than being reported here, which is where the verbed form reports it
