@@ -96,7 +96,7 @@ func (n Network) Line() string {
 }
 
 // backendSpec is the part of a run a backend is entitled to refuse: which
-// backend, what network, and whether it opens a window.
+// backend, what network, which rules, and whether it opens a window.
 //
 // One derivation, used both by the check before anything is started and by the
 // spec that is actually booted, so the two cannot come to different answers
@@ -106,6 +106,7 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Name:       c.VMName,
 		Hypervisor: hypervisor,
 		Net:        c.Network.RuntimeNet(),
+		Egress:     runtimeEgress(c.Egress),
 		GUI:        c.Profile.IsGUI(),
 	}
 }
@@ -114,10 +115,10 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 // started -- and, unlike the check inside Run, on the path that finds the
 // sandbox already up and boots nothing.
 //
-// That path is where this matters most. A posture the backend cannot give
-// would otherwise be refused on the first run and waved through on every one
-// after, leaving the envelope reporting a network the sandbox is not on. A
-// runtime with no opinion is not asked.
+// That path is where this matters most. A policy attached to a sandbox running
+// on a backend that cannot enforce it would otherwise be refused on the first
+// run and waved through on every one after, printing a POLICY row over a
+// sandbox filtering nothing. A runtime with no opinion is not asked.
 func (c *Config) checkBackend(hypervisor string) error {
 	checker, ok := c.Runtime.(runtime.RunChecker)
 	if !ok {
@@ -126,13 +127,13 @@ func (c *Config) checkBackend(hypervisor string) error {
 	return checker.CanRun(c.backendSpec(hypervisor))
 }
 
-// networkStale reports whether the sandbox that is already running is on a
-// different network than this run resolved to.
+// networkStale reports whether the sandbox that is already running differs
+// from what this run resolved to.
 //
 // Asked of the runtime, because the runtime is what knows: brig owns the
-// network on hvi and can compare what the sandbox is behind against what this
-// posture asks for, and owns none of it on a backend that takes its network
-// from somewhere else. A runtime that cannot answer is treated as current -- a
+// network on hvi and can compare what the sandbox is behind against what these
+// rules ask for, and owns none of it on a backend that takes its network from
+// somewhere else. A runtime that cannot answer is treated as current -- a
 // restart nobody needed costs a boot, and this is not the check that should be
 // deciding to spend one on a guess.
 func (c *Config) networkStale() bool {
@@ -140,5 +141,5 @@ func (c *Config) networkStale() bool {
 	if !ok {
 		return false
 	}
-	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet())
+	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), runtimeEgress(c.Egress))
 }

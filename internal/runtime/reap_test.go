@@ -19,7 +19,7 @@ func TestStopEscalatesWhenSigtermIsIgnored(t *testing.T) {
 	scratchIsolatedDir(t)
 	sock := mustSocket(t, "brig-stubborn")
 	pid := spawnGateway(t, sock, "trap '' TERM\nsleep 60\n")
-	writeGatewayRecord(sock, pid, gatewaySpec(0))
+	writeGatewayRecord(sock, pid, gatewaySpec(0, Egress{}))
 
 	if !stopGatewayAt(sock) {
 		t.Fatal("a gateway that ignores SIGTERM was not stopped")
@@ -39,7 +39,7 @@ func TestStopClearsTheRecordsAndTheLog(t *testing.T) {
 	scratchIsolatedDir(t)
 	sock := mustSocket(t, "brig-tidy")
 	pid := fakeGateway(t, sock)
-	writeGatewayRecord(sock, pid, gatewaySpec(0))
+	writeGatewayRecord(sock, pid, gatewaySpec(0, Egress{}))
 	if err := os.WriteFile(gatewayLogPath(sock), []byte("boot noise\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestReplacingAGatewayThatCannotBeStoppedIsRefused(t *testing.T) {
 	// has nothing to signal and the socket keeps answering.
 	listenAt(t, sock)
 
-	_, err := ensureIsolatedGateway("hull", name, 1)
+	_, err := ensureIsolatedGateway("hull", name, 0, Egress{Default: "deny"})
 	if err == nil {
 		t.Fatal("a gateway that could not be replaced was reported ready")
 	}

@@ -95,7 +95,7 @@ func TestGatewayRecordRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := gatewaySpec(0)
+	want := gatewaySpec(0, Egress{})
 	writeGatewayRecord(sock, 4242, want)
 
 	if got := recordedSpec(sock); got != want {
@@ -111,11 +111,11 @@ func TestGatewayRecordRoundTrips(t *testing.T) {
 // hazard the shared socket carries its subnet in its name to avoid. The
 // isolated one carries it in its record instead.
 func TestGatewaySpecDistinguishesNetworks(t *testing.T) {
-	if gatewaySpec(0) == gatewaySpec(1) {
+	if gatewaySpec(0, Egress{}) == gatewaySpec(1, Egress{}) {
 		t.Error("two networks produced the same spec")
 	}
-	if !strings.Contains(gatewaySpec(1), sandboxSubnet(1)) {
-		t.Errorf("the spec does not name its subnet: %q", gatewaySpec(1))
+	if !strings.Contains(gatewaySpec(1, Egress{}), sandboxSubnet(1)) {
+		t.Errorf("the spec does not name its subnet: %q", gatewaySpec(1, Egress{}))
 	}
 }
 
@@ -230,75 +230,208 @@ func listenAt(t *testing.T, sock string) {
 	}()
 }
 
-// The one path that skips the boot is the one where a changed posture would go
-// unnoticed: brig finds the sandbox running, returns, and reports a network
-// that sandbox is not on.
-func TestNetworkStale(t *testing.T) {
+// The policy reaches the gateway as flags, and the gateway reads them once at
+// startup. A rule dropped here is a rule nothing enforces, which the sandbox
+// has no way to notice.
+func TestEgressArgsCarryEveryRule(t *testing.T) {
+	got := strings.Join(Egress{
+		Default: "deny",
+		Allow:   []Rule{{Host: "*.anthropic.com"}, {CIDR: "10.0.0.0/8"}},
+		Deny:    []Rule{{Host: "metadata.google.internal"}},
+	}.args(), " ")
+
+	for _, want := range []string{
+		"--egress-default deny",
+		"--egress-allow host=*.anthropic.com",
+		"--egress-allow cidr=10.0.0.0/8",
+		"--egress-deny host=metadata.google.internal",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing from the gateway command line: %s", want, got)
+		}
+	}
+}
+
+// No policy must mean no flags rather than an empty one: --egress-default is
+// what turns filtering on, and passing it with no rules under `deny` would
+// give a sandbox that reaches nothing at all.
+func TestEgressArgsAreEmptyWithoutAPolicy(t *testing.T) {
+	if got := (Egress{}).args(); len(got) != 0 {
+		t.Errorf("an unfiltered sandbox passed egress flags: %v", got)
+	}
+	if got := (Egress{Allow: []Rule{{Host: "example.com"}}}).args(); len(got) != 0 {
+		t.Errorf("rules with no default were passed to the gateway: %v", got)
+	}
+}
+
+// The default is open, and stays open.
+//
+// A sandbox nobody attached a policy to is unfiltered and on the shared
+// network: the same sandbox it was before any of this existed. That is the
+// whole of what an ordinary `brig run` gets, and it is worth a test of its own
+// rather than an implication of several -- a tool people cannot use is not
+// safer than one they can, and the failure mode of getting this wrong is every
+// sandbox on the host losing its network at once.
+func TestASandboxWithNoPolicyIsUnfilteredAndShared(t *testing.T) {
+	// The zero value of the spec, which is what a run with nothing attached
+	// builds: no rules, and the empty posture that orDefault reads as shared.
+	spec := RunSpec{Name: "brig-s", Image: "img"}
+
+	if spec.Egress.Filtered() {
+		t.Error("a sandbox with no policy asked for filtering")
+	}
+	if got := spec.Egress.args(); len(got) != 0 {
+		t.Errorf("a sandbox with no policy passed egress flags to the gateway: %v", got)
+	}
+	if isolatedNet(orDefault(spec.Net, "shared"), spec.Egress) {
+		t.Error("a sandbox with no policy was given a network of its own")
+	}
+	for _, hv := range []string{"vz", "hvi", "qemu"} {
+		if err := supports(spec, hv); err != nil {
+			t.Errorf("a sandbox with no policy was refused on %s: %v", hv, err)
+		}
+	}
+}
+
+// And an empty rule list is not a policy either. A default of "" is what turns
+// filtering off; reading an empty allow list as a policy would give the
+// strictest sandbox there is -- one that reaches nothing -- to anyone who
+// attached a document and left it blank.
+func TestAnEmptyRuleListIsNotAPolicy(t *testing.T) {
+	for _, e := range []Egress{
+		{},
+		{Allow: []Rule{}, Deny: []Rule{}},
+		{Allow: []Rule{{Host: "example.com"}}},
+	} {
+		if e.Filtered() {
+			t.Errorf("%+v was read as a policy", e)
+		}
+		if got := e.args(); len(got) != 0 {
+			t.Errorf("%+v passed flags to the gateway: %v", e, got)
+		}
+	}
+}
+
+// The spec decides whether a running gateway is reused or replaced. It has to
+// see through cosmetic edits and not through real ones.
+func TestGatewaySpec(t *testing.T) {
+	base := Egress{Default: "deny", Allow: []Rule{{Host: "a.example"}, {Host: "b.example"}}}
+
+	reordered := Egress{Default: "deny", Allow: []Rule{{Host: "b.example"}, {Host: "a.example"}}}
+	if gatewaySpec(0, base) != gatewaySpec(0, reordered) {
+		t.Error("reordering two allow rules was treated as a different policy")
+	}
+
 	for _, tt := range []struct {
-		name string
-		// booted is the network index the running sandbox's gateway serves;
-		// -1 means it has none, which is the shared network.
-		booted int
-		net    string
-		want   bool
+		name  string
+		index int
+		e     Egress
 	}{
-		{"shared then shared", -1, "shared", false},
-		{"shared, then isolated asked for", -1, "isolated", true},
-		{"isolated, unchanged", 0, "isolated", false},
-		{"isolated, then shared asked for", 0, "shared", true},
+		{"the default flipped", 0, Egress{Default: "allow", Allow: base.Allow}},
+		{"a rule moved to deny", 0, Egress{Default: "deny",
+			Allow: []Rule{{Host: "a.example"}}, Deny: []Rule{{Host: "b.example"}}}},
+		{"a rule dropped", 0, Egress{Default: "deny", Allow: []Rule{{Host: "a.example"}}}},
+		{"no policy at all", 0, Egress{}},
+		// The network too, not only the rules: a gateway serving another
+		// subnet would route the guest nowhere, which is the hazard the
+		// shared socket carries its subnet in its name to avoid.
+		{"a different network", 1, base},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			scratchIsolatedDir(t)
-			const name = "brig-s"
-			if tt.booted >= 0 {
-				sock := mustSocket(t, name)
-				index, err := sandboxNet(name)
-				if err != nil {
-					t.Fatal(err)
-				}
-				listenAt(t, sock)
-				writeGatewayRecord(sock, os.Getpid(), gatewaySpec(index))
-			}
-			h := &hull{bin: "hull"}
-			if got := h.NetworkStale(name, "hvi", tt.net); got != tt.want {
-				t.Errorf("NetworkStale = %t, want %t", got, tt.want)
+			if gatewaySpec(0, base) == gatewaySpec(tt.index, tt.e) {
+				t.Errorf("%s was treated as the same gateway", tt.name)
 			}
 		})
 	}
 }
 
-// Only hvi has a gateway brig owns. On vz the network comes from vmnet, which
-// brig neither chose nor can inspect, so it has nothing to compare and must
-// not answer "stale" -- that would restart a healthy sandbox on every run.
-func TestNetworkStaleSaysNoWhereBrigOwnsNoNetwork(t *testing.T) {
-	scratchIsolatedDir(t)
-	h := &hull{bin: "hull"}
-
-	for _, hv := range []string{"vz", "qemu", ""} {
-		if h.NetworkStale("brig-s", hv, "isolated") {
-			t.Errorf("hypervisor %q: reported stale with no network of brig's to compare", hv)
+// The egress flags arrived after hull 0.1.0-rc21, so brig can meet a runtime
+// that does not take them. Rules sent to one anyway reach a gateway that
+// refuses the flag, and the user sees a network that did not come up.
+func TestGatewayEnforcesChecksTheRuntimeTakesRules(t *testing.T) {
+	old := fakeHull(t, "OPTIONS:\n   --socket string   control socket path\n")
+	err := gatewayEnforces(old)
+	if err == nil {
+		t.Fatal("a runtime with no egress flags was accepted")
+	}
+	for _, want := range []string{"--egress-default", "detach"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say what is missing or what to do: %v", err)
 		}
 	}
-	if h.NetworkStale("brig-s", "hvi", "none") {
-		t.Error("an offline sandbox was reported stale")
+
+	current := fakeHull(t, "OPTIONS:\n   --egress-default string   verdict\n")
+	if err := gatewayEnforces(current); err != nil {
+		t.Errorf("a runtime that takes the flags was refused: %v", err)
 	}
 }
 
-// A sandbox whose gateway died is not "on the wrong network" -- it has no
-// gateway at all, and the run that follows starts one. What matters is that
-// this does not read the dead gateway's record as current.
-func TestNetworkStaleIgnoresARecordWithNothingListening(t *testing.T) {
-	scratchIsolatedDir(t)
-	const name = "brig-s"
-	sock := mustSocket(t, name)
-	index, err := sandboxNet(name)
-	if err != nil {
+// Nothing is concluded from a probe that could not run. A runtime broken
+// enough not to print its own help fails the boot below with better context
+// than a guess made here.
+func TestGatewayEnforcesConcludesNothingFromAFailedProbe(t *testing.T) {
+	if err := gatewayEnforces(filepath.Join(t.TempDir(), "not-a-runtime")); err != nil {
+		t.Errorf("a failed probe was read as a missing feature: %v", err)
+	}
+}
+
+// fakeHull writes a script that answers `network-gateway --help` with the
+// given text, which is the whole of what the probe reads.
+func fakeHull(t *testing.T, help string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "hull")
+	script := "#!/bin/sh\ncat <<'EOF'\n" + help + "EOF\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeGatewayRecord(sock, os.Getpid(), gatewaySpec(index))
+	return path
+}
 
-	h := &hull{bin: "hull"}
-	if h.NetworkStale(name, "hvi", "shared") {
-		t.Error("a dead gateway's record was read as the sandbox's current network")
+// An egress policy on a backend that cannot enforce it is refused rather than
+// ignored. Booting anyway would give a sandbox that reports a policy and
+// enforces nothing, which is worse than no policy: someone would rely on it.
+func TestSupportsRefusesAPolicyOffHvi(t *testing.T) {
+	spec := RunSpec{Name: "s", Image: "img", Egress: Egress{Default: "deny"}}
+
+	for _, hv := range []string{"vz", "qemu"} {
+		err := supports(spec, hv)
+		if err == nil {
+			t.Fatalf("a policy was accepted on %s, which cannot enforce it", hv)
+		}
+		if !strings.Contains(err.Error(), "hvi") {
+			t.Errorf("the error does not say which backend enforces it: %v", err)
+		}
+	}
+	if err := supports(spec, "hvi"); err != nil {
+		t.Errorf("a policy was refused on the backend that enforces it: %v", err)
+	}
+	// And a sandbox with no policy is unaffected on every backend.
+	for _, hv := range []string{"vz", "hvi", "qemu"} {
+		if err := supports(RunSpec{Name: "s", Image: "img"}, hv); err != nil {
+			t.Errorf("a sandbox with no policy was refused on %s: %v", hv, err)
+		}
+	}
+}
+
+// A policy takes the posture with it: the rules live on a gateway and cover
+// every member of its network, so a sandbox answering to rules of its own
+// cannot be sharing one.
+func TestIsolatedNet(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		net    string
+		policy Egress
+		want   bool
+	}{
+		{"shared, no policy", "shared", Egress{}, false},
+		{"isolated, no policy", "isolated", Egress{}, true},
+		{"shared, with a policy", "shared", Egress{Default: "deny"}, true},
+		{"isolated, with a policy", "isolated", Egress{Default: "allow"}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isolatedNet(tt.net, tt.policy); got != tt.want {
+				t.Errorf("isolatedNet(%q, %+v) = %t, want %t", tt.net, tt.policy, got, tt.want)
+			}
+		})
 	}
 }

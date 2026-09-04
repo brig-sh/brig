@@ -59,7 +59,7 @@ func recordGateway(t *testing.T, name string, pid int) string {
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeGatewayRecord(sock, pid, gatewaySpec(0))
+	writeGatewayRecord(sock, pid, gatewaySpec(0, Egress{}))
 	return sock
 }
 

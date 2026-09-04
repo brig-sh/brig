@@ -11,9 +11,10 @@ brig policy edit no-net     # change the rules
 ```
 
 **This page is about the document, the commands that manage it, and binding
-it to a profile or a session.** Anything actually enforcing it -- reading a
-policy's rules and acting on them -- is not built yet; see
-[What this does not do yet](#what-this-does-not-do-yet).
+it to a profile or a session.** A bound policy is enforced on the `hvi`
+backend, at the network gateway brig gives that sandbox, and a run on a
+backend that cannot enforce one is refused rather than left unconstrained; see
+[Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
 
 ## Where policies live
 
@@ -66,13 +67,14 @@ both, or neither, is refused. `host:` is a domain, or a glob such as
 `"*.githubusercontent.com"`; `cidr:` is a network range such as
 `10.0.0.0/8`, checked with Go's own `net.ParseCIDR`, so a typo like
 `10.0.0/8` (an octet short) is refused rather than accepted and silently
-doing nothing once something enforces it.
+doing nothing at the gateway that enforces it.
 
-`host:` is not held to a pinned glob grammar yet -- which wildcard forms an
-eventual enforcer honours is enforcer-specific, and this document format is
-deliberately independent of that question (see the intro above). A host is
-refused only for what is unambiguously wrong however it ends up read:
-whitespace or a control character.
+`host:` is not held to a pinned glob grammar here -- which wildcard forms an
+enforcer honours is that enforcer's business, and this document format is
+deliberately independent of it (see the intro above). A host is refused only
+for what is unambiguously wrong however it ends up read: whitespace or a
+control character. The gateway that enforces it today matches the glob against
+the name the guest asks its resolver for.
 
 Parsing is strict throughout: a field this format does not recognise --
 `engine:`, `mode:`, a plain typo like `dsc:` -- fails to parse rather than
@@ -129,20 +131,21 @@ add an entry `detach` could never remove:
 ```console
 $ brig policy attach no-net claude-code
 attached no-net to claude-code
-note: no policy is enforced at runtime yet; this records the binding only
+note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach no-net claude-code -n work
 attached no-net to claude-code -n work
-note: no policy is enforced at runtime yet; this records the binding only
+note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach no-net ubuntu
 brig: cannot attach no-net to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
 
 Both `attach` and `check` say that last line, because "attached" and a
-`check` that prints a policy name both read as a rule that is in force,
-and none of this constrains an agent yet -- see
-[What this does not do yet](#what-this-does-not-do-yet). It goes to
-stderr, where this CLI puts every advisory, so stdout stays the command's
-answer. Both commands print the same constant from `internal/policy`, so
+`check` that prints a policy name both read as a rule that is in force
+everywhere, and where it is in force depends on the backend the run lands on
+-- see
+[Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
+It goes to stderr, where this CLI puts every advisory, so stdout stays the
+command's answer. Both commands print the same constant from `internal/policy`, so
 the two cannot drift into saying different things.
 
 `detach` refuses a policy the profile declares inline, the same way: it was
@@ -155,7 +158,7 @@ name the same binding.
 profile-level, session-level -- for one profile (or, with `-n`, one of its
 sessions), lists what applies, and runs the same `CheckCoverage` refusal
 `attach` does. It does not check anything about the rules those policies
-contain (see [What this does not do yet](#what-this-does-not-do-yet)):
+contain (see [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not)):
 the only two things it can fail over are a `kind: shell`/`kind: gui`
 profile, which nothing could ever enforce against no matter what is
 bound, and a name bound to nothing -- `--force` on `rm`, or on this
@@ -165,7 +168,7 @@ that enforceable:
 ```console
 $ brig policy check claude-code
 no-net
-note: no policy is enforced at runtime yet; this records the binding only
+note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy check ubuntu
 no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
@@ -337,17 +340,76 @@ removed /home/you/.config/brig/policies/no-net.yaml
 | `x is declared inline in y's policy: list, not attached; edit the profile directly to remove it` | `detach` naming a policy the profile's own `policy:` list declares, without `-n` |
 | `x is bound to y. Detach it first, or pass --force to remove it anyway` | `rm` on a policy attached to a profile or a session (a policy declared only inline says "edit the profile's policy: list" instead) |
 
-## What this does not do yet
+## The default is no policy at all
 
-This release ships the document format, the commands above, and a record of
-what is bound to what -- nothing that reads a policy's rules at boot or
-runtime and acts on them. `attach` and `check` only refuse what brig
-already knows it cannot enforce at all (a `kind: shell`/`kind: gui`
-profile); neither checks anything about the rules a policy actually
-contains, and a boot does not yet refuse to start over an unenforceable
-one. Nothing today makes an agent's outbound traffic actually respect a
-policy you write.
+A sandbox nobody attached a policy to has **unrestricted egress**, exactly as
+it did before any of this existed. No profile brig ships binds a policy, `brig
+run <agent>` on a fresh install filters nothing, and no gateway is given a rule
+until a policy is attached to that profile or that session by hand.
 
-[docs/security.md](security.md#things-brig-does-not-claim) states this
-directly: brig does not sandbox the agent from the network, and outbound
-traffic from the guest is whatever the runtime allows.
+That is deliberate, and it is a test rather than an intention
+(`TestNoShippedProfileBindsAPolicy`, `TestASandboxWithNoPolicyIsUnfilteredAndShared`).
+An agent that cannot reach its own API is not a safer agent, it is a broken
+one, and a default that broke every sandbox on upgrade would be paid for by
+everyone to benefit the few runs that want a rule.
+
+Note the shape of the two defaults, which are easy to confuse. Attaching no
+policy means **no filtering**. Attaching a policy whose `default:` is `deny`
+means the opposite -- everything is refused except what its `allow` list names
+-- and an empty `allow` list under it is a sandbox with no way out. The first
+is what you get; the second is what you ask for.
+
+## Where a policy is enforced, and where it is not
+
+On the `hvi` backend, a boot reads every policy bound to the run and puts the
+rules on the network gateway it gives that sandbox. That gateway is the
+sandbox's only way out, so the rules are the sandbox's only way out. Measured
+in a real guest in
+[docs/manual-tests/egress-policy.md](manual-tests/egress-policy.md): an allowed
+name reaches, a denied name does not resolve, and an address dialled directly
+does not connect.
+
+Everywhere else the boot is **refused** rather than left unenforced. `vz` and
+`qemu` take their network from vmnet and the Linux runtimes from the container
+network, neither of which brig filters; booting there with a policy attached
+would give a sandbox that reports one and enforces nothing, which is worse than
+no policy at all, because someone would rely on it. The refusal names the
+backend that does enforce.
+
+The runtime has to be new enough, too. The gateway's rule flags arrived after
+hull 0.1.0-rc21, so brig asks the binary whether it takes them and says so
+plainly if it does not, rather than letting the sandbox come up with no network
+and the reason in a log file.
+
+Three properties worth stating outright:
+
+- **The rules are fixed when the sandbox boots.** They go on the gateway's
+  command line and it reads them once. Editing a policy changes what the next
+  boot enforces, never what a running sandbox is already under, and no
+  environment variable overrides it. A policy an agent could ask to have
+  relaxed mid-run is not a policy.
+- **A policy takes the network posture with it.** Rules belong to a gateway and
+  cover every member of its network, so a sandbox answering to rules of its own
+  gets a network of its own: the run is `isolated` whether or not it asked to
+  be, and the `NETWORK` row of the execution envelope says so. That only ever
+  narrows what was asked for.
+- **Several policies at once are unioned.** A rule in any of them is a rule of
+  the run's, and the default is the strictest any of them names -- one `deny`
+  makes the run deny-by-default. Note what the union costs: a host allowed by
+  the second policy is reachable even though the first alone would have denied
+  it. Attaching is granting. `deny` still beats `allow` across the whole set.
+
+### What this still does not do
+
+`attach` and `check` refuse what brig knows it cannot enforce at all (a
+`kind: shell`/`kind: gui` profile) and a name bound to nothing, but neither
+inspects the rules a policy contains: they cannot tell you that an `allow` glob
+matches nothing you meant, only that the document parses.
+
+A `host` rule is enforced through the gateway's own resolver, so what it covers
+depends on the default. Under `default: deny` the resolver answers only names
+an `allow` glob covers, and the guest reaches nothing it did not resolve there
+-- which is also why traffic sent straight to an address, DNS-over-HTTPS and
+DNS-over-TLS do not get out. Under `default: allow` a `host` deny is best
+effort, because traffic sent straight to an address never asks for a name. A
+`cidr` rule is matched on the address either way.
