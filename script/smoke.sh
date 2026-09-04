@@ -769,6 +769,11 @@ echo "== logs =="
 # the ref resolves to, and the flags the line carried. The stub logs its argv
 # like every other verb, so this asserts what reached the runtime. --tail -1 is
 # the default brig passes, which both runtimes read as "all".
+#
+# A sandbox has to exist for there to be a log to read: logs asks the runtime's
+# list first and is a not-found otherwise, which the case below the lifecycle
+# section pins. The stop above left none, so boot one here.
+"$WORK/brig" run claude -d > /dev/null 2>&1
 : > "$STUB_LOG"
 "$WORK/brig" logs claude > /dev/null 2>&1
 grep -q '^argv: logs --tail -1 brig-claude-code' "$STUB_LOG" \
