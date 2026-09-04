@@ -32,8 +32,8 @@ func (r *listRuntime) List() ([]runtime.Instance, error) {
 	return r.instances, r.listErr
 }
 
-func (r *listRuntime) Stop(string) error          { r.stopped = true; return nil }
-func (r *listRuntime) Remove(string) error        { r.removed = true; return nil }
+func (r *listRuntime) Stop(string) error           { r.stopped = true; return nil }
+func (r *listRuntime) Remove(string) error         { r.removed = true; return nil }
 func (r *listRuntime) Logs(runtime.LogsSpec) error { r.logged = true; return nil }
 
 // present is a runtime that has brig-claude-code, absent one that has nothing.
