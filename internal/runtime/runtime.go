@@ -105,6 +105,15 @@ type RunSpec struct {
 	// urunc metadata. The runtime supplies the kernel and initrd; see
 	// bootArtifacts.
 	GenericBoot bool
+	// Egress is what this sandbox may open a connection to: the rules of
+	// every policy bound to it, merged. The zero value is unfiltered, which
+	// is what every sandbox got before anything read a policy at boot.
+	//
+	// Unlike the fields above it never reaches the run command line. The
+	// rules belong to the network gateway serving this sandbox and are read
+	// once, when that gateway starts, which is also why a sandbox carrying
+	// one needs a network of its own. See gateway.go.
+	Egress Egress
 	// Counted marks an operation that is a user action rather than brig's own
 	// plumbing, so telemetry counts one command once. See telemetryEnv.
 	Counted bool
@@ -152,6 +161,31 @@ type ExecSpec struct {
 	// the image's configured user, which is what every other exec wants.
 	User string
 }
+
+// Egress is a sandbox's outbound rule set as the runtime takes it: a default
+// verdict and the rules that beat it. Deny beats Allow beats Default.
+//
+// The same shape as policy.Egress rather than the type itself, so the runtime
+// adapters do not depend on the policy package or on how a policy document is
+// spelled. What each field means lives on policy.Egress, which is where
+// anyone writing one will be reading.
+type Egress struct {
+	Default string
+	Allow   []Rule
+	Deny    []Rule
+}
+
+// Rule is one destination, by exactly one of the two spellings it can take: a
+// glob on the name the guest resolves, or a range the address is matched
+// against.
+type Rule struct {
+	Host string
+	CIDR string
+}
+
+// Filtered reports whether any filtering was asked for. Default is the field
+// that turns it on: rules with no default are rules nothing consults.
+func (e Egress) Filtered() bool { return e.Default != "" }
 
 // Instance is one sandbox as the runtime sees it.
 type Instance struct {
@@ -429,7 +463,8 @@ const sandboxPrefix = "brig-"
 // Separate from Run because the refusal has to reach the path where Run is
 // never called. A sandbox that is already up is joined rather than booted, and
 // a check that lived only inside Run would let exactly the runs it exists to
-// stop through: refused on the first `brig run` and waved past on the second.
+// stop through: a policy on a backend that cannot enforce it is refused on the
+// first `brig run` and waved past on the second.
 //
 // Optional on the same terms as NetworkPruner. A runtime that can honour
 // anything asked of it needs no stub to say so.
@@ -439,12 +474,14 @@ type RunChecker interface {
 }
 
 // NetworkChecker is a runtime that can say whether a sandbox already running
-// is on the network a run is asking for.
+// is on the network, and under the rules, that a run is asking for.
 //
-// It exists because the network is fixed at boot. A gateway reads its subnet
-// once, when it starts, so a sandbox that is already up cannot be moved -- and
-// a run that found it running and carried on would report a posture in the
-// execution envelope that the live sandbox is not on.
+// It exists because both are fixed at boot. A gateway reads its subnet and its
+// egress rules once, when it starts, so a sandbox that is already up cannot be
+// moved or told a new rule -- and a run that found it running and carried on
+// would report a policy in the execution envelope that the live sandbox is not
+// under. That is the exact failure the rest of this is built to prevent, so it
+// is not one to leave on the one path that skips the boot.
 //
 // Optional for the same reason NetworkPruner is: a backend brig does not own
 // the network of cannot answer, and should not grow a stub to say so. wrap
@@ -454,7 +491,7 @@ type NetworkChecker interface {
 	// run asks for. False when they agree, and when the backend has no way to
 	// tell -- a restart nobody needs costs a boot, but a restart that is
 	// skipped costs the promise.
-	NetworkStale(name, hypervisor, net string) bool
+	NetworkStale(name, hypervisor, net string, e Egress) bool
 }
 
 // NetworkPruner is a runtime that makes a network per sandbox and can tidy the

@@ -338,6 +338,12 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		Digest: c.BootDigest,
 		Pull:   c.Pull,
 		Net:    check.Net,
+		// What this sandbox may reach. Read once here and fixed for the life
+		// of the boot: the rules go on the gateway's command line, and a
+		// running gateway cannot be told a new one. Editing a policy changes
+		// what the next boot enforces, which is the property worth having --
+		// a policy an agent could ask to have relaxed mid-run is not a policy.
+		Egress: check.Egress,
 		Mem:    c.Mem,
 		CPUs:   c.CPUs,
 		// The workspace first, which is the guest's home, then this run's

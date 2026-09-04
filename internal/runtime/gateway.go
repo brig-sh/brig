@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,6 +29,12 @@ import (
 //   - isolated: a gateway per sandbox, each on a /30 of its own out of the
 //     same space. No other sandbox is on that network, whatever the backend
 //     would have done with a shared one.
+//
+// isolated is also what a policy needs. An egress policy belongs to a gateway:
+// it covers every member of that gateway's network and no rule can name one
+// member, so a sandbox that is to answer to rules of its own needs a gateway
+// of its own. hull's gateway documentation says exactly that. A sandbox
+// carrying a policy is therefore isolated whether or not it asked to be.
 //
 // An isolated gateway costs one process per running sandbox, measured at
 // 28.7 MB resident with no member attached (hull 0.1.0-rc21, arm64). Against
@@ -208,45 +215,53 @@ func ensureGateway(bin string) (string, error) {
 	if gatewayReachable(sock) {
 		return sock, nil
 	}
-	return startGateway(bin, sock, gatewaySubnet, gatewayAddr, "")
+	return startGateway(bin, sock, gatewaySubnet, gatewayAddr, Egress{}, "")
 }
 
 // ensureIsolatedGateway returns the control socket of the gateway serving this
 // sandbox alone, starting one if nothing answers on it.
 //
-// A gateway already running to serve another network is replaced rather than
-// reused. Its subnet is read once, when it starts, so a running one cannot be
-// moved -- and reusing it would route guests on a network the process on the
-// other end does not serve. Restarting is safe here because this runs before
-// the guest attaches.
-func ensureIsolatedGateway(bin, name string, index int) (string, error) {
+// A gateway already running to serve something else is replaced rather than
+// reused. Its network and its rules are both read once, when it starts, so a
+// running one cannot be told a new rule or moved to another subnet -- and
+// reusing it would enforce the policy as it stood when the sandbox last
+// booted, or route guests on a network the process on the other end does not
+// serve. Restarting is safe here because this runs before the guest attaches.
+func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, error) {
 	sock, err := isolatedSocket(name)
 	if err != nil {
 		return "", err
 	}
-	want := gatewaySpec(index)
+	want := gatewaySpec(index, policy)
 	if gatewayReachable(sock) && recordedSpec(sock) == want {
 		return sock, nil
 	}
-	// A gateway serving another network has to be gone before the replacement
+	// Below the reuse check, so the common path -- the same sandbox restarted
+	// under the same policy -- does not pay for a probe process on every boot.
+	if policy.Filtered() {
+		if err := gatewayEnforces(bin); err != nil {
+			return "", err
+		}
+	}
+	// A gateway serving something else has to be gone before the replacement
 	// starts, and gone is not the same as asked to go. shutDownGateway is best
 	// effort: the record can be missing, the pid can belong to something else,
 	// hull can outlive the grace period. Any of those leaves the old process
 	// listening -- and startGateway judges success on the socket answering, so
 	// the old one would satisfy it while the new one died unseen on "socket is
-	// in use". The boot would then run on the previous network with the new one
-	// recorded beside it, which NetworkStale reads as current, so it would never
-	// be corrected.
+	// in use". The boot would then run under the previous rules with the new
+	// ones recorded beside it, which NetworkStale reads as current, so it would
+	// never be corrected.
 	if gatewayReachable(sock) {
 		shutDownGateway(name)
 		if gatewayReachable(sock) {
 			return "", fmt.Errorf("the gateway serving %s is still running and could not be "+
-				"stopped, so it cannot be replaced with one that serves the network this run "+
-				"asks for. Stop the sandbox with `brig stop %s`, or kill the process holding "+
-				"%s", name, name, qemuGatewaySocket(sock))
+				"stopped, so it cannot be replaced with one that serves the network and rules "+
+				"this run asks for. Stop the sandbox with `brig stop %s`, or kill the process "+
+				"holding %s", name, name, qemuGatewaySocket(sock))
 		}
 	}
-	return startGateway(bin, sock, sandboxSubnet(index), sandboxGatewayIP(index), want)
+	return startGateway(bin, sock, sandboxSubnet(index), sandboxGatewayIP(index), policy, want)
 }
 
 // startGateway runs one gateway and waits for it to answer.
@@ -254,7 +269,7 @@ func ensureIsolatedGateway(bin, name string, index int) (string, error) {
 // spec is what it was started to serve, recorded beside the socket for an
 // isolated gateway and empty for the shared one -- which is never replaced,
 // because its network is in its name and it carries no rules.
-func startGateway(bin, sock, subnet, gatewayIP string, spec string) (string, error) {
+func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		return "", fmt.Errorf("could not create the gateway directory: %w", err)
 	}
@@ -277,6 +292,7 @@ func startGateway(bin, sock, subnet, gatewayIP string, spec string) (string, err
 		"--subnet", subnet,
 		"--gateway-ip", gatewayIP,
 	}
+	args = append(args, policy.args()...)
 
 	cmd := exec.Command(bin, args...)
 	cmd.Env = mergeEnv(telemetryEnv(false))
@@ -316,10 +332,81 @@ func startGateway(bin, sock, subnet, gatewayIP string, spec string) (string, err
 		sock, gatewayReadyTimeout, logPath)
 }
 
-// gatewaySpec is what a running isolated gateway was started to serve. A
-// gateway is reused only when this matches what is being asked for now.
-func gatewaySpec(index int) string {
-	return "subnet=" + sandboxSubnet(index) + "\ngateway=" + sandboxGatewayIP(index)
+// gatewayEnforces checks that this runtime's gateway takes egress rules at
+// all, and is called only when a policy was asked for.
+//
+// The flags arrived after hull 0.1.0-rc21, so a brig new enough to enforce a
+// policy can meet a hull that cannot. Without the check the rules reach a
+// gateway that rejects the flag it does not know, and what the user sees is a
+// sandbox whose network did not come up, with the real reason in a log file
+// they have no reason to open. Asked of the binary rather than derived from
+// its version string: what matters is whether this hull takes the flag.
+func gatewayEnforces(bin string) error {
+	out, err := exec.Command(bin, "network-gateway", "--help").CombinedOutput()
+	if err != nil {
+		// Nothing is concluded from a failed probe. If this runtime is broken
+		// enough not to print its own help, the boot below will say so with
+		// far better context than a guess made here.
+		return nil
+	}
+	if strings.Contains(string(out), "--egress-default") {
+		return nil
+	}
+	return fmt.Errorf("a policy applies to this sandbox, but %s cannot enforce one "+
+		"(its network-gateway has no --egress-default). Upgrade the runtime, or detach "+
+		"the policy -- brig will not boot a sandbox that reports a policy nothing "+
+		"enforces", bin)
+}
+
+// args is the policy as the gateway's command line takes it. Empty when no
+// filtering was asked for, which leaves the gateway's own default: no filter
+// at all rather than an empty allowlist.
+//
+// This is the one place a rule is turned into the gateway's wire spelling, so
+// a rule class added to the document has one place to reach the enforcer
+// through rather than several that can disagree.
+func (e Egress) args() []string {
+	if !e.Filtered() {
+		return nil
+	}
+	args := []string{"--egress-default", e.Default}
+	for _, r := range e.Allow {
+		args = append(args, "--egress-allow", r.arg())
+	}
+	for _, r := range e.Deny {
+		args = append(args, "--egress-deny", r.arg())
+	}
+	return args
+}
+
+func (r Rule) arg() string {
+	if r.CIDR != "" {
+		return "cidr=" + r.CIDR
+	}
+	return "host=" + r.Host
+}
+
+// gatewaySpec is everything a running gateway was started to serve: the
+// network, and the rules on it. An isolated gateway is reused only when this
+// matches what is being asked for now.
+//
+// The rules are sorted, so that reordering two allow lines in a policy
+// document is not treated as a different policy. They are prefixed per list,
+// so that moving a rule from allow to deny is.
+func gatewaySpec(index int, e Egress) string {
+	parts := []string{"subnet=" + sandboxSubnet(index), "gateway=" + sandboxGatewayIP(index)}
+	if !e.Filtered() {
+		return strings.Join(append(parts, "unfiltered"), "\n")
+	}
+	rules := []string{"default=" + e.Default}
+	for _, r := range e.Allow {
+		rules = append(rules, "allow "+r.arg())
+	}
+	for _, r := range e.Deny {
+		rules = append(rules, "deny "+r.arg())
+	}
+	slices.Sort(rules[1:])
+	return strings.Join(append(parts, rules...), "\n")
 }
 
 // writeGatewayRecord records which process serves this socket and what it was

@@ -91,7 +91,24 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		// setting the run was started with.
 		envelopeRow{"NETWORK", c.Network.Line()},
 	)
+	// Only when one applies. A row reading "none" on every run would train
+	// the eye to skip the line that matters on the runs where there is one.
+	if line := c.policyLine(); line != "" {
+		rows = append(rows, envelopeRow{"POLICY", line})
+	}
 	return rows
+}
+
+// policyLine is the POLICY row: which policies this run answers to.
+//
+// It names them rather than summarising the rules. The document is where the
+// rules are, and a summary in the envelope would be a second place they are
+// written down, free to fall out of step with the first.
+func (c *Config) policyLine() string {
+	if len(c.Policies) == 0 {
+		return ""
+	}
+	return strings.Join(c.Policies, ", ") + " (egress default: " + c.Egress.Default + ")"
 }
 
 // isolationLine is the ISOLATION row: what the sandbox this run would boot

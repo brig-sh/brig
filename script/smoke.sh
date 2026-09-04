@@ -522,6 +522,38 @@ grep -q '^argv: run' "$STUB_LOG" \
   || ok "nothing reached the runtime for isolated"
 "$WORK/brig" rm --all > /dev/null 2>&1
 
+# A policy is enforced at the user-mode gateway, which only the hvi backend
+# uses. This run is pinned to vz, so the boot must be refused rather than
+# started with the rules dropped: a sandbox that reports a policy and enforces
+# nothing is worse than one with no policy. The negative half is the half worth
+# testing -- "it booted" would pass with the whole feature deleted.
+mkdir -p "$WORK/policies"
+cat > "$WORK/policies/no-net.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: no-net
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+export BRIG_POLICY_DIR="$WORK/policies"
+"$WORK/brig" policy attach no-net claude-code > /dev/null 2>&1 \
+  && ok "a policy attaches to a profile" \
+  || bad "a policy attaches to a profile"
+: > "$STUB_LOG"
+if "$WORK/brig" run claude -d > "$WORK/pol.out" 2>&1; then
+  bad "a policy on a backend that cannot enforce it was booted anyway"
+else
+  grep -q 'hvi' "$WORK/pol.out" \
+    && ok "a policy brig cannot enforce refuses the boot, naming the backend that can" \
+    || bad "the refusal does not name the backend -- got: $(cat "$WORK/pol.out")"
+fi
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "the runtime was invoked for a policy that could not be enforced" \
+  || ok "nothing reached the runtime"
+"$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
+unset BRIG_POLICY_DIR
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 # A posture brig does not know must stop the run rather than pick one.
 out="$(BRIG_NETWORK=airgapped "$WORK/brig" info claude 2>&1)"; rc=$?
