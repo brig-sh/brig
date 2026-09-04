@@ -22,6 +22,10 @@ func TestParseRef(t *testing.T) {
 		{"claude@v1.2", Ref{Agent: "claude", Label: "v1.2"}},
 		{"claude@a-b", Ref{Agent: "claude", Label: "a-b"}},
 		{"claude@2", Ref{Agent: "claude", Label: "2"}},
+		// The reservation is scoped to the agent: claude@desktop is refused
+		// below because its pair is the claude-desktop the Desktop app owns,
+		// but codex@desktop is codex-desktop, a workspace no profile has.
+		{"codex@desktop", Ref{Agent: "codex", Label: "desktop"}},
 		// Long, and slug-clean at that length. Nothing is cut any more, so a
 		// label is refused for what is in it and never for how much of it
 		// there is.

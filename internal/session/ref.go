@@ -70,10 +70,11 @@ func ParseRef(s string) (Ref, error) {
 			"start and end with one of those. Type %q if that is the session you want",
 			label, slug, slug)
 	}
-	// The same refusal Resolve makes, on the label. claude-desktop already
-	// owns ~/brig/claude-desktop, so claude@desktop would put a Claude Code
-	// session on the Desktop app's workspace.
-	if owner, ok := profile.Reserved(label); ok {
+	// The same refusal Resolve makes, on the label, and scoped to the agent
+	// asking. claude@desktop would land on ~/brig/claude-desktop, the workspace
+	// the Desktop app already owns, so it is refused; codex@desktop would be
+	// codex-desktop, which no profile has, so it is not.
+	if owner, ok := profile.Reserved(label, agent); ok {
 		return Ref{}, fmt.Errorf("session label %q is the workspace the %s profile "+
 			"already uses. Pick another label", label, owner)
 	}

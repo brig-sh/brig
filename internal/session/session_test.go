@@ -45,15 +45,24 @@ func TestSlug(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	if slug, err := Resolve("foo"); err != nil || slug != "foo" {
-		t.Errorf(`Resolve("foo") = %q, %v; want "foo", nil`, slug, err)
+	if slug, err := Resolve("codex", "foo"); err != nil || slug != "foo" {
+		t.Errorf(`Resolve("codex", "foo") = %q, %v; want "foo", nil`, slug, err)
 	}
-	// "claude-desktop" is in this list now. It used to be cut to "claude-des",
-	// a workspace of its own; with nothing cut it slugs to the Desktop
-	// profile's own workspace, so it is refused like every other spelling of
-	// it.
-	for _, bad := range []string{"...", "", "desktop", "Desktop!", "claude-desktop"} {
-		if _, err := Resolve(bad); err == nil {
+	// The --name refusal is the agent's to have. "desktop" lands claude on
+	// claude-desktop, the workspace the Desktop app owns, so it is refused;
+	// under codex it is codex-desktop, which no profile has, so it is not.
+	// Turning it away for codex too was the bug.
+	if _, err := Resolve("claude", "desktop"); err == nil {
+		t.Errorf(`Resolve("claude", "desktop") succeeded; want an error`)
+	}
+	if slug, err := Resolve("codex", "desktop"); err != nil || slug != "desktop" {
+		t.Errorf(`Resolve("codex", "desktop") = %q, %v; want "desktop", nil`, slug, err)
+	}
+	// A name that is a reserved profile's whole name is refused whichever agent
+	// asks; the Desktop spellings slug to it and stop here as well. And a name
+	// with nothing usable in it is refused before any of that.
+	for _, bad := range []string{"...", "", "claude-desktop", "Claude-Desktop!"} {
+		if _, err := Resolve("codex", bad); err == nil {
 			t.Errorf("Resolve(%q) succeeded; want an error", bad)
 		}
 	}

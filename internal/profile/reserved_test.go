@@ -65,6 +65,31 @@ func TestReservedReadsTheMergedSet(t *testing.T) {
 	}
 }
 
+// The reservation is scoped to the agent that would land on it. A label is
+// the workspace <agent>-<label>, so "desktop" collides for claude, whose pair
+// is the claude-desktop the Desktop app owns, and not for codex, whose pair is
+// a directory no profile has. The bug was matching the trailing word of the
+// reserved name against every agent's label alike.
+func TestReservedIsScopedToTheAgent(t *testing.T) {
+	reset(t)
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	// Refused: the pair is the reserved profile's own name.
+	if owner, ok := Reserved("desktop", "claude"); !ok || owner != "claude-desktop" {
+		t.Errorf(`Reserved("desktop", "claude") = %q, %v; want claude-desktop, true`, owner, ok)
+	}
+	// Accepted: codex-desktop is a workspace no profile owns.
+	if owner, ok := Reserved("desktop", "codex"); ok {
+		t.Errorf(`Reserved("desktop", "codex") = %q, true; want it accepted`, owner)
+	}
+	// A label that is a reserved profile's whole name is refused whichever
+	// agent asks: it names that workspace outright.
+	if owner, ok := Reserved("claude-desktop", "codex"); !ok || owner != "claude-desktop" {
+		t.Errorf(`Reserved("claude-desktop", "codex") = %q, %v; want claude-desktop, true`, owner, ok)
+	}
+}
+
 // Import refuses a name that collides with a *different* reserved profile.
 // Taking a reserved profile's own name is the legitimate "pin my own image for
 // a profile brig already knows" case and must still work -- once Reserved

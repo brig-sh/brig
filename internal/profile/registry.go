@@ -287,14 +287,30 @@ func Names() []string {
 	return out
 }
 
-// Reserved reports whether a session slug collides with a profile that owns
-// the workspace it would land on. Without this, `brig run claude --name
-// desktop` puts a Claude Code session on the Desktop app's workspace.
+// Reserved reports whether a session would land on the workspace a reserved
+// profile already owns, and names that profile when it would.
+//
+// A session's workspace is the agent's name, a dash, and the session slug (see
+// internal/wrap/config.go), so whether a slug collides is a question about the
+// agent asking it, not the slug alone: claude@desktop would be claude-desktop,
+// the workspace the Desktop app already owns, while codex@desktop would be
+// codex-desktop, a directory no profile has. Passing the agent is what lets
+// this turn away only the pair that actually collides, rather than every
+// "desktop" on account of the one agent it collides for. A slug that is a
+// reserved profile's whole name is refused whichever agent asked: it names that
+// workspace outright.
+//
+// The agent is optional because the other question this answers is not about a
+// session. Import asks whether a profile *name* would collide, where there is
+// no agent and the workspace is the name on its own -- so with none given the
+// trailing word a slug of the reserved name reads as is matched instead, which
+// is how a profile named "desktop" is still turned away for reading as
+// claude-desktop.
 //
 // It reads the merged set rather than the built-ins alone, so a profile of
 // your own can declare itself reserved. That is the honest reading of a field
 // a file can now set.
-func Reserved(slug string) (string, bool) {
+func Reserved(slug string, agent ...string) (string, bool) {
 	for _, p := range All() {
 		if !p.Reserved {
 			continue
@@ -302,8 +318,17 @@ func Reserved(slug string) (string, bool) {
 		if slug == p.Name {
 			return p.Name, true
 		}
-		// The trailing word is what a slug of the profile name reads as:
-		// claude-desktop is reserved as "desktop" too.
+		if len(agent) > 0 {
+			// A session: the workspace is <agent>-<slug>, so the collision is
+			// with the name the pair makes, not with the slug on its own.
+			if agent[0]+"-"+slug == p.Name {
+				return p.Name, true
+			}
+			continue
+		}
+		// No agent, so a profile name rather than a session. The trailing word
+		// is what a slug of the profile name reads as: claude-desktop is
+		// reserved as "desktop" too.
 		if i := lastDash(p.Name); i >= 0 && slug == p.Name[i+1:] {
 			return p.Name, true
 		}
