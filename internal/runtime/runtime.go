@@ -423,6 +423,40 @@ func mergeEnv(additions ...[]string) []string {
 // adapters read it back to recognise their own leftovers.
 const sandboxPrefix = "brig-"
 
+// RunChecker is a runtime that can refuse a run it cannot honour, before
+// anything is started.
+//
+// Separate from Run because the refusal has to reach the path where Run is
+// never called. A sandbox that is already up is joined rather than booted, and
+// a check that lived only inside Run would let exactly the runs it exists to
+// stop through: refused on the first `brig run` and waved past on the second.
+//
+// Optional on the same terms as NetworkPruner. A runtime that can honour
+// anything asked of it needs no stub to say so.
+type RunChecker interface {
+	// CanRun reports what this backend cannot honour about the run, or nil.
+	CanRun(spec RunSpec) error
+}
+
+// NetworkChecker is a runtime that can say whether a sandbox already running
+// is on the network a run is asking for.
+//
+// It exists because the network is fixed at boot. A gateway reads its subnet
+// once, when it starts, so a sandbox that is already up cannot be moved -- and
+// a run that found it running and carried on would report a posture in the
+// execution envelope that the live sandbox is not on.
+//
+// Optional for the same reason NetworkPruner is: a backend brig does not own
+// the network of cannot answer, and should not grow a stub to say so. wrap
+// asserts for it and treats a runtime that does not implement it as current.
+type NetworkChecker interface {
+	// NetworkStale reports whether the running sandbox differs from what this
+	// run asks for. False when they agree, and when the backend has no way to
+	// tell -- a restart nobody needs costs a boot, but a restart that is
+	// skipped costs the promise.
+	NetworkStale(name, hypervisor, net string) bool
+}
+
 // NetworkPruner is a runtime that makes a network per sandbox and can tidy the
 // ones nothing is on any more.
 //
