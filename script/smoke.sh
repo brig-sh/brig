@@ -911,6 +911,26 @@ grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
 grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
   && ok "rm --all removes brig sandboxes" || bad "rm --all removes brig sandboxes"
 
+echo "== rm and logs with no sandbox =="
+# Nothing holds the name now, so rm and logs name a sandbox that resolves to
+# nothing: exit 3, the code the table gives a name that is not there, and a
+# message naming the ref rather than the runtime's own "instance not found".
+# They used to hand that error back and exit 1.
+out="$("$WORK/brig" rm claude 2>&1)"; rc=$?
+[ "$rc" = 3 ] && ok "rm of a missing sandbox exits 3" \
+  || bad "rm of a missing sandbox exits 3 -- got $rc: $out"
+case "$out" in
+  *"no sandbox for claude"*) ok "rm names the ref, not the sandbox" ;;
+  *) bad "rm names the ref -- got: $out" ;;
+esac
+out="$("$WORK/brig" logs claude 2>&1)"; rc=$?
+[ "$rc" = 3 ] && ok "logs of a missing sandbox exits 3" \
+  || bad "logs of a missing sandbox exits 3 -- got $rc: $out"
+case "$out" in
+  *"no sandbox for claude"*) ok "logs names the ref, not the sandbox" ;;
+  *) bad "logs names the ref -- got: $out" ;;
+esac
+
 echo "== remembered workspace =="
 # A session created with -w used to be restarted by the next verb that left the
 # flag off: the workspace resolved back to the default, the running sandbox was
