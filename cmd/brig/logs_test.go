@@ -193,8 +193,15 @@ func TestLogsCmdArgErrors(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := logsCmd(c.args); err == nil {
-				t.Errorf("logsCmd(%q) returned no error", c.args)
+			err := logsCmd(c.args)
+			if err == nil {
+				t.Fatalf("logsCmd(%q) returned no error", c.args)
+			}
+			// Every one of these is a mistake on the line, so every one is the
+			// usage class -- the ref that does not parse included, which is the
+			// class run already gives it.
+			if exitCode(err) != exitUsage {
+				t.Errorf("logsCmd(%q) exits %d, want %d: %v", c.args, exitCode(err), exitUsage, err)
 			}
 		})
 	}
