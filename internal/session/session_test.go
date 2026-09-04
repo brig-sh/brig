@@ -2,6 +2,7 @@ package session
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,23 +49,86 @@ func TestResolve(t *testing.T) {
 	if slug, err := Resolve("codex", "foo"); err != nil || slug != "foo" {
 		t.Errorf(`Resolve("codex", "foo") = %q, %v; want "foo", nil`, slug, err)
 	}
-	// The --name refusal is the agent's to have. "desktop" lands claude on
-	// claude-desktop, the workspace the Desktop app owns, so it is refused;
-	// under codex it is codex-desktop, which no profile has, so it is not.
-	// Turning it away for codex too was the bug.
-	if _, err := Resolve("claude", "desktop"); err == nil {
-		t.Errorf(`Resolve("claude", "desktop") succeeded; want an error`)
+	// The --name refusal is the agent's to have, and the agent is the resolved
+	// profile name the caller passes: wrap builds the workspace from t.Name, so
+	// the Claude agent reaches here as claude-code, not the "claude" alias.
+	// "desktop" under claude-code is claude-code-desktop, a directory no profile
+	// owns, so it is accepted; under codex it is codex-desktop, likewise.
+	// Turning either away was the bug.
+	if slug, err := Resolve("claude-code", "desktop"); err != nil || slug != "desktop" {
+		t.Errorf(`Resolve("claude-code", "desktop") = %q, %v; want "desktop", nil`, slug, err)
 	}
 	if slug, err := Resolve("codex", "desktop"); err != nil || slug != "desktop" {
 		t.Errorf(`Resolve("codex", "desktop") = %q, %v; want "desktop", nil`, slug, err)
 	}
-	// A name that is a reserved profile's whole name is refused whichever agent
-	// asks; the Desktop spellings slug to it and stop here as well. And a name
-	// with nothing usable in it is refused before any of that.
-	for _, bad := range []string{"...", "", "claude-desktop", "Claude-Desktop!"} {
+	// A name that is a reserved profile's whole name is not a session workspace
+	// -- <agent>- is always in front of it -- so it is accepted now, where the
+	// first fix refused it. The Desktop spellings slug to the same name and are
+	// accepted too.
+	for _, name := range []string{"claude-desktop", "Claude-Desktop!"} {
+		if slug, err := Resolve("codex", name); err != nil || slug != "claude-desktop" {
+			t.Errorf(`Resolve("codex", %q) = %q, %v; want "claude-desktop", nil`, name, slug, err)
+		}
+	}
+	// Only a pair whose whole name is a reserved profile's is refused. A caller
+	// whose resolved name is "claude" -- a user profile that took the word from
+	// the alias -- makes "desktop" into claude-desktop, the workspace the
+	// Desktop app owns, and Resolve turns it away.
+	if _, err := Resolve("claude", "desktop"); err == nil {
+		t.Errorf(`Resolve("claude", "desktop") succeeded; want an error for claude-desktop`)
+	}
+	// A name with nothing usable in it is refused before any of that.
+	for _, bad := range []string{"...", ""} {
 		if _, err := Resolve("codex", bad); err == nil {
 			t.Errorf("Resolve(%q) succeeded; want an error", bad)
 		}
+	}
+}
+
+// The property the first fix broke: the two call sites must give one answer for
+// one workspace. Whatever claude@desktop does through ParseRef, `--name
+// desktop` under claude does through Resolve. Both resolve the Claude agent to
+// claude-code, land on claude-code-desktop, and accept -- where the first fix
+// passed the typed word to one and the resolved name to the other and had them
+// disagree.
+func TestBothCallSitesAgreeForOneWorkspace(t *testing.T) {
+	p, ok := profile.Lookup("claude")
+	if !ok {
+		t.Fatal("claude does not resolve to a profile")
+	}
+	_, refErr := ParseRef("claude@desktop")
+	// The --name path resolves the agent before Resolve, exactly as wrap.Load
+	// does with t.Name.
+	_, nameErr := Resolve(p.Name, "desktop")
+	if (refErr == nil) != (nameErr == nil) {
+		t.Errorf("call sites disagree for claude/desktop: ParseRef err=%v, Resolve err=%v", refErr, nameErr)
+	}
+	if refErr != nil {
+		t.Errorf("claude@desktop was refused: %v", refErr)
+	}
+}
+
+// The case the guard exists for. A user profile named "claude" takes the word
+// from the alias -- Lookup prefers a registry hit -- so claude@desktop then
+// resolves to claude-desktop, the workspace the Desktop app owns, and ParseRef
+// refuses it. The alias makes it claude-code-desktop and it is accepted; the
+// user profile is what brings the refusal back.
+func TestUserProfileNamedClaudeReclaimsTheRefusal(t *testing.T) {
+	dir := t.TempDir()
+	blob := []byte("name: claude\nimage: i\nguestHome: /home/claude\nbinary: c\nmem: 1\ncpus: 1\n")
+	if err := os.WriteFile(filepath.Join(dir, "claude.yaml"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = profile.Load() })
+
+	if p, ok := profile.Lookup("claude"); !ok || p.Name != "claude" {
+		t.Fatalf(`Lookup("claude") = %q, %v; want the user profile "claude"`, p.Name, ok)
+	}
+	if _, err := ParseRef("claude@desktop"); err == nil {
+		t.Error("claude@desktop was accepted, but a user profile named claude makes it claude-desktop")
 	}
 }
 

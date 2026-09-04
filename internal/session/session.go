@@ -98,13 +98,16 @@ func LegacySlug(name string) string {
 
 // Resolve validates a session name for an agent and returns its slug.
 //
-// A name that would slug the agent's session onto a reserved profile's own
-// workspace is refused rather than silently shared. The workspace is the
-// agent's name and the slug, so the collision is the agent's to have: `brig run
-// claude --name desktop` becomes claude-desktop, the workspace the Desktop app
-// owns, and is refused, where the same name under another agent lands somewhere
-// no profile has and is not. The check reads the slug, so Desktop and Desktop!
-// are the same name here.
+// The agent here is the profile as it resolved: the caller passes the canonical
+// name wrap builds the workspace from, not the word the user typed. A name that
+// would slug the agent's session onto a reserved profile's own workspace is
+// refused rather than silently shared. The workspace is the agent's name and
+// the slug, so the collision is the agent's to have: `brig run claude --name
+// desktop` resolves claude to claude-code and becomes claude-code-desktop, a
+// directory no profile owns, so it is accepted -- only a pair whose whole name
+// is a reserved profile's, what a profile actually named claude would make of
+// "desktop", is refused. The check reads the slug, so Desktop and Desktop! are
+// the same name here.
 func Resolve(agent, name string) (string, error) {
 	slug := Slug(name)
 	if slug == "" {

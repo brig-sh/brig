@@ -22,10 +22,16 @@ func TestParseRef(t *testing.T) {
 		{"claude@v1.2", Ref{Agent: "claude", Label: "v1.2"}},
 		{"claude@a-b", Ref{Agent: "claude", Label: "a-b"}},
 		{"claude@2", Ref{Agent: "claude", Label: "2"}},
-		// The reservation is scoped to the agent: claude@desktop is refused
-		// below because its pair is the claude-desktop the Desktop app owns,
-		// but codex@desktop is codex-desktop, a workspace no profile has.
+		// The reservation is scoped to the profile the agent resolves to.
+		// claude is the claude-code profile, so claude@desktop is
+		// claude-code-desktop, a workspace no profile owns; codex@desktop is
+		// codex-desktop, likewise. Both are accepted.
+		{"claude@desktop", Ref{Agent: "claude", Label: "desktop"}},
 		{"codex@desktop", Ref{Agent: "codex", Label: "desktop"}},
+		// A session workspace is always <agent>-<label>, so a label that is a
+		// reserved profile's whole name is codex-claude-desktop here, which
+		// nothing owns.
+		{"codex@claude-desktop", Ref{Agent: "codex", Label: "claude-desktop"}},
 		// Long, and slug-clean at that length. Nothing is cut any more, so a
 		// label is refused for what is in it and never for how much of it
 		// there is.
@@ -82,9 +88,6 @@ func TestParseRefRefusals(t *testing.T) {
 		{"claude@-foo", "-foo"},
 		{"claude@...", "..."},
 		{"claude@ünï", "ünï"},
-		// A label the claude-desktop profile already owns as a workspace: the
-		// same refusal Resolve makes on a --name, on the label instead.
-		{"claude@desktop", "desktop"},
 	} {
 		got, err := ParseRef(c.in)
 		if err == nil {

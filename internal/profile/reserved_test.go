@@ -66,27 +66,42 @@ func TestReservedReadsTheMergedSet(t *testing.T) {
 }
 
 // The reservation is scoped to the agent that would land on it. A label is
-// the workspace <agent>-<label>, so "desktop" collides for claude, whose pair
-// is the claude-desktop the Desktop app owns, and not for codex, whose pair is
-// a directory no profile has. The bug was matching the trailing word of the
-// reserved name against every agent's label alike.
+// the workspace <agent>-<label>, so "desktop" collides only for an agent whose
+// pair is a reserved profile's own name. The agent is the profile as it
+// resolved, the canonical name wrap builds the path from: the Claude agent
+// reaches here as claude-code -- not the "claude" alias -- and its pair is
+// claude-code-desktop, which nothing owns, so it is accepted. Only a caller
+// whose resolved name is literally "claude" (a user profile that took the word)
+// makes the pair claude-desktop and is refused.
 func TestReservedIsScopedToTheAgent(t *testing.T) {
 	reset(t)
 	if err := Load(); err != nil {
 		t.Fatal(err)
 	}
-	// Refused: the pair is the reserved profile's own name.
+	// Refused: the pair claude-desktop is the reserved profile's own name.
 	if owner, ok := Reserved("desktop", "claude"); !ok || owner != "claude-desktop" {
 		t.Errorf(`Reserved("desktop", "claude") = %q, %v; want claude-desktop, true`, owner, ok)
+	}
+	// Accepted: the Claude agent resolves to claude-code, so the pair is
+	// claude-code-desktop, a workspace no profile owns.
+	if owner, ok := Reserved("desktop", "claude-code"); ok {
+		t.Errorf(`Reserved("desktop", "claude-code") = %q, true; want it accepted`, owner)
 	}
 	// Accepted: codex-desktop is a workspace no profile owns.
 	if owner, ok := Reserved("desktop", "codex"); ok {
 		t.Errorf(`Reserved("desktop", "codex") = %q, true; want it accepted`, owner)
 	}
-	// A label that is a reserved profile's whole name is refused whichever
-	// agent asks: it names that workspace outright.
-	if owner, ok := Reserved("claude-desktop", "codex"); !ok || owner != "claude-desktop" {
-		t.Errorf(`Reserved("claude-desktop", "codex") = %q, %v; want claude-desktop, true`, owner, ok)
+	// Accepted with an agent: a session's workspace is always <agent>-<slug>,
+	// so a slug that is a reserved profile's whole name is codex-claude-desktop
+	// here, which nothing owns. The whole-name refusal is for a profile name,
+	// which has no agent in front of it.
+	if owner, ok := Reserved("claude-desktop", "codex"); ok {
+		t.Errorf(`Reserved("claude-desktop", "codex") = %q, true; want it accepted`, owner)
+	}
+	// But with no agent it is a profile name, and it names that workspace
+	// outright, so it is still refused.
+	if owner, ok := Reserved("claude-desktop"); !ok || owner != "claude-desktop" {
+		t.Errorf(`Reserved("claude-desktop") = %q, %v; want claude-desktop, true`, owner, ok)
 	}
 }
 
