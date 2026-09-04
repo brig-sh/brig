@@ -1761,6 +1761,9 @@ func agentCmd(args []string) error {
 		fmt.Print(agentUsage)
 		return nil
 	case "ls":
+		if err := rejectAgentTail("brig agent ls", "takes no arguments", args[1:]); err != nil {
+			return err
+		}
 		return listProfiles()
 	case "show":
 		err = showAgent(args[1:])
@@ -1779,6 +1782,12 @@ func agentCmd(args []string) error {
 	// scripts, which is exactly why they cannot simply disappear.
 	case "list":
 		deprecated("brig agent list", "brig agent ls")
+		// The retired spelling behaves exactly like the verb it maps onto, the
+		// refusal of a stray word included, so it names `brig agent ls` too:
+		// the notice above already pointed the reader there.
+		if err := rejectAgentTail("brig agent ls", "takes no arguments", args[1:]); err != nil {
+			return err
+		}
 		return listProfiles()
 	case "save":
 		deprecated("brig agent save", "brig agent export")
@@ -1839,6 +1848,26 @@ func deprecatedProfileCmd(args []string) error {
 	return agentCmd(append([]string{verb}, args[1:]...))
 }
 
+// rejectAgentTail refuses a word a brig agent subcommand has no place for,
+// rather than dropping it the way the group used to: ls printed its listing and
+// ignored what followed, and edit and import acted on their first word and let
+// the second fall on the floor. Every other verb in brig names a stray token --
+// see rejectTail on the run line and the check `brig ls` makes -- so this says
+// it the same way, naming the command the reader typed and what it takes, so a
+// mistake reads the same wherever it is made.
+//
+// show, new and export are not routed through here: they take flags as well as
+// words, so parseExportLine reads their lines and each refuses a word too many
+// against what it accepts -- a destination on show, two names on new, a second
+// destination on export -- with a message that names the command that wanted it
+// instead. rm is the same, through nameAndYes.
+func rejectAgentTail(command, takes string, tail []string) error {
+	if len(tail) > 0 {
+		return usagef("unexpected argument %q; `%s` %s", tail[0], command, takes)
+	}
+	return nil
+}
+
 // editProfile opens a file-backed profile in your editor.
 //
 // It creates nothing: a profile that is still embedded has no file, so edit
@@ -1849,6 +1878,9 @@ func deprecatedProfileCmd(args []string) error {
 func editProfile(args []string) error {
 	if len(args) == 0 {
 		return errors.New("edit needs a name, for example `brig agent edit mine`")
+	}
+	if err := rejectAgentTail("brig agent edit", "takes one agent and nothing more", args[1:]); err != nil {
+		return err
 	}
 	name := args[0]
 	p, ok := profile.Lookup(name)
@@ -1904,6 +1936,12 @@ func importProfile(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("import needs a file, for example `brig agent import mine.yaml` "+
 			"(or - to read stdin). See %s", profile.BringYourOwnImageDoc)
+	}
+	// Named before the file is read, so `brig agent import a b` reports b rather
+	// than importing a and dropping it -- one file is imported, never the first
+	// of several.
+	if err := rejectAgentTail("brig agent import", "takes one file and nothing more", args[1:]); err != nil {
+		return err
 	}
 	var blob []byte
 	var err error
