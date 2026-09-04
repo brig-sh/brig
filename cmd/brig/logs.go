@@ -91,7 +91,10 @@ func logsCmd(args []string) error {
 	// sandbox name from the two.
 	r, err := session.ParseRef(ref)
 	if err != nil {
-		return err
+		// Classed as a usage error, the same way split classes the identical
+		// ParseRef failure on the run line: nothing ran, so this is a token in
+		// the wrong place rather than a run that started and failed.
+		return usagef("%s", err)
 	}
 	t, ok := profile.Lookup(r.Agent)
 	if !ok {
