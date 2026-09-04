@@ -500,20 +500,28 @@ grep -q '^NETWORK .*shared' "$WORK/on.out" \
   && ok "the envelope names the shared posture" \
   || bad "the envelope names the shared posture -- got: $(cat "$WORK/on.out")"
 
-# isolated asks the runtime for a network of this sandbox's own. The stub is a
-# hull stand-in, so what is checked here is that the posture reaches the
-# runtime; that two sandboxes on separate networks genuinely cannot reach each
-# other is a real-runtime fact, recorded in docs/manual-tests.
+# isolated gives the sandbox a network of its own, which brig can only do where
+# it owns the gateway. This run is pinned to vz, where the network comes from
+# vmnet, so the posture is refused rather than accepted and dropped -- it was
+# accepted and dropped before, and the envelope reported a network of the
+# sandbox's own over a sandbox on the shared one. The negative half is the half
+# worth testing: "it booted" would pass with the whole thing deleted. That two
+# sandboxes on separate networks genuinely cannot reach each other is a
+# real-runtime fact, recorded in docs/manual-tests.
 "$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
-"$WORK/brig" --verbose run claude --network isolated -d > "$WORK/iso.out" 2>&1
-grep -q -- '--net isolated' "$STUB_LOG" \
-  && ok "--network isolated reaches the runtime" \
-  || bad "--network isolated reaches the runtime -- got: $(grep '^argv: run' "$STUB_LOG")"
-grep -q '^NETWORK .*isolated' "$WORK/iso.out" \
-  && ok "the envelope names the isolated posture" \
-  || bad "the envelope names the isolated posture -- got: $(cat "$WORK/iso.out")"
+if "$WORK/brig" run claude --network isolated -d > "$WORK/iso.out" 2>&1; then
+  bad "--network isolated was accepted on a backend that cannot give one"
+else
+  grep -q 'hvi' "$WORK/iso.out" \
+    && ok "isolated refuses where brig owns no network, naming the backend that does" \
+    || bad "the refusal does not name the backend -- got: $(cat "$WORK/iso.out")"
+fi
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "the runtime was invoked for a posture it cannot honour" \
+  || ok "nothing reached the runtime for isolated"
 "$WORK/brig" rm --all > /dev/null 2>&1
+
 
 # A posture brig does not know must stop the run rather than pick one.
 out="$(BRIG_NETWORK=airgapped "$WORK/brig" info claude 2>&1)"; rc=$?

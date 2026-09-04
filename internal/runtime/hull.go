@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -301,17 +303,33 @@ func (h *hull) Run(spec RunSpec) error {
 	// connection. See gateway.go.
 	gatewaySock, gatewayCidr := "", ""
 	if hv == "hvi" && net != "none" {
-		sock, err := ensureGateway(h.bin)
-		if err != nil {
-			return err
+		// hull takes the socket and the address together and configures the
+		// guest statically, so both are ours to assign.
+		if net == "isolated" {
+			// A network of this sandbox's own: its own gateway process on its
+			// own /30, so no other sandbox is on it. See sandboxnet.go.
+			index, err := sandboxNet(spec.Name)
+			if err != nil {
+				return err
+			}
+			sock, err := ensureIsolatedGateway(h.bin, spec.Name, index)
+			if err != nil {
+				return err
+			}
+			gatewaySock, gatewayCidr = sock, sandboxCIDR(index)
+		} else {
+			sock, err := ensureGateway(h.bin)
+			if err != nil {
+				return err
+			}
+			// One address on the network every shared sandbox is on. See
+			// gatewayip.go.
+			cidr, err := gatewayCIDR(spec.Name)
+			if err != nil {
+				return err
+			}
+			gatewaySock, gatewayCidr = sock, cidr
 		}
-		// hull takes the two together and configures the guest statically, so
-		// the address is ours to assign. See gatewayip.go.
-		cidr, err := gatewayCIDR(spec.Name)
-		if err != nil {
-			return err
-		}
-		gatewaySock, gatewayCidr = sock, cidr
 	}
 	args, envVals, err := runArgs(spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
 	if err != nil {
@@ -335,6 +353,11 @@ func (h *hull) Run(spec RunSpec) error {
 	return nil
 }
 
+// CanRun is supports for a caller that has not started anything yet, so that
+// the refusals below also reach the path that joins a running sandbox instead
+// of booting one. See RunChecker.
+func (h *hull) CanRun(spec RunSpec) error { return supports(spec, hypervisor(spec)) }
+
 // supports rejects a spec the chosen backend cannot honour, before anything
 // is started. hull would refuse this too, but only at boot and without
 // naming the variable that caused it -- and the user who set BRIG_HYPERVISOR
@@ -344,7 +367,34 @@ func supports(spec RunSpec, hv string) error {
 		return fmt.Errorf("this profile opens a graphical window, which only the vz backend provides "+
 			"(BRIG_HYPERVISOR is %q); unset it to run this profile", hv)
 	}
+	// The isolated posture is the same promise in a weaker form, and it was
+	// silently unkept on these backends: brig owns no network there, so the
+	// sandbox joined vmnet with every other one while the envelope reported a
+	// network of its own. Refused rather than accepted and dropped -- a posture
+	// nothing implements is worse than one the user was told they cannot have.
+	if spec.Net == "isolated" && hv != "hvi" {
+		return fmt.Errorf("--network isolated gives the sandbox a network of its own, which "+
+			"brig can only do on the hvi backend, where it owns the gateway (BRIG_HYPERVISOR "+
+			"is %q); vmnet decides what a %s sandbox shares. Run it on hvi, or use the shared "+
+			"network and read docs/security.md on what that backend separates anyway", hv, hv)
+	}
 	return nil
+}
+
+// hullNet is the posture as hull's --net takes it: none or shared, and
+// nothing else.
+//
+// Isolation is not something hull is told. It is which gateway the guest is
+// pointed at, which travels on --gateway-sock, so an isolated sandbox is a
+// networked one as far as hull is concerned. Passing "isolated" through was
+// what made the posture a no-op here: hull reads any value other than "none"
+// as networked, so the flag was accepted and the sandbox joined the shared
+// gateway anyway.
+func hullNet(net string) string {
+	if net == "none" {
+		return "none"
+	}
+	return "shared"
 }
 
 // runArgs is the one place the run command line is built, so that what a test
@@ -359,7 +409,7 @@ func supports(spec RunSpec, hv string) error {
 func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
 	args = []string{"run", "--detach", "--name", spec.Name,
 		"--hypervisor", hv,
-		"--net", net,
+		"--net", hullNet(net),
 		"--pull", orDefault(spec.Pull, "missing"),
 		"--mem", strconv.Itoa(spec.Mem),
 		"--cpus", strconv.Itoa(spec.CPUs),
@@ -534,15 +584,132 @@ func (h *hull) replaceCmd(spec ExecSpec) (argv, env []string) {
 	return argv, env
 }
 
-func (h *hull) Stop(name string) error { return h.quiet("stop", name, true) }
+// Stop also stops the gateway of an isolated sandbox. That gateway serves
+// this sandbox alone, so a stopped sandbox holding one is 28.7 MB and a socket
+// spent on a VM that is not running -- a leak the shared gateway cannot have,
+// because it is still serving everything else.
+func (h *hull) Stop(name string) error {
+	err := h.quiet("stop", name, true)
+	releaseGateway(name, err)
+	return err
+}
 
-// Remove also gives the sandbox's gateway address back. A stopped sandbox
-// keeps its address so that starting it again is the same machine on the same
+// Remove also gives the sandbox's address and network back. A stopped sandbox
+// keeps both so that starting it again is the same machine on the same
 // network; a removed one has no such claim.
 func (h *hull) Remove(name string) error {
 	err := h.quiet("rm", name, false)
-	releaseGatewayIP(name)
+	releaseGateway(name, err)
+	// Gated on the removal having succeeded, for the reason releaseGateway is:
+	// a `hull rm` that failed leaves a sandbox that may still be running, and
+	// putting its address and its /30 back in the pool hands them to the next
+	// sandbox to boot -- two guests on one address, which is the failure the
+	// allocator exists to prevent.
+	if err == nil {
+		releaseGatewayIP(name)
+		releaseSandboxNet(name)
+	}
 	return err
+}
+
+// NetworkStale reports whether a running sandbox is on a different network
+// than this run asks for.
+//
+// The comparison is the gateway spec, the same string ensureIsolatedGateway
+// decides on. A sandbox with no isolated gateway is on the shared network, and
+// its spec is the empty string, so it compares unequal to any isolated one and
+// equal to another shared run.
+func (h *hull) NetworkStale(name, hypervisor, net string) bool {
+	if hypervisorOrDefault(hypervisor) != "hvi" || net == "none" {
+		// No gateway either way, so nothing here can differ. vz takes its
+		// network from vmnet, which brig neither chose nor can inspect.
+		return false
+	}
+	want := ""
+	if net == "isolated" {
+		// A read, never an allocation. This runs on every run, exec and shell
+		// against a sandbox that is already up, and a run refused afterwards
+		// -- for a bad image, a failed verification -- would otherwise have
+		// spent one of the 64 networks that only `brig rm` gives back.
+		//
+		// A sandbox with no network yet cannot be running on the one it would
+		// be given, so the comparison is already decided: stale.
+		index, ok := lookupSandboxNet(name)
+		if !ok {
+			return true
+		}
+		want = gatewaySpec(index)
+	}
+	sock, err := isolatedSocket(name)
+	if err != nil {
+		return false
+	}
+	got := ""
+	if gatewayReachable(sock) {
+		got = recordedSpec(sock)
+	}
+	return got != want
+}
+
+// PruneNetworks stops the isolated gateways whose sandbox is gone, and reports
+// how many went.
+//
+// The same job the nerdctl adapter does with `network rm`, over a different
+// primitive: here a sandbox's network is a process, so tidying one is stopping
+// it. This is what catches the gateway of a sandbox that died without a `brig
+// stop` -- Stop and Remove clear their own, and nothing else would.
+//
+// Optional on the same terms as TelemetryReporter, and asserted for by reset.
+func (h *hull) PruneNetworks(inUse []string) int {
+	dir, err := gatewayDir()
+	if err != nil {
+		return 0
+	}
+	live := make(map[string]bool, len(inUse))
+	for _, name := range inUse {
+		if sock, err := isolatedSocket(name); err == nil {
+			live[sock] = true
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	gone := 0
+	for _, entry := range entries {
+		// The pid file rather than the socket: a gateway that died leaves its
+		// socket behind and hull removes that on the next claim, whereas the
+		// record is brig's own and names the process to stop.
+		if !strings.HasPrefix(entry.Name(), "sandbox-") || !strings.HasSuffix(entry.Name(), ".pid") {
+			continue
+		}
+		sock := strings.TrimSuffix(filepath.Join(dir, entry.Name()), ".pid") + ".sock"
+		if live[sock] {
+			continue
+		}
+		if pid, ok := gatewayPID(sock); ok && ownsGateway(pid, sock) {
+			gone++
+		}
+		stopGatewayAt(sock)
+	}
+	return gone
+}
+
+// releaseGateway shuts an isolated gateway down once the sandbox behind it is
+// really gone. A sandbox that was never isolated has none, and shutDownGateway
+// finds nothing to stop.
+//
+// Gated on the verb having succeeded rather than on a fresh liveness check. A
+// stop or a removal that failed leaves a sandbox that may still be running,
+// and taking the network out from under it would turn one failure into two --
+// but asking `hull ps` to confirm would put another process on the path of
+// every stop to answer a question the exit status already answers. A gateway
+// left behind by the failed case is what PruneNetworks is for.
+func releaseGateway(name string, err error) {
+	if err != nil {
+		return
+	}
+	shutDownGateway(name)
 }
 
 // quiet runs a verb whose success is the whole of its output, keeping hull's
