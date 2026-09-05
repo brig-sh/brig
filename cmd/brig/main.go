@@ -64,6 +64,7 @@ usage:
                                                  your host, once
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
+  brig doctor [<agent>]                          check the host, runtime and, given an agent, its image
   brig version
 
 A <ref> is the session. claude is that agent's default session, and
@@ -213,6 +214,8 @@ func run(args []string) error {
 		return secretCmd(os.Stdout, rest)
 	case "telemetry":
 		return telemetryCmd(os.Stdout, rest)
+	case "doctor":
+		return doctorCmd(os.Stdout, rest)
 	// Deprecated spellings, absent from the usage text.
 	//
 	// The three grammars this release settles are all here: a plural noun that
