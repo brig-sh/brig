@@ -153,6 +153,13 @@ release:
   # now, which makes the review the only thing standing between a tag and
   # something the world can download.
   draft: true
+  # Re-run the workflow for a tag that already has a draft -- a
+  # workflow_dispatch retry, or a second push -- and target that draft
+  # instead of opening a second release beside it. Without this, tag
+  # v0.1.0-rc16 ended up with two releases of the same name, a Draft and a
+  # Pre-release; the fix is to publish the draft, not create another. (GitHub
+  # only, goreleaser >= v2.5; the workflow pins `~> v2`.)
+  use_existing_draft: true
   prerelease: auto
 
 # The Homebrew tap. `brews` generated formulas that installed pre-compiled
