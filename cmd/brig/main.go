@@ -49,7 +49,7 @@ usage:
   brig rm   <ref>                                stop and remove the sandbox
   brig rm   --all                                stop and remove every brig sandbox
   brig ls   [-q]                                 list sandboxes; -q prints the refs
-  brig logs <ref> [--follow] [--tail N] [--raw]  stream the sandbox log (--gateway: the host gateway log)
+  brig logs <ref> [--follow] [--tail N] [--raw]  stream the sandbox log (--gateway: that sandbox's gateway log; alone: the shared one)
   brig info <ref>                                print the execution envelope and the
                                                  full environment, by name -- fails
                                                  if a declared secret is missing

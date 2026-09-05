@@ -30,8 +30,9 @@ type logsOptions struct {
 // ref, and which runtime is underneath, both of which brig has and they do not.
 //
 // It parses its own flags rather than going through the run line, because
-// --gateway takes no ref: the gateway is one per host, and the run line's
-// parser requires a ref to resolve a profile at all.
+// --gateway takes an optional ref: the shared gateway is one per host and is
+// named by no session, while the run line's parser requires a ref to resolve a
+// profile at all.
 func logsCmd(args []string) error {
 	o := logsOptions{tail: -1}
 	var gateway bool
@@ -72,43 +73,62 @@ func logsCmd(args []string) error {
 		}
 	}
 
-	// The gateway log is per host, so it takes no ref -- and naming one is a
-	// mistake to say, not a session to go and resolve.
+	// Which gateway is asked for is the ref: bare --gateway is the shared one,
+	// which serves the host and is named by no session, and a ref is that
+	// sandbox's own. An isolated sandbox has a gateway to itself, so the ref is
+	// the only thing that can pick between the two.
 	if gateway {
-		if ref != "" {
-			return usagef("`brig logs --gateway` names no session; the gateway is per host, "+
-				"not per sandbox. Drop %q", ref)
+		if ref == "" {
+			return gatewayLogs(os.Stdout, o)
 		}
-		return gatewayLogs(os.Stdout, o)
+		_, name, err := resolveSandbox(ref)
+		if err != nil {
+			return err
+		}
+		return isolatedGatewayLogs(os.Stdout, o, ref, name)
 	}
 	if ref == "" {
 		return usagef("brig logs needs a ref, for example `brig logs claude`. " +
-			"`brig logs --gateway` reads the host's gateway log instead")
+			"`brig logs --gateway` reads the shared gateway's log instead")
 	}
 
-	// Resolved the way every other ref'd verb resolves: the ref names the agent
-	// and the session, the profile picks the runtime, and Load derives the
-	// sandbox name from the two.
+	rt, name, err := resolveSandbox(ref)
+	if err != nil {
+		return err
+	}
+	return streamLogs(rt, name, o, os.Stdout)
+}
+
+// resolveSandbox turns a ref into the runtime it runs on and the sandbox name
+// it is known by there, the way every other ref'd verb resolves one: the ref
+// names the agent and the session, the profile picks the runtime, and Load
+// derives the sandbox name from the two.
+//
+// Both gateway and sandbox logs go through this. The gateway path wants only
+// the name -- an isolated gateway's socket is named after the sandbox -- but it
+// has to arrive at that name by exactly the same route, or `brig logs <ref>`
+// and `brig logs --gateway <ref>` could disagree about which sandbox a ref is.
+func resolveSandbox(ref string) (runtime.Runtime, string, error) {
 	r, err := session.ParseRef(ref)
 	if err != nil {
 		// Classed as a usage error, the same way split classes the identical
 		// ParseRef failure on the run line: nothing ran, so this is a token in
 		// the wrong place rather than a run that started and failed.
-		return usagef("%s", err)
+		return nil, "", usagef("%s", err)
 	}
 	t, ok := profile.Lookup(r.Agent)
 	if !ok {
-		return notFoundf("unknown profile %q. `brig agent ls` lists them", r.Agent)
+		return nil, "", notFoundf("unknown profile %q. `brig agent ls` lists them", r.Agent)
 	}
 	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin})
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	cfg, err := wrap.Load(t, wrap.Options{Name: r.Label, Verbosity: verbosity}, rt)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-	return streamLogs(rt, cfg.VMName, o, os.Stdout)
+	return rt, cfg.VMName, nil
 }
 
 // streamLogs hands the runtime the log request, filtering terminal control
@@ -129,12 +149,42 @@ func streamLogs(rt runtime.Runtime, name string, o logsOptions, out io.Writer) e
 // gatewayLogs prints the shared gateway's own log. brig starts that gateway for
 // the hvi backend and writes its output to a file beside the socket; a network
 // failure at boot lands there and nothing pointed at it until now.
+//
+// That gateway is per host: it serves every sandbox that asked for the shared
+// network, so no ref names it. An isolated sandbox has one to itself, and
+// isolatedGatewayLogs is that one's log.
 func gatewayLogs(out io.Writer, o logsOptions) error {
 	path, err := runtime.GatewayLogPath()
 	if err != nil {
 		return err
 	}
-	return streamGatewayFile(filtered(out, o.raw), path, o.follow, o.tail)
+	missing := notFoundf("no gateway log at %s yet -- it appears once a sandbox "+
+		"first needs the host network gateway", path)
+	return streamGatewayFile(filtered(out, o.raw), path, o.follow, o.tail, missing)
+}
+
+// isolatedGatewayLogs prints the log of the gateway serving one sandbox alone.
+//
+// This is the log the feature is most for. An isolated gateway that fails to
+// start takes its sandbox's network with it, and its output is the only account
+// of why -- the boot error names the file, and nothing could read it.
+//
+// It lives only as long as its gateway: the log is removed along with the pid
+// and spec records once the gateway is confirmed stopped, which is what keeps
+// ~/.brig from growing a file for every sandbox ever isolated. A gateway that
+// never came up was never confirmed stopped, so the failure this is for leaves
+// its log in place. Absent means the gateway is not running, and the message
+// says so rather than implying the log was somewhere else.
+func isolatedGatewayLogs(out io.Writer, o logsOptions, ref, name string) error {
+	path, err := runtime.IsolatedGatewayLogPath(name)
+	if err != nil {
+		return err
+	}
+	missing := notFoundf("no gateway log at %s: the gateway serving %s is not running, "+
+		"and its log is removed with it. A gateway that failed to start leaves its log "+
+		"behind, so this is a sandbox that is stopped, was never isolated, or never ran",
+		path, ref)
+	return streamGatewayFile(filtered(out, o.raw), path, o.follow, o.tail, missing)
 }
 
 // gatewayFollowPoll is how often --follow re-reads the gateway log for bytes
@@ -144,15 +194,15 @@ const gatewayFollowPoll = 500 * time.Millisecond
 
 // streamGatewayFile writes the gateway log to out, tailing it under --follow.
 //
-// A missing file is not a fault to fail loudly over: the gateway log appears
-// only once a sandbox has needed the host network gateway, so on a machine that
-// has booted only vz sandboxes there is simply nothing yet.
-func streamGatewayFile(out io.Writer, path string, follow bool, tail int) error {
+// A missing file is not a fault to fail loudly over, but why it is missing
+// differs by gateway -- the shared one's log has not appeared yet, an isolated
+// one's has been removed -- so the caller supplies that error and this returns
+// it. Both are not-found, so a script can tell either from a failure.
+func streamGatewayFile(out io.Writer, path string, follow bool, tail int, missing error) error {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return notFoundf("no gateway log at %s yet -- it appears once a sandbox "+
-				"first needs the host network gateway", path)
+			return missing
 		}
 		return err
 	}
@@ -171,9 +221,10 @@ func streamGatewayFile(out io.Writer, path string, follow bool, tail int) error 
 	if !follow {
 		return nil
 	}
-	// Interrupting this leaves the gateway running: it serves every sandbox on
-	// the host, and reading its log is not owning it. Ctrl-C reaches this
-	// process and ends it, which is the whole of what stopping should do.
+	// Interrupting this leaves the gateway running: it serves sandboxes -- every
+	// shared one on the host, or the single isolated one -- and reading its log
+	// is not owning it. Ctrl-C reaches this process and ends it, which is the
+	// whole of what stopping should do.
 	for {
 		time.Sleep(gatewayFollowPoll)
 		more, err := io.ReadAll(f)
