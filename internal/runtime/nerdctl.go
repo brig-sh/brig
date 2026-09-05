@@ -196,6 +196,17 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 }
 
 func (n *nerdctl) Run(spec RunSpec) error {
+	// A GUI profile wants a graphical window, and there is nowhere on this path
+	// to put one: the container runtime has no display on either driver, so the
+	// refusal is about the path rather than a setting to flip. hull refuses the
+	// same profile when its backend cannot show a window; refuse it here too,
+	// before anything is built, so the two paths exit alike instead of booting
+	// headless with the window silently dropped.
+	if spec.GUI {
+		return fmt.Errorf("this profile opens a graphical window, which the container runtime cannot "+
+			"display on either driver (%s here); run it on macOS, where hull's vz backend can show it",
+			n.driver())
+	}
 	if err := n.CanRun(spec); err != nil {
 		return err
 	}
