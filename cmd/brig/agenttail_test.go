@@ -99,3 +99,26 @@ func TestShSaysAFlagItCannotReadHasNowhereToGo(t *testing.T) {
 		t.Errorf("sh sent --no-project to a position it cannot read it in:\n%s", warning)
 	}
 }
+
+// Which run-line flags sh reads is the table's to say, not a list beside it:
+// every row marked runOnly is read in no position on sh, and every other
+// run-line row is, so a flag added without a decision fails here rather than
+// drifting.
+func TestRunOnlyComesFromTheFlagTable(t *testing.T) {
+	seen := 0
+	for _, f := range brigFlags {
+		if f.position != posRun {
+			continue
+		}
+		seen++
+		if got, want := honorsRunLine("sh", f.long), !f.runOnly; got != want {
+			t.Errorf("honorsRunLine(sh, %s) = %v, but the row says runOnly=%v", f.long, got, f.runOnly)
+		}
+		if !honorsRunLine("run", f.long) {
+			t.Errorf("honorsRunLine(run, %s) = false; run reads every run-line flag", f.long)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no run-line flags in the table")
+	}
+}

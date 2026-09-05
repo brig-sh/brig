@@ -606,6 +606,12 @@ var brigFlags = []struct {
 	// The table already carries a position per flag, so this is a field on the
 	// row rather than a case in split.
 	retiredAs, retiredTo string
+	// runOnly marks a run-line flag that only run acts on. sh, shell and exec
+	// continue a session rather than shape a fresh run, so they read such a
+	// flag in no position at all. On the row rather than in a list beside the
+	// table, so a new run-only flag declares itself where its position is
+	// declared and honorsRunLine cannot fall behind it.
+	runOnly bool
 }{
 	{long: "name", short: "n", value: true, position: posRun},
 	{long: "image", short: "t", value: true, position: posRun},
@@ -624,8 +630,8 @@ var brigFlags = []struct {
 	// --no-project detaches the project a session is carrying. It takes no
 	// value: a directory is what the positional says, and this says the
 	// absence of one.
-	{long: "no-project", position: posRun},
-	{long: "detach", short: "d", position: posRun},
+	{long: "no-project", position: posRun, runOnly: true},
+	{long: "detach", short: "d", position: posRun, runOnly: true},
 	{long: "skills", position: posRun},
 	{long: "network", value: true, position: posRun},
 	{long: "offline", position: posRun},
@@ -647,7 +653,7 @@ var brigFlags = []struct {
 	// have sent that -q to the agent, silently changing what a working command
 	// does.
 	{long: "quiet", short: "q", position: posGlobal},
-	{long: "quiet", short: "q", position: posRun,
+	{long: "quiet", short: "q", position: posRun, runOnly: true,
 		retiredAs: "brig <verb> <ref> -q", retiredTo: "brig -q <verb> <ref>"},
 }
 
@@ -1046,17 +1052,18 @@ func tailAdvice(verb, arg string) (where string, readable bool) {
 // honorsRunLine reports whether verb reads a run-line flag in the position
 // between the verb and the ref. It is asked only for the tail-forwarding verbs.
 //
-// run reads every run-line flag it has. sh, shell and exec continue a session
-// rather than shaping a fresh run, so the flags a run alone acts on are read in
-// no run-line position on them: -q suppresses the execution envelope, which is
-// documented for run and create; --no-project and --detach are run's own.
+// run reads every run-line flag it has. The other verbs continue a session
+// rather than shaping a fresh run, so a flag marked runOnly in brigFlags is
+// read in no run-line position on them. The table is the one source: a flag
+// that only run acts on says so on its row, the way its position does.
 func honorsRunLine(verb, long string) bool {
 	if verb == "run" {
 		return true
 	}
-	switch long {
-	case "quiet", "no-project", "detach":
-		return false
+	for _, f := range brigFlags {
+		if f.long == long && f.position == posRun && f.runOnly {
+			return false
+		}
 	}
 	return true
 }
