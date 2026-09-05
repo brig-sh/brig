@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brig-sh/brig/internal/brigsock"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -135,14 +136,10 @@ func main() {
 	}
 }
 
-// maxSocketPath is the longest path the kernel will bind a unix socket to.
-//
-// bind copies the path into sun_path, a fixed array in the address struct --
-// 104 bytes on macOS, 108 on Linux -- and the last byte has to be the
-// terminator, so what fits is one less than the array. Derived from the
-// platform's own struct rather than written out, because the two numbers
-// differ and a hard-coded 104 would turn away paths Linux binds happily.
-const maxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
+// maxSocketPath is brigsock.MaxPath, kept under its old name so this file and
+// its socket_test read the one value. The derivation and the reason for it now
+// live in internal/brigsock, where brig doctor can reach them too.
+const maxSocketPath = brigsock.MaxPath
 
 // chooseSocket settles which socket the daemon listens on -- the --socket
 // value if one was given, the default otherwise -- and refuses a path the
@@ -161,7 +158,7 @@ const maxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
 func chooseSocket(flagValue string) (string, error) {
 	socket, source := flagValue, "--socket"
 	if socket == "" {
-		socket, source = defaultSocket()
+		socket, source = brigsock.Default()
 	}
 	if len(socket) > maxSocketPath {
 		return "", fmt.Errorf("refusing to listen on %s: a unix socket path on this system "+
@@ -170,19 +167,6 @@ func chooseSocket(flagValue string) (string, error) {
 			"--socket", socket, maxSocketPath, len(socket), source)
 	}
 	return socket, nil
-}
-
-// defaultSocket is the socket brigd picks when it is not told one, and where
-// that choice came from.
-func defaultSocket() (string, string) {
-	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return filepath.Join(dir, "brigd.sock"), "XDG_RUNTIME_DIR"
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".brig", "brigd.sock"), "your home directory"
 }
 
 // lockSocket takes the exclusive lock that makes this process the daemon for
