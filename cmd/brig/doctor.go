@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	goruntime "runtime"
 	"strings"
 	"syscall"
@@ -66,14 +67,11 @@ type check struct {
 	err error
 }
 
-// Package-level seams so a test can force a hostile host without one. The
-// virtualization probe and the secret store are the two doctor reaches for that
-// have no environment escape hatch of their own; detectRuntime (telemetry.go)
-// and the BRIG_* variables cover the rest.
-var (
-	virtualization = probeVirtualization
-	openStore      = secret.Open
-)
+// virtualization is the seam a test replaces to force a hostile host: the probe
+// has no environment escape hatch of its own. The other two seams doctor reads
+// already exist for the same reason -- detectRuntime in telemetry.go and
+// openStore in secret.go -- and the BRIG_* variables cover the rest.
+var virtualization = probeVirtualization
 
 // doctorCmd is `brig doctor [<agent>]`, with an optional --json flag of its own.
 func doctorCmd(out io.Writer, args []string) error {
@@ -169,7 +167,7 @@ func doctorExit(checks []check) error {
 // them. Everything else -- the host, virtualization, the signature tooling, the
 // profiles, the secret store, the daemon -- stands on its own.
 func runDoctor(agent *profile.Profile, loadErr error) []check {
-	rt, rtCheck := runtimeCheck()
+	rtCheck := runtimeCheck()
 	runtimeOK := rtCheck.State == statePass
 	return []check{
 		hostCheck(),
@@ -214,27 +212,39 @@ func virtualCheck() check {
 }
 
 // runtimeCheck detects the runtime the way a run does, through the same seam,
-// and reports the binary and its version. It returns the runtime so the image
-// check can tell whether it was reached. A missing or broken runtime is the one
-// failure here that gates the exit status -- it is exactly "fix the runtime
+// and reports the binary and its version. A missing or broken runtime is the
+// one failure here that gates the exit status -- it is exactly "fix the runtime
 // before this can run", which is exit 4 -- so its error is carried through
 // unchanged for exitCode to class.
-func runtimeCheck() (runtime.Runtime, check) {
+func runtimeCheck() check {
 	rt, err := detectRuntime()
 	if err != nil {
-		return nil, check{Name: "runtime", State: stateFail, Finding: err.Error(),
+		return check{Name: "runtime", State: stateFail, Finding: err.Error(),
 			Fix: "install hull on macOS or nerdctl on Linux, or point BRIG_RUNTIME_BIN at a build",
 			err: err,
 		}
 	}
-	finding := fmt.Sprintf("%s at %s", rt.Kind(), rt.Bin())
+	bin := rt.Bin()
+	// Detect takes BRIG_RUNTIME_BIN on trust, where a profile's runtimeBin is
+	// checked for being on disk and executable before it is accepted. A doctor
+	// that repeated the trust would vouch for a path nothing can run, so the
+	// binary is looked up here, and the answer is classed the way a profile's
+	// bad runtimeBin already is: the runtime you named is broken, exit 4.
+	if _, lerr := exec.LookPath(bin); lerr != nil {
+		return check{Name: "runtime", State: stateFail,
+			Finding: fmt.Sprintf("%s at %s is not an executable on this host", rt.Kind(), bin),
+			Fix:     "fix BRIG_RUNTIME_BIN, or unset it so brig finds the runtime on PATH",
+			err:     fmt.Errorf("%w: %s is not there or not executable", runtime.ErrBadRuntime, bin),
+		}
+	}
+	finding := fmt.Sprintf("%s at %s", rt.Kind(), bin)
 	// Best-effort: a runtime that will not answer --version is still a runtime,
 	// so the version is added when it is there and left out when it is not,
 	// rather than failing the check over a line brig could not read.
-	if v, verr := runtime.Version(rt.Bin()); verr == nil && v != "" {
-		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), rt.Bin())
+	if v, verr := runtime.Version(bin); verr == nil && v != "" {
+		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), bin)
 	}
-	return rt, check{Name: "runtime", State: statePass, Finding: finding}
+	return check{Name: "runtime", State: statePass, Finding: finding}
 }
 
 // shortVersion is the version token out of a `--version` line: the last field,
