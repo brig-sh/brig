@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -281,14 +282,24 @@ func Detect() (Runtime, error) { return DetectFor(Preference{}) }
 // BRIG_RUNTIME forces the backend (hull | nerdctl) and BRIG_RUNTIME_BIN forces
 // the executable, which is how you point brig at a build that is not on PATH.
 // A profile's runtimeBin does the same thing without a variable per shell, and
-// loses to the variable when both are set.
+// loses to the variable when both are set. Whichever named the binary, it is
+// resolved and checked here, before any of it is run: a runtime that is not
+// there is refused with the setting that named it, rather than reaching the
+// first exec as a sandbox brig cannot tell the state of.
 func DetectFor(pref Preference) (Runtime, error) {
 	kind := os.Getenv("BRIG_RUNTIME")
 	if kind == "" {
 		kind = defaultKind()
 	}
 	bin := os.Getenv("BRIG_RUNTIME_BIN")
-	if bin == "" && pref.Bin != "" {
+	switch {
+	case bin != "":
+		resolved, err := runtimeBinFromEnv(bin)
+		if err != nil {
+			return nil, err
+		}
+		bin = resolved
+	case pref.Bin != "":
 		resolved, err := runtimeBinFromProfile(pref.Bin)
 		if err != nil {
 			return nil, err
@@ -320,14 +331,59 @@ func runtimeBinFromProfile(bin string) (string, error) {
 		}
 		bin = filepath.Join(home, bin[2:])
 	}
-	info, err := os.Stat(bin)
-	if err != nil {
-		return "", fmt.Errorf("%w: this profile's runtimeBin is %s, which is not there: %w", ErrBadRuntime, bin, err)
-	}
-	if info.IsDir() || info.Mode()&0o111 == 0 {
-		return "", fmt.Errorf("%w: this profile's runtimeBin is %s, which is not an executable", ErrBadRuntime, bin)
+	if err := runnable(bin); err != nil {
+		return "", fmt.Errorf("%w: this profile's runtimeBin is %s, %w", ErrBadRuntime, bin, err)
 	}
 	return bin, nil
+}
+
+// runtimeBinFromEnv resolves what BRIG_RUNTIME_BIN names.
+//
+// The variable used to be taken as given, which meant a value that was not
+// there reached the first exec instead of being refused: the failure surfaced
+// as a sandbox brig could not tell the state of, and reported the variable
+// nowhere (#139). It is the same mistake a profile's runtimeBin makes and it
+// is checked the same way, in the one place below, with the setting the reader
+// has to fix named rather than the profile.
+//
+// A bare name is a PATH lookup, because that is what BRIG_RUNTIME_BIN=hull has
+// always meant to the exec underneath and to anyone writing it. exec.LookPath
+// does that lookup and its own executable test, so a name it resolves is
+// already known to be runnable; the check below then covers the path it
+// returned and every value that named a path to begin with. Unlike the
+// profile's field a leading ~ is not expanded: this one is read by a shell
+// first, and a shell that did not expand it meant the literal directory.
+func runtimeBinFromEnv(bin string) (string, error) {
+	path := bin
+	if !strings.ContainsRune(bin, filepath.Separator) {
+		found, err := exec.LookPath(bin)
+		if err != nil {
+			return "", fmt.Errorf("%w: BRIG_RUNTIME_BIN is %s, which is not on PATH: %w", ErrBadRuntime, bin, err)
+		}
+		path = found
+	}
+	if err := runnable(path); err != nil {
+		return "", fmt.Errorf("%w: BRIG_RUNTIME_BIN is %s, %w", ErrBadRuntime, bin, err)
+	}
+	return path, nil
+}
+
+// runnable reports why a path cannot be driven as a runtime, or nil when it
+// can: it is on disk, it is not a directory, and it carries an execute bit.
+//
+// One function for both callers, phrased as the clause that follows the name
+// of whatever carried the path, so each says which setting is wrong while the
+// test itself is written once. Two copies is how the variable came to be
+// trusted where the profile's field was not.
+func runnable(bin string) error {
+	info, err := os.Stat(bin)
+	if err != nil {
+		return fmt.Errorf("which is not there: %w", err)
+	}
+	if info.IsDir() || info.Mode()&0o111 == 0 {
+		return errors.New("which is not an executable")
+	}
+	return nil
 }
 
 // envInArgv is the escape hatch for a runtime build that does not yet take a

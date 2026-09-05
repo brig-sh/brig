@@ -144,7 +144,9 @@ the command line even then.
 
 1. `BRIG_RUNTIME` names the backend, `hull` or `nerdctl`. Anything else is
    refused by name. Unset, it is `hull` on macOS and `nerdctl` everywhere else.
-2. `BRIG_RUNTIME_BIN` is the executable to run, and skips the PATH lookup.
+2. `BRIG_RUNTIME_BIN` is the executable to run. A path is taken as it stands
+   and a bare name is looked up on PATH, and either way one that is missing or
+   not executable is reported against the variable before anything runs.
 3. A profile's `runtimeBin` does the same thing without a variable per shell,
    and loses to `BRIG_RUNTIME_BIN`. A leading `~` is expanded, and a path that
    is missing or not executable is reported against the profile that named it.
