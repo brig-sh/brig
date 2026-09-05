@@ -11,21 +11,24 @@ thing to know when the wording does not match anything in brig.
 ## The sandbox never became ready
 
 ```
-brig: sandbox did not become ready; check 'hull logs brig-claude-code'
+brig: sandbox did not become ready; check 'brig logs claude (or the runtime's own, hull logs brig-claude-code)'
 ```
 
-On Linux the hint names `nerdctl logs` instead.
+On Linux the second half names `nerdctl logs` instead.
 
 The runtime reported the sandbox running, but the agent inside it never
 answered. Those are two different moments: the VM process starts, and a few
 seconds later the guest binds its listener. brig waits for the second one and
 gave up.
 
-Check the runtime's own logs, which is what the message points at:
+Read the log, which is what the message points at:
 
 ```bash
-hull logs brig-claude-code
+brig logs claude
 ```
+
+That is `hull logs` underneath, and the message names that spelling too, for
+a boot that never became a sandbox brig can address by ref.
 
 The guest's own errors are there, not in brig's output. If the guest is only
 slow rather than broken, give it longer with `BRIG_READY_TIMEOUT` (seconds,
@@ -39,8 +42,8 @@ BRIG_READY_TIMEOUT=60 brig run claude
 
 ```
 VMM started (PID 33351)
-brig: sandbox did not become ready; check '/opt/homebrew/bin/hull logs brig-claude-code'
-$ hull logs brig-claude-code
+brig: sandbox did not become ready; check 'brig logs claude (or the runtime's own, /opt/homebrew/bin/hull logs brig-claude-code)'
+$ brig logs claude
 dyld[33351]: missing symbol called
 ```
 

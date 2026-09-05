@@ -131,6 +131,20 @@ func gatewaySocket() (string, error) {
 	return filepath.Join(dir, "gateway-"+socketTag(gatewaySubnet)+".sock"), nil
 }
 
+// GatewayLogPath is where the shared gateway's own output is written, beside
+// its socket. ensureGateway opens it, and `brig logs --gateway` points at it:
+// the gateway logs a boot's network failure to a file no command named until
+// now, so a network that never came up was invisible unless you already knew
+// the file was there. Derived from the socket by the same rule startGateway
+// uses, so the writer and the reader cannot drift onto two paths.
+func GatewayLogPath() (string, error) {
+	sock, err := gatewaySocket()
+	if err != nil {
+		return "", err
+	}
+	return gatewayLogPath(sock), nil
+}
+
 // socketTag turns a subnet into something that can sit in a filename.
 func socketTag(subnet string) string {
 	return strings.NewReplacer("/", "_", ".", "-").Replace(subnet)

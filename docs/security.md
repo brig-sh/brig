@@ -664,9 +664,12 @@ clipboard; DCS sequences are forwarded verbatim by `tmux` and `screen` to the
 *outer* terminal; and a cursor-position query makes the terminal type its
 reply onto your shell's standard input. An agent that has read a hostile
 README can do any of those. `hull exec` and `hull logs` do filter, because
-hull stays in the middle of that stream; brig deliberately does not stay. If
-this matters for your threat model, run brig inside a terminal you are willing
-to lose, or through `hull exec`.
+hull stays in the middle of that stream. `brig run` deliberately does not
+stay. `brig logs` does: it reads a log back rather than driving a terminal, so
+it filters control sequences by default, and `--raw` turns that off and hands
+you the bytes with the surface above intact. If this matters for your threat
+model, run brig inside a terminal you are willing to lose, or through
+`hull exec`.
 
 It does not protect the workspace from the agent. Everything in there is
 writable by design, since that is the work.
