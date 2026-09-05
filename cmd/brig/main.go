@@ -49,6 +49,7 @@ usage:
   brig rm   <ref>                                stop and remove the sandbox
   brig rm   --all                                stop and remove every brig sandbox
   brig ls   [-q]                                 list sandboxes; -q prints the refs
+  brig logs <ref> [--follow] [--tail N] [--raw]  stream the sandbox log (--gateway: the host gateway log)
   brig info <ref>                                print the execution envelope and the
                                                  full environment, by name -- fails
                                                  if a declared secret is missing
@@ -216,6 +217,8 @@ func run(args []string) error {
 		return telemetryCmd(os.Stdout, rest)
 	case "doctor":
 		return doctorCmd(os.Stdout, rest)
+	case "logs":
+		return logsCmd(rest)
 	// Deprecated spellings, absent from the usage text.
 	//
 	// The three grammars this release settles are all here: a plural noun that
