@@ -53,10 +53,12 @@ On macOS the sandbox is a microVM, booted by
 [hull](https://github.com/brig-sh/hull) over Virtualization.framework. The
 Homebrew cask depends on it, so `brew install --cask brig` brings it along.
 
-Building both from source works too:
+Building both from source works too. hull's build target is `make macos`, it
+needs a Rust toolchain for the `hvi` submodule, and the submodule has to be
+cloned:
 
 ```bash
-git clone https://github.com/brig-sh/hull && cd hull && make build
+git clone --recursive https://github.com/brig-sh/hull && cd hull && make macos
 ```
 
 hull ships a `vz-runner` helper that needs the
