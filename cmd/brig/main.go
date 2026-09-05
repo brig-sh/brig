@@ -437,9 +437,13 @@ func run(args []string) error {
 	// keychain prompt that reading the host login may bring up.
 	switch verb {
 	case "stop":
+		// Deliberately not gated on the sandbox existing: stopping one that was
+		// never running is the end state stop asks for, not a failure. See
+		// Config.Stop. rm and logs below are the opposite -- there is nothing to
+		// remove and nothing to read -- which is why only they check first.
 		return cfg.Stop()
 	case "rm":
-		return cfg.Remove()
+		return removeSandbox(cfg, session.Ref{Agent: profileName, Label: cfg.RawName}.String())
 	}
 
 	set, err := cfg.BuildEnv()
@@ -1610,6 +1614,62 @@ func takeAll(args []string) (rest []string, all bool) {
 		rest = append(rest, a)
 	}
 	return rest, all
+}
+
+// removeSandbox is `brig rm <ref>`: be rid of the one sandbox the ref names.
+//
+// It asks the runtime whether that sandbox is there before handing over, so the
+// case the runtime used to answer with its own "instance not found" -- there is
+// nothing to remove -- is reported as a not-found (exit 3), the code the README
+// gives a name that resolves to nothing, rather than as a removal that ran and
+// failed (exit 1). A List that itself fails is a runtime that could not be asked
+// (exit 4), a different fact the exit table keeps apart, so it comes back
+// untouched rather than being read as absence.
+func removeSandbox(cfg *wrap.Config, ref string) error {
+	present, err := sandboxPresent(cfg.Runtime, cfg.VMName)
+	if err != nil {
+		return err
+	}
+	if !present {
+		// Not pruned here. "Not in the list" is not always "gone": hull.List
+		// falls back to a plain `ps` on a hull without `ps -a`, and that listing
+		// carries only the running instances, so a stopped sandbox reads as
+		// absent while it is still in hull's store. Forgetting its index entry on
+		// that reading would drop the workspace record of a sandbox that is
+		// really there. The entry goes when a removal actually happens, in
+		// Remove, or when ls prunes against a full listing; a stale entry for a
+		// sandbox that is truly gone costs nothing until then.
+		return noSandboxf(ref)
+	}
+	return cfg.Remove()
+}
+
+// sandboxPresent reports whether the runtime has a sandbox of this name at all,
+// running or stopped.
+//
+// It is how rm and logs tell "there is nothing here" -- a not-found, exit 3 --
+// from a runtime that could not be asked -- its own error, exit 4. The two are
+// different facts and the README's exit table keeps them apart, so a List that
+// fails is returned as is rather than folded into absence.
+func sandboxPresent(rt runtime.Runtime, name string) (bool, error) {
+	list, err := rt.List()
+	if err != nil {
+		return false, err
+	}
+	for _, inst := range list {
+		if inst.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// noSandboxf is the not-found a ref'd verb gives when the runtime has no sandbox
+// for the ref. It names the ref the reader typed -- the word `brig ls` prints
+// and the one they will reach for next -- rather than the sandbox name they
+// never chose.
+func noSandboxf(ref string) error {
+	return notFoundf("no sandbox for %s. `brig ls` lists them", ref)
 }
 
 // removeAll stops and removes every sandbox brig started. Workspaces are left

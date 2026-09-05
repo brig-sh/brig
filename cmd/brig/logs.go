@@ -96,7 +96,7 @@ func logsCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	return streamLogs(rt, name, o, os.Stdout)
+	return logsFor(rt, name, ref, o, os.Stdout)
 }
 
 // resolveSandbox turns a ref into the runtime it runs on and the sandbox name
@@ -129,6 +129,28 @@ func resolveSandbox(ref string) (runtime.Runtime, string, error) {
 		return nil, "", err
 	}
 	return rt, cfg.VMName, nil
+}
+
+// logsFor confirms the runtime has the sandbox before streaming its log.
+//
+// There is nothing to read from a sandbox that is not there, which the exit
+// table calls a not-found (3) rather than a log stream that started and failed
+// (1). So the runtime is asked before the stream is opened, and the ref the
+// reader typed -- not the sandbox name -- is what the not-found names. A List
+// that itself fails comes back as is (exit 4, the runtime unavailable), not as
+// absence: the two are different facts. See sandboxPresent.
+//
+// Split from logsCmd so a test can drive it with a runtime double, the way
+// streamLogs is split for the same reason.
+func logsFor(rt runtime.Runtime, name, ref string, o logsOptions, out io.Writer) error {
+	present, err := sandboxPresent(rt, name)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return noSandboxf(ref)
+	}
+	return streamLogs(rt, name, o, out)
 }
 
 // streamLogs hands the runtime the log request, filtering terminal control
