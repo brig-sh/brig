@@ -752,7 +752,7 @@ func attachPolicy(args []string) error {
 	// reads as a rule that is now in force. On stderr, where every other
 	// advisory in this CLI goes, so stdout stays the command's answer and
 	// nothing parsing it reads the note as part of one.
-	fmt.Fprintln(os.Stderr, policy.EnforcementNote)
+	fmt.Fprintln(os.Stderr, policy.NotEnforcedNote)
 	return nil
 }
 
@@ -896,7 +896,7 @@ func checkPolicy(args []string) error {
 	// On stderr: check prints one policy name per line, and anything
 	// looping over that would otherwise read the note as a name.
 	if len(names) > 0 {
-		fmt.Fprintln(os.Stderr, policy.EnforcementNote)
+		fmt.Fprintln(os.Stderr, policy.NotEnforcedNote)
 	}
 	return nil
 }

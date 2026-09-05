@@ -1,10 +1,6 @@
 package wrap
 
-import (
-	"fmt"
-
-	"github.com/brig-sh/brig/internal/runtime"
-)
+import "fmt"
 
 // Network is the posture a sandbox runs with.
 type Network string
@@ -93,53 +89,4 @@ func (n Network) Line() string {
 	default:
 		return "shared (one network for every sandbox on this host)"
 	}
-}
-
-// backendSpec is the part of a run a backend is entitled to refuse: which
-// backend, what network, which rules, and whether it opens a window.
-//
-// One derivation, used both by the check before anything is started and by the
-// spec that is actually booted, so the two cannot come to different answers
-// about the same run. The boot fills in the rest.
-func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
-	return runtime.RunSpec{
-		Name:       c.VMName,
-		Hypervisor: hypervisor,
-		Net:        c.Network.RuntimeNet(),
-		Egress:     runtimeEgress(c.Egress),
-		GUI:        c.Profile.IsGUI(),
-	}
-}
-
-// checkBackend refuses a run this backend cannot honour, before anything is
-// started -- and, unlike the check inside Run, on the path that finds the
-// sandbox already up and boots nothing.
-//
-// That path is where this matters most. A policy attached to a sandbox running
-// on a backend that cannot enforce it would otherwise be refused on the first
-// run and waved through on every one after, printing a POLICY row over a
-// sandbox filtering nothing. A runtime with no opinion is not asked.
-func (c *Config) checkBackend(hypervisor string) error {
-	checker, ok := c.Runtime.(runtime.RunChecker)
-	if !ok {
-		return nil
-	}
-	return checker.CanRun(c.backendSpec(hypervisor))
-}
-
-// networkStale reports whether the sandbox that is already running differs
-// from what this run resolved to.
-//
-// Asked of the runtime, because the runtime is what knows: brig owns the
-// network on hvi and can compare what the sandbox is behind against what these
-// rules ask for, and owns none of it on a backend that takes its network from
-// somewhere else. A runtime that cannot answer is treated as current -- a
-// restart nobody needed costs a boot, and this is not the check that should be
-// deciding to spend one on a guess.
-func (c *Config) networkStale() bool {
-	checker, ok := c.Runtime.(runtime.NetworkChecker)
-	if !ok {
-		return false
-	}
-	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), runtimeEgress(c.Egress))
 }

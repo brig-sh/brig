@@ -155,211 +155,81 @@ func TestBrigFlagsDeclareAPosition(t *testing.T) {
 // brig reads the flag and the agent never sees it, and `--` is the only way
 // through.
 //
-// The overlaps below are what that costs today, one map per shipped profile.
-// They are the reason #47 retires -n, -t, -w and -m in v0.3, and the maps are
-// expected to shrink as it does; a spelling that starts colliding, or one whose
-// collision has gone, fails here first so a map cannot outlive what it records.
+// The overlaps below are what that costs today. They are the reason #47
+// retires -n, -t, -w and -m in v0.3, and the map is expected to shrink as it
+// does; a spelling that starts colliding fails here first.
 //
-// The flag lists are hand-maintained. No profile spec declares its agent's
+// claudeCodeFlags is hand-maintained. No profile spec declares its agent's
 // flags -- internal/profile carries the image, the binary and the credentials
-// and nothing about the CLI's grammar -- so there is nothing to derive them
-// from, and this test is exactly as strong as they are. Each list says where it
-// came from, because the strength is not uniform:
-//
-//   - A local capture from the agent's own `--help` is the strong tier: it is
-//     the grammar the installed binary actually answers to.
-//   - A published CLI reference is the weaker tier: it is what the docs say,
-//     which can lag or lead the binary, and the agent is not on this machine to
-//     check against.
-//
-// All lists were captured 2026-09-05.
-func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
-	// The brig spelling -> why it still collides, per profile.
-	profiles := []struct {
-		name          string
-		agentFlags    []string
-		knownOverlaps map[string]string
-	}{
-		{
-			// Local capture from `claude --help`, Claude Code 2.1.261.
-			name: "claude-code",
-			agentFlags: []string{
-				"--add-dir", "--agent", "--agents", "--all",
-				"--allow-dangerously-skip-permissions", "--allowed-tools", "--allowedTools",
-				"--append-system-prompt", "--autocompact", "--ax-screen-reader",
-				"--background", "--bare", "--betas", "--bg", "--brief", "--chrome",
-				"--cloud", "--continue", "--dangerously-skip-permissions", "--debug",
-				"--debug-file", "--disable-slash-commands", "--disallowed-tools",
-				"--disallowedTools", "--effort", "--environment",
-				"--exclude-dynamic-system-prompt-sections", "--fallback-model", "--file",
-				"--fork-session", "--forward-subagent-text", "--from-pr", "--help", "--ide",
-				"--include-hook-events", "--include-partial-messages", "--input-format",
-				"--json-schema", "--max-budget-usd", "--mcp-config", "--model", "--name",
-				"--no-chrome", "--no-session-persistence", "--output-format",
-				"--permission-mode", "--permission-prompt-tool", "--permission-prompts",
-				"--plugin-dir", "--plugin-url", "--print", "--prompt-suggestions",
-				"--remote-control", "--remote-control-session-name-prefix",
-				"--replay-user-messages", "--restricted", "--resume", "--safe-mode",
-				"--session-id", "--setting-sources", "--settings", "--strict-mcp-config",
-				"--system-prompt", "--system-prompt-snapshot", "--teleport", "--tmux",
-				"--tools", "--verbose", "--version", "--worktree",
-				"-c", "-d", "-h", "-n", "-p", "-r", "-v", "-w",
-			},
-			knownOverlaps: map[string]string{
-				"--name": "claude-code's own --name; brig's retires onto the ref in #47",
-				"-n":     "claude-code -n; brig's retires onto the ref in #47",
-				"-w":     "claude-code -w/--worktree; brig's --workspace retires onto --home in #47",
-				"-d":     "claude-code -d/--debug; brig's --detach keeps -d, so this one stays",
-			},
-		},
-		{
-			// Local capture from `codex --help`.
-			name: "codex",
-			agentFlags: []string{
-				"--add-dir", "--approve-for-me", "--ask-for-approval", "--cd", "--config",
-				"--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
-				"--disable", "--enable", "--help", "--image", "--last", "--local-provider",
-				"--model", "--no-alt-screen", "--oss", "--profile", "--remote",
-				"--remote-auth-token-env", "--sandbox", "--search", "--strict-config",
-				"--version", "-a", "-c", "-C", "-h", "-i", "-m", "-p", "-s", "-V",
-			},
-			knownOverlaps: map[string]string{
-				"--image": "codex's own --image; brig keeps --image, so this one stays",
-				"-m":      "codex -m/--model; brig's -m/--memory retires onto --mem in #47",
-			},
-		},
-		{
-			// Local capture from `cursor-agent --help`, the binary the cursor
-			// profile runs.
-			name: "cursor",
-			agentFlags: []string{
-				"--api-key", "--approve-mcps", "--cloud", "--continue", "--force", "--header",
-				"--help", "--list-models", "--mode", "--model", "--output-format", "--plan",
-				"--print", "--resume", "--sandbox", "--skip-worktree-setup",
-				"--stream-partial-output", "--trust", "--version", "--workspace", "--worktree",
-				"--yolo", "-c", "-f", "-h", "-H", "-p", "-v", "-w",
-			},
-			knownOverlaps: map[string]string{
-				"--workspace": "cursor's own --workspace; brig's retires onto --home in #47",
-				"-w":          "cursor -w/--worktree; brig's --workspace retires onto --home in #47",
-			},
-		},
-		{
-			// Local capture from `grok --help`.
-			name: "grok",
-			agentFlags: []string{
-				"--allow-host", "--allow-net", "--api-key", "--background-task-file",
-				"--base-url", "--batch-api", "--directory", "--format", "--help",
-				"--max-tool-rounds", "--model", "--no-sandbox", "--port", "--prompt",
-				"--sandbox", "--session", "--update", "--verify", "--version",
-				"-d", "-h", "-k", "-m", "-p", "-s", "-u", "-V",
-			},
-			knownOverlaps: map[string]string{
-				"-d": "grok -d/--directory; brig's --detach keeps -d, so this one stays",
-				"-m": "grok -m/--model; brig's -m/--memory retires onto --mem in #47",
-			},
-		},
-		{
-			// Not installed here. Published CLI reference at
-			// https://geminicli.com/docs/cli/cli-reference/ , read 2026-09-05.
-			name: "gemini",
-			agentFlags: []string{
-				"--allowed-mcp-server-names", "--allowed-tools", "--approval-mode", "--debug",
-				"--delete-session", "--experimental-acp", "--experimental-zed-integration",
-				"--extensions", "--help", "--include-directories", "--list-extensions",
-				"--list-sessions", "--model", "--output-format", "--prompt",
-				"--prompt-interactive", "--resume", "--sandbox", "--screen-reader",
-				"--skip-trust", "--version", "--worktree", "--yolo",
-				"-d", "-e", "-h", "-i", "-l", "-m", "-o", "-p", "-r", "-s", "-v", "-w", "-y",
-			},
-			knownOverlaps: map[string]string{
-				"-d": "gemini -d/--debug; brig's --detach keeps -d, so this one stays",
-				"-m": "gemini -m/--model; brig's -m/--memory retires onto --mem in #47",
-				"-w": "gemini -w/--worktree; brig's --workspace retires onto --home in #47",
-			},
-		},
-		{
-			// Not installed here. Published CLI reference at
-			// https://opencode.ai/docs/cli/ , read 2026-09-05. This is the union
-			// of the global flags and every subcommand's flags, which is the right
-			// scope: brig forwards the whole tail, so `brig run opencode serve
-			// --port 3000` reaches a subcommand flag as directly as a global one.
-			name: "opencode",
-			agentFlags: []string{
-				"--agent", "--attach", "--auto", "--command", "--continue", "--cors",
-				"--days", "--description", "--dir", "--dry-run", "--event", "--file",
-				"--force", "--fork", "--format", "--help", "--hostname", "--keep-config",
-				"--keep-data", "--log-level", "--max-count", "--mdns", "--mdns-domain",
-				"--method", "--mode", "--model", "--password", "--path", "--permissions",
-				"--port", "--print-logs", "--prompt", "--provider", "--pure", "--refresh",
-				"--sanitize", "--session", "--thinking", "--title", "--token", "--tools",
-				"--username", "--variant", "--verbose", "--version",
-				"-c", "-f", "-h", "-m", "-n", "-p", "-s", "-u", "-v",
-			},
-			knownOverlaps: map[string]string{
-				"-n": "opencode -n; brig's retires onto the ref in #47",
-				"-m": "opencode -m/--model; brig's -m/--memory retires onto --mem in #47",
-			},
-		},
-		{
-			// claude-desktop is kind: gui. The app owns the console and brig execs
-			// no binary, so there is no flag vocabulary to collide with. The empty
-			// list accounts for the profile rather than forgetting it.
-			name:          "claude-desktop",
-			agentFlags:    nil,
-			knownOverlaps: map[string]string{},
-		},
-		{
-			// ubuntu is kind: shell. It runs a shell, not an agent CLI, so the
-			// same holds: nothing to collide with, listed so it is accounted for.
-			name:          "ubuntu",
-			agentFlags:    nil,
-			knownOverlaps: map[string]string{},
-		},
+// and nothing about the CLI's grammar -- so there is nothing to derive this
+// from. It was captured from `claude --help` (Claude Code 2.1.252) and covers
+// that one agent: the other shipped profiles' CLIs are not on this machine and
+// are not asserted here, so this test is exactly as strong as the list, which
+// is to say it catches a collision with Claude Code and no more.
+func TestBrigFlagsOverlapWithClaudeCodeOnlyWhereKnown(t *testing.T) {
+	claudeCodeFlags := []string{
+		"--add-dir", "--agent", "--agents", "--allow-dangerously-skip-permissions",
+		"--allowed-tools", "--allowedTools", "--append-system-prompt", "--autocompact",
+		"--ax-screen-reader", "--background", "--bare", "--betas", "--bg", "--brief",
+		"--chrome", "--cloud", "--continue", "--dangerously-skip-permissions", "--debug",
+		"--debug-file", "--disable-slash-commands", "--disallowed-tools", "--disallowedTools",
+		"--effort", "--environment", "--exclude-dynamic-system-prompt-sections",
+		"--fallback-model", "--file", "--fork-session", "--forward-subagent-text",
+		"--from-pr", "--help", "--ide", "--include-hook-events",
+		"--include-partial-messages", "--input-format", "--json-schema",
+		"--max-budget-usd", "--mcp-config", "--model", "--name", "--no-chrome",
+		"--no-session-persistence", "--output-format", "--permission-mode",
+		"--plugin-dir", "--plugin-url", "--print", "--prompt-suggestions",
+		"--remote-control", "--remote-control-session-name-prefix",
+		"--replay-user-messages", "--restricted", "--resume", "--safe-mode",
+		"--session-id", "--setting-sources", "--settings", "--strict-mcp-config",
+		"--system-prompt", "--teleport", "--tmux", "--tools", "--verbose", "--version",
+		"--worktree", "-c", "-d", "-h", "-n", "-p", "-r", "-v", "-w",
+	}
+	// The brig spelling -> why it still collides.
+	knownOverlaps := map[string]string{
+		"--name": "claude-code's own --name; brig's retires in #5",
+		"-n":     "claude-code -n; retires in #5",
+		"-w":     "claude-code -w/--worktree; brig's --workspace retires in #6",
+		"-d":     "claude-code -d/--debug; brig's --detach keeps -d, so this one stays",
 	}
 
-	for _, p := range profiles {
-		t.Run(p.name, func(t *testing.T) {
-			agent := make(map[string]bool, len(p.agentFlags))
-			for _, f := range p.agentFlags {
-				agent[f] = true
+	agent := make(map[string]bool, len(claudeCodeFlags))
+	for _, f := range claudeCodeFlags {
+		agent[f] = true
+	}
+	found := map[string]bool{}
+	for _, f := range brigFlags {
+		// Only the run line can collide. A global flag stands left of the verb
+		// and the agent's words stand right of the ref, so the two never occupy
+		// the same place: `brig --verbose run claude` is brig's and `brig run
+		// claude --verbose` is claude's, and neither reading is in doubt. That
+		// is a reason to put a flag brig shares with an agent in the global
+		// position rather than a reason to list it here.
+		if f.position == posGlobal {
+			continue
+		}
+		spellings := []string{"--" + f.long}
+		if f.short != "" {
+			spellings = append(spellings, "-"+f.short)
+		}
+		for _, s := range spellings {
+			if !agent[s] {
+				continue
 			}
-			found := map[string]bool{}
-			for _, f := range brigFlags {
-				// Only the run line can collide. A global flag stands left of the
-				// verb and the agent's words stand right of the ref, so the two
-				// never occupy the same place: `brig --verbose run claude` is
-				// brig's and `brig run claude --verbose` is claude's, and neither
-				// reading is in doubt. That is a reason to put a flag brig shares
-				// with an agent in the global position rather than a reason to list
-				// it here.
-				if f.position == posGlobal {
-					continue
-				}
-				spellings := []string{"--" + f.long}
-				if f.short != "" {
-					spellings = append(spellings, "-"+f.short)
-				}
-				for _, s := range spellings {
-					if !agent[s] {
-						continue
-					}
-					found[s] = true
-					if _, known := p.knownOverlaps[s]; !known {
-						t.Errorf("brig's %s is also %s's, and brig reads it first, so "+
-							"`brig run %s %s` never reaches the agent", s, p.name, p.name, s)
-					}
-				}
+			found[s] = true
+			if _, known := knownOverlaps[s]; !known {
+				t.Errorf("brig's %s is also claude-code's, and brig reads it first, so "+
+					"`brig run claude %s` never reaches the agent", s, s)
 			}
-			// And the other way, so a map shrinks when a spelling retires rather
-			// than outliving the collision it documents.
-			for s := range p.knownOverlaps {
-				if !found[s] {
-					t.Errorf("knownOverlaps for %s still lists %s, which no longer collides; "+
-						"drop the entry", p.name, s)
-				}
-			}
-		})
+		}
+	}
+	// And the other way, so the map shrinks when a spelling retires rather
+	// than outliving the collision it documents.
+	for s := range knownOverlaps {
+		if !found[s] {
+			t.Errorf("knownOverlaps still lists %s, which no longer collides; drop the entry", s)
+		}
 	}
 }
 
