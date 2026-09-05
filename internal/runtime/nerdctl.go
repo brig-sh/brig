@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // nerdctl drives the Linux path. It is the same product logic over
@@ -421,10 +420,27 @@ func (n *nerdctl) Feed(spec ExecSpec) error {
 	return nil
 }
 
-func (n *nerdctl) Replace(spec ExecSpec) error {
+// replaceCmd builds the handover argv and environment in one place, so the
+// terminal handover and the --json child cannot drift: Replace and Attach both
+// read from here, the way the hull adapter's replaceCmd serves both there.
+func (n *nerdctl) replaceCmd(spec ExecSpec) (argv, env []string) {
 	args, envVals := n.execArgs(spec)
-	argv := append([]string{n.bin}, args...)
-	return syscall.Exec(n.bin, argv, mergeEnv(telemetryEnv(spec.Counted), envVals))
+	argv = append([]string{n.bin}, args...)
+	env = mergeEnv(telemetryEnv(spec.Counted), envVals)
+	return argv, env
+}
+
+func (n *nerdctl) Replace(spec ExecSpec) error {
+	argv, env := n.replaceCmd(spec)
+	return execHandover(n.bin, argv, env)
+}
+
+// Attach runs the same handover as a child instead of replacing brig, for the
+// --json path. It builds from replaceCmd, exactly as Replace does, so the two
+// carry the same argv and env.
+func (n *nerdctl) Attach(spec ExecSpec) (int, error) {
+	argv, env := n.replaceCmd(spec)
+	return attachHandover(argv, env)
 }
 
 func (n *nerdctl) Stop(name string) error { return n.quiet("stop", name) }

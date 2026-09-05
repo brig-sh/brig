@@ -255,6 +255,17 @@ type Runtime interface {
 	// success. This is how the agent's own TUI gets a real tty without brig
 	// sitting in the middle of it.
 	Replace(spec ExecSpec) error
+	// Attach runs the exec as a child of brig instead of replacing brig with
+	// it: brig's own stdin, stdout and stderr are inherited, brig waits, and the
+	// child's exit status is returned. A child killed by a signal is reported as
+	// 128 plus the signal number, the shell's convention.
+	//
+	// It is the counterpart to Replace for a caller that has to survive the exec
+	// to report on it -- which is what --json needs and Replace, having left
+	// nothing of brig behind, cannot do. Both build their command from the same
+	// function, so the terminal handover and the child cannot drift. See
+	// RunAttached and the note on Replace.
+	Attach(spec ExecSpec) (int, error)
 	// Stop stops a sandbox, and Remove clears the instance holding the name.
 	Stop(name string) error
 	Remove(name string) error
