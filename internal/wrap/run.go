@@ -609,10 +609,11 @@ func (c *Config) Remove() error {
 	return err
 }
 
-// Exec hands the terminal to a command inside the sandbox. It does not return
-// on success.
-func (c *Config) Exec(set creds.Set, argv []string, tty bool) error {
-	return c.Runtime.Replace(runtime.ExecSpec{
+// execSpec is the one request Exec and ExecAttached both hand the runtime, so
+// the terminal handover and the --json child are the same exec asked for two
+// ways rather than two specs that can disagree.
+func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSpec {
+	return runtime.ExecSpec{
 		Name: c.VMName,
 		Cmd:  argv,
 		Cwd:  c.GuestCwd,
@@ -625,19 +626,46 @@ func (c *Config) Exec(set creds.Set, argv []string, tty bool) error {
 		CanAsk:  IsTerminal(os.Stdin),
 		Env:     set.Vars,
 		Counted: true,
-	})
+	}
 }
 
-// Shell opens a login shell in the sandbox, or runs one command in it.
+// Exec hands the terminal to a command inside the sandbox. It does not return
+// on success.
+func (c *Config) Exec(set creds.Set, argv []string, tty bool) error {
+	return c.Runtime.Replace(c.execSpec(set, argv, tty))
+}
+
+// ExecAttached runs the command as a child of brig rather than replacing brig
+// with it, and returns the command's exit status. It is the --json counterpart
+// of Exec: brig stays alive across the exec so it can report the outcome, which
+// Replace cannot. The spec is Exec's own, so the child inherits everything the
+// handover would have carried.
+func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, error) {
+	return c.Runtime.Attach(c.execSpec(set, argv, tty))
+}
+
+// shellArgv is the login-shell command line, built once so Shell and
+// ShellAttached spell it the same way.
 //
 // The trailing words are joined into a single string before the shell sees
 // them, so they land as one argument -- the script text for -c -- rather than
 // one per word. Passed individually, bash takes the first as the script and
 // the rest as $0, $1, ...
-func (c *Config) Shell(set creds.Set, command []string) error {
-	argv := []string{"bash", "-l"}
+func shellArgv(command []string) []string {
 	if len(command) > 0 {
-		argv = []string{"bash", "-lc", strings.Join(command, " ")}
+		return []string{"bash", "-lc", strings.Join(command, " ")}
 	}
-	return c.Exec(set, argv, true)
+	return []string{"bash", "-l"}
+}
+
+// Shell opens a login shell in the sandbox, or runs one command in it.
+func (c *Config) Shell(set creds.Set, command []string) error {
+	return c.Exec(set, shellArgv(command), true)
+}
+
+// ShellAttached is Shell down the child path, so a shell profile under --json
+// behaves like an agent one: brig runs it as a child and reports its exit
+// status rather than replacing itself with it.
+func (c *Config) ShellAttached(set creds.Set, command []string) (int, error) {
+	return c.ExecAttached(set, shellArgv(command), true)
 }

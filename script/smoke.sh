@@ -153,7 +153,13 @@ case "$verb" in
           printf '1 1 0:2 / %s rw - fuseblk\n' "$target" >> "$STUB_STATE.mounts"
         fi
         ;;
-      *) printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG" ;;
+      *)
+        printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG"
+        # The agent (or login shell) exec. STUB_EXEC_EXIT makes it exit non-zero,
+        # which is how the --json case drives the child path: brig runs this as a
+        # child rather than replacing itself, so it survives to report the status.
+        [ -n "${STUB_EXEC_EXIT:-}" ] && exit "$STUB_EXEC_EXIT"
+        ;;
     esac
     ;;
   stop)
@@ -1782,6 +1788,34 @@ grep -q -- "-v is one of brig's own flags" "$WORK/agentv.err" \
 "$WORK/brig" ls -q > "$WORK/lsq.out" 2>&1
 [ "$(cat "$WORK/lsq.out")" = claude-code ] \
   && ok "ls -q is unchanged" || bad "ls -q is unchanged -- got: $(cat "$WORK/lsq.out")"
+
+echo "== run --json =="
+# --json runs the agent as a child instead of replacing brig with it, so brig
+# survives the exec and reports the outcome on one JSON line. The stub's exec
+# exits 7; brig exits 7 too, with that status carried on a parseable last line --
+# which is how a script tells "the agent failed" from "brig refused to start it".
+"$WORK/brig" rm --all > /dev/null 2>&1
+STUB_EXEC_EXIT=7 "$WORK/brig" --json run ubuntu -- true \
+  > "$WORK/json.out" 2> "$WORK/json.err"
+rc=$?
+[ "$rc" = 7 ] && ok "brig --json run exits with the agent's own status" \
+  || bad "brig --json run exits with the agent's own status -- got $rc: $(cat "$WORK/json.err")"
+# The rule a script follows: the last line of stdout is brig's, and it parses.
+last="$(tail -n1 "$WORK/json.out")"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c 'import json,sys
+d = json.loads(sys.argv[1])
+assert d["kind"] == "Run", d
+assert d["data"]["stage"] == "agent", d
+assert d["data"]["exit"] == 7, d' "$last" 2>/dev/null \
+    && ok "the last stdout line is a Run object with stage agent and exit 7" \
+    || bad "the last stdout line is not the expected Run object -- got: $last"
+fi
+case "$last" in
+  *'"kind":"Run"'*) ok "brig --json run prints a compact Run object" ;;
+  *) bad "brig --json run prints a compact Run object -- got: $last" ;;
+esac
+"$WORK/brig" rm --all > /dev/null 2>&1
 
 echo "== doctor =="
 # brig doctor reports the prerequisites a first run hits, in boot order. On the
