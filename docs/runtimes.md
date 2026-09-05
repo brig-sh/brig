@@ -76,6 +76,7 @@ hull run --detach --name <name>
      [--gui [--gui-title <title>]]
      [--env <NAME>]... <image>
 hull exec [-t] [--cwd <dir>] [-u <user>] [--env <NAME>]... <name> -- <cmd>...
+hull logs [--follow] [--tail <n>] <name>
 hull stop <name>
 hull rm <name>
 hull network-gateway --socket <path> --qemu-socket <path>.qemu
@@ -93,8 +94,8 @@ routers and by vmnet on macOS, and 100.64.0.0/10 by Tailscale. The sibling
 `hull exec` is the whole exec path: the reachability probe, the captured read,
 the credential written over stdin and the terminal handover all build the same
 argv (`execArgs`), and the handover replaces the brig process with hull so the
-guest gets a real terminal. `hull logs <name>` appears in brig's error output
-as a suggestion and is never run.
+guest gets a real terminal. `hull logs <name>` is what `brig logs <ref>` runs,
+and it is also named in brig's error output when a sandbox will not come up.
 
 On Linux, from `internal/runtime/nerdctl.go`:
 

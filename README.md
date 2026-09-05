@@ -129,6 +129,7 @@ separate Linux re-implementation of it.
 | `brig rm <ref>` | stop and remove the sandbox. The workspace is untouched |
 | `brig rm --all` | stop and remove every brig sandbox. Workspaces are untouched |
 | `brig ls [-q]` | every brig sandbox, running or merely holding its name, with its ref and workspace. `-q` prints the refs alone, for a script |
+| `brig logs <ref>` | stream the sandbox's log; `--gateway` reads the gateway's |
 | `brig info <ref>` | the boundary a run would trust -- sandbox, workspace, image, credentials **by name only** -- and whether the guest will be authenticated |
 | `brig agent ls` | the agents, their images, and what each one refuses to forward |
 | `brig agent show <agent>` | print one agent's spec. `--json` for JSON instead of YAML |
