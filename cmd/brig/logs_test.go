@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/internal/runtime"
@@ -166,6 +167,84 @@ func TestGatewayLogsMissing(t *testing.T) {
 	}
 }
 
+// A ref reads the log of the gateway serving that sandbox alone, not the shared
+// one. The path is asked of the runtime package for the sandbox name, the same
+// way the shared test does, so both follow the writer's rule for where a log
+// goes rather than pinning one of their own.
+func TestIsolatedGatewayLogsReadsTheFile(t *testing.T) {
+	t.Setenv("BRIG_GATEWAY_DIR", shortGatewayDir(t))
+	path, err := runtime.IsolatedGatewayLogPath("brig-claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("isolated gateway up\x1b[0m\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The shared log holds something else, so reading it instead would be
+	// visible rather than an empty pass.
+	shared, err := runtime.GatewayLogPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shared, []byte("shared gateway up\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := isolatedGatewayLogs(&buf, logsOptions{tail: -1}, "claude@code", "brig-claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), "isolated gateway up\n"; got != want {
+		t.Errorf("the isolated gateway log was not read filtered: got %q, want %q", got, want)
+	}
+
+	// And bare --gateway still reads the shared one, with an isolated log
+	// sitting beside it.
+	buf.Reset()
+	if err := gatewayLogs(&buf, logsOptions{tail: -1}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), "shared gateway up\n"; got != want {
+		t.Errorf("bare --gateway did not read the shared log: got %q, want %q", got, want)
+	}
+}
+
+// An isolated gateway's log is removed with the gateway, so an absent one means
+// the sandbox's gateway is not running. The message says that and names the ref
+// the reader typed -- not the sandbox name, which they did not -- and it is a
+// not-found, like the shared one, so a script can tell it from a failure.
+func TestIsolatedGatewayLogsMissing(t *testing.T) {
+	t.Setenv("BRIG_GATEWAY_DIR", shortGatewayDir(t))
+
+	err := isolatedGatewayLogs(io.Discard, logsOptions{tail: -1}, "claude@code", "brig-claude-code")
+	if err == nil {
+		t.Fatal("a missing isolated gateway log was reported as success")
+	}
+	if _, ok := err.(*notFoundError); !ok {
+		t.Fatalf("a missing isolated gateway log is not a not-found error: %T: %v", err, err)
+	}
+	if got := err.Error(); !strings.Contains(got, "claude@code") || !strings.Contains(got, "not running") {
+		t.Errorf("the message does not name the ref and say the gateway is not running: %q", got)
+	}
+}
+
+// --gateway with a ref is no longer refused on the line. It names a sandbox
+// whose gateway log is wanted, so whatever it goes on to fail at, it is not the
+// usage error that used to reject the ref outright.
+func TestGatewayWithRefIsNotAUsageError(t *testing.T) {
+	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	// A profile that does not exist stops the resolution at its first step, so
+	// this touches no runtime: what is asserted is only that the ref got that
+	// far, which the old parse-time refusal did not allow.
+	err := logsCmd([]string{"--gateway", "no-such-profile-here"})
+	if err == nil {
+		t.Fatal("`brig logs --gateway <ref>` returned no error for an unknown profile")
+	}
+	if exitCode(err) == exitUsage {
+		t.Errorf("`brig logs --gateway <ref>` is still a usage error: %v", err)
+	}
+}
+
 func TestLastLines(t *testing.T) {
 	data := []byte("one\ntwo\nthree\n")
 	cases := []struct {
@@ -192,7 +271,7 @@ func TestLogsCmdArgErrors(t *testing.T) {
 	}{
 		{"no ref and no gateway", nil},
 		{"a ref that does not parse", []string{"claude@@x"}},
-		{"a gateway with a ref", []string{"--gateway", "claude"}},
+		{"a ref that does not parse, with --gateway", []string{"--gateway", "claude@@x"}},
 		{"an unknown flag", []string{"--nope", "claude"}},
 		{"tail without a number", []string{"--tail", "claude"}},
 		{"a second ref", []string{"claude", "extra"}},
@@ -211,4 +290,19 @@ func TestLogsCmdArgErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// shortGatewayDir is a gateway directory a unix socket path fits in. t.TempDir
+// carries the test's name, and on macOS that overflows the 103 bytes a socket
+// path has, so isolatedSocket refuses the directory before any log is read.
+// os.MkdirTemp under the default location stays short, the same way the
+// runtime package's own gateway tests make theirs.
+func shortGatewayDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
 }
