@@ -8,6 +8,9 @@ to give it, and nothing else on the host.
 This page is about where that boundary actually is. Some of it is weaker than
 it looks, and we would rather write that down than let someone find out later.
 
+The specific, testable claims on this page each have a test that defends them,
+listed in [docs/claims.md](claims.md); CI fails when a claim loses its test.
+
 If you have found a flaw in one of these boundaries, [SECURITY.md](../SECURITY.md)
 is how to report it privately. The section below on
 [things brig does not claim](#things-brig-does-not-claim) is the line between a
@@ -159,6 +162,11 @@ environment:
   like one it is not. `BRIG_ALLOW_REFS=1` forwards an ambient reference
   anyway.
 - A variable on the profile's `deny` list is refused, with the reason.
+  `BRIG_ALLOW_DENIED=1` forwards it anyway, and only that: every off spelling,
+  `BRIG_ALLOW_DENIED=false` among them, leaves the denied variable behind. The
+  switch reads as a strict boolean and an unrecognised value refuses the run
+  rather than guessing, because a setting that turns a control off by accident
+  is worse than one that fails.
 
 `brig env <agent>` reports the guest's environment, by name, and fails the
 same way a run would if a declared secret cannot be resolved. It never
@@ -455,7 +463,8 @@ A tag is a name, and a name can resolve to different bytes in the registry and
 in your local store. The provenance claim is about the bytes that run, so brig
 resolves the reference to the digest the registry serves before the check,
 verifies that digest, and boots it. The object cosign checked is the object that
-runs, and the success line names the digest rather than the tag it came from. A
+runs: the digest that booted is the digest that was verified, and the success
+line names it rather than the tag it came from. A
 local store holding a different digest under the tag is treated as the
 signature-failure row above: it stops, and a yes boots the verified digest
 rather than the copy on disk. A registry that cannot be reached stops in the
