@@ -84,7 +84,7 @@ func TestLsAndRemoveAllRefuseArguments(t *testing.T) {
 		fn   func([]string) error
 		args []string
 	}{
-		{"ls", func(args []string) error { return listSandboxes(args, false) }, []string{"claude"}},
+		{"ls", func(args []string) error { return listSandboxes(args, false, false) }, []string{"claude"}},
 		{"rm --all", func(args []string) error { return removeAll("brig rm --all", args) },
 			[]string{"--dry-run"}},
 		{"reset", func(args []string) error { return removeAll("brig reset", args) },
@@ -238,10 +238,19 @@ func TestBrigFlagsOverlapWithClaudeCodeOnlyWhereKnown(t *testing.T) {
 // No agent is named yet at that point, so nothing else can claim it.
 //
 // The tokens below are not brig flags. Adding one as a global flag means
-// removing it here.
+// removing it here. --json is now one -- #7 added it -- so it is accepted where
+// it used to be refused; the refusal is asserted on tokens that are still not
+// brig's.
 func TestGlobalPositionRefusesAnUnknownToken(t *testing.T) {
+	// --json is a global flag now, so the global position accepts it: it is read,
+	// and the verb line comes back untouched for the dispatch to act on.
+	if _, rest, err := parseGlobal([]string{"--json", "ls"}); err != nil {
+		t.Errorf("parseGlobal rejected --json, which is a global flag now: %v", err)
+	} else if len(rest) != 1 || rest[0] != "ls" {
+		t.Errorf("parseGlobal(--json ls) returned verb line %q, want [ls]", rest)
+	}
+
 	for _, args := range [][]string{
-		{"--json", "run", "claude"},
 		{"--nope", "ls"},
 		{"-y", "rm", "claude"},
 	} {

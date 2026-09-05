@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -223,15 +224,23 @@ func deleteSecret(out io.Writer, args []string) error {
 // Taking one silently is how `brig secret ls gh-token` -- someone reaching for
 // read -- prints everything and exits 0.
 func listSecrets(out io.Writer, args []string) error {
-	if len(args) > 0 {
-		if isHelp(args[0]) {
+	// --json is the one flag ls takes, in the local position as well as the
+	// global one -- see globalJSON. Anything else is a token it would read and
+	// discard: a flag it does not have, or a name that reads like a filter it
+	// does not apply.
+	jsonOut := globalJSON
+	for _, a := range args {
+		switch {
+		case a == "--json":
+			jsonOut = true
+		case isHelp(a):
 			return flag.ErrHelp
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("ls takes no flags other than --json, so it has no use for %s", a)
+		default:
+			return fmt.Errorf("ls lists every secret and takes no name. For one secret's "+
+				"value: `brig secret read %s`", a)
 		}
-		if strings.HasPrefix(args[0], "-") {
-			return fmt.Errorf("ls takes no flags, so it has no use for %s", args[0])
-		}
-		return fmt.Errorf("ls lists every secret and takes no name. For one secret's "+
-			"value: `brig secret read %s`", args[0])
 	}
 	store, err := openStore()
 	if err != nil {
@@ -240,6 +249,11 @@ func listSecrets(out io.Writer, args []string) error {
 	list, err := store.List()
 	if err != nil {
 		return err
+	}
+	if jsonOut {
+		// An empty store is data: [] and exit 0, not the prose hint below: a parser
+		// reads an empty list, and the note about how to add one is for a person.
+		return writeJSONDocument(out, "SecretList", secretListData(list))
 	}
 	// An empty store is an ordinary state, not an error, and is the moment to
 	// say how to leave it.
@@ -268,6 +282,33 @@ func listSecrets(out io.Writer, args []string) error {
 		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, updated, from)
 	}
 	return w.Flush()
+}
+
+// secretJSON is one secret as data, the SecretList row: the name, when it was
+// last written, and where it came from -- and never the value, which List does
+// not decrypt and neither does this. modified is RFC 3339 and omitted when the
+// backend carries no date; provenance is omitted when the secret was created by
+// hand, the same "absent rather than invented" rule the text column follows.
+type secretJSON struct {
+	Name       string `json:"name"`
+	Modified   string `json:"modified,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
+}
+
+// secretListData turns store.List into the SecretList payload. The list is the
+// same [] secret.Secret the text listing reads, names and dates only, so the two
+// forms cannot come to disagree about what is stored. An empty store is an empty
+// list, not nil, so the payload is data: [] rather than data: null.
+func secretListData(list []secret.Secret) []secretJSON {
+	out := make([]secretJSON, 0, len(list))
+	for _, s := range list {
+		row := secretJSON{Name: s.Name, Provenance: s.Provenance.From}
+		if !s.Modified.IsZero() {
+			row.Modified = s.Modified.Format(time.RFC3339)
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // isHelp reports whether a token is someone asking for help. The verbs that
