@@ -29,6 +29,12 @@ notes come first.
   can pass the whole suite and still be wrong. If you touch the run, exec or
   credential path, boot a real sandbox before opening the PR.
 
+## Releasing
+
+- Cutting a release is its own checklist: bump `VERSION`, tag, publish the one
+  draft the workflow opens, and update the tap. See
+  [docs/releasing.md](docs/releasing.md). One tag, one release.
+
 ## The two promises
 
 Most of brig is ordinary Go, but two properties are the reason the tool
