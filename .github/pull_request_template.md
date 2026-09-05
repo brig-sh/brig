@@ -53,11 +53,3 @@ change. A negative test is worth more here than a positive one: "the denied
 variable was not forwarded" and "the planted symlink was refused" are the
 assertions that catch a regression.
 -->
-
-## LLM usage
-
-<!--
-For transparency: note any AI assistance used in this change, e.g.
-"Authored with assistance from Claude Code; I have reviewed every line and am
-accountable for the change."
--->
