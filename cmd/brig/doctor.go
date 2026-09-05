@@ -79,6 +79,11 @@ func doctorCmd(out io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	// The global position sets the same bool, so `brig --json doctor` and
+	// `brig doctor --json` are one request and the report is unchanged either
+	// way. #7 made --json a global flag; doctor keeps its own for the release the
+	// two spellings overlap. See globalJSON.
+	jsonOut = jsonOut || globalJSON
 
 	// Reloaded here rather than reusing the load main already did, so this
 	// command holds the problems that load reported -- one line per bad file --
@@ -112,9 +117,9 @@ func doctorCmd(out io.Writer, args []string) error {
 }
 
 // parseDoctorArgs reads doctor's own flag and its one optional operand. --json
-// is a flag of the verb, the way `brig policy show --json` is, rather than a
-// global left of the verb: an unknown token in the global position is a usage
-// error today, and moving --json there is another issue's job.
+// is a flag of the verb here, and #7 also made it a global left of the verb;
+// doctorCmd ORs the two so both spellings reach the same report. This parser
+// keeps reading the local one for the release the two overlap.
 func parseDoctorArgs(args []string) (jsonOut bool, agent string, err error) {
 	for _, a := range args {
 		switch {
