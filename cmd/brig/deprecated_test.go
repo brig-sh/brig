@@ -192,6 +192,11 @@ func TestHostCredentialWarnsAndStillWorks(t *testing.T) {
 	if !strings.Contains(warning, "brig secret import mine") {
 		t.Errorf("the warning does not name what replaces it:\n%s", warning)
 	}
+	// A deadline the reader can act on is a version number, not "next release".
+	// See docs/compatibility.md.
+	if !strings.Contains(warning, "v0.1.0-rc17") {
+		t.Errorf("the warning does not name the release that removes it:\n%s", warning)
+	}
 	p, ok := profile.Lookup("mine")
 	if !ok {
 		t.Fatal("the profile stopped loading")
