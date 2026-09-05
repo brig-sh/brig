@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/creds"
-	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
@@ -125,14 +124,6 @@ type Config struct {
 	// envelope, the report and the spec handed to the runtime cannot disagree
 	// about what a reader was told.
 	Network Network
-	// Egress is the merged rule set of every policy bound to this run, and
-	// Policies the names it came from. Empty Egress.Default means no policy
-	// applies, which is every run before one is attached.
-	//
-	// Resolved with the posture above rather than at boot, because a policy
-	// decides the posture: see the note there.
-	Egress   policy.Egress
-	Policies []string
 	// BootDigest is the registry digest verifyDigest resolved and checked, set
 	// only on a runtime that boots by digest. EnsureRunning hands it to the
 	// runtime so the object that boots is the object that verified; empty means
@@ -278,7 +269,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	slug := ""
 	if rawName != "" {
 		var err error
-		if slug, err = session.Resolve(rawName); err != nil {
+		if slug, err = session.Resolve(t.Name, rawName); err != nil {
 			return nil, err
 		}
 	}
@@ -393,23 +384,6 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		strictErr = err
 	}
 
-	// The rules bound to this run, resolved here with everything else so the
-	// envelope row and the spec cannot disagree about them either.
-	//
-	// A policy takes the posture with it. Rules live on the network gateway
-	// and cover every member of its network, so a sandbox answering to rules
-	// of its own cannot be sharing one with sandboxes that do not -- and a
-	// reader told "shared" while brig had quietly given the sandbox a network
-	// of its own would be reading a row that is not true. Isolated is stricter
-	// than shared, never looser, so this only ever narrows what was asked for.
-	egress, policies, err := policy.Resolve(t, rawName, policy.Dir())
-	if err != nil && strictErr == nil {
-		strictErr = err
-	}
-	if egress.Default != "" && network != NetOffline {
-		network = NetIsolated
-	}
-
 	c := &Config{
 		Profile:        t,
 		Runtime:        rt,
@@ -432,8 +406,6 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
 		Network:        network,
-		Egress:         egress,
-		Policies:       policies,
 		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
 		AllowRefs:      strict("ALLOW_REFS", false),

@@ -287,9 +287,16 @@ func Names() []string {
 	return out
 }
 
-// Reserved reports whether a session slug collides with a profile that owns
-// the workspace it would land on. Without this, `brig run claude --name
-// desktop` puts a Claude Code session on the Desktop app's workspace.
+// Reserved reports whether a profile name would collide with the workspace a
+// reserved profile already owns, and names that profile when it would. This is
+// the question import asks, where there is no agent and the workspace is the
+// name on its own: the name itself is refused, and so is the trailing word a
+// slug of the reserved name reads as, which is how a profile named "desktop"
+// is turned away for reading as claude-desktop.
+//
+// A session's label is the other question, and ReservedFor answers it. The two
+// are separate functions rather than one with an optional argument, so that a
+// caller cannot reach the unscoped rule by forgetting to pass the agent.
 //
 // It reads the merged set rather than the built-ins alone, so a profile of
 // your own can declare itself reserved. That is the honest reading of a field
@@ -302,9 +309,29 @@ func Reserved(slug string) (string, bool) {
 		if slug == p.Name {
 			return p.Name, true
 		}
-		// The trailing word is what a slug of the profile name reads as:
-		// claude-desktop is reserved as "desktop" too.
 		if i := lastDash(p.Name); i >= 0 && slug == p.Name[i+1:] {
+			return p.Name, true
+		}
+	}
+	return "", false
+}
+
+// ReservedFor reports whether a session of agent labelled slug would land on
+// the workspace a reserved profile already owns, and names that profile when
+// it would.
+//
+// A session's workspace is the agent's name, a dash, and the slug (see
+// internal/wrap/config.go), so the collision is with the name the pair makes,
+// never with the slug on its own: the agent is always in front. agent must be
+// the profile as it RESOLVED, the canonical name wrap builds the path from,
+// not the word the user typed. claude is an alias of claude-code, so
+// ReservedFor("desktop", "claude-code") is not refused -- the workspace is
+// claude-code-desktop, which no profile owns -- while ReservedFor("desktop",
+// "claude") would be, and would be wrong. Both call sites look the alias up
+// first; a new one must too.
+func ReservedFor(slug, agent string) (string, bool) {
+	for _, p := range All() {
+		if p.Reserved && agent+"-"+slug == p.Name {
 			return p.Name, true
 		}
 	}

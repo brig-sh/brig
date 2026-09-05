@@ -601,16 +601,8 @@ it.
 
 ## Things brig does not claim
 
-It does not sandbox the agent from the network by default, on any backend. A
-sandbox nobody attached a policy to has unrestricted egress, which is what
-every sandbox had before policies existed and what `brig run <agent>` gets on a
-fresh install.
-
-Attach one and that changes, on `hvi`: the rules are enforced at the network
-gateway brig gives that sandbox, and a run that cannot enforce them is refused
-rather than booted unconstrained -- see [docs/policies.md](policies.md). On
-`vz`, on `qemu` and on Linux there is no policy to be had at all, and outbound
-traffic is whatever the runtime allows.
+It does not sandbox the agent from the network. Outbound traffic from the
+guest is whatever the runtime allows, and there is no per-sandbox policy yet.
 
 It does not promise that one sandbox cannot reach another. What happens
 depends on the backend. brig asks every runtime for its shared network, with
@@ -630,25 +622,12 @@ hole in the narrow-blast-radius argument above: there the radius is narrow per
 workspace and per token, not per sandbox. If it matters that two agents cannot
 reach each other, run them on separate hosts, or on macOS.
 
-On macOS the separation under the *shared* network is real, but it is a
-property of the backend rather than something brig asks for. brig asks for a
-shared network and gets guests that cannot address each other. No test in brig
-would notice if a runtime change removed it. Treat it as a property that holds,
-not as a guarantee brig makes.
-
-`--network isolated` is the guarantee. It gives the sandbox a network of its
-own -- its own CNI network on Linux, its own gateway process on a `/30` of its
-own on `hvi` -- so no other sandbox is on it whatever the backend would have
-done with a shared one. A sandbox carrying an egress policy is isolated whether
-or not it asked to be, because the rules live on that gateway and cover
-everything behind it.
-
-Two things about that posture. It is **refused** on `vz` and on `qemu`, where
-brig owns no network to give: a run asking for it there is stopped and told
-which backend implements it, rather than booted onto the shared network under a
-row claiming otherwise. And it is about reachability, not resources -- an
-isolated sandbox is one process and one network more than a shared one, which
-is what `brig reset` prunes.
+On macOS the separation is real, but it is a property of the backend rather
+than something brig asks for. brig asks for a shared network and gets guests
+that cannot address each other. No test in brig would notice if a runtime
+change removed it. Treat it as a property that holds, not as a guarantee brig
+makes. On Linux, `--network isolated` gives a sandbox a network of its own and
+closes the gap.
 
 It does not filter what the agent writes to your terminal. `brig` hands the
 tty over with `syscall.Exec` and is gone before the agent produces a byte,

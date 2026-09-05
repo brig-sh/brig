@@ -70,12 +70,21 @@ func ParseRef(s string) (Ref, error) {
 			"start and end with one of those. Type %q if that is the session you want",
 			label, slug, slug)
 	}
-	// The same refusal Resolve makes, on the label. claude-desktop already
-	// owns ~/brig/claude-desktop, so claude@desktop would put a Claude Code
-	// session on the Desktop app's workspace.
-	if owner, ok := profile.Reserved(label); ok {
-		return Ref{}, fmt.Errorf("session label %q is the workspace the %s profile "+
-			"already uses. Pick another label", label, owner)
+	// The same refusal Resolve makes, on the label, against the profile the
+	// agent resolves to -- the canonical name wrap builds the workspace from,
+	// not the word typed. claude is the claude-code profile, so claude@desktop
+	// is claude-code-desktop, a workspace no profile owns, and is accepted;
+	// codex@desktop is codex-desktop and likewise. A profile actually named
+	// claude, which Lookup prefers over the alias, would make claude@desktop
+	// claude-desktop, the workspace the Desktop app owns, and it would be
+	// refused. An agent brig does not know falls through unrefused: the run
+	// reports the unknown agent itself, which is the better message than one
+	// about a label.
+	if p, known := profile.Lookup(agent); known {
+		if owner, ok := profile.ReservedFor(label, p.Name); ok {
+			return Ref{}, fmt.Errorf("session label %q is the workspace the %s profile "+
+				"already uses. Pick another label", label, owner)
+		}
 	}
 	return Ref{Agent: agent, Label: label}, nil
 }

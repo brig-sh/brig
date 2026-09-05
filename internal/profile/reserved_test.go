@@ -65,6 +65,46 @@ func TestReservedReadsTheMergedSet(t *testing.T) {
 	}
 }
 
+// The reservation is scoped to the agent that would land on it. A label is
+// the workspace <agent>-<label>, so "desktop" collides only for an agent whose
+// pair is a reserved profile's own name. The agent is the profile as it
+// resolved, the canonical name wrap builds the path from: the Claude agent
+// reaches here as claude-code -- not the "claude" alias -- and its pair is
+// claude-code-desktop, which nothing owns, so it is accepted. Only a caller
+// whose resolved name is literally "claude" (a user profile that took the word)
+// makes the pair claude-desktop and is refused.
+func TestReservedIsScopedToTheAgent(t *testing.T) {
+	reset(t)
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	// Refused: the pair claude-desktop is the reserved profile's own name.
+	if owner, ok := ReservedFor("desktop", "claude"); !ok || owner != "claude-desktop" {
+		t.Errorf(`ReservedFor("desktop", "claude") = %q, %v; want claude-desktop, true`, owner, ok)
+	}
+	// Accepted: the Claude agent resolves to claude-code, so the pair is
+	// claude-code-desktop, a workspace no profile owns.
+	if owner, ok := ReservedFor("desktop", "claude-code"); ok {
+		t.Errorf(`ReservedFor("desktop", "claude-code") = %q, true; want it accepted`, owner)
+	}
+	// Accepted: codex-desktop is a workspace no profile owns.
+	if owner, ok := ReservedFor("desktop", "codex"); ok {
+		t.Errorf(`ReservedFor("desktop", "codex") = %q, true; want it accepted`, owner)
+	}
+	// Accepted with an agent: a session's workspace is always <agent>-<slug>,
+	// so a slug that is a reserved profile's whole name is codex-claude-desktop
+	// here, which nothing owns. The whole-name refusal is for a profile name,
+	// which has no agent in front of it.
+	if owner, ok := ReservedFor("claude-desktop", "codex"); ok {
+		t.Errorf(`ReservedFor("claude-desktop", "codex") = %q, true; want it accepted`, owner)
+	}
+	// But with no agent it is a profile name, and it names that workspace
+	// outright, so it is still refused.
+	if owner, ok := Reserved("claude-desktop"); !ok || owner != "claude-desktop" {
+		t.Errorf(`Reserved("claude-desktop") = %q, %v; want claude-desktop, true`, owner, ok)
+	}
+}
+
 // Import refuses a name that collides with a *different* reserved profile.
 // Taking a reserved profile's own name is the legitimate "pin my own image for
 // a profile brig already knows" case and must still work -- once Reserved
