@@ -419,6 +419,15 @@ func refWithDigest(ref, digest string) string {
 	return ref + "@" + digest
 }
 
+// Tooling reports the cosign binary this policy would run and whether it is on
+// PATH, through the same lookPath seam Image and Verify use so a test can force
+// either answer. brig doctor asks, to name the signature tooling and whether it
+// is there without booting anything or reaching a registry.
+func (p Policy) Tooling() (string, bool) {
+	path, err := lookPath(p.Cosign)
+	return path, err == nil
+}
+
 // lookPath and run are variables so tests can drive the decision table
 // without a cosign on PATH.
 var lookPath = exec.LookPath
