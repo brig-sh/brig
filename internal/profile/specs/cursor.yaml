@@ -1,0 +1,16 @@
+name: cursor
+desc: Cursor Agent -- example profile, image unpublished pending a terms check
+binary: cursor-agent
+
+# Built by community-images but deliberately never pushed, so this reference
+# does not resolve. unpublished makes brig say that rather than surface a
+# registry 404.
+unpublished: true
+image: ghcr.io/brig-sh/cursor:latest
+
+guestHome: /home/cursor
+forward: [CURSOR_API_KEY, GH_TOKEN]
+statePaths: [.cursor, .local/share/cursor-agent]
+headless: true
+mem: 4096
+cpus: 4

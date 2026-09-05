@@ -1,0 +1,87 @@
+name: claude-desktop
+desc: Claude Desktop (Anthropic), in a graphical window
+# kind: gui -- the app owns the console, so there is no binary to exec and
+# nothing to pass arguments to.
+kind: gui
+guiTitle: Claude Desktop
+image: ghcr.io/nofireai/urunc-claude-desktop:aarch64
+guestHome: /home/claude
+
+# The same secret as claude-code, with the same sources, written out in full.
+#
+# Names are flat and global -- claude-code and claude-desktop are the same
+# login -- so `brig secret import claude-code` fills this one too, and says so.
+# The five lines are duplicated rather than referenced on purpose: declaring
+# the secret with no sources and leaning on the other profile would mean a
+# missing-secret hint that searches every profile's importers for one covering
+# the name, which is a lot of machinery to avoid five lines. Duplicated, each
+# profile imports standalone and neither depends on the other having been used.
+secrets:
+  - name: claude-credentials
+    required: false
+    expiryField: expiresAt              # found at any depth; drives the stale warning
+    sources:
+      - from: keychain
+        service: Claude Code-credentials    # macOS keeps it here
+      - from: file
+        path: ~/.claude/.credentials.json   # the documented Linux location
+        hint: run `claude` on the host once to log in
+
+  - name: gh-token
+    required: false
+    hint: "export GH_TOKEN before running brig, or store one: gh auth token | brig secret create gh-token"
+
+# The bundled Claude Code reads this document, at the path it reads it from.
+# Written into the tmpfs below as an ordinary file -- see claude-code.yaml for
+# why it is not a bind mount on its own path.
+files:
+  - ref: secrets.claude-credentials
+    path: .claude/.credentials.json
+    mode: "0600"
+
+# .claude is tmpfs, so the credential above cannot reach host disk. The
+# hostmounts name the exceptions worth keeping across boots.
+#
+# .config/Claude -- the Electron app's own profile, which is where the desktop
+# app keeps its window state and its logged-in session -- is deliberately NOT
+# here. It sits outside .claude, so no tmpfs covers it and the workspace keeps
+# it exactly as it always did; a hostmount under no tmpfs would mount the
+# workspace onto itself and is refused at parse time.
+volumes:
+  - kind: tmpfs
+    path: .claude
+    size: 512m
+  - kind: hostmount
+    path: .claude/settings.json
+    file: true
+  - kind: hostmount
+    path: .claude/CLAUDE.md
+    file: true
+  - kind: hostmount
+    path: .claude/sessions
+  - kind: hostmount
+    path: .claude/projects
+  - kind: hostmount
+    path: .claude/plugins
+  - kind: hostmount
+    path: .claude/history.jsonl
+    file: true
+
+# For git over HTTPS, not for the app. env. first so an exported GH_TOKEN keeps
+# reaching the guest exactly as it did before this profile bound the name.
+env:
+  - name: GH_TOKEN
+    refs: [env.GH_TOKEN, secrets.gh-token]
+
+deny: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN]
+
+# brig never writes to this host path -- the credential lives in the tmpfs
+# above -- so one found in the workspace is a real token left by an older brig.
+staleCredentialFiles: [.claude/.credentials.json]
+
+mem: 6144
+cpus: 4
+# This profile owns ~/brig/claude-desktop, so a session called "desktop" is
+# refused rather than landing a Claude Code session on the Desktop app's
+# workspace.
+reserved: true

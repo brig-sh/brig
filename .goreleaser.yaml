@@ -1,0 +1,205 @@
+# goreleaser builds and publishes brig.
+#
+# Two binaries from one module: brig, the CLI, and brigd, the session daemon.
+# Both are pure Go with no cgo, so one Linux runner cross-compiles every
+# target -- including darwin/arm64, which is the one that matters most. The
+# keychain is read by shelling out to `security` rather than through cgo
+# precisely so this stays true.
+#
+#   goreleaser check                 validate this file
+#   goreleaser release --snapshot    build everything without publishing
+#   git tag v0.1.0 && git push --tags   the real thing, via CI
+version: 2
+
+project_name: brig
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: brig
+    main: ./cmd/brig
+    binary: brig
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: brigd
+    main: ./cmd/brigd
+    binary: brigd
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Developer ID signing and notarization for the macOS binaries.
+#
+# cosign proves who built an artifact; Gatekeeper wants an Apple signature and
+# a notarization ticket, which is a different question and needs the same
+# Developer ID certificate hull is signed with. Both credentials live as
+# organisation secrets, mapped onto these names in the release workflow.
+#
+# This is the cross-platform path, so it runs on the Linux release runner:
+# these are plain Go binaries with no app bundle, which is exactly what it
+# supports.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [brig, brigd]
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
+        timeout: 20m
+
+archives:
+  - id: brig
+    ids: [brig, brigd]
+    # One archive per platform carrying both binaries, named the way the
+    # Homebrew tap already expects to find a release asset.
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+# Keyless signing, the same way the guest images are signed.
+#
+# There is no key to distribute and none for us to lose: cosign takes a
+# short-lived certificate from Sigstore against this workflow's OIDC identity,
+# and the signature is recorded in a public transparency log. What a consumer
+# verifies is not "this was signed" but "this was built by that workflow, in
+# that repo" -- the verify command is in the README.
+#
+# Only checksums.txt is signed, which is the standard shape: the checksum file
+# covers every archive, so one signature vouches for all of them.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
+    output: true
+
+# An SBOM per archive, so what is inside a release is inspectable without
+# unpacking it.
+sboms:
+  - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  # Grouped by what the change was, because a flat list of thirty commits is
+  # not a changelog -- it is a git log with bullet points, and a reader has to
+  # classify every line themselves to answer "what is new and what got fixed".
+  #
+  # The scope is optional in each pattern: this project writes both `feat:` and
+  # `feat(profile):`, and a pattern that only matched the bare form would drop
+  # every scoped commit into Others -- which is exactly what the exclude
+  # filters below did before.
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([^)]+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\([^)]+\))??!?:.+$'
+      order: 1
+    - title: Refactors
+      regexp: '^.*?refactor(\([^)]+\))??!?:.+$'
+      order: 2
+    # Kept rather than excluded, unlike the usual advice: in this repo a docs:
+    # commit is often where a design decision and its measurements are
+    # recorded, and a reader deciding whether to upgrade wants those.
+    - title: Documentation
+      regexp: '^.*?docs(\([^)]+\))??!?:.+$'
+      order: 3
+    - title: Others
+      order: 999
+  filters:
+    # Anchored with an optional scope for the same reason as the groups above.
+    # The previous "^test:" never matched `test(smoke):`, so the mechanics this
+    # list exists to hide were being published.
+    exclude:
+      - '^test(\([^)]+\))?!?:'
+      - '^chore(\([^)]+\))?!?:'
+      - '^ci(\([^)]+\))?!?:'
+      - '^build(\([^)]+\))?!?:'
+      - '^style(\([^)]+\))?!?:'
+
+release:
+  # Drafts, so a tag never publishes itself before someone has looked at the
+  # notes. That mattered more when this repository was private; it is public
+  # now, which makes the review the only thing standing between a tag and
+  # something the world can download.
+  draft: true
+  prerelease: auto
+
+# The Homebrew tap. `brews` generated formulas that installed pre-compiled
+# binaries; goreleaser deprecated that in favour of casks, which is what
+# Homebrew itself now wants for a downloaded binary.
+homebrew_casks:
+  - name: brig
+    ids: [brig]
+    binaries: [brig, brigd]
+    repository:
+      owner: brig-sh
+      name: homebrew-brig
+      branch: main
+      # Open a pull request rather than pushing to the tap. The cask is what
+      # people install; a bad one is worth a second pair of eyes, and the PR
+      # is a place to see the diff.
+      pull_request:
+        enabled: true
+      # The tap is a different repository, so the release job's built-in
+      # GITHUB_TOKEN cannot write to it. This is a fine-grained PAT with
+      # contents:write on brig-sh/homebrew-brig, stored as a secret on this
+      # repository.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/brig-sh/brig
+    description: Run a coding agent in a sandbox, with the credentials it needs and none of the ones it does not
+    dependencies:
+      # Guest-image signature verification degrades to a warning without it,
+      # so ship it rather than let the check quietly do nothing.
+      - formula: cosign
+      # The microVM runtime brig drives on macOS. It lives in the same public
+      # tap as this cask, so `brew install --cask brig` brings it along.
+      #
+      # Both casks land in the tap on their first stable release: brig's from
+      # this config, hull's from its own sign-and-notarize workflow. Until
+      # then neither is published, so nothing here is half-wired.
+      - cask: brig-sh/brig/hull
+    # auto: never on a prerelease. An rc should not move what `brew upgrade`
+    # follows.
+    skip_upload: auto
+    caveats: |
+      On Linux, brig drives nerdctl and needs nothing else. On macOS it drives
+      hull, which brew installed alongside this cask.
+
+      Guest images are verified with cosign before boot. An image brig-sh did
+      not publish is reported and booted anyway -- bring-your-own images are a
+      supported way to use brig. One that claims to be ours and fails
+      verification stops and asks.
+
+      Start with:
+        brig run claude
