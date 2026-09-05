@@ -114,7 +114,7 @@ func Resolve(agent, name string) (string, error) {
 		return "", fmt.Errorf("session name %q has no usable characters. "+
 			"Names use letters, digits, dot, dash and underscore", name)
 	}
-	if owner, ok := profile.Reserved(slug, agent); ok {
+	if owner, ok := profile.ReservedFor(slug, agent); ok {
 		return "", fmt.Errorf("session name %q becomes %q, which the %s profile "+
 			"already uses. Pick another name", name, slug, owner)
 	}

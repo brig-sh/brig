@@ -81,7 +81,7 @@ func ParseRef(s string) (Ref, error) {
 	// reports the unknown agent itself, which is the better message than one
 	// about a label.
 	if p, known := profile.Lookup(agent); known {
-		if owner, ok := profile.Reserved(label, p.Name); ok {
+		if owner, ok := profile.ReservedFor(label, p.Name); ok {
 			return Ref{}, fmt.Errorf("session label %q is the workspace the %s profile "+
 				"already uses. Pick another label", label, owner)
 		}
