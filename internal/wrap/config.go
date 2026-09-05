@@ -278,7 +278,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	slug := ""
 	if rawName != "" {
 		var err error
-		if slug, err = session.Resolve(rawName); err != nil {
+		if slug, err = session.Resolve(t.Name, rawName); err != nil {
 			return nil, err
 		}
 	}
