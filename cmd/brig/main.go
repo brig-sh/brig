@@ -399,6 +399,17 @@ func dispatch(args []string) error {
 		verb, rest = "run", verbLine
 	}
 
+	// The Run object has to be there for a refusal that happens inside parse
+	// too -- a ref that will not parse is the common one -- so the context is
+	// made before parse, off the token the reader typed, and refreshed below
+	// with the resolved ref once parse has one. Without this a typo in the ref
+	// left stdout empty under --json, and a script's rule that the last line
+	// of stdout is brig's held for every refusal but that one.
+	if verb == "run" || verb == "sh" {
+		if wantJSON, operand := peekRunLine(rest); globalJSON || wantJSON {
+			jsonRun = &jsonRunContext{ref: operand}
+		}
+	}
 	opts, profileName, tail, err := parse(verb, rest)
 	if err != nil {
 		return err
@@ -2682,7 +2693,7 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // moves the flag rather than guessing which command it belongs on.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs "+
-		"(ls, info, agent ls, secret ls, doctor) and run", verb)
+		"(ls, info, agent ls, secret ls, doctor), run and sh", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run
@@ -2752,6 +2763,32 @@ func refDisplay(agent string, o options) string {
 		return agent + "@" + o.load.Name
 	}
 	return agent
+}
+
+// peekRunLine reads a run line only as far as its first bare word: whether
+// --json stands among brig's own flags before the ref, and what that word is.
+// It exists because parse can refuse the ref before it has told anyone about
+// the flags left of it, and the Run object for that refusal still has to be
+// printed and still has to name what was typed. A flag that takes a value skips
+// the value, the way split does, so `--mem 4096` is not read as the ref.
+func peekRunLine(rest []string) (wantJSON bool, operand string) {
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		if a == "--" || !strings.HasPrefix(a, "-") {
+			if a != "--" {
+				operand = a
+			}
+			return wantJSON, operand
+		}
+		name, _, inline := strings.Cut(a, "=")
+		if name == "--json" {
+			wantJSON = true
+		}
+		if mine, takesValue := ours(name, posRun); mine && takesValue && !inline {
+			i++
+		}
+	}
+	return wantJSON, ""
 }
 
 // signalName maps a 128+n exit status back to the signal that produced it, for

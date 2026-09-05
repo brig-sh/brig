@@ -175,6 +175,37 @@ func TestRunJSONReportsABrigRefusal(t *testing.T) {
 	}
 }
 
+// A ref that will not parse is refused inside parse, before the run line has
+// been read. Under --json that refusal is still one Run line, stage brig, with
+// the usage exit, in either position of the flag, so a script's rule -- the
+// last line of stdout is brig's -- holds for a typo as much as for an unknown
+// agent.
+func TestRunJSONReportsABadRef(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"--json", "run", "claude@BAD"},
+		{"run", "--json", "claude@BAD"},
+		{"run", "--mem", "4096", "--json", "claude@BAD"},
+	} {
+		var err error
+		out, _ := captureStdout(t, func() error { err = run(args); return nil })
+		if got := exitCode(err); got != exitUsage {
+			t.Errorf("%q: exit %d, want %d", args, got, exitUsage)
+		}
+		doc := lastJSONLine(t, out)
+		data, _ := doc["data"].(map[string]any)
+		if data["stage"] != "brig" || data["ref"] != "claude@BAD" {
+			t.Errorf("%q: stage %v ref %v, want brig and claude@BAD", args, data["stage"], data["ref"])
+		}
+		if data["exit"] != float64(exitUsage) {
+			t.Errorf("%q: exit field %v, want %d", args, data["exit"], exitUsage)
+		}
+	}
+}
+
 // -d starts the sandbox and stops. Under --json it says so as the object, with
 // the sandbox name a script would attach to; the text form still prints the bare
 // name and nothing more.
