@@ -132,13 +132,30 @@ func gatewaySocket() (string, error) {
 }
 
 // GatewayLogPath is where the shared gateway's own output is written, beside
-// its socket. ensureGateway opens it, and `brig logs --gateway` points at it:
-// the gateway logs a boot's network failure to a file no command named until
-// now, so a network that never came up was invisible unless you already knew
-// the file was there. Derived from the socket by the same rule startGateway
-// uses, so the writer and the reader cannot drift onto two paths.
+// its socket, and IsolatedGatewayLogPath is the same for the gateway serving
+// one sandbox alone. ensureGateway and ensureIsolatedGateway open them, and
+// `brig logs --gateway` points at them: the gateway logs a boot's network
+// failure to a file no command named until now, so a network that never came up
+// was invisible unless you already knew the file was there. Both are derived
+// from the socket by the same rule startGateway uses, so the writer and the
+// reader cannot drift onto two paths.
+//
+// The shared log stays put; an isolated one does not. clearGatewayRecord
+// removes it with the gateway it belongs to, once that gateway is confirmed
+// stopped, which is what keeps ~/.brig from growing a file for every sandbox
+// ever isolated. So an isolated log is there while its gateway runs -- and
+// after one that failed to start, which is the case a reader most needs -- and
+// gone once the sandbox is stopped.
 func GatewayLogPath() (string, error) {
 	sock, err := gatewaySocket()
+	if err != nil {
+		return "", err
+	}
+	return gatewayLogPath(sock), nil
+}
+
+func IsolatedGatewayLogPath(name string) (string, error) {
+	sock, err := isolatedSocket(name)
 	if err != nil {
 		return "", err
 	}
