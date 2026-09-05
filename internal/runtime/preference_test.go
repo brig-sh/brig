@@ -116,6 +116,95 @@ func TestDetectForSentinelMarksOnlyTheMissingRuntime(t *testing.T) {
 	}
 }
 
+// A path in BRIG_RUNTIME_BIN is checked the way a profile's runtimeBin is.
+// Taken on trust, a value that is not there reached the first exec instead,
+// where it surfaced as a sandbox whose state brig could not read and named the
+// variable nowhere (#139).
+func TestDetectForReportsAMissingRuntimeBinFromTheEnvironment(t *testing.T) {
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", filepath.Join(t.TempDir(), "not-there"))
+
+	_, err := DetectFor(Preference{})
+	if err == nil {
+		t.Fatal("expected a missing BRIG_RUNTIME_BIN to be reported")
+	}
+	if !errors.Is(err, ErrBadRuntime) {
+		t.Errorf("%v does not match ErrBadRuntime, so it would not exit 4", err)
+	}
+	if errors.Is(err, ErrNoRuntime) {
+		t.Errorf("a bad BRIG_RUNTIME_BIN matched ErrNoRuntime, so env/ls would swallow it: %v", err)
+	}
+	// The variable is what the reader has to fix, so the variable is what the
+	// message has to name: the profile is not where this one came from.
+	if !strings.Contains(err.Error(), "BRIG_RUNTIME_BIN") {
+		t.Errorf("error does not name the variable: %v", err)
+	}
+}
+
+// A file that is there but cannot be executed fails the same way: it is a
+// runtime that was named and is broken, not one that is absent.
+func TestDetectForRefusesANonExecutableRuntimeBinFromTheEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hull")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", path)
+
+	_, err := DetectFor(Preference{})
+	if err == nil {
+		t.Fatal("expected a non-executable BRIG_RUNTIME_BIN to be refused")
+	}
+	if !errors.Is(err, ErrBadRuntime) {
+		t.Errorf("%v does not match ErrBadRuntime, so it would not exit 4", err)
+	}
+	if !strings.Contains(err.Error(), "BRIG_RUNTIME_BIN") {
+		t.Errorf("error does not name the variable: %v", err)
+	}
+}
+
+// BRIG_RUNTIME_BIN=hull is a name to look up, not a path, and has always been
+// read that way by the exec underneath. Checking it as a path would have
+// refused every value that was working the day before the check landed.
+func TestDetectForResolvesABareRuntimeBinOnPath(t *testing.T) {
+	dir := t.TempDir()
+	bin := executableFile(t, dir, "hull")
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", "hull")
+	t.Setenv("PATH", dir)
+
+	rt, err := DetectFor(Preference{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Bin() != bin {
+		t.Errorf("Bin() = %q, want the %q found on PATH", rt.Bin(), bin)
+	}
+}
+
+// A bare name nothing on PATH answers is still a runtime that was named and is
+// not there, so it is ErrBadRuntime rather than the "nothing installed"
+// sentinel env and ls degrade over.
+func TestDetectForReportsABareRuntimeBinThatIsNotOnPath(t *testing.T) {
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", "hull")
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := DetectFor(Preference{})
+	if err == nil {
+		t.Fatal("expected a bare BRIG_RUNTIME_BIN that is not on PATH to be reported")
+	}
+	if !errors.Is(err, ErrBadRuntime) {
+		t.Errorf("%v does not match ErrBadRuntime, so it would not exit 4", err)
+	}
+	if errors.Is(err, ErrNoRuntime) {
+		t.Errorf("a bad BRIG_RUNTIME_BIN matched ErrNoRuntime, so env/ls would swallow it: %v", err)
+	}
+	if !strings.Contains(err.Error(), "BRIG_RUNTIME_BIN") {
+		t.Errorf("error does not name the variable: %v", err)
+	}
+}
+
 // A config file is where people write ~, so it has to mean something.
 func TestRuntimeBinExpandsHome(t *testing.T) {
 	home, err := os.UserHomeDir()

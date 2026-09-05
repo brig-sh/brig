@@ -1137,6 +1137,15 @@ PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" run claude -d > /dev/null 2>&1; rc=$?
 # A runtime that is named and broken is the same class to a script: also 4.
 BRIG_RUNTIME=podman "$WORK/brig" run claude -d > /dev/null 2>&1; rc=$?
 [ "$rc" = 4 ] && ok "an unknown BRIG_RUNTIME exits 4" || bad "an unknown BRIG_RUNTIME exits 4 -- got $rc"
+# So is a BRIG_RUNTIME_BIN pointing at nothing. It used to be taken on trust and
+# reach the first exec, which failed as "cannot tell whether the sandbox is
+# already running" with exit 1 and no mention of the variable that caused it.
+out="$(BRIG_RUNTIME_BIN=/nonexistent "$WORK/brig" run claude -d 2>&1)"; rc=$?
+[ "$rc" = 4 ] && ok "a BRIG_RUNTIME_BIN that is not there exits 4" || bad "a BRIG_RUNTIME_BIN that is not there exits 4 -- got $rc: $out"
+case "$out" in
+  *BRIG_RUNTIME_BIN*) ok "the refusal names BRIG_RUNTIME_BIN" ;;
+  *) bad "the refusal names BRIG_RUNTIME_BIN -- got: $out" ;;
+esac
 # A credential a run required but could not resolve is 6. A profile of our own
 # that declares a required secret nothing supplies fails at credential
 # resolution, before the sandbox boots -- whether the store is absent (Linux) or
