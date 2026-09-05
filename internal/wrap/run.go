@@ -648,6 +648,9 @@ func (c *Config) Stop() error {
 func (c *Config) Remove() error {
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)
+	// The index entries that name this sandbox: the workspace record and the
+	// slug claim. Both are idempotent. Removal is the only thing that clears
+	// them -- rm's not-found path leaves them alone, since it removed nothing.
 	ForgetSandbox(c.VMName)
 	ForgetSlugClaim(c.VMName)
 	return err
