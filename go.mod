@@ -6,6 +6,12 @@ module github.com/brig-sh/brig
 // planted by the guest from aiming brig at a host path; see internal/wrap/rootio.go.
 go 1.25
 
-require sigs.k8s.io/yaml v1.6.0
+require (
+	github.com/godbus/dbus/v5 v5.2.2
+	sigs.k8s.io/yaml v1.6.0
+)
 
-require go.yaml.in/yaml/v2 v2.4.2 // indirect
+require (
+	go.yaml.in/yaml/v2 v2.4.2 // indirect
+	golang.org/x/sys v0.27.0 // indirect
+)
