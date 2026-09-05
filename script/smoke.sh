@@ -844,6 +844,20 @@ esac
   && ok "ls -q prints the ref and nothing else" \
   || bad "ls -q prints the ref and nothing else -- got: $(cat "$WORK/refs.out")"
 
+# `brig --json ls` is the machine-readable listing: it parses, and it carries
+# the SandboxList kind of the shared JSON envelope. The global position is the
+# one the help text teaches, so it is the one the smoke asserts.
+"$WORK/brig" --json ls > "$WORK/ls.json" 2>/dev/null
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$WORK/ls.json" 2>/dev/null \
+    && ok "brig --json ls is valid JSON" \
+    || bad "brig --json ls is not valid JSON -- got: $(cat "$WORK/ls.json")"
+fi
+case "$(cat "$WORK/ls.json")" in
+  *'"kind": "SandboxList"'*) ok "brig --json ls carries kind SandboxList" ;;
+  *) bad "brig --json ls carries kind SandboxList -- got: $(cat "$WORK/ls.json")" ;;
+esac
+
 # The round trip, against the real binary: every ref the listing prints is a
 # word every verb takes.
 #

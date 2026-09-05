@@ -156,7 +156,7 @@ func TestListProfilesShowsTheAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := captureStdout(t, listProfiles)
+	out, err := captureStdout(t, func() error { return listProfiles(false) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestListProfilesReportsBindingsAndRequiredSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := captureStdout(t, listProfiles)
+	out, err := captureStdout(t, func() error { return listProfiles(false) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T)
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
-	out, err := captureStdout(t, listProfiles)
+	out, err := captureStdout(t, func() error { return listProfiles(false) })
 	if err != nil {
 		t.Fatal(err)
 	}

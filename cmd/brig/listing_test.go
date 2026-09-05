@@ -90,11 +90,11 @@ func TestListingQuietPrintsRefsOnly(t *testing.T) {
 	// -q is a flag on ls, and the only one. Anything else is still refused.
 	scratchHost(t)
 	for _, args := range [][]string{{"-q"}, {"--quiet"}} {
-		if _, err := captureStdout(t, func() error { return listSandboxes(args, false) }); err != nil {
+		if _, err := captureStdout(t, func() error { return listSandboxes(args, false, false) }); err != nil {
 			t.Errorf("brig ls %s: %v", args[0], err)
 		}
 	}
-	if _, err := captureStdout(t, func() error { return listSandboxes([]string{"-x"}, false) }); err == nil {
+	if _, err := captureStdout(t, func() error { return listSandboxes([]string{"-x"}, false, false) }); err == nil {
 		t.Error("brig ls -x was accepted")
 	}
 }
@@ -126,6 +126,20 @@ func TestListingRefsRoundTripThroughEveryVerb(t *testing.T) {
 	refs := strings.Fields(buf.String())
 	if len(refs) < 2 {
 		t.Fatalf("ls -q printed %d refs, want the sessions in the index: %q", len(refs), refs)
+	}
+
+	// The same promise holds for `ls --json`: every ref it prints is a ref, and
+	// it prints exactly the refs -q does. If the two disagreed, a script reading
+	// the JSON would get an operand no verb takes -- the fault this test is about,
+	// one shape further out.
+	jsonRefs := []string{}
+	for _, s := range sandboxListData(rows, nil).Sandboxes {
+		if s.Ref != "" {
+			jsonRefs = append(jsonRefs, s.Ref)
+		}
+	}
+	if strings.Join(jsonRefs, " ") != strings.Join(refs, " ") {
+		t.Fatalf("ls --json prints refs %q, ls -q prints %q", jsonRefs, refs)
 	}
 
 	// Every verb that takes a session, in the spelling the help text teaches

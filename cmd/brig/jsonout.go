@@ -33,6 +33,21 @@ import (
 // bumps.
 const jsonAPIVersion = policy.APIVersion
 
+// Two JSON shapes, and the rule that decides which a verb prints:
+//
+//   - A LIST or REPORT verb prints the envelope: jsonDocument wraps the payload
+//     under data, so `ls`, `info`, `agent ls`, `secret ls` and `doctor` all read
+//     the same {apiVersion, kind, data} whatever they list. A list goes straight
+//     under data (there is no items wrapper); a report puts its own object there.
+//   - A DOCUMENT verb prints the payload bare, no envelope: `agent show`,
+//     `agent export`, `agent new` and `policy show` each render one profile or
+//     policy meant to be saved to a file and read back by brig, so wrapping it
+//     would make the file something brig no longer imports. Those four keep the
+//     bare shape they had; #7 does not touch them.
+//
+// The dividing line is what the output is FOR: a thing to read or pipe takes the
+// envelope, a thing to write to disk stays bare.
+
 // jsonDocument wraps a command's payload with the apiVersion that pins its
 // shape and the kind that names it, both beside the payload rather than folded
 // into it, so a consumer reads the two envelope fields the same way whatever
