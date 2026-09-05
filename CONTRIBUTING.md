@@ -231,10 +231,6 @@ Signed-off-by: Jane Doe <jane@nofire.ai>
 - **Use draft PRs** for work in progress or early feedback. Mark the PR ready
   for review only when CI is green and the commits are in their final,
   logical shape.
-- **If LLMs or AI assistants were used**, be transparent about it in the PR
-  description, and make sure you have personally reviewed, understood, and can
-  stand behind every line. The author of a PR is accountable for its content
-  regardless of how it was produced.
 
 ## Review process
 
@@ -333,3 +329,7 @@ well in practice. They are not a substitute for judgement:
 
 The goal, in the end, is simple: a history we can trust, reviews we enjoy, and
 a codebase that explains itself. Everything here exists in service of that.
+
+## AI policy
+
+AI-assisted development is welcome in brig. See [AI_POLICY.md](AI_POLICY.md).
