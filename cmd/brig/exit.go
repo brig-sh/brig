@@ -28,12 +28,29 @@ const (
 	exitCredentials = 6
 )
 
+// agentExit carries the agent's own exit status up to main, so brig returns
+// exactly what the agent returned under --json. It is not a failure of brig's:
+// the Run object has already been printed and the agent's output has already
+// gone to the inherited streams, so main neither prints nor decorates it -- it
+// reads the code off here and exits with it. Error is empty for that reason;
+// nothing prints it.
+type agentExit struct{ code int }
+
+func (e *agentExit) Error() string { return "" }
+
 // exitCode reads the exit status for a finished run out of its error. It reads
 // the cause rather than the message, so a wrapped error keeps its class the
 // whole way up the stack, and the order is most specific first.
 func exitCode(err error) int {
 	if err == nil {
 		return exitOK
+	}
+	// The agent's own status, when the agent ran under --json. Read first: it is
+	// the one error whose code is not a class of brig's but a number brig is
+	// passing through unchanged.
+	var ae *agentExit
+	if errors.As(err, &ae) {
+		return ae.code
 	}
 	var ue *usageError
 	if errors.As(err, &ue) {

@@ -262,11 +262,12 @@ func TestJSONPositionsAndRefusals(t *testing.T) {
 
 	// Refused, both positions, on the verbs with no JSON form. Exit 2, and the
 	// message names a verb that does have one so the reader can move the flag.
+	// run and sh are NOT here since #110: --json runs the agent as a child and
+	// prints a Run object, so it is accepted rather than refused -- see
+	// run_json_test.go.
 	refuse := [][]string{
 		{"--json", "stop", "claude"}, {"stop", "claude", "--json"},
 		{"--json", "rm", "claude"}, {"rm", "claude", "--json"},
-		{"--json", "run", "claude"}, {"run", "claude", "--json"},
-		{"--json", "sh", "claude"}, {"sh", "claude", "--json"},
 	}
 	for _, args := range refuse {
 		scratchHost(t)

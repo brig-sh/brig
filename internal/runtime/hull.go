@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -586,7 +585,16 @@ func (h *hull) Feed(spec ExecSpec) error {
 // status is brig's exit status without any relaying.
 func (h *hull) Replace(spec ExecSpec) error {
 	argv, env := h.replaceCmd(spec)
-	return syscall.Exec(h.bin, argv, env)
+	return execHandover(h.bin, argv, env)
+}
+
+// Attach runs the same handover as a child instead of replacing brig, for the
+// --json path that has to outlive the exec to report its exit status. It builds
+// its command from replaceCmd, the one function Replace uses too, so the child
+// and the process replacement carry byte-for-byte the same argv and env.
+func (h *hull) Attach(spec ExecSpec) (int, error) {
+	argv, env := h.replaceCmd(spec)
+	return attachHandover(argv, env)
 }
 
 // replaceCmd builds the handover argv and environment in one place, so a test

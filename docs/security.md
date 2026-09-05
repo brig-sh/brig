@@ -654,6 +654,11 @@ It does not filter what the agent writes to your terminal. `brig` hands the
 tty over with `syscall.Exec` and is gone before the agent produces a byte,
 which is what buys correct `^C` handling and a truthful exit status -- and it
 means every byte the agent emits reaches your terminal emulator unexamined.
+The one exception is `--json`: there `brig` stays alive as the agent's parent
+so it can print one status line after the agent exits. The tty is still the
+agent's, `brig` reads nothing the agent prints and writes nothing to it, and
+the exit status is still the agent's own. What changes is only that `brig` is
+present for the run rather than gone.
 That is a real surface: OSC 52 writes to, and reads from, the system
 clipboard; DCS sequences are forwarded verbatim by `tmux` and `screen` to the
 *outer* terminal; and a cursor-position query makes the terminal type its

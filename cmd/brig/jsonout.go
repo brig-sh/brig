@@ -65,3 +65,16 @@ func writeJSONDocument(w io.Writer, kind string, data any) error {
 	enc.SetIndent("", "  ")
 	return enc.Encode(jsonDocument{APIVersion: jsonAPIVersion, Kind: kind, Data: data})
 }
+
+// writeJSONLine encodes one payload as a jsonDocument on a single line, the
+// deliberate opposite of writeJSONDocument's indentation.
+//
+// #110's Run object is printed to stdout after the agent's own inherited output,
+// so a script's rule for finding it is "the last line of stdout is brig's". An
+// indented object spanning many lines would break that rule, and there is no
+// person reading a run's stdout for whom the indentation was ever the point --
+// the agent already wrote there. Same envelope, same fields; only the framing
+// differs, so a consumer parses it exactly as it parses the read verbs.
+func writeJSONLine(w io.Writer, kind string, data any) error {
+	return json.NewEncoder(w).Encode(jsonDocument{APIVersion: jsonAPIVersion, Kind: kind, Data: data})
+}
