@@ -1809,5 +1809,19 @@ grep -q -- "-v is one of brig's own flags" "$WORK/agentv.err" \
 [ "$(cat "$WORK/lsq.out")" = claude-code ] \
   && ok "ls -q is unchanged" || bad "ls -q is unchanged -- got: $(cat "$WORK/lsq.out")"
 
+echo "== doctor =="
+# brig doctor reports the prerequisites a first run hits, in boot order. On the
+# stub host the runtime resolves to the stand-in hull, so the report exits 0 and
+# names the version the stub prints -- which is the whole point of the runtime
+# line, and the one fact this end-to-end case can pin that the unit tests (with
+# a runtime that answers no --version) cannot.
+"$WORK/brig" doctor > "$WORK/doctor.out" 2> "$WORK/doctor.err"
+rc=$?
+[ "$rc" = 0 ] && ok "doctor exits 0 on the stub host" \
+  || bad "doctor exits 0 -- got $rc: $(cat "$WORK/doctor.err")"
+grep -q '^  ok  runtime .*0.1.0-rc23' "$WORK/doctor.out" \
+  && ok "doctor names the runtime version" \
+  || bad "doctor names the runtime version -- got: $(grep runtime "$WORK/doctor.out")"
+
 [ "$fail" = 0 ] && echo PASS || echo FAILURES
 exit "$fail"
