@@ -14,23 +14,29 @@ import (
 	"github.com/brig-sh/brig/internal/secret"
 )
 
-// fakeRuntime is the runtime doctor detects when a test forces a working host.
+// doctorRuntime is the runtime doctor detects when a test forces a working host.
+// Its own name, as is doctorStore's: the package's fakeRuntime and fakeStore
+// belong to the telemetry and secret tests and carry state these do not need.
 // The interface is embedded rather than implemented, the repo's pattern: a
 // check that reached any method other than the two below is doing something a
 // check has no business doing, and the nil panic says that louder than a stub.
-type fakeRuntime struct{ runtime.Runtime }
+type doctorRuntime struct {
+	runtime.Runtime
+	bin string
+}
 
-// Bin points at nothing runnable on purpose: runtime.Version(Bin()) then fails
-// and the runtime check falls back to naming the binary without a version,
-// which is the best-effort path a test wants exercised without a real hull.
-func (fakeRuntime) Kind() string { return "hull" }
-func (fakeRuntime) Bin() string  { return "hull-not-on-this-host" }
+// Bin is whatever the test put there: healthyHost writes a script that answers
+// --version, because the runtime check now looks the binary up before it
+// vouches for it, and a name that is not on disk is the failure a separate
+// test asks for rather than the fixture every test starts from.
+func (doctorRuntime) Kind() string  { return "hull" }
+func (r doctorRuntime) Bin() string { return r.bin }
 
-// fakeStore is a secret store that opens. Kind is all the secrets check reads;
+// doctorStore is a secret store that opens. Kind is all the secrets check reads;
 // it never reaches for a value, and a store that answered one would be a bug.
-type fakeStore struct{ secret.Store }
+type doctorStore struct{ secret.Store }
 
-func (fakeStore) Kind() string { return "keychain" }
+func (doctorStore) Kind() string { return "keychain" }
 
 // healthyHost forces every seam and environment variable doctor reads to the
 // answer a working macOS-or-Linux host would give, so a test can then break one
@@ -55,8 +61,12 @@ func healthyHost(t *testing.T) string {
 	t.Setenv("BRIG_BOOT_ASSETS", assets)
 
 	swap(t, &virtualization, func() (bool, string) { return true, "virtualization available" })
-	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return fakeRuntime{}, nil })
-	swap(t, &openStore, func() (secret.Store, error) { return fakeStore{}, nil })
+	bin := filepath.Join(t.TempDir(), "hull")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho hull version 0.0.0-test\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: bin}, nil })
+	swap(t, &openStore, func() (secret.Store, error) { return doctorStore{}, nil })
 	return assets
 }
 
@@ -123,6 +133,31 @@ func TestDoctorMissingRuntimeExits4(t *testing.T) {
 	}
 	if code := exitCode(doctorExit(checks)); code != exitRuntime {
 		t.Errorf("a missing runtime exits %d, want %d", code, exitRuntime)
+	}
+}
+
+// A runtime whose binary is not on disk is exit 4 as well. Detect takes
+// BRIG_RUNTIME_BIN on trust, so this is the case doctor has to catch itself
+// rather than inherit from the seam.
+func TestDoctorRuntimeBinaryMissingExits4(t *testing.T) {
+	healthyHost(t)
+	missing := filepath.Join(t.TempDir(), "hull-not-here")
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: missing}, nil })
+
+	checks := runDoctor(&fakeProfile, nil)
+
+	rt := findCheck(t, checks, "runtime")
+	if rt.State != stateFail || rt.Fix == "" || !strings.Contains(rt.Finding, missing) {
+		t.Errorf("a missing binary is %q/%q with fix %q, want !! naming %s with a fix", rt.State, rt.Finding, rt.Fix, missing)
+	}
+	for _, name := range []string{"boot", "image"} {
+		c := findCheck(t, checks, name)
+		if c.State != stateInfo || c.Finding != "not reached" {
+			t.Errorf("%q after a missing binary is %q/%q, want -- / not reached", name, c.State, c.Finding)
+		}
+	}
+	if code := exitCode(doctorExit(checks)); code != exitRuntime {
+		t.Errorf("a missing binary exits %d, want %d", code, exitRuntime)
 	}
 }
 
@@ -203,7 +238,7 @@ func TestDoctorJSONCarriesSameFacts(t *testing.T) {
 	// A store whose name looks like a value would be, so the "no secret value"
 	// assertion has something real to miss if a check ever leaked one.
 	const planted = "super-secret-token-value"
-	swap(t, &openStore, func() (secret.Store, error) { return fakeStore{}, nil })
+	swap(t, &openStore, func() (secret.Store, error) { return doctorStore{}, nil })
 
 	out, err := captureStdout(t, func() error { return doctorCmd(os.Stdout, []string{"--json"}) })
 	if err != nil {
