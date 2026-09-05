@@ -1,0 +1,593 @@
+package runtime
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// hull drives the macOS microVM runtime.
+type hull struct {
+	bin string
+	// pins caches the one question PinsDigest asks the binary, because the
+	// verify path may ask more than once per run and the answer cannot change
+	// while brig is running.
+	pinsOnce sync.Once
+	pins     bool
+	// consent caches whether hull has an answer on file about telemetry, which
+	// decides whether an operation the user asked for may be counted. See
+	// consentRecorded.
+	consent struct {
+		once sync.Once
+		on   bool
+	}
+}
+
+func newHull(bin string) (Runtime, error) {
+	if bin != "" {
+		return &hull{bin: bin}, nil
+	}
+	if p, err := exec.LookPath("hull"); err == nil {
+		return &hull{bin: p}, nil
+	}
+	return nil, fmt.Errorf("%w: brig drives hull on macOS, and none was there. "+
+		"See https://github.com/brig-sh/brig#macos, "+
+		"or point BRIG_RUNTIME_BIN at a build", ErrNoRuntime)
+}
+
+func (h *hull) Kind() string { return "hull" }
+func (h *hull) Bin() string  { return h.bin }
+
+// Isolation is a microVM on every hull backend: vz, hvi and qemu are all
+// hypervisors, so the guest has a kernel of its own whichever one boots it.
+// The backend is named anyway, because it decides what that VM can do -- the
+// graphical console, the shares, the gateway -- and a reader asking what their
+// sandbox is wants the whole answer in one row.
+//
+// The default is applied here rather than reported as blank, so the row names
+// the backend that will actually boot rather than the absence of a setting.
+func (h *hull) Isolation(hv string) Isolation {
+	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend", hypervisorOrDefault(hv))}
+}
+
+// PinsDigest asks the hull on this machine whether it can boot a digest
+// reference from its own store, which it can from 0.1.0-rc23. Before that a
+// repo@sha256:... boot missed the cache and re-pulled every run, and failed
+// outright under --pull=never with the bytes on disk, so brig verified and
+// booted the tag there and said so rather than claim a pin it did not make.
+//
+// The binary is asked, not a build-time constant, because the hull brig drives
+// is whatever is on PATH or in BRIG_RUNTIME_BIN, and it may be older than brig.
+// See hullVersionPinsDigest for how the answer is read and why an unreadable
+// one pins.
+//
+// One thing to know when upgrading: an image pulled under an older hull has no
+// index digest on record, and a multi-arch tag resolves to its index digest,
+// so the first pinned boot of such an image misses the cache and pulls once.
+// From then on the store answers. Under --pull=never that first boot fails
+// until the image is pulled again.
+func (h *hull) PinsDigest() bool {
+	h.pinsOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, h.bin, "--version")
+		cmd.Env = mergeEnv(telemetryEnv(false))
+		out, _ := cmd.Output()
+		h.pins = hullVersionPinsDigest(string(out))
+	})
+	return h.pins
+}
+
+// LocalDigest answers "" on hull, which the verify path reads as "cannot say"
+// and raises no mismatch over. The boot is still pinned; what is missing is
+// the report that the copy on disk differs from what the registry serves.
+//
+// It cannot answer yet because hull exposes nothing brig could compare: `hull
+// images` prints a truncated manifest digest and no index digest, and a
+// multi-arch tag resolves to its index digest, which is a different object
+// from the per-platform manifest the store is keyed by. Handing back the
+// manifest digest would make every multi-arch image look like a mismatch and
+// stop a first-party boot with a prompt for nothing. Silence is the honest
+// answer until hull prints the index digest it recorded.
+func (h *hull) LocalDigest(string) (string, error) { return "", nil }
+
+// hullVersionPinsDigest reads `hull --version` and reports whether that hull
+// resolves a digest reference against its own store.
+//
+// Before 0.1.0-rc23 the store lookup compared the reference as a string, so a
+// repo@sha256:... boot missed the cache and re-pulled every run, and failed
+// outright under --pull=never with the bytes on disk. From rc23 the lookup
+// parses the reference and answers a digest, the index digest included, so a
+// pinned boot finds its bytes.
+//
+// Anything that does not read as a version is a build from source, and it
+// pins. A wrong guess in that direction costs a re-pull, never a weaker check:
+// a digest the store cannot answer is fetched from the registry, and that is
+// the verified bytes either way. A wrong guess the other way would silently
+// leave a capable hull on the tag, which is the outcome this function exists
+// to avoid.
+func hullVersionPinsDigest(out string) bool {
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return true
+	}
+	base, pre, _ := strings.Cut(fields[len(fields)-1], "-")
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return true
+	}
+	var v [3]int
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return true
+		}
+		v[i] = n
+	}
+	switch {
+	case v[0] > 0 || v[1] > 1 || (v[1] == 1 && v[2] > 0):
+		return true // past 0.1.0 altogether
+	case v[0] == 0 && v[1] == 1 && v[2] == 0:
+		if pre == "" {
+			return true // 0.1.0 final
+		}
+		rc, ok := strings.CutPrefix(pre, "rc")
+		if !ok {
+			return true
+		}
+		n, err := strconv.Atoi(rc)
+		return err != nil || n >= 23
+	default:
+		return false // 0.0.x, which never shipped a digest-aware store
+	}
+}
+
+// hypervisor is vz because that is the backend with a graphical console, a
+// virtiofs share per directory and the notarised runner. A profile names
+// another -- hvi for the Hypervisor Virtualization Interface, qemu for a qemu
+// host -- and BRIG_HYPERVISOR beats the profile. Both are resolved before they
+// reach here; see wrap.
+func hypervisor(spec RunSpec) string { return hypervisorOrDefault(spec.Hypervisor) }
+
+// hypervisorOrDefault is where the default lives, so the backend that boots and
+// the backend the envelope names are read off one line. Two copies of "vz"
+// would be two things to change, and the one that goes stale is a report about
+// a boundary rather than the boundary itself -- which is the worse half to get
+// wrong, because nothing fails to make it visible.
+func hypervisorOrDefault(hv string) string { return orDefault(hv, "vz") }
+
+// The kernel and initrd a genericBoot profile needs live in boot.go: both
+// backends take the same two annotations, so resolving them is not hull's
+// business alone.
+
+// pullAssets downloads the published boot bundle by asking hull to do it.
+//
+// hull needs the same kernel and initrd for its own `hull run`, so it already
+// knows the reference, the asset directory and the registry credentials. brig
+// driving that is one implementation instead of two that have to agree, and it
+// means a genericBoot profile works on a clean machine with no manual step.
+//
+// This is the one long operation brig starts on a first run, and it gets one
+// line each end rather than a stream: hull's own download progress goes to
+// Progress, which is empty unless somebody asked for it, and the two notices
+// say that a minute of silence is a download rather than a hang.
+func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
+	noticef(notice, "downloading the kernel and initrd this profile boots (once)...")
+	cmd := exec.Command(h.bin, "assets", "pull")
+	// Pin hull to the directory brig resolved. That directory came from hull
+	// itself via assetDir, so this is not brig overriding a choice -- it is
+	// brig making sure the place it checked and the place hull writes are the
+	// same one, even if something changed between the two calls.
+	cmd.Env = mergeEnv(telemetryEnv(false), []string{"HULL_BOOT_ASSETS=" + dir})
+	said := narrate(progress)
+	cmd.Stdout, cmd.Stderr = said, said
+	if err := cmd.Run(); err != nil {
+		return said.explain(fmt.Errorf("%s assets pull: %w", h.bin, err))
+	}
+	noticef(notice, "kernel and initrd downloaded")
+	return nil
+}
+
+// assetFetcher binds the boot-asset download to one run's writers, so a fetch
+// that happens deep inside runArgs still narrates where that run's output
+// goes. The alternative is another two parameters threaded through runArgs,
+// which has enough of them.
+func (h *hull) assetFetcher(spec RunSpec) assetFetcher {
+	return func(dir string) error { return h.pullAssets(dir, spec.Notice, spec.Progress) }
+}
+
+// assetDir asks hull where its boot assets live.
+//
+// They sit under hull's store, so the answer moves with --store-dir and with
+// hull's own environment variables. brig cannot see any of that, and a path
+// compiled in here would drift the moment hull changed its mind -- silently,
+// because brig would find an empty directory, fetch a second copy of the same
+// bundle into it, and boot a kernel hull knows nothing about.
+//
+// Errors are the caller's to shrug off: an older hull has no `assets dir`, and
+// that should fall back to the historical path rather than refuse to boot.
+func (h *hull) assetDir() (string, error) {
+	cmd := exec.Command(h.bin, "assets", "dir")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%s assets dir: %w", h.bin, err)
+	}
+	dir := strings.TrimSpace(out.String())
+	if dir == "" {
+		return "", fmt.Errorf("%s assets dir printed nothing", h.bin)
+	}
+	return dir, nil
+}
+
+// Running parses `ps` rather than asking for one instance, because a stopped
+// instance still holds its name and must not read as running.
+//
+// A `ps` that did not run is returned as an error rather than folded into
+// false. The two are different events -- no sandbox is up, versus this hull
+// could not be asked -- and the caller acts on the difference; see the note on
+// Runtime.Running. hull's own explanation is captured and carried along,
+// because "exit status 1" on its own tells nobody which of the two it was.
+func (h *hull) Running(name string) (bool, error) {
+	cmd := exec.Command(h.bin, "ps")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		if said := strings.TrimSpace(errb.String()); said != "" {
+			return false, fmt.Errorf("%s ps: %w: %s", h.bin, err, firstLines(said, 3))
+		}
+		return false, fmt.Errorf("%s ps: %w", h.bin, err)
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == name && f[1] == "running" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// List reads the same table Running does. A stopped instance still holds its
+// name, so it belongs in the listing -- that is exactly the thing a user
+// needs to see before wondering why a name is taken.
+func (h *hull) List() ([]Instance, error) {
+	cmd := exec.Command(h.bin, "ps", "-a")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		// -a is not universal across runtime versions; fall back to the plain
+		// listing rather than reporting no sandboxes at all.
+		cmd = exec.Command(h.bin, "ps")
+		cmd.Env = mergeEnv(telemetryEnv(false))
+		out.Reset()
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			return nil, err
+		}
+	}
+	var list []Instance
+	for i, line := range strings.Split(out.String(), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		// Skip a header row, whatever it is called.
+		if i == 0 && (strings.EqualFold(f[0], "name") || strings.EqualFold(f[0], "id")) {
+			continue
+		}
+		list = append(list, Instance{Name: f[0], State: f[1]})
+	}
+	return list, nil
+}
+
+func (h *hull) Run(spec RunSpec) error {
+	hv := hypervisor(spec)
+	if err := supports(spec, hv); err != nil {
+		return err
+	}
+	net := orDefault(spec.Net, "shared")
+	// hvi has no egress without the gateway, so brig guarantees one rather
+	// than booting a sandbox whose network silently swallows every
+	// connection. See gateway.go.
+	gatewaySock, gatewayCidr := "", ""
+	if hv == "hvi" && net != "none" {
+		sock, err := ensureGateway(h.bin)
+		if err != nil {
+			return err
+		}
+		// hull takes the two together and configures the guest statically, so
+		// the address is ours to assign. See gatewayip.go.
+		cidr, err := gatewayCIDR(spec.Name)
+		if err != nil {
+			return err
+		}
+		gatewaySock, gatewayCidr = sock, cidr
+	}
+	args, envVals, err := runArgs(spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(h.bin, args...)
+	// The boot gets no terminal, so hull cannot ask anyone anything here: it
+	// is counted only once an answer is already on file. See telemetryEnvFor.
+	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
+	cmd.Stdout = nil // the instance id is not interesting; failures explain themselves
+	// Held rather than passed through. What hull says on its way up is a pull
+	// progress bar and a boot message, which is noise on a boot that works and
+	// the only evidence there is on one that does not, so it is quoted back on
+	// the error and otherwise dropped. See narration.
+	said := narrate(spec.Progress)
+	cmd.Stderr = said
+	if err := cmd.Run(); err != nil {
+		return said.explain(fmt.Errorf("%s run: %w", h.bin, err))
+	}
+	return nil
+}
+
+// supports rejects a spec the chosen backend cannot honour, before anything
+// is started. hull would refuse this too, but only at boot and without
+// naming the variable that caused it -- and the user who set BRIG_HYPERVISOR
+// is the only one who can undo it.
+func supports(spec RunSpec, hv string) error {
+	if spec.GUI && hv != "vz" {
+		return fmt.Errorf("this profile opens a graphical window, which only the vz backend provides "+
+			"(BRIG_HYPERVISOR is %q); unset it to run this profile", hv)
+	}
+	return nil
+}
+
+// runArgs is the one place the run command line is built, so that what a test
+// asserts and what boots a sandbox cannot drift apart. It returns the argv
+// and the environment carrying the guest variables, which never travel in
+// argv; see splitEnv.
+//
+// fetch populates the boot assets when a genericBoot profile finds them
+// missing. It is a parameter rather than a method so that this stays a pure
+// argv-building function, drivable by a test with no hull on PATH; pass nil to
+// resolve the assets without ever downloading.
+func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
+	args = []string{"run", "--detach", "--name", spec.Name,
+		"--hypervisor", hv,
+		"--net", net,
+		"--pull", orDefault(spec.Pull, "missing"),
+		"--mem", strconv.Itoa(spec.Mem),
+		"--cpus", strconv.Itoa(spec.CPUs),
+	}
+	if spec.RootfsType != "" {
+		args = append(args, "--rootfs-type", spec.RootfsType)
+	}
+	if spec.GenericBoot {
+		annotations, err := bootAnnotations(locate, fetch)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, kv := range annotations {
+			args = append(args, "--annotation", kv)
+		}
+	}
+	// hull refuses one without the other: the socket says which network to
+	// join, the CIDR says which address to take on it.
+	if gatewaySock != "" {
+		args = append(args, "--gateway-sock", gatewaySock, "--gateway-cidr", gatewayCidr)
+	}
+	for _, s := range spec.Shares {
+		spec := s.Host + ":" + s.Guest
+		if s.ReadOnly {
+			// hull holds this on vz through VZSharedDirectory and on hvi
+			// through the virtio-fs export, and refuses it outright on qemu
+			// rather than mounting read-write behind our back.
+			spec += ":ro"
+		}
+		args = append(args, "--shared-dir", spec)
+	}
+	if spec.GUI {
+		args = append(args, "--gui")
+		if spec.GUITitle != "" {
+			args = append(args, "--gui-title", spec.GUITitle)
+		}
+	}
+	envArgs, envVals := splitEnv("--env", spec.Env)
+	args = append(args, envArgs...)
+	// The verified digest when one was resolved, so the bytes that boot are the
+	// bytes cosign checked; hull resolves it against its store from rc23.
+	args = append(args, withDigest(spec.Image, spec.Digest))
+	return args, envVals, nil
+}
+
+// execArgs is the one place the exec command line is built, so the probe, the
+// captured read and the terminal handover cannot drift apart.
+func (h *hull) execArgs(spec ExecSpec) (args, env []string) {
+	args = []string{"exec"}
+	if spec.TTY {
+		args = append(args, "-t")
+	}
+	if spec.Cwd != "" {
+		args = append(args, "--cwd", spec.Cwd)
+	}
+	if spec.User != "" {
+		args = append(args, "-u", spec.User)
+	}
+	envArgs, envVals := splitEnv("--env", spec.Env)
+	args = append(args, envArgs...)
+	args = append(args, spec.Name, "--")
+	return append(args, spec.Cmd...), envVals
+}
+
+// agentCallTimeout bounds a single question put to the guest agent.
+//
+// It has to exist because the agent socket answers before the guest does. The
+// socket belongs to the VMM, not to the guest, so it accepts as soon as the
+// VMM is up -- seconds before the in-guest agent binds its listener. An exec
+// aimed at that window sends its open request into nothing and then blocks in
+// the frame loop with no deadline, forever.
+//
+// A caller that retries cannot see that: waitReady's own deadline is only
+// consulted between probes, so the first probe never returning means the
+// timeout never fires and `brig run` hangs with nothing printed. Bounding the
+// call here is what makes the retry loop above a retry loop.
+//
+// Generous on purpose. This is not how long the guest may take to come up --
+// that is ReadyTimeout, across many probes -- only how long one probe waits
+// before deciding this attempt landed too early and another one is due.
+const agentCallTimeout = 5 * time.Second
+
+// agentCallWaitDelay is how long Run may keep waiting once the deadline has
+// already killed the command.
+//
+// Killing the process is not enough on its own. When output is collected into
+// a buffer rather than a file, Run does not return until the copy from the
+// pipe ends, and the pipe stays open as long as anything holds its write end
+// -- a grandchild the killed process left behind holds it just as well as the
+// process did. Without this the timeout kills hull and Run blocks anyway,
+// which is the same hang wearing a different hat; the test for it is exactly
+// how this was found.
+const agentCallWaitDelay = time.Second
+
+// agentCall builds a command to the guest agent that is guaranteed to return.
+func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string) {
+	args, envVals := h.execArgs(spec)
+	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
+	cmd := exec.CommandContext(ctx, h.bin, args...)
+	cmd.WaitDelay = agentCallWaitDelay
+	return cmd, cancel, envVals
+}
+
+func (h *hull) Probe(spec ExecSpec) bool {
+	cmd, cancel, envVals := h.agentCall(spec)
+	defer cancel()
+	cmd.Env = mergeEnv(telemetryEnv(false), envVals)
+	return cmd.Run() == nil
+}
+
+func (h *hull) Output(spec ExecSpec) (string, error) {
+	// Bounded for the same reason as Probe: this asks the guest which
+	// workspace it mounts, on the same socket, and its caller treats silence
+	// as "cannot say" rather than waiting on it.
+	cmd, cancel, envVals := h.agentCall(spec)
+	defer cancel()
+	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// Feed runs a command with a value on its standard input.
+//
+// Bounded like every other agent call: the socket accepts before the guest
+// does, so an unbounded write into that window blocks forever with nothing
+// printed.
+func (h *hull) Feed(spec ExecSpec) error {
+	cmd, cancel, envVals := h.agentCall(spec)
+	defer cancel()
+	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
+	cmd.Stdin = spec.Stdin
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(errb.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// Replace hands the process over. On success it does not return: the agent's
+// TUI gets the real terminal, ^C reaches it rather than brig, and its exit
+// status is brig's exit status without any relaying.
+func (h *hull) Replace(spec ExecSpec) error {
+	argv, env := h.replaceCmd(spec)
+	return syscall.Exec(h.bin, argv, env)
+}
+
+// replaceCmd builds the handover argv and environment in one place, so a test
+// can assert both what a shell handover runs (`-t` for the guest pty) and
+// whether the boot gate lets it be counted, neither of which survives the
+// syscall.Exec in Replace itself.
+//
+// canAsk is spec.CanAsk, not spec.TTY. This is the one invocation that inherits
+// the user's terminal, but only a real terminal on brig's own stdin means there
+// is anyone to answer hull's consent question. A login shell wants a pty even
+// when brig is driven from a script, so TTY is true there while CanAsk is not;
+// reading TTY for both left a scripted `brig shell` looking askable and let
+// hull's on-by-default send the first-boot event. When CanAsk is false and no
+// answer is on file the boot rule applies and the exec is suppressed. See
+// telemetryEnvFor.
+func (h *hull) replaceCmd(spec ExecSpec) (argv, env []string) {
+	args, envVals := h.execArgs(spec)
+	argv = append([]string{h.bin}, args...)
+	env = mergeEnv(h.telemetryEnvFor(spec.Counted, spec.CanAsk), envVals)
+	return argv, env
+}
+
+func (h *hull) Stop(name string) error { return h.quiet("stop", name, true) }
+
+// Remove also gives the sandbox's gateway address back. A stopped sandbox
+// keeps its address so that starting it again is the same machine on the same
+// network; a removed one has no such claim.
+func (h *hull) Remove(name string) error {
+	err := h.quiet("rm", name, false)
+	releaseGatewayIP(name)
+	return err
+}
+
+// quiet runs a verb whose success is the whole of its output, keeping hull's
+// own explanation for the caller that has to report a failure.
+//
+// Quiet means nothing is printed when it works, not that hull is silenced: the
+// command was built with no Stdout or Stderr at all, so a stop that failed
+// took its reason -- the one sentence saying which instance and why -- to
+// /dev/null, and the caller was left holding "exit status 1". Both streams are
+// captured and folded into the error instead, which is where anyone reading a
+// failed `brig stop` will look.
+func (h *hull) quiet(verb, name string, counted bool) error {
+	cmd := exec.Command(h.bin, verb, name)
+	// Counted like the boot, and gated like it for the same reason: this runs
+	// with no terminal, so nothing can be asked here either.
+	cmd.Env = mergeEnv(h.telemetryEnvFor(counted, false))
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		if said := strings.TrimSpace(out.String()); said != "" {
+			return fmt.Errorf("%s %s %s: %w: %s", h.bin, verb, name, err, firstLines(said, 3))
+		}
+		return fmt.Errorf("%s %s %s: %w", h.bin, verb, name, err)
+	}
+	return nil
+}
+
+// firstLines keeps a runtime's explanation to something that fits in an error
+// message: hull says what went wrong in its first line or two, and a stack
+// trace or a usage dump behind it would bury the sentence that matters.
+func firstLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "; ")
+}
+
+func (h *hull) LogsHint(name string) string {
+	return fmt.Sprintf("%s logs %s", h.bin, name)
+}
+
+func orDefault(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
+}
