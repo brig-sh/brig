@@ -127,8 +127,8 @@ separate Linux re-implementation of it.
 | `brig policy ls\|create\|edit\|show\|rm` | manage policies. `show --json` for JSON instead of YAML |
 | `brig policy attach\|detach <policy> <profile> [-n NAME]` | bind or unbind a policy to every run of a profile, or `-n` for one session |
 | `brig policy check <profile> [-n NAME]` | what is bound to a run of a profile (or `-n` session), and whether brig can enforce anything against it |
-| `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring. macOS only for now |
-| `brig secret import <profile>` | fill that profile's secrets from your host, once. macOS only for now |
+| `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring |
+| `brig secret import <profile>` | fill that profile's secrets from your host, once |
 | `brig telemetry status\|on\|off` | report what is counted, or turn the counting on or off. See [Telemetry](#telemetry) |
 | `brig version` | |
 
