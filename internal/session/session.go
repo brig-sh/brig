@@ -96,20 +96,25 @@ func LegacySlug(name string) string {
 	return strings.TrimRight(s[:legacyBudget], "-.")
 }
 
-// Resolve validates a session name and returns its slug.
+// Resolve validates a session name for an agent and returns its slug.
 //
-// A name that slugs to a profile's own workspace is refused rather than
-// silently shared: claude-desktop already owns ~/brig/claude-desktop, so a
-// session called desktop would land a Claude Code session on the Desktop
-// app's workspace. The check reads the slug, so Desktop and Desktop! stop
-// here as well.
-func Resolve(name string) (string, error) {
+// The agent here is the profile as it resolved: the caller passes the canonical
+// name wrap builds the workspace from, not the word the user typed. A name that
+// would slug the agent's session onto a reserved profile's own workspace is
+// refused rather than silently shared. The workspace is the agent's name and
+// the slug, so the collision is the agent's to have: `brig run claude --name
+// desktop` resolves claude to claude-code and becomes claude-code-desktop, a
+// directory no profile owns, so it is accepted -- only a pair whose whole name
+// is a reserved profile's, what a profile actually named claude would make of
+// "desktop", is refused. The check reads the slug, so Desktop and Desktop! are
+// the same name here.
+func Resolve(agent, name string) (string, error) {
 	slug := Slug(name)
 	if slug == "" {
 		return "", fmt.Errorf("session name %q has no usable characters. "+
 			"Names use letters, digits, dot, dash and underscore", name)
 	}
-	if owner, ok := profile.Reserved(slug); ok {
+	if owner, ok := profile.ReservedFor(slug, agent); ok {
 		return "", fmt.Errorf("session name %q becomes %q, which the %s profile "+
 			"already uses. Pick another name", name, slug, owner)
 	}
