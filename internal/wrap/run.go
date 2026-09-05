@@ -195,13 +195,6 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	if err := c.preflightHypervisor(hypervisor); err != nil {
 		return err
 	}
-	// What this backend cannot honour about the run, refused here rather than
-	// inside Run: the path below that finds the sandbox already up never calls
-	// Run, and a policy nothing can enforce must not be waved through by the
-	// accident of the sandbox happening to be running. See checkBackend.
-	if err := c.checkBackend(hypervisor); err != nil {
-		return err
-	}
 	// Said on the run, not in BuildEnv: BuildEnv resolves the set for every
 	// verb, brig env included, so a warning from there prints on a preview that
 	// spawns nothing and lands twice on env next to reportArgv. Here it is the
@@ -239,15 +232,6 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		// Recreate rather than fail: all persistent state lives in the
 		// workspace on the host, so restarting costs nothing but the boot.
 		switch stale := c.projectShareStale(); {
-		case c.networkStale():
-			// A third thing that cannot change on a live guest, answered the
-			// same way for the same reason. Its network and its egress rules
-			// were fixed when it booted, so a policy attached since is not in
-			// force on this sandbox -- and returning here would print a POLICY
-			// row for rules nothing is applying.
-			c.warnf("this sandbox is running under a different network policy than the one " +
-				"that applies now. Rules are fixed when a sandbox boots, so it is being " +
-				"restarted; any other session using this sandbox will be disconnected.")
 		case !c.guestMountsWorkspace():
 			c.warnf("the running sandbox is not mounting %s -- its share went stale (the "+
 				"directory was renamed or replaced, or the workspace changed). Restarting "+
@@ -325,25 +309,15 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// instead. Empty for hull, which execs as root and does the three-phase
 	// mount itself; see createTimeVolumes.
 	tmpfs, volumeShares := c.createTimeVolumes()
-	// The fields a backend can refuse the run over, taken from the one place
-	// that derives them, so the spec that boots and the spec that was checked
-	// before the boot cannot disagree about any of them.
-	check := c.backendSpec(hypervisor)
 	spec := runtime.RunSpec{
-		Name: check.Name,
+		Name: c.VMName,
 		// The tag stays as the image; the resolved digest rides alongside it and
 		// the runtime boots Image@Digest when it can pin one. Empty Digest boots
 		// the tag, which is the hull path and any run that resolved no digest.
 		Image:  c.Image,
 		Digest: c.BootDigest,
 		Pull:   c.Pull,
-		Net:    check.Net,
-		// What this sandbox may reach. Read once here and fixed for the life
-		// of the boot: the rules go on the gateway's command line, and a
-		// running gateway cannot be told a new one. Editing a policy changes
-		// what the next boot enforces, which is the property worth having --
-		// a policy an agent could ask to have relaxed mid-run is not a policy.
-		Egress: check.Egress,
+		Net:    c.Network.RuntimeNet(),
 		Mem:    c.Mem,
 		CPUs:   c.CPUs,
 		// The workspace first, which is the guest's home, then this run's
@@ -354,7 +328,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		Shares:   c.shares(ws.dir, volumeShares),
 		Tmpfs:    tmpfs,
 		Env:      set.Vars,
-		GUI:      check.GUI,
+		GUI:      c.Profile.IsGUI(),
 		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
@@ -363,7 +337,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		GenericBoot: c.Profile.GenericBoot,
 		// Resolved once at the top of EnsureRunning, where the preflight also
 		// read it, so the backend this spec boots is the one that was checked.
-		Hypervisor: check.Hypervisor,
+		Hypervisor: hypervisor,
 		Counted:    true,
 		// Where the runtime's own words go. Empty unless --verbose asked for
 		// them, which is what tells the adapter to hold them for the failure
