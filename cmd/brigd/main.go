@@ -403,8 +403,58 @@ func serve(socket string) error {
 		if err != nil {
 			return nil // the listener closed: a signal, not a failure
 		}
-		go d.handle(conn)
+		go d.accept(conn)
 	}
+}
+
+// accept screens a new connection by the peer's uid before it is served.
+//
+// The socket carries lifecycle control over sandboxes holding live credentials.
+// 0600 keeps another user's process from opening it, but a mode is only a mode:
+// the check that the peer really is the daemon's own user is here, read from the
+// kernel at accept rather than trusted from anything the peer says. A uid other
+// than the daemon's gets one response line and the connection is closed.
+//
+// The screening is at accept, not in handle, so it runs once per connection
+// against the real unix peer -- handle is driven directly by tests over an
+// in-process pipe that carries no peer credentials, and the request loop has no
+// business knowing which it is.
+func (d *daemon) accept(conn net.Conn) {
+	uid, err := peerUID(conn)
+	if err != nil {
+		d.refuse(conn, Response{Code: exitcode.Failure,
+			Error: "could not read the peer's identity, so the connection is refused: " + err.Error()})
+		return
+	}
+	if !peerAllowed(uid, os.Getuid()) {
+		d.refuse(conn, peerRefusal(uid, os.Getuid()))
+		return
+	}
+	d.handle(conn)
+}
+
+// peerAllowed is the decision accept turns on: a connection is served only when
+// its peer runs as the daemon's own user. It takes both uids so a test can drive
+// either answer without a second user on the box.
+func peerAllowed(peerUID, ownUID int) bool {
+	return peerUID == ownUID
+}
+
+// peerRefusal is the one line a refused peer gets. Code 1 -- a general refusal,
+// not a malformed request -- and a message naming both uids so the reader knows
+// which socket answered and who it serves.
+func peerRefusal(peerUID, ownUID int) Response {
+	return Response{Code: exitcode.Failure, Error: fmt.Sprintf(
+		"connection from uid %d refused: this socket serves only its owner, uid %d",
+		peerUID, ownUID)}
+}
+
+// refuse delivers one stamped response and closes, for a connection turned away
+// before it reaches the request loop.
+func (d *daemon) refuse(conn net.Conn, resp Response) {
+	defer conn.Close()
+	out := replier{conn: conn, enc: json.NewEncoder(conn), d: d.write}
+	_ = out.reply(stamp(Request{}, resp))
 }
 
 // idleConn arms the read deadline afresh before every read of the connection.
