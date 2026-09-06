@@ -68,6 +68,43 @@ jobs:
       - name: cross-compile linux/amd64
         run: GOOS=linux GOARCH=amd64 go build ./...
 
+  # Coverage, on main only. The number is a property of the branch other work
+  # builds on, and the README badge follows that branch; measuring it on every
+  # pull request would spend a second full `go test` run to move a badge that
+  # only main publishes.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      # The upload's tokenless-OIDC path, kept as a fallback when the token
+      # secret is absent.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      # One run produces the profile, and the summary is rendered from that
+      # same profile rather than from a second run of the suite. atomic mode
+      # because the suite runs packages in parallel.
+      - name: Measure coverage
+        run: |
+          go test -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tee -a "$GITHUB_STEP_SUMMARY"
+      # Renders the README badge and the per-file view on codecov.io. It never
+      # fails the run: a coverage upload that cannot reach its service is not a
+      # reason to call a green commit broken.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.out
+          fail_ci_if_error: false
+
   release-config:
     name: release config
     runs-on: ubuntu-latest
