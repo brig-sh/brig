@@ -174,6 +174,14 @@ func TestARefShapedTokenIsDiagnosedAsARef(t *testing.T) {
 		if verbless.Error() != verbed.Error() {
 			t.Errorf("brig %s said\n  %v\nbut brig run %s said\n  %v", ref, verbless, ref, verbed)
 		}
+		// The message being equal is not enough: a bare ParseRef failure falls
+		// through to exit 1 while the verbed form's usage error exits 2, so the
+		// two read alike and a script still tells them apart. Pin the class too,
+		// including nosuch@refactor, which already reaches exit 3 both ways.
+		if exitCode(verbless) != exitCode(verbed) {
+			t.Errorf("brig %s exits %d, brig run %s exits %d",
+				ref, exitCode(verbless), ref, exitCode(verbed))
+		}
 		if strings.Contains(verbless.Error(), "unknown command") {
 			t.Errorf("brig %s was reported as an unknown command: %v", ref, verbless)
 		}

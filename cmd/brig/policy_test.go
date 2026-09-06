@@ -1703,10 +1703,10 @@ func TestCheckFailsWhenABoundPolicyDoesNotExist(t *testing.T) {
 	}
 }
 
-// "attached" on its own reads as a rule that is now in force, and nothing
-// in the guest reads these bindings yet. The docs say so; so does attach,
-// because the terminal is where someone acts on it.
-func TestAttachSaysThePolicyIsNotEnforcedYet(t *testing.T) {
+// "attached" on its own reads as a rule that is in force everywhere, and
+// where it is in force depends on the backend the run lands on. The docs say
+// so; so does attach, because the terminal is where someone acts on it.
+func TestAttachSaysWhereThePolicyIsEnforced(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1724,18 +1724,18 @@ func TestAttachSaysThePolicyIsNotEnforcedYet(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(note, policy.NotEnforcedNote) {
-		t.Errorf("attach did not say the binding is not enforced: %q", note)
+	if !strings.Contains(note, policy.EnforcementNote) {
+		t.Errorf("attach did not say where the binding is enforced: %q", note)
 	}
-	if strings.Contains(out, policy.NotEnforcedNote) {
+	if strings.Contains(out, policy.EnforcementNote) {
 		t.Errorf("the note went to stdout, where it is not the answer: %q", out)
 	}
 }
 
 // check is the verb that means "confirm this is in force", and it prints
 // the names and exits zero -- the one answer most likely to be read as a
-// verdict, so it carries the note too.
-func TestCheckSaysThePolicyIsNotEnforcedYet(t *testing.T) {
+// verdict everywhere, so it carries the same note about where it holds.
+func TestCheckSaysWhereThePolicyIsEnforced(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
@@ -1754,8 +1754,8 @@ func TestCheckSaysThePolicyIsNotEnforcedYet(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(note, policy.NotEnforcedNote) {
-		t.Errorf("check did not say the binding is not enforced: %q", note)
+	if !strings.Contains(note, policy.EnforcementNote) {
+		t.Errorf("check did not say where the binding is enforced: %q", note)
 	}
 	if strings.TrimSpace(out) != "no-net" {
 		t.Errorf("stdout is not just the policy names: %q", out)
@@ -1773,12 +1773,12 @@ func TestCheckOmitsTheNoteWhenThereIsNothingToMisread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(nothingBound, policy.NotEnforcedNote) {
+	if strings.Contains(nothingBound, policy.EnforcementNote) {
 		t.Errorf("the note was printed with nothing bound: %q", nothingBound)
 	}
 
 	refused, _ := captureStdout(t, func() error { return checkPolicy([]string{"ubuntu"}) })
-	if strings.Contains(refused, policy.NotEnforcedNote) {
+	if strings.Contains(refused, policy.EnforcementNote) {
 		t.Errorf("the note was printed beside a refusal: %q", refused)
 	}
 }

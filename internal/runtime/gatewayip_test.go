@@ -84,14 +84,14 @@ func TestReleaseGatewayIPFreesTheAddress(t *testing.T) {
 func TestGatewayCIDRSurvivesACorruptStore(t *testing.T) {
 	scratchGatewayDir(t)
 
-	path, err := gatewayIPStore()
+	alloc, err := sharedIPs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(alloc.path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(alloc.path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +109,11 @@ func TestLowestFreeHostReportsAFullNetwork(t *testing.T) {
 	for host := firstGuestHost; host <= lastGuestHost; host++ {
 		assigned[string(rune(host))] = host
 	}
-	if _, err := lowestFreeHost(assigned); err == nil {
+	alloc, err := sharedIPs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alloc.lowestFree(assigned); err == nil {
 		t.Fatal("expected a full network to be reported")
 	} else if !strings.Contains(err.Error(), "brig rm") {
 		t.Errorf("error does not say how to free one: %v", err)
