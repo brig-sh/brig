@@ -62,6 +62,16 @@ jobs:
       - name: smoke test
         run: ./script/smoke.sh
 
+      # docs/security.md makes testable promises; docs/claims.md maps each to
+      # the test that defends it. This step fails when a row names a test that
+      # no longer exists, so a claim cannot be left silently undefended after a
+      # rename. The self-test first proves the guard is live by running it
+      # against a row that names a missing test and confirming it fails.
+      - name: claims table
+        run: |
+          ./script/check-claims.sh --self-test
+          ./script/check-claims.sh
+
       - name: cross-compile darwin/arm64
         run: GOOS=darwin GOARCH=arm64 go build ./...
 
