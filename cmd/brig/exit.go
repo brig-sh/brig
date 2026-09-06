@@ -9,8 +9,16 @@ import (
 )
 
 // Exit codes brig promises to a script. They are documented in the README
-// beside the command reference, and the mapping below is the only thing that
-// produces them, so the table and the behaviour cannot drift.
+// beside the command reference.
+//
+// The mapping below is no longer the only thing that produces them:
+// internal/exitcode classifies the same numbers for brigd, which cannot import
+// this package. The two agree today -- same order, same classes, same
+// numbers -- and they agree by construction rather than by sharing code, which
+// is the drift this comment used to rule out. Collapsing them means lifting
+// usageError and notFoundError somewhere both can see, since those are the
+// types this file reads and that package has to approximate. Until then, a
+// change here belongs in internal/exitcode too.
 //
 // 1 stays the general failure and 2 stays the usage error, so a caller written
 // against either keeps working. The rest name the failure shapes brig's own
