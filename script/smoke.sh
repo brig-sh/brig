@@ -500,19 +500,59 @@ grep -q '^NETWORK .*shared' "$WORK/on.out" \
   && ok "the envelope names the shared posture" \
   || bad "the envelope names the shared posture -- got: $(cat "$WORK/on.out")"
 
-# isolated asks the runtime for a network of this sandbox's own. The stub is a
-# hull stand-in, so what is checked here is that the posture reaches the
-# runtime; that two sandboxes on separate networks genuinely cannot reach each
-# other is a real-runtime fact, recorded in docs/manual-tests.
+# isolated gives the sandbox a network of its own, which brig can only do where
+# it owns the gateway. This run is pinned to vz, where the network comes from
+# vmnet, so the posture is refused rather than accepted and dropped -- it was
+# accepted and dropped before, and the envelope reported a network of the
+# sandbox's own over a sandbox on the shared one. The negative half is the half
+# worth testing: "it booted" would pass with the whole thing deleted. That two
+# sandboxes on separate networks genuinely cannot reach each other is a
+# real-runtime fact, recorded in docs/manual-tests.
 "$WORK/brig" rm --all > /dev/null 2>&1
 : > "$STUB_LOG"
-"$WORK/brig" --verbose run claude --network isolated -d > "$WORK/iso.out" 2>&1
-grep -q -- '--net isolated' "$STUB_LOG" \
-  && ok "--network isolated reaches the runtime" \
-  || bad "--network isolated reaches the runtime -- got: $(grep '^argv: run' "$STUB_LOG")"
-grep -q '^NETWORK .*isolated' "$WORK/iso.out" \
-  && ok "the envelope names the isolated posture" \
-  || bad "the envelope names the isolated posture -- got: $(cat "$WORK/iso.out")"
+if "$WORK/brig" run claude --network isolated -d > "$WORK/iso.out" 2>&1; then
+  bad "--network isolated was accepted on a backend that cannot give one"
+else
+  grep -q 'hvi' "$WORK/iso.out" \
+    && ok "isolated refuses where brig owns no network, naming the backend that does" \
+    || bad "the refusal does not name the backend -- got: $(cat "$WORK/iso.out")"
+fi
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "the runtime was invoked for a posture it cannot honour" \
+  || ok "nothing reached the runtime for isolated"
+"$WORK/brig" rm --all > /dev/null 2>&1
+
+# A policy is enforced at the user-mode gateway, which only the hvi backend
+# uses. This run is pinned to vz, so the boot must be refused rather than
+# started with the rules dropped: a sandbox that reports a policy and enforces
+# nothing is worse than one with no policy. The negative half is the half worth
+# testing -- "it booted" would pass with the whole feature deleted.
+mkdir -p "$WORK/policies"
+cat > "$WORK/policies/no-net.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: no-net
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+export BRIG_POLICY_DIR="$WORK/policies"
+"$WORK/brig" policy attach no-net claude-code > /dev/null 2>&1 \
+  && ok "a policy attaches to a profile" \
+  || bad "a policy attaches to a profile"
+: > "$STUB_LOG"
+if "$WORK/brig" run claude -d > "$WORK/pol.out" 2>&1; then
+  bad "a policy on a backend that cannot enforce it was booted anyway"
+else
+  grep -q 'hvi' "$WORK/pol.out" \
+    && ok "a policy brig cannot enforce refuses the boot, naming the backend that can" \
+    || bad "the refusal does not name the backend -- got: $(cat "$WORK/pol.out")"
+fi
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "the runtime was invoked for a policy that could not be enforced" \
+  || ok "nothing reached the runtime"
+"$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
+unset BRIG_POLICY_DIR
 "$WORK/brig" rm --all > /dev/null 2>&1
 
 # A posture brig does not know must stop the run rather than pick one.
