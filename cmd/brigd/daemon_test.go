@@ -693,6 +693,34 @@ func TestAMissingRuntimeIsTheRuntimeCode(t *testing.T) {
 	}
 }
 
+// The peer decision, driven for both answers without a second user on the box:
+// the daemon's own uid is served, another is refused, and the refusal is a
+// well-formed response line rather than a dropped connection.
+func TestThePeerDecision(t *testing.T) {
+	own := os.Getuid()
+	if !peerAllowed(own, own) {
+		t.Error("the daemon's own uid was refused")
+	}
+	if peerAllowed(own+1, own) {
+		t.Error("a uid other than the daemon's was served")
+	}
+
+	// The line a refused peer gets, stamped exactly as accept stamps it.
+	refusal := stamp(Request{}, peerRefusal(own+1, own))
+	if refusal.V != protocolVersion {
+		t.Errorf("the refusal carries no protocol version: %+v", refusal)
+	}
+	if refusal.OK {
+		t.Errorf("the refusal reports ok: %+v", refusal)
+	}
+	if refusal.Code != 1 {
+		t.Errorf("the refusal is not the general-failure code 1: %+v", refusal)
+	}
+	if !strings.Contains(refusal.Error, strconv.Itoa(own+1)) {
+		t.Errorf("the refusal does not name the uid it turned away: %q", refusal.Error)
+	}
+}
+
 // TestServeInAHelperProcess is not a test. It is how the test above starts a
 // second daemon in a second process, which is the only honest way to ask the
 // question: a lock is held against other processes, and this one already holds
