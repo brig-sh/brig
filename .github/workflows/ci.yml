@@ -49,8 +49,24 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # The profile costs almost nothing to write on a run that happens anyway,
+      # so the coverage number comes from the same run that gates the merge
+      # rather than from a second suite that could disagree with it. atomic is
+      # what -race requires, and what a parallel package run needs regardless.
       - name: go test
-        run: go test -race ./...
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      # Only the upload is gated: the badge follows main, and a pull request
+      # pays nothing for a step it skips. Never fails the run, since a coverage
+      # service that cannot be reached is not a reason to call a green commit
+      # broken.
+      - name: Upload coverage to Codecov
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.out
+          fail_ci_if_error: false
 
       # The macOS path is the one that ships first, and it is also the one no
       # Linux runner can execute. Compiling it is the part CI can do, and it
