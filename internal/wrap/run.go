@@ -382,8 +382,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// to find out.
 	c.rememberSession()
 	if !c.waitReady() {
-		return fmt.Errorf("sandbox did not become ready; check '%s'",
-			c.Runtime.LogsHint(c.VMName))
+		return fmt.Errorf("sandbox did not become ready; check '%s'", c.logHint())
 	}
 	if c.Profile.IsGUI() {
 		focusWindow()
@@ -462,6 +461,25 @@ func majorVersion(v string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// logHint is the advice a boot that will not come up, or a stop that will not
+// take, points the reader at: `brig logs` first, then the runtime's own
+// command. brig knows the two facts the runtime command asks of the user and
+// they do not -- the sandbox name, which is not the ref, and which runtime is
+// underneath -- so its own command leads, and the runtime's stays as the
+// fallback for a boot that never became a sandbox brig can name.
+//
+// The ref is recovered from the sandbox name through the session index, which
+// EnsureRunning has already written by the time a readiness wait can fail; a
+// session not in the index falls back to the bare agent, which is still a ref
+// every verb takes.
+func (c *Config) logHint() string {
+	ref := RefOfSandbox(c.VMName)
+	if ref == "" {
+		ref = c.Profile.Name
+	}
+	return fmt.Sprintf("brig logs %s (or the runtime's own, %s)", ref, c.Runtime.LogsHint(c.VMName))
 }
 
 // waitReady waits for the in-guest agent.
@@ -610,11 +628,11 @@ func (c *Config) Stop() error {
 		// Both, joined: what the stop said and why the end state could not be
 		// checked are two separate things to fix, and errors.Is finds either.
 		return fmt.Errorf("the sandbox %s would not stop, and whether it is still running "+
-			"could not be established (%s): %w", c.VMName, c.Runtime.LogsHint(c.VMName),
+			"could not be established (%s): %w", c.VMName, c.logHint(),
 			errors.Join(err, askErr))
 	}
 	return fmt.Errorf("the sandbox %s is still running and would not stop (%s): %w",
-		c.VMName, c.Runtime.LogsHint(c.VMName), err)
+		c.VMName, c.logHint(), err)
 }
 
 // Remove stops the sandbox and clears the instance holding its name. The
@@ -630,9 +648,23 @@ func (c *Config) Stop() error {
 func (c *Config) Remove() error {
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)
+	c.Forget()
+	return err
+}
+
+// Forget clears the index entries that name this sandbox: the workspace record
+// and the slug claim. Both are idempotent, so it is safe whether or not the
+// sandbox still exists.
+//
+// A method of its own, so that rm's not-found path can prune too. When the
+// runtime has no sandbox for the ref there is nothing to remove, but the entry
+// still names a sandbox the user has asked to be rid of, so clearing it there
+// leaves no stale record of a name nothing holds -- the same prune Remove does
+// after the runtime call, reached from the one path where there was no runtime
+// call to do it.
+func (c *Config) Forget() {
 	ForgetSandbox(c.VMName)
 	ForgetSlugClaim(c.VMName)
-	return err
 }
 
 // Exec hands the terminal to a command inside the sandbox. It does not return

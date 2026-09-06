@@ -188,6 +188,28 @@ type Rule struct {
 // that turns it on: rules with no default are rules nothing consults.
 func (e Egress) Filtered() bool { return e.Default != "" }
 
+// LogsSpec is a request to stream a sandbox's log.
+//
+// An options value rather than a parameter list, in the style of RunSpec and
+// ExecSpec: the flags brig hands the runtime -- follow, tail -- are a set that
+// grows, and threading them positionally is what makes an adapter and its
+// caller drift.
+type LogsSpec struct {
+	Name string
+	// Follow streams the log until the reader interrupts it. brig reads a log
+	// here and does not own the sandbox, so an interrupt that reaches the
+	// runtime must leave the sandbox running -- see the note on Logs.
+	Follow bool
+	// Tail is how many trailing lines to show, or -1 for all. -1 is both
+	// runtimes' own default; a container runtime with no notion of a negative
+	// count reads it as "all" rather than passing it through.
+	Tail int
+	// Out is where the log is written, as it arrives. The caller wraps it to
+	// filter the terminal control sequences a runtime may have captured, unless
+	// asked for the raw bytes.
+	Out io.Writer
+}
+
 // Instance is one sandbox as the runtime sees it.
 type Instance struct {
 	Name  string
@@ -259,7 +281,14 @@ type Runtime interface {
 	// Stop stops a sandbox, and Remove clears the instance holding the name.
 	Stop(name string) error
 	Remove(name string) error
-	// LogsHint is the command to suggest when a sandbox will not come up.
+	// Logs streams a sandbox's log to spec.Out, following until interrupted
+	// when spec.Follow is set. This reads a log; it does not own the sandbox, so
+	// an interrupt reaching the runtime leaves the sandbox running.
+	Logs(spec LogsSpec) error
+	// LogsHint is the command to suggest when a sandbox will not come up. It is
+	// kept beside Logs rather than replaced by it: a boot that never became a
+	// sandbox brig can drive still has a runtime command worth naming, and it is
+	// the second half of the advice `brig logs` leads.
 	LogsHint(name string) string
 }
 

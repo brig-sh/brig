@@ -804,6 +804,27 @@ grep -q '^argv: stop brig-claude-code' "$STUB_LOG" \
 grep -q 'CLAUDE_CODE_OAUTH_TOKEN' "$STUB_LOG" \
   && bad "stop resolved credentials" || ok "stop resolves no credentials"
 
+echo "== logs =="
+# brig hands the runtime the log request built from the ref: the sandbox name
+# the ref resolves to, and the flags the line carried. The stub logs its argv
+# like every other verb, so this asserts what reached the runtime. --tail -1 is
+# the default brig passes, which both runtimes read as "all".
+#
+# A sandbox has to exist for there to be a log to read: logs asks the runtime's
+# list first and is a not-found otherwise, which the case below the lifecycle
+# section pins. The stop above left none, so boot one here.
+"$WORK/brig" run claude -d > /dev/null 2>&1
+: > "$STUB_LOG"
+"$WORK/brig" logs claude > /dev/null 2>&1
+grep -q '^argv: logs --tail -1 brig-claude-code' "$STUB_LOG" \
+  && ok "logs streams the sandbox log through the runtime" \
+  || bad "logs streams the sandbox log -- got: $(grep '^argv:' "$STUB_LOG")"
+: > "$STUB_LOG"
+"$WORK/brig" logs claude --follow > /dev/null 2>&1
+grep -q '^argv: logs --follow --tail -1 brig-claude-code' "$STUB_LOG" \
+  && ok "logs --follow passes --follow to the runtime" \
+  || bad "logs --follow passes --follow -- got: $(grep '^argv:' "$STUB_LOG")"
+
 echo "== lifecycle verbs =="
 : > "$STUB_LOG"
 out="$("$WORK/brig" --verbose run claude -d 2>"$WORK/detach.err")"
@@ -894,6 +915,26 @@ grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
 "$WORK/brig" rm --all > /dev/null 2>&1
 grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
   && ok "rm --all removes brig sandboxes" || bad "rm --all removes brig sandboxes"
+
+echo "== rm and logs with no sandbox =="
+# Nothing holds the name now, so rm and logs name a sandbox that resolves to
+# nothing: exit 3, the code the table gives a name that is not there, and a
+# message naming the ref rather than the runtime's own "instance not found".
+# They used to hand that error back and exit 1.
+out="$("$WORK/brig" rm claude 2>&1)"; rc=$?
+[ "$rc" = 3 ] && ok "rm of a missing sandbox exits 3" \
+  || bad "rm of a missing sandbox exits 3 -- got $rc: $out"
+case "$out" in
+  *"no sandbox for claude"*) ok "rm names the ref, not the sandbox" ;;
+  *) bad "rm names the ref -- got: $out" ;;
+esac
+out="$("$WORK/brig" logs claude 2>&1)"; rc=$?
+[ "$rc" = 3 ] && ok "logs of a missing sandbox exits 3" \
+  || bad "logs of a missing sandbox exits 3 -- got $rc: $out"
+case "$out" in
+  *"no sandbox for claude"*) ok "logs names the ref, not the sandbox" ;;
+  *) bad "logs names the ref -- got: $out" ;;
+esac
 
 echo "== remembered workspace =="
 # A session created with -w used to be restarted by the next verb that left the
