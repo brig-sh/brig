@@ -129,6 +129,29 @@ func TestOpenReportsNoService(t *testing.T) {
 	}
 }
 
+// A keyring that is running but has no default collection: ReadAlias("default")
+// returns noObject ("/"), which the service means as "there is no default", not
+// "the default is at the well-known path". resolveCollection turns that into a
+// refusal in the shape of the other two -- wrapping ErrUnsupported, naming the
+// missing default collection and both ways out -- rather than letting a write
+// fall through to a CreateItem that fails halfway with a raw D-Bus string.
+func TestResolveCollectionReportsNoDefaultCollection(t *testing.T) {
+	orig := readDefaultAlias
+	readDefaultAlias = func(*secretService) (dbus.ObjectPath, error) { return noObject, nil }
+	defer func() { readDefaultAlias = orig }()
+
+	s := &secretService{service: service}
+	err := s.resolveCollection()
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("resolveCollection() = %v, want it to wrap ErrUnsupported", err)
+	}
+	for _, want := range []string{"default collection", "desktop session", "--from-command"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("resolveCollection() = %v, want it to mention %q", err, want)
+		}
+	}
+}
+
 // swapSeams replaces dialBus and hasSecretService for a test and returns a
 // function that puts the originals back. A nil hasSecretService leaves the real
 // one, which the no-bus test never reaches anyway.
