@@ -12,6 +12,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/brigsock"
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
@@ -72,6 +73,12 @@ type check struct {
 // already exist for the same reason -- detectRuntime in telemetry.go and
 // openStore in secret.go -- and the BRIG_* variables cover the rest.
 var virtualization = probeVirtualization
+
+// gatewayEnforces is the seam a test replaces to answer whether this runtime's
+// gateway takes egress rules without a real network-gateway to ask. It defaults
+// to runtime.GatewayEnforces, which puts the question to the binary rather than
+// to a version string.
+var gatewayEnforces = runtime.GatewayEnforces
 
 // doctorCmd is `brig doctor [<agent>]`, with an optional --json flag of its own.
 func doctorCmd(out io.Writer, args []string) error {
@@ -159,13 +166,14 @@ func doctorExit(checks []check) error {
 }
 
 // runDoctor builds the report, in boot order, and writes down the one
-// dependency that matters here: the boot assets and the image are only worth
-// checking once there is a runtime to boot them, so a runtime that is not there
-// marks both not reached rather than failing them a second time in the words of
-// whatever they would have called. The runtime's own version needs its binary,
-// which is a dependency inside the runtime check rather than between two of
-// them. Everything else -- the host, virtualization, the signature tooling, the
-// profiles, the secret store, the daemon -- stands on its own.
+// dependency that matters here: the gateway, the boot assets and the image are
+// only worth checking once there is a runtime to boot them, so a runtime that is
+// not there marks all three not reached rather than failing them a second time
+// in the words of whatever they would have called. The runtime's own version
+// needs its binary, which is a dependency inside the runtime check rather than
+// between two of them. Everything else -- the host, virtualization, the
+// signature tooling, the profiles, the secret store, the daemon -- stands on its
+// own.
 func runDoctor(agent *profile.Profile, loadErr error) []check {
 	rtCheck := runtimeCheck()
 	runtimeOK := rtCheck.State == statePass
@@ -173,6 +181,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		hostCheck(),
 		virtualCheck(),
 		rtCheck,
+		gatewayCheck(agent, runtimeOK),
 		bootCheck(runtimeOK),
 		verifyCheck(),
 		profilesCheck(loadErr),
@@ -256,6 +265,47 @@ func shortVersion(out string) string {
 		return out
 	}
 	return fields[len(fields)-1]
+}
+
+// gatewayCheck reports whether this runtime's gateway can enforce an egress
+// policy. Since a bound policy is enforced at the sandbox's gateway, and the
+// flags that carry it arrived after hull 0.1.0-rc21, an older gateway refuses a
+// policied boot with "upgrade the runtime" -- a prerequisite a reader wants
+// named here rather than discovered at boot. Not reached without a runtime,
+// which is what owns the gateway.
+//
+// Diagnostic, not a gate: a host with no policy bound has nothing to fail over,
+// so a gateway that cannot enforce prints its finding and its fix and leaves the
+// exit status alone, the way verify and boot do. When a policy is bound to the
+// agent named on the command line, the same gap is said more sharply -- a boot
+// of that agent will be refused -- but it stays the reader's to act on, not this
+// command's exit code.
+func gatewayCheck(agent *profile.Profile, runtimeOK bool) check {
+	if !runtimeOK {
+		return notReached("gateway")
+	}
+	rt, err := detectRuntime()
+	if err != nil {
+		return notReached("gateway")
+	}
+	if err := gatewayEnforces(rt.Bin()); err == nil {
+		return check{Name: "gateway", State: statePass,
+			Finding: "the gateway enforces egress rules"}
+	}
+	fix := "upgrade the runtime: gateway egress enforcement landed after hull 0.1.0-rc21"
+	// A policy bound to the named agent turns a latent gap into a boot that will
+	// be refused, so name the agent and say it will not come up.
+	if agent != nil {
+		if names, perr := policy.EffectivePolicies(*agent, "", policy.Dir()); perr == nil && len(names) > 0 {
+			return check{Name: "gateway", State: stateFail,
+				Finding: fmt.Sprintf("this runtime's gateway does not take egress rules, so a "+
+					"policied boot of %s will be refused", agent.Name),
+				Fix: fix}
+		}
+	}
+	return check{Name: "gateway", State: stateFail,
+		Finding: "this runtime's gateway does not take egress rules",
+		Fix:     fix}
 }
 
 // bootCheck reports whether the kernel and initrd an unmodified image boots on

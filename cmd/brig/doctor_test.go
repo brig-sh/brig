@@ -67,6 +67,12 @@ func healthyHost(t *testing.T) string {
 	}
 	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: bin}, nil })
 	swap(t, &openStore, func() (secret.Store, error) { return doctorStore{}, nil })
+	// The gateway takes egress rules by default, so a case can break just this
+	// one and watch the gateway line change without a real network-gateway to
+	// ask. A test that wants no attachments read points BRIG_POLICY_DIR at an
+	// empty directory of its own.
+	swap(t, &gatewayEnforces, func(string) error { return nil })
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
 	return assets
 }
 
@@ -102,7 +108,7 @@ func TestDoctorAllChecksPass(t *testing.T) {
 			t.Errorf("check %q failed on a healthy host: %s", c.Name, c.Finding)
 		}
 	}
-	for _, name := range []string{"host", "virtual", "runtime", "boot", "verify", "profiles", "secrets"} {
+	for _, name := range []string{"host", "virtual", "runtime", "gateway", "boot", "verify", "profiles", "secrets"} {
 		if got := findCheck(t, checks, name).State; got != statePass {
 			t.Errorf("check %q is %q on a healthy host, want ok", name, got)
 		}
@@ -125,7 +131,7 @@ func TestDoctorMissingRuntimeExits4(t *testing.T) {
 	if rt.State != stateFail || rt.Fix == "" {
 		t.Errorf("a missing runtime is %q with fix %q, want !! with a fix", rt.State, rt.Fix)
 	}
-	for _, name := range []string{"boot", "image"} {
+	for _, name := range []string{"gateway", "boot", "image"} {
 		c := findCheck(t, checks, name)
 		if c.State != stateInfo || c.Finding != "not reached" {
 			t.Errorf("%q after a missing runtime is %q/%q, want -- / not reached", name, c.State, c.Finding)
@@ -150,7 +156,7 @@ func TestDoctorRuntimeBinaryMissingExits4(t *testing.T) {
 	if rt.State != stateFail || rt.Fix == "" || !strings.Contains(rt.Finding, missing) {
 		t.Errorf("a missing binary is %q/%q with fix %q, want !! naming %s with a fix", rt.State, rt.Finding, rt.Fix, missing)
 	}
-	for _, name := range []string{"boot", "image"} {
+	for _, name := range []string{"gateway", "boot", "image"} {
 		c := findCheck(t, checks, name)
 		if c.State != stateInfo || c.Finding != "not reached" {
 			t.Errorf("%q after a missing binary is %q/%q, want -- / not reached", name, c.State, c.Finding)
@@ -270,6 +276,70 @@ func TestDoctorJSONCarriesSameFacts(t *testing.T) {
 		if c.Name == "" || c.State == "" {
 			t.Errorf("a --json check is missing its name or state: %+v", c)
 		}
+	}
+}
+
+// A gateway that takes egress rules is an ok line and nothing to act on.
+func TestDoctorGatewayEnforces(t *testing.T) {
+	healthyHost(t)
+	checks := runDoctor(nil, nil)
+	if got := findCheck(t, checks, "gateway").State; got != statePass {
+		t.Errorf("gateway is %q on a host whose gateway enforces, want ok", got)
+	}
+}
+
+// A gateway that cannot enforce is diagnostic: it carries a finding and a fix
+// but does not move the exit status, since a host with no policy bound has
+// nothing to fail over. Asserting the exit code does not move is the property
+// that keeps this check from becoming a gate.
+func TestDoctorGatewayCannotEnforceIsDiagnostic(t *testing.T) {
+	healthyHost(t)
+	swap(t, &gatewayEnforces, func(string) error { return errors.New("no egress flags") })
+
+	checks := runDoctor(nil, nil)
+	gw := findCheck(t, checks, "gateway")
+	if gw.State != stateFail || gw.Fix == "" {
+		t.Errorf("a gateway that cannot enforce is %q with fix %q, want !! with a fix", gw.State, gw.Fix)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("a gateway that cannot enforce moved the exit status: %v (code %d)", err, exitCode(err))
+	}
+}
+
+// A policy bound to the named agent on a gateway that cannot enforce is said
+// more sharply -- that boot will be refused -- and still does not gate the exit
+// status.
+func TestDoctorGatewayRefusesBoundPolicy(t *testing.T) {
+	healthyHost(t)
+	swap(t, &gatewayEnforces, func(string) error { return errors.New("no egress flags") })
+	p, err := profile.Parse([]byte("name: bound\nimage: ghcr.io/brig-sh/claude-code-stock:latest\n" +
+		"guestHome: /home/bound\nbinary: x\nmem: 1\ncpus: 1\npolicy:\n  - no-net\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checks := runDoctor(&p, nil)
+	gw := findCheck(t, checks, "gateway")
+	if gw.State != stateFail || !strings.Contains(gw.Finding, p.Name) {
+		t.Errorf("a bound policy on a gateway that cannot enforce is %q/%q, want !! naming %s",
+			gw.State, gw.Finding, p.Name)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("the sharper finding still moved the exit status: %v", err)
+	}
+}
+
+// The gateway check needs a runtime to own the gateway, so a missing runtime
+// leaves it not reached rather than failing it in the words of a gateway it
+// never asked.
+func TestDoctorGatewayNotReachedWithoutRuntime(t *testing.T) {
+	healthyHost(t)
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return nil, runtime.ErrNoRuntime })
+
+	checks := runDoctor(nil, nil)
+	gw := findCheck(t, checks, "gateway")
+	if gw.State != stateInfo || gw.Finding != "not reached" {
+		t.Errorf("gateway after a missing runtime is %q/%q, want -- / not reached", gw.State, gw.Finding)
 	}
 }
 

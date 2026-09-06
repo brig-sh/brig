@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -152,6 +153,44 @@ func ensureGateway(bin string) (string, error) {
 	}
 	return "", fmt.Errorf("the network gateway did not come up at %s within %s; see %s",
 		sock, gatewayReadyTimeout, logPath)
+}
+
+const (
+	// gatewayHelpTimeout bounds the one question GatewayEnforces asks the
+	// binary. `network-gateway --help` is a usage listing the binary prints and
+	// exits on, so this only ever fires on one that has wedged.
+	gatewayHelpTimeout = 5 * time.Second
+
+	// gatewayEgressFlag is the flag the gateway grew when egress enforcement
+	// landed, after hull 0.1.0-rc21. Its presence in `network-gateway --help` is
+	// what GatewayEnforces reads: the flag list is the ground truth about what
+	// this binary can do, where a version string is a guess about it.
+	gatewayEgressFlag = "--egress"
+)
+
+// GatewayEnforces reports whether this runtime's gateway can enforce a bound
+// egress policy: nil when it can, a non-nil error naming why it cannot.
+//
+// It asks the binary rather than deriving the answer from a version string. The
+// egress flags arrived after hull 0.1.0-rc21, and the hull brig drives is
+// whatever is on PATH or in BRIG_RUNTIME_BIN -- it may be older than brig, or a
+// build from source whose version says nothing about which flags it carries. So
+// the question is put to `network-gateway --help`, whose flag list is the fact
+// that matters: a gateway that lists the egress flags takes a bound policy, and
+// one that does not would refuse a policied boot with "upgrade the runtime".
+func GatewayEnforces(bin string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayHelpTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "network-gateway", "--help")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	// A usage listing may land on either stream, and a binary may exit non-zero
+	// printing it; the flag list is the whole of what is read, so both streams
+	// are taken and the exit status is not.
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), gatewayEgressFlag) {
+		return fmt.Errorf("this runtime's gateway does not take egress rules")
+	}
+	return nil
 }
 
 // gatewayReachable reports whether a gateway is accepting members.
