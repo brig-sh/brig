@@ -53,13 +53,10 @@ const (
 	propModified   = itemIface + ".Modified"
 )
 
-// defaultAlias is the collection brig stores into: whichever one the keyring
-// has aliased as the user's default (gnome-keyring calls it "login"). The alias
-// path is where ReadAlias points when a default is set.
-const (
-	defaultAlias     = "default"
-	defaultAliasPath = dbus.ObjectPath("/org/freedesktop/secrets/aliases/default")
-)
+// defaultAlias is the alias brig reads to find the collection it stores into:
+// whichever one the keyring has aliased as the user's default (gnome-keyring
+// calls it "login").
+const defaultAlias = "default"
 
 // noObject is the object path the Secret Service returns to mean "none": no
 // prompt is needed, or no default collection exists. It is a bare "/".
@@ -91,9 +88,10 @@ type dbusSecret struct {
 
 // secretService is the Store backed by the freedesktop Secret Service.
 type secretService struct {
-	service string
-	conn    *dbus.Conn
-	session dbus.ObjectPath
+	service    string
+	conn       *dbus.Conn
+	session    dbus.ObjectPath
+	collection dbus.ObjectPath
 }
 
 // Caught at build time rather than wherever a secretService first gets assigned
@@ -131,6 +129,18 @@ var (
 		}
 		return slices.Contains(names, secretsName)
 	}
+
+	// readDefaultAlias resolves the "default" alias to the collection brig
+	// stores into, held as a variable for the same reason as the two above: the
+	// executor has no bus, so a test forces the answer -- in particular the
+	// noObject a keyring with no default collection returns.
+	readDefaultAlias = func(s *secretService) (dbus.ObjectPath, error) {
+		var path dbus.ObjectPath
+		if err := s.service0().Call(methodReadAlias, 0, defaultAlias).Store(&path); err != nil {
+			return noObject, fmt.Errorf("finding the default keyring collection: %w", err)
+		}
+		return path, nil
+	}
 )
 
 func open() (Store, error) { return openService(service) }
@@ -148,6 +158,9 @@ func openService(service string) (*secretService, error) {
 	}
 	s := &secretService{service: service, conn: conn}
 	if err := s.openSession(); err != nil {
+		return nil, err
+	}
+	if err := s.resolveCollection(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -171,6 +184,22 @@ func errNoService() error {
 		"Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in "+
 		"to a session that starts it, or bind the secret to a command instead with "+
 		"`brig secret import <profile> --from-command '<sh>'`, which holds no plaintext at rest",
+		ErrUnsupported)
+}
+
+// errNoDefaultCollection is the third shape of the same refusal: a keyring is
+// running and answering, but ReadAlias("default") resolves to noObject, which
+// is the service saying plainly that no default collection exists yet -- not
+// that the default sits at some well-known path. Nothing has created it: a
+// headless or freshly provisioned session never unlocked a login keyring, so
+// brig has nowhere to store into. Both ways out again, in the voice of the two
+// above: an unlock from a desktop session is what creates the default, or bind
+// the secret to a command that holds no plaintext at rest.
+func errNoDefaultCollection() error {
+	return fmt.Errorf("%w: a keyring is running but has no default collection to store into. "+
+		"Unlock your keyring once from a desktop session, which is what creates it, or bind the "+
+		"secret to a command instead with `brig secret import <profile> --from-command '<sh>'`, "+
+		"which holds no plaintext at rest",
 		ErrUnsupported)
 }
 
@@ -244,10 +273,7 @@ func (s *secretService) Write(name string, value []byte, p Provenance, update bo
 // name is what keeps an update in place -- and never the delete-then-create
 // shape secretimport.go warns against.
 func (s *secretService) write(name string, value []byte, p Provenance, update bool) error {
-	collPath, err := s.defaultCollection()
-	if err != nil {
-		return err
-	}
+	collPath := s.collection
 	if err := s.unlock(collPath); err != nil {
 		return err
 	}
@@ -432,18 +458,23 @@ func (s *secretService) modified(item dbus.ObjectPath) time.Time {
 	return time.Unix(int64(secs), 0)
 }
 
-// defaultCollection is the path of the collection brig stores into: the alias
-// the keyring points at, or the well-known alias path when ReadAlias reports
-// none, which is the path the keyring will have created the default under.
-func (s *secretService) defaultCollection() (dbus.ObjectPath, error) {
-	var path dbus.ObjectPath
-	if err := s.service0().Call(methodReadAlias, 0, defaultAlias).Store(&path); err != nil {
-		return noObject, fmt.Errorf("finding the default keyring collection: %w", err)
+// resolveCollection finds the collection brig stores into and holds it on s, so
+// the write path reaches for a path already known good rather than resolving it
+// mid-write. A ReadAlias of noObject is not "the default is at the well-known
+// path" but the service saying plainly that no default collection exists yet --
+// nothing has created it -- so it is a refusal in the shape of errNoBus and
+// errNoService, surfaced here at open() time, before a value is read from
+// stdin, rather than as a CreateItem failure halfway through a write.
+func (s *secretService) resolveCollection() error {
+	path, err := readDefaultAlias(s)
+	if err != nil {
+		return err
 	}
 	if path == noObject {
-		return defaultAliasPath, nil
+		return errNoDefaultCollection()
 	}
-	return path, nil
+	s.collection = path
+	return nil
 }
 
 // unlock unlocks an object if it is locked, prompting the user through their

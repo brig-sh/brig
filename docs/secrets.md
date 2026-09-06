@@ -403,6 +403,7 @@ point of the table: the error is the second entry point into these docs.
 | `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. `-y` is the answer given ahead |
 | `a secret name holds letters, digits, - and _, ...` | see [Naming a secret](#naming-a-secret) |
 | `no secret store on this platform: … no Secret Service answers on it …` | Linux with no keyring on the session bus. Install `gnome-keyring` or KWallet and log in to a session that starts it, or bind the secret with `--from-command` |
+| `no secret store on this platform: … a keyring is running but has no default collection …` | Linux with a keyring but no default collection yet (a headless or freshly provisioned session). Unlock your keyring once from a desktop session, which creates it, or bind the secret with `--from-command` |
 | `"x" is a secret, not a profile, and import takes the profile that declares it: …` | `import`'s first argument is a profile. The message names the one that declares the secret you typed |
 | `nothing to import for "x": … held no value` | the profile's sources exist and none of them had anything. Usually: run the agent on the host once to log in |
 | `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. `-y` if replacing it is what you meant |
