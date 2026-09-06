@@ -547,6 +547,152 @@ func TestStatusSaysWhenTheRuntimeCouldNotBeAsked(t *testing.T) {
 	}
 }
 
+// askJSON sends one request and decodes the response as a bare object, so a
+// test can tell a field that is absent from one that is present and empty --
+// which is the whole question for an echoed id.
+func askJSON(t *testing.T, socket, request string) map[string]any {
+	t.Helper()
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(conn, request+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.NewDecoder(conn).Decode(&m); err != nil {
+		t.Fatalf("no response to %s: %v", request, err)
+	}
+	return m
+}
+
+// Every op's response carries the protocol version, and echoes the request's id
+// when it had one -- absent in, absent out -- so a client pipelining several
+// requests on one connection can match each answer to its question and tell what
+// it is talking to.
+func TestEveryResponseCarriesVersionAndEchoesID(t *testing.T) {
+	stubRuntime(t)
+	agent := testProfile(t, "versioned")
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(shortDir(t), "ws"))
+	// Off, so a cold boot does not stop to check an image with no cosign here.
+	t.Setenv("BRIG_VERIFY", "off")
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	startDaemon(t, socket)
+
+	// ensure first so status has something and stop has something to stop; every
+	// op is exercised, each with an id of its own.
+	for _, req := range []string{
+		`{"op":"version","id":"one"}`,
+		`{"op":"ensure","agent":"` + agent + `","id":"two"}`,
+		`{"op":"status","id":"three"}`,
+		`{"op":"stop","agent":"` + agent + `","id":"four"}`,
+	} {
+		m := askJSON(t, socket, req)
+		if v, ok := m["v"].(float64); !ok || int(v) != protocolVersion {
+			t.Errorf("%s: response does not carry v=%d: %v", req, protocolVersion, m["v"])
+		}
+		if _, ok := m["code"]; !ok {
+			t.Errorf("%s: response carries no code", req)
+		}
+	}
+
+	// The ids above, read back one by one.
+	for _, tc := range []struct{ req, id string }{
+		{`{"op":"version","id":"one"}`, "one"},
+		{`{"op":"status","id":"three"}`, "three"},
+	} {
+		if m := askJSON(t, socket, tc.req); m["id"] != tc.id {
+			t.Errorf("%s: id echoed as %v, want %q", tc.req, m["id"], tc.id)
+		}
+	}
+
+	// Absent in, absent out: no id key at all, not an empty one.
+	if m := askJSON(t, socket, `{"op":"version"}`); m["id"] != nil {
+		t.Errorf("a request with no id got one back: %v", m["id"])
+	}
+}
+
+// A request with no version is served as version 1: there is no client older
+// than the first. A version brigd does not speak is refused with the usage code
+// and an error naming what it does speak, rather than run against a shape it may
+// not understand.
+func TestProtocolVersionHandling(t *testing.T) {
+	stubRuntime(t)
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	startDaemon(t, socket)
+
+	if resp := ask(t, socket, `{"op":"version"}`); !resp.OK || resp.V != protocolVersion {
+		t.Errorf("a request with no version was not served as %d: %+v", protocolVersion, resp)
+	}
+
+	resp := ask(t, socket, `{"op":"version","v":99}`)
+	if resp.OK {
+		t.Errorf("an unknown protocol version was served: %+v", resp)
+	}
+	if resp.Code != 2 {
+		t.Errorf("an unknown protocol version was not the usage code 2: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, strconv.Itoa(protocolVersion)) {
+		t.Errorf("the refusal does not name the versions brigd speaks: %q", resp.Error)
+	}
+	// The refusal still carries the daemon's own version, so the client learns
+	// what it is talking to from the same answer.
+	if resp.V != protocolVersion {
+		t.Errorf("a version refusal carried no v of its own: %+v", resp)
+	}
+}
+
+// Each failure shape carries the code cmd/brig would return for the same cause,
+// so a script driving brigd branches the way one driving brig does. The runtime
+// case gets a test of its own because it needs a different environment.
+func TestErrorPathsCarryTheirCode(t *testing.T) {
+	stubRuntime(t)
+	agent := testProfile(t, "codes")
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(shortDir(t), "ws"))
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	startDaemon(t, socket)
+
+	// An unknown op is a usage error.
+	if resp := ask(t, socket, `{"op":"frobnicate"}`); resp.OK || resp.Code != 2 {
+		t.Errorf("an unknown op was not the usage code 2: %+v", resp)
+	}
+	// An unknown profile resolves to nothing.
+	if resp := ask(t, socket, `{"op":"ensure","agent":"no-such-profile"}`); resp.OK || resp.Code != 3 {
+		t.Errorf("an unknown profile was not the not-found code 3: %+v", resp)
+	}
+	// A stop for a session the daemon never started and the runtime is not
+	// running is "no such session".
+	if resp := ask(t, socket, `{"op":"stop","agent":"`+agent+`"}`); resp.OK || resp.Code != 3 {
+		t.Errorf("a stop for a session that is not there was not the not-found code 3: %+v", resp)
+	}
+}
+
+// A runtime that is not there is the runtime code, through the fake: a profile
+// pinning a binary that is not on disk fails that request with 4.
+func TestAMissingRuntimeIsTheRuntimeCode(t *testing.T) {
+	// BRIG_RUNTIME_BIN would beat the profile, so it is cleared: the profile's
+	// own runtimeBin is what has to be resolved, and it points at nothing.
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+	missing := filepath.Join(shortDir(t), "not-a-runtime")
+	agent := testProfile(t, "noruntime", "runtimeBin: "+missing)
+	t.Setenv("BRIG_WORKSPACE", filepath.Join(shortDir(t), "ws"))
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	startDaemon(t, socket)
+
+	resp := ask(t, socket, `{"op":"ensure","agent":"`+agent+`"}`)
+	if resp.OK {
+		t.Fatalf("a profile pinning a missing runtime booted: %+v", resp)
+	}
+	if resp.Code != 4 {
+		t.Errorf("a missing runtime was not the runtime code 4: %+v", resp)
+	}
+}
+
 // TestServeInAHelperProcess is not a test. It is how the test above starts a
 // second daemon in a second process, which is the only honest way to ask the
 // question: a lock is held against other processes, and this one already holds
