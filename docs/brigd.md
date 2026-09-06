@@ -40,10 +40,10 @@ held for as long as the daemon runs and released by the kernel if it dies.
 Line-delimited JSON, one request per line, one response per line.
 
 ```json
-{"op":"ensure","agent":"claude-code","name":"refactor"}
-{"op":"status"}
-{"op":"stop","agent":"claude-code","name":"refactor"}
-{"op":"version"}
+{"v":1,"op":"ensure","agent":"claude-code","name":"refactor"}
+{"v":1,"op":"status"}
+{"v":1,"op":"stop","agent":"claude-code","name":"refactor"}
+{"v":1,"op":"version"}
 ```
 
 `agent` is a profile name or alias. `name` is the optional session name and
@@ -52,13 +52,65 @@ follows the same rules as `brig --name`.
 A response looks like:
 
 ```json
-{"ok":true,"sessions":[{"agent":"claude-code","name":"refactor",
+{"v":1,"ok":true,"code":0,"sessions":[{"agent":"claude-code","name":"refactor",
   "sandbox":"brig-claude-code-refactor","workspace":"/Users/me/brig/claude-code-refactor",
   "running":true}]}
 ```
 
-Errors come back as `{"ok":false,"error":"..."}` rather than as a closed
-connection.
+Errors come back as `{"v":1,"ok":false,"code":...,"error":"..."}` rather than as
+a closed connection.
+
+### Protocol version
+
+Every request and every response carries `v`, the protocol version. It is `1`
+today.
+
+A request with no `v` is read as version 1: there is no client older than this,
+and the field has to start somewhere. A request carrying a `v` brigd does not
+know is refused with `code` 2 and an error naming the versions it does speak,
+rather than served a shape it may not understand. The response always carries
+`v`, so a client can tell what it is talking to from the answer itself.
+
+### Request id
+
+A request may carry `id`, any string, and the response echoes it back unchanged,
+so a client pipelining several requests on one connection can match each answer
+to its question. Absent in, absent out:
+
+```json
+{"v":1,"id":"boot-42","op":"ensure","agent":"claude-code"}
+{"v":1,"id":"boot-42","ok":true,"code":0,"sessions":[...]}
+```
+
+### Exit code
+
+Beside `error`, a response carries `code`: the stable exit status `brig` returns
+to a script, the same set and the same causes, so a script driving brigd
+branches the way one driving brig does. `0` on success, and on failure one of
+`1` general, `2` usage (an unknown op, an unknown protocol version), `3` no such
+profile or sandbox, `4` a runtime that is missing or broken, `5` a boot
+verification refused, `6` a credential that could not be resolved. The full
+table is in the README, beside the command reference.
+
+```json
+{"v":1,"op":"ensure","agent":"no-such-profile"}
+{"v":1,"ok":false,"code":3,"error":"unknown agent \"no-such-profile\""}
+```
+
+### Who may connect
+
+The socket is `0600` and the invoking user's alone. A mode is only a mode,
+though, so on each accepted connection brigd reads the peer's uid from the
+kernel -- `SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on darwin, neither of them
+anything the peer can forge -- and refuses a uid other than its own with one
+line and a closed connection:
+
+```json
+{"v":1,"ok":false,"code":1,"error":"connection from uid 1001 refused: this socket serves only its owner, uid 1000"}
+```
+
+The socket carries lifecycle control over sandboxes holding live credentials, so
+this is a floor, not a nicety.
 
 `running` is re-read from the runtime on every report rather than taken from
 the inventory, so a sandbox stopped by something else is still reported as
@@ -142,3 +194,22 @@ through the daemon.
 The inventory lives in memory. Restarting brigd forgets which sandboxes it
 started, though the sandboxes themselves keep running and `brig ls` still
 finds them.
+
+## What a restart reconciles
+
+Nothing. On start brigd loads the profile registry and begins listening; it does
+not go to the runtime to rebuild which sandboxes it had started. The inventory
+is a cache of what this process has done, not a record of what exists -- the
+runtime is the source of truth, which is why `status` re-reads liveness from it
+on every report and `stop` will act on a running sandbox the inventory never
+heard of. So a fresh daemon has an empty inventory over a set of sandboxes that
+are still up: `status` shows none until something asks for them again, and
+`brig ls`, which reads the runtime directly, shows them throughout.
+
+## Stability
+
+The protocol is versioned so a client can tell what it is talking to. It is
+**internal until brig 0.3**: within a version a field may be added, but none is
+renamed or removed, so a client that ignores unknown fields keeps working; a
+change that would break such a client is a new version (`v: 2`). That is the
+same rule `brig --json` output follows.
