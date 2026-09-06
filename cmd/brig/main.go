@@ -615,6 +615,12 @@ var brigFlags = []struct {
 	// The table already carries a position per flag, so this is a field on the
 	// row rather than a case in split.
 	retiredAs, retiredTo string
+	// runOnly marks a run-line flag that only run acts on. sh, shell and exec
+	// continue a session rather than shape a fresh run, so they read such a
+	// flag in no position at all. On the row rather than in a list beside the
+	// table, so a new run-only flag declares itself where its position is
+	// declared and honorsRunLine cannot fall behind it.
+	runOnly bool
 }{
 	{long: "name", short: "n", value: true, position: posRun},
 	{long: "image", short: "t", value: true, position: posRun},
@@ -633,8 +639,8 @@ var brigFlags = []struct {
 	// --no-project detaches the project a session is carrying. It takes no
 	// value: a directory is what the positional says, and this says the
 	// absence of one.
-	{long: "no-project", position: posRun},
-	{long: "detach", short: "d", position: posRun},
+	{long: "no-project", position: posRun, runOnly: true},
+	{long: "detach", short: "d", position: posRun, runOnly: true},
 	{long: "skills", position: posRun},
 	{long: "network", value: true, position: posRun},
 	{long: "offline", position: posRun},
@@ -656,7 +662,7 @@ var brigFlags = []struct {
 	// have sent that -q to the agent, silently changing what a working command
 	// does.
 	{long: "quiet", short: "q", position: posGlobal},
-	{long: "quiet", short: "q", position: posRun,
+	{long: "quiet", short: "q", position: posRun, runOnly: true,
 		retiredAs: "brig <verb> <ref> -q", retiredTo: "brig -q <verb> <ref>"},
 }
 
@@ -883,7 +889,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				word = a
 				continue
 			}
-			return mine, ref, word, agentTail(args[i:]), nil
+			return mine, ref, word, agentTail(verb, args[i:]), nil
 		default:
 			isOurs, takesValue := ours(a, posRun)
 			if !isOurs {
@@ -900,7 +906,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 						"brig's own flags come before the profile and the agent's after it; "+
 						"put %q after the profile to pass it through, or -- to end brig's flags", a, a)
 				}
-				return mine, ref, word, agentTail(args[i:]), nil
+				return mine, ref, word, agentTail(verb, args[i:]), nil
 			}
 			// Read off the spelling rather than the whole token, so the
 			// inline form is the same flag here as it is everywhere else, and
@@ -949,8 +955,28 @@ func warnPositionalMeaning(word string) {
 		"This notice goes in the next release.", word, word)
 }
 
+// forwardsTail reports whether a verb hands what follows the ref to the agent.
+// run forwards the agent's argv; sh -- with shell and exec, the two spellings
+// it replaces -- turns the tail into the guest command. Every other verb takes
+// a ref and nothing after it.
+//
+// This is the one source of truth for that set. rejectTail refuses a tail on
+// the verbs it excludes, and agentTail warns about brig's own flags in a tail
+// only on the verbs it includes: reading the same predicate, they cannot come
+// to disagree about whether a verb has an agent to hand a token to -- which is
+// the two-message contradiction #123 was. create is excluded with the others
+// rather than grouped with run because it does not attach: split hands it the
+// same tail run gets, but there is no agent here to receive it.
+func forwardsTail(verb string) bool {
+	switch verb {
+	case "run", "sh", "shell", "exec":
+		return true
+	}
+	return false
+}
+
 // agentTail hands the tail back as the agent's, saying so for any of brig's own
-// flags in it.
+// flags in it -- but only on the verbs that forward a tail at all.
 //
 // Right of the boundary brig reads nothing, and that is the surprise worth
 // naming: `brig run claude -p hi --quiet` has always run the agent with
@@ -959,24 +985,35 @@ func warnPositionalMeaning(word string) {
 // a line that works today has to keep working, and capturing the token would
 // change what runs rather than explain it.
 //
+// A verb that forwards no tail says nothing here. It has no agent to hand a
+// token to, so the token is not the agent's and calling it that would only
+// contradict rejectTail, which gives the one correct message that the verb
+// takes a ref and nothing more.
+//
 // Only the tail brig ended itself. A tail after -- was declared the agent's by
 // the person typing it, and there is nothing to point out about a decision
 // already made.
-func agentTail(tail []string) []string {
+func agentTail(verb string, tail []string) []string {
+	if !forwardsTail(verb) {
+		return tail
+	}
 	for _, a := range tail {
-		mine, _, at := oursAt(a, posAny)
-		if !mine {
+		if mine, _, _ := oursAt(a, posAny); !mine {
 			continue
 		}
-		// Where the flag actually belongs, which is not the same place for
-		// every flag any more: --verbose and -q stand left of the verb, and
-		// telling their reader to put one before the profile would send them to
-		// a position that refuses it.
-		where := "before the profile"
-		if at == posGlobal {
-			where = "before the command"
-		}
 		name, _, _ := strings.Cut(a, "=")
+		where, readable := tailAdvice(verb, a)
+		if !readable {
+			// The flag stands in no position this verb reads, so there is
+			// nowhere to send the reader. --no-project and -d belong to run
+			// alone; on sh, sending them "before the profile" would only earn a
+			// second refusal. Say that instead.
+			warnf("%s is one of brig's own flags, but here it is the agent's: "+
+				"brig stopped reading the line at the argument before it, and "+
+				"`brig %s` reads %s in no position, so there is nowhere to put it "+
+				"for brig to read it.", name, verb, name)
+			continue
+		}
 		warnf("%s is one of brig's own flags, but here it is the "+
 			"agent's: brig stopped reading the line at the argument before it. "+
 			"Put %s %s for brig to read it.", name, name, where)
@@ -984,18 +1021,70 @@ func agentTail(tail []string) []string {
 	return tail
 }
 
+// tailAdvice names the position where verb would read a flag found in its tail,
+// or reports that verb reads it in no position at all.
+//
+// A flag can hold more than one position -- -q is global and, for one more
+// release, run-line -- so every entry for the spelling is consulted rather than
+// the first the table lists. A global flag stands left of the verb and belongs
+// to every invocation, so it is always readable there. A run-line flag stands
+// between the verb and the ref, but only the verb that acts on it reads it there
+// (see honorsRunLine): -q shapes nothing on sh, so sh is sent to the global
+// position, and a run-only flag on sh is read in no position and gets no
+// position to move to.
+func tailAdvice(verb, arg string) (where string, readable bool) {
+	name, _, _ := strings.Cut(arg, "=")
+	runLine, global := false, false
+	for _, f := range brigFlags {
+		if name != "--"+f.long && !(f.short != "" && name == "-"+f.short) {
+			continue
+		}
+		switch f.position {
+		case posRun:
+			if honorsRunLine(verb, f.long) {
+				runLine = true
+			}
+		case posGlobal:
+			global = true
+		}
+	}
+	switch {
+	case runLine:
+		return "before the profile", true
+	case global:
+		return "before the command", true
+	default:
+		return "", false
+	}
+}
+
+// honorsRunLine reports whether verb reads a run-line flag in the position
+// between the verb and the ref. It is asked only for the tail-forwarding verbs.
+//
+// run reads every run-line flag it has. The other verbs continue a session
+// rather than shaping a fresh run, so a flag marked runOnly in brigFlags is
+// read in no run-line position on them. The table is the one source: a flag
+// that only run acts on says so on its row, the way its position does.
+func honorsRunLine(verb, long string) bool {
+	if verb == "run" {
+		return true
+	}
+	for _, f := range brigFlags {
+		if f.long == long && f.position == posRun && f.runOnly {
+			return false
+		}
+	}
+	return true
+}
+
 // rejectTail refuses a token a verb has no use for, rather than dropping it.
 //
-// run forwards the tail to the agent, and sh -- with shell and exec, the two
-// spellings it replaces -- turns it into the guest command, so those keep
-// whatever follows the ref. create, stop, rm and env take a ref and nothing
-// after it: a word left there is a mistake to name, not an operand to swallow.
-// create is grouped with the others rather than with run because it does not
-// attach -- split hands it the same agent tail run gets, but there is no agent
-// here to receive it, so a tail is still a mistake.
+// The verbs that forward a tail keep whatever follows the ref; the rest take a
+// ref and nothing after it, so a word left there is a mistake to name, not an
+// operand to swallow. forwardsTail is the same set agentTail stays silent for,
+// so the two never disagree about which message a stray tail should get.
 func rejectTail(verb string, tail []string) error {
-	switch verb {
-	case "run", "sh", "shell", "exec":
+	if forwardsTail(verb) {
 		return nil
 	}
 	if len(tail) > 0 {
