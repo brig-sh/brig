@@ -68,6 +68,23 @@ jobs:
       - name: cross-compile linux/amd64
         run: GOOS=linux GOARCH=amd64 go build ./...
 
+  tests-kept:
+    name: tests kept
+    runs-on: ubuntu-latest
+    # Only a pull request has a base to compare against, and only a pull
+    # request can carry the label that says a removal was meant.
+    if: >-
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'removes-tests')
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The merge base has to be in the clone for the comparison to have
+          # anything to compare with.
+          fetch-depth: 0
+      - name: Check that no test disappeared
+        run: ./script/check-tests-kept.sh "origin/${{ github.base_ref }}"
+
   release-config:
     name: release config
     runs-on: ubuntu-latest
