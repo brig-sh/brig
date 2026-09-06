@@ -365,18 +365,25 @@ nothing to be there.
 
 ## Linux
 
-There is no backend yet. `brig secret` says so rather than falling back to a
-file, which would be a downgrade nothing told you about:
+Linux stores into a Secret Service keyring on your session bus:
+`gnome-keyring` and KWallet both speak that API. brig keeps one item per secret
+in your default collection, tagged as its own so it lists and touches nothing
+else in the keyring, and unlocks the collection through your keyring UI when it
+is locked.
+
+When there is no session bus, or no keyring answering on it, `brig secret` says
+which is missing rather than falling back to a file, which would be a downgrade
+nothing told you about:
 
 ```console
 $ brig secret create gh-token
-brig: no secret store on this platform: brig secret needs the macOS keychain so far
+brig: no secret store on this platform: a D-Bus session bus is running but no Secret Service answers on it. Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session that starts it, or bind the secret to a command instead with `brig secret import <profile> --from-command '<sh>'`, which holds no plaintext at rest
 ```
 
-Note that it says so *before* asking for a value. The check happens ahead of
-the read from stdin, so you are not sent off to find a token only to be told
-afterwards that there is nowhere to put it. A Linux backend is
-[#8](https://github.com/brig-sh/brig/issues/8).
+It says so *before* asking for a value. The check happens ahead of the read
+from stdin, so you are not sent off to find a token only to be told afterwards
+that there is nowhere to put it. Binding the secret to a command with
+`--from-command` is the other way out, and holds no plaintext at rest.
 
 ## Errors you are likely to meet
 
@@ -395,7 +402,8 @@ point of the table: the error is the second entry point into these docs.
 | `the value for "x" is N bytes, and the keychain takes at most M` | over [the size limit](#the-size-limit) |
 | `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. `-y` is the answer given ahead |
 | `a secret name holds letters, digits, - and _, ...` | see [Naming a secret](#naming-a-secret) |
-| `no secret store on this platform: brig secret needs the macOS keychain so far` | Linux, [#8](https://github.com/brig-sh/brig/issues/8) |
+| `no secret store on this platform: … no Secret Service answers on it …` | Linux with no keyring on the session bus. Install `gnome-keyring` or KWallet and log in to a session that starts it, or bind the secret with `--from-command` |
+| `no secret store on this platform: … a keyring is running but has no default collection …` | Linux with a keyring but no default collection yet (a headless or freshly provisioned session). Unlock your keyring once from a desktop session, which creates it, or bind the secret with `--from-command` |
 | `"x" is a secret, not a profile, and import takes the profile that declares it: …` | `import`'s first argument is a profile. The message names the one that declares the secret you typed |
 | `nothing to import for "x": … held no value` | the profile's sources exist and none of them had anything. Usually: run the agent on the host once to log in |
 | `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. `-y` if replacing it is what you meant |
