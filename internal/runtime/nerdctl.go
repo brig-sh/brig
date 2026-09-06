@@ -178,15 +178,33 @@ func (n *nerdctl) isDocker() bool { return filepath.Base(n.bin) == "docker" }
 // nerdctl has a flag for. GenericBoot is not ignored -- urunc reads the same
 // two annotations from the container's OCI spec that hull takes on its command
 // line, so the Linux path is a pass-through.
-// CanRun refuses a policy this runtime cannot enforce, rather than dropping it
-// in silence.
+// CanRun refuses what this runtime cannot honour, rather than dropping it in
+// silence. It guards both paths, which is the whole point of living here rather
+// than in Run: a sandbox that is already up is joined rather than booted, so Run
+// is never called on the second `brig run`, and a check that only guarded Run
+// would refuse a profile the first time and wave it through every time after.
+// That is the failure RunChecker describes; hull refuses in supports, and its
+// CanRun is supports, so both paths are covered the same way here. Run calls
+// CanRun first, so the direct path is unchanged.
 //
-// Nothing here reads spec.Egress: this runtime hands the sandbox to the
-// container network, which brig does not filter. A boot that carried on would
-// print a POLICY row and an isolated NETWORK row over a sandbox with
-// unrestricted egress, which is the exact outcome the refusals on the other
-// backend exist to prevent. See RunChecker for why it is not inside Run.
+// A GUI profile wants a graphical window, and there is nowhere on this path to
+// put one: the container runtime has no display on either driver, so the refusal
+// is about the path rather than a setting to flip. hull refuses the same profile
+// when its backend cannot show a window; refuse it here too, before anything is
+// built, so the two paths exit alike instead of booting headless with the window
+// silently dropped.
+//
+// The policy refusal is here for the same reason: nothing on this runtime reads
+// spec.Egress into the run, which hands the sandbox to the container network
+// that brig does not filter. A boot that carried on would print a POLICY row and
+// an isolated NETWORK row over a sandbox with unrestricted egress, which is the
+// exact outcome the refusals on the other backend exist to prevent.
 func (n *nerdctl) CanRun(spec RunSpec) error {
+	if spec.GUI {
+		return fmt.Errorf("this profile opens a graphical window, which the container runtime cannot "+
+			"display on either driver (%s here); run it on macOS, where hull's vz backend can show it",
+			n.driver())
+	}
 	if spec.Egress.Filtered() && spec.Net != "none" {
 		return fmt.Errorf("a policy applies to this sandbox, and brig enforces one at the " +
 			"user-mode network gateway on macOS; there is no equivalent behind this runtime " +
@@ -196,17 +214,6 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 }
 
 func (n *nerdctl) Run(spec RunSpec) error {
-	// A GUI profile wants a graphical window, and there is nowhere on this path
-	// to put one: the container runtime has no display on either driver, so the
-	// refusal is about the path rather than a setting to flip. hull refuses the
-	// same profile when its backend cannot show a window; refuse it here too,
-	// before anything is built, so the two paths exit alike instead of booting
-	// headless with the window silently dropped.
-	if spec.GUI {
-		return fmt.Errorf("this profile opens a graphical window, which the container runtime cannot "+
-			"display on either driver (%s here); run it on macOS, where hull's vz backend can show it",
-			n.driver())
-	}
 	if err := n.CanRun(spec); err != nil {
 		return err
 	}
