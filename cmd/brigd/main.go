@@ -31,12 +31,28 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/brigsock"
+	"github.com/brig-sh/brig/internal/exitcode"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
 var version = "dev"
+
+// protocolVersion is the wire protocol brigd speaks. It rides every request and
+// every response as "v".
+//
+// A request with no "v" is read as this version: there is no client older than
+// the first, and the field has to start somewhere. A request carrying a "v"
+// brigd does not know is refused rather than guessed at, so a client written
+// against a later protocol is told it is talking to an earlier daemon instead of
+// being served a shape it cannot read. A field may be added inside a version but
+// none renamed or removed; a change that breaks a client is a new version.
+const protocolVersion = 1
+
+// supportedVersions is what a refusal names, so a client learns what this daemon
+// speaks rather than only that its own version is wrong.
+var supportedVersions = []int{protocolVersion}
 
 // maxRequestBytes is the longest request line brigd reads, newline excluded.
 //
@@ -71,6 +87,11 @@ const writeTimeout = 30 * time.Second
 
 // Request is one line of JSON on the socket.
 type Request struct {
+	// V is the protocol version. A pointer so absent and 0 are distinct: a
+	// request with no "v" is served as protocolVersion, while an explicit "v":0
+	// is a version brigd does not speak and is refused.
+	V     *int   `json:"v"`
+	ID    string `json:"id"`    // optional; echoed unchanged on the response so a client can pipeline
 	Op    string `json:"op"`    // ensure | status | stop | version
 	Agent string `json:"agent"` // template name, for ensure and stop
 	Name  string `json:"name"`  // session name, optional
@@ -78,7 +99,19 @@ type Request struct {
 
 // Response is one line of JSON back.
 type Response struct {
-	OK    bool   `json:"ok"`
+	// V is the protocol version this daemon speaks. Always present, so a client
+	// can tell what it is talking to without a round of guessing.
+	V int `json:"v"`
+	// ID echoes the request's id, absent when the request carried none, so a
+	// client pipelining several requests on one connection can match answers to
+	// questions.
+	ID string `json:"id,omitempty"`
+	OK bool   `json:"ok"`
+	// Code is the stable exit status beside Error, the same set cmd/brig returns
+	// to a script (see internal/exitcode), so a script driving brigd branches
+	// the way one driving brig does. Always present -- 0 on success -- because a
+	// client testing it should not have to tell "absent" from "success".
+	Code  int    `json:"code"`
 	Error string `json:"error,omitempty"`
 	// Warnings is what the run said about itself: a credential that was not
 	// forwarded and why, an expiring secret, an image that could not be
@@ -354,8 +387,58 @@ func serve(socket string) error {
 		if err != nil {
 			return nil // the listener closed: a signal, not a failure
 		}
-		go d.handle(conn)
+		go d.accept(conn)
 	}
+}
+
+// accept screens a new connection by the peer's uid before it is served.
+//
+// The socket carries lifecycle control over sandboxes holding live credentials.
+// 0600 keeps another user's process from opening it, but a mode is only a mode:
+// the check that the peer really is the daemon's own user is here, read from the
+// kernel at accept rather than trusted from anything the peer says. A uid other
+// than the daemon's gets one response line and the connection is closed.
+//
+// The screening is at accept, not in handle, so it runs once per connection
+// against the real unix peer -- handle is driven directly by tests over an
+// in-process pipe that carries no peer credentials, and the request loop has no
+// business knowing which it is.
+func (d *daemon) accept(conn net.Conn) {
+	uid, err := peerUID(conn)
+	if err != nil {
+		d.refuse(conn, Response{Code: exitcode.Failure,
+			Error: "could not read the peer's identity, so the connection is refused: " + err.Error()})
+		return
+	}
+	if !peerAllowed(uid, os.Getuid()) {
+		d.refuse(conn, peerRefusal(uid, os.Getuid()))
+		return
+	}
+	d.handle(conn)
+}
+
+// peerAllowed is the decision accept turns on: a connection is served only when
+// its peer runs as the daemon's own user. It takes both uids so a test can drive
+// either answer without a second user on the box.
+func peerAllowed(peerUID, ownUID int) bool {
+	return peerUID == ownUID
+}
+
+// peerRefusal is the one line a refused peer gets. Code 1 -- a general refusal,
+// not a malformed request -- and a message naming both uids so the reader knows
+// which socket answered and who it serves.
+func peerRefusal(peerUID, ownUID int) Response {
+	return Response{Code: exitcode.Failure, Error: fmt.Sprintf(
+		"connection from uid %d refused: this socket serves only its owner, uid %d",
+		peerUID, ownUID)}
+}
+
+// refuse delivers one stamped response and closes, for a connection turned away
+// before it reaches the request loop.
+func (d *daemon) refuse(conn net.Conn, resp Response) {
+	defer conn.Close()
+	out := replier{conn: conn, enc: json.NewEncoder(conn), d: d.write}
+	_ = out.reply(stamp(Request{}, resp))
 }
 
 // idleConn arms the read deadline afresh before every read of the connection.
@@ -416,12 +499,15 @@ func (d *daemon) handle(conn net.Conn) {
 		}
 		var req Request
 		if err := json.Unmarshal(scan.Bytes(), &req); err != nil {
-			if err := out.reply(Response{Error: "bad request: " + err.Error()}); err != nil {
+			// A line that would not parse carries no id or version to trust, so
+			// the response gets the default version and no echoed id.
+			bad := errResp(&exitcode.UsageError{Err: fmt.Errorf("bad request: %s", err)})
+			if err := out.reply(stamp(Request{}, bad)); err != nil {
 				return
 			}
 			continue
 		}
-		if err := out.reply(d.dispatch(req)); err != nil {
+		if err := out.reply(stamp(req, d.serve(req))); err != nil {
 			return
 		}
 	}
@@ -442,12 +528,38 @@ func (d *daemon) handle(conn net.Conn) {
 	case errors.Is(err, bufio.ErrTooLong):
 		tooLong := fmt.Errorf("request is longer than the %d byte limit, so it was "+
 			"not read", maxRequestBytes)
-		_ = out.reply(Response{Error: tooLong.Error()})
+		_ = out.reply(stamp(Request{}, errResp(&exitcode.UsageError{Err: tooLong})))
 		fmt.Fprintln(os.Stderr, "brigd: "+tooLong.Error())
 	default:
-		_ = out.reply(Response{Error: err.Error()})
+		_ = out.reply(stamp(Request{}, errResp(err)))
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
 	}
+}
+
+// stamp puts the protocol version on every response and echoes the request's id
+// back unchanged. It is the one place a response is finished, so no path can
+// answer without a version, and an absent id stays absent.
+func stamp(req Request, resp Response) Response {
+	resp.V = protocolVersion
+	resp.ID = req.ID
+	return resp
+}
+
+// errResp turns an error into a refused response, its code read from the error's
+// class so the same cause yields the same number cmd/brig would return.
+func errResp(err error) Response {
+	return Response{OK: false, Code: exitcode.Of(err), Error: err.Error()}
+}
+
+// serve checks the request's protocol version, then dispatches it. A version
+// brigd does not speak is a usage error naming the ones it does, rather than an
+// op run against a request shape it may not fully understand.
+func (d *daemon) serve(req Request) Response {
+	if req.V != nil && *req.V != protocolVersion {
+		return errResp(&exitcode.UsageError{Err: fmt.Errorf(
+			"unsupported protocol version %d; this brigd speaks %v", *req.V, supportedVersions)})
+	}
+	return d.dispatch(req)
 }
 
 func (d *daemon) dispatch(req Request) Response {
@@ -461,7 +573,7 @@ func (d *daemon) dispatch(req Request) Response {
 	case "stop":
 		return d.stop(req)
 	default:
-		return Response{Error: fmt.Sprintf("unknown op %q", req.Op)}
+		return errResp(&exitcode.UsageError{Err: fmt.Errorf("unknown op %q", req.Op)})
 	}
 }
 
@@ -487,7 +599,7 @@ func (d *daemon) dispatch(req Request) Response {
 func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	t, ok := profile.Lookup(req.Agent)
 	if !ok {
-		return nil, nil, fmt.Errorf("unknown agent %q", req.Agent)
+		return nil, nil, &exitcode.NotFoundError{Err: fmt.Errorf("unknown agent %q", req.Agent)}
 	}
 	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin})
 	if err != nil {
@@ -538,7 +650,7 @@ func warnings(buf *bytes.Buffer) []string {
 func (d *daemon) ensure(req Request) Response {
 	cfg, said, err := d.config(req)
 	if err != nil {
-		return Response{Error: err.Error()}
+		return errResp(err)
 	}
 	lock := d.lockFor(cfg.VMName)
 	lock.Lock()
@@ -552,26 +664,50 @@ func (d *daemon) ensure(req Request) Response {
 	// Response.Error next must not collapse those newlines onto one line.
 	set, err := cfg.BuildEnv()
 	if err != nil {
-		return Response{Error: err.Error(), Warnings: warnings(said)}
+		return withWarnings(errResp(err), said)
 	}
 	if err := cfg.EnsureRunning(set); err != nil {
-		return Response{Error: err.Error(), Warnings: warnings(said)}
+		return withWarnings(errResp(err), said)
 	}
 	d.remember(cfg)
 	return Response{OK: true, Warnings: warnings(said), Sessions: d.status()}
 }
 
+// withWarnings attaches what a run said to a response already carrying its code
+// and error, so a refused ensure or stop still delivers the credential or verify
+// lines the run wrote before it stopped.
+func withWarnings(resp Response, said *bytes.Buffer) Response {
+	resp.Warnings = warnings(said)
+	return resp
+}
+
 func (d *daemon) stop(req Request) Response {
 	cfg, said, err := d.config(req)
 	if err != nil {
-		return Response{Error: err.Error()}
+		return errResp(err)
 	}
 	lock := d.lockFor(cfg.VMName)
 	lock.Lock()
 	defer lock.Unlock()
 
+	// A name the daemon has never heard of is "no such session" -- unless the
+	// runtime is running one under it. The inventory is a cache, not the source
+	// of truth: a sandbox something else booted is real and stoppable even
+	// though brigd did not remember it, so only a name that is neither
+	// remembered nor running is refused. Stop itself is idempotent, so a known
+	// session that already exited still returns success.
+	d.mu.Lock()
+	_, known := d.sessions[cfg.VMName]
+	d.mu.Unlock()
+	if !known {
+		if running, _ := cfg.Runtime.Running(cfg.VMName); !running {
+			return errResp(&exitcode.NotFoundError{
+				Err: fmt.Errorf("no session for agent %q to stop", req.Agent)})
+		}
+	}
+
 	if err := cfg.Stop(); err != nil {
-		return Response{Error: err.Error(), Warnings: warnings(said)}
+		return withWarnings(errResp(err), said)
 	}
 	d.mu.Lock()
 	delete(d.sessions, cfg.VMName)
