@@ -232,6 +232,12 @@ Signed-off-by: Jane Doe <jane@nofire.ai>
 - **Complete the PR template** (where one exists) and write a meaningful PR
   title and description: what the change does, why, how it was tested, and
   anything reviewers should pay particular attention to.
+- **A test that disappears is a claim.** CI refuses a pull request that
+  removes a test, because a change which reverts more than it meant to takes
+  the failing tests with it and every other check stays green. A rename or a
+  deliberate removal is ordinary work: label the pull request
+  `removes-tests` and say why in the description. See
+  `script/check-tests-kept.sh`.
 - **Test locally before opening.** The build should not break, all tests
   should pass, and new functionality should come with new or updated tests.
 - **Use draft PRs** for work in progress or early feedback. Mark the PR ready
