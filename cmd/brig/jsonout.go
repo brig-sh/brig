@@ -33,6 +33,21 @@ import (
 // bumps.
 const jsonAPIVersion = policy.APIVersion
 
+// Two JSON shapes, and the rule that decides which a verb prints:
+//
+//   - A LIST or REPORT verb prints the envelope: jsonDocument wraps the payload
+//     under data, so `ls`, `info`, `agent ls`, `secret ls` and `doctor` all read
+//     the same {apiVersion, kind, data} whatever they list. A list goes straight
+//     under data (there is no items wrapper); a report puts its own object there.
+//   - A DOCUMENT verb prints the payload bare, no envelope: `agent show`,
+//     `agent export`, `agent new` and `policy show` each render one profile or
+//     policy meant to be saved to a file and read back by brig, so wrapping it
+//     would make the file something brig no longer imports. Those four keep the
+//     bare shape they had; #7 does not touch them.
+//
+// The dividing line is what the output is FOR: a thing to read or pipe takes the
+// envelope, a thing to write to disk stays bare.
+
 // jsonDocument wraps a command's payload with the apiVersion that pins its
 // shape and the kind that names it, both beside the payload rather than folded
 // into it, so a consumer reads the two envelope fields the same way whatever
@@ -49,4 +64,17 @@ func writeJSONDocument(w io.Writer, kind string, data any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(jsonDocument{APIVersion: jsonAPIVersion, Kind: kind, Data: data})
+}
+
+// writeJSONLine encodes one payload as a jsonDocument on a single line, the
+// deliberate opposite of writeJSONDocument's indentation.
+//
+// #110's Run object is printed to stdout after the agent's own inherited output,
+// so a script's rule for finding it is "the last line of stdout is brig's". An
+// indented object spanning many lines would break that rule, and there is no
+// person reading a run's stdout for whom the indentation was ever the point --
+// the agent already wrote there. Same envelope, same fields; only the framing
+// differs, so a consumer parses it exactly as it parses the read verbs.
+func writeJSONLine(w io.Writer, kind string, data any) error {
+	return json.NewEncoder(w).Encode(jsonDocument{APIVersion: jsonAPIVersion, Kind: kind, Data: data})
 }

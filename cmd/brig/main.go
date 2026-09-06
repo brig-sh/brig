@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
@@ -82,6 +83,15 @@ global flags (left of the command, as in: brig -q run claude):
                          line. A verification that did not hold is printed
                          even here
                          (-q after the verb still works this release)
+      --json             machine-readable output, for the read verbs: ls, info,
+                         agent ls, secret ls and doctor. Also accepted after the
+                         verb (brig ls --json). Every other verb refuses it
+      --json (with run)  run the agent as a child and, after it exits, print one
+                         JSON line with its exit status -- so a script can tell
+                         "brig refused" from "the agent failed"
+Within one apiVersion the JSON only ever gains fields, never renames or drops
+one, and no field carries a credential value -- so a script written against it
+keeps parsing, and a machine-readable dump stays a place a secret cannot leak.
 
 flags (before the agent's own arguments; -- ends brig's parsing):
       --image IMAGE      guest image to boot
@@ -130,16 +140,55 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
 `
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
-		// The exit status is a stable, documented set: a script can tell "you
-		// asked for the wrong thing" from "it ran and failed" from "the sandbox
-		// could not be verified" without parsing the message. exitCode owns the
-		// mapping; the README documents it. A run refused for any reason still
-		// exits non-zero, so a stop or a boot that removed or started nothing
-		// never reads as success.
-		os.Exit(exitCode(err))
+	err := run(os.Args[1:])
+	if err == nil {
+		return
 	}
+	// The agent ran under --json: its own exit status is brig's, its output has
+	// already gone to the inherited streams, and runAgent has already printed the
+	// one-line Run object. brig adds nothing -- no "brig:" line, no second object
+	// -- it just returns what the agent returned.
+	var ae *agentExit
+	if errors.As(err, &ae) {
+		os.Exit(ae.code)
+	}
+	fmt.Fprintln(os.Stderr, "brig: "+err.Error())
+	// The exit status is a stable, documented set: a script can tell "you
+	// asked for the wrong thing" from "it ran and failed" from "the sandbox
+	// could not be verified" without parsing the message. exitCode owns the
+	// mapping; the README documents it. A run refused for any reason still
+	// exits non-zero, so a stop or a boot that removed or started nothing
+	// never reads as success.
+	os.Exit(exitCode(err))
+}
+
+// run is the entry point dispatch is wrapped in, so the --json run/sh path has
+// one place to print its Run object when brig refuses.
+//
+// A refusal -- an unknown agent, a boot that would not come up -- returns from
+// deep inside dispatch as an ordinary error, at a depth that knows nothing about
+// --json. The success and detach paths print their own object, where the exit
+// status and the sandbox name are known; this catches the other half, so every
+// --json run ends in exactly one Run line whether the agent started or not. The
+// object carries stage "brig" and the reason, and brig's exit is the class the
+// error maps to -- the object is what tells "brig refused" from "the agent
+// exited non-zero", not the number.
+//
+// jsonRun is nil unless this invocation is a --json run or sh, so an ordinary
+// command's errors are untouched.
+func run(args []string) error {
+	jsonRun = nil
+	err := dispatch(args)
+	if err == nil || jsonRun == nil {
+		return err
+	}
+	var ae *agentExit
+	if errors.As(err, &ae) {
+		// The agent ran; its object is already printed. Leave it to main.
+		return err
+	}
+	_ = writeRunObject("brig", exitCode(err), err.Error(), "")
+	return err
 }
 
 // usageError is a command that was typed wrong: an unknown flag, a stray
@@ -163,7 +212,7 @@ func (e *notFoundError) Error() string { return e.msg }
 // notFoundf builds a notFoundError the way fmt.Errorf builds an ordinary one.
 func notFoundf(format string, a ...any) error { return &notFoundError{fmt.Sprintf(format, a...)} }
 
-func run(args []string) error {
+func dispatch(args []string) error {
 	// The global position first, so a flag written left of the verb is named
 	// rather than read as a command.
 	g, verbLine, err := parseGlobal(args)
@@ -177,6 +226,7 @@ func run(args []string) error {
 	// notices have already printed by the time it is known, which is one more
 	// reason the flag has moved.
 	verbosity = g.verbosity()
+	globalJSON = g.json
 	if len(verbLine) == 0 {
 		// No verb: a bare `brig`, or global flags and nothing to do with them.
 		fmt.Print(usage)
@@ -198,6 +248,14 @@ func run(args []string) error {
 		warnf("%s", hint)
 	}
 	warnDeprecatedProfileKeys()
+
+	// --json in the global position is refused here, before the verb runs, when
+	// the verb has no JSON form. The run-line spelling is refused later, where
+	// opts.json is known; this catches the canonical position. See
+	// jsonUnsupportedf.
+	if globalJSON && !verbTakesGlobalJSON(verb, rest) {
+		return jsonUnsupportedf(verb)
+	}
 
 	switch verb {
 	case "-h", "--help", "help":
@@ -225,7 +283,7 @@ func run(args []string) error {
 	// or that commit breaks every script anyone has written.
 	case "profiles":
 		deprecated("brig profiles", "brig agent ls")
-		return listProfiles()
+		return listProfiles(globalJSON)
 	case "profile":
 		return deprecatedProfileCmd(rest)
 	case "policies":
@@ -247,7 +305,7 @@ func run(args []string) error {
 	// does not gain one.
 	case "agents":
 		deprecated("brig agents", "brig agent ls")
-		return listProfiles()
+		return listProfiles(globalJSON)
 	case "template":
 		deprecated("brig template", "brig agent")
 		if len(rest) > 0 && rest[0] == "edit" {
@@ -259,7 +317,7 @@ func run(args []string) error {
 		// The two readings agree -- bare refs ARE identifiers only -- and ls
 		// still reads -q after the verb itself, which is the spelling the
 		// round-trip test consumes.
-		return listSandboxes(rest, verbosity <= wrap.Quiet)
+		return listSandboxes(rest, verbosity <= wrap.Quiet, globalJSON)
 	case "reset":
 		// reset was the one verb whose name did not say what it acts on, which
 		// is the whole of its problem: it removes every sandbox brig has, and it
@@ -347,9 +405,38 @@ func run(args []string) error {
 		verb, rest = "run", verbLine
 	}
 
+	// The Run object has to be there for a refusal that happens inside parse
+	// too -- a ref that will not parse is the common one -- so the context is
+	// made before parse, off the token the reader typed, and refreshed below
+	// with the resolved ref once parse has one. Without this a typo in the ref
+	// left stdout empty under --json, and a script's rule that the last line
+	// of stdout is brig's held for every refusal but that one.
+	if verb == "run" || verb == "sh" {
+		if wantJSON, operand := peekRunLine(rest); globalJSON || wantJSON {
+			jsonRun = &jsonRunContext{ref: operand}
+		}
+	}
 	opts, profileName, tail, err := parse(verb, rest)
 	if err != nil {
 		return err
+	}
+	// --json on a run-line verb. info and env answer it with a report; run and
+	// sh answer it by running the agent as a child and printing a Run object
+	// after it (see #110 and runAgent); every other verb here has no JSON form
+	// and refuses it by name. The global position was already refused above for
+	// the verbs that have none; this catches `brig run claude --json`, where
+	// --json is brig's own token rather than the agent's, so it is named rather
+	// than forwarded. Both spellings fold into one decision.
+	wantJSON := globalJSON || opts.json
+	switch {
+	case !wantJSON:
+	case verb == "info" || verb == "env":
+	case verb == "run" || verb == "sh":
+		// The state main needs to print the Run object once dispatch returns. The
+		// sandbox name is not known until Load below; the ref is what was typed.
+		jsonRun = &jsonRunContext{ref: refDisplay(profileName, opts)}
+	default:
+		return jsonUnsupportedf(verb)
 	}
 	// Both at once asks for two contradictory things, and either winner would
 	// be silent about the other: the directory would be mounted with
@@ -393,7 +480,7 @@ func run(args []string) error {
 			"%s explains how to build one", t.Name, verb, t.Name, profile.BringYourOwnImageDoc)
 	}
 
-	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin})
+	rt, err := detectRuntimeFor(runtime.Preference{Bin: t.RuntimeBin})
 	if err != nil {
 		// brig info is the report worth giving when the runtime is the thing
 		// that is broken: only one of its lines comes from the runtime, and the
@@ -427,6 +514,12 @@ func run(args []string) error {
 	// sandbox is refused later, at EnsureRunning; this only names the directory.
 	if cfg.RawName != "" && cfg.RawName != cfg.Slug {
 		warnf("session %q uses %s (sandbox %s)", cfg.RawName, cfg.Workspace, cfg.VMName)
+	}
+	// The sandbox name for the Run object, now that Load has resolved it. A
+	// refusal before this point (an unknown agent) prints the object with the
+	// name still empty, which is honest: no sandbox was named yet.
+	if jsonRun != nil {
+		jsonRun.sandbox = cfg.VMName
 	}
 
 	// Stopping and removing need nothing but the instance name, and are
@@ -468,11 +561,20 @@ func run(args []string) error {
 
 	switch verb {
 	case "info":
+		if wantJSON {
+			// The Info kind of the shared envelope, built from the same Config the
+			// text report reads -- see (*Config).InfoData. Written to Out, which is
+			// stdout, the way `doctor --json` writes its report.
+			return writeJSONDocument(cfg.Out, "Info", cfg.InfoData(set))
+		}
 		cfg.Info(set)
 		return nil
 	case "env":
 		// The retired spelling of the same report; the notice for it is printed
 		// by the dispatch above.
+		if wantJSON {
+			return writeJSONDocument(cfg.Out, "Info", cfg.InfoData(set))
+		}
 		cfg.Info(set)
 		return nil
 	case "create":
@@ -488,6 +590,16 @@ func run(args []string) error {
 		if err := cfg.EnsureRunning(set); err != nil {
 			return err
 		}
+		// Under --json, down the child path so brig survives the shell and reports
+		// its exit status on a Run line, the same handover an agent gets. Only sh
+		// reaches here with jsonRun set -- shell is refused above.
+		if jsonRun != nil {
+			code, err := cfg.ShellAttached(set, tail)
+			if err != nil {
+				return err
+			}
+			return emitAgentRun(code)
+		}
 		return cfg.Shell(set, tail)
 	case "exec":
 		if len(tail) == 0 {
@@ -498,7 +610,7 @@ func run(args []string) error {
 		}
 		return cfg.Exec(set, tail, isTerminal())
 	}
-	return runAgent(cfg, set, t, tail, opts.detach)
+	return runAgent(cfg, set, t, tail, opts.detach, jsonRun != nil)
 }
 
 // showsEnvelope reports whether this invocation prints the execution envelope
@@ -516,7 +628,7 @@ func showsEnvelope(verb string, v wrap.Verbosity) bool {
 	return false
 }
 
-func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string, detach bool) error {
+func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string, detach, wantJSON bool) error {
 	// A windowed agent owns its own console, so there is nothing to pass
 	// through and nothing to exec into: starting it IS the command.
 	if t.IsGUI() && len(tail) > 0 {
@@ -526,21 +638,49 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 	if err := cfg.EnsureRunning(set); err != nil {
 		return err
 	}
+	// Each branch below has a --json form: the object stands in for the text it
+	// would otherwise print, because a script asked for one machine-readable line
+	// and a bare name or a warning beside it would be the noise --json exists to
+	// remove. stage says which branch spoke -- gui, detached, or the agent having
+	// run -- so the reader need not infer it from the exit status.
 	switch {
 	case t.IsGUI():
+		// The window is up; there is nothing to attach to.
+		if wantJSON {
+			_ = writeRunObject("gui", exitOK, "", "")
+			return nil
+		}
 		warnf("sandbox %s is running; the %s window should be visible.", cfg.VMName, t.GUITitle)
 		return nil
 	case detach:
 		// The sandbox is up and will stay up; print the name so a script can
 		// exec into it.
+		if wantJSON {
+			_ = writeRunObject("detached", exitOK, "", "")
+			return nil
+		}
 		fmt.Println(cfg.VMName)
 		return nil
 	case t.IsShell():
 		// The "agent" is the guest shell itself, so a bare run is a login
 		// shell and trailing words are one command.
+		if wantJSON {
+			code, err := cfg.ShellAttached(set, tail)
+			if err != nil {
+				return err
+			}
+			return emitAgentRun(code)
+		}
 		return cfg.Shell(set, tail)
 	}
 	argv := append([]string{t.Binary}, agentArgs(cfg, t, tail)...)
+	if wantJSON {
+		code, err := cfg.ExecAttached(set, argv, isTerminal())
+		if err != nil {
+			return err
+		}
+		return emitAgentRun(code)
+	}
 	return cfg.Exec(set, argv, isTerminal())
 }
 
@@ -560,6 +700,7 @@ type options struct {
 	detach    bool
 	quiet     bool
 	offline   bool
+	json      bool
 }
 
 // position is where on a brig command line a flag is legal.
@@ -582,8 +723,9 @@ type options struct {
 type position int
 
 const (
-	// posGlobal is left of the verb: `brig --json run claude`. Closed and
-	// empty today; see splitGlobal.
+	// posGlobal is left of the verb: `brig -q run claude`. A closed set --
+	// --verbose, -q and --json -- and a token in it that brig does not own is a
+	// mistake to name; see splitGlobal.
 	posGlobal position = iota + 1
 	// posRun is the run line, from the verb to the ref. Every flag brig has
 	// today is here.
@@ -664,6 +806,21 @@ var brigFlags = []struct {
 	{long: "quiet", short: "q", position: posGlobal},
 	{long: "quiet", short: "q", position: posRun, runOnly: true,
 		retiredAs: "brig <verb> <ref> -q", retiredTo: "brig -q <verb> <ref>"},
+	// --json asks the read verbs -- ls, info, agent ls, secret ls, doctor -- for
+	// machine-readable output rather than aligned text. Global, because which
+	// form the whole invocation prints is a fact about the invocation, and left
+	// of the verb is the one position that never collides with an agent's own
+	// --json. No short form: -j is nobody's convention worth taking.
+	//
+	// Also on the run line, and not retiring there: `brig info claude --json` is
+	// what people type, and -q already works in both places, so the local
+	// spelling is a peer of the global one rather than a spelling on its way out.
+	// It prints no notice for that reason. The global position is what the help
+	// text teaches. A run-line verb with no JSON form refuses it by name -- see
+	// jsonUnsupportedf -- which is why it is brig's own token here rather than one
+	// forwarded to the agent; #110 defines what --json means on the run line.
+	{long: "json", position: posGlobal},
+	{long: "json", position: posRun},
 }
 
 // deprecatedFlags are the spellings on their way out, and what replaces each.
@@ -738,11 +895,11 @@ func retiredAt(arg string, at position) (was, now string) {
 
 // splitGlobal finds the verb and refuses anything standing left of it.
 //
-// The global position is closed. --verbose and -q live there, both facts about
-// the whole invocation rather than about one run line, and a token brig does
-// not own is refused rather than read as something else. `brig --json run
-// claude` is a line someone will type, and the two other readings are "the
-// command is --json" and "the agent wants it": one reports a command that does
+// The global position is closed. --verbose, -q and --json live there, each a
+// fact about the whole invocation rather than about one run line, and a token
+// brig does not own is refused rather than read as something else. `brig --nope
+// run claude` is a line someone will type, and the two other readings are "the
+// command is --nope" and "the agent wants it": one reports a command that does
 // not exist, the other hands a word to an agent that does not have it. Naming
 // the token is the reading that is true.
 //
@@ -786,6 +943,7 @@ func verbSpelling(arg string) bool {
 type globals struct {
 	quiet   bool
 	verbose bool
+	json    bool
 }
 
 // verbosity is the level these two flags ask for. Neither given is the default,
@@ -820,6 +978,7 @@ func parseGlobal(args []string) (g globals, rest []string, err error) {
 	for _, spelling := range []string{"quiet", "q"} {
 		fs.BoolVar(&g.quiet, spelling, false, "")
 	}
+	fs.BoolVar(&g.json, "json", false, "")
 	if err := fs.Parse(mine); err != nil {
 		return globals{}, nil, rewriteFlagError(err)
 	}
@@ -1143,6 +1302,10 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// Suppresses the execution envelope on run and create, for a script or
 		// a returning session that has already seen it.
 		{"quiet", "q", func(n string) { fs.BoolVar(&o.quiet, n, false, "") }},
+		// The run-line spelling of --json. info answers it; every other run-line
+		// verb refuses it by name -- see the run() dispatch. Its being brig's own
+		// token here rather than the agent's is what makes that refusal possible.
+		{"json", "", func(n string) { fs.BoolVar(&o.json, n, false, "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
 		// lands in one place and the last one on the line wins.
@@ -1305,24 +1468,28 @@ func spell(name string) string {
 // It leads with the ref, which is what every other verb takes: a listing whose
 // identifier no verb accepts is a listing a reader cannot act on, and copying
 // what it printed used to be an error.
-func listSandboxes(args []string, quiet bool) error {
-	// ls names no session and -q is the only flag it has, so anything else here
-	// is a token it would otherwise read and discard -- `brig ls claude` looks
-	// like it filters to one agent and does not. Refuse it rather than answer a
-	// question that was not asked.
+func listSandboxes(args []string, quiet, jsonOut bool) error {
+	// ls names no session, and -q and --json are the only flags it has, so
+	// anything else here is a token it would otherwise read and discard --
+	// `brig ls claude` looks like it filters to one agent and does not. Refuse it
+	// rather than answer a question that was not asked.
 	//
 	// Read here rather than through the flag package because ls is dispatched
 	// before the run line is parsed: it has no ref to parse, and the run line's
 	// parser exists to find where brig's arguments stop, which on this verb is
-	// immediately. Both spellings, because -q and --quiet are one flag
-	// everywhere else brig reads them.
+	// immediately. Both spellings of each, because -q/--quiet and the global and
+	// local --json are one flag everywhere else brig reads them. --json after the
+	// verb prints no notice: it is a peer of the global spelling, not one
+	// retiring in favour of it.
 	for _, a := range args {
 		switch a {
 		case "-q", "--quiet":
 			quiet = true
+		case "--json":
+			jsonOut = true
 		default:
 			return usagef("unexpected argument %q; `brig ls` takes no arguments "+
-				"other than -q", a)
+				"other than -q and --json", a)
 		}
 	}
 	rt, err := runtime.Detect()
@@ -1333,6 +1500,13 @@ func listSandboxes(args []string, quiet bool) error {
 			// named, exactly as run does, rather than answering a question that
 			// was not asked.
 			return err
+		}
+		// No runtime, so no sandboxes and none holding a name. --json says exactly
+		// that -- an empty list, the runtime marked unavailable -- and exits 0, the
+		// same answer the text form gives without the prose a parser would have to
+		// skip.
+		if jsonOut {
+			return writeJSONDocument(os.Stdout, "SandboxList", sandboxListData(nil, nil))
 		}
 		// No runtime on PATH means nothing is running and nothing is holding a
 		// name: there is nothing to list. Answer the question that was asked --
@@ -1363,6 +1537,12 @@ func listSandboxes(args []string, quiet bool) error {
 	// can be dropped. See wrap.PruneSessions.
 	pruneSessionIndex(list)
 	rows := sandboxRows(list, rt)
+	// --json before either text form, so `brig -q --json ls` is JSON and not the
+	// -q refs: the two answer different readers, and asking for both asks for the
+	// machine-readable one.
+	if jsonOut {
+		return writeJSONDocument(os.Stdout, "SandboxList", sandboxListData(rows, rt))
+	}
 	if quiet {
 		printRefs(os.Stdout, rows)
 		return nil
@@ -1424,6 +1604,62 @@ type sandboxRow struct {
 	name      string
 	state     string
 	workspace string
+}
+
+// sandboxListJSON is `brig ls` as data, the SandboxList payload. The runtime
+// sits once beside the list rather than on every row -- it is the same runtime
+// for all of them -- and image is left out, unlike #7's sketch: it is not in
+// hand for a listing and loading every profile to fill it would make ls pay for
+// a column a reader can get from `brig info`. See sandboxListData.
+type sandboxListJSON struct {
+	Runtime   sandboxRuntimeJSON `json:"runtime"`
+	Sandboxes []sandboxJSON      `json:"sandboxes"`
+}
+
+// sandboxRuntimeJSON is the runtime the listing ran against, or one marked
+// unavailable when none is on PATH -- the case the text form answers with a
+// note and an empty table.
+type sandboxRuntimeJSON struct {
+	Kind      string `json:"kind,omitempty"`
+	Bin       string `json:"bin,omitempty"`
+	Available bool   `json:"available"`
+}
+
+// sandboxJSON is one sandbox as data. agent and label are the parsed ref, so a
+// consumer need not split it; both are omitted, with ref, for a sandbox brig has
+// no ref to print -- and sandbox is set even then, so the JSON shows the sandbox
+// exists the way the table's placeholder row does.
+type sandboxJSON struct {
+	Ref       string `json:"ref,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Sandbox   string `json:"sandbox"`
+	State     string `json:"state"`
+	Workspace string `json:"workspace,omitempty"`
+}
+
+// sandboxListData turns the rows the table prints into the SandboxList payload.
+// It reads the same sandboxRows the two text printers do, so the JSON and the
+// table cannot come to list different sandboxes. rt is nil when no runtime is on
+// PATH, which marks the runtime unavailable rather than omitting it.
+func sandboxListData(rows []sandboxRow, rt runtime.Runtime) sandboxListJSON {
+	out := sandboxListJSON{Sandboxes: []sandboxJSON{}}
+	if rt != nil {
+		out.Runtime = sandboxRuntimeJSON{Kind: rt.Kind(), Bin: rt.Bin(), Available: true}
+	}
+	for _, r := range rows {
+		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace}
+		// A ref brig has for the sandbox carries its agent and label, split here so
+		// the consumer does not. A row with none is included ref-less: the sandbox
+		// is real, and the table shows it too.
+		if r.ref != "" {
+			if ref, err := session.ParseRef(r.ref); err == nil {
+				s.Ref, s.Agent, s.Label = r.ref, ref.Agent, ref.Label
+			}
+		}
+		out.Sandboxes = append(out.Sandboxes, s)
+	}
+	return out
 }
 
 // noRef is what the table shows for a sandbox with no ref to print.
@@ -1684,8 +1920,11 @@ func removeAll(spelling string, args []string) error {
 // listing -- so it says where each profile came from, because "the image is
 // not what I expected" and "there is a file I forgot about" are the same
 // question.
-func listProfiles() error {
+func listProfiles(jsonOut bool) error {
 	all := profile.All()
+	if jsonOut {
+		return writeJSONDocument(os.Stdout, "AgentList", agentListData(all))
+	}
 	// The short spellings, in a column of their own: `brig run claude` runs
 	// claude-code, and this listing is where someone finds that out. The
 	// column is as wide as the spellings in it and absent when there are none,
@@ -1777,6 +2016,74 @@ func listProfiles() error {
 	return nil
 }
 
+// agentLsJSON reads `brig agent ls`'s own arguments: --json, and nothing else.
+// ls names no agent and has no other flag, so any other token is one it would
+// read and discard -- the same refusal `brig ls` makes, for the same reason.
+func agentLsJSON(args []string) (bool, error) {
+	jsonOut := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonOut = true
+		default:
+			return false, usagef("unexpected argument %q; `brig agent ls` takes no "+
+				"arguments other than --json", a)
+		}
+	}
+	return jsonOut, nil
+}
+
+// agentJSON is one agent as data, the AgentList row. aliases is the short
+// spellings brig answers to; file is the path only for a file-backed profile,
+// absent for a built-in that has no file. builtIn and overridesBuiltIn are the
+// two the text listing marks in prose: whether brig ships it, and whether a file
+// of yours is shadowing one brig ships.
+type agentJSON struct {
+	Name             string   `json:"name"`
+	Aliases          []string `json:"aliases,omitempty"`
+	Kind             string   `json:"kind"`
+	Image            string   `json:"image"`
+	BuiltIn          bool     `json:"builtIn"`
+	OverridesBuiltIn bool     `json:"overridesBuiltIn"`
+	Unpublished      bool     `json:"unpublished"`
+	Reserved         bool     `json:"reserved"`
+	File             string   `json:"file,omitempty"`
+}
+
+// agentListData turns the merged profile set into the AgentList payload, from
+// the same registry views the text listing reads: profile.All for the set,
+// Aliases for the spellings, IsCustom and OverridesBuiltIn for the origin, and
+// Path for the file behind a file-backed one.
+func agentListData(all []profile.Profile) []agentJSON {
+	out := make([]agentJSON, 0, len(all))
+	for _, p := range all {
+		// The default applied: Parse leaves an agent's Kind empty because agent is
+		// the zero value, and a listing that omitted the kind of every ordinary
+		// agent would be reporting an absence rather than the fact.
+		kind := string(p.Kind)
+		if kind == "" {
+			kind = string(profile.KindAgent)
+		}
+		row := agentJSON{
+			Name:             p.Name,
+			Aliases:          profile.Aliases(p.Name),
+			Kind:             kind,
+			Image:            p.Image,
+			BuiltIn:          !profile.IsCustom(p.Name),
+			OverridesBuiltIn: profile.OverridesBuiltIn(p.Name),
+			Unpublished:      p.Unpublished,
+			Reserved:         p.Reserved,
+		}
+		// Only a file-backed profile has a file; a built-in is compiled in and has
+		// none, so the field is absent rather than an empty path.
+		if path, ok := profile.Path(p.Name); ok {
+			row.File = path
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 // importableNames and handCreatedNames split a profile's requirement list the
 // way the two commands that fill it do. A secret with no sources is
 // hand-created by definition, so the listing points at the command that can
@@ -1859,10 +2166,11 @@ func agentCmd(args []string) error {
 		fmt.Print(agentUsage)
 		return nil
 	case "ls":
-		if err := rejectAgentTail("brig agent ls", "takes no arguments", args[1:]); err != nil {
+		jsonOut, err := agentLsJSON(args[1:])
+		if err != nil {
 			return err
 		}
-		return listProfiles()
+		return listProfiles(jsonOut || globalJSON)
 	case "show":
 		err = showAgent(args[1:])
 	case "new":
@@ -1881,12 +2189,13 @@ func agentCmd(args []string) error {
 	case "list":
 		deprecated("brig agent list", "brig agent ls")
 		// The retired spelling behaves exactly like the verb it maps onto, the
-		// refusal of a stray word included, so it names `brig agent ls` too:
-		// the notice above already pointed the reader there.
-		if err := rejectAgentTail("brig agent ls", "takes no arguments", args[1:]); err != nil {
+		// refusal of a stray word and the reading of --json included, so it
+		// names `brig agent ls` too: the notice above already pointed there.
+		jsonOut, err := agentLsJSON(args[1:])
+		if err != nil {
 			return err
 		}
-		return listProfiles()
+		return listProfiles(jsonOut || globalJSON)
 	case "save":
 		deprecated("brig agent save", "brig agent export")
 		err = exportProfile(args[1:])
@@ -2483,6 +2792,176 @@ func deprecated(old, replacement string) {
 // rather than values a command returns. run sets it on every invocation, so a
 // test that drives run twice does not inherit the first one's level.
 var verbosity = wrap.Normal
+
+// globalJSON is whether --json was given left of the verb, read off the global
+// position with verbosity and for the same reason: which form the whole
+// invocation prints is a fact about the invocation, known before any verb runs.
+// A package var rather than a threaded value because the read verbs are reached
+// through four different dispatch paths -- ls inline, agent and secret through
+// their groups, doctor through its own parser -- and a parameter on each would
+// be a parameter most of them ignore. run sets it every invocation, so a test
+// driving run twice does not inherit the first one's setting.
+var globalJSON bool
+
+// verbTakesGlobalJSON reports whether the verb in the global position has a
+// --json form to ask for. The five read verbs do; run and sh do since #110,
+// where --json runs the agent as a child and prints its outcome; agent and
+// secret only in their ls subcommand, which is the one that lists. Everything
+// else -- stop, rm, and the verbs that manage rather than list -- has none, so
+// --json left of it is a usage error rather than a flag dropped on the floor.
+func verbTakesGlobalJSON(verb string, rest []string) bool {
+	switch verb {
+	case "ls", "info", "env", "doctor", "run", "sh":
+		return true
+	case "agent", "secret":
+		return len(rest) > 0 && rest[0] == "ls"
+	}
+	return false
+}
+
+// jsonUnsupportedf is the refusal a verb with no JSON form gives to --json: a
+// usage error (exit 2) that names the verbs that do have one, so the reader
+// moves the flag rather than guessing which command it belongs on. env takes
+// it too, because a deprecated spelling keeps working until it is removed,
+// but it is named as deprecated rather than listed, so nobody lands on it
+// from here.
+func jsonUnsupportedf(verb string) error {
+	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
+		"ls, info, agent ls, secret ls, doctor (env takes it too, but env is "+
+		"deprecated; prefer info), and for run and sh", verb)
+}
+
+// jsonRun is the state the --json run/sh path needs to print its one-line Run
+// object. It is package state for the same reason globalJSON is: the object is
+// printed at the top of the call chain, and the values in it -- the ref, the
+// sandbox name -- become known at different depths of dispatch. nil means this
+// invocation is not a --json run, so run() prints nothing on the way out.
+var jsonRun *jsonRunContext
+
+// jsonRunContext carries the two fields every Run object names whatever its
+// stage: the ref that was typed and the sandbox it resolved to.
+type jsonRunContext struct {
+	ref     string
+	sandbox string
+}
+
+// detectRuntimeFor is the seam the run-line tests replace, so a test can drive a
+// full run against a fake runtime with none on PATH. Everything else calls
+// runtime.DetectFor. It is the run-line sibling of detectRuntime, which the read
+// verbs already use for the same reason.
+var detectRuntimeFor = runtime.DetectFor
+
+// runData is the payload of a Run object: what a --json run says about itself
+// once the agent has run, or once brig has refused to run it.
+//
+// error and signal are omitempty because each names a case that did not always
+// happen: error only on a brig refusal, signal only on an agent the kernel
+// killed. ref and sandbox are always present, so a consumer reads them
+// unconditionally. See #110 and the field rule in jsonout.go.
+type runData struct {
+	Ref     string `json:"ref"`
+	Sandbox string `json:"sandbox"`
+	Stage   string `json:"stage"`
+	Exit    int    `json:"exit"`
+	Error   string `json:"error,omitempty"`
+	Signal  string `json:"signal,omitempty"`
+}
+
+// writeRunObject prints one Run object to stdout, compact, on its own line. It
+// reads the ref and sandbox off jsonRun, so every caller names them the same way
+// and none has to thread them through.
+func writeRunObject(stage string, exit int, errMsg, signal string) error {
+	return writeJSONLine(os.Stdout, "Run", runData{
+		Ref:     jsonRun.ref,
+		Sandbox: jsonRun.sandbox,
+		Stage:   stage,
+		Exit:    exit,
+		Error:   errMsg,
+		Signal:  signal,
+	})
+}
+
+// emitAgentRun prints the Run object for an agent that ran and returns the
+// agentExit that carries its status up to main. stage is "agent"; the signal is
+// derived from the status, since a child the kernel killed comes back as 128
+// plus the signal number.
+func emitAgentRun(code int) error {
+	_ = writeRunObject("agent", code, "", signalName(code))
+	return &agentExit{code: code}
+}
+
+// refDisplay is the ref a Run object names: the agent, and the session label
+// when one was given. It is what the reader typed, reconstructed from the parsed
+// parts, so it reads back as a ref every verb takes.
+func refDisplay(agent string, o options) string {
+	if o.nameGiven && o.load.Name != "" {
+		return agent + "@" + o.load.Name
+	}
+	return agent
+}
+
+// peekRunLine reads a run line only as far as its first bare word: whether
+// --json stands among brig's own flags before the ref, and what that word is.
+// It exists because parse can refuse the ref before it has told anyone about
+// the flags left of it, and the Run object for that refusal still has to be
+// printed and still has to name what was typed. A flag that takes a value skips
+// the value, the way split does, so `--mem 4096` is not read as the ref.
+func peekRunLine(rest []string) (wantJSON bool, operand string) {
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		if a == "--" || !strings.HasPrefix(a, "-") {
+			if a != "--" {
+				operand = a
+			}
+			return wantJSON, operand
+		}
+		name, _, inline := strings.Cut(a, "=")
+		if name == "--json" {
+			wantJSON = true
+		}
+		if mine, takesValue := ours(name, posRun); mine && takesValue && !inline {
+			i++
+		}
+	}
+	return wantJSON, ""
+}
+
+// signalName maps a 128+n exit status back to the signal that produced it, for
+// the Run object's signal field. Empty for an ordinary exit -- a status at or
+// below 128 is the program's own -- so the field is present only when a signal
+// actually killed the agent. Only the signals a child is plausibly killed by are
+// named; an unrecognised one leaves the field empty rather than inventing a
+// name.
+func signalName(code int) string {
+	if code <= 128 {
+		return ""
+	}
+	switch syscall.Signal(code - 128) {
+	case syscall.SIGHUP:
+		return "SIGHUP"
+	case syscall.SIGINT:
+		return "SIGINT"
+	case syscall.SIGQUIT:
+		return "SIGQUIT"
+	case syscall.SIGILL:
+		return "SIGILL"
+	case syscall.SIGABRT:
+		return "SIGABRT"
+	case syscall.SIGFPE:
+		return "SIGFPE"
+	case syscall.SIGKILL:
+		return "SIGKILL"
+	case syscall.SIGSEGV:
+		return "SIGSEGV"
+	case syscall.SIGPIPE:
+		return "SIGPIPE"
+	case syscall.SIGALRM:
+		return "SIGALRM"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	}
+	return ""
+}
 
 // warnf prints one of brig's own notices to stderr: a warning, a deprecation, a
 // word about what a line now means.
