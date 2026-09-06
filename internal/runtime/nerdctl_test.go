@@ -108,6 +108,30 @@ func TestNerdctlRefusesGUIBeforeRunning(t *testing.T) {
 	}
 }
 
+// The refusal lives in CanRun, not just Run, and this pins the property that
+// matters: a sandbox already up is joined rather than booted, so Run is never
+// called on the second `brig run`. Only a check reachable through CanRun covers
+// that join path, so assert CanRun itself refuses a GUI spec.
+func TestNerdctlCanRunRefusesGUI(t *testing.T) {
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+
+	err := n.CanRun(RunSpec{Name: "brig-x", Image: "img", GUI: true})
+	if err == nil {
+		t.Fatal("expected CanRun to refuse a GUI profile so the join path is covered")
+	}
+	if !strings.Contains(err.Error(), "container runtime") {
+		t.Errorf("the refusal does not say why this path cannot show a window: %v", err)
+	}
+	if !strings.Contains(err.Error(), "macOS") {
+		t.Errorf("the refusal does not point at where it can run: %v", err)
+	}
+
+	// A non-GUI profile passes CanRun, so the ordinary boot path is unaffected.
+	if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
+		t.Errorf("CanRun must let an ordinary profile through: %v", err)
+	}
+}
+
 // A non-GUI profile is untouched by the refusal: it reaches the runtime and
 // boots as any ordinary profile does.
 func TestNerdctlRunsNonGUIProfile(t *testing.T) {
