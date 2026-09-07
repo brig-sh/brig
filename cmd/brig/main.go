@@ -65,6 +65,7 @@ usage:
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
   brig doctor [<agent>]                          check the host, runtime and, given an agent, its image
+  brig completion bash|zsh|fish                  a completion script for your shell
   brig version
 
 A <ref> is the session. claude is that agent's default session, and
@@ -184,6 +185,24 @@ func run(args []string) error {
 	}
 	verb, rest := verbLine[0], verbLine[1:]
 
+	// Completion is answered before the notices below, and that ordering is the
+	// whole of its output contract: a profile that would not parse, a legacy
+	// directory, a retiring key -- every one of them is a line on stderr, and a
+	// line printed on a keystroke lands in the middle of what is being typed.
+	// The engine loads the profiles it needs itself, silently.
+	if verb == completeVerb {
+		// The scripts pass `--` before the words they collected, so that a
+		// current word spelled like a flag reaches the engine as a word rather
+		// than being read as one of brig's own. It is a guard, not one of those
+		// words, so it is dropped here -- a `--` the reader actually typed
+		// stands further along the line and still ends brig's parsing.
+		if len(rest) > 0 && rest[0] == "--" {
+			rest = rest[1:]
+		}
+		completeCmd(os.Stdout, rest)
+		return nil
+	}
+
 	// Profiles are read before anything looks a name up, so a file can stand
 	// in for a built-in. A broken file is reported and skipped rather than
 	// taking down the profile you were actually asking for.
@@ -216,6 +235,8 @@ func run(args []string) error {
 		return telemetryCmd(os.Stdout, rest)
 	case "doctor":
 		return doctorCmd(os.Stdout, rest)
+	case "completion":
+		return completionCmd(os.Stdout, rest)
 	// Deprecated spellings, absent from the usage text.
 	//
 	// The three grammars this release settles are all here: a plural noun that
@@ -615,6 +636,12 @@ var brigFlags = []struct {
 	// The table already carries a position per flag, so this is a field on the
 	// row rather than a case in split.
 	retiredAs, retiredTo string
+	// undocumented marks a spelling the help text does not teach, so that
+	// completion does not offer it. It is not deprecated and not retiring:
+	// --memory is the older name of --mem and still writes the same value, and
+	// a line that has it keeps working. Offering it would put two spellings of
+	// one flag in front of a reader who has typed neither.
+	undocumented bool
 	// runOnly marks a run-line flag that only run acts on. sh, shell and exec
 	// continue a session rather than shape a fresh run, so they read such a
 	// flag in no position at all. On the row rather than in a list beside the
@@ -634,7 +661,7 @@ var brigFlags = []struct {
 	// answers, because a line that works today keeps working. Both write one
 	// value in parse, so the last one on the line wins.
 	{long: "mem", value: true, position: posRun},
-	{long: "memory", short: "m", value: true, position: posRun},
+	{long: "memory", short: "m", value: true, position: posRun, undocumented: true},
 	{long: "cpus", value: true, position: posRun},
 	// --no-project detaches the project a session is carrying. It takes no
 	// value: a directory is what the positional says, and this says the
