@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -92,7 +93,12 @@ func TestCompletePositions(t *testing.T) {
 		name:      "left of the verb the flags are the global ones",
 		words:     []string{"-"},
 		directive: dirNames,
-		exactly:   []string{"--quiet", "--verbose", "-q"},
+		// Read off brigFlags rather than written out. A hand-kept copy of this
+		// set is what broke: --json became global in #7 and this case still
+		// named the three flags that came before it, so two changes that were
+		// each correct left main red when they met. The table is the one place
+		// a flag declares its position, so the test asks it.
+		exactly: globalFlagSpellings(),
 	}, {
 		name:      "a global flag does not hide the verb after it",
 		words:     []string{"-q", "r"},
@@ -632,5 +638,22 @@ func groupFlagNames() map[string]bool {
 			}
 		}
 	}
+	return out
+}
+
+// globalFlagSpellings is every spelling completion offers left of the verb:
+// the long form of each global flag, and the short one where it has it.
+func globalFlagSpellings() []string {
+	var out []string
+	for _, f := range brigFlags {
+		if f.position != posGlobal {
+			continue
+		}
+		out = append(out, "--"+f.long)
+		if f.short != "" {
+			out = append(out, "-"+f.short)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
