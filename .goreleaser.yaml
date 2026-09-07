@@ -73,6 +73,15 @@ archives:
     files:
       - README.md
       - LICENSE
+      # The completion scripts, verbatim: these are the bytes `brig completion
+      # <shell>` prints, so the archive and the command cannot disagree about
+      # what a shell is asked to source. The cask below installs them.
+      - src: cmd/brig/completions/brig.bash
+        dst: completions/brig.bash
+      - src: cmd/brig/completions/brig.zsh
+        dst: completions/brig.zsh
+      - src: cmd/brig/completions/brig.fish
+        dst: completions/brig.fish
 
 checksum:
   name_template: checksums.txt
@@ -185,6 +194,14 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/brig-sh/brig
     description: Run a coding agent in a sandbox, with the credentials it needs and none of the ones it does not
+    # Paths inside the archive above. brew puts each one where its shell reads
+    # completions from, so a cask install has completion without a second step
+    # -- which is the whole point of the closed flag sets: they only help a
+    # reader who can discover them.
+    completions:
+      bash: completions/brig.bash
+      zsh: completions/brig.zsh
+      fish: completions/brig.fish
     dependencies:
       # Guest-image signature verification degrades to a warning without it,
       # so ship it rather than let the check quietly do nothing.
