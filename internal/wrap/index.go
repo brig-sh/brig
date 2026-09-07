@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/brig-sh/brig/internal/session"
 )
@@ -387,4 +388,24 @@ func (c *Config) rememberSession() {
 			"that names no workspace will fall back to the default one and restart "+
 			"the sandbox.", c.Workspace, c.VMName, err)
 	}
+}
+
+// SessionRefs returns the ref of every session the index holds, sorted.
+//
+// The index is keyed by ref, so this is a read of what is already there. It
+// exists for completion, which needs the labels an agent has without asking
+// the runtime: detecting a runtime and listing its sandboxes is hundreds of
+// milliseconds on a keystroke, and returns nothing at all on a host that has
+// no runtime installed. The cost of reading the index instead is bounded --
+// a sandbox removed outside brig stays listed until the next `brig ls` prunes
+// it -- and a stale candidate is a name that fails when run, not a wrong
+// action.
+func SessionRefs() []string {
+	index := readSessionIndex()
+	refs := make([]string, 0, len(index))
+	for ref := range index {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	return refs
 }
