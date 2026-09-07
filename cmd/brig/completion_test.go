@@ -311,6 +311,49 @@ func TestCompletePositions(t *testing.T) {
 		name:      "and the file is the shell's to complete",
 		words:     []string{"secret", "create", "gh-token", "-f", ""},
 		directive: dirFiles,
+	}, {
+		// Only bash has "=" in COMP_WORDBREAKS. zsh and fish send
+		// `--network=is` as one token, so it arrives as the current word and
+		// would otherwise be matched against flag names.
+		//
+		// The candidate carries the flag because the shell replaces the whole
+		// current word: a bare "isolated" would replace `--network=is` with
+		// `isolated`.
+		name:      "an inline value under the cursor completes the value",
+		words:     []string{"run", "--network=is"},
+		directive: dirNames,
+		exactly:   []string{"--network=isolated"},
+	}, {
+		name:      "with the whole set when nothing is typed after the separator",
+		words:     []string{"run", "--network="},
+		directive: dirNames,
+		exactly:   []string{"--network=isolated", "--network=offline", "--network=shared"},
+	}, {
+		name:      "the split shape keeps its bare values, as bash needs",
+		words:     []string{"run", "--network", "=", "is"},
+		directive: dirNames,
+		exactly:   []string{"isolated"},
+	}, {
+		name:      "a group flag's value completes inline too",
+		words:     []string{"agent", "new", "ours", "--from=claude-c"},
+		directive: dirNames,
+		exactly:   []string{"--from=claude-code"},
+	}, {
+		// A path cannot be qualified this way: the shell would complete it
+		// against the flag text. Offering nothing leaves the inline spelling
+		// where it already was in these two shells.
+		name:      "an inline path is not completed",
+		words:     []string{"run", "--home=/pa"},
+		directive: dirNone,
+	}, {
+		name:      "an inline value on a flag brig does not have completes nothing",
+		words:     []string{"run", "--bogus=x"},
+		directive: dirNone,
+	}, {
+		name:      "a flag that already has its value leaves the ref next",
+		words:     []string{"run", "--network=offline", ""},
+		directive: dirNames,
+		want:      []string{"claude-code", "claude-code@refactor"},
 	}}
 
 	for _, tc := range cases {

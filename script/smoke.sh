@@ -1870,6 +1870,14 @@ out="$("$BASH_OLDEST" "$WORK/bashdrive.sh" "$WORK/brig.bash" "$WORK/brig" run cl
 [ "$out" = "--mem" ] && ok "the bash script offers brig's flags right of the ref" \
   || bad "the bash script offers --mem right of the ref -- got: $out"
 
+# The inline `--flag=value` shape, which only zsh and fish produce: bash has
+# "=" in COMP_WORDBREAKS and sends the halves separately. Checked through the
+# engine rather than a shell, since it is the argv shape that matters.
+out="$("$WORK/brig" __complete -- run "--network=is" 2>/dev/null | tr '\n' ' ')"
+[ "$out" = ":names --network=isolated " ] \
+  && ok "an inline flag value completes, qualified with its flag" \
+  || bad "inline --network=is completes -- got: $out"
+
 # fish, when installed. Skipped otherwise: it is not on a stock macOS or CI
 # image.
 if command -v fish >/dev/null 2>&1; then

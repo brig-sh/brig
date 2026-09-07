@@ -245,6 +245,18 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		return operandCandidates(flagValue(line.pending), cur)
 	}
 
+	// `--flag=value` with the cursor inside the value. Only bash splits on
+	// "=", so in zsh and fish the whole thing is the current word and would
+	// otherwise be matched against flag names, which it cannot match.
+	if flag, prefix, ok := inlineValue(cur); ok {
+		mine, takesValue := ours(flag, posRun)
+		if !mine || !takesValue {
+			return dirNone, nil
+		}
+		directive, candidates := operandCandidates(flagValue(flag), prefix)
+		return qualify(flag, directive, candidates)
+	}
+
 	if strings.HasPrefix(cur, "-") {
 		// split() reads brig's own flags on both sides of the ref, stopping
 		// only at a flag brig does not own, so offer them on both sides too.
@@ -564,6 +576,14 @@ func completeGroup(verb string, rest []string, cur string) (string, []string) {
 			return operandCandidates(kind, cur)
 		}
 	}
+	if flag, prefix, ok := inlineValue(cur); ok {
+		kind, takesValue := s.values[flag]
+		if !takesValue {
+			return dirNone, nil
+		}
+		directive, candidates := operandCandidates(kind, prefix)
+		return qualify(flag, directive, candidates)
+	}
 	if strings.HasPrefix(cur, "-") {
 		spellings := append([]string{}, s.flags...)
 		for f := range s.values {
@@ -618,6 +638,41 @@ func lastFlag(rest []string) string {
 		last = rest[len(rest)-2]
 	}
 	return last
+}
+
+// inlineValue splits a `--flag=value` token: the flag, and the part of the
+// value typed so far.
+//
+// bash has "=" in COMP_WORDBREAKS and sends the two halves as separate tokens,
+// which lastFlag handles. zsh and fish send one token, which arrives as the
+// current word and reaches here.
+func inlineValue(cur string) (flag, prefix string, ok bool) {
+	if !strings.HasPrefix(cur, "-") {
+		return "", "", false
+	}
+	flag, prefix, found := strings.Cut(cur, "=")
+	if !found {
+		return "", "", false
+	}
+	return flag, prefix, true
+}
+
+// qualify rewrites value candidates as `--flag=value`.
+//
+// The shell replaces the whole current word, and that word includes the flag,
+// so a bare value would replace `--network=is` with `isolated`. Directives that
+// hand the slot to the shell cannot be qualified this way -- the shell would
+// complete a path against the flag text -- so they become dirNone. That leaves
+// an inline path uncompleted in zsh and fish, which is what it already was.
+func qualify(flag string, directive string, candidates []string) (string, []string) {
+	if directive != dirNames {
+		return dirNone, nil
+	}
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		out = append(out, flag+"="+c)
+	}
+	return dirNames, out
 }
 
 // flagValue maps a run-line flag to what its value names. --network is the
