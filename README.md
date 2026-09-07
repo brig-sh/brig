@@ -132,6 +132,7 @@ separate Linux re-implementation of it.
 | `brig secret create\|read\|update\|delete\|ls` | keep secrets in your keyring. macOS only for now |
 | `brig secret import <profile>` | fill that profile's secrets from your host, once. macOS only for now |
 | `brig telemetry status\|on\|off` | report what is counted, or turn the counting on or off. See [Telemetry](#telemetry) |
+| `brig completion bash\|zsh\|fish` | print a completion script for your shell. A cask install already has it; see [completions.md](docs/completions.md) |
 | `brig version` | |
 
 A `<ref>` is the session: `claude` is that agent's default session, and
@@ -657,6 +658,7 @@ The README is the overview. The details live in [docs/](docs/):
 - [profiles.md](docs/profiles.md) -- writing an agent profile, field by field
 - [policies.md](docs/policies.md) -- writing an egress policy, verb by verb, with a worked example
 - [secrets.md](docs/secrets.md) -- `brig secret`, verb by verb, with a worked example
+- [completions.md](docs/completions.md) -- shell completion: installing it, and what completes where
 - [security.md](docs/security.md) -- what the boundary is, and what it is not
 - [non-goals.md](docs/non-goals.md) -- what brig will not do, with the reason
   and what would reopen each one
