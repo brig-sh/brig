@@ -1,40 +1,36 @@
 # brig completion for fish. Printed by `brig completion fish`.
 #
-# This script knows none of brig's vocabulary. It collects the words left of
-# the cursor, asks brig what may stand there, and renders the answer -- so the
-# verbs, the flags and the refs come from the binary that is installed rather
-# than from whenever this file was written.
+# This script holds no brig vocabulary. It collects the words left of the
+# cursor, asks brig what may stand there, and renders the reply, so verbs, refs
+# and flags come from the installed binary rather than from this file.
 #
-# The answer is a directive line and then the candidates, one per line.
+# The reply is a directive line followed by the candidates, one per line.
 
-# __brig_ask puts the line to brig and prints what it said.
+# __brig_ask sends the line to brig and prints the reply.
 #
-# Asked again for every completion rather than memoized. What brig answers
-# depends on state outside the command line -- the sessions that exist, the
-# profiles and policies on disk -- and a cache keyed on the line has no way to
-# learn that any of it changed, so a session started after the first TAB would
-# never be offered again for the life of the shell. bash and zsh re-ask on
-# every keystroke; the cost is one exec of a command that reads two files.
+# Not memoized. The reply also depends on state the command line does not
+# reflect -- the session index, the profile and policy directories -- and a
+# cache keyed on the line cannot detect a change in any of them, so a session
+# created after the first TAB would never appear again in that shell. bash and
+# zsh re-ask on every keystroke; the cost is one exec that reads two files.
 function __brig_ask
     set -l tokens (commandline -opc)
     set -l cur (commandline -ct)
-    # The command itself is dropped; the word under the cursor is passed
-    # explicitly, because an empty last argument is what tells brig it is being
-    # asked "what can come next" rather than "finish this token".
+    # Drop the command name. The current word is passed separately, because an
+    # empty final argument is what asks "what comes next".
     if set -q tokens[1]
         set -e tokens[1]
     end
-    # stderr is dropped rather than shown: brig writes none on this path, and a
-    # line from anywhere else would land in the middle of what is being typed.
+    # stderr is discarded: brig writes none here, and anything from elsewhere
+    # would print over the line being typed.
     brig __complete -- $tokens $cur 2>/dev/null
 end
 
-# __brig_says reports whether the answer carries one directive.
+# __brig_says reports whether the reply carries this directive.
 function __brig_says
     set -l out (__brig_ask)
-    # An answer with no first line means brig could not be reached at all.
-    # Reported as "not this directive" rather than left to `test`, which would
-    # otherwise print its own complaint across the prompt.
+    # No first line means brig could not be run. Return false rather than let
+    # `test` print its own error over the prompt.
     set -q out[1]; or return 1
     test "$out[1]" = "$argv[1]"
 end
@@ -46,9 +42,9 @@ function __brig_candidates
     end
 end
 
-# -f on the name and directory cases so fish offers nothing of its own: right
-# of the ref the words are the agent's, and filenames are a worse guess than
-# silence. -F on the path case hands the slot back to fish's own completion.
+# -f on the name and directory cases, so fish adds nothing of its own: inside
+# the agent's argv, filenames are worse than silence. -F on the path case hands
+# the slot to fish's file completion.
 complete -c brig -f
 complete -c brig -f -n '__brig_says :names' -a '(__brig_candidates)'
 complete -c brig -f -n '__brig_says :dirs' -a '(__fish_complete_directories (commandline -ct))'
