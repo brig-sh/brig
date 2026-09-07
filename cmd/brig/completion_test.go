@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -157,9 +161,14 @@ func TestCompletePositions(t *testing.T) {
 		words:     []string{"sh", "claude", ""},
 		directive: dirNone,
 	}, {
-		name:      "right of the ref a flag is the agent's",
+		// A flag under the cursor right of the ref is brig's if brig has it:
+		// split reads its own flags on either side of the ref, and stops only
+		// at one it does not own. An unknown flag there is still the agent's,
+		// and brig has no list of another program's to offer for it.
+		name:      "brig's own flags stand on either side of the ref",
 		words:     []string{"run", "claude", "--"},
-		directive: dirNone,
+		directive: dirNames,
+		want:      []string{"--mem", "--home"},
 	}, {
 		name:      "and everything past the end of brig's parsing is",
 		words:     []string{"run", "claude", "--", "-"},
@@ -237,6 +246,79 @@ func TestCompletePositions(t *testing.T) {
 		name:      "a verb brig does not have completes nothing",
 		words:     []string{"bogus", ""},
 		directive: dirNone,
+	}, {
+		// bash breaks a word on '=', so the inline spelling of a flag arrives
+		// as three tokens and the separator lands under the cursor. Reading it
+		// as the empty start of the value is what makes the two spellings of
+		// one flag complete alike.
+		name:      "the separator under the cursor starts the value",
+		words:     []string{"run", "--network", "="},
+		directive: dirNames,
+		exactly:   []string{"isolated", "offline", "shared"},
+	}, {
+		name:      "an inline value is consumed with its separator, not read as the ref",
+		words:     []string{"run", "--mem", "=", "4096", ""},
+		directive: dirNames,
+		want:      []string{"claude-code", "claude-code@refactor"},
+	}, {
+		name:      "and it does not shift a group's operand slots",
+		words:     []string{"policy", "attach", "--name", "=", "x", ""},
+		directive: dirNames,
+		exactly:   []string{"no-net"},
+	}, {
+		// brig's own flags stand on either side of the ref: split reads them
+		// wherever they are on the run line. Completion withholding them right
+		// of the ref left it silent about a line brig reads.
+		name:      "brig's own flag is offered right of the ref",
+		words:     []string{"run", "claude", "--m"},
+		directive: dirNames,
+		exactly:   []string{"--mem"},
+	}, {
+		// And stops where split stops. A bare word past the project begins the
+		// agent's argv, so a flag of brig's after it is the agent's word.
+		name:      "but not once the agent's arguments have begun",
+		words:     []string{"run", "claude", "./project", "npm", "--m"},
+		directive: dirNone,
+	}, {
+		name:      "nor is a flag's value completed into the agent's argv",
+		words:     []string{"sh", "claude", "npm", "--network", ""},
+		directive: dirNone,
+	}, {
+		name:      "a continuing verb reads brig's flags after its ref too",
+		words:     []string{"stop", "claude-code", "--m"},
+		directive: dirNames,
+		exactly:   []string{"--mem"},
+	}, {
+		name:      "and the tail begins at its first bare word past the ref",
+		words:     []string{"stop", "claude-code", "extra", "--m"},
+		directive: dirNone,
+	}, {
+		// --all replaces the ref rather than joining it, and removeAll refuses
+		// every argument, so a line carrying it has nothing left to offer.
+		name:      "rm --all completes nothing further",
+		words:     []string{"rm", "--all", ""},
+		directive: dirNone,
+	}, {
+		name:      "and --all is offered only where the ref would have gone",
+		words:     []string{"rm", "--a"},
+		directive: dirNames,
+		exactly:   []string{"--all"},
+	}, {
+		// --all replaces the ref, so once a ref is named it is gone from the
+		// offer -- and no other flag of brig's starts "--a", which is why the
+		// honest answer here is nothing at all.
+		name:      "a ref named, --all is not on offer",
+		words:     []string{"rm", "claude-code", "--a"},
+		directive: dirNone,
+	}, {
+		name:      "a secret write takes a file, and says so",
+		words:     []string{"secret", "create", "gh-token", "-"},
+		directive: dirNames,
+		exactly:   []string{"--file", "--stdin", "-f"},
+	}, {
+		name:      "and the file is the shell's to complete",
+		words:     []string{"secret", "create", "gh-token", "-f", ""},
+		directive: dirFiles,
 	}}
 
 	for _, tc := range cases {
@@ -325,8 +407,10 @@ func TestCompleteWireFormat(t *testing.T) {
 		t.Errorf("answer %q, want %q", got, want)
 	}
 
+	// A directive with nothing under it, so the two shapes of an answer are
+	// both covered: past `--` the line is the agent's and brig offers nothing.
 	out.Reset()
-	completeCmd(&out, []string{"run", "claude", "-"})
+	completeCmd(&out, []string{"run", "claude", "--", "-"})
 	if got, want := out.String(), ":none\n"; got != want {
 		t.Errorf("answer %q, want %q", got, want)
 	}
@@ -407,4 +491,120 @@ func equal(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// The groups table is a second spelling of what the noun commands accept, and a
+// second spelling is a thing that drifts. Each subcommand registers its flags
+// with a flag.FlagSet of its own, inside the function that runs it, so there is
+// no table for completion to read -- which is exactly why this test reads the
+// registrations themselves.
+//
+// The invariant is one direction and deliberately loose: every flag name
+// registered by a noun-group parser must appear somewhere in the groups table.
+// It does not check which subcommand a flag landed on, because the parsers are
+// shared -- nameAndYes serves `secret delete` and `agent rm` both. What it does
+// catch is the drift that actually happens: a flag added to a subcommand and
+// forgotten here, which no other test would notice because completion failing
+// to offer something is silent.
+func TestGroupsTableCoversEveryGroupFlag(t *testing.T) {
+	// The parsers that serve positions the groups table does not describe. Each
+	// is named rather than pattern-matched, and each is checked below to still
+	// register something, so this list cannot quietly rot into an excuse.
+	//
+	// It is short because most of brig's parsers are invisible to the scan
+	// below: it reads a flag name only where it is a string literal, and the
+	// run line registers its own through a closure over the spelling
+	// (`func(n string) { fs.StringVar(..., n, ...) }`), while doctor and ls
+	// hand-parse with no FlagSet at all. That is a real limit -- a group flag
+	// registered through a variable would go unseen here -- and it is worth
+	// naming rather than papering over: every group flag is a literal today,
+	// and one that stops being a literal loses this guard.
+	elsewhere := map[string]string{
+		"parseGlobal": "the global position, left of the verb; see brigFlags",
+	}
+	seen := map[string]bool{}
+
+	fset := token.NewFileSet()
+	pkg, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := groupFlagNames()
+
+	for _, f := range pkg["main"].Files {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				name, ok := registeredFlag(n)
+				if !ok {
+					return true
+				}
+				if _, excused := elsewhere[fn.Name.Name]; excused {
+					seen[fn.Name.Name] = true
+					return true
+				}
+				if !table[name] {
+					t.Errorf("%s registers the flag %q, and the groups table does not offer it. "+
+						"Add it to the subcommand's entry, or -- if it belongs to a position the "+
+						"table does not describe -- name that parser in `elsewhere` with the reason",
+						fn.Name.Name, spell(name))
+				}
+				return true
+			})
+		}
+	}
+
+	// Every excuse still earns its place. A parser that has been renamed, or
+	// that no longer registers a flag, would otherwise leave a line here
+	// excusing something that cannot happen.
+	for fn, why := range elsewhere {
+		if !seen[fn] {
+			t.Errorf("`elsewhere` excuses %s (%s), but it registers no flag any more. Drop the line", fn, why)
+		}
+	}
+}
+
+// registeredFlag reports the flag name a call registers, for the
+// fs.BoolVar/StringVar/... shape the noun groups use: the name is the second
+// argument, after the pointer it writes through.
+func registeredFlag(n ast.Node) (string, bool) {
+	call, ok := n.(*ast.CallExpr)
+	if !ok || len(call.Args) < 2 {
+		return "", false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || !strings.HasSuffix(sel.Sel.Name, "Var") {
+		return "", false
+	}
+	lit, ok := call.Args[1].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	name, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return name, true
+}
+
+// groupFlagNames is every flag the groups table offers, by bare name, so a
+// registration can be looked up whichever way it is spelled.
+func groupFlagNames() map[string]bool {
+	out := map[string]bool{}
+	for _, subs := range groups {
+		for _, s := range subs {
+			for _, f := range s.flags {
+				out[strings.TrimLeft(f, "-")] = true
+			}
+			for f := range s.values {
+				out[strings.TrimLeft(f, "-")] = true
+			}
+		}
+	}
+	return out
 }
