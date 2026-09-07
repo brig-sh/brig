@@ -39,14 +39,23 @@ A brig line has three positions, and completion follows them.
 | where the cursor is | what is offered |
 | --- | --- |
 | before the verb | the verbs, and the global flags (`--verbose`, `-q`) |
-| after the verb, before the ref | the flags that verb honours, and then the ref |
+| a flag, either side of the ref | the flags that verb honours -- brig reads its own on both sides |
 | a ref | every agent, and every session under one: `claude`, `claude@refactor` |
 | `brig run <ref> …` | the project directory, for the first word only |
-| after that, on `run` and `sh` | nothing -- the arguments there are the agent's |
+| once the agent's arguments have begun | nothing |
+
+Completion stops exactly where brig's own parsing stops, and not a word before
+it. `brig run claude --mem 4096` is a line brig reads, so `--mem` is offered
+after the ref as readily as before it. The agent's arguments begin at the first
+word or flag brig does not own -- `--`, an unrecognised flag, or a bare word
+past the project -- and from there completion offers nothing, because the
+vocabulary is another program's and brig has no list of it.
 
 `stop` and `rm` act on a sandbox that exists, so they offer the sessions there
 are rather than every agent there could be. `run`, `sh` and `info` take an
-agent that has never run, so they offer all of them.
+agent that has never run, so they offer all of them. `brig rm --all` names no
+session and refuses every argument, so a line carrying it completes nothing
+further.
 
 Under the noun commands -- `agent`, `policy`, `secret`, `telemetry` -- the
 subcommands complete, and so do the names they take: agents for `agent show`,
