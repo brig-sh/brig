@@ -37,7 +37,8 @@ ok()  { printf '  ok   %s\n' "$1"; }
 bad() { printf '  FAIL %s\n' "$1"; fail=1; }
 
 # --- the stub runtime ---
-# It answers the four questions brig asks (ps, run, exec, stop/rm) and logs
+# It answers the questions brig asks (ps, run, exec, stop/rm, and the network
+# gateway one case below needs) and logs
 # every argument it is given, so the test can assert on what reached argv.
 cat > "$WORK/hull" <<'STUB'
 #!/bin/bash
@@ -162,6 +163,36 @@ case "$verb" in
         ;;
     esac
     ;;
+  network-gateway)
+    # brig asks a gateway two things before it trusts one with rules: that its
+    # help mentions --egress-default, so an older runtime is refused rather
+    # than handed a flag it would reject, and that something answers on the
+    # qemu socket, which is what it judges readiness on. Answer both, so a run
+    # carrying a policy gets past the boot and the rules it passed can be read
+    # out of the log above. Nothing here filters anything: what is under test
+    # is whether the rules travel, and hull tests the filter itself.
+    case " $* " in
+      *" --help "*)
+        printf -- '   --egress-default string  verdict for a connection no egress rule matches\n'
+        exit 0
+        ;;
+    esac
+    qsock=""; prev=""
+    for a in "$@"; do [ "$prev" = --qemu-socket ] && qsock="$a"; prev="$a"; done
+    # exec, so the process brig started is the one holding the socket: it
+    # records the gateway only for a pid that owns it.
+    # The trailing arguments are for ps, not for python, which ignores them:
+    # brig records a gateway as one it owns only when `ps -o command=` on the
+    # pid it started shows both "network-gateway" and the control socket, and
+    # exec would otherwise leave an argv holding neither. Without the record,
+    # `brig rm --all` finds no gateway to stop and the listener outlives the
+    # run.
+    exec python3 -c 'import socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+s.listen(8)
+time.sleep(120)' "$qsock" network-gateway "$@"
+    ;;
   stop)
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
@@ -200,9 +231,10 @@ printf 'stand-in\n' > "$WORK/assets/bzImage"
 printf 'stand-in\n' > "$WORK/assets/container-initrd"
 export BRIG_BOOT_ASSETS="$WORK/assets"
 # The built-in profiles ask for hvi, and brig starts a network gateway for it
-# before booting anything -- a real subcommand of a real runtime, which the
-# stub below is not. This test is about what reaches argv, so pin the backend
-# to the one that needs no gateway rather than teach the stub to fake one.
+# before booting anything. Most cases here are about what reaches argv and have
+# no use for one, so the default is the backend that needs no gateway. The
+# egress case is the exception: it overrides this per command, and the stub
+# answers as a gateway for it.
 export BRIG_HYPERVISOR=vz
 # Your own profiles go in a scratch directory, never the caller's own.
 export BRIG_PROFILE_DIR="$WORK/profiles"
@@ -560,6 +592,118 @@ grep -q '^argv: run' "$STUB_LOG" \
 "$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
 unset BRIG_POLICY_DIR
 "$WORK/brig" rm --all > /dev/null 2>&1
+
+# And the other half of it: on a backend that can enforce a policy, the rules
+# have to arrive. The case above proves brig refuses what it cannot enforce,
+# which would still pass with the whole feature deleted -- an attach that
+# writes a file and a boot that reads nothing would refuse on vz just the same.
+# This one proves the rules travel. It is the only case here that needs a
+# gateway, so it is the only one that leaves BRIG_HYPERVISOR=vz behind.
+#
+# The stub gateway is a python listener, so a runner without python3 would
+# otherwise skip the only automated proof of #15 and stay green. In CI that is
+# a failure; on a laptop it is a skip.
+if ! command -v python3 > /dev/null 2>&1; then
+  if [ -n "${CI:-}" ]; then
+    bad "no python3, so the policy-reaches-the-gateway case could not run"
+  else
+    printf '  skip a policy reaches the gateway (no python3 for the stub gateway)\n'
+  fi
+else
+cat > "$WORK/policies/reachable.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: reachable
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+    - cidr: 140.82.112.0/20
+  deny:
+    - host: telemetry.example.com
+YAML
+export BRIG_POLICY_DIR="$WORK/policies"
+# Under $WORK, so the EXIT trap takes the sockets and the address ledger with
+# everything else. It fits: a sockaddr_un holds 103 bytes, and the longest path
+# built under here -- $WORK/gw/sandbox-brig-claude-code.sock.qemu -- measures
+# 101 on a Mac, where mktemp -d is at its longest. Exported rather than set per
+# command, because rm and detach release what run allocated and have to look in
+# the same place.
+export BRIG_GATEWAY_DIR="$WORK/gw"
+"$WORK/brig" policy attach reachable claude-code > /dev/null 2>&1
+: > "$STUB_LOG"
+env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/pol-on.out" 2>&1
+polrc=$?
+grep '^argv: network-gateway --socket' "$STUB_LOG" > "$WORK/gw-on.argv"
+if [ "$polrc" != 0 ]; then
+  bad "the run carrying a policy failed: $(cat "$WORK/pol-on.out")"
+else
+  missing=""
+  for want in "--egress-default deny" \
+              "--egress-allow host=api.anthropic.com" \
+              "--egress-allow cidr=140.82.112.0/20" \
+              "--egress-deny host=telemetry.example.com"; do
+    grep -q -- "$want" "$WORK/gw-on.argv" || missing="$missing [$want]"
+  done
+  [ -z "$missing" ] \
+    && ok "every rule of an attached policy reaches the gateway" \
+    || bad "rules missing from the gateway command line:$missing -- got: $(cat "$WORK/gw-on.argv")"
+fi
+
+# A rule set is only enforceable if the guest is behind the gateway carrying
+# it, so the boot has to name that gateway -- this exact socket, not merely
+# some gateway. hull is passed --gateway-sock and --gateway-cidr for every
+# networked run on this backend, shared or filtered, so asserting the flags
+# are present asserts nothing: a boot that starts the filtered gateway and
+# then attaches the guest to the shared one would satisfy it.
+polsock="$(sed -n 's/.*--socket \([^ ]*\).*/\1/p' "$WORK/gw-on.argv")"
+runline="$(grep '^argv: run' "$STUB_LOG")"
+if [ -z "$polsock" ]; then
+  bad "no policy gateway was started, so the sandbox could not be behind one"
+elif ! printf '%s' "$runline" | grep -q -- "--gateway-sock $polsock"; then
+  bad "the sandbox was not attached to the gateway carrying the rules ($polsock): $runline"
+elif ! printf '%s' "$runline" | grep -qE -- '--gateway-cidr [0-9.]+/30'; then
+  bad "the sandbox was not given an address on a network of its own: $runline"
+else
+  ok "and the sandbox is put on the network that gateway serves"
+fi
+
+# The default stays open. Held here as well as in Go because this is the path
+# a person takes: attach nothing, and nothing is filtered.
+"$WORK/brig" rm --all > /dev/null 2>&1
+"$WORK/brig" policy detach reachable claude-code > /dev/null 2>&1
+: > "$STUB_LOG"
+env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/pol-off.out" 2>&1
+offrc=$?
+grep '^argv: network-gateway --socket' "$STUB_LOG" > "$WORK/gw-off.argv"
+# Four claims, because three of them pass on an empty file. A gateway has to
+# have been started at all -- otherwise a reused one from the case above would
+# let the rest pass while measuring nothing; it has to be a shared gateway
+# rather than one raised for this sandbox alone, which is the shape of the
+# failure worth fearing, every run quietly isolated and filtered; and it must
+# carry no rule. The shared one is named for its network and the per-sandbox
+# one for its sandbox, and only the shared network is a /24 -- both read off
+# the argv rather than compared against a literal subnet, which has moved once
+# already.
+if [ "$offrc" != 0 ]; then
+  bad "the run with no policy failed: $(cat "$WORK/pol-off.out")"
+elif [ ! -s "$WORK/gw-off.argv" ]; then
+  bad "no gateway was started for a run with no policy, so nothing was measured"
+elif ! grep -q -- '--socket [^ ]*/gateway-' "$WORK/gw-off.argv"; then
+  bad "a run with nothing attached was given a gateway of its own: $(cat "$WORK/gw-off.argv")"
+elif ! grep -qE -- '--subnet [0-9.]+/24' "$WORK/gw-off.argv"; then
+  bad "a run with nothing attached was not put on the shared network: $(cat "$WORK/gw-off.argv")"
+elif grep -q -- '--egress' "$WORK/gw-off.argv"; then
+  bad "a run with nothing attached was filtered anyway: $(cat "$WORK/gw-off.argv")"
+else
+  ok "a run with no policy stays on the shared network and passes no egress rule"
+fi
+
+# rm --all stops the gateway raised for a sandbox; the shared one outlives it
+# by design, and its listener would outlive this script.
+"$WORK/brig" rm --all > /dev/null 2>&1
+pkill -f "$BRIG_GATEWAY_DIR/" > /dev/null 2>&1
+unset BRIG_POLICY_DIR BRIG_GATEWAY_DIR
+fi
 
 # A posture brig does not know must stop the run rather than pick one.
 out="$(BRIG_NETWORK=airgapped "$WORK/brig" info claude 2>&1)"; rc=$?
@@ -1719,9 +1863,10 @@ printf 'stand-in\n' > "$WORK/assets/bzImage"
 printf 'stand-in\n' > "$WORK/assets/container-initrd"
 export BRIG_BOOT_ASSETS="$WORK/assets"
 # The built-in profiles ask for hvi, and brig starts a network gateway for it
-# before booting anything -- a real subcommand of a real runtime, which the
-# stub below is not. This test is about what reaches argv, so pin the backend
-# to the one that needs no gateway rather than teach the stub to fake one.
+# before booting anything. Most cases here are about what reaches argv and have
+# no use for one, so the default is the backend that needs no gateway. The
+# egress case is the exception: it overrides this per command, and the stub
+# answers as a gateway for it.
 export BRIG_HYPERVISOR=vz
 
 echo "== sh =="

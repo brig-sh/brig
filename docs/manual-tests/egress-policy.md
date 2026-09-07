@@ -5,7 +5,11 @@ now says a bound policy is enforced at the gateway brig gives the sandbox.
 This file is the measurement behind that sentence.
 
 CI cannot run any of this. `ci.yml` runs on Linux only and never boots a VM,
-and the enforcement point is a macOS backend.
+and the enforcement point is a macOS backend. What CI does hold is the half
+above the guest: `script/smoke.sh` asserts that the rules of an attached
+policy reach the gateway's command line and that the sandbox is put behind
+that gateway. Everything below -- a real kernel, a real resolver, and whether
+a packet actually stops -- is measured here and nowhere else.
 
 ## Result
 
