@@ -17,12 +17,17 @@ _brig_completion() {
 	# tells brig it is being asked "what can come next" rather than "finish
 	# this token".
 	words=("${COMP_WORDS[@]:1:COMP_CWORD-1}")
-	cur="${COMP_WORDS[COMP_CWORD]}"
+	cur="${COMP_WORDS[COMP_CWORD]-}"
 
 	COMPREPLY=()
 	# stderr is dropped rather than shown: brig writes none on this path, and a
 	# line from anywhere else would land in the middle of what is being typed.
-	out="$("${COMP_WORDS[0]}" __complete -- "${words[@]}" "$cur" 2>/dev/null)" || return
+	#
+	# ${words[@]+"${words[@]}"} rather than "${words[@]}": before bash 4.4 an
+	# empty array expanded under `set -u` is an unbound variable, so a reader
+	# with `set -u` in their shell got an error across the prompt on the very
+	# first word. macOS ships bash 3.2, which is exactly that case.
+	out="$("${COMP_WORDS[0]}" __complete -- ${words[@]+"${words[@]}"} "$cur" 2>/dev/null)" || return
 	directive="${out%%$'\n'*}"
 
 	case "$directive" in
@@ -31,7 +36,7 @@ _brig_completion() {
 		# candidate carrying a space stays one candidate.
 		local IFS=$'\n'
 		reply=(${out#*$'\n'})
-		COMPREPLY=("${reply[@]}")
+		COMPREPLY=(${reply[@]+"${reply[@]}"})
 		;;
 	:dirs)
 		# Directory names, from the shell rather than from brig: the project

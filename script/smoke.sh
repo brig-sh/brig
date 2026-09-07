@@ -1832,5 +1832,58 @@ grep -q '^  ok  runtime .*0.1.0-rc23' "$WORK/doctor.out" \
   && ok "doctor names the runtime version" \
   || bad "doctor names the runtime version -- got: $(grep runtime "$WORK/doctor.out")"
 
+echo "== completion =="
+# The completion scripts are shell code, so the unit tests cannot run them: they
+# cover the engine's answers, and these cover the scripts that render them.
+#
+# Driven under `set -u`, which is where this went wrong once: an empty array
+# expanded under `set -u` is an unbound variable before bash 4.4, so the error
+# landed across the reader's prompt on the very first word. /bin/bash is
+# preferred over whatever `bash` resolves to for exactly that reason -- on macOS
+# it is 3.2, the version that reproduces it, while `bash` on PATH is often a
+# Homebrew 5.x that cannot. CI is Linux, where both are 5.x and this case checks
+# only that the script runs clean under `set -u`; the version that fails is on
+# the machines people develop on.
+BASH_OLDEST=bash
+[ -x /bin/bash ] && BASH_OLDEST=/bin/bash
+"$WORK/brig" completion bash > "$WORK/brig.bash" 2>/dev/null \
+  && ok "completion bash prints a script" || bad "completion bash prints a script"
+
+cat > "$WORK/bashdrive.sh" <<'DRIVE'
+set -u
+source "$1"
+shift
+COMP_WORDS=("$@"); COMP_CWORD=$(( ${#COMP_WORDS[@]} - 1 )); COMPREPLY=()
+_brig_completion
+printf '%s\n' "${COMPREPLY[@]-}"
+DRIVE
+
+# The first word: the case where the array left of the cursor is empty.
+out="$("$BASH_OLDEST" "$WORK/bashdrive.sh" "$WORK/brig.bash" "$WORK/brig" "" 2>&1)"
+case "$out" in
+  *"unbound variable"*) bad "the bash script survives set -u -- got: $out" ;;
+  *run*) ok "the bash script survives set -u and offers the verbs" ;;
+  *) bad "the bash script offers the verbs -- got: $out" ;;
+esac
+
+# And the boundary the engine and the parser have to agree on: brig's own flag
+# is offered right of the ref, where split still reads it.
+out="$("$BASH_OLDEST" "$WORK/bashdrive.sh" "$WORK/brig.bash" "$WORK/brig" run claude --m 2>&1)"
+[ "$out" = "--mem" ] && ok "the bash script offers brig's flags right of the ref" \
+  || bad "the bash script offers --mem right of the ref -- got: $out"
+
+# fish, when the host has it. The script is skipped rather than assumed: it is
+# the one shell that is not on a stock macOS or CI image.
+if command -v fish >/dev/null 2>&1; then
+  "$WORK/brig" completion fish > "$WORK/brig.fish" 2>/dev/null
+  out="$(PATH="$WORK:$PATH" fish -c "source $WORK/brig.fish; complete -C 'brig run cl'" 2>&1)"
+  case "$out" in
+    *claude*) ok "the fish script offers refs" ;;
+    *) bad "the fish script offers refs -- got: $out" ;;
+  esac
+else
+  echo "  --   fish not installed, skipping its script"
+fi
+
 [ "$fail" = 0 ] && echo PASS || echo FAILURES
 exit "$fail"
