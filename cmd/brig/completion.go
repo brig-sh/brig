@@ -14,25 +14,21 @@ import (
 
 // Shell completion, in two commands.
 //
-// `brig completion <shell>` writes a script to stdout and installs nothing.
-// Where that script belongs differs per shell and per host, and a command that
-// edits a startup file has a blast radius nothing else here has; the docs say
-// the line to add.
+// `brig completion <shell>` prints a script to stdout. It installs nothing:
+// the install path differs per shell and per host, and the docs give the line.
 //
-// The scripts carry none of brig's vocabulary. Each one collects the words left
-// of the cursor, hands them to `brig __complete`, and renders what comes back.
-// So the verbs, the flags and where each flag is legal are declared once, in
-// Go, beside the table that already decides them -- and the three shells cannot
-// come to disagree about what brig accepts, because none of them knows.
+// The scripts hold no brig vocabulary. Each collects the words left of the
+// cursor, passes them to `brig __complete`, and renders the reply. Verbs, flags
+// and flag positions are therefore declared once, in Go, next to brigFlags.
 //
-// __complete answers on stdout and says nothing anywhere else. It is an ABI
-// between a script and the binary that generated it, so it is in no help text.
+// __complete is an ABI between a script and the binary that printed it, so it
+// is in no help text.
 
 //go:embed completions/brig.bash completions/brig.zsh completions/brig.fish
 var completionScripts embed.FS
 
-// completeVerb is the hidden engine's name. Two underscores, because it is not
-// a word anyone types and it must not read like one.
+// completeVerb is the engine's name. Underscore-prefixed: it is not a command
+// anyone types.
 const completeVerb = "__complete"
 
 const completionUsage = `brig completion -- print a shell completion script
@@ -62,11 +58,10 @@ brig mounts, and directories are offered for it.
 // completionCmd prints the script for one shell.
 func completionCmd(out io.Writer, args []string) error {
 	if len(args) == 0 {
-		// An agent can be called completion, and the verb wins: dispatch reads
-		// a verb before it reads a ref, deliberately, so that brig's own
-		// vocabulary does not depend on which agents a host happens to have.
-		// The agent is still reachable under run, so name that reading rather
-		// than answer with a list of shells the reader did not ask about.
+		// Verb dispatch precedes the ref fallback, so an agent named
+		// "completion" is not reachable as `brig completion`. That applies to
+		// every verb and is intentional: the command set must not depend on
+		// which agents are installed. Point at the spelling that still works.
 		if _, known := profile.Lookup("completion"); known {
 			return usagef("completion needs a shell: bash, zsh or fish. " +
 				"The agent of that name is reached as `brig run completion`")
@@ -95,9 +90,8 @@ func completionCmd(out io.Writer, args []string) error {
 	return err
 }
 
-// The directive is the first line of an answer, and it says what the lines
-// under it are -- or, where a candidate list cannot say it, what the shell
-// should do instead.
+// The directive is the first line of a reply. It says what the lines below it
+// are, or what the shell should do when a candidate list cannot express it.
 const (
 	// dirNames: candidates follow, already matched against the current word.
 	dirNames = ":names"
@@ -105,24 +99,20 @@ const (
 	dirDirs = ":dirs"
 	// dirFiles: complete paths. No candidates follow.
 	dirFiles = ":files"
-	// dirNone: brig owns nothing at this position, so offer nothing. It has to
-	// be distinguishable from a failure: a shell that reads "brig had no
-	// answer" falls back to filenames, and the tail right of the ref is the one
-	// place brig has to stay silent rather than guess.
+	// dirNone: offer nothing. Distinct from a failed call, which the scripts
+	// treat as "fall back to filenames" -- wrong inside the agent's argv.
 	dirNone = ":none"
 )
 
-// completeCmd answers one completion request. It writes candidates to out and
-// nothing to stderr, ever, and returns no error: a notice or a failure printed
-// on a keystroke lands in the middle of the line the reader is typing.
+// completeCmd answers one completion request. It writes only candidates to out,
+// never to stderr, and returns no error. Anything on stderr would print over
+// the line the user is typing.
 func completeCmd(out io.Writer, words []string) {
-	// The profile directory is read here rather than by the dispatcher, so that
-	// a file that will not parse costs a candidate rather than a line of
-	// diagnostics across the prompt. What loaded is completed; what did not is
-	// not, and the next real command says why.
+	// Loaded here rather than by the dispatcher, which warns about files that
+	// will not parse. Profiles that load are completed; the rest are skipped,
+	// and the next real command reports them.
 	_ = profile.Load(profile.Dir())
-	// Nothing below prints a notice, and this is the belt to that braces: a
-	// warning added anywhere the engine reaches stays silent on a keystroke.
+	// Suppresses any warning added later in a path the engine reaches.
 	verbosity = wrap.Quiet
 
 	directive, candidates := complete(words)
@@ -132,12 +122,11 @@ func completeCmd(out io.Writer, words []string) {
 	}
 }
 
-// verbs are the commands completion offers: the taught vocabulary, and only it.
+// verbs are the commands completion offers: the documented set only.
 //
-// The retired spellings brig still answers to -- exec, shell, env, create,
-// reset, profiles, policies -- are deliberately absent. They keep working and
-// they say what replaced them; completing them would teach a word that is
-// leaving, to the one reader who has not typed it yet.
+// The retired spellings -- exec, shell, env, create, reset, profiles, policies
+// -- are excluded. They still work and print what replaced them, but they are
+// removed in v0.3, so completion does not teach them.
 var verbs = []string{
 	"agent",
 	"completion",
@@ -163,32 +152,28 @@ var refVerbs = map[string]bool{
 	"info": true,
 }
 
-// complete is the whole decision: which words are already on the line, and what
-// may stand where the cursor is.
+// complete decides what may stand where the cursor is.
 //
-// words is the line with `brig` dropped, and the word under the cursor is the
-// last of them -- empty when the cursor sits on fresh whitespace. That the
-// current word is always present, even empty, is what lets one function serve
-// both "finish this token" and "what can come next".
+// words is the line with `brig` dropped; the last element is the word under the
+// cursor, empty when the cursor is on fresh whitespace. Always passing that
+// element, even empty, is what lets one function serve both "finish this token"
+// and "what comes next".
 func complete(words []string) (string, []string) {
 	if len(words) == 0 {
 		words = []string{""}
 	}
 	cur := words[len(words)-1]
 	before := words[:len(words)-1]
-	// bash breaks a word on '=', so `--network=<cursor>` arrives with the
-	// separator as the current word rather than as part of the flag. It is not
-	// something the reader is trying to complete, so it reads as the empty
-	// start of the value -- the normalisation _init_completion makes, for the
-	// same reason.
+	// bash splits on '=', so `--network=<cursor>` arrives with "=" as the
+	// current word. Treat it as an empty value prefix, as _init_completion
+	// does.
 	if cur == "=" {
 		cur = ""
 	}
 
-	// The verb, and what stands between it and the cursor. Everything left of
-	// the verb is a global flag or a mistake, and both are skipped: a token brig
-	// would refuse is not a verb, so reading on is what keeps the rest of the
-	// line completable.
+	// Find the verb and the tokens between it and the cursor. Tokens left of
+	// the verb are global flags, or typos; both are skipped, so a typo does not
+	// make the rest of the line uncompletable.
 	verb := ""
 	var rest []string
 	for i := 0; i < len(before); i++ {
@@ -207,9 +192,8 @@ func complete(words []string) (string, []string) {
 		if strings.HasPrefix(cur, "-") {
 			return names(cur, flagSpellings(posGlobal, ""))
 		}
-		// Only the verbs. `brig claude@refactor` with no verb works, and is in
-		// no help text on purpose; completing it would teach the second
-		// spelling that the taught line already covers.
+		// Verbs only. A bare ref with no verb also works but is undocumented,
+		// and `brig run <ref>` already covers it.
 		return names(cur, verbs)
 	}
 
@@ -241,42 +225,34 @@ func complete(words []string) (string, []string) {
 	return dirNone, nil
 }
 
-// completeRunLine answers between a lifecycle verb and the end of the line.
-//
-// The three positions a brig line has are the whole of the logic here: brig's
-// own flags up to the ref, the ref, and then the agent's own vocabulary, which
-// brig does not complete because it does not own it.
+// completeRunLine answers for a lifecycle verb: flags, then the ref, then
+// run's project directory. Past that the tokens are the agent's.
 func completeRunLine(verb string, rest []string, cur string) (string, []string) {
-	// --all is read before the run line, removes every sandbox and refuses any
-	// argument at all, so a line carrying it names no session and there is
-	// nothing further to offer. See removeAll.
+	// takeAll strips --all before the run line is parsed, and removeAll then
+	// rejects every remaining argument. Nothing else can appear on this line.
 	if hasSpelling(rest, "--all") {
 		return dirNone, nil
 	}
 
 	line := walkRunLine(verb, rest)
 	if line.tailBegun {
-		// The vocabulary from here is the agent's. brig has no list of another
-		// program's flags and must not guess at one -- not for a flag name, and
-		// not for a flag's value either.
+		// Inside the agent's argv. brig has no list of another program's flags,
+		// so it offers neither names nor values here.
 		return dirNone, nil
 	}
 
-	// The value of one of brig's own flags, when that is what the cursor is on.
 	if line.pending != "" && !strings.HasPrefix(cur, "-") {
 		return operandCandidates(flagValue(line.pending), cur)
 	}
 
 	if strings.HasPrefix(cur, "-") {
-		// Brig's own flags stand on either side of the ref: split reads them
-		// wherever they are on the run line, and stops only at a flag brig does
-		// not own. Offering them only up to the ref would leave completion
-		// silent about `brig run claude --mem`, a line brig reads.
+		// split() reads brig's own flags on both sides of the ref, stopping
+		// only at a flag brig does not own, so offer them on both sides too.
+		// `brig run claude --mem 4096` is a line brig parses.
 		flags := flagSpellings(posRun, verb)
 		if verb == "rm" && !line.refGiven {
-			// --all is not on the run line and not in the table it is built
-			// from. It replaces the ref rather than joining it, so it is
-			// offered only where the ref would have gone.
+			// --all is not in brigFlags: it is read before the run line, and it
+			// replaces the ref rather than accompanying it.
 			flags = append(flags, "--all")
 			sort.Strings(flags)
 		}
@@ -286,24 +262,20 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	if !line.refGiven {
 		return names(cur, refsFor(verb))
 	}
-	// On run the first bare word after the ref is the project brig mounts, and
-	// a project is a directory. Every other verb, and every word after that
-	// one, begins the agent's own arguments.
+	// On run the first bare word after the ref is the project directory. On
+	// every other verb, and for later words, the agent's argv starts here.
 	if verb == "run" && !line.projectTaken {
 		return dirDirs, nil
 	}
 	return dirNone, nil
 }
 
-// runLine is how far a lifecycle line has got by the time the cursor is
-// reached.
+// runLine is how far a lifecycle line has been parsed at the cursor.
 //
-// It answers the same question split answers, and deliberately in the same
-// order, because the two must agree about where brig's arguments stop. Where
-// they disagree, completion either withholds a flag brig would have read or
-// offers one into the agent's argv -- and the second is the worse of the two,
-// since it puts brig's vocabulary in front of a reader who is typing another
-// program's.
+// It resolves the same boundary split() resolves, in the same order, because
+// the two must agree on where brig's arguments end. If completion stops early
+// it withholds a flag brig accepts; if it stops late it offers brig's flags
+// inside the agent's argv.
 type runLine struct {
 	// refGiven: the session ref has been named.
 	refGiven bool
@@ -345,18 +317,17 @@ func walkRunLine(verb string, args []string) runLine {
 					line.tailBegun = true
 					return line
 				}
-				// Before the ref, a flag brig does not have is a mistake the
-				// run itself names. Reading past it keeps the rest of the line
-				// completable, which is what someone fixing the typo wants.
+				// Before the ref, an unknown flag is a typo, which the run
+				// itself reports. Skip it so the rest of the line still
+				// completes.
 				continue
 			}
 			if !takesValue || strings.Contains(a, "=") {
 				continue
 			}
-			// The flag's value, which a shell that breaks words on '=' hands
-			// over as a separator token and then the value itself. Consuming
-			// only one of the two would leave the value standing where a bare
-			// word goes, and be read as the ref.
+			// Consume the value. A shell that splits on '=' delivers it as two
+			// tokens ("=" then the value); consuming only the "=" would leave
+			// the value to be counted as a positional, i.e. as the ref.
 			i++
 			if i < len(args) && args[i] == "=" {
 				i++
@@ -367,11 +338,9 @@ func walkRunLine(verb string, args []string) runLine {
 	return line
 }
 
-// pendingFlag is the brig flag the cursor's word would be the value of: the
-// last token on the line, when that is a flag of brig's that takes one.
-//
-// The `=` a shell may have split out of an inline value is stepped over, so
-// `--network=<cursor>` completes the postures the spaced spelling does.
+// pendingFlag returns the flag whose value the cursor is on: the last token,
+// when it is a brig flag that takes a value. A trailing "=" is skipped, so
+// `--network=<cursor>` completes like `--network <cursor>`.
 func pendingFlag(args []string) string {
 	if len(args) == 0 {
 		return ""
@@ -387,7 +356,7 @@ func pendingFlag(args []string) string {
 	return last
 }
 
-// hasSpelling reports whether a line carries one exact flag spelling.
+// hasSpelling reports whether args contains this exact token.
 func hasSpelling(args []string, spelling string) bool {
 	for _, a := range args {
 		if a == spelling {
@@ -397,13 +366,12 @@ func hasSpelling(args []string, spelling string) bool {
 	return false
 }
 
-// sessionVerbs act on a sandbox that already exists, so they are completed
-// from the sessions there are rather than from the agents there could be.
+// sessionVerbs require an existing sandbox, so they complete from the session
+// index rather than from the profile registry.
 //
-// run and sh both start one, and info reads a profile without booting
-// anything, so all three take an agent that has never run. stop and rm do not:
-// offering every agent there would offer a session that is not there, and on a
-// host with nothing running the honest answer is nothing.
+// run and sh create one, and info reads a profile without booting, so those
+// three accept an agent that has never run. stop and rm do not: offering every
+// agent would offer sessions that do not exist.
 var sessionVerbs = map[string]bool{
 	"stop": true,
 	"rm":   true,
@@ -420,12 +388,12 @@ func refsFor(verb string) []string {
 type operand int
 
 const (
-	// opNothing: brig has no list for this. A session label, a new agent's
-	// name, a secret's value -- words brig cannot enumerate, or should not.
+	// opNothing: no candidate list. A new agent's name, a session label, a
+	// secret name -- values brig cannot enumerate, or must not.
 	opNothing operand = iota
 	opAgent
-	// opFileAgent is an agent with a file of its own. edit opens that file and
-	// rm removes it, so a built-in is a candidate both commands refuse.
+	// opFileAgent is an agent backed by a file. `agent edit` opens that file
+	// and `agent rm` deletes it; both reject a built-in.
 	opFileAgent
 	opPolicy
 	opRef
@@ -455,13 +423,13 @@ func operandCandidates(kind operand, cur string) (string, []string) {
 	return dirNone, nil
 }
 
-// sub is one subcommand of a noun group: its flags, the flags that take a
-// value, and what its bare words name, in order.
+// sub is one subcommand of a noun group: its boolean flags, its value-taking
+// flags, and what its positional arguments name, in order.
 //
-// The noun groups build their arguments with a flag.FlagSet of their own,
-// inside the function that runs them, so there is no table to read them off.
-// This is that table, for completion only. A subcommand missing from here
-// completes nothing, which is the safe direction to be wrong in.
+// Each noun subcommand builds a flag.FlagSet inside the function that runs it,
+// so there is nothing for completion to read. This table duplicates that, for
+// completion only; TestGroupsTableCoversEveryGroupFlag guards the drift. A
+// subcommand missing here completes nothing rather than something wrong.
 type sub struct {
 	name string
 	// flags take no value.
@@ -473,12 +441,12 @@ type sub struct {
 	operands []operand
 }
 
-// groups is the noun commands and what stands under each.
+// groups is the noun commands and their subcommands.
 //
-// Secret names are absent on purpose. Listing them opens the store -- on macOS
-// that is `security dump-keychain`, and a secret-service backend can put an
-// unlock prompt on the screen -- and a keystroke must not do either. The
-// subcommands complete; their operands do not.
+// Secret names are deliberately absent: listing them opens the store, which on
+// macOS runs `security dump-keychain`, and on Linux can raise an unlock prompt
+// from the secret-service backend. Subcommands complete; their name operands
+// do not.
 var groups = map[string][]sub{
 	"agent": {
 		{name: "ls"},
@@ -560,10 +528,10 @@ func completeGroup(verb string, rest []string, cur string) (string, []string) {
 		a := rest[i]
 		if strings.HasPrefix(a, "-") {
 			if takesGroupValue(subs, name, a) && !strings.Contains(a, "=") {
-				// The value, and the separator before it when a shell has
-				// broken the inline spelling into tokens. Consuming only the
-				// separator would leave the value standing where an operand
-				// goes and shift every slot after it by one.
+				// Consume the value, plus the "=" when a shell split the
+				// inline spelling into tokens. Consuming only the "=" leaves
+				// the value to be counted as a positional, shifting every
+				// operand index by one.
 				i++
 				if i < len(rest) && rest[i] == "=" {
 					i++
@@ -580,7 +548,7 @@ func completeGroup(verb string, rest []string, cur string) (string, []string) {
 
 	if name == "" {
 		if strings.HasPrefix(cur, "-") {
-			// A flag before the subcommand belongs to no subcommand yet.
+			// No subcommand yet, so there is no flag set to draw from.
 			return dirNone, nil
 		}
 		return names(cur, subNames(subs))
@@ -590,7 +558,7 @@ func completeGroup(verb string, rest []string, cur string) (string, []string) {
 		return dirNone, nil
 	}
 
-	// The value of a flag that takes one.
+	// The cursor is on a value-taking flag's value.
 	if len(rest) > 0 && !strings.HasPrefix(cur, "-") {
 		if kind, ok := s.values[lastFlag(rest)]; ok {
 			return operandCandidates(kind, cur)
@@ -628,9 +596,9 @@ func subNames(subs []sub) []string {
 	return out
 }
 
-// takesGroupValue reports whether a token is a flag of this subcommand that
-// consumes the argument after it, so that walking a group's line does not read
-// a flag's value as one of its bare words.
+// takesGroupValue reports whether arg is a flag of this subcommand that
+// consumes the next token, so the walk does not count a value as a
+// positional.
 func takesGroupValue(subs []sub, name, arg string) bool {
 	s, ok := findSub(subs, name)
 	if !ok {
@@ -641,13 +609,9 @@ func takesGroupValue(subs []sub, name, arg string) bool {
 	return takes
 }
 
-// lastFlag is the flag spelling the cursor may be completing the value of: the
-// token immediately left of the cursor, with the `=` a shell may have split out
-// of an inline value stepped over.
-//
-// bash breaks words on `=`, so `--network=sh` reaches here as three tokens.
-// Reading past the separator is what makes the inline spelling of a flag
-// complete the same way the spaced one does.
+// lastFlag returns the token left of the cursor, skipping a trailing "=" so
+// that `--file=<cursor>` resolves to `--file`. bash splits on "=", so the
+// inline spelling arrives as three tokens.
 func lastFlag(rest []string) string {
 	last := rest[len(rest)-1]
 	if last == "=" && len(rest) > 1 {
@@ -656,11 +620,8 @@ func lastFlag(rest []string) string {
 	return last
 }
 
-// flagValue is what a run-line flag's value names.
-//
-// A closed set is the payoff here: --network has three postures and nothing
-// else, and a reader who cannot remember them is exactly who completion is for.
-// The rest name a host path, or a number brig cannot guess.
+// flagValue maps a run-line flag to what its value names. --network is the
+// only closed set; the rest take a host path or a number.
 func flagValue(flag string) operand {
 	switch flag {
 	case "--home", "-w", "--workspace":
@@ -673,17 +634,15 @@ func flagValue(flag string) operand {
 	return opNothing
 }
 
-// networkModes is the posture set --network takes. Spelled here rather than
-// read from wrap because the parser there maps words onto values and does not
-// enumerate them.
+// networkModes is the value set --network accepts. Duplicated from
+// wrap.ParseNetwork, which maps strings to values without exposing the list.
 var networkModes = []string{"isolated", "offline", "shared"}
 
-// flagSpellings is what brig owns at one position, as a reader types it.
+// flagSpellings returns brig's own flags legal at one position, as typed.
 //
-// Read off the position table, so a flag added there is completed without
-// anything here changing. What is left out is what the help text leaves out: a
-// spelling on its way out, and a position on its way out, are not words to
-// teach a reader who has not typed them yet.
+// Read from brigFlags, so a flag added there needs no change here. Excluded:
+// deprecated spellings, positions being retired (retiredAs), and undocumented
+// spellings -- all still accepted, none of them taught.
 func flagSpellings(at position, verb string) []string {
 	var out []string
 	for _, f := range brigFlags {
@@ -705,8 +664,8 @@ func flagSpellings(at position, verb string) []string {
 	return out
 }
 
-// bareWords are the words at one position that are not flags and not a flag's
-// value. On a run line the first of them is the ref.
+// bareWords returns the positional arguments at one position: tokens that are
+// neither a flag nor a flag's value.
 func bareWords(args []string, at position) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
@@ -721,8 +680,7 @@ func bareWords(args []string, at position) []string {
 			continue
 		}
 		if a == "=" {
-			// A separator with no flag of brig's before it. Neither it nor the
-			// value after it is a word of brig's own.
+			// A "=" with no brig flag before it. Skip it and its value.
 			i++
 			continue
 		}
@@ -743,8 +701,8 @@ func agentNames() []string {
 	return out
 }
 
-// fileAgentNames is every spelling that reaches an agent brig loaded from a
-// file. A built-in has no file to open or remove.
+// fileAgentNames returns the spellings of file-backed agents only. A built-in
+// has no file to open or delete.
 func fileAgentNames() []string {
 	var out []string
 	for _, name := range profile.Names() {
@@ -758,13 +716,9 @@ func fileAgentNames() []string {
 	return out
 }
 
-// refCandidates is what a lifecycle verb takes: every agent, and every session
-// that exists under one.
-//
-// Both, and in one list, because they are one grammar: `claude` is that agent's
-// default session and `claude@refactor` is a session of its own. Offering the
-// agents alone would answer half the question, and offering the labelled refs
-// alone would hide the session most lines mean.
+// refCandidates returns every agent plus every existing session, in one list.
+// They are one grammar: `claude` is that agent's default session,
+// `claude@refactor` is a labelled one.
 func refCandidates() []string {
 	seen := map[string]bool{}
 	var out []string
@@ -785,8 +739,8 @@ func refCandidates() []string {
 	return out
 }
 
-// policyNames is every policy that loads, and nothing about the ones that do
-// not: a name completion offers has to be a name the next command accepts.
+// policyNames returns the policies that load. One that does not load is
+// omitted: every command that takes a policy name would reject it.
 func policyNames() []string {
 	entries, _ := policy.LoadAll(policy.Dir())
 	out := make([]string, 0, len(entries))
@@ -797,15 +751,12 @@ func policyNames() []string {
 	return out
 }
 
-// names matches candidates against the word being typed.
+// names filters candidates by the word being typed.
 //
-// Matched here rather than left to the shell so that one Go test is the whole
-// truth about what a keystroke offers. The shells filter again; agreeing with
-// them costs nothing.
+// Filtered here rather than in the shells so the Go tests cover exactly what a
+// keystroke offers; the shells filter again, harmlessly.
 //
-// A long spelling under the cursor drops the short forms: someone who has typed
-// two dashes has said which spelling they want, and offering `-q` against `--`
-// is a candidate that cannot be completed.
+// A "--" prefix drops the short forms, which cannot match it anyway.
 func names(cur string, candidates []string) (string, []string) {
 	long := strings.HasPrefix(cur, "--")
 	var out []string
