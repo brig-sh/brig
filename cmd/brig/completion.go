@@ -52,15 +52,25 @@ completions from, or source it from your startup file:
   fish    brig completion fish >~/.config/fish/completions/brig.fish
 
 Completion offers the verbs, the refs ` + "`brig ls`" + ` prints, and the flags that are
-legal where the cursor is. Right of the ref the arguments are the agent's, so
-brig completes nothing there -- with one exception: on run the first word after
-the ref is the project directory brig mounts, and directories are offered for
-it.
+legal where the cursor is. brig's own flags stand on either side of the ref,
+and are offered on both. What brig does not own it does not complete: once a
+word or a flag it does not recognise has begun the agent's own arguments,
+completion stops. On run the first word after the ref is the project directory
+brig mounts, and directories are offered for it.
 `
 
 // completionCmd prints the script for one shell.
 func completionCmd(out io.Writer, args []string) error {
 	if len(args) == 0 {
+		// An agent can be called completion, and the verb wins: dispatch reads
+		// a verb before it reads a ref, deliberately, so that brig's own
+		// vocabulary does not depend on which agents a host happens to have.
+		// The agent is still reachable under run, so name that reading rather
+		// than answer with a list of shells the reader did not ask about.
+		if _, known := profile.Lookup("completion"); known {
+			return usagef("completion needs a shell: bash, zsh or fish. " +
+				"The agent of that name is reached as `brig run completion`")
+		}
 		return usagef("completion needs a shell: bash, zsh or fish")
 	}
 	switch args[0] {
@@ -166,6 +176,14 @@ func complete(words []string) (string, []string) {
 	}
 	cur := words[len(words)-1]
 	before := words[:len(words)-1]
+	// bash breaks a word on '=', so `--network=<cursor>` arrives with the
+	// separator as the current word rather than as part of the flag. It is not
+	// something the reader is trying to complete, so it reads as the empty
+	// start of the value -- the normalisation _init_completion makes, for the
+	// same reason.
+	if cur == "=" {
+		cur = ""
+	}
 
 	// The verb, and what stands between it and the cursor. Everything left of
 	// the verb is a global flag or a mistake, and both are skipped: a token brig
@@ -229,48 +247,154 @@ func complete(words []string) (string, []string) {
 // own flags up to the ref, the ref, and then the agent's own vocabulary, which
 // brig does not complete because it does not own it.
 func completeRunLine(verb string, rest []string, cur string) (string, []string) {
-	// `--` is the reader saying the rest is the agent's. Nothing after it is
-	// brig's to complete, whatever it looks like.
-	for _, a := range rest {
-		if a == "--" {
-			return dirNone, nil
-		}
+	// --all is read before the run line, removes every sandbox and refuses any
+	// argument at all, so a line carrying it names no session and there is
+	// nothing further to offer. See removeAll.
+	if hasSpelling(rest, "--all") {
+		return dirNone, nil
+	}
+
+	line := walkRunLine(verb, rest)
+	if line.tailBegun {
+		// The vocabulary from here is the agent's. brig has no list of another
+		// program's flags and must not guess at one -- not for a flag name, and
+		// not for a flag's value either.
+		return dirNone, nil
 	}
 
 	// The value of one of brig's own flags, when that is what the cursor is on.
-	if kind, ok := pendingValue(rest, cur); ok {
-		return operandCandidates(kind, cur)
+	if line.pending != "" && !strings.HasPrefix(cur, "-") {
+		return operandCandidates(flagValue(line.pending), cur)
 	}
 
-	bare := bareWords(rest, posRun)
-	refGiven := len(bare) > 0
-
 	if strings.HasPrefix(cur, "-") {
-		if refGiven {
-			// Right of the ref a flag is the agent's. brig has no list of
-			// another program's flags and should not pretend to.
-			return dirNone, nil
-		}
+		// Brig's own flags stand on either side of the ref: split reads them
+		// wherever they are on the run line, and stops only at a flag brig does
+		// not own. Offering them only up to the ref would leave completion
+		// silent about `brig run claude --mem`, a line brig reads.
 		flags := flagSpellings(posRun, verb)
-		if verb == "rm" {
-			// --all names no session, so it is read before the run line rather
-			// than on it, and it is not in the table the line is built from.
+		if verb == "rm" && !line.refGiven {
+			// --all is not on the run line and not in the table it is built
+			// from. It replaces the ref rather than joining it, so it is
+			// offered only where the ref would have gone.
 			flags = append(flags, "--all")
 			sort.Strings(flags)
 		}
 		return names(cur, flags)
 	}
 
-	if !refGiven {
+	if !line.refGiven {
 		return names(cur, refsFor(verb))
 	}
 	// On run the first bare word after the ref is the project brig mounts, and
 	// a project is a directory. Every other verb, and every word after that
-	// one, is the agent's.
-	if verb == "run" && len(bare) == 1 {
+	// one, begins the agent's own arguments.
+	if verb == "run" && !line.projectTaken {
 		return dirDirs, nil
 	}
 	return dirNone, nil
+}
+
+// runLine is how far a lifecycle line has got by the time the cursor is
+// reached.
+//
+// It answers the same question split answers, and deliberately in the same
+// order, because the two must agree about where brig's arguments stop. Where
+// they disagree, completion either withholds a flag brig would have read or
+// offers one into the agent's argv -- and the second is the worse of the two,
+// since it puts brig's vocabulary in front of a reader who is typing another
+// program's.
+type runLine struct {
+	// refGiven: the session ref has been named.
+	refGiven bool
+	// projectTaken: run's one project word has been given.
+	projectTaken bool
+	// tailBegun: brig's parsing has ended and the rest is the agent's -- `--`,
+	// a flag brig does not own once the ref is named, or a bare word past the
+	// project.
+	tailBegun bool
+	// pending is the brig flag whose value the cursor's word would be, when the
+	// line ends on one. Empty when it does not.
+	pending string
+}
+
+func walkRunLine(verb string, args []string) runLine {
+	var line runLine
+	takesProject := verb == "run"
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			line.tailBegun = true
+			return line
+		case !strings.HasPrefix(a, "-"):
+			if !line.refGiven {
+				line.refGiven = true
+				continue
+			}
+			if takesProject && !line.projectTaken {
+				line.projectTaken = true
+				continue
+			}
+			line.tailBegun = true
+			return line
+		default:
+			mine, takesValue := ours(a, posRun)
+			if !mine {
+				if line.refGiven {
+					line.tailBegun = true
+					return line
+				}
+				// Before the ref, a flag brig does not have is a mistake the
+				// run itself names. Reading past it keeps the rest of the line
+				// completable, which is what someone fixing the typo wants.
+				continue
+			}
+			if !takesValue || strings.Contains(a, "=") {
+				continue
+			}
+			// The flag's value, which a shell that breaks words on '=' hands
+			// over as a separator token and then the value itself. Consuming
+			// only one of the two would leave the value standing where a bare
+			// word goes, and be read as the ref.
+			i++
+			if i < len(args) && args[i] == "=" {
+				i++
+			}
+		}
+	}
+	line.pending = pendingFlag(args)
+	return line
+}
+
+// pendingFlag is the brig flag the cursor's word would be the value of: the
+// last token on the line, when that is a flag of brig's that takes one.
+//
+// The `=` a shell may have split out of an inline value is stepped over, so
+// `--network=<cursor>` completes the postures the spaced spelling does.
+func pendingFlag(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	last := args[len(args)-1]
+	if last == "=" && len(args) > 1 {
+		last = args[len(args)-2]
+	}
+	mine, takesValue := ours(last, posRun)
+	if !mine || !takesValue || strings.Contains(last, "=") {
+		return ""
+	}
+	return last
+}
+
+// hasSpelling reports whether a line carries one exact flag spelling.
+func hasSpelling(args []string, spelling string) bool {
+	for _, a := range args {
+		if a == spelling {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionVerbs act on a sandbox that already exists, so they are completed
@@ -397,9 +521,19 @@ var groups = map[string][]sub{
 		},
 	},
 	"secret": {
-		{name: "create", operands: []operand{opNothing}},
+		{
+			name:     "create",
+			flags:    []string{"--stdin"},
+			values:   map[string]operand{"--file": opFile, "-f": opFile},
+			operands: []operand{opNothing},
+		},
 		{name: "read", operands: []operand{opNothing}},
-		{name: "update", operands: []operand{opNothing}},
+		{
+			name:     "update",
+			flags:    []string{"--stdin"},
+			values:   map[string]operand{"--file": opFile, "-f": opFile},
+			operands: []operand{opNothing},
+		},
 		{name: "delete", flags: []string{"--yes", "-y"}, operands: []operand{opNothing}},
 		{name: "ls"},
 		{
@@ -426,7 +560,14 @@ func completeGroup(verb string, rest []string, cur string) (string, []string) {
 		a := rest[i]
 		if strings.HasPrefix(a, "-") {
 			if takesGroupValue(subs, name, a) && !strings.Contains(a, "=") {
+				// The value, and the separator before it when a shell has
+				// broken the inline spelling into tokens. Consuming only the
+				// separator would leave the value standing where an operand
+				// goes and shift every slot after it by one.
 				i++
+				if i < len(rest) && rest[i] == "=" {
+					i++
+				}
 			}
 			continue
 		}
@@ -515,20 +656,6 @@ func lastFlag(rest []string) string {
 	return last
 }
 
-// pendingValue reports whether the cursor is on the value of one of brig's own
-// run-line flags, and what that value names.
-func pendingValue(rest []string, cur string) (operand, bool) {
-	if len(rest) == 0 || strings.HasPrefix(cur, "-") {
-		return opNothing, false
-	}
-	flag := lastFlag(rest)
-	mine, takesValue := ours(flag, posRun)
-	if !mine || !takesValue || strings.Contains(flag, "=") {
-		return opNothing, false
-	}
-	return flagValue(flag), true
-}
-
 // flagValue is what a run-line flag's value names.
 //
 // A closed set is the payoff here: --network has three postures and nothing
@@ -587,12 +714,15 @@ func bareWords(args []string, at position) []string {
 		if strings.HasPrefix(a, "-") {
 			if mine, takesValue := ours(a, at); mine && takesValue && !strings.Contains(a, "=") {
 				i++
+				if i < len(args) && args[i] == "=" {
+					i++
+				}
 			}
 			continue
 		}
 		if a == "=" {
-			// The separator a shell split out of an inline flag value, and the
-			// value after it. Neither is a word of brig's own.
+			// A separator with no flag of brig's before it. Neither it nor the
+			// value after it is a word of brig's own.
 			i++
 			continue
 		}
