@@ -711,7 +711,7 @@ func attachPolicy(args []string) error {
 	}
 	p, ok := profile.Lookup(profileName)
 	if !ok {
-		return notFoundf("unknown profile %q. `brig profiles` lists them", profileName)
+		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
 	}
 	if err := policy.CheckCoverage(p); err != nil {
 		return fmt.Errorf("cannot attach %s to %s: %w. Nothing was written", policyName, p.Name, err)
@@ -854,7 +854,7 @@ func checkPolicy(args []string) error {
 	}
 	p, ok := profile.Lookup(profileName)
 	if !ok {
-		return notFoundf("unknown profile %q. `brig profiles` lists them", profileName)
+		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
 	}
 	names, err := policy.EffectivePolicies(p, session, policy.Dir())
 	if err != nil {

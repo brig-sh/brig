@@ -167,23 +167,23 @@ func openService(service string) (*secretService, error) {
 }
 
 // errNoBus and errNoService are the two shapes of the same refusal, and each
-// says which half is missing and both ways out: install a keyring, or bind the
-// secret to a command that holds no plaintext at rest. Both fixes appear in one
+// says which half is missing and both ways out: install a keyring, or take the
+// secret from a command's output once. Both fixes appear in one
 // message the way the darwin messages read, because a user who cannot install a
 // keyring still has the second door.
 func errNoBus(err error) error {
 	return fmt.Errorf("%w: no D-Bus session bus to reach a keyring on. Install a keyring "+
 		"(gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session "+
-		"that starts it, or bind the secret to a command instead with "+
-		"`brig secret import <profile> --from-command '<sh>'`, which holds no plaintext at rest: %v",
+		"that starts it, or read the secret once from a command's output with "+
+		"`brig secret import <profile> --from-command '<sh>'`, which stores it like any other import: %v",
 		ErrUnsupported, err)
 }
 
 func errNoService() error {
 	return fmt.Errorf("%w: a D-Bus session bus is running but no Secret Service answers on it. "+
 		"Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in "+
-		"to a session that starts it, or bind the secret to a command instead with "+
-		"`brig secret import <profile> --from-command '<sh>'`, which holds no plaintext at rest",
+		"to a session that starts it, or read the secret once from a command's output with "+
+		"`brig secret import <profile> --from-command '<sh>'`, which stores it like any other import",
 		ErrUnsupported)
 }
 
@@ -193,13 +193,13 @@ func errNoService() error {
 // that the default sits at some well-known path. Nothing has created it: a
 // headless or freshly provisioned session never unlocked a login keyring, so
 // brig has nowhere to store into. Both ways out again, in the voice of the two
-// above: an unlock from a desktop session is what creates the default, or bind
-// the secret to a command that holds no plaintext at rest.
+// above: an unlock from a desktop session is what creates the default, or take
+// the secret from a command's output once.
 func errNoDefaultCollection() error {
 	return fmt.Errorf("%w: a keyring is running but has no default collection to store into. "+
-		"Unlock your keyring once from a desktop session, which is what creates it, or bind the "+
-		"secret to a command instead with `brig secret import <profile> --from-command '<sh>'`, "+
-		"which holds no plaintext at rest",
+		"Unlock your keyring once from a desktop session, which is what creates it, or read the "+
+		"secret once from a command's output with `brig secret import <profile> --from-command '<sh>'`, "+
+		"which stores it like any other import",
 		ErrUnsupported)
 }
 
