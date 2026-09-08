@@ -43,9 +43,24 @@ git clone https://github.com/brig-sh/brig && cd brig
 make build                    # produces ./brig and ./brigd
 ```
 
-macOS needs `hull` on PATH (see [macOS](#macos) above); Linux needs
+macOS needs `hull` on PATH (see [macOS](#macos) below); Linux needs
 `nerdctl`. brig finds either. `cosign` is optional but recommended -- without
 it, guest images cannot be verified and brig says so on every boot.
+
+Without Homebrew, `install.sh` fetches the newest release for your platform,
+checks the archive against the published `checksums.txt` with sha256, and
+installs `brig` and `brigd` into `/usr/local/bin` (`BRIG_INSTALL_DIR` and
+`BRIG_VERSION` override the destination and the version):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sh
+```
+
+It does not check the cosign signature on `checksums.txt`, because that needs
+cosign installed; [Verifying a brig download](#verifying-a-brig-download) is
+that step, and the archive also carries the three completion scripts under
+`completions/`, which the script leaves for you to install
+([docs/completions.md](docs/completions.md)).
 
 Two tools are needed only by a profile marked `genericBoot`, which boots an
 image that was never built to be a guest and therefore needs a kernel and an
@@ -129,12 +144,13 @@ separate Linux re-implementation of it.
 | `brig rm <ref>` | stop and remove the sandbox. The workspace is untouched |
 | `brig rm --all` | stop and remove every brig sandbox. Workspaces are untouched |
 | `brig ls [-q]` | every brig sandbox, running or merely holding its name, with its ref and workspace. `-q` prints the refs alone, for a script |
-| `brig logs <ref>` | stream the sandbox's log; `--gateway` reads the gateway's |
+| `brig logs <ref> [--follow] [--tail N] [--raw]` | stream the sandbox's log: `--follow` keeps reading, `--tail N` starts N lines from the end (default: all), `--raw` leaves terminal escape sequences in, which are filtered out otherwise. `--gateway [<ref>]` reads the gateway's log instead: the shared one, or with a ref the gateway serving that sandbox alone |
 | `brig info <ref>` | the boundary a run would trust -- sandbox, workspace, image, credentials **by name only** -- and whether the guest will be authenticated |
+| `brig doctor [<agent>]` | check the host, the hypervisor, the runtime, the boot assets, cosign, the profiles, the secret store and brigd, one line each; given an agent, its image too |
 | `brig agent ls` | the agents, their images, and what each one refuses to forward |
 | `brig agent show <agent>` | print one agent's spec. `--json` for JSON instead of YAML |
-| `brig agent new <name> --from <agent>` | copy an agent under a new name, ready to edit |
-| `brig agent edit\|rm\|import\|export` | manage agents |
+| `brig agent new <name> --from <agent>` | copy an agent under a new name, ready to edit. `--json` writes JSON; `-f` replaces a file already there |
+| `brig agent edit\|rm\|import\|export` | manage agents. `rm -y` answers the question in advance; `export <agent> [name]` prints one or saves it under a name |
 | `brig policy ls\|create\|edit\|show\|rm` | manage policies. `show --json` for JSON instead of YAML |
 | `brig policy attach\|detach <policy> <profile> [-n NAME]` | bind or unbind a policy to every run of a profile, or `-n` for one session |
 | `brig policy check <profile> [-n NAME]` | what is bound to a run of a profile (or `-n` session), and whether brig can enforce anything against it |
@@ -196,6 +212,7 @@ so, without taking the token, so a line that works today keeps working.
 | --- | --- |
 | `--verbose` | the execution envelope, brig's own progress and the runtime's own output. No short form: `-v` is Claude Code's version flag, codex's verbose flag and Docker's volume flag, so brig does not claim the letter |
 | `-q, --quiet` | identifiers and errors only, for a script. It drops brig's warnings; on `ls` it prints the refs alone. A verification that did not hold is printed even here. Still read after the verb for this release, with a note |
+| `--json` | machine-readable output, for the read verbs: `ls`, `info`, `agent ls`, `secret ls` and `doctor`. Also accepted after the verb (`brig ls --json`); every other verb refuses it. With `run`, brig runs the agent as a child and, after it exits, prints one JSON line with its exit status, so a script can tell "brig refused" from "the agent failed". Within one `apiVersion` the JSON only gains fields, never renames or drops one, and no field carries a credential value |
 
 By default a run prints what you have to act on, then the agent: warnings,
 errors, and one line saying verification held. The execution envelope, brig's
@@ -394,7 +411,8 @@ The verbs line up deliberately, so muscle memory carries over:
 | `sbx -t/--template` | `brig -t/--image` | |
 | `sbx -m/--memory`, `--cpus`, `-d` | same | |
 | `sbx --name <name>` | `brig <agent>@<name>` | brig's `--name` still works and says what replaces it |
-| `sbx --publish`, `--deny-network` | n/a | not yet; brig does not manage guest networking, and sandboxes share one network -- see [docs/security.md](docs/security.md#things-brig-does-not-claim) |
+| `sbx --publish` | n/a | not yet; brig does not forward a guest port |
+| `sbx --deny-network` | `brig --network offline` | no route out at all. `--network isolated` is a network of the sandbox's own, and an egress policy (`brig policy`) filters what leaves it -- see [docs/security.md](docs/security.md#things-brig-does-not-claim) |
 | `sbx --clone` | n/a | not yet; the workspace is mounted directly |
 | `sbx login` | n/a | nothing to sign in to |
 
@@ -474,8 +492,9 @@ sandbox cannot use a credential it cannot see. Prefer a fine-grained
 `brig secret` is a store of brig's own, and it is the only store a run reads.
 `brig secret import` fills it from your host; these verbs are how you fill it
 by hand, from any backend you like. On macOS it keeps each secret in your login
-keychain; there is no Linux backend yet, and brig says so rather than falling
-back to a file.
+keychain; on Linux in a Secret Service keyring on your session bus
+(gnome-keyring or KWallet). With no keyring to reach, brig says which half is
+missing rather than falling back to a file ([docs/secrets.md](docs/secrets.md#linux)).
 
 ```bash
 printf %s "$TOKEN" | brig secret create gh-token   # the value comes from stdin
@@ -510,19 +529,24 @@ your own.
 $ brig info claude
 PROFILE      claude-code
 SANDBOX      brig-claude-code (hull)
-ISOLATION    microVM (hull, vz backend)
+ISOLATION    microVM (hull, hvi backend)
 WORKSPACE    /Users/you/brig/claude-code (read-write)
 IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
 VERIFY       warn, against brig's own trust policy
-CREDENTIALS  GH_TOKEN
-brig: forwarding to guest:
-brig:   GH_TOKEN(secret)
+CREDENTIALS  claude-credentials
+NETWORK      shared (one network for every sandbox on this host)
+brig: workspace /Users/you/brig/claude-code (sandbox brig-claude-code)
+brig: runtime hull (/opt/homebrew/bin/hull)
+...
 ```
 
 The block at the top is the execution envelope: the boundary the run would
-trust, printed before the sandbox boots. `brig run` prints the same block before
-it starts one, so what you preview is what you get. Names only, never values.
-`brig -q` drops it.
+trust, printed before the sandbox boots. `brig --verbose run` prints the same
+block before it starts one, so what you preview is what you get. Names only,
+never values. A run with a project adds a `PROJECT` row, and one with a policy
+attached a `POLICY` row. The `brig:` lines after it are the full report, which
+`brig info` goes on to print: what is forwarded and from where, what is never
+forwarded, and the guest git settings.
 
 A secret a profile declares but the store does not have fails the run before
 any sandbox is created, naming every one that is missing and the command that
@@ -795,7 +819,7 @@ worth knowing:
 
 ## Environment variables
 
-Every setting is read in this order, first hit wins:
+A setting that belongs to a run is read in this order, first hit wins:
 
 ```
 BRIG_<AGENT>_<KEY>   →   BRIG_<KEY>
@@ -803,9 +827,25 @@ BRIG_<AGENT>_<KEY>   →   BRIG_<KEY>
 
 `<AGENT>` is the profile name uppercased with dashes as underscores
 (`BRIG_CLAUDE_CODE_WORKSPACE`), so one shell can carry different settings for
-two agents.
+two agents. That prefix is honoured by the per-run settings: `WORKSPACE`,
+`NAME`, `IMAGE`, `PULL`, `MEM`, `CPUS`, `READY_TIMEOUT`, `TITLE`, `NETWORK`,
+`SKILLS`, `FORWARD_ENV`, `ALLOW_REFS`, `ALLOW_DENIED`, `ALLOW_EXPIRED`, the
+`GIT_*` group, `TRUST_WORKSPACE`, `VERIFY`, `VERIFY_REGISTRY`,
+`VERIFY_IDENTITY`, `VERIFY_ISSUER`, `COSIGN_BIN`, `HYPERVISOR` and
+`ROOTFS_TYPE`. The settings that describe the host rather than a run are read
+under `BRIG_<KEY>` only: `PROFILE_DIR`, `POLICY_DIR`, `STATE_DIR`, `RUNTIME`,
+`RUNTIME_BIN`, `CONTAINERD_RUNTIME`, `GATEWAY_SOCK`, `GATEWAY_DIR`,
+`BOOT_ASSETS`, `BOOT_ASSETS_REF` and `ENV_ARGV`.
 
-Booleans are shell-style: anything except `0` is on.
+Booleans come in two kinds. A switch whose safe position is off --
+`BRIG_GIT_CONFIG`, `BRIG_SKILLS`, `BRIG_TRUST_WORKSPACE`, `BRIG_ALLOW_REFS`,
+`BRIG_ALLOW_DENIED`, `BRIG_ALLOW_EXPIRED` -- takes `1`, `true`, `yes` or `on`
+to turn on and `0`, `false`, `no` or `off` to turn off, case-insensitively,
+and refuses the run on any other value rather than guessing: under the
+shell-style rule `BRIG_ALLOW_DENIED=false` would have turned the guard off by
+turning it on. Absent or empty keeps the default. `BRIG_GIT_IDENTITY` is a
+tuning knob and keeps the shell rule, anything but `0` is on. `BRIG_ENV_ARGV`
+is on only when it is exactly `1`.
 
 ### Where things live
 
@@ -814,6 +854,7 @@ Booleans are shell-style: anything except `0` is on.
 | `BRIG_WORKSPACE` | `~/brig/<agent>` | Host directory mounted as the guest home. A named session appends `-<slug>` |
 | `BRIG_NAME` | `brig-<agent>` | Sandbox (VM or container) name; must begin with `brig-`. A named session appends `-<slug>` |
 | `BRIG_PROFILE_DIR` | `~/.config/brig` | Where custom profiles are read from and written to (`BRIG_TEMPLATE_DIR` still works) |
+| `BRIG_POLICY_DIR` | `~/.config/brig/policies` | Where egress policies are read from and written to (`$XDG_CONFIG_HOME/brig/policies`). See [docs/policies.md](docs/policies.md) |
 | `BRIG_STATE_DIR` | `~/.brig` | Where brig keeps what has to outlive one command, including the workspace each sandbox was started with. Bookkeeping only: an unusable file there costs a restart, never a failed command |
 
 ### Image and guest
@@ -856,7 +897,7 @@ Removed: `BRIG_CREDENTIALS_CMD` ran a command of yours on every boot to read the
 | variable | default | what it does |
 | --- | --- | --- |
 | `BRIG_TRUST_WORKSPACE` | `1` | Pre-answer the agent's "do you trust the files in this folder?" for the directory each run starts in. The guest sees only the workspace, so mounting it already answered that question |
-| `BRIG_VERIFY` | `warn` | `warn`, `require` or `off` -- see the table above |
+| `BRIG_VERIFY` | `warn` | `warn`, `require` or `off` -- see the table above. `strict` is `require`; `none` and `0` are `off`. Any other value refuses the run |
 | `BRIG_VERIFY_REGISTRY` | `ghcr.io/brig-sh/` | Image prefix treated as "ours", so a check is expected |
 | `BRIG_VERIFY_IDENTITY` | community-images workflow | Certificate identity regexp cosign must match |
 | `BRIG_VERIFY_ISSUER` | GitHub Actions OIDC | Certificate OIDC issuer |
@@ -868,13 +909,13 @@ Removed: `BRIG_CREDENTIALS_CMD` ran a command of yours on every boot to read the
 | --- | --- | --- |
 | `BRIG_RUNTIME` | `hull` on macOS, `nerdctl` elsewhere | Which backend to drive |
 | `BRIG_RUNTIME_BIN` | first of `hull` / `nerdctl`, `docker` on PATH | Path to that binary |
-| `BRIG_HYPERVISOR` | `vz` | Hypervisor backend, macOS only: `vz`, `hvi` or `qemu`. Only `vz` has a graphical console, so a GUI profile is refused on the others |
+| `BRIG_HYPERVISOR` | the profile's `hypervisor`, else `vz` | Hypervisor backend, macOS only: `vz`, `hvi` or `qemu`. Set, it wins over the profile; the `vz` default applies only when the profile is silent, and six of the eight shipped profiles say `hvi`. Only `vz` has a graphical console, so a GUI profile is refused on the others. `hvi` needs macOS 15 or newer, and brig refuses the run on an older one rather than letting the VMM crash |
 | `BRIG_GATEWAY_SOCK` | `~/.brig/gateway-<subnet>.sock` | Control socket of the user-mode network gateway. `hvi` has no egress without one, so brig starts a shared gateway there and joins every sandbox on the shared network to it. The default name carries the network it serves, so a gateway left from a different subnet is never reused for guests that are not on it |
 | `BRIG_GATEWAY_DIR` | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | Where the gateway sockets live. A sandbox on `--network isolated`, or one carrying a policy, gets a gateway of its own here (`sandbox-<name>.sock`) on a `/30` of its own, rather than joining the shared one |
 | `BRIG_BOOT_ASSETS` | whatever `hull assets dir` reports on macOS, `$XDG_DATA_HOME/brig/assets` (default `~/.local/share/brig/assets`) on Linux | Directory holding the host kernel and `container-initrd` used to boot a profile marked `genericBoot`. The kernel is named `Image` on arm64 and `bzImage` on x86_64. Set it and brig uses what is there, unchanged; leave it unset and brig downloads the pair on first use (hull on macOS, `oras` on Linux) |
 | `BRIG_BOOT_ASSETS_REF` | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | The bundle brig fetches when the boot assets are missing. Override to pin a version or use a mirror |
 | `BRIG_ROOTFS_TYPE` | profile's `rootfsType` | How the guest root reaches the VM: `block`, `virtiofs` or `9pfs` |
-| `BRIG_ENV_ARGV` | `0` | Put forwarded values back on the runtime's command line, where `ps` can read them. For a runtime build that does not accept a bare `--env KEY`. Opt-in, and it costs you the `ps` guarantee. Inert for a value brig resolved on your behalf -- a secret from its store, or the host credential -- which stays off the command line regardless |
+| `BRIG_ENV_ARGV` | `0` | Put forwarded values back on the runtime's command line, where `ps` can read them. For a runtime build that does not accept a bare `--env KEY`. Opt-in -- on only when set to exactly `1` -- and it costs you the `ps` guarantee. Inert for a value brig resolved on your behalf -- a secret from its store, or the host credential -- which stays off the command line regardless |
 | `DO_NOT_TRACK`, `HULL_TELEMETRY_DISABLED` | | Passed through to the runtime untouched, and always win |
 
 
@@ -891,7 +932,7 @@ CLI uses. Line-delimited JSON on a unix socket:
 ```
 
 It does not proxy exec. Handing your terminal to a process inside the guest
-means passing file descriptors, and `brig exec` already does that correctly by
+means passing file descriptors, and `brig sh` already does that correctly by
 replacing itself with the runtime. The daemon owns lifecycle, the CLI owns the
 terminal. See [docs/brigd.md](docs/brigd.md).
 
@@ -905,8 +946,9 @@ binary, so brig works with no setup at all. Guest images live in
 [brig-sh/community-images](https://github.com/brig-sh/community-images) with
 open Dockerfiles, and a profile name is the same string as its image name.
 
-Claude Code and Codex are the proven core. Gemini, Grok and opencode are
-example profiles. `claude-desktop` is the GUI app in a windowed VM, and
+Claude Code and Codex are the proven core. Gemini, Grok, opencode and cursor
+are example profiles, and cursor ships without an image (see
+[Image tags](#image-tags)). `claude-desktop` is the GUI app in a windowed VM, and
 `ubuntu` is a plain root shell for when you need to inspect guest networking
 or raise a raw socket.
 
