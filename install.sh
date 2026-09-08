@@ -4,13 +4,16 @@
 #   curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sh
 #
 # Downloads the latest release for this platform, checks it against the
-# published checksums, and installs brig and brigd. Homebrew is the better
-# path on macOS -- it also brings hull, the runtime brig needs there:
+# published checksums, and installs brig and brigd. The archive also carries
+# the shell completion scripts under completions/, which this script leaves
+# for you to install (docs/completions.md). Homebrew is the better path on
+# macOS -- it also brings hull, the runtime brig needs there, and installs
+# the completions:
 #
 #   brew tap brig-sh/brig && brew trust brig-sh/brig && brew install --cask brig
 #
 # Override the destination with BRIG_INSTALL_DIR, or the version with
-# BRIG_VERSION=v0.1.0-rc4.
+# BRIG_VERSION=v0.1.0-rc17.
 set -eu
 
 REPO=brig-sh/brig

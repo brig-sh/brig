@@ -128,7 +128,7 @@ with the same parser and neither has to guess.
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
 | `network` | no | the sandbox's network posture: `shared` (the default: one network for every sandbox on this host), `isolated` (a network of this sandbox's own) or `offline` (no route out at all). `BRIG_NETWORK`, `--network` and `--offline` win over it |
-| `hypervisor` | no | macOS backend to boot on: `vz` (the default, and the only one with a graphical console), `hvi` or `qemu`. `BRIG_HYPERVISOR` wins over it. Ignored on Linux, where the shim decides |
+| `hypervisor` | no | macOS backend to boot on: `vz` (the default when the field is absent, and the only one with a graphical console), `hvi` or `qemu`. Six of the eight shipped profiles say `hvi`. `BRIG_HYPERVISOR` wins over it. Ignored on Linux, where the shim decides |
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. Unlike every other field this is about your machine rather than the workload, so it does not travel usefully to anyone else -- it is how you pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the VM: `block`, `virtiofs` or `9pfs`. Left unset the runtime picks its own default, which is what a profile that only runs an agent wants. Set `block` when the sandbox installs packages and needs a real writable disk rather than a share sized to the image |
 | `genericBoot` | no | The image was never built to be a guest -- a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See below |
@@ -211,7 +211,7 @@ ignoring it reads as a working portable chain that resolves nothing:
 
 | `from:` | locator | what it reads |
 | --- | --- | --- |
-| `keychain` | `service:` | a macOS keychain generic-password item. macOS only; a Linux backend is [#8](https://github.com/brig-sh/brig/issues/8) |
+| `keychain` | `service:` | a macOS keychain generic-password item. macOS only: the Linux store is a Secret Service keyring ([secrets.md](secrets.md#linux)), and no source reads from it |
 | `file` | `path:` | a host file, verbatim. A leading `~` is expanded when it is read, so a profile carries no one host's home directory |
 | `env` | `var:` | a host environment variable, **copied once at import** |
 
@@ -239,10 +239,10 @@ to share a shape.
 
 On macOS the keychain source answers first, so nothing in a supported
 configuration today ever reaches `path: ~/.claude/.credentials.json`. That path
-is the **documented** Linux location rather than an observed one, and a Linux
-host has no store to import into yet ([#8](https://github.com/brig-sh/brig/issues/8)),
-so it is data that costs three lines and makes the profile portable the day the
-backend lands.
+is the **documented** Linux location rather than an observed one. On a Linux
+host with a keyring the import reads it and stores into the Secret Service
+backend ([secrets.md](secrets.md#linux)); it is data that costs three lines and
+makes the profile portable.
 
 ### What happens when a secret is missing
 
@@ -285,14 +285,15 @@ brig: no value for the secret "gh-token", and claude-code will run without it.
 brig: To supply one: brig secret create gh-token
 ```
 
-There is no secret store on Linux yet. A **required** secret therefore fails
-every run on the nerdctl backend, for the same reason and in the same way --
-failing closed is correct, but it is worth knowing before your first run of
-such a profile there rather than after. An **optional** one is silent there
-instead of warning on every run: there is no store to create it in, so nothing
-the user does on that host would change the outcome, and a warning about it
-would be noise rather than information. That is why the shipped `claude-code`
-still boots on Linux.
+On Linux the store is a Secret Service keyring, and a host without one --
+no session bus, or nothing answering on it -- has no store. A **required**
+secret therefore fails every run on such a host, for the same reason and in
+the same way; failing closed is correct, but it is worth knowing before your
+first run of such a profile there rather than after. An **optional** one is
+silent there instead of warning on every run: there is no store to create it
+in, so nothing the user does on that host short of installing a keyring would
+change the outcome, and a warning about it would be noise rather than
+information. That is why the shipped `claude-code` still boots on Linux.
 
 ### The `ref` grammar, and `refs:` chains
 
@@ -740,9 +741,10 @@ at a build you are iterating on, and downloading a release bundle over your own
 work would be the opposite of helpful. `BRIG_BOOT_ASSETS_REF` pins a specific
 bundle instead of the current one for your platform.
 
-The bundles come from
-[hull-assets](https://github.com/NOFireAI/hull-assets), one per guest platform;
-`oci/pull-bundle.sh` there does the same fetch by hand.
+The bundle is published as the OCI artifact `ghcr.io/nofireai/hull-assets`,
+one tag per guest platform, and pulls anonymously; the repository that builds
+it is not public. `oras pull ghcr.io/nofireai/hull-assets:<os>-<arch> --output
+<dir>` is the same fetch by hand.
 
 On Linux this needs `nerdctl` rather than `docker`. Docker does not carry OCI
 annotations through to the runtime, so the sandbox would boot with no kernel;

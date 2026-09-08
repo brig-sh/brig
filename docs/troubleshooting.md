@@ -8,6 +8,32 @@ the microVM runtime (`hull` on macOS, `nerdctl` on Linux), cosign, or
 Homebrew. Where a message is not brig's, it says so, because that is the first
 thing to know when the wording does not match anything in brig.
 
+Before reading further, run `brig doctor`. It checks the host, the
+hypervisor, the runtime and its version, the boot assets, cosign, the
+profiles, the secret store and brigd, one line each, and says what to do
+about a line that is not `ok`; `brig doctor <agent>` checks that agent's
+image too. `--json` is for a script or a bug report.
+
+## Exit codes
+
+A script does not have to parse the message. Every failure is reported on
+`stderr` with one of these codes, which are stable across releases:
+
+| code | meaning |
+| --- | --- |
+| `0` | success |
+| `1` | general failure -- something ran and did not finish |
+| `2` | usage error -- an unknown flag, a stray argument, a value in the wrong place |
+| `3` | no such profile or sandbox -- the name resolves to nothing. `brig rm` and `brig logs` on a ref with no sandbox exit here rather than handing the runtime's "instance not found" back as `1` |
+| `4` | runtime unavailable -- none is installed, `BRIG_RUNTIME_BIN` points at nothing, or the runtime could not be asked |
+| `5` | image verification refused the boot |
+| `6` | a credential the run needed could not be resolved |
+
+`brig stop` on a sandbox that is not running exits `0`: stopped is the state
+it asked for. `brig run --json` prints one JSON line with the agent's own exit
+status after it exits, so a caller can tell "brig refused" from "the agent
+failed".
+
 ## The sandbox never became ready
 
 ```
@@ -60,23 +86,36 @@ BRIG_HYPERVISOR=vz brig run claude
 ```
 
 For good, put `BRIG_HYPERVISOR=vz` in your shell profile, or upgrade to macOS
-15 or newer. macOS 26 is what hull is developed and tested on. A check that
-refuses `hvi` on an older macOS with this message, instead of letting the VMM
-crash, is in flight.
+15 or newer. macOS 26 is what hull is developed and tested on.
 
-## No microVM runtime found on PATH
-
-```
-brig: no microVM runtime found on PATH. brig drives hull on macOS: see
-https://github.com/brig-sh/brig#macos. Or point BRIG_RUNTIME_BIN at a build
-```
-
-On Linux the message is different, because the runtime there is `nerdctl`:
+Current releases do not get this far. brig reads the macOS version before it
+asks the runtime for anything, and refuses an `hvi` run on macOS 14 with the
+cause and the way past it:
 
 ```
-brig: no container runtime found: install nerdctl, or point
-BRIG_RUNTIME_BIN at one
+brig: the hvi hypervisor needs macOS 15 or newer (this is 14.5): its in-kernel
+interrupt controller does not exist here. Set BRIG_HYPERVISOR=vz for this run,
+or upgrade macOS
 ```
+
+The `dyld` log above is what an older brig left you to find.
+
+## No runtime found on PATH
+
+```
+brig: no runtime found on PATH: brig drives hull on macOS, and none was there.
+See https://github.com/brig-sh/brig#macos, or point BRIG_RUNTIME_BIN at a build
+```
+
+On Linux the second half is different, because the runtime there is `nerdctl`:
+
+```
+brig: no runtime found on PATH: install nerdctl, or point BRIG_RUNTIME_BIN at one
+```
+
+Either way the exit code is `4`. A `BRIG_RUNTIME_BIN` or a profile
+`runtimeBin` that names something missing is the same code with the setting
+named: `BRIG_RUNTIME_BIN is hull2, which is not on PATH`.
 
 brig delegates every boot to a runtime it does not ship, and could not find
 one. On macOS the cask depends on hull, so this usually means a from-source
@@ -168,16 +207,19 @@ brig: not a terminal, so there is nobody to ask: refusing. Set
 BRIG_VERIFY=off to boot it regardless.
 ```
 
-Answering no aborts:
+Answering no aborts, with exit code `5`:
 
 ```
-brig: aborted: the image failed verification. Pull it again, or set
-BRIG_VERIFY=off if you know why it fails
+brig: aborted: the image failed verification. Pull it again (BRIG_PULL=always),
+or set BRIG_IMAGE to a digest you have checked yourself
 ```
 
 The usual innocent cause is a stale local copy. Pull the image again
 (`BRIG_PULL=always brig run claude`) and let the check run against the current
-registry. If it still fails and you do not know why, do not boot it. An image
+registry. If it still fails and you do not know why, do not boot it; naming a
+digest you have checked yourself is the deliberate way past it, and
+`BRIG_VERIFY=off` is not offered here because disabling the control that
+caught it is not a remedy. An image
 published by someone else warns rather than stopping, because bring-your-own
 images are supported; a failure under brig's registry is the one case that
 stops.

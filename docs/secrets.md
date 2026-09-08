@@ -313,9 +313,8 @@ brig: a secret name starts with a letter, and "1password" starts with "1"
 
 The reason it is this narrow is that the name is three things at once. It is
 the keychain account, where a space or a slash would make the item awkward to
-address by hand. It is a word in brig's own error messages. And once profiles
-can reference stored secrets ([#7](https://github.com/brig-sh/brig/issues/7)),
-it is the tail of `ref: secrets.<name>` -- which is what rules out the `.`
+address by hand. It is a word in brig's own error messages. And a profile
+references it as the tail of `ref: secrets.<name>` -- which is what rules out the `.`
 specifically, since a dot would make that reference ambiguous. A leading digit
 reads as a number rather than a name, and a leading dash reads as a flag
 wherever the name is typed.
@@ -377,13 +376,17 @@ nothing told you about:
 
 ```console
 $ brig secret create gh-token
-brig: no secret store on this platform: a D-Bus session bus is running but no Secret Service answers on it. Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session that starts it, or bind the secret to a command instead with `brig secret import <profile> --from-command '<sh>'`, which holds no plaintext at rest
+brig: no secret store on this platform: a D-Bus session bus is running but no Secret Service answers on it. Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session that starts it, or read the secret once from a command's output with `brig secret import <profile> --from-command '<sh>'`, which stores it like any other import
 ```
 
 It says so *before* asking for a value. The check happens ahead of the read
 from stdin, so you are not sent off to find a token only to be told afterwards
-that there is nowhere to put it. Binding the secret to a command with
-`--from-command` is the other way out, and holds no plaintext at rest.
+that there is nowhere to put it. `--from-command` is the other way out for a
+value that lives in an external secret manager: the import runs the command
+once, takes its stdout, and stores that the way it stores any other import.
+It still needs a store to write into, so on a host with no keyring it is a
+way to fill the store from somewhere other than a file, not a way around
+having one.
 
 ## Errors you are likely to meet
 
@@ -402,8 +405,8 @@ point of the table: the error is the second entry point into these docs.
 | `the value for "x" is N bytes, and the keychain takes at most M` | over [the size limit](#the-size-limit) |
 | `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. `-y` is the answer given ahead |
 | `a secret name holds letters, digits, - and _, ...` | see [Naming a secret](#naming-a-secret) |
-| `no secret store on this platform: … no Secret Service answers on it …` | Linux with no keyring on the session bus. Install `gnome-keyring` or KWallet and log in to a session that starts it, or bind the secret with `--from-command` |
-| `no secret store on this platform: … a keyring is running but has no default collection …` | Linux with a keyring but no default collection yet (a headless or freshly provisioned session). Unlock your keyring once from a desktop session, which creates it, or bind the secret with `--from-command` |
+| `no secret store on this platform: … no Secret Service answers on it …` | Linux with no keyring on the session bus. Install `gnome-keyring` or KWallet and log in to a session that starts it |
+| `no secret store on this platform: … a keyring is running but has no default collection …` | Linux with a keyring but no default collection yet (a headless or freshly provisioned session). Unlock your keyring once from a desktop session, which creates it |
 | `"x" is a secret, not a profile, and import takes the profile that declares it: …` | `import`'s first argument is a profile. The message names the one that declares the secret you typed |
 | `nothing to import for "x": … held no value` | the profile's sources exist and none of them had anything. Usually: run the agent on the host once to log in |
 | `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. `-y` if replacing it is what you meant |
@@ -420,8 +423,8 @@ value comes down a pipe rather than sitting in your history:
 ```console
 $ printf %s 'ghp_16C7e42F292c6912E7710c838347Ae178B4a' | brig secret create gh-token
 $ brig secret ls
-NAME      UPDATED
-gh-token  2026-08-15 21:09
+NAME      UPDATED           FROM
+gh-token  2026-08-15 21:09  -
 ```
 
 Use it. `claude-code` declares `gh-token`, so nothing else is needed -- the

@@ -25,14 +25,16 @@ outlines, so the files carry no font dependency.
 
 | File | Use |
 | --- | --- |
-| `svg/brig-avatar.svg`, `png/brig-avatar-*.png` | Org and repo avatar. Full-bleed navy square, no baked corner radius -- GitHub rounds it. |
-| `svg/brig-mark-on-{dark,light}.svg` | The mark alone, transparent background. |
-| `svg/brig-lockup-on-{dark,light}.svg` | Horizontal lockup, transparent, for README headers via `<picture>`. |
-| `svg/brig-lockup-badge.svg` | Lockup on its own navy field, for slides and anywhere the background is uncontrolled. |
-| `svg/hull-*.svg` | The same set for `hull`. |
+| `brig-avatar.svg`, `brig-avatar-512.png` | Org and repo avatar. Full-bleed navy square, no baked corner radius -- GitHub rounds it. The 512 PNG is the one GitHub takes for the org picture. |
+| `brig-mark-on-{dark,light}.svg` | The mark alone, transparent background. |
+| `brig-lockup-on-{dark,light}.svg` | Horizontal lockup, transparent, for README headers via `<picture>`. |
+| `brig-lockup-badge.svg` | Lockup on its own navy field, for slides and anywhere the background is uncontrolled. |
+| `nofire-logo.svg`, `nofire-logo-on-dark.svg` | The NOFire AI logo, for the README footer. |
+| `architecture.svg` | The diagram in the README's "What brig is". |
 
-PNG exports live in `png/`. The 1024 and 512 avatars are what GitHub wants for
-the org picture; everything else is convenience.
+The directory is flat. hull's own set of marks lives in
+[brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork) with the
+sources for these.
 
 ## Rules
 
@@ -44,4 +46,4 @@ the org picture; everything else is convenience.
 - Do not re-colour the bars. Brass on navy is the only pairing that survives
   both GitHub themes.
 
-Generated from `svg/`; regenerate PNGs with `rsvg-convert`.
+Regenerate the PNG from the SVG with `rsvg-convert`.

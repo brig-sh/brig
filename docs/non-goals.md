@@ -1,7 +1,7 @@
 # What brig will not do
 
 brig's shape comes from what it refuses. It delegates every mechanical
-operation to a runtime it does not own, keeps one direct dependency, needs no
+operation to a runtime it does not own, keeps its dependencies to three, needs no
 account, and adds only the things the layer underneath has no concept of. None
 of that was written down as a boundary, so every proposal to cross one arrived
 as a fresh argument with no prior answer. This page is the prior answer.
@@ -22,7 +22,7 @@ containerd does it on Linux, and brig's own work begins after the sandbox is
 running. Owning the boot path would mean owning Virtualization.framework, a
 kernel command line, an image store, a snapshotter and the vulnerability
 surface of all of it, in a tool whose reason to exist is that it handles your
-credentials carefully with one direct dependency. The four things brig adds on
+credentials carefully with three direct dependencies. The four things brig adds on
 top, in the README's "What brig is", are the four a runtime has no concept of.
 Everything else in the boot path already works.
 
@@ -34,12 +34,13 @@ runtime of our own.
 ## A policy engine with its own rules language
 
 There is a line here, and it is worth being exact about where it falls. A
-profile field the runtime enforces is fine: `network: none` translated into
+profile field the runtime enforces is fine: `network: offline` translated into
 the runtime's own flag is data, brig's job ends at the translation, and the
-guarantee is the runtime's to make. The README already lists sbx's
-`--publish` and `--deny-network` as "not yet" rather than never, and
-`docs/security.md` says there is no per-sandbox network policy yet. Those are
-missing fields, and fields are in scope. What is out of scope is a language:
+guarantee is the runtime's to make. An egress policy is the same shape one
+step up: a document of `allow` and `deny` rules handed to the gateway that
+enforces them, and refused where nothing can ([policies.md](policies.md)).
+The README still lists sbx's `--publish` as "not yet" rather than never, and
+a missing field of that kind is in scope. What is out of scope is a language:
 conditions, matchers, precedence rules and an evaluator that lives in brig. A
 decision brig evaluates is one people will believe is enforced, when in fact
 enforcement sits one layer down and brig can only ask for it.
@@ -107,14 +108,16 @@ permanently. That part is not up for review in twelve months or in sixty.
 
 A library per language is a release train per language, a dependency set per
 language, and a chance per language to drift behind the CLI, all to wrap a
-process the caller could have spawned. The single-dependency rule in
+process the caller could have spawned. The short dependency list in
 `CONTRIBUTING.md` exists for the tool itself, and the same reasoning applies to
 what we ask users to link into their programs. The commitment instead is a CLI
 disciplined enough not to need wrapping: stable verbs and exit codes, human
 output on stdout, diagnostics on stderr, and a `--json` mode wherever a program
-is the reader rather than a person. Today that mode exists on
-`brig profile export`; more verbs get it as callers need them, and asking for
-one is a small issue rather than an argument. For lifecycle control there is
+is the reader rather than a person. Today that mode covers the read verbs --
+`ls`, `info`, `agent ls`, `agent show`, `agent export`, `agent new`,
+`policy show`, `secret ls` and `doctor` -- and `run`, which under `--json`
+reports the agent's exit status on one line; more verbs get it as callers
+need them, and asking for one is a small issue rather than an argument. For lifecycle control there is
 already an interface with no library attached: `brigd` speaks line-delimited
 JSON over a unix socket and is documented in [brigd.md](brigd.md).
 
@@ -185,7 +188,7 @@ platform, not once but as they change.
 ## A plugin system
 
 Loading third-party code into the process that resolves your credentials is
-the thing the single-dependency rule exists to prevent, and a plugin API also
+the thing the short dependency list exists to prevent, and a plugin API also
 turns internal interfaces into a contract we then cannot change. brig is
 already extensible three ways that do not require it. Profiles are data, so
 any Linux CLI in an OCI image runs under brig with a YAML file and no code at

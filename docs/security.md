@@ -28,6 +28,7 @@ Which of them you got is the `ISOLATION` row of the execution envelope, printed
 before every boot and by `brig info`:
 
 ```
+ISOLATION    microVM (hull, hvi backend)
 ISOLATION    microVM (hull, vz backend)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2)
 ISOLATION    container (docker over containerd, runc: the guest shares the host kernel)
@@ -90,10 +91,12 @@ deprecated `forward:` spelling of one -- brig still reads the named variable
 from its own environment, so whatever populates that environment remains a
 usable backend for those.
 
-There is no secret store on Linux yet. A profile whose secrets are *optional*
-degrades there rather than failing: the run boots and the agent asks for a
-login, which is what `claude-code` does. A **required** secret does fail
-outright, because there is nowhere on that host to read it from.
+On Linux the store is a Secret Service keyring on your session bus,
+gnome-keyring or KWallet ([secrets.md](secrets.md#linux)). A host with no
+keyring has no store, and a profile whose secrets are *optional* degrades
+there rather than failing: the run boots and the agent asks for a login,
+which is what `claude-code` does. A **required** secret does fail outright,
+because there is nowhere on that host to read it from.
 
 Values are re-read on every exec, so a rotated credential is picked up without
 restarting the sandbox. Nothing is written into the workspace.
@@ -326,8 +329,9 @@ What that means for the things this document is about:
   import verb: the dialog appears when you asked for it, once, and never again
   on the boot path.
 
-There is no store on Linux yet; `brig secret` says so rather than falling back
-to a file, which would be a downgrade nothing told you about.
+On Linux the store is a Secret Service keyring, and a host without one has no
+store: `brig secret` says which half is missing rather than falling back to a
+file, which would be a downgrade nothing told you about.
 
 ## Writing into the workspace
 
@@ -444,7 +448,8 @@ is the case that stops.
 
 `BRIG_VERIFY=require` refuses anything that cannot be positively verified,
 third-party images included. `BRIG_VERIFY=off` skips the check. A typo in that
-setting falls back to `warn` rather than silently disabling it.
+setting refuses the run, naming the three values, rather than being read as
+either of them.
 
 Point `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
 at your own registry and workflow if you publish signed images yourself.
@@ -604,7 +609,8 @@ it.
 It does not sandbox the agent from the network by default, on any backend. A
 sandbox nobody attached a policy to has unrestricted egress, which is what
 every sandbox had before policies existed and what `brig run <agent>` gets on a
-fresh install.
+fresh install. `--network offline` is the one posture with no route out at
+all, on every backend.
 
 Attach one and that changes, on `hvi`: the rules are enforced at the network
 gateway brig gives that sandbox, and a run that cannot enforce them is refused
@@ -612,10 +618,10 @@ rather than booted unconstrained -- see [docs/policies.md](policies.md). On
 `vz`, on `qemu` and on Linux there is no policy to be had at all, and outbound
 traffic is whatever the runtime allows.
 
-It does not promise that one sandbox cannot reach another. What happens
-depends on the backend. brig asks every runtime for its shared network, with
-no setting to say otherwise. What the runtime then does with that request is
-the runtime's own behaviour, not brig's. The measurements are in
+It does not promise that one sandbox cannot reach another under the default
+`shared` network. What happens there depends on the backend: brig asks the
+runtime for its shared network, and what the runtime does with that request
+is the runtime's own behaviour, not brig's. The measurements are in
 [docs/manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md).
 
 | backend | can one sandbox reach another? |

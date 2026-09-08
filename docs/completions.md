@@ -38,7 +38,7 @@ A brig line has three positions, and completion follows them.
 
 | where the cursor is | what is offered |
 | --- | --- |
-| before the verb | the verbs, and the global flags (`--verbose`, `-q`) |
+| before the verb | the verbs, and the global flags (`--verbose`, `-q`, `--json`) |
 | a flag, either side of the ref | the flags that verb honours -- brig reads its own on both sides |
 | a ref | every agent, and every session under one: `claude`, `claude@refactor` |
 | `brig run <ref> …` | the project directory, for the first word only |

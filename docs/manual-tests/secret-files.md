@@ -8,16 +8,17 @@ recording double: it can assert the order of the mounts and that no value ever
 reaches argv, but it cannot tell you what `stat -f -c %T` says in a real guest,
 which is the only thing that makes the design fail-closed rather than intended.
 
-CI cannot run this either: `ci.yml` is Linux-only and GitHub Actions is
-disabled at the repository level, so nothing in this PR is machine-verified.
+CI cannot run this either: `ci.yml` runs on Linux only, with a stub runtime,
+so nothing in this PR is machine-verified.
 
 Run on a macOS host (arm64, macOS 26.4) with hull installed, 2026-08-18,
 against `ghcr.io/brig-sh/claude-code-stock:latest` (Ubuntu, aarch64).
 
 ## The profile under test
 
-The built-in `claude-code` spec does not declare `volumes:` yet -- that is
-PR 8 -- so the run used a shadowing profile in a throwaway
+When this was run the built-in `claude-code` spec did not declare `volumes:`
+yet (it does now: a `512m` tmpfs over `.claude`, `internal/profile/specs/claude-code.yaml`),
+so the run used a shadowing profile in a throwaway
 `$XDG_CONFIG_HOME/brig/claude-code.yaml`: the built-in with `statePaths:`
 removed and this appended.
 
