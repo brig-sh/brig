@@ -625,6 +625,7 @@ func dispatch(args []string) error {
 		if err := cfg.EnsureRunning(set); err != nil {
 			return err
 		}
+		recordBoot(cfg)
 		// Under --json, down the child path so brig survives the shell and reports
 		// its exit status on a Run line, the same handover an agent gets. Only sh
 		// reaches here with jsonRun set -- shell is refused above.
@@ -673,6 +674,7 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 	if err := cfg.EnsureRunning(set); err != nil {
 		return err
 	}
+	recordBoot(cfg)
 	// Each branch below has a --json form: the object stands in for the text it
 	// would otherwise print, because a script asked for one machine-readable line
 	// and a bare name or a warning beside it would be the noise --json exists to
@@ -2939,6 +2941,21 @@ var jsonRun *jsonRunContext
 type jsonRunContext struct {
 	ref     string
 	sandbox string
+	// boot is how long the sandbox took to become reachable, in milliseconds,
+	// when this invocation booted it; nil when it found one already running.
+	boot *int64
+}
+
+// recordBoot copies the measured boot time onto the Run object's context, once
+// EnsureRunning has returned. A run without --json has no jsonRun and nothing
+// to record; a run that reused a sandbox has no BootTime and records nothing,
+// so the field's absence says "not booted here" rather than "booted in zero".
+func recordBoot(cfg *wrap.Config) {
+	if jsonRun == nil || cfg.BootTime == 0 {
+		return
+	}
+	ms := cfg.BootTime.Milliseconds()
+	jsonRun.boot = &ms
 }
 
 // detectRuntimeFor is the seam the run-line tests replace, so a test can drive a
@@ -2950,17 +2967,25 @@ var detectRuntimeFor = runtime.DetectFor
 // runData is the payload of a Run object: what a --json run says about itself
 // once the agent has run, or once brig has refused to run it.
 //
-// error and signal are omitempty because each names a case that did not always
-// happen: error only on a brig refusal, signal only on an agent the kernel
-// killed. ref and sandbox are always present, so a consumer reads them
-// unconditionally. See #110 and the field rule in jsonout.go.
+// error, signal and bootMillis are omitempty because each names a case that
+// did not always happen: error only on a brig refusal, signal only on an agent
+// the kernel killed, bootMillis only when this invocation booted the sandbox
+// rather than finding it running. ref and sandbox are always present, so a
+// consumer reads them unconditionally. See #110 and the field rule in
+// jsonout.go.
+//
+// bootMillis is measured, from the runtime being asked to boot to the first
+// probe the guest agent answered, so it includes the VMM's own start. A
+// pointer rather than an integer so a stub that boots in under a millisecond
+// still reports 0 instead of dropping the field.
 type runData struct {
-	Ref     string `json:"ref"`
-	Sandbox string `json:"sandbox"`
-	Stage   string `json:"stage"`
-	Exit    int    `json:"exit"`
-	Error   string `json:"error,omitempty"`
-	Signal  string `json:"signal,omitempty"`
+	Ref        string `json:"ref"`
+	Sandbox    string `json:"sandbox"`
+	Stage      string `json:"stage"`
+	Exit       int    `json:"exit"`
+	Error      string `json:"error,omitempty"`
+	Signal     string `json:"signal,omitempty"`
+	BootMillis *int64 `json:"bootMillis,omitempty"`
 }
 
 // writeRunObject prints one Run object to stdout, compact, on its own line. It
@@ -2968,12 +2993,13 @@ type runData struct {
 // and none has to thread them through.
 func writeRunObject(stage string, exit int, errMsg, signal string) error {
 	return writeJSONLine(os.Stdout, "Run", runData{
-		Ref:     jsonRun.ref,
-		Sandbox: jsonRun.sandbox,
-		Stage:   stage,
-		Exit:    exit,
-		Error:   errMsg,
-		Signal:  signal,
+		Ref:        jsonRun.ref,
+		Sandbox:    jsonRun.sandbox,
+		Stage:      stage,
+		Exit:       exit,
+		Error:      errMsg,
+		Signal:     signal,
+		BootMillis: jsonRun.boot,
 	})
 }
 

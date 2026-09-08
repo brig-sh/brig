@@ -588,6 +588,11 @@ status when `stage` is `"agent"`, and one of Brig's own exit codes
 otherwise. See [Exit codes](#exit-codes) for what those carve-outs mean for
 a script.
 
+When the run booted the sandbox, `data.bootMillis` carries the measured time
+from the runtime being asked to start to the first answer from the guest
+agent, so it includes the VMM's own start. A run that found the sandbox
+already up omits the field rather than reporting zero.
+
 ## Exit codes
 
 | Code | Meaning |
