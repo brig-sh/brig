@@ -13,7 +13,7 @@ the repository level, so none of it is machine-verified.
 ## What was run
 
 ```
-$ brig create claude-code
+$ brig run -d claude-code
 ...
 brig: starting sandbox brig-claude-code...
 VMM started (PID 34585)

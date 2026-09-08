@@ -10,7 +10,7 @@ never run it.
 ## What it does not do
 
 It does not proxy exec. Handing your terminal to a process inside the guest
-means passing file descriptors, and `brig exec` already does that correctly by
+means passing file descriptors, and `brig sh` already does that correctly by
 replacing itself with the runtime. The daemon owns lifecycle, the CLI owns the
 terminal.
 

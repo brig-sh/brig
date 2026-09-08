@@ -15,7 +15,7 @@
 #              last element, which is how brig derives it too. Its binary: is
 #              the agent CLI, checked for when the profile names one
 #
-# The boot goes through brig: `BRIG_IMAGE=<image> brig create <profile>`, torn
+# The boot goes through brig: `BRIG_IMAGE=<image> brig run -d <profile>@image-check`, torn
 # down with `brig rm`. That is the point of the script rather than an
 # implementation detail. An image booted bare as a container -- `hull run
 # <image>` with no profile behind it -- runs with the runtime's default
@@ -151,9 +151,9 @@ printf 'runtime: %s (%s)\n' "$KIND" "${RT:-none found}"
 if dry; then
 	printf '\nBRIG_DRY_RUN is set, so nothing was booted and nothing was checked.\n'
 	printf 'The boot would be:\n'
-	printf '  BRIG_IMAGE=%s BRIG_VERIFY=off %s create %s --name image-check --workspace <scratch>\n' \
+	printf '  BRIG_IMAGE=%s BRIG_VERIFY=off %s run -d %s@image-check --home <scratch>\n' \
 		"$IMAGE" "$BRIG_BIN" "$PROFILE"
-	printf '  %s rm %s --name image-check --workspace <scratch>\n' "$BRIG_BIN" "$PROFILE"
+	printf '  %s rm %s@image-check --home <scratch>\n' "$BRIG_BIN" "$PROFILE"
 	printf 'and each requirement would run as `%s exec -u root <sandbox>`.\n' \
 		"$(basename "${RT:-$KIND}")"
 	exit 0
@@ -184,7 +184,7 @@ cleanup() {
 	# Unconditionally, not only when the boot printed a name: a create that
 	# failed after the sandbox was up leaves one behind holding the name, and
 	# `brig rm` on a sandbox that was never created is a no-op.
-	"$BRIG_BIN" rm "$PROFILE" --name image-check --workspace "$WORKSPACE" >/dev/null 2>&1
+	"$BRIG_BIN" rm "$PROFILE@image-check" --home "$WORKSPACE" >/dev/null 2>&1
 	if [ -n "$LISTED" ]; then
 		"$RT" rm -f "$LISTED" >/dev/null 2>&1
 	fi
@@ -210,7 +210,7 @@ export BRIG_IMAGE="$IMAGE"
 export BRIG_VERIFY=off
 
 printf '\n'
-if BOOTED="$("$BRIG_BIN" create "$PROFILE" --name image-check --workspace "$WORKSPACE" 2>"$BOOTLOG")"; then
+if BOOTED="$("$BRIG_BIN" run -d "$PROFILE@image-check" --home "$WORKSPACE" 2>"$BOOTLOG")"; then
 	NAME="$(printf '%s\n' "$BOOTED" | tail -1 | tr -d '[:space:]')"
 else
 	# A create that fails during credential delivery leaves the sandbox
@@ -371,7 +371,7 @@ run 'rm' rm 'removes a planted symlink rather than following it' -- \
 run 'mount, tmpfs' mount 'covers a directory so a credential stays off disk' -- \
 	mount -t tmpfs -o size=1m,mode=0700,nodev,nosuid tmpfs "$SCRATCH/d"
 run 'sleep' sleep 'the container command on the nerdctl path' -- sleep 0
-run 'bash' bash 'brig shell' -- bash -lc 'exit 0'
+run 'bash' bash 'brig sh' -- bash -lc 'exit 0'
 
 if [ -n "$BINARY" ]; then
 	run "$BINARY" "$BINARY" "the profile's binary:" -- "$BINARY" --version

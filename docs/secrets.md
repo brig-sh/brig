@@ -136,7 +136,7 @@ note: claude-desktop also declares claude-credentials, so this fills it there to
 ```
 
 Where it looks is data in the profile, not knowledge in brig: each secret
-carries a `sources:` list and the first that exists wins. `brig profiles` shows
+carries a `sources:` list and the first that exists wins. `brig agent ls` shows
 which names a profile can import and which it cannot, and
 [profiles.md](profiles.md) is how to declare them in one of your own.
 
@@ -428,7 +428,7 @@ Use it. `claude-code` declares `gh-token`, so nothing else is needed -- the
 name in the store is the binding:
 
 ```console
-$ brig env claude-code
+$ brig info claude-code
 ...
 brig: forwarding to guest:
 brig:   GH_TOKEN(secret)
@@ -436,7 +436,7 @@ brig: never forwarded for claude-code: ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN (t
 ```
 
 `(secret)` says the value came from brig's store rather than from your shell.
-`brig env` reports; `brig run claude-code` does it.
+`brig info` reports; `brig run claude-code` does it.
 
 An exported `GH_TOKEN` still wins, because the profile binds the name as a
 chain -- `refs: [env.GH_TOKEN, secrets.gh-token]` -- so

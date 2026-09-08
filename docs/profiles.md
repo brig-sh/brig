@@ -8,17 +8,17 @@ The quickest way to write one is to start from the closest existing profile
 rather than from a blank file:
 
 ```bash
-brig profile export claude-code mine   # writes ~/.config/brig/mine.yaml
-brig profile edit mine                 # change the image, and what it forwards
+brig agent new mine --from claude-code   # writes ~/.config/brig/mine.yaml
+brig agent edit mine                     # change the image, and what it forwards
 brig run mine
 ```
 
-The second word is a *name*, not a path: brig puts the file in your profile
+The name you give `new` is a *name*, not a path: brig puts the file in your profile
 directory, which is the only place a profile file does anything. It writes
 nowhere else -- a destination with a `/` in it is refused, not honoured.
 
 It is also the name the profile itself carries. brig keys on the `name:` field
-inside the file rather than on the file name, so export writes the name you
+inside the file rather than on the file name, so `new` writes the name you
 gave it into the file: `mine.yaml` says `name: mine`, and every command that
 takes a profile takes `mine` from that point on. Nothing else in the file is
 touched, so the image, the guest home and the comments still describe the
@@ -26,7 +26,7 @@ profile you copied -- that is what the edit in the second line is for.
 
 The exported file carries a header explaining every field, so you can edit it
 without coming back here. Once you have a profile of your own on disk,
-`brig profile edit` opens it directly in `$VISUAL`, then `$EDITOR`, then `vi`
+`brig agent edit` opens it directly in `$VISUAL`, then `$EDITOR`, then `vi`
 -- there is no round trip through a separate file any more. It only works on
 a profile backed by a file: a built-in has none, so it says so and prints the
 commands that would make one, and creates nothing itself.
@@ -50,23 +50,24 @@ project. The old `~/.config/brig/templates` default is not read. Nothing is
 migrated for you -- these files name credential variables, and there is no
 safe guess about which of them you still want -- but brig notices files left
 there and says so on every invocation until you move them across with
-`brig profile import`.
+`brig agent import`.
 
 **The directory starts empty, and brig never writes there unless you ask
-it to.** Nothing is pre-seeded on first run. `brig profile import` and
-`brig profile export <name> <dest>` are the only commands that write to it,
-and export refuses to overwrite an existing file unless you pass `--force`.
+it to.** Nothing is pre-seeded on first run. `brig agent import`,
+`brig agent export <agent> <name>` and `brig agent new <name> --from <agent>`
+are the only commands that write to it, and the last two refuse to overwrite
+an existing file unless you pass `--force`.
 
 A profile may be backed by more than one file, because a file need not be
 named after the profile inside it. Two files declaring one name is a mistake
 with no winner worth having -- which survives depends on where the names
 happen to sort -- so brig reports it and says which one won.
-`brig profile rm` takes all of them, after asking: a second file is by
+`brig agent rm` takes all of them, after asking: a second file is by
 definition not the file you named.
 
 A file may take a built-in's name. That is deliberate: it is how you pin your
 own image for a profile brig already knows about, without inventing a second
-name for it. `brig profiles` lists the merged set -- embedded and file-backed
+name for it. `brig agent ls` lists the merged set -- embedded and file-backed
 together, one namespace -- and marks where each came from: unmarked is
 embedded, `(file)` is a profile that exists only as a file, and
 `(file, overrides built-in)` is a file shadowing an embedded one.
@@ -74,11 +75,11 @@ embedded, `(file)` is a profile that exists only as a file, and
 ## Export and import
 
 ```bash
-brig profile export claude-code                # prints to stdout
-brig profile export claude-code mine           # ~/.config/brig/mine.yaml
-brig profile export claude-code mine --force   # ...overwriting what is there
-brig profile export claude-code > ./mine.yaml  # a copy somewhere of your own
-brig profile export x | brig profile import -
+brig agent export claude-code                # prints to stdout
+brig agent export claude-code mine           # ~/.config/brig/mine.yaml
+brig agent export claude-code mine --force   # ...overwriting what is there
+brig agent export claude-code > ./mine.yaml  # a copy somewhere of your own
+brig agent export x | brig agent import -
 ```
 
 With no destination, export prints to stdout, so it composes into a pipe.
@@ -95,13 +96,13 @@ to stdout and redirect it, under the shell's rules rather than brig's.
 A destination that is already spoken for is refused too, because the
 destination is the name written into the file. `claude` is how brig spells
 `claude-code`, and a profile actually called `claude` wins the lookup over
-that alias, so `brig profile export claude-code claude` would make every
+that alias, so `brig agent new claude --from claude-code` would make every
 `brig run claude` mean the copy and leave the built-in reachable only under
 its full name. A name a `reserved:` profile owns is refused for the same
 reason. Both say what the collision is; pick another name.
 
 Export writes YAML because a profile is a file a person edits, and YAML has
-comments. Use `brig profile export --json` if something downstream consumes
+comments. Use `brig agent show --json` if something downstream consumes
 profiles programmatically -- JSON is a subset of YAML, so import reads both
 with the same parser and neither has to guess.
 
@@ -115,7 +116,7 @@ with the same parser and neither has to guess.
 | `kind` | no | `agent` (the default), `shell` or `gui`. An `agent` needs a `binary`; the other two have nothing to pass arguments to |
 | `binary` | yes, for `kind: agent` | The agent CLI inside the guest |
 | `mem`, `cpus` | yes | Guest size. Both must be greater than zero |
-| `desc` | no | One line, shown by `brig profiles` |
+| `desc` | no | One line, shown by `brig agent ls` |
 | `secrets` | no | Names this profile wants out of brig's own secret store, checked before the sandbox is created. Each entry says whether a run without it should stop, and where `brig secret import` may find it. See below |
 | `env` | no | The variables the guest sees, and where each one's value comes from: a literal, a stored secret, or brig's own environment. See below |
 | `forward` | no | Deprecated spelling of `env` for the environment case. Still works; folded into `env` when the file is read. See below |
@@ -135,7 +136,7 @@ with the same parser and neither has to guess.
 | `onboarding` | no | A first-run state file to seed. See below |
 | `hostCredential` | no | **Deprecated, removed next release.** A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
 | `reserved` | no | Marks a profile that owns the workspace a session name could otherwise slug onto. See below |
-| `unpublished` | no | We ship the profile but not an image for it. `brig run` says so and stops, rather than letting the pull fail against the registry with a 404 that reads like an outage. Pass `--image` with one you built, and `brig profiles` marks it. `cursor` is the one that carries it |
+| `unpublished` | no | We ship the profile but not an image for it. `brig run` says so and stops, rather than letting the pull fail against the registry with a 404 that reads like an outage. Pass `--image` with one you built, and `brig agent ls` marks it. `cursor` is the one that carries it |
 | `policy` | no | Names of policies attached to this profile inline: every run carries all of them, unioned with whatever is attached separately by name |
 
 A misspelled field is refused rather than ignored. `forwards:` instead of
@@ -360,7 +361,7 @@ env:
 
 The translation happens once, at parse time, so nothing downstream of it has
 to know which spelling a given file used. One consequence worth knowing:
-`brig profile export --json` emits the `env:` form even for a profile
+`brig agent show --json` emits the `env:` form even for a profile
 written with `forward:`, because JSON export marshals the parsed profile,
 and by then there is no `forward:` left in it. Plain YAML export is
 unaffected -- it hands back the file exactly as written, comments and all,
@@ -493,15 +494,16 @@ about what persists is worse than the duplication.
 part of this. The mechanism is built (a re-run rewrites the file under a live
 agent); the verb is not.
 
-## `brig env`, to see what a run would send
+## `brig info`, to see what a run would send
 
-`brig env <profile>` reports what the guest would be handed, by name --
+`brig info <profile>` reports what the guest would be handed, by name --
 never a value, on any path. A variable sourced from the secret store is
 annotated `(secret)`; one from the deprecated `hostCredential:` is annotated
 `(host)`; an ambient or literal one is reported bare:
 
 ```
-$ brig env alex
+$ brig info alex
+...
 brig: workspace /Users/alex/brig/alex (sandbox brig-alex)
 brig: runtime hull (/opt/homebrew/bin/hull)
 brig: image ghcr.io/brig-sh/claude-code:latest (pull missing)
@@ -517,7 +519,7 @@ separate from the value, from the point a binding is resolved -- and the
 report is built from that name list alone, so no path through this command
 reads a value. A test fails the build if one ever reaches the output.
 
-`brig env` resolves secrets the same way any other run does, so a profile
+`brig info` resolves secrets the same way any other run does, so a profile
 missing one from the store fails the same way `brig run` would. It is not a
 preview that quietly skips what it cannot resolve.
 
@@ -540,7 +542,7 @@ The trailing word is reserved too, not just the full name: `claude-desktop`
 reserves `desktop` as well as `claude-desktop` itself. Watch for the
 consequence -- it is easy to trip over by accident. A profile of your own
 named `my-codex` with `reserved: true` reserves `codex` along with
-`my-codex`, so `brig profile import` of anything else named `codex` is
+`my-codex`, so `brig agent import` of anything else named `codex` is
 refused as a collision, even though nothing on brig's side is called that.
 
 ## `deny` is the billing guard
@@ -659,7 +661,7 @@ cpus: 4
 ```
 
 ```bash
-brig profile import mytool.yaml
+brig agent import mytool.yaml
 MYTOOL_TOKEN=$(pass show mytool/token) brig run mytool
 ```
 
@@ -718,7 +720,7 @@ file on your machine. On macOS brig asks hull where they are, because they live
 under hull's store and only hull knows where that is; on Linux it looks in
 `~/.local/share/brig/assets`. `BRIG_BOOT_ASSETS` overrides both.
 The kernel is named for the architecture it boots: `Image` on arm64,
-`bzImage` on x86_64. And the guest agent that `brig exec` talks to comes from
+`bzImage` on x86_64. And the guest agent that `brig sh` talks to comes from
 that initrd rather than from the image, which is what makes an unmodified image
 drivable at all.
 
@@ -749,7 +751,7 @@ brig refuses up front instead.
 ## Removing a profile
 
 ```bash
-brig profile rm mytool
+brig agent rm mytool
 ```
 
 The argument is a profile name, not a file name: `rm` resolves it through the
@@ -758,7 +760,7 @@ called. If more than one file declares the name, it takes all of them --
 removing only the one that loaded would promote the other and leave the
 profile listed exactly as before.
 
-That resolution is why `rm` asks. `mytool.yaml` for `brig profile rm mytool`
+That resolution is why `rm` asks. `mytool.yaml` for `brig agent rm mytool`
 is the file you named, and it goes without a word. Anything else -- an alias,
 a second file declaring the same profile, a file renamed by hand -- is a file
 brig found and you did not type, so it is named and the delete waits for a
@@ -766,7 +768,7 @@ brig found and you did not type, so it is named and the delete waits for a
 no terminal to ask on `rm` refuses and says so rather than assuming yes:
 
 ```bash
-brig profile rm claude -y   # the alias resolves to claude-code's file
+brig agent rm claude -y   # the alias resolves to claude-code's file
 ```
 
 Built-in profiles are compiled in, so there is nothing to remove -- import a

@@ -7,7 +7,7 @@ assignees: ''
 ---
 
 <!--
-Write a specific, imperative title, e.g. "brig env omits a forwarded variable
+Write a specific, imperative title, e.g. "brig info omits a forwarded variable
 when the profile is file-backed". Search open and closed issues first to avoid
 duplicates.
 -->
