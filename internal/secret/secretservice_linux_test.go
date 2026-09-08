@@ -109,6 +109,7 @@ func TestOpenReportsNoBus(t *testing.T) {
 			t.Errorf("open() = %v, want it to mention %q", err, want)
 		}
 	}
+	assertFromCommandIsHonest(t, err)
 }
 
 func TestOpenReportsNoService(t *testing.T) {
@@ -126,6 +127,21 @@ func TestOpenReportsNoService(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("open() = %v, want it to mention %q", err, want)
 		}
+	}
+	assertFromCommandIsHonest(t, err)
+}
+
+// The way out each refusal offers has to describe what --from-command does:
+// the import runs the command once and stores its output like any other
+// import (cmd/brig/secretimport.go, readFor). An earlier wording promised it
+// "holds no plaintext at rest", which it does not.
+func assertFromCommandIsHonest(t *testing.T, err error) {
+	t.Helper()
+	if strings.Contains(err.Error(), "plaintext at rest") {
+		t.Errorf("%v: claims --from-command keeps no plaintext at rest; the import stores the command's output", err)
+	}
+	if !strings.Contains(err.Error(), "stores it like any other import") {
+		t.Errorf("%v: does not say --from-command stores the value", err)
 	}
 }
 
@@ -150,6 +166,7 @@ func TestResolveCollectionReportsNoDefaultCollection(t *testing.T) {
 			t.Errorf("resolveCollection() = %v, want it to mention %q", err, want)
 		}
 	}
+	assertFromCommandIsHonest(t, err)
 }
 
 // swapSeams replaces dialBus and hasSecretService for a test and returns a

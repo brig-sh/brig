@@ -107,8 +107,9 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --mem MB           guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
-      --skills           project your own ~/.claude skills and plugins into
-                         the guest, read-only (or BRIG_SKILLS=1)
+      --skills           copy your own ~/.claude skills and plugins into the
+                         guest home; the host copy is never written
+                         (or BRIG_SKILLS=1)
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
@@ -136,7 +137,7 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
   BRIG_WORKSPACE       host directory mounted as the guest home
   BRIG_IMAGE           guest image
   BRIG_PULL            missing (default) | always | never
-  BRIG_SKILLS          1 to project your ~/.claude skills and plugins read-only
+  BRIG_SKILLS          1 to copy your ~/.claude skills and plugins into the guest
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off -- guest image signature

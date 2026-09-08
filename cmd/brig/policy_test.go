@@ -1389,6 +1389,11 @@ func TestAttachUnknownProfile(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown profile") {
 		t.Errorf("wrong error for an unknown profile: %v", err)
 	}
+	// The listing it points at is the one the help teaches, not the retired
+	// `brig profiles`.
+	if err != nil && !strings.Contains(err.Error(), "`brig agent ls` lists them") {
+		t.Errorf("the unknown-profile message does not point at `brig agent ls`: %v", err)
+	}
 	// The same "unknown profile" message every other command in this
 	// codebase reports via notFoundf, which exitCode reads for exit 3 --
 	// a plain fmt.Errorf here would look identical on stderr but exit 1.
@@ -1850,6 +1855,9 @@ func TestCheckUnknownProfile(t *testing.T) {
 	err := checkPolicy([]string{"ghost"})
 	if err == nil || !strings.Contains(err.Error(), "unknown profile") {
 		t.Errorf("wrong error for an unknown profile: %v", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "`brig agent ls` lists them") {
+		t.Errorf("the unknown-profile message does not point at `brig agent ls`: %v", err)
 	}
 	if got := exitCode(err); got != exitNotFound {
 		t.Errorf("exitCode = %d, want %d (exitNotFound)", got, exitNotFound)
