@@ -21,8 +21,8 @@ it, in order.
 - Tag the release commit and push the tag:
 
   ```bash
-  git tag v0.1.0-rc17
-  git push origin v0.1.0-rc17
+  git tag v0.1.0-rc18
+  git push origin v0.1.0-rc18
   ```
 
   The push starts the workflow. It builds both binaries for every target,
@@ -65,14 +65,14 @@ it, in order.
   pkg.go.dev serves only what the proxy has already seen:
 
   ```bash
-  GOPROXY=https://proxy.golang.org go list -m github.com/brig-sh/brig@v0.1.0-rc17
+  GOPROXY=https://proxy.golang.org go list -m github.com/brig-sh/brig@v0.1.0-rc18
   ```
 
 - Update the documentation a release touches. Grep for the previous version
   before publishing and change every place that still quotes it:
 
   ```bash
-  git grep -n 0.1.0-rc16
+  git grep -n 0.1.0-rc17
   ```
 
   At least `VERSION`, the compatibility window named in README's deprecation
