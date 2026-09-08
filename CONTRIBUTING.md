@@ -7,9 +7,13 @@ notes come first.
 ## Repo specifics
 
 - Build: `make build` produces `./brig` and `./brigd`. `make all` is
-  `vet test build`, which is what CI gates on.
-- Dependencies: brig has **one** direct dependency (`sigs.k8s.io/yaml`), and
-  that is deliberate. It shells out to `cosign`, `oras` and `security` rather
+  `vet test build`. CI runs that plus `gofmt -l`, `script/smoke.sh`, a
+  cross-compile for darwin/arm64 and linux/amd64, and a check that no test
+  disappeared.
+- Dependencies: brig has **three** direct dependencies -- `sigs.k8s.io/yaml`
+  for profiles, `golang.org/x/sys` for terminal and process calls, and
+  `github.com/godbus/dbus/v5` for the Linux secret store -- and that list is
+  deliberately short. It shells out to `cosign`, `oras` and `security` rather
   than linking them, which keeps the attack surface of a tool that handles
   credentials small. Please do not add a dependency without saying in the PR
   why shelling out or using the standard library will not do.
@@ -276,8 +280,7 @@ A few norms that make reviews pleasant on both sides:
 
 A PR is mergeable when:
 
-- CI is green: linting (including commit-message linting), builds, unit tests
-  and end-to-end tests pass.
+- CI is green: linting, builds, unit tests and end-to-end tests pass.
 - The required approvals are in place.
 - The branch is up to date with `main` (rebased, with a clean, logical commit
   series).

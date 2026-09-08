@@ -30,7 +30,9 @@ read it as isolation.
 
 ## macOS, `hvi`
 
-hull 0.1.0-rc21, `claude-code-stock`, sandboxes at `10.87.0.4` and `10.87.0.5`.
+hull 0.1.0-rc21, `claude-code-stock`, sandboxes at `10.87.0.4` and `10.87.0.5`
+on the shared subnet of the time. The shared network is `198.18.0.0/24` now
+(`internal/runtime/gateway.go`); the mechanism below does not depend on which.
 
 A packet capture on both guests, with a raw `AF_PACKET` socket, shows the
 mechanism:
@@ -88,7 +90,8 @@ creates that network in `Run` and removes it in `Remove`.
 
 ## Offline
 
-`--network none` gives a guest with `lo` only, no route, and no egress. The
+`--network offline` (`--net none` at hull, `--network none` at nerdctl) gives
+a guest with `lo` only, no route, and no egress. The
 same image on the default bridge has `eth0` and reaches the internet. This is
 true on Linux and on both macOS backends.
 

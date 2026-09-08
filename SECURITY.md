@@ -65,8 +65,10 @@ written down.
 Out of scope are the limitations brig already declares. `docs/security.md` lists
 them under
 [Things brig does not claim](docs/security.md#things-brig-does-not-claim): brig
-does not sandbox the agent from the network, does not isolate one sandbox from
-another, does not filter terminal escape sequences the agent writes, and does
+does not sandbox the agent from the network by default, does not isolate one
+sandbox from another under the default shared network (`--network isolated`
+and `--network offline` are the postures that do), does not filter terminal
+escape sequences the agent writes, and does
 not stop an agent misusing a credential it was deliberately handed. A report
 that brig does one of those is describing a known limitation, not a
 vulnerability. That page is the authority on the boundary, so we point at it

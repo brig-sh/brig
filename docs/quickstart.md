@@ -41,11 +41,12 @@ The first run is the slow one. In order:
   ```
   PROFILE      claude-code
   SANDBOX      brig-claude-code (hull)
-  ISOLATION    microVM (hull, vz backend)
+  ISOLATION    microVM (hull, hvi backend)
   WORKSPACE    /Users/you/brig/claude-code (read-write)
   IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
   VERIFY       warn, against brig's own trust policy
-  CREDENTIALS  GH_TOKEN
+  CREDENTIALS  claude-credentials
+  NETWORK      shared (one network for every sandbox on this host)
   ```
 
   Credentials are named, never printed. An ordinary run goes straight to the

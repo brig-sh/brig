@@ -7,8 +7,8 @@ privileged exec. `go test ./internal/runtime/` only asserts on the argv a spec
 builds; it cannot see a guest. This is the guest-side check the plan asks for,
 run by hand on a macOS host with hull already installed.
 
-CI cannot run this: `ci.yml` is Linux-only and GitHub Actions is disabled at
-the repository level, so none of it is machine-verified.
+CI cannot run this: `ci.yml` runs on Linux only, with a stub runtime, so none
+of it is machine-verified.
 
 ## What was run
 

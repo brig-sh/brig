@@ -12,8 +12,8 @@ because there is no other keychain `security -i`'s `-w`-must-be-last rule
 would exercise the same way (see `keychain_darwin_test.go`'s own comment on
 why its tests use the real keychain).
 
-CI cannot run this: `ci.yml` is Linux-only and GitHub Actions is disabled at
-the repository level, so none of it is machine-verified.
+CI cannot run this: `ci.yml` runs on Linux only, with a stub runtime, so none
+of it is machine-verified.
 
 ## What was run
 

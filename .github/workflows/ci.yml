@@ -32,8 +32,8 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          # sigs.k8s.io/yaml is the only dependency, but there is a go.sum
-          # to key the cache on now.
+          # Three direct dependencies (godbus/dbus, x/sys, sigs.k8s.io/yaml),
+          # and a go.sum to key the cache on.
           cache: true
 
       - name: gofmt
@@ -113,8 +113,8 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-          # sigs.k8s.io/yaml is the only dependency, but there is a go.sum
-          # to key the cache on now.
+          # Three direct dependencies (godbus/dbus, x/sys, sigs.k8s.io/yaml),
+          # and a go.sum to key the cache on.
           cache: true
 
       # A release config that only runs on a tag is a config nobody has run.
