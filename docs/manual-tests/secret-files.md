@@ -58,13 +58,13 @@ $ echo '{"before":1}'        > $WS/.claude/history.jsonl
 ## 1. The mounts, and their order
 
 ```
-$ brig create claude-code
+$ brig run -d claude-code
 brig: image ghcr.io/brig-sh/claude-code-stock:latest: signature verified
 brig: starting sandbox brig-claude-code...
 VMM started (PID 55252)
 brig-claude-code
 
-$ brig exec claude-code -- sh -c \
+$ brig sh claude-code \
     'grep -E "claude|persist" /proc/self/mountinfo | awk "{print \$5, \$(NF-2)}"'
 /home/claude                                virtiofs
 /run/brig/persist/.claude%2Fsessions        virtiofs
@@ -86,7 +86,7 @@ depth, never from the file.
 ## 2. `stat -f -c %T`: the fail-closed check
 
 ```
-$ brig exec claude-code -- sh -c \
+$ brig sh claude-code \
     'for p in ~/.claude ~/.claude/sessions ~/.claude/history.jsonl \
               ~/.claude/projects ~/.claude/.credentials.json; do
        printf "%-38s %s\n" "$p" "$(stat -f -c %T $p)"; done'
@@ -104,7 +104,7 @@ brig makes both of these checks itself and fails the run on either, and the
 same run checks that the guest has no swap:
 
 ```
-$ brig exec claude-code -- cat /proc/swaps
+$ brig sh claude-code cat /proc/swaps
 Filename				Type		Size		Used		Priority
 ```
 
@@ -113,7 +113,7 @@ Header only. Nothing for a tmpfs page to be written out to.
 ## 3. The credential
 
 ```
-$ brig exec claude-code -- stat -c "%n %F %U:%G %a %s" ~/.claude/.credentials.json
+$ brig sh claude-code 'stat -c "%n %F %U:%G %a %s" ~/.claude/.credentials.json'
 /home/claude/.claude/.credentials.json regular file claude:root 600 170
 ```
 
@@ -124,7 +124,7 @@ mode 0600 makes the group irrelevant.
 The kept state is there too, read back from the host copies through the cover:
 
 ```
-$ brig exec claude-code -- cat .claude/sessions/old.jsonl .claude/history.jsonl
+$ brig sh claude-code cat .claude/sessions/old.jsonl .claude/history.jsonl
 session-from-before
 {"before":1}
 ```
@@ -157,7 +157,7 @@ real path; against the bind mount D4 originally specified that `renameat`
 returned `EBUSY`, and the temp file landed in the workspace. Simulated exactly:
 
 ```
-$ brig exec claude-code -- sh -c '
+$ brig sh claude-code '
     C=~/.claude/.credentials.json
     echo "inode before: $(stat -c %i $C)"
     T=$C.tmp.$$
@@ -182,11 +182,11 @@ file (section 4's `find` was re-run and is unchanged).
 that runs every time after the first.
 
 ```
-$ brig exec claude-code -- sh -c 'grep -cE "claude|persist" /proc/self/mountinfo'
+$ brig sh claude-code 'grep -cE "claude|persist" /proc/self/mountinfo'
 8
-$ brig create claude-code
+$ brig run -d claude-code
 brig-claude-code
-$ brig exec claude-code -- sh -c '
+$ brig sh claude-code '
     echo "mount lines: $(grep -cE "claude|persist" /proc/self/mountinfo)"
     stat -c "%n %U %a %s" ~/.claude/.credentials.json
     stat -f -c %T ~/.claude
@@ -205,8 +205,8 @@ cannot do:
 ```
 $ printf '%s' '{"claudeAiOauth":{"accessToken":"probe-rotated",...}}' \
     | brig secret update volumes-probe-cred -f -
-$ brig create claude-code
-$ brig exec claude-code -- sh -c \
+$ brig run -d claude-code
+$ brig sh claude-code \
     'wc -c < ~/.claude/.credentials.json; grep -o probe-rotated ~/.claude/.credentials.json'
 108
 probe-rotated
@@ -222,7 +222,7 @@ targets on the host through the workspace root and refuses rather than repairs.
 ```
 $ brig rm claude-code
 $ ln -s /etc $WS/.claude/sessions
-$ brig create claude-code
+$ brig run -d claude-code
 brig: refusing to mount .../ws/.claude/sessions: it is a symlink to "/etc", and
 brig writes only regular files inside the workspace. The workspace is mounted
 read-write as the sandbox's home, so that link was put there from inside the

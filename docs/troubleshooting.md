@@ -113,7 +113,7 @@ not yours.
 Check the reference you are booting:
 
 ```bash
-brig env claude       # shows the image, among other things
+brig info claude      # shows the image, among other things
 ```
 
 Read the runtime's error for which of the two it is. If it is the wrong
@@ -206,7 +206,7 @@ loses it. See [Credentials](../README.md#credentials).
 First, ask brig what it would forward, by name:
 
 ```bash
-brig env claude
+brig info claude
 ```
 
 That reports what reaches the guest and whether the guest will be
@@ -253,7 +253,7 @@ Renew the login on the host and import it again, as the second line says.
 Renewing on the host alone does not help: a run reads brig's stored copy, and
 nothing re-reads the host until an import says so.
 
-## The sandbox restarted when I ran exec
+## The sandbox restarted when I ran sh
 
 ```
 brig: the running sandbox is not mounting /Users/alex/work -- its share went
@@ -263,7 +263,7 @@ Restarting it; any other session using this sandbox will be disconnected.
 
 brig compares the workspace the running sandbox has against the one this
 command asked for, and restarts the sandbox when they differ. Passing an
-explicit `--workspace` (or `BRIG_WORKSPACE`) that does not match the default
+explicit `--home` (or `BRIG_WORKSPACE`) that does not match the default
 the sandbox was started with trips this: brig reads it as the share having
 gone stale and recreates the VM.
 
@@ -273,11 +273,11 @@ Check which workspace the sandbox is on:
 brig ls               # shows each sandbox and its workspace
 ```
 
-If you did not mean to change the workspace, drop the `--workspace` flag so
-exec addresses the same session the sandbox already has. There is no flag today
+If you did not mean to change the workspace, drop the `--home` flag so
+`sh` addresses the same session the sandbox already has. There is no flag today
 that runs against a different workspace without this restart; a fix is in
 flight, and until it lands the honest description is that an explicit
-`--workspace` that differs from the remembered default restarts the sandbox.
+`--home` that differs from the remembered default restarts the sandbox.
 
 ## brew trust is not a command
 
@@ -317,7 +317,7 @@ files in there, so a link in the way was put there on purpose or by the
 sandbox reaching for the host. Nothing was written.
 
 This is not a case for retrying. Inspect the path the message names and remove
-the link, or point the workspace somewhere else. Pointing `--workspace` at a
+the link, or point the workspace somewhere else. Pointing `--home` at a
 symlink is refused the same way, and is fixed by naming the real directory.
 [docs/security.md](security.md#writing-into-the-workspace) explains why the
 refusal exists.

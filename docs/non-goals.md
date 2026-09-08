@@ -125,12 +125,12 @@ cannot perform.
 
 ## A dashboard or a TUI ahead of the CLI
 
-The refusal is in the last three words. `brig ls`, `brig env` and
-`brig profiles` are how you see what exists, what would be forwarded and what
+The refusal is in the last three words. `brig ls`, `brig info` and
+`brig agent ls` are how you see what exists, what would be forwarded and what
 each profile refuses, and while any of that is missing from the CLI, adding a
 screen that displays it is building the second floor first. A live interface
 also has to stay in the middle of something, and brig deliberately does not:
-`brig exec` replaces itself with the runtime so `^C` and the exit status are
+`brig sh` replaces itself with the runtime so `^C` and the exit status are
 the agent's own, which `docs/security.md` explains and accepts the cost of.
 
 **Reopens when** the CLI covers the whole surface and someone shows a task that

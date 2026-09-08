@@ -3,7 +3,7 @@
 A policy is a named YAML (or JSON) document declaring what an agent may
 reach outbound: a default of `allow` or `deny`, plus `host` or `cidr`
 exceptions on either side. `brig policy create` writes a starter and opens
-it in your editor, the same way `brig profile edit` does:
+it in your editor, the same way `brig agent edit` does:
 
 ```bash
 brig policy create no-net   # writes ~/.config/brig/policies/no-net.yaml
@@ -34,7 +34,7 @@ write to it.
 already follows -- a file need not be named after the policy it declares,
 though `create` always names them the same way. A directory can hold any
 number of policies, and one file that fails to parse does not stop the
-others from loading: `brig policies` reports it on stderr and lists
+others from loading: `brig policy ls` reports it on stderr and lists
 everything that did load. Two files declaring the same name is a mistake
 with no winner worth having, and is reported the same way.
 
@@ -57,7 +57,7 @@ egress:
 | --- | --- | --- |
 | `apiVersion` | yes | Pins the document shape. `brig.sh/v1alpha1` is the only value this build knows; anything else is refused rather than guessed at |
 | `name` | yes | The policy's identifier. Wins over the filename, and follows the same character rule as a profile name -- see [Naming a policy](#naming-a-policy) |
-| `desc` | no | One line, shown by `brig policies` |
+| `desc` | no | One line, shown by `brig policy ls` |
 | `egress.default` | yes | `allow` or `deny`, applied to any traffic neither list below names |
 | `egress.allow` | no | Exceptions to a `deny` default |
 | `egress.deny` | no | Always wins over `allow` and over `default`: a host named here is refused regardless, and no other settings source restores it |
@@ -106,8 +106,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 
 | verb | what it does |
 | --- | --- |
-| `brig policies` | every policy that parses, by name and description, and -- for one bound to anything -- what binds it |
-| `brig policy ls` | same (parity with `brig profiles` / `brig profile ls`) |
+| `brig policy ls` | every policy that parses, by name and description, and -- for one bound to anything -- what binds it. `brig policies` still works, with a note naming this spelling |
 | `brig policy create <name>` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
 | `brig policy edit <name> [--force]` | open an existing one, and only replace it if the save still parses and validates. Refuses a rename that would orphan anything bound to it -- inline or attached -- unless `--force` |
 | `brig policy show <name> [--json]` | print the parsed document |
@@ -262,7 +261,7 @@ binding points at is still right here either way.
 Starting from nothing:
 
 ```console
-$ brig policies
+$ brig policy ls
 no policies yet; your own live in /home/you/.config/brig/policies
 brig policy create <name> writes a starter one
 ```
@@ -273,7 +272,7 @@ filled in:
 ```console
 $ brig policy create no-net
 /home/you/.config/brig/policies/no-net.yaml created
-$ brig policies
+$ brig policy ls
 no-net          only Anthropic's API and one internal range
 ```
 
@@ -306,7 +305,7 @@ $ brig policy show no-net --json
 
 `show` prints the parsed document back out, not the file verbatim, which is
 why the field order differs from what you typed -- YAML's own marshalling
-sorts keys, the same way `brig profile export --json` does.
+sorts keys, the same way `brig agent show --json` does.
 
 Edit it, and remove it:
 
@@ -321,7 +320,7 @@ removed /home/you/.config/brig/policies/no-net.yaml
 
 | what brig says | what happened |
 | --- | --- |
-| ``unknown policy "x". `brig policies` lists them`` | `show`, `edit` or `rm` on a name that is not there |
+| ``unknown policy "x". `brig policy ls` lists them`` | `show`, `edit` or `rm` on a name that is not there |
 | `name "x" may use only lowercase letters, digits, dot, dash and underscore, and must start with a letter or digit` | see [Naming a policy](#naming-a-policy) |
 | `name "x" reads as false when written unquoted in YAML, not as itself; pick a different name` | the name is a bare YAML boolean, null or number word -- see [Naming a policy](#naming-a-policy) |
 | `<path> already exists. Edit it directly with brig policy edit x, or pass --force to replace it with a fresh starter` | `create` on a name whose file is already there |
@@ -332,7 +331,7 @@ removed /home/you/.config/brig/policies/no-net.yaml
 | `host "x" contains whitespace or a control character` | a `host:` value that cannot be a domain or glob under any grammar |
 | `apiVersion is required, and must be "brig.sh/v1alpha1"` | a document with no `apiVersion:`, or the wrong one |
 | `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate, or renamed a name that is bound to something, without `--force`. The real file is untouched; the error names where your edit still is |
-| ``unknown profile "x". `brig profiles` lists them`` | `attach`, `detach` or `check` naming a profile that is not there |
+| ``unknown profile "x". `brig agent ls` lists them`` | `attach`, `detach` or `check` naming a profile that is not there |
 | `cannot attach x to y: y is kind: shell, which has no agent to hook an egress rule into. Nothing was written` | `attach` to a `kind: shell` or `kind: gui` profile |
 | `cannot enforce any policy on x: x is kind: shell, which has no agent to hook an egress rule into` | `check` on a `kind: shell` or `kind: gui` profile |
 | `x is bound to y, which no policy loads under -- nothing can enforce what did not load` | `check` on a profile bound to a name nothing loads under: either `--force` on `rm` or a rename left no policy behind it, or the file that declares it did not parse (named separately on stderr) |

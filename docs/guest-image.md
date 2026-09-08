@@ -31,7 +31,7 @@ Resolved through the guest's `PATH` unless the table says otherwise.
 | `chmod` | sets the mode a `files:` binding declares, inside the create script | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `rm` | `rm -f --` at the credential path before creating it, so a planted symlink is removed rather than followed | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `sleep` | **Linux only.** nerdctl runs the container as `sleep infinity`, because a container exits when its command does and the sandbox has to outlive the exec that uses it | `internal/runtime/nerdctl.go`, `runArgs` |
-| `bash` | `brig shell` runs `bash -l`, and `brig shell <agent> '<command>'` runs `bash -lc`. It is also the `binary:` of the `ubuntu` profile | `internal/wrap/run.go`, `Shell` |
+| `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> '<command>'` runs `bash -lc`. It is also the `binary:` of the `ubuntu` profile | `internal/wrap/run.go`, `Shell` |
 | the profile's `binary:` | `brig run` execs it. `claude` for claude-code, `codex` for codex, and so on | `cmd/brig/main.go`, `runAgent` |
 
 Two of these are conditional, and it is worth knowing which.
@@ -41,7 +41,7 @@ image and lets its own entrypoint run, so a macOS-only image can get away
 without it and then fail on Linux. Since `:latest` on the published profiles
 is a multi-arch index meant to work on both, treat `sleep` as required.
 
-`bash` is only reached by `brig shell`. That is also the verb people reach for
+`bash` is only reached by `brig sh`. That is also the verb people reach for
 when a sandbox is misbehaving, so an image without it works right up to the
 moment somebody needs to look inside it.
 
@@ -124,7 +124,7 @@ the image comes up as a microVM whose root holds everything,
 `CapEff: 000001ffffffffff` (`runArgs` in `internal/runtime/hull.go`, and the
 nerdctl equivalent in `internal/runtime/nerdctl.go`). Checking an image under
 the bare boot therefore reports failures against a boundary brig never gives
-it, which is why `script/check-guest-image.sh` boots through `brig create`
+it, which is why `script/check-guest-image.sh` boots through `brig run -d`
 rather than through the runtime.
 
 ## What `genericBoot` changes
@@ -273,7 +273,7 @@ Then check it rather than trusting this file, naming the profile it will run
 under. That profile has to be one brig knows, so import it first:
 
 ```bash
-brig profile import mine.yaml
+brig agent import mine.yaml
 script/check-guest-image.sh docker.io/me/mine:latest mine
 ```
 
@@ -301,7 +301,7 @@ failure order is the unhelpful part. In rough order of what you would hit:
   credential file happens.
 - **`chown` has no name to resolve.** No `/etc/passwd`, so the guest user does
   not exist even if the binaries did.
-- **`brig shell` cannot get you in to look.** No `bash`.
+- **`brig sh` cannot get you in to look.** No `bash`.
 
 Distroless is the same story with a tidier base. The `static` and `base`
 variants carry no shell and no coreutils, so every point above applies except
@@ -322,7 +322,7 @@ script/check-guest-image.sh <image> [profile]
 
 The profile defaults to `claude-code`, and naming one is how the check gets
 the boot the contract describes. The script boots the image with
-`BRIG_IMAGE=<image> brig create <profile> --name image-check`, in a scratch
+`BRIG_IMAGE=<image> brig run -d <profile>@image-check`, in a scratch
 workspace, and tears it down with `brig rm` when it is done. Going through
 brig is what supplies the hypervisor, the rootfs type, the generic-boot
 annotations and the capabilities described above; a bare `hull run` or
@@ -334,7 +334,7 @@ its last path element is the user `chown` has to resolve, and its `binary:` is
 the agent CLI the last line looks for. So the check is of this image under
 this profile rather than of an image in the abstract, which is the question
 you actually have. A profile of your own has to be one brig knows, through
-`brig profile import`.
+`brig agent import`.
 
 The requirements themselves run as root through the runtime's own exec against
 the sandbox brig created, one exec per line of the table above, so what they

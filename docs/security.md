@@ -160,7 +160,7 @@ environment:
   anyway.
 - A variable on the profile's `deny` list is refused, with the reason.
 
-`brig env <agent>` reports the guest's environment, by name, and fails the
+`brig info <agent>` reports the guest's environment, by name, and fails the
 same way a run would if a declared secret cannot be resolved. It never
 prints a value: a secret-sourced variable comes back annotated, e.g.
 `GH_TOKEN(secret)`, never with the value itself. A credential delivered as a
@@ -398,7 +398,7 @@ one in the way is either something you put there deliberately, or the sandbox
 reaching for the host. Neither is a case for retrying: remove the link, or
 point the workspace somewhere else.
 
-`--workspace` pointed at a symlink is refused for the same reason, with the
+`--home` pointed at a symlink is refused for the same reason, with the
 same kind of message, and is fixed by naming the real directory.
 
 ## Guest images
@@ -648,7 +648,7 @@ brig owns no network to give: a run asking for it there is stopped and told
 which backend implements it, rather than booted onto the shared network under a
 row claiming otherwise. And it is about reachability, not resources -- an
 isolated sandbox is one process and one network more than a shared one, which
-is what `brig reset` prunes.
+is what `brig rm --all` prunes.
 
 It does not filter what the agent writes to your terminal. `brig` hands the
 tty over with `syscall.Exec` and is gone before the agent produces a byte,
