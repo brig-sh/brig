@@ -1,7 +1,7 @@
 // Package exitcode maps a finished run's error to the stable exit status brig
 // promises a script.
 //
-// The set is the exit-code table in README.md beside the command reference: 1 a
+// The set is the exit-code table in docs/cli.md, "Exit codes": 1 a
 // general failure, 2 a usage error, 3 no such profile or sandbox, 4 a runtime
 // that is missing or broken, 5 a boot verification refused, 6 a credential that
 // could not be resolved. A caller that only checked "zero or not" keeps working;
@@ -22,7 +22,7 @@ import (
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
-// The exit statuses, matching README.md's table. A code no path returns is
+// The exit statuses, matching docs/cli.md's table. A code no path returns is
 // worse than no code at all, so the set is only the failure shapes brig's paths
 // -- and brigd's -- actually produce.
 const (

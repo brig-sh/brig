@@ -8,8 +8,8 @@ import (
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
-// Exit codes brig promises to a script. They are documented in the README
-// beside the command reference.
+// Exit codes brig promises to a script. They are documented in docs/cli.md,
+// under "Exit codes".
 //
 // The mapping below is no longer the only thing that produces them:
 // internal/exitcode classifies the same numbers for brigd, which cannot import

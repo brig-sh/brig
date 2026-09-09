@@ -2,11 +2,15 @@
 
 The reason to run an agent in a sandbox is that the agent runs code you did
 not write, against a machine that holds everything you have. brig narrows what
-"everything" means: the agent sees one directory and the credentials you chose
-to give it, and nothing else on the host.
+"everything" means. What the agent can reach on the host is its workspace,
+any project you name on the run line, and the credentials you gave it. No
+other host directory is mounted, and no host credential source is read on
+the run path. What the agent can reach over the network is a separate
+question, with a much weaker answer, covered below.
 
-This page is about where that boundary actually is. Some of it is weaker than
-it looks, and we would rather write that down than let someone find out later.
+This page states what is isolated first, then what an agent can still do.
+Some of it is weaker than it looks, and we would rather write that down than
+let someone find out later.
 
 If you have found a flaw in one of these boundaries, [SECURITY.md](../SECURITY.md)
 is how to report it privately. The section below on
@@ -40,11 +44,20 @@ promises. A shim brig does not recognise may well boot a VM, and brig cannot
 establish that from a name, so the row says it cannot tell instead of claiming
 the stronger boundary.
 
-Inside it, the guest has your workspace mounted as its home. It does not have
-your keychain, your SSH agent, your secret manager, or any other directory on
-the host. That inaccessibility is the isolation boundary, and it is also the
-reason credentials have to be forwarded in explicitly: the guest cannot fetch
-them for itself.
+Inside it, the guest has your workspace mounted as its home, read-write. Name
+a project on the run line and that project is a second host directory, also
+mounted read-write, at `/work/<name>`. The agent can change those files too.
+
+A profile's own hostmount volumes are further shares. Every one in a shipped
+profile lives inside the workspace already, so nothing extra is exposed
+today. That is a property of the shipped profiles, not a guarantee. A
+hostmount your own profile declares outside a tmpfs cover is a host path the
+guest can see.
+
+Beyond those, the guest does not have your keychain, your SSH agent, your
+secret manager, or any other directory on the host. That inaccessibility is
+the isolation boundary for everything else. It is also the reason credentials
+have to be forwarded in explicitly: the guest cannot fetch them for itself.
 
 ## Credentials
 
@@ -174,8 +187,8 @@ file is not an environment variable and does not appear in that list at all.
 The credential file is the part that does not. It lands on a `tmpfs` mount
 covering `~/.claude`, checked to be `tmpfs` with no swap before anything is
 written, so `~/.claude/.credentials.json` and the temp file the agent renames
-onto it never touch your disk. `brig stop` takes that mount with the VM, which
-is why an in-sandbox login does not outlive a stop.
+onto it never touch your disk. `brig stop` takes that mount with the VM,
+which is why an in-sandbox login on this profile does not outlive a stop.
 
 The rest of `~/.claude` is not on that mount. Seven paths under it are
 hostmounted, so they live in the workspace on host disk and persist across
@@ -350,11 +363,26 @@ microVM boundary stops this: the write is on the host side of it.
 
 So every host-side read and write brig makes inside the workspace goes through
 an `os.Root` opened on the workspace. It resolves each path itself, refuses an
-absolute symlink outright, will not let a relative one climb past the root,
-and leaves no window between the check and the open for the guest to swap the
-file in. A symlink that stays *inside* the workspace is refused too: brig
-writes only regular files in there, so a link where a state file belongs was
-put there rather than left there.
+absolute symlink outright, and will not let a relative one climb past the
+root. A symlink that escapes the workspace this way is refused everywhere,
+on a read or a write. There is no window between the check and the open for
+the guest to swap the file in.
+
+A symlink that stays *inside* the workspace is a different story, and reading
+and writing do not treat it alike. Where brig writes a state file, the
+symlink is refused even though it does not escape. brig writes only regular
+files there, so a link where a state file belongs was put there rather than
+left there.
+
+Where brig reads a file, an internal symlink is followed instead. A
+`.gitconfig` symlinked to your own dotfiles, inside the workspace, has to
+keep working. The refusal it replaced used to claim such a link "leads out
+of" the workspace, which was never true for one that stays inside.
+
+Either way, brig decides from what it actually opened, not from a check made
+beforehand. A fifo, socket, device or directory where a regular file belongs
+is refused there. That closes the window where the guest renames one file
+type over another between the two.
 
 The one escape a root cannot see is a symlink *at* the workspace or on the
 way to it, since resolving that still leaves every path below it honestly
@@ -431,7 +459,13 @@ The identity is anchored on the repository and the workflow file, so a
 signature from anywhere else fails -- including one from another workflow in
 the same repository.
 
-What brig does with the answer:
+`BRIG_VERIFY` has three modes: `off`, `warn` and `require`. `warn` is the
+default. The table below is `warn`'s behavior: it reports what it found, then
+boots anyway, except for the one row with no innocent reading. `require`
+refuses anything it cannot positively verify, third-party images included.
+`off` skips the check entirely.
+
+What `warn` does with the answer:
 
 | situation | behaviour |
 | --- | --- |
@@ -446,10 +480,8 @@ check" is not the same as "failed". The one case with no innocent reading is
 an image sitting under our registry whose signature does not verify, and that
 is the case that stops.
 
-`BRIG_VERIFY=require` refuses anything that cannot be positively verified,
-third-party images included. `BRIG_VERIFY=off` skips the check. A typo in that
-setting refuses the run, naming the three values, rather than being read as
-either of them.
+A typo in `BRIG_VERIFY` refuses the run, naming the three values, rather than
+being read as either of them.
 
 Point `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
 at your own registry and workflow if you publish signed images yourself.
@@ -484,8 +516,7 @@ brig therefore verifies and boots the tag on such a hull, prints one line
 saying so, and the gap remains there until you upgrade: under the default
 `missing` pull policy cosign checks the tag in the registry, not necessarily
 the copy hull already holds, and `BRIG_PULL=always` is the workaround. brig
-never prints the digest-named line on a boot that did not pin a digest, so the
-message never claims more than the runtime delivered.
+does not name a digest on a boot that did not pin one.
 
 Two things are still narrower on macOS than on Linux. An image pulled under an
 older hull has no index digest on record, and a multi-arch tag resolves to its
@@ -495,9 +526,34 @@ image is pulled again. And hull does not yet expose the digest its store holds
 for a reference, so the report that the local copy differs from what the
 registry serves is Linux-only for now. The boot is pinned either way.
 
-`claude-desktop` and `ubuntu` still point at `ghcr.io/nofireai` images, which
-brig has no signing policy for, so they warn on every boot until those images
-move.
+`claude-desktop` points at a `ghcr.io/nofireai/` image, and `ubuntu` at
+`docker.io/library/ubuntu`. brig has no signing policy for either registry, so
+both warn on every boot until those images move.
+
+### The kernel, not only the image
+
+Six of the eight shipped profiles boot a kernel and an initrd brig downloads,
+rather than one baked into the image. They are `claude-code`, `codex`,
+`gemini`, `grok`, `opencode` and `ubuntu`. `cursor` and `claude-desktop` boot
+their own image and skip everything below.
+
+That bundle is checked too, under the same `BRIG_VERIFY` setting, but as a
+second and separately-rooted check. Its trust root is its own: registry
+prefix `ghcr.io/nofireai/`, signing identity the `build-assets.yml` workflow
+in `NOFireAI/hull-assets`, the same issuer as the image check. A signature
+that fails stops the boot outright, in every mode except `off`. There is no
+`[y/N]` prompt the way there is for the image, because there is no reading of
+a bad kernel signature worth asking about.
+
+One thing the check does not buy: nothing is pinned from the result. The
+check verifies a registry reference, not the
+bytes that boot. What actually starts the guest is whatever kernel and
+initrd sit in `BRIG_BOOT_ASSETS`, or failing that the runtime's own asset
+directory, or the platform default. Only existence and being non-empty are
+checked there. brig does not bind the kernel on disk to the artifact it just
+verified. `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and
+`BRIG_VERIFY_ISSUER` repoint the image's trust policy only: the kernel's
+identity is fixed.
 
 ## brig's own binaries
 
@@ -613,10 +669,22 @@ fresh install. `--network offline` is the one posture with no route out at
 all, on every backend.
 
 Attach one and that changes, on `hvi`: the rules are enforced at the network
-gateway brig gives that sandbox, and a run that cannot enforce them is refused
-rather than booted unconstrained -- see [docs/policies.md](policies.md). On
-`vz`, on `qemu` and on Linux there is no policy to be had at all, and outbound
-traffic is whatever the runtime allows.
+gateway brig gives that sandbox. Every runtime brig ships refuses to boot a
+policy it cannot enforce, rather than booting it unconstrained (see
+[docs/policies.md](policies.md)). That refusal is each adapter's own choice,
+not a guarantee brig imposes on every runtime it will ever drive. The
+one exception is `--network offline`: a policy-carrying sandbox with no route
+out satisfies every rule set, so it is not refused on any backend. Short of
+that, on `vz`, on `qemu` and on Linux there is no policy to be had at all.
+Outbound traffic there is whatever the runtime allows.
+
+It does not say whether the guest can reach services bound on the host
+itself. That covers a dev server, a local model, an MCP server, a metadata
+endpoint. brig adds nothing to narrow that. What the guest's network reaches
+is the runtime's default, and whether that includes the host is unmeasured
+on every backend. The one control that exists is an egress policy on `hvi`,
+with `default: deny` and no `cidr` allow for the host's own ranges. There is
+no equivalent on `vz`, `qemu` or Linux.
 
 It does not promise that one sandbox cannot reach another under the default
 `shared` network. What happens there depends on the backend: brig asks the
@@ -628,7 +696,7 @@ is the runtime's own behaviour, not brig's. The measurements are in
 | --- | --- |
 | `hvi` on macOS | no. A packet capture in both guests shows why: an ARP broadcast from one guest does reach the other, and the other answers, but the gateway does not forward that unicast reply back. The first guest never learns the second's MAC address, so it never sends a packet, and the second guest sees no TCP at all |
 | `vz` on macOS | no. vmnet does not carry traffic from one guest to another in the mode hull uses |
-| Linux | **yes.** The CNI bridge is an ordinary layer 2 segment, and two sandboxes on it reach each other the way two containers do |
+| Linux, measured with plain containers on the nerdctl bridge | **yes.** The CNI bridge is an ordinary layer 2 segment, and two sandboxes on it reach each other the way two containers do. The shipped default shim, `io.containerd.urunc.v2`, puts a microVM behind that same bridge, and nothing here has measured whether that changes the answer. Assume it does not |
 
 So on Linux, two agents you gave *different* credentials sit on one broadcast
 domain, each able to reach whatever the other is listening on. That is a real
@@ -683,3 +751,29 @@ writable by design, since that is the work.
 It does not stop an agent from spending your money. The `deny` list keeps a
 metered key from being forwarded by accident, which is a different and much
 smaller promise.
+
+## Trust assumptions
+
+Everything above narrows what an agent can reach. None of it removes the need
+to trust four things, and it is worth naming them in one place.
+
+**The guest image, and whoever publishes it.** An image under
+`ghcr.io/brig-sh/` is checked against a specific build workflow. An image brig
+did not publish boots on a warning under the default mode, and
+`BRIG_VERIFY=off` turns the check off for either kind. Either way, the image
+is code that runs with your credentials.
+
+**The profile author.** A profile names the image, the volumes it hostmounts,
+and any `files:` binding. A `files:` binding is the one channel the deny list
+does not cover. A profile is only as careful as whoever wrote it.
+
+**hull or nerdctl.** The kernel boundary, the shared-network separation on
+macOS, and every device and namespace decision belong to the runtime, not to
+brig. brig reports what it resolved. It neither hardens nor weakens what the
+runtime does.
+
+**brig itself.** brig runs as you, on the host, outside the sandbox. A
+resolved credential sits in its process memory as plaintext for the run's
+lifetime. brig clears that memory on the way out. That is defence in depth,
+not a control. A process already holding your credentials in memory is not
+something this page claims to protect against.

@@ -1,9 +1,11 @@
 # Keeping secrets in your keyring
 
-`brig secret` is brig's own store, and it is the **only** store a run reads. A
-profile declares the names it wants under `secrets:`, and what is in this store
-under those names reaches the sandbox -- as a file where the agent reads one,
-as an environment variable where it does not.
+`brig secret` is brig's own store, and it is the **only** store a run reads, on
+every profile brig ships. A profile of your own still carrying the deprecated
+`hostCredential:` field is the exception: it reads the host item it names on
+every run. A profile declares the names it wants under `secrets:`, and what is
+in this store under those names reaches the sandbox -- as a file where the
+agent reads one, as an environment variable where it does not.
 
 Most people never fill it by hand. One command carries the login already on
 your Mac into it:
@@ -125,12 +127,13 @@ brig: deleting "gh-token" cannot be undone, and there is no terminal to ask on. 
 
 `brig secret import <profile>` reads where your host already keeps that
 profile's credentials and copies them into brig's store, so that every run
-afterwards reads only the store:
+afterwards reads only the store. No test pins the exact wording brig prints,
+so treat this as the shape rather than a literal transcript:
 
 ```console
 $ brig secret import claude-code
 claude-code: importing 1 secret
-  claude-credentials: stored from keychain:Claude Code-credentials (expires in 11h)
+  claude-credentials: stored from keychain:Claude Code-credentials, expires 2026-08-19 01:31
   gh-token: no source on your host, so it is one you supply: brig secret create gh-token
 note: claude-desktop also declares claude-credentials, so this fills it there too
 ```
@@ -139,6 +142,12 @@ Where it looks is data in the profile, not knowledge in brig: each secret
 carries a `sources:` list and the first that exists wins. `brig agent ls` shows
 which names a profile can import and which it cannot, and
 [profiles.md](profiles.md) is how to declare them in one of your own.
+
+A profile can still declare a credential with the deprecated `hostCredential:`
+field instead of `secrets:` and `sources:`. It keeps working, but reads the
+named host keychain item on every run rather than once at import.
+[migration.md](migration.md#profile-keys) has the replacement. This page
+assumes `secrets:`.
 
 | flag | what it does |
 | --- | --- |
@@ -150,9 +159,10 @@ which names a profile can import and which it cannot, and
 
 Four rules worth knowing before you build anything on it:
 
-- **It reads your host when you type it, and never again.** That is the whole
-  point of the verb: a run performs no host read, so it raises no keychain
-  approval dialog. The dialog you may see belongs to `import` itself, once.
+- **It reads your host's own credential stores when you type it, and never
+  again.** A run afterwards reads only brig's own keychain item, which carries
+  the default ACL, so it raises no approval dialog. That dialog belongs to
+  `import` itself, once.
 - **The copy does not track its source.** Renewing the login on the host does
   not update brig's copy, and revoking it does not invalidate it. Re-import to
   refresh; `brig secret delete` to be rid of it.
@@ -185,9 +195,9 @@ fresh machine with a red exit code for a state that is perfectly normal.
 
 A stored value is capped at about 3KB (see [the size limit](#the-size-limit)),
 and that is enough for every API key, every OAuth credential document and every
-ed25519 key. It is **not** enough for `codex`: its `~/.codex/auth.json` carries
-two JWTs and runs to 4-8KB, so it does not fit and cannot be delivered as a
-file today.
+ed25519 key. It is **not** enough for a credential document the size of
+`codex`'s `~/.codex/auth.json`, which carries two JWTs, so it does not fit and
+cannot be delivered as a file today.
 
 This is not a constant to raise. The limit is a *line length* in `security -i`,
 which is how brig keeps a value out of `argv`; lifting it means changing how
@@ -331,12 +341,14 @@ base64 spends four characters for every three bytes of value.
 
 | name | longest value `create` takes | `update` |
 | --- | --- | --- |
-| `a` (1 character) | 3012 bytes | 3009 bytes |
-| `gh-token` (8 characters) | 3003 bytes | 3000 bytes |
-| `deploy-key` (10 characters) | 3000 bytes | 2997 bytes |
-| a 43-character name | 2949 bytes | 2946 bytes |
+| `a` (1 character) | 3012 bytes | 3006 bytes |
+| `gh-token` (8 characters) | 3003 bytes | 2994 bytes |
+| `deploy-key` (10 characters) | 3000 bytes | 2991 bytes |
+| a 43-character name | 2949 bytes | 2943 bytes |
 
-`update` is three bytes tighter throughout because its command carries `-U`.
+`update` is tighter because its command carries `-U` and an empty `-j` that
+clears the previous provenance. Base64's four-for-three then rounds that gap
+to six or nine bytes, depending on the name's length.
 
 Every API key and every SSH key you are likely to have fits: an ed25519
 private key is 387 bytes. A 4096-bit RSA private key does not, and is refused
@@ -344,7 +356,7 @@ with both numbers named rather than stored short:
 
 ```console
 $ brig secret create deploy-key -f rsa4096.pem
-brig: the value for "deploy-key" is 3272 bytes, and the keychain takes at most 3000
+brig: the value for "deploy-key" is 3272 bytes, and with its provenance the keychain takes at most 3000
 ```
 
 The check is there because the failure it replaces was invisible. The first
@@ -402,7 +414,7 @@ point of the table: the error is the second entry point into these docs.
 | `no value on stdin. Pipe one in, or pass -f <file>: …` (and prints two examples) | `create` at a prompt with nothing piped in. It refuses rather than waiting, because typing the value there would put it in your scrollback |
 | ``-f was given an empty path. Leave it out to read stdin, or pass `-f -` to say so`` | `-f "$KEYFILE"` with the variable unset. Falling through to stdin would store whatever the script had on it, under your name, and report success |
 | `--stdin and -f name two different sources; pass one` | both given, and guessing which you meant would silently store the wrong one |
-| `the value for "x" is N bytes, and the keychain takes at most M` | over [the size limit](#the-size-limit) |
+| `the value for "x" is N bytes, and with its provenance the keychain takes at most M` | over [the size limit](#the-size-limit) |
 | `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. `-y` is the answer given ahead |
 | `a secret name holds letters, digits, - and _, ...` | see [Naming a secret](#naming-a-secret) |
 | `no secret store on this platform: … no Secret Service answers on it …` | Linux with no keyring on the session bus. Install `gnome-keyring` or KWallet and log in to a session that starts it |
@@ -415,7 +427,9 @@ point of the table: the error is the second entry point into these docs.
 
 ## A worked example
 
-Storing a GitHub token, using it, rotating it and removing it.
+Storing a GitHub token, using it, rotating it and removing it. The commands
+are real. The exact wording brig prints is illustrative, since no test pins it
+byte for byte.
 
 Store it. `printf %s` rather than `echo`, so no newline is stored, and the
 value comes down a pipe rather than sitting in your history:
@@ -440,6 +454,12 @@ brig: never forwarded for claude-code: ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN (t
 
 `(secret)` says the value came from brig's store rather than from your shell.
 `brig info` reports; `brig run claude-code` does it.
+
+That denylist covers environment forwarding only. It does not check a
+`files:` binding. It does not stop an agent that reads a credential inside the
+guest from sending it over the network.
+[security.md](security.md#what-file-delivery-buys-and-what-it-costs) explains
+why the guard is scoped that way.
 
 An exported `GH_TOKEN` still wins, because the profile binds the name as a
 chain -- `refs: [env.GH_TOKEN, secrets.gh-token]` -- so

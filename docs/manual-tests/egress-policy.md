@@ -1,5 +1,11 @@
 # Manual test: is an attached policy actually enforced?
 
+*Historical evidence, not current validation. It evidences whether an attached
+egress policy is enforced at the gateway brig starts. No calendar date was
+recorded. It is identified instead by build: hull from `main` at `a7a5d1e`,
+the first hull to accept the `--egress-*` flags (`0.1.0-rc21` and earlier
+have none), on macOS arm64.*
+
 `docs/policies.md` used to say that nothing read a policy's rules at boot. It
 now says a bound policy is enforced at the gateway brig gives the sandbox.
 This file is the measurement behind that sentence.

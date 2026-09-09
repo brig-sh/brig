@@ -32,11 +32,12 @@ from the right place.
 <!--
 Delete if there is none.
 
-brig's value is that the guest sees one directory and holds only the
-credentials it was named. A proposal that widens either -- a new mount, a new
-forwarded variable, a new host path the guest can reach -- is still worth
-making, but say so plainly here so the tradeoff is discussed rather than
-discovered. docs/security.md is the place those limits are written down.
+brig's value is that the guest reaches only the host directories brig names
+for it, and holds only the credentials it was named. A proposal that widens
+either -- a new mount, a new forwarded variable, a new host path the guest can
+reach -- is still worth making, but say so plainly here so the tradeoff is
+discussed rather than discovered. docs/security.md is the place those limits
+are written down.
 -->
 
 ## Additional context

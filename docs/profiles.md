@@ -1,7 +1,14 @@
 # Writing an agent profile
 
+**Two words, and they mean different things.** The command is `brig agent`:
+`brig agent ls`, `brig agent edit`, and the `<ref>` every verb takes. *Profile*
+names the other half: the file format this page documents, the directory it
+lives in (`$XDG_CONFIG_HOME/brig`), and the variable that points somewhere
+else (`BRIG_PROFILE_DIR`). Both words are correct at once. You run an agent;
+you edit a profile.
+
 brig boots an agent from an OCI image. Any Linux CLI that runs in one already
-works, so a profile is not a requirement -- it just saves you spelling out
+works, so a profile is not a requirement, it just saves you spelling out
 the image, the guest home and the credential variables on every invocation.
 
 The quickest way to write one is to start from the closest existing profile
@@ -72,6 +79,41 @@ together, one namespace -- and marks where each came from: unmarked is
 embedded, `(file)` is a profile that exists only as a file, and
 `(file, overrides built-in)` is a file shadowing an embedded one.
 
+## The eight built-in profiles
+
+| profile | alias | kind | image |
+| --- | --- | --- | --- |
+| `claude-code` | `claude` | agent | `ghcr.io/brig-sh/claude-code-stock:latest` |
+| `claude-desktop` | `desktop` | gui | `ghcr.io/nofireai/urunc-claude-desktop:aarch64` |
+| `codex` |  | agent | `ghcr.io/brig-sh/codex-stock:latest` |
+| `cursor` |  | agent, example profile | `ghcr.io/brig-sh/cursor:latest` |
+| `gemini` |  | agent, example profile | `ghcr.io/brig-sh/gemini-stock:latest` |
+| `grok` |  | agent, example profile | `ghcr.io/brig-sh/grok-stock:latest` |
+| `opencode` |  | agent, example profile | `ghcr.io/brig-sh/opencode-stock:latest` |
+| `ubuntu` |  | shell | `docker.io/library/ubuntu:latest` |
+
+"example profile" is the profile's own `desc:`, and `brig agent ls` prints it.
+`claude-code` and `codex` carry no such marker.
+
+Seven of the eight name an image brig expects to be pullable. `cursor` is the
+one that does not: it declares `unpublished: true`, `brig run` refuses it
+before the registry is reached, and `brig agent ls` appends
+`(no published image)`. Pass your own `--image` to run it. Whether the other
+seven are pullable today is a registry fact rather than a brig fact; this
+table states only what each profile declares.
+
+Five of those seven, `claude-code`, `codex`, `gemini`, `grok` and `opencode`,
+are brig's own multi-architecture `:latest` builds under `ghcr.io/brig-sh`,
+the registry brig can verify a signature against. `claude-desktop` and
+`ubuntu` point outside it, at `ghcr.io/nofireai/` and Docker Hub, so brig
+cannot check their signature and warns on every boot
+([security.md](security.md)). `claude-desktop`'s image is also single-arch,
+`aarch64` only.
+
+`claude-desktop` is the one shipped `kind: gui` profile and `ubuntu` the one
+shipped `kind: shell` profile; the other six are `kind: agent`, the default.
+See [`kind`, and what each one does](#kind-and-what-each-one-does) below.
+
 ## Export and import
 
 ```bash
@@ -113,17 +155,17 @@ with the same parser and neither has to guess.
 | `name` | yes | The profile name. It becomes the workspace directory and the sandbox name, so it is restricted to lowercase letters, digits, dot, dash and underscore |
 | `image` | yes | The guest image to boot |
 | `guestHome` | yes | Absolute path where the workspace is mounted. The agent's state lands here, which is what makes the workspace the unit of persistence |
-| `kind` | no | `agent` (the default), `shell` or `gui`. An `agent` needs a `binary`; the other two have nothing to pass arguments to |
+| `kind` | no | What sort of workload this is: `agent` (the default), `shell` or `gui`. See [`kind`, and what each one does](#kind-and-what-each-one-does) below |
 | `binary` | yes, for `kind: agent` | The agent CLI inside the guest |
 | `mem`, `cpus` | yes | Guest size. Both must be greater than zero |
 | `desc` | no | One line, shown by `brig agent ls` |
 | `secrets` | no | Names this profile wants out of brig's own secret store, checked before the sandbox is created. Each entry says whether a run without it should stop, and where `brig secret import` may find it. See below |
 | `env` | no | The variables the guest sees, and where each one's value comes from: a literal, a stored secret, or brig's own environment. See below |
-| `forward` | no | Deprecated spelling of `env` for the environment case. Still works; folded into `env` when the file is read. See below |
+| `forward` | no | Deprecated, see [migration.md](migration.md#profile-keys). Still works; folded into `env` when the file is read. See below |
 | `files` | no | Credential files the guest sees: which stored secret fills each one, and where under `guestHome` it is written. See below |
 | `volumes` | no | What is mounted inside `guestHome`: a `tmpfs` that nothing written to can reach host disk, how big it may grow, and the `hostmount` exceptions kept across boots. See below |
 | `deny` | no | Variables never bound, whatever `env` or `forward` says. See below |
-| `statePaths` | no | Deprecated: `volumes` says the same thing and is acted on. Still read, so an older file keeps parsing; declaring both is an error rather than a merge |
+| `statePaths` | no | Deprecated, see [migration.md](migration.md#profile-keys). Still parses; declaring it alongside `volumes:` is an error, not a merge. Five shipped profiles declare only this, and nothing outside this package reads it: see [What this costs](#what-this-costs) below |
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. brig never does, so finding one is worth a warning rather than a deletion |
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
@@ -132,9 +174,9 @@ with the same parser and neither has to guess.
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. Unlike every other field this is about your machine rather than the workload, so it does not travel usefully to anyone else -- it is how you pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the VM: `block`, `virtiofs` or `9pfs`. Left unset the runtime picks its own default, which is what a profile that only runs an agent wants. Set `block` when the sandbox installs packages and needs a real writable disk rather than a share sized to the image |
 | `genericBoot` | no | The image was never built to be a guest -- a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See below |
-| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the workspace. Only when the run passes `--skills` or sets `BRIG_SKILLS=1`. See below |
+| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the workspace. Both are required together, and only `claude-code` declares them: see [What this costs](#what-this-costs) below |
 | `onboarding` | no | A first-run state file to seed. See below |
-| `hostCredential` | no | **Deprecated, removed next release.** A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
+| `hostCredential` | no | **Deprecated, removed next release**, see [migration.md](migration.md#profile-keys). A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
 | `reserved` | no | Marks a profile that owns the workspace a session name could otherwise slug onto. See below |
 | `unpublished` | no | We ship the profile but not an image for it. `brig run` says so and stops, rather than letting the pull fail against the registry with a 404 that reads like an outage. Pass `--image` with one you built, and `brig agent ls` marks it. `cursor` is the one that carries it |
 | `policy` | no | Names of policies attached to this profile inline: every run carries all of them, unioned with whatever is attached separately by name |
@@ -143,6 +185,36 @@ A misspelled field is refused rather than ignored. `forwards:` instead of
 `forward:` would otherwise decode into nothing, forward no credentials, and
 look exactly like a broken sandbox.
 
+## `kind`, and what each one does
+
+Three values, and each changes what `brig run` does once the guest is up.
+
+- **`kind: agent`**, the default. `brig run` execs `binary:` and passes your
+  trailing arguments to it. `binary:` is required.
+- **`kind: shell`**. `brig run` opens a login shell, and trailing words run as
+  one command instead. There is no CLI to pass arguments to: `brig sh` always
+  execs `bash -l` (or `bash -lc` for a command), never `binary:`, so the field
+  is not required and not read for this kind. `ubuntu` sets `binary: bash`
+  anyway, which documents the shell without brig acting on it.
+- **`kind: gui`**. The VM boots with a graphical console and there is nothing
+  to attach to: starting the sandbox is the whole command, and `brig run`
+  refuses a trailing argument rather than discarding it. `guiTitle:` names the
+  window. Only the `vz` hypervisor shows a console, so brig refuses to boot a
+  `kind: gui` profile on `hvi` or `qemu`.
+
+The older `shell:` and `gui:` booleans still parse and fold into `kind:` when
+the file is read; see [migration.md](migration.md#profile-keys).
+
+Two of the eight shipped profiles are not agents: `claude-desktop` is
+`kind: gui`, and `ubuntu` is `kind: shell`. The `agent` group's own help text
+calls the group "the agents you can run" (`brig agent --help`), which holds
+for six of the eight and not for those two: `brig agent ls` still lists them,
+but running one opens a window or a shell rather than an agent CLI.
+
+A `kind: shell` or `kind: gui` profile cannot carry `policy:`. Neither has an
+agent process to hook an egress rule into, and brig refuses the profile at
+parse time rather than accepting a rule nothing enforces.
+
 ## `secrets` and `env`, for a credential brig resolves itself
 
 `secrets:` is what a profile requires out of brig's own secret store.
@@ -150,8 +222,8 @@ look exactly like a broken sandbox.
 literal, one of those secrets, or brig's own environment:
 
 ```yaml
-name: alex
-image: ghcr.io/brig-sh/claude-code:latest
+name: mine
+image: ghcr.io/brig-sh/claude-code-stock:latest
 guestHome: /home/claude
 binary: claude
 mem: 4096
@@ -249,17 +321,16 @@ makes the profile portable.
 The run fails before any sandbox is created, and the error names the secret,
 the sandbox it was needed for, and the command that creates it:
 
-```
-$ brig
-brig: missing secret "gh_token" needed by the brig-alex sandbox -- create it first with: brig secret create gh_token
+```console
+$ brig run mine
+brig: missing secret "gh_token" needed by the brig-mine sandbox, create it first with: brig secret create gh_token
 ```
 
 A profile missing more than one gets every name in the same error, not one
 failed run per secret:
 
 ```
-$ brig
-brig: missing 2 secrets needed by the brig-alex sandbox -- create them first:
+brig: missing 2 secrets needed by the brig-mine sandbox, create them first:
   brig secret create gh_token
   brig secret create npm_token
 ```
@@ -485,9 +556,30 @@ The corollary for `--skills`: those host directories are copied into the
 workspace, so a profile that covers the directory they land in needs a
 `hostmount` for each, or the copy is hidden and the flag does nothing.
 
-`volumes:` replaces `statePaths:`, which was reference-only documentation.
-Declaring both is an error rather than a merge: two lists that can disagree
-about what persists is worse than the duplication.
+That corollary only applies once `--skills` runs at all, and today it runs on
+one shipped profile. `hostConfigDir:` and `projectPaths:` are required
+together, and `claude-code` is the only shipped profile that declares either.
+On the other seven, `--skills` and `BRIG_SKILLS=1` parse and do nothing: there
+is no host directory named to copy.
+
+`claude-code`'s tmpfs carves out `.claude/skills` and `.claude/plugins` as
+hostmounts, which is what lets a `--skills` copy land somewhere that
+survives. `claude-desktop` covers `.claude` with the same kind of tmpfs but
+carves out no exception for `.claude/skills`, only for `settings.json`,
+`CLAUDE.md`, `sessions`, `projects` and `history.jsonl`. This is unrelated to
+`--skills`, which is already a no-op there for the reason above: whatever the
+bundled desktop app itself writes under `.claude/skills` is thrown away at
+shutdown, where the same path persists for `claude-code`.
+
+`volumes:` replaces `statePaths:`, which was reference-only documentation
+even before it was deprecated: nothing outside this package ever read it.
+Five shipped profiles, `codex`, `cursor`, `gemini`, `grok` and `opencode`,
+declare only `statePaths:` and no `volumes:` at all, so none of them has
+anything memory-only. Their whole guest home is the workspace share, on host
+disk. A login an agent writes there persists across `brig stop` like any
+other file in the workspace. `claude-code` and `claude-desktop` are the only
+two shipped profiles with a `volumes:` tmpfs. They are the only two where an
+in-guest login lives in memory and does not survive a stop.
 
 ### What is not here yet
 
@@ -500,14 +592,14 @@ agent); the verb is not.
 `brig info <profile>` reports what the guest would be handed, by name --
 never a value, on any path. A variable sourced from the secret store is
 annotated `(secret)`; one from the deprecated `hostCredential:` is annotated
-`(host)`; an ambient or literal one is reported bare:
+`(host)`; an ambient or literal one is reported bare. No test pins the exact
+wording, so treat this as the shape rather than a literal transcript:
 
-```
-$ brig info alex
-...
-brig: workspace /Users/alex/brig/alex (sandbox brig-alex)
+```console
+$ brig info mine
+brig: workspace /Users/you/brig/mine (sandbox brig-mine)
 brig: runtime hull (/opt/homebrew/bin/hull)
-brig: image ghcr.io/brig-sh/claude-code:latest (pull missing)
+brig: image ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
 brig: forwarding to guest:
 brig:   GH_TOKEN(secret)
 brig:   CI
@@ -686,6 +778,10 @@ Two things matter for a guest brig can drive. Install the CLI outside the home
 directory, because the workspace gets mounted over it at boot. And bake no
 credential into the image, since the agent authenticates at runtime and its
 state belongs in the home directory brig persists.
+
+[guest-image.md](guest-image.md) is the full contract: every binary brig execs
+inside the guest, the account it expects, and a script that checks an image
+you built against it.
 
 ## `genericBoot`, for an image that is not a guest image
 

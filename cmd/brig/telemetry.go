@@ -24,8 +24,8 @@ runtime underneath, and these verbs set the answer it keeps, so an opt-out
 holds whether brig is the caller or not. DO_NOT_TRACK=1 in your environment
 turns it off without recording anything, and beats both.
 
-The telemetry section of the README lists every field an event carries, who
-receives it, and what is never collected.
+docs/telemetry.md lists every field an event carries, who receives it, and
+what is never collected.
 `
 
 // telemetryCmd reports and sets the telemetry answer.

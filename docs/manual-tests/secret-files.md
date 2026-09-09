@@ -1,5 +1,12 @@
 # Manual test: `volumes:` and the credential in an ephemeral `.claude`
 
+*Historical evidence, not current validation. It evidences the delivery
+MECHANISM, as measured on 2026-08-18: that a tmpfs cover over the agent's
+config directory, the paths a profile pins across it, and a `files:` binding
+delivered on stdin behave as designed in a real guest. Measured on macOS
+26.4, arm64, with hull installed, against
+`ghcr.io/brig-sh/claude-code-stock:latest`.*
+
 PR 6 covers the agent's config directory with a tmpfs so that nothing written
 there can reach host disk, pins the paths a profile wants to keep across the
 cover, and writes a `files:` binding into the tmpfs as an ordinary file with

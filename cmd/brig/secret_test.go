@@ -681,8 +681,9 @@ func TestStdinIsAcceptedExplicitly(t *testing.T) {
 	}
 }
 
-// `-f -` is the conventional spelling of "the file is stdin", and the README
-// uses it, so it has to mean stdin rather than a file called "-".
+// `-f -` is the conventional spelling of "the file is stdin", and
+// docs/secrets.md uses it, so it has to mean stdin rather than a file
+// called "-".
 func TestDashAsTheFileMeansStdin(t *testing.T) {
 	f := newFake(t)
 	pipeStdin(t, "tok")

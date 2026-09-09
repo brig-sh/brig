@@ -1,5 +1,11 @@
 # Manual test: can one sandbox reach another?
 
+*Historical evidence, not current validation. It evidences whether one
+sandbox can reach another, across hvi, vz, and Linux's shared and isolated
+networks. No calendar date was recorded. It is identified instead by
+version: hull `0.1.0-rc21` on macOS, and Amazon Linux 2023 (kernel 6.18.41)
+with nerdctl 2.0.3 and containerd 2.0.2 on Linux.*
+
 `docs/security.md` said that sandboxes share a broadcast domain, and that each
 one can reach what the other listens on. Nothing measured it. This file is the
 measurement. The claim is true on Linux and false on both macOS backends.

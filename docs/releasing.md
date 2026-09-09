@@ -30,6 +30,17 @@ it, in order.
   opens a **draft** release for the tag. `draft: true` is deliberate: a tag
   never publishes itself before someone has read the notes.
 
+- Two different signing paths run here, and only one needs a stored secret.
+  `cosign` signs the checksum file keylessly. It gets a short-lived
+  certificate from Sigstore's OIDC flow, and no key exists anywhere. Signing
+  and notarizing the macOS binaries needs repository secrets instead: a
+  Developer ID certificate, its password, a notary API key, a key ID and an
+  issuer ID. `.goreleaser.yaml` gates notarization on the certificate secret
+  being set, so a release run without it still succeeds, and ships an
+  unsigned macOS binary. Publishing the Homebrew cask needs one more
+  credential: a token for the separate tap repository, because the built-in
+  `GITHUB_TOKEN` cannot write there.
+
 ## Publish the draft
 
 - Read the draft's generated notes. Fix anything the changelog grouped wrong.
@@ -78,6 +89,12 @@ it, in order.
   At least `VERSION`, the compatibility window named in README's deprecation
   section (the hull version brig can pin against), and anything else that
   quotes a version number.
+
+  This grep exists because a version quoted in a comment survives copy-paste.
+  As of `0.1.0-rc18`, `install.sh`'s own `BRIG_VERSION` example still named
+  the previous release, `rc17`: the exact staleness this step is meant to
+  catch. Run the grep everywhere a version might hide, not just where you
+  expect one.
 
 ## Check before you walk away
 

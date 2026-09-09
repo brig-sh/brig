@@ -38,21 +38,27 @@ A brig line has three positions, and completion follows them.
 
 | where the cursor is | what is offered |
 | --- | --- |
-| before the verb | the verbs, and the global flags (`--verbose`, `-q`, `--json`) |
-| a flag, either side of the ref | the flags that verb honours -- brig reads its own on both sides |
+| before the verb | the verbs, and the three global flags (`--verbose`, `-q`/`--quiet`, `--json`) |
+| a flag, either side of the ref | the run-line flags that verb accepts -- brig reads those on both sides |
 | a ref | every agent, and every session under one: `claude`, `claude@refactor` |
 | `brig run <ref> …` | the project directory, for the first word only |
 | once the agent's arguments have begun | nothing |
 
-Completion stops exactly where brig's own parsing stops, and not a word before
-it. `brig run claude --mem 4096` is a line brig reads, so `--mem` is offered
-after the ref as readily as before it. The agent's arguments begin at the first
-word or flag brig does not own -- `--`, an unrecognised flag, or a bare word
-past the project -- and from there completion offers nothing, because the
-vocabulary is another program's and brig has no list of it.
+The global flags complete only before the verb. `--verbose` and `-q`/`--quiet`
+have no run-line row, so neither is offered beside the ref.
+
+Completion computes what a flag is legal for by its position on the line, not
+by whether the verb does anything with it once parsed. `brig run claude --mem
+4096` is a line brig reads, so `--mem` is offered after the ref as readily as
+before it, on every verb that reads run-line flags at all. Completion does not
+know, and does not claim, that a given verb acts on the value. The agent's
+arguments begin at the first word or flag brig does not own (`--`, an
+unrecognised flag, or a bare word past the project), and from there completion
+offers nothing, because the vocabulary is another program's and brig has no
+list of it.
 
 `stop` and `rm` act on a sandbox that exists, so they offer the sessions there
-are rather than every agent there could be. `run`, `sh` and `info` take an
+are rather than every agent there is. `run`, `sh` and `info` take an
 agent that has never run, so they offer all of them. `brig rm --all` names no
 session and refuses every argument, so a line carrying it completes nothing
 further.
@@ -67,10 +73,10 @@ Two things are deliberately not offered:
 
 - **Secret names.** Listing them opens your keyring -- on macOS that means
   `security dump-keychain`, and a Linux secret-service backend can raise an
-  unlock prompt. A keystroke should do neither. `brig secret ls` lists them.
-- **The retired spellings.** `brig exec`, `brig env`, `brig create`,
-  `brig reset`, `--name`, `--workspace` and the rest still work and say what
-  replaced them. Completion teaches the spelling that stays.
+  unlock prompt. A keystroke must not do either. `brig secret ls` lists them.
+- **Every retired spelling.** Each one still works and prints one line saying
+  what replaced it. Completion teaches only the spelling that stays. See
+  [migration.md](migration.md) for the full old-to-new list.
 
 ## Session names can be stale
 
