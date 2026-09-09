@@ -14,6 +14,13 @@ Nothing here is a brig-specific format. A stock distribution image satisfies
 all of it without being told about brig, which is the point. What follows
 matters when you are building something smaller than that.
 
+Guest images for the built-in profiles are open source, built in
+[brig-sh/community-images](https://github.com/brig-sh/community-images).
+Building your own from scratch is documented there, at
+[bring-your-own-image.md](https://github.com/brig-sh/community-images/blob/main/docs/bring-your-own-image.md).
+[profiles.md](profiles.md) is the other half of the job: the fields that name
+this image and hand it a credential.
+
 ## The binaries
 
 Resolved through the guest's `PATH` unless the table says otherwise.
@@ -31,7 +38,7 @@ Resolved through the guest's `PATH` unless the table says otherwise.
 | `chmod` | sets the mode a `files:` binding declares, inside the create script | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `rm` | `rm -f --` at the credential path before creating it, so a planted symlink is removed rather than followed | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `sleep` | **Linux only.** nerdctl runs the container as `sleep infinity`, because a container exits when its command does and the sandbox has to outlive the exec that uses it | `internal/runtime/nerdctl.go`, `runArgs` |
-| `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> '<command>'` runs `bash -lc`. It is also the `binary:` of the `ubuntu` profile | `internal/wrap/run.go`, `Shell` |
+| `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> '<command>'` runs `bash -lc`, for every profile regardless of its `binary:` field | `internal/wrap/run.go`, `Shell` |
 | the profile's `binary:` | `brig run` execs it. `claude` for claude-code, `codex` for codex, and so on | `cmd/brig/main.go`, `runAgent` |
 
 Two of these are conditional, and it is worth knowing which.
@@ -97,6 +104,12 @@ last path element: `/home/claude` means the user `claude` (`GuestUser` in
 `internal/profile/profile.go`). The profile states the home once and the user
 follows from it. There is no field to set the user separately.
 
+One shipped profile breaks that pattern on purpose. `ubuntu`'s `guestHome` is
+`/root/work`, so the derived name is `work`, which is not an account in that
+image. Nothing reads it there: the image already runs as `root`, and the
+derivation only matters for a profile whose workspace sits inside a real
+user's home directory.
+
 Three things follow for the image.
 
 **That account has to exist in the image.** The name is passed to `chown`
@@ -151,12 +164,12 @@ The kernel file is named `Image` on arm64 and `bzImage` on x86_64; the initrd
 is `container-initrd` on both. They come from `BRIG_BOOT_ASSETS` if it is set,
 otherwise from whatever `hull assets dir` reports on macOS, otherwise from
 `$XDG_DATA_HOME/brig/assets` (default `~/.local/share/brig/assets`) on Linux.
-Missing, they are fetched: with hull on macOS, which downloads the same bundle
-for its own use, and with `oras` on Linux, where hull does not build. A
-zero-length file counts as missing rather than passing an existence check and
-failing at boot. The one case brig refuses to fix is `BRIG_BOOT_ASSETS`
-pointing at a directory you chose: it will not download over a build somebody
-is iterating on.
+Missing, they are fetched: with hull on macOS, which downloads the same
+bundle for its own use, and with [`oras`](install.md#linux) on Linux, where
+hull does not build. A zero-length file counts as missing rather than passing
+an existence check and failing at boot. The one case brig refuses to fix is
+`BRIG_BOOT_ASSETS` pointing at a directory you chose: it will not download
+over a build somebody is iterating on.
 
 Two consequences for the image itself:
 
@@ -347,3 +360,10 @@ It is not part of CI, which has no registry access and no runtime to boot
 with, so it is something you run yourself against an image you are building.
 Bear in mind that it is a real run of a real profile: the credentials that
 profile delivers are delivered into the image under test.
+
+Exit status: `0` when every requirement is met, `1` when something is
+missing, `2` when there was nothing to check with at all (no `brig`, no
+runtime, or no such profile). The script never reports a pass it did not
+perform. Set `BRIG_DRY_RUN=1` to print what it would boot and stop before
+booting it, which checks the argument handling and the profile lookup on a
+machine with no runtime.

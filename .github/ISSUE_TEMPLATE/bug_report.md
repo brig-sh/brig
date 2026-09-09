@@ -43,13 +43,22 @@ info` reports the backend, and `hull ps` / `nerdctl ps` shows the instance.
 
 <!-- Fill in what applies; delete the rest. -->
 
+- Command: <!-- the exact `brig ...` line that failed -->
 - Host OS: <!-- e.g. macOS 26.3, or Ubuntu 24.04 -->
 - Architecture: <!-- arm64 | amd64 -->
-- brig version: <!-- brig --version -->
+- brig version: <!-- run `brig version` and paste its output -->
 - Runtime and version: <!-- hull --version, or nerdctl --version -->
 - Profile: <!-- claude-code, codex, ... or a file-backed one -->
 - Installed how: <!-- Homebrew cask | install.sh | make build -->
 - Commit: <!-- git rev-parse HEAD, if built from source -->
+
+## `brig doctor` output
+
+<!--
+Paste it in full, fenced. `brig doctor` reports every check it can and exits
+0 even when a line reads `!!`, so the whole report matters more than whether
+the command "passed".
+-->
 
 ## Logs and additional context
 

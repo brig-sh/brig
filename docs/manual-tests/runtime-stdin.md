@@ -1,5 +1,11 @@
 # Manual test: stdin delivery and privileged-mount visibility
 
+*Historical evidence, not current validation. It evidences that a value
+delivered on stdin (`Runtime.Feed`) reaches the guest without appearing in
+argv, and that a mount a privileged exec creates is visible to a later
+unprivileged one (`RunSpec.Tmpfs` / `ExecSpec.User`). Measured 2026-08-17,
+from the `CREATED` column of the recorded `hull ps` output below.*
+
 PR 4 (`internal/runtime`) adds `Runtime.Feed`, which carries a value into the
 guest on stdin instead of argv, and `RunSpec.Tmpfs` / `ExecSpec.User`, which
 let a container runtime create a tmpfs at boot and hull mount one with a

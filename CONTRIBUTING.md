@@ -6,10 +6,20 @@ notes come first.
 
 ## Repo specifics
 
-- Build: `make build` produces `./brig` and `./brigd`. `make all` is
-  `vet test build`. CI runs that plus `gofmt -l`, `script/smoke.sh`, a
-  cross-compile for darwin/arm64 and linux/amd64, and a check that no test
-  disappeared.
+- Build: `make build` produces `./brig` and `./brigd`. `make all` runs
+  `vet test build`. Run it before you push, but CI does not call `make` at
+  all: it runs its own steps, listed next.
+- What CI runs (`.github/workflows/ci.yml`): a `gofmt -l` gate, `go vet
+  ./...`, `go test -race -covermode=atomic -coverprofile=coverage.out ./...`
+  with a coverage upload to Codecov on pushes to `main`, `script/smoke.sh`,
+  a cross-compile for darwin/arm64 and linux/amd64, a check that no test
+  disappeared, and `goreleaser check` plus a full snapshot build so the
+  release config stays exercised before a tag depends on it. The one CI
+  label this repo reads is `removes-tests`: it skips the test-disappeared
+  check for a pull request that means to remove one.
+- There is no linter in this repository. No `golangci-lint` configuration
+  exists anywhere in the tree, and the Makefile has no lint target. The only
+  static gates are `gofmt -l` and `go vet`.
 - Dependencies: brig has **three** direct dependencies -- `sigs.k8s.io/yaml`
   for profiles, `golang.org/x/sys` for terminal and process calls, and
   `github.com/godbus/dbus/v5` for the Linux secret store -- and that list is
@@ -24,6 +34,10 @@ notes come first.
   touching concurrency, subprocesses or `brigd`. Note that
   `internal/secret` exercises the **real** login keychain on macOS, so those
   tests create and delete items under the `sh.brig.secret` service.
+- Docs: `script/check-retired-spellings.sh` fails a doc that teaches a
+  command spelling scheduled for removal. Run it before you open a docs PR.
+- Brand assets: logos, marks and the architecture diagram live under
+  `assets/`, with usage rules in [assets/README.md](assets/README.md).
 - End-to-end: `script/smoke.sh` drives the real binary against a stub runtime
   and a stub cosign, so it needs neither a VM nor macOS and runs in CI. It
   covers profile resolution, credential forwarding, the image-verification
@@ -44,11 +58,15 @@ notes come first.
 Most of brig is ordinary Go, but two properties are the reason the tool
 exists, and a change that weakens either is a bug even when every test passes:
 
-1. **The guest sees one directory.** The workspace is mounted as the sandbox's
-   home and nothing else on the host is reachable from inside it. Everything
-   brig writes into that directory it writes from the host, as you — so those
-   paths are attacker-controlled input, and they are handled through an
-   `os.Root` rather than by joining strings.
+1. **The guest reaches only the host directories brig names for it.** The
+   guest home is mounted as the sandbox's home. Name a project on the run
+   line and brig mounts that project too, read-write, as a second host
+   directory at `/work/<name>`. The agent can change those real project
+   files. `docs/security.md` names the further limits, including what a
+   profile's own hostmount can add. Everything brig writes into either
+   directory it writes from the host, as you. Those paths are
+   attacker-controlled input, and they are handled through an `os.Root`
+   rather than by joining strings.
 2. **The guest gets the credentials it was named, and no others.** Values are
    read from your environment per invocation, forwarded by name so they never
    appear in `ps`, and never written into the workspace.
@@ -280,7 +298,7 @@ A few norms that make reviews pleasant on both sides:
 
 A PR is mergeable when:
 
-- CI is green: linting, builds, unit tests and end-to-end tests pass.
+- CI is green: gofmt and go vet, builds, unit tests and the smoke test pass.
 - The required approvals are in place.
 - The branch is up to date with `main` (rebased, with a clean, logical commit
   series).

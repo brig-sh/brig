@@ -1,118 +1,127 @@
 # Quickstart
 
-One agent, running in a sandbox, on a Mac that meets the requirements. This is
-the shortest path from nothing to a working Claude Code session. Everything
-else brig can do is in the [README](../README.md) and the rest of
-[docs/](.); this page is only the first run.
+This page takes you from an empty terminal to Claude Code running inside a
+sandbox, on a throwaway project. It also shows you how to stop it when you
+are done. It is one path, start to finish. The [README](../README.md) and
+the rest of [docs/](.) cover everything else brig can do.
 
-You need a Mac. brig boots the sandbox as a microVM over
-Virtualization.framework, and macOS 26 is what it is tested on.
+## Prerequisites
 
-## Install
+You need a Mac with Apple silicon. The default agent profiles, including
+`claude-code`, ask for hull's `hvi` backend, and `hvi` needs macOS 15 or
+newer. On macOS 14, set `BRIG_HYPERVISOR=vz` before you run one. See
+[docs/support.md](support.md) for the full platform matrix.
 
-```bash
-brew tap brig-sh/brig
-brew trust brig-sh/brig       # brew refuses untrusted third-party taps
-brew install --cask brig
-```
+brig itself must already be installed. [docs/install.md](install.md) covers
+every platform, and how to verify a download.
 
-The cask depends on [hull](https://github.com/brig-sh/hull), the microVM
-runtime brig drives, so installing brig brings it along. `cosign` is optional.
-Without it brig cannot verify the guest image and says so on every boot; with
-it the boot is checked. `brew install cosign` if you want the check.
-
-## Run
+## Check what brig found
 
 ```bash
-brig run claude
+brig doctor
 ```
 
-That boots the sandbox and starts Claude Code inside it. `claude` is the short
-name for the `claude-code` profile.
-
-## What the first run does
-
-The first run is the slow one. In order:
-
-- **The boundary is named, if you ask.** `brig info claude` prints the
-  execution envelope without starting anything, and `brig --verbose run` prints
-  it before the boot:
-
-  ```
-  PROFILE      claude-code
-  SANDBOX      brig-claude-code (hull)
-  ISOLATION    microVM (hull, hvi backend)
-  WORKSPACE    /Users/you/brig/claude-code (read-write)
-  IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
-  VERIFY       warn, against brig's own trust policy
-  CREDENTIALS  claude-credentials
-  NETWORK      shared (one network for every sandbox on this host)
-  ```
-
-  Credentials are named, never printed. An ordinary run goes straight to the
-  work rather than printing this first.
-- **The image is pulled.** The guest image comes down from the registry once.
-  Later runs use the copy already on disk.
-- **The image is verified.** brig checks that the image, and the kernel it
-  boots, were built by the workflow that publishes them. The run says so in one
-  line:
-
-  ```
-  brig: image and boot assets verified
-  ```
-
-  The `VERIFY` row above names the policy that line held under. A check that
-  did **not** hold prints at every level, `-q` included. The per-check detail
-  is `--verbose`'s:
-
-  ```
-  brig: image ghcr.io/brig-sh/claude-code-stock:latest: signature verified
-  ```
-
-  Then it starts the sandbox, which is another line `--verbose` carries:
-
-  ```
-  brig: starting sandbox brig-claude-code...
-  ```
-
-- **The agent asks you to log in.** The sandbox boots with no credential, so
-  Claude Code prompts you to log in exactly as it would on a fresh machine.
-  That login happens inside the sandbox.
-
-The login lives in the sandbox's memory. It lasts as long as the sandbox does,
-and never reaches your disk. Stop the sandbox and the next run asks again. To
-carry the login you already have on this Mac into the sandbox, and keep it
-across stops, see [Credentials](../README.md#credentials).
-
-## The one directory the agent can see
-
-The agent's whole world is one host directory, mounted as its home:
+brig prints one line per fact, in this shape:
 
 ```
-~/brig/claude-code
+  ok  host      macOS 26.5 on arm64
+  ok  virtual   Hypervisor.framework available
+  ok  runtime   hull 0.1.0-rc21 at /opt/homebrew/bin/hull
+  !!  boot      assets missing at /Users/you/.hull/assets
+          run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
+  ok  verify    cosign at /opt/homebrew/bin/cosign, BRIG_VERIFY=warn
+  ok  profiles  8 built in, 0 in /Users/you/.config/brig
+  ok  secrets   keychain reachable
+  --  brigd     not running (no socket at /Users/you/.brig/brigd.sock)
+  --  image     pass an agent to check its image: brig doctor claude
 ```
 
-Nothing else on your machine is reachable from inside the sandbox. Put the
-projects the agent should work on in that directory. It cannot reach your
-keychain, your SSH agent, or any other folder. That directory holds the
-agent's settings, its history, and your projects, and it stays on the host
-across restarts.
+`ok` means brig found what that line checks. `virtual` reports only whether
+this Mac can host a microVM at all, not which backend a run uses. `!!`
+prints a fix beside the line and does not stop you here. brig fetches
+missing boot assets itself, the first time an agent needs them. `--` means
+brig looked and found nothing to report, not a failure. `brigd` is an
+optional daemon this quickstart does not need.
 
-## Keep going, or stop
-
-The sandbox stays up between commands, so a second `brig run claude` is
-immediate. When you are done:
+## Run it
 
 ```bash
-brig stop claude    # stop the sandbox, keep it
-brig rm claude      # stop and remove the sandbox
+mkdir -p ~/code/demo && cd ~/code/demo
+brig run claude ~/code/demo
 ```
 
-`brig stop` keeps the sandbox so starting it again is a boot, not a fresh
-creation. It takes the in-sandbox login with it. `brig rm` removes the sandbox
-as well. Neither touches `~/brig/claude-code`: your projects and the agent's
-saved state stay where they are. To drop those too, remove the directory by
-hand.
+`claude` is the default session of the `claude-code` agent. `~/code/demo`
+is the project this run mounts.
 
-If a run fails, [troubleshooting.md](troubleshooting.md) is organised by what
-you saw on the terminal.
+The first run is the slow one: brig pulls the guest image once, and later
+runs reuse the copy already on disk. `brig --verbose run` prints the
+execution envelope before it boots, and `brig info claude` prints the same
+thing without running anything:
+
+```
+PROFILE      claude-code
+SANDBOX      brig-claude-code (hull)
+ISOLATION    microVM (hull, hvi backend)
+WORKSPACE    /Users/you/brig/claude-code (read-write)
+IMAGE        ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
+VERIFY       warn, against brig's own trust policy
+CREDENTIALS  (none)
+NETWORK      shared (one network for every sandbox on this host)
+```
+
+`claude-code` asks for hull's `hvi` backend, which is why `ISOLATION` names
+it: `hvi` drives Apple's Hypervisor.framework directly, not
+Virtualization.framework. `WORKSPACE` here is brig's own label for the
+guest home, the row this page calls the guest home everywhere else.
+
+Once brig verifies the image and the boot assets, it prints one line and
+starts the sandbox:
+
+```
+brig: image and boot assets verified
+```
+
+Then Claude Code asks you to log in, because the sandbox holds no
+credential. That login happens inside the sandbox. On `claude-code` it
+lands on a memory-backed mount, not disk, so `brig stop` takes it with the
+VM and the next run asks again. Not every agent works this way: see
+[sessions.md](sessions.md#what-survives) for which do.
+
+## Where the agent's files live
+
+Two host directories are reachable from inside the sandbox, and nothing
+else is:
+
+- The **guest home**, `~/brig/claude-code`, mounted as the agent's home.
+  Its settings and its history live there, and it survives everything
+  short of you deleting it by hand.
+- The **project**, `~/code/demo` in the run above, mounted read-write at
+  `/work/demo`. The agent starts there.
+
+The agent can change anything under `/work/demo`, because that mount is
+read-write and those are your real files. It cannot reach your keychain,
+your SSH agent, or any host directory you did not name.
+[sessions.md](sessions.md) explains the full model: what a session is,
+what each mount keeps separate, and what survives which command.
+
+## You know it worked
+
+The agent's prompt appears, and inside it `pwd` prints `/work/demo`. Leave
+the agent running and the sandbox stays up, so a second `brig run claude`
+is immediate.
+
+## Stop it
+
+```bash
+brig stop claude   # stop the sandbox, keep its name
+brig rm claude      # stop and remove it
+```
+
+`brig stop` keeps the sandbox's name, its row in `brig ls`, and what brig
+recorded about the session. `brig rm` drops the last of those too. Neither
+touches `~/brig/claude-code` or `~/code/demo`: your project and the
+agent's saved state stay where they are.
+
+If a run does not do what you expected,
+[troubleshooting.md](troubleshooting.md) is organized by what you saw on
+the terminal.

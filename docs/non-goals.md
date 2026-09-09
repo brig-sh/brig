@@ -75,12 +75,14 @@ process.
 brig runs on the machine in front of you, and three of its properties depend on
 that. The workspace is a live host directory, not a copy, which is why there is
 no `cp` verb. Credentials are resolved from your own keychain per invocation.
-An in-sandbox login lives in guest memory and dies with `brig stop`. Point brig
-at a remote host and the workspace becomes a synchronisation problem, the
-credential path becomes a transport with its own threat model, and the login
-that was deliberately memory-only is now sitting on a machine you are not in
-front of. Kubernetes adds a controller, a custom resource, an image pull secret
-story and a scheduler on top of all that. The remote story that works today is
+On the two profiles that declare a tmpfs, `claude-code` and `claude-desktop`,
+an in-sandbox login lives in guest memory and dies with `brig stop`. On the
+rest it is already on the persisted workspace, like everything else there.
+Point brig at a remote host and the workspace becomes a synchronisation
+problem, and the credential path becomes a transport with its own threat
+model. A login that was meant to stay in memory is now sitting on a machine
+you are not in front of. Kubernetes adds a controller, a custom resource, an
+image pull secret story and a scheduler on top of all that. The remote story that works today is
 the boring one: `ssh` to the host and run brig there.
 
 **Reopens when** running the agent on a different machine from the one you edit
@@ -115,9 +117,10 @@ disciplined enough not to need wrapping: stable verbs and exit codes, human
 output on stdout, diagnostics on stderr, and a `--json` mode wherever a program
 is the reader rather than a person. Today that mode covers the read verbs --
 `ls`, `info`, `agent ls`, `agent show`, `agent export`, `agent new`,
-`policy show`, `secret ls` and `doctor` -- and `run`, which under `--json`
-reports the agent's exit status on one line; more verbs get it as callers
-need them, and asking for one is a small issue rather than an argument. For lifecycle control there is
+`policy show`, `secret ls` and `doctor` -- and `run` and `sh`, which under
+`--json` report the agent's exit status on one line (`env`, the deprecated
+spelling of `info`, takes it too). More verbs get it as callers need them,
+and asking for one is a small issue rather than an argument. For lifecycle control there is
 already an interface with no library attached: `brigd` speaks line-delimited
 JSON over a unix socket and is documented in [brigd.md](brigd.md).
 
@@ -146,9 +149,9 @@ becomes reachable only through a screen.
 This one is refused for want of demand rather than on principle. Running
 containers inside the guest needs either nested virtualization or a privileged
 guest, plus a second image store living on host disk inside the workspace, and
-it complicates the sentence the whole tool is built around: one directory is
-the agent's whole world. That is a real cost, and nobody has yet shown it is
-worth paying.
+it complicates the model the whole tool is built around: a small, named set
+of host directories is what the agent can reach. That is a real cost, and
+nobody has yet shown it is worth paying.
 
 **Reopens when** people report the workflows that need it, concretely: a repo
 whose tests bring up containers, a compose file the agent is meant to run. Once

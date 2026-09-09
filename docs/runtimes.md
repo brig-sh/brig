@@ -34,6 +34,33 @@ not brig-shaped. nerdctl, containerd and urunc predate brig, are used far
 outside it, and brig is an ordinary caller of all three: it passes flags any
 other caller could pass.
 
+## The three macOS backends
+
+hull accepts three values for its `--hypervisor` flag: `vz`, `hvi` and
+`qemu`. brig passes through whichever one the profile names, or
+`BRIG_HYPERVISOR` when that is set.
+
+`vz` talks to Virtualization.framework through the `vz-runner` helper. It is
+hull's own default when nothing else names a backend. It is also the only
+backend that can show a graphical console, so a `kind: gui` profile is
+refused on `hvi` and `qemu`.
+
+`hvi` talks to Hypervisor.framework directly, through the `hvi` VM monitor.
+It is the only backend that runs a network gateway of its own. An attached
+egress policy and `--network isolated` both refuse to run on anything else.
+Six of the eight shipped profiles set `hypervisor: hvi`. In practice most
+runs use `hvi`, not `vz`, even though `vz` is what hull picks when a profile
+is silent.
+
+`qemu` is a third value hull accepts. Which framework it uses, if any, and
+what it needs on the host are questions for hull's own documentation.
+Nothing in brig's source answers them.
+
+`brig doctor`'s `Hypervisor.framework available` line is not a report on any
+of these three backends. It is the pass string of one `kern.hv_support`
+sysctl read, which asks only whether this Mac can back a microVM at all. It
+never gates the exit status.
+
 ## Where the boundary sits
 
 brig decides, and the runtime never sees the reasoning:

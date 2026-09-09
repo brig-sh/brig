@@ -86,7 +86,7 @@ func TestRemoveSandboxProceedsWhenPresent(t *testing.T) {
 // A List that fails is a runtime that could not be asked, not a sandbox that is
 // gone: the error comes back as is, so exitCode reads it as the runtime class
 // rather than not-found. Turning "could not ask" into "not there" would erase a
-// fact the README's exit table keeps apart.
+// fact docs/cli.md's exit table keeps apart.
 func TestRemoveSandboxPropagatesAListError(t *testing.T) {
 	t.Setenv("BRIG_STATE_DIR", t.TempDir())
 	boom := errors.New("cannot connect to the daemon")

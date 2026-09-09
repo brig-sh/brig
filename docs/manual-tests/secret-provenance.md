@@ -1,5 +1,12 @@
 # Manual test: the keychain comment attribute
 
+*Historical evidence, not current validation. It evidences the delivery
+MECHANISM: that the keychain's `icmt` comment attribute reads back without a
+decrypt prompt, and that `security -U` actually replaces the comment rather
+than leaving the old one. No calendar date appears in the prose. The recorded
+keychain `cdat`/`mdat` timestamps decode to 2026-08-17, measured on macOS
+26.4 (Darwin 25.4.0, arm64).*
+
 PR 2 (`internal/secret`) stores provenance in the keychain's `icmt` (comment)
 attribute, and D9's design rests on two facts about `security(1)` that
 `go test` cannot check without a real login keychain: that the comment can be

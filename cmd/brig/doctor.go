@@ -149,7 +149,7 @@ func parseDoctorArgs(args []string) (jsonOut bool, agent string, err error) {
 // gives a caller the same code the equivalent run would have -- so a wrapper
 // script reads "fix the runtime" from doctor exactly as it reads it from a
 // failed `brig run`, without a second table to parse. #9 asked for a flat exit
-// 5; the exit-code table that landed in #104 (README around line 219) is the
+// 5; the exit-code table that landed in #104 (docs/cli.md, "Exit codes") is the
 // contract now, and 5 there is "verification refused", which a diagnostic that
 // boots nothing never does. Every other check is diagnostic: it prints its
 // finding and its fix and leaves the status alone, so `brig doctor` on a host

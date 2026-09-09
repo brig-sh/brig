@@ -11,7 +11,7 @@ import (
 )
 
 // TestExitCode pins the mapping from an error to the process exit status. Every
-// code in the README table has a case here, so a documented code that nothing
+// code in docs/cli.md's table has a case here, so a documented code that nothing
 // returns is a test failure rather than a surprise for a script.
 func TestExitCode(t *testing.T) {
 	cases := []struct {

@@ -133,7 +133,7 @@ every time: copy the closest one and edit it, with
 Building an image for one is documented at
   https://github.com/brig-sh/community-images/blob/main/docs/bring-your-own-image.md
 
-settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; see the README for all):
+settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_WORKSPACE       host directory mounted as the guest home
   BRIG_IMAGE           guest image
   BRIG_PULL            missing (default) | always | never
@@ -162,7 +162,7 @@ func main() {
 	// The exit status is a stable, documented set: a script can tell "you
 	// asked for the wrong thing" from "it ran and failed" from "the sandbox
 	// could not be verified" without parsing the message. exitCode owns the
-	// mapping; the README documents it. A run refused for any reason still
+	// mapping; docs/cli.md documents it. A run refused for any reason still
 	// exits non-zero, so a stop or a boot that removed or started nothing
 	// never reads as success.
 	os.Exit(exitCode(err))
@@ -1890,7 +1890,7 @@ func takeAll(args []string) (rest []string, all bool) {
 //
 // It asks the runtime whether that sandbox is there before handing over, so the
 // case the runtime used to answer with its own "instance not found" -- there is
-// nothing to remove -- is reported as a not-found (exit 3), the code the README
+// nothing to remove -- is reported as a not-found (exit 3), the code docs/cli.md
 // gives a name that resolves to nothing, rather than as a removal that ran and
 // failed (exit 1). A List that itself fails is a runtime that could not be asked
 // (exit 4), a different fact the exit table keeps apart, so it comes back
@@ -1918,7 +1918,7 @@ func removeSandbox(cfg *wrap.Config, ref string) error {
 //
 // It is how rm and logs tell "there is nothing here" -- a not-found, exit 3 --
 // from a runtime that could not be asked -- its own error, exit 4. The two are
-// different facts and the README's exit table keeps them apart, so a List that
+// different facts and docs/cli.md's exit table keeps them apart, so a List that
 // fails is returned as is rather than folded into absence.
 func sandboxPresent(rt runtime.Runtime, name string) (bool, error) {
 	list, err := rt.List()
