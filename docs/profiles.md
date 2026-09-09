@@ -174,7 +174,7 @@ with the same parser and neither has to guess.
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. Unlike every other field this is about your machine rather than the workload, so it does not travel usefully to anyone else -- it is how you pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the VM: `block`, `virtiofs` or `9pfs`. Left unset the runtime picks its own default, which is what a profile that only runs an agent wants. Set `block` when the sandbox installs packages and needs a real writable disk rather than a share sized to the image |
 | `genericBoot` | no | The image was never built to be a guest -- a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See below |
-| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the workspace. Both are required together, and only `claude-code` declares them: see [What this costs](#what-this-costs) below |
+| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the workspace, and only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both fields are required together, and only `claude-code` declares them, so `--skills` does nothing on the other seven: see [What this costs](#what-this-costs) below |
 | `onboarding` | no | A first-run state file to seed. See below |
 | `hostCredential` | no | **Deprecated, removed next release**, see [migration.md](migration.md#profile-keys). A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
 | `reserved` | no | Marks a profile that owns the workspace a session name could otherwise slug onto. See below |
@@ -566,7 +566,7 @@ is no host directory named to copy.
 hostmounts, which is what lets a `--skills` copy land somewhere that
 survives. `claude-desktop` covers `.claude` with the same kind of tmpfs but
 carves out no exception for `.claude/skills`, only for `settings.json`,
-`CLAUDE.md`, `sessions`, `projects` and `history.jsonl`. This is unrelated to
+`CLAUDE.md`, `sessions`, `projects`, `plugins` and `history.jsonl`. This is unrelated to
 `--skills`, which is already a no-op there for the reason above: whatever the
 bundled desktop app itself writes under `.claude/skills` is thrown away at
 shutdown, where the same path persists for `claude-code`.
@@ -627,8 +627,8 @@ trade.
 
 ## `reserved`, so a session name cannot land on the wrong workspace
 
-`claude-desktop` owns the Desktop app's workspace, so `brig run claude --name
-desktop` is refused rather than quietly landing a Claude Code session there.
+`claude-desktop` owns the Desktop app's workspace, so `brig run claude@desktop`
+is refused rather than quietly landing a Claude Code session there.
 That protection is `reserved: true` on the `claude-desktop` profile.
 
 The trailing word is reserved too, not just the full name: `claude-desktop`

@@ -44,8 +44,10 @@ A brig line has three positions, and completion follows them.
 | `brig run <ref> …` | the project directory, for the first word only |
 | once the agent's arguments have begun | nothing |
 
-The global flags complete only before the verb. `--verbose` and `-q`/`--quiet`
-have no run-line row, so neither is offered beside the ref.
+The global flags complete only before the verb. `--verbose` has no run-line
+row at all. `-q`/`--quiet` has one, but it is the retiring spelling, and
+completion never offers a spelling on its way out, so neither is offered
+beside the ref.
 
 Completion computes what a flag is legal for by its position on the line, not
 by whether the verb does anything with it once parsed. `brig run claude --mem

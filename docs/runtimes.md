@@ -41,16 +41,17 @@ hull accepts three values for its `--hypervisor` flag: `vz`, `hvi` and
 `BRIG_HYPERVISOR` when that is set.
 
 `vz` talks to Virtualization.framework through the `vz-runner` helper. It is
-hull's own default when nothing else names a backend. It is also the only
+what brig falls back to when neither the profile nor `BRIG_HYPERVISOR` names a
+backend. brig always passes `--hypervisor` explicitly, so hull's own default
+never decides it. It is also the only
 backend that can show a graphical console, so a `kind: gui` profile is
 refused on `hvi` and `qemu`.
 
 `hvi` talks to Hypervisor.framework directly, through the `hvi` VM monitor.
 It is the only backend that runs a network gateway of its own. An attached
 egress policy and `--network isolated` both refuse to run on anything else.
-Six of the eight shipped profiles set `hypervisor: hvi`. In practice most
-runs use `hvi`, not `vz`, even though `vz` is what hull picks when a profile
-is silent.
+Six of the eight shipped profiles set `hypervisor: hvi`, so most runs use
+`hvi` rather than the `vz` fallback.
 
 `qemu` is a third value hull accepts. Which framework it uses, if any, and
 what it needs on the host are questions for hull's own documentation.
