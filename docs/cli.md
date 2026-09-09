@@ -180,7 +180,8 @@ assets, cosign, the profile directory, the secret store and brigd.
 brig doctor claude
 ```
 
-Adds a ninth line, checking that agent's image.
+Fills in the image line, which is otherwise the one check doctor cannot make
+without knowing which agent you mean.
 
 ```bash
 brig doctor --json

@@ -4,8 +4,10 @@ The reason to run an agent in a sandbox is that the agent runs code you did
 not write, against a machine that holds everything you have. brig narrows what
 "everything" means. What the agent can reach on the host is its workspace,
 any project you name on the run line, and the credentials you gave it. No
-other host directory is mounted, and no host credential source is read on
-the run path. What the agent can reach over the network is a separate
+other host directory is mounted, and, on every profile brig ships, no host
+credential source is read on the run path. A profile of your own carrying the
+deprecated `hostCredential:` key is the exception: it reads the macOS keychain
+item it names on every run. See [secrets.md](secrets.md). What the agent can reach over the network is a separate
 question, with a much weaker answer, covered below.
 
 This page states what is isolated first, then what an agent can still do.

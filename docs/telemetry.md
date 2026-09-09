@@ -21,9 +21,11 @@ DO_NOT_TRACK=1 brig run claude
 
 ## What is counted
 
-Exactly two things, each once per brig command:
+Three things, each once per brig command:
 
 - **A sandbox boot.**
+- **A sandbox stop**, including the stop inside a restart, when brig recreates
+  a sandbox whose shares or policy went stale. `brig rm` is not counted.
 - **The command that hands your terminal to the agent**, which is `run`
   without `--json`, `sh`, or the `--json` child path either one takes.
 

@@ -73,6 +73,12 @@ names=(
 
 # Print "<line>:<command text>" for every place a reader could copy a command
 # from: each inline-code span, and each line inside a fenced code block.
+#
+# An inline span can wrap across a line break, and a `brig run claude --name
+# desktop` split that way went unseen until a reviewer caught it by eye. So a
+# line holding an odd number of backticks has an open span, and the next line
+# is joined to it before matching. The pair is reported at the first line's
+# number, which is where a reader looks.
 extract_commands() {
 	awk '
 		/^[[:space:]]*```/ { fence = !fence; next }
@@ -80,9 +86,15 @@ extract_commands() {
 		fence { print NR ":" $0; next }
 		{
 			line = $0
+			start = NR
+			# gsub returns the count, which is what says the span is open.
+			probe = line
+			if (gsub(/`/, "`", probe) % 2 == 1) {
+				if ((getline nextline) > 0) line = line " " nextline
+			}
 			while (match(line, /`[^`]+`/)) {
 				span = substr(line, RSTART + 1, RLENGTH - 2)
-				print NR ":" span
+				print start ":" span
 				line = substr(line, RSTART + RLENGTH)
 			}
 		}

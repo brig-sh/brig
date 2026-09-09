@@ -7,7 +7,8 @@ one session, and check where brig actually enforces it.
 Policy enforcement needs hull's `hvi` backend, which needs macOS 15 or
 newer, and a hull newer than 0.1.0-rc21. On every other backend, including
 every Linux runtime, brig refuses a policy-bound boot rather than running it
-unenforced. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
+unenforced. A run with `--network offline` is the exception: it reaches no
+network at all, so it satisfies any egress rule and is never refused. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
 
 ## Network postures
 

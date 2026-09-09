@@ -55,9 +55,10 @@ info` reports the backend, and `hull ps` / `nerdctl ps` shows the instance.
 ## `brig doctor` output
 
 <!--
-Paste it in full, fenced. `brig doctor` reports every check it can and exits
-0 even when a line reads `!!`, so the whole report matters more than whether
-the command "passed".
+Paste it in full, fenced. `brig doctor` prints a fix beside every line that
+is not `ok`, and still exits 0 for most of them. Only a missing or broken
+runtime and an unreachable secret store set a nonzero status, so the whole
+report matters more than whether the command "passed".
 -->
 
 ## Logs and additional context

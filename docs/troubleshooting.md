@@ -481,8 +481,10 @@ brig: Renew it, then store it again: brig secret import claude-code <name> --fro
 
 ## The sandbox restarted when I ran sh
 
-Two different things trigger this, and both recreate the sandbox rather than
-fail it. All persistent state lives in the guest home on the host
+Three different things trigger this, and each recreates the sandbox rather
+than failing it: a stale share, a stale policy, and a session run against a
+different project than it last used (see
+[sessions.md](sessions.md)). All persistent state lives in the guest home on the host
 either way. Any other session on that sandbox is disconnected when it
 restarts.
 

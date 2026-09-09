@@ -133,7 +133,7 @@ network and the credentials by name, and it boots nothing.
 ## The boundary
 
 <p align="center">
-  <img alt="brig sandbox architecture: brig run resolves the session on the host; hull drives a microVM on macOS and urunc over KVM on Linux; both give the guest the same contract of a guest home, a project mount, per-exec credentials and a verified image" src="assets/architecture.svg" width="900">
+  <img alt="brig sandbox architecture. brig run resolves the session on the host. hull drives a microVM on macOS, urunc over KVM on Linux. Both give the guest the same contract: a guest home, a project mount, per-exec credentials, and an image whose signature brig checks" src="assets/architecture.svg" width="900">
 </p>
 
 What the sandbox keeps out: every host directory except the guest home and the
@@ -145,7 +145,7 @@ mounted, because that mount is read-write and those are your real files. It can
 read any credential you chose to deliver into the guest. On the default
 `shared` network it can reach the internet, so anything it can read it can also
 send. Egress filtering exists, and brig enforces it only on hull's `hvi`
-backend; on any other backend a policy-bound run is refused rather than run
+backend. On any other backend a policy-bound run is refused rather than run
 unenforced.
 
 Image verification defaults to `warn`, which reports an unverifiable image and
