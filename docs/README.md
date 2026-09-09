@@ -67,6 +67,6 @@ not current validation, and each one says so in its own header.
 | --- | --- |
 | [manual-tests/egress-policy.md](manual-tests/egress-policy.md) | Egress rules against a live gateway |
 | [manual-tests/runtime-stdin.md](manual-tests/runtime-stdin.md) | Standard input through the runtime |
-| [manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md) | What a guest could reach from inside the sandbox |
+| [manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md) | What a guest can reach from inside the sandbox |
 | [manual-tests/secret-files.md](manual-tests/secret-files.md) | File-delivered secrets and their tmpfs backing |
 | [manual-tests/secret-provenance.md](manual-tests/secret-provenance.md) | Where an imported secret came from |

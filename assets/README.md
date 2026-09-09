@@ -30,7 +30,7 @@ outlines, so the files carry no font dependency.
 | `brig-lockup-on-{dark,light}.svg` | Horizontal lockup, transparent, for README headers via `<picture>`. |
 | `brig-lockup-badge.svg` | Lockup on its own navy field, for slides and anywhere the background is uncontrolled. |
 | `nofire-logo.svg`, `nofire-logo-on-dark.svg` | The NOFire AI logo, for the README footer. |
-| `architecture.svg` | The diagram in the README's "What brig is". README embeds it with `<img src>`, so the SVG's own internal `<title>` and `<desc>` are never read by a browser. The `img` element's `alt` attribute carries the description instead. Keep that alt text current whenever you change the diagram. |
+| `architecture.svg` | The diagram in the README's "The boundary". README embeds it with `<img src>`, so the SVG's own internal `<title>` and `<desc>` are never read by a browser. The `img` element's `alt` attribute carries the description instead. Keep that alt text current whenever you change the diagram. |
 
 The directory is flat. hull's own set of marks lives in
 [brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork) with the

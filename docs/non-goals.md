@@ -23,7 +23,7 @@ running. Owning the boot path would mean owning Virtualization.framework, a
 kernel command line, an image store, a snapshotter and the vulnerability
 surface of all of it, in a tool whose reason to exist is that it handles your
 credentials carefully with three direct dependencies. The four things brig adds on
-top, in the README's "What brig is", are the four a runtime has no concept of.
+top, in the README's "How it works", are the four a runtime has no concept of.
 Everything else in the boot path already works.
 
 **Reopens when** a runtime brig can drive refuses upstream to expose something

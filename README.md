@@ -43,7 +43,7 @@ brig run claude ~/code/demo
 - **The sandbox** is a microVM: `hull` on macOS, `nerdctl` with containerd and
   the `urunc` shim on Linux.
 - **Credentials** are not carried in by default. The sandbox boots with none,
-  so the agent asks you to log in exactly as it would on a new machine.
+  so the agent asks you to log in exactly as it does on a new machine.
 
 ## Requirements
 
@@ -122,7 +122,7 @@ brig run claude                  # reopen the session on the project it last use
 brig run claude@refactor ~/code/demo   # a second session, its own sandbox and home
 brig sh claude                   # a login shell inside the sandbox
 brig sh claude ls /work          # one command inside it
-brig info claude                 # the boundary a run would use, before booting
+brig info claude                 # the boundary a run uses, before booting
 brig logs claude --follow        # stream the sandbox's log
 ```
 

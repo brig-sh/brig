@@ -42,8 +42,8 @@ notes come first.
   and a stub cosign, so it needs neither a VM nor macOS and runs in CI. It
   covers profile resolution, credential forwarding, the image-verification
   decision table and the workspace lifecycle.
-- What `script/smoke.sh` cannot cover: brig drives a runtime it does not own
-  — `hull` on macOS, `nerdctl` on Linux. A change to how brig *invokes* either
+- What `script/smoke.sh` cannot cover: brig drives a runtime it does not own:
+  `hull` on macOS, `nerdctl` on Linux. A change to how brig *invokes* either
   can pass the whole suite and still be wrong. If you touch the run, exec or
   credential path, boot a real sandbox before opening the PR.
 
@@ -73,7 +73,7 @@ exists, and a change that weakens either is a bug even when every test passes:
 
 `docs/security.md` is where the limits of both are written down, including the
 ones that are weaker than they look. If a change moves either promise, say so
-in the PR and update that document in the same change — it is the page people
+in the PR and update that document in the same change. It is the page people
 read before deciding what credential to trust brig with, and it is only useful
 while it is true.
 
