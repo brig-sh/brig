@@ -951,7 +951,7 @@ every success case goes, and the usual error line on stderr. See
 | --- | --- |
 | `0` | success |
 | `1` | a general failure |
-| `2` | a usage error: an unknown flag, a stray argument, or a value in the wrong place, as reported by the verb's own parser |
+| `2` | a usage error: an unknown command or subcommand, a required operand left out, an unknown flag, a stray argument, or a value in the wrong place |
 | `3` | no such thing: an unknown agent, or a sandbox that is not there |
 | `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing. The refusal names the setting that caused it |
 | `5` | a boot refused over image verification |
@@ -959,7 +959,9 @@ every success case goes, and the usual error line on stderr. See
 | `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The refusal names the property, the runtime and the backend. See [Exit 7 cases](#exit-7-cases) |
 
 [Stability](stability.md) lists this table as stable enough to script
-against.
+against. `script/smoke.sh` asserts it end to end, `cmd/brig/exit_test.go`
+asserts the mapping, and `cmd/brig/usageexit_test.go` holds the usage class
+to `2` across every group.
 
 **Under `run --json` and `sh --json`, the agent's exit status becomes
 Brig's.** An exit `3` from `brig --json run claude` can be the agent's own
@@ -999,15 +1001,14 @@ did not come up.
 
 </details>
 
-### Usage mistakes that exit 1
+### Usage mistakes
 
-These usage mistakes exit `1` and not `2`:
-
-- an unknown top-level command
-- a run-line verb given no ref
-- a missing subcommand on `agent`, `policy` or `secret`
-- `secret import` or `policy check` given no agent
-- a `--mem` or `--cpus` value that is not a positive whole number
+**A mistake in what you typed exits `2`.** An unknown top-level command, an
+unknown or missing subcommand on `agent`, `policy`, `secret` or `telemetry`,
+a run-line verb given no ref, any verb in those groups given no operand, one
+given a word or a flag it has no place for, a flag given no value or one it
+cannot take, and two flags that ask for different things all return the
+usage type:
 
 ```
 brig nosuchverb
@@ -1020,8 +1021,12 @@ brig: run needs a profile, for example `brig run claude`. `brig agent ls`
 lists them
 ```
 
-Both exit `1`. `brig ls extra` and `brig completion bogus` exit `2`. A
-script that looks for a usage mistake must test for a nonzero status.
+Both exit `2`, the same as `brig ls extra` and `brig completion bogus`. A
+script can branch on exactly `2` for this class.
+
+Naming something that does not exist is a different class and stays `3`:
+`brig info nosuchagent` is a well-formed command about an agent that is not
+there, not a command typed wrong.
 
 A bare `brig telemetry` is not a usage mistake. It runs `status`.
 

@@ -65,7 +65,7 @@ func rejectPolicyTail(tail []string) error {
 // policyCmd groups the policy verbs.
 func policyCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("policy needs a subcommand: ls, create, edit, show, rm, attach, detach or check")
+		return usagef("policy needs a subcommand: ls, create, edit, show, rm, attach, detach or check")
 	}
 	var err error
 	switch args[0] {
@@ -98,7 +98,7 @@ func policyCmd(args []string) error {
 	case "check":
 		err = checkPolicy(args[1:])
 	default:
-		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach, check)", args[0])
+		return usagef("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach, check)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how
 	// the flag package says it. Asking for help is not a mistake, so it is
@@ -222,7 +222,7 @@ func parseWords(verb, takes string, fs *flag.FlagSet, args []string) ([]string, 
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return nil, fmt.Errorf("%s (%s takes %s)", msg, verb, takes)
+			return nil, usagef("%s (%s takes %s)", msg, verb, takes)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -244,10 +244,10 @@ func showPolicy(args []string) error {
 		return err
 	}
 	if len(words) == 0 {
-		return errors.New("policy show needs a name, for example `brig policy show no-net`")
+		return usagef("policy show needs a name, for example `brig policy show no-net`")
 	}
 	if len(words) > 1 {
-		return fmt.Errorf("policy show takes one name, not %q", words[1])
+		return usagef("policy show takes one name, not %q", words[1])
 	}
 	entry, err := lookupPolicy(words[0])
 	if err != nil {
@@ -280,10 +280,10 @@ func parseNameAndForce(verb string, args []string) (name string, force bool, err
 		return "", false, err
 	}
 	if len(words) == 0 {
-		return "", false, fmt.Errorf("policy %s needs a name, for example `brig policy %s no-net`", verb, verb)
+		return "", false, usagef("policy %s needs a name, for example `brig policy %s no-net`", verb, verb)
 	}
 	if len(words) > 1 {
-		return "", false, fmt.Errorf("policy %s takes one name, not %q", verb, words[1])
+		return "", false, usagef("policy %s takes one name, not %q", verb, words[1])
 	}
 	return words[0], force, nil
 }
@@ -696,15 +696,15 @@ func parseAttachArgs(verb string, args []string) (policyName, profileName, sessi
 		return "", "", "", err
 	}
 	if sessionGivenEmpty(fs, session) {
-		return "", "", "", fmt.Errorf("policy %s -n/--name needs a value", verb)
+		return "", "", "", usagef("policy %s -n/--name needs a value", verb)
 	}
 	if len(words) < 2 {
-		return "", "", "", fmt.Errorf(
+		return "", "", "", usagef(
 			"policy %s needs a policy and a profile, for example `brig policy %s no-net claude-code`",
 			verb, verb)
 	}
 	if len(words) > 2 {
-		return "", "", "", fmt.Errorf("policy %s takes a policy and a profile, not %q", verb, words[2])
+		return "", "", "", usagef("policy %s takes a policy and a profile, not %q", verb, words[2])
 	}
 	return words[0], words[1], session, nil
 }
@@ -847,13 +847,13 @@ func parseCheckArgs(args []string) (profileName, session string, err error) {
 		return "", "", err
 	}
 	if sessionGivenEmpty(fs, session) {
-		return "", "", errors.New("policy check -n/--name needs a value")
+		return "", "", usagef("policy check -n/--name needs a value")
 	}
 	if len(words) == 0 {
-		return "", "", errors.New("policy check needs a profile, for example `brig policy check claude-code`")
+		return "", "", usagef("policy check needs a profile, for example `brig policy check claude-code`")
 	}
 	if len(words) > 1 {
-		return "", "", fmt.Errorf("policy check takes one profile, not %q", words[1])
+		return "", "", usagef("policy check takes one profile, not %q", words[1])
 	}
 	return words[0], session, nil
 }

@@ -412,7 +412,7 @@ func dispatch(args []string) error {
 	case "template":
 		deprecated("brig template", "brig agent")
 		if len(rest) > 0 && rest[0] == "edit" {
-			return fmt.Errorf("there is no `brig template edit`; use `brig agent edit`")
+			return usagef("there is no `brig template edit`; use `brig agent edit`")
 		}
 		return agentCmd(rest)
 	case "ls":
@@ -514,7 +514,7 @@ func dispatch(args []string) error {
 			// ref. The reader typed it where a command goes, and it is a
 			// mistyped verb as readily as a mistyped agent -- so the ref
 			// parser's complaint would answer a question nobody asked.
-			return fmt.Errorf("unknown command %q (try `brig help`)", verb)
+			return usagef("unknown command %q (try `brig help`)", verb)
 		}
 		// A token carrying the separator is a ref that did not work, because
 		// nothing else it could be has an '@' in it. Answering that with the
@@ -605,7 +605,7 @@ func dispatch(args []string) error {
 	t, ok := profile.Lookup(profileName)
 	if !ok {
 		if profileName == "" {
-			return fmt.Errorf("%s needs a profile, for example `brig %s claude`. "+
+			return usagef("%s needs a profile, for example `brig %s claude`. "+
 				"`brig agent ls` lists them", verb, verb)
 		}
 		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
@@ -778,7 +778,7 @@ func dispatch(args []string) error {
 		return cfg.Shell(set, tail)
 	case "exec":
 		if len(tail) == 0 {
-			return errors.New("exec needs a command, for example `brig exec claude -- ls`")
+			return usagef("exec needs a command, for example `brig exec claude -- ls`")
 		}
 		if err := cfg.EnsureRunning(set); err != nil {
 			return err
@@ -807,7 +807,7 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 	// A windowed agent owns its own console, so there is nothing to pass
 	// through and nothing to exec into: starting it IS the command.
 	if t.IsGUI() && len(tail) > 0 {
-		return fmt.Errorf("%s is a graphical agent, so it takes no arguments "+
+		return usagef("%s is a graphical agent, so it takes no arguments "+
 			"(use `brig sh %s` or `brig stop %s`)", t.Name, t.Name, t.Name)
 	}
 	if err := cfg.EnsureRunning(set); err != nil {
@@ -1671,7 +1671,7 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 			// One message for both, quoting the argument as written: a value
 			// that is not a number and one that is not a useful number are the
 			// same mistake to whoever has to spot their own input in it.
-			return options{}, "", nil, fmt.Errorf("%s needs a positive number, not %q",
+			return options{}, "", nil, usagef("%s needs a positive number, not %q",
 				c.got.as, c.got.raw)
 		}
 		*c.dst = n
@@ -1681,14 +1681,14 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 	// unnamed sandbox.
 	o.nameGiven = seen(fs, "name", "n")
 	if o.nameGiven && o.load.Name == "" {
-		return options{}, "", nil, errors.New("--name needs a session name, for example `--name foo`")
+		return options{}, "", nil, usagef("--name needs a session name, for example `--name foo`")
 	}
 	// --offline is shorthand for one --network value, so the two agreeing is
 	// fine and the two disagreeing is a mistake worth naming: a silent winner
 	// would leave the run with a posture the line does not read like.
 	if o.offline {
 		if o.load.Network != "" && o.load.Network != "offline" {
-			return options{}, "", nil, fmt.Errorf(
+			return options{}, "", nil, usagef(
 				"--offline and --network %s ask for different things; --offline is --network offline",
 				o.load.Network)
 		}
@@ -1767,7 +1767,7 @@ func rewriteFlagError(err error) error {
 	msg := err.Error()
 	// "flag needs an argument: -image"
 	if name, ok := strings.CutPrefix(msg, "flag needs an argument: "); ok {
-		return fmt.Errorf("%s needs a value", spell(name))
+		return usagef("%s needs a value", spell(name))
 	}
 	// `invalid boolean value "garbage" for -detach: parse error`. The flags
 	// this can name are the ones written bare, so say that rather than leave
@@ -1781,7 +1781,7 @@ func rewriteFlagError(err error) error {
 			raw, tail = rest[:i], rest[i+len(" for "):]
 		}
 		name, _, _ := strings.Cut(tail, ":")
-		return fmt.Errorf("%s is either given or not, so it takes true or false, not %s",
+		return usagef("%s is either given or not, so it takes true or false, not %s",
 			spell(name), raw)
 	}
 	return err
@@ -2839,7 +2839,7 @@ an image for one is documented at
 // review, and it changes nothing anyone types.
 func agentCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("agent needs a subcommand: ls, show, new, edit, rm, import or export")
+		return usagef("agent needs a subcommand: ls, show, new, edit, rm, import or export")
 	}
 	var err error
 	switch args[0] {
@@ -2884,7 +2884,7 @@ func agentCmd(args []string) error {
 		deprecated("brig agent load", "brig agent import")
 		err = importProfile(args[1:])
 	default:
-		return fmt.Errorf("unknown agent subcommand %q "+
+		return usagef("unknown agent subcommand %q "+
 			"(ls, show, new, edit, rm, import, export)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how the
@@ -2965,7 +2965,16 @@ func rejectAgentTail(command, takes string, tail []string) error {
 // version and no longer picking up a deny entry added in a later release.
 func editProfile(args []string) error {
 	if len(args) == 0 {
-		return errors.New("edit needs a name, for example `brig agent edit mine`")
+		return usagef("edit needs a name, for example `brig agent edit mine`")
+	}
+	// A profile name starts with a letter or digit, so a leading dash is a
+	// flag, and edit takes none -- except -h and --help, which are a question
+	// agentCmd answers with the usage and a zero exit.
+	if strings.HasPrefix(args[0], "-") {
+		if isHelp(args[0]) {
+			return flag.ErrHelp
+		}
+		return usagef("unknown flag %s (edit takes no flags)", args[0])
 	}
 	if err := rejectAgentTail("brig agent edit", "takes one agent and nothing more", args[1:]); err != nil {
 		return err
@@ -3022,8 +3031,17 @@ func editorCommand() []string {
 // work.
 func importProfile(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("import needs a file, for example `brig agent import mine.yaml` "+
+		return usagef("import needs a file, for example `brig agent import mine.yaml` "+
 			"(or - to read stdin). See %s", profile.BringYourOwnImageDoc)
+	}
+	// A bare - is stdin. Anything else with a leading dash is a flag, and
+	// import takes none; a file of that name is reachable as ./-name. -h and
+	// --help are the exception, as they are for edit.
+	if args[0] != "-" && strings.HasPrefix(args[0], "-") {
+		if isHelp(args[0]) {
+			return flag.ErrHelp
+		}
+		return usagef("unknown flag %s (import takes no flags)", args[0])
 	}
 	// Named before the file is read, so `brig agent import a b` reports b rather
 	// than importing a and dropping it -- one file is imported, never the first
@@ -3131,7 +3149,7 @@ func parseExportLine(verb string, args []string, offers exportFlags) (exportLine
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return line, fmt.Errorf("%s (%s takes %s)", msg, verb, offers.takes)
+			return line, usagef("%s (%s takes %s)", msg, verb, offers.takes)
 		}
 		if fs.NArg() == 0 {
 			return line, nil
@@ -3155,10 +3173,10 @@ func showAgent(args []string) error {
 	}
 	switch len(line.words) {
 	case 0:
-		return errors.New("show needs an agent, for example `brig agent show claude-code`")
+		return usagef("show needs an agent, for example `brig agent show claude-code`")
 	case 1:
 	default:
-		return fmt.Errorf("show prints one agent and writes nothing, so it takes no "+
+		return usagef("show prints one agent and writes nothing, so it takes no "+
 			"destination. To copy one under a name of your own: brig agent new %s --from %s",
 			line.words[1], line.words[0])
 	}
@@ -3185,7 +3203,7 @@ func newAgent(args []string) error {
 	}
 	switch len(line.words) {
 	case 0:
-		return errors.New("new needs a name, for example " +
+		return usagef("new needs a name, for example " +
 			"`brig agent new mine --from claude-code`")
 	case 1:
 	default:
@@ -3193,12 +3211,12 @@ func newAgent(args []string) error {
 		// `new codex mine` are both lines someone types -- the second is the
 		// old `brig export codex mine` order -- and picking one would send half
 		// of them a corrected command with the two words the wrong way round.
-		return fmt.Errorf("new takes one name and takes the agent it copies from --from, "+
+		return usagef("new takes one name and takes the agent it copies from --from, "+
 			"so it cannot have both %q and %q: brig agent new <name> --from <agent>",
 			line.words[0], line.words[1])
 	}
 	if line.from == "" {
-		return fmt.Errorf("new copies an agent, so it needs one: "+
+		return usagef("new copies an agent, so it needs one: "+
 			"brig agent new %s --from claude-code. `brig agent ls` lists them", line.words[0])
 	}
 	return renderProfile(line.from, line.words[0], line.asJSON, line.force)
@@ -3222,11 +3240,11 @@ func exportProfile(args []string) error {
 	case 2:
 		name, dest = line.words[0], line.words[1]
 	default:
-		return fmt.Errorf("export takes an agent and at most one destination, not %q",
+		return usagef("export takes an agent and at most one destination, not %q",
 			line.words[2])
 	}
 	if name == "" {
-		return errors.New("export needs an agent, for example `brig agent export claude-code`")
+		return usagef("export needs an agent, for example `brig agent export claude-code`")
 	}
 	return renderProfile(name, dest, line.asJSON, line.force)
 }

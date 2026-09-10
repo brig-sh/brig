@@ -77,14 +77,14 @@ func importSecrets(out io.Writer, args []string) error {
 	}
 	if o.command {
 		if o.fromCommand == "" {
-			return errors.New("--from-command was given an empty command. Leave it out to read " +
+			return usagef("--from-command was given an empty command. Leave it out to read " +
 				"the sources the profile declares")
 		}
 		// A command supplies ONE secret's value, and nothing in the string says
 		// which. Guessing would store a credential under the wrong name, which
 		// is the one mistake here that is silent afterwards.
 		if len(o.names) != 1 {
-			return fmt.Errorf("--from-command fills one secret, so it needs one name: "+
+			return usagef("--from-command fills one secret, so it needs one name: "+
 				"`brig secret import %s <name> --from-command '...'`", p.Name)
 		}
 	}
@@ -562,7 +562,7 @@ func parseImport(args []string) (importOptions, error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return o, fmt.Errorf("%s (import takes --dry-run, --from-command and -y)", msg)
+			return o, usagef("%s (import takes --dry-run, --from-command and -y)", msg)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -572,7 +572,7 @@ func parseImport(args []string) (importOptions, error) {
 	}
 	o.command = seen(fs, "from-command")
 	if len(words) == 0 {
-		return o, errors.New("import needs a profile, for example " +
+		return o, usagef("import needs a profile, for example " +
 			"`brig secret import claude-code`")
 	}
 	o.profile, o.names = words[0], words[1:]

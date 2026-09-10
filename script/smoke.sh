@@ -1801,6 +1801,9 @@ echo "== exit codes =="
 # A usage mistake is 2, kept apart from the general failure it used to share.
 "$WORK/brig" run --nope claude > /dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] && ok "a usage error exits 2" || bad "a usage error exits 2 -- got $rc"
+# An unknown command is the mistake a wrapper script is likeliest to hit.
+"$WORK/brig" nosuchverb > /dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "an unknown command exits 2" || bad "an unknown command exits 2 -- got $rc"
 # A profile that does not exist is 3: "no such thing", not "it ran and failed".
 "$WORK/brig" run nosuchprofile > /dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] && ok "an unknown profile exits 3" || bad "an unknown profile exits 3 -- got $rc"

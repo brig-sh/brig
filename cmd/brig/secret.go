@@ -38,7 +38,7 @@ var openStore = secret.Open
 // on the store instead, which is the one thing these tests are not about.
 func secretCmd(out io.Writer, args []string) error {
 	if len(args) == 0 {
-		return errors.New("secret needs a subcommand: create, read, update, delete, ls or import")
+		return usagef("secret needs a subcommand: create, read, update, delete, ls or import")
 	}
 	var err error
 	switch args[0] {
@@ -69,7 +69,7 @@ func secretCmd(out io.Writer, args []string) error {
 	case "import":
 		err = importSecrets(out, args[1:])
 	default:
-		return fmt.Errorf("unknown secret subcommand %q (create, read, update, delete, ls, import)", args[0])
+		return usagef("unknown secret subcommand %q (create, read, update, delete, ls, import)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how the
 	// flag package says it. Asking for help is not a mistake, so it is answered
@@ -237,9 +237,9 @@ func listSecrets(out io.Writer, args []string) error {
 		case isHelp(a):
 			return flag.ErrHelp
 		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("ls takes no flags other than --json, so it has no use for %s", a)
+			return usagef("ls takes no flags other than --json, so it has no use for %s", a)
 		default:
-			return fmt.Errorf("ls lists every secret and takes no name. For one secret's "+
+			return usagef("ls lists every secret and takes no name. For one secret's "+
 				"value: `brig secret read %s`", a)
 		}
 	}
@@ -409,7 +409,7 @@ func nameAndYes(verb, example string, args []string) (name string, yes bool, err
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return "", false, fmt.Errorf("%s (%s takes -y)", msg, verb)
+			return "", false, usagef("%s (%s takes -y)", msg, verb)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -419,11 +419,11 @@ func nameAndYes(verb, example string, args []string) (name string, yes bool, err
 	}
 	switch len(words) {
 	case 0:
-		return "", false, fmt.Errorf("%s needs a name, for example `%s`", verb, example)
+		return "", false, usagef("%s needs a name, for example `%s`", verb, example)
 	case 1:
 		name = words[0]
 	default:
-		return "", false, fmt.Errorf("%s takes one name, not %q", verb, words[1])
+		return "", false, usagef("%s takes one name, not %q", verb, words[1])
 	}
 	return name, yes, nil
 }
@@ -433,7 +433,7 @@ func nameAndYes(verb, example string, args []string) (name string, yes bool, err
 // worth storing.
 func onlyName(args []string, verb string) (string, error) {
 	if len(args) == 0 {
-		return "", fmt.Errorf("%s needs a name, for example `brig secret %s gh-token`", verb, verb)
+		return "", usagef("%s needs a name, for example `brig secret %s gh-token`", verb, verb)
 	}
 	// Ahead of the count, so `read -f key.pem` is reported as the flag it is
 	// rather than as two names. Checked at all because otherwise a flag
@@ -444,12 +444,12 @@ func onlyName(args []string, verb string) (string, error) {
 			return "", flag.ErrHelp
 		}
 		if strings.HasPrefix(a, "-") {
-			return "", fmt.Errorf("%s takes no flags, so it has no use for %s. "+
+			return "", usagef("%s takes no flags, so it has no use for %s. "+
 				"It takes a name: `brig secret %s gh-token`", verb, a, verb)
 		}
 	}
 	if len(args) > 1 {
-		return "", fmt.Errorf("%s takes one name, not %q", verb, args[1])
+		return "", usagef("%s takes one name, not %q", verb, args[1])
 	}
 	return args[0], nil
 }
@@ -484,7 +484,7 @@ func nameAndFile(args []string, verb string) (name, file string, err error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return "", "", fmt.Errorf("%s (%s takes -f and --stdin)", msg, verb)
+			return "", "", usagef("%s (%s takes -f and --stdin)", msg, verb)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -494,24 +494,24 @@ func nameAndFile(args []string, verb string) (name, file string, err error) {
 	}
 	switch len(words) {
 	case 0:
-		return "", "", fmt.Errorf("%s needs a name, for example `brig secret %s gh-token`", verb, verb)
+		return "", "", usagef("%s needs a name, for example `brig secret %s gh-token`", verb, verb)
 	case 1:
 		name = words[0]
 	default:
-		return "", "", fmt.Errorf("%s takes one name, not %q", verb, words[1])
+		return "", "", usagef("%s takes one name, not %q", verb, words[1])
 	}
 	// An empty -f is not the same line as no -f at all, which is what seen
 	// distinguishes. `-f "$KEYFILE"` with the variable unset is how it gets
 	// typed, and falling through to stdin there stores whatever the script had
 	// on it under the name and reports success.
 	if seen(fs, "f", "file") && file == "" {
-		return "", "", errors.New("-f was given an empty path. Leave it out to read stdin, " +
+		return "", "", usagef("-f was given an empty path. Leave it out to read stdin, " +
 			"or pass `-f -` to say so")
 	}
 	// Two sources named at once is a line whose meaning cannot be guessed, and
 	// guessing it would silently store the wrong one of them.
 	if stdin && file != "" && file != "-" {
-		return "", "", errors.New("--stdin and -f name two different sources; pass one")
+		return "", "", usagef("--stdin and -f name two different sources; pass one")
 	}
 	return name, file, nil
 }
