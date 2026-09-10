@@ -91,10 +91,18 @@ it, in order.
   quotes a version number.
 
   This grep exists because a version quoted in a comment survives copy-paste.
-  As of `0.1.0-rc18`, `install.sh`'s own `BRIG_VERSION` example still named
+  Through `0.1.0-rc18`, `install.sh`'s own `BRIG_VERSION` example still named
   the previous release, `rc17`: the exact staleness this step is meant to
-  catch. Run the grep everywhere a version might hide, not just where you
-  expect one.
+  catch. That example now names no tag at all, which removes it from this
+  grep's work rather than relying on the grep to find it. Run the grep
+  everywhere a version might hide, not just where you expect one.
+
+- `install.sh` pins `cosign` by version **and** by SHA-256, one hash per
+  platform. That pin is deliberate -- cosign's own release cannot be verified
+  without cosign, so the hash in this repository is the trust root -- and it is
+  the one version here that no release of ours moves. Bump the version and all
+  three hashes together, from `cosign_checksums.txt` on the upstream release,
+  and never one without the others.
 
 ## Check before you walk away
 
