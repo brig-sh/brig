@@ -152,3 +152,180 @@ func TestAgentAcceptsTheRightNumberOfArguments(t *testing.T) {
 		}
 	}
 }
+
+// The policy listing and brig version read their verb and stopped there, so a
+// trailing word was dropped and the command still exited 0 -- and a reader who
+// typed `brig policy ls --help` got the listing, not help, with a status that
+// said it worked.
+//
+// The table is over every spelling that reaches listPolicies, not just the two
+// in the report: `brig policy list` and the top-level `brig policies` are the
+// same listing behind a retired word, and a retired word that quietly drops the
+// tail is still a word that drops the tail.
+//
+// --help is not in this table. Asking for help is not a stray word, and the
+// group answers it with the group's usage and exit 0 -- see
+// TestPolicyListingAnswersHelpLikeTheRestOfTheGroup.
+func TestPolicyListingAndVersionRefuseAWordTooMany(t *testing.T) {
+	for _, c := range []struct {
+		args  []string
+		names string // the command the refusal must name
+	}{
+		{[]string{"policy", "ls", "extra"}, "brig policy ls"},
+		// The retired spellings refuse in the current verb's words, which is
+		// where their notice has just sent the reader.
+		{[]string{"policy", "list", "extra"}, "brig policy ls"},
+		{[]string{"policies", "extra"}, "brig policy ls"},
+		{[]string{"version", "extra"}, "brig version"},
+		{[]string{"--version", "extra"}, "brig --version"},
+	} {
+		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+		typed := strings.Join(c.args, " ")
+		var err error
+		// Through captureStderr as well, so a retired spelling's notice does
+		// not land in the test's own output.
+		captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(c.args) })
+		})
+		if err == nil {
+			t.Errorf("brig %s dropped the trailing word instead of refusing it", typed)
+			continue
+		}
+		if got := exitCode(err); got != 2 {
+			t.Errorf("brig %s exits %d, want 2 (the usage class)", typed, got)
+		}
+		stray := c.args[len(c.args)-1]
+		if !strings.Contains(err.Error(), `"`+stray+`"`) {
+			t.Errorf("brig %s does not name the stray word: %v", typed, err)
+		}
+		if !strings.Contains(err.Error(), "unexpected argument") ||
+			!strings.Contains(err.Error(), "`"+c.names+"`") {
+			t.Errorf("brig %s does not refuse in %s's words: %v", typed, c.names, err)
+		}
+	}
+}
+
+// Nothing is printed before the refusal. The bug was not only the exit code:
+// the listing had already run, so a reader saw output that looked like an
+// answer to what they typed.
+func TestPolicyListingRefusesBeforeItPrints(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	out, err := captureStdout(t, func() error { return run([]string{"policy", "ls", "extra"}) })
+	if err == nil {
+		t.Fatal("brig policy ls extra was accepted")
+	}
+	if out != "" {
+		t.Errorf("brig policy ls extra printed the listing before refusing:\n%s", out)
+	}
+}
+
+// The retired spellings still say which word replaces them. Both halves matter:
+// a spelling that stopped refusing would drop the tail again, and one that
+// stopped notifying would never teach the reader the current word.
+func TestRetiredPolicyListingSpellingsRefuseTailAndStillNotify(t *testing.T) {
+	for _, c := range []struct {
+		args   []string
+		notice string
+	}{
+		{[]string{"policy", "list", "extra"}, "brig policy list"},
+		{[]string{"policies", "extra"}, "brig policies"},
+	} {
+		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+		typed := strings.Join(c.args, " ")
+		var err error
+		notice := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(c.args) })
+		})
+		if err == nil {
+			t.Errorf("brig %s was accepted", typed)
+			continue
+		}
+		if !strings.Contains(notice, c.notice) || !strings.Contains(notice, "brig policy ls") {
+			t.Errorf("brig %s printed no deprecation notice:\n%s", typed, notice)
+		}
+	}
+}
+
+// The other side of the change: the right number of operands still works and
+// still exits 0. A refusal one word too early would be as much a bug as the
+// drop it replaces.
+func TestPolicyListingAndVersionStillAcceptNoArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"policy", "ls"},
+		{"policy", "list"},
+		{"policies"},
+		{"version"},
+		{"--version"},
+	} {
+		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+		var err error
+		captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		if err != nil {
+			t.Errorf("brig %s was refused: %v", strings.Join(args, " "), err)
+		}
+	}
+}
+
+// The other half of the report's --help complaint. `brig policy ls --help`
+// printed the listing, which is not help, and exited 0 saying it worked; a
+// usage error would not have been help either. policyCmd already translates a
+// verb's flag.ErrHelp into the group's usage and exit 0 -- policy.go says so
+// where it does it -- and ls is not an exception to that, so it is asserted
+// against a sibling rather than in isolation: whatever `brig policy show
+// --help` answers, ls and both retired spellings answer the same.
+func TestPolicyListingAnswersHelpLikeTheRestOfTheGroup(t *testing.T) {
+	for _, args := range [][]string{
+		{"policy", "ls", "--help"},
+		{"policy", "ls", "-h"},
+		{"policy", "list", "--help"},
+		{"policies", "--help"},
+	} {
+		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+		typed := strings.Join(args, " ")
+		var err error
+		var out string
+		captureStderr(t, func() {
+			out, err = captureStdout(t, func() error { return run(args) })
+		})
+		if err != nil {
+			t.Errorf("brig %s was refused instead of answered with help: %v", typed, err)
+			continue
+		}
+		if !strings.Contains(out, "brig policy -- manage egress policies") {
+			t.Errorf("brig %s did not print the policy usage:\n%s", typed, out)
+		}
+		// The listing is what it used to print instead of help. Nothing of it
+		// may survive alongside the usage.
+		if strings.Contains(out, "no policies yet") {
+			t.Errorf("brig %s printed the listing as well as the help:\n%s", typed, out)
+		}
+	}
+}
+
+// The sibling the rule is borrowed from, so a change that stopped translating
+// flag.ErrHelp for the group would fail here rather than only where ls asserts
+// it.
+func TestPolicySiblingsStillAnswerHelp(t *testing.T) {
+	for _, verb := range []string{"show", "create", "rm", "attach"} {
+		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+		var err error
+		var out string
+		captureStderr(t, func() {
+			out, err = captureStdout(t, func() error { return run([]string{"policy", verb, "--help"}) })
+		})
+		if err != nil {
+			t.Errorf("brig policy %s --help was refused: %v", verb, err)
+		}
+		if !strings.Contains(out, "brig policy -- manage egress policies") {
+			t.Errorf("brig policy %s --help did not print the policy usage:\n%s", verb, out)
+		}
+	}
+}

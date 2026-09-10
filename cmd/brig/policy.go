@@ -44,6 +44,35 @@ attach binds it to a profile's every run, or -- with -n -- to one session;
 a profile's own inline policy: field does the same without a separate attach.
 `
 
+// rejectPolicyTail refuses a word the policy listing has no place for, rather
+// than dropping it the way it used to: the listing printed and the command
+// exited 0, so a stray word was answered as if it were a command.
+//
+// Asking for help is not one of those words. Every other verb in the group
+// answers --help with the group's usage and an exit code of zero -- that is
+// the flag.ErrHelp translation at the foot of policyCmd, and the reason the
+// report calls the old `brig policy ls --help` wrong is that it printed
+// something that was not help, which a usage error would still be. So a help
+// token comes back as flag.ErrHelp and is answered there, with the same words
+// `brig policy show --help` gets, and only a real stray word is refused.
+//
+// listPolicies stays a printer -- it takes no operands and no flags, and the
+// tests call it as one -- so the check sits at the spellings that reach it
+// instead: ls and the retired list, with the retired top-level policies
+// routed onto ls so it inherits both answers. They refuse in `brig policy
+// ls`'s words, as the retired agent spellings do in `brig agent ls`'s: a
+// notice has just sent the reader to that verb, so the error they hear next
+// is the one that names it.
+func rejectPolicyTail(tail []string) error {
+	if len(tail) == 0 {
+		return nil
+	}
+	if isHelp(tail[0]) {
+		return flag.ErrHelp
+	}
+	return usagef("unexpected argument %q; `brig policy ls` takes no arguments", tail[0])
+}
+
 // policyCmd groups the policy verbs.
 func policyCmd(args []string) error {
 	if len(args) == 0 {
@@ -54,13 +83,20 @@ func policyCmd(args []string) error {
 	case "--help", "-h", "help":
 		fmt.Print(policyUsage)
 		return nil
+	// The assignment falls through to the flag.ErrHelp translation below
+	// rather than returning here, so --help is answered the way the rest of
+	// the group answers it.
 	case "ls":
-		err = listPolicies()
+		if err = rejectPolicyTail(args[1:]); err == nil {
+			err = listPolicies()
+		}
 	// list was never in the help text, so it was found by accident and then
 	// scripted. Kept for one release, saying which spelling to keep.
 	case "list":
 		deprecated("brig policy list", "brig policy ls")
-		err = listPolicies()
+		if err = rejectPolicyTail(args[1:]); err == nil {
+			err = listPolicies()
+		}
 	case "create":
 		err = createPolicy(args[1:])
 	case "edit":
