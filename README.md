@@ -59,8 +59,10 @@ macOS 15. On macOS 14 brig refuses the run and names `BRIG_HYPERVISOR=vz` as
 the way past it. macOS 26 is what the project tests on.
 
 `cosign` is optional. Without it brig cannot check a guest image signature and
-says so on every boot. Full instructions, including Linux and building from
-source, are in [docs/install.md](docs/install.md).
+says so on every boot. Both install paths bring it: the cask depends on it, and
+`install.sh` installs it when there is none on `PATH`. Full instructions,
+including Linux and building from source, are in
+[docs/install.md](docs/install.md).
 
 ## Quickstart
 
@@ -74,7 +76,8 @@ brew install --cask brig
 
 The cask brings [hull](https://github.com/brig-sh/hull) with it. During the
 `0.1.0-rc` series the casks are maintained by hand, so if the tap lags the
-newest release, use [install.sh](docs/install.md#installsh) instead.
+newest release, use [install.sh](docs/install.md#installsh) instead: it
+installs hull and cosign too, so it leaves you with the same working host.
 
 Check what brig found on your host:
 

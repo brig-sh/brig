@@ -39,47 +39,95 @@ outright, use [install.sh](#installsh) instead. Or read `Casks/brig.rb` and
 
 ## install.sh
 
-Outcome: the `brig` and `brigd` binaries installed directly, without
-Homebrew.
+Outcome: a working install without Homebrew. `brig` and `brigd` on macOS and
+Linux, `hull` and its two runners on macOS, and `cosign` on both.
 
-Prerequisites: `curl` and `tar` on `PATH`.
+Prerequisites: `curl`, `tar`, and either `sha256sum` or `shasum` on `PATH`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sh
 ```
 
 This downloads the newest release for your OS and architecture. There is no
-stable release yet, so that includes prereleases. It checks the archive
-against the published `checksums.txt` with `sha256sum` or `shasum`, then
-installs `brig` and `brigd` into `BRIG_INSTALL_DIR` or `/usr/local/bin`. It
-uses `sudo` when that directory is not writable.
+stable release yet, so that includes prereleases. Everything it fetches is
+checked against a SHA-256 before it is installed, and the destination is
+`BRIG_INSTALL_DIR` or `/usr/local/bin`. It uses `sudo` when that directory is
+not writable.
 
-CAUTION: on a host with neither `sha256sum` nor `shasum` on `PATH`, the
-checksum check is skipped and the install proceeds anyway. If you want the
-check enforced rather than skipped, install `sha256sum` or `shasum` first.
+A host with neither `sha256sum` nor `shasum` stops the install. A checksum step
+that quietly downgrades to no check is the one outcome it exists to prevent, so
+this is a refusal rather than a warning.
 
-`install.sh` does not check the cosign signature on `checksums.txt`. That
-check needs cosign, which `install.sh` does not require you to have. See
-[Verifying a downloaded release with cosign](#verifying-a-downloaded-release-with-cosign)
-below to check it yourself.
+An Intel Mac is refused before anything is written. brig itself publishes a
+`darwin/amd64` archive, but `hull` drives Virtualization.framework on Apple
+silicon and has never published an `amd64` build, so there would be no runtime
+to drive. See [support.md](support.md).
 
-Two variables change what it does:
+### What it installs on macOS
+
+`hull` comes from its own release, as the `hull-<version>-arm64.tar.gz`
+archive: the same one the Homebrew cask uses. It holds three executables, and
+all three go into the same directory, because `hull` discovers a runner next to
+its own executable:
+
+| Executable | What it is |
+| --- | --- |
+| `hull` | the CLI brig drives |
+| `vz-runner` | the Virtualization.framework backend |
+| `hvi` | the Hypervisor.framework backend |
+
+`hull.dmg` on the same release page holds the same three binaries in an app
+bundle, for dragging to Applications by hand. `install.sh` does not use it.
+
+### What it installs on both
+
+`cosign` is what verifies the kernel, initrd and guest agent every sandbox
+boots, and the container image behind an agent. Without it on `PATH` those
+checks report "no tooling", which under the default mode is not a refusal: the
+boot assets are fetched, written and booted with a printed warning. Installing
+it is what makes `HULL_VERIFY=require` and `BRIG_VERIFY=require` usable on a
+host without Homebrew.
+
+Two things to know about it. It is a 130 MB download, by far the largest thing
+here. And its macOS build is ad-hoc signed upstream, so Gatekeeper rejects it
+on its own -- unlike everything else `install.sh` places, which is Developer ID
+signed and notarized. It runs because a `curl` download carries no quarantine
+attribute. `install.sh` prints this rather than leaving you to find it.
+
+`install.sh` skips `cosign` entirely when one is already on `PATH`.
+
+Unlike the brig and hull archives, whose checksums come from the release that
+carries them, cosign is pinned in `install.sh` by version *and* by hash. Its
+own release cannot be verified without cosign: upstream publishes Sigstore
+bundles and no detached signature, so there is nothing `openssl` can check.
+Writing the hash down moves the trust root to a reviewed file in this
+repository.
+
+### Settings
 
 ```bash
 BRIG_INSTALL_DIR=~/bin BRIG_VERSION=v0.1.0-rc18 sh install.sh
 ```
 
 - `BRIG_INSTALL_DIR` overrides the destination. Unset, it installs to
-  `/usr/local/bin`.
-- `BRIG_VERSION` pins a release rather than fetching the newest one.
+  `/usr/local/bin`. Put it on your `PATH`: `hull` finds `cosign` there, and a
+  destination that is not on `PATH` leaves the boot check reporting "no
+  tooling" even though the binary is installed. `install.sh` warns when this
+  is the case.
+- `BRIG_VERSION` pins a brig release rather than fetching the newest one.
+- `HULL_VERSION` does the same for hull. The two are versioned independently.
+- `BRIG_INSTALL_HULL=0` skips hull, and leaves macOS without a runtime.
+- `BRIG_INSTALL_COSIGN=0` skips cosign, and leaves the boot chain unverified.
+
+`install.sh` does not check the cosign signature on `checksums.txt`, even when
+it has just installed cosign: the archive is already verified by hash, and the
+signature is the stronger separate claim. See
+[Verifying a downloaded release with cosign](#verifying-a-downloaded-release-with-cosign)
+below to check it yourself.
 
 The archive also carries the shell completion scripts, under `completions/`.
 `install.sh` does not install them for you. See [completions.md](completions.md)
 for how.
-
-On macOS, if `hull` is not already on `PATH`, `install.sh` prints the Homebrew
-command to install it. It does not install `hull` itself, since Homebrew is
-the maintained path for a runtime that needs signing.
 
 ## Verifying a downloaded release with cosign
 
