@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brig-lockup-on-dark.svg">
-    <img alt="brig" src="assets/brig-lockup-on-light.svg" width="300">
+    <img alt="brig" src="assets/brig-lockup-on-light.svg" width="240">
   </picture>
 </p>
 
