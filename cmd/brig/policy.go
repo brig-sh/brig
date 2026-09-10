@@ -44,6 +44,22 @@ attach binds it to a profile's every run, or -- with -n -- to one session;
 a profile's own inline policy: field does the same without a separate attach.
 `
 
+// rejectPolicyTail refuses a word the policy listing has no place for, and
+// returns flag.ErrHelp for a help token so policyCmd's translation answers it
+// with the group's usage, the way `brig policy show --help` is answered.
+//
+// The check sits here, at the spellings that reach listPolicies, rather than
+// inside it: listPolicies stays a printer, taking no operands and no flags.
+func rejectPolicyTail(tail []string) error {
+	if len(tail) == 0 {
+		return nil
+	}
+	if isHelp(tail[0]) {
+		return flag.ErrHelp
+	}
+	return usagef("unexpected argument %q; `brig policy ls` takes no arguments", tail[0])
+}
+
 // policyCmd groups the policy verbs.
 func policyCmd(args []string) error {
 	if len(args) == 0 {
@@ -55,12 +71,16 @@ func policyCmd(args []string) error {
 		fmt.Print(policyUsage)
 		return nil
 	case "ls":
-		err = listPolicies()
+		if err = rejectPolicyTail(args[1:]); err == nil {
+			err = listPolicies()
+		}
 	// list was never in the help text, so it was found by accident and then
 	// scripted. Kept for one release, saying which spelling to keep.
 	case "list":
 		deprecated("brig policy list", "brig policy ls")
-		err = listPolicies()
+		if err = rejectPolicyTail(args[1:]); err == nil {
+			err = listPolicies()
+		}
 	case "create":
 		err = createPolicy(args[1:])
 	case "edit":

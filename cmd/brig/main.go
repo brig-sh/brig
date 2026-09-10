@@ -286,6 +286,12 @@ func dispatch(args []string) error {
 		fmt.Print(usage)
 		return nil
 	case "version", "--version":
+		// Named as the reader spelled it. Both spellings are current -- one is
+		// not a retirement of the other -- so there is no newer word to send
+		// them to, unlike the deprecated listings above.
+		if len(rest) > 0 {
+			return usagef("unexpected argument %q; `brig %s` takes no arguments", rest[0], verb)
+		}
 		fmt.Printf("brig %s\n", version)
 		return nil
 	case "agent":
@@ -316,7 +322,11 @@ func dispatch(args []string) error {
 		return deprecatedProfileCmd(rest)
 	case "policies":
 		deprecated("brig policies", "brig policy ls")
-		return listPolicies()
+		// Routed onto the verb the notice just named, the way
+		// deprecatedProfileCmd routes onto agentCmd, so the retired spelling
+		// answers a stray word and a --help exactly as `brig policy ls` does
+		// rather than keeping a second copy of either answer.
+		return policyCmd(append([]string{"ls"}, rest...))
 	case "import":
 		deprecated("brig import", "brig agent import")
 		return importProfile(rest)
