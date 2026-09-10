@@ -193,7 +193,9 @@ homebrew_casks:
       # repository.
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/brig-sh/brig
-    description: Run a coding agent in a sandbox, with the credentials it needs and none of the ones it does not
+    # Under 80 characters, which is what `brew style` enforces (Cask/Desc)
+    # and the one offence in a generated cask that it cannot autocorrect.
+    description: Run a coding agent in a microVM sandbox with only the credentials it needs
     # Paths inside the archive above. brew puts each one where its shell reads
     # completions from, so a cask install has completion without a second step
     # -- which is the whole point of the closed flag sets: they only help a
@@ -209,9 +211,9 @@ homebrew_casks:
       # The microVM runtime brig drives on macOS. It lives in the same public
       # tap as this cask, so `brew install --cask brig` brings it along.
       #
-      # Both casks land in the tap on their first stable release: brig's from
-      # this config, hull's from its own sign-and-notarize workflow. Until
-      # then neither is published, so nothing here is half-wired.
+      # Both casks land in the tap on their first stable release, each from
+      # its own .goreleaser.yaml. Until then the tap carries hand-written
+      # ones, pinned to the newest release candidate.
       - cask: brig-sh/brig/hull
     # auto: never on a prerelease. An rc should not move what `brew upgrade`
     # follows.
