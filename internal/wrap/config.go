@@ -402,7 +402,12 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// reader told "shared" while brig had quietly given the sandbox a network
 	// of its own would be reading a row that is not true. Isolated is stricter
 	// than shared, never looser, so this only ever narrows what was asked for.
-	egress, policies, err := policy.Resolve(t, rawName, policy.Dir())
+	//
+	// Under the slug, the identity vmName and workspace are built from and the
+	// index keys on. It differs from the raw name only when --name sanitised
+	// something, which is the one spelling `attach -n` refuses, so the raw name
+	// could match no row attach had written.
+	egress, policies, err := policy.Resolve(t, slug, policy.Dir())
 	if err != nil && strictErr == nil {
 		strictErr = err
 	}

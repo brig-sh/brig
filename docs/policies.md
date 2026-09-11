@@ -336,25 +336,28 @@ naming the slug it must become. This is stricter than the retired
 <!-- retired-ok -->`brig run --name`, which sanitizes a name and reports the
 directory it landed on.
 
-That difference matters when a session started with `--name` picks up its
-policy. The `<agent>@<label>` ref form is unaffected. `ParseRef` refuses
-any label that is not already slug-clean, so `claude@refactor` can only
-ever reach a session whose stored name is `refactor`. That matches what
-`attach -n refactor` requires.
+The difference is in what you are allowed to type, not in what you get.
+`ParseRef` applies the same slug rule to the `<agent>@<label>` form:
+`claude@refactor` is accepted and `claude@Refactor` is refused, so a ref
+can only ever name a session whose stored name is `refactor`.
 
-A session opened with `brig run claude --name Refactor` <!-- retired-ok --> is
-a different case. `brig run` accepts and sanitizes `Refactor` to the slug `refactor`
-for the sandbox itself. But the policy binding is looked up under the name
-exactly as typed, `Refactor`, not the slug. Because `attach -n` never
-accepts anything but a slug, no attachment is ever filed under `Refactor`.
-That session's policy lookup never finds one, even after `brig policy
-attach locked-down claude-code -n refactor`.
+A session opened with `brig run claude --name Refactor` <!-- retired-ok -->
+reaches the same policy. `brig run` sanitizes `Refactor` to the slug
+`refactor` for the sandbox and the workspace, and the policy is looked up
+under that slug too, so `brig policy attach locked-down claude-code -n
+refactor` covers the session whichever way it was named on the way in.
 
-Until this is fixed, scope any per-session policy claim to the `@` form.
-Use `claude@refactor` when you need a policy bound to one session, and
-attach it with `brig policy attach locked-down claude-code -n refactor`.
-Do not rely on `-n` matching a session opened with `--name` unless the name
-you passed to `--name` was already lowercase, slug-clean text.
+One identity, in other words. The slug names the sandbox and the
+workspace, keys the session index, and now selects the policy. Whether you
+typed `claude@refactor` or `--name Refactor`, you are in session
+`refactor` and you get `refactor`'s policy.
+
+One gap is left, and it is not about spelling. `attach -n` refuses a name
+that any reserved profile ends in, while a session is only refused one
+reserved for the agent it belongs to. So `claude@desktop` opens an
+ordinary session, but `brig policy attach locked-down claude-code -n
+desktop` is refused for colliding with `claude-desktop`. That session
+cannot be given a policy of its own.
 
 ## A worked example
 
