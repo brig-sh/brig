@@ -836,6 +836,19 @@ func parseCheckArgs(args []string) (profileName, session string, err error) {
 	return words[0], session, nil
 }
 
+// recordedUnder reads the session rows attached to p under exactly the key
+// given, with none of the slugging checkPolicy does on its way in. It is how
+// checkPolicy names a row that `brig policy ls` prints and no run can reach:
+// the listing's own spelling has to stay answerable, and reading the record
+// raw is what answers it.
+func recordedUnder(p profile.Profile, key string) ([]string, error) {
+	a, err := policy.LoadAttachments(policy.Dir())
+	if err != nil {
+		return nil, err
+	}
+	return a.Sessions[p.Name][key], nil
+}
+
 // checkPolicy reports the policies effectively bound to a run of profile,
 // or -- with -n -- to one of its sessions, and whether brig can enforce
 // anything against it at all.
@@ -848,7 +861,7 @@ func parseCheckArgs(args []string) (profileName, session string, err error) {
 // CheckCoverage's refusal of a kind: shell/kind: gui profile, which no
 // policy can bind regardless of what it says.
 func checkPolicy(args []string) error {
-	profileName, session, err := parseCheckArgs(args)
+	profileName, sessionName, err := parseCheckArgs(args)
 	if err != nil {
 		return err
 	}
@@ -856,9 +869,39 @@ func checkPolicy(args []string) error {
 	if !ok {
 		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
 	}
-	names, err := policy.EffectivePolicies(p, session, policy.Dir())
+	// -n names a session, and a session is its slug: the key a run looks its
+	// own rules up under (see internal/wrap/config.go), and the only
+	// spelling `attach -n` will write. Slugging here is what makes this
+	// command answer about the session a run would start rather than about
+	// the word typed, so what it reports and what a boot applies are the
+	// same thing.
+	//
+	// The spelling handed in stays lenient, which `attach -n` is not. A key
+	// that is not a slug can be in the record from a hand edit or an earlier
+	// build, `brig policy ls` prints it, and a binding the listing names has
+	// to be one something can inspect and remove. Such a row is reported
+	// beside the answer and named as one no run reaches, rather than left to
+	// read as rules in force.
+	slug := session.Slug(sessionName)
+	names, err := policy.EffectivePolicies(p, slug, policy.Dir())
 	if err != nil {
 		return err
+	}
+	if sessionName != "" && slug != sessionName {
+		stray, err := recordedUnder(p, sessionName)
+		if err != nil {
+			return err
+		}
+		if len(stray) > 0 {
+			for _, name := range stray {
+				if !slices.Contains(names, name) {
+					names = append(names, name)
+				}
+			}
+			warnf("%s is recorded under %q, which no run reaches: a session named %q "+
+				"starts %q. Remove it with `brig policy detach <policy> %s -n %q`",
+				strings.Join(stray, ", "), sessionName, sessionName, slug, p.Name, sessionName)
+		}
 	}
 	entries, err := loadPolicies(policy.Dir())
 	if err != nil {
