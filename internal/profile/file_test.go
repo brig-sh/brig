@@ -50,15 +50,14 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 }
 
-// hostCredential: is deprecated and no built-in carries it any more, but a
-// user's own file may -- for one more release -- and export/import is how such
-// a file is edited. A round trip that silently dropped the block would
-// un-authenticate a working profile, so it is checked against a fixture rather
-// than against a shipped spec that no longer has one.
-func TestHostCredentialSurvivesARoundTrip(t *testing.T) {
-	reset(t)
-	dir := t.TempDir()
-	original, err := Parse([]byte(`name: mytool
+// hostCredential: is removed, and a file that still carries it is refused
+// rather than parsed with the block ignored. Ignoring it would boot a sandbox
+// without the login its owner believes they configured, and the only symptom
+// would be the guest asking them to authenticate. The error names both the key
+// and the command that replaces it, so the reader is one edit from a working
+// profile.
+func TestHostCredentialIsRefusedAndNamesTheReplacement(t *testing.T) {
+	_, err := Parse([]byte(`name: mytool
 image: i
 guestHome: /home/x
 binary: x
@@ -69,20 +68,13 @@ hostCredential:
   tokenField: accessToken
   targetVar: MYTOOL_TOKEN
 `))
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("a profile carrying hostCredential: parsed")
 	}
-	blob, err := Export(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	back, _, err := Import(blob, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if back.HostCredential == nil ||
-		back.HostCredential.TargetVar != original.HostCredential.TargetVar {
-		t.Errorf("the host credential block did not survive: %+v", back.HostCredential)
+	for _, want := range []string{"hostCredential:", "removed", "brig secret import mytool"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not carry %q: %v", want, err)
+		}
 	}
 }
 

@@ -28,22 +28,62 @@ func TestTheRunPathCannotReachTheImporter(t *testing.T) {
 	// why the file-level check below takes over that half of the guarantee. It
 	// is the weaker of the two and it is the strongest available.
 	//
-	// Note what this still does not prove. Until the next release removes
-	// creds.ReadHost, a run DOES read another application's keychain when the
-	// profile declares hostCredential:, so the guarantee is "no NEW host source
-	// reaches the run path", not yet "a run reads no host source". Say so in
-	// the PR body rather than letting the test's name overclaim.
-	for _, pkg := range []string{
-		"github.com/brig-sh/brig/internal/wrap",
-		"github.com/brig-sh/brig/internal/creds",
-		"github.com/brig-sh/brig/cmd/brigd",
-	} {
+	// This proves only that the run path cannot reach the importer. The claim
+	// itself, that a run reads no host source, is TestTheRunPathReadsNoKeychain
+	// below: the keychain was read through a second door, creds.ReadHost behind
+	// the profile's hostCredential: field, which never touched this package.
+	for _, pkg := range runPathPackages {
 		out, err := exec.Command("go", "list", "-deps", pkg).Output()
 		if err != nil {
 			t.Fatalf("go list -deps %s: %v", pkg, err)
 		}
 		if strings.Contains(string(out), "brig/internal/hostsrc") {
 			t.Errorf("%s depends on internal/hostsrc: a run can now reach a host source", pkg)
+		}
+	}
+}
+
+// runPathPackages are the packages a run is built from. cmd/brig is not among
+// them: `brig secret import` is wired there, so it necessarily links the
+// importer, and the file-level tests below take over its half of the guarantee.
+var runPathPackages = []string{
+	"github.com/brig-sh/brig/internal/wrap",
+	"github.com/brig-sh/brig/internal/creds",
+	"github.com/brig-sh/brig/cmd/brigd",
+}
+
+// A run reads no host source. The dependency test above cannot say so on its
+// own: hostCredential: used to read the macOS keychain through a `security`
+// call inside internal/creds, a package the run path is allowed to link, so a
+// second door stood open with the first one shut. The field is removed, and
+// this pins the removal: no non-test source in a run-path package names the
+// keychain tool. The importer is where that call belongs, and internal/secret
+// -- brig's own store -- is the one keychain a run may open.
+func TestTheRunPathReadsNoKeychain(t *testing.T) {
+	for _, pkg := range runPathPackages {
+		out, err := exec.Command("go", "list", "-f", "{{.Dir}}", pkg).Output()
+		if err != nil {
+			t.Fatalf("go list %s: %v", pkg, err)
+		}
+		dir := strings.TrimSpace(string(out))
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			blob, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, marker := range []string{"find-generic-password", "/usr/bin/security"} {
+				if strings.Contains(string(blob), marker) {
+					t.Errorf("%s/%s names %q: a run reads a host keychain", pkg, name, marker)
+				}
+			}
 		}
 	}
 }

@@ -680,14 +680,13 @@ because the profile is what you wrote.
 | --- | --- | --- |
 | `BRIG_ALLOW_REFS` | `0` | `1` forwards a value that still looks like an unresolved `scheme://` secret reference |
 | `BRIG_ALLOW_DENIED` | `0` | `1` forwards a variable on the agent's own billing denylist |
-| `BRIG_ALLOW_EXPIRED` | `0` | `1` forwards a host credential even though it reports as expired. Scoped to the deprecated `hostCredential:` field |
 | `BRIG_GIT_CONFIG` | `0` | `1` writes a credential helper and gitconfig into the guest, routing an SSH GitHub remote over HTTPS |
 | `BRIG_GIT_HOSTS` | `github.com` | space-separated hosts the forwarded token applies to |
 | `BRIG_GIT_USER` | resolved on the host | username paired with the forwarded token |
 | `BRIG_GIT_IDENTITY` | `1` | `0` stops brig from forwarding the host commit identity resolved from the invoking directory |
 | `BRIG_GIT_NAME`, `BRIG_GIT_EMAIL` | the host's `git config` | override that identity |
 | `BRIG_TRUST_WORKSPACE` | `1` | pre-answers the agent's own "do you trust this folder" question for the directory a run starts in |
-| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. Never applies to a value brig resolved itself, a secret or the host credential, which stay off the command line regardless |
+| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. Never applies to a value brig resolved itself, a stored secret, which stays off the command line regardless |
 
 [authentication.md](authentication.md) and [secrets.md](secrets.md) cover
 what each of these does with the credential once it is in the guest.

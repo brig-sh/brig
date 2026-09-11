@@ -116,6 +116,9 @@ func Read(path string) (Profile, error) {
 // would otherwise decode into nothing and silently forward no credentials,
 // which looks exactly like a broken sandbox.
 func Parse(blob []byte) (Profile, error) {
+	if err := refuseRemovedKeys(blob); err != nil {
+		return Profile{}, err
+	}
 	var p Profile
 	if err := yaml.UnmarshalStrict(blob, &p); err != nil {
 		return Profile{}, err
@@ -127,6 +130,41 @@ func Parse(blob []byte) (Profile, error) {
 		return Profile{}, err
 	}
 	return p, p.Validate()
+}
+
+// refuseRemovedKeys names a key that brig used to read and no longer does,
+// before the strict decoder reports it as a field it has never heard of.
+//
+// The strict decoder alone would refuse the file, but with a message about an
+// unknown field -- the same words a typo gets -- and no route to the current
+// spelling. A removed key deserves better: the reader wrote it because the
+// documentation told them to, and the error is the one place they will look
+// for what to write now.
+//
+// hostCredential: read another application's keychain item on every run, and
+// its replacement -- a secret with sources:, filled once by `brig secret
+// import` -- is where the removed behaviour went. The profile name is read out
+// of the same document so the command in the error can be pasted as it stands.
+func refuseRemovedKeys(blob []byte) error {
+	var keys struct {
+		Name           string `json:"name"`
+		HostCredential any    `json:"hostCredential"`
+	}
+	if err := yaml.Unmarshal(blob, &keys); err != nil {
+		// Not this check's error to report: the strict decode that follows
+		// says what is wrong with the document.
+		return nil
+	}
+	if keys.HostCredential != nil {
+		name := keys.Name
+		if name == "" {
+			name = "<profile>"
+		}
+		return fmt.Errorf("hostCredential: has been removed. It read the host keychain on "+
+			"every run; declare the credential under secrets: with sources: instead, "+
+			"then store it once: brig secret import %s", name)
+	}
+	return nil
 }
 
 // Validate checks a profile is usable and safe.

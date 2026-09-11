@@ -176,7 +176,7 @@ with the same parser and neither has to guess.
 | `genericBoot` | no | The image was never built to be a guest -- a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See below |
 | `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the workspace, and only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both fields are required together, and only `claude-code` declares them, so `--skills` does nothing on the other seven: see [What this costs](#what-this-costs) below |
 | `onboarding` | no | A first-run state file to seed. See below |
-| `hostCredential` | no | **Deprecated, removed next release**, see [migration.md](migration.md#profile-keys). A credential read from the host keychain on every run when the environment carries none. Replaced by `secrets` with `sources`, filled once by `brig secret import`. See below |
+| `hostCredential` | no | **Removed**, see [migration.md](migration.md#profile-keys). A file that carries it is refused. It read a credential from the host keychain on every run; `secrets` with `sources`, filled once by `brig secret import`, replaces it. See below |
 | `reserved` | no | Marks a profile that owns the workspace a session name could otherwise slug onto. See below |
 | `unpublished` | no | We ship the profile but not an image for it. `brig run` says so and stops, rather than letting the pull fail against the registry with a 404 that reads like an outage. Pass `--image` with one you built, and `brig agent ls` marks it. `cursor` is the one that carries it |
 | `policy` | no | Names of policies attached to this profile inline: every run carries all of them, unioned with whatever is attached separately by name |
@@ -591,8 +591,7 @@ agent); the verb is not.
 
 `brig info <profile>` reports what the guest would be handed, by name --
 never a value, on any path. A variable sourced from the secret store is
-annotated `(secret)`; one from the deprecated `hostCredential:` is annotated
-`(host)`; an ambient or literal one is reported bare. No test pins the exact
+annotated `(secret)`; an ambient or literal one is reported bare. No test pins the exact
 wording, so treat this as the shape rather than a literal transcript:
 
 ```console
@@ -619,7 +618,7 @@ preview that quietly skips what it cannot resolve.
 `BRIG_ENV_ARGV=1` still puts an ordinary forwarded variable on the runtime's
 own command line, for a runtime build that will not take a bare `--env KEY`.
 It is deliberately inert for a value brig resolved on your behalf -- one bound
-from the secret store, and the host credential too: the host durably logs
+from the secret store: the host durably logs
 every exec's argv, and a debugging escape hatch is not worth turning into a
 credential leak. So on a runtime build that needs the hatch, the credential
 does not arrive at all rather than arriving in the log; that is the intended
@@ -684,13 +683,14 @@ that records trust per directory. brig sets it for the directory each run
 starts in, resolved to the git repository root as the guest sees it. Nothing
 is ever seeded that contains a credential.
 
-## `hostCredential`, deprecated
+## `hostCredential`, removed
 
-**Removed in the next release.** No built-in profile carries it any more, and
-brig warns when a profile file does.
+**Removed.** A profile file that still carries it is refused at load, and the
+error names the replacement below. No built-in profile had carried it for
+several releases before that.
 
 ```yaml
-hostCredential:                                  # deprecated
+hostCredential:                                  # removed: brig refuses the file
   keychainService: Claude Code-credentials
   tokenField: accessToken
   expiryField: expiresAt
@@ -700,8 +700,8 @@ hostCredential:                                  # deprecated
 
 It read another application's keychain item on **every run**, whenever the
 environment carried no value for `targetVar`, and forwarded what it found as an
-environment variable. That is the automatic host read this release retires: a
-run should not reach a credential store you did not point it at.
+environment variable. That is the automatic host read brig no longer performs:
+a run should not reach a credential store you did not point it at.
 
 Say the same thing with a secret and a source instead, and fill it once:
 
@@ -726,8 +726,8 @@ brig secret import mytool
 
 The difference is when the host is read: at import, once, when you asked --
 rather than on every boot. `BRIG_CREDENTIALS_CMD`, which pointed the old
-machinery at any command printing equivalent JSON, is gone; brig refuses to
-start when it is set and names what replaces it,
+machinery at any command printing equivalent JSON, is gone the same way; brig
+refuses to start when it is set and names what replaces it,
 `brig secret import <profile> <name> --from-command '<command>'`.
 
 ## A worked example

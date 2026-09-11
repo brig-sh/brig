@@ -63,26 +63,6 @@ type Onboarding struct {
 	TrustKey [2]string `json:"trustKey,omitempty"`
 }
 
-// HostCredential describes a credential brig can resolve from the host when
-// the environment carries none, so a fresh sandbox works without anyone
-// minting a token by hand.
-//
-// The value is read fresh on every invocation and forwarded as environment
-// only. Nothing is written to the workspace, and a rotated credential is
-// picked up without restarting the VM.
-type HostCredential struct {
-	// KeychainService is the macOS keychain generic-password service name.
-	KeychainService string `json:"keychainService,omitempty"`
-	// TokenField and ExpiryField are keys in the credential JSON. The blob is
-	// searched recursively, so a nested envelope needs no path.
-	TokenField  string `json:"tokenField,omitempty"`
-	ExpiryField string `json:"expiryField,omitempty"`
-	// TargetVar is the guest environment variable the token is forwarded as.
-	TargetVar string `json:"targetVar,omitempty"`
-	// RenewHint is shown when the host credential has expired.
-	RenewHint string `json:"renewHint,omitempty"`
-}
-
 // Profile is one sandboxed workload, as data.
 type Profile struct {
 	// Name is the profile name, the community-images image name, and the
@@ -215,8 +195,6 @@ type Profile struct {
 	StaleCredentialFiles []string `json:"staleCredentialFiles,omitempty"`
 	// Onboarding is the first-run state file, if the agent has one.
 	Onboarding *Onboarding `json:"onboarding,omitempty"`
-	// HostCredential is the host-side fallback, if the agent has one.
-	HostCredential *HostCredential `json:"hostCredential,omitempty"`
 	// HostConfigDir is where the user's own agent configuration lives on the
 	// host, and ProjectPaths are the subdirectories of it worth handing to
 	// the guest. They are projected read-only under GuestHome at the same
@@ -291,10 +269,6 @@ func (p Profile) clone() Profile {
 		o := *p.Onboarding
 		o.Seed = maps.Clone(o.Seed)
 		p.Onboarding = &o
-	}
-	if p.HostCredential != nil {
-		h := *p.HostCredential
-		p.HostCredential = &h
 	}
 	return p
 }

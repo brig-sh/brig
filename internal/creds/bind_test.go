@@ -26,8 +26,8 @@ func TestBindResolvesBothNamespaces(t *testing.T) {
 	}
 }
 
-// A ref'd secret is annotated with its origin, the way the host credential
-// already reads as CLAUDE_CODE_OAUTH_TOKEN(host).
+// A ref'd secret is annotated with its origin, so a report can tell a stored
+// value from an ambient one by name alone.
 func TestBindAnnotatesOrigin(t *testing.T) {
 	p := profileWith(t, "secrets:\n  - gh\nenv:\n  - name: GH_TOKEN\n    ref: secrets.gh\n")
 	set := Bind(p, p.Env, map[string]string{"gh": "ghp_x"}, lookupFrom(nil), Options{})

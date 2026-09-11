@@ -271,8 +271,6 @@ func dispatch(args []string) error {
 	if hint := profile.LegacyHint(); hint != "" {
 		warnf("%s", hint)
 	}
-	warnDeprecatedProfileKeys()
-
 	// --json in the global position is refused here, before the verb runs, when
 	// the verb has no JSON form. The run-line spelling is refused later, where
 	// opts.json is known; this catches the canonical position. See
@@ -3071,35 +3069,6 @@ func warnf(format string, a ...any) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "brig: "+format+"\n", a...)
-}
-
-// warnDeprecatedProfileKeys says that a profile FILE still carries
-// hostCredential:, which reads another application's keychain on every run and
-// goes in the next release.
-//
-// Only for file-backed profiles, and that scoping is the whole point: no
-// built-in carries the key any more, so an unscoped check would have brig warn
-// about its own shipped spec on every command -- a warning the reader cannot
-// act on, which is how people learn to ignore the ones they can.
-//
-// Emitted here, beside LegacyHint, because this is where profiles are loaded
-// and it is the same class of thing: a file that still parses and no longer
-// means what it did. A run that never names the profile still hears it once,
-// which is right -- the file is what needs editing, not the run.
-func warnDeprecatedProfileKeys() {
-	for _, p := range profile.All() {
-		if p.HostCredential == nil || !profile.IsCustom(p.Name) {
-			continue
-		}
-		where := p.Name
-		if path, ok := profile.Path(p.Name); ok {
-			where = path
-		}
-		warnf("hostCredential: in %s is deprecated and goes in the "+
-			"next release -- it reads another application's keychain on every run. "+
-			"Declare the credential under secrets: with sources: instead, then: "+
-			"brig secret import %s", where, p.Name)
-	}
 }
 
 // isTerminal reports whether stdin is a tty, which decides whether the guest

@@ -112,7 +112,7 @@ type InfoProject struct {
 }
 
 // InfoCredential is one credential this run hands the guest: its name, and
-// where the value came from ("environment", "host", "secret" or "file"). Never
+// where the value came from ("environment", "secret" or "file"). Never
 // the value.
 type InfoCredential struct {
 	Name   string `json:"name"`
@@ -240,24 +240,10 @@ func (c *Config) infoGit() InfoGit {
 	return InfoGit{Enabled: true, User: c.GitUser, Hosts: c.GitHosts}
 }
 
-// infoGuestLogin is where the guest's login comes from, from the same two
-// sources status.go reads: the deprecated Profile.HostCredential, and imported
-// secrets' provenance. Both read without decrypting a value.
+// infoGuestLogin is where the guest's login comes from, read the way status.go
+// reads it: from imported secrets' provenance, without decrypting a value.
 func (c *Config) infoGuestLogin(set creds.Set) []InfoGuestLogin {
 	var out []InfoGuestLogin
-	if hc := c.Profile.HostCredential; hc != nil {
-		source, forwarded := sourceOf(credentialNames(set), hc.TargetVar)
-		switch {
-		case forwarded && source == "secret":
-			out = append(out, InfoGuestLogin{Name: hc.TargetVar, Source: "secret"})
-		case forwarded && source == "":
-			out = append(out, InfoGuestLogin{Name: hc.TargetVar, Source: "environment"})
-		case c.HostCred != nil && c.HostCred.Expired(nowMilli()):
-			out = append(out, InfoGuestLogin{Name: hc.TargetVar, Source: c.HostCred.Source, Expired: true})
-		case c.HostCred != nil:
-			out = append(out, InfoGuestLogin{Name: hc.TargetVar, Source: c.HostCred.Source})
-		}
-	}
 	if secrets, ok := c.listSecrets(); ok {
 		for _, decl := range c.Profile.Secrets {
 			s, found := secrets[decl.Name]

@@ -225,30 +225,8 @@ func TestBuildEnvBindsAResolvedSecret(t *testing.T) {
 	}
 }
 
-// The host credential is read out of a keychain too, so it gets the same argv
-// exemption a store secret gets. BRIG_ENV_ARGV is a debugging hatch, and the
-// host durably logs every exec's argv -- a token in there outlives the sandbox
-// in a file nobody thinks to look at.
-func TestBuildEnvKeepsTheHostCredentialOutOfArgv(t *testing.T) {
-	c := hostCredConfig(t, "", `{"accessToken":"tok"}`)
-
-	set, err := c.BuildEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !set.Has("TOK") {
-		t.Fatalf("the host credential was not bound: %+v", set.Names)
-	}
-	for _, v := range set.Vars {
-		if v.Name == "TOK" && !v.Secret {
-			t.Errorf("TOK is not marked as a secret, so BRIG_ENV_ARGV would log it")
-		}
-	}
-}
-
 // A profile with no secrets never opens the store, so no keychain prompt is
-// raised for a run with nothing to read -- the same property BuildEnv already
-// protects for the host credential.
+// raised for a run with nothing to read.
 func TestBuildEnvNeverOpensTheStoreWithoutSecrets(t *testing.T) {
 	c := bindingConfig(t, "env:\n  - name: NOPE\n    ref: env.NOPE\n")
 	c.OpenStore = func() (creds.SecretReader, error) {

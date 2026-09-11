@@ -83,13 +83,6 @@ type Config struct {
 	// declares secrets -- opening it unconditionally would raise a keychain
 	// prompt for runs that read nothing. Replaced in tests.
 	OpenStore func() (creds.SecretReader, error)
-	// ReadKeychain reads the blob behind a profile's deprecated
-	// hostCredential:, and is nil outside tests, where nil means the host's own
-	// keychain. It exists because a test must not read the login keychain of
-	// whoever runs the suite, and because the blob a test wants is one it wrote
-	// itself. BRIG_CREDENTIALS_CMD used to serve that purpose by accident.
-	ReadKeychain creds.KeychainRead
-
 	// MacOSVersion reports the host's macOS version like "14.5", or "" off
 	// macOS. A field so a test can pin the version the hypervisor preflight
 	// sees without running on the OS in question; Load sets it to the real
@@ -154,12 +147,6 @@ type Config struct {
 	verified    []string
 	AllowRefs   bool
 	AllowDenied bool
-	// AllowExpired forwards the host credential even when its own expiry says it
-	// is dead. Read here rather than where it is used so a typo in it refuses the
-	// run before boot, like the other security switches, instead of at the moment
-	// an expired credential happens to turn up.
-	AllowExpired bool
-
 	// Cwd is the host directory the command was invoked from, and GuestCwd is
 	// where that lands inside the guest.
 	Cwd      string
@@ -182,11 +169,6 @@ type Config struct {
 	// name or the slug. See mountProject and sessionEntry.
 	Project      string
 	GuestProject string
-
-	// HostCred is the credential read from the host during BuildEnv, kept so
-	// the status report can say where the guest login comes from without
-	// paying for a second keychain read.
-	HostCred *creds.HostCredential
 
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
@@ -265,8 +247,8 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	//
 	// The replacement is two steps, and naming only the second sends the reader
 	// into an error: --from-command fills one secret so it needs a name, and a
-	// profile still on hostCredential: has no secrets: list for that name to be
-	// in. Say both, in order.
+	// profile that leaned on this variable has no secrets: list for that name
+	// to be in. Say both, in order.
 	if cmd, ok := env.Get("CREDENTIALS_CMD"); ok && cmd != "" {
 		return nil, fmt.Errorf("BRIG_CREDENTIALS_CMD has been removed. Declare the "+
 			"credential under secrets: in %s, then store it once: brig secret import "+
@@ -438,7 +420,6 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		VerifyPolicy:   verifyPolicy(env),
 		AllowRefs:      strict("ALLOW_REFS", false),
 		AllowDenied:    strict("ALLOW_DENIED", false),
-		AllowExpired:   strict("ALLOW_EXPIRED", false),
 		Cwd:            cwd,
 		Out:            os.Stdout,
 		Err:            os.Stderr,

@@ -107,7 +107,7 @@ the header comment documents every field.
 
 | Retired key | Current |
 | --- | --- |
-| `hostCredential:` | declare a secret and run `brig secret import <agent>` |
+| `hostCredential:` | **removed**: declare a secret and run `brig secret import <agent>` |
 | `shell:`, `gui:` booleans | `kind:` |
 | `forward:` | `env:`, with `ref: env.<name>` |
 | `statePaths:` | `volumes:` |
@@ -116,8 +116,10 @@ Declaring a retired key and its replacement with values that disagree is an
 error, not a warning. brig refuses the profile rather than guessing which one
 you meant.
 
-`hostCredential:` warns only on a profile backed by a file of your own. No
-built-in profile warns about itself.
+`hostCredential:` is the one key in the table already gone: it read the host
+keychain on every run, and a key that reads a host credential does not wait for
+the window to close. A file that still carries it is refused rather than warned
+about, and the error names the replacement.
 
 ## The words `agent` and `profile`
 

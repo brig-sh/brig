@@ -125,7 +125,7 @@ func TestLoadRefusesAnUnreadableSecuritySwitch(t *testing.T) {
 func TestEveryStrictSwitchIsWired(t *testing.T) {
 	for _, key := range []string{
 		"BRIG_GIT_CONFIG", "BRIG_TRUST_WORKSPACE",
-		"BRIG_ALLOW_REFS", "BRIG_ALLOW_DENIED", "BRIG_ALLOW_EXPIRED",
+		"BRIG_ALLOW_REFS", "BRIG_ALLOW_DENIED",
 	} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "maybe")

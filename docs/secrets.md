@@ -1,11 +1,9 @@
 # Keeping secrets in your keyring
 
-`brig secret` is brig's own store, and it is the **only** store a run reads, on
-every profile brig ships. A profile of your own still carrying the deprecated
-`hostCredential:` field is the exception: it reads the host item it names on
-every run. A profile declares the names it wants under `secrets:`, and what is
-in this store under those names reaches the sandbox -- as a file where the
-agent reads one, as an environment variable where it does not.
+`brig secret` is brig's own store, and it is the **only** store a run reads. A
+profile declares the names it wants under `secrets:`, and what is in this
+store under those names reaches the sandbox -- as a file where the agent reads
+one, as an environment variable where it does not.
 
 Most people never fill it by hand. One command carries the login already on
 your Mac into it:
@@ -143,11 +141,9 @@ carries a `sources:` list and the first that exists wins. `brig agent ls` shows
 which names a profile can import and which it cannot, and
 [profiles.md](profiles.md) is how to declare them in one of your own.
 
-A profile can still declare a credential with the deprecated `hostCredential:`
-field instead of `secrets:` and `sources:`. It keeps working, but reads the
-named host keychain item on every run rather than once at import.
-[migration.md](migration.md#profile-keys) has the replacement. This page
-assumes `secrets:`.
+The `hostCredential:` field, which read the named host keychain item on every
+run rather than once at import, is removed: a profile that still carries it is
+refused, and [migration.md](migration.md#profile-keys) has the replacement.
 
 | flag | what it does |
 | --- | --- |
