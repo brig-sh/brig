@@ -324,3 +324,29 @@ func TestLoadAcceptsAnEmptyCredentialsCmd(t *testing.T) {
 		t.Fatalf("an empty BRIG_CREDENTIALS_CMD failed the run: %v", err)
 	}
 }
+
+// The off spellings of BRIG_ALLOW_DENIED, read the strict way, keep a denied
+// variable out of the guest all the way through BuildEnv. This used to be
+// asserted on the host credential, which is gone; the ambient path is the one
+// that remains, and the binding is built by hand because a profile may not
+// declare a variable it also denies -- this is the shape a BRIG_FORWARD_ENV
+// override produces.
+func TestOffSpellingsDoNotForwardADeniedCredential(t *testing.T) {
+	t.Setenv("TOK", "tok")
+	for _, v := range []string{"false", "no", "off", "FALSE", "0"} {
+		c := bindingConfig(t, "deny: [TOK]\n")
+		c.Env = []profile.EnvBinding{{Name: "TOK", Ref: "env.TOK"}}
+		on, err := NewEnv(c.Profile.Name, oneVar("BRIG_ALLOW_DENIED", v)).StrictBool("ALLOW_DENIED", false)
+		if err != nil {
+			t.Fatalf("BRIG_ALLOW_DENIED=%s was refused: %v", v, err)
+		}
+		c.AllowDenied = on
+		set, err := c.BuildEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if set.Has("TOK") {
+			t.Errorf("BRIG_ALLOW_DENIED=%s forwarded a denied variable", v)
+		}
+	}
+}

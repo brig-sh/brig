@@ -58,11 +58,11 @@ type Var struct {
 	Name  string
 	Value string
 	// Secret marks a value brig resolved on the user's behalf from the store
-	// it owns, so that BRIG_ENV_ARGV
-	// never puts it in argv whatever it says: hull durably logs every exec's
-	// argv to a host file, and an ambient shell value put there deliberately
-	// is one thing, but a stored credential outliving the sandbox in a file
-	// the user never sees is a different severity of leak.
+	// it owns, so that BRIG_ENV_ARGV never puts it in argv whatever it says:
+	// hull durably logs every exec's argv to a host file, and an ambient shell
+	// value put there deliberately is one thing, but a stored credential
+	// outliving the sandbox in a file the user never sees is a different
+	// severity of leak.
 	Secret bool
 }
 

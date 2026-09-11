@@ -78,6 +78,22 @@ hostCredential:
 	}
 }
 
+// A bare `hostCredential:` with nothing under it -- the shape a file takes once
+// its sub-keys are commented out -- is the same key, and gets the same route,
+// rather than the strict decoder's unknown-field message a typo gets.
+func TestBareHostCredentialIsRefusedTheSameWay(t *testing.T) {
+	for _, value := range []string{"", " null", " {}"} {
+		_, err := Parse([]byte("name: mytool\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n" +
+			"hostCredential:" + value + "\n"))
+		if err == nil {
+			t.Fatalf("hostCredential:%s parsed", value)
+		}
+		if !strings.Contains(err.Error(), "brig secret import mytool") {
+			t.Errorf("hostCredential:%s does not name the replacement: %v", value, err)
+		}
+	}
+}
+
 // The name reaches a workspace path and a sandbox name, so it has to be safe
 // in both.
 func TestImportRejectsAnUnsafeName(t *testing.T) {

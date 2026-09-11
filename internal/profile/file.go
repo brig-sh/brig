@@ -145,18 +145,19 @@ func Parse(blob []byte) (Profile, error) {
 // its replacement -- a secret with sources:, filled once by `brig secret
 // import` -- is where the removed behaviour went. The profile name is read out
 // of the same document so the command in the error can be pasted as it stands.
+//
+// Presence of the key is what is refused, not a value under it: a file whose
+// sub-keys were commented out leaves a bare `hostCredential:`, and that reader
+// needs the same route.
 func refuseRemovedKeys(blob []byte) error {
-	var keys struct {
-		Name           string `json:"name"`
-		HostCredential any    `json:"hostCredential"`
-	}
+	var keys map[string]any
 	if err := yaml.Unmarshal(blob, &keys); err != nil {
 		// Not this check's error to report: the strict decode that follows
 		// says what is wrong with the document.
 		return nil
 	}
-	if keys.HostCredential != nil {
-		name := keys.Name
+	if _, present := keys["hostCredential"]; present {
+		name, _ := keys["name"].(string)
 		if name == "" {
 			name = "<profile>"
 		}

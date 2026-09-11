@@ -686,7 +686,7 @@ because the profile is what you wrote.
 | `BRIG_GIT_IDENTITY` | `1` | `0` stops brig from forwarding the host commit identity resolved from the invoking directory |
 | `BRIG_GIT_NAME`, `BRIG_GIT_EMAIL` | the host's `git config` | override that identity |
 | `BRIG_TRUST_WORKSPACE` | `1` | pre-answers the agent's own "do you trust this folder" question for the directory a run starts in |
-| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. Never applies to a value brig resolved itself, a stored secret, which stays off the command line regardless |
+| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. Never applies to a value brig resolved itself, such as a stored secret; those stay off the command line regardless |
 
 [authentication.md](authentication.md) and [secrets.md](secrets.md) cover
 what each of these does with the credential once it is in the guest.

@@ -1,8 +1,10 @@
 # Moving off the retired spellings
 
 brig renamed most of its commands while it was still a prerelease. Every old
-spelling on this page still works today. Each one prints one line on stderr
-naming its replacement, in this form:
+spelling on this page still works today, with one exception: the
+`hostCredential:` profile key is removed, and a file that carries it is
+refused (see [Profile keys](#profile-keys)). Each of the others prints one
+line on stderr naming its replacement, in this form:
 
 ```
 brig: `brig profiles` is now `brig agent ls`
@@ -116,10 +118,10 @@ Declaring a retired key and its replacement with values that disagree is an
 error, not a warning. brig refuses the profile rather than guessing which one
 you meant.
 
-`hostCredential:` is the one key in the table already gone: it read the host
-keychain on every run, and a key that reads a host credential does not wait for
-the window to close. A file that still carries it is refused rather than warned
-about, and the error names the replacement.
+`hostCredential:` is the one key in the table already gone. It read the host
+keychain on every run, so it was removed before the deprecation window ended.
+A file that still carries it is refused rather than warned about, and the
+error names the replacement.
 
 ## The words `agent` and `profile`
 

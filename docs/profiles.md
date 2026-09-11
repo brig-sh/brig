@@ -591,8 +591,8 @@ agent); the verb is not.
 
 `brig info <profile>` reports what the guest would be handed, by name --
 never a value, on any path. A variable sourced from the secret store is
-annotated `(secret)`; an ambient or literal one is reported bare. No test pins the exact
-wording, so treat this as the shape rather than a literal transcript:
+annotated `(secret)`; an ambient or literal one is reported bare. No test pins
+the exact wording, so treat this as the shape rather than a literal transcript:
 
 ```console
 $ brig info mine
@@ -617,12 +617,11 @@ preview that quietly skips what it cannot resolve.
 
 `BRIG_ENV_ARGV=1` still puts an ordinary forwarded variable on the runtime's
 own command line, for a runtime build that will not take a bare `--env KEY`.
-It is deliberately inert for a value brig resolved on your behalf -- one bound
-from the secret store: the host durably logs
-every exec's argv, and a debugging escape hatch is not worth turning into a
-credential leak. So on a runtime build that needs the hatch, the credential
-does not arrive at all rather than arriving in the log; that is the intended
-trade.
+It is deliberately inert for a value brig resolved on your behalf, one bound
+from the secret store: the host durably logs every exec's argv, and a debugging
+escape hatch is not worth turning into a credential leak. So on a runtime build
+that needs the hatch, the credential does not arrive at all rather than
+arriving in the log; that is the intended trade.
 
 ## `reserved`, so a session name cannot land on the wrong workspace
 
@@ -686,8 +685,8 @@ is ever seeded that contains a credential.
 ## `hostCredential`, removed
 
 **Removed.** A profile file that still carries it is refused at load, and the
-error names the replacement below. No built-in profile had carried it for
-several releases before that.
+error names the replacement below. No built-in profile has carried it since
+rc16.
 
 ```yaml
 hostCredential:                                  # removed: brig refuses the file
