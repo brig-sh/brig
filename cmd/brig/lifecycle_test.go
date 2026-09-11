@@ -68,8 +68,8 @@ func TestShAcceptsACommandAndNoCommand(t *testing.T) {
 // run-line parser would refuse it as a brig flag that does not exist.
 //
 // The refusals are the point of the test as much as the acceptance. A flag
-// typed to make a destructive command safer must not be read past and ignored,
-// and a ref beside --all is two different requests on one line.
+// brig does not know must not be read past and ignored, and a ref beside --all
+// is two different requests on one line.
 func TestRemoveAllTakesNothingElse(t *testing.T) {
 	scratchHost(t)
 	if err := run([]string{"rm", "--all"}); !took(err) {
@@ -78,7 +78,7 @@ func TestRemoveAllTakesNothingElse(t *testing.T) {
 	for _, args := range [][]string{
 		{"rm", "--all", "claude"},
 		{"rm", "claude", "--all"},
-		{"rm", "--all", "--dry-run"},
+		{"rm", "--all", "--nope"},
 	} {
 		scratchHost(t)
 		err := run(args)

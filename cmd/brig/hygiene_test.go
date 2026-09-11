@@ -73,11 +73,12 @@ func TestRejectTail(t *testing.T) {
 	}
 }
 
-// ls names no session and takes only -q, and `rm --all` takes nothing at all,
-// so any other argument is a token they would read and drop. `rm --all` is the
-// sharp one: `brig rm --all --dry-run` reads like a preview and removes
-// everything, so it must refuse before it reaches the runtime. reset is the
-// retired spelling of the same command and refuses on the same terms.
+// ls names no session and takes only -q, and `rm --all` takes only --dry-run
+// and -y, so any other argument is a token they would read and drop. `rm --all`
+// is the sharp one: a flag it does not know, read past, is a command that
+// removes everything on a line that asked for something else, so it must
+// refuse before it reaches the runtime. reset is the retired spelling of the
+// same command and refuses on the same terms.
 func TestLsAndRemoveAllRefuseArguments(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -85,10 +86,10 @@ func TestLsAndRemoveAllRefuseArguments(t *testing.T) {
 		args []string
 	}{
 		{"ls", func(args []string) error { return listSandboxes(args, false, false) }, []string{"claude"}},
-		{"rm --all", func(args []string) error { return removeAll("brig rm --all", args) },
-			[]string{"--dry-run"}},
-		{"reset", func(args []string) error { return removeAll("brig reset", args) },
-			[]string{"--dry-run"}},
+		{"rm --all", func(args []string) error { return removeAll("brig rm --all", args, removeOpts{}) },
+			[]string{"--nope"}},
+		{"reset", func(args []string) error { return removeAll("brig reset", args, removeOpts{}) },
+			[]string{"--nope"}},
 	} {
 		err := tc.fn(tc.args)
 		if err == nil {

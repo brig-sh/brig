@@ -47,8 +47,9 @@ usage:
   brig sh   <ref> [command...]                   a login shell inside the sandbox,
                                                  or one command in it
   brig stop <ref>                                stop the sandbox, keep it
-  brig rm   <ref>                                stop and remove the sandbox
-  brig rm   --all                                stop and remove every brig sandbox
+  brig rm   <ref> [--dry-run]                    stop and remove the sandbox
+  brig rm   --all [--dry-run] [-y]               list every brig sandbox, ask, and
+                                                 stop and remove them all
   brig ls   [-q]                                 list sandboxes; -q prints the refs
   brig logs <ref> [--follow] [--tail N] [--raw]  stream the sandbox's log
   brig logs --gateway [<ref>]                    the gateway's log: the shared
@@ -239,6 +240,9 @@ func dispatch(args []string) error {
 		return nil
 	}
 	verb, rest := verbLine[0], verbLine[1:]
+	// rm's --dry-run, read off the line in the switch below and acted on where
+	// the run line reaches rm, after the ref has been resolved to a sandbox.
+	rmDryRun := false
 
 	// Completion is answered before the notices below, and that ordering is the
 	// whole of its output contract: a profile that would not parse, a legacy
@@ -352,15 +356,34 @@ func dispatch(args []string) error {
 		// was spelled as if it were a setting being restored. --all is that
 		// word, on the verb that already removes one.
 		deprecated("brig reset", "brig rm --all")
-		return removeAll("brig reset", rest)
-	case "rm":
-		// --all is read here rather than on the run line, because it names no
-		// session: split would refuse it as a brig flag standing where brig's
-		// own flags go, and it is not one. Without --all this falls through to
-		// the run line and removes the one sandbox the ref names.
-		if others, all := takeAll(rest); all {
-			return removeAll("brig rm --all", others)
+		others, o, err := takeRemoveFlags(rest)
+		if err != nil {
+			return err
 		}
+		return removeAll("brig reset", others, o)
+	case "rm":
+		// rm's own flags are read here rather than on the run line. --all names
+		// no session, so split would refuse it as a brig flag standing where
+		// brig's own flags go; --dry-run and -y stay out of brigFlags so that
+		// `brig run opencode --dry-run` keeps reaching opencode, whose flag it
+		// is. Without --all this falls through to the run line and removes the
+		// one sandbox the ref names.
+		others, o, err := takeRemoveFlags(rest)
+		if err != nil {
+			return err
+		}
+		if o.all {
+			return removeAll("brig rm --all", others, o)
+		}
+		// One sandbox is removed without a question, so an answer given in
+		// advance is a flag that would do nothing. Refused by name rather
+		// than read past.
+		if o.yes != "" {
+			return usagef("%s answers a question `brig rm <ref>` does not ask; "+
+				"it goes with --all", o.yes)
+		}
+		rmDryRun = o.dryRun
+		rest = others
 	case "run", "sh", "stop", "info":
 		// The taught lifecycle spellings. They fall through to the run line
 		// below, which is where the ref and the flags are read.
@@ -564,7 +587,7 @@ func dispatch(args []string) error {
 		// The slug, not the name as typed: ParseRef refuses a label that is not
 		// already its own slug, so naming RawName here would print a ref brig
 		// would then turn away. The index is keyed by the slug too.
-		return removeSandbox(cfg, session.Ref{Agent: profileName, Label: cfg.Slug}.String())
+		return removeSandbox(cfg, session.Ref{Agent: profileName, Label: cfg.Slug}.String(), rmDryRun)
 	}
 
 	set, err := cfg.BuildEnv()
@@ -1863,27 +1886,52 @@ func workspaceOf(vmName string, rt runtime.Runtime) string {
 	return cfg.Workspace
 }
 
-// takeAll reads --all off a command line and reports whether it was there.
+// removeOpts is what rm reads for itself before the run line: --all, --dry-run
+// and the -y that answers --all's question in advance.
+type removeOpts struct {
+	all    bool
+	dryRun bool
+	// yes is the spelling of -y as typed, or "" when it was not. The spelling
+	// rather than a bool so the refusal on `brig rm <ref> -y` can name the
+	// token the reader wrote.
+	yes string
+}
+
+// takeRemoveFlags reads rm's own flags off a command line and hands back what
+// is left, in order.
 //
-// A flag on rm rather than a verb of its own, because it is the same removal:
-// `brig rm <ref>` takes one sandbox and `brig rm --all` takes every one. The
-// long spelling only -- a short -a would be a second way to ask for the most
-// destructive thing brig does, and #47 is retiring short flags rather than
-// adding them.
+// --all is a flag on rm rather than a verb of its own, because it is the same
+// removal: `brig rm <ref>` takes one sandbox and `brig rm --all` takes every
+// one. The long spelling only -- a short -a would be a second way to ask for
+// the most destructive thing brig does, and #47 is retiring short flags rather
+// than adding them. -y has its short form because it is the spelling `brig
+// secret delete` and `brig agent rm` already answer to.
 //
 // What is left of the line is handed back rather than dropped, so removeAll can
 // refuse it by name: `brig rm claude --all` is two different requests written on
 // one line, and picking either would act on something the line does not read
-// like.
-func takeAll(args []string) (rest []string, all bool) {
+// like. An `=` form is refused: none of these takes a value, and `--all=1` is
+// not a line brig should guess at.
+func takeRemoveFlags(args []string) (rest []string, o removeOpts, err error) {
 	for _, a := range args {
-		if a == "--all" {
-			all = true
-			continue
+		switch a {
+		case "--all":
+			o.all = true
+		case "--dry-run":
+			o.dryRun = true
+		case "-y", "--yes":
+			o.yes = a
+		default:
+			if spelling, _, ok := strings.Cut(a, "="); ok {
+				switch spelling {
+				case "--all", "--dry-run", "--yes":
+					return nil, removeOpts{}, usagef("%s takes no value", spelling)
+				}
+			}
+			rest = append(rest, a)
 		}
-		rest = append(rest, a)
 	}
-	return rest, all
+	return rest, o, nil
 }
 
 // removeSandbox is `brig rm <ref>`: be rid of the one sandbox the ref names.
@@ -1895,7 +1943,12 @@ func takeAll(args []string) (rest []string, all bool) {
 // failed (exit 1). A List that itself fails is a runtime that could not be asked
 // (exit 4), a different fact the exit table keeps apart, so it comes back
 // untouched rather than being read as absence.
-func removeSandbox(cfg *wrap.Config, ref string) error {
+//
+// --dry-run says what the removal would be -- the ref, the sandbox, and the
+// workspace it would leave behind -- and stops. It is still a not-found when
+// there is nothing to remove: "would remove" about a sandbox that is not there
+// is a preview of nothing.
+func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 	present, err := sandboxPresent(cfg.Runtime, cfg.VMName)
 	if err != nil {
 		return err
@@ -1910,7 +1963,18 @@ func removeSandbox(cfg *wrap.Config, ref string) error {
 		// entry for a sandbox that is truly gone costs nothing until then.
 		return noSandboxf(ref)
 	}
-	return cfg.Remove()
+	if dryRun {
+		fmt.Printf("would remove %s (sandbox %s). The workspace %s stays on the host\n",
+			ref, cfg.VMName, cfg.Workspace)
+		return nil
+	}
+	if err := cfg.Remove(); err != nil {
+		return err
+	}
+	// The workspace is the reader's work, and rm is the verb whose name
+	// suggests it might have gone. Say where it is, every time.
+	warnf("removed %s. The workspace %s stays on the host", ref, cfg.Workspace)
+	return nil
 }
 
 // sandboxPresent reports whether the runtime has a sandbox of this name at all,
@@ -1945,21 +2009,25 @@ func noSandboxf(ref string) error {
 // alone: they are on the host, they hold your work, and this is a command
 // about sandboxes.
 //
-// spelling is the command as it was typed, for the message: this is reached as
+// It says what it is about to remove and asks first. Without a terminal there
+// is nobody to answer, and assuming yes would make the scripted case the one
+// that cannot be stopped, so it refuses and names -y -- the shape confirmDelete
+// uses, for the same reason. --dry-run prints the same list and stops there.
+//
+// spelling is the command as it was typed, for the messages: this is reached as
 // `brig rm --all` and as the retired `brig reset`, and an error about the wrong
 // one of those sends the reader to fix a line they did not write.
-func removeAll(spelling string, args []string) error {
+func removeAll(spelling string, args []string, o removeOpts) error {
 	// This stops and removes every brig sandbox, so a flag typed to make it
-	// safer -- `brig rm --all --dry-run` -- must not be read past and ignored,
-	// which is exactly how a command meant to preview ends up removing
-	// everything. It has no flags and no operands beyond --all itself; refuse
-	// anything here so a flag that gains a meaning later is one this release
-	// declined rather than silently swallowed.
+	// safer must not be read past and ignored, which is exactly how a command
+	// meant to preview ends up removing everything. Its flags were taken off
+	// the line already; refuse anything left so a flag that gains a meaning
+	// later is one this release declined rather than silently swallowed.
 	if len(args) > 0 {
-		return usagef("unexpected argument %q; `%s` takes no arguments and removes "+
+		return usagef("unexpected argument %q; `%s` takes --dry-run and -y, and removes "+
 			"every brig sandbox", args[0], spelling)
 	}
-	rt, err := runtime.Detect()
+	rt, err := detectRuntime()
 	if err != nil {
 		return err
 	}
@@ -1967,11 +2035,25 @@ func removeAll(spelling string, args []string) error {
 	if err != nil {
 		return err
 	}
-	removed := 0
+	var mine []runtime.Instance
 	for _, inst := range list {
-		if !strings.HasPrefix(inst.Name, sandboxPrefix) {
-			continue
+		if strings.HasPrefix(inst.Name, sandboxPrefix) {
+			mine = append(mine, inst)
 		}
+	}
+	if o.dryRun {
+		// The list is the command's whole output, so it goes where output
+		// goes; the sentence about workspaces is a notice, and goes with the
+		// other notices.
+		fmt.Print(removalList(mine))
+		warnf("would remove %d sandbox(es). Workspaces stay on the host.", len(mine))
+		return nil
+	}
+	if err := confirmRemoveAll(spelling, mine, o.yes != ""); err != nil {
+		return err
+	}
+	removed := 0
+	for _, inst := range mine {
 		_ = rt.Stop(inst.Name)
 		err := rt.Remove(inst.Name)
 		// The same pruning `brig rm` of one sandbox does, for the same reason
@@ -1988,7 +2070,7 @@ func removeAll(spelling string, args []string) error {
 		fmt.Println(inst.Name)
 		removed++
 	}
-	warnf("removed %d sandbox(es). Workspaces are untouched.", removed)
+	warnf("removed %d sandbox(es). Workspaces stay on the host.", removed)
 	// A network whose sandbox was removed outside brig is not reachable
 	// through Remove, because that sandbox is not in the list any more. This is
 	// the one command that leaves nothing behind, so it prunes those too. Only
@@ -2009,6 +2091,56 @@ func removeAll(spelling string, args []string) error {
 		p.PruneNetworks(live)
 	}
 	return nil
+}
+
+// removalList is what `rm --all` is about to act on, one sandbox per line: the
+// ref, which is the word `brig ls` prints and the one a reader would type at
+// `brig rm` to take just that one, and its state. A sandbox whose ref brig
+// cannot derive -- one named through BRIG_NAME, or whose agent is gone -- is
+// removed all the same, so it is listed by its sandbox name rather than left
+// off a list the reader is about to agree to.
+func removalList(list []runtime.Instance) string {
+	width := 0
+	names := make([]string, len(list))
+	for i, inst := range list {
+		names[i] = refOf(inst.Name)
+		if names[i] == "" {
+			names[i] = inst.Name
+		}
+		width = max(width, len(names[i]))
+	}
+	var b strings.Builder
+	for i, inst := range list {
+		fmt.Fprintf(&b, "%-*s  %s\n", width, names[i], inst.State)
+	}
+	return b.String()
+}
+
+// confirmRemoveAll names every sandbox `rm --all` is about to remove and asks.
+// Nothing to remove is nothing to ask about, and -y is the answer given in
+// advance. Everything goes to stderr, so a removal inside a pipeline still asks
+// where a person can see it.
+func confirmRemoveAll(spelling string, list []runtime.Instance, yes bool) error {
+	if len(list) == 0 || yes {
+		return nil
+	}
+	if !wrap.IsTerminal(os.Stdin) {
+		return fmt.Errorf("`%s` would remove %d sandbox(es), and there is no terminal to ask on. "+
+			"Pass -y to answer in advance: %s -y, or --dry-run to see the list", spelling, len(list), spelling)
+	}
+	fmt.Fprintf(os.Stderr, "brig: `%s` removes %d sandbox(es). Workspaces stay on the host.\n%s",
+		spelling, len(list), removalList(list))
+	fmt.Fprint(os.Stderr, "brig: remove them? [y/N] ")
+	line, err := readAnswer(os.Stdin)
+	if err != nil {
+		// EOF is the answer a closed stdin gives, and it is not yes.
+		return fmt.Errorf("aborted: nothing was removed. To answer in advance: %s -y", spelling)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	}
+	return errors.New("aborted: nothing was removed")
 }
 
 // listProfiles prints the merged set: embedded and file-backed together, one
