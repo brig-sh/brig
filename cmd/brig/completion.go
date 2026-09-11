@@ -228,9 +228,13 @@ func complete(words []string) (string, []string) {
 // completeRunLine answers for a lifecycle verb: flags, then the ref, then
 // run's project directory. Past that the tokens are the agent's.
 func completeRunLine(verb string, rest []string, cur string) (string, []string) {
-	// takeAll strips --all before the run line is parsed, and removeAll then
-	// rejects every remaining argument. Nothing else can appear on this line.
+	// takeRemoveFlags strips --all before the run line is parsed, and
+	// removeAll then rejects every argument but its own two flags. So no ref
+	// is offered after it, and nothing but those flags.
 	if hasSpelling(rest, "--all") {
+		if strings.HasPrefix(cur, "-") {
+			return names(cur, []string{"--dry-run", "--yes", "-y"})
+		}
 		return dirNone, nil
 	}
 
@@ -262,10 +266,14 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		// only at a flag brig does not own, so offer them on both sides too.
 		// `brig run claude --mem 4096` is a line brig parses.
 		flags := flagSpellings(posRun, verb)
-		if verb == "rm" && !line.refGiven {
-			// --all is not in brigFlags: it is read before the run line, and it
-			// replaces the ref rather than accompanying it.
-			flags = append(flags, "--all")
+		if verb == "rm" {
+			// rm's own flags are not in brigFlags: they are read before the run
+			// line. --dry-run goes on either side of the ref; --all replaces the
+			// ref rather than accompanying it.
+			flags = append(flags, "--dry-run")
+			if !line.refGiven {
+				flags = append(flags, "--all")
+			}
 			sort.Strings(flags)
 		}
 		return names(cur, flags)

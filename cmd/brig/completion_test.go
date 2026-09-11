@@ -293,10 +293,23 @@ func TestCompletePositions(t *testing.T) {
 		words:     []string{"stop", "claude-code", "extra", "--m"},
 		directive: dirNone,
 	}, {
-		// --all replaces the ref, and removeAll rejects every argument.
-		name:      "rm --all completes nothing further",
+		// --all replaces the ref, so no ref is offered after it. The flags
+		// that go with it are.
+		name:      "rm --all offers no ref",
 		words:     []string{"rm", "--all", ""},
 		directive: dirNone,
+	}, {
+		name:      "rm --all offers the answer and the preview",
+		words:     []string{"rm", "--all", "--"},
+		directive: dirNames,
+		exactly:   []string{"--dry-run", "--yes"},
+	}, {
+		// --dry-run is read wherever it stands on the rm line, before or
+		// after the ref.
+		name:      "rm offers --dry-run beside a ref",
+		words:     []string{"rm", "claude-code", "--d"},
+		directive: dirNames,
+		exactly:   []string{"--dry-run"},
 	}, {
 		name:      "and --all is offered only where the ref would have gone",
 		words:     []string{"rm", "--a"},

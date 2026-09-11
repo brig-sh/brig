@@ -50,7 +50,7 @@ func TestRemoveSandboxOnMissingIsNotFound(t *testing.T) {
 	rt := absent()
 	cfg := &wrap.Config{VMName: "brig-claude-code", Runtime: rt}
 
-	err := removeSandbox(cfg, "claude")
+	err := removeSandbox(cfg, "claude", false)
 	if err == nil {
 		t.Fatal("rm of a missing sandbox was reported as success")
 	}
@@ -75,7 +75,7 @@ func TestRemoveSandboxProceedsWhenPresent(t *testing.T) {
 	rt := present()
 	cfg := &wrap.Config{VMName: "brig-claude-code", Runtime: rt}
 
-	if err := removeSandbox(cfg, "claude"); err != nil {
+	if err := removeSandbox(cfg, "claude", false); err != nil {
 		t.Fatalf("rm of a present sandbox failed: %v", err)
 	}
 	if !rt.removed {
@@ -93,7 +93,7 @@ func TestRemoveSandboxPropagatesAListError(t *testing.T) {
 	rt := &listRuntime{listErr: boom}
 	cfg := &wrap.Config{VMName: "brig-claude-code", Runtime: rt}
 
-	err := removeSandbox(cfg, "claude")
+	err := removeSandbox(cfg, "claude", false)
 	if !errors.Is(err, boom) {
 		t.Fatalf("a List error was not returned as is: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestRemoveSandboxKeepsTheIndexOnMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := removeSandbox(&wrap.Config{VMName: "brig-claude-code", Runtime: absent()}, "claude@refactor")
+	err := removeSandbox(&wrap.Config{VMName: "brig-claude-code", Runtime: absent()}, "claude@refactor", false)
 	if exitCode(err) != exitNotFound {
 		t.Fatalf("rm of a missing sandbox exits %d, want %d: %v", exitCode(err), exitNotFound, err)
 	}
