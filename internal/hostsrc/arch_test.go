@@ -56,32 +56,44 @@ var runPathPackages = []string{
 // own: hostCredential: used to read the macOS keychain through a `security`
 // call inside internal/creds, a package the run path is allowed to link, so a
 // second door stood open with the first one shut. The field is removed, and
-// this pins the removal: no non-test source in a run-path package names the
-// keychain tool. The importer is where that call belongs, and internal/secret
-// -- brig's own store -- is the one keychain a run may open.
+// this pins the removal: no non-test source in any package of this module
+// that a run-path package links names the keychain tool. Every linked package,
+// not just the three named above, or a new internal package that shells out
+// and is imported by wrap would pass both tests. The importer is where that
+// call belongs, and internal/secret -- brig's own store -- is the one keychain
+// a run may open.
 func TestTheRunPathReadsNoKeychain(t *testing.T) {
+	const module = "github.com/brig-sh/brig/"
+	const allowed = module + "internal/secret"
+	seen := map[string]bool{}
 	for _, pkg := range runPathPackages {
-		out, err := exec.Command("go", "list", "-f", "{{.Dir}}", pkg).Output()
+		out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}} {{.Dir}}", pkg).Output()
 		if err != nil {
-			t.Fatalf("go list %s: %v", pkg, err)
+			t.Fatalf("go list -deps %s: %v", pkg, err)
 		}
-		dir := strings.TrimSpace(string(out))
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			path, dir, ok := strings.Cut(line, " ")
+			if !ok || !strings.HasPrefix(path, module) || path == allowed || seen[path] {
 				continue
 			}
-			blob, err := os.ReadFile(filepath.Join(dir, name))
+			seen[path] = true
+			entries, err := os.ReadDir(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, marker := range []string{"find-generic-password", "/usr/bin/security"} {
-				if strings.Contains(string(blob), marker) {
-					t.Errorf("%s/%s names %q: a run reads a host keychain", pkg, name, marker)
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+					continue
+				}
+				blob, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, marker := range []string{"find-generic-password", "/usr/bin/security"} {
+					if strings.Contains(string(blob), marker) {
+						t.Errorf("%s/%s names %q: a run reads a host keychain", path, name, marker)
+					}
 				}
 			}
 		}
