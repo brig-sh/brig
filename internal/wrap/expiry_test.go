@@ -80,9 +80,8 @@ func TestExpiredSecretWithNoSourcesIsSentToTheCommandForm(t *testing.T) {
 	}
 }
 
-// A secret carrying no expiry is not expired: absence is not evidence. That is
-// the rule HostCredential.Expired already followed, and losing it would warn
-// about every hand-created secret on every run.
+// A secret carrying no expiry is not expired: absence is not evidence, and
+// losing that rule would warn about every hand-created secret on every run.
 func TestNoExpiryIsNotExpired(t *testing.T) {
 	var errb bytes.Buffer
 	c := &Config{

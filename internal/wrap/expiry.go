@@ -18,9 +18,7 @@ type lister interface {
 }
 
 // warnExpiredSecrets says, before boot, that an imported credential has
-// expired. It replaces the warning at the old run.go:62, which read
-// Profile.HostCredential and goes dead the moment a later PR drops that key
-// from the built-in profiles.
+// expired.
 //
 // Rebuilt from provenance rather than from the value: List reads it with no
 // decrypt and raises no keychain dialog, which is the property that lets
@@ -34,9 +32,8 @@ func (c *Config) warnExpiredSecrets() {
 	for _, decl := range c.Profile.Secrets {
 		s, found := secrets[decl.Name]
 		if !found || s.Provenance.ExpiresAt == 0 || s.Provenance.ExpiresAt >= now {
-			// No expiry is not expired: absence is not evidence, the rule
-			// HostCredential.Expired already followed. Losing it would warn
-			// about every hand-created secret on every run.
+			// No expiry is not expired: absence is not evidence. Losing that
+			// rule would warn about every hand-created secret on every run.
 			continue
 		}
 		// Names the SECRET, not just the profile: a profile may declare more

@@ -6,11 +6,10 @@ what "everything" means. On the host, the agent can reach its guest home and
 the credentials you gave it. It can also reach any project you name on the
 run line. No other host directory is mounted.
 
-On every profile Brig ships, no host credential source is read on the run
-path. A custom profile carrying the deprecated `hostCredential:` key is
-the exception: it reads the macOS keychain item it names on every run. See
-[secrets.md](secrets.md) for that exception. What the agent can reach over
-the network is a separate question, with a much weaker answer, covered below.
+No host credential source is read on the run path: the only store a run
+opens is Brig's own. See [secrets.md](secrets.md). What the agent can reach
+over the network is a separate question, with a much weaker answer, covered
+below.
 
 If you have found a flaw in one of these boundaries, [SECURITY.md](../SECURITY.md)
 is how to report it privately. The section below on
@@ -97,7 +96,7 @@ have to be forwarded in explicitly: the guest cannot fetch them for itself.
 
 ## Credentials
 
-**`brig run` with a shipped profile reads no host credential source.** Nothing on the
+**A run reads no host credential source.** Nothing on the
 `brig run`, `exec` or `shell` path reaches a keychain item Brig did not write.
 Nothing on that path reaches a credential file outside the guest home, or a
 host command that produces one. Two host reads do happen, and no setting
@@ -117,20 +116,6 @@ and every run afterwards reads only that store:
 brig run claude-code               # log in inside the sandbox, or:
 brig secret import claude-code     # carry the host login in, once
 ```
-
-The profile key that read Claude Code's own keychain item on every invocation,
-`hostCredential:`, is deprecated and has left the shipped profiles. Brig
-removes the field in the next release. `BRIG_CREDENTIALS_CMD`, which pointed
-that read at a host command of your own, is already gone: a run that sets it
-fails, naming `brig secret import <profile> <name> --from-command '<command>'`.
-
-Until the field goes too, the sentence above is about the profiles Brig ships.
-A profile of your own still carrying `hostCredential:` keeps the old
-behaviour. That is what deprecating rather than deleting the key means: every
-run reads the host item it names. It also raises the approval dialog that
-comes with it.
-`brig run` warns when it finds one. Moving it to `secrets:` with `sources:` is
-what makes the promise above true for your profile too.
 
 A credential reaches the guest by one of two channels, and the profile picks
 per secret. `files:` writes it into the guest at the path the agent already
@@ -252,9 +237,9 @@ readable in `ps` by other processes on the host.
 does not accept a bare `--env KEY`. That gives up the guarantee for a value
 read from the environment. A value Brig resolved on your behalf is exempt
 from the hatch. It stays off the command line regardless: one bound from its
-own secret store, and the host credential too, however that was obtained.
-The host durably logs every exec's argv. An opt-in debugging escape hatch has
-no business turning that log into a credential leak.
+own secret store. The host durably logs every exec's argv. An opt-in
+debugging escape hatch has no business turning that log into a credential
+leak.
 
 ### What is still exposed
 

@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/creds"
-	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // BuildEnv resolves everything the guest is handed for this invocation.
 //
 // It is called once per command and never by Stop: stopping a sandbox needs
-// nothing but the instance name, and reading the host credential for it would
+// nothing but the instance name, and opening the secret store for it would
 // raise a keychain approval prompt for a command that needs no credential.
 func (c *Config) BuildEnv() (creds.Set, error) {
 	// What building the binding list dropped, said before anything can fail:
@@ -59,24 +58,6 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 		c.warnf("%s", w)
 	}
 
-	// Fall back to the host's own login when the environment supplied no
-	// token, so the sandbox works out of the box without anyone having to
-	// mint one. Read fresh every invocation: the token is short-lived, the
-	// host renews it as a matter of course, and nothing in the guest has to
-	// refresh anything.
-	//
-	// Only a profile still carrying the deprecated hostCredential: gets here,
-	// and no built-in carries one any more. The keychain is the only backend
-	// this reads: BRIG_CREDENTIALS_CMD, which used to point it at a command of
-	// the user's own, is gone, and Load fails a run that still sets it rather
-	// than booting a sandbox without the login the variable used to supply.
-	if hc := c.Profile.HostCredential; hc != nil && !set.Has(hc.TargetVar) {
-		if host := creds.ReadHost(hc, c.ReadKeychain); host != nil {
-			c.HostCred = host
-			c.admitHostCredential(hc, host, &set)
-		}
-	}
-
 	// Never let git block on an interactive credential prompt: inside an
 	// agent session there is no one to answer it, so git hangs and the agent
 	// looks wedged. Fail fast instead. Deliberately unconditional -- a
@@ -106,56 +87,9 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	return set, nil
 }
 
-// admitHostCredential decides whether the credential brig read off the host
-// reaches the guest, and forwards it if so.
-//
-// Two decisions, and neither of them used to be made here. The value went
-// straight into the set, so it passed neither the denylist nor the
-// unresolved-reference guard that every environment-sourced value passes --
-// see creds.AdmitHost -- and an expired token was forwarded and merely warned
-// about.
-//
-// An expired credential is not forwarded. It cannot authenticate anything: the
-// expiry is the host's own record of when its access token died, so sending it
-// in buys the sandbox nothing and puts a real, if dead, credential inside a
-// machine with unrestricted egress -- a token that is worthless to the agent
-// is not worthless to whatever else is in there. The run continues rather than
-// failing: refusing outright would break a session mid-flight over a
-// credential the user may not need for what they are doing, and the sandbox
-// asking for a login is a legible outcome, which the warning says out loud.
-// BRIG_ALLOW_EXPIRED=1 forwards it anyway, for a host whose clock or whose
-// expiry field cannot be trusted.
-func (c *Config) admitHostCredential(hc *profile.HostCredential, host *creds.HostCredential, set *creds.Set) {
-	if warning, ok := creds.AdmitHost(c.Profile, hc.TargetVar, host.Token, creds.Options{
-		AllowRefs:   c.AllowRefs,
-		AllowDenied: c.AllowDenied,
-	}); !ok {
-		c.warnf("%s (from %s)", warning, host.Source)
-		return
-	}
-	if host.Expired(time.Now().UnixMilli()) && !c.AllowExpired {
-		c.warnf("NOT forwarding the host's credential: it has expired, so it would "+
-			"authenticate nothing and the sandbox would ask you to log in anyway. "+
-			"%s, or set BRIG_ALLOW_EXPIRED=1 to send it as it is", hc.RenewHint)
-		return
-	}
-	if host.Expired(time.Now().UnixMilli()) {
-		// Quote what the user set, not a hardcoded =1: with the strict reading
-		// BRIG_ALLOW_EXPIRED=true is what turned this on, and echoing a value
-		// they never wrote sends them looking for a variable that is not there.
-		c.warnf("the host's credential has expired and %s is set, "+
-			"so it is being forwarded anyway -- %s", c.env.setting("ALLOW_EXPIRED"), hc.RenewHint)
-	}
-	// AddSecret, not Add: this token came out of the host's keychain, so it
-	// wants the same argv exemption a store secret gets. BRIG_ENV_ARGV is a
-	// debugging hatch, and no debugging is worth writing a keychain token into
-	// a log file that outlives the sandbox.
-	set.AddSecret(hc.TargetVar, host.Token, hc.TargetVar+"(host)")
-}
-
 // resolveSecrets reads what this run needs out of the store, opening it only
 // when something needs it -- so a run that needs no secret raises no keychain
-// prompt, the same property BuildEnv already protects for the host credential.
+// prompt.
 //
 // The decision to open is creds.Needed's rather than a length check here, and
 // it is a better one: a profile declaring secrets that this run's environment

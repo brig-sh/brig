@@ -113,7 +113,7 @@ the header comment documents every field.
 
 | Retired key | Current |
 | --- | --- |
-| `hostCredential:` | declare a secret and run `brig secret import <agent>` |
+| `hostCredential:` | **removed**: declare a secret and run `brig secret import <agent>` |
 | `shell:`, `gui:` booleans | `kind:` |
 | `forward:` | `env:`, with `ref: env.<name>` |
 | `statePaths:` | `volumes:` |
@@ -123,9 +123,6 @@ Declaring a retired key beside its replacement is an error, not a warning.
 `forward:` beside an `env:` entry of the same name, and `statePaths:` beside
 `volumes:`, are refused whatever their values. Brig refuses the profile
 rather than guessing which one you meant.
-
-`hostCredential:` warns only on a profile backed by a file of your own. No
-built-in profile warns about itself.
 
 ## The words `agent` and `profile`
 
