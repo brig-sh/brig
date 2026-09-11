@@ -62,8 +62,8 @@ list of it.
 `stop` and `rm` act on a sandbox that exists, so they offer the sessions there
 are rather than every agent there is. `run`, `sh` and `info` take an
 agent that has never run, so they offer all of them. `brig rm --all` names no
-session and refuses every argument, so a line carrying it completes nothing
-further.
+session, so a line carrying it offers no ref. It offers only the two flags
+that go with it, `--dry-run` and `--yes`.
 
 Under the noun commands -- `agent`, `policy`, `secret`, `telemetry` -- the
 subcommands complete, and so do the names they take: agents for `agent show`,

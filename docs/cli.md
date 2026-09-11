@@ -100,28 +100,30 @@ brig rm claude
 ```
 
 Stops the sandbox and removes it. Your guest home and your project are host
-directories brig only mounted, so neither is touched, and `rm` says so,
-naming the workspace it left behind.
+directories that brig only mounted, so neither is touched. `rm` prints the
+path of the workspace it left behind.
 
 ```bash
 brig rm --all
 ```
 
-Stops and removes every sandbox brig has. It prints the list first, one ref
-and its state per line, and asks before removing them. Without a terminal to
-ask on it refuses and removes nothing: pass `-y` (or `--yes`) to answer in
-advance, which is what a script wants. With no sandbox to remove there is
-nothing to ask about, and the command proceeds.
+Stops and removes every sandbox brig has. Before removing anything, it lists
+each sandbox as its ref, sandbox name and state, one per line, and asks for
+confirmation. If stdin is not a terminal, the command refuses, removes
+nothing, and exits `1`. Pass `-y` (or `--yes`) to confirm in advance, for
+example in a script. If there is nothing to remove, the command asks nothing
+and exits `0`.
 
 ```bash
 brig rm --all --dry-run
 brig rm claude --dry-run
 ```
 
-`--dry-run` prints the same list, or the one sandbox and the workspace it
-would leave, and exits `0` without removing anything. A ref with no sandbox
-is still a not-found (exit `3`) under `--dry-run`. `-y` is refused on
-`brig rm <ref>`, which asks no question.
+`--dry-run` prints what the command would remove and exits `0` without
+removing anything. For `rm --all` this is the same list the prompt shows.
+For `rm <ref>` it is the one sandbox and the workspace it would leave. A ref
+with no sandbox still exits `3`. `brig rm <ref>` asks no question, so it
+refuses `-y`.
 
 `rm` and `stop` each take exactly one ref. Neither takes a list of them.
 
