@@ -48,8 +48,8 @@ usage:
                                                  or one command in it
   brig stop <ref>                                stop the sandbox, keep it
   brig rm   <ref> [--dry-run]                    stop and remove the sandbox
-  brig rm   --all [--dry-run] [-y]               list every brig sandbox, ask, and
-                                                 stop and remove them all
+  brig rm   --all [--dry-run] [-y]               list every brig sandbox, confirm,
+                                                 then stop and remove them
   brig ls   [-q]                                 list sandboxes; -q prints the refs
   brig logs <ref> [--follow] [--tail N] [--raw]  stream the sandbox's log
   brig logs --gateway [<ref>]                    the gateway's log: the shared
@@ -2095,23 +2095,23 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 
 // removalList is what `rm --all` is about to act on, one sandbox per line: the
 // ref, which is the word `brig ls` prints and the one a reader would type at
-// `brig rm` to take just that one, and its state. A sandbox whose ref brig
-// cannot derive -- one named through BRIG_NAME, or whose agent is gone -- is
-// removed all the same, so it is listed by its sandbox name rather than left
-// off a list the reader is about to agree to.
+// `brig rm` to take just that one; the sandbox name, which is the word the
+// removal itself prints, so the two lists can be matched; and its state. A
+// sandbox whose ref brig cannot derive -- one named through BRIG_NAME, or
+// whose agent is gone -- is removed all the same, so it is listed under `-`
+// in the ref column, the way `brig ls` shows it, rather than left off a list
+// the reader is about to agree to.
 func removalList(list []runtime.Instance) string {
-	width := 0
-	names := make([]string, len(list))
+	ref, name := 0, 0
+	refs := make([]string, len(list))
 	for i, inst := range list {
-		names[i] = refOf(inst.Name)
-		if names[i] == "" {
-			names[i] = inst.Name
-		}
-		width = max(width, len(names[i]))
+		refs[i] = refCell(refOf(inst.Name))
+		ref = max(ref, len(refs[i]))
+		name = max(name, len(inst.Name))
 	}
 	var b strings.Builder
 	for i, inst := range list {
-		fmt.Fprintf(&b, "%-*s  %s\n", width, names[i], inst.State)
+		fmt.Fprintf(&b, "%-*s  %-*s  %s\n", ref, refs[i], name, inst.Name, inst.State)
 	}
 	return b.String()
 }
