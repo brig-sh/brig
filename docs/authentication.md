@@ -3,7 +3,7 @@
 By the end of this page you can pick how an agent gets its credentials. It
 can then reach GitHub over HTTPS from inside the guest.
 
-Prerequisites: brig installed ([install.md](install.md)) and a shipped agent,
+Prerequisites: Brig installed ([install.md](install.md)) and a shipped agent,
 such as `claude-code`. Nothing else.
 
 This page uses **agent** for the CLI surface you run: `brig run claude`, a
@@ -40,17 +40,16 @@ brig: run `claude` on the host once to log in
 ```
 
 That run exits 0. Only a **required** secret stops a run before the sandbox
-exists, and no profile brig ships declares one. `brig --help`'s note that
-`info` "fails if a declared secret is missing" describes a path none of the
-eight built-in profiles can reach.
+exists. None of the eight built-in profiles declares one, so a missing
+secret never stops a run.
 
 Claude Code prompts for the login the sandbox does not have. Complete it
 inside the guest, the same way a fresh machine's first login works.
 
 Where that login lands next depends on the profile. `claude-code` and
 `claude-desktop` write it to a memory-backed mount. `brig stop claude` takes
-the whole VM with it, and the next `brig run claude` prompts again. The other
-five agent profiles mount the guest home from host disk instead: `codex`,
+the whole sandbox with it, and the next `brig run claude` prompts again. The
+other five agent profiles mount the guest home from host disk instead: `codex`,
 `cursor`, `gemini`, `grok`, `opencode`. A login written there survives a stop.
 
 Choose this path for a first run with no setup. On `claude-code` or
@@ -79,13 +78,13 @@ command still succeeds: it prints `<profile>: importing 0 secrets` and exits
 0. On a host with no keyring it fails instead, even though there is nothing
 to import.
 
-**If a long `claude-code` session stops authenticating.** brig re-delivers the
+**If a long `claude-code` session stops authenticating.** Brig re-delivers the
 stored `claude-credentials` document on every command that reaches the
 sandbox. `run`, `sh` and `exec` all count, not only the first boot.
 
 Measured 2026-08-19 against a live account: Claude Code refreshes that
 document in place, and Anthropic rotates the refresh token single-use. A
-refresh inside the guest invalidates the host copy, so the next brig command
+refresh inside the guest invalidates the host copy, so the next Brig command
 re-delivers the dead stored document over the guest's fresh one. This can
 change with either the agent or the provider. If a session starts failing to
 authenticate, log in on the host again and re-run
@@ -119,10 +118,10 @@ one moves the sandbox off your subscription and onto metered billing.
 `codex` denies `OPENAI_API_KEY` for the same reason. It signs in with
 `codex login --device-auth` inside the guest instead, which is path 1 above.
 `codex` also declares no `secrets:`, so path 2 cannot fill one either.
-[secrets.md](secrets.md) has the exact message brig prints and the override.
+[secrets.md](secrets.md) has the exact message Brig prints and the override.
 
 Choose this path when a key already lives in your shell, a CI job, or a
-secret manager's run-with-env wrapper. brig reads it fresh on every run
+secret manager's run-with-env wrapper. Brig reads it fresh on every run
 instead of storing a copy.
 
 ## Git access in the guest
@@ -144,7 +143,7 @@ Turn it on with `BRIG_GIT_CONFIG=1`:
 BRIG_GIT_CONFIG=1 brig run claude ~/code/demo
 ```
 
-With it on, brig regenerates a credential helper and a managed gitconfig
+With it on, Brig regenerates a credential helper and a managed gitconfig
 inside the guest on every run. The helper reads `GH_TOKEN` at the moment git
 asks for a credential. It does nothing when the variable is unset, so git
 reports its own authentication error instead of failing on an empty
@@ -157,5 +156,5 @@ comes only from your exported `GH_TOKEN`. A stored `gh-token` secret does not
 reach them.
 
 [secrets.md](secrets.md) is the reference for the store behind path 2 and the
-`gh-token` fallback. [profiles.md](profiles.md) is where to change any of
+`gh-token` fallback. See [profiles.md](profiles.md) for how to change any of
 this for an agent of your own.
