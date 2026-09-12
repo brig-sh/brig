@@ -372,6 +372,10 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		Progress: c.runtimeOutput(),
 		Notice:   c.runtimeNotice(),
 	}
+	// The clock starts here rather than in waitReady: the VMM's own start is
+	// part of what the reader waits through, and a number that left it out
+	// would flatter every backend equally.
+	started := time.Now()
 	if err := c.Runtime.Run(spec); err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
 	}
@@ -381,9 +385,15 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// still has this workspace, and the next command has to resolve the same one
 	// to find out.
 	c.rememberSession()
-	if !c.waitReady() {
+	took, ok := c.waitReady(started)
+	if !ok {
 		return fmt.Errorf("sandbox did not become ready; check '%s'", c.logHint())
 	}
+	c.BootTime = took
+	// Narration rather than a warning: nobody acts on it, and the smoke test
+	// reads the default output. Rounded to a tenth of a second, which is as
+	// fine as a 300 ms probe interval can honestly claim.
+	c.progressf("sandbox ready in %s", took.Round(100*time.Millisecond))
 	if c.Profile.IsGUI() {
 		focusWindow()
 	}
@@ -488,14 +498,21 @@ func (c *Config) logHint() string {
 // instance running as soon as the VMM process starts, while the guest agent
 // binds its listener a few seconds later. Everything that asks the guest a
 // question waits here first.
-func (c *Config) waitReady() bool {
+//
+// since is when the wait is counted from, and the elapsed returned is measured
+// from it to the first probe that answered. EnsureRunning passes the moment it
+// asked the runtime to boot, so the number covers the VMM start as well as the
+// agent's; a caller re-checking a sandbox that was already up passes now and
+// ignores the figure. The timeout still runs from the call, not from since,
+// so a slow VMM launch does not eat into the guest's allowance.
+func (c *Config) waitReady(since time.Time) (time.Duration, bool) {
 	deadline := time.Now().Add(c.ReadyTimeout)
 	for {
 		if c.Runtime.Probe(runtime.ExecSpec{Name: c.VMName, Cmd: []string{"/bin/true"}}) {
-			return true
+			return time.Since(since), true
 		}
 		if time.Now().After(deadline) {
-			return false
+			return 0, false
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -519,7 +536,7 @@ func (c *Config) guestMountsWorkspace() bool {
 	if err != nil {
 		return false
 	}
-	if !c.waitReady() {
+	if _, ok := c.waitReady(time.Now()); !ok {
 		return false
 	}
 	seen, err := c.Runtime.Output(runtime.ExecSpec{

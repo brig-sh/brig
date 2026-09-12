@@ -307,6 +307,13 @@ grep -q '^ISOLATION .*microVM (hull, vz backend)' "$WORK/env.err" \
 grep -q 'env-token-secret\|gh-secret\|host-token' "$WORK/env.err" \
   && bad "the envelope printed a credential value" \
   || ok "the envelope names credentials, never values"
+# How long the boot took is said at the verbose level only: it is narration
+# nobody acts on, so the default run above, which did the booting, stays
+# without it. The positive half is under "run --json" below, where a sandbox
+# is removed first so the run measures a boot rather than reusing this one.
+grep -q 'sandbox ready in' "$WORK/run.err" \
+  && bad "a default run printed the boot time -- got: $(cat "$WORK/run.err")" \
+  || ok "a default run does not print the boot time"
 
 # -q prints no envelope either, which is no longer -q's doing -- the default
 # prints none. Kept as the guard that asking for less never yields more.
@@ -2030,6 +2037,15 @@ echo "== run --json =="
 # survives the exec and reports the outcome on one JSON line. The stub's exec
 # exits 7; brig exits 7 too, with that status carried on a parseable last line --
 # which is how a script tells "the agent failed" from "brig refused to start it".
+# A boot is timed, from the runtime being asked to start to the first probe
+# the guest answered, and --verbose says so in one line. The sandbox is removed
+# first so this run boots rather than reuses; a reused sandbox was not booted
+# here and reports nothing.
+"$WORK/brig" rm --all > /dev/null 2>&1
+"$WORK/brig" --verbose run ubuntu -- true > /dev/null 2> "$WORK/boot.err"
+grep -q '^brig: sandbox ready in [0-9.]*m\{0,1\}s$' "$WORK/boot.err" \
+  && ok "--verbose says how long the boot took" \
+  || bad "--verbose says how long the boot took -- got: $(cat "$WORK/boot.err")"
 "$WORK/brig" rm --all > /dev/null 2>&1
 STUB_EXEC_EXIT=7 "$WORK/brig" --json run ubuntu -- true \
   > "$WORK/json.out" 2> "$WORK/json.err"
@@ -2046,6 +2062,13 @@ assert d["data"]["stage"] == "agent", d
 assert d["data"]["exit"] == 7, d' "$last" 2>/dev/null \
     && ok "the last stdout line is a Run object with stage agent and exit 7" \
     || bad "the last stdout line is not the expected Run object -- got: $last"
+  # rm --all above means this run booted, so the object carries the measured
+  # boot time in milliseconds, a non-negative integer.
+  python3 -c 'import json,sys
+d = json.loads(sys.argv[1])["data"]
+assert isinstance(d["bootMillis"], int) and d["bootMillis"] >= 0, d' "$last" 2>/dev/null \
+    && ok "a Run object for a boot carries bootMillis" \
+    || bad "a Run object for a boot carries bootMillis -- got: $last"
 fi
 case "$last" in
   *'"kind":"Run"'*) ok "brig --json run prints a compact Run object" ;;

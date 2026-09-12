@@ -75,6 +75,14 @@ type Config struct {
 	// listener.
 	ReadyTimeout time.Duration
 
+	// BootTime is how long this invocation's boot took, from the runtime
+	// being asked to start the sandbox to the first probe the guest agent
+	// answered. It is set by EnsureRunning and only when it booted: a sandbox
+	// found already running was not measured, and the field stays zero. The
+	// number is what the verbose "sandbox ready in" line and the Run
+	// object's bootMillis report -- measured rather than quoted.
+	BootTime time.Duration
+
 	// Env is what the guest sees, with BRIG_FORWARD_ENV already applied. See
 	// envOverride for what that override does and does not reach. The
 	// requirement list it may read from stays on Profile: one list, one place.
