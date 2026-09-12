@@ -1,184 +1,85 @@
-# Contributing to brig
+# Contributing to Brig
 
-This repository follows the NOFire AI engineering Git guidelines,
-reproduced in full below so the repo is self-contained. Repo-specific
-notes come first.
+## Build and test locally
 
-## Repo specifics
+- `make build` builds `./brig` and `./brigd`.
+- `make test` runs `go test -race ./...`.
+- `make vet` runs `go vet ./...`.
+- `make all` runs vet, test and build, in that order. Run it before you push.
 
-- Build: `make build` produces `./brig` and `./brigd`. `make all` runs
-  `vet test build`. Run it before you push, but CI does not call `make` at
-  all: it runs its own steps, listed next.
-- What CI runs (`.github/workflows/ci.yml`): a `gofmt -l` gate, `go vet
-  ./...`, `go test -race -covermode=atomic -coverprofile=coverage.out ./...`
-  with a coverage upload to Codecov on pushes to `main`, `script/smoke.sh`,
-  a cross-compile for darwin/arm64 and linux/amd64, a check that no test
-  disappeared, and `goreleaser check` plus a full snapshot build so the
-  release config stays exercised before a tag depends on it. The one CI
-  label this repo reads is `removes-tests`: it skips the test-disappeared
-  check for a pull request that means to remove one.
-- There is no linter in this repository. No `golangci-lint` configuration
-  exists anywhere in the tree, and the Makefile has no lint target. The only
-  static gates are `gofmt -l` and `go vet`.
-- Dependencies: brig has **three** direct dependencies -- `sigs.k8s.io/yaml`
-  for profiles, `golang.org/x/sys` for terminal and process calls, and
-  `github.com/godbus/dbus/v5` for the Linux secret store -- and that list is
-  deliberately short. It shells out to `cosign`, `oras` and `security` rather
-  than linking them, which keeps the attack surface of a tool that handles
-  credentials small. Please do not add a dependency without saying in the PR
-  why shelling out or using the standard library will not do.
-- Go version: see `go.mod`. `go build` and `go test` are more permissive than
-  `go vet` about standard-library symbols newer than the `go` directive, so
-  run vet before assuming a version bump is unnecessary.
-- Tests: `go test ./...` runs everywhere. `go test ./... -race` for anything
-  touching concurrency, subprocesses or `brigd`. Note that
-  `internal/secret` exercises the **real** login keychain on macOS, so those
-  tests create and delete items under the `sh.brig.secret` service.
-- Docs: `script/check-retired-spellings.sh` fails a doc that teaches a
-  command spelling scheduled for removal. Run it before you open a docs PR.
-- Brand assets: logos, marks and the architecture diagram live under
-  `assets/`, with usage rules in [assets/README.md](assets/README.md).
-- End-to-end: `script/smoke.sh` drives the real binary against a stub runtime
-  and a stub cosign, so it needs neither a VM nor macOS and runs in CI. It
-  covers profile resolution, credential forwarding, the image-verification
-  decision table and the workspace lifecycle.
-- What `script/smoke.sh` cannot cover: brig drives a runtime it does not own:
-  `hull` on macOS, `nerdctl` on Linux. A change to how brig *invokes* either
-  can pass the whole suite and still be wrong. If you touch the run, exec or
-  credential path, boot a real sandbox before opening the PR.
+`internal/secret`'s tests touch the real login keychain on macOS. They
+create and delete items under service names prefixed `sh.brig.secret.test.`
+(`internal/secret/keychain_darwin_test.go:21`).
 
-## Releasing
+`script/smoke.sh` drives the real binary against a stub runtime. It cannot
+catch a change to how Brig invokes the real one: `hull` on macOS, `nerdctl`
+on Linux. Boot a real sandbox before you open a pull request that touches the
+run, exec or credential path.
 
-- Cutting a release is its own checklist: bump `VERSION`, tag, publish the one
-  draft the workflow opens, and update the tap. See
-  [docs/releasing.md](docs/releasing.md). One tag, one release.
+## What CI checks
+
+CI does not call `make`. It runs its own steps
+([.github/workflows/ci.yml](.github/workflows/ci.yml)):
+
+- `gofmt -l .`, and fails the build if any file is not formatted.
+- `go vet ./...`.
+- `go test -race -covermode=atomic -coverprofile=coverage.out ./...`, with
+  coverage uploaded to Codecov on pushes to `main`.
+- `script/smoke.sh`.
+- A cross-compile for `darwin/arm64` and one for `linux/amd64`.
+- A check that no test disappeared (`script/check-tests-kept.sh`). Label a
+  pull request that renames or deliberately removes a test `removes-tests`,
+  and say why in the description. `removes-tests` is the only label CI
+  reads.
+- `goreleaser check`, and a full snapshot build, so the release config stays
+  exercised before a tag depends on it.
+
+There is no linter. No `golangci-lint` configuration exists in this
+repository, and the Makefile has no lint target. `gofmt` and `go vet` are the
+only static gates.
+
+## Dependencies
+
+Brig has three direct dependencies: `sigs.k8s.io/yaml` for profiles,
+`golang.org/x/sys` for terminal and process calls, and
+`github.com/godbus/dbus/v5` for the Linux secret store. That list is
+deliberately short. Brig shells out to `cosign`, `oras` and `security`
+rather than linking them, which keeps the attack surface of a tool that
+handles credentials small. Do not add a dependency without saying in the
+pull request why shelling out or using the standard library will not do.
 
 ## The two promises
 
-Most of brig is ordinary Go, but two properties are the reason the tool
-exists, and a change that weakens either is a bug even when every test passes:
+Most of Brig is ordinary Go. Two properties are the reason the tool
+exists, and a change that weakens either is a bug even when every test
+passes:
 
-1. **The guest reaches only the host directories brig names for it.** The
+1. **The guest reaches only the host directories Brig names for it.** The
    guest home is mounted as the sandbox's home. Name a project on the run
-   line and brig mounts that project too, read-write, as a second host
+   line and Brig mounts that project too, read-write, as a second host
    directory at `/work/<name>`. The agent can change those real project
-   files. `docs/security.md` names the further limits, including what a
-   profile's own hostmount can add. Everything brig writes into either
-   directory it writes from the host, as you. Those paths are
-   attacker-controlled input, and they are handled through an `os.Root`
-   rather than by joining strings.
-2. **The guest gets the credentials it was named, and no others.** Values are
-   read from your environment per invocation, forwarded by name so they never
-   appear in `ps`, and never written into the workspace.
+   files. [docs/security.md](docs/security.md) names further limits,
+   including what a profile's own hostmount can add. Brig writes everything
+   into either directory from the host, as you, and handles those
+   attacker-controlled paths through an `os.Root` rather than by joining
+   strings.
+2. **The guest gets only the credentials you name for it.** Brig reads
+   values from your environment per invocation and forwards them by name, so
+   they never appear in `ps`. It never writes them into the guest home.
 
-`docs/security.md` is where the limits of both are written down, including the
-ones that are weaker than they look. If a change moves either promise, say so
-in the PR and update that document in the same change. It is the page people
-read before deciding what credential to trust brig with, and it is only useful
-while it is true.
+[docs/security.md](docs/security.md) lists the limits of both promises,
+including the ones weaker than they look. If a change moves either promise,
+say so in the pull request and update that page in the same change. People
+read it before trusting Brig with a credential, so keep it true.
 
 A note on tests for these two: a **negative** test is worth more than a
-positive one. "The denied variable was not forwarded" and "the planted symlink
-was refused, and the file outside the workspace is untouched" are the
-assertions that catch a regression; "the sandbox booted" is not.
-
-# Working with Git at NOFire AI
-
-This document describes how we work with Git at NOFire AI: how we shape
-commits, write commit messages, open Pull Requests, and review each other's
-work. It draws on practices that have served us well over years of building
-and maintaining systems software in the open.
-
-A note before we start: Git workflows are an opinionated space, and reasonable
-people disagree on many of the points below. What follows is not meant as
-dogma, but as a shared baseline that keeps our history readable, our reviews
-pleasant, and our debugging sessions short. If you believe a guideline gets in
-the way of good work, raise it; these conventions should serve us, not the
-other way around. That said, until we collectively decide to change something,
-we ask everyone to follow the same conventions so the result stays consistent.
-
-## Table of contents
-
-1. [Guiding principles](#guiding-principles)
-2. [Branches](#branches)
-3. [Commits](#commits)
-4. [Commit messages](#commit-messages)
-5. [Pull Requests](#pull-requests)
-6. [Review process](#review-process)
-7. [CI and merge criteria](#ci-and-merge-criteria)
-8. [Issues](#issues)
-9. [A few words on flexibility](#a-few-words-on-flexibility)
-
-## Guiding principles
-
-Everything below derives from a few simple ideas:
-
-- **The history is a first-class artifact.** We read `git log`, `git blame`
-  and `git bisect` far more often than we write commits. A clean, honest
-  history is documentation that never goes stale.
-- **Every commit should stand on its own.** Each commit should build and pass
-  tests, so that `git bisect` remains usable and reverts stay surgical.
-- **Reviews are conversations, not gates.** We optimize for making the
-  reviewer's life easy; in return, reviews are faster and friendlier for
-  everyone.
-- **Small and focused beats large and complete.** A series of small, logical
-  changes is almost always easier to review, test, and revert than one big
-  drop.
-
-## Branches
-
-- `main` is always releasable. It is protected; changes land only through
-  Pull Requests.
-- Work happens on short-lived feature branches. A simple, descriptive naming
-  scheme helps when browsing branches, e.g.:
-  - `feat/<short-description>`
-  - `fix/<issue-number>-<short-description>`
-  - `docs/<short-description>`
-- Prefer rebasing your branch on top of `main` over merging `main` into it.
-  This keeps the eventual history linear and the PR diff honest. (If you have
-  a strong preference for merge-based updates during development, that is fine
-  too, just make sure the branch is tidy before review.)
-- Delete branches after they are merged.
+positive one. "The denied variable was not forwarded" is one assertion that
+catches a regression. "The planted symlink was refused, and the file outside
+the guest home is untouched" is another. "The sandbox booted" is not.
 
 ## Commits
 
-We care about commit hygiene, and this is probably the most "opinionated" part
-of this document. Our experience is that the effort pays off many times over.
-
-- **Organize changes into logical commits.** Each commit should represent a
-  single, specific change, avoiding both overly large and overly small
-  commits. "Implement feature X" and "fix typo from previous commit" are both
-  signs that a rebase is in order.
-- **No commit should break the build.** Every commit in a PR should compile
-  and pass the test suite on its own, not just the final one. This keeps
-  `git bisect` useful.
-- **Keep refactoring separate from behavior changes.** If a fix requires
-  moving code around first, put the mechanical move in its own commit so the
-  actual change is visible in a small diff.
-- **Don't mix unrelated changes.** If you spot an unrelated problem while
-  working on something, fix it in a separate commit (or better, a separate
-  PR/issue).
-- **Rewrite history freely before review, carefully after.** `git rebase -i`
-  is your friend while a branch is yours alone. Once review has started,
-  prefer appending fixup commits during the discussion and squashing them
-  before merge, so reviewers can follow what changed between rounds. The one
-  sanctioned exception is adding review trailers (e.g. `Reviewed-by`) when the
-  PR is approved (see [Review process](#review-process)): that final amend
-  happens at merge time, not mid-review.
-- **Always sign off your commits** (`git commit -s`). This adds the
-  `Signed-off-by` trailer and certifies the
-  [Developer Certificate of Origin](https://developercertificate.org/).
-
-## Commit messages
-
-This is where we deliberately hold ourselves to a high standard. A good commit
-message explains *why* a change exists, to a reader who
-has none of the context you currently have, including future you.
-
-### Format
-
-We follow the [Conventional Commits](https://www.conventionalcommits.org/)
-specification:
+Brig follows [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 <type>[optional scope]: <description>
@@ -188,181 +89,62 @@ specification:
 [optional footer(s)/trailers]
 ```
 
-- Limit the header (first line) to **72 characters**.
-- Limit body and footer lines to **80 characters**.
-- The `description` is written in the imperative mood ("add", not "added" or
-  "adds") and does not end with a full stop.
-- `type` is one of:
-  - *feat*: A new feature
-  - *fix*: A bug fix
-  - *docs*: Documentation-only changes
-  - *style*: Changes that do not affect the meaning of the code
-    (white-space, formatting, missing semi-colons, etc.)
-  - *refactor*: A code change that neither fixes a bug nor adds a feature
-  - *perf*: A code change that improves performance
-  - *test*: Adding or fixing tests
-  - *build*: Changes that affect the build system or external dependencies
-  - *ci*: Changes to CI configuration files and scripts
-  - *chore*: Other changes that don't modify src or test files
-  - *revert*: Reverts a previous commit
-- Use a `scope` when it adds clarity, e.g. `fix(api): ...` or
-  `feat(agent): ...`.
-- If the change relates to an issue, reference it with a git trailer:
-  `Fixes: #<issue-number>` (or `Refs: #<issue-number>` when it does not fully
-  resolve it).
-- Always include the `Signed-off-by` trailer (`git commit -s`).
+- Limit the header to 72 characters. Write the description in the imperative
+  mood ("add", not "added") and do not end it with a full stop.
+- `type` is one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`,
+  `test`, `build`, `ci`, `chore` or `revert`. The release changelog
+  (`.goreleaser.yaml`) groups `feat`, `fix`, `refactor` and `docs` commits,
+  and drops `test`, `chore`, `ci`, `build` and `style` commits entirely.
+- Use a scope when it adds clarity, for example `fix(secret): ...`.
+- The body says why the change exists, not what it does. Cover the problem,
+  the approach you chose, and any non-obvious consequence.
+- Reference an issue with a trailer: `Fixes: #<number>` when the commit
+  resolves it, `Refs: #<number>` when it does not.
+- Sign off every commit: `git commit -s`. This adds the `Signed-off-by`
+  trailer.
 
-### Body
+## Pull requests and review
 
-The header says *what*; the body says *why*. For anything beyond trivial
-changes, include a body that covers:
+- One logical change per pull request. Put an unrelated fix in its own.
+- Fill in the pull request template.
+- Open the pull request as a draft, and mark it ready for review only once
+  CI is green.
+- Merging needs at least one approval.
+- At merge, add the `Reviewed-by` trailer to the commits. A rebase-and-merge
+  will not add it for you.
+- Rebase-and-merge is preferred, to keep the commits as distinct units in
+  `main`'s history.
 
-- What the problem or motivation was.
-- Why this approach was chosen (especially if alternatives were considered).
-- Any non-obvious consequences, limitations, or follow-up work.
+## Docs
 
-A reasonable test: could a colleague reviewing `git log` in two years
-understand the change without opening the diff or the PR discussion?
+Run `script/check-retired-spellings.sh` before you open a documentation pull
+request. It fails a doc that teaches a command spelling scheduled for
+removal. [docs/README.md](docs/README.md) is the map of the documentation.
 
-### Example
+Brand assets (logos, marks, the architecture diagram) live under `assets/`.
+See [assets/README.md](assets/README.md) for the rules.
 
-```
-fix(detector): avoid false positives on slow-start deployments
+## Releasing
 
-The anomaly detector treated the warm-up phase of newly deployed
-services as a regression, because baseline metrics were computed
-over a window that included pre-deployment data.
-
-Skip baseline computation until the service has reported healthy
-for at least one full evaluation window. An alternative would have
-been to weight recent samples more heavily, but that would change
-behavior for all services rather than only newly deployed ones.
-
-Fixes: #142
-Signed-off-by: Jane Doe <jane@nofire.ai>
-```
-
-## Pull Requests
-
-- **Start from an issue when the change is non-trivial.** For significant
-  changes, open an issue (or pick up an existing one) and discuss the
-  approach before investing in an implementation. For small fixes, a PR alone
-  is fine; use judgement.
-- **Keep PRs focused.** One PR per logical change. Avoid drive-by changes
-  unrelated to the PR's purpose; they slow down review and complicate
-  reverts.
-- **Complete the PR template** (where one exists) and write a meaningful PR
-  title and description: what the change does, why, how it was tested, and
-  anything reviewers should pay particular attention to.
-- **A test that disappears is a claim.** CI refuses a pull request that
-  removes a test, because a change which reverts more than it meant to takes
-  the failing tests with it and every other check stays green. A rename or a
-  deliberate removal is ordinary work: label the pull request
-  `removes-tests` and say why in the description. See
-  `script/check-tests-kept.sh`.
-- **Test locally before opening.** The build should not break, all tests
-  should pass, and new functionality should come with new or updated tests.
-- **Use draft PRs** for work in progress or early feedback. Mark the PR ready
-  for review only when CI is green and the commits are in their final,
-  logical shape.
-
-## Review process
-
-The flow we follow:
-
-1. The author opens a PR (draft, if work is in progress) and ensures CI
-   passes.
-2. The author marks the PR ready for review and requests reviewers (or relies
-   on the default assignment).
-3. Reviewers submit comments and reviews. We aim for at least one approval
-   before merging; for sensitive areas, two is a good idea.
-4. The author addresses comments (through discussion or follow-up commits)
-   and re-requests review.
-5. Upon approval, the appropriate trailers (e.g. `Reviewed-by`) are added to
-   the commits (the one sanctioned post-review amend) and the PR is merged.
-   Add them before merging: a rebase-and-merge will not insert them for you.
-
-A few norms that make reviews pleasant on both sides:
-
-- **As an author:** respond to every comment, even if just with a 👍 or a
-  short rationale for disagreeing. Don't take review comments personally;
-  the review targets the code, not you.
-- **As a reviewer:** be kind and specific. Distinguish blocking concerns from
-  preferences ("nit:" is a fine prefix for the latter). Suggest, don't
-  command, where the choice is genuinely a matter of taste.
-- **Disagreements** are resolved through discussion; if no consensus emerges,
-  the maintainers of the affected area make the call. It is fine to record a
-  "disagree and commit" in the thread and move on.
-
-## CI and merge criteria
-
-A PR is mergeable when:
-
-- CI is green: gofmt and go vet, builds, unit tests and the smoke test pass.
-- The required approvals are in place.
-- The branch is up to date with `main` (rebased, with a clean, logical commit
-  series).
-- All commits are signed off and follow the message conventions above.
-
-We prefer **rebase-and-merge** to keep the individual, carefully crafted
-commits as distinct units in `main`'s history: their granularity and messages,
-though rebasing necessarily rewrites their SHAs. Squash-merge is acceptable for
-PRs that are genuinely a single logical change; plain merge commits are
-generally avoided to keep the history linear. (Again: this is a preference, not
-a religion; if a repository has good reasons for a different merge strategy,
-document it in that repository.)
-
-Where supported by the tooling, labels can control CI behavior (e.g.
-`ok-to-test`, `skip-build`, `skip-lint`), skipping the heavy
-build-and-test workflows for documentation-only PRs, or deferring lint checks
-on drafts. Check each repository's docs for the labels it supports.
+Cutting a release is maintainers-only work, covered in
+[docs/releasing.md](docs/releasing.md).
 
 ## Issues
 
-We use issues to track bugs and feature requests, and to anchor PRs to a
-discussion.
+Use issues to track bugs and feature requests. **A vulnerability is not a
+public issue.** Brig handles credentials, so a flaw in how it does that must
+reach the maintainers privately. Do not open an issue or a pull request for
+one. Follow [SECURITY.md](SECURITY.md) instead, which routes it through
+GitHub's private vulnerability reporting.
 
-**A security vulnerability is not a public issue.** brig handles credentials,
-so a flaw in how it does that should reach the maintainers privately before it
-reaches everyone else. Do not open an issue or a pull request for one: follow
-[SECURITY.md](SECURITY.md), which routes it through GitHub's private
-vulnerability reporting instead. The rest of this section is for ordinary bugs.
+For a bug report, fill in the issue template. Include the problem, steps to
+reproduce, the `brig version` and runtime version, your environment, and the
+full `brig doctor` output.
 
-When reporting a bug, please include:
-
-- A short, clear description of the problem.
-- Relevant logs at the highest useful verbosity.
-- The version in use (release version or commit hash).
-- Environment details (architecture, deployment type, relevant
-  configuration).
-- Steps to reproduce.
-- The `bug` label, and a willingness to answer follow-up questions from the
-  maintainers.
-
-For feature requests, use the `enhancement` label and describe the proposed
-feature and its motivation. Read [docs/non-goals.md](docs/non-goals.md) first:
-it lists what brig will not do for now, with the reason and the change in
-circumstances that would reopen each one, so a proposal can start from the
-existing answer. Proposals for improvements are always welcome, including
-proposals to change this document.
-
-## A few words on flexibility
-
-These guidelines describe how we *prefer* to work, based on what has served us
-well in practice. They are not a substitute for judgement:
-
-- Trivial changes (a typo fix, a one-line doc tweak) do not need the full
-  ceremony, though they still deserve a well-formed commit message.
-- New repositories or experimental projects may relax some rules early on,
-  tightening them as the project matures. If a repository deviates, it should
-  say so in its own `CONTRIBUTING.md`.
-- If a rule consistently creates friction without adding value, that is a
-  signal worth acting on. Open an issue or a PR against this document and
-  let's discuss it.
-
-The goal, in the end, is simple: a history we can trust, reviews we enjoy, and
-a codebase that explains itself. Everything here exists in service of that.
+For a feature request, read [docs/non-goals.md](docs/non-goals.md) first. It
+lists what Brig will not do for now and why, so a proposal can start from
+the existing answer.
 
 ## AI policy
 
-AI-assisted development is welcome in brig. See [AI_POLICY.md](AI_POLICY.md).
+AI-assisted development is welcome in Brig. See [AI_POLICY.md](AI_POLICY.md).

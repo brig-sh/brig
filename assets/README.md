@@ -2,10 +2,10 @@
 
 The wordmark is the mark. There is no symbol.
 
-The letters are drawn on a square grid with a two-unit stroke, which is the
-shape of a terminal cell and the shape of a bar. `brig` and `hull` share the
-grid, the stroke and the palette, so the relationship between them is the
-drawing itself rather than a symbol they both carry.
+The letters are drawn on a square grid with a two-unit stroke. That stroke
+is the shape of a terminal cell and the shape of a bar. `brig` and `hull`
+share the grid, the stroke and the palette. The relationship between them
+is the drawing itself, rather than a symbol they both carry.
 
 Every stroke is two units. The x-height is five units, the ascender is eight,
 and the descender drops three below the baseline. Letters are tracked two units
@@ -21,7 +21,7 @@ apart.
 | Brass | `#E7A33E` | The avatar glyph, and one accent per page |
 | Brass deep | `#B9761C` | Brass on a light background, where the lighter brass fails contrast |
 
-Brass because ships are brass; navy because it is the sea, not another
+Brass because ships are brass. Navy because it is the sea, not another
 cloud-native blue. The files carry no font dependency, because there is no
 font: the letters are rectangles.
 
@@ -45,7 +45,7 @@ sources for these.
 - Lowercase, always. There is no capital form.
 - Do not put the on-dark files on a light background. The ink is paper-coloured
   and disappears. That is what the on-light pair is for.
-- Clear space is four units on every side. The badge already carries it; the
+- Clear space is four units on every side. The badge already carries it. The
   transparent files do not.
 - The wordmark holds down to about 33 px tall. Below that the stroke falls
   under two device pixels and the counters close up. Use the avatar instead.
