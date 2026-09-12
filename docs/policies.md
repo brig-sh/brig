@@ -1,14 +1,14 @@
 # Networking and egress policy
 
-By the end of this page you can read the three network postures a sandbox
-runs under. You can also write an egress policy, bind it to a profile or
-one session, and check where brig actually enforces it.
+A sandbox runs under one of three network postures. You can bind an
+egress policy to a profile, or to one session, on top of that.
 
-Policy enforcement needs hull's `hvi` backend, which needs macOS 15 or
-newer, and a hull newer than 0.1.0-rc21. On every other backend, including
-every Linux runtime, brig refuses a policy-bound boot rather than running it
-unenforced. A run with `--network offline` is the exception: it reaches no
-network at all, so it satisfies any egress rule and is never refused. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
+An egress policy is enforced only on hull's `hvi` backend, which needs macOS
+15 or newer and a hull newer than 0.1.0-rc21. Every other runtime, including
+every Linux runtime, refuses to boot a policy it cannot enforce. The one
+exception is `--network offline`: it reaches no network at all, so it
+satisfies any egress rule and is never refused. See
+[Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 
 ## Network postures
 
@@ -25,14 +25,13 @@ brig run claude --network isolated
 | --- | --- |
 | `shared` | one network for every sandbox on the host. The default |
 | `isolated` | a network of this sandbox's own |
-| `offline` | no route out. The agent runs, the workspace is mounted, nothing leaves |
+| `offline` | no route out. The agent runs, the guest home is mounted, nothing leaves |
 
-`shared` is a shared network in name, not in reach. On both macOS backends,
-sandboxes on it cannot reach each other. An ARP broadcast from one guest
-crosses to the other, but the reply does not cross back, so neither guest
-ever learns the other's address. On Linux, sandboxes on the shared network
-can reach each other. `brig info` prints the posture as one of these three
-lines:
+`shared` is a shared network in name, not in reach. Sandboxes on it cannot
+reach each other on either macOS backend, but they can reach each other on
+Linux. See the per-backend table in
+[security.md](security.md#things-brig-does-not-claim) for how that was
+measured. `brig info` prints the posture as one of these three lines:
 
 ```
 NETWORK      shared (one network for every sandbox on this host)
@@ -41,13 +40,13 @@ NETWORK      offline (no egress)
 ```
 
 `isolated` needs the `hvi` backend on macOS. `vz` and `qemu` take their
-network from vmnet, which brig does not own, so brig refuses `--network
+network from vmnet, which Brig does not own, so Brig refuses `--network
 isolated` there. On Linux, nerdctl creates a network per sandbox for
 `isolated`, so the posture works on any Linux host.
 
 Binding an egress policy to a sandbox forces the `isolated` posture, whether
 or not `--network` asked for it. See
-[Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
+[Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 
 An unrecognized value refuses the run rather than picking a posture nobody
 asked for, and names where the value came from:
@@ -69,11 +68,9 @@ brig policy create locked-down   # writes ~/.config/brig/policies/locked-down.ya
 brig policy edit locked-down     # change the rules
 ```
 
-This page covers the document, the commands that manage it, and binding it
-to a profile or a session. A bound policy is enforced on the `hvi` backend,
-at the network gateway brig gives that sandbox. A run on a backend that
-cannot enforce one is refused rather than left unconstrained. See
-[Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
+See
+[Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not)
+for what a bound policy actually gets you.
 
 ## Where policies live
 
@@ -85,7 +82,7 @@ absoluteness. This follows the
 [XDG Base Directory Specification, version 0.8](https://specifications.freedesktop.org/basedir/latest/):
 an empty or relative `$XDG_CONFIG_HOME` counts as unset.
 
-The directory starts empty, and brig never writes there unless you ask it
+The directory starts empty, and Brig never writes there unless you ask it
 to. `brig policy create` and `brig policy edit` are the only commands that
 write to it.
 
@@ -119,7 +116,7 @@ egress:
 | `desc` | no | One line, shown by `brig policy ls` |
 | `egress.default` | yes | `allow` or `deny`, applied to any traffic neither list below names |
 | `egress.allow` | no | Exceptions to a `deny` default |
-| `egress.deny` | no | A host or range to refuse regardless. At the gateway that enforces the rules, `deny` takes priority over `allow` and over `default`. brig applies no priority of its own: it passes every rule through as a flag. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
+| `egress.deny` | no | A host or range to refuse regardless. At the gateway that enforces the rules, `deny` takes priority over `allow` and over `default`. Brig applies no priority of its own: it passes every rule through as a flag. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
 
 Each entry in `allow` or `deny` names exactly one of `host:` or `cidr:`. Both,
 or neither, is refused. `host:` is a domain, or a glob such as
@@ -172,7 +169,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy rm <name> [--force]` | delete it. Refuses one that is bound to anything, inline or attached, unless `--force` |
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
-| `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session), and report whether brig can enforce anything against it at all |
+| `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session), and report whether Brig can enforce anything against it at all |
 
 Complete command lines for all eight:
 
@@ -210,10 +207,9 @@ $ brig policy attach locked-down ubuntu
 brig: cannot attach locked-down to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
 
-Both `attach` and `check` print that last line, because "attached" and a
-`check` that prints a policy name both read as a rule in force everywhere.
-Where it is in force depends on the backend the run lands on. See
-[Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
+Both `attach` and `check` print that last line. "attached" and a
+`check` that prints a policy name can both read as a rule already in force.
+See [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 It goes to stderr, where this CLI puts every advisory, so stdout stays the
 command's answer. Both commands print the same constant from
 `internal/policy`, so the two cannot drift into saying different things.
@@ -245,16 +241,16 @@ no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
 ```
 
-"Whether brig can enforce it" means exactly two structural checks. Is the
-profile `kind: shell` or `kind: gui`? Nothing can ever enforce a policy
-against either. Does every bound name still resolve to a policy that
-loaded?
+"Whether Brig can enforce it" means exactly two structural checks. The
+first is whether the profile is `kind: shell` or `kind: gui`. Neither of
+those can ever enforce a policy. The second is whether every bound name
+still resolves to a policy that loaded.
 
 `check` does not resolve the current runtime, the current hypervisor, or
 the runtime's version. It cannot tell you whether the host you are on
-right now will boot the run or refuse it. That answer only appears at boot
-time, from the checks in
-[Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not).
+right now will boot the run or refuse it. See
+[Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not)
+for the checks that answer that.
 
 `--force` on `rm`, or on a rename, can leave a binding pointing at a name
 nothing loads under any more:
@@ -278,7 +274,7 @@ locked-down     only Anthropic's API and one internal range
 ```
 
 "not loaded" rather than "no such policy", because there are two ways to
-get there, and brig cannot always tell them apart. Either nothing declares
+get there, and Brig cannot always tell them apart. Either nothing declares
 that name, or the file that declares it did not parse. In that second case
 the file and its parse error are named separately on stderr.
 
@@ -418,13 +414,13 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 
 ## Errors you are likely to meet
 
-| what brig says | what happened |
+| what Brig says | what happened |
 | --- | --- |
 | ``unknown policy "x". `brig policy ls` lists them`` | `show`, `edit` or `rm` on a name that is not there |
 | `name "x" may use only lowercase letters, digits, dot, dash and underscore, and must start with a letter or digit` | see [Naming a policy](#naming-a-policy) |
 | `name "x" reads as false when written unquoted in YAML, not as itself; pick a different name` | the name is a bare YAML boolean, null or number word. See [Naming a policy](#naming-a-policy) |
-| `<path> already exists. Edit it directly with brig policy edit x, or pass --force to replace it with a fresh starter` | `create` on a name whose file is already there |
-| `policy "x" already exists, declared in <path>. Edit it directly with brig policy edit x, or remove that file first` | `create` on a name a *different* file already declares. `--force` does not help here |
+| ``<path> already exists. Edit it directly with `brig policy edit x`, or pass --force to replace it with a fresh starter`` | `create` on a name whose file is already there |
+| ``policy "x" already exists, declared in <path>. Edit it directly with `brig policy edit x`, or remove that file first`` | `create` on a name a *different* file already declares. `--force` does not help here |
 | `a rule needs host: or cidr:` | a rule in `allow:`/`deny:` named neither |
 | `a rule takes host: or cidr:, not both …` | a rule named both |
 | `cidr "x" is not a valid CIDR: …` | a typo in a `cidr:` value, such as a missing octet |
@@ -446,7 +442,7 @@ Read from the source rather than assumed: the default egress stance is
 allow everything, with no filtering applied at all. It is not a deny-all
 default, and it is not an empty allow list either. A sandbox nobody
 attached a policy to has unrestricted egress, exactly as it did before any
-of this existed. No profile brig ships binds a policy, and `brig run
+of this existed. No profile Brig ships binds a policy, and `brig run
 <agent>` on a fresh install filters nothing. No gateway is given a rule
 until a policy is attached to that profile or that session by hand.
 
@@ -465,9 +461,9 @@ first is what you get. The second is what you ask for.
 ## Where a policy is enforced, and where it is not
 
 Exactly one backend can enforce an egress policy: hull's `hvi` backend, at
-the user-mode network gateway brig gives that sandbox. `vz` and `qemu` take
+the user-mode network gateway Brig gives that sandbox. `vz` and `qemu` take
 their network from vmnet, and every Linux runtime takes its network from
-the container network. Neither of those is something brig filters.
+the container network. Neither of those is something Brig filters.
 
 On the `hvi` backend, a boot reads every policy bound to the run and puts
 the rules on the network gateway it gives that sandbox. That gateway is the
@@ -477,7 +473,7 @@ Measured in a real guest in
 allowed name reaches, a denied name does not resolve, and an address
 dialled directly does not connect.
 
-On every backend that cannot enforce a policy, brig refuses the boot rather
+On every backend that cannot enforce a policy, Brig refuses the boot rather
 than running unenforced. `vz`, `qemu` and every Linux runtime refuse a
 filtered run outright, naming the backend that does enforce. Refusing it
 beats booting a sandbox that reports a policy and filters nothing. There is
@@ -487,13 +483,13 @@ set, regardless of who is watching.
 
 That refusal is checked before anything starts, and again on the path that
 finds the sandbox already running. A policy cannot be waved through by the
-accident of the sandbox being up already. Every runtime brig ships refuses
-a policy it cannot enforce. This is a guarantee about the runtimes brig
+accident of the sandbox being up already. Every runtime Brig ships refuses
+a policy it cannot enforce. This is a guarantee about the runtimes Brig
 ships today, not a property of the interface. A runtime that never answers
 the question is never asked, and stays unrefused.
 
 The runtime has to be new enough, too. The gateway's `--egress-*` flags
-arrived after hull 0.1.0-rc21. brig probes the binary itself, `<bin>
+arrived after hull 0.1.0-rc21. Brig probes the binary itself, `<bin>
 network-gateway --help`, rather than checking a version number. The exact
 release does not matter: a hull newer than 0.1.0-rc21 works. An older one
 is refused by name once a policy applies to the run:
@@ -507,7 +503,7 @@ brig: a policy applies to this sandbox, but hull cannot enforce one (its network
 ```
 
 This probe has a gap, worth stating plainly rather than hiding. If the
-probe command itself fails to run, brig draws no conclusion from that
+probe command itself fails to run, Brig draws no conclusion from that
 failure, and the boot proceeds anyway. The reasoning is that a runtime too
 broken to print its own help produces a clearer error later in the boot.
 But the probe cannot tell a broken binary from one that exits non-zero on
@@ -515,13 +511,13 @@ But the probe cannot tell a broken binary from one that exits non-zero on
 fails open. A policy can reach a gateway that does not take the flags,
 with no refusal from this check first.
 
-Three properties worth stating outright:
+Binding a policy has these properties:
 
 - **The rules are fixed when the sandbox boots.** They go on the gateway's
   command line and it reads them once. Editing a policy changes what the
   next boot enforces, and no environment variable overrides a running
   gateway's rules. A sandbox that is already up when the rules change does
-  not keep running under the old ones. brig detects the mismatch, stops,
+  not keep running under the old ones. Brig detects the mismatch, stops,
   removes and reboots the sandbox, and warns that any other session on it
   will be disconnected.
 - **A policy takes the network posture with it.** Rules belong to a
@@ -539,15 +535,15 @@ Three properties worth stating outright:
 
 ### What this does not do yet
 
-`attach` and `check` refuse what brig knows it cannot enforce at all (a
+`attach` and `check` refuse what Brig knows it cannot enforce at all (a
 `kind: shell`/`kind: gui` profile), and a name bound to nothing. Neither
 inspects the rules a policy contains. Neither can tell you that an `allow`
 glob matches nothing you meant. They can only tell you that the document
 parses.
 
 Deny-over-allow-over-default ordering, and the host-rule behavior below,
-are the enforcing gateway's documented behavior, not something brig
-verifies itself. brig's own merge applies no priority. It concatenates the
+are the enforcing gateway's documented behavior, not something Brig
+verifies itself. Brig's own merge applies no priority. It concatenates the
 `allow` and `deny` lists from every bound policy. Each rule reaches the
 gateway as an `--egress-allow` or `--egress-deny` flag on its command
 line.
@@ -559,7 +555,7 @@ denied name fails to resolve, and an address dialled directly fails to
 connect. It does not exercise a `deny` rule overriding an `allow` rule, and
 it does not exercise a `default: allow` policy. Treat deny-over-allow
 ordering as hull's documented gateway behavior, evidenced historically by
-that one measurement, and not as something brig's own tests confirm.
+that one measurement, and not as something Brig's own tests confirm.
 
 A `host` rule is enforced through the gateway's own resolver, so what it
 covers depends on the default. Under `default: deny`, the resolver answers
