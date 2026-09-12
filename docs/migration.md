@@ -1,6 +1,6 @@
 # Moving off the retired spellings
 
-brig renamed most of its commands while it was still a prerelease. Every old
+Brig renamed most of its commands while it was still a prerelease. Every old
 spelling on this page still works today. Each one prints one line on stderr
 naming its replacement, in this form:
 
@@ -75,7 +75,7 @@ brig run claude -q      # still works, prints a notice
 The notice names the move rather than a new spelling:
 
 ```
-brig: brig <verb> <ref> -q is now brig -q <verb> <ref>
+brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`
 ```
 
 `--json` is different. It is accepted on both sides of the verb permanently,
@@ -91,13 +91,14 @@ brig run claude@refactor          # current
 brig run claude --name refactor   # still works, prints a notice
 ```
 
-`brig run claude` is the default session of the `claude-code` agent, and
-`claude@refactor` is a second one with its own sandbox and its own guest home.
-[docs/sessions.md](sessions.md) explains what each session keeps separate.
+`brig run claude` is the default session of the `claude-code` agent.
+`claude@refactor` is a second session, with its own sandbox and its own
+guest home. [docs/sessions.md](sessions.md) explains what each session
+keeps separate.
 
-`--name` is also Claude Code's own flag. Anything you type to the right of the
-ref goes to the agent untouched, so `brig run claude -- --name x` sends
-`--name x` to Claude Code and brig never sees it.
+`--name` is also Claude Code's own flag. Anything you type to the right of
+the ref goes to the agent untouched. `brig run claude -- --name x` sends
+`--name x` to Claude Code, and Brig never sees it.
 
 ## Profile keys
 
@@ -112,9 +113,11 @@ the header comment documents every field.
 | `forward:` | `env:`, with `ref: env.<name>` |
 | `statePaths:` | `volumes:` |
 
-Declaring a retired key and its replacement with values that disagree is an
-error, not a warning. brig refuses the profile rather than guessing which one
-you meant.
+Declaring a retired key beside its replacement is an error, not a warning.
+`kind:` beside `shell:` or `gui:` is refused only when the two disagree.
+`forward:` beside an `env:` entry of the same name, and `statePaths:` beside
+`volumes:`, are refused whatever their values. Brig refuses the profile
+rather than guessing which one you meant.
 
 `hostCredential:` warns only on a profile backed by a file of your own. No
 built-in profile warns about itself.
