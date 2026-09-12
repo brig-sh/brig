@@ -10,10 +10,10 @@ It is deliberately small, and optional. The CLI has no client for it: every
 absent that is not a problem, never `!!`:
 
 ```
---  brigd     not running (no socket at /Users/pmoust/.brig/brigd.sock)
+--  brigd     not running (no socket at ~/.brig/brigd.sock)
 ```
 
-Run it when something else wants one socket to ask brig through. That is a
+Run it when something else wants one socket to ask Brig through. That is a
 second tool driving several sandboxes from one process, or a client that
 wants boots on one sandbox serialized across several callers. Most people
 never run it.
@@ -97,14 +97,10 @@ each answer to its question. Absent in, absent out:
 
 ### Exit code
 
-Beside `error`, a response carries `code`: the stable exit status `brig`
-returns to a script, the same set and the same causes. A script driving
-brigd branches the way one driving brig does. `0` is success. On failure it
-is one of `1` general, `2` usage (an unknown op, an unknown protocol
-version), or `3` no such profile or sandbox. The rest are `4` a runtime that
-is missing or broken, `5` a boot verification refused, and `6` a credential
-that was not resolved. The full table is at
-[docs/cli.md#exit-codes](cli.md#exit-codes).
+Beside `error`, a response carries `code`. brigd uses the same codes and
+the same causes as `brig` itself, listed at
+[docs/cli.md#exit-codes](cli.md#exit-codes). A script driving brigd
+branches the way one driving `brig` does.
 
 ```json
 {"v":1,"op":"ensure","agent":"no-such-profile"}
@@ -128,9 +124,9 @@ this is a floor, not a nicety.
 
 `running` is re-read from the runtime on every report, rather than taken from
 the inventory. A sandbox stopped by something else is still reported as
-stopped. When the runtime cannot be asked at all -- its binary is gone, a
-permission error, containerd is down -- the session carries `runningError`
-instead. `running` says nothing:
+stopped. Sometimes the runtime cannot be asked at all: its binary is gone,
+a permission error came back, or containerd is down. Then the session
+carries `runningError` instead, and `running` says nothing:
 
 ```json
 {"agent":"claude-code","sandbox":"brig-claude-code","workspace":"/Users/me/brig/claude-code",
@@ -143,7 +139,7 @@ reach never made.
 
 Anything the run says about itself comes back with it, as `warnings`, one
 line each. Examples: a credential that was not forwarded and why, a secret
-about to expire, an image the check did not confirm. The CLI prints these on
+about to expire, an image that did not verify. The CLI prints these on
 the terminal of the person who typed the command. The daemon has no such
 terminal, so they travel to the client that asked, not to brigd's own
 terminal, wherever that is.
@@ -190,8 +186,8 @@ credentials, verifies the image and checks the share, then boots only if
 needed. Work on one sandbox is serialised, so two clients asking for the same
 one at the same moment get one boot rather than two.
 
-The daemon never asks a question. The image check stops to ask when an image
-claiming to be ours fails verification. There is nobody at brigd's terminal
+The daemon never asks a question. Image verification stops to ask when an
+image claiming to be ours fails to verify. There is nobody at brigd's terminal
 to answer: the client is somewhere else, and the sandbox's lock stays held
 across the wait. So a request that needs a prompt is refused
 instead, with the reason and the setting that overrides it in `error`. Setting
@@ -202,9 +198,9 @@ profile carrying `runtimeBin` drives the same binary through the daemon as it
 does through the CLI. A profile naming a binary that is not there fails that
 request and no other.
 
-`status` re-reads liveness from the runtime instead of trusting the inventory.
-A sandbox can be stopped by anything, including a `brig stop` that never went
-through the daemon.
+`status` re-reads liveness from the runtime instead of trusting the
+inventory. A sandbox can be stopped by anything, including a `brig stop`
+that never went through the daemon.
 
 The inventory lives in memory. Restarting brigd forgets which sandboxes it
 started, though the sandboxes themselves keep running and `brig ls` still
@@ -226,7 +222,8 @@ ls`, which reads the runtime directly, shows them throughout.
 ## Stability
 
 The protocol is versioned so a client can tell what it is talking to. It is
-**internal until brig 0.3**: within a version a field can be added, but none
+**internal until Brig 0.3**: within a version a field can be added, but none
 is renamed or removed. A client that ignores unknown fields keeps working. A
-change that breaks such a client becomes a new version (`v: 2`). That is the
-same rule `brig --json` output follows.
+change that breaks such a client becomes a new version (`v: 2`), the same
+rule [docs/cli.md#--json-output](cli.md#--json-output) sets for `--json`
+output.
