@@ -2,26 +2,30 @@
 
 This page takes you from an empty terminal to Claude Code running inside a
 sandbox, on a throwaway project. It also shows you how to stop it when you
-are done. It is one path, start to finish. The [README](../README.md) and
-the rest of [docs/](.) cover everything else brig can do.
+are done. It is one path, start to finish, on macOS.
+
+The same agent runs on Linux: see [install.md#linux](install.md#linux), and
+the rest of this page applies there too.
 
 ## Prerequisites
 
-You need a Mac with Apple silicon. The default agent profiles, including
-`claude-code`, ask for hull's `hvi` backend, and `hvi` needs macOS 15 or
-newer. On macOS 14, set `BRIG_HYPERVISOR=vz` before you run one. See
-[docs/support.md](support.md) for the full platform matrix.
-
-brig itself must already be installed. [docs/install.md](install.md) covers
+Brig itself must already be installed. [install.md](install.md) covers
 every platform, and how to verify a download.
 
-## Check what brig found
+You need a Mac with Apple silicon, and macOS 15 or newer. On macOS 14, set
+`BRIG_HYPERVISOR=vz` before you run an agent. The default profiles,
+including `claude-code`, ask for hull's `hvi` hypervisor backend, and `hvi`
+needs macOS 15. On Linux you need `nerdctl`, containerd and the `urunc`
+shim instead. [install.md#platform-support](install.md#platform-support)
+has the full platform matrix.
+
+## Check what Brig found
 
 ```bash
 brig doctor
 ```
 
-brig prints one line per fact, in this shape:
+Brig prints one line per fact, in this shape:
 
 ```
   ok  host      macOS 26.5 on arm64
@@ -36,11 +40,11 @@ brig prints one line per fact, in this shape:
   --  image     pass an agent to check its image: brig doctor claude
 ```
 
-`ok` means brig found what that line checks. `virtual` reports only whether
-this Mac can host a microVM at all, not which backend a run uses. `!!`
-prints a fix beside the line and does not stop you here. brig fetches
+`ok` means Brig found what that line checks. `virtual` reports only
+whether this Mac can host a microVM at all, not which backend a run uses.
+`!!` prints a fix beside the line and does not stop you here. Brig fetches
 missing boot assets itself, the first time an agent needs them. `--` means
-brig looked and found nothing to report, not a failure. `brigd` is an
+Brig looked and found nothing to report, not a failure. `brigd` is an
 optional daemon this quickstart does not need.
 
 ## Run it
@@ -53,10 +57,11 @@ brig run claude ~/code/demo
 `claude` is the default session of the `claude-code` agent. `~/code/demo`
 is the project this run mounts.
 
-The first run is the slow one: brig pulls the guest image once, and later
-runs reuse the copy already on disk. `brig --verbose run` prints the
-execution envelope before it boots, and `brig info claude` prints the same
-thing without running anything:
+The first run downloads two things: the guest image, and the boot assets,
+the kernel and the initrd. Both are cached, and later runs reuse the copy
+already on disk. `brig --verbose run` prints the execution envelope before
+it boots, and `brig info claude` prints the same thing without running
+anything:
 
 ```
 PROFILE      claude-code
@@ -69,12 +74,16 @@ CREDENTIALS  (none)
 NETWORK      shared (one network for every sandbox on this host)
 ```
 
-`claude-code` asks for hull's `hvi` backend, which is why `ISOLATION` names
-it: `hvi` drives Apple's Hypervisor.framework directly, not
-Virtualization.framework. `WORKSPACE` here is brig's own label for the
-guest home, the row this page calls the guest home everywhere else.
+`claude-code` asks for hull's `hvi` backend, which is why `ISOLATION`
+names it: `hvi` drives Apple's Hypervisor.framework directly, not
+Virtualization.framework. `WORKSPACE` is the CLI's label for the guest
+home.
 
-Once brig verifies the image and the boot assets, it prints one line and
+On macOS, hull can ask one question about telemetry before the agent
+appears. See [telemetry.md](telemetry.md) for what it counts and how to
+turn it off.
+
+Once Brig verifies the image and the boot assets, it prints one line and
 starts the sandbox:
 
 ```
@@ -84,8 +93,8 @@ brig: image and boot assets verified
 Then Claude Code asks you to log in, because the sandbox holds no
 credential. That login happens inside the sandbox. On `claude-code` it
 lands on a memory-backed mount, not disk, so `brig stop` takes it with the
-VM and the next run asks again. Not every agent works this way: see
-[sessions.md](sessions.md#what-survives) for which do.
+sandbox and the next run asks again. Not every agent works this way: see
+[sessions.md#what-survives](sessions.md#what-survives) for which do.
 
 ## Where the agent's files live
 
@@ -117,10 +126,11 @@ brig stop claude   # stop the sandbox, keep its name
 brig rm claude      # stop and remove it
 ```
 
-`brig stop` keeps the sandbox's name, its row in `brig ls`, and what brig
-recorded about the session. `brig rm` drops the last of those too. Neither
-touches `~/brig/claude-code` or `~/code/demo`: your project and the
-agent's saved state stay where they are.
+`brig stop` stops the sandbox and keeps its name, its row in `brig ls`,
+and what Brig recorded about the session. `brig rm` stops the sandbox and
+drops all of that too. Neither touches `~/brig/claude-code` or
+`~/code/demo`: your project and the agent's saved state stay where they
+are.
 
 If a run does not do what you expected,
 [troubleshooting.md](troubleshooting.md) is organized by what you saw on
