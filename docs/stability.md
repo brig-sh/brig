@@ -1,12 +1,12 @@
 # What is stable, and what is not
 
-brig is a prerelease. Every published version so far is a `0.1.0-rc` tag, and
+Brig is a prerelease. Every published version so far is a `0.1.0-rc` tag, and
 the grammar is still settling. This page says which parts you can write a
 script against today and which parts are expected to move.
 
 ## Not stable yet
 
-Nothing in brig carries a compatibility guarantee before 1.0. The command
+Nothing in Brig carries a compatibility guarantee before 1.0. The command
 grammar was renamed once already, during the 0.1 series, and
 [docs/migration.md](migration.md) is the record of that change.
 
@@ -14,7 +14,7 @@ Treat the following as subject to change without a deprecation cycle:
 
 - Profile file fields other than those the current `brig agent export` header
   documents.
-- The layout of `~/.brig`, brig's state directory, and its session index.
+- The layout of `~/.brig`, Brig's state directory, and its session index.
 - The wording of any human-readable output. Parse `--json`, not prose.
 - Anything marked "example profile" in `brig agent ls`.
 
@@ -37,15 +37,10 @@ removal in 0.3. `brig run` is never removed.
 
 ## The deprecation window
 
-A spelling brig retires keeps working for at least one release after the notice
-appears. The notice goes to stderr, so it does not corrupt piped output:
-
-```
-brig: `brig profiles` is now `brig agent ls`
-```
-
-The current window closes at 0.3, which removes the spellings listed in
-[docs/migration.md](migration.md).
+A retired spelling keeps working for at least one release after Brig prints
+its notice, and the current window closes at 0.3.
+[docs/migration.md](migration.md) has the notice example and the full mapping
+of retired spellings.
 
 ## Reporting a break
 
