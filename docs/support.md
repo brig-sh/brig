@@ -15,12 +15,12 @@ Open an issue and pick the bug report template. Include:
 - The output of `brig version`.
 - The output of `brig doctor`.
 
-`brig doctor` reports the host, the hypervisor, the runtime, the boot assets,
-cosign, the profiles, the secret store and brigd, one line per fact.
+`brig doctor` prints one line per check: host, virtual, runtime, boot,
+verify, profiles, secrets, brigd and image.
 [../CONTRIBUTING.md#issues](../CONTRIBUTING.md#issues) lists what else helps:
 logs, your environment, and the steps to reproduce.
 
-If brig or its runtime will not install or start, check whether your platform
+If Brig or its runtime will not install or start, check whether your platform
 is supported first: [install.md](install.md#platform-support) has the full
 matrix.
 
