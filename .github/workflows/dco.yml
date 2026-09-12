@@ -1,0 +1,96 @@
+name: DCO
+
+# Every commit in a pull request carries a Signed-off-by trailer, which is how
+# a contributor certifies the Developer Certificate of Origin
+# (https://developercertificate.org/).
+# CONTRIBUTING.md has asked for `git commit -s` from the start; nothing checked
+# it, and commits without the trailer have already reached main.
+#
+# Its own workflow rather than a job in ci.yml: a ruleset requires the context
+# "<workflow> / <job>", so the required check keeps its name when ci.yml is
+# reorganised, and this runs on ubuntu in seconds rather than queueing behind
+# the other lanes.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Full history: the check walks every commit the pull request adds, not
+      # only its head.
+      - name: Check out the full history
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Per commit rather than the range in one call, so a failure names the
+      # commit to fix. Violations become annotations and a run summary, so a
+      # contributor sees which one without opening the log.
+      - name: Check every commit is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Commits written by a tool, not by a person who can certify
+          # anything: the release bot that opens the cask pull request on a
+          # stable tag, and the dependency bots. Requiring the trailer of one
+          # would only mean a human forging it on the bot's behalf.
+          is_exempt() {
+            case "$1" in
+              bot@goreleaser.com | *'[bot]'*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          failed=0
+          echo "## DCO sign-off" >> "$GITHUB_STEP_SUMMARY"
+
+          for sha in $(git rev-list --reverse --no-merges \
+                        "${BASE_SHA}..${HEAD_SHA}"); do
+            short=$(git log -1 --format=%h "$sha")
+            subject=$(git log -1 --format=%s "$sha")
+            author=$(git log -1 --format=%ae "$sha")
+
+            if is_exempt "$author"; then
+              echo "- \`${short}\` ${subject} -- exempt (${author})" \
+                >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            # The trailer on its own line, carrying a name and an address,
+            # which is what `git commit -s` writes. A bare "Signed-off-by: me"
+            # certifies nobody.
+            if git log -1 --format=%B "$sha" \
+               | grep -qiE '^[[:space:]]*Signed-off-by:[[:space:]]*[^<]+<[^>]+>[[:space:]]*$'; then
+              echo "- \`${short}\` ${subject}" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            failed=1
+            echo "::error::${short} ${subject}: no Signed-off-by trailer"
+            echo "- \`${short}\` ${subject} **MISSING Signed-off-by**" \
+              >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          if [ "$failed" = 1 ]; then
+            {
+              echo
+              echo "Sign off the commits and force-push:"
+              echo
+              echo "    git rebase --signoff ${BASE_SHA}"
+              echo "    git push --force-with-lease"
+              echo
+              echo "\`git commit -s\` does it for new commits."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
