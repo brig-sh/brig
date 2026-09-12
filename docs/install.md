@@ -1,18 +1,19 @@
-# Install brig
+# Install Brig
 
-This page covers every way to install brig: Homebrew and `install.sh` on
-macOS, the Linux runtime, and building from source. Pick the path for your
-platform, then check what brig found with `brig doctor`.
+Homebrew is the path to prefer on macOS. Use `install.sh` when Homebrew is
+not available.
 
-Every path installs two things: the `brig` CLI itself, and the sandbox runtime
-it drives underneath, `hull` on macOS or `nerdctl` with containerd on Linux.
-Both have to be present before `brig run` works.
+No single path installs a full working setup everywhere. Homebrew and
+`install.sh` both install `hull` on macOS. On Linux, `install.sh` installs
+`brig`, `brigd` and `cosign` only: you install the runtime, `nerdctl` with
+containerd and the `urunc` shim, yourself. Building from source writes only
+`brig` and `brigd`, never a runtime.
 
 ## macOS with Homebrew
 
-Outcome: `brig` and `hull` installed and on `PATH`.
-
-Prerequisites: a Mac on Apple silicon, and Homebrew.
+Prerequisites: a Mac with Apple silicon, macOS 15 or newer, and Homebrew
+([brew.sh](https://brew.sh)). On macOS 14, set `BRIG_HYPERVISOR=vz` before
+you run an agent. See [Platform support](#platform-support).
 
 ```bash
 brew tap brig-sh/brig
@@ -20,27 +21,19 @@ brew trust brig-sh/brig
 brew install --cask brig
 ```
 
+This installs `brig`, `brigd` and `hull`, puts them on `PATH`, and installs the bash,
+zsh and fish completions with them.
+
 `brew trust` is required because the cask comes from a third-party tap, and
-Homebrew refuses to install one that has not been trusted. `brew trust` needs
-a recent Homebrew. If it reports `Unknown command: trust`, run `brew update`
-first, then try the command again.
+Homebrew refuses to install one that has not been trusted. If it reports
+`Unknown command: trust`, run `brew update` first, then run the command
+again.
 
-The cask depends on the `hull` cask, so this one command installs both, and it
-installs the bash, zsh and fish completions with them.
-
-During the `0.1.0-rc` series, the casks in `brig-sh/homebrew-brig` are
-maintained by hand rather than published by the release pipeline. The release
-workflow opens a cask pull request only on a stable tag, and there is no
-stable tag yet. So the tap can lag the newest release.
-
-If `brew install` gives you an older version than you expected, or fails
-outright, use [install.sh](#installsh) instead. Or read `Casks/brig.rb` and
-`Casks/hull.rb` in the tap for what an install currently gives you.
+During the `0.1.0-rc` series, the tap can lag the newest release. If
+`brew install` gives you an older version than you expected, or fails, use
+[install.sh](#installsh) instead.
 
 ## install.sh
-
-Outcome: a working install without Homebrew. `brig` and `brigd` on macOS and
-Linux, `hull` and its two runners on macOS, and `cosign` on both.
 
 Prerequisites: `curl`, `tar`, and either `sha256sum` or `shasum` on `PATH`.
 
@@ -48,60 +41,47 @@ Prerequisites: `curl`, `tar`, and either `sha256sum` or `shasum` on `PATH`.
 curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sh
 ```
 
-This downloads the newest release for your OS and architecture. There is no
-stable release yet, so that includes prereleases. Everything it fetches is
-checked against a SHA-256 before it is installed, and the destination is
-`BRIG_INSTALL_DIR` or `/usr/local/bin`. It uses `sudo` when that directory is
-not writable.
+This installs `brig` and `brigd` on macOS and Linux. On macOS it also
+installs `hull` with the `vz-runner` and `hvi` executables it drives, and on
+both platforms it installs `cosign`.
 
-A host with neither `sha256sum` nor `shasum` stops the install. A checksum step
-that quietly downgrades to no check is the one outcome it exists to prevent, so
-this is a refusal rather than a warning.
+It downloads the newest release for your OS and architecture. There is no
+stable release yet, so that includes prereleases. It checks every archive
+against a SHA-256 checksum, and installs to `BRIG_INSTALL_DIR` or
+`/usr/local/bin`. It uses `sudo` when that directory is not writable.
 
-An Intel Mac is refused before anything is written. brig itself publishes a
-`darwin/amd64` archive, but `hull` drives Virtualization.framework on Apple
-silicon and has never published an `amd64` build, so there would be no runtime
-to drive. See [support.md](support.md).
+A host with neither `sha256sum` nor `shasum` stops the install, instead of
+silently skipping the check.
 
-### What it installs on macOS
+An Intel Mac is refused before anything is written. The release publishes a
+`darwin/amd64` archive of `brig`. `hull` drives Virtualization.framework on
+Apple silicon only, and has never published an `amd64` build. There is no
+runtime to drive on an Intel Mac.
 
-`hull` comes from its own release, as the `hull-<version>-arm64.tar.gz`
-archive: the same one the Homebrew cask uses. It holds three executables, and
-all three go into the same directory, because `hull` discovers a runner next to
-its own executable:
+`hull` ships as one archive holding three executables. All three go into the
+same directory, because `hull` discovers a runner next to its own
+executable:
 
 | Executable | What it is |
 | --- | --- |
-| `hull` | the CLI brig drives |
+| `hull` | the CLI Brig drives |
 | `vz-runner` | the Virtualization.framework backend |
 | `hvi` | the Hypervisor.framework backend |
 
-`hull.dmg` on the same release page holds the same three binaries in an app
-bundle, for dragging to Applications by hand. `install.sh` does not use it.
+`cosign` verifies the kernel, initrd and guest agent every sandbox boots,
+and the container image behind an agent. Without it on `PATH`, those checks
+report "no tooling". Under the default mode that is not a refusal: Brig
+fetches, writes and boots the assets anyway, with a printed warning.
+Installing `cosign` is what makes `HULL_VERIFY=require` and
+`BRIG_VERIFY=require` usable on a host without Homebrew. `install.sh` skips
+it when one is already on `PATH`.
 
-### What it installs on both
-
-`cosign` is what verifies the kernel, initrd and guest agent every sandbox
-boots, and the container image behind an agent. Without it on `PATH` those
-checks report "no tooling", which under the default mode is not a refusal: the
-boot assets are fetched, written and booted with a printed warning. Installing
-it is what makes `HULL_VERIFY=require` and `BRIG_VERIFY=require` usable on a
-host without Homebrew.
-
-Two things to know about it. It is a 130 MB download, by far the largest thing
-here. And its macOS build is ad-hoc signed upstream, so Gatekeeper rejects it
-on its own -- unlike everything else `install.sh` places, which is Developer ID
-signed and notarized. It runs because a `curl` download carries no quarantine
-attribute. `install.sh` prints this rather than leaving you to find it.
-
-`install.sh` skips `cosign` entirely when one is already on `PATH`.
-
-Unlike the brig and hull archives, whose checksums come from the release that
-carries them, cosign is pinned in `install.sh` by version *and* by hash. Its
-own release cannot be verified without cosign: upstream publishes Sigstore
-bundles and no detached signature, so there is nothing `openssl` can check.
-Writing the hash down moves the trust root to a reviewed file in this
-repository.
+It is a 130 MB download, by far the largest thing here. Its macOS build is
+ad-hoc signed upstream, so Gatekeeper rejects it on its own, unlike
+everything else `install.sh` places. It runs because a `curl` download
+carries no quarantine attribute. Unlike the `brig` and `hull` archives,
+`cosign` is pinned in `install.sh` by version and by hash, because its own
+release cannot be verified without cosign.
 
 ### Settings
 
@@ -110,32 +90,110 @@ BRIG_INSTALL_DIR=~/bin BRIG_VERSION=v0.1.0-rc18 sh install.sh
 ```
 
 - `BRIG_INSTALL_DIR` overrides the destination. Unset, it installs to
-  `/usr/local/bin`. Put it on your `PATH`: `hull` finds `cosign` there, and a
-  destination that is not on `PATH` leaves the boot check reporting "no
-  tooling" even though the binary is installed. `install.sh` warns when this
-  is the case.
-- `BRIG_VERSION` pins a brig release rather than fetching the newest one.
-- `HULL_VERSION` does the same for hull. The two are versioned independently.
+  `/usr/local/bin`. Put it on your `PATH`. `hull` finds `cosign` there, and
+  a destination that is not on `PATH` leaves the boot check reporting "no
+  tooling" even though the binary is installed. `install.sh` warns when
+  this is the case.
+- `BRIG_VERSION` pins a Brig release instead of fetching the newest one.
+- `HULL_VERSION` does the same for hull. The two are versioned
+  independently.
 - `BRIG_INSTALL_HULL=0` skips hull, and leaves macOS without a runtime.
-- `BRIG_INSTALL_COSIGN=0` skips cosign, and leaves the boot chain unverified.
+- `BRIG_INSTALL_COSIGN=0` skips cosign, and leaves the boot chain
+  unverified.
 
-`install.sh` does not check the cosign signature on `checksums.txt`, even when
-it has just installed cosign: the archive is already verified by hash, and the
-signature is the stronger separate claim. See
-[Verifying a downloaded release with cosign](#verifying-a-downloaded-release-with-cosign)
-below to check it yourself.
+`install.sh` does not check the cosign signature on `checksums.txt`, even
+after installing cosign: the archive is already verified by hash. See
+[Verify a downloaded release with cosign](#verify-a-downloaded-release-with-cosign)
+to check the signature yourself.
 
-The archive also carries the shell completion scripts, under `completions/`.
-`install.sh` does not install them for you. See [completions.md](completions.md)
-for how.
+`install.sh` does not install shell completions. See
+[completions.md](completions.md) for how to add them.
 
-## Verifying a downloaded release with cosign
+## Linux
 
-Outcome: proof that a downloaded `checksums.txt`, and the archive it covers,
-came from brig's own release workflow rather than somewhere else.
+Prerequisites: `nerdctl`, containerd, and the `urunc` containerd shim. A
+`genericBoot` profile also needs `oras`.
 
-Prerequisites: cosign, and `checksums.txt`, `checksums.txt.pem` and
-`checksums.txt.sig` downloaded alongside the archive from the release page.
+Brig drives `nerdctl` over containerd, with `urunc` as the shim that boots
+the container as a microVM instead of a plain process. `install.sh` does
+not install any of this on Linux: it installs `brig`, `brigd` and `cosign`
+only. Install `nerdctl`, containerd and `urunc` yourself before you run an
+agent. [runtimes.md](runtimes.md) covers the full command surface each one
+needs.
+
+That combination is what makes a Linux sandbox a microVM rather than a
+container sharing the host kernel. What that boundary does and does not
+keep out is not identical to macOS: [security.md](security.md) covers the
+difference.
+
+`docker` is accepted in `nerdctl`'s place for an image that carries its own
+kernel. A `genericBoot` profile is refused on `docker` rather than
+attempted: six of the eight shipped profiles are `genericBoot`. `docker`
+does not pass the boot annotations `urunc` needs through to the runtime.
+
+`BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, using
+`runc` directly:
+
+```bash
+BRIG_CONTAINERD_RUNTIME=runc brig run claude
+```
+
+A `runc` sandbox shares the host kernel with the agent, instead of running
+it in its own microVM. That is a weaker boundary, and `brig info` reports
+which one a run got.
+
+`oras` fetches the boot bundle, the kernel and `container-initrd` that let
+an ordinary container image boot as a guest, for a `genericBoot` profile.
+Six of the eight shipped profiles need it: `claude-code`, `codex`,
+`gemini`, `grok`, `opencode` and `ubuntu`. `claude-desktop` and `cursor` do
+not. Without `oras` on `PATH`, a `genericBoot` run fails, naming the exact
+artifact to fetch by hand and the directory to put it in.
+
+`claude-desktop` cannot run on Linux at all. [Platform support](#platform-support)
+below covers why.
+
+## Building from source
+
+Prerequisites: Go 1.25.0 or newer, the floor `go.mod` states.
+
+```bash
+git clone https://github.com/brig-sh/brig
+cd brig
+make build
+```
+
+`make build` writes `brig` and `brigd` into the current directory. Building
+Brig from source needs no signing and no entitlement: Brig reaches the
+hypervisor only by shelling out to `hull`, never directly.
+
+A from-source `hull` cannot boot a sandbox without a Developer ID
+certificate. See
+[runtimes.md#building-hull-from-source-on-macos](runtimes.md#building-hull-from-source-on-macos)
+for what that needs and why.
+
+## Verify the install
+
+```bash
+brig version
+brig doctor
+```
+
+`brig version` prints the version you installed. `brig doctor` prints one
+line per check: host, virtual, runtime, boot, verify, profiles, secrets,
+brigd and image. Each line is marked `ok`, `!!` or `--`.
+
+`ok` beside `runtime` means Brig found the `hull` or `nerdctl` it drives,
+and where. `!!` beside `boot` is normal before you run an agent: Brig
+fetches boot assets on first use. Anything else marked `!!` names the fix
+beside it.
+
+Next: [quickstart.md](quickstart.md).
+
+## Verify a downloaded release with cosign
+
+Optional. Prerequisites: cosign, and `checksums.txt`, `checksums.txt.pem`
+and `checksums.txt.sig`, downloaded alongside the archive from the release
+page.
 
 ```bash
 cosign verify-blob \
@@ -149,90 +207,20 @@ cosign verify-blob \
 shasum -a 256 -c checksums.txt --ignore-missing
 ```
 
-The first command vouches for `checksums.txt` itself: brig's releases use
-keyless cosign, so there is no key to check against. Instead the certificate
-is short-lived, bound to the release workflow's own identity, and recorded in
-a public transparency log, and `--certificate-identity-regexp` names exactly
-that workflow. The second command ties every archive listed in
-`checksums.txt` to the file the first command already vouched for.
+The first command vouches for `checksums.txt` with keyless cosign: no key
+to check against, a short-lived certificate bound to the release
+workflow's identity instead. The second command ties every archive listed
+in `checksums.txt` to the file the first command already vouched for.
 
-The macOS binaries carry a second, separate proof: they are signed with a
-Developer ID certificate and notarized with Apple. Gatekeeper checks that
-one, not cosign's.
+The macOS binaries carry a second, separate proof: a Developer ID
+signature, notarized with Apple. Gatekeeper checks that one, not cosign's.
 
 ```bash
 spctl -a -vv -t install "$(which brig)"   # source=Notarized Developer ID
 ```
 
-[docs/security.md](security.md) covers both checks, and what each one does
-and does not prove, in full.
-
-## Linux
-
-Outcome: a working sandbox runtime on Linux.
-
-Prerequisites: `nerdctl`, containerd, and the `urunc` containerd shim
-installed.
-
-brig drives `nerdctl` over containerd, with `urunc` as the shim that boots the
-container as a microVM instead of a plain process. That combination is what
-makes a Linux sandbox a microVM rather than a container sharing the host
-kernel. What that boundary does and does not keep out is not identical to
-macOS: [docs/security.md](security.md) covers the difference.
-
-`docker` is accepted in `nerdctl`'s place for an image that carries its own
-kernel. A `genericBoot` profile, which is six of the eight shipped ones, is
-refused on `docker` rather than attempted. `docker` does not pass the boot
-annotations `urunc` needs through to the runtime. See
-[runtimes.md](runtimes.md) for the full command surface each runtime needs.
-
-`BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, using
-`runc` directly:
-
-```bash
-BRIG_CONTAINERD_RUNTIME=runc brig run claude
-```
-
-A `runc` sandbox shares the host kernel with the agent, rather than running it
-in its own microVM. That is a weaker boundary, and `brig info` reports which
-one a run got.
-
-`oras` fetches the boot bundle, the kernel and `container-initrd` that let an
-ordinary container image boot as a guest, for a `genericBoot` profile. Six of
-the eight shipped profiles need it: `claude-code`, `codex`, `gemini`, `grok`,
-`opencode` and `ubuntu`. `claude-desktop` and `cursor` do not. Without `oras`
-on `PATH`, a `genericBoot` run on Linux fails, naming the exact artifact to
-fetch by hand and the directory to put it in. `claude-desktop` cannot run on
-Linux at all, for a reason the [platform support matrix](#platform-support)
-below covers.
-
-## Building from source
-
-Outcome: a `brig` and `brigd` binary built from this repository.
-
-Prerequisites: Go 1.25.0 or newer, the floor `go.mod` states.
-
-```bash
-git clone https://github.com/brig-sh/brig
-cd brig
-make build
-```
-
-`make build` writes `brig` and `brigd` into the current directory.
-
-Building brig from source needs no signing and no entitlement: brig reaches
-the hypervisor only by shelling out to `hull`, never directly.
-
-Building `hull` from source on macOS is a different matter. A from-source
-`hull` cannot boot a VM at all without a Developer ID certificate for an
-Apple entitlement. macOS honours that entitlement only on a binary signed
-with a real Apple identity. See
-[runtimes.md#building-hull-from-source-on-macos](runtimes.md#building-hull-from-source-on-macos)
-for exactly what that needs and why.
-
-The released `hull` that Homebrew installs is already signed, notarized and
-stapled. `brew install --cask brig` is the path to prefer unless you are
-working on `hull` itself.
+[security.md](security.md) covers both checks, what each one proves, and
+why Brig signs releases this way.
 
 ## Platform support
 
@@ -243,33 +231,34 @@ working on `hull` itself.
 | Intel Mac | No |
 | Linux, x86-64 or arm64 | Yes, with `nerdctl`, containerd and the `urunc` shim |
 
-macOS 15 is the floor brig enforces for hull's `hvi` backend. Apple shipped
-the in-kernel interrupt controller `hvi` depends on first in macOS 15. brig
-refuses the run on an older one rather than let the virtual machine monitor
-crash. That refusal needs a version it can read from the host. A host that
-will not report its version proceeds to the boot instead of being refused.
-Six of the eight shipped profiles ask for `hvi`, so a first run on macOS 14
-hits this floor unless you set `BRIG_HYPERVISOR=vz`.
+macOS 15 is the floor Brig enforces for hull's `hvi` backend. Apple shipped
+the in-kernel interrupt controller `hvi` depends on first in macOS 15.
+Brig refuses the run on an older one rather than let the virtual machine
+monitor crash. That refusal needs a version it can read from the host. A
+host that will not report its version proceeds to the boot instead of
+being refused. Six of the eight shipped profiles ask for `hvi`, so a first
+run on macOS 14 hits this floor unless you set `BRIG_HYPERVISOR=vz`.
 
-macOS 26 is what the project tests on, which is a separate fact from the
-floor. Nothing in brig or hull refuses macOS 15 or macOS 16 for being older
-than 26.
+macOS 26 is what the project tests on, a separate fact from the floor.
+Nothing in Brig or hull refuses macOS 15 or macOS 16 for being older than
+26.
 
-Nothing in brig's own source checks the host architecture. The release
+Nothing in Brig's own source checks the host architecture. The release
 publishes a `darwin/amd64` archive of `brig` and `brigd` alongside the
-`arm64` one, and `install.sh` installs it on an Intel Mac without a warning.
-The limit sits in `hull`, the microVM runtime brig drives on macOS: it needs
-Apple silicon. Installing brig on an Intel Mac succeeds. Running an agent
-then fails at the runtime check, because brig finds no `hull` to drive.
+`arm64` one. `install.sh` refuses an Intel Mac before writing anything, but
+a manual download or a source build of `brig` succeeds there. A run then
+fails at the runtime check, because Brig finds no `hull` to drive. `hull`
+needs Apple silicon, and has never published an `amd64` build.
 
-`claude-desktop` is the one built-in profile Linux cannot run at all. It is a
-graphical profile. The Linux runtime refuses a graphical profile outright, on
-`nerdctl` and on `docker` alike, and names macOS as where it can run instead.
+`claude-desktop` is the one built-in profile Linux cannot run at all. It
+is a graphical profile. The Linux runtime refuses a graphical profile
+outright, on `nerdctl` and on `docker` alike, and names macOS as where it
+can run instead.
 
 Its image is also published for `arm64` only, so on macOS it needs Apple
-silicon too. It needs the `vz` backend specifically as well. `vz` is the only
-one of the three backends with a console, and a graphical profile is refused
-on `hvi` and `qemu`.
+silicon too. It needs the `vz` backend specifically as well. `vz` is the
+only one of the three backends with a console, and a graphical profile is
+refused on `hvi` and `qemu`.
 
 `brig agent ls` lists `claude-desktop` on every platform with no marker of
 either limit.
