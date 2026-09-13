@@ -73,10 +73,9 @@ declares a source for `gh-token`. That one takes a value you supply by hand
 
 The other six shipped profiles declare no `secrets:` at all: `codex`,
 `cursor`, `gemini`, `grok`, `opencode`, `ubuntu`. There is nothing on your
-host for `import` to read. On a host with a working secret store, the
-command still succeeds: it prints `<profile>: importing 0 secrets` and exits
-0. On a host with no keyring it fails instead, even though there is nothing
-to import.
+host for `import` to read. The command prints
+`<profile> declares no secrets, so there is nothing to import` and exits 0,
+on any host, without opening the secret store.
 
 **If a long `claude-code` session stops authenticating.** Brig re-delivers the
 stored `claude-credentials` document on every command that reaches the
