@@ -1,0 +1,35 @@
+# Dependabot version updates. Security updates are a repository setting and
+# run regardless of this file; this adds the routine version bumps.
+#
+# Weekly on Monday, minor and patch bumps grouped into one pull request per
+# ecosystem. brig has three direct Go dependencies and a handful of actions,
+# so the grouped bumps are at most two pull requests a week. A major bump is
+# left out of the group so it arrives alone and is reviewed on its own.
+#
+# Dependabot signs its commits off, and the DCO check exempts bot authors, so
+# these pull requests need no human trailer.
+
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build(deps)
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
