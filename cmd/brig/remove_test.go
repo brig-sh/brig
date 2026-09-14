@@ -212,15 +212,22 @@ func TestRemoveRefDryRunIsStillNotFound(t *testing.T) {
 func TestRemoveRefRefusesYes(t *testing.T) {
 	rt := twoSandboxes()
 	removeHost(t, rt)
-	for _, args := range [][]string{{"rm", "faker", "-y"}, {"rm", "-y", "faker"}, {"rm", "--yes", "faker"}} {
-		_, err := run2(t, args)
+	for _, tc := range []struct {
+		args []string
+		flag string
+	}{
+		{[]string{"rm", "faker", "-y"}, "-y"},
+		{[]string{"rm", "-y", "faker"}, "-y"},
+		{[]string{"rm", "--yes", "faker"}, "--yes"},
+	} {
+		_, err := run2(t, tc.args)
 		var ue *usageError
 		if !errors.As(err, &ue) {
-			t.Errorf("brig %s: %v, want a usageError", strings.Join(args, " "), err)
+			t.Errorf("brig %s: %v, want a usageError", strings.Join(tc.args, " "), err)
 			continue
 		}
-		if !strings.Contains(err.Error(), args[1]) && !strings.Contains(err.Error(), args[2]) {
-			t.Errorf("brig %s: %v, want it to name the flag", strings.Join(args, " "), err)
+		if !strings.Contains(err.Error(), tc.flag) {
+			t.Errorf("brig %s: %v, want it to name %s", strings.Join(tc.args, " "), err, tc.flag)
 		}
 	}
 	if len(rt.removed) != 0 {
