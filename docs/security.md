@@ -7,7 +7,7 @@ the credentials you gave it. It can also reach any project you name on the
 run line. No other host directory is mounted.
 
 On every profile Brig ships, no host credential source is read on the run
-path. A profile of your own carrying the deprecated `hostCredential:` key is
+path. A custom profile carrying the deprecated `hostCredential:` key is
 the exception: it reads the macOS keychain item it names on every run. See
 [secrets.md](secrets.md) for that exception. What the agent can reach over
 the network is a separate question, with a much weaker answer, covered below.
@@ -54,7 +54,7 @@ whether the guest can reach a service bound on the host.
 
 ## The boundary
 
-The sandbox is a microVM on both. On macOS it is booted by
+The sandbox is a microVM on both macOS and Linux. On macOS it is booted by
 [hull](https://github.com/brig-sh/hull) over Virtualization.framework, which
 `brew install --cask brig` brings along. On Linux Brig drives `nerdctl` and
 hands the container to the urunc shim (`io.containerd.urunc.v2`), which is the
@@ -75,17 +75,17 @@ ISOLATION    container (docker over containerd, runc: the guest shares the host 
 
 The row reports what this run resolved: the binary in hand, the backend it
 settled on, and the shim it will name. That is not the same as what the
-paragraph above promises. A shim Brig does not recognise can still boot a
-sandbox, and Brig cannot establish the isolation that sandbox gets from a
+paragraph above promises. Brig may not recognise a shim but could still use it
+to boot a sandbox, and Brig cannot establish the isolation that sandbox gets from a
 shim name alone. So the row says it cannot tell, instead of claiming the
 stronger boundary.
 
-Inside it, the guest has your guest home mounted as its home, read-write. Name
+Inside Brig, the guest has your guest home mounted as its home, read-write. Name
 a project on the run line and that project is a second host directory, also
 mounted read-write, at `/work/<name>`. The agent can change those files too.
 
-A profile's own hostmount volumes are further shares. Every one in a shipped
-profile lives inside the guest home already, so nothing extra is exposed
+Each hostmount volume in the profile is an additional share. Every hostmount volume in
+a shipped profile lives inside the guest home already, so nothing extra is exposed
 today. That is a property of the shipped profiles, not a guarantee. A
 hostmount your own profile declares outside a tmpfs cover is a host path the
 guest can see.
@@ -97,7 +97,7 @@ have to be forwarded in explicitly: the guest cannot fetch them for itself.
 
 ## Credentials
 
-**A run on a shipped profile reads no host credential source.** Nothing on the
+**`brig run` with a shipped profile reads no host credential source.** Nothing on the
 `brig run`, `exec` or `shell` path reaches a keychain item Brig did not write.
 Nothing on that path reaches a credential file outside the guest home, or a
 host command that produces one. Two host reads do happen, and no setting
