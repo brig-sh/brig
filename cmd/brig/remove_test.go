@@ -167,11 +167,17 @@ func TestRemoveAllLeavesOtherSandboxesAlone(t *testing.T) {
 }
 
 // `brig rm <ref> --dry-run` names the one sandbox it would remove and its
-// workspace, and removes nothing.
+// workspace, and removes nothing. The preview is the output and goes to
+// stdout; the workspace sentence is a notice and goes to stderr, the same
+// split the real removal and `rm --all --dry-run` make.
 func TestRemoveRefDryRun(t *testing.T) {
 	rt := twoSandboxes()
 	removeHost(t, rt)
-	out, err := run2(t, []string{"rm", "faker@refactor", "--dry-run"})
+	var out string
+	var err error
+	stderr := captureStderr(t, func() {
+		out, err = run2(t, []string{"rm", "faker@refactor", "--dry-run"})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,10 +185,13 @@ func TestRemoveRefDryRun(t *testing.T) {
 		t.Errorf("removed %v under --dry-run", rt.removed)
 	}
 	if !strings.Contains(out, "faker@refactor") {
-		t.Errorf("the ref is not named:\n%s", out)
+		t.Errorf("the ref is not named on stdout:\n%s", out)
 	}
-	if !strings.Contains(out, os.Getenv("BRIG_WORKSPACE")) {
-		t.Errorf("the workspace is not named:\n%s", out)
+	if strings.Contains(out, "stays on the host") {
+		t.Errorf("the workspace notice is on stdout, want stderr:\n%s", out)
+	}
+	if !strings.Contains(stderr, "stays on the host") || !strings.Contains(stderr, os.Getenv("BRIG_WORKSPACE")) {
+		t.Errorf("the workspace is not named on stderr:\n%s", stderr)
 	}
 }
 

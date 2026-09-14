@@ -1964,8 +1964,11 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		return noSandboxf(ref)
 	}
 	if dryRun {
-		fmt.Printf("would remove %s (sandbox %s). The workspace %s stays on the host\n",
-			ref, cfg.VMName, cfg.Workspace)
+		// The preview is the command's output and goes where output goes; the
+		// workspace sentence is a notice, on stderr like the one the real
+		// removal prints, so -q and a redirect treat both paths the same.
+		fmt.Printf("would remove %s (sandbox %s)\n", ref, cfg.VMName)
+		warnf("The workspace %s stays on the host", cfg.Workspace)
 		return nil
 	}
 	if err := cfg.Remove(); err != nil {
