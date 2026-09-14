@@ -26,7 +26,7 @@ jobs:
     name: goreleaser
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # goreleaser derives the version and the changelog from the tag
           # history, so a shallow clone gives it the wrong answer.
