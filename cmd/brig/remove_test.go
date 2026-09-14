@@ -64,6 +64,28 @@ func TestRemoveAllRefusesWithoutTerminalOrYes(t *testing.T) {
 	}
 }
 
+// `brig reset` already means every sandbox, so --all on it is the new spelling
+// half-typed onto the old verb. Refused by name, with the whole of `brig rm
+// --all` in the message, rather than read past.
+func TestResetRefusesAll(t *testing.T) {
+	for _, args := range [][]string{{"reset", "--all"}, {"reset", "--all", "-y"}, {"reset", "--dry-run", "--all"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		_, err := captureStdout(t, func() error { return run(args) })
+		var ue *usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("brig %s: %v, want a usageError", strings.Join(args, " "), err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "--all") || !strings.Contains(err.Error(), "brig rm --all") {
+			t.Errorf("brig %s: %v, want it to name --all and `brig rm --all`", strings.Join(args, " "), err)
+		}
+		if len(rt.removed) != 0 {
+			t.Errorf("brig %s removed %v after refusing", strings.Join(args, " "), rt.removed)
+		}
+	}
+}
+
 // -y is the answer given in advance. Both spellings, on either side of --all.
 func TestRemoveAllWithYesRemovesEverySandbox(t *testing.T) {
 	for _, args := range [][]string{

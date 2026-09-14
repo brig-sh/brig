@@ -360,6 +360,12 @@ func dispatch(args []string) error {
 		if err != nil {
 			return err
 		}
+		// reset already means every sandbox, so --all on it is the new
+		// spelling half-typed onto the old verb. Refused with the whole of the
+		// new line rather than read past, so the migration finishes here.
+		if o.all {
+			return usagef("`brig reset` takes no --all; the command is now `brig rm --all`")
+		}
 		return removeAll("brig reset", others, o)
 	case "rm":
 		// rm's own flags are read here rather than on the run line. --all names
