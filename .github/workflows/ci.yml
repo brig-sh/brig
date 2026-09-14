@@ -120,7 +120,7 @@ jobs:
       # A release config that only runs on a tag is a config nobody has run.
       # Validate it and build a full snapshot here, so the first real tag is
       # not the first time goreleaser sees this file.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: check
@@ -128,7 +128,7 @@ jobs:
       # sign and sbom are skipped here: signing needs an OIDC identity a pull
       # request does not have, and both are exercised on the release path.
       # The point of this job is that the build and archive config assembles.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --snapshot --clean --skip=publish,sign,sbom
