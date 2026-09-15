@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -330,6 +331,14 @@ func (h *hull) Run(spec RunSpec) error {
 			}
 			gatewaySock, gatewayCidr = sock, cidr
 		}
+		// Before the boot, so a port that cannot be published stops the run
+		// rather than leaving a sandbox up with an envelope naming a hole
+		// nothing is listening on. The gateway forwards to an address, and the
+		// guest need not be up yet for the listener to exist. See
+		// gatewayapi.go.
+		if err := reconcilePublications(gatewaySock, addrOf(gatewayCidr), Publications(spec.Name)); err != nil {
+			return fmt.Errorf("cannot publish %s's ports: %w", spec.Name, err)
+		}
 	}
 	args, envVals, err := runArgs(spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
 	if err != nil {
@@ -386,6 +395,20 @@ func supports(spec RunSpec, hv string) error {
 	// sandbox joined vmnet with every other one while the envelope reported a
 	// network of its own. Refused for the same reason a policy is -- a posture
 	// nothing implements is worse than one the user was told they cannot have.
+	// Published on the gateway, which is the hvi backend's alone. vz takes its
+	// network from vmnet, where brig has nothing to ask. Refused rather than
+	// ignored, for the reason a policy is: the envelope would name a port the
+	// host cannot reach, and the person in front of it would go looking at
+	// their dev server.
+	if len(spec.Publish) > 0 && hv != "hvi" {
+		return fmt.Errorf("--publish opens a guest port on the host through the user-mode "+
+			"network gateway, which only the hvi backend uses (BRIG_HYPERVISOR is %q); run it "+
+			"on hvi, or drop the --publish flags", hv)
+	}
+	if len(spec.Publish) > 0 && spec.Net == "none" {
+		return errors.New("--publish opens a guest port on the host, and --network offline " +
+			"gives the sandbox no network to publish from. Drop one of the two")
+	}
 	if spec.Net == "isolated" && hv != "hvi" {
 		return fmt.Errorf("--network isolated gives the sandbox a network of its own, which "+
 			"brig can only do on the hvi backend, where it owns the gateway (BRIG_HYPERVISOR "+
@@ -645,6 +668,94 @@ func (h *hull) Remove(name string) error {
 	return err
 }
 
+// Publish offers one of this sandbox's ports on the host while it runs, and
+// records it so the next boot offers it again.
+//
+// The gateway is told first. A record written before the forward exists would
+// have the envelope name a port nothing is listening on, and there is no way
+// back from that except for the user to notice; a forward installed and not
+// recorded costs one re-publish after a restart.
+func (h *hull) Publish(name string, p Publication) error {
+	sock, guestIP, err := sandboxGateway(name)
+	if err != nil {
+		return err
+	}
+	// A host port this sandbox already publishes is moved rather than
+	// refused, which is what the record means by laying one publication over
+	// another and what the boot reconcile already does. Without this, moving
+	// a live port reaches the gateway as a second listener on an address it
+	// has, and comes back as a conflict with the sandbox's own forward.
+	//
+	// Only this sandbox's. The gateway keys a forward by protocol and local
+	// address alone, so withdrawing without checking the guest would take
+	// another sandbox's port off the shared gateway.
+	live, err := publishedOn(sock, guestIP)
+	if err != nil {
+		return err
+	}
+	for _, q := range live {
+		if q.Same(p) && q.GuestPort != p.GuestPort {
+			if err := withdrawFrom(sock, guestIP, q); err != nil {
+				return err
+			}
+		}
+	}
+	if err := publishOn(sock, guestIP, p); err != nil {
+		return publishError(err, p)
+	}
+	_, err = RecordPublications(name, []Publication{p})
+	return err
+}
+
+// Unpublish withdraws a publication and forgets it.
+//
+// The record goes even when the gateway could not be told, which is the
+// direction that can be corrected: the next boot reconciles against the
+// record, so a forward left behind on a gateway that refused goes then. A
+// record left behind would republish the port the user just closed.
+func (h *hull) Unpublish(name string, p Publication) error {
+	_, _, err := ForgetSomePublications(name, []Publication{p})
+	if err != nil {
+		return err
+	}
+	sock, guestIP, err := sandboxGateway(name)
+	if err != nil {
+		// A sandbox that is not running has no gateway to tell, and the record
+		// is already correct.
+		return nil
+	}
+	return withdrawFrom(sock, guestIP, p)
+}
+
+// Published is what the gateway is actually forwarding for this sandbox.
+func (h *hull) Published(name string) ([]Publication, error) {
+	sock, guestIP, err := sandboxGateway(name)
+	if err != nil {
+		return nil, err
+	}
+	return publishedOn(sock, guestIP)
+}
+
+// publishError names the sandbox in the way when a host port is already taken.
+//
+// The gateway can only say that something is published there, because it knows
+// its forwards by address and nothing about sandboxes. brig hands out those
+// addresses, so it can turn the one in the way back into the name the user
+// would recognise.
+func publishError(err error, p Publication) error {
+	var conflict *forwardConflict
+	if !errors.As(err, &conflict) {
+		return err
+	}
+	if owner := sandboxAt(conflictGuest(conflict.detail)); owner != "" {
+		return fmt.Errorf("%s is already published by %s; publish on another host port, "+
+			"for example `%d:%d`, or withdraw that one with `brig unpublish`",
+			p.Local(), owner, p.HostPort+1, p.GuestPort)
+	}
+	return fmt.Errorf("%s is already published; publish on another host port, for example "+
+		"`%d:%d`", p.Local(), p.HostPort+1, p.GuestPort)
+}
+
 // NetworkStale reports whether a running sandbox is on a different network, or
 // under different rules, than this run asks for.
 //
@@ -749,7 +860,30 @@ func releaseGateway(name string, err error) {
 	if err != nil {
 		return
 	}
+	// The published ports first, while the gateway that holds them is still
+	// answering. An isolated gateway takes its own forwards with it when it
+	// stops, but a sandbox on the shared network leaves them on a gateway that
+	// serves everything else -- so a stopped sandbox would go on holding a
+	// host port, and nothing else on the machine could take it.
+	//
+	// The record is left alone, so the next run publishes the same ports
+	// again. Best effort, like the rest of this: a forward left behind costs a
+	// port, and there is no answer to "the withdrawal failed" worth
+	// interrupting a stop with.
+	withdrawPublications(name)
 	shutDownGateway(name)
+}
+
+// withdrawPublications takes this sandbox's forwards off the gateway serving
+// it, leaving what the sandbox publishes recorded.
+func withdrawPublications(name string) {
+	sock, guestIP, err := sandboxGateway(name)
+	if err != nil {
+		return
+	}
+	for _, p := range Publications(name) {
+		_ = withdrawFrom(sock, guestIP, p)
+	}
 }
 
 // quiet runs a verb whose success is the whole of its output, keeping hull's

@@ -86,9 +86,13 @@ first run pulls the guest image and the boot assets, so it is slow.
 to carry one in from the host.
 
 ```bash
-brig stop claude    # stop the sandbox, keep its name
-brig rm claude      # stop it and remove it
+brig publish claude 3000   # the agent's dev server, on localhost:3000
+brig stop claude           # stop the sandbox, keep its name
+brig rm claude             # stop it and remove it
 ```
+
+A published port binds to `127.0.0.1` and is named in the execution envelope,
+so the one inbound hole in the sandbox is one you asked for and can see.
 
 Neither touches `~/brig/claude-code` or `~/code/demo`.
 [docs/quickstart.md](docs/quickstart.md) walks through all of this, explained.

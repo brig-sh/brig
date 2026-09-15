@@ -107,6 +107,7 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Hypervisor: hypervisor,
 		Net:        c.Network.RuntimeNet(),
 		Egress:     runtimeEgress(c.Egress),
+		Publish:    c.Publish,
 		GUI:        c.Profile.IsGUI(),
 	}
 }
@@ -142,4 +143,37 @@ func (c *Config) networkStale() bool {
 		return false
 	}
 	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), runtimeEgress(c.Egress))
+}
+
+// mergePublications is what a sandbox will be offering: everything it already
+// publishes, with what this command line asked for laid over it.
+//
+// Laid over rather than appended. Two publications on one host port are one
+// host listener, so `--publish 8080:3000` on a sandbox already publishing 8080
+// to port 80 moves that listener rather than asking for a second one.
+func mergePublications(have, asked []runtime.Publication) []runtime.Publication {
+	out := append([]runtime.Publication(nil), have...)
+	for _, p := range asked {
+		replaced := false
+		for i, q := range out {
+			if q.Same(p) {
+				out[i], replaced = p, true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// publicationLines is the PORTS row's value: every published port, one per
+// line, with the loopback default and anything wider said out loud.
+func publicationLines(ps []runtime.Publication) []string {
+	lines := make([]string, 0, len(ps))
+	for _, p := range ps {
+		lines = append(lines, p.Line())
+	}
+	return lines
 }
