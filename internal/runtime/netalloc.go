@@ -96,14 +96,21 @@ func (a netAlloc) release(name string) {
 }
 
 // lock takes an exclusive lock on the store, and returns the release.
+func (a netAlloc) lock() (func(), error) { return flock(a.path) }
+
+// flock takes an exclusive lock on a store in the gateway directory, and
+// returns the release.
 //
-// A lock file beside the map rather than the map itself, so that the atomic
-// rename in write does not swap the file out from under a held descriptor.
-func (a netAlloc) lock() (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(a.path), 0o700); err != nil {
+// A lock file beside the store rather than the store itself, so that the
+// atomic rename a write ends with does not swap the file out from under a
+// held descriptor. The allocators and the publication record both use it:
+// each does a read-modify-write, and two brig processes doing one at once is
+// the ordinary case rather than the unlucky one.
+func flock(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(a.path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}

@@ -134,22 +134,26 @@ var verbs = []string{
 	"info",
 	"ls",
 	"policy",
+	"publish",
 	"rm",
 	"run",
 	"secret",
 	"sh",
 	"stop",
 	"telemetry",
+	"unpublish",
 	"version",
 }
 
 // refVerbs are the verbs whose operand is a session ref.
 var refVerbs = map[string]bool{
-	"run":  true,
-	"sh":   true,
-	"stop": true,
-	"rm":   true,
-	"info": true,
+	"run":       true,
+	"sh":        true,
+	"stop":      true,
+	"rm":        true,
+	"info":      true,
+	"publish":   true,
+	"unpublish": true,
 }
 
 // complete decides what may stand where the cursor is.
@@ -253,7 +257,7 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	// "=", so in zsh and fish the whole thing is the current word and would
 	// otherwise be matched against flag names, which it cannot match.
 	if flag, prefix, ok := inlineValue(cur); ok {
-		mine, takesValue := ours(flag, posRun)
+		mine, takesValue := ours(flag, verbPosition(verb))
 		if !mine || !takesValue {
 			return dirNone, nil
 		}
@@ -265,7 +269,7 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		// split() reads brig's own flags on both sides of the ref, stopping
 		// only at a flag brig does not own, so offer them on both sides too.
 		// `brig run claude --mem 4096` is a line brig parses.
-		flags := flagSpellings(posRun, verb)
+		flags := flagSpellings(verbPosition(verb), verb)
 		if verb == "rm" {
 			// rm's own flags are not in brigFlags: they are read before the run
 			// line. --dry-run goes on either side of the ref; --all replaces the
@@ -313,6 +317,7 @@ type runLine struct {
 func walkRunLine(verb string, args []string) runLine {
 	var line runLine
 	takesProject := verb == "run"
+	at := verbPosition(verb)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -331,7 +336,7 @@ func walkRunLine(verb string, args []string) runLine {
 			line.tailBegun = true
 			return line
 		default:
-			mine, takesValue := ours(a, posRun)
+			mine, takesValue := ours(a, at)
 			if !mine {
 				if line.refGiven {
 					line.tailBegun = true
@@ -725,6 +730,16 @@ func flagSpellings(at position, verb string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// verbPosition is where this verb's own flags stand. publish and unpublish
+// read a vocabulary of their own, so completion has to offer that one rather
+// than the run line's; see posPublish.
+func verbPosition(verb string) position {
+	if takesPorts(verb) {
+		return posPublish
+	}
+	return posRun
 }
 
 // bareWords returns the positional arguments at one position: tokens that are
