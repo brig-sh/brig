@@ -18,6 +18,18 @@ around it, in order.
 
   Land the `VERSION` bump before you tag, not after.
 
+- Read the notes the release will carry before the tag exists:
+
+  ```bash
+  make notes TAG=v0.1.0-rc18
+  ```
+
+  This runs git-cliff over the commits since the previous tag, with the
+  same [cliff.toml](../cliff.toml) the workflow uses, so what it prints is
+  what the release will say. It needs `git-cliff` (`brew install git-cliff`).
+  A subject that reads badly, or sits in the wrong section, is fixed in the
+  commit now, while it is still cheap.
+
 - Tag the release commit and push the tag:
 
   ```bash
@@ -42,8 +54,14 @@ around it, in order.
 
 ## Publish the draft
 
-- Read the draft's generated notes. Fix anything the changelog grouped
-  wrong.
+- Read the draft's notes. They are rendered by git-cliff from the
+  conventional-commit subjects since the previous tag, in the sections
+  [cliff.toml](../cliff.toml) defines: breaking changes first, then
+  features, fixes, refactors and docs, each entry linking its commit and any
+  `Fixes`/`Refs` issue. A commit in the wrong section has the wrong type in
+  its subject; a section that behaves wrongly is a rule in `cliff.toml`. Fix
+  the one at fault rather than the draft: a re-run of the workflow rewrites
+  the draft's body, and a hand-edit is lost with it.
 
 - **Publish that draft.** Editing it to "published" is the release. Do not
   create a new release for the tag. That is how `v0.1.0-rc16` ended up with

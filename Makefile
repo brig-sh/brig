@@ -3,7 +3,7 @@ BINDIR ?= $(CURDIR)
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build test vet fmt snapshot clean
+.PHONY: all build test vet fmt snapshot notes clean
 
 all: vet test build
 
@@ -25,6 +25,14 @@ fmt:
 # local build.
 snapshot:
 	HOMEBREW_TAP_GITHUB_TOKEN= goreleaser release --snapshot --clean --skip=publish,sign,sbom
+
+# The release notes CI would publish for TAG, rendered from cliff.toml before
+# the tag exists. Read them before you push: a subject that reads badly is
+# cheap to fix while the commit is still unpushed. Needs git-cliff
+# (brew install git-cliff).
+notes:
+	@test -n "$(TAG)" || { echo "usage: make notes TAG=v0.1.0-rc19" >&2; exit 2; }
+	git cliff --unreleased --tag $(TAG)
 
 clean:
 	rm -rf dist brig brigd

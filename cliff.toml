@@ -1,0 +1,82 @@
+# git-cliff renders the release notes that goreleaser publishes.
+#
+# The release workflow runs `git cliff --current` on the tag being released
+# and hands the result to goreleaser with --release-notes, so this file is
+# the one place that decides what a release says. The notes come from the
+# conventional-commit subjects between the previous tag and this one.
+#
+#   make notes TAG=v0.1.0-rc19            what the next release would say
+#   git cliff v0.1.0-rc17..v0.1.0-rc18    re-render a release that shipped
+#
+# Sections are ordered by what a reader deciding whether to upgrade wants
+# first: what breaks, what is new, what got fixed. Mechanics -- test, chore,
+# ci, build, style -- are left out. Docs are kept, unlike the usual advice: in
+# this repo a docs: commit is often where a design decision and its
+# measurements are recorded.
+
+[changelog]
+# Whitespace in the template is deliberate: the BREAKING CHANGE footer is
+# indented under its entry, which trimming would undo.
+trim = false
+
+# One release per render. Every entry links its commit; a Fixes/Refs/Closes
+# trailer follows the entry, and the postprocessor below turns each #N into a
+# link. A breaking change also shows its BREAKING CHANGE footer, indented
+# under the entry, when the footer says more than the subject does.
+#
+# The <!-- N --> prefix on each group name below fixes the section order;
+# striptags removes it from the heading.
+#
+# A trailer written `Refs #111, #47` parses with ` #` as the separator, so the
+# first `#` is put back from the separator rather than lost.
+body = """
+{%- for group, commits in commits | group_by(attribute="group") %}
+## {{ group | striptags | trim }}
+
+{% for commit in commits -%}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | trim }} \
+([{{ commit.id | truncate(length=7, end="") }}](https://github.com/brig-sh/brig/commit/{{ commit.id }}))\
+{%- for footer in commit.footers %}\
+{%- if footer.token is matching("^(Fixes|Closes|Refs)$") %} \
+{% if footer.separator is containing("#") %}#{% endif %}{{ footer.value | trim }}{% endif %}\
+{%- endfor %}
+{% if commit.breaking and commit.breaking_description and commit.breaking_description != commit.message -%}
+{{ "  " }}{{ commit.breaking_description | trim | replace(from="\n", to=" ") }}
+{% endif -%}
+{% endfor -%}
+{% endfor %}
+{% if previous and previous.version and version -%}
+**Full changelog**: https://github.com/brig-sh/brig/compare/{{ previous.version }}...{{ version }}
+{% endif -%}
+"""
+
+postprocessors = [
+  { pattern = '#([0-9]+)', replace = "[#${1}](https://github.com/brig-sh/brig/issues/${1})" },
+]
+
+[git]
+conventional_commits = true
+# A subject that is not `type(scope): summary` is dropped rather than shown
+# raw. In practice that is a Revert "..." or a merge, neither of which a
+# reader of the notes needs.
+filter_unconventional = true
+# A `chore!:` is still a breaking change; keep it even though chore is
+# skipped below. The first parser routes it to Breaking changes anyway.
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+
+# First match wins, so the breaking-change rules come before the type rules:
+# a `feat(profile)!:` is listed once, under Breaking changes, not under
+# Features as well.
+commit_parsers = [
+  { message = '^[a-z]+(\([^)]+\))?!:', group = "<!-- 0 -->Breaking changes" },
+  { footer = "^BREAKING CHANGE", group = "<!-- 0 -->Breaking changes" },
+  { message = '^feat[(!:]', group = "<!-- 1 -->Features" },
+  { message = '^fix[(!:]', group = "<!-- 2 -->Fixes" },
+  { message = '^refactor[(!:]', group = "<!-- 3 -->Refactors" },
+  { message = '^docs[(!:]', group = "<!-- 4 -->Documentation" },
+  { message = '^(test|chore|ci|build|style)[(!:]', skip = true },
+  { message = ".*", group = "<!-- 9 -->Others" },
+]

@@ -116,45 +116,13 @@ sboms:
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
 
+# The release notes are rendered by git-cliff from cliff.toml in the release
+# workflow and handed over with --release-notes, so this is disabled: one
+# place decides what a release says. A run without the flag then publishes an
+# empty body, which is visible, rather than a second, differently grouped
+# changelog, which is not.
 changelog:
-  use: github
-  sort: asc
-  # Grouped by what the change was, because a flat list of thirty commits is
-  # not a changelog -- it is a git log with bullet points, and a reader has to
-  # classify every line themselves to answer "what is new and what got fixed".
-  #
-  # The scope is optional in each pattern: this project writes both `feat:` and
-  # `feat(profile):`, and a pattern that only matched the bare form would drop
-  # every scoped commit into Others -- which is exactly what the exclude
-  # filters below did before.
-  groups:
-    - title: Features
-      regexp: '^.*?feat(\([^)]+\))??!?:.+$'
-      order: 0
-    - title: Fixes
-      regexp: '^.*?fix(\([^)]+\))??!?:.+$'
-      order: 1
-    - title: Refactors
-      regexp: '^.*?refactor(\([^)]+\))??!?:.+$'
-      order: 2
-    # Kept rather than excluded, unlike the usual advice: in this repo a docs:
-    # commit is often where a design decision and its measurements are
-    # recorded, and a reader deciding whether to upgrade wants those.
-    - title: Documentation
-      regexp: '^.*?docs(\([^)]+\))??!?:.+$'
-      order: 3
-    - title: Others
-      order: 999
-  filters:
-    # Anchored with an optional scope for the same reason as the groups above.
-    # The previous "^test:" never matched `test(smoke):`, so the mechanics this
-    # list exists to hide were being published.
-    exclude:
-      - '^test(\([^)]+\))?!?:'
-      - '^chore(\([^)]+\))?!?:'
-      - '^ci(\([^)]+\))?!?:'
-      - '^build(\([^)]+\))?!?:'
-      - '^style(\([^)]+\))?!?:'
+  disable: true
 
 release:
   # Drafts, so a tag never publishes itself before someone has looked at the

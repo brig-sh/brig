@@ -44,6 +44,18 @@ jobs:
           [ "$(cat VERSION)" = "$TAG" ] || {
             echo "VERSION file ($(cat VERSION)) does not match tag $TAG" >&2; exit 1; }
 
+      # The release notes, rendered by git-cliff from the conventional-commit
+      # subjects since the previous tag; cliff.toml decides the sections.
+      # --current renders the tag that is checked out, so a workflow_dispatch
+      # of an older tag gets that tag's notes rather than the newest one's.
+      #
+      # A third-party action in the job that signs the release, so it is
+      # pinned to a commit rather than a tag, and runs here, before the notary
+      # key is written to disk and before any tap token is minted.
+      - uses: orhun/git-cliff-action@3d96a18cc4ec17e9dc69ddcc424ccafaf1f78ce2 # v4.9.0
+        with:
+          args: --current --output ${{ runner.temp }}/release-notes.md
+
       - uses: actions/setup-go@v7
         with:
           go-version: stable
@@ -81,7 +93,7 @@ jobs:
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The same Developer ID certificate and App Store Connect key hull
