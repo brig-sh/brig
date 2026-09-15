@@ -113,8 +113,15 @@ signs:
 sboms:
   - artifacts: archive
 
+# The version a build that is not a release carries.
+#
+# CHANNEL_VERSION is what the channel workflow sets: a build from main or from
+# one named ref is published to the tap, and Homebrew decides there is
+# something to upgrade to by the version string alone -- so two builds of a
+# moving channel must not share one. A local `--snapshot` sets nothing and
+# keeps the old spelling.
 snapshot:
-  version_template: "{{ incpatch .Version }}-snapshot"
+  version_template: '{{ envOrDefault "CHANNEL_VERSION" (printf "%s-snapshot" (incpatch .Version)) }}'
 
 # The release notes come from git-cliff (cliff.toml), handed over with
 # --release-notes in the release workflow. goreleaser reads that file inside
