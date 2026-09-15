@@ -118,6 +118,16 @@ type Config struct {
 	// envelope, the report and the spec handed to the runtime cannot disagree
 	// about what a reader was told.
 	Network Network
+	// Publish is every guest port this sandbox offers on the host: what -p
+	// asked for on this line, and what the sandbox was already publishing.
+	// PublishAsked is the first half alone.
+	//
+	// A publication belongs to the sandbox rather than to one run of it, so a
+	// later `brig run` with no -p keeps what is already published. The
+	// envelope names all of them on every run, which is what keeps that from
+	// being a hole nobody was told about.
+	Publish      []runtime.Publication
+	PublishAsked []runtime.Publication
 	// Egress is the merged rule set of every policy bound to this run, and
 	// Policies the names it came from. Empty Egress.Default means no policy
 	// applies, which is every run before one is attached.
@@ -227,6 +237,9 @@ type Options struct {
 	// Network is the posture asked for on the command line, and beats both the
 	// setting and the profile. Empty means nothing was asked for.
 	Network string
+	// Publish are the -p values on the command line, unparsed. Each one opens
+	// a guest port on the host; see runtime.ParsePublication for the grammar.
+	Publish []string
 	// Verbosity is how much this invocation was asked to say: --verbose and
 	// -q, which are read left of the verb. The zero value is the default
 	// level, so a caller with no opinion -- brigd, and every test that builds
@@ -375,6 +388,19 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		strictErr = err
 	}
 
+	// Read, never written. Load answers for `brig info` and `brig env` too,
+	// and asking what a sandbox publishes must not change it; EnsureRunning is
+	// where a -p on this line is recorded.
+	asked, err := runtime.ParsePublications(o.Publish)
+	if err != nil && strictErr == nil {
+		strictErr = err
+	}
+	recorded, err := runtime.Publications(vmName)
+	if err != nil && strictErr == nil {
+		strictErr = err
+	}
+	published := mergePublications(recorded, asked)
+
 	// The rules bound to this run, resolved here with everything else so the
 	// envelope row and the spec cannot disagree about them either.
 	//
@@ -414,6 +440,8 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
 		Network:        network,
+		Publish:        published,
+		PublishAsked:   asked,
 		Egress:         egress,
 		Policies:       policies,
 		Verify:         verifyMode,

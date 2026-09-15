@@ -317,6 +317,11 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 	args := []string{"network-gateway",
 		"--socket", sock,
 		"--qemu-socket", qemuGatewaySocket(sock),
+		// The API socket is opened on every gateway, whether or not this run
+		// publishes anything: a port published later has to reach a gateway
+		// that is already serving guests, and a gateway started without this
+		// could only be given one by being restarted. See gatewayapi.go.
+		"--api", gatewayAPISocket(sock),
 		// Explicit, though the shared pair are hull's defaults: brig hands out
 		// the addresses on this network, so the two must agree by construction
 		// rather than by both happening to default the same way.
@@ -532,6 +537,7 @@ func clearGatewayRecord(sock string) {
 	_ = os.Remove(gatewayPIDPath(sock))
 	_ = os.Remove(gatewaySpecPath(sock))
 	_ = os.Remove(gatewayLogPath(sock))
+	_ = os.Remove(gatewayAPISocket(sock))
 }
 
 func gatewayPID(sock string) (int, bool) {

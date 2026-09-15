@@ -107,6 +107,7 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Hypervisor: hypervisor,
 		Net:        c.Network.RuntimeNet(),
 		Egress:     runtimeEgress(c.Egress),
+		Publish:    c.Publish,
 		GUI:        c.Profile.IsGUI(),
 	}
 }
@@ -127,6 +128,24 @@ func (c *Config) checkBackend(hypervisor string) error {
 	return checker.CanRun(c.backendSpec(hypervisor))
 }
 
+// CanPublish reports what this backend cannot honour about opening these ports
+// on this sandbox, or nil.
+//
+// `brig publish` on a stopped sandbox writes a record and boots nothing, so
+// without this the refusal arrives at the next `brig run` -- against a
+// publication the user can no longer see on the command line, having typed it
+// yesterday. Asked here, the refusal names the backend while the port is still
+// the thing being discussed.
+func (c *Config) CanPublish(add []runtime.Publication) error {
+	checker, ok := c.Runtime.(runtime.RunChecker)
+	if !ok {
+		return nil
+	}
+	spec := c.backendSpec(c.hypervisor())
+	spec.Publish = add
+	return checker.CanRun(spec)
+}
+
 // networkStale reports whether the sandbox that is already running differs
 // from what this run resolved to.
 //
@@ -142,4 +161,37 @@ func (c *Config) networkStale() bool {
 		return false
 	}
 	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), runtimeEgress(c.Egress))
+}
+
+// mergePublications is what a sandbox will be offering: everything it already
+// publishes, with what this command line asked for laid over it.
+//
+// Laid over rather than appended. Two publications on one host port are one
+// host listener, so `--publish 8080:3000` on a sandbox already publishing 8080
+// to port 80 moves that listener rather than asking for a second one.
+func mergePublications(have, asked []runtime.Publication) []runtime.Publication {
+	out := append([]runtime.Publication(nil), have...)
+	for _, p := range asked {
+		replaced := false
+		for i, q := range out {
+			if q.Same(p) {
+				out[i], replaced = p, true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// publicationLines is the PORTS row's value: every published port, one per
+// line, with the loopback default and anything wider said out loud.
+func publicationLines(ps []runtime.Publication) []string {
+	lines := make([]string, 0, len(ps))
+	for _, p := range ps {
+		lines = append(lines, p.Line())
+	}
+	return lines
 }
