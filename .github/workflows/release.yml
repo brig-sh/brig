@@ -48,6 +48,8 @@ jobs:
       # subjects since the previous tag; cliff.toml decides the sections.
       # --current renders the tag that is checked out, so a workflow_dispatch
       # of an older tag gets that tag's notes rather than the newest one's.
+      # The contributor lists need the GitHub API; the action passes the job
+      # token.
       #
       # A third-party action in the job that signs the release, so it is
       # pinned to a commit rather than a tag, and runs here, before the notary

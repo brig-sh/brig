@@ -27,6 +27,13 @@ trim = false
 # The <!-- N --> prefix on each group name below fixes the section order;
 # striptags removes it from the heading.
 #
+# After the sections: Contributors lists the GitHub handle of every commit
+# author in the range; New contributors lists those with no earlier commit
+# in the repository, with the PR that landed it. Bots are skipped. Handles
+# come from the GitHub API via [remote.github]; git author names do not link
+# to a profile. Both lists cover every commit in the range, including the
+# types the sections skip.
+#
 # A trailer written `Refs #111, #47` parses with ` #` as the separator, so the
 # first `#` is put back from the separator rather than lost.
 body = """
@@ -45,6 +52,28 @@ body = """
 {% endif -%}
 {% endfor -%}
 {% endfor %}
+{%- set_global people = [] -%}
+{%- set_global newcomers = [] -%}
+{%- for c in github.contributors | sort(attribute="username") -%}
+{%- if c.username is ending_with("[bot]") -%}{% continue %}{%- endif -%}
+{%- set_global people = people | concat(with=c) -%}
+{%- if c.is_first_time -%}{%- set_global newcomers = newcomers | concat(with=c) -%}{%- endif -%}
+{%- endfor -%}
+{% if people | length > 0 %}
+## Contributors
+
+{% for c in people -%}
+- @{{ c.username }}
+{% endfor %}
+{% endif -%}
+{% if newcomers | length > 0 -%}
+## New contributors
+
+{% for c in newcomers -%}
+- @{{ c.username }} made their first contribution\
+{% if c.pr_number %} in #{{ c.pr_number }}{% endif %}
+{% endfor %}
+{% endif -%}
 {% if previous and previous.version and version -%}
 **Full changelog**: https://github.com/brig-sh/brig/compare/{{ previous.version }}...{{ version }}
 {% endif -%}
@@ -53,6 +82,13 @@ body = """
 postprocessors = [
   { pattern = '#([0-9]+)', replace = "[#${1}](https://github.com/brig-sh/brig/issues/${1})" },
 ]
+
+# GitHub author lookup for the contributor lists. Uses GITHUB_TOKEN when
+# set; the release workflow passes the job token, and `make notes` runs
+# unauthenticated within the anonymous rate limit.
+[remote.github]
+owner = "brig-sh"
+repo = "brig"
 
 [git]
 conventional_commits = true

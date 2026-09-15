@@ -58,7 +58,10 @@ around it, in order.
   conventional-commit subjects since the previous tag, in the sections
   [cliff.toml](../cliff.toml) defines: breaking changes first, then
   features, fixes, refactors and docs, each entry linking its commit and any
-  `Fixes`/`Refs` issue. A commit in the wrong section has the wrong type in
+  `Fixes`/`Refs` issue, then the contributors by GitHub handle and the
+  first-time contributors with their pull request. These come from the
+  GitHub API; `make notes` uses `GITHUB_TOKEN` when set, else the anonymous
+  rate limit. A commit in the wrong section has the wrong type in
   its subject; a section that behaves wrongly is a rule in `cliff.toml`. Fix
   the one at fault rather than the draft: a re-run of the workflow rewrites
   the draft's body, and a hand-edit is lost with it.
