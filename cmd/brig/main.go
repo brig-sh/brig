@@ -288,7 +288,7 @@ func dispatch(args []string) error {
 	case "version", "--version":
 		// Named as the reader spelled it. Both spellings are current -- one is
 		// not a retirement of the other -- so there is no newer word to send
-		// them to, unlike the deprecated listings above.
+		// them to, unlike the deprecated listings.
 		if len(rest) > 0 {
 			return usagef("unexpected argument %q; `brig %s` takes no arguments", rest[0], verb)
 		}

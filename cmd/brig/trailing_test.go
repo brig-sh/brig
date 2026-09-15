@@ -160,8 +160,7 @@ func TestAgentAcceptsTheRightNumberOfArguments(t *testing.T) {
 //
 // The table is over every spelling that reaches listPolicies, not just the two
 // in the report: `brig policy list` and the top-level `brig policies` are the
-// same listing behind a retired word, and a retired word that quietly drops the
-// tail is still a word that drops the tail.
+// same listing behind a retired word.
 //
 // --help is not in this table. Asking for help is not a stray word, and the
 // group answers it with the group's usage and exit 0 -- see
