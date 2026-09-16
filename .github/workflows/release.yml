@@ -33,17 +33,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      # The VERSION file is what a reader and the docs see; the tag is what
-      # goreleaser builds from. Assert they agree, or the file quietly drifts
-      # into being decorative.
-      - name: Check the tag matches VERSION
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          [ "${{ github.event.inputs.tag }}" = "" ] || TAG="${{ github.event.inputs.tag }}"
-          TAG="${TAG#v}"
-          [ "$(cat VERSION)" = "$TAG" ] || {
-            echo "VERSION file ($(cat VERSION)) does not match tag $TAG" >&2; exit 1; }
-
       # The release notes, rendered by git-cliff from the conventional-commit
       # subjects since the previous tag; cliff.toml decides the sections.
       # --current renders the tag that is checked out, so a workflow_dispatch
@@ -63,6 +52,15 @@ jobs:
           go-version: stable
           check-latest: true
           cache: true
+
+      # The binaries embed +dirty if the tree is modified when they build.
+      # goreleaser checks the tree before its hooks run, so its `go mod tidy`
+      # hook could change go.mod or go.sum after the check and nothing would
+      # fail. Tidy here first, and stop on any change.
+      - name: Check the tree stays clean after go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code
 
       - uses: sigstore/cosign-installer@v3
 

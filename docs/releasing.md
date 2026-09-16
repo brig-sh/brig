@@ -5,18 +5,47 @@ How a release of Brig is cut. One tag, one release. The release workflow
 building, signing, notarizing and drafting. This page is the human part
 around it, in order.
 
+## The tag is the version
+
+There is no version file. The binary reads its version from what the Go
+toolchain embeds at build time, which is derived from the nearest `v*` tag
+reachable from the commit:
+
+| Commit | `brig version` prints |
+| --- | --- |
+| tagged `v0.3.0` | `v0.3.0` |
+| tagged `v0.4.0-rc1` | `v0.4.0-rc1` |
+| after `v0.3.0` | `v0.3.1-0.<commit time>-<commit>` |
+| after `v0.4.0-rc1` | `v0.4.0-rc1.0.<commit time>-<commit>` |
+| any of these with uncommitted changes | the same, with `+dirty` |
+
+So a bump is a tag, a release candidate is a prerelease tag, and every build
+between tags names the release it follows and the commit it is. Only tags
+reachable from the commit count: a maintenance branch cut from `v0.2.0` keeps
+counting `v0.2.x` however far `main` has moved.
+
+```
+        main                                          0.2
+          │                                            │
+          ● e5e5e5e ── tag v0.4.0-rc1                  ● d4d4d4d  v0.2.2-0.20260919120000-d4d4d4d4d4d4
+          │ v0.4.0-rc1                                 │
+          │                                            ● c3c3c3c ── tag v0.2.1
+          ● b2b2b2b ── tag v0.3.0                      │ v0.2.1
+          │ v0.3.0                                     ● a1a1a1a  v0.2.1-0.20260917120000-a1a1a1a1a1a1
+          ● 9999999  v0.2.1-0.20260915120000-…         │
+          │   ┌────────────────────────────────────────╯
+          ●───┘   git checkout -b 0.2 v0.2.0
+        0000000 ── tag v0.2.0
+```
+
+The toolchain needs the tag to be present when it builds, which is why the
+release workflow clones with full history. A build from a source tarball,
+with no git history at all, prints `dev` and no commit. So does a plain
+`go build` in a linked git worktree: its `.git` is a file, and the toolchain
+does not recognise that as a repository. `make build` passes git's own
+answers in that case, and the binary prints what a normal clone would.
+
 ## Cut the release
-
-- Bump `VERSION` to the version you are releasing, without the `v`. The tag
-  carries the `v`, the file does not. They must name the same version,
-  because the workflow asserts it and fails the release if they disagree:
-
-  ```
-  [ "$(cat VERSION)" = "$TAG" ] || {
-    echo "VERSION file ($(cat VERSION)) does not match tag $TAG" >&2; exit 1; }
-  ```
-
-  Land the `VERSION` bump before you tag, not after.
 
 - Read the notes the release will carry before the tag exists:
 
@@ -35,6 +64,17 @@ around it, in order.
   ```bash
   git tag v0.2.0
   git push origin v0.2.0
+  ```
+
+  A release candidate is the same with a prerelease tag, `v0.3.0-rc1`. A
+  patch for an older release is tagged on its maintenance branch:
+
+  ```bash
+  git checkout -b 0.2 v0.2.0        # once, from the release being patched
+  git cherry-pick <fix>
+  git push origin 0.2
+  git tag v0.2.1
+  git push origin v0.2.1
   ```
 
   The push starts the workflow. It builds both binaries for every target,
@@ -125,7 +165,7 @@ around it, in order.
   git grep -n 0.1.0-rc18
   ```
 
-  At least `VERSION`, and every page that quotes a hull version:
+  Every page that quotes a hull version:
   [docs/policies.md](policies.md), [docs/runtimes.md](runtimes.md),
   [docs/security.md](security.md), and the files under
   [docs/manual-tests/](manual-tests/).
@@ -146,7 +186,10 @@ around it, in order.
 
 ## Check before you walk away
 
-- The tag matches `VERSION`.
+- A downloaded binary prints the tag: `brig version` says `brig v0.2.0`, not
+  a pseudo-version, which would mean the workflow built without the tag in
+  reach, and not `v0.2.0+dirty`, which would mean the tree changed during
+  the build.
 - There is exactly one release for the tag, and it is published.
 - On a stable tag: the cask PR against `brig-sh/homebrew-brig` exists.
   Goreleaser skips it silently if neither tap token resolved, so check

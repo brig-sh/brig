@@ -23,7 +23,8 @@ before:
 # is why the release workflow clones with full history: a shallow clone
 # without the tag would embed a pseudo-version instead. The `go mod tidy`
 # hook above has to leave the tree clean, or every release build reads as
-# +dirty.
+# +dirty; goreleaser checks the tree before hooks run, so the release
+# workflow runs the tidy first and fails on a diff.
 builds:
   - id: brig
     main: ./cmd/brig
