@@ -18,6 +18,12 @@ before:
     - go mod tidy
     - go test ./...
 
+# No version is stamped into either binary. `brig version` reads the tag,
+# commit and modified flag the Go toolchain embeds from the checkout, which
+# is why the release workflow clones with full history: a shallow clone
+# without the tag would embed a pseudo-version instead. The `go mod tidy`
+# hook above has to leave the tree clean, or every release build reads as
+# +dirty.
 builds:
   - id: brig
     main: ./cmd/brig
@@ -26,7 +32,7 @@ builds:
     goos: [darwin, linux]
     goarch: [arm64, amd64]
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
     mod_timestamp: "{{ .CommitTimestamp }}"
 
   - id: brigd
@@ -36,7 +42,7 @@ builds:
     goos: [darwin, linux]
     goarch: [arm64, amd64]
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 # Developer ID signing and notarization for the macOS binaries.
