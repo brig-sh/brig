@@ -234,7 +234,20 @@ secret store that will not open. Every other finding, including one marked
 brig version
 ```
 
-Prints `brig v0.2.0` in this release. `--version` is the same command.
+Prints the version and, in parentheses, the build it came from: the short
+commit, the commit date, the Go version and the platform. `--version` is the
+same command.
+
+```
+brig v0.2.0 (131e3bc, 2026-09-15, go1.26.0, darwin/arm64)
+```
+
+The version is what Go derived from the nearest tag when the binary was
+built. A release prints its tag. A build from a commit after a tag prints a
+pseudo-version naming that commit, such as
+`v0.2.1-0.20260915210404-ef4aa8b0efb6`, with `+dirty` appended when the tree
+had uncommitted changes. A build with no git history behind it, such as one
+from a source tarball, prints `dev` and no commit.
 
 ### `brig completion`
 

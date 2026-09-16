@@ -21,15 +21,13 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/session"
 	"github.com/brig-sh/brig/internal/wrap"
 )
-
-// version is stamped at build time by goreleaser.
-var version = "dev"
 
 // sandboxPrefix is how brig recognises its own sandboxes in a runtime that
 // may be running other things. It is the same mark wrap stamps onto every
@@ -294,7 +292,7 @@ func dispatch(args []string) error {
 		if len(rest) > 0 {
 			return usagef("unexpected argument %q; `brig %s` takes no arguments", rest[0], verb)
 		}
-		fmt.Printf("brig %s\n", version)
+		fmt.Printf("brig %s\n", buildinfo.Read())
 		return nil
 	case "agent":
 		return agentCmd(rest)
