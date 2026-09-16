@@ -209,6 +209,12 @@ func complete(words []string) (string, []string) {
 			return names(cur, []string{"--quiet", "-q"})
 		}
 		return dirNone, nil
+	case verb == "version":
+		// One flag, no operand.
+		if strings.HasPrefix(cur, "-") {
+			return names(cur, []string{"--json"})
+		}
+		return dirNone, nil
 	case verb == "doctor":
 		if strings.HasPrefix(cur, "-") {
 			return names(cur, []string{"--json"})

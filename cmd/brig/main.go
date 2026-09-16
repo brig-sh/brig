@@ -21,7 +21,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -88,8 +87,9 @@ global flags (left of the command, as in: brig -q run claude):
                          even here
                          (-q after the verb still works this release)
       --json             machine-readable output, for the read verbs: ls, info,
-                         agent ls, secret ls and doctor. Also accepted after the
-                         verb (brig ls --json). Every other verb refuses it
+                         agent ls, secret ls, doctor and version. Also accepted
+                         after the verb (brig ls --json). Every other verb
+                         refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
                          JSON line with its exit status -- so a script can tell
                          "brig refused" from "the agent failed"
@@ -286,14 +286,7 @@ func dispatch(args []string) error {
 		fmt.Print(usage)
 		return nil
 	case "version", "--version":
-		// Named as the reader spelled it. Both spellings are current -- one is
-		// not a retirement of the other -- so there is no newer word to send
-		// them to, unlike the deprecated listings.
-		if len(rest) > 0 {
-			return usagef("unexpected argument %q; `brig %s` takes no arguments", rest[0], verb)
-		}
-		fmt.Printf("brig %s\n", buildinfo.Read())
-		return nil
+		return versionCmd(verb, rest)
 	case "agent":
 		return agentCmd(rest)
 	case "policy":
@@ -3054,7 +3047,7 @@ var globalJSON bool
 // --json left of it is a usage error rather than a flag dropped on the floor.
 func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
-	case "ls", "info", "env", "doctor", "run", "sh":
+	case "ls", "info", "env", "doctor", "version", "--version", "run", "sh":
 		return true
 	case "agent", "secret":
 		return len(rest) > 0 && rest[0] == "ls"
@@ -3070,8 +3063,8 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // from here.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, agent ls, secret ls, doctor (env takes it too, but env is "+
-		"deprecated; prefer info), and for run and sh", verb)
+		"ls, info, agent ls, secret ls, doctor, version (env takes it too, but "+
+		"env is deprecated; prefer info), and for run and sh", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run

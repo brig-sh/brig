@@ -249,6 +249,29 @@ pseudo-version naming that commit, such as
 had uncommitted changes. A build with no git history behind it, such as one
 from a source tarball, prints `dev` and no commit.
 
+`--json` prints the same build under the envelope, with the commit in full.
+`commit` and `commitTime` are absent when the build carried no git history.
+
+```bash
+brig version --json
+```
+
+```json
+{
+  "apiVersion": "brig.sh/v1alpha1",
+  "kind": "Version",
+  "data": {
+    "version": "v0.2.0",
+    "commit": "131e3bc5615df5ff74e6b5af9a5bcf2ed42b1d57",
+    "commitTime": "2026-09-15T09:36:19Z",
+    "modified": false,
+    "goVersion": "go1.26.0",
+    "os": "darwin",
+    "arch": "arm64"
+  }
+}
+```
+
 ### `brig completion`
 
 ```bash
@@ -553,6 +576,7 @@ verb.
 | `ls` | global, or local after `ls` | envelope |
 | `info`, `env` | global, or local on the run line | envelope |
 | `doctor` | global, or local after `doctor` | envelope |
+| `version` | global, or local after `version` | envelope |
 | `run`, `sh` | global, or local on the run line | one compact line, see below |
 | `agent ls` | global, or local after `ls` | envelope |
 | `secret ls` | global, or local after `ls` | envelope |
@@ -572,8 +596,8 @@ that works:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, agent ls, secret ls, doctor (env takes it too, but env is deprecated;
-prefer info), and for run and sh
+info, agent ls, secret ls, doctor, version (env takes it too, but env is
+deprecated; prefer info), and for run and sh
 ```
 
 The flag has to follow `agent show`, not precede `agent`. Every verb not
