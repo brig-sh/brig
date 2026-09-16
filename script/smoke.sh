@@ -2104,6 +2104,12 @@ rc=$?
 grep -q '^  ok  runtime .*0.1.0-rc23' "$WORK/doctor.out" \
   && ok "doctor names the runtime version" \
   || bad "doctor names the runtime version -- got: $(grep runtime "$WORK/doctor.out")"
+# The first row is the build that produced the report, the same line
+# `brig version` prints after the word brig.
+build="$("$WORK/brig" version | sed 's/^brig //')"
+[ "$(head -1 "$WORK/doctor.out")" = "  ok  brig      $build" ] \
+  && ok "doctor opens with the brig build" \
+  || bad "doctor opens with the brig build -- want '$build', got: $(head -1 "$WORK/doctor.out")"
 
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's

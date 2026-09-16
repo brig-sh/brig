@@ -207,8 +207,13 @@ exits `0`.
 brig doctor
 ```
 
-Checks, one line each: the host, the hypervisor, the runtime, the boot
-assets, cosign, the profile directory, the secret store and brigd.
+Checks, one line each: the brig build, the host, the hypervisor, the
+runtime, the boot assets, cosign, the profile directory, the secret store and
+brigd. The first line is the same build `brig version` prints, so a report
+pasted whole says which binary produced it. A running brigd is asked which
+build it is; one that differs from the brig binary is marked `!!` with a
+restart as its fix, because a daemon left up across an upgrade serves the
+old code with no other sign.
 
 ```bash
 brig doctor claude
