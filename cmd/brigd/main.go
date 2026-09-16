@@ -31,13 +31,12 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/brigsock"
+	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/exitcode"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/wrap"
 )
-
-var version = "dev"
 
 // protocolVersion is the wire protocol brigd speaks. It rides every request and
 // every response as "v".
@@ -123,9 +122,18 @@ type Response struct {
 	// Only things to act on. What the run narrated about its own progress is
 	// not among them, so an ensure that went entirely well comes back with no
 	// warnings at all and a client can treat any at all as worth showing.
-	Warnings []string  `json:"warnings,omitempty"`
-	Version  string    `json:"version,omitempty"`
-	Sessions []Session `json:"sessions,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+	// Version through Modified answer the version op: the build this daemon
+	// came from, the same fields `brig version --json` prints for the CLI, so
+	// a client can tell a daemon left running across an upgrade from the
+	// binary talking to it. Commit and CommitTime are absent when the build
+	// carried no VCS data. Modified is a pointer so the version op always
+	// carries it, as the CLI does, and no other op carries it at all.
+	Version    string    `json:"version,omitempty"`
+	Commit     string    `json:"commit,omitempty"`
+	CommitTime string    `json:"commitTime,omitempty"`
+	Modified   *bool     `json:"modified,omitempty"`
+	Sessions   []Session `json:"sessions,omitempty"`
 }
 
 // Session is one sandbox the daemon knows about.
@@ -381,7 +389,7 @@ func serve(socket string) error {
 
 	// No runtime named here any more: there is one per request, resolved from
 	// the profile the request names, so there is no single answer to give.
-	fmt.Fprintf(os.Stderr, "brigd %s listening on %s\n", version, socket)
+	fmt.Fprintf(os.Stderr, "brigd %s listening on %s\n", buildinfo.Read(), socket)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -562,10 +570,19 @@ func (d *daemon) serve(req Request) Response {
 	return d.dispatch(req)
 }
 
+// versionResponse is the version op's answer for one build.
+func versionResponse(info buildinfo.Info) Response {
+	resp := Response{OK: true, Version: info.Version, Commit: info.Commit, Modified: &info.Modified}
+	if !info.CommitTime.IsZero() {
+		resp.CommitTime = info.CommitTime.UTC().Format(time.RFC3339)
+	}
+	return resp
+}
+
 func (d *daemon) dispatch(req Request) Response {
 	switch req.Op {
 	case "version":
-		return Response{OK: true, Version: version}
+		return versionResponse(buildinfo.Read())
 	case "status":
 		return Response{OK: true, Sessions: d.status()}
 	case "ensure":
