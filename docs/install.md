@@ -33,6 +33,39 @@ During the `0.1.0-rc` series, the tap can lag the newest release. If
 `brew install` gives you an older version than you expected, or fails, use
 [install.sh](#installsh) instead.
 
+### Trying something before it is released
+
+Two extra casks carry builds that are not releases, for anyone who wants to
+try a feature before it reaches one.
+
+```bash
+brew install --cask brig-sh/brig/brig@main           # the tip of main
+brew install --cask brig-sh/brig/brig@experimental   # a branch someone promoted
+```
+
+`brig@main` is rebuilt on every merge to `main`, so `brew upgrade` follows
+what is coming. `brig@experimental` moves only when a maintainer promotes a
+particular ref to it, which is how an unmerged branch reaches a tester; ask on
+the pull request, or run the `channel` workflow with that ref.
+
+Each pulls the matching `hull` -- `hull@main` or `hull@experimental` -- because
+a feature usually spans both.
+
+Neither is supported. They can break, they move without notice, and they are
+not what a bug report should be filed against unless the bug is the reason you
+were asked to install one.
+
+Only one of the three casks can be installed at a time, and going back to the
+supported build means removing the hull that came with the channel as well:
+
+```bash
+brew uninstall --cask brig@main hull@main
+brew install --cask brig
+```
+
+Removing `brig@main` alone leaves `hull@main` behind, and the stable `brig`
+then asks for `hull`, which conflicts with it.
+
 ## install.sh
 
 Prerequisites: `curl`, `tar`, and either `sha256sum` or `shasum` on `PATH`.
