@@ -300,17 +300,17 @@ Under `BRIG_VERIFY=off` cosign is never looked up, and the only line is:
 brig: BRIG_VERIFY=off, so the guest image is not checked before it boots
 ```
 
-Under `BRIG_VERIFY=require` the same missing-cosign message appears, with the
-mode named. This time it refuses the boot instead of continuing (exit
-`5`), even though the wording still reads "Booting it unchecked":
+Under `BRIG_VERIFY=require` nothing boots, and the line says so rather than
+describing the boot it refused (exit `5`):
 
 ```
-brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:latest: cosign is not
-installed (`brew install cosign`). Booting it unchecked (BRIG_VERIFY=require)
+brig: refusing to boot image ghcr.io/brig-sh/claude-code-stock:latest: cosign is
+not installed (`brew install cosign`), so nothing could be checked
+(BRIG_VERIFY=require). Install cosign, or set BRIG_VERIFY=warn to boot it
+unchecked
 ```
 
-Read the exit code, not the last clause of the message: `require` with no
-cosign refuses every image, Brig's own included.
+`require` with no cosign refuses every image, Brig's own included.
 
 Install cosign to get the check:
 

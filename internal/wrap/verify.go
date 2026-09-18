@@ -97,7 +97,7 @@ func (c *Config) verifyTag() error {
 
 	case verify.NotOurs, verify.NoTooling:
 		if c.Verify == verify.Require {
-			return fmt.Errorf("%s (BRIG_VERIFY=require)", res.Message())
+			return errors.New(res.Refusal())
 		}
 		c.alertf("%s", res.Message())
 		return nil
@@ -148,7 +148,7 @@ func (c *Config) verifyDigest() error {
 		// serves rather than a stale local tag.
 		c.BootDigest = res.Digest
 		if res.Outcome == verify.NotOurs && c.Verify == verify.Require {
-			return fmt.Errorf("%s (BRIG_VERIFY=require)", res.Message())
+			return errors.New(res.Refusal())
 		}
 		// The two outcomes part company here. A signature that checked out is
 		// nothing to act on and narrates; an image nobody claimed to publish is
@@ -167,7 +167,7 @@ func (c *Config) verifyDigest() error {
 		// in the machine's setup, said so on every boot, not something that
 		// changes between one run and the next.
 		if c.Verify == verify.Require {
-			return fmt.Errorf("%s (BRIG_VERIFY=require)", res.Message())
+			return errors.New(res.Refusal())
 		}
 		c.alertf("%s", res.Message())
 		return nil
@@ -353,11 +353,25 @@ func (c *Config) verifyBootAssets() error {
 	case verify.NoTooling, verify.Unresolved:
 		// Could not check, rather than failed. It follows the image's rule: said
 		// out loud at every level by default, a refusal under require.
+		//
+		// The cause is named here rather than taken from res.Message(), which is
+		// written about an image and about booting it anyway. Nesting it put
+		// "Booting it unchecked" inside a sentence that refuses the boot, and
+		// named the image where the subject is the kernel this sandbox starts.
+		//
+		// The warn line still has to say the boot goes ahead, which is what the
+		// nested message used to carry. It says it about the kernel, in the same
+		// words the NotOurs case above uses.
+		cause := "cosign is not installed (`brew install cosign`)"
+		if res.Outcome == verify.Unresolved {
+			cause = fmt.Sprintf("the registry could not be reached: %s", res.Detail)
+		}
 		if c.Verify == verify.Require {
 			return fmt.Errorf("refusing to boot: the boot assets at %s could not be "+
-				"verified (%s) (BRIG_VERIFY=require)", ref, res.Message())
+				"verified: %s (BRIG_VERIFY=require)", ref, cause)
 		}
-		c.alertf("the boot assets at %s could not be verified: %s", ref, res.Message())
+		c.alertf("the boot assets at %s could not be verified: %s, so nothing was "+
+			"checked about the kernel this sandbox boots", ref, cause)
 		return nil
 
 	default:

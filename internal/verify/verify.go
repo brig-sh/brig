@@ -199,15 +199,25 @@ func (r Result) Message() string {
 		// Naming the digest is the point of this whole path: the line vouches
 		// for the bytes that boot, not for a tag that can move under them.
 		//
+		// The tag path has no digest to name. Image verifies the reference it
+		// was handed and resolves nothing, so Digest is empty there, and a
+		// template that printed it regardless ended the sentence on a space.
+		// What boots is the tag, and the line says so. Why it is the tag is
+		// already said one line earlier, by the caller that chose this path.
+		//
 		// Under a policy the user replaced it vouches for less, and says so in
 		// different words. The same sentence for both would let a check that
 		// accepts every certificate read exactly like one that accepts one.
+		booted := r.Digest
+		if booted == "" {
+			booted = "the tag"
+		}
 		if r.Policy.Replaced() {
 			return fmt.Sprintf("image %s: matched the replaced trust policy, booting %s "+
 				"(BRIG_VERIFY_REGISTRY, BRIG_VERIFY_IDENTITY or BRIG_VERIFY_ISSUER is set, "+
-				"so this is not brig's own check)", r.Image, r.Digest)
+				"so this is not brig's own check)", r.Image, booted)
 		}
-		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, r.Digest)
+		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, booted)
 	case NotOurs:
 		return fmt.Sprintf("image %s is not published by brig-sh, so there is no "+
 			"signature of ours to check. That is expected for your own image -- "+
@@ -230,6 +240,53 @@ func (r Result) Message() string {
 	default:
 		return fmt.Sprintf("image %s claims to be published by brig-sh, but its "+
 			"signature DID NOT VERIFY: %s", r.Image, r.Detail)
+	}
+}
+
+// Refusal is the line to show when BRIG_VERIFY=require turns this outcome into
+// a refusal, rather than the warning Message is phrased for.
+//
+// Two outcomes need one. NotOurs and NoTooling are the "nothing could be
+// checked" rows, and their Message ends by saying what boots anyway -- the
+// opposite of what happened. Decorating that sentence with the mode, which is
+// what the callers used to do, left brig printing "Booting it unchecked
+// (BRIG_VERIFY=require)" over a boot that never started. Each also names the
+// way out, because require refuses these two on a host that is set up as its
+// owner intended: a third party's image, or a machine with no cosign.
+//
+// The rest keep Message. Failed, Mismatch and Unresolved are refused by
+// sentences their callers write, and those already say they refuse.
+func (r Result) Refusal() string {
+	switch r.Outcome {
+	case NotOurs:
+		// Split on the replaced policy the same way the Verified line does, and
+		// for a sharper reason: under a replaced policy the registry that
+		// decided this row is the user's own. Naming brig-sh would name a trust
+		// root that is not in force, and telling them to set the three
+		// variables would tell them to set what they have already set.
+		if r.Policy.Replaced() {
+			// The registry alone, because the registry alone decided this: both
+			// Image and Verify reach NotOurs on the prefix test and nothing else.
+			// Naming the other two would send the reader to widen settings that
+			// cannot move an image out of this row. The shipped wording names all
+			// three because there the reader is choosing a trust root, not
+			// widening one they already chose.
+			return fmt.Sprintf("refusing to boot image %s: it is outside the trust "+
+				"policy you set, so there is no signature to check it against "+
+				"(BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it anyway, or "+
+				"widen BRIG_VERIFY_REGISTRY to cover it", r.Image)
+		}
+		return fmt.Sprintf("refusing to boot image %s: it is not published by brig-sh, "+
+			"so there is no signature of ours to check (BRIG_VERIFY=require). Set "+
+			"BRIG_VERIFY=warn to boot your own image, or point BRIG_VERIFY_REGISTRY, "+
+			"BRIG_VERIFY_IDENTITY and BRIG_VERIFY_ISSUER at the publisher you trust",
+			r.Image)
+	case NoTooling:
+		return fmt.Sprintf("refusing to boot image %s: cosign is not installed "+
+			"(`brew install cosign`), so nothing could be checked (BRIG_VERIFY=require). "+
+			"Install cosign, or set BRIG_VERIFY=warn to boot it unchecked", r.Image)
+	default:
+		return r.Message()
 	}
 }
 
