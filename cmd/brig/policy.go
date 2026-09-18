@@ -856,6 +856,19 @@ func parseCheckArgs(args []string) (profileName, session string, err error) {
 	return words[0], session, nil
 }
 
+// recordedUnder reads the rows attached to p under exactly key, skipping the
+// slugging checkPolicy does on its way in.
+//
+// `brig policy ls` prints a row whatever it is filed under, so check has to be
+// able to answer for one no run reaches. Reading the record raw is what sees it.
+func recordedUnder(p profile.Profile, key string) ([]string, error) {
+	a, err := policy.LoadAttachments(policy.Dir())
+	if err != nil {
+		return nil, err
+	}
+	return a.Sessions[p.Name][key], nil
+}
+
 // checkPolicy reports the policies effectively bound to a run of profile,
 // or -- with -n -- to one of its sessions, and whether brig can enforce
 // anything against it at all.
@@ -868,7 +881,7 @@ func parseCheckArgs(args []string) (profileName, session string, err error) {
 // CheckCoverage's refusal of a kind: shell/kind: gui profile, which no
 // policy can bind regardless of what it says.
 func checkPolicy(args []string) error {
-	profileName, session, err := parseCheckArgs(args)
+	profileName, sessionName, err := parseCheckArgs(args)
 	if err != nil {
 		return err
 	}
@@ -876,15 +889,59 @@ func checkPolicy(args []string) error {
 	if !ok {
 		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
 	}
-	names, err := policy.EffectivePolicies(p, session, policy.Dir())
+	// A session is its slug: the key a run looks its own rules up under (see
+	// internal/wrap/config.go), and the only spelling `attach -n` will write.
+	// Asking under the same key is what keeps what this command reports and
+	// what a boot applies the same thing.
+	slug := session.Slug(sessionName)
+	names, err := policy.EffectivePolicies(p, slug, policy.Dir())
 	if err != nil {
 		return err
+	}
+	// The spelling handed in stays lenient, which `attach -n` is not: a row
+	// under a key that is not a slug is reported beside the answer and named
+	// as one no run reaches, rather than left to read as rules in force.
+	//
+	// It stays out of names. names is what a boot applies, and it decides the
+	// exit status below -- so a row nothing reaches, naming a policy that does
+	// not load, would otherwise fail the command for failing to enforce rules
+	// the session never carried. Reported, never counted.
+	var stray []string
+	if sessionName != "" && slug != sessionName {
+		recorded, err := recordedUnder(p, sessionName)
+		if err != nil {
+			return err
+		}
+		if len(recorded) > 0 {
+			for _, name := range recorded {
+				if !slices.Contains(names, name) {
+					stray = append(stray, name)
+				}
+			}
+			// A name with nothing usable in it slugs to the empty string, and
+			// no session starts from it at all, so the advice cannot be to
+			// type the slug: there is none.
+			becomes := fmt.Sprintf("a session named %q starts %q", sessionName, slug)
+			if slug == "" {
+				becomes = fmt.Sprintf("%q has no usable characters, so no session starts from it", sessionName)
+			}
+			// detach takes one policy, so one row has a line to run rather
+			// than a template to edit. Several keep the placeholder: which of
+			// them to remove is the reader's to pick.
+			which := "<policy>"
+			if len(recorded) == 1 {
+				which = recorded[0]
+			}
+			warnf("%s is recorded under %q, which no run reaches: %s. Remove it with "+
+				"`brig policy detach %s %s -n %q`",
+				strings.Join(recorded, ", "), sessionName, becomes, which, p.Name, sessionName)
+		}
 	}
 	entries, err := loadPolicies(policy.Dir())
 	if err != nil {
 		return err
 	}
-	if len(names) == 0 {
+	if len(names) == 0 && len(stray) == 0 {
 		fmt.Printf("no policy applies to %s\n", p.Name)
 	}
 	// "not loaded", not "no such policy", for the reason listPolicies
@@ -901,6 +958,16 @@ func checkPolicy(args []string) error {
 		fmt.Printf("%s (not loaded)\n", name)
 		missing = append(missing, name)
 	}
+	// Listed too, because `brig policy ls` lists it and something has to be
+	// able to inspect what the listing names -- but never added to missing,
+	// which is the verdict on what a boot would fail to enforce.
+	for _, name := range stray {
+		if _, ok := entries[name]; ok {
+			fmt.Println(name)
+			continue
+		}
+		fmt.Printf("%s (not loaded)\n", name)
+	}
 	if err := policy.CheckCoverage(p); err != nil {
 		return fmt.Errorf("cannot enforce any policy on %s: %w", p.Name, err)
 	}
@@ -915,7 +982,7 @@ func checkPolicy(args []string) error {
 	// neither needs it.
 	// On stderr: check prints one policy name per line, and anything
 	// looping over that would otherwise read the note as a name.
-	if len(names) > 0 {
+	if len(names) > 0 || len(stray) > 0 {
 		fmt.Fprintln(os.Stderr, policy.EnforcementNote)
 	}
 	return nil

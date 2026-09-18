@@ -1835,6 +1835,173 @@ func TestCheckWithNameChecksOnlyThatSession(t *testing.T) {
 	}
 }
 
+// A session is its slug, and that is the key the run looks its rules up under
+// (internal/wrap/config.go). check answers about the same key, so every
+// spelling of --name that starts session foo gets foo's answer here -- what
+// this command reports and what a boot applies are one thing.
+func TestCheckFollowsTheSlugTheRunUses(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "foo"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"foo", "Foo", "FOO"} {
+		out, err := captureStdout(t, func() error {
+			return checkPolicy([]string{"claude-code", "-n", name})
+		})
+		if err != nil {
+			t.Fatalf("check -n %q: %v", name, err)
+		}
+		if !strings.Contains(out, "no-net") {
+			t.Errorf("check -n %q says %q, want the no-net bound to session foo", name, out)
+		}
+	}
+
+	// The other direction, so the lookup cannot be one that matches too
+	// much: a name that slugs to something else carries nothing.
+	out, err := captureStdout(t, func() error {
+		return checkPolicy([]string{"claude-code", "-n", "Bar"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "no policy applies") {
+		t.Errorf("check -n Bar says %q, want nothing: only foo is bound", out)
+	}
+}
+
+// A key that is not a slug reaches the record only by hand or from an earlier
+// build, and no run addresses it. check reports it all the same, because
+// `policy ls` prints it and a binding the listing names has to be one
+// something can inspect and remove -- and says what it is, rather than
+// letting the name read as rules in force.
+func TestCheckNamesARecordedRowNoRunReaches(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	var a policy.Attachments
+	a.AttachToSession("no-net", "claude-code", "My Work")
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	var out string
+	warning := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, func() error {
+			return checkPolicy([]string{"claude-code", "-n", "My Work"})
+		})
+		if err != nil {
+			t.Errorf("check could not inspect a recorded binding: %v", err)
+		}
+	})
+	if !strings.Contains(out, "no-net") {
+		t.Errorf("check did not report the recorded binding: %q", out)
+	}
+	if !strings.Contains(warning, "no run reaches") {
+		t.Errorf("check did not say the row is unreachable: %q", warning)
+	}
+	if !strings.Contains(warning, "my-work") {
+		t.Errorf("the warning does not name the session a run would start: %q", warning)
+	}
+}
+
+// A name with no usable character in it slugs to nothing, so no session
+// starts from it at all. The warning has to say that, rather than report the
+// empty slug as a session a run would reach.
+func TestCheckNamesARowUnderAnUnusableName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	var a policy.Attachments
+	a.AttachToSession("no-net", "claude-code", "!!!")
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	warning := captureStderr(t, func() {
+		if _, err := captureStdout(t, func() error {
+			return checkPolicy([]string{"claude-code", "-n", "!!!"})
+		}); err != nil {
+			t.Errorf("check could not inspect a recorded binding: %v", err)
+		}
+	})
+	if !strings.Contains(warning, "no usable characters") {
+		t.Errorf("the warning does not say why nothing reaches the row: %q", warning)
+	}
+	if strings.Contains(warning, `starts ""`) {
+		t.Errorf("the warning names the empty slug as a session: %q", warning)
+	}
+}
+
+// A row no run reaches cannot fail the command. check's exit status is its
+// verdict on what a boot applies, and a key nothing resolves to applies
+// nothing -- so a policy that would not load, recorded under such a key, is
+// still named in the listing and still leaves the status alone. The contrast
+// is TestCheckFailsWhenABoundPolicyDoesNotExist, where the binding is one a
+// run really carries and the failure is the point.
+func TestCheckDoesNotFailOnAStrayRowThatDoesNotLoad(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	loadTestProfiles(t)
+	// No policy file for it: the name is recorded and loads under nothing.
+	var a policy.Attachments
+	a.AttachToSession("ghost", "claude-code", "My Work")
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	var out string
+	warning := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, func() error {
+			return checkPolicy([]string{"claude-code", "-n", "My Work"})
+		})
+		if err != nil {
+			t.Errorf("a row no run reaches failed the command: %v", err)
+		}
+	})
+	if !strings.Contains(out, "ghost") {
+		t.Errorf("check did not name the recorded row: %q", out)
+	}
+	if !strings.Contains(warning, "no run reaches") {
+		t.Errorf("check did not say the row is unreachable: %q", warning)
+	}
+}
+
+// The remedy the warning prints is for one row, so with one row it is a line
+// to run rather than a template to edit.
+func TestTheStrayWarningNamesThePolicyToDetach(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	var a policy.Attachments
+	a.AttachToSession("no-net", "claude-code", "My Work")
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	warning := captureStderr(t, func() {
+		if _, err := captureStdout(t, func() error {
+			return checkPolicy([]string{"claude-code", "-n", "My Work"})
+		}); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(warning, `detach no-net claude-code -n "My Work"`) {
+		t.Errorf("the warning does not give the line that removes the row: %q", warning)
+	}
+	if strings.Contains(warning, "<policy>") {
+		t.Errorf("the warning kept the placeholder with one row to name: %q", warning)
+	}
+}
+
 func TestCheckFailsOnAShellProfile(t *testing.T) {
 	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
 	loadTestProfiles(t)

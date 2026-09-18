@@ -384,7 +384,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// reader told "shared" while brig had quietly given the sandbox a network
 	// of its own would be reading a row that is not true. Isolated is stricter
 	// than shared, never looser, so this only ever narrows what was asked for.
-	egress, policies, err := policy.Resolve(t, rawName, policy.Dir())
+	//
+	// Keyed by the slug, the one identity a session has: vmName and the
+	// workspace above are built from it, the index keys on it, and `attach -n`
+	// writes no other spelling, so the rules follow the same key as the rest.
+	egress, policies, err := policy.Resolve(t, slug, policy.Dir())
 	if err != nil && strictErr == nil {
 		strictErr = err
 	}
