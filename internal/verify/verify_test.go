@@ -380,3 +380,74 @@ func TestAReplacedPolicyDoesNotSayTheSameThing(t *testing.T) {
 		t.Errorf("the shipped policy stopped saying it verified: %s", got)
 	}
 }
+
+// Image returns Verified with an empty Digest, and the line it produces is the
+// success line on every runtime that cannot boot by digest. Both spellings are
+// covered: the replaced-policy one formats the same field.
+func TestVerifiedWithoutADigestNamesTheTag(t *testing.T) {
+	shipped := DefaultPolicy()
+	replaced := Policy{Registry: "ghcr.io/someone/", Identity: shipped.Identity,
+		Issuer: shipped.Issuer, Cosign: shipped.Cosign}
+
+	for what, p := range map[string]Policy{"shipped": shipped, "replaced": replaced} {
+		got := Result{Policy: p, Outcome: Verified, Image: "ghcr.io/brig-sh/x:1"}.Message()
+		if !strings.Contains(got, "booting the tag") {
+			t.Errorf("the %s policy does not say what booted: %q", what, got)
+		}
+		if strings.Contains(got, "booting  ") || strings.HasSuffix(got, "booting ") {
+			t.Errorf("the %s policy left the digest slot empty: %q", what, got)
+		}
+	}
+
+	// And a digest, when there is one, is still what the line names.
+	got := Result{Policy: shipped, Outcome: Verified, Image: "ghcr.io/brig-sh/x:1",
+		Digest: "sha256:abc"}.Message()
+	if !strings.Contains(got, "sha256:abc") {
+		t.Errorf("the digest path stopped naming the digest: %q", got)
+	}
+}
+
+// Under require these two outcomes refuse the boot, so their line says that and
+// names what the user can do instead.
+func TestRefusalSaysItRefusedAndNamesTheWayOut(t *testing.T) {
+	for outcome, remedy := range map[Outcome]string{
+		NotOurs:   "BRIG_VERIFY_REGISTRY",
+		NoTooling: "brew install cosign",
+	} {
+		got := Result{Policy: DefaultPolicy(), Outcome: outcome, Image: "img"}.Refusal()
+		if !strings.Contains(got, "refusing to boot") {
+			t.Errorf("%v refusal does not say it refused: %q", outcome, got)
+		}
+		if !strings.Contains(got, "BRIG_VERIFY=warn") || !strings.Contains(got, remedy) {
+			t.Errorf("%v refusal does not name the way out: %q", outcome, got)
+		}
+		if !strings.Contains(got, "img") {
+			t.Errorf("%v refusal does not name the image: %q", outcome, got)
+		}
+		if strings.Contains(strings.ToLower(got), "booting") {
+			t.Errorf("%v refusal still says something booted: %q", outcome, got)
+		}
+	}
+}
+
+// Under a replaced policy the registry that put an image in the NotOurs row is
+// the user's own, so the line names neither brig-sh nor settings already set.
+func TestARefusedThirdPartyImageUnderAReplacedPolicyDoesNotNameBrigSh(t *testing.T) {
+	shipped := DefaultPolicy()
+	replaced := Policy{Registry: "ghcr.io/acme/", Identity: shipped.Identity,
+		Issuer: shipped.Issuer, Cosign: shipped.Cosign}
+
+	got := Result{Policy: replaced, Outcome: NotOurs, Image: "ghcr.io/other/x:1"}.Refusal()
+	if strings.Contains(got, "brig-sh") {
+		t.Errorf("a replaced policy blamed brig-sh: %q", got)
+	}
+	if !strings.Contains(got, "refusing to boot") || !strings.Contains(got, "BRIG_VERIFY=warn") {
+		t.Errorf("the replaced refusal lost its shape: %q", got)
+	}
+
+	// And the shipped policy still says whose image it is not.
+	got = Result{Policy: shipped, Outcome: NotOurs, Image: "docker.io/library/ubuntu:24.04"}.Refusal()
+	if !strings.Contains(got, "not published by brig-sh") {
+		t.Errorf("the shipped policy stopped naming the publisher: %q", got)
+	}
+}

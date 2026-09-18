@@ -250,15 +250,58 @@ func TestVerifyWarnsButBootsWithoutCosign(t *testing.T) {
 }
 
 // require is for the caller who would rather not boot than not know.
+//
+// What it says matters as much as what it does: these two rows are the ones
+// whose warn wording ends by naming what boots anyway.
 func TestVerifyRequireRefusesWhatItCannotCheck(t *testing.T) {
 	for _, image := range []string{
 		"docker.io/library/ubuntu:24.04",
 		"ghcr.io/brig-sh/claude-code:arm64",
 	} {
 		c := verifyConfig(t, image, verify.Require)
-		if err := c.verifyImage(); err == nil {
+		err := c.verifyImage()
+		if err == nil {
 			t.Errorf("BRIG_VERIFY=require booted %s unchecked", image)
+			continue
 		}
+		assertRefusalReadsAsOne(t, image, err.Error())
+	}
+}
+
+// The same two rows on the digest path, which refuses them in its own two
+// places rather than sharing the tag path's.
+func TestVerifyDigestRequireRefusesWhatItCannotCheck(t *testing.T) {
+	for _, tc := range []struct{ what, image, cosign string }{
+		// Somebody else's image: nothing of ours to check, whatever cosign says.
+		{"a third-party image", "docker.io/library/ubuntu:24.04", fakeCosign(t, testDigest, false)},
+		// And our own with no cosign to check it with.
+		{"no cosign", "ghcr.io/brig-sh/claude-code:arm64", "cosign-that-does-not-exist"},
+	} {
+		c := digestConfig(t, tc.image, verify.Require, tc.cosign, "")
+		err := c.verifyImage()
+		if err == nil {
+			t.Errorf("%s: BRIG_VERIFY=require booted it unchecked", tc.what)
+			continue
+		}
+		assertRefusalReadsAsOne(t, tc.what, err.Error())
+	}
+}
+
+// A refusal says it refused, never that something booted, and names a way
+// past itself. A client that surfaces the error and drops the warnings -- the
+// ordinary client shape -- shows the user this string and nothing else.
+func assertRefusalReadsAsOne(t *testing.T, what, msg string) {
+	t.Helper()
+	if !strings.Contains(msg, "refusing to boot") {
+		t.Errorf("%s: the refusal does not say it refused: %q", what, msg)
+	}
+	if strings.Contains(strings.ToLower(msg), "booting") {
+		t.Errorf("%s: the refusal says something booted: %q", what, msg)
+	}
+	// Its own remedy rather than namesAWayForward: warn is the way past these
+	// two, and the shared helper does not accept turning the check down.
+	if !strings.Contains(msg, "BRIG_VERIFY=warn") {
+		t.Errorf("%s: the refusal names no way forward: %q", what, msg)
 	}
 }
 
@@ -457,6 +500,30 @@ func TestGenericBootVerifiesTheBundle(t *testing.T) {
 	err := boots.verifyBootAssets()
 	if err == nil {
 		t.Error("a genericBoot profile booted a bundle that could not be checked")
+	} else {
+		// And it reads as a refusal about the kernel, with the cause named on
+		// its own rather than the image message nested whole.
+		if !strings.Contains(err.Error(), "cosign is not installed") {
+			t.Errorf("the refusal does not name the cause: %v", err)
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "booting it unchecked") {
+			t.Errorf("the refusal says the bundle booted unchecked: %v", err)
+		}
+		if strings.Contains(err.Error(), "image ghcr.io") {
+			t.Errorf("the refusal is about the boot assets, not the image: %v", err)
+		}
+	}
+
+	// Warn is the default, and there it boots anyway -- which the line says.
+	// The refusal above and this warning share a cause and part on that clause.
+	warned := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
+	warned.Runtime = verifyRuntime{pins: false}
+	warned.Profile.GenericBoot = true
+	if err := warned.verifyBootAssets(); err != nil {
+		t.Errorf("BRIG_VERIFY=warn refused a bundle it could not check: %v", err)
+	}
+	if said := warned.Err.(*bytes.Buffer).String(); !strings.Contains(said, "the kernel this sandbox boots") {
+		t.Errorf("the warning does not say the kernel boots anyway: %q", said)
 	}
 
 	// A profile that boots its own image has no bundle, so there is nothing to

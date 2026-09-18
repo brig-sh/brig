@@ -199,15 +199,22 @@ func (r Result) Message() string {
 		// Naming the digest is the point of this whole path: the line vouches
 		// for the bytes that boot, not for a tag that can move under them.
 		//
+		// Image resolves nothing, so on the tag path Digest is empty and the
+		// tag is what boots.
+		//
 		// Under a policy the user replaced it vouches for less, and says so in
 		// different words. The same sentence for both would let a check that
 		// accepts every certificate read exactly like one that accepts one.
+		booted := r.Digest
+		if booted == "" {
+			booted = "the tag"
+		}
 		if r.Policy.Replaced() {
 			return fmt.Sprintf("image %s: matched the replaced trust policy, booting %s "+
 				"(BRIG_VERIFY_REGISTRY, BRIG_VERIFY_IDENTITY or BRIG_VERIFY_ISSUER is set, "+
-				"so this is not brig's own check)", r.Image, r.Digest)
+				"so this is not brig's own check)", r.Image, booted)
 		}
-		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, r.Digest)
+		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, booted)
 	case NotOurs:
 		return fmt.Sprintf("image %s is not published by brig-sh, so there is no "+
 			"signature of ours to check. That is expected for your own image -- "+
@@ -230,6 +237,43 @@ func (r Result) Message() string {
 	default:
 		return fmt.Sprintf("image %s claims to be published by brig-sh, but its "+
 			"signature DID NOT VERIFY: %s", r.Image, r.Detail)
+	}
+}
+
+// Refusal is the line for an outcome that BRIG_VERIFY=require turns into a
+// refusal. Message is phrased for the warn path, where these rows end by
+// naming what boots anyway; under require nothing does.
+//
+// Only NotOurs and NoTooling need one, and each names the way out: require
+// refuses both on a host set up as its owner intended -- a third party's
+// image, or a machine with no cosign. Failed, Mismatch and Unresolved keep
+// Message, refused by sentences their callers write.
+func (r Result) Refusal() string {
+	switch r.Outcome {
+	case NotOurs:
+		// Under a replaced policy the registry that put the image here is the
+		// user's own, so the line names neither brig-sh nor the three variables
+		// they already set. The registry alone, because Image and Verify both
+		// reach NotOurs on the prefix test and nothing else. The shipped wording
+		// names all three, where the reader is choosing a trust root rather than
+		// widening one.
+		if r.Policy.Replaced() {
+			return fmt.Sprintf("refusing to boot image %s: it is outside the trust "+
+				"policy you set, so there is no signature to check it against "+
+				"(BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it anyway, or "+
+				"widen BRIG_VERIFY_REGISTRY to cover it", r.Image)
+		}
+		return fmt.Sprintf("refusing to boot image %s: it is not published by brig-sh, "+
+			"so there is no signature of ours to check (BRIG_VERIFY=require). Set "+
+			"BRIG_VERIFY=warn to boot your own image, or point BRIG_VERIFY_REGISTRY, "+
+			"BRIG_VERIFY_IDENTITY and BRIG_VERIFY_ISSUER at the publisher you trust",
+			r.Image)
+	case NoTooling:
+		return fmt.Sprintf("refusing to boot image %s: cosign is not installed "+
+			"(`brew install cosign`), so nothing could be checked (BRIG_VERIFY=require). "+
+			"Install cosign, or set BRIG_VERIFY=warn to boot it unchecked", r.Image)
+	default:
+		return r.Message()
 	}
 }
 
