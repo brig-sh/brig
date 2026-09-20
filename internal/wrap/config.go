@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -196,6 +197,15 @@ type Config struct {
 	// name or the slug. See mountProject and sessionEntry.
 	Project      string
 	GuestProject string
+
+	// projectRefused is why the project this session remembers was not
+	// mounted: a link on the way to it. Load records it and EnsureRunning
+	// returns it, so a verb that never boots or joins the sandbox can still
+	// reach the session.
+	projectRefused error
+	// refusedProject is the remembered project projectRefused is about. See
+	// KeptProject.
+	refusedProject string
 
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
@@ -549,13 +559,26 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		if remembered == "" {
 			break
 		}
-		// The error is dropped rather than returned, which is the one place the
-		// two steps differ. A directory this line never named is not the user's
-		// to fix, so a remembered project that has since been renamed or
-		// deleted leaves the run with no project instead of refusing it -- and
-		// EnsureRunning then names it, in the warning about the restart that
-		// takes the dead mount away.
-		_ = c.mountProject(remembered)
+		// Most errors are dropped here, which is the one place the two steps
+		// differ. A directory this line never named is not the user's to fix,
+		// so a remembered project that has since been renamed or deleted leaves
+		// the run with no project instead of refusing it -- and EnsureRunning
+		// then names it, in the warning about the restart that takes the dead
+		// mount away.
+		//
+		// A link on the way is the exception. Dropping it would restart the
+		// running sandbox without its project and never say why, so the run is
+		// refused with the reason and the two ways on.
+		//
+		// Refused at the boot, not here. Every verb loads the session, and stop,
+		// rm, info and logs must still reach it. Only `brig run` takes a
+		// directory or --no-project, so the advice names that verb.
+		if err := c.mountProject(remembered); errors.Is(err, errPlantedSymlink) {
+			c.projectRefused = fmt.Errorf("%w\nThis session's project was remembered from an "+
+				"earlier run. Run `brig run` with the real directory after the ref, or with "+
+				"--no-project", err)
+			c.refusedProject = remembered
+		}
 	}
 	// After the Config is built, because the notice reads the pair this run
 	// resolved to and reports it against the pair the old one had.
@@ -570,6 +593,16 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// KeptProject returns the host directory this session names as its project:
+// the one this run mounts, or the remembered one refused for a link on the way
+// to it. It is empty when the session has no project.
+func (c *Config) KeptProject() string {
+	if c.Project != "" {
+		return c.Project
+	}
+	return c.refusedProject
 }
 
 // slugMigrationNotice is what this run has to be told about a session created
@@ -825,43 +858,39 @@ func (c *Config) mountProject(dir string) error {
 			"word after the ref as a directory to mount; if it is an argument for the "+
 			"agent, put it after -- instead", abs, err)
 	}
-	// Resolved before it is judged, because filepath.Abs cleans a path
-	// lexically and stops there: `/Users/..` collapses to `/`, but `~/mnt ->
-	// /` does not, and the guard below was reading the spelling rather than
-	// the directory. A link is a way around every rule made about a path
-	// unless the rule is made about what the path resolves to -- and the
-	// person who follows a link is not necessarily the person who made it.
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		// It stats, so this is a path brig cannot establish the truth about
-		// rather than one that is not there. Refused rather than checked
-		// lexically and let through, because the lexical check is exactly the
-		// one that does not hold here.
-		return fmt.Errorf("cannot mount %s as this run's project: its real path could not be "+
-			"resolved: %w", abs, err)
-	}
 	// A filesystem root has no basename to mount it under -- filepath.Base
 	// gives back the separator -- and /work// is not a guest path. Nobody means
 	// to hand an agent the whole machine, so say what to name instead.
-	if filepath.Base(real) == string(filepath.Separator) {
-		// The resolution is named only when it is the thing the reader cannot
-		// see. `brig run claude /` needs no explaining; a link's own name
-		// plainly has a basename, so there "it has no name to mount it under"
-		// would read as nonsense against the word on the line.
-		subject := "it has"
-		if real != abs {
-			subject = fmt.Sprintf("it resolves to %s, which has", real)
-		}
-		return fmt.Errorf("cannot mount %s as this run's project: %s no name to "+
-			"mount it under; name a project directory rather than a filesystem root",
-			abs, subject)
+	//
+	// Read off the path as typed. The descent below refuses a link before it
+	// can resolve to the root, so the only line reaching this branch is one
+	// that spells the root out.
+	if filepath.Base(abs) == string(filepath.Separator) {
+		return fmt.Errorf("cannot mount %s as this run's project: it has no name to "+
+			"mount it under; name a project directory rather than a filesystem root", abs)
 	}
-	// Resolved to judge it, and the path as typed is what gets mounted. A link
-	// is the name its owner uses for the project, so /work/<link> is the path
-	// the agent should see and the host path it came from is the one to record
-	// and print -- resolving those too would rewrite `/tmp/x` to `/private/tmp/x`
-	// on every macOS host, for a directory the VMM resolves at mount time
-	// anyway.
+	// Reached one component at a time against a directory already open,
+	// refusing every symlink below the first directory this user can write.
+	// This is the descent the workspace uses; see openPathHandle.
+	//
+	// The project is mounted read-write, so every component at or below it is
+	// the sandbox's to replace between one run and the next. A link planted
+	// there is followed by the VMM, which exports its target read-write.
+	//
+	// A project reached through a link of the user's own is refused too. brig
+	// cannot tell it from a planted one, so both are refused and the message
+	// names the target to type instead.
+	held, err := openHeldDir(abs, projectSubject)
+	if err != nil {
+		return err
+	}
+	// The early refusal is what this call is for. The handle is not kept: the
+	// boot opens its own and holds it across the handover. See EnsureRunning.
+	_ = held.Close()
+	// The descent refused every link below the trusted split, so the path as
+	// typed names the directory it resolves to. `/tmp/x` stays `/tmp/x` on
+	// macOS: that prefix sits above the split and is not the sandbox's to
+	// touch.
 	c.Project = abs
 	c.GuestProject = GuestProject(abs)
 	// The point of naming a directory: the agent starts in it. The cwd-under-

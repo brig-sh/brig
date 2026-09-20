@@ -8,3 +8,6 @@ import "os"
 // yes: nothing is trusted, and the whole path is walked one component at a
 // time. Slower and stricter, which is the right way round for a guess.
 var dirWritableByUs = func(string, os.FileInfo) bool { return true }
+
+// runningAsRoot has no meaning here either. Nothing is trusted anyway.
+var runningAsRoot = func() bool { return false }

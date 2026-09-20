@@ -40,10 +40,10 @@ func TestWorkspaceParentSwappedDuringTheWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	old := duringWorkspaceWalk
-	t.Cleanup(func() { duringWorkspaceWalk = old })
-	duringWorkspaceWalk = func() {
-		duringWorkspaceWalk = func() {} // once, so only the leaf step is hit
+	old := duringPathWalk
+	t.Cleanup(func() { duringPathWalk = old })
+	duringPathWalk = func() {
+		duringPathWalk = func() {} // once, so only the leaf step is hit
 		if err := os.Rename(parent, filepath.Join(base, "parent.real")); err != nil {
 			t.Error(err)
 			return
@@ -95,10 +95,10 @@ func TestWorkspaceParentVanishesDuringTheWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	old := duringWorkspaceWalk
-	t.Cleanup(func() { duringWorkspaceWalk = old })
-	duringWorkspaceWalk = func() {
-		duringWorkspaceWalk = func() {}
+	old := duringPathWalk
+	t.Cleanup(func() { duringPathWalk = old })
+	duringPathWalk = func() {
+		duringPathWalk = func() {}
 		if err := os.Rename(parent, filepath.Join(base, "gone")); err != nil {
 			t.Error(err)
 		}

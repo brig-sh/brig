@@ -42,6 +42,9 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 	if c.Project != "" {
 		d.Project = &InfoProject{Host: c.Project, Guest: c.GuestProject}
 	}
+	if c.projectRefused != nil {
+		d.ProjectRefused = c.projectRefused.Error()
+	}
 	if len(c.Profile.Deny) > 0 {
 		d.Deny = c.infoDeny(set)
 	}
@@ -74,6 +77,11 @@ type InfoDocument struct {
 	ArgvExposed []string         `json:"argvExposed,omitempty"`
 	GuestLogin  []InfoGuestLogin `json:"guestLogin,omitempty"`
 	Identity    *InfoIdentity    `json:"identity,omitempty"`
+
+	// ProjectRefused is why the project this session remembers was not
+	// mounted, and so why Project is absent. It is omitted when nothing was
+	// refused, so a script can tell a refusal from a run with --no-project.
+	ProjectRefused string `json:"projectRefused,omitempty"`
 }
 
 // InfoRuntime is the runtime this run resolved to, and whether it is there at

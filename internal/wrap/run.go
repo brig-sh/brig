@@ -113,6 +113,12 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) error {
+	// First of all. The session has no project this run, and every check below
+	// that compares the sandbox with this run would read that as a project to
+	// drop, and recreate the sandbox without it. See Load.
+	if c.projectRefused != nil {
+		return c.projectRefused
+	}
 	// Before anything is prepared or booted: a name that sanitises onto a
 	// sandbox another name already owns is refused here rather than dropped
 	// into that sandbox's home directory. See slugclaim.go.
@@ -264,6 +270,25 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		return err
 	}
 
+	// The project is mounted read-write like the home, so the components at and
+	// below it are the sandbox's to replace. mountProject refused a planted
+	// link when the path was read, and one may have been swapped in since.
+	// This descends again, and verifyStillOurs refuses a path that no longer
+	// names the directory held. The handover to the runtime stays open, as it
+	// does for the workspace. See verifyStillOurs and docs/security.md.
+	project := ""
+	if c.Project != "" {
+		held, err := openHeldDir(c.Project, projectSubject)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = held.Close() }()
+		if err := held.verifyStillOurs(); err != nil {
+			return err
+		}
+		project = held.dir
+	}
+
 	c.progressf("starting sandbox %s...", c.VMName)
 	// What a runtime that cannot mount after boot needs handed to it now
 	// instead. Empty for hull, which execs as root and does the three-phase
@@ -299,7 +324,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		// into the workspace rather than mounted, so it needs no share of its
 		// own -- see seedHostConfig. volumeShares is empty on hull and carries
 		// the profile's hostmounts on a container runtime.
-		Shares:   c.shares(ws.dir, volumeShares),
+		Shares:   c.shares(ws.dir, project, volumeShares),
 		Tmpfs:    tmpfs,
 		Env:      c.guestEnv(set),
 		GUI:      check.GUI,
@@ -496,16 +521,17 @@ func (c *Config) guestMountsWorkspace() bool {
 // smoke test reads the first share as the home -- so a project arrives after
 // it rather than in front of it or instead of it.
 //
-// The home's host path comes from the caller rather than from c.Workspace: it
-// is the path re-resolved through a held directory handle just above, which is
-// the whole point of holding one. The project has no such handle. It is a
-// directory the user named on this command line, not one brig created and the
-// guest has had read-write for however long the sandbox has been up, so the
-// swap the workspace check defends against has nobody to do it.
-func (c *Config) shares(home string, volumes []runtime.Share) []runtime.Share {
+// Both host paths come from the caller rather than from c.Workspace and
+// c.Project. Each is the path a held directory handle was just checked
+// against, which is why one is held.
+//
+// The project is held for the same reason the home is. The guest has it
+// read-write for as long as the sandbox is up, so it can swap a component and
+// redirect the next run that names a path through it.
+func (c *Config) shares(home, project string, volumes []runtime.Share) []runtime.Share {
 	shares := []runtime.Share{{Host: home, Guest: c.Profile.GuestHome}}
-	if c.Project != "" {
-		shares = append(shares, runtime.Share{Host: c.Project, Guest: c.GuestProject})
+	if project != "" {
+		shares = append(shares, runtime.Share{Host: project, Guest: c.GuestProject})
 	}
 	return append(shares, volumes...)
 }

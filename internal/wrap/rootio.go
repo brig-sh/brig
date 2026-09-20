@@ -20,20 +20,21 @@ import (
 // and fail the run instead of quietly carrying on. A plain configuration
 // error, such as a regular file where a directory was named, does not carry
 // it.
-var errPlantedSymlink = errors.New("a symlink in the workspace leads out of it")
+var errPlantedSymlink = errors.New("a symlink leads out of a directory brig is checking")
 
 // afterWorkspaceCheck runs after the workspace has been opened and before the
 // root is handed back. It does nothing outside tests; see openWorkspace.
 var afterWorkspaceCheck = func() {}
 
-// duringWorkspaceWalk runs at the start of the last step of the descent,
-// before the workspace itself is looked at. It does nothing outside tests.
+// duringPathWalk runs at the start of the last step of the descent, before
+// the directory itself is looked at: the workspace or the project, since both
+// take this walk. It does nothing outside tests.
 //
 // This is the gap an attacker gets against a walk that resolves strings: a
 // parent flipped here poisons everything a by-name walk does next, and then
 // everything downstream agrees with itself about the wrong directory. Against
 // the descent it is meant to do nothing, and the test that drives it says so.
-var duringWorkspaceWalk = func() {}
+var duringPathWalk = func() {}
 
 // betweenLstatAndOpen runs inside one step of the descent, after the entry has
 // been looked at and before it is opened, with the entry's name. It does
@@ -59,6 +60,65 @@ var betweenLstatAndOpen = func(name string) {}
 // user's ~/.claude that seedHostConfig copies from -- are a different matter
 // and stay ordinary, because those live outside the workspace by design.
 type workspaceRoot struct {
+	heldDir
+}
+
+// pathSubject is the role a descent opens a directory for, in the words its
+// refusals use.
+//
+// The walk is shared between the workspace and the project. The subject is
+// what differs: what the directory is for, why a link there is refused, and
+// what to do instead.
+type pathSubject struct {
+	// what completes "refusing to use <path> as ...".
+	what string
+	// leafWhy and pathWhy say why a link is refused at the end of the path and
+	// on the way to it. The reader's mistake differs: a link they named
+	// themselves, or one they walked through without knowing.
+	leafWhy string
+	pathWhy string
+	// remedy tells the reader what to do instead.
+	remedy string
+}
+
+var workspaceSubject = pathSubject{
+	what: "the workspace",
+	leafWhy: "the workspace is mounted read-write as the sandbox's home, so brig will not " +
+		"write a guest's home through a link",
+	pathWhy: "the sandbox's home would be created somewhere other than where you asked for it",
+	remedy:  "Point BRIG_WORKSPACE (or --workspace) at the real directory",
+}
+
+// projectSubject is the same standard applied to the directory named on the
+// command line.
+//
+// The project is mounted read-write, so every component at or below it is the
+// sandbox's to replace. brig reads those components on the next run that names
+// a path through them, running as the user and outside the sandbox. Refusing a
+// link there keeps the directory the operator named and the directory the VMM
+// exports the same one.
+var projectSubject = pathSubject{
+	what: "this run's project",
+	leafWhy: "the project is mounted read-write into the sandbox, so brig will not hand a " +
+		"guest a directory reached through a link",
+	pathWhy: "the sandbox would be handed a directory other than the one you named",
+	remedy:  "Name the real directory instead",
+}
+
+// refusef builds this subject's refusal for root, with whatever detail the
+// descent found. The path and the role lead every one of them, so they are
+// composed here.
+func (s pathSubject) refusef(root, format string, a ...any) error {
+	return fmt.Errorf("refusing to use %s as %s: "+format, append([]any{root, s.what}, a...)...)
+}
+
+// heldDir is a host directory reached by the descent below and held open.
+// Every read-write share brig hands a runtime is made from one.
+//
+// The handle references the directory that was opened, not the name it was
+// reached by, so it cannot be redirected after the descent. Every later check
+// compares against it.
+type heldDir struct {
 	root *os.Root
 	dir  string
 	// ident is the directory the descent ended on, read from the handle it
@@ -66,6 +126,18 @@ type workspaceRoot struct {
 	// it afresh and compares against this: a resolution can only disagree with
 	// the handle, and disagreement refuses.
 	ident os.FileInfo
+	// subj is the role it was opened for, so a refusal raised after the descent
+	// reads the same way as one raised during it.
+	subj pathSubject
+}
+
+// openHeldDir reaches dir by the descent and holds it, for the role subj names.
+func openHeldDir(dir string, subj pathSubject) (*heldDir, error) {
+	root, ident, err := openPathHandle(dir, subj)
+	if err != nil {
+		return nil, err
+	}
+	return &heldDir{root: root, dir: dir, ident: ident, subj: subj}, nil
 }
 
 // openWorkspace creates the workspace if it is not there yet and opens it as a
@@ -104,8 +176,8 @@ func (c *Config) openWorkspace() (*workspaceRoot, error) {
 	// between the last two steps poisoned the captured value, and the
 	// comparison then had two wrong answers to agree about. Walking the part
 	// of the path the guest can reach by handle removes the class rather than
-	// the instance; see openWorkspaceHandle for where that part begins.
-	root, want, err := openWorkspaceHandle(c.Workspace)
+	// the instance; see openPathHandle for where that part begins.
+	root, want, err := openPathHandle(c.Workspace, workspaceSubject)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +187,8 @@ func (c *Config) openWorkspace() (*workspaceRoot, error) {
 	// opened, not the name it was reached by.
 	afterWorkspaceCheck()
 
-	return &workspaceRoot{root: root, dir: c.Workspace, ident: want}, nil
+	return &workspaceRoot{heldDir{root: root, dir: c.Workspace, ident: want,
+		subj: workspaceSubject}}, nil
 }
 
 // openWorkspaceHandle opens the workspace and hands back the directory it
@@ -144,27 +217,26 @@ func (c *Config) openWorkspace() (*workspaceRoot, error) {
 //
 // Whether a directory is ours to write is the kernel's answer, plus ownership;
 // see writableBy, which also says what the rule degrades to as root.
-func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
+func openPathHandle(path string, subj pathSubject) (*os.Root, os.FileInfo, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %w", path, err)
+		return nil, nil, subj.refusef(path, "%w", err)
 	}
-	components := workspaceComponents(abs)
+	components := pathComponents(abs)
 
 	k, err := trustedPrefix(components)
 	if err != nil {
-		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %w", abs, err)
+		return nil, nil, subj.refusef(abs, "%w", err)
 	}
 	prefix, tail := components[k], components[k+1:]
 
 	root, err := os.OpenRoot(prefix)
 	if err != nil {
-		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: cannot open %s: %w",
-			abs, prefix, err)
+		return nil, nil, subj.refusef(abs, "cannot open %s: %w", prefix, err)
 	}
 	for i, p := range tail {
 		if i == len(tail)-1 {
-			duringWorkspaceWalk()
+			duringPathWalk()
 		}
 		name := filepath.Base(p)
 		info, err := root.Lstat(name)
@@ -173,14 +245,13 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 			// leaf was created moments ago and every parent had to exist for
 			// that to work, so absence here is not a race brig can wait out.
 			_ = root.Close()
-			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s could not be "+
-				"read while brig was checking the path (%v), so something is moving it: %w",
-				abs, p, err, errPlantedSymlink)
+			return nil, nil, subj.refusef(abs, "%s could not be "+
+				"read while brig was checking the path (%v), so something is moving it: %w", p, err, errPlantedSymlink)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, _ := root.Readlink(name)
 			_ = root.Close()
-			return nil, nil, plantedSymlinkErr(abs, p, target)
+			return nil, nil, plantedSymlinkErr(subj, abs, p, target)
 		}
 		if !info.IsDir() {
 			// Only a directory can be on the way to the workspace. The check
@@ -191,8 +262,8 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 			// both make this check already; the descent was the one that did
 			// not.
 			_ = root.Close()
-			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s is %s, "+
-				"not a directory", abs, p, describeType(info.Mode()))
+			return nil, nil, subj.refusef(abs, "%s is %s, "+
+				"not a directory", p, describeType(info.Mode()))
 		}
 		betweenLstatAndOpen(name)
 		// One open, with O_DIRECTORY, and the root is built from the
@@ -212,16 +283,15 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 		opening, err := root.OpenFile(name, syscall.O_DIRECTORY, 0)
 		if err != nil {
 			_ = root.Close()
-			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s could not be "+
+			return nil, nil, subj.refusef(abs, "%s could not be "+
 				"opened as a directory (%v), so something changed it while brig was "+
-				"looking: %w", abs, p, err, errPlantedSymlink)
+				"looking: %w", p, err, errPlantedSymlink)
 		}
 		next, err := rootFromFile(opening)
 		_ = opening.Close()
 		_ = root.Close()
 		if err != nil {
-			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: cannot open %s: %w",
-				abs, p, err)
+			return nil, nil, subj.refusef(abs, "cannot open %s: %w", p, err)
 		}
 		// The look and the open are two calls, and os.Root follows a link that
 		// stays under the root, so a link swapped in between them was followed
@@ -234,8 +304,8 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 		}
 		if !os.SameFile(opened, info) {
 			_ = next.Close()
-			return nil, nil, fmt.Errorf("refusing to use %s as the workspace: %s changed between "+
-				"the look and the open, so something is moving it: %w", abs, p, errPlantedSymlink)
+			return nil, nil, subj.refusef(abs, "%s changed between "+
+				"the look and the open, so something is moving it: %w", p, errPlantedSymlink)
 		}
 		root = next
 	}
@@ -258,14 +328,14 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 	byPath, err := os.Stat(abs)
 	if err != nil {
 		_ = root.Close()
-		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: it could not be read "+
-			"after brig opened it (%v), so something is moving it: %w", abs, err, errPlantedSymlink)
+		return nil, nil, subj.refusef(abs, "it could not be read "+
+			"after brig opened it (%v), so something is moving it: %w", err, errPlantedSymlink)
 	}
 	if !os.SameFile(byPath, ident) {
 		_ = root.Close()
-		return nil, nil, fmt.Errorf("refusing to use %s as the workspace: the name stopped "+
-			"pointing at the directory brig opened, so the sandbox would be handed somewhere "+
-			"else as its home: %w", abs, errPlantedSymlink)
+		return nil, nil, subj.refusef(abs, "the name stopped "+
+			"pointing at the directory brig opened, so the sandbox would be handed a "+
+			"directory other than the one brig checked: %w", errPlantedSymlink)
 	}
 	return root, ident, nil
 }
@@ -291,9 +361,18 @@ func openWorkspaceHandle(path string) (*os.Root, os.FileInfo, error) {
 // the runtime as the share, resolved by another process later, so a link
 // there is refused wherever it sits. A component that does not exist yet ends
 // the prefix too: it is about to be created.
+//
+// As root, ownership cannot tell the machine's directories from ones a sandbox
+// wrote, because a sandbox run as root writes to the host as root. Trust then
+// stops at the entries of /, which brig never mounts. The system's own links
+// there, such as /tmp or /home, still resolve, and every component below them
+// is walked link by link.
 func trustedPrefix(components []string) (int, error) {
 	k, dir := 0, components[0]
 	for i := 1; i < len(components)-1; i++ {
+		if i > 1 && runningAsRoot() {
+			break
+		}
 		real, ok, err := resolveTrusted(dir, filepath.Base(components[i]))
 		if err != nil {
 			return 0, err
@@ -384,7 +463,7 @@ func resolveTrusted(dir, name string) (real string, ok bool, err error) {
 // because the value it is compared with came from the handle: a poisoned
 // resolution can only disagree, and disagreement only refuses. Closing the
 // rest needs hull to accept a descriptor rather than a path.
-func (r *workspaceRoot) verifyStillOurs() error {
+func (r *heldDir) verifyStillOurs() error {
 	now, err := os.Stat(r.dir)
 	if err != nil {
 		return fmt.Errorf("refusing to hand %s to the runtime: it could not be read (%v), so "+
@@ -392,15 +471,15 @@ func (r *workspaceRoot) verifyStillOurs() error {
 	}
 	if !os.SameFile(now, r.ident) {
 		return fmt.Errorf("refusing to hand %s to the runtime: it no longer names the "+
-			"directory brig prepared, so the sandbox would get somewhere else as its home: %w",
-			r.dir, errPlantedSymlink)
+			"directory brig checked, so the sandbox would be handed somewhere else as %s: %w",
+			r.dir, r.subj.what, errPlantedSymlink)
 	}
 	return nil
 }
 
 // checkWorkspacePathBeforeCreate walks the path before the workspace exists.
 //
-// It is the same refusal as openWorkspaceHandle with one difference: a
+// It is the same refusal as openPathHandle with one difference: a
 // component that is simply absent is fine here, because MkdirAll is about to
 // create it. A symlink below the trusted prefix, or a stat that fails for any
 // other reason, is a refusal, so nothing is ever created through a planted
@@ -408,11 +487,12 @@ func (r *workspaceRoot) verifyStillOurs() error {
 // directory created through a link planted between this pass and the descent,
 // in a directory the attacker could write anyway, before the run is refused.
 func (c *Config) checkWorkspacePathBeforeCreate() error {
-	components := workspaceComponents(c.Workspace)
+	subj := workspaceSubject
+	components := pathComponents(c.Workspace)
 	workspace := components[len(components)-1]
 	k, err := trustedPrefix(components)
 	if err != nil {
-		return fmt.Errorf("refusing to use %s as the workspace: %w", workspace, err)
+		return subj.refusef(workspace, "%w", err)
 	}
 	for _, p := range components[k+1:] {
 		info, err := os.Lstat(p)
@@ -420,42 +500,38 @@ func (c *Config) checkWorkspacePathBeforeCreate() error {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return fmt.Errorf("refusing to use %s as the workspace: %s could not be read "+
-				"(%v): %w", workspace, p, err, errPlantedSymlink)
+			return subj.refusef(workspace, "%s could not be read "+
+				"(%v): %w", p, err, errPlantedSymlink)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, _ := os.Readlink(p)
-			return plantedSymlinkErr(workspace, p, target)
+			return plantedSymlinkErr(subj, workspace, p, target)
 		}
 		if !info.IsDir() {
-			return fmt.Errorf("refusing to use %s as the workspace: %s is not a directory",
-				workspace, p)
+			return subj.refusef(workspace, "%s is not a directory", p)
 		}
 	}
 	return nil
 }
 
 // plantedSymlinkErr is the refusal for a symlink at or on the way to the
-// workspace, in the part of the path the guest can reach. Both walks produce
-// it, so the advice stays the same whether or not the workspace existed yet.
-func plantedSymlinkErr(workspace, component, target string) error {
-	if component == workspace {
-		return fmt.Errorf("refusing to use %s as the workspace: it is a symlink to %q, and the "+
-			"workspace is mounted read-write as the sandbox's home, so brig will not write a "+
-			"guest's home through a link. Point BRIG_WORKSPACE (or --workspace) at the real "+
-			"directory: %w", workspace, target, errPlantedSymlink)
+// directory subj names, in the part of the path the guest can reach. Both
+// walks of the workspace produce it, so the advice stays the same whether or
+// not the workspace existed yet.
+func plantedSymlinkErr(subj pathSubject, root, component, target string) error {
+	if component == root {
+		return subj.refusef(root, "it is a symlink to %q, and %s. %s: %w",
+			target, subj.leafWhy, subj.remedy, errPlantedSymlink)
 	}
-	return fmt.Errorf("refusing to use %s as the workspace: %s on the way to it is a symlink "+
-		"to %q, so the sandbox's home would be created somewhere other than where you asked "+
-		"for it. Point BRIG_WORKSPACE (or --workspace) at the real directory: %w",
-		workspace, component, target, errPlantedSymlink)
+	return subj.refusef(root, "%s on the way to it is a symlink to %q, so %s. %s: %w",
+		component, target, subj.pathWhy, subj.remedy, errPlantedSymlink)
 }
 
-// workspaceComponents returns the path and every ancestor, outermost first, so
-// a message names the outermost link rather than a deeper one that only exists
+// pathComponents returns the path and every ancestor, outermost first, so a
+// message names the outermost link rather than a deeper one that only exists
 // because of it.
-func workspaceComponents(workspace string) []string {
-	path := filepath.Clean(workspace)
+func pathComponents(dir string) []string {
+	path := filepath.Clean(dir)
 	var components []string
 	for {
 		components = append(components, path)
@@ -472,7 +548,7 @@ func workspaceComponents(workspace string) []string {
 }
 
 // Close releases the directory handle the root holds open.
-func (r *workspaceRoot) Close() error { return r.root.Close() }
+func (r *heldDir) Close() error { return r.root.Close() }
 
 // path is the host path of a workspace-relative name, for messages only.
 // Nothing opens what this returns.

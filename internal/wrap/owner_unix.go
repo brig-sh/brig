@@ -36,10 +36,8 @@ const wOK = 0x2
 // guest's host-side writes are root's too, so ownership tells brig nothing
 // about who put a link where. Trust then covers only what nobody but root
 // could have written: root-owned, with no write bit for group or other. That
-// keeps the links the machine is made of usable -- /tmp and /var on macOS,
-// /home on an ostree system -- and protects nothing: a sandbox run as root
-// can reach a nested workspace's parents like anything else, and nothing here
-// is the control for that.
+// alone would trust a directory a root sandbox wrote, so trustedPrefix also
+// stops at the entries of / when brig runs as root.
 func writableBy(info fs.FileInfo, uid int, access error) bool {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -66,3 +64,7 @@ func writableBy(info fs.FileInfo, uid int, access error) bool {
 var dirWritableByUs = func(path string, info os.FileInfo) bool {
 	return writableBy(info, os.Getuid(), syscall.Access(path, wOK))
 }
+
+// runningAsRoot reports whether brig runs as root. A variable so a test can
+// take the root path through trustedPrefix without running as root.
+var runningAsRoot = func() bool { return os.Getuid() == 0 }

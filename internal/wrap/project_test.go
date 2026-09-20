@@ -1,6 +1,8 @@
 package wrap
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/verify"
 )
 
 // The project a run names is mounted at /work/<basename>, OUTSIDE the guest
@@ -120,20 +123,10 @@ func TestAProjectThatIsNotADirectoryIsRefused(t *testing.T) {
 	}
 }
 
-// A link is followed before the root is ruled out, and mounted under the name
-// that was typed.
-//
-// Both halves are the point. filepath.Abs cleans a path lexically and stops
-// there, so `~/mnt -> /` reached the guard as "mnt" and passed it: the guard
-// was reading the spelling rather than the directory. A path is what it
-// resolves to, and that is what has to be checked -- otherwise a link is a way
-// around every rule the guard makes, and the person who follows one is not
-// necessarily the person who made it.
-//
-// The mount keeps the typed basename all the same. The link is the name its
-// owner uses, so /work/<link> is the path the agent should see; resolving that
-// too would rename every legitimate link's mount to whatever it points at.
-func TestALinkIsResolvedBeforeTheRootGuardAndMountedUnderItsOwnName(t *testing.T) {
+// The refusal names the link's target, because typing that target is the way
+// past it. A link of the user's own is refused as well: brig cannot tell one
+// from a planted one, so the rule is about links, not about who made them.
+func TestALinkAtTheProjectIsRefusedAndNamesItsTarget(t *testing.T) {
 	isolateState(t)
 	dir := t.TempDir()
 
@@ -142,19 +135,14 @@ func TestALinkIsResolvedBeforeTheRootGuardAndMountedUnderItsOwnName(t *testing.T
 		t.Fatal(err)
 	}
 	c := &Config{}
-	err := c.mountProject(root)
-	if err == nil {
+	if err := c.mountProject(root); err == nil {
 		t.Fatalf("a link to / was accepted, and mounted at %q", c.GuestProject)
-	}
-	// Named as what it resolves to as well as what was typed: "myroot has no
-	// name to mount it under" would read as nonsense on a path that plainly
-	// has one.
-	if !strings.Contains(err.Error(), root) || !strings.Contains(err.Error(), "filesystem root") {
+	} else if !strings.Contains(err.Error(), root) || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("the refusal does not say what was typed and why it fails: %v", err)
 	}
 
-	// An ordinary link is not collateral: it mounts, under its own name, from
-	// the directory it resolves to.
+	// An ordinary link is refused on the same terms, and the message carries
+	// the target.
 	target := filepath.Join(dir, "elsewhere")
 	mustMkdir(t, target)
 	link := filepath.Join(dir, "myproject")
@@ -162,17 +150,236 @@ func TestALinkIsResolvedBeforeTheRootGuardAndMountedUnderItsOwnName(t *testing.T
 		t.Fatal(err)
 	}
 	c = &Config{}
-	mustMountProject(t, c, link)
-	if want := "/work/myproject"; c.GuestProject != want {
-		t.Errorf("the link mounted at %q, want %q -- the name typed, not the one it points at",
-			c.GuestProject, want)
+	err := c.mountProject(link)
+	if err == nil {
+		t.Fatalf("a link was accepted as a project, exporting %q", c.Project)
 	}
-	// And the host side is the path as typed. The link is what the share is
-	// asked for and what the VMM resolves; recording the target instead would
-	// rewrite every path under a symlinked parent -- /tmp on this host among
-	// them -- for no gain the mount does not already give.
-	if c.Project != link {
-		t.Errorf("the share exports %q, want the link as typed %q", c.Project, link)
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Errorf("the refusal is not a planted-link refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), target) {
+		t.Errorf("the refusal does not name the target to type instead: %v", err)
+	}
+
+	// The real directory is what mounts, under its own name.
+	c = &Config{}
+	mustMountProject(t, c, target)
+	if want := "/work/elsewhere"; c.GuestProject != want {
+		t.Errorf("the project mounted at %q, want %q", c.GuestProject, want)
+	}
+	if c.Project != target {
+		t.Errorf("the share exports %q, want %q", c.Project, target)
+	}
+}
+
+// The link need not be the last component. A sandbox given a monorepo
+// read-write can replace any directory under it, so refusing only the last
+// component would leave the same escape one directory deeper.
+func TestALinkOnTheWayToTheProjectIsRefused(t *testing.T) {
+	isolateState(t)
+	dir := t.TempDir()
+
+	escape := filepath.Join(dir, "escape-target")
+	mustMkdir(t, escape)
+	mustMkdir(t, filepath.Join(escape, "src"))
+
+	monorepo := filepath.Join(dir, "monorepo")
+	mustMkdir(t, monorepo)
+	planted := filepath.Join(monorepo, "frontend")
+	if err := os.Symlink(escape, planted); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Config{}
+	err := c.mountProject(filepath.Join(planted, "src"))
+	if err == nil {
+		t.Fatalf("a project reached through a planted link was accepted, exporting %q", c.Project)
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Errorf("the refusal is not a planted-link refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), planted) {
+		t.Errorf("the refusal does not name the link on the way: %v", err)
+	}
+}
+
+// The property that matters is the share string the VMM resolves, not the
+// refusal above it. This drives a run and reads the spec the runtime got, so a
+// change that lets the path through mountProject still fails here.
+func TestAPlantedLinkNeverReachesTheRuntimeAsAShare(t *testing.T) {
+	rt := &livenessRuntime{}
+	c := livenessConfig(t, rt)
+	dir := t.TempDir()
+
+	escape := filepath.Join(dir, "escape-target")
+	mustMkdir(t, escape)
+	monorepo := filepath.Join(dir, "monorepo")
+	mustMkdir(t, monorepo)
+
+	// The operator's first run gives the agent the monorepo.
+	frontend := filepath.Join(monorepo, "frontend")
+	mustMkdir(t, frontend)
+	mustMountProject(t, c, frontend)
+
+	// The agent's one move, with the write access it was given.
+	// The link dangles in the guest and means something only on the host.
+	if err := os.Remove(frontend); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(escape, frontend); err != nil {
+		t.Fatal(err)
+	}
+
+	// The operator's second run, naming the same path as before. Either check
+	// may refuse it: mountProject when the path is read, or the one at boot.
+	c2 := livenessConfig(t, rt)
+	err := c2.mountProject(frontend)
+	if err == nil {
+		err = c2.EnsureRunning(creds.Set{})
+	}
+	for _, s := range rt.spec.Shares {
+		if s.Host == frontend || s.Host == escape {
+			t.Fatalf("the runtime was handed %q as a share, which resolves to %q",
+				s.Host, escape)
+		}
+	}
+	if err == nil {
+		t.Fatal("a planted link was accepted as a project")
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Errorf("the run was refused, but not for the planted link: %v", err)
+	}
+	if rt.boots != 0 {
+		t.Errorf("booted %d sandboxes over a planted link", rt.boots)
+	}
+}
+
+// mountProject reads the path when the run is set up, and the sandbox can swap
+// a component before the boot hands the path over. The check in EnsureRunning
+// is the one that covers that window, so the link is planted after
+// mountProject accepted the real directory.
+func TestALinkPlantedAfterTheProjectWasReadIsRefusedAtBoot(t *testing.T) {
+	rt := &livenessRuntime{}
+	c := livenessConfig(t, rt)
+	dir := t.TempDir()
+
+	escape := filepath.Join(dir, "escape-target")
+	mustMkdir(t, escape)
+	project := filepath.Join(dir, "project")
+	mustMkdir(t, project)
+	mustMountProject(t, c, project)
+
+	if err := os.Remove(project); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(escape, project); err != nil {
+		t.Fatal(err)
+	}
+
+	err := c.EnsureRunning(creds.Set{})
+	if err == nil {
+		t.Fatal("the boot handed over a project that became a link after it was read")
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Errorf("the boot was refused, but not for the planted link: %v", err)
+	}
+	if rt.boots != 0 {
+		t.Errorf("booted %d sandboxes over a planted link", rt.boots)
+	}
+}
+
+// /tmp is a link to /private/tmp on every macOS host. A component whose parent
+// this user cannot write is one the guest cannot redirect, so it is opened by
+// name and the kernel follows it. Only the part below the first writable
+// directory is walked link by link, and a planted link is always there.
+func TestALinkAboveTheTrustedSplitIsFollowed(t *testing.T) {
+	isolateState(t)
+
+	info, err := os.Lstat("/tmp")
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Skip("/tmp is not a symlink on this host, so there is no prefix link to follow")
+	}
+	project, err := os.MkdirTemp("/tmp", "brig-prefix-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(project) }()
+
+	c := &Config{}
+	if err := c.mountProject(project); err != nil {
+		t.Fatalf("a project under the symlinked /tmp was refused: %v", err)
+	}
+	// It keeps the spelling that was typed: the PROJECT row and the guest path
+	// stay /tmp, not /private/tmp.
+	if c.Project != project {
+		t.Errorf("the share exports %q, want the path as typed %q", c.Project, project)
+	}
+	if want := "/work/" + filepath.Base(project); c.GuestProject != want {
+		t.Errorf("the project mounted at %q, want %q", c.GuestProject, want)
+	}
+}
+
+// asRoot makes trustedPrefix take its root path for the rest of the test.
+func asRoot(t *testing.T) {
+	t.Helper()
+	old := runningAsRoot
+	t.Cleanup(func() { runningAsRoot = old })
+	runningAsRoot = func() bool { return true }
+}
+
+// A sandbox run as root writes to the host as root, so a directory it had
+// read-write looks just like one of the machine's own: root-owned, no group
+// or other write bit. trustDirs makes the monorepo look like that. The link is
+// on the way to the project, not the project itself, because a link at the
+// project is refused whatever the prefix.
+func TestAsRootALinkInARootOwnedProjectIsRefused(t *testing.T) {
+	isolateState(t)
+	asRoot(t)
+	dir := t.TempDir()
+
+	escape := filepath.Join(dir, "escape-target")
+	mustMkdir(t, escape)
+	mustMkdir(t, filepath.Join(escape, "src"))
+	monorepo := filepath.Join(dir, "monorepo")
+	mustMkdir(t, monorepo)
+	planted := filepath.Join(monorepo, "frontend")
+	if err := os.Symlink(escape, planted); err != nil {
+		t.Fatal(err)
+	}
+	trustDirs(t, monorepo, escape)
+
+	c := &Config{}
+	err := c.mountProject(filepath.Join(planted, "src"))
+	if err == nil {
+		t.Fatalf("as root, a link in a root-owned directory was followed, exporting %q", c.Project)
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Errorf("the refusal is not a planted-link refusal: %v", err)
+	}
+}
+
+// The other half: as root, the entries of / are still trusted, so the links
+// the machine is made of keep working.
+func TestAsRootALinkAtTheTopOfThePathIsFollowed(t *testing.T) {
+	isolateState(t)
+	asRoot(t)
+
+	info, err := os.Lstat("/tmp")
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Skip("/tmp is not a symlink on this host, so there is no prefix link to follow")
+	}
+	project, err := os.MkdirTemp("/tmp", "brig-prefix-root-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(project) }()
+
+	c := &Config{}
+	if err := c.mountProject(project); err != nil {
+		t.Fatalf("as root, a project under the symlinked /tmp was refused: %v", err)
+	}
+	if c.Project != project {
+		t.Errorf("the share exports %q, want the path as typed %q", c.Project, project)
 	}
 }
 
@@ -432,6 +639,82 @@ func TestARememberedProjectThatIsGoneIsDropped(t *testing.T) {
 	}
 	if stale := next.projectShareStale(); stale == "" {
 		t.Error("the sandbox still mounting the vanished project did not read as stale")
+	}
+}
+
+// A session remembered from before links were refused can name its project
+// through one. Dropping that refusal like a vanished directory would restart
+// the running sandbox without its project and never say why. Refusing it in
+// Load would lock the session away from stop and rm, so the boot refuses it.
+func TestARememberedProjectReachedThroughALinkRefusesTheRun(t *testing.T) {
+	isolateState(t)
+	home := t.TempDir()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real")
+	mustMkdir(t, target)
+	project := filepath.Join(dir, "myproject")
+	mustMkdir(t, project)
+
+	mustLoad(t, Options{Workspace: home, Project: project}).rememberSession()
+	if err := os.Remove(project); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, project); err != nil {
+		t.Fatal(err)
+	}
+
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("the claude-code profile is not loaded")
+	}
+	// Load itself goes through: stop, rm, info and logs load the session too,
+	// and none of them can name a directory or take --no-project.
+	c, err := Load(p, Options{}, nil)
+	if err != nil {
+		t.Fatalf("loading the session was refused, so nothing can reach it by ref: %v", err)
+	}
+	if c.Project != "" {
+		t.Fatalf("the remembered project was mounted through a link: %q", c.Project)
+	}
+	if c.KeptProject() != project {
+		t.Errorf("brig rm would not say the project stays on the host: KeptProject is %q, "+
+			"want %q", c.KeptProject(), project)
+	}
+
+	rt := &livenessRuntime{workspace: c.Workspace}
+	c.Runtime, c.Verify = rt, verify.Off
+	err = c.EnsureRunning(creds.Set{})
+	if err == nil {
+		t.Fatalf("a remembered project reached through a link was dropped, and the run went on "+
+			"(%d boots)", rt.boots)
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Errorf("the refusal is not a planted-link refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "brig run") || !strings.Contains(err.Error(), "--no-project") {
+		t.Errorf("the refusal does not say how to go on: %v", err)
+	}
+	if rt.boots != 0 || rt.removes != 0 {
+		t.Errorf("the refused run still booted %d and removed %d sandboxes", rt.boots, rt.removes)
+	}
+
+	// brig info has no PROJECT row to show, so it says why. It runs with no
+	// runtime here, because the stub answers nothing about isolation.
+	c.Runtime = nil
+	report, said := &bytes.Buffer{}, &bytes.Buffer{}
+	c.Out, c.Err = report, said
+	c.Info(creds.Set{})
+	if !strings.Contains(said.String(), "remembered from an earlier run") {
+		t.Errorf("brig info does not say why the project is missing:\n%s", said.String())
+	}
+	// A script reads the --json document, not the warning, so the document
+	// carries the refusal too.
+	doc := c.InfoData(creds.Set{})
+	if doc.Project != nil {
+		t.Errorf("brig info --json shows a project that was refused: %+v", doc.Project)
+	}
+	if !strings.Contains(doc.ProjectRefused, "remembered from an earlier run") {
+		t.Errorf("brig info --json does not say why the project is missing: %q", doc.ProjectRefused)
 	}
 }
 

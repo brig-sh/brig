@@ -109,7 +109,7 @@ func TestAVanishingComponentIsRefused(t *testing.T) {
 	// Remove the parent between the pre-create pass and the strict walk, using
 	// the seam so this is deterministic rather than a race.
 	afterWorkspaceCheck = func() {}
-	if root, _, err := openWorkspaceHandle(work); err != nil {
+	if root, _, err := openPathHandle(work, workspaceSubject); err != nil {
 		t.Fatalf("the honest path should pass: %v", err)
 	} else {
 		_ = root.Close()
@@ -117,7 +117,7 @@ func TestAVanishingComponentIsRefused(t *testing.T) {
 	if err := os.Rename(parent, filepath.Join(base, "gone")); err != nil {
 		t.Fatal(err)
 	}
-	if root, _, err := openWorkspaceHandle(work); err == nil {
+	if root, _, err := openPathHandle(work, workspaceSubject); err == nil {
 		_ = root.Close()
 		t.Fatal("a component that vanished mid-check was accepted")
 	} else if !errors.Is(err, errPlantedSymlink) {

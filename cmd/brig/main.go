@@ -2157,10 +2157,11 @@ func warnHomeKept(cfg *wrap.Config) {
 }
 
 // warnProjectKept says that rm leaves the project alone. brig never deletes
-// a project, whichever kind of guest home the session has.
+// a project, whichever kind of guest home the session has, and whether or not
+// this run could mount it.
 func warnProjectKept(cfg *wrap.Config) {
-	if cfg.Project != "" {
-		warnf("The project %s stays on the host", cfg.Project)
+	if p := cfg.KeptProject(); p != "" {
+		warnf("The project %s stays on the host", p)
 	}
 }
 

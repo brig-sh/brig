@@ -749,7 +749,8 @@ files inside the workspace. The workspace is mounted read-write as the
 sandbox's home, so that link was put there from inside the sandbox, to have
 brig -- which runs as you, on the host -- reach a file the sandbox cannot.
 Nothing was written; inspect /Users/alex/brig/claude-code/.claude.json and
-remove it before running brig again: a symlink in the workspace leads out of it
+remove it before running brig again: a symlink leads out of a directory brig
+is checking
 ```
 
 Brig writes state files into the guest home from the host, as you. A

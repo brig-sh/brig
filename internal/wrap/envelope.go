@@ -261,6 +261,10 @@ func (c *Config) PrintPreRunEnvelope(set creds.Set) {
 // kept as a deprecated spelling that calls this and prints one line naming the
 // new one.
 func (c *Config) Info(set creds.Set) {
+	// The report has no PROJECT row for a refused project, so say why.
+	if c.projectRefused != nil {
+		c.warnf("%v", c.projectRefused)
+	}
 	c.renderEnvelope(c.Out, set)
 	c.Status(set)
 }
