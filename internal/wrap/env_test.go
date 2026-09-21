@@ -74,11 +74,11 @@ func TestEnvBoolAndFields(t *testing.T) {
 // credential or writes brig's own files into the workspace when on, so an
 // unrecognised value must refuse rather than fall open the way Bool does.
 var strictSwitches = []string{
-	"GIT_CONFIG", "TRUST_WORKSPACE", "ALLOW_REFS", "ALLOW_DENIED", "ALLOW_EXPIRED",
+	"GIT_CONFIG", "TRUST_WORKSPACE", "ALLOW_REFS", "ALLOW_DENIED",
 }
 
 // The table the issue asks for: every spelling in the true set, the false set,
-// an unrecognised value, absent and empty, for all five security switches. The
+// an unrecognised value, absent and empty, for all four security switches. The
 // old Bool test covered only "1", "0", absent and empty, which is exactly why
 // "false" and "off" reading as on went unnoticed.
 func TestEnvStrictBool(t *testing.T) {

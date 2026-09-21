@@ -92,6 +92,21 @@ func importSecrets(out io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Nothing to fill means nothing to read and nothing to store, so say so
+	// and stop before the store is opened: on a host with no keyring, opening
+	// it is what would turn a guaranteed no-op into a failure. A count of zero
+	// reads like an import that found nothing, which is a different thing
+	// from a profile with nothing to find. selectForImport has already made
+	// the named form an error, so this is the unnamed form only.
+	if len(selected) == 0 {
+		if len(p.Secrets) == 0 {
+			fmt.Fprintf(out, "%s declares no secrets, so there is nothing to import\n", p.Name)
+			return nil
+		}
+		fmt.Fprintf(out, "%s declares no secret brig can read from your host\n", p.Name)
+		reportHandCreated(out, p)
+		return nil
+	}
 
 	store, err := openStore()
 	if err != nil {
@@ -124,16 +139,22 @@ func importSecrets(out io.Writer, args []string) error {
 	// failure, or `brig secret import x && brig run x` breaks. Only listed
 	// without [name...], because a named one is an error rather than a note.
 	if len(o.names) == 0 {
-		for _, d := range p.Secrets {
-			if !d.Importable() {
-				fmt.Fprintf(out, "  %s: no source on your host, so it is one you supply: "+
-					"brig secret create %s\n", d.Name, d.Name)
-			}
-		}
+		reportHandCreated(out, p)
 	}
 	reportOtherProfiles(out, p, selected)
 
 	return importFailure(failures, len(selected))
+}
+
+// reportHandCreated lists the secrets no importer covers, each with the
+// command that supplies it.
+func reportHandCreated(out io.Writer, p profile.Profile) {
+	for _, d := range p.Secrets {
+		if !d.Importable() {
+			fmt.Fprintf(out, "  %s: no source on your host, so it is one you supply: "+
+				"brig secret create %s\n", d.Name, d.Name)
+		}
+	}
 }
 
 // importOne fills one secret, in the order the rules require: read, extract,

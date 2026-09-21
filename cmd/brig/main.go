@@ -28,9 +28,6 @@ import (
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
-// version is stamped at build time by goreleaser.
-var version = "dev"
-
 // sandboxPrefix is how brig recognises its own sandboxes in a runtime that
 // may be running other things. It is the same mark wrap stamps onto every
 // sandbox name, taken from there so the two cannot drift: ls and `rm --all`
@@ -90,8 +87,9 @@ global flags (left of the command, as in: brig -q run claude):
                          even here
                          (-q after the verb still works this release)
       --json             machine-readable output, for the read verbs: ls, info,
-                         agent ls, secret ls and doctor. Also accepted after the
-                         verb (brig ls --json). Every other verb refuses it
+                         agent ls, secret ls, doctor and version. Also accepted
+                         after the verb (brig ls --json). Every other verb
+                         refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
                          JSON line with its exit status -- so a script can tell
                          "brig refused" from "the agent failed"
@@ -275,8 +273,6 @@ func dispatch(args []string) error {
 	if hint := profile.LegacyHint(); hint != "" {
 		warnf("%s", hint)
 	}
-	warnDeprecatedProfileKeys()
-
 	// --json in the global position is refused here, before the verb runs, when
 	// the verb has no JSON form. The run-line spelling is refused later, where
 	// opts.json is known; this catches the canonical position. See
@@ -290,8 +286,7 @@ func dispatch(args []string) error {
 		fmt.Print(usage)
 		return nil
 	case "version", "--version":
-		fmt.Printf("brig %s\n", version)
-		return nil
+		return versionCmd(verb, rest)
 	case "agent":
 		return agentCmd(rest)
 	case "policy":
@@ -320,7 +315,11 @@ func dispatch(args []string) error {
 		return deprecatedProfileCmd(rest)
 	case "policies":
 		deprecated("brig policies", "brig policy ls")
-		return listPolicies()
+		// Routed onto the verb the notice just named, the way
+		// deprecatedProfileCmd routes onto agentCmd, so the retired spelling
+		// answers a stray word and a --help exactly as `brig policy ls` does
+		// rather than keeping a second copy of either answer.
+		return policyCmd(append([]string{"ls"}, rest...))
 	case "import":
 		deprecated("brig import", "brig agent import")
 		return importProfile(rest)
@@ -3048,7 +3047,7 @@ var globalJSON bool
 // --json left of it is a usage error rather than a flag dropped on the floor.
 func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
-	case "ls", "info", "env", "doctor", "run", "sh":
+	case "ls", "info", "env", "doctor", "version", "--version", "run", "sh":
 		return true
 	case "agent", "secret":
 		return len(rest) > 0 && rest[0] == "ls"
@@ -3064,8 +3063,8 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // from here.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, agent ls, secret ls, doctor (env takes it too, but env is "+
-		"deprecated; prefer info), and for run and sh", verb)
+		"ls, info, agent ls, secret ls, doctor, version (env takes it too, but "+
+		"env is deprecated; prefer info), and for run and sh", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run
@@ -3212,35 +3211,6 @@ func warnf(format string, a ...any) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "brig: "+format+"\n", a...)
-}
-
-// warnDeprecatedProfileKeys says that a profile FILE still carries
-// hostCredential:, which reads another application's keychain on every run and
-// goes in the next release.
-//
-// Only for file-backed profiles, and that scoping is the whole point: no
-// built-in carries the key any more, so an unscoped check would have brig warn
-// about its own shipped spec on every command -- a warning the reader cannot
-// act on, which is how people learn to ignore the ones they can.
-//
-// Emitted here, beside LegacyHint, because this is where profiles are loaded
-// and it is the same class of thing: a file that still parses and no longer
-// means what it did. A run that never names the profile still hears it once,
-// which is right -- the file is what needs editing, not the run.
-func warnDeprecatedProfileKeys() {
-	for _, p := range profile.All() {
-		if p.HostCredential == nil || !profile.IsCustom(p.Name) {
-			continue
-		}
-		where := p.Name
-		if path, ok := profile.Path(p.Name); ok {
-			where = path
-		}
-		warnf("hostCredential: in %s is deprecated and goes in the "+
-			"next release -- it reads another application's keychain on every run. "+
-			"Declare the credential under secrets: with sources: instead, then: "+
-			"brig secret import %s", where, p.Name)
-	}
 }
 
 // isTerminal reports whether stdin is a tty, which decides whether the guest

@@ -238,10 +238,11 @@ export BRIG_BOOT_ASSETS="$WORK/assets"
 export BRIG_HYPERVISOR=vz
 # Your own profiles go in a scratch directory, never the caller's own.
 export BRIG_PROFILE_DIR="$WORK/profiles"
-# The keychain is never read here, and nothing below arranges for it to be: no
-# shipped profile declares hostCredential:, which is the only thing that reads
-# it. BRIG_CREDENTIALS_CMD used to stand in for that read from this script; it
-# is removed, and the case below is what is left to assert about it.
+# The keychain is never read here, and nothing below arranges for it to be:
+# hostCredential:, the one profile key that read it on the run path, is
+# removed. BRIG_CREDENTIALS_CMD used to stand in for that read from this
+# script; it is removed too, and the case below is what is left to assert
+# about it.
 
 echo "== run =="
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret GH_TOKEN=gh-secret \
@@ -2103,6 +2104,12 @@ rc=$?
 grep -q '^  ok  runtime .*0.1.0-rc23' "$WORK/doctor.out" \
   && ok "doctor names the runtime version" \
   || bad "doctor names the runtime version -- got: $(grep runtime "$WORK/doctor.out")"
+# The first row is the build that produced the report, the same line
+# `brig version` prints after the word brig.
+build="$("$WORK/brig" version | sed 's/^brig //')"
+[ "$(head -1 "$WORK/doctor.out")" = "  ok  brig      $build" ] \
+  && ok "doctor opens with the brig build" \
+  || bad "doctor opens with the brig build -- want '$build', got: $(head -1 "$WORK/doctor.out")"
 
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's

@@ -633,3 +633,85 @@ func TestProfileImportPointsAtTheSecretVerb(t *testing.T) {
 		t.Errorf("the error does not name the verb they meant: %v", err)
 	}
 }
+
+// noSecrets registers a profile that declares no secrets at all, which is
+// the state six of the eight shipped profiles are in.
+func noSecrets(t *testing.T) {
+	t.Helper()
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: bare
+image: ghcr.io/brig-sh/bare:latest
+guestHome: /home/bare
+binary: bare
+mem: 1024
+cpus: 1
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A profile with no secrets has nothing this verb can ever do. The unnamed
+// form says so, the way the named form already does, instead of reporting a
+// count of zero that reads like an import that found nothing (#178).
+func TestImportSaysWhenAProfileDeclaresNoSecrets(t *testing.T) {
+	noSecrets(t)
+	newAnnotating(t)
+	useHost(t, nil)
+
+	for _, args := range [][]string{{"bare"}, {"bare", "--dry-run"}} {
+		var out bytes.Buffer
+		if err := importSecrets(&out, args); err != nil {
+			t.Fatalf("%v: a no-op import failed: %v", args, err)
+		}
+		got := out.String()
+		if !strings.Contains(got, "bare declares no secrets, so there is nothing to import") {
+			t.Errorf("%v: the output does not say the profile declares no secrets:\n%s", args, got)
+		}
+		if strings.Contains(got, "importing 0") || strings.Contains(got, "reading your host") {
+			t.Errorf("%v: the output still reports a count or a read:\n%s", args, got)
+		}
+	}
+}
+
+// Nothing to import means nothing to store, so the store is not opened. On a
+// host with no keyring, opening it is what turns a guaranteed no-op into a
+// failure (#178).
+func TestImportWithNothingToDoDoesNotOpenTheStore(t *testing.T) {
+	old := openStore
+	openStore = func() (secret.Store, error) { return nil, secret.ErrUnsupported }
+	t.Cleanup(func() { openStore = old })
+	useHost(t, nil)
+
+	noSecrets(t)
+	if err := importSecrets(&bytes.Buffer{}, []string{"bare"}); err != nil {
+		t.Errorf("a profile with no secrets opened the store: %v", err)
+	}
+
+	// Secrets declared, none an importer covers: the notes still print, and
+	// the store is still not needed.
+	t.Setenv("BRIG_PROFILE_DIR", writeProfile(t, `
+name: handmade
+image: ghcr.io/brig-sh/handmade:latest
+guestHome: /home/handmade
+binary: handmade
+mem: 1024
+cpus: 1
+secrets:
+  - name: handmade-token
+    required: false
+`))
+	if err := profile.Load(profile.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := importSecrets(&out, []string{"handmade"}); err != nil {
+		t.Errorf("a profile with only hand-created secrets opened the store: %v", err)
+	}
+	if !strings.Contains(out.String(), "brig secret create handmade-token") {
+		t.Errorf("the hand-created secret was not reported:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "importing 0") {
+		t.Errorf("the output still reports a count of zero:\n%s", out.String())
+	}
+}

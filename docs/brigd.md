@@ -72,6 +72,18 @@ A response looks like:
 Errors come back as `{"v":1,"ok":false,"code":...,"error":"..."}` rather than as
 a closed connection.
 
+`version` answers with the build the daemon came from, the same fields
+`brig version --json` prints for the CLI:
+
+```json
+{"v":1,"ok":true,"code":0,"version":"v0.2.0",
+  "commit":"131e3bc5615df5ff74e6b5af9a5bcf2ed42b1d57","commitTime":"2026-09-15T09:36:19Z",
+  "modified":false}
+```
+
+`commit` and `commitTime` are absent when the build carried no git history.
+`modified` is always present, and `true` when the tree had uncommitted changes.
+
 ### Protocol version
 
 Every request and every response carries `v`, the protocol version. It is `1`

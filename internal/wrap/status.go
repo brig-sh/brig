@@ -51,37 +51,10 @@ func (c *Config) Status(set creds.Set) {
 	}
 	c.reportArgv(set)
 
-	// Where the guest's login comes from, and whether it is usable: an
-	// expired host token is exactly what sends the sandbox back to its login
-	// screen. Reported from what is actually being forwarded, not from the
-	// keychain alone -- with a token from the environment and no host login,
-	// consulting the keychain would report "no credential" about a sandbox
-	// that authenticates fine.
-	if hc := c.Profile.HostCredential; hc != nil {
-		source, forwarded := sourceOf(names, hc.TargetVar)
-		switch {
-		case forwarded && source == "secret":
-			c.sayf("guest login: from %s in the secret store", hc.TargetVar)
-		case forwarded && source == "":
-			c.sayf("guest login: from %s in the environment (nothing on disk)", hc.TargetVar)
-		case c.HostCred != nil && c.HostCred.Expired(nowMilli()):
-			c.sayf("guest login: host credential found but EXPIRED (%s)", hc.RenewHint)
-		case c.HostCred != nil:
-			c.sayf("guest login: from %s, forwarded as environment (nothing on disk)",
-				c.HostCred.Source)
-		default:
-			c.sayf("guest login: no host credential found (the sandbox will ask you to log in)")
-		}
-	}
-
-	// Where an imported login comes from, and whether it is still good --
-	// the same question the block above answers from Profile.HostCredential,
-	// asked instead of the store's own provenance for a profile that has
-	// moved to secrets: rather than hostCredential:. Both can report at once
-	// while a profile still carries the old field; a later PR drops it, and
-	// this block keeps reporting on its own. listSecrets (expiry.go) is the
-	// same no-decrypt read warnExpiredSecrets uses, so a status report raises
-	// no keychain dialog either.
+	// Where an imported login comes from, and whether it is still good,
+	// asked of the store's own provenance rather than of a value. listSecrets
+	// (expiry.go) is the same no-decrypt read warnExpiredSecrets uses, so a
+	// status report raises no keychain dialog either.
 	if secrets, ok := c.listSecrets(); ok {
 		for _, decl := range c.Profile.Secrets {
 			s, found := secrets[decl.Name]
@@ -253,28 +226,6 @@ func droppedDeny(builtin, current []string) []string {
 // its own accord (git identity, the terminal-prompt guard) are not
 // credentials and must not be reported as if they were.
 func credentialNames(set creds.Set) []string { return set.Names }
-
-// sourceOf finds a variable in the reporting names and says where its value
-// came from: "" for the ambient environment, or the annotation Set carries --
-// "host" for the host credential, "secret" for the store.
-//
-// Matching is on the bare name because the annotation is part of the entry, not
-// part of the variable: comparing the whole string finds "TOK" and misses
-// "TOK(secret)", which is how a sandbox authenticating fine from the keychain
-// gets reported as having no credential at all -- the exact misreport the
-// comment above says this code exists to prevent.
-func sourceOf(names []string, want string) (string, bool) {
-	for _, s := range names {
-		bare, annotation := s, ""
-		if i := strings.LastIndex(s, "("); i > 0 && strings.HasSuffix(s, ")") {
-			bare, annotation = s[:i], s[i+1:len(s)-1]
-		}
-		if bare == want {
-			return annotation, true
-		}
-	}
-	return "", false
-}
 
 func orUnset(s string) string {
 	if s == "" {

@@ -71,30 +71,3 @@ func TestSetReportsNamesNotPlumbing(t *testing.T) {
 		t.Error("plumbing variable is not being forwarded")
 	}
 }
-
-func TestHostCredentialParsing(t *testing.T) {
-	// The real keychain blob wraps the credential in an envelope, so the
-	// fields are found by name at any depth rather than by a configured path.
-	blob := []byte(`{"claudeAiOauth":{"accessToken":"tok-123","expiresAt":1700000000000,
-	  "refreshToken":"r","scopes":["a"]}}`)
-	tok, ok := findString(blob, "accessToken")
-	if !ok || tok != "tok-123" {
-		t.Errorf("token = %q, %v", tok, ok)
-	}
-	exp, ok := findNumber(blob, "expiresAt")
-	if !ok || exp != 1700000000000 {
-		t.Errorf("expiry = %d, %v", exp, ok)
-	}
-
-	c := &HostCredential{ExpiresAt: 1700000000000}
-	if !c.Expired(1700000000001) {
-		t.Error("a past expiry did not read as expired")
-	}
-	if c.Expired(1699999999999) {
-		t.Error("a future expiry read as expired")
-	}
-	// Absence of an expiry is not evidence of expiry.
-	if (&HostCredential{}).Expired(1700000000000) {
-		t.Error("a blob with no expiry read as expired")
-	}
-}

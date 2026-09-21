@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/brig-sh/brig/internal/brigsock"
+	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -175,6 +176,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	rtCheck := runtimeCheck()
 	runtimeOK := rtCheck.State == statePass
 	return []check{
+		brigCheck(),
 		hostCheck(),
 		virtualCheck(),
 		rtCheck,
@@ -185,6 +187,14 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		brigdCheck(),
 		imageCheck(agent, runtimeOK),
 	}
+}
+
+// brigCheck names the build that produced the report: the version, the
+// commit and the platform, the same line `brig version` prints. Informational,
+// and first, so a bug report pasted whole carries the build without a second
+// command.
+func brigCheck() check {
+	return check{Name: "brig", State: statePass, Finding: buildinfo.Read().String()}
 }
 
 // hostCheck names the operating system and architecture a run resolves against.
@@ -371,7 +381,8 @@ func brigdCheck() check {
 		return check{Name: "brigd", State: stateInfo, Finding: "not running (no socket at " + socket + ")"}
 	}
 	finding := "socket at " + socket
-	if running, pid := brigdHolder(socket); running {
+	running, pid := brigdHolder(socket)
+	if running {
 		if pid != "" {
 			finding += " (daemon pid " + pid + ")"
 		} else {
@@ -385,7 +396,51 @@ func brigdCheck() check {
 			Finding: fmt.Sprintf("%s, mode %04o", finding, mode),
 			Fix:     fmt.Sprintf("chmod 600 %s -- it carries lifecycle control over sandboxes holding live credentials", socket)}
 	}
+	if !running {
+		return check{Name: "brigd", State: statePass, Finding: finding}
+	}
+	// A daemon that is up is asked which build it is. One left running across
+	// an upgrade serves the old code with no other sign, so a build other than
+	// this brig's is the failure, and the fix is a restart.
+	theirs, err := askBrigdBuild(socket)
+	if err != nil {
+		return check{Name: "brigd", State: statePass,
+			Finding: fmt.Sprintf("%s, did not answer a version request: %v", finding, err)}
+	}
+	finding += ", build " + buildLabel(theirs)
+	if mine := buildinfo.Read(); !sameBuild(theirs, mine) {
+		return check{Name: "brigd", State: stateFail, Finding: finding,
+			Fix: fmt.Sprintf("restart brigd -- it is %s and this brig is %s", buildLabel(theirs), buildLabel(mine))}
+	}
 	return check{Name: "brigd", State: statePass, Finding: finding}
+}
+
+// sameBuild is whether two builds are the same code. The commit and the
+// modified flag are compared only when both builds name a commit: a binary
+// installed with `go install` names none, and restarting brigd would not give
+// it one.
+func sameBuild(a, b buildinfo.Info) bool {
+	if a.Version != b.Version {
+		return false
+	}
+	if a.Commit == "" || b.Commit == "" {
+		return true
+	}
+	return a.Commit == b.Commit && a.Modified == b.Modified
+}
+
+// buildLabel is a build as the brigd row names one: the version, and the
+// short commit when there is one, marked modified when the version does not
+// already end in +dirty.
+func buildLabel(b buildinfo.Info) string {
+	if b.Commit == "" {
+		return b.Version
+	}
+	commit := buildinfo.ShortCommit(b.Commit)
+	if b.Modified && !strings.HasSuffix(b.Version, "+dirty") {
+		commit += ", modified"
+	}
+	return fmt.Sprintf("%s (%s)", b.Version, commit)
 }
 
 // brigdHolder reports whether a daemon holds the lock on the socket, and the

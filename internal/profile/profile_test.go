@@ -81,10 +81,6 @@ func TestClaudeNoLongerBindsTheOAuthVariables(t *testing.T) {
 			t.Errorf("claude-code still binds %s", b.Name)
 		}
 	}
-	if tmpl.HostCredential != nil {
-		t.Error("claude-code still carries hostCredential:, so brig would read " +
-			"the Claude keychain item on every run")
-	}
 }
 
 // The credential is delivered as a file, into a directory nothing can write

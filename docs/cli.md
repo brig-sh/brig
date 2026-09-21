@@ -207,8 +207,13 @@ exits `0`.
 brig doctor
 ```
 
-Checks, one line each: the host, the hypervisor, the runtime, the boot
-assets, cosign, the profile directory, the secret store and brigd.
+Checks, one line each: the brig build, the host, the hypervisor, the
+runtime, the boot assets, cosign, the profile directory, the secret store and
+brigd. The first line is the same build `brig version` prints, so a report
+pasted whole says which binary produced it. A running brigd is asked which
+build it is; one that differs from the brig binary is marked `!!` with a
+restart as its fix, because a daemon left up across an upgrade serves the
+old code with no other sign.
 
 ```bash
 brig doctor claude
@@ -234,7 +239,43 @@ secret store that will not open. Every other finding, including one marked
 brig version
 ```
 
-Prints `brig v0.2.0` in this release. `--version` is the same command.
+Prints the version and, in parentheses, the build it came from: the short
+commit, the commit date, the Go version and the platform. `--version` is the
+same command.
+
+```
+brig v0.2.0 (131e3bc, 2026-09-15, go1.26.0, darwin/arm64)
+```
+
+The version is what Go derived from the nearest tag when the binary was
+built. A release prints its tag. A build from a commit after a tag prints a
+pseudo-version naming that commit, such as
+`v0.2.1-0.20260915210404-ef4aa8b0efb6`, with `+dirty` appended when the tree
+had uncommitted changes. A build with no git history behind it, such as one
+from a source tarball, prints `dev` and no commit.
+
+`--json` prints the same build under the envelope, with the commit in full.
+`commit` and `commitTime` are absent when the build carried no git history.
+
+```bash
+brig version --json
+```
+
+```json
+{
+  "apiVersion": "brig.sh/v1alpha1",
+  "kind": "Version",
+  "data": {
+    "version": "v0.2.0",
+    "commit": "131e3bc5615df5ff74e6b5af9a5bcf2ed42b1d57",
+    "commitTime": "2026-09-15T09:36:19Z",
+    "modified": false,
+    "goVersion": "go1.26.0",
+    "os": "darwin",
+    "arch": "arm64"
+  }
+}
+```
 
 ### `brig completion`
 
@@ -540,6 +581,7 @@ verb.
 | `ls` | global, or local after `ls` | envelope |
 | `info`, `env` | global, or local on the run line | envelope |
 | `doctor` | global, or local after `doctor` | envelope |
+| `version` | global, or local after `version` | envelope |
 | `run`, `sh` | global, or local on the run line | one compact line, see below |
 | `agent ls` | global, or local after `ls` | envelope |
 | `secret ls` | global, or local after `ls` | envelope |
@@ -559,8 +601,8 @@ that works:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, agent ls, secret ls, doctor (env takes it too, but env is deprecated;
-prefer info), and for run and sh
+info, agent ls, secret ls, doctor, version (env takes it too, but env is
+deprecated; prefer info), and for run and sh
 ```
 
 The flag has to follow `agent show`, not precede `agent`. Every verb not
@@ -717,14 +759,13 @@ because the profile is what you wrote.
 | --- | --- | --- |
 | `BRIG_ALLOW_REFS` | `0` | `1` forwards a value that still looks like an unresolved `scheme://` secret reference |
 | `BRIG_ALLOW_DENIED` | `0` | `1` forwards a variable on the agent's own billing denylist |
-| `BRIG_ALLOW_EXPIRED` | `0` | `1` forwards a host credential even though it reports as expired. Scoped to the deprecated `hostCredential:` field |
 | `BRIG_GIT_CONFIG` | `0` | `1` writes a credential helper and gitconfig into the guest, routing an SSH GitHub remote over HTTPS |
 | `BRIG_GIT_HOSTS` | `github.com` | space-separated hosts the forwarded token applies to |
 | `BRIG_GIT_USER` | resolved on the host | username paired with the forwarded token |
 | `BRIG_GIT_IDENTITY` | `1` | `0` stops Brig from forwarding the host commit identity resolved from the invoking directory |
 | `BRIG_GIT_NAME`, `BRIG_GIT_EMAIL` | the host's `git config` | override that identity |
 | `BRIG_TRUST_WORKSPACE` | `1` | pre-answers the agent's own "do you trust this folder" question for the directory a run starts in |
-| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. Never applies to a value Brig resolved itself, a secret or the host credential, which stay off the command line regardless |
+| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. Never applies to a value Brig resolved itself, such as a stored secret; those stay off the command line regardless |
 
 [authentication.md](authentication.md) and [secrets.md](secrets.md) cover
 what each of these does with the credential once it is in the guest.

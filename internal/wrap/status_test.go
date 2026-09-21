@@ -32,10 +32,6 @@ func (fakeRuntime) Isolation(hv string) runtime.Isolation {
 	return runtime.Isolation{Boundary: runtime.BoundaryVM, Detail: "hull, " + hv + " backend"}
 }
 
-const credentialProfile = "hostCredential:\n  keychainService: s\n" +
-	"  tokenField: accessToken\n  expiryField: expiresAt\n" +
-	"  targetVar: TOK\n  renewHint: run it once\n"
-
 func statusOutput(t *testing.T, body string, set creds.Set) string {
 	t.Helper()
 	c := bindingConfig(t, body)
@@ -50,7 +46,7 @@ func statusOutput(t *testing.T, body string, set creds.Set) string {
 // needs a runtime unavailable, rather than failing the whole report -- the
 // reader is often the one whose runtime is what broke.
 func TestStatusReportsWithoutARuntime(t *testing.T) {
-	c := bindingConfig(t, credentialProfile)
+	c := bindingConfig(t, "")
 	out := &bytes.Buffer{}
 	c.Out = out
 	c.Runtime = nil // no runtime detected
@@ -63,60 +59,6 @@ func TestStatusReportsWithoutARuntime(t *testing.T) {
 	// without a runtime, and is the kind of line env exists to print.
 	if !strings.Contains(got, "image ") {
 		t.Errorf("the report dropped the lines it could still give:\n%s", got)
-	}
-}
-
-// Set.Names annotates a store-sourced variable as "TOK(secret)", the way it
-// already annotates the host credential's as "TOK(host)". An exact-string
-// check against the bare name misses it, and because a secret-bound run
-// correctly skips the host credential read, HostCred is nil and the report
-// falls through to "no host credential found" -- about a sandbox that
-// authenticates perfectly well from the keychain.
-func TestStatusReportsAGuestLoginBoundFromTheStore(t *testing.T) {
-	var set creds.Set
-	set.AddSecret("TOK", "s3cr3t", "TOK(secret)")
-
-	got := statusOutput(t, "secrets:\n  - tok\nenv:\n  - name: TOK\n    ref: secrets.tok\n"+
-		credentialProfile, set)
-
-	if strings.Contains(got, "no host credential found") {
-		t.Errorf("a secret-bound login was reported as no credential at all:\n%s", got)
-	}
-	if !strings.Contains(got, "guest login: from TOK in the secret store") {
-		t.Errorf("the login was not reported as coming from the store:\n%s", got)
-	}
-	if strings.Contains(got, "s3cr3t") {
-		t.Errorf("the status report printed a value:\n%s", got)
-	}
-}
-
-// The environment case keeps its own wording: the annotation is what tells the
-// two apart, so stripping it must not merge them.
-func TestStatusStillDistinguishesTheEnvironmentAndTheHost(t *testing.T) {
-	var fromEnv creds.Set
-	fromEnv.Add("TOK", "t", "TOK")
-	got := statusOutput(t, credentialProfile, fromEnv)
-	if !strings.Contains(got, "guest login: from TOK in the environment") {
-		t.Errorf("an environment-sourced login was misreported:\n%s", got)
-	}
-
-	var fromHost creds.Set
-	fromHost.AddSecret("TOK", "t", "TOK(host)")
-	// Assert the annotation directly: the reported wording below is reached on
-	// HostCred alone, so it survives a sourceOf that has regressed to matching
-	// the whole string. This is what pins "(host)" the way the store test above
-	// pins "(secret)".
-	if source, ok := sourceOf(fromHost.Names, "TOK"); !ok || source != "host" {
-		t.Errorf("sourceOf(%q) = %q, %v; want \"host\", true", fromHost.Names, source, ok)
-	}
-	c := bindingConfig(t, credentialProfile)
-	out := &bytes.Buffer{}
-	c.Out = out
-	c.Runtime = fakeRuntime{}
-	c.HostCred = &creds.HostCredential{Token: "t", Source: "the host keychain"}
-	c.Status(fromHost)
-	if !strings.Contains(out.String(), "guest login: from the host keychain") {
-		t.Errorf("a host-sourced login was misreported:\n%s", out.String())
 	}
 }
 
@@ -283,8 +225,8 @@ func TestStatusNamesTheBindingsWhenNothingIsForwarded(t *testing.T) {
 }
 
 // The status report says where the guest login comes from and whether it is
-// still good, without reading a value -- the same question the old
-// HostCredential block answered, asked of the store instead.
+// still good, without reading a value: the question is asked of the store's
+// provenance, never of the host.
 func TestStatusReportsTheImportedLogin(t *testing.T) {
 	const now = 1755436980000
 	old := nowMilli
