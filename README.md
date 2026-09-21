@@ -49,7 +49,7 @@ full model.
 | Mac, Apple silicon, macOS 15 or newer | Yes |
 | Mac, Apple silicon, macOS 14 | Yes, with `BRIG_HYPERVISOR=vz` |
 | Intel Mac | No |
-| Linux, x86-64 or arm64 | Yes, with `nerdctl`, containerd and the `urunc` shim |
+| Linux, x86-64 or arm64 | Yes, with the runtime bundle `install.sh` installs |
 
 macOS 15 is the floor: six of the eight built-in profiles need the `hvi`
 backend. See [docs/install.md#platform-support](docs/install.md#platform-support)

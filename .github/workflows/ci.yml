@@ -134,3 +134,20 @@ jobs:
           args: release --snapshot --clean --skip=publish,sign,sbom
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ""
+
+  shell:
+    name: shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # install.sh is the one piece of this repository that is not Go and is
+      # not covered by anything above. It is also what most people run first,
+      # and it now fetches and executes a second installer, so a syntax error
+      # or an unquoted expansion here lands on a user's host.
+      - name: Check install.sh
+        run: |
+          set -eu
+          sh -n install.sh
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -s sh install.sh

@@ -250,7 +250,7 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	fromProfile := agent != nil && agent.RuntimeBin != "" && os.Getenv("BRIG_RUNTIME_BIN") == ""
 	rt, err := detect()
 	if err != nil {
-		fix := "install hull on macOS or nerdctl on Linux, or point BRIG_RUNTIME_BIN at a build"
+		fix := "run install.sh: it installs hull on macOS and the runtime bundle on Linux. Or point BRIG_RUNTIME_BIN at a build"
 		if fromProfile {
 			fix = "fix this profile's runtimeBin (brig agent edit " + agent.Name + "), or remove it so brig finds the runtime on PATH"
 		}

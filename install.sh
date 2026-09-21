@@ -9,6 +9,11 @@
 # run` fails -- and cosign, which is what verifies the kernel, initrd and guest
 # agent every sandbox boots.
 #
+# On Linux the runtime is nerdctl over containerd with the urunc shim, none of
+# which is brig's to build, so this delegates to the bundle that packages it
+# (brig-standalone-linux). That bundle carries brig and brigd too, so on Linux
+# they come from there rather than from the archive above.
+#
 # Homebrew is still the better path on macOS. It tracks upgrades, and it
 # installs the shell completions this script leaves in the archive for you
 # (docs/completions.md):
@@ -21,7 +26,13 @@
 #   BRIG_VERSION          a brig tag instead of the newest release
 #   HULL_VERSION          a hull tag instead of the newest release
 #   BRIG_INSTALL_HULL=0   skip hull, and leave macOS without a runtime
-#   BRIG_INSTALL_COSIGN=0 skip cosign, and leave the boot chain unverified
+#   BRIG_INSTALL_COSIGN=0 skip cosign, and leave the boot chain unverified. On
+#                         Linux the runtime bundle brings its own, so this only
+#                         stops the one fetched to check that release
+#   BRIG_INSTALL_RUNTIME=0 skip the Linux runtime, and install brig only
+#   BRIG_RUNTIME_VERSION  a brig-standalone-linux tag instead of the pinned one
+#   BRIG_INSTALL_ROOTLESS=1  install the rootless bundle on Linux, so any user
+#                         of the install can run `brig-ctl rootless`
 set -eu
 
 BRIG_REPO=brig-sh/brig
@@ -38,6 +49,17 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 #
 # Bump both the version and the hashes together. docs/releasing.md carries the
 # grep that catches a version quoted in one place and not the other.
+# The Linux runtime bundle. Pinned here, and reviewed, for the same reason
+# cosign's version is: it decides what ends up running on the host. Bump it
+# with each brig release that the bundle repins against.
+#
+# v0.1.0-rc7 is the first release carrying the rootless bundle, so
+# BRIG_INSTALL_ROOTLESS against anything older fails naming the asset it wanted.
+RUNTIME_REPO=NOFireAI/brig-standalone-linux
+RUNTIME_VERSION=v0.1.0-rc7
+RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
+RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
+
 COSIGN_VERSION=v3.1.3
 COSIGN_SHA_DARWIN_ARM64=5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76
 COSIGN_SHA_LINUX_AMD64=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
@@ -191,6 +213,99 @@ install_hull() {
   say "installed $("$DEST/hull" --version) to $DEST"
 }
 
+# cosign, as a tool rather than as an install. install_runtime needs one to
+# check the runtime release's signature, and it needs it before that release is
+# trusted, so the bundle's own cosign is too late to use. On Linux nothing else
+# in this script writes to DEST, and DEST is not writable by a normal user, so
+# installing a second cosign there would ask for sudo on the one path that is
+# meant to need none. This one lands in $tmp and is verified by the pinned hash
+# above, exactly as install_cosign verifies the copy it installs.
+COSIGN_BIN=""
+resolve_cosign() {
+  if command -v cosign > /dev/null 2>&1; then
+    COSIGN_BIN=cosign
+    return 0
+  fi
+  [ "${BRIG_INSTALL_COSIGN:-1}" != 0 ] || return 1
+  case "$os/$arch" in
+    darwin/arm64) cosign_sha=$COSIGN_SHA_DARWIN_ARM64 ;;
+    linux/amd64)  cosign_sha=$COSIGN_SHA_LINUX_AMD64 ;;
+    linux/arm64)  cosign_sha=$COSIGN_SHA_LINUX_ARM64 ;;
+    *) return 1 ;;
+  esac
+  say "downloading cosign $COSIGN_VERSION to check the runtime release (about 130 MB)"
+  curl -fsSL -o "$tmp/cosign" \
+    "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-${os}-${arch}" \
+    || return 1
+  printf '%s  cosign\n' "$cosign_sha" > "$tmp/cosign-checksums.txt"
+  verify "$tmp" cosign cosign-checksums.txt
+  chmod 0755 "$tmp/cosign"
+  COSIGN_BIN="$tmp/cosign"
+}
+
+# The Linux runtime, installed by the bundle repository's own install.sh. That
+# script is a release asset covered by the same checksums.txt the bundle is, so
+# it is verified the way every other download here is rather than piped from a
+# branch. The bundle installer then fetches and verifies its own tarball from
+# the same pinned release.
+#
+# It decides where the tree goes from its own euid: run under sudo it installs
+# the node-wide stack, run as a user it installs under $HOME. That is the same
+# answer this script gives for DEST, so the two agree without being told.
+install_runtime() {
+  version="${BRIG_RUNTIME_VERSION:-$RUNTIME_VERSION}"
+  base="https://github.com/$RUNTIME_REPO/releases/download/$version"
+
+  say "downloading the Linux runtime installer ($RUNTIME_REPO $version)"
+  curl -fsSL -o "$tmp/install.sh" "$base/install.sh" \
+    || die "no install.sh in $RUNTIME_REPO $version"
+  curl -fsSL -o "$tmp/runtime-checksums.txt" "$base/checksums.txt" \
+    || die "could not fetch checksums.txt for $RUNTIME_REPO $version"
+  verify "$tmp" install.sh runtime-checksums.txt
+
+  # With cosign present the release's provenance is checkable, not just its
+  # integrity, and the bundle installer is told to insist on the same for the
+  # tarball it fetches. A failure here is fatal: it is what a tampered or
+  # mis-signed release looks like.
+  require_sig=false
+  resolve_cosign || true
+  if [ -n "$COSIGN_BIN" ] \
+     && curl -fsSL -o "$tmp/runtime-checksums.txt.sig" "$base/checksums.txt.sig" \
+     && curl -fsSL -o "$tmp/runtime-checksums.txt.pem" "$base/checksums.txt.pem"; then
+    "$COSIGN_BIN" verify-blob "$tmp/runtime-checksums.txt" \
+      --certificate "$tmp/runtime-checksums.txt.pem" \
+      --signature "$tmp/runtime-checksums.txt.sig" \
+      --certificate-identity-regexp "$RUNTIME_SIG_IDENTITY" \
+      --certificate-oidc-issuer "$RUNTIME_SIG_ISSUER" > /dev/null 2>&1 \
+      || die "the runtime release's checksums.txt is not signed by $RUNTIME_REPO's release workflow"
+    say "signature ok: $RUNTIME_REPO checksums.txt"
+    require_sig=true
+  else
+    say "no cosign available, so the runtime release is checked by hash alone"
+  fi
+
+  case "${BRIG_INSTALL_ROOTLESS:-0}" in
+    1|true|yes) rootless=true ;;
+    *) rootless=false ;;
+  esac
+
+  # A cosign fetched above sits in $tmp and is on nobody's PATH, so the bundle
+  # installer -- which is being told to require a signature -- would refuse for
+  # want of the very tool this just verified with. Hand it over.
+  runtime_path="$PATH"
+  case "$COSIGN_BIN" in
+    */*) runtime_path="${COSIGN_BIN%/*}:$PATH" ;;
+  esac
+
+  say "running the runtime installer"
+  PATH="$runtime_path" \
+  INSTALL_BRIG_RELEASE_REPO="$RUNTIME_REPO" \
+  INSTALL_BRIG_RELEASE_VERSION="$version" \
+  INSTALL_BRIG_REQUIRE_SIGCHECK="$require_sig" \
+  INSTALL_BRIG_ROOTLESS="$rootless" \
+    sh "$tmp/install.sh" || die "the runtime installer failed"
+}
+
 # cosign is what turns hull's boot-asset check from a printed warning into an
 # answer. Without it on PATH the check reports "no tooling", and under the
 # default mode that is not a refusal: the kernel a sandbox boots is fetched,
@@ -228,22 +343,36 @@ install_cosign() {
   fi
 }
 
-install_brig
+# The Linux runtime bundle carries brig and brigd and installs launchers for
+# them -- launchers, not the binaries, because they are what sets the
+# environment that points brig at the private containerd. Installing the plain
+# binaries here as well would leave two copies of brig on PATH with one
+# silently winning, so on Linux the bundle owns them. It carries cosign too,
+# and puts it on the PATH its launcher sets, so nothing here writes to DEST on
+# that path: an unprivileged install needs no sudo at all.
+if [ "$os" = linux ] && [ "${BRIG_INSTALL_RUNTIME:-1}" != 0 ]; then
+  install_runtime
+else
+  if [ "${BRIG_INSTALL_COSIGN:-1}" != 0 ]; then
+    install_cosign
+  fi
+  install_brig
+fi
 
 if [ "$os" = darwin ] && [ "${BRIG_INSTALL_HULL:-1}" != 0 ]; then
   install_hull
 fi
 
-if [ "${BRIG_INSTALL_COSIGN:-1}" != 0 ]; then
-  install_cosign
-fi
-
 # hull finds cosign on PATH, so a DEST that is not on it leaves the boot check
-# reporting "no tooling" even though the binary is installed.
-case ":${PATH}:" in
-  *":$DEST:"*) ;;
-  *) say "$DEST is not on your PATH; add it, or hull will not find cosign there" ;;
-esac
+# reporting "no tooling" even though the binary is installed. The runtime
+# bundle installs nothing in DEST and reports on its own launcher directory, so
+# this says nothing there.
+if [ "$os" = darwin ] || [ "${BRIG_INSTALL_RUNTIME:-1}" = 0 ]; then
+  case ":${PATH}:" in
+    *":$DEST:"*) ;;
+    *) say "$DEST is not on your PATH; add it, or hull will not find cosign there" ;;
+  esac
+fi
 
 if [ "$os" = darwin ] && ! command -v hull > /dev/null 2>&1 \
    && [ "${BRIG_INSTALL_HULL:-1}" = 0 ]; then

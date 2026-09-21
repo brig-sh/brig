@@ -10,7 +10,9 @@ use.
 
 If you adopt this stack, on macOS you take on Brig and hull. On Linux
 you take on Brig, plus three projects it does not own: nerdctl,
-containerd and urunc.
+containerd and urunc. `install.sh` installs those three for you on Linux,
+from the bundle described in [install.md](install.md#linux), but they are
+still three upstreams rather than ours.
 
 ## What you are installing
 
@@ -164,6 +166,7 @@ nerdctl run --detach --name <name>
      [--network none | --network <name>]      # offline, or isolated
      [--annotation com.urunc.unikernel.bootKernel=<path>]
      [--annotation com.urunc.unikernel.bootInitrd=<path>]
+     [--annotation com.urunc.unikernel.hypervisor=cloud-hypervisor]
      [-v <host>:<guest>[:ro]]... [--tmpfs <path>:<options>]...
      [-e <NAME>]... <image> sleep infinity
 nerdctl exec -i [-t] [-w <dir>] [-u <user>] [-e <NAME>]... <name> <cmd>...

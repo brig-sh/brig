@@ -46,6 +46,24 @@ func TestNerdctlPassesBootAnnotations(t *testing.T) {
 	}
 }
 
+// urunc defaults an image booted this way to qemu, which the runtime bundle
+// does not ship -- it ships cloud-hypervisor and a kernel built for it. Naming
+// the monitor is what keeps a host without a system qemu from failing at the
+// shim with "vmm not found".
+func TestNerdctlNamesTheMonitor(t *testing.T) {
+	stageBootAssets(t)
+
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	args, _, err := n.runArgs(RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "--annotation com.urunc.unikernel.hypervisor=cloud-hypervisor") {
+		t.Errorf("monitor annotation not passed: %s", got)
+	}
+}
+
 // docker does not carry annotations through to the runtime, so the sandbox
 // would boot without a kernel. Refuse where the cause is still visible.
 func TestNerdctlRefusesGenericBootOnDocker(t *testing.T) {

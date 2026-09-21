@@ -3,11 +3,10 @@
 Homebrew is the path to prefer on macOS. Use `install.sh` when Homebrew is
 not available.
 
-No single path installs a full working setup everywhere. Homebrew and
-`install.sh` both install `hull` on macOS. On Linux, `install.sh` installs
-`brig`, `brigd` and `cosign` only: you install the runtime, `nerdctl` with
-containerd and the `urunc` shim, yourself. Building from source writes only
-`brig` and `brigd`, never a runtime.
+Homebrew and `install.sh` both install `hull` on macOS. On Linux,
+`install.sh` installs the runtime bundle, which carries `nerdctl`,
+containerd, the `urunc` shim and `brig` itself. Building from source writes
+only `brig` and `brigd`, never a runtime.
 
 ## macOS with Homebrew
 
@@ -41,9 +40,9 @@ Prerequisites: `curl`, `tar`, and either `sha256sum` or `shasum` on `PATH`.
 curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sh
 ```
 
-This installs `brig` and `brigd` on macOS and Linux. On macOS it also
-installs `hull` with the `vz-runner` and `hvi` executables it drives, and on
-both platforms it installs `cosign`.
+On macOS this installs `brig` and `brigd`, plus `hull` with the `vz-runner`
+and `hvi` executables it drives. On Linux it installs the runtime bundle,
+which brings `brig` and `brigd` with it. Both platforms get `cosign`.
 
 It downloads the newest release for your OS and architecture. There is no
 stable release yet, so that includes prereleases. It checks every archive
@@ -111,15 +110,43 @@ to check the signature yourself.
 
 ## Linux
 
-Prerequisites: `nerdctl`, containerd, and the `urunc` containerd shim. A
-`genericBoot` profile also needs `oras`.
-
 Brig drives `nerdctl` over containerd, with `urunc` as the shim that boots
-the container as a microVM instead of a plain process. `install.sh` does
-not install any of this on Linux: it installs `brig`, `brigd` and `cosign`
-only. Install `nerdctl`, containerd and `urunc` yourself before you run an
-agent. [runtimes.md](runtimes.md) covers the full command surface each one
-needs.
+the container as a microVM instead of a plain process. `install.sh` installs
+all of it from the runtime bundle published by
+[brig-standalone-linux](https://github.com/NOFireAI/brig-standalone-linux),
+which packages those three with the monitors, the guest kernel and a private
+containerd of its own, under `/var/lib/brig`. The tag is pinned in
+`install.sh`, and the bundle's own `install.sh` is a release asset checked
+against the same signed `checksums.txt` as the bundle.
+
+Because the bundle carries `brig` and `brigd` too, on Linux they come from
+there rather than from the brig archive: what lands on `PATH` is a launcher
+that sets the environment pointing brig at that private containerd.
+
+Run it under `sudo` for a node-wide install, which is the default and needs
+root. Run it as a normal user and everything lands under `$HOME` instead:
+`~/.local/share/brig` for the tree, `~/.local/bin` for the launchers, and a
+containerd of your own under a systemd user unit. That path writes nothing
+outside your home and asks for `sudo` at no point, which is why `install.sh`
+puts nothing in `BRIG_INSTALL_DIR` there and uses the cosign the bundle
+carries.
+
+The bundle for it is selected for you: an unprivileged install always takes
+the rootless one, since the plain bundle cannot serve it and says so rather
+than installing half of itself. `BRIG_INSTALL_ROOTLESS=1` asks for that same
+bundle from a *node-wide* install, which is what lets each user then run
+`brig-ctl rootless` against the shared tree.
+
+Either rootless route needs the host prepared once, by someone with root: a
+subuid range, access to `/dev/kvm` and `/dev/vhost-vsock`, the `uidmap`
+package, and an AppArmor profile on Ubuntu 24.04 and later. The installer
+reports which of those are missing before it unpacks anything. See the
+bundle's `docs/rootless.md` for what each one is for.
+
+`BRIG_INSTALL_RUNTIME=0` skips all of this and installs `brig` and `brigd`
+alone, for a host that already has `nerdctl`, containerd and `urunc`. A
+`genericBoot` profile also needs `oras`, which the bundle carries.
+[runtimes.md](runtimes.md) covers the full command surface each one needs.
 
 That combination is what makes a Linux sandbox a microVM rather than a
 container sharing the host kernel. What that boundary does and does not
@@ -229,7 +256,7 @@ why Brig signs releases this way.
 | Mac, Apple silicon, macOS 15 or newer | Yes |
 | Mac, Apple silicon, macOS 14 | Yes, with `BRIG_HYPERVISOR=vz` |
 | Intel Mac | No |
-| Linux, x86-64 or arm64 | Yes, with `nerdctl`, containerd and the `urunc` shim |
+| Linux, x86-64 or arm64 | Yes, with the runtime bundle `install.sh` installs |
 
 macOS 15 is the floor Brig enforces for hull's `hvi` backend. Apple shipped
 the in-kernel interrupt controller `hvi` depends on first in macOS 15.
