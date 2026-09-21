@@ -120,8 +120,33 @@ signs:
 sboms:
   - artifacts: archive
 
+# The channel tags are moving tags, and neither is a version.
+#
+# goreleaser takes the version and the changelog's starting point from the
+# nearest tag. channel-main is re-pointed at every merge, so after the first
+# publish it is nearer than any release tag: the next channel build reads its
+# version as "channel-main", and the next release's notes start at the channel
+# tag and lose everything before it. Ignoring them here leaves both reading
+# the release tags they are meant to read.
+git:
+  ignore_tags:
+    - channel-main
+    - channel-experimental
+
+# The version a build that is not a release carries.
+#
+# CHANNEL_VERSION is what the channel workflow sets: a build from main or from
+# one named ref is published to the tap, and Homebrew decides there is
+# something to upgrade to by the version string alone -- so two builds of a
+# moving channel must not share one. A local `--snapshot` sets nothing and
+# keeps the old spelling.
+#
+# The branches are a conditional rather than envOrDefault's second argument.
+# Go evaluates a function's arguments before the call, so the default was
+# computed on every build, and incpatch refused a version it could not read as
+# semver even when CHANNEL_VERSION held the answer.
 snapshot:
-  version_template: "{{ incpatch .Version }}-snapshot"
+  version_template: '{{ with envOrDefault "CHANNEL_VERSION" "" }}{{ . }}{{ else }}{{ incpatch .Version }}-snapshot{{ end }}'
 
 # The release notes come from git-cliff (cliff.toml), handed over with
 # --release-notes in the release workflow. goreleaser reads that file inside
@@ -184,6 +209,14 @@ homebrew_casks:
       bash: completions/brig.bash
       zsh: completions/brig.zsh
       fish: completions/brig.fish
+    # The channel casks declare a conflict with this one, and Homebrew reads
+    # only the conflicts of the cask being installed. So without this half,
+    # `brew install --cask brig` over an installed brig@main is not stopped:
+    # it fails later, while linking the binaries, with a message about a link
+    # rather than about the two casks.
+    conflicts:
+      - cask: brig@main
+      - cask: brig@experimental
     dependencies:
       # Guest-image signature verification degrades to a warning without it,
       # so ship it rather than let the check quietly do nothing.

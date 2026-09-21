@@ -1,0 +1,266 @@
+# The prerelease channels: a build people can install and try before there is
+# a release, or a release candidate, to try.
+#
+# Two of them, and they are deliberately separate rather than one channel with
+# two sources.
+#
+#   main          follows the tip of main, republished on every merge. This is
+#                 "what is coming", and it moves on its own.
+#   experimental  is promoted by hand from any ref, which is how an unmerged
+#                 branch reaches a tester. It moves only when someone asks.
+#
+# Folding them together would mean a merge to main silently replacing the
+# branch build a tester was halfway through checking.
+#
+# Neither is a release. Each publishes to a moving tag, so the assets under
+# `channel-main` and `channel-experimental` are replaced in place and nothing
+# accumulates. `skip_upload: auto` on the stable cask is untouched: that is
+# GoReleaser's, it runs on a v-tag, and nothing here creates one.
+name: channel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to publish to the experimental channel"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  # One publish per channel at a time. Two racing runs would move the same tag
+  # and leave the tap's cask naming assets the release no longer has.
+  group: channel-${{ github.event_name == 'workflow_dispatch' && 'experimental' || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # The dispatch input reaches bash through the environment, never through
+      # a ${{ }} substitution: an expression is pasted into the script before
+      # bash reads it, so a ref carrying a quote or a $(...) would run as
+      # shell in a job that can write to this repository. It is also checked
+      # against what a ref can contain, because the same value ends up inside
+      # a Ruby string in the cask.
+      - name: Work out which channel this is
+        id: channel
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.event.inputs.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            case "$REF" in
+              *[!A-Za-z0-9._/-]*|"")
+                echo "$REF is not a branch, tag or SHA" >&2; exit 1;;
+            esac
+            {
+              echo "name=experimental"
+              echo "ref=$REF"
+              echo "source=$REF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "name=main"
+              echo "ref=$SHA"
+              echo "source=the tip of main"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.channel.outputs.ref }}
+          # The Go toolchain derives the pseudo-version this build reports from
+          # the nearest tag, so a shallow clone gives it the wrong answer.
+          fetch-depth: 0
+          # An experimental build checks out a ref somebody asked for, and this
+          # job can write to the repository. The default checkout leaves its
+          # token in the git config, where anything that ref runs -- a
+          # goreleaser hook, the renderer -- could reach it. The two pushes
+          # below are given a token explicitly instead.
+          persist-credentials: false
+
+      # The workflow's own commit, kept apart from the ref being built. The
+      # renderer and the goreleaser config are run from here, so promoting a
+      # branch does not mean running that branch's copy of either -- which is
+      # also what lets a ref cut before this workflow existed be promoted at
+      # all.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workflow
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+
+      # goreleaser checks the tree before its hooks run, so its `go mod tidy`
+      # hook could change go.mod or go.sum afterwards and nothing would fail --
+      # a snapshot build does not refuse a dirty tree. The binaries would then
+      # report a +dirty version that no longer matches the one the cask names.
+      # Tidy here first and stop on any change, the way release.yml does.
+      - name: Check the tree stays clean after go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code
+
+      # The version is read off a binary rather than composed here. The Go
+      # toolchain stamps every binary with the pseudo-version it derives from
+      # the commit, which is already unique per build -- which is all Homebrew
+      # needs to see that there is something to upgrade to -- and it means the
+      # asset names, the cask version and what the binary says about itself
+      # are one string rather than three that can disagree.
+      #
+      # `go version -m` reads the stamp without running the binary. An
+      # experimental build is whatever ref somebody promoted, and later steps
+      # of this job hold a token for this repository and one for the tap. A
+      # step that ran that ref's code could leave something behind for them.
+      - name: Read the version
+        id: version
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/brig" ./cmd/brig
+          v="$(go version -m "$RUNNER_TEMP/brig" | awk '$1 == "mod" { print $3; exit }')"
+          v="${v#v}"
+          case "$v" in
+            "" | "(devel)") echo "the binary carries no module version" >&2; exit 1 ;;
+          esac
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+
+      # --snapshot builds every archive and publishes nothing, which is what
+      # this job wants: the release below is a moving tag rather than the
+      # v-tag release GoReleaser knows how to make.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          # The `before` hooks are skipped: `go mod tidy` ran above with the
+          # tree checked afterwards, and `go test ./...` runs in CI on every
+          # merge to main. Running tidy here would dirty the tree after
+          # goreleaser has already read it.
+          args: release --snapshot --clean --skip=before,sbom,sign --config .workflow/.goreleaser.yaml
+        env:
+          CHANNEL_VERSION: ${{ steps.version.outputs.value }}
+
+      # Moved rather than created. A channel is one release whose assets are
+      # replaced, so a year of merges to main leaves one tag and one release
+      # rather than a release per commit.
+      # The new assets go up before anything else changes. The cask in the tap
+      # still names the previous build's files at this point, and those files
+      # are still there -- so an install during this step gets the old build
+      # rather than a 404, and the tap's checksum CI still agrees with itself.
+      # The old assets are removed after the tap has moved on; see below.
+      - name: Publish to the channel release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: channel-${{ steps.channel.outputs.name }}
+          SOURCE: ${{ steps.channel.outputs.source }}
+          CHANNEL: ${{ steps.channel.outputs.name }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NOTES="Built from $SOURCE at $(git rev-parse --short HEAD). Not a release."
+          TITLE="$CHANNEL channel"
+          git tag -f "$TAG"
+          # The checkout persisted no credentials, so the push is given one.
+          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/$TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --prerelease --target "$(git rev-parse HEAD)" \
+              --title "$TITLE" --notes "$NOTES"
+          else
+            gh release create "$TAG" --prerelease --target "$(git rev-parse HEAD)" \
+              --title "$TITLE" --notes "$NOTES"
+          fi
+          # checksums.txt as well as the archives: the tap's CI asks each
+          # release whether it really published the sha256 its cask claims,
+          # and a channel cask has to answer that the same way a stable one
+          # does. It keeps its name, so it is replaced in place.
+          gh release upload "$TAG" dist/*.tar.gz dist/checksums.txt --clobber
+
+      - name: Render the cask
+        env:
+          V: ${{ steps.version.outputs.value }}
+          CHANNEL: ${{ steps.channel.outputs.name }}
+          SOURCE: ${{ steps.channel.outputs.source }}
+        run: |
+          set -euo pipefail
+          OTHER=experimental
+          [ "$CHANNEL" = "experimental" ] && OTHER=main
+          python3 .workflow/script/render-cask.py \
+            --project brig --channel "$CHANNEL" --version "$V" \
+            --repo brig-sh/brig --tag "channel-$CHANNEL" --dist dist \
+            --archive "on_macos:on_arm:brig-$V-darwin-arm64.tar.gz" \
+            --archive "on_macos:on_intel:brig-$V-darwin-amd64.tar.gz" \
+            --archive "on_linux:on_arm:brig-$V-linux-arm64.tar.gz" \
+            --archive "on_linux:on_intel:brig-$V-linux-amd64.tar.gz" \
+            --desc "Run a coding agent in a microVM sandbox with only the credentials it needs" \
+            --source "$SOURCE" \
+            --binary brig --binary brigd \
+            --completion bash --completion zsh --completion fish \
+            --depends-cask "brig-sh/brig/hull@$CHANNEL" --depends-formula cosign \
+            --conflicts-with "$OTHER" \
+            --out "brig@$CHANNEL.rb"
+
+      # Pushed to the tap rather than opened as a pull request, which is the
+      # one place this differs from the stable cask. That cask is what people
+      # install and a bad one deserves a second pair of eyes; a channel cask
+      # is regenerated on every merge, and a pull request per merge is noise
+      # nobody would read.
+      - name: Update the tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          CHANNEL: ${{ steps.channel.outputs.name }}
+          V: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/brig-sh/homebrew-brig.git" /tmp/tap
+          cp "brig@$CHANNEL.rb" "/tmp/tap/Casks/brig@$CHANNEL.rb"
+          cd /tmp/tap
+          git config user.name "brig-sh-bot"
+          git config user.email "bot@brig.sh"
+          git add "Casks/brig@$CHANNEL.rb"
+          git diff --cached --quiet && { echo "the cask is unchanged"; exit 0; }
+          git commit -m "chore(cask): brig@$CHANNEL $V"
+          # Rebased and retried rather than pushed once. brig and hull each
+          # publish two channels into this one repository, and nothing
+          # serializes across the four: a concurrency group is per workflow,
+          # and these are four workflows in two repositories. Two that overlap
+          # would have the loser rejected non-fast-forward, its channel left
+          # stale, and the error pointing at git rather than at the cause.
+          # They touch different files, so a rebase always applies.
+          for attempt in 1 2 3 4 5; do
+            git push && exit 0
+            echo "the tap moved under this push; rebasing (attempt $attempt)"
+            git pull --rebase --quiet origin main
+            sleep $((attempt * 2))
+          done
+          echo "the tap could not be updated after five attempts" >&2
+          exit 1
+
+      # Only now, with the tap naming the new files, are the previous build's
+      # assets removed. They carry that build's version in their name, so
+      # --clobber never replaced them and the release would otherwise list
+      # every build ever made. Doing it before the tap moved is what would
+      # give an installer a 404 -- see the note on the upload above.
+      - name: Remove the assets no cask names any more
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: channel-${{ steps.channel.outputs.name }}
+        run: |
+          set -euo pipefail
+          keep="$(cd dist && ls -- *.tar.gz checksums.txt)"
+          gh release view "$TAG" --json assets -q '.assets[].name' | while read -r asset; do
+            [ -n "$asset" ] || continue
+            printf '%s\n' "$keep" | grep -qxF "$asset" && continue
+            echo "removing the stale asset $asset"
+            gh release delete-asset "$TAG" "$asset" --yes
+          done

@@ -149,6 +149,38 @@ answers in that case, and the binary prints what a normal clone would.
   to need `brew style --fix Casks/brig.rb` on its branch as well: goreleaser
   writes the cask with its own indentation.
 
+## The prerelease channels
+
+- `.github/workflows/channel.yml` publishes two casks that are not releases:
+  `brig@main`, rebuilt on every merge to `main`, and `brig@experimental`,
+  promoted by hand from any ref with a `workflow_dispatch`. They exist so a
+  feature can be tried before there is a release, or a release candidate, to
+  try. See [install.md](install.md#trying-something-before-it-is-released).
+
+- Each publishes to a moving tag -- `channel-main`, `channel-experimental` --
+  whose assets are replaced in place. Neither tag matches `v*`, so neither
+  starts the release workflow, and `skip_upload: auto` on the stable cask is
+  untouched.
+- Both are named in `git.ignore_tags` in `.goreleaser.yaml`, and `v*` is what
+  cliff.toml's `tag_pattern` matches. goreleaser reads the nearest tag for the
+  version, and a re-pointed channel tag is nearer than any release tag, so
+  without that list a channel build reads its version as `channel-main`.
+  Rename a channel and both have to follow.
+
+- The channel cask is pushed to the tap rather than opened as a pull request.
+  It is regenerated on every merge, and a PR per merge is noise. That push
+  uses the `HOMEBREW_TAP_GITHUB_TOKEN` secret directly rather than minting an
+  App token first: a channel that cannot reach the tap should fail loudly,
+  and there is no release for it to quietly go green beside.
+
+- The cask is rendered by `script/render-cask.py`, not by goreleaser. A
+  channel has no version of its own, so there is nothing for goreleaser's cask
+  pipe to release. The renderer emits what `brew style` wants, so a channel
+  cask needs no `--fix` pass.
+
+- To promote a branch: `gh workflow run channel.yml -f ref=<branch>` on
+  `brig-sh/brig`, and the same on `brig-sh/hull` if the feature needs both.
+
 ## After the tag
 
 - Ask the module proxy for the new version once, so pkg.go.dev indexes it.
