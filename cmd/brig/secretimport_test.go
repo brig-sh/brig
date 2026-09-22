@@ -573,7 +573,7 @@ func TestFromCommandRefusesAValueThatDoesNotEnd(t *testing.T) {
 	useHost(t, nil)
 	var out bytes.Buffer
 	err := importSecrets(&out, []string{"mytool", "mytool-manual",
-		"--from-command", `dd if=/dev/zero bs=1024 count=64 2>/dev/null | tr "\0" a`})
+		"--from-command", `dd if=/dev/zero bs=1024 count=128 2>/dev/null | tr "\0" a`})
 	if err == nil {
 		t.Fatal("stored a value larger than the store takes")
 	}

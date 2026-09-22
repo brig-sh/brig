@@ -556,16 +556,13 @@ func readValue(file string) ([]byte, error) {
 
 // maxValueBytes is where reading a secret stops.
 //
-// The store this feeds takes less: the keychain command line is one 4096-byte
-// line, the value travels base64-encoded, and what is left after the command
-// and the name is about 3 KB. So a value over this ceiling was never going to
-// be stored, and reading it first is not free -- `brig secret create x`
-// pointed at /dev/zero read until it had 12.5 GB in memory, three seconds in,
-// on its way to being refused for being 3 KB too long. The cap is a little
-// above what the store accepts so the error that comes back is the store's
-// own, about this secret and this name, in every case except the one where
-// there is no plausible secret at the other end at all.
-const maxValueBytes = 4096
+// This is a refusal of streams, not a limit on secrets. Reading stdin to the
+// end first is not free: `brig secret create x` pointed at /dev/zero read
+// until it had 12.5 GB in memory, three seconds in. Nothing that is a
+// credential comes near this: a credential document with plugin state or a
+// pair of JWTs is a few kilobytes, and an RSA private key under 4 KB. Above
+// it there is no plausible secret at the other end at all.
+const maxValueBytes = 64 << 10
 
 // readCapped reads a secret and refuses one that does not end.
 func readCapped(r io.Reader, what string) ([]byte, error) {

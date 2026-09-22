@@ -5,15 +5,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// A secret is a credential, and the store this feeds takes about 3 KB. Reading
-// stdin to the end first meant `brig secret create` pointed at a stream sat
-// there allocating: 12.5 GB resident three seconds in, on the way to refusing
-// the value for being too long. The read stops a little above what can be
-// stored, and says so.
+// A secret is a credential, and no credential is a megabyte. Reading stdin to
+// the end first meant `brig secret create` pointed at a stream sat there
+// allocating: 12.5 GB resident three seconds in, on the way to refusing the
+// value for being too long. The read stops well past any real secret, and
+// says so.
 func TestCreateRefusesAValueThatDoesNotEnd(t *testing.T) {
 	f := newFake(t)
 	pipeStdin(t, strings.Repeat("A", 1<<20))
@@ -21,7 +22,7 @@ func TestCreateRefusesAValueThatDoesNotEnd(t *testing.T) {
 	if err == nil {
 		t.Fatal("a megabyte on stdin was accepted as a secret")
 	}
-	if !strings.Contains(err.Error(), "stdin") || !strings.Contains(err.Error(), "4096") {
+	if !strings.Contains(err.Error(), "stdin") || !strings.Contains(err.Error(), strconv.Itoa(maxValueBytes)) {
 		t.Errorf("the refusal does not say what it refused or where the ceiling is: %v", err)
 	}
 	if _, ok := f.items["gh"]; ok {
@@ -104,3 +105,19 @@ func TestTheDeleteAnswerStillReadsAYes(t *testing.T) {
 }
 
 var _ io.Reader = (*endlessReader)(nil)
+
+// The store no longer has a ceiling near 4 KB: the value goes to an encrypted
+// file and only a fixed-size key reaches the keychain. A credential document
+// of a few kilobytes, which is what a login with plugin state or two JWTs
+// comes to, has to pass the read cap.
+func TestCreateTakesACredentialDocumentOfSeveralKilobytes(t *testing.T) {
+	f := newFake(t)
+	value := strings.Repeat("j", 12*1024)
+	pipeStdin(t, value)
+	if err := secretCmd(&bytes.Buffer{}, []string{"create", "gh"}); err != nil {
+		t.Fatalf("a 12 KB secret was refused: %v", err)
+	}
+	if string(f.items["gh"]) != value {
+		t.Error("the value was truncated")
+	}
+}
