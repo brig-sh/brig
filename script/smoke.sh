@@ -640,6 +640,50 @@ grep -q -- '--cwd /work/otherproject' "$STUB_LOG" \
   || bad "the recreated sandbox starts in the new project -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
+echo "== the skills flag =="
+# --skills is accepted on every profile and only claude-code and herdr declare anywhere
+# to copy from, so on the rest it resolves to no projection and says so: from
+# the outside, a copy that did nothing reads like one that worked.
+#
+# Unset first: the shell running this script is a developer's, and an exported
+# BRIG_SKILLS puts the notice on every case below.
+unset BRIG_SKILLS BRIG_UBUNTU_SKILLS
+: > "$STUB_LOG"
+"$WORK/brig" run ubuntu --skills -d > /dev/null 2> "$WORK/skills.err"
+grep -q -- '--skills' "$WORK/skills.err" \
+  && ok "a profile with nothing to seed says --skills did nothing" \
+  || bad "a profile with nothing to seed says --skills did nothing -- got: $(cat "$WORK/skills.err")"
+grep -q 'ubuntu profile' "$WORK/skills.err" \
+  && ok "the notice names the profile that has nothing to seed" \
+  || bad "the notice names the profile that has nothing to seed -- got: $(cat "$WORK/skills.err")"
+# The setting is the same request, and the notice quotes the spelling that
+# made it: pointing somebody at a flag they never typed is its own wrong turn.
+: > "$STUB_LOG"
+BRIG_UBUNTU_SKILLS=1 "$WORK/brig" run ubuntu -d > /dev/null 2> "$WORK/skills-env.err"
+grep -q 'BRIG_UBUNTU_SKILLS' "$WORK/skills-env.err" \
+  && ok "the notice names the setting that asked" \
+  || bad "the notice names the setting that asked -- got: $(cat "$WORK/skills-env.err")"
+# And a run that never asked hears nothing about skills at all.
+: > "$STUB_LOG"
+"$WORK/brig" run ubuntu -d > /dev/null 2> "$WORK/skills-off.err"
+grep -q 'skills' "$WORK/skills-off.err" \
+  && bad "a run that never asked was told about skills -- got: $(cat "$WORK/skills-off.err")" \
+  || ok "a run that never asked is not told about skills"
+# The global setting is "every agent that can", left on in a shell profile, so
+# an agent that cannot is not told so on every run.
+: > "$STUB_LOG"
+BRIG_SKILLS=1 "$WORK/brig" run ubuntu -d > /dev/null 2> "$WORK/skills-global.err"
+grep -q 'skills' "$WORK/skills-global.err" \
+  && bad "BRIG_SKILLS warned on a profile with nothing to seed -- got: $(cat "$WORK/skills-global.err")" \
+  || ok "BRIG_SKILLS says nothing on a profile with nothing to seed"
+# The notice belongs to the run that would do the copying. info previews the
+# envelope and prepares no workspace, so the same setting says nothing there.
+BRIG_UBUNTU_SKILLS=1 "$WORK/brig" info ubuntu > /dev/null 2> "$WORK/skills-info.err"
+grep -q 'skills' "$WORK/skills-info.err" \
+  && bad "info talked about seeding -- got: $(cat "$WORK/skills-info.err")" \
+  || ok "info prepares no workspace and says nothing about skills"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
 echo "== the home flag =="
 # --home is what sets the guest home. v0.5.0 removed -w and --workspace: after
 # the ref they are the agent's, and before it they are refused naming --home,

@@ -117,7 +117,8 @@ flags (before the agent's own arguments; -- ends brig's parsing):
   -d, --detach           with run: start the sandbox and exit
       --skills           copy your own ~/.claude skills and plugins into the
                          guest home; the host copy is never written
-                         (or BRIG_SKILLS=1)
+                         (or BRIG_SKILLS=1). Only claude-code and herdr have
+                         any to copy, and a run that copies nothing says so
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
@@ -155,7 +156,7 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_WORKSPACE       host directory mounted as the guest home
   BRIG_IMAGE           guest image
   BRIG_PULL            missing (default) | always | never
-  BRIG_SKILLS          1 to copy your ~/.claude skills and plugins into the guest
+  BRIG_SKILLS          1 to copy your ~/.claude skills and plugins (claude-code, herdr)
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off: guest image signature
@@ -1506,8 +1507,8 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		{"memory", "", func(n string) { fs.Var(numberFlag{spell(n), &mem}, n, "") }},
 		{"cpus", "", func(n string) { fs.Var(numberFlag{spell(n), &cpus}, n, "") }},
 		{"detach", "d", func(n string) { fs.BoolVar(&o.detach, n, false, "") }},
-		// Opt-in, and only ever opt-in: this hands the guest the user's real
-		// skills and plugins, read-only.
+		// Opt-in, and only ever opt-in: this hands the guest a copy of the
+		// user's real skills and plugins.
 		{"skills", "", func(n string) { fs.BoolVar(&o.load.Skills, n, false, "") }},
 		// Run this session with no project, whatever it ran with last.
 		{"no-project", "", func(n string) { fs.BoolVar(&o.load.NoProject, n, false, "") }},

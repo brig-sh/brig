@@ -212,6 +212,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			}
 		}()
 	}
+	// The copy happens in PrepareWorkspace below, so this is where a request
+	// for the host's skills that copies nothing is answered, and brig info
+	// previews the envelope without reaching here. A warning rather than an
+	// alert, since alertf is verification's alone.
+	if c.skillsNotice != "" {
+		c.warnf("%s", c.skillsNotice)
+	}
 	if err := c.PrepareWorkspace(); err != nil {
 		return err
 	}

@@ -27,6 +27,7 @@ flags:
       --cpus N        guest vCPUs
   -d, --detach        start the sandbox and exit, without attaching
       --skills        copy your ~/.claude skills and plugins into the guest home
+                      (claude-code, herdr; elsewhere it says it copied nothing)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable
@@ -57,6 +58,7 @@ flags:
       --mem MB        guest memory
       --cpus N        guest vCPUs
       --skills        copy your ~/.claude skills and plugins into the guest home
+                      (claude-code, herdr; elsewhere it says it copied nothing)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable
@@ -153,6 +155,7 @@ flags:
       --mem MB        guest memory
       --cpus N        guest vCPUs
       --skills        copy your ~/.claude skills and plugins into the guest home
+                      (claude-code, herdr; elsewhere it says it copied nothing)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable

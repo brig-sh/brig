@@ -506,6 +506,7 @@ var osPathAllowlist = []osPathAllow{
 	{"git.go", "openHostFile", "os.OpenFile", "path",
 		"the host's gh hosts.yml, refused unless the open descriptor is a regular file"},
 	{"config.go", "hostProjections", "os.Stat", "hostPath", "a directory under the host's own agent config"},
+	{"config.go", "hostProjections", "os.Open", "hostPath", "the same host directory, read for one name to tell an empty one apart"},
 	{"workspace.go", "Config.seedHostConfig", "os.ReadDir", "seed.Host", "the host's own agent config"},
 	{"workspace.go", "copyTree", "os.Lstat", "src", "a host source, and a link there is copied as a link"},
 	{"workspace.go", "copyTree", "os.Readlink", "src", "a host source, copied as a link and never followed"},

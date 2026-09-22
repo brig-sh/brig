@@ -118,6 +118,10 @@ type Config struct {
 	// own prints the warnings when Err is not the process's stderr. See
 	// notices.
 	own Notices
+	// skillsNotice is what a run that asked for the host's own skills has to
+	// be told when none were copied, held until the run reaches the copy
+	// itself. See hostProjections.
+	skillsNotice string
 	// secrets is what the store gave this run, kept so file delivery does not
 	// read it twice -- and cleared the moment delivery is done, because a
 	// plaintext refresh token has no business outliving its use.
@@ -592,6 +596,18 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		strictErr = err
 	}
 	published := mergePublications(recorded, asked)
+	// Which spelling asked for the host's own skills, so a notice quotes the
+	// one the user wrote. Flag first and setting second, the order every
+	// other knob follows, and short-circuiting: an unreadable setting is not
+	// held against a run that passed the flag.
+	skillsAsked := ""
+	switch {
+	case o.Skills:
+		skillsAsked = "--skills"
+	case strict("SKILLS", false):
+		skillsAsked = env.SettingName("SKILLS")
+	}
+	hostConfig, skillsNotice := hostProjections(t, skillsAsked)
 
 	// The rules bound to this run, resolved here with everything else so the
 	// envelope row and the spec cannot disagree about them either.
@@ -653,10 +669,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		ReadyTimeout:   time.Duration(env.Int("READY_TIMEOUT", 30)) * time.Second,
 		Env:            bindings,
 		envWarnings:    envWarnings,
+		skillsNotice:   skillsNotice,
 		OpenStore:      openStore,
 		MacOSVersion:   macOSVersion,
 		GitConfig:      strict("GIT_CONFIG", false),
-		HostConfig:     hostProjections(t, o.Skills || strict("SKILLS", false)),
+		HostConfig:     hostConfig,
 		GitHosts:       env.Fields("GIT_HOSTS", []string{"github.com"}),
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
@@ -1133,30 +1150,70 @@ func (c *Config) mountProject(dir string) error {
 // guest path mirrors the host layout under GuestHome, so the agent finds them
 // where it already looks.
 //
+// Copying nothing carries a notice, because the outcome is invisible from the
+// guest: the agent starts without the skills either way. Three ways there --
+// a profile that names no configuration to copy, which is seven of the nine
+// shipped ones, a host missing the directories the profile names, and
+// directories that are there with nothing in them. Load has no writer, so
+// EnsureRunning says it.
+//
+// asked is the spelling this run used, "--skills" or the setting, and empty
+// when it did not ask, so the notice quotes what the user typed.
+//
+// The global BRIG_SKILLS is the one spelling that does not hear about a
+// profile with no configuration. It is the way to say "every agent that can,
+// every time", so it is set once in a shell profile and stays there; telling
+// each codex or ubuntu run that it has nothing to copy would repeat itself on
+// every run, sh and exec, and say nothing the help text does not. The flag
+// and the per-agent setting name this profile, so they are told.
+//
 // These are copied into the workspace rather than mounted read-only from the
 // host. Read-only was the safer-looking choice and the wrong one: agents write
 // inside these directories -- installing a plugin, populating a cache -- and a
 // read-only mount turns that into an I/O error rather than a refusal it can
 // handle. Copying gives the guest its own writable copy, and the host's stays
 // untouched, which was the actual point of read-only.
-func hostProjections(t profile.Profile, enabled bool) []hostSeed {
-	if !enabled || t.HostConfigDir == "" || len(t.ProjectPaths) == 0 {
-		return nil
+func hostProjections(t profile.Profile, asked string) ([]hostSeed, string) {
+	if asked == "" {
+		return nil, ""
+	}
+	if t.HostConfigDir == "" || len(t.ProjectPaths) == 0 {
+		if asked == "BRIG_SKILLS" {
+			return nil, ""
+		}
+		return nil, notice.Newf("%s copied nothing: the %s profile names no host configuration", asked, t.Name).
+			Note("only a profile that declares hostConfigDir and projectPaths has skills to copy, as claude-code and herdr do").
+			String()
 	}
 	root := t.HostConfigDir
 	if strings.HasPrefix(root, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil
+			return nil, notice.Newf("%s copied nothing: brig cannot tell where your home directory is", asked).
+				Note("%s is relative to it: %v", t.HostConfigDir, err).
+				String()
 		}
 		root = filepath.Join(home, root[2:])
 	}
 	var out []hostSeed
+	var wanted []string
+	copies := 0
 	for _, rel := range t.ProjectPaths {
 		hostPath := filepath.Join(root, rel)
+		wanted = append(wanted, hostPath)
 		info, err := os.Stat(hostPath)
 		if err != nil || !info.IsDir() {
 			continue
+		}
+		// One name is enough to tell an empty directory from one with
+		// something to copy. An empty one passes every check above and still
+		// leaves the guest with nothing, which is the outcome the notice
+		// exists to name.
+		if f, err := os.Open(hostPath); err == nil {
+			if names, err := f.Readdirnames(1); err == nil && len(names) > 0 {
+				copies++
+			}
+			_ = f.Close()
 		}
 		out = append(out, hostSeed{
 			Host: hostPath,
@@ -1166,7 +1223,17 @@ func hostProjections(t profile.Profile, enabled bool) []hostSeed {
 			Rel: filepath.Join(filepath.Base(root), rel),
 		})
 	}
-	return out
+	if copies == 0 {
+		// Every path, in full: the directory is what the reader has to fill,
+		// and a notice that will not say where brig looked leaves them
+		// guessing between ~/.claude and the workspace.
+		b := notice.Newf("%s copied nothing: the directories the %s profile takes are missing or empty", asked, t.Name)
+		for _, w := range wanted {
+			b.Note("%s", w)
+		}
+		return out, b.String()
+	}
+	return out, ""
 }
 
 // hostSeed is one host directory copied into the workspace.

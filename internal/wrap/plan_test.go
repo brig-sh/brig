@@ -557,7 +557,7 @@ func TestPlanNamesTheSkillsItCopies(t *testing.T) {
 	plain.Profile, plain.Workspace = p, "/home-dir"
 	skills := bindingConfig(t, "")
 	skills.Profile, skills.Workspace = p, "/home-dir"
-	skills.HostConfig = hostProjections(p, true)
+	skills.HostConfig = seedsFor(p)
 
 	d := plain.Plan()
 	if d.Skills == nil || len(d.Skills) != 0 {
