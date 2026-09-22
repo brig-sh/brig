@@ -174,7 +174,7 @@ func TestSeedHostConfigRefusesASymlinkedDestination(t *testing.T) {
 	tm, _ := profile.Lookup("claude-code")
 	c := testConfig(t, ws, ws)
 	c.Profile = tm
-	c.HostConfig = hostProjections(tm, true)
+	c.HostConfig = seedsFor(tm)
 
 	err := c.seedHostConfig(mustRoot(t, c))
 	wantRefused(t, err, ".claude")

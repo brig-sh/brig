@@ -907,7 +907,7 @@ This runs the agent with `-p hi --quiet`, with a warning about `--quiet`.
 | `--cpus N` | number | the agent's own (`4` for most shipped agents) | guest vCPUs |
 | `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run` and `plan`, refused by name as a usage error |
 | `-d`, `--detach` | (none) | off | start the sandbox, print its name and exit, without attaching. Only `run` acts on it. `sh`, `stop`, `rm`, `info` and `plan` accept it and ignore it |
-| `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
+| `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1`. When the profile declares no `hostConfigDir` and `projectPaths`, or those directories are missing or empty, the run warns that it copied nothing |
 | `--network MODE` | `shared`, `isolated` or `offline` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture) | the sandbox's network posture. A verb without the flag does not change the posture of a sandbox. If Brig cannot establish the posture of an existing sandbox, name one with this flag or `BRIG_NETWORK`. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox. Refused together with a different `--network` value |
 | `--publish PORT` | `3000`, `8080:80`, `127.0.0.1:8080:80`, `5353:53/udp` | nothing published | open a guest port on the host. Repeatable. Binds to `127.0.0.1` unless the address says otherwise. There is no `-p`, which stays the agent's flag. See [`brig network`](#brig-network) |
@@ -1121,7 +1121,7 @@ them "global only".
 | `BRIG_CPUS` | the agent's own | guest vCPUs. A value that is not a positive whole number is ignored |
 | `BRIG_READY_TIMEOUT` | `30` | seconds to wait for the in-guest agent once the runtime reports the sandbox running |
 | `BRIG_NETWORK` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture, which `brig info` reports) | `shared`, `isolated` or `offline`. Wins over the posture an existing sandbox was started with. An unrecognized value refuses the run. See [policies.md](policies.md) |
-| `BRIG_SKILLS` | `0` | `1` copies your own `~/.claude` skills and plugins into the guest home. Same as `--skills` |
+| `BRIG_SKILLS` | `0` | `1` copies your own `~/.claude` skills and plugins into the guest home. Same as `--skills`, except that the global `BRIG_SKILLS` asks for every agent that can, so it does not warn on one whose profile has nothing to copy. `BRIG_<AGENT>_SKILLS` warns like the flag |
 | `BRIG_FORWARD_ENV` | (unset) | a space-separated list of environment variable names to carry into the guest, read live on every run |
 | `BRIG_TITLE` | the agent's own | window title for a graphical agent |
 
