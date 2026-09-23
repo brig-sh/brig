@@ -73,19 +73,20 @@ func keyItem(key []byte) string {
 	return keyPrefix + base64.StdEncoding.EncodeToString(key)
 }
 
-// keyFromItem reads the key out of an item line, or reports that the line
-// is a pre-sealing value. A marked line that does not hold a key of the
-// right size was written by something other than brig.
-func keyFromItem(line string) (key []byte, sealed bool, err error) {
+// keyFromItem reads the key out of an item line. A nil key with no error
+// is a pre-sealing line, which holds the value itself. A marked line that
+// does not hold a key of the right size was written by something other
+// than brig.
+func keyFromItem(line string) ([]byte, error) {
 	rest, ok := strings.CutPrefix(line, keyPrefix)
 	if !ok {
-		return nil, false, nil
+		return nil, nil
 	}
-	key, err = base64.StdEncoding.DecodeString(rest)
+	key, err := base64.StdEncoding.DecodeString(rest)
 	if err != nil || len(key) != keyLen {
-		return nil, true, errors.New("the keychain item is marked as a key and does not hold one, so brig did not write it")
+		return nil, errors.New("the keychain item is marked as a key and does not hold one, so brig did not write it")
 	}
-	return key, true, nil
+	return key, nil
 }
 
 // seal encrypts value for name under key: magic, nonce, then the ciphertext

@@ -35,6 +35,9 @@ type guestFake struct {
 	fail  map[string]error
 	// fed is the size of every Feed's stdin, in order.
 	fed []int
+	// feedLimit is what MaxFeed answers: hull's bound by default, and 0 for
+	// a runtime that carries any size in one Feed.
+	feedLimit int
 	// dropEveryOtherFeed makes odd-numbered feeds report success while
 	// writing nothing, to stand in for a piece that never reached the file.
 	dropEveryOtherFeed bool
@@ -54,8 +57,13 @@ func newGuestFake() *guestFake {
 		files:  map[string]*guestFile{},
 		swaps:  "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n",
 		fail:   map[string]error{},
+		// The same bound the hull adapter declares, so the tests below
+		// exercise the piece loop the way a real run does.
+		feedLimit: 2048,
 	}
 }
+
+func (g *guestFake) MaxFeed() int { return g.feedLimit }
 
 func (g *guestFake) Kind() string { return g.kind }
 
@@ -489,9 +497,10 @@ func indexOf(t *testing.T, log []string, prefix string) int {
 }
 
 // hull's exec stalls on one stdin frame over about 3.7 KB (brig-sh/hull#82),
-// and a credential document with plugin state is 3846 bytes. Delivery hands
-// the value over in pieces no larger than deliveryPiece, each its own exec,
-// so no frame can be that large, and checks the whole of it landed.
+// and a credential document with plugin state is 3846 bytes. A runtime that
+// declares a feed limit gets the value in pieces no larger than it, each
+// its own exec, so no frame can be that large, and delivery checks the
+// whole of it landed.
 func TestDeliveryFeedsTheValueInPiecesHullCanCarry(t *testing.T) {
 	g := newGuestFake()
 	c := deliveryConfig(t, g)
@@ -509,8 +518,8 @@ func TestDeliveryFeedsTheValueInPiecesHullCanCarry(t *testing.T) {
 	}
 	total := 0
 	for i, n := range g.fed {
-		if n > deliveryPiece {
-			t.Errorf("feed %d carried %d bytes, over the %d-byte piece", i, n, deliveryPiece)
+		if n > g.MaxFeed() {
+			t.Errorf("feed %d carried %d bytes, over the %d-byte limit", i, n, g.MaxFeed())
 		}
 		total += n
 	}
@@ -524,7 +533,7 @@ func TestDeliveryFeedsTheValueInPiecesHullCanCarry(t *testing.T) {
 func TestDeliveryChecksTheWholeValueLanded(t *testing.T) {
 	g := newGuestFake()
 	c := deliveryConfig(t, g)
-	value := strings.Repeat("v", 3*deliveryPiece)
+	value := strings.Repeat("v", 3*g.MaxFeed())
 	c.secrets = creds.Resolution{Values: map[string]string{"cred": value}}
 	g.dropEveryOtherFeed = true
 	err := c.deliverSecretFiles()
@@ -533,5 +542,21 @@ func TestDeliveryChecksTheWholeValueLanded(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bytes") {
 		t.Errorf("err = %v, want it to say how much landed", err)
+	}
+}
+
+// A runtime that declares no feed limit gets the whole value in one Feed:
+// the piece loop is hull's workaround, not a cost every backend pays.
+func TestARuntimeWithoutAFeedLimitGetsTheValueWhole(t *testing.T) {
+	g := newGuestFake()
+	g.feedLimit = 0
+	c := deliveryConfig(t, g)
+	value := strings.Repeat("v", 10000)
+	c.secrets = creds.Resolution{Values: map[string]string{"cred": value}}
+	if err := c.deliverSecretFiles(); err != nil {
+		t.Fatalf("deliverSecretFiles: %v", err)
+	}
+	if len(g.fed) != 1 || g.fed[0] != len(value) {
+		t.Errorf("feeds = %v, want one of %d bytes", g.fed, len(value))
 	}
 }

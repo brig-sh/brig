@@ -580,6 +580,15 @@ func (h *hull) Feed(spec ExecSpec) error {
 	return nil
 }
 
+// maxFeed is the most one Feed carries. hull's guest agent stalls on a
+// stdin frame over about 3.7 KB (brig-sh/hull#82), and the frame is
+// whatever one read of the pipe returns, which brig cannot shape from its
+// end. Bounding what one exec is given is the one way to bound it, and half
+// of the measured limit leaves room for another guest's being lower.
+const maxFeed = 2048
+
+func (h *hull) MaxFeed() int { return maxFeed }
+
 // Replace hands the process over. On success it does not return: the agent's
 // TUI gets the real terminal, ^C reaches it rather than brig, and its exit
 // status is brig's exit status without any relaying.

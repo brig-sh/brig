@@ -111,8 +111,7 @@ case "$verb" in
       fed="$STUB_STATE.fed.$(printf '%s' "${5:-}" | tr / _)"
       case "$3" in
         *'set -C'*) rm -f "$fed" ;;   # the create step empties the file first
-        *'>>'*) cat >> "$fed" ;;
-        *) cat > "$fed" ;;
+        *) cat >> "$fed" ;;
       esac
       exit 0
     fi

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"slices"
 	"strings"
@@ -160,22 +161,9 @@ func (k keychain) writePrefix(name string, update bool, p Provenance) (string, e
 // and one more update or import repairs it. Once an item holds a key every
 // concurrent update shares it, so the window is that first move only.
 func (k keychain) Write(name string, value []byte, p Provenance, update bool) error {
-	var key []byte
-	if update {
-		line, err := k.readItem(name)
-		if err != nil {
-			return err
-		}
-		// A marked item that holds no key is damaged, and an update is the
-		// repair: it draws a fresh key, the way it does for a pre-sealing
-		// item, and the sealed item is written under that.
-		key, _, _ = keyFromItem(line)
-	}
-	if key == nil {
-		var err error
-		if key, err = newKey(); err != nil {
-			return err
-		}
+	key, err := k.keyFor(name, update)
+	if err != nil {
+		return err
 	}
 	blob, err := seal(name, key, value)
 	if err != nil {
@@ -200,6 +188,38 @@ func (k keychain) Write(name string, value []byte, p Provenance, update bool) er
 	return k.verify(name, value, false)
 }
 
+// keyFor is the key a write seals under: the one the item already holds
+// on an update, a fresh one on a create. An update of a pre-sealing item,
+// or of a marked item that holds no key, draws a fresh one too: the
+// sealed item written under it is what makes the secret whole again.
+func (k keychain) keyFor(name string, update bool) ([]byte, error) {
+	if !update {
+		return newKey()
+	}
+	line, err := k.readItem(name)
+	if err != nil {
+		return nil, err
+	}
+	if key, _ := keyFromItem(line); key != nil {
+		return key, nil
+	}
+	return newKey()
+}
+
+// security runs one security(1) command and returns its stdout. stdin is
+// nil for a command that reads none. A failure carries security's own
+// explanation and, through errors.As, its exit code, which status reads.
+func (k keychain) security(stdin io.Reader, args ...string) (string, error) {
+	cmd := exec.Command(securityBin, args...)
+	cmd.Stdin = stdin
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return "", securityError(err, errb.String())
+	}
+	return out.String(), nil
+}
+
 // putItem stores line as the keychain item for name, through `security -i`
 // on stdin, so it stays out of argv exactly as the value used to.
 //
@@ -212,17 +232,11 @@ func (k keychain) putItem(name, line string, p Provenance, update bool) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(securityBin, "-i")
-	cmd.Stdin = strings.NewReader(prefix + line + "\n")
-	var errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &bytes.Buffer{}, &errb
-	if err := cmd.Run(); err != nil {
-		if status(err) == codeDuplicate {
-			return ErrExists
-		}
-		return securityError(err, errb.String())
+	_, err = k.security(strings.NewReader(prefix+line+"\n"), "-i")
+	if status(err) == codeDuplicate {
+		return ErrExists
 	}
-	return nil
+	return err
 }
 
 // sealedArgs is the argv of the sealed write: security's own command, with
@@ -248,13 +262,8 @@ func (k keychain) putSealed(name string, blob []byte) error {
 			return err
 		}
 	}
-	cmd := exec.Command(securityBin, k.sealedArgs(name, blob)...)
-	var errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &bytes.Buffer{}, &errb
-	if err := cmd.Run(); err != nil {
-		return securityError(err, errb.String())
-	}
-	return nil
+	_, err := k.security(nil, k.sealedArgs(name, blob)...)
+	return err
 }
 
 // write is Create and Update's path: the zero Provenance, so a plain secret
@@ -301,12 +310,12 @@ func (k keychain) Read(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	key, sealed, err := keyFromItem(line)
+	key, err := keyFromItem(line)
 	if err != nil {
 		return nil, fmt.Errorf("%q %w: %v. Store it again: brig secret update %s, or brig secret import",
 			name, ErrDamaged, err, name)
 	}
-	if !sealed {
+	if key == nil {
 		// Written before this change: the item is the value.
 		value, err := base64.StdEncoding.DecodeString(line)
 		if err != nil {
@@ -360,18 +369,15 @@ func (k keychain) readItem(name string) (string, error) {
 
 // readLine is the -w read of one account.
 func (k keychain) readLine(account string) (string, error) {
-	cmd := exec.Command(securityBin, "find-generic-password",
-		"-s", k.service, "-a", account, "-w")
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		if status(err) == codeNotFound {
-			return "", ErrNotFound
-		}
-		return "", securityError(err, errb.String())
+	out, err := k.security(nil, "find-generic-password", "-s", k.service, "-a", account, "-w")
+	if status(err) == codeNotFound {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
 	}
 	// -w prints the value and a newline of its own.
-	return strings.TrimRight(out.String(), "\n"), nil
+	return strings.TrimRight(out, "\n"), nil
 }
 
 // Update refuses to create.
@@ -416,17 +422,11 @@ func isAuthError(err error) bool {
 
 // deleteItem removes one account's item.
 func (k keychain) deleteItem(account string) error {
-	cmd := exec.Command(securityBin, "delete-generic-password",
-		"-s", k.service, "-a", account)
-	var errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &bytes.Buffer{}, &errb
-	if err := cmd.Run(); err != nil {
-		if status(err) == codeNotFound {
-			return ErrNotFound
-		}
-		return securityError(err, errb.String())
+	_, err := k.security(nil, "delete-generic-password", "-s", k.service, "-a", account)
+	if status(err) == codeNotFound {
+		return ErrNotFound
 	}
-	return nil
+	return err
 }
 
 // List reads brig's namespace out of the keychain dump.
@@ -435,13 +435,11 @@ func (k keychain) deleteItem(account string) error {
 // prompt, which is what lets brig list secrets without an index file of its
 // own -- and so without anything that could drift out of step with the store.
 func (k keychain) List() ([]Secret, error) {
-	cmd := exec.Command(securityBin, "dump-keychain")
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return nil, securityError(err, errb.String())
+	out, err := k.security(nil, "dump-keychain")
+	if err != nil {
+		return nil, err
 	}
-	return parseDump(out.String(), k.service), nil
+	return parseDump(out, k.service), nil
 }
 
 // parseDump pulls the generic passwords of one service out of a keychain

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -14,25 +15,22 @@ import (
 // rawItem is the line security holds for account, exactly as stored.
 func rawItem(t *testing.T, k *testKeychain, account string) string {
 	t.Helper()
-	out, err := exec.Command(securityBin, "find-generic-password",
-		"-s", k.service, "-a", account, "-w").Output()
+	line, err := k.readLine(account)
 	if err != nil {
-		t.Fatalf("find-generic-password %s: %v", account, err)
+		t.Fatalf("reading %s: %v", account, err)
 	}
-	return strings.TrimRight(string(out), "\n")
+	return line
 }
 
 // keyOf is the key the item for name holds, or a failed test.
 func keyOf(t *testing.T, k *testKeychain, name string) []byte {
 	t.Helper()
-	raw := rawItem(t, k, name)
-	rest, ok := strings.CutPrefix(raw, keyPrefix)
-	if !ok {
-		t.Fatalf("the item does not start with the key marker: %q", raw[:min(len(raw), 12)])
-	}
-	key, err := base64.StdEncoding.DecodeString(rest)
+	key, err := keyFromItem(rawItem(t, k, name))
 	if err != nil {
-		t.Fatalf("the key is not base64: %v", err)
+		t.Fatal(err)
+	}
+	if key == nil {
+		t.Fatalf("the item for %s holds a value, not a key", name)
 	}
 	return key
 }
@@ -365,12 +363,13 @@ func TestKeyLineNeverNearsTheBuffer(t *testing.T) {
 	}
 }
 
-// plantUpdate replaces an item's value directly, the way plant writes one,
-// to stand in for something else on the host changing it.
+// plantUpdate replaces an item's value directly, the way plant writes one
+// and down the same `security -i` line, to stand in for something else on
+// the host changing it.
 func plantUpdate(t *testing.T, service, account, value string) {
 	t.Helper()
-	cmd := exec.Command(securityBin, "add-generic-password",
-		"-s", service, "-a", account, "-U", "-w", value)
+	cmd := exec.Command(securityBin, "-i")
+	cmd.Stdin = strings.NewReader(fmt.Sprintf("add-generic-password -s %s -a %q -U -w %q\n", service, account, value))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("replacing %s: %v\n%s", account, err, out)
 	}

@@ -304,18 +304,12 @@ What that means for the things this document is about:
   default either. This is the same fact [file delivery](#what-file-delivery-buys-and-what-it-costs)
   states for the Claude credential copy specifically.
 - **The keychain holds the key in one item and the sealed value in another.**
-  The item under the secret's name is a random 32-byte key, base64-encoded so
-  that nothing on the `security -i` line needs quoting. The item under
-  `<name>.sealed` is the value encrypted with AES-256-GCM under that key,
-  with the secret's name as associated data, base64-encoded on `security`'s
-  argument line. [secrets.md](secrets.md#where-a-value-lives) has the layout
-  and why it exists: `security -i` shortens a line over 4096 bytes without
-  saying so, and a credential document does not fit on one. What this
-  changes for the threat model is nothing. A process that can read Brig's
-  items, which is any process running as you (the ACL point below), reads
-  the key and opens the sealed item. A copy of the keychain file without the
-  login password holds two encrypted items it cannot open. Keychain Access
-  shows a base64 key and base64 ciphertext, not the secret.
+  [secrets.md](secrets.md#where-a-value-lives) has the layout and why it
+  exists. What this changes for the threat model is nothing. A process that
+  can read Brig's items, which is any process running as you (the ACL point
+  below), reads the key and opens the sealed item. A copy of the keychain
+  file without the login password holds two encrypted items it cannot open.
+  Keychain Access shows a base64 key and base64 ciphertext, not the secret.
 - **`brig secret ls` never decrypts.** It reads attributes only, which is why
   listing raises no access prompt and why it can show names and dates but
   never values. Worth being exact about what it reads, though:

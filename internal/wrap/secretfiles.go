@@ -370,15 +370,18 @@ func (c *Config) writeSecretFile(b profile.FileBinding) error {
 		return err
 	}
 	value := c.secrets.Values[r.Name]
-	// The value goes in on stdin, in pieces, each its own exec that appends.
-	// Never argv: see runtime.Var.Secret for why brig treats a stored
-	// credential in a log file as a different severity of leak from an
-	// ambient one. In pieces because hull's exec stalls on one stdin frame
-	// over about 3.7 KB (brig-sh/hull#82), and the frame is whatever one
-	// read of the pipe returns, which brig cannot shape from its end. A
-	// separate exec per piece is the one way to bound it.
-	for start := 0; start < len(value); start += deliveryPiece {
-		end := min(start+deliveryPiece, len(value))
+	// The value goes in on stdin. Never argv: see runtime.Var.Secret for
+	// why brig treats a stored credential in a log file as a different
+	// severity of leak from an ambient one. A runtime that cannot carry the
+	// whole value in one Feed says how much it can, and the value goes over
+	// in pieces of that size, each its own exec that appends. See
+	// runtime.FeedLimiter, and hull's MaxFeed for why it has one.
+	piece := len(value)
+	if l, ok := c.Runtime.(runtime.FeedLimiter); ok && l.MaxFeed() > 0 && l.MaxFeed() < piece {
+		piece = l.MaxFeed()
+	}
+	for start := 0; start < len(value); start += piece {
+		end := min(start+piece, len(value))
 		if err := c.Runtime.Feed(runtime.ExecSpec{
 			Name:  c.VMName,
 			User:  guestRootUser,
@@ -401,11 +404,6 @@ func (c *Config) writeSecretFile(b profile.FileBinding) error {
 	}
 	return nil
 }
-
-// deliveryPiece is the most a single feed carries. hull's guest agent stalls
-// on a stdin frame over about 3.7 KB; half of that leaves room for the
-// measurement being a little off on another guest.
-const deliveryPiece = 2048
 
 // verifySecretFile is the check that runs BEFORE the value is written.
 func (c *Config) verifySecretFile(b profile.FileBinding, target, user string, mode fs.FileMode) error {

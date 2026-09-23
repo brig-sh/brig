@@ -225,6 +225,13 @@ type Instance struct {
 }
 
 // Runtime is the container mechanics brig delegates.
+// FeedLimiter is a runtime whose Feed cannot carry more than MaxFeed bytes
+// of stdin in one call. Optional: a runtime without the limit does not
+// implement it, and a caller hands the whole value to one Feed.
+type FeedLimiter interface {
+	MaxFeed() int
+}
+
 type Runtime interface {
 	// Kind is the backend name, e.g. "hull" or "nerdctl".
 	Kind() string

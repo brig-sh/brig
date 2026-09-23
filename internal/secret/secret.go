@@ -94,6 +94,11 @@ const maxName = 128
 
 // ValidName reports whether a name is one brig will store.
 //
+// The macOS store also leans on the dot being refused: it keeps a secret's
+// sealed value under `<name>.sealed`, which no secret can be named like and
+// which List, skipping names outside this grammar, never shows. See
+// sealed_darwin.go before loosening it.
+//
 // The grammar is deliberately narrow. A name is three things at once: the
 // keychain account, a word in brig's error messages, and -- once profiles can
 // reference secrets -- the tail of `ref: secrets.<name>`. A dot would make
