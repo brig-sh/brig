@@ -358,6 +358,15 @@ func (c *Config) writeSecretFile(b profile.FileBinding) error {
 	}
 	target := c.guestPath(b.Path)
 	user := c.Profile.GuestUser()
+	value := c.secrets.Values[r.Name]
+	// Refused before the file exists. An empty file at a credential path is
+	// indistinguishable from a real leak to whoever finds it, and a login
+	// prompt the agent cannot explain. The check used to come after the
+	// write, by size, and leave the file behind.
+	if len(value) == 0 {
+		return fmt.Errorf("%s resolved to an empty value, so the sandbox would have an empty "+
+			"credential where it expects one", b.Path)
+	}
 
 	// rm -f removes the link rather than following it; set -C then refuses to
 	// create through anything that reappeared, so a race loses loudly.
@@ -369,7 +378,6 @@ func (c *Config) writeSecretFile(b profile.FileBinding) error {
 	if err := c.verifySecretFile(b, target, user, mode); err != nil {
 		return err
 	}
-	value := c.secrets.Values[r.Name]
 	// The value goes in on stdin. Never argv: see runtime.Var.Secret for
 	// why brig treats a stored credential in a log file as a different
 	// severity of leak from an ambient one. A runtime that cannot carry the

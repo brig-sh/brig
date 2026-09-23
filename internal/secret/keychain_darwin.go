@@ -233,7 +233,11 @@ func (k keychain) putItem(name, line string, p Provenance, update bool) error {
 		return err
 	}
 	_, err = k.security(strings.NewReader(prefix+line+"\n"), "-i")
-	if status(err) == codeDuplicate {
+	// A duplicate on a create is a taken name, which is ErrExists and its
+	// advice to update. On an update it is two -U writes colliding, which
+	// the advice would send straight back into, so that one stays security's
+	// own error.
+	if !update && status(err) == codeDuplicate {
 		return ErrExists
 	}
 	return err
@@ -341,13 +345,17 @@ func (k keychain) Read(name string) ([]byte, error) {
 		return nil, err
 	}
 	blob, err := base64.StdEncoding.DecodeString(sealedLine)
-	if err == nil {
+	if err != nil {
+		// Not base64 is not brig's either: the same answer as a blob with
+		// no magic in front of it.
+		err = errNotSealed
+	} else {
 		blob, err = unseal(name, key, blob)
 	}
 	switch {
 	case err == nil:
 		return blob, nil
-	case errors.Is(err, errNotSealed) || !isAuthError(err):
+	case errors.Is(err, errNotSealed):
 		return nil, fmt.Errorf("%q %w: the sealed item is %v, so something other than brig put it there. "+
 			"Store it again: brig secret update %s, or brig secret import", name, ErrDamaged, errNotSealed, name)
 	default:
@@ -412,12 +420,6 @@ func (k keychain) Delete(name string) error {
 		return err
 	}
 	return itemErr
-}
-
-// isAuthError reports whether an unseal failure is the cipher refusing the
-// key or the bytes, rather than a shape the cipher never saw.
-func isAuthError(err error) bool {
-	return err != nil && !errors.Is(err, errNotSealed)
 }
 
 // deleteItem removes one account's item.

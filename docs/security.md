@@ -282,11 +282,11 @@ brig secret ls
 What that means for the things this document is about:
 
 - **The value never appears in argv.** A secret is two keychain items (see
-  below). The key item's whole `add-generic-password` command, base64 key
-  and all, goes to `security -i` down a pipe, so Brig's own command line
-  is `security -i` and nothing else. The sealed item is written through
-  `security`'s arguments, and what stands there is the ciphertext and the
-  secret's name. This is the same
+  below), written by two `security` invocations. The key item's whole
+  `add-generic-password` command, base64 key and all, goes to `security -i`
+  down a pipe, so that command line is `security -i` and nothing else. The
+  sealed item is written through `security`'s arguments, and what stands
+  there is the ciphertext and the secret's name. This is the same
   guarantee the forwarding path makes above, for the same reason. `security -i`
   reads one command per line and blocks for the next. So the write is on the
   process table only for as long as the pipe stays open. Reproduce it by

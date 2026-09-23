@@ -560,3 +560,23 @@ func TestARuntimeWithoutAFeedLimitGetsTheValueWhole(t *testing.T) {
 		t.Errorf("feeds = %v, want one of %d bytes", g.fed, len(value))
 	}
 }
+
+// An empty resolved value is refused before the credential file is created.
+// An empty file at a credential path is indistinguishable from a real leak
+// to whoever finds it, and a login prompt the agent cannot explain; the
+// old delivery caught it after the fact, by size, and left the file.
+func TestAnEmptyValueIsRefusedBeforeAnythingIsWritten(t *testing.T) {
+	g := newGuestFake()
+	c := deliveryConfig(t, g)
+	c.secrets = creds.Resolution{Values: map[string]string{"cred": ""}}
+	err := c.deliverSecretFiles()
+	if err == nil {
+		t.Fatal("delivery accepted an empty credential")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("err = %v, want it to say the value is empty", err)
+	}
+	if _, ok := g.files["/home/x/.claude/.credentials.json"]; ok {
+		t.Error("an empty credential file was created")
+	}
+}

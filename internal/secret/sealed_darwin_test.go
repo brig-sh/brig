@@ -37,8 +37,8 @@ func keyOf(t *testing.T, k *testKeychain, name string) []byte {
 
 // hasSealed reports whether the sealed item for name is in the keychain.
 func hasSealed(k *testKeychain, name string) bool {
-	return exec.Command(securityBin, "find-generic-password",
-		"-s", k.service, "-a", sealedAccount(name)).Run() == nil
+	_, err := k.readLine(sealedAccount(name))
+	return err == nil
 }
 
 // A value far past the old command-line ceiling round-trips, because the
@@ -275,24 +275,31 @@ func TestUpdateMovesAnOldItemIntoTheSealedLayout(t *testing.T) {
 
 // A key without its sealed item is a state brig has to explain rather than
 // report as "no such secret": the secret exists, and half of it is gone.
+// It reads as ErrDamaged, which is what lets an import overwrite it, and an
+// update repairs it.
 func TestReadExplainsAMissingSealedItem(t *testing.T) {
 	k := testStore(t)
 	if err := k.Create("half", []byte("v")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := exec.Command(securityBin, "delete-generic-password",
-		"-s", k.service, "-a", sealedAccount("half")).Run(); err != nil {
+	if err := k.deleteItem(sealedAccount("half")); err != nil {
 		t.Fatal(err)
 	}
 	_, err := k.Read("half")
 	if err == nil {
 		t.Fatal("Read succeeded with the sealed item gone")
 	}
-	if errors.Is(err, ErrNotFound) {
-		t.Error("a missing sealed item reported as ErrNotFound, which would let import overwrite the key")
+	if !errors.Is(err, ErrDamaged) || errors.Is(err, ErrNotFound) {
+		t.Errorf("Read = %v, want ErrDamaged and not ErrNotFound", err)
 	}
 	if !strings.Contains(err.Error(), "sealed") {
 		t.Errorf("error = %v, want it to name the sealed item", err)
+	}
+	if err := k.Update("half", []byte("again")); err != nil {
+		t.Fatalf("Update did not repair it: %v", err)
+	}
+	if got, _ := k.Read("half"); string(got) != "again" {
+		t.Errorf("read back %q", got)
 	}
 }
 
@@ -317,19 +324,27 @@ func TestReadExplainsASealedItemThatDoesNotOpen(t *testing.T) {
 	}
 }
 
-// A sealed item that is not in brig's format at all is named as such.
+// A sealed item that is not in brig's format at all is named as such,
+// whether its line is base64 of something else or not base64 at all.
 func TestReadNamesASealedItemThatIsNotOurs(t *testing.T) {
-	k := testStore(t)
-	if err := k.Create("notours", []byte("v")); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	plantUpdate(t, k.service, sealedAccount("notours"), base64.StdEncoding.EncodeToString([]byte("just some bytes")))
-	_, err := k.Read("notours")
-	if err == nil {
-		t.Fatal("Read succeeded on a sealed item that is not brig's")
-	}
-	if !strings.Contains(err.Error(), "not a brig sealed value") {
-		t.Errorf("error = %v, want it to say the item is not a brig sealed value", err)
+	for name, line := range map[string]string{
+		"base64 of other bytes": base64.StdEncoding.EncodeToString([]byte("just some bytes")),
+		"not base64":            "not*base64*at*all",
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := testStore(t)
+			if err := k.Create("notours", []byte("v")); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			plantUpdate(t, k.service, sealedAccount("notours"), line)
+			_, err := k.Read("notours")
+			if err == nil {
+				t.Fatal("Read succeeded on a sealed item that is not brig's")
+			}
+			if !strings.Contains(err.Error(), "not a brig sealed value") {
+				t.Errorf("error = %v, want it to say the item is not a brig sealed value", err)
+			}
+		})
 	}
 }
 
@@ -372,29 +387,6 @@ func plantUpdate(t *testing.T, service, account, value string) {
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("add-generic-password -s %s -a %q -U -w %q\n", service, account, value))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("replacing %s: %v\n%s", account, err, out)
-	}
-}
-
-// A secret with one item damaged or missing is reported as ErrDamaged, not
-// as absent: it exists, and half of it is unusable. That is what lets an
-// import overwrite it rather than stop on the read.
-func TestAHalfPresentSecretReadsAsDamaged(t *testing.T) {
-	k := testStore(t)
-	if err := k.Create("half", []byte("v")); err != nil {
-		t.Fatal(err)
-	}
-	if err := exec.Command(securityBin, "delete-generic-password",
-		"-s", k.service, "-a", sealedAccount("half")).Run(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := k.Read("half"); !errors.Is(err, ErrDamaged) {
-		t.Errorf("Read = %v, want ErrDamaged", err)
-	}
-	if err := k.Update("half", []byte("again")); err != nil {
-		t.Fatalf("Update did not repair it: %v", err)
-	}
-	if got, _ := k.Read("half"); string(got) != "again" {
-		t.Errorf("read back %q", got)
 	}
 }
 

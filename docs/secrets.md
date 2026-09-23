@@ -508,8 +508,9 @@ around having one.
 | ``-f was given an empty path. Leave it out to read stdin, or pass `-f -` to say so`` | `-f "$KEYFILE"` with the variable unset. Falling through to stdin stores whatever the script had on it, under your name, and reports success |
 | `--stdin and -f name two different sources; pass one` | both given, and guessing which you meant silently stores the wrong one |
 | `the value on stdin is over 65536 bytes, which is larger than any secret brig can store. If that is a file or a stream rather than a credential, this is the wrong one` | `create` or `update` read more than 65536 bytes before ever reaching the store. `-f FILE` names the file in place of `stdin` |
-| `the key for "x" is in the keychain, but its sealed value is missing. Store it again: …` | the `x.sealed` item was removed and the key item was not. See [Where a value lives](#where-a-value-lives) |
-| `the sealed item for "x" does not open with the key stored for it, so one of them was changed outside brig. Store it again: …` | one of the two items was replaced by something other than Brig. Storing the value again replaces both |
+| `"x" secret is damaged: the key is in the keychain, but its sealed value is missing. Store it again: …` | the `x.sealed` item was removed and the key item was not. See [Where a value lives](#where-a-value-lives) |
+| `"x" secret is damaged: the sealed item does not open with the key stored for it, so one of them was changed outside brig. Store it again: …` | one of the two items was replaced by something other than Brig. Storing the value again replaces both |
+| `"x" secret is damaged: the sealed item is not a brig sealed value, so something other than brig put it there. Store it again: …` | the `x.sealed` item holds something that is not Brig's format at all. Storing the value again replaces both |
 | `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. `-y` is the answer given ahead |
 | `a secret name holds letters, digits, - and _, ...` | see [Naming a secret](#naming-a-secret) |
 | `no secret store on this platform: … no Secret Service answers on it …` | Linux with no keyring on the D-Bus session bus. Install `gnome-keyring` or KWallet and log in to a desktop session that starts it |
