@@ -207,8 +207,9 @@ func TestWriteKeepsTheValueOutOfArgv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The whole of what security is invoked with. Anything the value could
-	// hide in would have to be here.
+	// The whole of what `security -i` is invoked with. The sealed write is
+	// the other invocation, through argv, and TestArgvCarriesOnlyCiphertext
+	// holds that one to the same rule.
 	for _, a := range []string{"-i", prefix} {
 		if strings.Contains(a, value) || strings.Contains(a, base64.StdEncoding.EncodeToString([]byte(value))) {
 			t.Fatalf("the value reached argv: %q", a)

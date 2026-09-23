@@ -20,14 +20,20 @@ import (
 type fakeAnnotator struct {
 	*fakeStore
 	prov  map[string]secret.Provenance
-	max   int
 	calls []string
+	// damaged names secrets whose Read reports ErrDamaged: there, and not
+	// readable as stored.
+	damaged map[string]bool
 }
 
-var (
-	_ secret.Annotator = (*fakeAnnotator)(nil)
-	_ secret.Sizer     = (*fakeAnnotator)(nil)
-)
+func (f *fakeAnnotator) Read(name string) ([]byte, error) {
+	if f.damaged[name] {
+		return nil, fmt.Errorf("%q %w", name, secret.ErrDamaged)
+	}
+	return f.fakeStore.Read(name)
+}
+
+var _ secret.Annotator = (*fakeAnnotator)(nil)
 
 func newAnnotating(t *testing.T) *fakeAnnotator {
 	t.Helper()
@@ -36,7 +42,7 @@ func newAnnotating(t *testing.T) *fakeAnnotator {
 	// only way a Store exposes it -- List -- so a test that seeded prov into a
 	// map List never reads would be asserting on something the code cannot
 	// see.
-	f := &fakeAnnotator{fakeStore: base, prov: base.provenance, max: 3000}
+	f := &fakeAnnotator{fakeStore: base, prov: base.provenance}
 	old := openStore
 	openStore = func() (secret.Store, error) { return f, nil }
 	t.Cleanup(func() { openStore = old })
@@ -45,18 +51,12 @@ func newAnnotating(t *testing.T) *fakeAnnotator {
 
 func (f *fakeAnnotator) Write(name string, value []byte, p secret.Provenance, update bool) error {
 	f.calls = append(f.calls, fmt.Sprintf("write:%s:%t", name, update))
-	if len(value) > f.max {
-		return fmt.Errorf("the value for %q is %d bytes, and the store takes at most %d",
-			name, len(value), f.max)
-	}
 	if _, exists := f.items[name]; !exists {
 		f.order = append(f.order, name)
 	}
 	f.items[name], f.prov[name] = value, p
 	return nil
 }
-
-func (f *fakeAnnotator) MaxValue(string, bool) int { return f.max }
 
 func (f *fakeAnnotator) Delete(name string) error {
 	f.calls = append(f.calls, "delete:"+name)
@@ -192,31 +192,6 @@ func TestNamingAHandCreatedSecretIsAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "brig secret create mytool-manual") {
 		t.Errorf("the error does not say how to supply it: %v", err)
-	}
-}
-
-// security truncates an over-long line silently on a four-byte boundary,
-// so the short value still base64-decodes and still resolves. verify catches
-// that on create but explicitly cannot roll back an update -- so the size is
-// checked BEFORE writing, which is what stops a re-import destroying a good
-// value and leaving a resolvable bad one behind.
-func TestOversizeValueIsRefusedBeforeWriting(t *testing.T) {
-	importable(t)
-	store := newAnnotating(t)
-	store.max = 16
-	store.seed("mytool-token", "the-good-value")
-	useHost(t, map[string][]byte{
-		"keychain:Mytool-credentials": bytes.Repeat([]byte("x"), 64),
-	})
-
-	if err := importSecrets(&bytes.Buffer{}, []string{"mytool"}); err == nil {
-		t.Fatal("an oversize value was accepted")
-	}
-	if len(store.calls) != 0 {
-		t.Errorf("the store was written to before the size was checked: %v", store.calls)
-	}
-	if string(store.items["mytool-token"]) != "the-good-value" {
-		t.Error("the previous good value was destroyed")
 	}
 }
 
@@ -588,7 +563,7 @@ func TestFromCommandRefusesAValueThatDoesNotEnd(t *testing.T) {
 // without this test the fallback arm is never executed.
 func TestStoreWithoutAnnotatorStillImports(t *testing.T) {
 	importable(t)
-	store := newFake(t) // a plain secret.Store: no Annotator, no Sizer
+	store := newFake(t) // a plain secret.Store: no Annotator
 	useHost(t, map[string][]byte{"keychain:Mytool-credentials": []byte("v")})
 
 	if err := importSecrets(&bytes.Buffer{}, []string{"mytool"}); err != nil {
@@ -713,5 +688,27 @@ secrets:
 	}
 	if strings.Contains(out.String(), "importing 0") {
 		t.Errorf("the output still reports a count of zero:\n%s", out.String())
+	}
+}
+
+// A secret one of whose items is damaged or missing reads as ErrDamaged. The
+// importer treats that as a secret that exists with no usable value, and
+// writes over it, since a re-import is the advice the read error gives and
+// the user has no other way to get the value back.
+func TestImportOverwritesADamagedSecret(t *testing.T) {
+	importable(t)
+	store := newAnnotating(t)
+	store.seed("mytool-token", "old")
+	store.prov["mytool-token"] = secret.Provenance{V: secret.ProvenanceVersion, From: "keychain:Mytool-credentials"}
+	store.damaged = map[string]bool{"mytool-token": true}
+	useHost(t, map[string][]byte{"keychain:Mytool-credentials": []byte("renewed")})
+	if err := importSecrets(&bytes.Buffer{}, []string{"mytool"}); err != nil {
+		t.Fatalf("import stopped on a damaged secret: %v", err)
+	}
+	if string(store.items["mytool-token"]) != "renewed" {
+		t.Errorf("the damaged secret was not overwritten: %q", store.items["mytool-token"])
+	}
+	if len(store.calls) == 0 || store.calls[len(store.calls)-1] != "write:mytool-token:true" {
+		t.Errorf("calls = %v, want an update write last", store.calls)
 	}
 }

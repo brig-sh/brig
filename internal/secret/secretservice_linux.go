@@ -96,10 +96,7 @@ type secretService struct {
 
 // Caught at build time rather than wherever a secretService first gets assigned
 // to a Store: a method that stops matching the interface fails here, in the
-// file that has to change. Sizer is deliberately absent -- the value travels
-// over D-Bus, not on a command line, so there is no line-length ceiling to
-// price against, and secretimport.go falls back cleanly when a backend is not a
-// Sizer.
+// file that has to change.
 var (
 	_ Store     = (*secretService)(nil)
 	_ Annotator = (*secretService)(nil)

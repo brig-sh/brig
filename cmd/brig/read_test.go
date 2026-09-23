@@ -106,10 +106,10 @@ func TestTheDeleteAnswerStillReadsAYes(t *testing.T) {
 
 var _ io.Reader = (*endlessReader)(nil)
 
-// The store no longer has a ceiling near 4 KB: the value goes to an encrypted
-// file and only a fixed-size key reaches the keychain. A credential document
-// of a few kilobytes, which is what a login with plugin state or two JWTs
-// comes to, has to pass the read cap.
+// The store no longer has a ceiling near 4 KB: the value is sealed into a
+// keychain item of its own and only a fixed-size key rides security's line.
+// A credential document of a few kilobytes, which is what a login with
+// plugin state or two JWTs comes to, has to pass the read cap.
 func TestCreateTakesACredentialDocumentOfSeveralKilobytes(t *testing.T) {
 	f := newFake(t)
 	value := strings.Repeat("j", 12*1024)

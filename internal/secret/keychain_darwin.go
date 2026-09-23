@@ -154,7 +154,11 @@ func (k keychain) writePrefix(name string, update bool, p Provenance) (string, e
 // one draws a key, writes the sealed item, and then replaces the item with
 // the key. If that last step fails the old item still holds the old value
 // and Read still returns it, and the sealed item is replaced by the next
-// update.
+// update. Two updates of such an item at once can draw two keys and land
+// them crosswise, key item under one and sealed item under the other; both
+// writers then fail their read-back, Read reports the secret as damaged,
+// and one more update or import repairs it. Once an item holds a key every
+// concurrent update shares it, so the window is that first move only.
 func (k keychain) Write(name string, value []byte, p Provenance, update bool) error {
 	var key []byte
 	if update {
@@ -162,9 +166,10 @@ func (k keychain) Write(name string, value []byte, p Provenance, update bool) er
 		if err != nil {
 			return err
 		}
-		if key, _, err = keyFromItem(line); err != nil {
-			return fmt.Errorf("%q: %w", name, err)
-		}
+		// A marked item that holds no key is damaged, and an update is the
+		// repair: it draws a fresh key, the way it does for a pre-sealing
+		// item, and the sealed item is written under that.
+		key, _, _ = keyFromItem(line)
 	}
 	if key == nil {
 		var err error
@@ -298,7 +303,8 @@ func (k keychain) Read(name string) ([]byte, error) {
 	}
 	key, sealed, err := keyFromItem(line)
 	if err != nil {
-		return nil, fmt.Errorf("%q: %w", name, err)
+		return nil, fmt.Errorf("%q %w: %v. Store it again: brig secret update %s, or brig secret import",
+			name, ErrDamaged, err, name)
 	}
 	if !sealed {
 		// Written before this change: the item is the value.
@@ -320,27 +326,26 @@ func (k keychain) Read(name string) ([]byte, error) {
 			// Reporting absence would let an import write a new key over
 			// this one without anyone learning the sealed item had been
 			// removed.
-			return nil, fmt.Errorf("the key for %q is in the keychain, but its sealed value is missing. "+
-				"Store it again: brig secret update %s, or brig secret import", name, name)
+			return nil, fmt.Errorf("%q %w: the key is in the keychain, but its sealed value is missing. "+
+				"Store it again: brig secret update %s, or brig secret import", name, ErrDamaged, name)
 		}
 		return nil, err
 	}
 	blob, err := base64.StdEncoding.DecodeString(sealedLine)
-	if err != nil {
-		return nil, fmt.Errorf("the sealed item for %q is %w, so something other than brig put it there. "+
-			"Store it again: brig secret update %s, or brig secret import", name, errNotSealed, name)
+	if err == nil {
+		blob, err = unseal(name, key, blob)
 	}
-	value, err := unseal(name, key, blob)
-	if errors.Is(err, errNotSealed) {
-		return nil, fmt.Errorf("the sealed item for %q is %w, so something other than brig put it there. "+
-			"Store it again: brig secret update %s, or brig secret import", name, errNotSealed, name)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("the sealed item for %q does not open with the key stored for it, so one of "+
+	switch {
+	case err == nil:
+		return blob, nil
+	case errors.Is(err, errNotSealed) || !isAuthError(err):
+		return nil, fmt.Errorf("%q %w: the sealed item is %v, so something other than brig put it there. "+
+			"Store it again: brig secret update %s, or brig secret import", name, ErrDamaged, errNotSealed, name)
+	default:
+		return nil, fmt.Errorf("%q %w: the sealed item does not open with the key stored for it, so one of "+
 			"them was changed outside brig. Store it again: brig secret update %s, or brig secret import",
-			name, name)
+			name, ErrDamaged, name)
 	}
-	return value, nil
 }
 
 // readItem returns the line the key item holds for name, as stored: a
@@ -401,6 +406,12 @@ func (k keychain) Delete(name string) error {
 		return err
 	}
 	return itemErr
+}
+
+// isAuthError reports whether an unseal failure is the cipher refusing the
+// key or the bytes, rather than a shape the cipher never saw.
+func isAuthError(err error) bool {
+	return err != nil && !errors.Is(err, errNotSealed)
 }
 
 // deleteItem removes one account's item.

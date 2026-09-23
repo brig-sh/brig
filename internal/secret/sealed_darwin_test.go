@@ -375,3 +375,43 @@ func plantUpdate(t *testing.T, service, account, value string) {
 		t.Fatalf("replacing %s: %v\n%s", account, err, out)
 	}
 }
+
+// A secret with one item damaged or missing is reported as ErrDamaged, not
+// as absent: it exists, and half of it is unusable. That is what lets an
+// import overwrite it rather than stop on the read.
+func TestAHalfPresentSecretReadsAsDamaged(t *testing.T) {
+	k := testStore(t)
+	if err := k.Create("half", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(securityBin, "delete-generic-password",
+		"-s", k.service, "-a", sealedAccount("half")).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Read("half"); !errors.Is(err, ErrDamaged) {
+		t.Errorf("Read = %v, want ErrDamaged", err)
+	}
+	if err := k.Update("half", []byte("again")); err != nil {
+		t.Fatalf("Update did not repair it: %v", err)
+	}
+	if got, _ := k.Read("half"); string(got) != "again" {
+		t.Errorf("read back %q", got)
+	}
+}
+
+// A key item that carries the marker but no key is damaged too, and an
+// update replaces it with a fresh key rather than refusing.
+func TestUpdateReplacesAMarkedItemThatHoldsNoKey(t *testing.T) {
+	k := testStore(t)
+	plant(t, k.service, "badkey", keyPrefix+"not-a-key")
+	k.cleanup("badkey")
+	if _, err := k.Read("badkey"); !errors.Is(err, ErrDamaged) {
+		t.Errorf("Read = %v, want ErrDamaged", err)
+	}
+	if err := k.Update("badkey", []byte("fresh")); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got, _ := k.Read("badkey"); string(got) != "fresh" {
+		t.Errorf("read back %q", got)
+	}
+}

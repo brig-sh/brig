@@ -22,6 +22,12 @@ var (
 	ErrNotFound    = errors.New("no such secret")
 	ErrExists      = errors.New("secret already exists")
 	ErrUnsupported = errors.New("no secret store on this platform")
+	// ErrDamaged is a secret that is there and cannot be read as stored: a
+	// backend that keeps a secret in more than one piece found one of them
+	// missing or unopenable. Not ErrNotFound, because a write that took
+	// absence at face value would create beside the damage rather than
+	// replace it; an importer overwrites a damaged secret instead.
+	ErrDamaged = errors.New("secret is damaged")
 )
 
 // Secret is one entry, without its value. Listing never reads values: the
@@ -75,17 +81,6 @@ type Store interface {
 type Annotator interface {
 	// Write stores a value with its provenance, creating or updating.
 	Write(name string, value []byte, p Provenance, update bool) error
-}
-
-// Sizer is a backend with a value-size ceiling worth checking before writing.
-//
-// The keychain has one, and it truncates silently on a four-byte boundary --
-// so a truncated value still base64-decodes and still resolves. Checking
-// before the write is what stops a re-import destroying a good value and
-// leaving a resolvable bad one behind, which is the failure verify cannot roll
-// back on an update.
-type Sizer interface {
-	MaxValue(name string, update bool) int
 }
 
 // Open returns the store for this host. The platform files supply open(),
