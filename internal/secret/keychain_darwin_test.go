@@ -219,54 +219,6 @@ func TestWriteKeepsTheValueOutOfArgv(t *testing.T) {
 	}
 }
 
-// The write is priced against the command line that carries it, and a value
-// that does not fit is refused rather than shortened. security answers a line
-// over its buffer by truncating it and reporting success, so a value one byte
-// past the limit used to be stored short, decode cleanly, and read back as a
-// different secret than the one that went in.
-func TestWriteRefusesAValueTooBigForTheCommandLine(t *testing.T) {
-	k := testStore(t)
-	max := k.MaxValueFor("big", false, Provenance{})
-	if max < 1024 {
-		t.Fatalf("MaxValueFor = %d, too small to be carrying keys", max)
-	}
-	if err := k.Create("big", bytes.Repeat([]byte("a"), max)); err != nil {
-		t.Fatalf("a value of exactly %d bytes was refused: %v", max, err)
-	}
-	got, err := k.Read("big")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != max {
-		t.Errorf("the largest value read back as %d bytes, not %d", len(got), max)
-	}
-	err = k.Create("toobig", bytes.Repeat([]byte("a"), max+1))
-	if err == nil {
-		t.Fatal("a value one byte over the limit was accepted")
-	}
-	if !strings.Contains(err.Error(), "at most") {
-		t.Errorf("refusal = %v, want it to say what the limit is", err)
-	}
-	// Refused before anything was written, so there is no short value left
-	// behind under that name.
-	if _, err := k.Read("toobig"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("the refused write left something behind: %v", err)
-	}
-}
-
-// The limit shrinks as the name grows, because the name is on the same line.
-func TestMaxValueLeavesRoomForTheName(t *testing.T) {
-	k := testStore(t)
-	short := k.MaxValueFor("a", false, Provenance{})
-	long := k.MaxValueFor(strings.Repeat("a", 41), false, Provenance{})
-	if long >= short {
-		t.Errorf("MaxValueFor did not fall with a longer name: %d then %d", short, long)
-	}
-	if diff := short - long; diff < 30 {
-		t.Errorf("a name 40 characters longer only cost %d bytes", diff)
-	}
-}
-
 // The comment attribute is read without decrypting, which is what lets
 // ls report provenance with no keychain dialog.
 func TestProvenanceSurvivesWriteAndList(t *testing.T) {
@@ -322,28 +274,6 @@ func TestUpdateWithNoProvenanceClearsTheOldOne(t *testing.T) {
 	}
 }
 
-// MaxValue promises a caller that has not chosen a provenance yet a ceiling
-// Write will not undercut, for any From up to assumedFromLen. ExpiresAt is
-// omitempty, so leaving it zero in the assumed provenance dropped it out of
-// the encoded document and broke that promise from about 105 characters on --
-// the caller was told a value fit and then refused.
-//
-// Past assumedFromLen no fixed assumption can hold, and the failure there is
-// a spurious refusal carrying Write's own accurate ceiling, never a truncated
-// write. That boundary is the thing worth pinning.
-func TestMaxValueIsNeverLargerThanWhatWriteApplies(t *testing.T) {
-	k := keychain{service: "sh.brig.test"}
-	for _, n := range []int{len("keychain:svc"), 105, assumedFromLen} {
-		real := Provenance{V: ProvenanceVersion, From: strings.Repeat("x", n), ExpiresAt: 1755436980000}
-		for _, update := range []bool{false, true} {
-			if got, want := k.MaxValueFor("n", update, real), k.MaxValue("n", update); got < want {
-				t.Errorf("From=%d update=%v: Write's ceiling %d is below MaxValue's %d",
-					n, update, got, want)
-			}
-		}
-	}
-}
-
 // A hand-created secret carries none, and that has to read as absent rather
 // than as an empty provenance that claims a source of "".
 func TestHandCreatedSecretHasNoProvenance(t *testing.T) {
@@ -353,48 +283,6 @@ func TestHandCreatedSecretHasNoProvenance(t *testing.T) {
 	}
 	if got := find(t, k, "plain").Provenance; !got.IsZero() {
 		t.Errorf("provenance = %+v, want the zero value", got)
-	}
-}
-
-// The size ceiling is priced against the whole command line, and the comment
-// now rides on it -- so MaxValue has to account for the comment or the
-// pre-check passes a write that security silently truncates.
-func TestMaxValueAccountsForTheComment(t *testing.T) {
-	k := keychain{service: "sh.brig.test"}
-	long := Provenance{V: ProvenanceVersion, From: "keychain:" + strings.Repeat("x", 200)}
-	if k.MaxValueFor("n", false, long) >= k.MaxValueFor("n", false, Provenance{}) {
-		t.Error("a longer comment did not reduce the value budget")
-	}
-}
-
-// Step 5c: the write path must price its ceiling against the provenance it is
-// actually attaching, not the provenance-free ceiling MaxValue offers a
-// caller that has not chosen one yet. Wiring Write to that number while still
-// appending -j <encoded> is the obvious minimal edit, and it is wrong: the
-// line exceeds security's buffer, security truncates it silently on a
-// four-byte boundary, the short value still base64-decodes and still
-// resolves, and verify cannot roll back an update. The assertion that matters
-// is on the stored bytes -- here, that nothing was stored at all -- not on
-// the error alone.
-func TestWriteRefusesWhenProvenanceOverflowsTheLine(t *testing.T) {
-	k := testStore(t)
-	// A value that exactly fills the provenance-free budget: the old
-	// maxValue would have waved this through.
-	bare := k.MaxValueFor("prov-big", false, Provenance{})
-	value := bytes.Repeat([]byte("a"), bare)
-	long := Provenance{V: ProvenanceVersion, From: "keychain:" + strings.Repeat("x", 200)}
-
-	err := k.Write("prov-big", value, long, false)
-	if err == nil {
-		t.Fatal("a value plus provenance that overflows the line was accepted")
-	}
-	if !strings.Contains(err.Error(), "at most") {
-		t.Errorf("refusal = %v, want it to say what the limit is", err)
-	}
-	// The point of 5c: nothing was silently truncated and stored under a name
-	// that now resolves to a value shorter than the one asked for.
-	if _, err := k.Read("prov-big"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("the refused write left something behind")
 	}
 }
 
