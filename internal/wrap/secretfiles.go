@@ -370,27 +370,42 @@ func (c *Config) writeSecretFile(b profile.FileBinding) error {
 		return err
 	}
 	value := c.secrets.Values[r.Name]
-	if err := c.Runtime.Feed(runtime.ExecSpec{
-		Name: c.VMName,
-		User: guestRootUser,
-		// The value goes in on stdin. Never argv: see runtime.Var.Secret for
-		// why brig treats a stored credential in a log file as a different
-		// severity of leak from an ambient one.
-		Cmd:   []string{"sh", "-c", `cat > "$1"`, "sh", target},
-		Stdin: strings.NewReader(value),
-	}); err != nil {
-		return fmt.Errorf("could not write %s in the sandbox: %w", b.Path, err)
+	// The value goes in on stdin, in pieces, each its own exec that appends.
+	// Never argv: see runtime.Var.Secret for why brig treats a stored
+	// credential in a log file as a different severity of leak from an
+	// ambient one. In pieces because hull's exec stalls on one stdin frame
+	// over about 3.7 KB (brig-sh/hull#82), and the frame is whatever one
+	// read of the pipe returns, which brig cannot shape from its end. A
+	// separate exec per piece is the one way to bound it.
+	for start := 0; start < len(value); start += deliveryPiece {
+		end := min(start+deliveryPiece, len(value))
+		if err := c.Runtime.Feed(runtime.ExecSpec{
+			Name:  c.VMName,
+			User:  guestRootUser,
+			Cmd:   []string{"sh", "-c", `cat >> "$1"`, "sh", target},
+			Stdin: strings.NewReader(value[start:end]),
+		}); err != nil {
+			return fmt.Errorf("could not write %s in the sandbox: %w", b.Path, err)
+		}
 	}
-	// Re-checked after the write for size alone: a Feed that reported success
-	// while delivering nothing would leave the agent with an empty credential
-	// and no way to say so.
+	// Re-checked after the write for size: a Feed that reported success
+	// while delivering nothing, or a piece that never landed, would leave
+	// the agent with a credential it cannot use and no way to say so.
 	size, err := c.guestOutput("stat", "-c", "%s", target)
-	if err != nil || strings.TrimSpace(size) == "0" {
-		return fmt.Errorf("%s is empty after delivery, so the sandbox has no credential "+
-			"where it expects one", b.Path)
+	if err != nil {
+		return fmt.Errorf("%s could not be checked after delivery: %w", b.Path, err)
+	}
+	if got := strings.TrimSpace(size); got != fmt.Sprint(len(value)) {
+		return fmt.Errorf("%s holds %s bytes after delivery, not the %d written, so the sandbox "+
+			"has no usable credential where it expects one", b.Path, got, len(value))
 	}
 	return nil
 }
+
+// deliveryPiece is the most a single feed carries. hull's guest agent stalls
+// on a stdin frame over about 3.7 KB; half of that leaves room for the
+// measurement being a little off on another guest.
+const deliveryPiece = 2048
 
 // verifySecretFile is the check that runs BEFORE the value is written.
 func (c *Config) verifySecretFile(b profile.FileBinding, target, user string, mode fs.FileMode) error {

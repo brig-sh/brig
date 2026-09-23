@@ -103,6 +103,19 @@ case "$verb" in
     # stub has to remember what it was told to mount.
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
     shift
+    # Credential delivery feeds the value on stdin to `sh -c 'cat >> "$1"'`,
+    # in pieces, and then asks stat for the file's size to check the whole
+    # of it landed. Keep what was fed, per target, so stat can answer with
+    # the truth rather than a fixed number.
+    if [ "$1" = sh ] && case "${3:-}" in *'cat >'*|*'set -C'*) true ;; *) false ;; esac; then
+      fed="$STUB_STATE.fed.$(printf '%s' "${5:-}" | tr / _)"
+      case "$3" in
+        *'set -C'*) rm -f "$fed" ;;   # the create step empties the file first
+        *'>>'*) cat >> "$fed" ;;
+        *) cat > "$fed" ;;
+      esac
+      exit 0
+    fi
     case "$1" in
       /bin/true) exit 0 ;;
       cat)
@@ -140,7 +153,10 @@ case "$verb" in
           esac
         else
           case "${3:-}" in
-            %s) printf '512\n' ;;
+            %s)
+              fed="$STUB_STATE.fed.$(printf '%s' "${4:-}" | tr / _)"
+              if [ -f "$fed" ]; then wc -c < "$fed" | tr -d ' '; else printf '512\n'; fi
+              ;;
             *) printf 'regular file|claude|600\n' ;;
           esac
         fi

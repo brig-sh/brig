@@ -33,6 +33,11 @@ type guestFake struct {
 	swaps string
 	log   []string
 	fail  map[string]error
+	// fed is the size of every Feed's stdin, in order.
+	fed []int
+	// dropEveryOtherFeed makes odd-numbered feeds report success while
+	// writing nothing, to stand in for a piece that never reached the file.
+	dropEveryOtherFeed bool
 }
 
 type guestFile struct {
@@ -200,12 +205,22 @@ func (g *guestFake) Feed(spec runtime.ExecSpec) error {
 	if err != nil {
 		return err
 	}
+	g.fed = append(g.fed, len(body))
+	if g.dropEveryOtherFeed && len(g.fed)%2 == 0 {
+		return nil
+	}
 	target := spec.Cmd[len(spec.Cmd)-1]
 	f, ok := g.files[target]
 	if !ok {
 		return fmt.Errorf("fed %s, which does not exist", target)
 	}
-	f.body = string(body)
+	// `cat >>` appends, `cat >` replaces: the same distinction the guest's
+	// shell makes.
+	if strings.Contains(spec.Cmd[2], ">>") {
+		f.body += string(body)
+	} else {
+		f.body = string(body)
+	}
 	return nil
 }
 
@@ -471,4 +486,52 @@ func indexOf(t *testing.T, log []string, prefix string) int {
 	}
 	t.Fatalf("nothing in the log starts with %q:\n%s", prefix, strings.Join(log, "\n"))
 	return -1
+}
+
+// hull's exec stalls on one stdin frame over about 3.7 KB (brig-sh/hull#82),
+// and a credential document with plugin state is 3846 bytes. Delivery hands
+// the value over in pieces no larger than deliveryPiece, each its own exec,
+// so no frame can be that large, and checks the whole of it landed.
+func TestDeliveryFeedsTheValueInPiecesHullCanCarry(t *testing.T) {
+	g := newGuestFake()
+	c := deliveryConfig(t, g)
+	value := strings.Repeat(`{"claudeAiOauth":"0123456789abcdef"}`, 300) // 10.8 KB
+	c.secrets = creds.Resolution{Values: map[string]string{"cred": value}}
+	if err := c.deliverSecretFiles(); err != nil {
+		t.Fatalf("deliverSecretFiles: %v", err)
+	}
+	cred := g.files["/home/x/.claude/.credentials.json"]
+	if cred == nil || cred.body != value {
+		t.Fatal("the credential did not arrive whole")
+	}
+	if len(g.fed) < 2 {
+		t.Fatalf("the value went over in %d feed(s); a frame that size stalls hull", len(g.fed))
+	}
+	total := 0
+	for i, n := range g.fed {
+		if n > deliveryPiece {
+			t.Errorf("feed %d carried %d bytes, over the %d-byte piece", i, n, deliveryPiece)
+		}
+		total += n
+	}
+	if total != len(value) {
+		t.Errorf("the feeds carried %d bytes in total, want %d", total, len(value))
+	}
+}
+
+// The size check after delivery compares against the value's length, not
+// against zero, so a piece that went missing is caught.
+func TestDeliveryChecksTheWholeValueLanded(t *testing.T) {
+	g := newGuestFake()
+	c := deliveryConfig(t, g)
+	value := strings.Repeat("v", 3*deliveryPiece)
+	c.secrets = creds.Resolution{Values: map[string]string{"cred": value}}
+	g.dropEveryOtherFeed = true
+	err := c.deliverSecretFiles()
+	if err == nil {
+		t.Fatal("delivery reported success with pieces missing")
+	}
+	if !strings.Contains(err.Error(), "bytes") {
+		t.Errorf("err = %v, want it to say how much landed", err)
+	}
 }
