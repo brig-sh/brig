@@ -269,7 +269,7 @@ func TestVerifyRequireRefusesWhatItCannotCheck(t *testing.T) {
 }
 
 // The same two rows on the digest path, which refuses them in its own two
-// places rather than sharing the tag path's.
+// places.
 func TestVerifyDigestRequireRefusesWhatItCannotCheck(t *testing.T) {
 	for _, tc := range []struct{ what, image, cosign string }{
 		// Somebody else's image: nothing of ours to check, whatever cosign says.
@@ -298,8 +298,8 @@ func assertRefusalReadsAsOne(t *testing.T, what, msg string) {
 	if strings.Contains(strings.ToLower(msg), "booting") {
 		t.Errorf("%s: the refusal says something booted: %q", what, msg)
 	}
-	// Its own remedy rather than namesAWayForward: warn is the way past these
-	// two, and the shared helper does not accept turning the check down.
+	// Checks its own remedy: warn is the way past these two, and the shared
+	// helper namesAWayForward does not accept turning the check down.
 	if !strings.Contains(msg, "BRIG_VERIFY=warn") {
 		t.Errorf("%s: the refusal names no way forward: %q", what, msg)
 	}
@@ -502,7 +502,7 @@ func TestGenericBootVerifiesTheBundle(t *testing.T) {
 		t.Error("a genericBoot profile booted a bundle that could not be checked")
 	} else {
 		// And it reads as a refusal about the kernel, with the cause named on
-		// its own rather than the image message nested whole.
+		// its own.
 		if !strings.Contains(err.Error(), "cosign is not installed") {
 			t.Errorf("the refusal does not name the cause: %v", err)
 		}

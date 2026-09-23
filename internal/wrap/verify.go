@@ -354,10 +354,9 @@ func (c *Config) verifyBootAssets() error {
 		// Could not check, rather than failed. It follows the image's rule: said
 		// out loud at every level by default, a refusal under require.
 		//
-		// The cause is named here rather than taken from res.Message(), which is
-		// written about an image and about booting it anyway. The subject here is
-		// the kernel, and the warn line says it boots, in the words the NotOurs
-		// case above uses.
+		// The cause is named here. res.Message() is written about an image and
+		// about booting it anyway; the subject here is the kernel, and the warn
+		// line says it boots, in the words the NotOurs case above uses.
 		cause := "cosign is not installed (`brew install cosign`)"
 		if res.Outcome == verify.Unresolved {
 			cause = fmt.Sprintf("the registry could not be reached: %s", res.Detail)

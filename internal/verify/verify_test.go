@@ -441,8 +441,28 @@ func TestARefusedThirdPartyImageUnderAReplacedPolicyDoesNotNameBrigSh(t *testing
 	if strings.Contains(got, "brig-sh") {
 		t.Errorf("a replaced policy blamed brig-sh: %q", got)
 	}
+	if !strings.Contains(got, "ghcr.io/acme/") {
+		t.Errorf("the refusal does not name the registry that decided: %q", got)
+	}
 	if !strings.Contains(got, "refusing to boot") || !strings.Contains(got, "BRIG_VERIFY=warn") {
 		t.Errorf("the replaced refusal lost its shape: %q", got)
+	}
+
+	// Replaced is true when any one of the three settings differs, and each is
+	// set on its own. With only the identity replaced the prefix that rejected
+	// the image is still brig's, and the line names that registry.
+	identityOnly := Policy{Registry: shipped.Registry, Identity: `.*`,
+		Issuer: shipped.Issuer, Cosign: shipped.Cosign}
+	if !identityOnly.Replaced() {
+		t.Fatal("a replaced identity no longer reports the policy as replaced")
+	}
+	got = Result{Policy: identityOnly, Outcome: NotOurs,
+		Image: "docker.io/library/ubuntu:24.04"}.Refusal()
+	if strings.Contains(got, "you set") || strings.Contains(got, "policy you") {
+		t.Errorf("the refusal credits the reader with a registry they did not set: %q", got)
+	}
+	if !strings.Contains(got, shipped.Registry) {
+		t.Errorf("the refusal does not name the registry that decided: %q", got)
 	}
 
 	// And the shipped policy still says whose image it is not.

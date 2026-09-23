@@ -251,17 +251,18 @@ func (r Result) Message() string {
 func (r Result) Refusal() string {
 	switch r.Outcome {
 	case NotOurs:
-		// Under a replaced policy the registry that put the image here is the
-		// user's own, so the line names neither brig-sh nor the three variables
-		// they already set. The registry alone, because Image and Verify both
-		// reach NotOurs on the prefix test and nothing else. The shipped wording
-		// names all three, where the reader is choosing a trust root rather than
-		// widening one.
+		// A replaced policy differs in any one of its three settings, so the
+		// line names the registry that decided: with only BRIG_VERIFY_IDENTITY
+		// set, the prefix is still brig's. The registry alone, because Image and
+		// Verify both reach NotOurs on the prefix test and nothing else. The
+		// shipped wording names all three, for a reader who is choosing a trust
+		// root.
 		if r.Policy.Replaced() {
-			return fmt.Sprintf("refusing to boot image %s: it is outside the trust "+
-				"policy you set, so there is no signature to check it against "+
-				"(BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it anyway, or "+
-				"widen BRIG_VERIFY_REGISTRY to cover it", r.Image)
+			return fmt.Sprintf("refusing to boot image %s: it is not under %s, the "+
+				"registry this check trusts, so there is no signature to check it "+
+				"against (BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it "+
+				"anyway, or widen BRIG_VERIFY_REGISTRY to cover it",
+				r.Image, r.Policy.Registry)
 		}
 		return fmt.Sprintf("refusing to boot image %s: it is not published by brig-sh, "+
 			"so there is no signature of ours to check (BRIG_VERIFY=require). Set "+
