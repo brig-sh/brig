@@ -211,11 +211,11 @@ func (c *Config) mountVolumes() error {
 				return fmt.Errorf("could not pin %s before covering it: %w", h.Path, err)
 			}
 		}
-		// Phase 2: cover. Left root-owned deliberately, and handed to the
-		// guest user only by releaseTmpfs at the very end: a directory the
-		// agent cannot create in is a directory where a symlink cannot be
-		// planted at a credential's path, so the race has no window rather
-		// than a small one.
+		// Phase 2: cover. Left root-owned, and handed to the guest user only
+		// by releaseTmpfs at the very end. A guest that is not root cannot
+		// create in a root-owned directory, so it cannot put a symlink at a
+		// credential's path between brig's check and brig's write. The shipped
+		// profiles run the guest as root, so this covers a custom profile.
 		for _, t := range cover {
 			if err := c.guestRoot("mount", "-t", "tmpfs", "-o", t.TmpfsOptions(),
 				"tmpfs", c.guestPath(t.Path)); err != nil {
@@ -323,12 +323,13 @@ func (c *Config) writeSecretFiles() (err error) {
 		return nil
 	}
 
-	// Hold the directories root-owned across the write. The agent runs as the
-	// guest user and could otherwise plant a symlink at a credential's path
-	// between brig checking it and brig writing it -- and root writing through
-	// one is the arbitrary-write primitive this whole file is careful about.
-	// A directory root owns cannot have anything created in it by the agent,
-	// so the race has no window rather than a small one.
+	// Hold the directories root-owned across the write. A guest that is not
+	// root cannot create in them, so it cannot put a symlink at a credential's
+	// path between brig checking that path and brig writing to it. Root
+	// writing through such a link is an arbitrary write.
+	//
+	// The shipped profiles run the guest as root. This covers a profile whose
+	// guestHome sits under a real user's home.
 	dirs := c.credentialDirs(pending)
 	if err := c.chownGuest(dirs, guestRootUser); err != nil {
 		return err
@@ -353,6 +354,10 @@ func (c *Config) writeSecretFiles() (err error) {
 // is what makes the shell's > use it), checked to be a regular file of the
 // right ownership on a tmpfs, and only then handed the value. Checking after
 // the write would be checking where a live token had already gone.
+//
+// The checks catch a profile whose volumes: left the path on host disk,
+// whatever the guest account is. Their ordering also closes the window a
+// guest that is not root would have to swap the path for a symlink.
 func (c *Config) writeSecretFile(b profile.FileBinding) error {
 	r, err := profile.ParseRef(b.Ref)
 	if err != nil {

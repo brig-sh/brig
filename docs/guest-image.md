@@ -87,10 +87,10 @@ Brig mounted.
   Brig never wrote to.
 - **`/run`, writable by root.** Each hostmount is pinned at
   `/run/brig/persist/<escaped path>` while the tmpfs goes over its real
-  location, then bound back. `/run` rather than anywhere in the guest home is
-  deliberate. It is root-owned, and the agent runs as an ordinary user.
-  Nothing the sandbox can write to sits between a privileged mount and its
-  source. See `persistRoot` in `internal/wrap/secretfiles.go`.
+  location, then bound back. `/run` keeps the pin off the workspace, so it
+  never reaches host disk and never survives a boot. The shipped profiles run
+  the guest as root, so the pin is not out of the agent's reach. See
+  `persistRoot` in `internal/wrap/secretfiles.go`.
 - **`/bin/true`, at that literal path.** The probe is not `true` resolved
   through `PATH`.
 - **tmpfs in the guest kernel**, accepting `size=`, `mode=0700`, `nodev` and
@@ -107,11 +107,15 @@ last path element: `/home/claude` means the user `claude` (`GuestUser` in
 `internal/profile/profile.go`). The profile states the home once and the user
 follows from it. There is no field to set the user separately.
 
-One shipped profile breaks that pattern on purpose. `ubuntu`'s `guestHome` is
-`/root/work`, so the derived name is `work`, which is not an account in that
-image. Nothing reads it there: the image already runs as `root`. The
-derivation only matters for a profile whose guest home sits inside a real
-user's home directory.
+The five shipped agent profiles set `guestHome: /root`, so the guest is root.
+A rootless Linux install maps container uid 0 to the invoking user, which is
+what lets the guest open `/dev/kvm` and own the workspace it writes. Each spec
+carries the rationale next to the field.
+
+`ubuntu`'s `guestHome` is `/root/work`, so the derived name is `work`, which
+is not an account in that image. Nothing reads it there, because the image
+already runs as `root`. The derivation only matters for a profile whose guest
+home sits inside a real user's home directory.
 
 Three things follow for the image.
 
@@ -126,8 +130,13 @@ the agent runs as. Set it to the guest user, and set its home to `guestHome`.
 
 **Root has to be available to exec as.** The mounting and file-writing execs
 carry `User: "root"` (`guestRootUser` in `internal/wrap/secretfiles.go`). Only
-the mount syscall actually needs the privilege. Every target sits under a
-directory root already owns, which is what keeps the rest of it unprivileged.
+the mount syscall needs the privilege.
+
+On a profile whose guest is root, the agent and those execs are the same
+account. The boundary is the VM, not the guest account: brig claims nothing
+about what the agent can reach inside the sandbox. A profile whose `guestHome`
+sits under a real user's home keeps the two apart, and the symlink guards in
+`writeSecretFiles` cover that case.
 
 That privilege comes from the boot, and there are two boots to tell apart. A
 bare `hull run <image>` or `nerdctl run <image>` starts the image as an
