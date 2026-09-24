@@ -53,10 +53,12 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 # cosign's version is: it decides what ends up running on the host. Bump it
 # with each brig release that the bundle repins against.
 #
-# v0.1.0-rc7 is the first release carrying the rootless bundle, so
-# BRIG_INSTALL_ROOTLESS against anything older fails naming the asset it wanted.
+# v0.1.0-rc7 is the floor rather than the pin: it is the first release carrying
+# the rootless bundle, so BRIG_INSTALL_ROOTLESS against anything older fails
+# naming the asset it wanted. rc8 is the pin because it is the first where
+# brig-ctl reads the socket a rootless install actually uses.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc7
+RUNTIME_VERSION=v0.1.0-rc8
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 
