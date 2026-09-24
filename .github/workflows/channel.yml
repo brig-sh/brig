@@ -227,38 +227,56 @@ jobs:
             --conflicts-with "$OTHER" \
             --out "brig@$CHANNEL.rb"
 
-      # Pushed to the tap rather than opened as a pull request, which is the
-      # one place this differs from the stable cask. That cask is what people
-      # install and a bad one deserves a second pair of eyes; a channel cask
-      # is regenerated on every merge, and a pull request per merge is noise
-      # nobody would read.
+      # The same bot App token release.yml uses for the tap, with the same PAT
+      # fallback. The push below relies on this App being a bypass actor on
+      # the tap's main ruleset, which requires a reviewed pull request from
+      # anyone else.
+      - uses: actions/create-github-app-token@v3
+        id: tap-token
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.NOFIRE_BOT_APP_ID }}
+          private-key: ${{ secrets.NOFIRE_BOT_PRIVATE_KEY }}
+          owner: brig-sh
+          repositories: homebrew-brig
+
+      # Pushed rather than opened as a pull request, unlike the stable cask: a
+      # channel cask is regenerated on every merge, and a reviewed PR per merge
+      # is noise nobody reads. hull's channel publishes the same way.
       - name: Update the tap
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.tap-token.outputs.token || secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           CHANNEL: ${{ steps.channel.outputs.name }}
           V: ${{ steps.version.outputs.value }}
         run: |
           set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "no token for the tap" >&2; exit 1; }
+          rm -rf "$RUNNER_TEMP/tap"
           git clone --depth 1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/brig-sh/homebrew-brig.git" /tmp/tap
-          cp "brig@$CHANNEL.rb" "/tmp/tap/Casks/brig@$CHANNEL.rb"
-          cd /tmp/tap
+            "https://x-access-token:${GH_TOKEN}@github.com/brig-sh/homebrew-brig.git" "$RUNNER_TEMP/tap"
+          cp "brig@$CHANNEL.rb" "$RUNNER_TEMP/tap/Casks/brig@$CHANNEL.rb"
+          cd "$RUNNER_TEMP/tap"
           git config user.name "brig-sh-bot"
           git config user.email "bot@brig.sh"
           git add "Casks/brig@$CHANNEL.rb"
           git diff --cached --quiet && { echo "the cask is unchanged"; exit 0; }
-          git commit -m "chore(cask): brig@$CHANNEL $V"
+          # -s: the tap's DCO check reads the trailer.
+          git commit -s -m "chore(cask): brig@$CHANNEL $V"
           # Rebased and retried rather than pushed once. brig and hull each
           # publish two channels into this one repository, and nothing
-          # serializes across the four: a concurrency group is per workflow,
-          # and these are four workflows in two repositories. Two that overlap
-          # would have the loser rejected non-fast-forward, its channel left
-          # stale, and the error pointing at git rather than at the cause.
-          # They touch different files, so a rebase always applies.
+          # serializes across the four. They touch different files, so a
+          # rebase always applies.
           for attempt in 1 2 3 4 5; do
             git push && exit 0
+            # A push the tap's rules refuse fails the same way every time.
+            # Retry only when main has moved.
+            git fetch --quiet origin main
+            if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+              echo "the tap refused the push and main has not moved" >&2
+              exit 1
+            fi
             echo "the tap moved under this push; rebasing (attempt $attempt)"
-            git pull --rebase --quiet origin main
+            git rebase --quiet FETCH_HEAD
             sleep $((attempt * 2))
           done
           echo "the tap could not be updated after five attempts" >&2

@@ -167,11 +167,12 @@ answers in that case, and the binary prints what a normal clone would.
   without that list a channel build reads its version as `channel-main`.
   Rename a channel and both have to follow.
 
-- The channel cask is pushed to the tap rather than opened as a pull request.
-  It is regenerated on every merge, and a PR per merge is noise. That push
-  uses the `HOMEBREW_TAP_GITHUB_TOKEN` secret directly rather than minting an
-  App token first: a channel that cannot reach the tap should fail loudly,
-  and there is no release for it to quietly go green beside.
+- The channel cask is pushed to the tap directly, not opened as a pull request.
+  It is regenerated on every merge, and a reviewed PR per merge is noise. The
+  tap's `main` ruleset requires a reviewed pull request, so the push depends on
+  the `brig-release-bot` App being a bypass actor there; the workflow mints that
+  App's token, the same one `release.yml` uses. The commit is signed off for
+  the tap's `DCO sign-off` check. hull's channel publishes the same way.
 
 - The cask is rendered by `script/render-cask.py`, not by goreleaser. A
   channel has no version of its own, so there is nothing for goreleaser's cask
