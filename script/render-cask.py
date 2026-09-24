@@ -91,6 +91,11 @@ def generator():
     resolves in the repository it was written into.
     """
     path = pathlib.Path(sys.argv[0])
+    # The channel workflow runs this from a second checkout at .workflow/, a
+    # directory that exists in neither repository. Drop it, so the banner names
+    # the path a reader can open.
+    if path.parts[:1] == (".workflow",):
+        path = pathlib.Path(*path.parts[1:])
     try:
         return str(path.relative_to(pathlib.Path.cwd()))
     except ValueError:
