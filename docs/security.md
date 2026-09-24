@@ -450,10 +450,11 @@ root-owned `/data` pointing into your home is one example. Name the real
 directory instead.
 
 Running Brig as root, ownership tells it nothing, because the guest's writes
-are root's too. It then trusts only files that only root was able to write.
-That keeps the system's own links usable, but protects nothing: a sandbox
-run as root can reach a nested guest home's parents like anything else.
-This is not the control for that.
+are root's too. A directory a root sandbox had read-write looks like one of
+the machine's own. Brig then trusts only the entries of `/`, which it never
+mounts. The system's own links there, such as `/tmp` on macOS or `/home` on
+an ostree system, still resolve. Every component below them is walked link
+by link, so a link on the way to the guest home or the project is refused.
 
 What this looks like when it fires is a failed run, before anything is
 written, naming the link and where it points:
@@ -477,6 +478,80 @@ point the guest home somewhere else.
 
 `--home` pointed at a symlink is refused for the same reason, with the
 same kind of message, and is fixed by naming the real directory.
+
+## Mounting a project
+
+Name a project on the run line and Brig mounts it read-write at
+`/work/<name>`. It is the second host directory the sandbox can change, and
+every component at or below it is the sandbox's to replace.
+
+A share is a path, and the runtime resolves it. Brig runs as you and outside
+the sandbox, so a link planted in the project is a link something follows on
+the host side of the boundary. The microVM does not stop this either. The VMM
+is asked to export a directory and it exports the one the link points at.
+
+What makes it reachable is a second sandbox with write access to the path.
+A run's own sandbox gains nothing by a swap, since it already has the project
+read-write. Another one does: the sandbox of an earlier run, or one from
+another session that is still running with an overlapping project. An agent
+replaces a subdirectory with a link to somewhere else on the host. The
+operator later narrows a run to that subdirectory, which is the ordinary way
+to point an agent at one part of a repository. The path is the operator's own
+and the directory it reaches is the agent's choice.
+
+So the project is reached the same way the guest home is. The path is split
+where the first directory you can write appears. Above the split, entries sit
+where the guest cannot reach and that part is opened by name, so the links
+the system put there keep working. From there down, Brig descends one
+component at a time against the directory it already holds, refuses every
+symlink, and confirms after each step that what it opened is what it looked
+at. The boot descends again and refuses a path that no longer names the
+directory it holds.
+
+That does not close the handover. The share is a string the VMM resolves
+later, on its own time. A sandbox from another session that is still running
+with an overlapping project, such as `~/monorepo` while this run names
+`~/monorepo/frontend`, can swap a component in that window. The guest home has
+the same gap, and closing either needs the runtime to accept a directory
+handle rather than a path.
+
+A link you made yourself is refused too. Brig cannot tell it from a planted
+one: same owner, same directory, same bytes. So the rule is about links and
+not about who made them, and the message names the target so you can type
+that instead.
+
+The guest home refuses links for a different reason -- Brig creates it, so a
+link there has no legitimate author -- and the two refusals come out of one
+walk. Only the wording differs.
+
+What it looks like when it fires is a failed run, before anything is mounted,
+naming the link and where it points:
+
+```console
+$ brig run claude ~/lab/monorepo/frontend
+brig: refusing to use /Users/alex/lab/monorepo/frontend as this run's
+project: it is a symlink to "/Users/alex/escape-target", and the project is
+mounted read-write into the sandbox, so brig will not hand a guest a
+directory reached through a link. Name the real directory instead: a symlink
+leads out of a directory brig is checking
+```
+
+A link further up the path reads the same way, naming the component that is a
+link rather than the directory you typed:
+
+```console
+$ brig run claude ~/lab/monorepo/frontend/src
+brig: refusing to use /Users/alex/lab/monorepo/frontend/src as this run's
+project: /Users/alex/lab/monorepo/frontend on the way to it is a symlink to
+"/Users/alex/escape-target", so the sandbox would be handed a directory other
+than the one you named. Name the real directory instead: a symlink leads out
+of a directory brig is checking
+```
+
+The `PROJECT` row in the run envelope reports the directory this resolved to,
+not the path as typed. On macOS that costs a difference in spelling: a
+project under `/tmp` prints as `/private/tmp`. It is the directory the
+sandbox gets, which is the question the row is there to answer.
 
 ## Guest images
 

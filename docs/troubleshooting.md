@@ -773,3 +773,41 @@ brig run claude
 The run reaches the agent instead of refusing.
 [docs/security.md](security.md#writing-into-the-workspace) explains why the
 refusal exists.
+
+## A project reached through a symlink was refused
+
+```
+brig: refusing to use /Users/alex/work/app as this run's project:
+/Users/alex/work on the way to it is a symlink to "/Volumes/data/work", so the
+sandbox would be handed a directory other than the one you named. Name the
+real directory instead: a symlink leads out of a directory brig is checking
+```
+
+The project is mounted read-write, so the sandbox can replace any directory
+at or below it. A link planted there on one run would have the next run hand
+the runtime a directory the agent picked. Brig cannot tell that link from one
+you made yourself, so it refuses both and names where the link points. A link
+in a directory you cannot write, such as `/tmp` on macOS, is still followed.
+
+Name the real directory:
+
+```bash
+brig run claude /Volumes/data/work/app
+```
+
+When the message ends with "This session's project was remembered from an
+earlier run", the project came from an earlier `brig run` of this session,
+not from this command. `brig run` with the real directory after the ref, or
+with `--no-project`, replaces it. Until then only the verbs that boot or join
+the sandbox are refused. `brig stop`, `brig rm` and `brig info` still work,
+and `brig info` repeats the refusal.
+
+Confirm:
+
+```bash
+brig info claude
+```
+
+The PROJECT row names the real directory, and the refusal is gone.
+[docs/security.md](security.md#mounting-a-project) explains why the refusal
+exists.

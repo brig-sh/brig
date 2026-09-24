@@ -11,13 +11,12 @@ you.
 
 ## Supported versions
 
-There is no stable release yet. Brig ships prereleases only, currently the
-`0.1.0-rc` series, and the version you are on is whatever `brig version`
-prints. Fixes land on `main` and go out in the next prerelease. We do not
-backport to an earlier `rc`, so the supported version is the latest one. If
-you are reporting against an older prerelease, check that the issue still
-reproduces on the newest before you send it. Expect the fix to arrive as a
-newer prerelease, not as a patch to the one you filed against.
+The supported version is the latest release, and the version you are on is
+whatever `brig version` prints. Fixes land on `main` and go out in the next
+release. We do not backport, so a fix arrives as a newer release and not as a
+patch to the one you filed against. If you are reporting against an older
+version, check that the issue still reproduces on the latest one before you
+send it.
 
 ## Reporting a vulnerability
 
