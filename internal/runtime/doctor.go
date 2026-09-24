@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -59,21 +58,31 @@ func VersionToken(out string) string {
 
 // BootAssetsDir reports the directory the boot bundle for this host lives in
 // and whether the kernel and initrd are already there, so brig doctor can say
-// "present" or name the directory that is empty. It honours BRIG_BOOT_ASSETS,
-// the same override the boot path reads, so the two agree about where to look.
+// "present" or name the directory that is empty. It resolves the directory
+// through bootAssetsDir, the same function the boot path uses, with the same
+// question put to rt: a hull is asked with `hull assets dir`, and a runtime
+// with no opinion gets the per-platform default. So doctor checks the directory
+// a run would boot from, not a guess at it (#314).
 //
 // It reports presence rather than fetching: doctor names what is missing and
 // how to get it, and downloading a bundle is a side effect a diagnostic has no
 // business having.
-func BootAssetsDir() (dir string, present bool, err error) {
-	dir = os.Getenv("BRIG_BOOT_ASSETS")
-	if dir == "" {
-		dir, err = defaultBootAssetsDir()
-		if err != nil {
-			return "", false, err
-		}
+func BootAssetsDir(rt Runtime) (dir string, present bool, err error) {
+	dir, _, err = bootAssetsDir(assetLocatorFor(rt))
+	if err != nil {
+		return "", false, err
 	}
 	kernel := filepath.Join(dir, bootKernelName())
 	initrd := filepath.Join(dir, bootInitrdName)
 	return dir, bootArtifactsPresent(kernel, initrd), nil
+}
+
+// assetLocatorFor is the locator a run with rt would pass to bootArtifacts:
+// hull's `assets dir` for a hull, and none for anything else, the same as
+// nerdctl's run path passes.
+func assetLocatorFor(rt Runtime) assetLocator {
+	if h, ok := rt.(*hull); ok {
+		return h.assetDir
+	}
+	return nil
 }

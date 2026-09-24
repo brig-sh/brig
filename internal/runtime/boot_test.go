@@ -250,3 +250,89 @@ func TestBootArtifactsFallsBackWhenTheRuntimeCannotAnswer(t *testing.T) {
 		t.Fatalf("resolved %s, want the default %s", kernel, fallback)
 	}
 }
+
+// assetsDirHull is a hull whose `assets dir` prints dir, the way a hull that
+// keeps its assets under its store answers. An empty dir makes the subcommand
+// fail, the way an older hull that has no `assets dir` does.
+func assetsDirHull(t *testing.T, dir string) *hull {
+	t.Helper()
+	answer := "exit 1"
+	if dir != "" {
+		answer = "echo '" + dir + "'"
+	}
+	bin := filepath.Join(t.TempDir(), "hull")
+	script := "#!/bin/sh\nif [ \"$1 $2\" = \"assets dir\" ]; then " + answer + "; fi\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &hull{bin: bin}
+}
+
+// brig doctor and a boot look for the assets in one directory, the one hull
+// names. Doctor used to build the macOS default itself and report assets
+// missing from a directory no run reads, while the run booted from hull's
+// store (#314).
+func TestDoctorAndBootResolveTheSameAssetsDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+
+	store := filepath.Join(t.TempDir(), "store", "assets")
+	if err := os.MkdirAll(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{bootKernelName(), bootInitrdName} {
+		if err := os.WriteFile(filepath.Join(store, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := assetsDirHull(t, store)
+
+	dir, present, err := BootAssetsDir(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernel, _, err := bootArtifacts(h.assetDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != store || filepath.Dir(kernel) != store {
+		t.Fatalf("doctor checked %s and the boot resolved %s, want both at %s",
+			dir, filepath.Dir(kernel), store)
+	}
+	if !present {
+		t.Errorf("doctor reported the assets missing at %s, where they are", dir)
+	}
+}
+
+// A hull too old to answer `assets dir` sends doctor to the built-in default,
+// the same fallback the boot path takes, and BRIG_BOOT_ASSETS beats both.
+func TestDoctorAssetsDirFallbackAndOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+
+	fallback, err := defaultBootAssetsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, present, err := BootAssetsDir(assetsDirHull(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != fallback || present {
+		t.Errorf("an old hull resolved %s (present %v), want an empty %s", dir, present, fallback)
+	}
+
+	explicit := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", explicit)
+	dir, _, err = BootAssetsDir(assetsDirHull(t, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != explicit {
+		t.Errorf("resolved %s, want BRIG_BOOT_ASSETS at %s", dir, explicit)
+	}
+}

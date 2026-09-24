@@ -303,3 +303,48 @@ func TestShortVersion(t *testing.T) {
 		}
 	}
 }
+
+// The boot row checks the directory a run would boot from. A run of an agent
+// drives the hull its profile names, and asks that hull where its assets live,
+// so doctor has to ask the same one the same way: here the hull on PATH has
+// nothing, and the profile's hull keeps its assets under a store of its own
+// (#314).
+func TestDoctorBootAsksTheAgentsHull(t *testing.T) {
+	healthyHost(t)
+	home := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+
+	store := filepath.Join(t.TempDir(), "store", "assets")
+	if err := os.MkdirAll(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Image", "bzImage", "container-initrd"} {
+		if err := os.WriteFile(filepath.Join(store, name), []byte("stand-in\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(t.TempDir(), "hull")
+	script := "#!/bin/sh\ncase \"$1 $2\" in\n" +
+		"\"assets dir\") echo '" + store + "' ;;\n" +
+		"*) echo hull version 0.0.0-test ;;\nesac\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent := fakeProfile
+	agent.RuntimeBin = bin
+
+	checks := runDoctor(&agent, nil)
+
+	if rt := findCheck(t, checks, "runtime"); !strings.Contains(rt.Finding, bin) {
+		t.Errorf("the runtime row reports %q, want the profile's hull at %s", rt.Finding, bin)
+	}
+	boot := findCheck(t, checks, "boot")
+	if boot.State != statePass || !strings.Contains(boot.Finding, store) {
+		t.Errorf("the boot row is %q %q, want ok at %s, where the agent's hull keeps its assets",
+			boot.State, boot.Finding, store)
+	}
+}

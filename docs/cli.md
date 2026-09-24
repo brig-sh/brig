@@ -805,7 +805,7 @@ on its own. See [runtimes.md](runtimes.md).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BRIG_BOOT_ASSETS` (global only) | `~/.hull/assets` on macOS, `$XDG_DATA_HOME/brig/assets` on Linux | directory holding the host kernel and initrd a `genericBoot` agent needs |
+| `BRIG_BOOT_ASSETS` (global only) | on macOS, wherever `hull assets dir` says (`~/.hull/assets` if hull cannot answer); `$XDG_DATA_HOME/brig/assets` on Linux | directory holding the host kernel and initrd a `genericBoot` agent needs |
 | `BRIG_BOOT_ASSETS_REF` (global only) | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | the bundle Brig fetches when the boot assets are missing |
 | `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway |
 | `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where every gateway socket and log lives, shared and per-sandbox alike |

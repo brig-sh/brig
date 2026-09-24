@@ -173,14 +173,14 @@ func doctorExit(checks []check) error {
 // them. Everything else -- the host, virtualization, the signature tooling, the
 // profiles, the secret store, the daemon -- stands on its own.
 func runDoctor(agent *profile.Profile, loadErr error) []check {
-	rtCheck := runtimeCheck()
+	rtCheck, rt := runtimeCheck(agent)
 	runtimeOK := rtCheck.State == statePass
 	return []check{
 		brigCheck(),
 		hostCheck(),
 		virtualCheck(),
 		rtCheck,
-		bootCheck(runtimeOK),
+		bootCheck(rt),
 		verifyCheck(),
 		profilesCheck(loadErr),
 		secretsCheck(),
@@ -230,14 +230,27 @@ func virtualCheck() check {
 // and reports the binary and its version. A missing or broken runtime is the
 // one failure here that gates the exit status -- it is exactly "fix the runtime
 // before this can run", which is exit 4 -- so its error is carried through
-// unchanged for exitCode to class.
-func runtimeCheck() check {
-	rt, err := detectRuntime()
+// unchanged for exitCode to class. The runtime comes back beside the row when
+// the row passes, and nil otherwise, so the boot check asks the same runtime
+// rather than detecting a second one.
+//
+// Given an agent whose profile names a runtimeBin, that binary is the one a run
+// of the agent drives, so it is the one detected here. Otherwise `brig doctor
+// <agent>` would report on the hull on PATH, and the boot row would name the
+// assets directory of a hull the run never asks.
+func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
+	detect := detectRuntime
+	if agent != nil && agent.RuntimeBin != "" {
+		detect = func() (runtime.Runtime, error) {
+			return detectRuntimeFor(runtime.Preference{Bin: agent.RuntimeBin})
+		}
+	}
+	rt, err := detect()
 	if err != nil {
 		return check{Name: "runtime", State: stateFail, Finding: err.Error(),
 			Fix: "install hull on macOS or nerdctl on Linux, or point BRIG_RUNTIME_BIN at a build",
 			err: err,
-		}
+		}, nil
 	}
 	bin := rt.Bin()
 	// Detect takes BRIG_RUNTIME_BIN on trust, where a profile's runtimeBin is
@@ -250,7 +263,7 @@ func runtimeCheck() check {
 			Finding: fmt.Sprintf("%s at %s is not an executable on this host", rt.Kind(), bin),
 			Fix:     "fix BRIG_RUNTIME_BIN, or unset it so brig finds the runtime on PATH",
 			err:     fmt.Errorf("%w: %s is not there or not executable", runtime.ErrBadRuntime, bin),
-		}
+		}, nil
 	}
 	finding := fmt.Sprintf("%s at %s", rt.Kind(), bin)
 	// Best-effort: a runtime that will not answer --version is still a runtime,
@@ -259,7 +272,7 @@ func runtimeCheck() check {
 	if v, verr := runtime.Version(bin); verr == nil && v != "" {
 		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), bin)
 	}
-	return check{Name: "runtime", State: statePass, Finding: finding}
+	return check{Name: "runtime", State: statePass, Finding: finding}, rt
 }
 
 // shortVersion is the version out of a `--version` line, read the way
@@ -287,11 +300,15 @@ func shortVersion(out string) string {
 // what would boot them. A missing bundle is diagnostic, not a gate: a first run
 // downloads it, so this names the directory and how to fill it rather than
 // failing the exit status over a file that is one boot away from being there.
-func bootCheck(runtimeOK bool) check {
-	if !runtimeOK {
+//
+// The directory is the one a run would boot from: rt is asked where its assets
+// live the same way the boot path asks it, so a hull that keeps them under its
+// store is checked there and not at a path brig compiled in (#314).
+func bootCheck(rt runtime.Runtime) check {
+	if rt == nil {
 		return notReached("boot")
 	}
-	dir, present, err := runtime.BootAssetsDir()
+	dir, present, err := runtime.BootAssetsDir(rt)
 	if err != nil {
 		return check{Name: "boot", State: stateFail, Finding: "cannot locate the boot assets: " + err.Error(),
 			Fix: "set BRIG_BOOT_ASSETS to a directory holding the kernel and initrd"}

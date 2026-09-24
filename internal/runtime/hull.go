@@ -214,8 +214,17 @@ func (h *hull) assetFetcher(spec RunSpec) assetFetcher {
 //
 // Errors are the caller's to shrug off: an older hull has no `assets dir`, and
 // that should fall back to the historical path rather than refuse to boot.
+//
+// Bounded like an agent call. brig doctor asks this too, and doctor is what
+// someone runs when hull is wedged: an unbounded question here would hang the
+// report at its boot row, after the runtime row had already given up on
+// `--version` and moved on. A hull that does not answer in time is treated
+// like one that has no `assets dir`.
 func (h *hull) assetDir() (string, error) {
-	cmd := exec.Command(h.bin, "assets", "dir")
+	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.bin, "assets", "dir")
+	cmd.WaitDelay = agentCallWaitDelay
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	var out bytes.Buffer
 	cmd.Stdout = &out

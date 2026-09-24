@@ -30,8 +30,8 @@ Brig prints one line per fact, in this shape:
 ```
   ok  host      macOS 26.5 on arm64
   ok  virtual   Hypervisor.framework available
-  ok  runtime   hull 0.1.0-rc21 at /opt/homebrew/bin/hull
-  !!  boot      assets missing at /Users/you/.hull/assets
+  ok  runtime   hull 0.1.0-rc27 at /opt/homebrew/bin/hull
+  !!  boot      assets missing at /Users/you/.hull/store/assets
           run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
   ok  verify    cosign at /opt/homebrew/bin/cosign, BRIG_VERIFY=warn
   ok  profiles  8 built in, 0 in /Users/you/.config/brig

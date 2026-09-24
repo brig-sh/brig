@@ -78,21 +78,32 @@ type assetFetcher func(dir string) error
 // per-platform default below applies.
 type assetLocator func() (string, error)
 
-func bootArtifacts(locate assetLocator, fetch assetFetcher) (kernel, initrd string, err error) {
-	explicit := os.Getenv("BRIG_BOOT_ASSETS")
-	dir := explicit
-	if dir == "" && locate != nil {
+// bootAssetsDir is the one answer to where the boot assets live, and both the
+// boot path and brig doctor ask it. BRIG_BOOT_ASSETS wins, and when it is set
+// the runtime is not asked at all. Otherwise the runtime says, and a runtime
+// that cannot answer falls through to the per-platform default. explicit is
+// the variable's value, so the caller can tell a directory the user chose from
+// one brig found.
+func bootAssetsDir(locate assetLocator) (dir, explicit string, err error) {
+	explicit = os.Getenv("BRIG_BOOT_ASSETS")
+	if explicit != "" {
+		return explicit, explicit, nil
+	}
+	if locate != nil {
 		// A runtime that cannot answer is not fatal: fall through to the
 		// default rather than refusing to boot over a missing subcommand.
 		if located, locErr := locate(); locErr == nil {
-			dir = located
+			return located, "", nil
 		}
 	}
-	if dir == "" {
-		dir, err = defaultBootAssetsDir()
-		if err != nil {
-			return "", "", err
-		}
+	dir, err = defaultBootAssetsDir()
+	return dir, "", err
+}
+
+func bootArtifacts(locate assetLocator, fetch assetFetcher) (kernel, initrd string, err error) {
+	dir, explicit, err := bootAssetsDir(locate)
+	if err != nil {
+		return "", "", err
 	}
 	kernel = filepath.Join(dir, bootKernelName())
 	initrd = filepath.Join(dir, bootInitrdName)

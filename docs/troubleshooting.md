@@ -128,7 +128,7 @@ The `runtime` line reads `ok` again.
 Seen in `brig doctor`, not from a run:
 
 ```
-!!  boot      assets missing at /Users/alex/.hull/assets
+!!  boot      assets missing at /Users/alex/.hull/store/assets
         run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
 ```
 
@@ -144,7 +144,7 @@ Confirm:
 brig doctor
 ```
 
-The `boot` line reads `ok  boot      assets present at /Users/alex/.hull/assets`.
+The `boot` line reads `ok  boot      assets present at /Users/alex/.hull/store/assets`.
 
 ## The secret store could not be read during a run
 

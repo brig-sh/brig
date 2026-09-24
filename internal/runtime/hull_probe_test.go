@@ -76,3 +76,40 @@ func TestOutputDoesNotHangWhenTheGuestNeverAnswers(t *testing.T) {
 		t.Fatal("Output never returned")
 	}
 }
+
+// brig doctor asks hull where its boot assets live, and doctor is what gets run
+// against a hull that has stopped answering. The question must come back, and
+// the answer must be the fallback a hull with no `assets dir` gets.
+func TestBootAssetsDirDoesNotHangWhenHullNeverAnswers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+	fallback, err := defaultBootAssetsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &hull{bin: hangingHull(t)}
+
+	type result struct {
+		dir string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		dir, _, err := BootAssetsDir(h)
+		done <- result{dir, err}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if r.dir != fallback {
+			t.Errorf("a hull that never answered resolved %s, want the fallback %s", r.dir, fallback)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("BootAssetsDir never returned: brig doctor hangs at its boot row on a wedged hull")
+	}
+}
