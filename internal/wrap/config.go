@@ -198,6 +198,10 @@ type Config struct {
 	Project      string
 	GuestProject string
 
+	// ProjectReal is the project with every link resolved. It is what the
+	// PROJECT row prints. Project is what the runtime is handed, and
+	// mountProject says why the two reach the same directory.
+	ProjectReal string
 	// projectRefused is why the project this session remembers was not
 	// mounted: a link on the way to it. Load records it and EnsureRunning
 	// returns it, so a verb that never boots or joins the sandbox can still
@@ -893,6 +897,14 @@ func (c *Config) mountProject(dir string) error {
 	// touch.
 	c.Project = abs
 	c.GuestProject = GuestProject(abs)
+	// The two still differ above the split, so the row gets its own resolved
+	// copy to print. A failure here falls back to the typed path: the descent
+	// has already opened every component, and a display is not worth refusing
+	// a run over.
+	c.ProjectReal = abs
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		c.ProjectReal = real
+	}
 	// The point of naming a directory: the agent starts in it. The cwd-under-
 	// home derivation above still decides this for a run that names none.
 	c.GuestCwd = c.GuestProject

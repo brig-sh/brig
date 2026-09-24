@@ -239,3 +239,39 @@ func TestEnvelopeNamesTheNetworkPosture(t *testing.T) {
 		t.Errorf("the offline row does not say what it costs:\n%s", block.String())
 	}
 }
+
+// The PROJECT row prints the resolved path. The question it answers is which
+// host directory the sandbox gets, and a reader who is shown the path they
+// typed learns nothing about where it leads.
+func TestEnvelopeNamesTheProjectItResolvedTo(t *testing.T) {
+	c := envelopeConfig()
+	c.Project = "/tmp/monorepo/frontend"
+	c.ProjectReal = "/private/tmp/monorepo/frontend"
+	c.GuestProject = "/work/frontend"
+
+	out := &bytes.Buffer{}
+	c.renderEnvelope(out, creds.Set{})
+	got := out.String()
+
+	want := "PROJECT      /private/tmp/monorepo/frontend (read-write, mounted at /work/frontend)"
+	if !strings.Contains(got, want) {
+		t.Errorf("the block does not carry %q:\n%s", want, got)
+	}
+	// The typed path is not what the row reports. Asserted as its own failure
+	// so a regression that prints both still fails here rather than passing on
+	// a substring of the line above.
+	if strings.Contains(got, "PROJECT      /tmp/monorepo/frontend") {
+		t.Errorf("the PROJECT row reports the path as typed:\n%s", got)
+	}
+}
+
+// A run that named no project has no second host directory to report, so the
+// row is left out rather than printed empty.
+func TestEnvelopeOmitsProjectWhenThereIsNone(t *testing.T) {
+	c := envelopeConfig()
+	out := &bytes.Buffer{}
+	c.renderEnvelope(out, creds.Set{})
+	if strings.Contains(out.String(), "PROJECT") {
+		t.Errorf("a run with no project printed a PROJECT row:\n%s", out.String())
+	}
+}

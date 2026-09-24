@@ -309,13 +309,25 @@ func TestALinkAboveTheTrustedSplitIsFollowed(t *testing.T) {
 	if err := c.mountProject(project); err != nil {
 		t.Fatalf("a project under the symlinked /tmp was refused: %v", err)
 	}
-	// It keeps the spelling that was typed: the PROJECT row and the guest path
-	// stay /tmp, not /private/tmp.
+	// The share and the guest path keep the spelling that was typed, so /tmp
+	// stays /tmp.
 	if c.Project != project {
 		t.Errorf("the share exports %q, want the path as typed %q", c.Project, project)
 	}
 	if want := "/work/" + filepath.Base(project); c.GuestProject != want {
 		t.Errorf("the project mounted at %q, want %q", c.GuestProject, want)
+	}
+	// The reader is shown the resolved directory. A link above the split is the
+	// one case where the two differ, and the system put that one there.
+	real, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ProjectReal != real {
+		t.Errorf("the PROJECT row reads %q, want the resolved %q", c.ProjectReal, real)
+	}
+	if c.ProjectReal == c.Project {
+		t.Error("the resolved path equals the typed one, so this host proves nothing")
 	}
 }
 

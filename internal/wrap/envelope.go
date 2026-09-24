@@ -73,9 +73,12 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 	// report, and a row saying so on every ordinary run is a row people learn
 	// to skip. The guest path is named beside the host path because it is the
 	// answer to the question the row raises, which is where the agent will be.
+	// The resolved path, because the question this row answers is which host
+	// directory the sandbox gets. On macOS that costs the reader a difference
+	// in spelling: a project under /tmp prints as /private/tmp.
 	if c.Project != "" {
 		rows = append(rows, envelopeRow{"PROJECT",
-			fmt.Sprintf("%s (read-write, mounted at %s)", c.Project, c.GuestProject)})
+			fmt.Sprintf("%s (read-write, mounted at %s)", c.ProjectReal, c.GuestProject)})
 	}
 	rows = append(rows,
 		// The pull policy, the same detail the full report prints beside the

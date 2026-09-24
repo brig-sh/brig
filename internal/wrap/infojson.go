@@ -115,6 +115,10 @@ type InfoVerify struct {
 // and where it lands in the guest. Absent -- and omitted -- on a run that named
 // no project.
 type InfoProject struct {
+	// Host is the path as typed, which is what the runtime is handed. The
+	// envelope's PROJECT row prints the directory it resolves to, and the two
+	// differ only above the trusted split, as /tmp and /private/tmp do on
+	// macOS. See mountProject.
 	Host  string `json:"host"`
 	Guest string `json:"guest"`
 }
