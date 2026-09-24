@@ -14,14 +14,20 @@ import (
 
 // persistRoot is where a hostmount is pinned while the tmpfs goes over it.
 //
-// Under /run rather than anywhere in the workspace, and that is the point: /run
-// is root-owned in the guest and the agent runs as an ordinary user, so nothing
-// the sandbox can write to sits between a privileged mount and its source.
+// Under /run rather than anywhere in the workspace, so the pin never reaches
+// host disk and never survives a boot.
+//
+// It is not out of the agent's reach. The shipped profiles run the guest as
+// root, so the agent can write here too. A root guest can rewrite its own
+// mount table either way, and which host paths are exposed is decided
+// host-side, so this path keeps the pin off the workspace rather than away
+// from the agent.
 const persistRoot = "/run/brig/persist"
 
 // guestRootUser is who the mounting execs run as. The mount syscall is the
 // only privileged thing here; every target is created under a directory root
-// already owns, so nothing else needs the privilege.
+// already owns, so nothing else needs the privilege. On a profile whose guest
+// is root this is the account the agent runs as anyway.
 const guestRootUser = "root"
 
 // deliverSecretFiles mounts the profile's volumes: and writes its files: into

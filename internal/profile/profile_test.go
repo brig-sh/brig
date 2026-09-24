@@ -125,15 +125,17 @@ func TestClaudeDeliversItsCredentialIntoATmpfs(t *testing.T) {
 // would resolve to an image carrying a second, unused kernel.
 func TestPublishedImagesMatchProfileNames(t *testing.T) {
 	reset(t)
-	// :latest is the multi-arch index, so the same reference resolves on an
-	// arm64 Mac and an amd64 Linux host. An arch-suffixed tag here would
-	// silently pull the wrong architecture on one of the two.
+	// :root, not :latest, because a rootless Linux install needs the guest on
+	// uid 0 -- see the note on guestHome in each spec. It is a multi-arch
+	// index exactly as :latest is, so the same reference resolves on an arm64
+	// Mac and an amd64 Linux host; an arch-suffixed tag here would silently
+	// pull the wrong architecture on one of the two.
 	published := map[string]string{
-		"claude-code": "ghcr.io/brig-sh/claude-code-stock:latest",
-		"codex":       "ghcr.io/brig-sh/codex-stock:latest",
-		"gemini":      "ghcr.io/brig-sh/gemini-stock:latest",
-		"grok":        "ghcr.io/brig-sh/grok-stock:latest",
-		"opencode":    "ghcr.io/brig-sh/opencode-stock:latest",
+		"claude-code": "ghcr.io/brig-sh/claude-code-stock:root",
+		"codex":       "ghcr.io/brig-sh/codex-stock:root",
+		"gemini":      "ghcr.io/brig-sh/gemini-stock:root",
+		"grok":        "ghcr.io/brig-sh/grok-stock:root",
+		"opencode":    "ghcr.io/brig-sh/opencode-stock:root",
 	}
 	for name, image := range published {
 		tmpl, ok := Lookup(name)
@@ -182,8 +184,20 @@ func TestLookupAliases(t *testing.T) {
 func TestGuestUser(t *testing.T) {
 	reset(t)
 	tmpl, _ := Lookup("codex")
-	if got := tmpl.GuestUser(); got != "codex" {
-		t.Errorf("GuestUser() = %q, want codex", got)
+	if got := tmpl.GuestUser(); got != "root" {
+		t.Errorf("GuestUser() = %q, want root", got)
+	}
+
+	// The shipped profiles all end in /root, so they cannot on their own show
+	// that this still takes the LAST element rather than returning a constant.
+	for home, want := range map[string]string{
+		"/home/agent": "agent",
+		"/root":       "root",
+		"/root/work":  "work",
+	} {
+		if got := (Profile{GuestHome: home}).GuestUser(); got != want {
+			t.Errorf("GuestUser() for %q = %q, want %q", home, got, want)
+		}
 	}
 }
 

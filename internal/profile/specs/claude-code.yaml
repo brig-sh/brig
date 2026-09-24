@@ -1,13 +1,20 @@
 name: claude-code
 desc: Claude Code (Anthropic)
 binary: claude
-image: ghcr.io/brig-sh/claude-code-stock:latest
+image: ghcr.io/brig-sh/claude-code-stock:root
 
 # Boots as an ordinary OCI image: the image carries no kernel, so the
 # runtime supplies one. hvi is the backend that path is built around.
 hypervisor: hvi
 genericBoot: true
-guestHome: /home/claude
+# The root account, which is what makes this work on a rootless Linux install:
+# rootlesskit maps container uid 0 to the invoking user, so a root guest IS
+# that user -- it opens /dev/kvm and owns the workspace it writes. A guest on
+# 501 or 1000 lands on a subuid that owns nothing. It costs nothing on macOS,
+# where hvi presents the host user's files as uid 0 by default.
+#
+# brig takes the guest account from the last element of this path.
+guestHome: /root
 
 # ~/.claude/skills and ~/.claude/plugins are copied into the guest under
 # --skills. Memory is deliberately absent: it is keyed by host project path
@@ -171,7 +178,15 @@ volumes:
 # that exports nothing.
 #
 # For git over HTTPS, not for the agent.
+#
+# IS_SANDBOX is load-bearing on root rather than informational. Claude Code
+# refuses --dangerously-skip-permissions outright when it is running as root --
+# "cannot be used with root/sudo privileges for security reasons" -- and this
+# is what says the boundary is the VM rather than the account. Measured: with
+# it unset the flag is refused, with it set the run proceeds.
 env:
+  - name: IS_SANDBOX
+    value: "1"
   - name: GH_TOKEN
     refs: [env.GH_TOKEN, secrets.gh-token]
 

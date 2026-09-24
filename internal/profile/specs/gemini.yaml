@@ -1,13 +1,20 @@
 name: gemini
 desc: Gemini CLI (Google) -- example profile
 binary: gemini
-image: ghcr.io/brig-sh/gemini-stock:latest
+image: ghcr.io/brig-sh/gemini-stock:root
 
 # Boots as an ordinary OCI image: the image carries no kernel, so the
 # runtime supplies one. hvi is the backend that path is built around.
 hypervisor: hvi
 genericBoot: true
-guestHome: /home/gemini
+# The root account, which is what makes this work on a rootless Linux install:
+# rootlesskit maps container uid 0 to the invoking user, so a root guest IS
+# that user -- it opens /dev/kvm and owns the workspace it writes. A guest on
+# 501 or 1000 lands on a subuid that owns nothing. It costs nothing on macOS,
+# where hvi presents the host user's files as uid 0 by default.
+#
+# brig takes the guest account from the last element of this path.
+guestHome: /root
 forward: [GEMINI_API_KEY, GH_TOKEN]
 statePaths: [.gemini]
 headless: true

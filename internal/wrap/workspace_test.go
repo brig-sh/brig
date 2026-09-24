@@ -126,10 +126,13 @@ func TestTrustGuestCwdSetsOneKeyAndKeepsTheRest(t *testing.T) {
 		t.Errorf("an unrelated key was dropped: %s", blob)
 	}
 	projects := doc["projects"].(map[string]any)
-	// The key is the repository root as the guest sees it, not the cwd.
-	entry, ok := projects["/home/claude/myrepo"].(map[string]any)
+	// The key is the repository root as the guest sees it, not the cwd. Taken
+	// from the profile rather than spelled out, so moving the guest home does
+	// not silently turn this into an assertion about the old one.
+	want := c.Profile.GuestHome + "/myrepo"
+	entry, ok := projects[want].(map[string]any)
 	if !ok || entry["hasTrustDialogAccepted"] != true {
-		t.Errorf("trust key not set for the repository root: %s", blob)
+		t.Errorf("trust key not set for %s: %s", want, blob)
 	}
 	if projects["/home/claude"] == nil {
 		t.Errorf("an existing trust entry was dropped: %s", blob)

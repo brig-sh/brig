@@ -27,6 +27,11 @@ export STUB_LOG="$WORK/argv.log"
 export STUB_STATE="$WORK/instance"
 WS="$WORK/ws"
 
+# The guest home the claude-code profile mounts the workspace at, spelled once
+# because six assertions below check it. It follows that profile's guestHome:
+# change it there and this is the single line to match.
+GUEST_HOME=/root
+
 # Assertions on brig's own output capture it first rather than piping into
 # `grep -q`. grep -q exits at the first match, brig then dies of SIGPIPE
 # writing the rest, and `set -o pipefail` reports the pipeline as failed --
@@ -284,7 +289,7 @@ grep -q 'env-token:env-token-secret' "$STUB_LOG" \
 grep '^argv:' "$STUB_LOG" | grep -q -- '--env GH_TOKEN' \
   && ok "argv names the variables only" || bad "argv names the variables only"
 
-grep -q -- "--shared-dir $WS:/home/claude" "$STUB_LOG" \
+grep -q -- "--shared-dir $WS:$GUEST_HOME" "$STUB_LOG" \
   && ok "the workspace is mounted as the guest home" || bad "workspace is mounted as the guest home"
 grep -q -- '-- claude -p hi' "$STUB_LOG" \
   && ok "agent arguments pass through" || bad "agent arguments pass through"
@@ -366,7 +371,7 @@ rc=$?
 grep -q -- "--shared-dir $PROJ:/work/myproject" "$STUB_LOG" \
   && ok "the project is mounted at /work/<basename>" \
   || bad "the project is mounted at /work/<basename> -- got: $(grep '^argv: run' "$STUB_LOG")"
-grep -q -- "--shared-dir $WS:/home/claude" "$STUB_LOG" \
+grep -q -- "--shared-dir $WS:$GUEST_HOME" "$STUB_LOG" \
   && ok "the home share is unchanged by a project" \
   || bad "the home share is unchanged by a project -- got: $(grep '^argv: run' "$STUB_LOG")"
 grep -q -- '--cwd /work/myproject' "$STUB_LOG" \
@@ -502,7 +507,7 @@ HOMEDIR="$WORK/named-home"
 : > "$STUB_LOG"
 env -u BRIG_WORKSPACE "$WORK/brig" run claude --home "$HOMEDIR" -d \
   > /dev/null 2> "$WORK/home.err"
-grep -q -- "--shared-dir $HOMEDIR:/home/claude" "$STUB_LOG" \
+grep -q -- "--shared-dir $HOMEDIR:$GUEST_HOME" "$STUB_LOG" \
   && ok "--home is mounted as the guest home" \
   || bad "--home is mounted as the guest home -- got: $(grep '^argv: run' "$STUB_LOG")"
 grep -q 'is now' "$WORK/home.err" \
@@ -513,7 +518,7 @@ for spelling in -w --workspace; do
   : > "$STUB_LOG"
   env -u BRIG_WORKSPACE "$WORK/brig" run claude "$spelling" "$HOMEDIR" -d \
     > /dev/null 2> "$WORK/oldhome.err"
-  grep -q -- "--shared-dir $HOMEDIR:/home/claude" "$STUB_LOG" \
+  grep -q -- "--shared-dir $HOMEDIR:$GUEST_HOME" "$STUB_LOG" \
     && ok "$spelling still sets the guest home" \
     || bad "$spelling still sets the guest home -- got: $(grep '^argv: run' "$STUB_LOG")"
   grep -q "is now \`--home\`" "$WORK/oldhome.err" \
@@ -796,7 +801,7 @@ grep -q '^SANDBOX .*brig-claude-code' "$WORK/env.out" \
 echo "== named session =="
 : > "$STUB_LOG"
 "$WORK/brig" run claude --name 'My Big Refactor' -p hi > /dev/null 2>&1
-grep -q -- "--shared-dir $WS-my-big-refactor:/home/claude" "$STUB_LOG" \
+grep -q -- "--shared-dir $WS-my-big-refactor:$GUEST_HOME" "$STUB_LOG" \
   && ok "a named session gets its own workspace" || bad "named session gets its own workspace"
 grep -q -- '--name brig-claude-code-my-big-refactor' "$STUB_LOG" \
   && ok "a named session gets its own sandbox" || bad "named session gets its own sandbox"
@@ -1424,7 +1429,7 @@ echo "== flags =="
   > /dev/null 2>&1
 grep -q -- '--mem 8192 --cpus 2' "$STUB_LOG" \
   && ok "-m and --cpus reach the runtime" || bad "-m and --cpus reach the runtime"
-grep -q -- "--shared-dir $WORK/other:/home/claude" "$STUB_LOG" \
+grep -q -- "--shared-dir $WORK/other:$GUEST_HOME" "$STUB_LOG" \
   && ok "-w overrides the workspace" || bad "-w overrides the workspace"
 grep -q 'ghcr.io/me/img:latest' "$STUB_LOG" \
   && ok "-t overrides the image" || bad "-t overrides the image"
