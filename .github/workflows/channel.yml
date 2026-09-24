@@ -96,6 +96,18 @@ jobs:
           path: .workflow
           persist-credentials: false
 
+      # actions/checkout takes a path under the workspace, so the checkout
+      # above lands inside the tree being built. Go's VCS stamping runs `git
+      # status --porcelain`, which lists untracked paths, so without this every
+      # channel build is stamped +dirty. That reaches CHANNEL_VERSION, and from
+      # there the archive names, which GitHub then rewrites on upload.
+      #
+      # info/exclude rather than .gitignore: a ref cut before this workflow
+      # existed carries no entry for it, and promoting one of those is a case
+      # this workflow keeps working.
+      - name: Keep the workflow checkout out of the built tree's status
+        run: echo '/.workflow/' >> .git/info/exclude
+
       - uses: actions/setup-go@v7
         with:
           go-version: stable
@@ -154,9 +166,15 @@ jobs:
       # rather than a release per commit.
       # The new assets go up before anything else changes. The cask in the tap
       # still names the previous build's files at this point, and those files
-      # are still there -- so an install during this step gets the old build
-      # rather than a 404, and the tap's checksum CI still agrees with itself.
-      # The old assets are removed after the tap has moved on; see below.
+      # are still there, so an install during this step gets the old build
+      # rather than a 404. The old assets are removed after the tap has moved
+      # on; see below.
+      #
+      # checksums.txt is the one name replaced in place. A tap CI run between
+      # this step and the tap commit reads the new file and looks the old
+      # cask's filenames up in it, so check-cask-checksums.py fails until the
+      # tap moves. Nothing installs from checksums.txt, so the window costs a
+      # red run on the tap rather than a broken install.
       - name: Publish to the channel release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
