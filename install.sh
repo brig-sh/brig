@@ -269,11 +269,20 @@ install_runtime() {
   # integrity, and the bundle installer is told to insist on the same for the
   # tarball it fetches. A failure here is fatal: it is what a tampered or
   # mis-signed release looks like.
+  #
+  # The version is pinned, and a release from that workflow carries both
+  # signature assets. A fetch that does not find one is an anomaly, so it stops
+  # the install. Without cosign there is nothing to check with, and that is the
+  # one case that falls back to the hash.
   require_sig=false
   resolve_cosign || true
-  if [ -n "$COSIGN_BIN" ] \
-     && curl -fsSL -o "$tmp/runtime-checksums.txt.sig" "$base/checksums.txt.sig" \
-     && curl -fsSL -o "$tmp/runtime-checksums.txt.pem" "$base/checksums.txt.pem"; then
+  if [ -z "$COSIGN_BIN" ]; then
+    say "no cosign available, so the runtime release is checked by hash alone"
+  else
+    curl -fsSL -o "$tmp/runtime-checksums.txt.sig" "$base/checksums.txt.sig" \
+      || die "no checksums.txt.sig in $RUNTIME_REPO $version"
+    curl -fsSL -o "$tmp/runtime-checksums.txt.pem" "$base/checksums.txt.pem" \
+      || die "no checksums.txt.pem in $RUNTIME_REPO $version"
     "$COSIGN_BIN" verify-blob "$tmp/runtime-checksums.txt" \
       --certificate "$tmp/runtime-checksums.txt.pem" \
       --signature "$tmp/runtime-checksums.txt.sig" \
@@ -282,8 +291,6 @@ install_runtime() {
       || die "the runtime release's checksums.txt is not signed by $RUNTIME_REPO's release workflow"
     say "signature ok: $RUNTIME_REPO checksums.txt"
     require_sig=true
-  else
-    say "no cosign available, so the runtime release is checked by hash alone"
   fi
 
   case "${BRIG_INSTALL_ROOTLESS:-0}" in
@@ -355,10 +362,13 @@ install_cosign() {
 if [ "$os" = linux ] && [ "${BRIG_INSTALL_RUNTIME:-1}" != 0 ]; then
   install_runtime
 else
+  # brig first. install_cosign dies on a failed download, and cosign is the
+  # least important thing here, so fetching it before brig would let a sigstore
+  # outage leave the host with nothing installed.
+  install_brig
   if [ "${BRIG_INSTALL_COSIGN:-1}" != 0 ]; then
     install_cosign
   fi
-  install_brig
 fi
 
 if [ "$os" = darwin ] && [ "${BRIG_INSTALL_HULL:-1}" != 0 ]; then
