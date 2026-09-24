@@ -33,6 +33,10 @@ const (
 	// hull does not read this: it takes its backend as --hypervisor, from a
 	// different set of names entirely (vz, hvi), which is why this is appended
 	// on the Linux path rather than added to the pair below.
+	//
+	// TODO: appended on every Linux generic boot, so a host that installed
+	// containerd and urunc itself and runs qemu fails where it booted before.
+	// Make it conditional on the bundle once hvi reaches parity on Linux.
 	annotationHypervisor   = "com.urunc.unikernel.hypervisor"
 	monitorCloudHypervisor = "cloud-hypervisor"
 )
