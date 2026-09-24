@@ -373,6 +373,34 @@ func TestCompletePositions(t *testing.T) {
 		words:     []string{"run", "--network=offline", ""},
 		directive: dirNames,
 		want:      []string{"claude-code", "claude-code@refactor"},
+	}, {
+		// #312: the port verbs are a group, and the flat spellings never shipped.
+		name:      "the port verbs are under network",
+		words:     []string{""},
+		directive: dirNames,
+		want:      []string{"network"},
+		absent:    []string{"publish", "unpublish"},
+	}, {
+		name:      "network is three words",
+		words:     []string{"network", ""},
+		directive: dirNames,
+		exactly:   []string{"ls", "publish", "unpublish"},
+	}, {
+		name:      "a network verb takes a ref",
+		words:     []string{"network", "publish", ""},
+		directive: dirNames,
+		want:      []string{"claude-code", "claude-code@refactor"},
+	}, {
+		name:      "--all is offered on unpublish",
+		words:     []string{"network", "unpublish", "claude-code", "-"},
+		directive: dirNames,
+		want:      []string{"--all", "--json"},
+		absent:    []string{"--mem", "--publish"},
+	}, {
+		name:      "and nowhere else on the network line",
+		words:     []string{"network", "ls", "claude-code", "-"},
+		directive: dirNames,
+		exactly:   []string{"--json"},
 	}}
 
 	for _, tc := range cases {

@@ -26,6 +26,12 @@ The guest can access:
 - the internet, on the default `shared` network
 - any hostmount volume a profile declares
 
+The host can reach the guest on any port you publish with `--publish` or
+`brig network publish`, and on no other. A published port is the one inbound
+hole in the boundary, it exists only because you asked for it, and it goes
+with `brig network unpublish`. See [Published ports](#published-ports)
+below.
+
 The guest cannot access:
 
 - any other host directory
@@ -93,6 +99,37 @@ Beyond those, the guest does not have your keychain, your SSH agent, your
 secret manager, or any other directory on the host. That inaccessibility is
 the isolation boundary for everything else. It is also the reason credentials
 have to be forwarded in explicitly: the guest cannot fetch them for itself.
+
+### Published ports
+
+Nothing on the host can open a connection into the sandbox until you publish
+a port. `--publish` on a run, and `brig network publish` on a sandbox already
+up, are the two ways to ask.
+
+A published port widens the boundary, per port and on request. Three things
+hold it down.
+
+It binds to `127.0.0.1` unless you write an address yourself, so the port is
+reachable from this machine and not from the network this machine is on.
+`0.0.0.0:8080:80` is how you ask for the wider one, and it is never the
+default.
+
+It is named in the execution envelope, on a `PORTS` row, every run:
+
+```
+NETWORK      shared (one network for every sandbox on this host)
+PORTS        127.0.0.1:8080 -> 80
+             0.0.0.0:443 -> 443 (reachable from the network this host is on)
+```
+
+The row carries every port the sandbox publishes, not only the ones this
+command line asked for, because a publication outlives the run that made it.
+An address other than loopback says so on its own row.
+
+And it is ingress, so no egress rule applies to it. A policy decides what the
+guest may open a connection *to*; it has nothing to say about a connection
+opened *into* the guest. A sandbox under a strict egress policy with a port
+published is still reachable on that port.
 
 ## Credentials
 

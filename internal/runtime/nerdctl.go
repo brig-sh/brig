@@ -224,6 +224,9 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 			"user-mode network gateway on macOS; there is no equivalent behind this runtime " +
 			"yet, so the rules would not be enforced here. Detach the policy to run it")
 	}
+	if len(spec.Publish) > 0 && spec.Net == "none" {
+		return offlinePublishError(spec.Publish)
+	}
 	return nil
 }
 
@@ -348,6 +351,14 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		// sandbox. Created before the run, in Run, because nerdctl will not
 		// make one on demand.
 		args = append(args, "--network", sandboxNetwork(spec.Name))
+	}
+	// Published at creation, which is the only time this runtime can do it:
+	// a container's port bindings are part of the container, and adding one
+	// means replacing the container. That is why Publisher is implemented on
+	// the other adapter and not here, and why `brig network publish` says so.
+	for _, p := range spec.Publish {
+		args = append(args, "--publish", fmt.Sprintf("%s:%d:%d/%s",
+			p.Addr(), p.HostPort, p.GuestPort, p.Proto()))
 	}
 	// "shared" passes no --network at all, so the runtime's own default is
 	// used. Said as an absence rather than a flag because that is what every

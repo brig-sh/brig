@@ -91,8 +91,22 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		// setting the run was started with.
 		envelopeRow{"NETWORK", c.Network.Line()},
 	)
-	// Only when one applies. A row reading "none" on every run would train
-	// the eye to skip the line that matters on the runs where there is one.
+	// Directly under the network, because a published port is a hole in it.
+	// One row per port, and only when there is one: a row reading "none" on
+	// every run would train the eye to skip the line that matters on the runs
+	// where there is one.
+	//
+	// Every port, not only the ones this command line asked for. A publication
+	// outlives the run that made it, and a reader has to be able to see the
+	// whole boundary from the block in front of them.
+	for i, line := range publicationLines(c.Publish) {
+		label := ""
+		if i == 0 {
+			label = "PORTS"
+		}
+		rows = append(rows, envelopeRow{label, line})
+	}
+	// Only when one applies, for the reason above.
 	if line := c.policyLine(); line != "" {
 		rows = append(rows, envelopeRow{"POLICY", line})
 	}

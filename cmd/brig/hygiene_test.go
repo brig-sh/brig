@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -143,7 +144,7 @@ func TestParseNetworkAndOffline(t *testing.T) {
 func TestBrigFlagsDeclareAPosition(t *testing.T) {
 	for _, f := range brigFlags {
 		switch f.position {
-		case posGlobal, posRun:
+		case posGlobal, posRun, posPublish:
 		default:
 			t.Errorf("brig flag --%s has no position", f.long)
 		}
@@ -337,6 +338,13 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 				if f.position == posGlobal {
 					continue
 				}
+				// A publish-line flag cannot collide either, and for the
+				// same reason read from the other end: `brig network publish` and
+				// `brig network unpublish` hand nothing to an agent, so no word on
+				// one of those lines was ever going to reach one.
+				if f.position == posPublish {
+					continue
+				}
 				spellings := []string{"--" + f.long}
 				if f.short != "" {
 					spellings = append(spellings, "-"+f.short)
@@ -445,7 +453,7 @@ func TestParseReadsASessionRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse --name: %v", err)
 	}
-	if viaFlag.load != o.load || viaFlag.nameGiven != o.nameGiven {
+	if !reflect.DeepEqual(viaFlag.load, o.load) || viaFlag.nameGiven != o.nameGiven {
 		t.Errorf("claude@refactor = %+v, claude --name refactor = %+v", o.load, viaFlag.load)
 	}
 }

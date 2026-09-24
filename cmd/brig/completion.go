@@ -133,6 +133,7 @@ var verbs = []string{
 	"doctor",
 	"info",
 	"ls",
+	"network",
 	"policy",
 	"rm",
 	"run",
@@ -223,6 +224,8 @@ func complete(words []string) (string, []string) {
 			return dirNone, nil
 		}
 		return names(cur, agentNames())
+	case verb == "network":
+		return completeNetwork(rest, cur)
 	case groups[verb] != nil:
 		return completeGroup(verb, rest, cur)
 	case refVerbs[verb]:
@@ -259,7 +262,7 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	// "=", so in zsh and fish the whole thing is the current word and would
 	// otherwise be matched against flag names, which it cannot match.
 	if flag, prefix, ok := inlineValue(cur); ok {
-		mine, takesValue := ours(flag, posRun)
+		mine, takesValue := ours(flag, verbPosition(verb))
 		if !mine || !takesValue {
 			return dirNone, nil
 		}
@@ -271,7 +274,7 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		// split() reads brig's own flags on both sides of the ref, stopping
 		// only at a flag brig does not own, so offer them on both sides too.
 		// `brig run claude --mem 4096` is a line brig parses.
-		flags := flagSpellings(posRun, verb)
+		flags := flagSpellings(verbPosition(verb), verb)
 		if verb == "rm" {
 			// rm's own flags are not in brigFlags: they are read before the run
 			// line. --dry-run goes on either side of the ref; --all replaces the
@@ -319,6 +322,7 @@ type runLine struct {
 func walkRunLine(verb string, args []string) runLine {
 	var line runLine
 	takesProject := verb == "run"
+	at := verbPosition(verb)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -337,7 +341,7 @@ func walkRunLine(verb string, args []string) runLine {
 			line.tailBegun = true
 			return line
 		default:
-			mine, takesValue := ours(a, posRun)
+			mine, takesValue := ours(a, at)
 			if !mine {
 				if line.refGiven {
 					line.tailBegun = true
@@ -724,6 +728,9 @@ func flagSpellings(at position, verb string) []string {
 		if at == posRun && verb != "" && !honorsRunLine(verb, f.long) {
 			continue
 		}
+		if f.long == "all" && at == posPublish && verb != "network unpublish" {
+			continue
+		}
 		out = append(out, "--"+f.long)
 		if f.short != "" && deprecatedFlags["-"+f.short] == "" {
 			out = append(out, "-"+f.short)
@@ -731,6 +738,32 @@ func flagSpellings(at position, verb string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// completeNetwork answers under `brig network`: the subcommand, then the line
+// it reads. It is not in groups, because its subcommands take a ref and the
+// flags of posPublish.
+func completeNetwork(rest []string, cur string) (string, []string) {
+	if len(rest) == 0 {
+		if strings.HasPrefix(cur, "-") {
+			return dirNone, nil
+		}
+		return names(cur, []string{"ls", "publish", "unpublish"})
+	}
+	verb := "network " + rest[0]
+	if !onPortLine(verb) {
+		return dirNone, nil
+	}
+	return completeRunLine(verb, rest[1:], cur)
+}
+
+// verbPosition is where this verb's own flags stand. The network verbs read a
+// vocabulary of their own, so completion offers that one; see posPublish.
+func verbPosition(verb string) position {
+	if onPortLine(verb) {
+		return posPublish
+	}
+	return posRun
 }
 
 // bareWords returns the positional arguments at one position: tokens that are

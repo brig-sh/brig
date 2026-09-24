@@ -48,6 +48,11 @@ func gatewayCIDR(name string) (string, error) {
 	return formatGatewayCIDR(host), nil
 }
 
+// sharedCIDR is the address a host number carries on the shared network. It
+// is formatGatewayCIDR under the name a reader of the isolated side expects,
+// since sandboxCIDR is its counterpart there.
+func sharedCIDR(host int) string { return formatGatewayCIDR(host) }
+
 // releaseGatewayIP gives a removed sandbox's address back.
 func releaseGatewayIP(name string) {
 	if alloc, err := sharedIPs(); err == nil {

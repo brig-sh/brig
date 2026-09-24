@@ -204,6 +204,12 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 			if c.Profile.IsGUI() {
 				focusWindow()
 			}
+			// A port published on a sandbox that is already up, which the
+			// gateway can do without a restart. `brig network publish` goes
+			// through the same Publisher; see runtime.Publisher.
+			if err := c.publishLive(); err != nil {
+				return err
+			}
 			// Delivered on this path too: the tmpfs dies with the sandbox but
 			// a running one may have been booted before the secret existed,
 			// and rewriting a file the agent already read is how a rotated
@@ -282,8 +288,12 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		// what the next boot enforces, which is the property worth having --
 		// a policy an agent could ask to have relaxed mid-run is not a policy.
 		Egress: check.Egress,
-		Mem:    c.Mem,
-		CPUs:   c.CPUs,
+		// The ports this sandbox offers on the host. The whole set, not only
+		// what this line asked for: the record is the sandbox's, and the boot
+		// is where it is made true again after a gateway that forgot it.
+		Publish: check.Publish,
+		Mem:     c.Mem,
+		CPUs:    c.CPUs,
 		// The workspace first, which is the guest's home, then this run's
 		// project if it named one. The host's agent configuration is copied
 		// into the workspace rather than mounted, so it needs no share of its
@@ -312,6 +322,13 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	}
 	if err := c.Runtime.Run(spec); err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
+	}
+	// Recorded once the boot has installed the ports. The spec already
+	// carried them: Load merges this line's --publish into the record it
+	// read. A run refused before this point, by verification or by the boot
+	// itself, leaves the record as it was.
+	if err := c.recordPublications(); err != nil {
+		return err
 	}
 	// The share is bound now and cannot be changed on a live sandbox, so this
 	// is the moment the path becomes a fact about the instance. Recorded before
@@ -599,6 +616,10 @@ func (c *Config) Remove() error {
 	// them -- rm's not-found path leaves them alone, since it removed nothing.
 	ForgetSandbox(c.VMName)
 	ForgetSlugClaim(c.VMName)
+	// And what it published. A publication survives a stop and a recreate,
+	// because it belongs to the sandbox rather than to one run of it; this is
+	// the one place the sandbox itself goes away.
+	runtime.ForgetPublications(c.VMName)
 	return err
 }
 
@@ -679,4 +700,52 @@ func (c *Config) Shell(set creds.Set, command []string) error {
 // status rather than replacing itself with it.
 func (c *Config) ShellAttached(set creds.Set, command []string) (int, error) {
 	return c.ExecAttached(set, shellArgv(command), true)
+}
+
+// recordPublications writes what this command line asked to publish, so the
+// next run of this sandbox offers the same ports.
+//
+// Nothing is written when the line asked for nothing, which is almost every
+// run. The record is the sandbox's, and a run that says nothing about ports
+// should not touch it.
+func (c *Config) recordPublications() error {
+	if len(c.PublishAsked) == 0 {
+		return nil
+	}
+	published, err := runtime.RecordPublications(c.VMName, c.PublishAsked)
+	if err != nil {
+		return err
+	}
+	c.Publish = published
+	return nil
+}
+
+// publishLive offers this run's --publish ports on a sandbox that is already
+// up.
+//
+// The alternative was to restart the sandbox, the way a changed network or a
+// stale share is answered. A port does not need it: the gateway installs a
+// forward while its guests stay attached, so `brig run --publish 3000 claude`
+// on a running session publishes the port and leaves the agent where it is.
+//
+// A runtime that cannot do it says so rather than leaving the envelope
+// claiming a port nothing forwards. On a container runtime the bindings are
+// part of the container, so the way through is to remove the sandbox and run
+// it again.
+func (c *Config) publishLive() error {
+	if len(c.PublishAsked) == 0 {
+		return nil
+	}
+	publisher, ok := c.Runtime.(runtime.Publisher)
+	if !ok {
+		return fmt.Errorf("%s is already running, and %s fixes a sandbox's published ports "+
+			"when it is created. Remove it with `brig rm %s` and run it again to publish %s",
+			c.VMName, c.Runtime.Kind(), c.RawName, c.PublishAsked[0])
+	}
+	for _, p := range c.PublishAsked {
+		if err := publisher.Publish(c.VMName, p); err != nil {
+			return err
+		}
+	}
+	return nil
 }

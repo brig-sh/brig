@@ -122,3 +122,18 @@ func TestRunOnlyComesFromTheFlagTable(t *testing.T) {
 		t.Fatal("no run-line flags in the table")
 	}
 }
+
+// #228: --all is registered on the publish line alone, and agentTail asks
+// oursAt for a flag at posAny, which skips the position check. `brig run claude
+// --all` then told the reader that the agent's own flag was brig's, about a
+// flag brig reads nowhere on that line.
+func TestAPublishOnlyFlagDoesNotWarnOnARunLine(t *testing.T) {
+	warning := captureStderr(t, func() {
+		if _, _, _, err := parse("run", []string{"claude", "--all"}); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+	})
+	if strings.Contains(warning, "one of brig's own flags") {
+		t.Errorf("run warned about --all, which it reads nowhere on that line:\n%s", warning)
+	}
+}

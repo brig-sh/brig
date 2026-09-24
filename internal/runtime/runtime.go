@@ -115,6 +115,15 @@ type RunSpec struct {
 	// once, when that gateway starts, which is also why a sandbox carrying
 	// one needs a network of its own. See gateway.go.
 	Egress Egress
+	// Publish are the guest ports this run offers on the host.
+	//
+	// Every one of them is a hole in the sandbox boundary, so they are named
+	// in the execution envelope and default to loopback. What reaches a
+	// runtime here is the whole set the sandbox publishes, which is the
+	// record on disk and not only what this command line asked for: a
+	// publication is part of a sandbox's configuration and outlives one run.
+	// See publish.go.
+	Publish []Publication
 	// Counted marks an operation that is a user action rather than brig's own
 	// plumbing, so telemetry counts one command once. See telemetryEnv.
 	Counted bool

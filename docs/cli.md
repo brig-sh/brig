@@ -11,7 +11,7 @@ and the deprecation window.
 
 ## Everyday commands
 
-The eight commands you type most, before the exhaustive reference below.
+The nine commands you type most, before the exhaustive reference below.
 
 | Command | What it does |
 | --- | --- |
@@ -23,6 +23,7 @@ The eight commands you type most, before the exhaustive reference below.
 | `brig info claude` | prints the execution envelope, without booting anything |
 | `brig stop claude` | stops the sandbox and keeps its state on disk |
 | `brig rm claude` | stops the sandbox and removes it |
+| `brig network publish claude 3000` | opens the agent's port 3000 on `localhost:3000` |
 
 ## Verbs
 
@@ -202,11 +203,65 @@ brig info claude
 
 Prints the execution envelope without booting anything. The envelope has the
 sandbox name, the isolation, the guest home, the image, the verification
-mode, the network and the credentials by name.
+mode, the network, every published port and the credentials by name.
 
 `info` fails only when a required secret cannot be resolved. A declared
 secret marked `required: false` prints a warning, and the command still
 exits `0`.
+
+### `brig network`
+
+```bash
+brig network publish claude 3000      # the agent's dev server, on localhost:3000
+brig network publish claude 8080:80   # host 8080 carries guest 80
+brig network ls claude                # what this sandbox publishes
+brig network unpublish claude 8080    # close it again
+brig network unpublish claude --all
+```
+
+`publish` opens a guest port on the host of a sandbox that is already up, or
+records it for the next boot of one that is not. `--publish` on `brig run`
+asks for the same thing at boot. `ls` lists the ports and whether each is open
+right now.
+
+`brig info` prints the ports too, as the `PORTS` row of the execution
+envelope. `ls` is the one to reach for when the ports are all you want: it
+resolves no credentials, so it answers even when a declared secret is
+missing.
+
+A port is written the way docker writes one:
+
+| Written | Means |
+| --- | --- |
+| `3000` | host `127.0.0.1:3000` carries guest `3000` |
+| `8080:80` | host `127.0.0.1:8080` carries guest `80` |
+| `127.0.0.1:8080:80` | the same, said explicitly |
+| `0.0.0.0:8080:80` | offered to the network this host is on |
+| `5353:53/udp` | UDP rather than TCP |
+
+The host address defaults to `127.0.0.1`, so a published port is reachable
+from this machine and not from the network this machine is on. `0.0.0.0` is
+how you ask for the wider one, and the execution envelope says so on the row
+for that port.
+
+A publication belongs to the sandbox rather than to one run of it. `brig stop`
+releases the host port, because nothing else on the machine could take it
+otherwise, and keeps the publication: the next `brig run` offers the same
+ports without being asked again. `brig network unpublish` is what takes one
+away, and `brig rm` takes all of them with the sandbox.
+
+`unpublish` names a port by its host side alone, which is the half you can
+see. `brig network unpublish claude 8080` closes whatever `8080` was
+carrying. The HOST column of `brig network ls` works as printed:
+`brig network unpublish claude 0.0.0.0:8080` closes the port on that address
+only.
+
+Publishing needs a network gateway that brig owns, which is the `hvi` backend
+on macOS. On `vz` the sandbox takes its network from vmnet and brig has
+nothing to ask, so `--publish` is refused there by name rather than ignored.
+On Linux the container runtime publishes, and it can only do that when the
+sandbox is created: `brig run --publish` works, and publishing onto a sandbox
+that is already running says to remove it and run it again.
 
 ### `brig doctor`
 
@@ -512,7 +567,7 @@ own arguments begin.
 | Position | Flags |
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
-| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, and, as peers, `-q`/`--quiet` and `--json` |
+| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish`, and, as peers, `-q`/`--quiet` and `--json` |
 
 The global position is a closed set. A token there that is none of the three
 global flags is refused by name, never forwarded to an agent:
@@ -571,6 +626,7 @@ Brig's own flag but stood where the agent's arguments already begin.
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
 | `--network MODE` | `shared`, `isolated` or `offline` | `shared`, unless the agent's own profile sets `network:` (none of the shipped agents do) | the sandbox's network posture. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox |
+| `--publish PORT` | `3000`, `8080:80`, `127.0.0.1:8080:80`, `5353:53/udp` | nothing published | open a guest port on the host. Repeatable. Binds to `127.0.0.1` unless the address says otherwise. There is no `-p`: that is the agent's. See [`brig network`](#brig-network) |
 
 Flag beats an environment setting beats the profile's own field, in that
 order, for every value above with an `env` counterpart in
@@ -591,6 +647,7 @@ verb.
 | `info`, `env` | global, or local on the run line | envelope |
 | `doctor` | global, or local after `doctor` | envelope |
 | `version` | global, or local after `version` | envelope |
+| `network ls`, `network publish`, `network unpublish` | global, or local after the ref | envelope, `kind: Ports` |
 | `run`, `sh` | global, or local on the run line | one compact line, see below |
 | `agent ls` | global, or local after `ls` | envelope |
 | `secret ls` | global, or local after `ls` | envelope |
@@ -610,8 +667,8 @@ that works:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, agent ls, secret ls, doctor, version (env takes it too, but env is
-deprecated; prefer info), and for run and sh
+info, agent ls, secret ls, doctor, version and the network verbs (env takes
+it too, but env is deprecated; prefer info), and for run and sh
 ```
 
 The flag has to follow `agent show`, not precede `agent`. Every verb not
@@ -641,6 +698,30 @@ brig agent show claude-code --json
   ...
 }
 ```
+
+**The network verbs under `--json`.** All three print what the sandbox
+publishes, after whatever the command changed, as `kind: Ports`:
+
+```json
+{
+  "apiVersion": "brig.sh/v1alpha1",
+  "kind": "Ports",
+  "data": {
+    "sandbox": "brig-claude-code",
+    "ports": [
+      {"host": "127.0.0.1:8080", "guest": 80, "protocol": "tcp", "live": true}
+    ]
+  }
+}
+```
+
+`live` is whether the gateway is forwarding that port this moment. A port
+recorded but not live belongs to a sandbox that is not running, and it is
+published again when that sandbox starts.
+
+It is `null`, and `STATE` reads `unknown`, on a runtime brig cannot ask. The
+Linux runtime answers nothing here, so a port it forwards reports neither open
+nor pending until it does.
 
 **`run` and `sh` under `--json`.** The agent runs as a child of Brig. After
 it exits, Brig prints one compact JSON line with the outcome, the last line

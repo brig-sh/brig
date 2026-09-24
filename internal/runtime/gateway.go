@@ -323,6 +323,15 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 		"--subnet", subnet,
 		"--gateway-ip", gatewayIP,
 	}
+	// The API socket is opened on every gateway, whether or not this run
+	// publishes anything: a port published later has to reach a gateway that
+	// is already serving guests, and a gateway started without this could only
+	// be given one by being restarted. See gatewayapi.go.
+	//
+	// Every hull release takes --api: network-gateway has had it since
+	// v0.1.0-rc3, the first tag. What a hull before rc29 lacks is the
+	// /forwards endpoint behind it, and unpublishable names that.
+	args = append(args, "--api", gatewayAPISocket(sock))
 	args = append(args, policy.args()...)
 
 	cmd := exec.Command(bin, args...)
@@ -532,6 +541,7 @@ func clearGatewayRecord(sock string) {
 	_ = os.Remove(gatewayPIDPath(sock))
 	_ = os.Remove(gatewaySpecPath(sock))
 	_ = os.Remove(gatewayLogPath(sock))
+	_ = os.Remove(gatewayAPISocket(sock))
 }
 
 func gatewayPID(sock string) (int, bool) {

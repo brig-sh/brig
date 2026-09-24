@@ -55,6 +55,9 @@ usage:
   brig info <ref>                                print the execution envelope and the
                                                  full environment, by name -- fails
                                                  if a declared secret is missing
+  brig network ls        <ref>                   the ports a sandbox publishes
+  brig network publish   <ref> PORT...           open a guest port on the host
+  brig network unpublish <ref> PORT...|--all     close one again
   brig agent ls|show|new|edit|rm|import|export   the agents you can run
   brig policy ls|create|edit|show|rm             manage policies
   brig policy attach|detach <policy> <profile>   bind or unbind a policy,
@@ -87,9 +90,9 @@ global flags (left of the command, as in: brig -q run claude):
                          even here
                          (-q after the verb still works this release)
       --json             machine-readable output, for the read verbs: ls, info,
-                         agent ls, secret ls, doctor and version. Also accepted
-                         after the verb (brig ls --json). Every other verb
-                         refuses it
+                         agent ls, secret ls, doctor, version and the network
+                         verbs. Also accepted after the verb (brig ls
+                         --json). Every other verb refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
                          JSON line with its exit status -- so a script can tell
                          "brig refused" from "the agent failed"
@@ -112,6 +115,15 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
+      --publish PORT     open a guest port on the host. Repeatable. No short
+                         form: -p belongs to the agents
+
+A published port is 3000 (the same port on both sides), 8080:80 (a host port
+and the guest port behind it), 127.0.0.1:8080:80 (an explicit host address) or
+5353:53/udp. It binds to 127.0.0.1 unless the address says otherwise, so the
+port is reachable from this machine and not from the network this machine is
+on. Every one of them is named in the execution envelope. A port stays with
+the sandbox until brig network unpublish, so a later run offers it again.
 
 By default a run prints what you have to act on, then the agent: warnings,
 errors, and one line saying verification held. The execution envelope, brig's
@@ -392,6 +404,15 @@ func dispatch(args []string) error {
 	case "run", "sh", "stop", "info":
 		// The taught lifecycle spellings. They fall through to the run line
 		// below, which is where the ref and the flags are read.
+	case "network":
+		// The subcommands take a ref, so they continue on the run line below.
+		// The verb keeps the group's name, and every message that names the
+		// verb then names the line the reader typed.
+		sub, err := networkSub(rest)
+		if err != nil || sub == "" {
+			return err
+		}
+		verb, rest = "network "+sub, rest[1:]
 	case "create":
 		// create is `run -d`: start the sandbox, print its name, attach to
 		// nothing. It keeps a branch of its own below rather than being
@@ -487,6 +508,8 @@ func dispatch(args []string) error {
 	switch {
 	case !wantJSON:
 	case verb == "info" || verb == "env":
+	// All three answer with what the sandbox publishes.
+	case onPortLine(verb):
 	case verb == "run" || verb == "sh":
 		// The state main needs to print the Run object once dispatch returns. The
 		// sandbox name is not known until Load below; the ref is what was typed.
@@ -500,6 +523,10 @@ func dispatch(args []string) error {
 	if opts.load.Project != "" && opts.load.NoProject {
 		return usagef("--no-project and the project %q ask for different things; "+
 			"drop one", opts.load.Project)
+	}
+	// --all is read on every network line, but only unpublish acts on it.
+	if opts.all && verb != "network unpublish" {
+		return usagef("--all goes with `brig network unpublish`, not `brig %s`", verb)
 	}
 	// --no-project is run's, like the positional it answers. Elsewhere it is a
 	// flag that does nothing, which is worse than one that is refused.
@@ -590,6 +617,12 @@ func dispatch(args []string) error {
 		// already its own slug, so naming RawName here would print a ref brig
 		// would then turn away. The index is keyed by the slug too.
 		return removeSandbox(cfg, session.Ref{Agent: profileName, Label: cfg.Slug}.String(), rmDryRun)
+	case "network ls":
+		return reportPorts(cfg, refDisplay(profileName, opts), wantJSON)
+	case "network publish":
+		return publishPorts(cfg, refDisplay(profileName, opts), tail, wantJSON)
+	case "network unpublish":
+		return unpublishPorts(cfg, refDisplay(profileName, opts), tail, opts.all, wantJSON)
 	}
 
 	set, err := cfg.BuildEnv()
@@ -761,6 +794,26 @@ type options struct {
 	quiet     bool
 	offline   bool
 	json      bool
+	// all is `brig network unpublish --all`, which withdraws every port this
+	// sandbox offers.
+	all bool
+}
+
+// repeated collects a flag written more than once, in the order it was
+// written. The flag package keeps only the last value of a StringVar, and
+// --publish is a set rather than a setting.
+type repeated struct{ dst *[]string }
+
+func (r repeated) String() string {
+	if r.dst == nil {
+		return ""
+	}
+	return strings.Join(*r.dst, ",")
+}
+
+func (r repeated) Set(v string) error {
+	*r.dst = append(*r.dst, v)
+	return nil
 }
 
 // position is where on a brig command line a flag is legal.
@@ -787,9 +840,14 @@ const (
 	// --verbose, -q and --json -- and a token in it that brig does not own is a
 	// mistake to name; see splitGlobal.
 	posGlobal position = iota + 1
-	// posRun is the run line, from the verb to the ref. Every flag brig has
-	// today is here.
+	// posRun is the run line, from the verb to the ref. Every flag that shapes
+	// a run is here.
 	posRun
+	// posPublish is the line of the `brig network` verbs, which take a ref
+	// and their own small set. A position of their own because those verbs
+	// shape no run: --mem or --image on one of them is a mistake
+	// to name, and the ports they take are bare words rather than flags.
+	posPublish
 	// posAny matches a flag wherever brig would have read it. Only the tail
 	// warning uses it: right of the ref every token is the agent's whatever
 	// position brig would otherwise read it in, so what matters there is that
@@ -852,6 +910,18 @@ var brigFlags = []struct {
 	{long: "skills", position: posRun},
 	{long: "network", value: true, position: posRun},
 	{long: "offline", position: posRun},
+	// --publish opens a guest port on the host. Repeatable.
+	//
+	// It has NO short form, for the reason --verbose has none. -p is Claude
+	// Code's print flag and docker's publish flag, and brig owns only one of
+	// those readings: taking the letter would make `brig run claude -p "fix
+	// the tests"` mean a port to brig and a prompt to everything the reader
+	// has typed it at before. `brig network publish` takes its ports as bare words
+	// instead, where there is no agent to disagree with. Do not add -p here.
+	{long: "publish", value: true, position: posRun},
+	// --all withdraws every port a sandbox publishes. Only on unpublish,
+	// where "all of them" is a thing to ask for.
+	{long: "all", position: posPublish},
 	// --verbose is brig's own progress and the runtime's own output, and it is
 	// global because it is a fact about the whole invocation rather than about
 	// one run line.
@@ -887,6 +957,9 @@ var brigFlags = []struct {
 	// forwarded to the agent; #110 defines what --json means on the run line.
 	{long: "json", position: posGlobal},
 	{long: "json", position: posRun},
+	// And on the publish line, where the ports are bare words: without this
+	// the flag falls into the tail and is read as a port.
+	{long: "json", position: posPublish},
 }
 
 // deprecatedFlags are the spellings on their way out, and what replaces each.
@@ -1081,6 +1154,13 @@ func parseGlobal(args []string) (g globals, rest []string, err error) {
 // does end it, which is where the agent's argv starts.
 func split(verb string, args []string) (mine []string, ref session.Ref, word string, tail []string, err error) {
 	takesProject := verb == "run"
+	// Which vocabulary brig reads on this line. publish and unpublish shape no
+	// run, so a run-line flag on one of them is a mistake to name rather than
+	// a flag to honour. See posPublish.
+	at := posRun
+	if onPortLine(verb) {
+		at = posPublish
+	}
 	passed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -1093,8 +1173,9 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 			//
 			// A project already read stands. `brig run claude ~/proj -- pwd`
 			// named one before the marker, and the marker speaks for what
-			// comes after it rather than undoing what came before.
-			return mine, ref, word, args[i+1:], nil
+			// comes after it rather than undoing what came before. The same
+			// holds for ports read before it.
+			return mine, ref, word, append(tail, args[i+1:]...), nil
 		case !strings.HasPrefix(a, "-"):
 			if !passed {
 				if ref, err = session.ParseRef(a); err != nil {
@@ -1114,9 +1195,18 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				word = a
 				continue
 			}
+			// On publish and unpublish every bare word is a port. Collected
+			// here rather than ending the parse: these verbs forward to no
+			// agent, so a flag after a port is still brig's. Stopping at the
+			// first port read `brig network publish claude 8080 --json` as
+			// two of them.
+			if takesPorts(verb) {
+				tail = append(tail, a)
+				continue
+			}
 			return mine, ref, word, agentTail(verb, args[i:]), nil
 		default:
-			isOurs, takesValue := ours(a, posRun)
+			isOurs, takesValue := ours(a, at)
 			if !isOurs {
 				// An unknown flag once the ref is named is the agent's:
 				// `brig run claude --resume` runs the agent with --resume, and
@@ -1131,6 +1221,14 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 						"brig's own flags come before the profile and the agent's after it; "+
 						"put %q after the profile to pass it through, or -- to end brig's flags", a, a)
 				}
+				// On a verb with no agent behind it there is nothing for an
+				// unknown flag to be. Refused by name rather than handed on as
+				// a port, which would report a bad port number for a word that
+				// was never a port.
+				if takesPorts(verb) {
+					return nil, session.Ref{}, "", nil, usagef("unknown flag %q; `brig %s` takes "+
+						"a ref, the ports, and nothing else", a, verb)
+				}
 				return mine, ref, word, agentTail(verb, args[i:]), nil
 			}
 			// Read off the spelling rather than the whole token, so the
@@ -1140,7 +1238,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 			// and reaches this loop as a value, not as a token.
 			if spelling, _, _ := strings.Cut(a, "="); deprecatedFlags[spelling] != "" {
 				deprecated(spelling, deprecatedFlags[spelling])
-			} else if was, now := retiredAt(a, posRun); now != "" {
+			} else if was, now := retiredAt(a, at); now != "" {
 				// A flag whose place on the line is what retires, not its
 				// spelling. Said here, where the position is known, rather than
 				// after the flag package has read it and forgotten where it
@@ -1157,7 +1255,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 			}
 		}
 	}
-	return mine, ref, word, nil, nil
+	return mine, ref, word, tail, nil
 }
 
 // forwardsTail reports whether a verb hands what follows the ref to the agent.
@@ -1178,6 +1276,54 @@ func forwardsTail(verb string) bool {
 		return true
 	}
 	return false
+}
+
+// takesPorts reports whether a verb reads the bare words after its ref as
+// ports. `brig network publish` and `brig network unpublish` do, and nothing
+// else does.
+//
+// Beside forwardsTail for the same reason that one is written once: split
+// keeps the tail for these verbs and rejectTail must then not refuse it, and
+// two predicates would be one edit away from a verb that takes an operand it
+// is also told it cannot have.
+func takesPorts(verb string) bool {
+	switch verb {
+	case "network publish", "network unpublish":
+		return true
+	}
+	return false
+}
+
+// onPortLine reports whether a verb reads the flags of the publish line. The
+// network verbs do. `brig network ls` takes no ports but shares their flags.
+func onPortLine(verb string) bool {
+	return takesPorts(verb) || verb == "network ls"
+}
+
+// networkUsage is the help text of `brig network`.
+const networkUsage = `usage:
+  brig network ls        <ref>                   the ports a sandbox publishes
+  brig network publish   <ref> PORT...           open a guest port on the host
+  brig network unpublish <ref> PORT...|--all     close one again
+
+A port is 3000, 8080:80, 127.0.0.1:8080:80 or 5353:53/udp. See brig help.
+`
+
+// networkSub returns the subcommand of `brig network`, or "" when it printed
+// the help text instead.
+func networkSub(rest []string) (string, error) {
+	if len(rest) == 0 {
+		fmt.Print(networkUsage)
+		return "", nil
+	}
+	switch rest[0] {
+	case "-h", "--help", "help":
+		fmt.Print(networkUsage)
+		return "", nil
+	case "ls", "publish", "unpublish":
+		return rest[0], nil
+	}
+	return "", usagef("unknown network subcommand %q (ls, publish or unpublish)", rest[0])
 }
 
 // agentTail hands the tail back as the agent's, saying so for any of brig's own
@@ -1203,7 +1349,13 @@ func agentTail(verb string, tail []string) []string {
 		return tail
 	}
 	for _, a := range tail {
-		if mine, _, _ := oursAt(a, posAny); !mine {
+		mine, _, found := oursAt(a, posAny)
+		if !mine {
+			continue
+		}
+		// A flag brig reads only on the publish line stands nowhere on this
+		// one, so the agent's own --all is the agent's.
+		if found == posPublish && !takesPorts(verb) {
 			continue
 		}
 		name, _, _ := strings.Cut(a, "=")
@@ -1289,7 +1441,7 @@ func honorsRunLine(verb, long string) bool {
 // operand to swallow. forwardsTail is the same set agentTail stays silent for,
 // so the two never disagree about which message a stray tail should get.
 func rejectTail(verb string, tail []string) error {
-	if forwardsTail(verb) {
+	if forwardsTail(verb) || takesPorts(verb) {
 		return nil
 	}
 	if len(tail) > 0 {
@@ -1352,6 +1504,11 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// verb refuses it by name -- see the run() dispatch. Its being brig's own
 		// token here rather than the agent's is what makes that refusal possible.
 		{"json", "", func(n string) { fs.BoolVar(&o.json, n, false, "") }},
+		// A guest port opened on the host. Repeatable, so it collects rather
+		// than overwriting; see repeated.
+		{"publish", "", func(n string) { fs.Var(repeated{&o.load.Publish}, n, "") }},
+		// Only unpublish reads it, and split only lets it through there.
+		{"all", "", func(n string) { fs.BoolVar(&o.all, n, false, "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
 		// lands in one place and the last one on the line wins.
@@ -1943,6 +2100,14 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		// this path in the business of deciding a sandbox is gone, which is a
 		// judgement the verb that removes it is better placed to make. A stale
 		// entry for a sandbox that is truly gone costs nothing until then.
+		//
+		// Published ports are the exception. `brig network publish` records a
+		// port for a sandbox that has never booted, and the next run would
+		// open it, so rm drops the record whatever the runtime holds.
+		if ports, err := runtime.Publications(cfg.VMName); err == nil && len(ports) > 0 && !dryRun {
+			runtime.ForgetPublications(cfg.VMName)
+			warnf("dropped the ports recorded for %s", ref)
+		}
 		return noSandboxf(ref)
 	}
 	if dryRun {
@@ -2094,6 +2259,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		}
 		wrap.ForgetSandbox(inst.Name)
 		wrap.ForgetSlugClaim(inst.Name)
+		runtime.ForgetPublications(inst.Name)
 		if err != nil {
 			warnf("could not remove %s: %v", inst.Name, err)
 			continue
@@ -2108,20 +2274,29 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	// the one command that leaves nothing behind, so it prunes those too. Only
 	// the runtimes that make a network per sandbox implement this; the rest are
 	// skipped rather than asked.
+	//
+	// Asked again rather than reusing the list above: that one was taken
+	// before the removals, so every sandbox just removed would still look live
+	// and nothing would be pruned. What matters here is what survived, which is
+	// a sandbox whose removal failed and whose network is therefore still in
+	// use.
+	after, err := rt.List()
+	if err != nil {
+		// Pruning needs to know what is still running. Without that answer,
+		// every network and every published port would look abandoned, so
+		// nothing is pruned.
+		return nil
+	}
+	var live []string
+	for _, inst := range after {
+		live = append(live, inst.Name)
+	}
 	if p, ok := rt.(runtime.NetworkPruner); ok {
-		// Asked again rather than reusing the list above: that one was taken
-		// before the removals, so every sandbox just removed would still look
-		// live and nothing would be pruned. What matters here is what survived,
-		// which is a sandbox whose removal failed and whose network is
-		// therefore still in use.
-		var live []string
-		if after, err := rt.List(); err == nil {
-			for _, inst := range after {
-				live = append(live, inst.Name)
-			}
-		}
 		p.PruneNetworks(live)
 	}
+	// The same for published ports, which also covers a sandbox that was
+	// given a port and never booted.
+	runtime.PrunePublications(live)
 	return nil
 }
 
@@ -3088,6 +3263,8 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 		return true
 	case "agent", "secret":
 		return len(rest) > 0 && rest[0] == "ls"
+	case "network":
+		return len(rest) > 0 && onPortLine("network "+rest[0])
 	}
 	return false
 }
@@ -3100,8 +3277,9 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // from here.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, agent ls, secret ls, doctor, version (env takes it too, but "+
-		"env is deprecated; prefer info), and for run and sh", verb)
+		"ls, info, agent ls, secret ls, doctor, version and the network verbs "+
+		"(env takes it too, but env is deprecated; prefer info), and for run "+
+		"and sh", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run
@@ -3254,3 +3432,241 @@ func warnf(format string, a ...any) {
 // exec allocates one. A headless `-p` run piped from a script must not get a
 // pseudo-terminal.
 func isTerminal() bool { return wrap.IsTerminal(os.Stdin) }
+
+// publishPorts is `brig network publish`: open a guest port on the host, and
+// print what the sandbox publishes afterwards.
+func publishPorts(cfg *wrap.Config, ref string, ports []string, wantJSON bool) error {
+	if len(ports) == 0 {
+		return usagef("`brig network publish` needs a port, for example "+
+			"`brig network publish %s 3000`. `brig network ls %s` lists what is open", ref, ref)
+	}
+	add, err := runtime.ParsePublications(ports)
+	if err != nil {
+		return err
+	}
+	// Before the record is written. A backend that cannot open a port must
+	// refuse here, where the port is still on the command line, rather than at
+	// the next run of a sandbox whose record the user cannot see.
+	if err := cfg.CanPublish(add); err != nil {
+		return err
+	}
+	running, err := cfg.Runtime.Running(cfg.VMName)
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the sandbox %s is running, so brig cannot "+
+			"publish a port from it: %w", cfg.VMName, err)
+	}
+	if !running {
+		// Recorded rather than refused. The next boot reads this record and
+		// publishes what is in it, so asking for a port on a sandbox that is
+		// down is answered rather than turned away.
+		if _, err := runtime.RecordPublications(cfg.VMName, add); err != nil {
+			return err
+		}
+		warnf("%s is not running, so nothing is listening on the host yet. "+
+			"These ports are published when it starts.", cfg.VMName)
+		return reportPorts(cfg, ref, wantJSON)
+	}
+	publisher, ok := cfg.Runtime.(runtime.Publisher)
+	if !ok {
+		return fmt.Errorf("%s fixes a sandbox's published ports when it is created, so a "+
+			"port cannot be opened on one that is already running. Remove the sandbox with "+
+			"`brig rm %s` and run it again with --publish %s", cfg.Runtime.Kind(), ref, add[0])
+	}
+	for _, p := range add {
+		if err := publisher.Publish(cfg.VMName, p); err != nil {
+			return err
+		}
+	}
+	return reportPorts(cfg, ref, wantJSON)
+}
+
+// unpublishPorts is `brig network unpublish`: close a port again.
+//
+// A port is named by its host side, which is the half the person typing this
+// can see. `brig network unpublish claude@web 8080` withdraws whatever 8080
+// carries, and the guest port is not asked for.
+func unpublishPorts(cfg *wrap.Config, ref string, ports []string, all, wantJSON bool) error {
+	if all && len(ports) > 0 {
+		return usagef("--all withdraws every port, so naming %q as well asks for two "+
+			"different things; drop one", ports[0])
+	}
+	var drop []runtime.Publication
+	switch {
+	case all:
+		var err error
+		if drop, err = runtime.Publications(cfg.VMName); err != nil {
+			return err
+		}
+	case len(ports) == 0:
+		return usagef("`brig network unpublish` needs a port, for example "+
+			"`brig network unpublish %s 8080`, "+
+			"or --all to withdraw every one", ref)
+	default:
+		named, err := runtime.ParseHostSides(ports)
+		if err != nil {
+			return err
+		}
+		// Resolved against the record rather than taken literally. A port
+		// written without an address names whatever is published on it, and
+		// one written as the HOST column prints it, ADDR:PORT, names the one
+		// on that address. Neither needs the guest port spelled out.
+		have, err := runtime.Publications(cfg.VMName)
+		if err != nil {
+			return err
+		}
+		var missing []string
+		for i, want := range named {
+			found := false
+			for _, p := range have {
+				if p.Matches(want) {
+					drop = append(drop, p)
+					found = true
+				}
+			}
+			if !found {
+				missing = append(missing, ports[i])
+			}
+		}
+		// Named and not there is worth saying. Silence would read as a
+		// withdrawal that happened, and the next `brig network ls` would
+		// be the only place the port turned up again.
+		if len(missing) > 0 {
+			return fmt.Errorf("%s publishes nothing on %s. `brig network ls %s` lists what it does",
+				ref, strings.Join(missing, ", "), ref)
+		}
+	}
+	// Withdrawn through the runtime when there is one that can, so the gateway
+	// and the record are corrected together. A sandbox that is not running has
+	// only the record to correct, on either runtime.
+	running, err := cfg.Runtime.Running(cfg.VMName)
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the sandbox %s is running, so brig cannot "+
+			"withdraw a port from it: %w", cfg.VMName, err)
+	}
+	publisher, ok := cfg.Runtime.(runtime.Publisher)
+	switch {
+	case !running:
+		if _, _, err := runtime.ForgetSomePublications(cfg.VMName, drop); err != nil {
+			return err
+		}
+	case !ok:
+		return fmt.Errorf("%s fixes a sandbox's published ports when it is created, so one "+
+			"cannot be withdrawn from a running sandbox. Remove it with `brig rm %s` and run "+
+			"it again without that port", cfg.Runtime.Kind(), ref)
+	default:
+		for _, p := range drop {
+			if err := publisher.Unpublish(cfg.VMName, p); err != nil {
+				return err
+			}
+		}
+	}
+	return reportPorts(cfg, ref, wantJSON)
+}
+
+// portRow is one published port as `brig network ls` prints it.
+type portRow struct {
+	Host     string `json:"host"`
+	Guest    int    `json:"guest"`
+	Protocol string `json:"protocol"`
+	// Live reports whether the gateway is forwarding this port now. False on a
+	// sandbox that is not running, which will publish it again when it starts.
+	//
+	// Null where the runtime cannot be asked. nerdctl implements no Publisher,
+	// so false there would report every port on every Linux host as shut while
+	// it is open.
+	Live *bool `json:"live"`
+}
+
+// reportPorts is `brig network ls`, and what publish and unpublish print after
+// the change.
+//
+// The list comes from the gateway when the sandbox is running, and from brig's
+// record when it is not. A stopped sandbox publishes these again on its next
+// boot.
+//
+// Two sources, and the difference between them is the point: the record is
+// what the sandbox will offer, and the gateway is what is listening this
+// moment. A port in the record that the gateway does not have is a sandbox
+// that is not running, and the row says so rather than claiming a host port
+// that nothing answers on.
+func reportPorts(cfg *wrap.Config, ref string, wantJSON bool) error {
+	want, err := runtime.Publications(cfg.VMName)
+	if err != nil {
+		return err
+	}
+	// Keyed by protocol and guest port as well as address: one number can
+	// carry a tcp and a udp forward, and a forward to another guest port is
+	// not the publication the record names.
+	//
+	// Nil until something answers, so a runtime with no Publisher and one that
+	// reports nothing forwarded stay apart. A sandbox that is not running
+	// forwards nothing, and the gateway is not asked.
+	key := func(p runtime.Publication) string {
+		return fmt.Sprintf("%s/%s/%d", p.Proto(), p.Local(), p.GuestPort)
+	}
+	var live map[string]bool
+	if publisher, ok := cfg.Runtime.(runtime.Publisher); ok && len(want) > 0 {
+		running, err := cfg.Runtime.Running(cfg.VMName)
+		switch {
+		case err != nil:
+			warnf("cannot tell whether %s is running, so its ports read unknown: %v", ref, err)
+		case !running:
+			live = map[string]bool{}
+		default:
+			have, err := publisher.Published(cfg.VMName)
+			if err != nil {
+				warnf("could not ask the gateway what %s forwards, so its ports read "+
+					"unknown: %v", ref, err)
+				break
+			}
+			live = map[string]bool{}
+			for _, p := range have {
+				live[key(p)] = true
+			}
+		}
+	}
+	rows := make([]portRow, 0, len(want))
+	for _, p := range want {
+		row := portRow{Host: p.Local(), Guest: p.GuestPort, Protocol: p.Proto()}
+		if live != nil {
+			open := live[key(p)]
+			row.Live = &open
+		}
+		rows = append(rows, row)
+	}
+	if wantJSON {
+		return writeJSONDocument(cfg.Out, "Ports", struct {
+			Sandbox string    `json:"sandbox"`
+			Ports   []portRow `json:"ports"`
+		}{cfg.VMName, rows})
+	}
+	if len(rows) == 0 {
+		fmt.Fprintf(cfg.Out, "%s publishes no ports\n", ref)
+		return nil
+	}
+	printPorts(cfg.Out, rows)
+	return nil
+}
+
+// printPorts writes the rows with the columns lined up, measured rather than
+// fixed so a long host address widens the column instead of breaking it. The
+// same shape printSandboxes uses.
+func printPorts(w io.Writer, rows []portRow) {
+	host := len("HOST")
+	for _, r := range rows {
+		if len(r.Host) > host {
+			host = len(r.Host)
+		}
+	}
+	fmt.Fprintf(w, "%-*s %-6s %-6s %s\n", host, "HOST", "GUEST", "PROTO", "STATE")
+	for _, r := range rows {
+		state := "unknown"
+		if r.Live != nil {
+			state = "pending"
+			if *r.Live {
+				state = "open"
+			}
+		}
+		fmt.Fprintf(w, "%-*s %-6d %-6s %s\n", host, r.Host, r.Guest, r.Protocol, state)
+	}
+}
