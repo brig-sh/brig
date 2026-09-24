@@ -143,36 +143,21 @@ func TestNoProjectAfterThePositionalIsRefused(t *testing.T) {
 	}
 }
 
-// The one-release warning. A bare word after the ref used to end brig's
-// parsing and reach the AGENT, so giving it a new meaning is a breaking change
-// for anyone who passed one through. Both readings are named, so a user can
-// pick one before the notice goes.
-func TestASecondBareWordWarnsAndNamesBothReadings(t *testing.T) {
+// A project on the line is the documented spelling, and the first line of the
+// quickstart, so it runs without a notice. The warning that the word used to
+// reach the agent shipped in 0.1.0-rc18, promised to go in the next release,
+// and still printed through 0.2.0 (#315).
+//
+// Two markers, not one: the phrase that named the new reading and the `--`
+// hint that named the old one. A reworded notice would have to drop both to
+// get past this.
+func TestAProjectRunsWithoutANotice(t *testing.T) {
 	scratchHost(t)
 	notice := captureStderr(t, func() { _, _ = captureStdout(t, func() error { return run([]string{"run", "claude", "."}) }) })
-	for _, want := range []string{"project", "--", "`.`"} {
-		if !strings.Contains(notice, want) {
-			t.Errorf("the notice does not name %s:\n%s", want, notice)
+	for _, old := range []string{"project directory", "put it after --"} {
+		if strings.Contains(notice, old) {
+			t.Errorf("a run naming a project printed the old notice (%q):\n%s", old, notice)
 		}
-	}
-
-	// After an explicit -- there is nothing to point out: the line said what
-	// the word is, and the word is not a project.
-	scratchHost(t)
-	notice = captureStderr(t, func() {
-		_, _ = captureStdout(t, func() error { return run([]string{"run", "claude", "--", "."}) })
-	})
-	if strings.Contains(notice, "project directory") {
-		t.Errorf("a tail after -- was warned about:\n%s", notice)
-	}
-
-	// And a run that names no positional at all hears nothing.
-	scratchHost(t)
-	notice = captureStderr(t, func() {
-		_, _ = captureStdout(t, func() error { return run([]string{"run", "claude", "-p", "hi"}) })
-	})
-	if strings.Contains(notice, "project directory") {
-		t.Errorf("a run with no positional was warned about:\n%s", notice)
 	}
 }
 

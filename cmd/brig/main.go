@@ -513,9 +513,6 @@ func dispatch(args []string) error {
 	if opts.quiet {
 		verbosity = wrap.Quiet
 	}
-	if opts.load.Project != "" {
-		warnPositionalMeaning(opts.load.Project)
-	}
 	if err := rejectTail(verb, tail); err != nil {
 		return err
 	}
@@ -1161,26 +1158,6 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 		}
 	}
 	return mine, ref, word, nil, nil
-}
-
-// warnPositionalMeaning names both readings of a second bare word, for the one
-// release in which it changes meaning.
-//
-// Until now that word ended brig's parsing and reached the AGENT: `brig run
-// claude .` passed "." to claude. It is the project directory brig mounts from
-// here on, so anyone who was passing a positional through has a line that means
-// something else now -- and this is a breaking change however additive the
-// feature looks. Naming the reading it lost, beside the one it gained, is what
-// lets somebody pick the one they meant.
-//
-// Only a word brig read itself. A tail after -- was declared the agent's by the
-// person typing it, so there is nothing to point out -- the same rule agentTail
-// follows.
-func warnPositionalMeaning(word string) {
-	warnf("`%s` is now the project directory this run mounts, "+
-		"and brig starts the agent in it. It used to be the agent's first argument "+
-		"instead. If that is what you meant, put it after --: `brig run <ref> -- %s`. "+
-		"This notice goes in the next release.", word, word)
 }
 
 // forwardsTail reports whether a verb hands what follows the ref to the agent.

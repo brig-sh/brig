@@ -382,15 +382,11 @@ grep -q "\"project\": \"$PROJ\"" "$BRIG_STATE_DIR/sessions.json" \
   && ok "the index records the project the session ran with" \
   || bad "the index records the project -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 
-# The one-release warning. That word used to reach the AGENT, so giving it a
-# new meaning is a breaking change, and the notice names both readings so
-# somebody can pick the one they meant before it goes.
+# A project is the documented spelling, so it runs without a notice. The
+# one-release warning that the word used to reach the agent is gone (#315).
 grep -q 'project directory this run mounts' "$WORK/proj.err" \
-  && ok "a second bare word says what it now means" \
-  || bad "a second bare word says what it now means -- got: $(cat "$WORK/proj.err")"
-grep -q -- 'put it after --' "$WORK/proj.err" \
-  && ok "the notice names the way to keep the old reading" \
-  || bad "the notice names the way to keep the old reading"
+  && bad "a run naming a project printed the old notice -- got: $(cat "$WORK/proj.err")" \
+  || ok "a run naming a project prints no notice"
 
 # A share is bound at boot and cannot be attached to a live sandbox, so the
 # same project reuses the sandbox and a different one recreates it.
@@ -412,19 +408,16 @@ grep -q -- "--shared-dir $OTHER:/work/otherproject" "$STUB_LOG" \
   && ok "the recreated sandbox mounts the new project" \
   || bad "the recreated sandbox mounts the new project -- got: $(grep '^argv: run' "$STUB_LOG")"
 
-# And after an explicit -- there is nothing to point out: the line said the
-# word is the agent's, and it still reaches the agent untouched. This run names
-# no project, so it recreates the sandbox the block above left mounting one --
-# which is the same rule, read in the other direction.
+# After an explicit -- the line said the word is the agent's, and it still
+# reaches the agent untouched. This run names no project, so it recreates the
+# sandbox the block above left mounting one -- which is the same rule, read in
+# the other direction.
 : > "$STUB_LOG"
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
   "$WORK/brig" run claude --quiet -- --version > /dev/null 2> "$WORK/dashdash.err"
-grep -q 'project directory this run mounts' "$WORK/dashdash.err" \
-  && bad "a tail after -- was warned about -- got: $(cat "$WORK/dashdash.err")" \
-  || ok "a tail after -- is not warned about"
 grep -q -- '-- claude --version' "$STUB_LOG" \
   && ok "a word after -- still reaches the agent" \
-  || bad "a word after -- still reaches the agent -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
+  || bad "a word after -- still reaches the agent -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1) $(cat "$WORK/dashdash.err")"
 
 # A word that names no directory is refused rather than mounted, and the
 # refusal carries the way past it. This is the line the grammar change breaks,
@@ -445,10 +438,7 @@ esac
 "$WORK/brig" sh claude echo hi > /dev/null 2> "$WORK/shproj.err"
 grep -q -- '-- bash -lc echo hi' "$STUB_LOG" \
   && ok "sh still reads a second bare word as the guest command" \
-  || bad "sh still reads a second bare word as the guest command -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
-grep -q 'project directory this run mounts' "$WORK/shproj.err" \
-  && bad "sh warned about its own guest command" \
-  || ok "sh says nothing about its guest command"
+  || bad "sh still reads a second bare word as the guest command -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1) $(cat "$WORK/shproj.err")"
 
 # The project is inherited by a verb that names none, the way the home already
 # is. Reading that silence as "no project" is what real-runtime testing caught:
