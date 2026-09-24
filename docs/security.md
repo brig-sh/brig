@@ -443,11 +443,11 @@ cosign verify \
   --certificate-identity-regexp \
     '^https://github\.com/brig-sh/community-images/\.github/workflows/build-images\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/brig-sh/claude-code-stock:latest
+  ghcr.io/brig-sh/claude-code-stock:root
 ```
 
 That works anonymously: the images are public, and the signature lives in
-Sigstore's transparency log, not behind a registry login. `:latest` is a
+Sigstore's transparency log, not behind a registry login. `:root` is a
 multi-arch index. The per-architecture tags (`:arm64`, `:amd64`) and the
 immutable `:<arch>-<sha>` pins are signed the same way and verify with the
 same command.

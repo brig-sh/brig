@@ -89,13 +89,13 @@ embedded, `(file)` means a profile that exists only as a file, and
 
 | profile | alias | kind | image |
 | --- | --- | --- | --- |
-| `claude-code` | `claude` | agent | `ghcr.io/brig-sh/claude-code-stock:latest` |
+| `claude-code` | `claude` | agent | `ghcr.io/brig-sh/claude-code-stock:root` |
 | `claude-desktop` | `desktop` | gui | `ghcr.io/nofireai/urunc-claude-desktop:aarch64` |
-| `codex` |  | agent | `ghcr.io/brig-sh/codex-stock:latest` |
+| `codex` |  | agent | `ghcr.io/brig-sh/codex-stock:root` |
 | `cursor` |  | agent, example profile | `ghcr.io/brig-sh/cursor:latest` |
-| `gemini` |  | agent, example profile | `ghcr.io/brig-sh/gemini-stock:latest` |
-| `grok` |  | agent, example profile | `ghcr.io/brig-sh/grok-stock:latest` |
-| `opencode` |  | agent, example profile | `ghcr.io/brig-sh/opencode-stock:latest` |
+| `gemini` |  | agent, example profile | `ghcr.io/brig-sh/gemini-stock:root` |
+| `grok` |  | agent, example profile | `ghcr.io/brig-sh/grok-stock:root` |
+| `opencode` |  | agent, example profile | `ghcr.io/brig-sh/opencode-stock:root` |
 | `ubuntu` |  | shell | `docker.io/library/ubuntu:latest` |
 
 "example profile" is the profile's own `desc:`, and `brig agent ls` prints
@@ -199,7 +199,7 @@ transcript:
 $ brig info mine
 brig: workspace /Users/you/brig/mine (sandbox brig-mine)
 brig: runtime hull (/opt/homebrew/bin/hull)
-brig: image ghcr.io/brig-sh/claude-code-stock:latest (pull missing)
+brig: image ghcr.io/brig-sh/claude-code-stock:root (pull missing)
 brig: forwarding to guest:
 brig:   GH_TOKEN(secret)
 brig:   CI
@@ -346,8 +346,8 @@ literal, one of those secrets, or Brig's own environment.
 
 ```yaml
 name: mine
-image: ghcr.io/brig-sh/claude-code-stock:latest
-guestHome: /home/claude
+image: ghcr.io/brig-sh/claude-code-stock:root
+guestHome: /root
 binary: claude
 mem: 4096
 cpus: 4

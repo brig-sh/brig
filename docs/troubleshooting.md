@@ -286,7 +286,7 @@ The agent starts already logged in instead of showing its login screen.
 ## cosign is not installed
 
 ```
-brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:latest: cosign is not
+brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign is not
 installed (`brew install cosign`). Booting it unchecked
 ```
 
@@ -304,7 +304,7 @@ Under `BRIG_VERIFY=require` nothing boots, and the line says so rather than
 describing the boot it refused (exit `5`):
 
 ```
-brig: refusing to boot image ghcr.io/brig-sh/claude-code-stock:latest: cosign is
+brig: refusing to boot image ghcr.io/brig-sh/claude-code-stock:root: cosign is
 not installed (`brew install cosign`), so nothing could be checked
 (BRIG_VERIFY=require). Install cosign, or set BRIG_VERIFY=warn to boot it
 unchecked
@@ -336,7 +336,7 @@ Cosign prints its version instead of "command not found", and the next run under
 
 ```
 brig: cannot reach the registry to verify image
-ghcr.io/brig-sh/claude-code-stock:latest: <detail>. The copy on disk could
+ghcr.io/brig-sh/claude-code-stock:root: <detail>. The copy on disk could
 not be checked against what the registry serves
 brig: Boot the cached copy unverified? [y/N]
 ```
@@ -378,7 +378,7 @@ brig: could not start the sandbox: <runtime error>
 The detail after the colon is the runtime's, not Brig's. It is a registry
 Brig cannot reach, an image reference that does not exist, or a manifest
 with no build for your architecture. The five published agents default to
-`:latest`, which `brig-sh/community-images` publishes as a multi-arch index
+`:root`, which `brig-sh/community-images` publishes as a multi-arch index
 covering `linux/arm64` and `linux/amd64`. One reference is meant to work on
 both an Apple Silicon Mac and an x86 Linux host. A mismatch usually means a
 `--image` or `BRIG_IMAGE` pinned to a single-architecture tag (`:arm64` or
@@ -415,7 +415,7 @@ The sandbox boots instead of failing at `could not start the sandbox`.
 ## The signature did not verify
 
 ```
-brig: image ghcr.io/brig-sh/claude-code-stock:latest claims to be published by
+brig: image ghcr.io/brig-sh/claude-code-stock:root claims to be published by
 brig-sh, but its signature DID NOT VERIFY: <detail>
 brig: Boot it anyway? [y/N]
 ```

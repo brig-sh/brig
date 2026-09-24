@@ -229,7 +229,7 @@ Both are relative to `guestHome`, and neither can escape it.
 
 **The mount covers the guest home entirely.** Anything the image
 ships inside `guestHome` is invisible once the sandbox is up, because a host
-directory is mounted over it. Dotfiles baked into `/home/claude` at image
+directory is mounted over it. Dotfiles baked into `/root` at image
 build time never appear. Put them somewhere else, or have the agent create
 them on first run.
 
