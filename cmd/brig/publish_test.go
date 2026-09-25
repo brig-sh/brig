@@ -234,6 +234,48 @@ func TestAFailedBootRecordsNoPort(t *testing.T) {
 	}
 }
 
+// orderRuntime records the removals and boots a run makes, in order.
+type orderRuntime struct {
+	jsonRuntime
+	calls []string
+}
+
+func (r *orderRuntime) Remove(name string) error {
+	r.calls = append(r.calls, "rm "+name)
+	return nil
+}
+
+func (r *orderRuntime) Run(spec runtime.RunSpec) error {
+	r.calls = append(r.calls, "run "+spec.Name)
+	return nil
+}
+
+// A rootless nerdctl keeps a stopped container's host port until the
+// container is removed. docs/cli.md says the next `brig run` releases it,
+// which holds because a run removes the stopped container before it boots.
+func TestARunRemovesAStoppedSandboxBeforeItBoots(t *testing.T) {
+	rt := &orderRuntime{}
+	jsonRunHost(t, rt)
+	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	if _, err := captureStdout(t, func() error { return run([]string{"run", "-d", "faker"}) }); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	rm, boot := -1, -1
+	for i, c := range rt.calls {
+		switch c {
+		case "rm brig-faker":
+			if rm < 0 {
+				rm = i
+			}
+		case "run brig-faker":
+			boot = i
+		}
+	}
+	if rm < 0 || boot < 0 || rm > boot {
+		t.Fatalf("calls = %v, want the stopped sandbox removed before the boot", rt.calls)
+	}
+}
+
 // `brig network publish` records a port for a sandbox that has never booted.
 // rm finds no sandbox there, and still drops the record, or the next run
 // would open the port.

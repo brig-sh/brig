@@ -250,6 +250,16 @@ otherwise, and keeps the publication: the next `brig run` offers the same
 ports without being asked again. `brig network unpublish` is what takes one
 away, and `brig rm` takes all of them with the sandbox.
 
+A rootless install on Linux is the exception. There `brig stop` keeps the
+host port bound. nerdctl hands a published port to rootlesskit when the
+container starts, and takes it back only when the container is removed. Until
+then rootlesskit keeps listening on the port, and a connection to it is reset.
+`brig rm` releases the port. So does the next `brig run` of that sandbox,
+which removes the stopped container first, and its new container binds the
+port again if the sandbox still publishes it. `brig network unpublish` on the
+stopped sandbox changes only the record, so the port stays bound until one of
+those two.
+
 `unpublish` names a port by its host side alone, which is the half you can
 see. `brig network unpublish claude 8080` closes whatever `8080` was
 carrying. The HOST column of `brig network ls` works as printed:
