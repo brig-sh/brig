@@ -103,16 +103,19 @@ This one does not keep working the old way, and it prints no notice.
 For a line written against rc17, such as `brig run claude src`:
 
 - If `src` is a directory, Brig mounts it read-write at `/work/src` and
-  starts the agent there. Nothing is printed about it.
+  starts the agent there. At the default verbosity nothing is printed
+  about it. `brig info claude` shows the mounted project without running
+  anything, and `brig --verbose run` prints it before the boot.
 - If it is not, Brig refuses the run and says to put it after `--`.
 
 `--` ends Brig's own parsing, so anything after it reaches the agent
 untouched. That is the spelling that keeps the old meaning.
 
 0.1.0-rc18 and 0.2.0 printed a notice about this on every run that named a
-project. It is gone. `script/check-retired-spellings.sh` cannot find these
-lines either, because the line is still valid and only its meaning changed.
-Look for `brig run` lines with a second bare word after the agent.
+project, unless `-q` was given. It is gone.
+`script/check-retired-spellings.sh` cannot find these lines either, because
+the line is still valid and only its meaning changed. Look for `brig run`
+lines with a second bare word after the agent.
 
 ## Session names
 
