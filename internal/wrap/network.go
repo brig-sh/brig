@@ -162,16 +162,44 @@ func (c *Config) networkStale() bool {
 	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), runtimeEgress(c.Egress))
 }
 
+// postureChanged reports whether this run asks for a different posture than
+// the one the running sandbox was booted with.
+//
+// Decided from the record, whatever the runtime says. hull on hvi can compare
+// an isolated gateway, but it has no answer for offline, vz has none at all, and
+// nerdctl is not asked. A running sandbox kept on any of them would leave this
+// run reporting a posture the sandbox does not have. A sandbox with no record
+// has nothing to compare, and is left to networkStale as before.
+func (c *Config) postureChanged() bool {
+	return c.recordedNet != "" && c.askedNetwork != "" && c.askedNetwork != c.recordedNet
+}
+
+// recordPosture records the posture this run has just booted the sandbox on.
+//
+// A warning when it fails, the way rememberSession treats its own write: the
+// sandbox is up, and the cost is that a later command that names no posture
+// resolves the default and restarts the sandbox onto it.
+func (c *Config) recordPosture() {
+	if c.askedNetwork == "" {
+		return
+	}
+	if err := runtime.RecordBootedNet(c.VMName, c.askedNetwork.RuntimeNet()); err != nil {
+		c.warnf("could not record that %s was started %s (%v). A later command that "+
+			"names no posture will use the default one and restart the sandbox.",
+			c.VMName, c.askedNetwork, err)
+	}
+}
+
 // networkChange is the first half of the warning printed when a running
 // sandbox is restarted because its network is stale: which posture it is
 // leaving and which it is going to, when that is the change.
 //
-// That is only known when the index recorded the posture the sandbox was
-// started with and this run asked for a different one. A flagless verb takes
-// the recorded posture, so a posture change here was named on this line or in
-// the setting, and the warning says which. Anything else -- a policy attached
-// or detached since the boot, or a session recorded before the index held a
-// posture -- keeps the general wording.
+// That is only known when a posture was recorded at the sandbox's boot and
+// this run asked for a different one. A flagless verb takes the recorded
+// posture, so a posture change here was named on this line or in the setting,
+// and the warning says which. Anything else -- a policy attached or detached
+// since the boot, or a sandbox booted before postures were recorded -- keeps
+// the general wording.
 func (c *Config) networkChange() string {
 	was, now := c.recordedNet, c.askedNetwork
 	if was == "" || now == "" || was == now {

@@ -192,7 +192,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// Recreate rather than fail: all persistent state lives in the
 		// workspace on the host, so restarting costs nothing but the boot.
 		switch stale := c.projectShareStale(); {
-		case c.networkStale():
+		case c.postureChanged() || c.networkStale():
 			// A third thing that cannot change on a live guest, answered the
 			// same way for the same reason. Its network and its egress rules
 			// were fixed when it booted, so a policy attached since is not in
@@ -363,6 +363,10 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err := c.recordPublications(); err != nil {
 		return err
 	}
+	// The posture, on the same terms and only here. This is the one point at
+	// which the runtime has been told a network, so it is the one point at
+	// which the record can say which one the sandbox has.
+	c.recordPosture()
 	// The share is bound now and cannot be changed on a live sandbox, so this
 	// is the moment the path becomes a fact about the instance. Recorded before
 	// the readiness wait for that reason: a sandbox that boots and never answers
@@ -654,6 +658,7 @@ func (c *Config) Remove() error {
 	// because it belongs to the sandbox rather than to one run of it; this is
 	// the one place the sandbox itself goes away.
 	runtime.ForgetPublications(c.VMName)
+	runtime.ForgetBootedNet(c.VMName)
 	return err
 }
 

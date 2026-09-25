@@ -33,10 +33,10 @@ $ brig run claude --network shared
 brig: this sandbox was started with the isolated posture and --network asks for shared. Rules are fixed when a sandbox boots, so it is being restarted; any other session using this sandbox will be disconnected.
 ```
 
-A sandbox started by an older Brig release has no recorded posture, so
-a command on it resolves the posture from the flag, the setting and the
-profile, as before. Run one command on it with its posture named, for
-example `BRIG_NETWORK=isolated brig sh claude`, and Brig records it.
+Brig records the posture when it boots a sandbox, and drops the record
+with `brig rm`. A sandbox started by an older Brig release has no record
+until its next boot. Until then a command on it resolves the posture from
+the flag, the setting and the profile, as before.
 
 | posture | what it permits |
 | --- | --- |
