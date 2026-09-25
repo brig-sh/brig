@@ -272,6 +272,14 @@ func dispatch(args []string) error {
 		return nil
 	}
 
+	// A removed verb is refused before anything else reads the line, so it
+	// loads no profile, is not answered by the --json refusal below, and
+	// starts nothing. A usage error rather than an unknown command: the word
+	// was brig's own, and the reader needs the one that replaced it.
+	if now, ok := removedVerbs[verb]; ok {
+		return usagef("`brig %s` was removed; use `%s`", verb, now)
+	}
+
 	// Profiles are read before anything looks a name up, so a file can stand
 	// in for a built-in. A broken file is reported and skipped rather than
 	// taking down the profile you were actually asking for.
@@ -3234,6 +3242,14 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 // is not long enough to have broken anyone's muscle memory on purpose.
 func deprecated(old, replacement string) {
 	warnf("`%s` is now `%s`", old, replacement)
+}
+
+// removedVerbs are verbs brig no longer runs, each with the line that replaced
+// it. Every one spent a release as a retired spelling first, so a script that
+// still has one is told what to type instead of that the command does not
+// exist.
+var removedVerbs = map[string]string{
+	"shell": "brig sh <ref> [command...]",
 }
 
 // verbosity is how much this invocation says about itself, read off the global

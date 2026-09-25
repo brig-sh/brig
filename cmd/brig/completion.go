@@ -124,9 +124,10 @@ func completeCmd(out io.Writer, words []string) {
 
 // verbs are the commands completion offers: the documented set only.
 //
-// The retired spellings -- exec, shell, env, create, reset, profiles, policies
-// -- are excluded. They still work and print what replaced them, but they are
-// removed in v0.3, so completion does not teach them.
+// The retired spellings -- exec, env, create, reset, profiles, policies -- are
+// excluded. They still work and print what replaced them, but they are
+// removed in v0.3, so completion does not teach them. shell is already
+// removed.
 var verbs = []string{
 	"agent",
 	"completion",

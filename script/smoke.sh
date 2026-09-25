@@ -2025,6 +2025,25 @@ retired 'brig info' env claude
 retired 'brig run -d' create claude
 retired '<agent>@<label>' run claude --name retn -d
 retired '<agent>@<label>' run claude -n retn -d
+# A removed spelling is the other end of that: refused as a usage error that
+# names its replacement, with nothing asked of the runtime.
+removed() {
+  local want="$1"; shift
+  local line="brig $*"
+  : > "$STUB_LOG"
+  "$WORK/brig" "$@" > "$WORK/removed.out" 2>&1
+  local rc=$?
+  [ "$rc" = 2 ] \
+    && ok "$line is a usage error" \
+    || bad "$line exited $rc, want 2 -- got: $(cat "$WORK/removed.out")"
+  grep -qF "use \`$want\`" "$WORK/removed.out" \
+    && ok "$line names $want" \
+    || bad "$line names $want -- got: $(cat "$WORK/removed.out")"
+  [ -s "$STUB_LOG" ] \
+    && bad "$line reached the runtime: $(cat "$STUB_LOG")" \
+    || ok "$line starts nothing"
+}
+removed 'brig sh <ref> [command...]' shell claude echo hi
 # Last of the group: it removes what the others were acting on.
 retired 'brig rm --all' reset
 

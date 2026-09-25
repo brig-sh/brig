@@ -252,6 +252,37 @@ func TestRetiredLifecycleSpellingsWorkAndNameTheirReplacement(t *testing.T) {
 	}
 }
 
+// A removed verb is a usage error that names its replacement, on every shape
+// of the line, and it says nothing on stderr: the refusal is the whole of the
+// answer. Exit 2 rather than the 1 an unknown command gets, because the word
+// was brig's own. --json in the global position gets the same refusal, not the
+// one for a verb with no JSON form.
+func TestRemovedVerbsAreUsageErrorsNamingTheReplacement(t *testing.T) {
+	for _, args := range [][]string{
+		{"shell"},
+		{"shell", "claude"},
+		{"shell", "claude", "echo", "hi"},
+		{"shell", "claude", "-c", "script.sh"},
+		{"--json", "shell", "claude"},
+	} {
+		line := "brig " + strings.Join(args, " ")
+		scratchHost(t)
+		var err error
+		stderr := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		if code := exitCode(err); code != exitUsage {
+			t.Errorf("%s exited %d, want %d: %v", line, code, exitUsage, err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "`brig sh <ref> [command...]`") {
+			t.Errorf("%s does not name brig sh: %v", line, err)
+		}
+		if stderr != "" {
+			t.Errorf("%s printed on stderr:\n%s", line, stderr)
+		}
+	}
+}
+
 // The current lifecycle spellings say nothing. This is the other half of the
 // contract above: a notice on a command that is not going anywhere is how a
 // reader learns to ignore the ones that are.
