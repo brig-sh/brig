@@ -10,7 +10,9 @@ brig: `brig profiles` is now `brig agent ls`
 
 The old spellings are scheduled for removal in 0.3. `brig run` is never
 removed. If you have a script written against an older spelling, this page is
-the whole list of what to change.
+the whole list of what to change. One entry is not a spelling at all: a word
+on the `brig run` line changed meaning, and it prints nothing. See
+[One word whose meaning changed](#one-word-whose-meaning-changed).
 
 To find out whether a script still uses one, run
 [`script/check-retired-spellings.sh`](../script/check-retired-spellings.sh)
@@ -85,6 +87,32 @@ brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`
 
 `--json` is different. It is accepted on both sides of the verb permanently,
 and prints no notice either way.
+
+## One word whose meaning changed
+
+Up to 0.1.0-rc17, the second bare word on a `brig run` line went to the
+agent. From 0.1.0-rc18 it is the project directory Brig mounts, and the
+agent starts in it:
+
+```bash
+brig run claude ~/code/demo   # mounts ~/code/demo at /work/demo
+brig run claude -- src        # passes src to the agent
+```
+
+This one does not keep working the old way, and it prints no notice.
+For a line written against rc17, such as `brig run claude src`:
+
+- If `src` is a directory, Brig mounts it read-write at `/work/src` and
+  starts the agent there. Nothing is printed about it.
+- If it is not, Brig refuses the run and says to put it after `--`.
+
+`--` ends Brig's own parsing, so anything after it reaches the agent
+untouched. That is the spelling that keeps the old meaning.
+
+0.1.0-rc18 and 0.2.0 printed a notice about this on every run that named a
+project. It is gone. `script/check-retired-spellings.sh` cannot find these
+lines either, because the line is still valid and only its meaning changed.
+Look for `brig run` lines with a second bare word after the agent.
 
 ## Session names
 
