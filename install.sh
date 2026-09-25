@@ -59,12 +59,13 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 # decide the brig version, since install_runtime replaces the brig the bundle
 # carries, so it moves only when the runtime itself does.
 #
-# v0.1.0-rc7 is the floor rather than the pin: it is the first release carrying
-# the rootless bundle, so BRIG_INSTALL_ROOTLESS against anything older fails
-# naming the asset it wanted. rc8 is the pin because it is the first where
-# brig-ctl reads the socket a rootless install actually uses.
+# v0.1.0-rc7 is the floor: it is the first release carrying the rootless
+# bundle, so BRIG_INSTALL_ROOTLESS against anything older fails naming the
+# asset it wanted. rc9 is the pin. Its urunc returns the whole output of a short
+# command run in the guest, and it gives each rootless user a device grant of
+# their own.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc8
+RUNTIME_VERSION=v0.1.0-rc9
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 
