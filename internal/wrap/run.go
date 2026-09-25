@@ -287,7 +287,7 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 		// the profile's hostmounts on a container runtime.
 		Shares:   c.shares(ws.dir, volumeShares),
 		Tmpfs:    tmpfs,
-		Env:      set.Vars,
+		Env:      c.guestEnv(set),
 		GUI:      check.GUI,
 		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
@@ -605,9 +605,27 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 		// no one to answer, so it must not read as askable. Compute it here,
 		// once, from the real stdin rather than reusing tty. See telemetryEnvFor.
 		CanAsk:  IsTerminal(os.Stdin),
-		Env:     set.Vars,
+		Env:     c.guestEnv(set),
 		Counted: true,
 	}
+}
+
+// guestEnv is the environment brig hands every process in the sandbox: the
+// resolved variables, and HOME set to the profile's guest home.
+//
+// HOME is set here because the runtime cannot be relied on for it. runc fills
+// it in from the guest's /etc/passwd when the spec has none, but an exec
+// through urunc leaves it unset. A HOME the set already carries is kept.
+func (c *Config) guestEnv(set creds.Set) []runtime.Var {
+	if c.Profile.GuestHome == "" {
+		return set.Vars
+	}
+	for _, v := range set.Vars {
+		if v.Name == "HOME" {
+			return set.Vars
+		}
+	}
+	return append([]runtime.Var{{Name: "HOME", Value: c.Profile.GuestHome}}, set.Vars...)
 }
 
 // Exec hands the terminal to a command inside the sandbox. It does not return
