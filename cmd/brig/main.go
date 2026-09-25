@@ -430,8 +430,8 @@ func dispatch(args []string) error {
 		deprecated("brig create", "brig run -d")
 	case "exec":
 		// exec keeps its own branch below. It runs its argv directly where sh
-		// runs it through `bash -lc`, so a script that relies on its own
-		// quoting keeps it -- a rename must not change what a working line
+		// runs it under a login shell, so a script that relies on exec's
+		// environment keeps it -- a rename must not change what a working line
 		// does.
 		deprecated("brig exec", "brig sh")
 	case "env":

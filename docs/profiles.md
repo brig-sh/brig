@@ -162,8 +162,9 @@ Three values, and each changes what `brig run` does once the guest is up.
 - **`kind: agent`**, the default. `brig run` execs `binary:` and passes your
   trailing arguments to it. `binary:` is required.
 - **`kind: shell`**. `brig run` opens a login shell, and trailing words run
-  as one command instead. There is no CLI to pass arguments to: `brig sh`
-  always execs `bash -l` (or `bash -lc` for a command), never `binary:`.
+  as one command instead, each word one argument to it. There is no CLI to
+  pass arguments to: `brig sh` always execs `bash -l`, or runs the command
+  under `bash -lc`, never `binary:`.
   So the field is not required and not read for this kind. `ubuntu` sets
   `binary: bash` anyway, which documents the shell without Brig acting on
   it.

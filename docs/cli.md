@@ -99,6 +99,15 @@ the guest command:
 brig sh claude ls /work
 ```
 
+Each word after the ref is one argument to the guest command, passed the way
+you typed it, and the command runs under a login shell for its environment.
+The words are not parsed again inside the guest, so a pipe, a `;` or a glob
+has to go through a shell you name:
+
+```bash
+brig sh claude bash -c 'ls /work | wc -l'
+```
+
 ### `brig stop`
 
 ```bash

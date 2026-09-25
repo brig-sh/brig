@@ -130,6 +130,30 @@ project, unless `-q` was given. It is gone.
 the line is still valid and only its meaning changed. Look for `brig run`
 lines with a second bare word after the agent.
 
+## A quoted script on `brig sh`
+
+`brig sh <ref> <command...>` used to join its trailing words with spaces and
+hand the result to `bash -lc` as a script. That threw away every argument
+boundary, so `brig sh ubuntu sh -c 'echo FIRST; echo SECOND'` printed a blank
+line and `SECOND`. Each word now reaches the guest as one argument, the way
+`brig exec <ref> -- <cmd>` passed them. The one difference left between the
+two is that `sh` runs the command under a login shell and `exec` does not.
+`brig run` on a `kind: shell` profile such as `ubuntu` runs its trailing words
+the same way `sh` does, and changed with it.
+
+A line that relied on the join, passing shell syntax as a single quoted word,
+now exits 127 with `not found` instead of running it. Name the shell:
+
+```bash
+brig sh claude 'ls /work | wc -l'           # no longer runs
+brig sh claude bash -c 'ls /work | wc -l'   # runs it as a script
+```
+
+The first word has to be a program, so a shell builtin such as `type` or
+`ulimit` needs the same `bash -c`, and a function the login profile defines
+needs `bash -lc`.
+The command still runs under a login shell, so its environment is unchanged.
+
 ## Session names
 
 `--name` is the flag this replaced most visibly. A session is now part of the

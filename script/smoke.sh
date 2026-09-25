@@ -477,7 +477,7 @@ esac
 "$WORK/brig" run claude -d > /dev/null 2>&1
 : > "$STUB_LOG"
 "$WORK/brig" sh claude echo hi > /dev/null 2> "$WORK/shproj.err"
-grep -q -- '-- bash -lc echo hi' "$STUB_LOG" \
+grep -qF -- '-- bash -lc exec "$@" bash echo hi' "$STUB_LOG" \
   && ok "sh still reads a second bare word as the guest command" \
   || bad "sh still reads a second bare word as the guest command -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1) $(cat "$WORK/shproj.err")"
 
@@ -1502,7 +1502,7 @@ echo "== ubuntu =="
 # and -- is what still says so.
 : > "$STUB_LOG"
 "$WORK/brig" run ubuntu -- uname -a > /dev/null 2>&1
-grep -q -- '-- bash -lc uname -a' "$STUB_LOG" \
+grep -qF -- '-- bash -lc exec "$@" bash uname -a' "$STUB_LOG" \
   && ok "a shell profile runs the command in a shell" \
   || bad "a shell profile runs the command in a shell"
 grep -q -- ':/root/work' "$STUB_LOG" \
@@ -1983,9 +1983,9 @@ export BRIG_HYPERVISOR=vz
 echo "== sh =="
 : > "$STUB_LOG"
 "$WORK/brig" sh claude echo hi there > /dev/null 2>"$WORK/shell.err"
-grep -q -- '-- bash -lc echo hi there' "$STUB_LOG" \
-  && ok "a trailing command reaches bash as one argument" \
-  || bad "a trailing command reaches bash as one argument"
+grep -qF -- '-- bash -lc exec "$@" bash echo hi there' "$STUB_LOG" \
+  && ok "a trailing command reaches bash as its own arguments" \
+  || bad "a trailing command reaches bash as its own arguments"
 grep -q '^SANDBOX ' "$WORK/shell.err" \
   && bad "sh printed the envelope" || ok "sh does not print the envelope"
 
