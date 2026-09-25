@@ -797,7 +797,7 @@ func (h *hull) Publish(name string, p Publication) error {
 	}
 	if !served {
 		if err := publishOn(sock, guestIP, p); err != nil {
-			return publishError(err, p)
+			return publishError(sock, err, p)
 		}
 	}
 	_, err = RecordPublications(name, []Publication{p})
@@ -845,25 +845,34 @@ func (h *hull) Published(name string) ([]Publication, error) {
 	return publishedOn(sock, guestIP)
 }
 
-// publishError names the sandbox in the way when a host port is already taken.
+// publishError names what holds a host port the gateway at sock refused.
 //
-// The gateway can only say that something is published there, because it knows
-// its forwards by address and nothing about sandboxes. brig hands out those
-// addresses, so it can turn the one in the way back into the name the user
-// would recognise.
-func publishError(err error, p Publication) error {
+// The gateway refuses a port in two cases. In the first, one of its own
+// forwards holds the port, and the refusal ends with the guest address that
+// forward carries to. brig hands out those addresses, so it can turn one back
+// into a sandbox name. In the second, the host would not let the gateway bind
+// the port, and the refusal names no guest. Then the holder is a sandbox on
+// another brig gateway, or a process brig did not start.
+func publishError(sock string, err error, p Publication) error {
 	var conflict *forwardConflict
 	if !errors.As(err, &conflict) {
 		return err
 	}
-	if owner := sandboxAt(conflictGuest(conflict.detail)); owner != "" {
-		return fmt.Errorf("%s is already published by %s; publish on another host port, "+
-			"for example `%d:%d`, or withdraw that one with `brig network unpublish`",
-			p.Local(), owner, p.HostPort+1, p.GuestPort)
+	if guest := conflictGuest(conflict.detail); guest != "" {
+		if owner := sandboxAt(guest); owner != "" {
+			return publishedBy(p, owner, unpublishRelease)
+		}
+		return fmt.Errorf("%s is already published; publish on another host port, for example "+
+			"`%d:%d`", p.Local(), p.HostPort+1, p.GuestPort)
 	}
-	return fmt.Errorf("%s is already published; publish on another host port, for example "+
-		"`%d:%d`", p.Local(), p.HostPort+1, p.GuestPort)
+	if owner := publisherElsewhere(sock, p); owner != "" {
+		return publishedBy(p, owner, unpublishRelease)
+	}
+	return portInUse(p)
 }
+
+// unpublishRelease is how a sandbox on a brig gateway gives up a host port.
+const unpublishRelease = "withdraw that one with `brig network unpublish`"
 
 // NetworkStale reports whether a running sandbox is on a different network, or
 // under different rules, than this run asks for.

@@ -256,6 +256,10 @@ carrying. The HOST column of `brig network ls` works as printed:
 `brig network unpublish claude 0.0.0.0:8080` closes the port on that address
 only.
 
+A host port that is already taken is refused, and the refusal says what holds
+it. That is another sandbox, named, or a process on the host. brig names the
+process when `lsof` can see it, and says "another process" when it cannot.
+
 Publishing needs a network gateway that brig owns, which is the `hvi` backend
 on macOS. On `vz` the sandbox takes its network from vmnet and brig has
 nothing to ask, so `--publish` is refused there by name rather than ignored.
