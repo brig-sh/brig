@@ -173,6 +173,13 @@ answers in that case, and the binary prints what a normal clone would.
   could not keep per-build tags out. cliff.toml's `tag_pattern` matches `v*`
   only, so the release notes skip them as well.
 
+- The macOS binaries are signed and notarized like a release's, with the same
+  certificate and notary key. Homebrew quarantines what a cask downloads, so
+  Gatekeeper checks each binary on its first run and blocks one it cannot
+  verify. A channel upgrade is a new binary every time. A build promoted to
+  `brig@experimental` is signed too, with the Developer ID, whatever branch it
+  came from.
+
 - The channel cask is pushed to the tap directly, not opened as a pull request.
   It is regenerated on every merge, and a reviewed PR per merge is noise. The
   tap's `main` ruleset requires a reviewed pull request, so the push depends on

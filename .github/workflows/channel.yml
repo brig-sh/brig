@@ -39,6 +39,10 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Notarizing waits on Apple for up to 20 minutes (.goreleaser.yaml). This
+    # bounds a run that hangs, which would otherwise hold the channel's
+    # concurrency group and queue every later merge behind it.
+    timeout-minutes: 60
     steps:
       # The dispatch input reaches bash through the environment, never through
       # a ${{ }} substitution: an expression is pasted into the script before
@@ -147,12 +151,24 @@ jobs:
           esac
           echo "value=$v" >> "$GITHUB_OUTPUT"
 
+      # A channel build is signed and notarized like a release. The
+      # prerelease channels section of docs/releasing.md says why. The key is
+      # staged the way release.yml does.
+      - name: Stage the notary key
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          printf '%s' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary-key.p8"
+          chmod 600 "$RUNNER_TEMP/notary-key.p8"
+
       # --snapshot builds every archive and publishes nothing, which is what
       # this job wants: the release below is a per-build prerelease rather
       # than the v-tag release GoReleaser knows how to make.
       - uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          # The major ci.yml checks .goreleaser.yaml against and release.yml
+          # runs, so a new major cannot change what the channel signs.
+          version: "~> v2"
           # The `before` hooks are skipped: `go mod tidy` ran above with the
           # tree checked afterwards, and `go test ./...` runs in CI on every
           # merge to main. Running tidy here would dirty the tree after
@@ -160,6 +176,14 @@ jobs:
           args: release --snapshot --clean --skip=before,sbom,sign --config .workflow/.goreleaser.yaml
         env:
           CHANNEL_VERSION: ${{ steps.version.outputs.value }}
+          # The certificate and notary key release.yml passes, under the
+          # names goreleaser reads. MACOS_SIGN_P12 is what turns on the
+          # notarize block in .goreleaser.yaml.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ runner.temp }}/notary-key.p8
+          MACOS_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
 
       # Each build is a release of its own, under a tag no other build uses.
       # Releases in this org are immutable: once published, a release takes no
