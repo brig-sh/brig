@@ -13,8 +13,9 @@ import (
 )
 
 // isolateState points brig's state directory at a scratch one and clears the
-// workspace settings, so a case runs against the index it writes itself rather
-// than against whatever the machine running the test happens to have.
+// workspace, name and network settings, so a case runs against the index it
+// writes itself rather than against whatever the machine running the test
+// happens to have.
 func isolateState(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -27,6 +28,7 @@ func isolateState(t *testing.T) string {
 	for _, key := range []string{
 		"BRIG_WORKSPACE", "BRIG_CLAUDE_CODE_WORKSPACE",
 		"BRIG_NAME", "BRIG_CLAUDE_CODE_NAME",
+		"BRIG_NETWORK", "BRIG_CLAUDE_CODE_NETWORK",
 	} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {

@@ -107,11 +107,19 @@ const (
 // workspace. Such a home goes with the sandbox on `brig rm`. An entry without
 // it keeps its home, which covers every session recorded by an older release.
 // See DropEphemeralHome.
+//
+// Network is the posture the sandbox was started with, as it was asked for:
+// before a policy narrowed it, so detaching the policy lets the sandbox go back
+// to what was asked. A verb that names no posture takes this one, so a shell
+// into an isolated sandbox does not read it as stale and restart it onto the
+// shared network. An entry without it resolves the posture the way an older
+// release did. See rememberedNetwork.
 type sessionEntry struct {
 	Home      string `json:"home"`
 	Sandbox   string `json:"sandbox"`
 	Project   string `json:"project,omitempty"`
 	Ephemeral bool   `json:"ephemeral,omitempty"`
+	Network   string `json:"network,omitempty"`
 }
 
 // stateDir is where brig keeps what has to outlive a single invocation.
@@ -272,6 +280,27 @@ func rememberedProject(ref, vmName string) string {
 	return entry.Project
 }
 
+// rememberedNetwork is the posture the sandbox of this session was started
+// with, or "" when nothing is recorded, when what is recorded belongs to a
+// differently named sandbox, or when it is not a posture.
+//
+// The last case is read as absent rather than refused. This is a value brig
+// wrote, not one anybody typed, and a stray file in ~/.brig must not stop every
+// command on the host -- see readIndex. The posture then comes from the profile
+// or the default, as it did before the index recorded one.
+func rememberedNetwork(ref, vmName string) Network {
+	entry := readSessionIndex()[ref]
+	if entry.Sandbox != vmName {
+		return ""
+	}
+	for _, n := range AllNetworks() {
+		if string(n) == entry.Network {
+			return n
+		}
+	}
+	return ""
+}
+
 // WorkspaceOfSandbox is the workspace recorded for whichever session is
 // carrying this sandbox, or "" when none is.
 //
@@ -369,7 +398,7 @@ func PruneSessions(live []string) {
 
 // rememberSession records what this run has just started: the ref it is filed
 // under, the directory the sandbox was given as its home, the sandbox carrying
-// it, and the project it was started on if it named one.
+// it, the project it was started on if it named one, and its network posture.
 //
 // Also called when the running sandbox already matches, which is what fills
 // the index in for a session created before it existed: the entry is written
@@ -388,6 +417,7 @@ func (c *Config) rememberSession() {
 		Sandbox:   c.VMName,
 		Project:   c.Project,
 		Ephemeral: c.EphemeralHome,
+		Network:   string(c.askedNetwork),
 	}
 	index := readSessionIndex()
 	if index[key] == entry {

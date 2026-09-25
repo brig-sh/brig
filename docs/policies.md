@@ -21,6 +21,23 @@ beats the profile. Leave all three unset and you get `shared`.
 brig run claude --network isolated
 ```
 
+A sandbox keeps the posture it was started with. A later command that
+names no posture, such as `brig sh`, `brig info` or a bare `brig run`,
+uses the one the sandbox has, and the profile's `network:` does not move
+it. To change the posture, name a different one with `--network` or
+`BRIG_NETWORK`. The posture is fixed when a sandbox boots, so Brig
+restarts it and says which posture it leaves and which it goes to:
+
+```console
+$ brig run claude --network shared
+brig: this sandbox was started with the isolated posture and --network asks for shared. Rules are fixed when a sandbox boots, so it is being restarted; any other session using this sandbox will be disconnected.
+```
+
+A sandbox started by an older Brig release has no recorded posture, so
+a command on it resolves the posture from the flag, the setting and the
+profile, as before. Run one command on it with its posture named, for
+example `BRIG_NETWORK=isolated brig sh claude`, and Brig records it.
+
 | posture | what it permits |
 | --- | --- |
 | `shared` | one network for every sandbox on the host. The default |

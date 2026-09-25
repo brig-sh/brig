@@ -162,6 +162,26 @@ func (c *Config) networkStale() bool {
 	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), runtimeEgress(c.Egress))
 }
 
+// networkChange is the first half of the warning printed when a running
+// sandbox is restarted because its network is stale: which posture it is
+// leaving and which it is going to, when that is the change.
+//
+// That is only known when the index recorded the posture the sandbox was
+// started with and this run asked for a different one. A flagless verb takes
+// the recorded posture, so a posture change here was named on this line or in
+// the setting, and the warning says which. Anything else -- a policy attached
+// or detached since the boot, or a session recorded before the index held a
+// posture -- keeps the general wording.
+func (c *Config) networkChange() string {
+	was, now := c.recordedNet, c.askedNetwork
+	if was == "" || now == "" || was == now {
+		return "this sandbox is running under a different network policy than the one " +
+			"that applies now"
+	}
+	return fmt.Sprintf("this sandbox was started with the %s posture and %s asks for %s",
+		was, c.networkSource, now)
+}
+
 // mergePublications is what a sandbox will be offering: everything it already
 // publishes, with what this command line asked for laid over it.
 //

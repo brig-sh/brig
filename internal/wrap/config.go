@@ -136,6 +136,16 @@ type Config struct {
 	// envelope, the report and the spec handed to the runtime cannot disagree
 	// about what a reader was told.
 	Network Network
+	// askedNetwork is the posture before a policy narrowed it, which is what
+	// the session index records: a sandbox isolated only by its policy goes
+	// back to shared when the policy is detached, so the narrowing is never
+	// remembered as though it had been asked for. networkSource is where
+	// askedNetwork came from, and recordedNet is what the index held for this
+	// sandbox before this run, or "" when it held nothing. The restart warning
+	// reads all three. See rememberedNetwork and networkChange.
+	askedNetwork  Network
+	networkSource string
+	recordedNet   Network
 	// Publish is every guest port this sandbox offers on the host: what
 	// --publish asked for on this line, and what the sandbox was already
 	// publishing. PublishAsked is the first half alone.
@@ -439,9 +449,22 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// Flag beats setting beats profile, the order every other setting follows.
 	// Resolved once here so the envelope row and the spec cannot disagree. The
 	// source travels with the value so a refusal names what was actually typed.
+	//
+	// The posture the sandbox was started with sits between the setting and
+	// the profile, the same two-step the home and the project follow. A verb
+	// that names no posture is not asking for a different one: `brig sh` on a
+	// sandbox started with --network isolated resolved shared, read the running
+	// sandbox as stale and restarted it onto the shared network (#340). The
+	// profile's network: is a default for a new sandbox, not a request to move
+	// one, so it only applies when nothing was recorded -- which is also every
+	// session recorded by an older release.
 	netValue, netSource := o.Network, "--network"
 	if netValue == "" {
 		netValue, netSource = env.String("NETWORK", ""), env.settingName("NETWORK")
+	}
+	recordedNet := rememberedNetwork(sessionKey(t.Name, slug), vmName)
+	if netValue == "" && recordedNet != "" {
+		netValue, netSource = string(recordedNet), "the posture this sandbox was started with"
 	}
 	if netValue == "" {
 		netValue, netSource = t.Network, "the profile's network:"
@@ -481,6 +504,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if err != nil && strictErr == nil {
 		strictErr = err
 	}
+	askedNet := network
 	if egress.Default != "" && network != NetOffline {
 		network = NetIsolated
 	}
@@ -511,6 +535,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
 		Network:        network,
+		askedNetwork:   askedNet,
+		networkSource:  netSource,
+		recordedNet:    recordedNet,
 		Publish:        published,
 		PublishAsked:   asked,
 		Egress:         egress,
