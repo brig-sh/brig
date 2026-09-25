@@ -79,16 +79,16 @@ SENTINEL=claims-vm-probe-done
 BOOT_ID_FILE=/proc/sys/kernel/random/boot_id
 boot_id=""
 
-# guest SCRIPT runs one bash script in the sandbox. brig sh joins its words
-# into a bash -lc script, so the script goes in as one word. The command runs
-# on a pty, so its lines end in CR LF.
+# guest SCRIPT runs one bash script in the sandbox. brig sh passes each of its
+# words to the guest as one argument, so the script goes to bash -c as one
+# word. The command runs on a pty, so its lines end in CR LF.
 #
 # A probe with no answer says so on stderr, with the last line it got. A
 # real run once failed a check with nothing to say why. This line tells a
 # guest that did not answer apart from a guest that leaked.
 guest() {
 	local out last id
-	out="$("$BRIG" -q sh "$REF" "$1; echo $SENTINEL boot=\$(cat $(quote "$BOOT_ID_FILE") 2>/dev/null)" 2>&1 | tr -d '\r')"
+	out="$("$BRIG" -q sh "$REF" bash -c "$1; echo $SENTINEL boot=\$(cat $(quote "$BOOT_ID_FILE") 2>/dev/null)" 2>&1 | tr -d '\r')"
 	last="$(printf '%s\n' "$out" | tail -1)"
 	case "$last" in
 	"$SENTINEL boot="*) id="${last#"$SENTINEL boot="}" ;;
@@ -352,10 +352,13 @@ self_test() {
 	# that runs each probe on the host and ends every line in CR LF, as brig
 	# sh does on a pty. The host reaches what a guest must not, so a negative
 	# check through it has to fail, and a check with nothing to find passes
-	# only once the CR and the sentinel line are gone.
+	# only once the CR and the sentinel line are gone. The stub hands its words
+	# on as brig sh does, each one argument, so a script passed as one word
+	# fails here as it does in a guest.
 	cat >"$tmp/brig" <<'STUB'
 #!/bin/bash
 [ "$1 $2" = "-q sh" ] || exit 2
+shift 3
 case "${CLAIMS_VM_STUB:-}" in
 dead)
 	printf 'sandbox gone\r\n'
@@ -363,11 +366,13 @@ dead)
 	;;
 silent) exit 1 ;;
 nofind)
-	/bin/bash -c "PATH=/var/empty; $4" | sed 's/$/\r/'
+	# A guest with bash and nothing else on its PATH.
+	mkdir -p "${0%/*}/nofind" && ln -sf /bin/bash "${0%/*}/nofind/bash"
+	PATH="${0%/*}/nofind" /bin/bash -c '"$@"' bash "$@" | sed 's/$/\r/'
 	exit
 	;;
 esac
-bash -c "$4" | sed 's/$/\r/'
+/bin/bash -c '"$@"' bash "$@" | sed 's/$/\r/'
 STUB
 	chmod +x "$tmp/brig"
 	local real_brig="$BRIG"

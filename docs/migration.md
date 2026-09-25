@@ -20,6 +20,9 @@ whole list of what to change. Some changes go beyond spelling: a word on
 the `brig run` line changed meaning, and it prints nothing. See
 [One word whose meaning changed](#one-word-whose-meaning-changed). New
 sandboxes also use a different [network default](#network-defaults).
+`brig sh` now passes its words to the guest command as arguments, so a
+script typed as one quoted word no longer runs. See
+[A quoted script on `brig sh`](#a-quoted-script-on-brig-sh).
 
 To find out whether a script still uses one, run
 [`script/check-retired-spellings.sh`](../script/check-retired-spellings.sh)
@@ -141,6 +144,60 @@ project, unless `-q` was given. It is gone.
 `script/check-retired-spellings.sh` cannot find these lines either, because
 the line is still valid and only its meaning changed. Look for `brig run`
 lines with a second bare word after the agent.
+
+## A quoted script on `brig sh`
+
+`brig sh <ref> <command...>` used to join its trailing words with spaces and
+hand the result to `bash -lc` as a script. That threw away every argument
+boundary, so `brig sh ubuntu sh -c 'echo FIRST; echo SECOND'` printed a blank
+line and `SECOND`. Each word now reaches the guest as one argument, the way
+`brig exec <ref> -- <cmd>` passed them. Two differences are left between the
+two. `sh` runs the command under a login shell and `exec` does not. `sh` also
+always asks for a terminal in the guest, where `exec` asked for one only when
+brig's own stdin was a terminal. On hull, output piped or redirected from `sh`
+therefore comes through that terminal: lines end in CRLF, and stderr is mixed
+into stdout. On Linux the runtime can refuse the terminal, and then the
+command does not run at all. docker refuses it when brig's stdin is not a
+terminal. nerdctl refuses it when none of brig's stdin, stdout and stderr is
+one.
+
+`brig run` on a `kind: shell` profile such as `ubuntu` runs its trailing words
+the same way `sh` does, and changed with it.
+
+A line that relied on the join, passing shell syntax as a single quoted word,
+now exits 127 with `not found` instead of running it. Name the shell:
+
+```bash
+brig sh claude 'ls /work | wc -l'           # no longer runs
+brig sh claude bash -c 'ls /work | wc -l'   # runs it as a script
+```
+
+A variable assignment in front of the command is shell syntax too, even
+unquoted. `brig sh claude FOO=bar npm test` now looks for a command named
+`FOO=bar` and exits 127. Pass the variable through `env`, which keeps the
+words as they are:
+
+```bash
+brig sh claude FOO=bar npm test       # no longer runs
+brig sh claude env FOO=bar npm test   # runs npm test with FOO set
+```
+
+The command still runs under a login shell, so its environment is unchanged,
+and a shell builtin such as `ulimit` or a function the login profile defines,
+such as `nvm`, still works as the first word. A first word that starts with
+`-` is a command name, not an option, and exits 127 when no such command
+exists.
+
+When the first word is a profile function, or the login profile sets a trap,
+bash stays running as the command's parent. A `SIGTERM` sent to the session
+then ends bash and leaves the command running until the sandbox stops.
+
+The words are now positional parameters, so a login profile that runs a
+top-level `shift` or `set --` rewrites them and so the command. This applies
+to `/etc/profile` in the image. It also applies to a `.bash_profile` in your
+guest home when the profile mounts that home at the guest user's `$HOME`.
+Move either into a function, where bash scopes it to the call. See
+[guest-image.md](guest-image.md).
 
 ## Session names
 
