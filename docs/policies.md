@@ -38,6 +38,12 @@ with `brig rm`. A sandbox started by an older Brig release has no record
 until its next boot. Until then a command on it resolves the posture from
 the flag, the setting and the profile, as before.
 
+An older release that boots the sandbox again does not update the record.
+On a host where two releases share one sandbox, the record can name a
+posture the sandbox no longer has, and `brig info` reports the recorded
+one. `brig stop` and a `brig run` from this release boot it again and
+write a new record. `brig rm` drops the record with the sandbox.
+
 | posture | what it permits |
 | --- | --- |
 | `shared` | one network for every sandbox on the host. The default |
