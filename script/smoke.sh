@@ -1786,8 +1786,16 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/cosign" <<'COSIGN'
 #!/bin/bash
 # `triangulate <ref>` names the signature tag for the digest a reference
-# resolves to, which is how brig learns the digest to verify and boot.
+# resolves to, which is how brig learns the digest to verify and boot. cosign
+# 3.1 warns on stderr first that triangulate is deprecated, whether it works or
+# not. COSIGN_TRIANGULATE_FAIL=1 is a credential helper that is not on PATH.
 if [ "$1" = triangulate ]; then
+  echo 'Command "triangulate" is deprecated, triangulate will be removed in v4.0.0' >&2
+  if [ "${COSIGN_TRIANGULATE_FAIL:-0}" = 1 ]; then
+    echo 'Error: error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH' >&2
+    echo 'error during command execution: error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH' >&2
+    exit 1
+  fi
   printf '%s:sha256-%s.sig\n' "${2%%:*}" "$(printf 'a%.0s' $(seq 64))"
   exit 0
 fi
@@ -1917,6 +1925,17 @@ esac
 # tell it apart from a run that started and failed.
 [ "$rc" = 5 ] && ok "a bad signature stops the boot (exit 5) with no terminal to ask" \
   || bad "a bad signature stops the boot with exit 5 -- got $rc"
+
+# A resolve that fails names cosign's error, not the deprecation notice cosign
+# prints ahead of it.
+fresh
+out="$(BRIG_VERIFY=warn COSIGN_TRIANGULATE_FAIL=1 "$WORK/brig" run claude -p hi 2>&1)"
+case "$out" in
+  *"is deprecated"*) bad "a failed resolve reported cosign's deprecation notice -- got: $out" ;;
+  *'"docker-credential-desktop": executable file not found'*)
+    ok "a failed resolve reports cosign's error" ;;
+  *) bad "a failed resolve reports cosign's error -- got: $out" ;;
+esac
 
 fresh
 out="$(BRIG_VERIFY=warn BRIG_IMAGE=docker.io/library/ubuntu:24.04 \

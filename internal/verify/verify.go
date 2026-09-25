@@ -321,7 +321,7 @@ func (p Policy) Image(ref string) Result {
 		subject,
 	)
 	if err != nil {
-		return Result{Policy: p, Outcome: Failed, Image: ref, Detail: firstLine(out, err)}
+		return Result{Policy: p, Outcome: Failed, Image: ref, Detail: cosignReason(out, err)}
 	}
 	return Result{Policy: p, Outcome: Verified, Image: ref}
 }
@@ -381,7 +381,7 @@ func (p Policy) Verify(ref, localDigest string) Result {
 		refWithDigest(ref, digest),
 	)
 	if verr != nil {
-		return Result{Policy: p, Outcome: Failed, Image: ref, Digest: digest, Ours: ours, Detail: firstLine(out, verr)}
+		return Result{Policy: p, Outcome: Failed, Image: ref, Digest: digest, Ours: ours, Detail: cosignReason(out, verr)}
 	}
 
 	// The copy on disk must be the object we just resolved -- and, for our own
@@ -410,7 +410,7 @@ func (p Policy) Verify(ref, localDigest string) Result {
 func (p Policy) resolveDigest(ref string) (string, error) {
 	out, err := run(p.Cosign, "triangulate", ref)
 	if err != nil {
-		return "", errors.New(firstLine(out, err))
+		return "", errors.New(cosignReason(out, err))
 	}
 	if d := digestFromOutput(out); d != "" {
 		return d, nil
@@ -519,15 +519,28 @@ var run = func(bin string, args ...string) (string, error) {
 	return out.String(), err
 }
 
-func firstLine(out string, err error) string {
-	for _, line := range strings.Split(out, "\n") {
+// cosignReason returns the line of cosign's output that says why it failed.
+//
+// cosign prints the error it returns as "Error: <reason>", and again as "error
+// during command execution: <reason>". Other lines come before it: the banner
+// about the transparency log, and warnings such as the deprecation notice
+// cosign 3 prints for triangulate. So the reason is the text of the Error line.
+// Output without one gives the first line that is not a banner or a warning,
+// and output with nothing left gives the exit error.
+func cosignReason(out string, err error) string {
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		if reason, ok := strings.CutPrefix(strings.TrimSpace(line), "Error: "); ok && reason != "" {
+			return reason
+		}
+	}
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		// cosign prints a banner about the transparency log before the real
-		// reason; the reason is the first line that is not one of those.
-		if line == "" || strings.HasPrefix(line, "Verification for ") ||
-			strings.HasPrefix(line, "The following checks") ||
-			strings.HasPrefix(line, "  - ") {
+		if line == "" || cosignChatter(line) {
 			continue
+		}
+		if _, reason, ok := strings.Cut(line, "error during command execution: "); ok && reason != "" {
+			return reason
 		}
 		return line
 	}
@@ -535,4 +548,22 @@ func firstLine(out string, err error) string {
 		return err.Error()
 	}
 	return "no detail"
+}
+
+// cosignChatter reports whether line is one cosign prints beside the reason
+// for a failure: the verification banner, or a warning.
+func cosignChatter(line string) bool {
+	switch {
+	case strings.HasPrefix(line, "Verification for "),
+		strings.HasPrefix(line, "The following checks"),
+		strings.HasPrefix(line, "- "),
+		strings.HasPrefix(line, "WARNING"),
+		strings.HasPrefix(line, "Warning:"):
+		return true
+	case strings.HasPrefix(line, "Command ") && strings.Contains(line, " is deprecated"),
+		strings.HasPrefix(line, "Flag --") && strings.Contains(line, " has been deprecated"):
+		// cobra's notices for a deprecated command or flag.
+		return true
+	}
+	return false
 }
