@@ -282,10 +282,11 @@ install_runtime() {
   # directory of ours for BRIG_INSTALL_DIR to choose.
   [ -z "${BRIG_INSTALL_DIR:-}" ] \
     || say "BRIG_INSTALL_DIR is ignored here: the bundle installs its own launchers"
-  # A brig an earlier run of this script put in DEST sits ahead of an
-  # unprivileged install's ~/.local/bin on most PATHs, and knows nothing of
-  # the bundle's containerd.
-  if [ -x "$DEST/brig" ]; then
+  # A node-wide install is root's, and a brig an earlier run of this script
+  # put in DEST knows nothing of the bundle's containerd. A user install
+  # cannot remove anything there, so it is checked by PATH order instead,
+  # once the launcher is in place.
+  if [ "$(id -u)" = 0 ] && [ -x "$DEST/brig" ]; then
     say "$DEST/brig is from an earlier install, and may run instead of the bundle's launcher; remove it"
   fi
   base="https://github.com/$RUNTIME_REPO/releases/download/$version"
@@ -370,6 +371,36 @@ install_runtime() {
     sed -i "s/^BRIG_VERSION=.*/BRIG_VERSION=$brig_version/" "$prefix/pins.env"
   fi
   say "installed brig $brig_version into the runtime at $prefix/bin"
+
+  # A user install's launcher is in ~/.local/bin, and a brig earlier on PATH
+  # runs instead. On a shared host that is usually the node-wide launcher in
+  # /usr/local/bin, which this user cannot remove.
+  if [ "$(id -u)" != 0 ]; then
+    launchers="$HOME/.local/bin"
+    if shadow=$(brig_before "$launchers"); then
+      say "\`brig\` on your PATH is $shadow, so it runs instead of this install"
+      say "put $launchers before ${shadow%/*} on PATH, for instance in ~/.profile:"
+      say "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+  fi
+}
+
+# brig_before <dir> prints the first brig on PATH that comes ahead of <dir>,
+# and fails when there is none. <dir> missing from PATH counts as last.
+brig_before() {
+  _ifs=$IFS
+  IFS=:
+  for _d in $PATH; do
+    [ -n "$_d" ] || continue
+    [ "$_d" = "$1" ] && break
+    if [ -x "$_d/brig" ]; then
+      IFS=$_ifs
+      printf '%s\n' "$_d/brig"
+      return 0
+    fi
+  done
+  IFS=$_ifs
+  return 1
 }
 
 # cosign is what turns hull's boot-asset check from a printed warning into an

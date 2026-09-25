@@ -169,6 +169,17 @@ outside your home and asks for `sudo` at no point, which is why `install.sh`
 puts nothing in `BRIG_INSTALL_DIR` there and uses the cosign the bundle
 carries.
 
+On a host that also has a node-wide install, `/usr/local/bin/brig` is that
+install's launcher, and it runs whenever `/usr/local/bin` comes first on
+`PATH`. Put `~/.local/bin` ahead of it:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`install.sh` checks the order once the launcher is in place, and prints this
+line when another `brig` would run instead.
+
 The bundle for it is selected for you: an unprivileged install always takes
 the rootless one, since the plain bundle cannot serve it and says so rather
 than installing half of itself. `BRIG_INSTALL_ROOTLESS=1` asks for that same
