@@ -5,7 +5,8 @@ not available.
 
 Homebrew and `install.sh` both install `hull` on macOS. On Linux,
 `install.sh` installs the runtime bundle, which carries `nerdctl`,
-containerd, the `urunc` shim and `brig` itself. Building from source writes
+containerd and the `urunc` shim, and puts `brig` from the Brig release into
+it. Building from source writes
 only `brig` and `brigd`, never a runtime.
 
 ## macOS with Homebrew
@@ -42,7 +43,8 @@ curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sh
 
 On macOS this installs `brig` and `brigd`, plus `hull` with the `vz-runner`
 and `hvi` executables it drives. On Linux it installs the runtime bundle,
-which brings `brig` and `brigd` with it. Both platforms get `cosign`.
+and `brig` and `brigd` from the Brig release inside it. Both platforms get
+`cosign`.
 
 It downloads the newest release for your OS and architecture. There is no
 stable release yet, so that includes prereleases. It checks every archive
@@ -119,9 +121,12 @@ containerd of its own, under `/var/lib/brig`. The tag is pinned in
 `install.sh`, and the bundle's own `install.sh` is a release asset checked
 against the same signed `checksums.txt` as the bundle.
 
-Because the bundle carries `brig` and `brigd` too, on Linux they come from
-there rather than from the brig archive: what lands on `PATH` is a launcher
-that sets the environment pointing brig at that private containerd.
+The bundle carries a `brig` and `brigd` of its own. `install.sh` replaces them
+with the ones from the Brig release, the same release it would install on
+macOS, so `BRIG_VERSION` chooses the Brig version on Linux too. The runtime
+and Brig are versioned separately. What lands on `PATH` is the bundle's
+launcher, which sets the environment that points brig at the private
+containerd.
 
 Run it under `sudo` for a node-wide install, which is the default and needs
 root. Run it as a normal user and everything lands under `$HOME` instead:
@@ -143,8 +148,10 @@ package, and an AppArmor profile on Ubuntu 24.04 and later. The installer
 reports which of those are missing before it unpacks anything. See the
 bundle's `docs/rootless.md` for what each one is for.
 
-`BRIG_INSTALL_RUNTIME=0` skips all of this and installs `brig` and `brigd`
-alone, for a host that already has `nerdctl`, containerd and `urunc`. A
+`BRIG_INSTALL_RUNTIME=0` skips the bundle and installs `brig` and `brigd`
+alone, for a host that already has `nerdctl`, containerd and `urunc`. With the
+bundle, `BRIG_INSTALL_DIR` is ignored, since the binaries go into the bundle's
+tree, and `install.sh` says so. A
 `genericBoot` profile also needs `oras`, which the bundle carries.
 [runtimes.md](runtimes.md) covers the full command surface each one needs.
 

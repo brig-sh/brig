@@ -11,8 +11,9 @@
 #
 # On Linux the runtime is nerdctl over containerd with the urunc shim, none of
 # which is brig's to build, so this delegates to the bundle that packages it
-# (brig-standalone-linux). That bundle carries brig and brigd too, so on Linux
-# they come from there rather than from the archive above.
+# (brig-standalone-linux). brig and brigd still come from the brig release: the
+# bundle's own copies are replaced with them, so the runtime and brig are
+# versioned separately.
 #
 # Homebrew is still the better path on macOS. It tracks upgrades, and it
 # installs the shell completions this script leaves in the archive for you
@@ -29,7 +30,9 @@
 #   BRIG_INSTALL_COSIGN=0 skip cosign, and leave the boot chain unverified. On
 #                         Linux the runtime bundle brings its own, so this only
 #                         stops the one fetched to check that release
-#   BRIG_INSTALL_RUNTIME=0 skip the Linux runtime, and install brig only
+#   BRIG_INSTALL_RUNTIME=0 skip the Linux runtime bundle, and install brig
+#                         alone, for a host with its own nerdctl, containerd
+#                         and urunc
 #   BRIG_RUNTIME_VERSION  a brig-standalone-linux tag instead of the pinned one
 #   BRIG_INSTALL_ROOTLESS=1  install the rootless bundle on Linux, so any user
 #                         of the install can run `brig-ctl rootless`
@@ -37,6 +40,8 @@ set -eu
 
 BRIG_REPO=brig-sh/brig
 HULL_REPO=brig-sh/hull
+
+INSTALL_RUNTIME="${BRIG_INSTALL_RUNTIME:-1}"
 DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 
 # cosign is pinned by version and by hash, which the two repos above are not.
@@ -50,8 +55,9 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 # Bump both the version and the hashes together. docs/releasing.md carries the
 # grep that catches a version quoted in one place and not the other.
 # The Linux runtime bundle. Pinned here, and reviewed, for the same reason
-# cosign's version is: it decides what ends up running on the host. Bump it
-# with each brig release that the bundle repins against.
+# cosign's version is: it decides what ends up running on the host. It does not
+# decide the brig version, since install_runtime replaces the brig the bundle
+# carries, so it moves only when the runtime itself does.
 #
 # v0.1.0-rc7 is the floor rather than the pin: it is the first release carrying
 # the rootless bundle, so BRIG_INSTALL_ROOTLESS against anything older fails
@@ -150,31 +156,37 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-install_brig() {
-  version="${BRIG_VERSION:-}"
-  if [ -z "$version" ]; then
-    version=$(newest_tag "$BRIG_REPO")
-    [ -n "$version" ] || die "could not work out the newest version; set BRIG_VERSION"
+# fetch_brig downloads the brig release archive, checks it and unpacks it into
+# $tmp/brig. It sets brig_version to the tag it fetched.
+fetch_brig() {
+  brig_version="${BRIG_VERSION:-}"
+  if [ -z "$brig_version" ]; then
+    brig_version=$(newest_tag "$BRIG_REPO")
+    [ -n "$brig_version" ] || die "could not work out the newest version; set BRIG_VERSION"
   fi
 
-  bare="${version#v}"
+  bare="${brig_version#v}"
   archive="brig-${bare}-${os}-${arch}.tar.gz"
-  base="https://github.com/$BRIG_REPO/releases/download/$version"
+  base="https://github.com/$BRIG_REPO/releases/download/$brig_version"
 
   say "downloading $archive"
   curl -fsSL -o "$tmp/$archive" "$base/$archive" \
-    || die "no build for ${os}/${arch} in $version"
+    || die "no build for ${os}/${arch} in $brig_version"
   # The checksum file is signed with cosign as well. Verifying that signature
   # needs a cosign this script may be about to install, so the signature is
   # documented in the README rather than checked here.
   curl -fsSL -o "$tmp/brig-checksums.txt" "$base/checksums.txt" \
-    || die "could not fetch checksums.txt for $version"
+    || die "could not fetch checksums.txt for $brig_version"
   verify "$tmp" "$archive" brig-checksums.txt
 
   # Both archives carry a LICENSE and a README.md, so each unpacks into its own
   # directory rather than over the other.
   mkdir -p "$tmp/brig"
   tar -xzf "$tmp/$archive" -C "$tmp/brig"
+}
+
+install_brig() {
+  fetch_brig
   install_from "$tmp/brig" brig
   install_from "$tmp/brig" brigd
   say "installed $("$DEST/brig" version) to $DEST"
@@ -256,6 +268,17 @@ resolve_cosign() {
 # answer this script gives for DEST, so the two agree without being told.
 install_runtime() {
   version="${BRIG_RUNTIME_VERSION:-$RUNTIME_VERSION}"
+
+  # brig goes into the bundle's tree, behind its launchers, so there is no
+  # directory of ours for BRIG_INSTALL_DIR to choose.
+  [ -z "${BRIG_INSTALL_DIR:-}" ] \
+    || say "BRIG_INSTALL_DIR is ignored here: the bundle installs its own launchers"
+  # A brig an earlier run of this script put in DEST sits ahead of an
+  # unprivileged install's ~/.local/bin on most PATHs, and knows nothing of
+  # the bundle's containerd.
+  if [ -x "$DEST/brig" ]; then
+    say "$DEST/brig is from an earlier install, and may run instead of the bundle's launcher; remove it"
+  fi
   base="https://github.com/$RUNTIME_REPO/releases/download/$version"
 
   say "downloading the Linux runtime installer ($RUNTIME_REPO $version)"
@@ -287,8 +310,9 @@ install_runtime() {
       --certificate "$tmp/runtime-checksums.txt.pem" \
       --signature "$tmp/runtime-checksums.txt.sig" \
       --certificate-identity-regexp "$RUNTIME_SIG_IDENTITY" \
-      --certificate-oidc-issuer "$RUNTIME_SIG_ISSUER" > /dev/null 2>&1 \
-      || die "the runtime release's checksums.txt is not signed by $RUNTIME_REPO's release workflow"
+      --certificate-oidc-issuer "$RUNTIME_SIG_ISSUER" > "$tmp/cosign.log" 2>&1 \
+      || { cat "$tmp/cosign.log" >&2
+           die "the runtime release's checksums.txt is not signed by $RUNTIME_REPO's release workflow"; }
     say "signature ok: $RUNTIME_REPO checksums.txt"
     require_sig=true
   fi
@@ -306,6 +330,11 @@ install_runtime() {
     */*) runtime_path="${COSIGN_BIN%/*}:$PATH" ;;
   esac
 
+  # brig is fetched and checked before the runtime installer writes anything,
+  # so a brig release that is missing or fails its checksum leaves the host
+  # untouched.
+  fetch_brig
+
   say "running the runtime installer"
   PATH="$runtime_path" \
   INSTALL_BRIG_RELEASE_REPO="$RUNTIME_REPO" \
@@ -313,6 +342,25 @@ install_runtime() {
   INSTALL_BRIG_REQUIRE_SIGCHECK="$require_sig" \
   INSTALL_BRIG_ROOTLESS="$rootless" \
     sh "$tmp/install.sh" || die "the runtime installer failed"
+
+  # The bundle's launchers exec $PREFIX/bin/brig and $PREFIX/bin/brigd. It
+  # picks PREFIX from its euid, the same way it picks where to install:
+  # /var/lib/brig for root, the XDG data directory for anyone else.
+  if [ "$(id -u)" = 0 ]; then
+    prefix=/var/lib/brig/data
+  else
+    prefix="${XDG_DATA_HOME:-$HOME/.local/share}/brig/data"
+  fi
+  [ -x "$prefix/bin/brig" ] \
+    || die "the runtime installer left no brig at $prefix/bin/brig to replace"
+  install -m 0755 "$tmp/brig/brig" "$prefix/bin/brig"
+  install -m 0755 "$tmp/brig/brigd" "$prefix/bin/brigd"
+  # pins.env is what `brig-ctl version` reports, so it names the brig that is
+  # there now.
+  if [ -f "$prefix/pins.env" ]; then
+    sed -i "s/^BRIG_VERSION=.*/BRIG_VERSION=$brig_version/" "$prefix/pins.env"
+  fi
+  say "installed brig $brig_version into the runtime at $prefix/bin"
 }
 
 # cosign is what turns hull's boot-asset check from a printed warning into an
@@ -352,14 +400,13 @@ install_cosign() {
   fi
 }
 
-# The Linux runtime bundle carries brig and brigd and installs launchers for
-# them -- launchers, not the binaries, because they are what sets the
-# environment that points brig at the private containerd. Installing the plain
-# binaries here as well would leave two copies of brig on PATH with one
-# silently winning, so on Linux the bundle owns them. It carries cosign too,
-# and puts it on the PATH its launcher sets, so nothing here writes to DEST on
-# that path: an unprivileged install needs no sudo at all.
-if [ "$os" = linux ] && [ "${BRIG_INSTALL_RUNTIME:-1}" != 0 ]; then
+# On Linux brig and brigd run behind the bundle's launchers, which set the
+# environment that points brig at the private containerd. install_runtime puts
+# the release's brig in the bundle's tree rather than in DEST, since a second
+# copy on PATH would silently win over the launcher. The bundle carries cosign
+# too, on the PATH its launcher sets, so nothing here writes to DEST on that
+# path: an unprivileged install needs no sudo at all.
+if [ "$os" = linux ] && [ "$INSTALL_RUNTIME" != 0 ]; then
   install_runtime
 else
   # brig first. install_cosign dies on a failed download, and cosign is the
@@ -379,7 +426,7 @@ fi
 # reporting "no tooling" even though the binary is installed. The runtime
 # bundle installs nothing in DEST and reports on its own launcher directory, so
 # this says nothing there.
-if [ "$os" = darwin ] || [ "${BRIG_INSTALL_RUNTIME:-1}" = 0 ]; then
+if [ "$os" = darwin ] || [ "$INSTALL_RUNTIME" = 0 ]; then
   case ":${PATH}:" in
     *":$DEST:"*) ;;
     *) say "$DEST is not on your PATH; add it, or hull will not find cosign there" ;;
