@@ -127,13 +127,15 @@ func (c *Config) verifyTag() error {
 // records it in BootDigest so EnsureRunning boots that exact object.
 //
 // The decision table is the same shape as verifyTag's, with two rows the tag
-// path cannot express. Unresolved (a registry that could not be reached) joins
-// NoTooling: nothing could be checked, so it warns and boots the tag, and only
-// Require refuses. Mismatch (the local store holds a different digest than the
-// one verified) joins the failure row, and splits the way Failed and NotOurs
-// do: our own image stops to ask, a third party's warns. Either way brig boots
-// the digest it resolved, not the copy on disk, so a "yes" boots the verified
-// object rather than the suspect one.
+// path cannot express. Unresolved (a registry that could not be reached) stops
+// to ask, and only Require refuses outright. Nothing could be checked, but a
+// boot that went ahead on its own would let anyone who can make the registry
+// unreachable turn the default mode into "unchecked". Nothing is pinned, so a
+// "yes" boots the cached tag. Mismatch (the local store holds a different
+// digest than the one verified) joins the failure row, and splits the way
+// Failed and NotOurs do: our own image stops to ask, a third party's warns.
+// Either way brig boots the digest it resolved, not the copy on disk, so a
+// "yes" boots the verified object rather than the suspect one.
 func (c *Config) verifyDigest() error {
 	// What the store already holds for this reference, so the resolve can be
 	// compared against it. A runtime that cannot say returns "", which reads as

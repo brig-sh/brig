@@ -195,11 +195,11 @@ func TestVerifyDigestThirdPartyBootsTheTagWithoutCosign(t *testing.T) {
 	}
 }
 
-// A registry that cannot be reached resolves nothing, so the tag boots unpinned
-// and only require refuses. cosign-that-does-not-exist stands in for a cosign
-// that is present but whose resolve fails, by being absent -- which lands on
-// NoTooling, the same warn-and-boot row -- so here a real failing resolve is
-// used instead.
+// A registry that cannot be reached resolves nothing, so nothing is pinned, and
+// the boot stops to ask: with no terminal to say yes it refuses, and require
+// refuses outright. cosign-that-does-not-exist cannot stand in for a cosign
+// that is present but whose resolve fails: being absent lands on NoTooling,
+// which warns and boots, so here a real failing resolve is used instead.
 func TestVerifyDigestUnreachableRegistryRefusesWithoutATerminal(t *testing.T) {
 	// A cosign whose triangulate always fails: a resolve that cannot reach the
 	// registry. Before the digest check existed the same outage failed inside
