@@ -109,6 +109,16 @@ case "$verb" in
     # stub has to remember what it was told to mount.
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
     shift
+    # brig asks its questions through `sh -c '"$@" || exit; printf ...' sh
+    # <question>`, and takes the output as an answer only when the marker
+    # line ends it. Answer the question inside, then print the marker the way
+    # the guest's shell would.
+    if [ "$1" = sh ] && case "${3:-}" in *brig-answer-end*) true ;; *) false ;; esac; then
+      shift 4
+      "$0" exec -- "$@" || exit
+      printf '\nbrig-answer-end\n'
+      exit 0
+    fi
     # Credential delivery feeds the value on stdin to `sh -c 'cat >> "$1"'`,
     # in pieces, and then asks stat for the file's size to check the whole
     # of it landed. Keep what was fed, per target, so stat can answer with

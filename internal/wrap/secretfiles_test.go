@@ -1,8 +1,10 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +43,16 @@ type guestFake struct {
 	// dropEveryOtherFeed makes odd-numbered feeds report success while
 	// writing nothing, to stand in for a piece that never reached the file.
 	dropEveryOtherFeed bool
+	// lose cuts the output of the next execs whose command contains a
+	// pattern. The command still runs and reports success.
+	lose map[string]*loss
+	// asked counts the execs whose command contains each pattern in lose.
+	asked map[string]int
 }
+
+// loss is how a runtime that drops the output of a short-lived exec is
+// modeled: the next times execs return only their first keep bytes.
+type loss struct{ times, keep int }
 
 type guestFile struct {
 	mode  string
@@ -57,6 +68,8 @@ func newGuestFake() *guestFake {
 		files:  map[string]*guestFile{},
 		swaps:  "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n",
 		fail:   map[string]error{},
+		lose:   map[string]*loss{},
+		asked:  map[string]int{},
 		// The same bound the hull adapter declares, so the tests below
 		// exercise the piece loop the way a real run does.
 		feedLimit: 2048,
@@ -83,7 +96,29 @@ func (g *guestFake) Output(spec runtime.ExecSpec) (string, error) {
 			return "", err
 		}
 	}
-	argv := spec.Cmd
+	argv, asked := question(spec.Cmd)
+	out, err := g.run(line, argv)
+	if err != nil {
+		return "", err
+	}
+	if asked {
+		out = answered(out)
+	}
+	for pattern, l := range g.lose {
+		if !strings.Contains(line, pattern) {
+			continue
+		}
+		g.asked[pattern]++
+		if l.times > 0 {
+			l.times--
+			out = out[:min(l.keep, len(out))]
+		}
+	}
+	return out, nil
+}
+
+// run is the guest's side of one command: what it prints, or why it fails.
+func (g *guestFake) run(line string, argv []string) (string, error) {
 	switch {
 	case len(argv) >= 2 && argv[0] == "cat" && argv[1] == "/proc/self/mountinfo":
 		var b strings.Builder
@@ -433,6 +468,154 @@ func TestVerificationFailsTheRun(t *testing.T) {
 			t.Fatalf("err = %v; want one naming swap", err)
 		}
 	})
+}
+
+// deliveryQuestions is every question delivery asks the guest, by a part of
+// the command that names it.
+var deliveryQuestions = []string{
+	"cat /proc/self/mountinfo",
+	"stat -f -c %T",
+	"cat /proc/swaps",
+	"stat -c %F|%U|%a",
+	"stat -c %s",
+}
+
+// A runtime that loses the output of a short-lived exec reports it as run and
+// returns nothing, or the start of it. Taken as the answer, an empty type read
+// as host disk and a short mount table as nothing mounted, and the run refused
+// a sandbox that was fine. An answer lost on every try but the last still
+// delivers.
+func TestALostAnswerIsAskedAgain(t *testing.T) {
+	noPause(t)
+	for _, q := range deliveryQuestions {
+		for _, keep := range []int{0, 3} {
+			t.Run(fmt.Sprintf("%s kept %d bytes", q, keep), func(t *testing.T) {
+				g := newGuestFake()
+				c := deliveryConfig(t, g)
+				g.lose[q] = &loss{times: answerTries - 1, keep: keep}
+				if err := c.deliverSecretFiles(); err != nil {
+					t.Fatalf("deliverSecretFiles: %v", err)
+				}
+				if g.asked[q] < answerTries {
+					t.Errorf("asked %d times; the last try is the one that answers", g.asked[q])
+				}
+				cred := g.files["/home/x/.claude/.credentials.json"]
+				if cred == nil || cred.body != testCredential {
+					t.Error("the credential did not arrive")
+				}
+			})
+		}
+	}
+}
+
+// A question that never gets an answer fails and says so. It is not read as
+// the guest's answer, and the error does not claim a verdict nobody gave.
+func TestAnAnswerThatNeverArrivesFailsAsNoAnswer(t *testing.T) {
+	noPause(t)
+	for _, q := range deliveryQuestions {
+		t.Run(q, func(t *testing.T) {
+			g := newGuestFake()
+			c := deliveryConfig(t, g)
+			g.lose[q] = &loss{times: math.MaxInt}
+			err := c.deliverSecretFiles()
+			if err == nil || !strings.Contains(err.Error(), "gave no answer") {
+				t.Fatalf("err = %v; want one saying the sandbox gave no answer", err)
+			}
+			if g.asked[q] != answerTries {
+				t.Errorf("asked %d times, want %d", g.asked[q], answerTries)
+			}
+		})
+	}
+}
+
+// Nothing is mounted on a mount table nobody read. An empty table used to
+// mean "nothing mounted yet", and delivery went on to pin and cover.
+func TestNothingIsMountedOnAMountTableNobodyRead(t *testing.T) {
+	noPause(t)
+	g := newGuestFake()
+	c := deliveryConfig(t, g)
+	g.lose["cat /proc/self/mountinfo"] = &loss{times: math.MaxInt}
+	if err := c.deliverSecretFiles(); err == nil {
+		t.Fatal("delivery went on without a mount table")
+	}
+	for _, line := range g.log {
+		if strings.HasPrefix(line, "mount ") {
+			t.Errorf("delivery ran %q on a mount table it never got", line)
+		}
+	}
+}
+
+// On a sandbox that is already up, a lost mount table read as nothing mounted,
+// and delivery covered .claude again over the live session's own tmpfs.
+// guestFake refuses a mount on a mount point outright.
+func TestALostMountTableDoesNotStackASecondCover(t *testing.T) {
+	noPause(t)
+	g := newGuestFake()
+	c := deliveryConfig(t, g)
+	if err := c.deliverSecretFiles(); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	g.lose["cat /proc/self/mountinfo"] = &loss{times: 1}
+	c.secrets = creds.Resolution{Values: map[string]string{"cred": "second"}}
+	if err := c.deliverSecretFiles(); err != nil {
+		t.Fatalf("second delivery: %v", err)
+	}
+}
+
+// Asking again does not wash out a real refusal. A directory that really is
+// on host disk, and swap that is really there, still stop the run when the
+// answers before the real one were lost. The swap case also covers the other
+// direction: a lost swap table used to read as no swap.
+func TestARealRefusalSurvivesLostAnswers(t *testing.T) {
+	noPause(t)
+	t.Run("the ephemeral directory reads as host disk", func(t *testing.T) {
+		g := newGuestFake()
+		c := deliveryConfig(t, g)
+		if err := c.deliverSecretFiles(); err != nil {
+			t.Fatalf("first delivery: %v", err)
+		}
+		g.fstype["/home/x/.claude"] = "fuseblk"
+		g.lose["stat -f -c %T"] = &loss{times: answerTries - 1}
+		c.secrets = creds.Resolution{Values: map[string]string{"cred": "second"}}
+		err := c.deliverSecretFiles()
+		if err == nil || !strings.Contains(err.Error(), "reads as fuseblk") {
+			t.Fatalf("err = %v; want one refusing a .claude on host disk", err)
+		}
+		if body := g.files["/home/x/.claude/.credentials.json"].body; body != testCredential {
+			t.Errorf("a credential was written despite the refusal: %q", body)
+		}
+	})
+	t.Run("swap", func(t *testing.T) {
+		g := newGuestFake()
+		c := deliveryConfig(t, g)
+		g.swaps += "/swapfile file 2097148 0 -2\n"
+		g.lose["cat /proc/swaps"] = &loss{times: 1}
+		err := c.deliverSecretFiles()
+		if err == nil || !strings.Contains(err.Error(), "swap") {
+			t.Fatalf("err = %v; want one naming swap", err)
+		}
+	})
+}
+
+// A command that fails has given its answer. The runtime keeps the exit
+// status, so the question is not asked again.
+func TestAFailedQuestionIsNotAskedAgain(t *testing.T) {
+	noPause(t)
+	g := newGuestFake()
+	c := deliveryConfig(t, g)
+	g.fail["stat -f -c %T"] = errors.New("exit status 1")
+	if err := c.deliverSecretFiles(); err == nil {
+		t.Fatal("delivery went on past a failed stat")
+	}
+	asked := 0
+	for _, line := range g.log {
+		if strings.Contains(line, "stat -f -c %T") {
+			asked++
+		}
+	}
+	if asked != 1 {
+		t.Errorf("a failed stat was asked %d times, want 1", asked)
+	}
 }
 
 // Every one of these paths is inside the workspace, which the sandbox has had
