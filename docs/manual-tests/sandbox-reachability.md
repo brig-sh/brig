@@ -440,6 +440,11 @@ A is `claude@r364b` and serves a file that holds a fresh UUID and exists only
 in A. B is `claude@r364a`. The v0.3.0 run used the labels `r364d` and `r364c`
 and got the same addresses.
 
+*The two `brig sh` lines below are as they were run on that date. They
+predate the change that passes `brig sh`'s words through as arguments, and a
+quoted script now needs the spelling in
+[migration.md](../migration.md#a-quoted-script-on-brig-sh).*
+
 ```bash
 brig run -d claude@r364a /tmp/pa     # B, 198.18.0.2
 brig run -d claude@r364b /tmp/pb     # A, 198.18.0.3

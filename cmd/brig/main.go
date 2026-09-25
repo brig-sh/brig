@@ -435,10 +435,10 @@ func dispatch(args []string) error {
 		// is still a mistake, and translating the verb would have swallowed it.
 		deprecated("brig create", "brig run -d")
 	case "exec":
-		// exec keeps its own branch below. It runs its argv directly where sh
-		// runs it through `bash -lc`, so a script that relies on its own
-		// quoting keeps it -- a rename must not change what a working line
-		// does.
+		// exec keeps its own branch below. sh runs its argv under a login
+		// shell, and exec runs it directly, with no profile sourced first. A
+		// script that relies on that environment keeps it -- a rename must not
+		// change what a working line does.
 		deprecated("brig exec", "brig sh")
 	case "env":
 		// Kept until retiredGoesIn as a spelling of `brig info`. The bug report

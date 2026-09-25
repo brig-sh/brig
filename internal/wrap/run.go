@@ -789,13 +789,30 @@ func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, erro
 // shellArgv is the login-shell command line, built once so Shell and
 // ShellAttached spell it the same way.
 //
-// The trailing words are joined into a single string before the shell sees
-// them, so they land as one argument -- the script text for -c -- rather than
-// one per word. Passed individually, bash takes the first as the script and
-// the rest as $0, $1, ...
+// The trailing words run as the argument vector the caller gave, under a login
+// shell for its environment. They reach bash as positional parameters, after
+// a fixed script and a $0, and the script is "$@", so bash never parses them:
+// spaces, quotes, a `;`, a `$` or a glob in a word arrive unchanged.
+//
+// "$@" runs a builtin or a function the login profile defines (ulimit, nvm)
+// as the command, and a first word starting with a dash is a command name.
+// bash execs a lone simple command without forking, so the command is the
+// top process in the guest, unless the first word is a profile function or
+// the profile sets a trap. bash then stays as the parent, and a SIGTERM to
+// the session ends bash but not the command; see docs/migration.md.
+//
+// The words are data in the shell, so the login profile can reach them: -l
+// sources it before the "$@" script runs, and a top-level `shift` or `set --`
+// there rewrites the positional parameters and so the command brig was asked
+// to run. The "$@" script cannot prevent that. Quoting every word into one
+// -c script would, but would cap the whole command at the length of one
+// argument (128 KiB on Linux). So it is a constraint on the profile the guest
+// sources, from the image or from the mounted home.
+// docs/guest-image.md states it next to the rest of what an image has to
+// provide.
 func shellArgv(command []string) []string {
 	if len(command) > 0 {
-		return []string{"bash", "-lc", strings.Join(command, " ")}
+		return append([]string{"bash", "-lc", `"$@"`, "bash"}, command...)
 	}
 	return []string{"bash", "-l"}
 }

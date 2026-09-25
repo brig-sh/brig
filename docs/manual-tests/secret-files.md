@@ -7,6 +7,11 @@ delivered on stdin behave as designed in a real guest. Measured on macOS
 26.4, arm64, with hull installed, against
 `ghcr.io/brig-sh/claude-code-stock:latest`.*
 
+*The `brig sh` commands below are as they were run on that date. They predate
+the change that passes `brig sh`'s words through as arguments, and a quoted
+script now needs the spelling in
+[migration.md](../migration.md#a-quoted-script-on-brig-sh).*
+
 PR 6 covers the agent's config directory with a tmpfs so that nothing written
 there can reach host disk, pins the paths a profile wants to keep across the
 cover, and writes a `files:` binding into the tmpfs as an ordinary file with
