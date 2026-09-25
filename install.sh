@@ -114,11 +114,20 @@ verify() {
   say "checksum ok: $2"
 }
 
-# newest_tag <repo> names the newest release, prereleases included. Neither
-# repo has a stable one yet, so /releases/latest answers 404 for both.
+# newest_tag <repo> names the newest v-tagged release, prereleases included.
+# hull has no stable release yet, so /releases/latest answers 404 there.
+#
+# Only v-tags count. Each channel build (brig@main, hull@main) is a prerelease
+# of its own under a channel-* tag, so it is often the newest release of all.
+# Its archives are not named the way this script expects.
+#
+# The listing is split at commas before the match, so each field starts a line
+# whether GitHub's JSON arrives pretty-printed or on one line. Matched within
+# one long line, the first tag would be lost to the last.
 newest_tag() {
-  curl -fsSL "https://api.github.com/repos/$1/releases" \
-    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1
+  curl -fsSL "https://api.github.com/repos/$1/releases?per_page=100" \
+    | tr ',' '\n' \
+    | sed -n 's/^[[:space:]{]*"tag_name": *"\(v[^"]*\)".*/\1/p' | head -1
 }
 
 # install_from <dir> <name> puts one executable in DEST.
