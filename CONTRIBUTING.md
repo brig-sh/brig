@@ -33,6 +33,8 @@ CI does not call `make`. It runs its own steps
   reads.
 - `goreleaser check`, and a full snapshot build, so the release config stays
   exercised before a tag depends on it.
+- `script/render-cask-test.py`, which checks the channel cask the renderer
+  writes against the rules Homebrew applies when it loads the tap.
 
 There is no linter. No `golangci-lint` configuration exists in this
 repository, and the Makefile has no lint target. `gofmt` and `go vet` are the
