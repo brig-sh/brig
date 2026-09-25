@@ -157,15 +157,21 @@ answers in that case, and the binary prints what a normal clone would.
   feature can be tried before there is a release, or a release candidate, to
   try. See [install.md](install.md#trying-something-before-it-is-released).
 
-- Each publishes to a moving tag -- `channel-main`, `channel-experimental` --
-  whose assets are replaced in place. Neither tag matches `v*`, so neither
-  starts the release workflow, and `skip_upload: auto` on the stable cask is
-  untouched.
-- Both are named in `git.ignore_tags` in `.goreleaser.yaml`, and `v*` is what
-  cliff.toml's `tag_pattern` matches. goreleaser reads the nearest tag for the
-  version, and a re-pointed channel tag is nearer than any release tag, so
-  without that list a channel build reads its version as `channel-main`.
-  Rename a channel and both have to follow.
+- Each build is a prerelease of its own, tagged `channel-<channel>-<version>`.
+  Releases in this org are immutable: once published, a release takes no more
+  assets, and its tag can neither move nor be deleted while the release
+  exists. So a build is drafted, given its assets, and then published, and the
+  tap's cask names that build's release. Once the tap has moved, older builds
+  of the same channel are deleted with their tags and the newest three stay;
+  a draft or a tag with no release, left by a run that failed part way, is
+  removed too. No channel tag matches `v*`, so none starts the release
+  workflow, and `skip_upload: auto` on the stable cask is untouched.
+- A channel tag points at a commit made for it: an empty commit on top of the
+  build's, with the same tree. Nothing is built on it, so it is never an
+  ancestor of `main`, and goreleaser, which reads the nearest tag for the
+  version, never finds one. `git.ignore_tags` only matches whole names, so it
+  could not keep per-build tags out. cliff.toml's `tag_pattern` matches `v*`
+  only, so the release notes skip them as well.
 
 - The channel cask is pushed to the tap directly, not opened as a pull request.
   It is regenerated on every merge, and a reviewed PR per merge is noise. The

@@ -120,18 +120,9 @@ signs:
 sboms:
   - artifacts: archive
 
-# The channel tags are moving tags, and neither is a version.
-#
-# goreleaser takes the version and the changelog's starting point from the
-# nearest tag. channel-main is re-pointed at every merge, so after the first
-# publish it is nearer than any release tag: the next channel build reads its
-# version as "channel-main", and the next release's notes start at the channel
-# tag and lose everything before it. Ignoring them here leaves both reading
-# the release tags they are meant to read.
-git:
-  ignore_tags:
-    - channel-main
-    - channel-experimental
+# The channel tags need no git.ignore_tags entry. They sit on commits that
+# are never an ancestor of main, so goreleaser never finds one as the nearest
+# tag. See the publish step in .github/workflows/channel.yml.
 
 # The version a build that is not a release carries.
 #

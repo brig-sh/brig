@@ -12,10 +12,10 @@
 # Folding them together would mean a merge to main silently replacing the
 # branch build a tester was halfway through checking.
 #
-# Neither is a release. Each publishes to a moving tag, so the assets under
-# `channel-main` and `channel-experimental` are replaced in place and nothing
-# accumulates. `skip_upload: auto` on the stable cask is untouched: that is
-# GoReleaser's, it runs on a v-tag, and nothing here creates one.
+# Neither is a release. Each build is a prerelease of its own, under a tag
+# only that build uses, and the older builds of a channel are deleted once the
+# tap has moved on. `skip_upload: auto` on the stable cask is untouched: that
+# is GoReleaser's, it runs on a v-tag, and nothing here creates one.
 name: channel
 
 on:
@@ -31,8 +31,8 @@ permissions:
   contents: write
 
 concurrency:
-  # One publish per channel at a time. Two racing runs would move the same tag
-  # and leave the tap's cask naming assets the release no longer has.
+  # One publish per channel at a time. Two racing runs could push the tap's
+  # cask in either order, and the older build could land last.
   group: channel-${{ github.event_name == 'workflow_dispatch' && 'experimental' || 'main' }}
   cancel-in-progress: false
 
@@ -148,8 +148,8 @@ jobs:
           echo "value=$v" >> "$GITHUB_OUTPUT"
 
       # --snapshot builds every archive and publishes nothing, which is what
-      # this job wants: the release below is a moving tag rather than the
-      # v-tag release GoReleaser knows how to make.
+      # this job wants: the release below is a per-build prerelease rather
+      # than the v-tag release GoReleaser knows how to make.
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
@@ -161,60 +161,62 @@ jobs:
         env:
           CHANNEL_VERSION: ${{ steps.version.outputs.value }}
 
-      # Moved rather than created. A channel is one release whose assets are
-      # replaced, so a year of merges to main leaves one tag and one release
-      # rather than a release per commit.
-      # The new assets go up before anything else changes. The cask in the tap
-      # still names the previous build's files at this point, and those files
-      # are still there, so an install during this step gets the old build
-      # rather than a 404. The old assets are removed after the tap has moved
-      # on; see below.
+      # Each build is a release of its own, under a tag no other build uses.
+      # Releases in this org are immutable: once published, a release takes no
+      # more assets, and its tag can neither move nor be deleted while the
+      # release exists. So nothing is replaced in place. The release is
+      # created as a draft, the one state that accepts assets, and published
+      # once it holds them. The previous build's release stays until the tap
+      # has moved on; see the pruning step below.
       #
-      # checksums.txt is the one name replaced in place. A tap CI run between
-      # this step and the tap commit reads the new file and looks the old
-      # cask's filenames up in it, so check-cask-checksums.py fails until the
-      # tap moves. Nothing installs from checksums.txt, so the window costs a
-      # red run on the tap rather than a broken install.
-      - name: Publish to the channel release
+      # The tag goes on a commit made for it: an empty commit on top of the
+      # one this build was made from, with the same tree. Nothing is built on
+      # top of it, so no later commit on main has it as an ancestor.
+      # goreleaser takes a release's version from the nearest tag, and
+      # git.ignore_tags only matches whole names, so a per-build tag on main
+      # itself would become the nearest tag for the next release.
+      - name: Publish the channel release
+        id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: channel-${{ steps.channel.outputs.name }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.version.outputs.value }}
           SOURCE: ${{ steps.channel.outputs.source }}
           CHANNEL: ${{ steps.channel.outputs.name }}
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          NOTES="Built from $SOURCE at $(git rev-parse --short HEAD). Not a release."
-          TITLE="$CHANNEL channel"
-          git tag -f "$TAG"
+          TAG="channel-$CHANNEL-$V"
+          BUILT="$(git rev-parse --short HEAD)"
+          SIDE="$(git -c user.name=brig-sh-bot -c user.email=bot@brig.sh \
+            commit-tree 'HEAD^{tree}' -p HEAD \
+            -m "brig $V, the $CHANNEL channel build of $BUILT")"
           # The checkout persisted no credentials, so the push is given one.
-          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            "refs/tags/$TAG"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --prerelease --target "$(git rev-parse HEAD)" \
-              --title "$TITLE" --notes "$NOTES"
-          else
-            gh release create "$TAG" --prerelease --target "$(git rev-parse HEAD)" \
-              --title "$TITLE" --notes "$NOTES"
-          fi
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$SIDE:refs/tags/$TAG"
           # checksums.txt as well as the archives: the tap's CI asks each
           # release whether it really published the sha256 its cask claims,
           # and a channel cask has to answer that the same way a stable one
-          # does. It keeps its name, so it is replaced in place.
-          gh release upload "$TAG" dist/*.tar.gz dist/checksums.txt --clobber
+          # does.
+          gh release create "$TAG" --draft --prerelease --verify-tag \
+            --title "brig $V ($CHANNEL channel)" \
+            --notes "Built from $SOURCE at $BUILT. Not a release." \
+            dist/*.tar.gz dist/checksums.txt
+          gh release edit "$TAG" --draft=false
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Render the cask
         env:
           V: ${{ steps.version.outputs.value }}
           CHANNEL: ${{ steps.channel.outputs.name }}
           SOURCE: ${{ steps.channel.outputs.source }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           OTHER=experimental
           [ "$CHANNEL" = "experimental" ] && OTHER=main
           python3 .workflow/script/render-cask.py \
             --project brig --channel "$CHANNEL" --version "$V" \
-            --repo brig-sh/brig --tag "channel-$CHANNEL" --dist dist \
+            --repo brig-sh/brig --tag "$TAG" --dist dist \
             --archive "on_macos:on_arm:brig-$V-darwin-arm64.tar.gz" \
             --archive "on_macos:on_intel:brig-$V-darwin-amd64.tar.gz" \
             --archive "on_linux:on_arm:brig-$V-linux-arm64.tar.gz" \
@@ -282,21 +284,46 @@ jobs:
           echo "the tap could not be updated after five attempts" >&2
           exit 1
 
-      # Only now, with the tap naming the new files, are the previous build's
-      # assets removed. They carry that build's version in their name, so
-      # --clobber never replaced them and the release would otherwise list
-      # every build ever made. Doing it before the tap moved is what would
-      # give an installer a 404 -- see the note on the upload above.
-      - name: Remove the assets no cask names any more
+      # Every build leaves a release and a tag behind, so the older ones go
+      # once the tap names the new build. The newest three published builds
+      # are kept: an install that read the previous cask a moment ago still
+      # finds its files. Deleting a published release is allowed, and its tag
+      # can go once the release has. The name cannot be used again, which a
+      # per-build tag never needs.
+      #
+      # A run that failed part way leaves a draft, or a tag with no release at
+      # all. Neither is installable, so neither counts towards the three, and
+      # both are removed here. The concurrency group keeps another publish of
+      # this channel from running meanwhile, so nothing here is in flight.
+      - name: Prune the older builds of this channel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: channel-${{ steps.channel.outputs.name }}
+          CHANNEL: ${{ steps.channel.outputs.name }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          keep="$(cd dist && ls -- *.tar.gz checksums.txt)"
-          gh release view "$TAG" --json assets -q '.assets[].name' | while read -r asset; do
-            [ -n "$asset" ] || continue
-            printf '%s\n' "$keep" | grep -qxF "$asset" && continue
-            echo "removing the stale asset $asset"
-            gh release delete-asset "$TAG" "$asset" --yes
+          PREFIX="channel-$CHANNEL-"
+          RELEASES="$(gh release list --limit 200 --json tagName,createdAt,isDraft \
+            --jq ".[] | select(.tagName | startswith(\"$PREFIX\")) | [.createdAt, .tagName, (.isDraft | tostring)] | @tsv")"
+          printf '%s\n' "$RELEASES" | awk -F'\t' '$3 == "false"' \
+            | sort -r | cut -f2 | tail -n +4 | while read -r old; do
+              [ -n "$old" ] && [ "$old" != "$TAG" ] || continue
+              echo "removing the older build $old"
+              gh release delete "$old" --cleanup-tag --yes
+            done
+          printf '%s\n' "$RELEASES" | awk -F'\t' '$3 == "true" {print $2}' | while read -r draft; do
+            [ -n "$draft" ] && [ "$draft" != "$TAG" ] || continue
+            echo "removing the draft $draft, left by a run that did not finish"
+            gh release delete "$draft" --cleanup-tag --yes
           done
+          # Read from a variable, not a pipe: under pipefail a grep -q that
+          # stops reading early can fail the writer, which would read as no
+          # match and delete a tag that has a release.
+          KNOWN="$(printf '%s\n' "$RELEASES" | cut -f2)"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$PREFIX" \
+            --jq '.[].ref | ltrimstr("refs/tags/")' | while read -r tag; do
+              [ -n "$tag" ] && [ "$tag" != "$TAG" ] || continue
+              if grep -qxF -- "$tag" <<< "$KNOWN"; then continue; fi
+              echo "removing the tag $tag, which has no release"
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+            done

@@ -191,7 +191,7 @@ def main():
     p.add_argument("--channel", required=True, help="main or experimental")
     p.add_argument("--version", required=True)
     p.add_argument("--repo", required=True, help="owner/name the release lives in")
-    p.add_argument("--tag", required=True, help="the moving tag holding the assets")
+    p.add_argument("--tag", required=True, help="the tag of the release holding the assets")
     p.add_argument("--dist", default="dist")
     p.add_argument("--archive", action="append", default=[], required=True,
                    help="<os stanza>:<arch stanza>:<file name>, repeatable")
