@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/verify"
 )
 
 // isolateHome is isolateState with HOME moved too, so the check for a legacy
@@ -467,5 +469,121 @@ func TestANamedHomeInsideHomesDirIsKept(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "claude")); err != nil {
 		t.Errorf("rm deleted a --home inside the homes directory: %v", err)
+	}
+}
+
+// bootFailRuntime refuses every boot, the way hull does when it cannot create
+// its store, and says whether a sandbox of the name exists.
+type bootFailRuntime struct {
+	livenessRuntime
+	exists bool
+}
+
+func (r *bootFailRuntime) Run(runtime.RunSpec) error {
+	r.boots++
+	return errors.New("create store mountpoint: mkdir /root: read-only file system")
+}
+
+func (r *bootFailRuntime) Exists(string) (bool, error) { return r.exists, nil }
+
+// failBoot runs c up to a boot the runtime refuses.
+func failBoot(t *testing.T, c *Config, rt runtime.Runtime) {
+	t.Helper()
+	c.Runtime, c.Verify = rt, verify.Off
+	c.Err, c.Verbosity = &bytes.Buffer{}, Normal
+	if err := c.EnsureRunning(creds.Set{}); err == nil {
+		t.Fatal("the runtime refused the boot and EnsureRunning did not")
+	}
+}
+
+// A first boot that fails leaves no sandbox and records no session, so neither
+// `brig rm` nor `rm --all` finds anything to remove. The home brig created
+// for it goes with the failure, and the next run has nothing to reap.
+func TestAFailedFirstBootDeletesTheHomeItCreated(t *testing.T) {
+	isolateHome(t)
+	c := mustLoad(t, Options{})
+	if _, err := os.Lstat(c.Workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the home exists before the first run: %v", err)
+	}
+	rt := &bootFailRuntime{}
+	failBoot(t, c, rt)
+	if rt.boots != 1 {
+		t.Fatalf("booted %d times, want 1", rt.boots)
+	}
+	if _, err := os.Lstat(c.Workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a failed first boot left its home behind: %v", err)
+	}
+
+	var errOut bytes.Buffer
+	next := mustLoad(t, Options{})
+	next.Runtime, next.Err, next.Verbosity = &listingRuntime{}, &errOut, Normal
+	next.reapOrphanHome()
+	if errOut.Len() != 0 {
+		t.Errorf("the next run reaped a home: %s", errOut.String())
+	}
+}
+
+// The failure path deletes only a home brig created. A --home or
+// BRIG_WORKSPACE directory is the user's even when this run created it, and
+// even inside the homes directory.
+func TestAFailedBootNeverDeletesANamedHome(t *testing.T) {
+	state, _ := isolateHome(t)
+	for _, tc := range []struct {
+		name string
+		home string
+		env  bool
+	}{
+		{"--home, new", filepath.Join(t.TempDir(), "mine"), false},
+		{"--home in the homes dir", filepath.Join(state, "homes", "brig-claude-code"), false},
+		{"BRIG_WORKSPACE, new", filepath.Join(t.TempDir(), "env"), true},
+	} {
+		o := Options{Workspace: tc.home}
+		if tc.env {
+			o = Options{}
+			t.Setenv("BRIG_WORKSPACE", tc.home)
+		}
+		c := mustLoad(t, o)
+		if c.Workspace != tc.home || c.EphemeralHome {
+			t.Fatalf("%s: resolved %q (ephemeral %v)", tc.name, c.Workspace, c.EphemeralHome)
+		}
+		failBoot(t, c, &bootFailRuntime{})
+		if _, err := os.Stat(filepath.Join(tc.home, markerFile)); err != nil {
+			t.Errorf("%s: a failed boot deleted the named home: %v", tc.name, err)
+		}
+		if tc.env {
+			if err := os.Unsetenv("BRIG_WORKSPACE"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// A later boot of a session that booted before is not a first boot. Its home
+// holds the guest's state, and a failure keeps it for the next run.
+func TestAFailedBootKeepsTheHomeOfAnEarlierBoot(t *testing.T) {
+	isolateHome(t)
+	c := mustLoad(t, Options{})
+	bootHome(t, c)
+
+	next := mustLoad(t, Options{})
+	failBoot(t, next, &bootFailRuntime{})
+	if _, err := os.Stat(filepath.Join(next.Workspace, ".local", "bin", "claude")); err != nil {
+		t.Errorf("a failed boot deleted the home of an earlier boot: %v", err)
+	}
+}
+
+// A runtime that holds a sandbox of the name, or cannot say whether it does,
+// may have the home mounted, so a failure keeps it.
+func TestAFailedBootKeepsAHomeTheRuntimeMayHold(t *testing.T) {
+	for name, rt := range map[string]runtime.Runtime{
+		"a sandbox exists": &bootFailRuntime{exists: true},
+		"cannot say":       &livenessRuntime{runningErr: errors.New("cannot connect")},
+	} {
+		isolateHome(t)
+		c := mustLoad(t, Options{})
+		failBoot(t, c, rt)
+		if _, err := os.Stat(filepath.Join(c.Workspace, markerFile)); err != nil {
+			t.Errorf("%s: the home went: %v", name, err)
+		}
 	}
 }

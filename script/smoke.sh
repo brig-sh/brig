@@ -215,6 +215,17 @@ s.bind(sys.argv[1])
 s.listen(8)
 time.sleep(120)' "$qsock" network-gateway "$@"
     ;;
+  inspect)
+    # An instance holds its name while it runs and once it stops. Any other
+    # name is not there, in the words brig reads for that.
+    if [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] ||
+       [ "$1" = "$(cat "$STUB_STATE.stopped" 2>/dev/null)" ]; then
+      printf '{"name": "%s"}\n' "$1"
+    else
+      printf 'error: instance not found: %s\n' "$1" >&2
+      exit 1
+    fi
+    ;;
   stop)
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
@@ -1133,6 +1144,18 @@ case "$out" in
 esac
 [ ! -e "$EPH" ] && ok "rm deletes the ephemeral home" || bad "rm left the ephemeral home at $EPH"
 [ -d "$WS" ] && ok "rm leaves a named workspace alone" || bad "rm deleted the named workspace"
+
+# A first boot that fails records no session, so rm finds nothing to remove.
+# The home brig created for it goes with the failure. A --home it created stays.
+env -u BRIG_WORKSPACE HOME="$WORK/home" STUB_RUN_FAIL=1 \
+  "$WORK/brig" run claude -d > "$WORK/failboot.out" 2>&1 \
+  && bad "a boot the runtime refused exited 0"
+[ ! -e "$EPH" ] && ok "a failed first boot deletes the home it created" \
+  || bad "a failed first boot left its home at $EPH: $(cat "$WORK/failboot.out")"
+env -u BRIG_WORKSPACE HOME="$WORK/home" STUB_RUN_FAIL=1 \
+  "$WORK/brig" run claude --home "$WORK/failhome" -d > /dev/null 2>&1
+[ -f "$WORK/failhome/.brig-workspace" ] && ok "a failed boot keeps a --home it created" \
+  || bad "a failed boot deleted the --home $WORK/failhome"
 
 echo "== rm and logs with no sandbox =="
 # Nothing holds the name now, so rm and logs name a sandbox that resolves to

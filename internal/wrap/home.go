@@ -165,8 +165,42 @@ func (c *Config) reapOrphanHome() {
 	if removed, err := removeHome(c.Workspace); err != nil {
 		c.warnf("%v", err)
 	} else if removed {
-		c.warnf("deleted the guest home %s, left behind by a sandbox that was "+
-			"removed outside brig", c.Workspace)
+		c.warnf("deleted the guest home %s. No sandbox owns it: its sandbox was "+
+			"removed outside brig, or an earlier run stopped before it booted",
+			c.Workspace)
+	}
+}
+
+// createsEphemeralHome returns whether this run is about to create an
+// ephemeral home that no session owns. Call it before PrepareWorkspace.
+func (c *Config) createsEphemeralHome() bool {
+	if !c.EphemeralHome || c.homeRemembered || c.homeGiven {
+		return false
+	}
+	_, err := os.Lstat(c.Workspace)
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// dropUnbootedHome deletes the ephemeral home this run created, after a boot
+// that failed.
+//
+// The session is recorded only once the runtime has booted the sandbox.
+// Before that, `brig rm` finds nothing to remove, so no later command would
+// delete the home. It stays when the index records a session for it, and when
+// the runtime holds a sandbox of this name or cannot say whether it does: that
+// sandbox may have the home mounted.
+func (c *Config) dropUnbootedHome() {
+	if _, owned := ephemeralEntry(c.VMName); owned {
+		return
+	}
+	if exists, err := sandboxExists(c.Runtime, c.VMName); err != nil || exists {
+		return
+	}
+	if removed, err := removeHome(c.Workspace); err != nil {
+		c.warnf("%v", err)
+	} else if removed {
+		c.progressf("deleted the guest home %s, since no sandbox booted on it",
+			c.Workspace)
 	}
 }
 

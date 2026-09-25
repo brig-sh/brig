@@ -40,10 +40,14 @@ directory inside it.
 A guest home Brig created belongs to the sandbox. It survives `brig stop`
 and a host reboot, and `brig rm` deletes it. The next `brig run` of the
 same session starts from an empty home. The first run of such a session
-says so on stderr. A home left behind by a sandbox that was removed
-outside Brig is deleted before the next run of that session boots, once the
-runtime confirms that the sandbox no longer exists, stopped or running.
-Brig says so on stderr when it does.
+says so on stderr. A first run whose boot fails deletes the home it
+created, once the runtime confirms that no sandbox of that name exists.
+
+A home can still be left behind, by a sandbox that was removed outside
+Brig or by a run that was killed before its sandbox booted. It is deleted
+before the next run of that session boots, once the runtime confirms that
+the sandbox no longer exists, stopped or running. Brig says so on stderr
+when it does.
 
 To keep the guest home, name it with `--home <dir>` or `BRIG_WORKSPACE`. A
 guest home you named is yours: Brig never deletes it, and it survives every

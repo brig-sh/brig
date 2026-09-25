@@ -112,7 +112,7 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
-func (c *Config) EnsureRunning(set creds.Set) error {
+func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// First of all. The session has no project this run, and every check below
 	// that compares the sandbox with this run would read that as a project to
 	// drop, and recreate the sandbox without it. See Load.
@@ -153,6 +153,15 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// a new session from a later run of one.
 	c.reapOrphanHome()
 	c.ephemeralNotice()
+	// A home this run creates belongs to no session until the boot records
+	// one, so a failed boot deletes it. See dropUnbootedHome.
+	if c.createsEphemeralHome() {
+		defer func() {
+			if err != nil {
+				c.dropUnbootedHome()
+			}
+		}()
+	}
 	if err := c.PrepareWorkspace(); err != nil {
 		return err
 	}

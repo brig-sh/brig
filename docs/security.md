@@ -416,7 +416,8 @@ an `os.Root` opened there, so nothing it does can resolve outside that
 directory. Inside it, the delete removes a symlink as a link and never
 descends into it. That is what keeps the target of a symlink the guest left
 in its home untouched. `os.Root` alone would not: it follows a link whose
-target stays inside the root. A guest home you named with `--home` or
+target stays inside the root. A first run whose boot fails deletes the home
+it created the same way. A guest home you named with `--home` or
 `BRIG_WORKSPACE` is never deleted, wherever it is.
 
 A symlink that stays *inside* the guest home is a different story, and reading
