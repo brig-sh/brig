@@ -479,7 +479,11 @@ brig logs claude
 That is `hull logs` underneath, and the message names that spelling too, for
 a boot that never became a sandbox Brig can address by ref.
 
-The guest's own errors are there, not in Brig's output. If the guest is only
+The guest's own errors are there, not in Brig's output. To see how long a
+boot that does succeed takes, run with `--verbose`: Brig prints
+`sandbox ready in 2.3s`, measured from the runtime being asked to start to the
+first answer from the guest agent, so it includes the VMM's own start. Under
+`--json` the same number is the Run line's `bootMillis`. If the guest is only
 slow rather than broken, give it longer with `BRIG_READY_TIMEOUT` (seconds,
 default 30):
 

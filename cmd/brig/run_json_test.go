@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/wrap"
 )
 
 // jsonRuntime is a runtime a full `brig run` can drive with none on PATH. It
@@ -237,5 +239,52 @@ func TestDetachJSONPrintsTheObjectAndTextPrintsTheName(t *testing.T) {
 	}
 	if strings.TrimSpace(textOut) != "brig-faker" {
 		t.Errorf("text -d printed %q, want the bare sandbox name", textOut)
+	}
+}
+
+// slowBootRuntime is a jsonRuntime whose boot takes long enough to measure, so
+// the case below can tell "the boot was timed" from "the field is present".
+type slowBootRuntime struct{ jsonRuntime }
+
+func (r *slowBootRuntime) Run(runtime.RunSpec) error {
+	time.Sleep(20 * time.Millisecond)
+	return nil
+}
+
+// A --json run that booted the sandbox reports how long the boot took, in
+// milliseconds, beside the agent's exit status: measured rather than quoted. The runtime here is asked to boot
+// (nothing is running), so the field is present and covers the boot's sleep.
+func TestRunJSONReportsTheBootTime(t *testing.T) {
+	rt := &slowBootRuntime{}
+	jsonRunHost(t, rt)
+
+	out, _ := captureStdout(t, func() error { return run([]string{"--json", "run", "faker"}) })
+	data, _ := lastJSONLine(t, out)["data"].(map[string]any)
+	ms, ok := data["bootMillis"].(float64)
+	if !ok {
+		t.Fatalf("a booted sandbox carried no bootMillis: %v", data)
+	}
+	if ms < 20 {
+		t.Errorf("bootMillis = %v, want at least the 20ms the boot took", ms)
+	}
+}
+
+// A run that found its sandbox running did not boot it, so the object carries
+// no bootMillis at all: absent means "not measured here", which a zero would
+// misreport as a boot that took no time. Tested at the seam rather than through
+// a full run, because the stub runtime cannot read the workspace marker back
+// and so every full run through it restarts the sandbox; the reuse decision
+// itself is covered in internal/wrap.
+func TestRecordBootSkipsAReusedSandbox(t *testing.T) {
+	jsonRun = &jsonRunContext{ref: "faker"}
+	t.Cleanup(func() { jsonRun = nil })
+
+	recordBoot(&wrap.Config{})
+	if jsonRun.boot != nil {
+		t.Errorf("a zero BootTime was recorded as %d ms", *jsonRun.boot)
+	}
+	recordBoot(&wrap.Config{BootTime: 2300 * time.Millisecond})
+	if jsonRun.boot == nil || *jsonRun.boot != 2300 {
+		t.Errorf("boot = %v, want 2300 ms", jsonRun.boot)
 	}
 }
