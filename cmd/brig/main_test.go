@@ -19,7 +19,21 @@ func TestMain(m *testing.M) {
 	if err := profile.Load(); err != nil {
 		panic(err)
 	}
-	os.Exit(m.Run())
+	// The runtime's records live under the gateway directory, which does not
+	// follow BRIG_STATE_DIR. A case that boots a fake sandbox records its
+	// network there, and without this it writes into the real ~/.brig of
+	// whoever runs the tests. A case that needs a directory of its own still
+	// sets one.
+	gw, err := os.MkdirTemp("", "brig-gw-")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("BRIG_GATEWAY_DIR", gw); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(gw)
+	os.Exit(code)
 }
 
 // The parse cases the bash wrapper's own suite ran, plus the ones the verb
