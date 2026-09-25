@@ -3463,8 +3463,7 @@ func publishPorts(cfg *wrap.Config, ref string, ports []string, wantJSON bool) e
 		if _, err := runtime.RecordPublications(cfg.VMName, add); err != nil {
 			return err
 		}
-		warnf("%s is not running, so nothing is listening on the host yet. "+
-			"These ports are published when it starts.", cfg.VMName)
+		warnf("%s", pendingNotice(cfg, ref))
 		return reportPorts(cfg, ref, wantJSON)
 	}
 	publisher, ok := cfg.Runtime.(runtime.Publisher)
@@ -3479,6 +3478,24 @@ func publishPorts(cfg *wrap.Config, ref string, ports []string, wantJSON bool) e
 		}
 	}
 	return reportPorts(cfg, ref, wantJSON)
+}
+
+// pendingNotice says what `brig network publish` did with a port it could not
+// open yet: it recorded it for the next `brig run` of ref.
+//
+// A ref with no sandbox behind it is said apart. Publishing ahead of a first
+// run is allowed, and a mistyped ref reaches the same branch. The notice is
+// where the person typing it finds out which of the two happened.
+func pendingNotice(cfg *wrap.Config, ref string) string {
+	if ex, ok := cfg.Runtime.(runtime.Exister); ok {
+		if exists, err := ex.Exists(cfg.VMName); err == nil && !exists {
+			return fmt.Sprintf("%s has no sandbox yet. The ports are recorded, and the next "+
+				"`brig run %s` publishes them. `brig network unpublish %s --all` drops them.",
+				ref, ref, ref)
+		}
+	}
+	return fmt.Sprintf("%s is not running, so nothing is listening on the host yet. "+
+		"The next `brig run %s` publishes these ports.", ref, ref)
 }
 
 // unpublishPorts is `brig network unpublish`: close a port again.

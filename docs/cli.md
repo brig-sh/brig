@@ -219,10 +219,15 @@ brig network unpublish claude 8080    # close it again
 brig network unpublish claude --all
 ```
 
-`publish` opens a guest port on the host of a sandbox that is already up, or
-records it for the next boot of one that is not. `--publish` on `brig run`
-asks for the same thing at boot. `ls` lists the ports and whether each is open
-right now.
+`publish` opens a guest port on the host of a sandbox that is already up.
+`--publish` on `brig run` asks for the same thing at boot. `ls` lists the
+ports and whether each is open right now.
+
+For a sandbox that is stopped, or that has never been run, `publish` records
+the port instead. It says that the next `brig run` of that ref publishes it,
+and it says when the ref has no sandbox at all. That is how a port is
+published ahead of a first run, and it is also what a mistyped ref does.
+`brig network unpublish <ref> --all` drops such a record.
 
 `brig info` prints the ports too, as the `PORTS` row of the execution
 envelope. `ls` is the one to reach for when the ports are all you want: it
