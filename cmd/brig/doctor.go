@@ -316,11 +316,12 @@ func verifyCheck() check {
 			Finding: fmt.Sprintf("cosign at %s, BRIG_VERIFY=%s", path, mode)}
 	case mode == verify.Require:
 		return check{Name: "verify", State: stateFail,
-			Finding: fmt.Sprintf("cosign is not installed, BRIG_VERIFY=%s", mode),
-			Fix:     "install cosign (brew install cosign), or set BRIG_VERIFY=warn"}
+			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s", policy.CosignMissing(), mode),
+			Fix:     "supply cosign, or set BRIG_VERIFY=warn"}
 	default:
 		return check{Name: "verify", State: statePass,
-			Finding: fmt.Sprintf("cosign is not installed, BRIG_VERIFY=%s (images boot unchecked)", mode)}
+			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s (images boot unchecked)",
+				policy.CosignMissing(), mode)}
 	}
 }
 

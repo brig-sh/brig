@@ -220,8 +220,8 @@ func (r Result) Message() string {
 			"signature of ours to check. That is expected for your own image -- "+
 			"just be sure you trust where it came from", r.Image)
 	case NoTooling:
-		return fmt.Sprintf("cannot verify image %s: cosign is not installed "+
-			"(`brew install cosign`). Booting it unchecked", r.Image)
+		return fmt.Sprintf("cannot verify image %s: %s. Booting it unchecked",
+			r.Image, r.Policy.CosignMissing())
 	case Unresolved:
 		return fmt.Sprintf("cannot reach the registry to verify image %s: %s. The copy "+
 			"on disk could not be checked against what the registry serves",
@@ -270,9 +270,9 @@ func (r Result) Refusal() string {
 			"BRIG_VERIFY_IDENTITY and BRIG_VERIFY_ISSUER at the publisher you trust",
 			r.Image)
 	case NoTooling:
-		return fmt.Sprintf("refusing to boot image %s: cosign is not installed "+
-			"(`brew install cosign`), so nothing could be checked (BRIG_VERIFY=require). "+
-			"Install cosign, or set BRIG_VERIFY=warn to boot it unchecked", r.Image)
+		return fmt.Sprintf("refusing to boot image %s: %s, so nothing could be "+
+			"checked (BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it "+
+			"unchecked", r.Image, r.Policy.CosignMissing())
 	default:
 		return r.Message()
 	}
@@ -471,6 +471,21 @@ func refWithDigest(ref, digest string) string {
 func (p Policy) Tooling() (string, bool) {
 	path, err := lookPath(p.Cosign)
 	return path, err == nil
+}
+
+// CosignMissing is the phrase for a check that could not run for want of
+// cosign.
+//
+// Tooling answers false for a host with no cosign and for a BRIG_COSIGN_BIN
+// that points at nothing, and the two are different problems to the person
+// reading. The install hint holds for the default name alone, and is
+// platform-specific, so every line that reports the gap reads it from here.
+func (p Policy) CosignMissing() string {
+	if p.Cosign != DefaultPolicy().Cosign {
+		return fmt.Sprintf("cosign was not found at %s, where BRIG_COSIGN_BIN points",
+			p.Cosign)
+	}
+	return "cosign is not installed (`brew install cosign`)"
 }
 
 // lookPath and run are variables so tests can drive the decision table

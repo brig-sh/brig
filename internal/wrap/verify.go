@@ -357,7 +357,7 @@ func (c *Config) verifyBootAssets() error {
 		// The cause is named here. res.Message() is written about an image and
 		// about booting it anyway; the subject here is the kernel, and the warn
 		// line says it boots, in the words the NotOurs case above uses.
-		cause := "cosign is not installed (`brew install cosign`)"
+		cause := c.VerifyPolicy.CosignMissing()
 		if res.Outcome == verify.Unresolved {
 			cause = fmt.Sprintf("the registry could not be reached: %s", res.Detail)
 		}

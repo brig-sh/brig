@@ -67,8 +67,9 @@ func verifyConfig(t *testing.T, image string, mode verify.Mode) *Config {
 	c.Image = image
 	c.Verify = mode
 	c.VerifyPolicy = verify.DefaultPolicy()
-	// No cosign on the machine running the tests, which is itself one of the
-	// cases worth pinning.
+	// A cosign the lookup cannot find, named so the outcome is the same on a
+	// machine that has cosign and one that does not. It is the shape a
+	// BRIG_COSIGN_BIN pointing at nothing takes, and the messages say so.
 	c.VerifyPolicy.Cosign = "cosign-that-does-not-exist"
 	// These cases are about the tag path, which is the runtime that does not
 	// pin a digest. The digest path has its own cases below.
@@ -244,7 +245,7 @@ func TestVerifyWarnsButBootsWithoutCosign(t *testing.T) {
 	if err := c.verifyImage(); err != nil {
 		t.Fatalf("a missing cosign blocked the boot: %v", err)
 	}
-	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "cosign is not installed") {
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "cosign was not found") {
 		t.Errorf("nothing was said about it: %q", said)
 	}
 }
@@ -503,7 +504,7 @@ func TestGenericBootVerifiesTheBundle(t *testing.T) {
 	} else {
 		// And it reads as a refusal about the kernel, with the cause named on
 		// its own.
-		if !strings.Contains(err.Error(), "cosign is not installed") {
+		if !strings.Contains(err.Error(), "cosign was not found") {
 			t.Errorf("the refusal does not name the cause: %v", err)
 		}
 		if strings.Contains(strings.ToLower(err.Error()), "booting it unchecked") {

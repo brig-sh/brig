@@ -48,7 +48,7 @@ func TestVerificationProblemsSurviveQuiet(t *testing.T) {
 			build: func(t *testing.T) *Config {
 				return verifyConfig(t, ours, verify.Warn)
 			},
-			want: "cosign is not installed",
+			want: "cosign was not found",
 		},
 		{
 			name: "the image is nobody's we know",

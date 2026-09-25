@@ -254,6 +254,24 @@ func TestDefaultPolicyPinsRepoAndWorkflow(t *testing.T) {
 	}
 }
 
+// A cosign the lookup cannot find is two situations: a host without the tool,
+// and a BRIG_COSIGN_BIN naming a path that holds nothing. The install hint
+// applies to the first, and the second is a setting the reader can correct.
+func TestCosignMissingSeparatesAnAbsentToolFromAWrongPath(t *testing.T) {
+	shipped := DefaultPolicy().CosignMissing()
+	if !strings.Contains(shipped, "not installed") || !strings.Contains(shipped, "brew install cosign") {
+		t.Errorf("the default name loses the install hint: %q", shipped)
+	}
+
+	pointed := Policy{Cosign: "/opt/nowhere/cosign"}.CosignMissing()
+	if !strings.Contains(pointed, "/opt/nowhere/cosign") || !strings.Contains(pointed, "BRIG_COSIGN_BIN") {
+		t.Errorf("a pointed cosign does not name the path or the setting: %q", pointed)
+	}
+	if strings.Contains(pointed, "brew") {
+		t.Errorf("a pointed cosign is told to install one: %q", pointed)
+	}
+}
+
 func TestMessagesNameTheImageAndTheRemedy(t *testing.T) {
 	cases := map[Outcome]string{
 		NotOurs:   "not published by brig-sh",
@@ -261,7 +279,8 @@ func TestMessagesNameTheImageAndTheRemedy(t *testing.T) {
 		Failed:    "DID NOT VERIFY",
 	}
 	for outcome, want := range cases {
-		msg := Result{Outcome: outcome, Image: "img", Detail: "d"}.Message()
+		msg := Result{Policy: DefaultPolicy(), Outcome: outcome, Image: "img",
+			Detail: "d"}.Message()
 		if !strings.Contains(msg, want) {
 			t.Errorf("%v message = %q, want it to mention %q", outcome, msg, want)
 		}
