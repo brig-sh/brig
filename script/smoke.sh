@@ -247,6 +247,15 @@ export BRIG_READY_TIMEOUT=5
 # its state directory. Scratch, like the profile directory: the test creates and
 # removes sandboxes, and it must not edit the state of whoever is running it.
 export BRIG_STATE_DIR="$WORK/state"
+# The gateway directory is scratch for the same reason. Every boot records its
+# network posture there, and rm and the listing prune those records against
+# the stub's sandboxes, so the developer's own ~/.brig/networks.json would
+# lose the posture of every real sandbox. It also holds the gateway sockets
+# and the address ledger, which the EXIT trap takes with everything else. It
+# fits: a sockaddr_un holds 103 bytes, and the longest path built under here
+# -- $WORK/gw/sandbox-brig-claude-code.sock.qemu -- measures 101 on a Mac,
+# where mktemp -d is at its longest.
+export BRIG_GATEWAY_DIR="$WORK/gw"
 # The image checks get their own cases below, with a stub cosign. Everywhere
 # else they are off: a CI runner has no cosign and must not reach a registry.
 export BRIG_VERIFY=off
@@ -660,13 +669,6 @@ egress:
     - host: telemetry.example.com
 YAML
 export BRIG_POLICY_DIR="$WORK/policies"
-# Under $WORK, so the EXIT trap takes the sockets and the address ledger with
-# everything else. It fits: a sockaddr_un holds 103 bytes, and the longest path
-# built under here -- $WORK/gw/sandbox-brig-claude-code.sock.qemu -- measures
-# 101 on a Mac, where mktemp -d is at its longest. Exported rather than set per
-# command, because rm and detach release what run allocated and have to look in
-# the same place.
-export BRIG_GATEWAY_DIR="$WORK/gw"
 "$WORK/brig" policy attach reachable claude-code > /dev/null 2>&1
 : > "$STUB_LOG"
 env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/pol-on.out" 2>&1
@@ -740,7 +742,7 @@ fi
 # by design, and its listener would outlive this script.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 pkill -f "$BRIG_GATEWAY_DIR/" > /dev/null 2>&1
-unset BRIG_POLICY_DIR BRIG_GATEWAY_DIR
+unset BRIG_POLICY_DIR
 fi
 
 # A posture brig does not know must stop the run rather than pick one.
