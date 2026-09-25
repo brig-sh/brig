@@ -449,6 +449,25 @@ func TestRefusalSaysItRefusedAndNamesTheWayOut(t *testing.T) {
 	}
 }
 
+// Refusal owns the wording of two rows. The rest carry Message, and the
+// sentence that refuses them is the caller's own.
+func TestRefusalCarriesMessageForTheRowsItDoesNotOwn(t *testing.T) {
+	for _, outcome := range []Outcome{Verified, Failed, Mismatch, Unresolved} {
+		r := Result{Policy: DefaultPolicy(), Outcome: outcome, Image: "img",
+			Digest: "sha256:abc", Local: "sha256:def", Detail: "d"}
+		if got, want := r.Refusal(), r.Message(); got != want {
+			t.Errorf("%v: refusal is %q, message is %q", outcome, got, want)
+		}
+	}
+
+	for _, outcome := range []Outcome{NotOurs, NoTooling} {
+		r := Result{Policy: DefaultPolicy(), Outcome: outcome, Image: "img"}
+		if r.Refusal() == r.Message() {
+			t.Errorf("%v: the refusal reads as the warning: %q", outcome, r.Refusal())
+		}
+	}
+}
+
 // Under a replaced policy the registry that put an image in the NotOurs row is
 // the user's own, so the line names neither brig-sh nor settings already set.
 func TestARefusedThirdPartyImageUnderAReplacedPolicyDoesNotNameBrigSh(t *testing.T) {
