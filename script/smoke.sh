@@ -384,7 +384,9 @@ grep -q "\"project\": \"$PROJ\"" "$BRIG_STATE_DIR/sessions.json" \
 
 # A project is the documented spelling, so it runs without a notice. The
 # one-release warning that the word used to reach the agent is gone (#315).
-grep -q 'project directory this run mounts' "$WORK/proj.err" \
+# Two markers, as in the Go test: the sentence that named the new reading,
+# and the `--` hint that named the old one.
+grep -q -e 'project directory this run mounts' -e 'put it after --' "$WORK/proj.err" \
   && bad "a run naming a project printed the old notice -- got: $(cat "$WORK/proj.err")" \
   || ok "a run naming a project prints no notice"
 
