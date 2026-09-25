@@ -768,7 +768,7 @@ func (c *Config) publishLive() error {
 	if !ok {
 		return fmt.Errorf("%s is already running, and %s fixes a sandbox's published ports "+
 			"when it is created. Remove it with `brig rm %s` and run it again to publish %s",
-			c.VMName, c.Runtime.Kind(), c.RawName, c.PublishAsked[0])
+			c.VMName, c.Runtime.Kind(), sessionKey(c.Profile.Name, c.Slug), c.PublishAsked[0])
 	}
 	for _, p := range c.PublishAsked {
 		if err := publisher.Publish(c.VMName, p); err != nil {

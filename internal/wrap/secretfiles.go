@@ -247,7 +247,8 @@ func (c *Config) mountVolumes() error {
 		if !mounted[c.guestPath(h.Path)] {
 			return fmt.Errorf("%s is not mounted and the ephemeral directory above it "+
 				"already is, so what the sandbox writes there would be lost at shutdown. "+
-				"Stop the sandbox and run again: brig rm %s", h.Path, c.VMName)
+				"Stop the sandbox and run again: brig rm %s", h.Path,
+				sessionKey(c.Profile.Name, c.Slug))
 		}
 	}
 	return nil
