@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // `brig run <ref> [project] [agent args...]`. The second bare word is the
@@ -151,9 +153,20 @@ func TestNoProjectAfterThePositionalIsRefused(t *testing.T) {
 // Two markers, not one: the phrase that named the new reading and the `--`
 // hint that named the old one. A reworded notice would have to drop both to
 // get past this.
+//
+// The run has to get far enough to have printed it, or the test covers
+// nothing. The notice sat in dispatch, and a scratch host has no runtime on
+// PATH, so a run that got past dispatch ends on ErrNoRuntime. Any other
+// error means it stopped earlier.
 func TestAProjectRunsWithoutANotice(t *testing.T) {
 	scratchHost(t)
-	notice := captureStderr(t, func() { _, _ = captureStdout(t, func() error { return run([]string{"run", "claude", "."}) }) })
+	var err error
+	notice := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"run", "claude", "."}) })
+	})
+	if !errors.Is(err, runtime.ErrNoRuntime) {
+		t.Fatalf("the run stopped before it could have printed the notice: %v", err)
+	}
 	for _, old := range []string{"project directory", "put it after --"} {
 		if strings.Contains(notice, old) {
 			t.Errorf("a run naming a project printed the old notice (%q):\n%s", old, notice)
