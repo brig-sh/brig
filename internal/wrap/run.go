@@ -502,7 +502,9 @@ func (c *Config) guestMountsWorkspace() bool {
 	if !c.waitReady() {
 		return false
 	}
-	seen, err := c.Runtime.Output(runtime.ExecSpec{
+	// Through ask: an empty answer the runtime lost would read as a stale
+	// share, and the sandbox would be restarted under a live session.
+	seen, err := c.ask(runtime.ExecSpec{
 		Name: c.VMName,
 		Cmd:  []string{"cat", c.Profile.GuestHome + "/" + markerFile},
 	})

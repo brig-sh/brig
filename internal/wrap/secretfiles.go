@@ -564,13 +564,16 @@ func pinPath(rel string) string {
 	return persistRoot + "/" + strings.ReplaceAll(escaped, "/", "%2F")
 }
 
+// guestRoot runs a command for its effect and reads only its exit status. It
+// does not go through ask, which runs a command again when its output is lost.
 func (c *Config) guestRoot(argv ...string) error {
-	_, err := c.guestOutput(argv...)
+	_, err := c.Runtime.Output(runtime.ExecSpec{Name: c.VMName, User: guestRootUser, Cmd: argv})
 	return err
 }
 
+// guestOutput asks the guest a question as root. See ask.
 func (c *Config) guestOutput(argv ...string) (string, error) {
-	return c.Runtime.Output(runtime.ExecSpec{Name: c.VMName, User: guestRootUser, Cmd: argv})
+	return c.ask(runtime.ExecSpec{Name: c.VMName, User: guestRootUser, Cmd: argv})
 }
 
 func nonEmptyLines(s string) []string {
