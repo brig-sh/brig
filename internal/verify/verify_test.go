@@ -466,6 +466,11 @@ func TestARefusedThirdPartyImageUnderAReplacedPolicyDoesNotNameBrigSh(t *testing
 	if !strings.Contains(got, "refusing to boot") || !strings.Contains(got, "BRIG_VERIFY=warn") {
 		t.Errorf("the replaced refusal lost its shape: %q", got)
 	}
+	// Warn is the only way out offered. A wider registry lands the image on the
+	// signature check, which is a harder row to leave.
+	if strings.Contains(got, "widen") {
+		t.Errorf("the refusal sends the reader to widen the registry: %q", got)
+	}
 
 	// Replaced is true when any one of the three settings differs, and each is
 	// set on its own. With only the identity replaced the prefix that rejected

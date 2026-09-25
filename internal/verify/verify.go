@@ -258,11 +258,13 @@ func (r Result) Refusal() string {
 		// shipped wording names all three, for a reader who is choosing a trust
 		// root.
 		if r.Policy.Replaced() {
+			// Warn is the whole of the way out here. A wider registry brings the
+			// image as far as the signature check, which refuses it on the
+			// identity, and that row stops to ask on every mode but off.
 			return fmt.Sprintf("refusing to boot image %s: it is not under %s, the "+
 				"registry this check trusts, so there is no signature to check it "+
 				"against (BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it "+
-				"anyway, or widen BRIG_VERIFY_REGISTRY to cover it",
-				r.Image, r.Policy.Registry)
+				"anyway", r.Image, r.Policy.Registry)
 		}
 		return fmt.Sprintf("refusing to boot image %s: it is not published by brig-sh, "+
 			"so there is no signature of ours to check (BRIG_VERIFY=require). Set "+
