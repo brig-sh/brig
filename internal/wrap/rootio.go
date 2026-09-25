@@ -701,7 +701,7 @@ func (r *workspaceRoot) writeFile(rel string, blob []byte, mode os.FileMode) err
 	// The write path needs the same rule as the read path, and did not have it.
 	// os.Root.WriteFile opens O_WRONLY|O_CREATE|O_TRUNC, and on a FIFO that
 	// blocks forever waiting for a reader -- so one `mkfifo .brig-workspace`
-	// inside the sandbox hung `brig run`, `brig shell` and `brig exec` on the
+	// inside the sandbox hung `brig run`, `brig sh` and `brig exec` on the
 	// host, with no output and no way for the user to tell why. No race
 	// required.
 	//

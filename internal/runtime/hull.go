@@ -711,7 +711,7 @@ func (h *hull) Attach(spec ExecSpec) (int, error) {
 // the user's terminal, but only a real terminal on brig's own stdin means there
 // is anyone to answer hull's consent question. A login shell wants a pty even
 // when brig is driven from a script, so TTY is true there while CanAsk is not;
-// reading TTY for both left a scripted `brig shell` looking askable and let
+// reading TTY for both left a scripted `brig sh` looking askable and let
 // hull's on-by-default send the first-boot event. When CanAsk is false and no
 // answer is on file the boot rule applies and the exec is suppressed. See
 // telemetryEnvFor.

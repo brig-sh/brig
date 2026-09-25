@@ -161,7 +161,7 @@ type ExecSpec struct {
 	// TTY on purpose: TTY gives the guest a pseudo-terminal, which a login shell
 	// wants even when brig is driven from a script, whereas the question can
 	// only be answered on a real terminal. Reading TTY for both jobs counted a
-	// scripted `brig shell` as askable and let hull's on-by-default send the
+	// scripted `brig sh` as askable and let hull's on-by-default send the
 	// first-boot event. Only Replace reads it; see telemetryEnvFor.
 	CanAsk bool
 	// Stdin, when set, is fed to the command inside the guest. It is how a
