@@ -161,7 +161,7 @@ case "$verb" in
               fed="$STUB_STATE.fed.$(printf '%s' "${4:-}" | tr / _)"
               if [ -f "$fed" ]; then wc -c < "$fed" | tr -d ' '; else printf '512\n'; fi
               ;;
-            *) printf 'regular file|claude|600\n' ;;
+            *) printf 'regular file|root|600\n' ;;
           esac
         fi
         ;;
@@ -258,10 +258,12 @@ export BRIG_BOOT_ASSETS="$WORK/assets"
 export BRIG_HYPERVISOR=vz
 # Your own profiles go in a scratch directory, never the caller's own.
 export BRIG_PROFILE_DIR="$WORK/profiles"
-# The keychain is never read here, and nothing below arranges for it to be:
-# hostCredential:, the one profile key that read it on the run path, is
-# removed. BRIG_CREDENTIALS_CMD used to stand in for that read from this
-# script; it is removed too, and the case below is what is left to assert
+# Brig's own secret store is read here: it is the login keychain, so on a
+# developer's Mac a stored secret (an imported claude credential, say) reaches
+# these runs, and on CI's Linux host there is none. That is why the stub's
+# stat answers for the root guest the shipped profiles use. hostCredential:,
+# the one profile key that read the keychain outside that store, is removed,
+# and so is BRIG_CREDENTIALS_CMD; the case below is what is left to assert
 # about it.
 
 echo "== run =="
