@@ -231,8 +231,6 @@ func TestRetiredLifecycleSpellingsWorkAndNameTheirReplacement(t *testing.T) {
 	}{
 		{[]string{"create", "claude"}, "brig run -d"},
 		{[]string{"exec", "claude", "--", "true"}, "brig sh"},
-		{[]string{"shell", "claude"}, "brig sh"},
-		{[]string{"shell", "claude", "echo", "hi"}, "brig sh"},
 		{[]string{"reset"}, "brig rm --all"},
 		{[]string{"env", "claude"}, "brig info"},
 	} {

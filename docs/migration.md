@@ -30,7 +30,6 @@ over your own files, or watch stderr for the notice.
 | `brig policies` | `brig policy ls` |
 | `brig create <ref>` | `brig run -d <ref>` |
 | `brig exec <ref> -- <cmd>` | `brig sh <ref> <cmd>` |
-| `brig shell <ref>` | `brig sh <ref>` |
 | `brig env <ref>` | `brig info <ref>` |
 | `brig reset` | `brig rm --all` |
 

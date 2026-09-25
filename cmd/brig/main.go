@@ -420,17 +420,12 @@ func dispatch(args []string) error {
 		// agent and create has no agent to hand one to -- a word after the ref
 		// is still a mistake, and translating the verb would have swallowed it.
 		deprecated("brig create", "brig run -d")
-	case "exec", "shell":
-		// Two verbs for one question: exec ran a command, shell opened a login
-		// shell or ran one. sh is both, because which of the two you want is
-		// said by whether you typed a command, not by which word you reached
-		// for.
-		//
-		// Both keep their own branch below rather than being translated to sh.
-		// exec runs its argv directly where sh runs it through `bash -lc`, so a
-		// script that relies on its own quoting keeps it -- a rename must not
-		// change what a working line does.
-		deprecated("brig "+verb, "brig sh")
+	case "exec":
+		// exec keeps its own branch below. It runs its argv directly where sh
+		// runs it through `bash -lc`, so a script that relies on its own
+		// quoting keeps it -- a rename must not change what a working line
+		// does.
+		deprecated("brig exec", "brig sh")
 	case "env":
 		// Kept for one release as a spelling of `brig info`. The bug report
 		// template used to send reporters to `brig status`, which was never a
@@ -676,7 +671,7 @@ func dispatch(args []string) error {
 		}
 		fmt.Println(cfg.VMName)
 		return nil
-	case "sh", "shell":
+	case "sh":
 		// One command or none, which is the whole of sh's grammar: Shell runs
 		// the trailing words through a login shell and opens one when there are
 		// no trailing words.
@@ -684,8 +679,7 @@ func dispatch(args []string) error {
 			return err
 		}
 		// Under --json, down the child path so brig survives the shell and reports
-		// its exit status on a Run line, the same handover an agent gets. Only sh
-		// reaches here with jsonRun set -- shell is refused above.
+		// its exit status on a Run line, the same handover an agent gets.
 		if jsonRun != nil {
 			code, err := cfg.ShellAttached(set, tail)
 			if err != nil {
@@ -881,7 +875,7 @@ var brigFlags = []struct {
 	// a line that has it keeps working. Offering it would put two spellings of
 	// one flag in front of a reader who has typed neither.
 	undocumented bool
-	// runOnly marks a run-line flag that only run acts on. sh, shell and exec
+	// runOnly marks a run-line flag that only run acts on. sh and exec
 	// continue a session rather than shape a fresh run, so they read such a
 	// flag in no position at all. On the row rather than in a list beside the
 	// table, so a new run-only flag declares itself where its position is
@@ -1259,9 +1253,9 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 }
 
 // forwardsTail reports whether a verb hands what follows the ref to the agent.
-// run forwards the agent's argv; sh -- with shell and exec, the two spellings
-// it replaces -- turns the tail into the guest command. Every other verb takes
-// a ref and nothing after it.
+// run forwards the agent's argv; sh, and exec, the spelling it replaces, turn
+// the tail into the guest command. Every other verb takes a ref and nothing
+// after it.
 //
 // This is the one source of truth for that set. rejectTail refuses a tail on
 // the verbs it excludes, and agentTail warns about brig's own flags in a tail
@@ -1272,7 +1266,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 // same tail run gets, but there is no agent here to receive it.
 func forwardsTail(verb string) bool {
 	switch verb {
-	case "run", "sh", "shell", "exec":
+	case "run", "sh", "exec":
 		return true
 	}
 	return false

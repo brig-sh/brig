@@ -148,7 +148,7 @@ func TestListingRefsRoundTripThroughEveryVerb(t *testing.T) {
 	lines := func(ref string) [][]string {
 		return [][]string{
 			{"run", ref}, {"sh", ref}, {"stop", ref}, {"rm", ref}, {"info", ref},
-			{"create", ref}, {"shell", ref}, {"env", ref}, {"exec", ref, "--", "true"},
+			{"create", ref}, {"env", ref}, {"exec", ref, "--", "true"},
 			{ref},
 		}
 	}
