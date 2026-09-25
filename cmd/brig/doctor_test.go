@@ -285,3 +285,21 @@ var fakeProfile = func() profile.Profile {
 	}
 	return p
 }()
+
+// The runtime row shows the version word wherever the line puts it. hull
+// moved it off the end of its --version line when it started reporting its
+// build, and a reader of the last word showed the platform.
+func TestShortVersion(t *testing.T) {
+	cases := []struct{ out, want string }{
+		{"hull version 0.1.0-rc28", "0.1.0-rc28"},
+		{"hull v0.1.0-rc27.0.20260925084401-44b53facb020 (44b53fa, 2026-09-25, go1.26.5, darwin/arm64)",
+			"0.1.0-rc27.0.20260925084401-44b53facb020"},
+		{"nerdctl version 2.3.5", "2.3.5"},
+		{"hull dev (go1.26.5, darwin/arm64)", "dev (go1.26.5, darwin/arm64)"},
+	}
+	for _, tc := range cases {
+		if got := shortVersion(tc.out); got != tc.want {
+			t.Errorf("shortVersion(%q) = %q, want %q", tc.out, got, tc.want)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -31,6 +32,29 @@ func Version(bin string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// versionWord is a release version, with or without its leading v: three
+// dotted numbers and whatever suffix the tag or the toolchain gave it.
+var versionWord = regexp.MustCompile(`^v?([0-9]+\.[0-9]+\.[0-9]+\S*)$`)
+
+// VersionToken returns the version out of a runtime's `--version` line,
+// without its leading v, or "" when the line carries none.
+//
+// The version is the first word shaped like one, not a fixed position. hull
+// up to 0.1.0-rc28 printed `hull version 0.1.0-rc28`, with the version last.
+// From the release that reports its build it prints `hull v0.1.0-rc29
+// (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)`, where the last word is the
+// platform. nerdctl prints `nerdctl version 2.3.5`. A build from source can
+// print `hull dev (...)`, which has no version word, and whose date must not
+// be read as one.
+func VersionToken(out string) string {
+	for _, f := range strings.Fields(out) {
+		if m := versionWord.FindStringSubmatch(f); m != nil {
+			return m[1]
+		}
+	}
+	return ""
 }
 
 // BootAssetsDir reports the directory the boot bundle for this host lives in

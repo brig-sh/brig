@@ -115,11 +115,11 @@ func (h *hull) LocalDigest(string) (string, error) { return "", nil }
 // leave a capable hull on the tag, which is the outcome this function exists
 // to avoid.
 func hullVersionPinsDigest(out string) bool {
-	fields := strings.Fields(out)
-	if len(fields) == 0 {
+	word := VersionToken(out)
+	if word == "" {
 		return true
 	}
-	base, pre, _ := strings.Cut(fields[len(fields)-1], "-")
+	base, pre, _ := strings.Cut(word, "-")
 	parts := strings.Split(base, ".")
 	if len(parts) != 3 {
 		return true

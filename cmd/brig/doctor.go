@@ -262,15 +262,24 @@ func runtimeCheck() check {
 	return check{Name: "runtime", State: statePass, Finding: finding}
 }
 
-// shortVersion is the version token out of a `--version` line: the last field,
-// the same place hullVersionPinsDigest reads it. "hull version 0.1.0-rc23"
-// becomes "0.1.0-rc23", so the row reads as a version and not as a sentence.
+// shortVersion is the version out of a `--version` line, read the way
+// hullVersionPinsDigest reads it (see runtime.VersionToken), so the row reads
+// as a version and not as a sentence. A line with no version word, such as a
+// build from source, is shown without the binary's own name, which the row
+// already carries: `hull dev (go1.26.5, darwin/arm64)` reads as
+// `dev (go1.26.5, darwin/arm64)`.
 func shortVersion(out string) string {
-	fields := strings.Fields(out)
-	if len(fields) == 0 {
-		return out
+	if v := runtime.VersionToken(out); v != "" {
+		return v
 	}
-	return fields[len(fields)-1]
+	fields := strings.Fields(out)
+	if len(fields) > 1 {
+		fields = fields[1:]
+	}
+	if len(fields) > 1 && fields[0] == "version" {
+		fields = fields[1:]
+	}
+	return strings.Join(fields, " ")
 }
 
 // bootCheck reports whether the kernel and initrd an unmodified image boots on

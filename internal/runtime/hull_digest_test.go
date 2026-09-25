@@ -35,6 +35,16 @@ func TestHullVersionPinsDigest(t *testing.T) {
 		{"hull version dev\n", true},
 		{"", true},
 		{"garbage\n", true},
+		// The line hull prints once it reports its build: the version is no
+		// longer the last word, the platform is.
+		{"hull v0.1.0-rc22 (abc1234, 2026-08-01, go1.26.5, darwin/arm64)\n", false},
+		{"hull v0.1.0-rc29 (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", true},
+		{"hull v0.2.0 (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", true},
+		// A pseudo-version or a dirty tree is a build from source, and pins.
+		{"hull v0.1.0-rc22.0.20260801000000-abc1234abcde (abc1234, 2026-08-01, go1.26.5, darwin/arm64)\n", true},
+		{"hull v0.1.0-rc29+dirty (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", true},
+		// No version word at all: the date is not one.
+		{"hull dev (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", true},
 	}
 	for _, tc := range cases {
 		if got := hullVersionPinsDigest(tc.out); got != tc.want {
@@ -107,5 +117,25 @@ func TestHullLocalDigestIsUnknown(t *testing.T) {
 	got, err := stubHull(t, "hull version 0.1.0-rc23").LocalDigest("ghcr.io/brig-sh/x:latest")
 	if err != nil || got != "" {
 		t.Fatalf("LocalDigest = %q, %v; want \"\", nil", got, err)
+	}
+}
+
+// TestVersionToken reads the version out of each --version line a runtime has
+// printed. hull moved the version off the end of the line when it started
+// reporting its build, so a reader of the last word got the platform.
+func TestVersionToken(t *testing.T) {
+	cases := []struct{ out, want string }{
+		{"hull version 0.1.0-rc28\n", "0.1.0-rc28"},
+		{"hull v0.1.0-rc29 (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", "0.1.0-rc29"},
+		{"hull v0.1.0-rc29.0.20260924234257-4f5b4cb92893 (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n",
+			"0.1.0-rc29.0.20260924234257-4f5b4cb92893"},
+		{"nerdctl version 2.3.5\n", "2.3.5"},
+		{"hull dev (4f5b4cb, 2026-09-24, go1.26.5, darwin/arm64)\n", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := VersionToken(tc.out); got != tc.want {
+			t.Errorf("VersionToken(%q) = %q, want %q", tc.out, got, tc.want)
+		}
 	}
 }
