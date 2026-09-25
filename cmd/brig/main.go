@@ -557,8 +557,9 @@ func dispatch(args []string) error {
 	}
 	// sh, and run on a shell profile, hand their words to the login shell.
 	// Read them before anything boots, so a -c missing its script is a usage
-	// error and a script typed as one word gets its hint up front.
-	if verb == "sh" || (verb == "run" && t.IsShell()) {
+	// error and a script typed as one word gets its hint up front. run -d
+	// runs nothing once the sandbox is up, so there is nothing to read.
+	if verb == "sh" || (verb == "run" && t.IsShell() && !opts.detach) {
 		if err := checkShellCommand(tail); err != nil {
 			return err
 		}

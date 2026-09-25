@@ -19,6 +19,14 @@ func TestShellHint(t *testing.T) {
 		{[]string{"make;make test"}, true},
 		{[]string{"a&&b"}, true},
 		{[]string{"cat ~/.bashrc"}, true},
+		{[]string{"ls>out"}, true},
+		{[]string{"cat<f"}, true},
+		{[]string{"echo$HOME"}, true},
+		{[]string{"$(id)"}, true},
+		{[]string{"echo `id`"}, true},
+		// A program path with a space in it is a real command, and -c
+		// would split it.
+		{[]string{"/work/My Tools/run"}, false},
 		{[]string{"ls"}, false},
 		{[]string{"ls", "/work dir"}, false},
 		{[]string{"-c", "ls | wc -l"}, false},
@@ -39,6 +47,8 @@ func TestShellHint(t *testing.T) {
 func TestShScriptFlagNeedsAScript(t *testing.T) {
 	for _, args := range [][]string{
 		{"sh", "claude", "-c"},
+		{"sh", "claude", "-c", ""},
+		{"sh", "claude", "-ec"},
 		{"run", "ubuntu", "--", "-c"},
 	} {
 		scratchHost(t)
@@ -83,5 +93,15 @@ func TestShScriptHintPrintsBeforeBoot(t *testing.T) {
 	stderr = captureStderr(t, func() { _ = run([]string{"-q", "sh", "claude", "ls /work | wc -l"}) })
 	if strings.Contains(stderr, "put -c in front of it") {
 		t.Errorf("-q printed the hint: %q", stderr)
+	}
+}
+
+// brig run -d starts the sandbox and runs nothing, so a hint about what the
+// guest will do with the command is wrong there.
+func TestShScriptHintNotOnDetach(t *testing.T) {
+	scratchHost(t)
+	stderr := captureStderr(t, func() { _ = run([]string{"run", "-d", "ubuntu", "--", "ls /work | wc -l"}) })
+	if strings.Contains(stderr, "put -c in front of it") {
+		t.Errorf("run -d printed the hint: %q", stderr)
 	}
 }

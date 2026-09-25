@@ -90,6 +90,7 @@ running.
 
 ```
 brig sh <ref> [command...]
+brig sh <ref> -c '<script>' [args...]
 ```
 
 `sh` takes no project argument. The first bare word after the ref is already
@@ -111,7 +112,11 @@ brig sh claude -c 'ls /work | wc -l'
 brig sh claude -c 'cat ~/.claude/settings.json'
 ```
 
-Words after the script are its `$0`, `$1` and on, as with `sh -c`. An
+Words after the script are its `$0`, `$1` and on, as with `sh -c`. The flags
+that go in front of `-c` with `sh -c` work here too: `-ec` stops at the first
+failing command, `-xc` traces, `-uc` refuses unset variables. They cover the
+script, not the login profile that runs before it. `-c` with no
+script, or an empty one, is refused before the sandbox starts. An
 unquoted `~` in the plain form is expanded by your own shell before brig sees
 it, so it names your home on the host, not the guest's.
 

@@ -171,7 +171,8 @@ The command still runs under a login shell, so its environment is unchanged,
 and a shell builtin such as `ulimit` or a function the login profile defines,
 such as `nvm`, still works as the first word. A first word that starts with
 `-` is a command name, not an option, and exits 127 when no such command
-exists.
+exists. The exception is `-c`, alone or combined as in `-ec`, which runs the
+next word as a script.
 
 When the first word is a profile function, or the login profile sets an
 `EXIT` trap, bash stays running as the command's parent. A `SIGTERM` sent to

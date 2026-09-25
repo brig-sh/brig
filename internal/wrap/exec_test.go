@@ -135,8 +135,8 @@ func TestShellArgvSurvivesBash(t *testing.T) {
 }
 
 // runShellArgv runs what shellArgv builds for command under the host's bash,
-// with -l dropped so the host's own profile is not sourced into the test, and
-// returns the exit status.
+// with -l dropped from its flags so the host's own profile is not sourced into
+// the test, and returns the exit status.
 func runShellArgv(t *testing.T, command ...string) int {
 	t.Helper()
 	bash, err := exec.LookPath("bash")
@@ -144,7 +144,8 @@ func runShellArgv(t *testing.T, command ...string) int {
 		t.Skip("no bash on this host")
 	}
 	argv := shellArgv(command)
-	err = exec.Command(bash, append([]string{"-c"}, argv[2:]...)...).Run()
+	flags := strings.Replace(argv[1], "l", "", 1)
+	err = exec.Command(bash, append([]string{flags}, argv[2:]...)...).Run()
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
@@ -208,5 +209,51 @@ func TestShellScriptFlagUnderBash(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != "X:Y" {
 		t.Errorf("script printed %q, want X:Y", got)
+	}
+}
+
+// -c takes the flags people put in front of it with sh -c: -ec to stop at the
+// first failure, -xc to trace, -uc for unset variables. They apply to the
+// script alone, set at its start, not to the login shell: bash -lxc traced
+// every line of /etc/profile and ~/.bashrc before the first line of the
+// script, and -e or -u there would stop on a profile's own habits.
+func TestShellScriptFlagCombined(t *testing.T) {
+	if got, want := shellArgv([]string{"-ec", "false; echo no"}), []string{"bash", "-lc", "set -e; false; echo no"}; !slices.Equal(got, want) {
+		t.Errorf("shellArgv = %q, want %q", got, want)
+	}
+	if got, want := shellArgv([]string{"-lc", "x"}), []string{"bash", "-lc", "x"}; !slices.Equal(got, want) {
+		t.Errorf("shellArgv = %q, want %q", got, want)
+	}
+	if got := runShellArgv(t, "-ec", "false; echo reached"); got != 1 {
+		t.Errorf("-ec kept going past a failure: exit %d, want 1", got)
+	}
+	// Anything else that starts with a dash is still a command name.
+	if got := runShellArgv(t, "-zc", "echo x"); got != 127 {
+		t.Errorf("-zc exited %d, want 127 for a command not found", got)
+	}
+}
+
+// A script flag with no script, or an empty one, is refused rather than handed
+// to bash: bash -lc exits 0 on an empty script, and a caller whose $SCRIPT was
+// unset reads that as success. The check lives beside shellArgv so every
+// caller of Shell gets it, not only the verbs dispatch remembers to check.
+func TestShellScriptFlagNeedsAScript(t *testing.T) {
+	for _, command := range [][]string{{"-c"}, {"-c", ""}, {"-c", "  \n"}, {"-ec"}} {
+		if ShellCommandError(command) == nil {
+			t.Errorf("ShellCommandError(%q) = nil, want a refusal", command)
+		}
+		rec := &recordingRuntime{}
+		c := &Config{VMName: "vm", Runtime: rec}
+		if err := c.Shell(creds.Set{}, command); err == nil {
+			t.Errorf("Shell(%q) ran %q, want a refusal", command, rec.spec.Cmd)
+		}
+		if _, err := c.ShellAttached(creds.Set{}, command); err == nil {
+			t.Errorf("ShellAttached(%q) ran, want a refusal", command)
+		}
+	}
+	for _, command := range [][]string{nil, {"ls"}, {"-c", "ls"}, {"-l"}} {
+		if err := ShellCommandError(command); err != nil {
+			t.Errorf("ShellCommandError(%q) = %v, want nil", command, err)
+		}
 	}
 }
