@@ -58,6 +58,7 @@ index is the map of everything else, in the order a new reader needs it.
 | --- | --- |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | The build, the tests, the review norms |
 | [../AI_POLICY.md](../AI_POLICY.md) | How AI-assisted contributions are handled |
+| [../AGENTS.md](../AGENTS.md) | The rules above, gathered for a coding agent working in the repository |
 | [../SECURITY.md](../SECURITY.md) | Reporting a vulnerability |
 | [releasing.md](releasing.md) | Cutting a release. Maintainers only |
 | [../assets/README.md](../assets/README.md) | The logo and diagram assets, and how to use them |
