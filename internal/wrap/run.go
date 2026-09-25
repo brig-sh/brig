@@ -729,7 +729,10 @@ func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, erro
 // function the login profile defines (ulimit, nvm) would stop working as the
 // command, and exec reads a first word starting with a dash as its own option.
 // bash still execs a lone simple command without forking, so the command is
-// the top process in the guest either way.
+// the top process in the guest either way, unless the first word is a profile
+// function or the profile sets an EXIT trap. bash then stays as the parent,
+// and a SIGTERM to the session ends bash but not the command; see
+// docs/migration.md.
 func shellArgv(command []string) []string {
 	if len(command) > 0 {
 		return append([]string{"bash", "-lc", `"$@"`, "bash"}, command...)

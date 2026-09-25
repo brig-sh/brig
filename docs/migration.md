@@ -142,6 +142,7 @@ always gives the command a terminal in the guest, where `exec` gave it one
 only when brig's own stdin was a terminal. Output piped or redirected from
 `sh` therefore comes through that terminal: lines end in CRLF, and stderr is
 mixed into stdout.
+
 `brig run` on a `kind: shell` profile such as `ubuntu` runs its trailing words
 the same way `sh` does, and changed with it.
 
@@ -151,6 +152,16 @@ now exits 127 with `not found` instead of running it. Name the shell:
 ```bash
 brig sh claude 'ls /work | wc -l'           # no longer runs
 brig sh claude bash -c 'ls /work | wc -l'   # runs it as a script
+```
+
+A variable assignment in front of the command is shell syntax too, even
+unquoted. `brig sh claude FOO=bar npm test` now looks for a command named
+`FOO=bar` and exits 127. Pass the variable through `env`, which keeps the
+words as they are:
+
+```bash
+brig sh claude FOO=bar npm test       # no longer runs
+brig sh claude env FOO=bar npm test   # runs npm test with FOO set
 ```
 
 The command still runs under a login shell, so its environment is unchanged,
