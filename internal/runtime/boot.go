@@ -92,7 +92,7 @@ func bootAssetsDir(locate assetLocator) (dir, explicit string, err error) {
 	if locate != nil {
 		// A runtime that cannot answer is not fatal: fall through to the
 		// default rather than refusing to boot over a missing subcommand.
-		if located, locErr := locate(); locErr == nil {
+		if located, locErr := locate(); locErr == nil && located != "" {
 			return located, "", nil
 		}
 	}

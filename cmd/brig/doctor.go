@@ -245,12 +245,16 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 			return detectRuntimeFor(runtime.Preference{Bin: agent.RuntimeBin})
 		}
 	}
+	// The binary came from the profile, so a broken one is the profile's to
+	// fix, not a variable the user may never have set.
+	fromProfile := agent != nil && agent.RuntimeBin != "" && os.Getenv("BRIG_RUNTIME_BIN") == ""
 	rt, err := detect()
 	if err != nil {
-		return check{Name: "runtime", State: stateFail, Finding: err.Error(),
-			Fix: "install hull on macOS or nerdctl on Linux, or point BRIG_RUNTIME_BIN at a build",
-			err: err,
-		}, nil
+		fix := "install hull on macOS or nerdctl on Linux, or point BRIG_RUNTIME_BIN at a build"
+		if fromProfile {
+			fix = "fix this profile's runtimeBin (brig agent edit " + agent.Name + "), or remove it so brig finds the runtime on PATH"
+		}
+		return check{Name: "runtime", State: stateFail, Finding: err.Error(), Fix: fix, err: err}, nil
 	}
 	bin := rt.Bin()
 	// Detect takes BRIG_RUNTIME_BIN on trust, where a profile's runtimeBin is
@@ -259,9 +263,13 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	// binary is looked up here, and the answer is classed the way a profile's
 	// bad runtimeBin already is: the runtime you named is broken, exit 4.
 	if _, lerr := exec.LookPath(bin); lerr != nil {
+		fix := "fix BRIG_RUNTIME_BIN, or unset it so brig finds the runtime on PATH"
+		if fromProfile {
+			fix = "fix this profile's runtimeBin (brig agent edit " + agent.Name + "), or remove it so brig finds the runtime on PATH"
+		}
 		return check{Name: "runtime", State: stateFail,
 			Finding: fmt.Sprintf("%s at %s is not an executable on this host", rt.Kind(), bin),
-			Fix:     "fix BRIG_RUNTIME_BIN, or unset it so brig finds the runtime on PATH",
+			Fix:     fix,
 			err:     fmt.Errorf("%w: %s is not there or not executable", runtime.ErrBadRuntime, bin),
 		}, nil
 	}
@@ -308,13 +316,19 @@ func bootCheck(rt runtime.Runtime) check {
 	if rt == nil {
 		return notReached("boot")
 	}
-	dir, present, err := runtime.BootAssetsDir(rt)
+	dir, present, explicit, err := runtime.BootAssetsDir(rt)
 	if err != nil {
 		return check{Name: "boot", State: stateFail, Finding: "cannot locate the boot assets: " + err.Error(),
 			Fix: "set BRIG_BOOT_ASSETS to a directory holding the kernel and initrd"}
 	}
 	if present {
 		return check{Name: "boot", State: statePass, Finding: "assets present at " + dir}
+	}
+	if explicit {
+		// A run does not download into a directory the user chose.
+		kernel, initrd := runtime.BootAssetNames()
+		return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
+			Fix: fmt.Sprintf("put %s and %s in %s, or unset BRIG_BOOT_ASSETS so brig fetches them", kernel, initrd, dir)}
 	}
 	return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
 		Fix: "run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them"}

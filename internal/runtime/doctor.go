@@ -67,22 +67,33 @@ func VersionToken(out string) string {
 // It reports presence rather than fetching: doctor names what is missing and
 // how to get it, and downloading a bundle is a side effect a diagnostic has no
 // business having.
-func BootAssetsDir(rt Runtime) (dir string, present bool, err error) {
-	dir, _, err = bootAssetsDir(assetLocatorFor(rt))
+//
+// explicit reports that BRIG_BOOT_ASSETS chose the directory, which a run
+// never downloads into, so doctor's advice for an empty one differs.
+func BootAssetsDir(rt Runtime) (dir string, present, explicit bool, err error) {
+	dir, chosen, err := bootAssetsDir(assetLocatorFor(rt))
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	kernel := filepath.Join(dir, bootKernelName())
 	initrd := filepath.Join(dir, bootInitrdName)
-	return dir, bootArtifactsPresent(kernel, initrd), nil
+	return dir, bootArtifactsPresent(kernel, initrd), chosen != "", nil
 }
 
-// assetLocatorFor is the locator a run with rt would pass to bootArtifacts:
-// hull's `assets dir` for a hull, and none for anything else, the same as
-// nerdctl's run path passes.
+// BootAssetNames are the two files a boot bundle must hold, for a message
+// that tells someone what to put in a directory.
+func BootAssetNames() (kernel, initrd string) { return bootKernelName(), bootInitrdName }
+
+// doctorAssetDirTimeout bounds doctor's `hull assets dir`. Its own value, not
+// the agent-call timeout, so the two can change apart. A var for tests.
+var doctorAssetDirTimeout = 5 * time.Second
+
+// assetLocatorFor is the question a run with rt would ask, with doctor's
+// deadline on it: hull's `assets dir` for a hull, and none for anything else,
+// the same as nerdctl's run path passes.
 func assetLocatorFor(rt Runtime) assetLocator {
 	if h, ok := rt.(*hull); ok {
-		return h.assetDir
+		return func() (string, error) { return h.assetDirWithin(doctorAssetDirTimeout) }
 	}
 	return nil
 }

@@ -348,3 +348,41 @@ func TestDoctorBootAsksTheAgentsHull(t *testing.T) {
 			boot.State, boot.Finding, store)
 	}
 }
+
+// BRIG_BOOT_ASSETS pointing at a directory without the bundle is not fixed by
+// running an agent: a run refuses to download into a directory the user
+// chose. The boot row's fix says what does fix it.
+func TestDoctorBootFixForAnEmptyExplicitDir(t *testing.T) {
+	healthyHost(t)
+	dir := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", dir)
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: "/bin/sh"}, nil })
+
+	boot := findCheck(t, runDoctor(nil, nil), "boot")
+	if boot.State != stateFail {
+		t.Fatalf("the boot row is %q, want !!", boot.State)
+	}
+	if strings.Contains(boot.Fix, "run any agent") {
+		t.Errorf("the fix %q sends the user to a run, which will not download into %s", boot.Fix, dir)
+	}
+	if !strings.Contains(boot.Fix, "BRIG_BOOT_ASSETS") || !strings.Contains(boot.Fix, dir) {
+		t.Errorf("the fix %q does not name BRIG_BOOT_ASSETS and %s", boot.Fix, dir)
+	}
+}
+
+// When the profile names the runtime binary, a broken one is the profile's to
+// fix, not BRIG_RUNTIME_BIN's, which the user may never have set.
+func TestDoctorRuntimeFixNamesTheProfilesRuntimeBin(t *testing.T) {
+	healthyHost(t)
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+	agent := fakeProfile
+	agent.RuntimeBin = filepath.Join(t.TempDir(), "hull-not-here")
+
+	rt := findCheck(t, runDoctor(&agent, nil), "runtime")
+	if rt.State != stateFail {
+		t.Fatalf("the runtime row is %q, want !!", rt.State)
+	}
+	if strings.Contains(rt.Fix, "BRIG_RUNTIME_BIN") || !strings.Contains(rt.Fix, "runtimeBin") {
+		t.Errorf("the fix %q should name the profile's runtimeBin, not BRIG_RUNTIME_BIN", rt.Fix)
+	}
+}

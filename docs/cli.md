@@ -220,7 +220,9 @@ brig doctor claude
 ```
 
 Fills in the image line, which is otherwise the one check doctor cannot make
-without knowing which agent you mean.
+without knowing which agent you mean. When the agent's profile names a
+`runtimeBin`, the runtime and boot lines report on that binary, the one a
+run of the agent drives, rather than the one on `PATH`.
 
 ```bash
 brig doctor --json

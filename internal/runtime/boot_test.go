@@ -289,7 +289,7 @@ func TestDoctorAndBootResolveTheSameAssetsDir(t *testing.T) {
 	}
 	h := assetsDirHull(t, store)
 
-	dir, present, err := BootAssetsDir(h)
+	dir, present, _, err := BootAssetsDir(h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestDoctorAssetsDirFallbackAndOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, present, err := BootAssetsDir(assetsDirHull(t, ""))
+	dir, present, _, err := BootAssetsDir(assetsDirHull(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,11 +328,32 @@ func TestDoctorAssetsDirFallbackAndOverride(t *testing.T) {
 
 	explicit := t.TempDir()
 	t.Setenv("BRIG_BOOT_ASSETS", explicit)
-	dir, _, err = BootAssetsDir(assetsDirHull(t, t.TempDir()))
+	dir, _, _, err = BootAssetsDir(assetsDirHull(t, t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dir != explicit {
 		t.Errorf("resolved %s, want BRIG_BOOT_ASSETS at %s", dir, explicit)
+	}
+}
+
+// A runtime that answers with nothing has no opinion, and the per-platform
+// default applies, as the assetLocator comment says. An empty answer used as
+// the directory would put the kernel and initrd in the working directory.
+func TestAnEmptyAnswerFromTheRuntimeFallsBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+	fallback, err := defaultBootAssetsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, _, err := bootAssetsDir(func() (string, error) { return "", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != fallback {
+		t.Errorf("an empty answer resolved %q, want the fallback %s", dir, fallback)
 	}
 }

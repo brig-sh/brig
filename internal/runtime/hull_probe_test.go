@@ -97,7 +97,7 @@ func TestBootAssetsDirDoesNotHangWhenHullNeverAnswers(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		dir, _, err := BootAssetsDir(h)
+		dir, _, _, err := BootAssetsDir(h)
 		done <- result{dir, err}
 	}()
 
@@ -111,5 +111,39 @@ func TestBootAssetsDirDoesNotHangWhenHullNeverAnswers(t *testing.T) {
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatal("BootAssetsDir never returned: brig doctor hangs at its boot row on a wedged hull")
+	}
+}
+
+// The deadline on `hull assets dir` is doctor's alone. A run waits for hull's
+// answer: falling back on a slow hull would boot an old bundle left at the
+// default, or fetch a second copy, which is the drift #314 is about. Doctor
+// is the one that must come back from a wedged hull.
+func TestOnlyDoctorBoundsTheAssetsQuestion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in is not portable to windows")
+	}
+	home := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+	fallback, err := defaultBootAssetsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := filepath.Join(t.TempDir(), "store", "assets")
+	bin := filepath.Join(t.TempDir(), "hull")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 1\necho '"+store+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := doctorAssetDirTimeout
+	doctorAssetDirTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { doctorAssetDirTimeout = old })
+	h := &hull{bin: bin}
+
+	if dir, err := h.assetDir(); err != nil || dir != store {
+		t.Errorf("the run path got %q, %v from a slow hull, want its answer %s", dir, err, store)
+	}
+	if dir, _, _, err := BootAssetsDir(h); err != nil || dir != fallback {
+		t.Errorf("doctor got %q, %v from a slow hull, want the fallback %s", dir, err, fallback)
 	}
 }
