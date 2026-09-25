@@ -208,6 +208,35 @@ func TestSymlinkedWorkspaceRootIsRefused(t *testing.T) {
 	}
 }
 
+// The advice names the flag that sets the guest home. --workspace is a
+// retired spelling of --home, so naming it sent the reader to a word brig
+// only accepts with a deprecation notice.
+func TestAWorkspaceLinkRefusalNamesTheHomeFlag(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// A link at the home, and a link on the way to it, word the refusal
+	// differently and share the remedy.
+	for _, ws := range []string{link, filepath.Join(link, "home")} {
+		c := testConfig(t, ws, ws)
+		err := c.PrepareWorkspace()
+		wantRefused(t, err, "link")
+		msg := err.Error()
+		if !strings.Contains(msg, "Point --home (or BRIG_WORKSPACE) at the real directory") {
+			t.Errorf("%s: the refusal does not name --home: %v", ws, err)
+		}
+		if strings.Contains(msg, "--workspace") {
+			t.Errorf("%s: the refusal names the retired --workspace: %v", ws, err)
+		}
+	}
+}
+
 // The credential helper is written mode 0755. A link planted at it turns
 // "regenerate our helper" into making an arbitrary host file executable and
 // filling it with a script -- the worst of the git pair, and why both go

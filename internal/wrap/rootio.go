@@ -86,7 +86,7 @@ var workspaceSubject = pathSubject{
 	leafWhy: "the workspace is mounted read-write as the sandbox's home, so brig will not " +
 		"write a guest's home through a link",
 	pathWhy: "the sandbox's home would be created somewhere other than where you asked for it",
-	remedy:  "Point BRIG_WORKSPACE (or --workspace) at the real directory",
+	remedy:  "Point --home (or BRIG_WORKSPACE) at the real directory",
 }
 
 // projectSubject is the same standard applied to the directory named on the
