@@ -61,7 +61,7 @@ func TestOnlyRunKeepsTheSecondBareWord(t *testing.T) {
 	if word != "myproject" || strings.Join(tail, " ") != "-p hi" {
 		t.Errorf("run: project %q, tail %q; want myproject and -p hi", word, tail)
 	}
-	for _, verb := range []string{"sh", "shell", "exec", "create", "stop", "rm", "info", "env"} {
+	for _, verb := range []string{"sh", "exec", "create", "stop", "rm", "info", "env"} {
 		_, _, word, tail, err := split(verb, []string{"claude", "echo", "hi"})
 		if err != nil {
 			t.Errorf("split(%s): %v", verb, err)

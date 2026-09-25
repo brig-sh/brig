@@ -61,13 +61,13 @@ func TestRejectTail(t *testing.T) {
 			t.Errorf("rejectTail(%q): %v, want it to name the token", verb, err)
 		}
 	}
-	for _, verb := range []string{"run", "sh", "shell", "exec"} {
+	for _, verb := range []string{"run", "sh", "exec"} {
 		if err := rejectTail(verb, []string{"-p", "hi"}); err != nil {
 			t.Errorf("rejectTail(%q) refused an agent tail: %v", verb, err)
 		}
 	}
 	// No tail is fine for every verb.
-	for _, verb := range []string{"create", "stop", "rm", "env", "run", "sh", "shell", "exec"} {
+	for _, verb := range []string{"create", "stop", "rm", "env", "run", "sh", "exec"} {
 		if err := rejectTail(verb, nil); err != nil {
 			t.Errorf("rejectTail(%q, nil): %v", verb, err)
 		}

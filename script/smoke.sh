@@ -2021,7 +2021,6 @@ retired() {
 }
 "$WORK/brig" run claude -d > /dev/null 2>&1
 retired 'brig sh' exec claude -- true
-retired 'brig sh' shell claude echo hi
 retired 'brig info' env claude
 retired 'brig run -d' create claude
 retired '<agent>@<label>' run claude --name retn -d
