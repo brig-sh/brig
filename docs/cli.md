@@ -102,11 +102,22 @@ brig sh claude ls /work
 Each word after the ref is one argument to the guest command, passed the way
 you typed it, and the command runs under a login shell for its environment.
 The words are not parsed again inside the guest, so a pipe, a `;` or a glob
-has to go through a shell you name:
+is not shell syntax there. For a script, put `-c` in front of it, the way
+`sh -c` takes one. The login shell parses it in the guest, so `~` is the
+guest home and `$HOME` the guest's:
 
 ```bash
-brig sh claude bash -c 'ls /work | wc -l'
+brig sh claude -c 'ls /work | wc -l'
+brig sh claude -c 'cat ~/.claude/settings.json'
 ```
+
+Words after the script are its `$0`, `$1` and on, as with `sh -c`. An
+unquoted `~` in the plain form is expanded by your own shell before brig sees
+it, so it names your home on the host, not the guest's.
+
+A single word with a space or a shell operator in it, such as
+`brig sh claude 'ls | wc -l'`, is looked up as a command by that name. brig
+prints a hint naming `-c` before it runs.
 
 ### `brig stop`
 

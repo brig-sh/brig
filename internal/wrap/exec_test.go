@@ -176,3 +176,37 @@ func TestShellRunsABuiltin(t *testing.T) {
 		t.Errorf("shopt exited %d, want 0", got)
 	}
 }
+
+// -c as the first word is sh's own -c: the next word is a script for the login
+// shell, parsed in the guest, so pipes, ~ and $VAR mean what they mean there.
+// It is the one spelling that asks for the parse the plain form never does.
+func TestShellScriptFlag(t *testing.T) {
+	rec := &recordingRuntime{}
+	c := &Config{VMName: "vm", Runtime: rec}
+	if err := c.Shell(creds.Set{}, []string{"-c", "ls /work | wc -l"}); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	if want := []string{"bash", "-lc", "ls /work | wc -l"}; !slices.Equal(rec.spec.Cmd, want) {
+		t.Errorf("Shell ran %q, want %q", rec.spec.Cmd, want)
+	}
+}
+
+// Words after the script are its $0, $1 and on, the way sh -c takes them, and
+// the script itself is parsed by bash rather than looked up as a command.
+func TestShellScriptFlagUnderBash(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash on this host")
+	}
+	argv := shellArgv([]string{"-c", `echo "$0:$1" | tr a-z A-Z`, "x", "y"})
+	if argv[1] != "-lc" {
+		t.Fatalf("shellArgv = %q, want bash -lc", argv)
+	}
+	out, err := exec.Command(bash, append([]string{"-c"}, argv[2:]...)...).Output()
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "X:Y" {
+		t.Errorf("script printed %q, want X:Y", got)
+	}
+}

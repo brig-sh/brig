@@ -43,6 +43,7 @@ usage:
                                                  starts there
   brig sh   <ref> [command...]                   a login shell inside the sandbox,
                                                  or one command in it
+  brig sh   <ref> -c '<script>'                  a script, run by the login shell
   brig stop <ref>                                stop the sandbox, keep it
   brig rm   <ref> [--dry-run]                    stop and remove the sandbox
   brig rm   --all [--dry-run] [-y]               list every brig sandbox, confirm,
@@ -553,6 +554,14 @@ func dispatch(args []string) error {
 				"`brig agent ls` lists them", verb, verb)
 		}
 		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
+	}
+	// sh, and run on a shell profile, hand their words to the login shell.
+	// Read them before anything boots, so a -c missing its script is a usage
+	// error and a script typed as one word gets its hint up front.
+	if verb == "sh" || (verb == "run" && t.IsShell()) {
+		if err := checkShellCommand(tail); err != nil {
+			return err
+		}
 	}
 	// Say why up front. Without this the pull fails against the registry
 	// with a 404 that reads like an outage rather than a decision.

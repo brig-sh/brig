@@ -734,16 +734,23 @@ func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, erro
 // and a SIGTERM to the session ends bash but not the command; see
 // docs/migration.md.
 //
-// The words are data in the shell rather than the script text, so the login
-// profile can now reach them: -l sources it before the "$@" script runs, and
-// a top-level `shift` or `set --` there rewrites the positional parameters
-// and so the command brig was asked to run. The joined form could not be
-// touched that way, because the command was the script. No spelling of the
-// script defends against it -- `command "$@"` reads the same clobbered
+// A leading -c is sh's own: the word after it is a script for the login shell
+// and the rest are its $0, $1 and on. That is the one form bash parses, and
+// the caller asks for it by name.
+//
+// Without -c the words are data in the shell rather than the script text, so
+// the login profile can reach them: -l sources it before the "$@" script
+// runs, and a top-level `shift` or `set --` there rewrites the positional
+// parameters and so the command brig was asked to run. The joined form could
+// not be touched that way, because the command was the script. No spelling
+// of the script defends against it -- `command "$@"` reads the same clobbered
 // parameters -- so it is a property of the profile the guest sources, from
 // the image or from the mounted home. docs/guest-image.md states it as a
 // constraint next to the rest of what an image has to provide.
 func shellArgv(command []string) []string {
+	if len(command) > 0 && command[0] == "-c" {
+		return append([]string{"bash", "-lc"}, command[1:]...)
+	}
 	if len(command) > 0 {
 		return append([]string{"bash", "-lc", `"$@"`, "bash"}, command...)
 	}
