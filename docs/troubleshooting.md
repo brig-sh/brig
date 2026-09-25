@@ -685,6 +685,19 @@ Check what a profile has bound, and whether Brig can enforce it:
 brig policy check claude
 ```
 
+**A different posture than the one the sandbox was started with.**
+
+```
+brig: this sandbox was started with the isolated posture and --network asks
+for shared. Rules are fixed when a sandbox boots, so it is being restarted;
+any other session using this sandbox will be disconnected.
+```
+
+A sandbox keeps the posture it was started with, so a command that names
+no posture never trips this. `--network` or `BRIG_NETWORK` naming a
+different one does. If you did not mean to change it, check whether
+`BRIG_NETWORK` is exported in this shell.
+
 **A different project than the one last used.**
 
 ```
