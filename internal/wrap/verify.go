@@ -344,7 +344,8 @@ func (c *Config) verifyBootAssets() error {
 		// implying it checked.
 		if c.Verify == verify.Require {
 			return fmt.Errorf("refusing to boot: the boot assets at %s are not published "+
-				"by brig, so their signature cannot be checked (BRIG_VERIFY=require)", ref)
+				"by brig, so their signature cannot be checked (BRIG_VERIFY=require). "+
+				"Set BRIG_VERIFY=warn to boot them unchecked", ref)
 		}
 		c.alertf("boot assets %s are not published by brig, so nothing was checked "+
 			"about the kernel this sandbox boots", ref)
@@ -359,11 +360,15 @@ func (c *Config) verifyBootAssets() error {
 		// line says it boots, in the words the NotOurs case above uses.
 		cause := c.VerifyPolicy.CosignMissing()
 		if res.Outcome == verify.Unresolved {
-			cause = fmt.Sprintf("the registry could not be reached: %s", res.Detail)
+			// Unresolved covers every reference the resolve did not answer: a
+			// registry out of reach, a tag that is not there, one that needs
+			// credentials. Detail carries which of them it was.
+			cause = fmt.Sprintf("the reference could not be resolved: %s", res.Detail)
 		}
 		if c.Verify == verify.Require {
 			return fmt.Errorf("refusing to boot: the boot assets at %s could not be "+
-				"verified: %s (BRIG_VERIFY=require)", ref, cause)
+				"verified: %s (BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot "+
+				"them unchecked", ref, cause)
 		}
 		c.alertf("the boot assets at %s could not be verified: %s, so nothing was "+
 			"checked about the kernel this sandbox boots", ref, cause)

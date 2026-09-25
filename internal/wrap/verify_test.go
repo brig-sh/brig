@@ -502,8 +502,8 @@ func TestGenericBootVerifiesTheBundle(t *testing.T) {
 	if err == nil {
 		t.Error("a genericBoot profile booted a bundle that could not be checked")
 	} else {
-		// And it reads as a refusal about the kernel, with the cause named on
-		// its own.
+		// The refusal is about the kernel: it names the cause, claims no boot,
+		// names no image, and leaves the reader a way past it.
 		if !strings.Contains(err.Error(), "cosign was not found") {
 			t.Errorf("the refusal does not name the cause: %v", err)
 		}
@@ -513,10 +513,13 @@ func TestGenericBootVerifiesTheBundle(t *testing.T) {
 		if strings.Contains(err.Error(), "image ghcr.io") {
 			t.Errorf("the refusal is about the boot assets, not the image: %v", err)
 		}
+		if !strings.Contains(err.Error(), "BRIG_VERIFY=warn") {
+			t.Errorf("the refusal names no way forward: %v", err)
+		}
 	}
 
-	// Warn is the default, and there it boots anyway -- which the line says.
-	// The refusal above and this warning share a cause and part on that clause.
+	// Warn is the default, and there the bundle boots. The line carries the same
+	// cause and says the kernel boots.
 	warned := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
 	warned.Runtime = verifyRuntime{pins: false}
 	warned.Profile.GenericBoot = true
