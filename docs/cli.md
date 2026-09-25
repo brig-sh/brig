@@ -114,9 +114,15 @@ state `stop` asks for.
 brig rm claude
 ```
 
-Stops the sandbox and removes it. Your guest home and your project are host
-directories Brig only mounted, so neither is touched. `rm` prints the path
-of the workspace it left behind.
+Stops the sandbox and removes it. When Brig created the guest home, because
+the run named no `--home` or `BRIG_WORKSPACE`, `rm` deletes it too and prints
+its path. A guest home you named and your project are host directories
+Brig only mounted, so neither is touched, and `rm` prints the path of each
+one it left behind.
+
+If the sandbox is removed but its guest home cannot be deleted, `rm` exits
+`1` and names the home. The sandbox stays removed, and the next run of the
+session deletes what is left of the home before it boots.
 
 ```bash
 brig rm --all
@@ -136,7 +142,8 @@ brig rm claude --dry-run
 
 `--dry-run` prints what the command would remove and exits `0` without
 removing anything. For `rm --all` this is the same list the prompt shows.
-For `rm <ref>` it is the one sandbox and the workspace it would leave. A ref
+For `rm <ref>` it is the one sandbox, and the guest home it would delete or
+leave. A ref
 with no sandbox still exits `3`. `brig rm <ref>` asks no question, so it
 refuses `-y`.
 
@@ -727,7 +734,7 @@ only" below.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BRIG_WORKSPACE` | `~/brig/<agent>` | host directory mounted as the guest home. A named session appends `-<slug>` |
+| `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set |
 | `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A named session appends `-<slug>` |
 | `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig` | where your own agent files live. `BRIG_TEMPLATE_DIR` still works for one release |
 | `BRIG_POLICY_DIR` (global only) | `$XDG_CONFIG_HOME/brig/policies` | where policy files live |

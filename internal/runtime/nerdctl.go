@@ -147,6 +147,21 @@ func (n *nerdctl) Running(name string) (bool, error) {
 	return false, nil
 }
 
+// Exists looks for the sandbox in List, which is `nerdctl ps -a` with no
+// fallback to running containers only, so a missing name is a removed one.
+func (n *nerdctl) Exists(name string) (bool, error) {
+	list, err := n.List()
+	if err != nil {
+		return false, err
+	}
+	for _, inst := range list {
+		if inst.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (n *nerdctl) List() ([]Instance, error) {
 	cmd := exec.Command(n.bin, "ps", "-a", "--format", "{{.Names}}\t{{.Status}}")
 	cmd.Env = mergeEnv(telemetryEnv(false))

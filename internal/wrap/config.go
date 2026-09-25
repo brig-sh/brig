@@ -60,6 +60,23 @@ type Config struct {
 	Slug    string
 
 	Workspace string
+	// EphemeralHome is set when brig chose Workspace because the run named
+	// none. `brig rm` deletes such a home with the sandbox.
+	EphemeralHome bool
+	// RemovedHome is the home Remove deleted, or "" when it kept one.
+	RemovedHome string
+	// HomeErr is why Remove could not delete an ephemeral home, or nil.
+	HomeErr error
+	// legacyHome is the ~/brig directory an older release would have used for
+	// this session, or "" when there is none. See ephemeralNotice.
+	legacyHome string
+	// homeRemembered is set when Workspace came from the session index. An
+	// ephemeral home that was not remembered belongs to no session yet. See
+	// reapOrphanHome.
+	homeRemembered bool
+	// homeGiven is set when the run named Workspace with --home or
+	// BRIG_WORKSPACE. See reapOrphanHome.
+	homeGiven bool
 	VMName    string
 	// HostConfig are host directories seeded into the workspace, empty unless
 	// the run opted in. See hostProjections.
@@ -297,31 +314,40 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// value: the default is a directory too, and telling a chosen one from a
 	// derived one is what lets the remembered path beat the second and not the
 	// first.
-	base, given := defaultWorkspace(t), false
+	base, given := "", false
 	if v, ok := env.Get("WORKSPACE"); ok && v != "" {
 		base, given = v, true
 	}
 	if o.Workspace != "" {
 		base, given = o.Workspace, true
 	}
-	// Made absolute whichever of the two supplied it. A relative
-	// --workspace was already resolved here and a relative BRIG_WORKSPACE was
-	// not, which meant one exported variable named a different host directory
-	// from every directory you ran brig in: same sandbox name, same profile,
-	// and a workspace that moved with your shell. The sandbox's home is a host
-	// path, so it is resolved once, here, against the directory the command was
-	// actually invoked from.
-	abs, err := filepath.Abs(base)
-	if err != nil {
-		return nil, err
-	}
-	base = abs
-	// A named session suffixes the slug onto whatever the base already is, so
-	// an exported BRIG_WORKSPACE keeps working alongside --name instead of
-	// fighting it. An unnamed run adds nothing.
-	workspace := base
-	if slug != "" {
-		workspace += "-" + slug
+	var workspace string
+	if given {
+		// Made absolute whichever of the two supplied it. A relative
+		// --workspace was already resolved here and a relative BRIG_WORKSPACE
+		// was not, which meant one exported variable named a different host
+		// directory from every directory you ran brig in: same sandbox name,
+		// same profile, and a workspace that moved with your shell. The
+		// sandbox's home is a host path, so it is resolved once, here, against
+		// the directory the command was actually invoked from.
+		abs, err := filepath.Abs(base)
+		if err != nil {
+			return nil, err
+		}
+		base = abs
+		// A named session suffixes the slug onto whatever the base already
+		// is, so an exported BRIG_WORKSPACE keeps working alongside --name
+		// instead of fighting it. An unnamed run adds nothing.
+		workspace = base
+		if slug != "" {
+			workspace += "-" + slug
+		}
+	} else {
+		// Named after the sandbox, which already carries the slug, so two
+		// sandboxes never share a home brig will delete with one of them.
+		if workspace, err = defaultWorkspace(vmName); err != nil {
+			return nil, err
+		}
 	}
 	// Nothing on this invocation named a directory, so the one the sandbox was
 	// started with beats the default just computed. Without this, a session
@@ -333,9 +359,32 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// Looked up by ref, which is the profile as it resolved and the slug, so
 	// the entry a run under one spelling of the profile wrote is the entry a
 	// run under its alias reads. Both halves of the key are in hand here.
+	//
+	// A home brig chose goes with the sandbox on `brig rm`. A home the run
+	// named never does, wherever it is. A remembered home keeps what was
+	// recorded with it, so a session an older release started under ~/brig
+	// keeps its home.
+	ephemeral := !given
+	remembered := false
 	if !given {
-		if remembered := rememberedWorkspace(sessionKey(t.Name, slug), vmName); remembered != "" {
-			workspace = remembered
+		if home, eph := rememberedWorkspace(sessionKey(t.Name, slug), vmName); home != "" {
+			workspace, ephemeral, remembered = home, eph, true
+		}
+	}
+	// The directory an older release would have given this session, when it is
+	// still there. A sandbox that release booted on it keeps it: resolving the
+	// new default would read as a stale share and restart the sandbox onto an
+	// empty home. Otherwise the first run on a new ephemeral home names it, so
+	// work kept there is not taken for lost. See ephemeralNotice.
+	legacyHome := ""
+	if !given && !remembered {
+		dir := legacyDefaultWorkspace(t, slug)
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			if exists, err := sandboxExists(rt, vmName); err == nil && exists {
+				workspace, ephemeral = dir, false
+			} else {
+				legacyHome = dir
+			}
 		}
 	}
 
@@ -402,6 +451,10 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		RawName:        rawName,
 		Slug:           slug,
 		Workspace:      workspace,
+		EphemeralHome:  ephemeral,
+		legacyHome:     legacyHome,
+		homeRemembered: remembered,
+		homeGiven:      given,
 		VMName:         vmName,
 		Image:          firstNonEmpty(o.Image, env.String("IMAGE", t.Image)),
 		Pull:           env.String("PULL", "missing"),
@@ -478,7 +531,13 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	}
 	// After the Config is built, because the notice reads the pair this run
 	// resolved to and reports it against the pair the old one had.
-	c.slugMigration = c.slugMigrationNotice(base, vmBase)
+	// A session old enough to have a legacy slug was started under ~/brig, so
+	// that is where its home is when nothing named a directory.
+	noticeBase := base
+	if !given {
+		noticeBase = legacyDefaultWorkspace(t, "")
+	}
+	c.slugMigration = c.slugMigrationNotice(noticeBase, vmBase)
 	if err := c.resolveGitIdentity(); err != nil {
 		return nil, err
 	}
@@ -516,7 +575,7 @@ func (c *Config) slugMigrationNotice(base, vmBase string) []string {
 		return nil
 	}
 	oldVM := vmBase + "-" + old
-	oldWorkspace := rememberedWorkspace(sessionKey(c.Profile.Name, old), oldVM)
+	oldWorkspace, _ := rememberedWorkspace(sessionKey(c.Profile.Name, old), oldVM)
 	if oldWorkspace == "" {
 		oldWorkspace = base + "-" + old
 	}
@@ -614,13 +673,30 @@ func bindingNames(bindings []profile.EnvBinding) []string {
 // openStore is the default OpenStore: the system keyring, opened on demand.
 func openStore() (creds.SecretReader, error) { return secret.Open() }
 
-// defaultWorkspace is ~/brig/<profile>.
-func defaultWorkspace(t profile.Profile) string {
+// defaultWorkspace returns the guest home brig creates for a sandbox when the
+// run names none, ~/.brig/homes/<sandbox>. It sits with the rest of brig's
+// state, so deleting it on `brig rm` never touches a directory the user made.
+// See homesDir.
+func defaultWorkspace(vmName string) (string, error) {
+	dir, err := homesDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, vmName), nil
+}
+
+// legacyDefaultWorkspace is ~/brig/<profile>[-<slug>], the default guest home
+// of releases before homes moved under the state directory.
+func legacyDefaultWorkspace(t profile.Profile, slug string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, "brig", t.Name)
+	dir := filepath.Join(home, "brig", t.Name)
+	if slug != "" {
+		dir += "-" + slug
+	}
+	return dir
 }
 
 func firstNonEmpty(a, b string) string {

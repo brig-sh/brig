@@ -101,7 +101,7 @@ rather than copying it to the remote host.
 
 There is nothing to sign in to, and that is a feature with a price we are
 willing to pay. Every piece of state is on your disk: profiles in
-`~/.config/brig`, secrets in your login keychain, guest homes in `~/brig`,
+`~/.config/brig`, secrets in your login keychain, guest homes in `~/.brig/homes`,
 sessions in `brigd`'s inventory. Nothing registers, and nothing phones
 home. Nothing we run can be down while you are trying to boot a sandbox.
 An account also widens the security page. Brig's threat model then has

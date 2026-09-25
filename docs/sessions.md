@@ -24,18 +24,36 @@ other profile, not even `claude-desktop`, receives it this way.
 
 ## The guest home
 
-The guest home is a host directory mounted as the agent's home:
+The guest home is a host directory mounted as the agent's home. When the
+run names none, Brig creates one under its own state directory:
 
 ```
-~/brig/<resolved agent name>[-<label>]
+~/.brig/homes/<sandbox name>
 ```
 
-The resolved name is the agent's own, not the alias you typed, so
-`claude`'s guest home is `~/brig/claude-code`. `claude@refactor`'s is
-`~/brig/claude-code-refactor`, a sibling of the default, not a directory
-inside it. The guest home is host-backed. It is an ordinary directory on
-your disk, and it survives every command this page covers, until you
-remove it by hand.
+The sandbox name is `brig-<resolved agent name>[-<label>]`, and the
+resolved name is the agent's own, not the alias you typed. So `claude`'s
+guest home is `~/.brig/homes/brig-claude-code`. `claude@refactor`'s is
+`~/.brig/homes/brig-claude-code-refactor`, a sibling of the default, not a
+directory inside it.
+
+A guest home Brig created belongs to the sandbox. It survives `brig stop`
+and a host reboot, and `brig rm` deletes it. The next `brig run` of the
+same session starts from an empty home. The first run of such a session
+says so on stderr. A home left behind by a sandbox that was removed
+outside Brig is deleted before the next run of that session boots, once the
+runtime confirms that the sandbox no longer exists, stopped or running.
+Brig says so on stderr when it does.
+
+To keep the guest home, name it with `--home <dir>` or `BRIG_WORKSPACE`. A
+guest home you named is yours: Brig never deletes it, and it survives every
+command this page covers. A named session appends `-<label>` to it.
+
+Releases before 0.3.0 created the default guest home in
+`~/brig/<resolved agent name>[-<label>]`, and kept it on `brig rm`. A
+session started by one of those releases keeps that home while its sandbox
+exists. After you remove it, pass `--home ~/brig/<resolved agent name>` to go on
+using it.
 
 `brig ls` and `brig info` both print this directory as `WORKSPACE`, and the
 `BRIG_WORKSPACE` environment variable names it too. Both are the CLI's
@@ -76,19 +94,21 @@ Brig recorded about the session. Only two of the eight built-in agents,
 `claude-code` and `claude-desktop`, declare a memory-backed mount at all.
 For the other six, `codex`, `cursor`, `gemini`, `grok`, `opencode` and
 `ubuntu`, the whole guest home is the host-backed share above. An in-guest
-login for those agents lands on host disk and survives every stop.
+login for those agents lands on host disk and survives every stop. It goes
+on `brig rm` when Brig created the guest home.
 
 | Event | Guest home | Memory-backed mount (`claude-code`, `claude-desktop`) | The sandbox | What Brig recorded |
 | --- | --- | --- | --- | --- |
 | The agent exits | kept | kept, the sandbox is still up | still running | unchanged |
 | `brig stop` | kept | gone with the sandbox | stopped, still named in `brig ls` | kept |
-| `brig rm` | kept | gone | removed | dropped |
-| `brig rm --all` | kept, every session | gone | every sandbox removed | dropped, every session |
+| `brig rm` | deleted if Brig created it, kept if you named it | gone | removed | dropped |
+| `brig rm --all` | as `brig rm`, every session | gone | every sandbox removed | dropped, every session |
 | A host reboot | kept, an ordinary host directory | gone, guest memory cannot survive a reboot | the runtime's own business, not established here | kept as host files |
 
 `brig stop` keeps the sandbox's name, its row in `brig ls`, and what Brig
-recorded about the session. `brig rm` drops the last of those too. Neither
-touches the guest home.
+recorded about the session. `brig rm` drops the last of those too, and
+deletes the guest home when Brig created it. Neither touches a project or a
+guest home you named.
 
 A host reboot cannot take your work: the guest home is a host directory,
 and what Brig recorded is host files. It does take everything inside the

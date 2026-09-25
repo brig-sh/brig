@@ -275,6 +275,29 @@ func (h *hull) Running(name string) (bool, error) {
 	return false, nil
 }
 
+// Exists asks `hull inspect`, which answers for one instance, stopped ones
+// included. List may come from the plain `hull ps` fallback, which does not
+// promise stopped instances. Only hull's own "instance not found" reads as
+// absent.
+func (h *hull) Exists(name string) (bool, error) {
+	cmd := exec.Command(h.bin, "inspect", name)
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	said := strings.TrimSpace(errb.String())
+	if strings.Contains(said, "instance not found") {
+		return false, nil
+	}
+	if said != "" {
+		return false, fmt.Errorf("%s inspect %s: %w: %s", h.bin, name, err, firstLines(said, 3))
+	}
+	return false, fmt.Errorf("%s inspect %s: %w", h.bin, name, err)
+}
+
 // List reads the same table Running does. A stopped instance still holds its
 // name, so it belongs in the listing -- that is exactly the thing a user
 // needs to see before wondering why a name is taken.

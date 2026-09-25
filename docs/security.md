@@ -365,6 +365,15 @@ root. A symlink that escapes the guest home this way is refused everywhere,
 on a read or a write. There is no window between the check and the open for
 the guest to swap the file in.
 
+`brig rm` deletes a guest home Brig created, and that tree is the guest's.
+The delete takes only a direct child of `~/.brig/homes`, and it goes through
+an `os.Root` opened there, so nothing it does can resolve outside that
+directory. Inside it, the delete removes a symlink as a link and never
+descends into it. That is what keeps the target of a symlink the guest left
+in its home untouched. `os.Root` alone would not: it follows a link whose
+target stays inside the root. A guest home you named with `--home` or
+`BRIG_WORKSPACE` is never deleted, wherever it is.
+
 A symlink that stays *inside* the guest home is a different story, and reading
 and writing do not treat it alike. Where Brig writes a state file, the
 symlink is refused even though it does not escape. Brig writes only regular

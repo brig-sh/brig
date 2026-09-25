@@ -143,6 +143,10 @@ func (c *Config) EnsureRunning(set creds.Set) error {
 	// line. The set is the whole of what the runtime will be handed: the git
 	// plumbing and SetupGit have both added to it.
 	c.warnArgvExposure(set)
+	// Before PrepareWorkspace creates the home, which is how the notice tells
+	// a new session from a later run of one.
+	c.reapOrphanHome()
+	c.ephemeralNotice()
 	if err := c.PrepareWorkspace(); err != nil {
 		return err
 	}
@@ -569,19 +573,27 @@ func (c *Config) Stop() error {
 		c.VMName, c.logHint(), err)
 }
 
-// Remove stops the sandbox and clears the instance holding its name. The
-// workspace is untouched: it lives on the host and holds your work. Only the
-// index entry goes, so the next sandbox to take this name resolves its
-// workspace the ordinary way instead of inheriting one chosen for a sandbox
-// that no longer exists.
+// Remove stops the sandbox and clears the instance holding its name. A guest
+// home brig created goes with it, and RemovedHome names it. A home named with
+// --home or BRIG_WORKSPACE stays on the host. The index entry goes too, so the
+// next sandbox to take this name resolves its workspace the ordinary way
+// instead of inheriting one chosen for a sandbox that no longer exists.
 //
-// Pruned whether or not the runtime could remove the instance, which is how
-// hull releases the gateway address it hands out: the entry describes a sandbox
-// the user has asked to be rid of either way, and a removal that failed is
-// reported on its own.
+// The home is deleted only when the runtime removed the sandbox, because a
+// sandbox that is still there may still be using it. The index is pruned
+// either way, which is how hull releases the gateway address it hands out: the
+// entry describes a sandbox the user has asked to be rid of, and a removal
+// that failed is reported on its own.
+//
+// A home that could not be deleted is reported in HomeErr, not as the error:
+// the sandbox is gone, and the next run of the session deletes what is left
+// before it boots. See reapOrphanHome.
 func (c *Config) Remove() error {
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)
+	if err == nil {
+		c.RemovedHome, c.HomeErr = DropEphemeralHome(c.VMName)
+	}
 	// The index entries that name this sandbox: the workspace record and the
 	// slug claim. Both are idempotent. Removal is the only thing that clears
 	// them -- rm's not-found path leaves them alone, since it removed nothing.

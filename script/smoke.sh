@@ -1088,7 +1088,7 @@ grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
   && ok "rm removes the sandbox" || bad "rm removes the sandbox"
 [ -d "$WS" ] && ok "rm leaves the workspace alone" || bad "rm deleted the workspace"
 case "$out" in
-  *"workspace $WS stays on the host"*) ok "rm says where the workspace still is" ;;
+  *"guest home $WS stays on the host"*) ok "rm says where the workspace still is" ;;
   *) bad "rm says where the workspace still is -- got: $out" ;;
 esac
 
@@ -1099,6 +1099,28 @@ esac
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 grep -q '^argv: rm brig-claude-code' "$STUB_LOG" \
   && ok "rm --all removes brig sandboxes" || bad "rm --all removes brig sandboxes"
+
+echo "== ephemeral guest home =="
+# Every other case runs with BRIG_WORKSPACE set. With it unset, brig creates the
+# guest home under its state directory, says so once, and rm deletes it. HOME
+# is scratch too: an older release's ~/brig/claude-code on the machine running
+# this would otherwise be picked up as the session's home.
+EPH="$BRIG_STATE_DIR/homes/brig-claude-code"
+mkdir -p "$WORK/home"
+out="$(env -u BRIG_WORKSPACE HOME="$WORK/home" "$WORK/brig" run claude -d 2>&1)"
+case "$out" in
+  *"none of your directories is shared with claude-code"*) ok "a run with no --home says its home is ephemeral" ;;
+  *) bad "a run with no --home says its home is ephemeral -- got: $out" ;;
+esac
+[ -d "$EPH" ] && ok "a run with no --home creates its home under the state dir" \
+  || bad "a run with no --home creates its home under the state dir"
+out="$(env -u BRIG_WORKSPACE HOME="$WORK/home" "$WORK/brig" rm claude 2>&1)"
+case "$out" in
+  *"removed claude and its guest home $EPH"*) ok "rm names the ephemeral home it deleted" ;;
+  *) bad "rm names the ephemeral home it deleted -- got: $out" ;;
+esac
+[ ! -e "$EPH" ] && ok "rm deletes the ephemeral home" || bad "rm left the ephemeral home at $EPH"
+[ -d "$WS" ] && ok "rm leaves a named workspace alone" || bad "rm deleted the named workspace"
 
 echo "== rm and logs with no sandbox =="
 # Nothing holds the name now, so rm and logs name a sandbox that resolves to
@@ -1245,7 +1267,7 @@ grep -q '^argv: rm ' "$STUB_LOG" \
 [ "$rc" = 0 ] && ok "rm --all --dry-run exits 0" || bad "rm --all --dry-run exits 0 -- got $rc"
 grep -q '^claude-code ' "$WORK/dry.out" \
   && ok "rm --all --dry-run lists the ref" || bad "rm --all --dry-run lists the ref -- got: $(cat "$WORK/dry.out")"
-grep -q 'Workspaces stay on the host' "$WORK/dry.err" \
+grep -q 'named with --home and projects stay on the host' "$WORK/dry.err" \
   && ok "rm --all --dry-run says workspaces stay" || bad "rm --all --dry-run says workspaces stay -- got: $(cat "$WORK/dry.err")"
 grep -q '^argv: rm ' "$STUB_LOG" \
   && bad "rm --all --dry-run removed a sandbox" || ok "rm --all --dry-run removes nothing"

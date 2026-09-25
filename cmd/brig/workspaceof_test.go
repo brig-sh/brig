@@ -13,9 +13,9 @@ import "testing"
 func TestWorkspaceOfUnnamedSandbox(t *testing.T) {
 	t.Setenv("BRIG_STATE_DIR", t.TempDir())
 	for _, c := range []struct{ vm, want string }{
-		{"brig-claude-code", "/claude-code"},
-		{"brig-claude-code-skilltest", "/claude-code-skilltest"},
-		{"brig-ubuntu", "/ubuntu"},
+		{"brig-claude-code", "/homes/brig-claude-code"},
+		{"brig-claude-code-skilltest", "/homes/brig-claude-code-skilltest"},
+		{"brig-ubuntu", "/homes/brig-ubuntu"},
 	} {
 		got := workspaceOf(c.vm, nil)
 		if got == "" {

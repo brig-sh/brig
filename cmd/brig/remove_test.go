@@ -296,7 +296,7 @@ func TestRemoveAllAtATerminalListsAndAsks(t *testing.T) {
 	if len(rt.removed) != 2 {
 		t.Errorf("removed %v after a yes, want both", rt.removed)
 	}
-	for _, want := range []string{"faker@refactor", "stopped", "Workspaces stay on the host", "[y/N]"} {
+	for _, want := range []string{"faker@refactor", "stopped", "stay on the host", "[y/N]"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("the prompt does not say %q:\n%s", want, stderr)
 		}

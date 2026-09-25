@@ -31,9 +31,10 @@ A session is `<agent>` or `<agent>@<label>`, the ref every command takes.
 `claude` and `claude@refactor` are two independent sessions of the same
 agent, each with its own sandbox. The guest home is the host directory
 holding a session's settings and history. `claude` resolves to the
-`claude-code` agent, so its guest home is `~/brig/claude-code`, and
-`claude@refactor`'s is the sibling `~/brig/claude-code-refactor`, not a
-directory inside it.
+`claude-code` agent, so its guest home is `~/.brig/homes/brig-claude-code`,
+and `claude@refactor`'s is the sibling
+`~/.brig/homes/brig-claude-code-refactor`, not a directory inside it. Brig creates that home, and `brig rm` deletes it.
+Pass `--home <dir>` to use a guest home of your own, which Brig never deletes.
 
 Name a project on the run line, and Brig mounts it read-write at
 `/work/<name>`, where the agent starts. Credentials reach the guest only
@@ -90,7 +91,8 @@ brig stop claude    # stop the sandbox, keep its name
 brig rm claude      # stop it and remove it
 ```
 
-Neither touches `~/brig/claude-code` or `~/code/demo`.
+`brig rm` also deletes the guest home Brig created. Neither touches
+`~/code/demo`.
 [docs/quickstart.md](docs/quickstart.md) walks through all of this, explained.
 
 ## The boundary

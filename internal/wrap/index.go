@@ -15,7 +15,7 @@ import (
 // started with.
 //
 // Every invocation resolves the workspace from scratch -- --workspace, then
-// BRIG_WORKSPACE, then ~/brig/<profile>-<name> -- and EnsureRunning compares
+// BRIG_WORKSPACE, then ~/.brig/homes/<sandbox> -- and EnsureRunning compares
 // the running sandbox against whatever that produced. That is right for an
 // invocation that names a directory and wrong for one that does not: a session
 // created with --workspace never matches its own default, so the next flagless
@@ -102,10 +102,16 @@ const (
 // new value -- which is exactly what makes it worth recording, because a share
 // cannot be attached to a live sandbox and this is what the next run compares
 // against to find out whether it has to recreate one. See projectShareStale.
+//
+// Ephemeral is set when brig chose Home itself, because the run named no
+// workspace. Such a home goes with the sandbox on `brig rm`. An entry without
+// it keeps its home, which covers every session recorded by an older release.
+// See DropEphemeralHome.
 type sessionEntry struct {
-	Home    string `json:"home"`
-	Sandbox string `json:"sandbox"`
-	Project string `json:"project,omitempty"`
+	Home      string `json:"home"`
+	Sandbox   string `json:"sandbox"`
+	Project   string `json:"project,omitempty"`
+	Ephemeral bool   `json:"ephemeral,omitempty"`
 }
 
 // stateDir is where brig keeps what has to outlive a single invocation.
@@ -235,7 +241,7 @@ func sessionKey(agent, slug string) string {
 }
 
 // rememberedWorkspace is the workspace the sandbox of this session was started
-// with, or "" when nothing usable has been recorded -- a session created
+// with and whether brig created it, or "" when nothing usable has been recorded -- a session created
 // before this index existed, one whose entry has been pruned, or one recorded
 // against a different sandbox.
 //
@@ -243,12 +249,12 @@ func sessionKey(agent, slug string) string {
 // changing the ref: the same profile and slug under two sandbox names are two
 // instances, and handing one the directory recorded for the other is the stale
 // share this file exists to avoid.
-func rememberedWorkspace(ref, vmName string) string {
+func rememberedWorkspace(ref, vmName string) (home string, ephemeral bool) {
 	entry := readSessionIndex()[ref]
 	if entry.Sandbox != vmName {
-		return ""
+		return "", false
 	}
-	return entry.Home
+	return entry.Home, entry.Ephemeral
 }
 
 // rememberedProject is the project the sandbox of this session last ran with,
@@ -377,7 +383,12 @@ func PruneSessions(live []string) {
 func (c *Config) rememberSession() {
 	dropLegacyWorkspaceIndex()
 	key := sessionKey(c.Profile.Name, c.Slug)
-	entry := sessionEntry{Home: c.Workspace, Sandbox: c.VMName, Project: c.Project}
+	entry := sessionEntry{
+		Home:      c.Workspace,
+		Sandbox:   c.VMName,
+		Project:   c.Project,
+		Ephemeral: c.EphemeralHome,
+	}
 	index := readSessionIndex()
 	if index[key] == entry {
 		return

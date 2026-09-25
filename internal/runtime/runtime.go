@@ -232,6 +232,19 @@ type FeedLimiter interface {
 	MaxFeed() int
 }
 
+// Exister is a runtime that can say whether one sandbox exists, running or
+// stopped. Exists returns false with a nil error only when the runtime says
+// the sandbox is not there. Any other failure is an error.
+//
+// List is not enough for this: when `hull ps -a` fails, hull's List falls
+// back to plain `hull ps`, and brig cannot tell whether that listing includes
+// stopped sandboxes. A caller that deletes something because a sandbox is
+// gone asks Exists.
+// Optional: a runtime without it cannot vouch that a sandbox is gone.
+type Exister interface {
+	Exists(name string) (bool, error)
+}
+
 type Runtime interface {
 	// Kind is the backend name, e.g. "hull" or "nerdctl".
 	Kind() string

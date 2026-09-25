@@ -101,9 +101,10 @@ sandbox and the next run asks again. Not every agent works this way: see
 Two host directories are reachable from inside the sandbox, and nothing
 else is:
 
-- The **guest home**, `~/brig/claude-code`, mounted as the agent's home.
-  Its settings and its history live there, and it survives everything
-  short of you deleting it by hand.
+- The **guest home**, `~/.brig/homes/brig-claude-code`, mounted as the
+  agent's home. Its settings and its history live there. Brig created it, so
+  it survives `brig stop` and goes with `brig rm`. Pass `--home <dir>` to
+  keep a guest home of your own instead.
 - The **project**, `~/code/demo` in the run above, mounted read-write at
   `/work/demo`. The agent starts there.
 
@@ -128,9 +129,8 @@ brig rm claude      # stop and remove it
 
 `brig stop` stops the sandbox and keeps its name, its row in `brig ls`,
 and what Brig recorded about the session. `brig rm` stops the sandbox and
-drops all of that too. Neither touches `~/brig/claude-code` or
-`~/code/demo`: your project and the agent's saved state stay where they
-are.
+drops all of that too, and deletes `~/.brig/homes/brig-claude-code`. Neither
+touches `~/code/demo`: your project stays where it is.
 
 If a run does not do what you expected,
 [troubleshooting.md](troubleshooting.md) is organized by what you saw on

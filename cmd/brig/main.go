@@ -1949,17 +1949,54 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		// The preview is the command's output and goes where output goes; the
 		// workspace sentence is a notice, on stderr like the one the real
 		// removal prints, so -q and a redirect treat both paths the same.
-		fmt.Printf("would remove %s (sandbox %s)\n", ref, cfg.VMName)
-		warnf("The workspace %s stays on the host", cfg.Workspace)
+		if home := wrap.EphemeralHomeOf(cfg.VMName); home != "" {
+			fmt.Printf("would remove %s (sandbox %s) and its guest home %s\n",
+				ref, cfg.VMName, home)
+		} else {
+			fmt.Printf("would remove %s (sandbox %s)\n", ref, cfg.VMName)
+			warnHomeKept(cfg)
+		}
+		warnProjectKept(cfg)
 		return nil
 	}
 	if err := cfg.Remove(); err != nil {
 		return err
 	}
-	// The workspace is the reader's work, and rm is the verb whose name
-	// suggests it might have gone. Say where it is, every time.
-	warnf("removed %s. The workspace %s stays on the host", ref, cfg.Workspace)
+	// rm is the verb whose name suggests the reader's work might have gone.
+	// Say what went and what stays, every time.
+	switch {
+	case cfg.HomeErr != nil:
+		warnProjectKept(cfg)
+		return fmt.Errorf("removed %s, but %w. The next run of %s deletes what is left",
+			ref, cfg.HomeErr, ref)
+	case cfg.RemovedHome != "":
+		warnf("removed %s and its guest home %s", ref, cfg.RemovedHome)
+	default:
+		warnf("removed %s", ref)
+		warnHomeKept(cfg)
+	}
+	warnProjectKept(cfg)
 	return nil
+}
+
+// warnHomeKept says where the guest home rm left behind is. An ephemeral home
+// that was never created is not mentioned, since there is nothing on the host
+// to find.
+func warnHomeKept(cfg *wrap.Config) {
+	if cfg.EphemeralHome {
+		if _, err := os.Stat(cfg.Workspace); err != nil {
+			return
+		}
+	}
+	warnf("The guest home %s stays on the host", cfg.Workspace)
+}
+
+// warnProjectKept says that rm leaves the project alone. brig never deletes
+// a project, whichever kind of guest home the session has.
+func warnProjectKept(cfg *wrap.Config) {
+	if cfg.Project != "" {
+		warnf("The project %s stays on the host", cfg.Project)
+	}
 }
 
 // sandboxPresent reports whether the runtime has a sandbox of this name at all,
@@ -1990,9 +2027,9 @@ func noSandboxf(ref string) error {
 	return notFoundf("no sandbox for %s. `brig ls` lists them", ref)
 }
 
-// removeAll stops and removes every sandbox brig started. Workspaces are left
-// alone: they are on the host, they hold your work, and this is a command
-// about sandboxes.
+// removeAll stops and removes every sandbox brig started, and the guest homes
+// brig created for them. Guest homes named with --home and projects are left
+// alone: they are the user's directories.
 //
 // It says what it is about to remove and asks first. Without a terminal there
 // is nobody to answer, and assuming yes would make the scripted case the one
@@ -2031,21 +2068,30 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		// goes; the sentence about workspaces is a notice, and goes with the
 		// other notices.
 		fmt.Print(removalList(mine))
-		warnf("would remove %d sandbox(es). Workspaces stay on the host.", len(mine))
+		warnf("would remove %d sandbox(es). %s", len(mine), homesSentence(mine))
 		return nil
 	}
 	if err := confirmRemoveAll(spelling, mine, o.yes != ""); err != nil {
 		return err
 	}
-	removed := 0
+	removed, homes := 0, 0
 	for _, inst := range mine {
 		_ = rt.Stop(inst.Name)
 		err := rt.Remove(inst.Name)
-		// The same pruning `brig rm` of one sandbox does, for the same reason
-		// and on the same terms: this goes through the runtime directly rather
-		// than through a Config, because it works from the instance list and a
-		// stopped sandbox need not correspond to a profile brig can still look
-		// up.
+		// The same deletion and pruning `brig rm` of one sandbox does, for the
+		// same reason and on the same terms: this goes through the runtime
+		// directly rather than through a Config, because it works from the
+		// instance list and a stopped sandbox need not correspond to a profile
+		// brig can still look up.
+		if err == nil {
+			home, homeErr := wrap.DropEphemeralHome(inst.Name)
+			if homeErr != nil {
+				warnf("%v", homeErr)
+			}
+			if home != "" {
+				homes++
+			}
+		}
 		wrap.ForgetSandbox(inst.Name)
 		wrap.ForgetSlugClaim(inst.Name)
 		if err != nil {
@@ -2055,7 +2101,8 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		fmt.Println(inst.Name)
 		removed++
 	}
-	warnf("removed %d sandbox(es). Workspaces stay on the host.", removed)
+	warnf("removed %d sandbox(es) and %d guest home(s) brig created. Guest homes "+
+		"named with --home and projects stay on the host.", removed, homes)
 	// A network whose sandbox was removed outside brig is not reachable
 	// through Remove, because that sandbox is not in the list any more. This is
 	// the one command that leaves nothing behind, so it prunes those too. Only
@@ -2101,6 +2148,19 @@ func removalList(list []runtime.Instance) string {
 	return b.String()
 }
 
+// homesSentence says which guest homes removing list deletes and which it
+// keeps, for the question and the preview of `rm --all`.
+func homesSentence(list []runtime.Instance) string {
+	n := 0
+	for _, inst := range list {
+		if wrap.EphemeralHomeOf(inst.Name) != "" {
+			n++
+		}
+	}
+	return fmt.Sprintf("%d guest home(s) brig created go with them. Guest homes "+
+		"named with --home and projects stay on the host.", n)
+}
+
 // confirmRemoveAll names every sandbox `rm --all` is about to remove and asks.
 // Nothing to remove is nothing to ask about, and -y is the answer given in
 // advance. Everything goes to stderr, so a removal inside a pipeline still asks
@@ -2113,8 +2173,8 @@ func confirmRemoveAll(spelling string, list []runtime.Instance, yes bool) error 
 		return fmt.Errorf("`%s` would remove %d sandbox(es), and there is no terminal to ask on. "+
 			"Pass -y to answer in advance: %s -y, or --dry-run to see the list", spelling, len(list), spelling)
 	}
-	fmt.Fprintf(os.Stderr, "brig: `%s` removes %d sandbox(es). Workspaces stay on the host.\n%s",
-		spelling, len(list), removalList(list))
+	fmt.Fprintf(os.Stderr, "brig: `%s` removes %d sandbox(es). %s\n%s",
+		spelling, len(list), homesSentence(list), removalList(list))
 	fmt.Fprint(os.Stderr, "brig: remove them? [y/N] ")
 	line, err := readAnswer(os.Stdin)
 	if err != nil {
