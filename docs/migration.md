@@ -136,8 +136,12 @@ lines with a second bare word after the agent.
 hand the result to `bash -lc` as a script. That threw away every argument
 boundary, so `brig sh ubuntu sh -c 'echo FIRST; echo SECOND'` printed a blank
 line and `SECOND`. Each word now reaches the guest as one argument, the way
-`brig exec <ref> -- <cmd>` passed them. The one difference left between the
-two is that `sh` runs the command under a login shell and `exec` does not.
+`brig exec <ref> -- <cmd>` passed them. Two differences are left between the
+two. `sh` runs the command under a login shell and `exec` does not. `sh` also
+always gives the command a terminal in the guest, where `exec` gave it one
+only when brig's own stdin was a terminal. Output piped or redirected from
+`sh` therefore comes through that terminal: lines end in CRLF, and stderr is
+mixed into stdout.
 `brig run` on a `kind: shell` profile such as `ubuntu` runs its trailing words
 the same way `sh` does, and changed with it.
 
@@ -149,10 +153,16 @@ brig sh claude 'ls /work | wc -l'           # no longer runs
 brig sh claude bash -c 'ls /work | wc -l'   # runs it as a script
 ```
 
-The first word has to be a program, so a shell builtin such as `type` or
-`ulimit` needs the same `bash -c`, and a function the login profile defines
-needs `bash -lc`.
-The command still runs under a login shell, so its environment is unchanged.
+The command still runs under a login shell, so its environment is unchanged,
+and a shell builtin such as `ulimit` or a function the login profile defines,
+such as `nvm`, still works as the first word. A first word that starts with
+`-` is a command name, not an option, and exits 127 when no such command
+exists.
+
+When the first word is a profile function, or the login profile sets an
+`EXIT` trap, bash stays running as the command's parent. A `SIGTERM` sent to
+the session then ends bash and leaves the command running until the sandbox
+stops.
 
 ## Session names
 

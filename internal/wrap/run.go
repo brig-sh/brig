@@ -720,13 +720,19 @@ func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, erro
 //
 // The trailing words run as the argument vector the caller gave, under a login
 // shell for its environment. They reach bash as positional parameters, after
-// a fixed script and a $0, and the script execs "$@", so bash never parses
-// them: spaces, quotes, a `;`, a `$` or a glob in a word arrive unchanged.
-// Joining them into the -c script instead let bash re-split every word
-// boundary the caller had set.
+// a fixed script and a $0, and the script is "$@", so bash never parses them:
+// spaces, quotes, a `;`, a `$` or a glob in a word arrive unchanged. Joining
+// them into the -c script instead let bash re-split every word boundary the
+// caller had set.
+//
+// The script is not `exec "$@"`. exec runs only a program, so a builtin or a
+// function the login profile defines (ulimit, nvm) would stop working as the
+// command, and exec reads a first word starting with a dash as its own option.
+// bash still execs a lone simple command without forking, so the command is
+// the top process in the guest either way.
 func shellArgv(command []string) []string {
 	if len(command) > 0 {
-		return append([]string{"bash", "-lc", `exec "$@"`, "bash"}, command...)
+		return append([]string{"bash", "-lc", `"$@"`, "bash"}, command...)
 	}
 	return []string{"bash", "-l"}
 }

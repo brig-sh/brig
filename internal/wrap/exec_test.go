@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"slices"
@@ -72,7 +73,7 @@ func TestExecCanAskTracksStdin(t *testing.T) {
 // re-parses, on both the handover and the --json child path.
 func TestShellPassesWordsThrough(t *testing.T) {
 	command := []string{"sh", "-c", "echo FIRST; echo SECOND"}
-	want := []string{"bash", "-lc", `exec "$@"`, "bash", "sh", "-c", "echo FIRST; echo SECOND"}
+	want := []string{"bash", "-lc", `"$@"`, "bash", "sh", "-c", "echo FIRST; echo SECOND"}
 
 	rec := &recordingRuntime{}
 	c := &Config{VMName: "vm", Runtime: rec}
@@ -130,5 +131,48 @@ func TestShellArgvSurvivesBash(t *testing.T) {
 	got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
 	if !slices.Equal(got, words) {
 		t.Errorf("guest received %q, want %q", got, words)
+	}
+}
+
+// runShellArgv runs what shellArgv builds for command under the host's bash,
+// with -l dropped so the host's own profile is not sourced into the test, and
+// returns the exit status.
+func runShellArgv(t *testing.T, command ...string) int {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash on this host")
+	}
+	argv := shellArgv(command)
+	err = exec.Command(bash, append([]string{"-c"}, argv[2:]...)...).Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return exit.ExitCode()
+	}
+	t.Fatalf("bash: %v", err)
+	return 0
+}
+
+// The first word is the command, even when it starts with a dash. Under
+// `exec "$@"` bash read `-l` as exec's own option, ran nothing and exited 0,
+// and `-a foo bar` ran bar under another name.
+func TestShellLeadingDashIsACommand(t *testing.T) {
+	if got := runShellArgv(t, "-l"); got != 127 {
+		t.Errorf("a first word of -l exited %d, want 127 for a command not found", got)
+	}
+}
+
+// sh runs under a login shell so the command gets what that shell sets up,
+// and that includes the shell's own builtins and the functions its profile
+// defines: `brig sh x ulimit -n` and `brig sh x nvm use 20` ran before the
+// words were passed through and have to keep running. shopt is the builtin
+// checked because it has no binary of the same name on any host, where
+// ulimit and type do on macOS.
+func TestShellRunsABuiltin(t *testing.T) {
+	if got := runShellArgv(t, "shopt", "-q", "sourcepath"); got != 0 {
+		t.Errorf("shopt exited %d, want 0", got)
 	}
 }

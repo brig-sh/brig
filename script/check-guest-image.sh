@@ -371,7 +371,7 @@ run 'rm' rm 'removes a planted symlink rather than following it' -- \
 run 'mount, tmpfs' mount 'covers a directory so a credential stays off disk' -- \
 	mount -t tmpfs -o size=1m,mode=0700,nodev,nosuid tmpfs "$SCRATCH/d"
 run 'sleep' sleep 'the container command on the nerdctl path' -- sleep 0
-run 'bash' bash 'brig sh' -- bash -lc 'exec "$@"' bash true
+run 'bash' bash 'brig sh' -- bash -lc '"$@"' bash true
 
 if [ -n "$BINARY" ]; then
 	run "$BINARY" "$BINARY" "the profile's binary:" -- "$BINARY" --version
