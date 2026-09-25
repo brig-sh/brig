@@ -148,7 +148,7 @@ func TestTerminalHandoverStaysAskable(t *testing.T) {
 // A shell handover always gives the guest a pty, but only a real terminal on
 // brig's own stdin means hull has someone to answer its consent question. The
 // two are separate signals: TTY drives `hull exec -t`, CanAsk drives the boot
-// gate. A scripted `brig shell -- cmd` sets TTY (a login shell wants a pty)
+// gate. A scripted `brig sh <ref> cmd` sets TTY (a login shell wants a pty)
 // without CanAsk, and on a fresh install that must still suppress -- the exact
 // case the boot gate closes and which reading TTY for both jobs had left open.
 func TestShellHandoverSeparatesPtyFromConsent(t *testing.T) {

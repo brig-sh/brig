@@ -23,7 +23,7 @@ func (r *recordingRuntime) Replace(spec runtime.ExecSpec) error {
 // Shell forces a pty on because a login shell wants one, but whether hull may
 // ask its consent question is a fact about brig's own stdin, not the guest's
 // pty. Under test, stdin is not a terminal (a script or CI is the same), so a
-// `brig shell -- cmd` must record TTY on and CanAsk off: the split the boot
+// `brig sh <ref> cmd` must record TTY on and CanAsk off: the split the boot
 // gate reads to leave a fresh install suppressed rather than send its first
 // event before anyone was asked.
 func TestShellSeparatesPtyFromConsent(t *testing.T) {
