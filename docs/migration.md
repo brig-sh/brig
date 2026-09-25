@@ -39,6 +39,10 @@ answer on, so a script that ran `brig reset` unattended needs
 `brig rm --all -y`. The same applies to `brig reset` itself: without a
 terminal it also refuses unless `-y` is passed.
 
+There is deliberately no `brig template edit`. The retired group kept only the
+verbs it already had, so asking for that one is an error rather than a
+deprecation notice.
+
 ### Removed
 
 These no longer run. Each is refused as a usage error, exit code 2, that
@@ -51,10 +55,6 @@ brig: `brig shell` was removed; use `brig sh <ref> [command...]`
 | Removed | Spelling | Current |
 | --- | --- | --- |
 | 0.3.0 | `brig shell <ref>` | `brig sh <ref>` |
-
-There is deliberately no `brig template edit`. The retired group kept only the
-verbs it already had, so asking for that one is an error rather than a
-deprecation notice.
 
 ## Subverbs
 
