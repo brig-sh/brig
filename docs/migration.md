@@ -1,8 +1,9 @@
 # Moving off the retired spellings
 
 Brig renamed most of its commands while it was still a prerelease. Every old
-spelling on this page still works today. Each one prints one line on stderr
-naming its replacement, in this form:
+spelling on this page still works today, except the ones under
+[Removed](#removed). Each one prints one line on stderr naming its
+replacement, in this form:
 
 ```
 brig: `brig profiles` is now `brig agent ls`
@@ -37,6 +38,19 @@ over your own files, or watch stderr for the notice.
 answer on, so a script that ran `brig reset` unattended needs
 `brig rm --all -y`. The same applies to `brig reset` itself: without a
 terminal it also refuses unless `-y` is passed.
+
+### Removed
+
+These no longer run. Each is refused as a usage error, exit code 2, that
+names its replacement:
+
+```
+brig: `brig shell` was removed; use `brig sh <ref> [command...]`
+```
+
+| Removed | Spelling | Current |
+| --- | --- | --- |
+| 0.3.0 | `brig shell <ref>` | `brig sh <ref>` |
 
 There is deliberately no `brig template edit`. The retired group kept only the
 verbs it already had, so asking for that one is an error rather than a
