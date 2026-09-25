@@ -2,6 +2,9 @@ package wrap
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,6 +25,31 @@ func (r *postureRuntime) NetworkStale(_, _, net string, _ runtime.Egress) bool {
 	return net != r.booted
 }
 
+// blindRuntime answers that nothing is stale, whatever it is asked. That is
+// hull's answer for offline on hvi and for everything on vz.
+type blindRuntime struct {
+	*livenessRuntime
+}
+
+func (r *blindRuntime) NetworkStale(string, string, string, runtime.Egress) bool { return false }
+
+// booted records what a boot of this run records, without a runtime: the
+// session entry and the posture.
+func booted(c *Config) {
+	c.rememberSession()
+	c.recordPosture()
+}
+
+// mustBootedNet is the runtime's record for this sandbox.
+func mustBootedNet(t *testing.T, name string) string {
+	t.Helper()
+	got, err := runtime.BootedNet(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 // The report in #340. A sandbox started with --network isolated, then a verb
 // that names no posture: `brig sh` resolved shared from the flag, the setting
 // and the profile, read the running sandbox as stale, and restarted it onto
@@ -30,7 +58,7 @@ func TestAPostureGivenOnceIsFoundAgainWithoutTheFlag(t *testing.T) {
 	isolateState(t)
 	home := t.TempDir()
 
-	mustLoad(t, Options{Name: "video", Workspace: home, Network: "isolated"}).rememberSession()
+	booted(mustLoad(t, Options{Name: "video", Workspace: home, Network: "isolated"}))
 
 	next := mustLoad(t, Options{Name: "video"})
 	if next.Network != NetIsolated {
@@ -38,7 +66,7 @@ func TestAPostureGivenOnceIsFoundAgainWithoutTheFlag(t *testing.T) {
 			next.Network)
 	}
 	next.Runtime = &postureRuntime{livenessRuntime: &livenessRuntime{}, booted: "isolated"}
-	if next.networkStale() {
+	if next.postureChanged() || next.networkStale() {
 		t.Error("a flagless verb read the isolated sandbox as stale, so it would restart it")
 	}
 }
@@ -49,7 +77,7 @@ func TestAnOfflineSandboxStaysOffline(t *testing.T) {
 	isolateState(t)
 	home := t.TempDir()
 
-	mustLoad(t, Options{Workspace: home, Network: "offline"}).rememberSession()
+	booted(mustLoad(t, Options{Workspace: home, Network: "offline"}))
 
 	if got := mustLoad(t, Options{}).Network; got != NetOffline {
 		t.Errorf("a bare run resolved %q, want offline", got)
@@ -63,11 +91,14 @@ func TestAnExplicitPostureBeatsTheRememberedOne(t *testing.T) {
 	isolateState(t)
 	home := t.TempDir()
 
-	mustLoad(t, Options{Workspace: home, Network: "isolated"}).rememberSession()
+	booted(mustLoad(t, Options{Workspace: home, Network: "isolated"}))
 
 	byFlag := mustLoad(t, Options{Network: "shared"})
 	if byFlag.Network != NetShared {
 		t.Fatalf("--network shared resolved %q", byFlag.Network)
+	}
+	if !byFlag.postureChanged() {
+		t.Error("--network shared on an isolated sandbox was not read as a change")
 	}
 	got := byFlag.networkChange()
 	for _, want := range []string{"isolated", "shared", "--network"} {
@@ -110,7 +141,7 @@ func TestARememberedPostureBeatsTheProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	started.rememberSession()
+	booted(started)
 
 	next, err := Load(p, Options{}, nil)
 	if err != nil {
@@ -121,9 +152,9 @@ func TestARememberedPostureBeatsTheProfile(t *testing.T) {
 	}
 }
 
-// A session recorded before the index held a posture resolves it the way it
-// always did, and the restart warning keeps its general wording because there
-// is no recorded posture to name.
+// A sandbox booted before postures were recorded resolves its posture the way
+// it always did, and the restart warning keeps its general wording because
+// there is no recorded posture to name.
 func TestASessionWithNoRecordedPostureKeepsTheOldResolution(t *testing.T) {
 	isolateState(t)
 	if err := writeSessionIndex(map[string]sessionEntry{
@@ -136,23 +167,31 @@ func TestASessionWithNoRecordedPostureKeepsTheOldResolution(t *testing.T) {
 	if c.Network != NetShared {
 		t.Errorf("an old entry resolved %q, want shared", c.Network)
 	}
+	if c.postureChanged() {
+		t.Error("a sandbox with no recorded posture was read as changed")
+	}
 	if got := c.networkChange(); !strings.Contains(got, "different network policy") {
 		t.Errorf("an old entry changed the restart warning: %s", got)
 	}
 }
 
-// A posture recorded for a differently named sandbox is not this one's, the
-// same rule the home and the project follow.
+// A posture recorded for a sandbox whose session entry names another one is
+// not this session's, the same rule the home and the project follow. That is
+// also what an older release's `brig rm` leaves: the entry gone and the
+// posture record still there.
 func TestAnotherSandboxesPostureIsNotInherited(t *testing.T) {
 	isolateState(t)
 	if err := writeSessionIndex(map[string]sessionEntry{
-		"claude-code": {Home: t.TempDir(), Sandbox: "brig-elsewhere", Network: "isolated"},
+		"claude-code": {Home: t.TempDir(), Sandbox: "brig-elsewhere"},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordBootedNet("brig-claude-code", "isolated"); err != nil {
 		t.Fatal(err)
 	}
 
 	if got := mustLoad(t, Options{}).Network; got != NetShared {
-		t.Errorf("inherited %q from another sandbox", got)
+		t.Errorf("inherited %q through an entry naming another sandbox", got)
 	}
 }
 
@@ -162,8 +201,11 @@ func TestAnotherSandboxesPostureIsNotInherited(t *testing.T) {
 func TestARecordedPostureThatIsNotOneIsIgnored(t *testing.T) {
 	isolateState(t)
 	if err := writeSessionIndex(map[string]sessionEntry{
-		"claude-code": {Home: t.TempDir(), Sandbox: "brig-claude-code", Network: "bogus"},
+		"claude-code": {Home: t.TempDir(), Sandbox: "brig-claude-code"},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordBootedNet("brig-claude-code", "bogus"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -181,10 +223,10 @@ func TestARecordedPostureThatIsNotOneIsIgnored(t *testing.T) {
 }
 
 // A policy isolates the sandbox it binds to, but that is the policy's doing,
-// not a posture anybody asked for. The index records what was asked, so the
+// not a posture anybody asked for. The record keeps what was asked, so the
 // sandbox goes back to shared once the policy is detached.
 func TestAPolicyIsNotRecordedAsThePosture(t *testing.T) {
-	dir := isolateState(t)
+	isolateState(t)
 	policies := t.TempDir()
 	writeTestPolicy(t, policies, "no-net")
 	t.Setenv("BRIG_POLICY_DIR", policies)
@@ -193,9 +235,9 @@ func TestAPolicyIsNotRecordedAsThePosture(t *testing.T) {
 	if c.Network != NetIsolated {
 		t.Fatalf("the policy did not isolate the sandbox: %q", c.Network)
 	}
-	c.rememberSession()
-	if blob := mustReadIndex(t, dir); !strings.Contains(blob, `"network": "shared"`) {
-		t.Errorf("the index recorded the policy's posture rather than the one asked for:\n%s", blob)
+	booted(c)
+	if got := mustBootedNet(t, c.VMName); got != "shared" {
+		t.Errorf("the record holds %q, the policy's posture rather than the one asked for", got)
 	}
 }
 
@@ -219,5 +261,107 @@ func TestChangingThePostureRestartsAndSaysSo(t *testing.T) {
 	want := "this sandbox was started with the isolated posture and --network asks for shared"
 	if !strings.Contains(errOut.String(), want) {
 		t.Errorf("the warning does not say what changed:\n%s", errOut.String())
+	}
+	if got := mustBootedNet(t, c.VMName); got != "shared" {
+		t.Errorf("after the restart the record holds %q, want shared", got)
+	}
+}
+
+// Asking for a different posture restarts the sandbox even when the runtime
+// cannot see the difference. hull reports nothing stale for offline, vz reports
+// nothing stale at all, and nerdctl is never asked. Kept running, the sandbox
+// stays online while every later command reads offline from the record.
+func TestAPostureChangeRestartsWhenTheRuntimeCannotTell(t *testing.T) {
+	for name, wrap := range map[string]func(*livenessRuntime) runtime.Runtime{
+		"a runtime that sees nothing stale": func(l *livenessRuntime) runtime.Runtime { return &blindRuntime{l} },
+		"a runtime that is never asked":     func(l *livenessRuntime) runtime.Runtime { return l },
+	} {
+		t.Run(name, func(t *testing.T) {
+			live := &livenessRuntime{running: true}
+			c := livenessConfig(t, live)
+			c.Runtime = wrap(live)
+			c.Network, c.askedNetwork = NetOffline, NetOffline
+			c.recordedNet, c.networkSource = NetShared, "--network"
+
+			if err := c.EnsureRunning(creds.Set{}); err != nil {
+				t.Fatal(err)
+			}
+			if live.stops != 1 || live.boots != 1 {
+				t.Errorf("%d stops and %d boots, want one of each", live.stops, live.boots)
+			}
+			if live.spec.Net != "none" {
+				t.Errorf("booted on %q, want none", live.spec.Net)
+			}
+			if got := mustBootedNet(t, c.VMName); got != "none" {
+				t.Errorf("the record holds %q, want none", got)
+			}
+		})
+	}
+}
+
+// Reusing a running sandbox records no posture. The runtime was not told a
+// network by this command, so what the command asked for says nothing about
+// the one the sandbox has. A sandbox booted before postures were recorded
+// stays unrecorded until its next boot.
+func TestReusingASandboxRecordsNoPosture(t *testing.T) {
+	live := &livenessRuntime{running: true}
+	c := livenessConfig(t, live)
+	c.Network, c.askedNetwork = NetShared, NetShared
+
+	if err := c.EnsureRunning(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	if live.boots != 0 {
+		t.Fatalf("a running sandbox was booted %d times", live.boots)
+	}
+	if got := mustBootedNet(t, c.VMName); got != "" {
+		t.Errorf("reuse recorded %q for a sandbox it did not boot", got)
+	}
+}
+
+// An older release reads the session index into the fields it knows and writes
+// it back. The posture is not one of them, so it lives in a file of its own
+// and survives the rewrite.
+func TestAnOlderReleaseRewritingTheIndexKeepsThePosture(t *testing.T) {
+	dir := isolateState(t)
+	home := t.TempDir()
+	booted(mustLoad(t, Options{Name: "video", Workspace: home, Network: "isolated"}))
+
+	type olderEntry struct {
+		Home    string `json:"home"`
+		Sandbox string `json:"sandbox"`
+	}
+	path := filepath.Join(dir, sessionIndexName)
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := map[string]olderEntry{}
+	if err := json.Unmarshal(blob, &old); err != nil {
+		t.Fatal(err)
+	}
+	if blob, err = json.Marshal(old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mustLoad(t, Options{Name: "video"}).Network; got != NetIsolated {
+		t.Errorf("after an older release rewrote the index a flagless verb resolved %q", got)
+	}
+}
+
+// Removing the sandbox drops its posture, so the next sandbox to take the name
+// starts from the flag, the setting and the profile.
+func TestRemoveDropsThePosture(t *testing.T) {
+	isolateState(t)
+	c := mustLoad(t, Options{Workspace: t.TempDir(), Network: "isolated"})
+	booted(c)
+	c.Runtime = &removingRuntime{}
+
+	_ = c.Remove()
+	if got := mustBootedNet(t, c.VMName); got != "" {
+		t.Errorf("rm left %q recorded", got)
 	}
 }

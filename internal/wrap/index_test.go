@@ -12,14 +12,18 @@ import (
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
-// isolateState points brig's state directory at a scratch one and clears the
-// workspace, name and network settings, so a case runs against the index it
-// writes itself rather than against whatever the machine running the test
-// happens to have.
+// isolateState points brig's state and gateway directories at scratch ones and
+// clears the workspace, name and network settings, so a case runs against the
+// index it writes itself rather than against whatever the machine running the
+// test happens to have.
 func isolateState(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("BRIG_STATE_DIR", dir)
+	// The runtime's records live under the gateway directory, which does not
+	// follow BRIG_STATE_DIR. A boot records the network it used there, so a
+	// case that boots would otherwise write into the real ~/.brig.
+	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
 	// Set, then removed. t.Setenv is what restores the caller's own value when
 	// the case ends, and it cannot unset -- but a variable present and empty is
 	// not the same as an absent one here: Get takes the first prefix that

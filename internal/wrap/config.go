@@ -136,13 +136,13 @@ type Config struct {
 	// envelope, the report and the spec handed to the runtime cannot disagree
 	// about what a reader was told.
 	Network Network
-	// askedNetwork is the posture before a policy narrowed it, which is what
-	// the session index records: a sandbox isolated only by its policy goes
-	// back to shared when the policy is detached, so the narrowing is never
-	// remembered as though it had been asked for. networkSource is where
-	// askedNetwork came from, and recordedNet is what the index held for this
-	// sandbox before this run, or "" when it held nothing. The restart warning
-	// reads all three. See rememberedNetwork and networkChange.
+	// askedNetwork is the posture before a policy narrowed it, which is what a
+	// boot records: a sandbox isolated only by its policy goes back to shared
+	// when the policy is detached, so the narrowing is never remembered as
+	// though it had been asked for. networkSource is where askedNetwork came
+	// from, and recordedNet is the posture recorded at the sandbox's last
+	// boot, or "" when none was. EnsureRunning and the restart warning read
+	// all three. See rememberedNetwork, postureChanged and networkChange.
 	askedNetwork  Network
 	networkSource string
 	recordedNet   Network
@@ -462,7 +462,10 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if netValue == "" {
 		netValue, netSource = env.String("NETWORK", ""), env.settingName("NETWORK")
 	}
-	recordedNet := rememberedNetwork(sessionKey(t.Name, slug), vmName)
+	recordedNet, err := rememberedNetwork(sessionKey(t.Name, slug), vmName)
+	if err != nil && strictErr == nil {
+		strictErr = err
+	}
 	if netValue == "" && recordedNet != "" {
 		netValue, netSource = string(recordedNet), "the posture this sandbox was started with"
 	}

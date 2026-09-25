@@ -1781,7 +1781,8 @@ func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 }
 
 // pruneSessionIndex hands the session index every instance the runtime has, so
-// that an entry naming a sandbox that is not among them goes.
+// that an entry naming a sandbox that is not among them goes. The record of
+// the network each sandbox booted on is pruned against the same list.
 //
 // Every instance and not only brig's own: a sandbox brig would not recognise
 // still exists, and the question the index is asking is whether the sandbox is
@@ -1792,6 +1793,7 @@ func pruneSessionIndex(list []runtime.Instance) {
 		live = append(live, inst.Name)
 	}
 	wrap.PruneSessions(live)
+	runtime.PruneBootedNets(live)
 }
 
 // sandboxRow is one line of the listing, gathered before anything is printed
@@ -2108,6 +2110,12 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 			runtime.ForgetPublications(cfg.VMName)
 			warnf("dropped the ports recorded for %s", ref)
 		}
+		// A network is recorded only at a boot, so a record for a sandbox the
+		// runtime does not have was left by a removal brig did not make. The
+		// next sandbox to take the name must not inherit it.
+		if !dryRun {
+			runtime.ForgetBootedNet(cfg.VMName)
+		}
 		return noSandboxf(ref)
 	}
 	if dryRun {
@@ -2261,6 +2269,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		wrap.ForgetSandbox(inst.Name)
 		wrap.ForgetSlugClaim(inst.Name)
 		runtime.ForgetPublications(inst.Name)
+		runtime.ForgetBootedNet(inst.Name)
 		if err != nil {
 			warnf("could not remove %s: %v", inst.Name, err)
 			continue
@@ -2296,8 +2305,9 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		p.PruneNetworks(live)
 	}
 	// The same for published ports, which also covers a sandbox that was
-	// given a port and never booted.
+	// given a port and never booted, and for the network each one booted on.
 	runtime.PrunePublications(live)
+	runtime.PruneBootedNets(live)
 	return nil
 }
 
