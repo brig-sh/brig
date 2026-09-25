@@ -135,6 +135,12 @@ jobs:
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ""
 
+      # The channel workflow pushes what script/render-cask.py writes straight
+      # to the tap, so this is the only check the channel cask gets before a
+      # merge.
+      - name: Check the cask renderer
+        run: python3 script/render-cask-test.py
+
   shell:
     name: shell
     runs-on: ubuntu-latest
