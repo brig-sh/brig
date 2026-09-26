@@ -1,0 +1,5 @@
+# Labels of the self-hosted runners the workflows ask for, so actionlint
+# knows them.
+self-hosted-runner:
+  labels:
+    - sip-enabled
