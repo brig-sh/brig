@@ -14,6 +14,10 @@
 #
 #   LEVEL           canary (default) or nightly. nightly boots more often,
 #                   and adds a parallel block and stop/start churn
+#   E2E_HOST        the host id in the report (default linux)
+#   BRIG_RUNTIME_VERSION
+#                   a brig-standalone-linux tag to install in place of the
+#                   one install.sh pins. install.sh reads it itself
 #   E2E_OUT         where logs/ go
 #                   (default $RUNNER_TEMP/brig-e2e, else /tmp/brig-e2e)
 #   E2E_RESULTS     the results file (default $E2E_OUT/results.json)
@@ -39,6 +43,14 @@ case "$LEVEL" in
   *) echo "canary-linux: LEVEL must be canary or nightly, not $LEVEL" >&2; exit 2 ;;
 esac
 EXEC_N=100
+
+HOST="${E2E_HOST:-linux}"
+RUNTIME_OVERRIDE="${BRIG_RUNTIME_VERSION:-}"
+if [ -n "$RUNTIME_OVERRIDE" ] &&
+   ! printf '%s\n' "$RUNTIME_OVERRIDE" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'; then
+  echo "canary-linux: BRIG_RUNTIME_VERSION must look like v0.1.0 or v0.1.0-rc10, not $RUNTIME_OVERRIDE" >&2
+  exit 2
+fi
 
 OUT="${E2E_OUT:-${RUNNER_TEMP:-/tmp}/brig-e2e}"
 RESULTS="${E2E_RESULTS:-$OUT/results.json}"
@@ -280,11 +292,19 @@ setup() {
   bundle="$(awk -F= '$1 == "BUNDLE_VERSION" { print $2 }' "$BUNDLE_DIR/pins.env")"
   urunc="$(awk -F= '$1 == "URUNC_REF" { print $2 }' "$BUNDLE_DIR/pins.env")"
   res meta commit "$head"
+  # The bundle is read from what was installed, so the page names what ran.
+  local source="install.sh pin" short=Linux
+  if [ -n "$RUNTIME_OVERRIDE" ]; then
+    source=override
+    short="Linux ${bundle#v*-}"
+  fi
+  res meta host_short "$short"
+  res meta host_label "GitHub-hosted ubuntu-24.04, x64, bundle $bundle ($source)"
   res meta target "brig ${head:0:7} · bundle $bundle"
   res fact "brig version" "$version"
-  res fact "runtime bundle" "$bundle" "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/$bundle"
-  res fact urunc "${urunc:0:7}" "https://github.com/urunc-dev/urunc/commit/$urunc"
-  res meta host_detail "$(nproc) vCPUs, $(free -g | awk '/^Mem:/ { print $2 }') GB, kernel $(uname -r), nested KVM. A rootless user install from install.sh at ${head:0:7}."
+  res fact "runtime bundle ($short)" "$bundle ($source)" "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/$bundle"
+  res fact "urunc ($short)" "${urunc:0:7}" "https://github.com/urunc-dev/urunc/commit/$urunc"
+  res meta host_detail "$(nproc) vCPUs, $(free -g | awk '/^Mem:/ { print $2 }') GB, kernel $(uname -r), nested KVM. A rootless user install from install.sh at ${head:0:7}, with runtime bundle $bundle ($source)."
 
   if [ "$commit" != "$head" ]; then
     echo "brig version names $commit, not the checkout's $head"
@@ -480,6 +500,7 @@ gate_nosudo() {
   sudo -u "$u" env -i HOME="/home/$u" USER="$u" LOGNAME="$u" SHELL=/bin/bash \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     XDG_RUNTIME_DIR="/run/user/$uid" DO_NOT_TRACK=1 ${release:+BRIG_VERSION="$release"} \
+    ${RUNTIME_OVERRIDE:+BRIG_RUNTIME_VERSION="$RUNTIME_OVERRIDE"} \
     timeout --kill-after=10 600 script -q -e -c "cd && sh /tmp/brig-e2e-install.sh" /dev/null \
     < /dev/null > "$OUT/nosudo.out" 2>&1 || rc=$?
   t1="$(now)"
@@ -513,17 +534,24 @@ gate_nosudo() {
   fi
 }
 
+# vmm_cpus: the --cpus boot= value of the one cloud-hypervisor running.
+vmm_cpus() {
+  pgrep -a -f cloud-hypervisor | grep -o -E 'boot=[0-9]+' | head -n 1 | cut -d= -f2 || true
+}
+
 gate_cpus() {
-  local want n0 n3 bundle rc=0
+  local want n0 n3 b0 b3 bundle rc=0
   want="$(timeout 30 brig agent show ubuntu --json | field cpus)"
   run 900 brig run -d ubuntu@cpu
   n0="$(gsh ubuntu@cpu nproc | tail -n 1)" || true
+  b0="$(vmm_cpus)"
   run 300 brig rm ubuntu@cpu || true
   run 900 brig run -d ubuntu@cpu3 --cpus 3
   n3="$(gsh ubuntu@cpu3 nproc | tail -n 1)" || true
+  b3="$(vmm_cpus)"
   run 300 brig rm ubuntu@cpu3 || true
   bundle="$(awk -F= '$1 == "BUNDLE_VERSION" { print $2 }' "$BUNDLE_DIR/pins.env")"
-  local note="guest nproc=$n0 for the profile's cpus: $want, and nproc=$n3 for --cpus 3, on bundle $bundle."
+  local note="Profile default (cpus: $want): nproc=$n0, cloud-hypervisor boot=${b0:-?}. --cpus 3: nproc=$n3, boot=${b3:-?}. Bundle $bundle."
   res at-least "$bundle" v0.1.0-rc10 || rc=$?
   if [ "$n0" = "$want" ] && [ "$n3" = 3 ]; then
     res gate cpus pass "$note"
@@ -844,7 +872,7 @@ check_churn() {
 # ---------------------------------------------------------------- main
 
 say "brig e2e $LEVEL, results in $RESULTS"
-res host linux
+res host "$HOST"
 res meta host_os linux
 res meta level "$LEVEL"
 res meta run_note "LEVEL=$LEVEL: $EXEC_N execs each way, $CLAUDE_N claude-code boots, $SEQ_N ubuntu cycles$([ "$LEVEL" = nightly ] && echo ", $PAR_N in parallel, $CHURN_N stop/start cycles")."
