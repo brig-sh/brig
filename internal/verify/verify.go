@@ -164,8 +164,9 @@ const (
 	Mismatch
 	// Unresolved: the reference could not be resolved to a registry digest, so
 	// there was nothing to pin or verify. A registry that cannot be reached
-	// lands here, and that is "could not check", not "failed": like NoTooling
-	// it warns and boots the tag, and only Require refuses it.
+	// lands here, and that is "could not check", not "failed". Unlike
+	// NoTooling, the image path does not boot it unasked: under warn it stops
+	// to ask, and Require refuses it.
 	Unresolved
 )
 
