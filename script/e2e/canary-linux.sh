@@ -14,13 +14,13 @@
 #
 #   LEVEL           canary (default) or nightly. nightly boots more often,
 #                   and adds a parallel block and stop/start churn
-#   E2E_OUT         where results.json and logs/ go
+#   E2E_OUT         where logs/ go
 #                   (default $RUNNER_TEMP/brig-e2e, else /tmp/brig-e2e)
+#   E2E_RESULTS     the results file (default $E2E_OUT/results.json)
 #   BRIG_BUILD_DIR  a directory holding brig and brigd built from this
 #                   checkout. Unset, the script runs make build itself
-#   E2E_BASELINE    a results.json whose timings this run is compared with.
-#                   Unset, the script looks for the last scheduled run that
-#                   passed, when gh and GH_TOKEN are there
+#   E2E_BASELINE    a results.json to compare with. The workflow compares
+#                   in its report job instead
 #
 # It exits 1 on a no-go verdict, after results.json is written.
 
@@ -41,6 +41,7 @@ esac
 EXEC_N=100
 
 OUT="${E2E_OUT:-${RUNNER_TEMP:-/tmp}/brig-e2e}"
+RESULTS="${E2E_RESULTS:-$OUT/results.json}"
 LOGS="$OUT/logs"
 mkdir -p "$LOGS"
 export E2E_RECORDS="$OUT/records.jsonl"
@@ -275,10 +276,14 @@ setup() {
   cp "$BUNDLE_DIR/pins.env" "$LOGS/pins.env"
   cat "$LOGS/pins.env"
 
+  local bundle urunc
+  bundle="$(awk -F= '$1 == "BUNDLE_VERSION" { print $2 }' "$BUNDLE_DIR/pins.env")"
+  urunc="$(awk -F= '$1 == "URUNC_REF" { print $2 }' "$BUNDLE_DIR/pins.env")"
   res meta commit "$head"
-  res meta brig_version "$version"
-  res meta bundle_version "$(awk -F= '$1 == "BUNDLE_VERSION" { print $2 }' "$BUNDLE_DIR/pins.env")"
-  res meta urunc_ref "$(awk -F= '$1 == "URUNC_REF" { print $2 }' "$BUNDLE_DIR/pins.env")"
+  res meta target "brig ${head:0:7} · bundle $bundle"
+  res fact "brig version" "$version"
+  res fact "runtime bundle" "$bundle" "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/$bundle"
+  res fact urunc "${urunc:0:7}" "https://github.com/urunc-dev/urunc/commit/$urunc"
   res meta host_detail "$(nproc) vCPUs, $(free -g | awk '/^Mem:/ { print $2 }') GB, kernel $(uname -r), nested KVM. A rootless user install from install.sh at ${head:0:7}."
 
   if [ "$commit" != "$head" ]; then
@@ -296,7 +301,7 @@ check_version() {
   version="$(timeout 30 brig version)"
   commit="$(timeout 30 brig version --json | field data.commit)"
   modified="$(timeout 30 brig version --json | field data.modified)"
-  if [ "$commit" = "$(git -C "$REPO" rev-parse HEAD)" ] && [ "$modified" = False ] &&
+  if [ "$commit" = "$(git -C "$REPO" rev-parse HEAD)" ] && [ "$modified" = false ] &&
      cmp -s "$BUNDLE_DIR/bin/brigd" "${BRIG_BUILD_DIR:-$OUT/build}/brigd"; then
     res check Install "brig version names this commit" pass \
       "$version; brigd is the same build ($(sha256sum "$BUNDLE_DIR/bin/brigd" | cut -c1-12))"
@@ -419,7 +424,7 @@ gate_claude() {
   done
   res note "claude-code boot" "median of $CLAUDE_N runs of brig run -d claude, image already pulled"
   local seen
-  seen="$(sort "$OUT/claude-fs.txt" | uniq -c | one_line 100)"
+  seen="$(sort "$OUT/claude-fs.txt" | uniq -c | awk '{ $1 = $1; print }' | paste -s -d, - | sed 's/,/, /g')"
   local note="$refusals refusals naming .claude and $failures other failures in $CLAUDE_N boots. /root/.claude: $seen."
   if [ "$refusals" = 0 ] && [ "$failures" = 0 ]; then
     res gate claude pass "$note"
@@ -838,25 +843,9 @@ check_churn() {
 
 # ---------------------------------------------------------------- main
 
-# fetch_baseline: points E2E_BASELINE at the results.json of the last
-# scheduled run of this workflow that passed, when there is one.
-fetch_baseline() {
-  [ -z "${E2E_BASELINE:-}" ] || return 0
-  [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GH_TOKEN:-}" ] && command -v gh > /dev/null || return 0
-  local id
-  id="$(timeout 60 gh run list -R "$GITHUB_REPOSITORY" --workflow e2e.yml --event schedule \
-    --status success -L 1 --json databaseId -q '.[0].databaseId' || true)"
-  [ -n "$id" ] || { say "no scheduled run has passed yet, so there is no baseline"; return 0; }
-  if timeout 120 gh run download "$id" -R "$GITHUB_REPOSITORY" -n e2e-report -D "$OUT/baseline" &&
-     [ -f "$OUT/baseline/results.json" ]; then
-    E2E_BASELINE="$OUT/baseline/results.json"
-    say "baseline: run $id"
-  else
-    say "could not download run $id's e2e-report, so there is no baseline"
-  fi
-}
-
-say "brig e2e $LEVEL, results in $OUT"
+say "brig e2e $LEVEL, results in $RESULTS"
+res host linux
+res meta host_os linux
 res meta level "$LEVEL"
 res meta run_note "LEVEL=$LEVEL: $EXEC_N execs each way, $CLAUDE_N claude-code boots, $SEQ_N ubuntu cycles$([ "$LEVEL" = nightly ] && echo ", $PAR_N in parallel, $CHURN_N stop/start cycles")."
 if [ -n "${GITHUB_RUN_ID:-}" ]; then
@@ -864,8 +853,6 @@ if [ -n "${GITHUB_RUN_ID:-}" ]; then
   res meta run_url "${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
   res meta source "GitHub Actions run $GITHUB_RUN_ID, attempt ${GITHUB_RUN_ATTEMPT:-1} (${GITHUB_EVENT_NAME:-unknown})"
 fi
-fetch_baseline
-
 block setup setup
 if [ -f "$OUT/setup.ok" ]; then
   block version check_version
@@ -892,6 +879,6 @@ fi
 
 build_args=()
 [ -z "${E2E_BASELINE:-}" ] || build_args+=(--baseline "$E2E_BASELINE")
-verdict="$(res build ${build_args[@]+"${build_args[@]}"} "$OUT/results.json")"
-say "verdict: $verdict ($OUT/results.json)"
+verdict="$(res build ${build_args[@]+"${build_args[@]}"} "$RESULTS")"
+say "verdict: $verdict ($RESULTS)"
 [ "$verdict" = go ]

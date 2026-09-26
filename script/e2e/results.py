@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
-"""Collects what canary-linux.sh finds and writes it as results.json.
+"""Collects what the e2e scripts find and writes it as results.json.
 
-The canary never writes JSON itself. Each result goes through one of the
+A host script never writes JSON itself. Each result goes through one of the
 record commands, which append a line to the file $E2E_RECORDS names. build
-reads those lines and writes results.json in schema 1, the one
-render-report.py renders.
+reads those lines and writes one host's results.json in schema 1, the one
+render-report.py renders. merge-results.py joins several of them.
 
+    results.py host ID
+    results.py meta KEY VALUE
+    results.py fact LABEL VALUE [URL]
     results.py gate ID STATUS NOTE
     results.py check GROUP NAME STATUS EVIDENCE
-    results.py meta KEY VALUE
     results.py sample METRIC SECONDS
     results.py note METRIC TEXT
     results.py build [--baseline FILE] OUT
-    results.py median FILE
     results.py at-least VERSION FLOOR
     results.py field FILE KEY[.KEY...]
 
 build prints the verdict, go or no-go. at-least exits 0 when VERSION is
 FLOOR or newer, 1 when it is older, and 2 when either is not a vX.Y.Z or
-vX.Y.Z-rcN tag.
+vX.Y.Z-rcN tag. field reads FILE, or stdin for -.
 """
 
 import datetime
+import importlib.util
 import json
 import os
 import re
@@ -29,16 +31,26 @@ import statistics
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
 
 STATUSES = {"pass", "fail", "expected", "warn", "skip", "na", "running",
             "fixed", "review", "progress", "open", "filed"}
 
-# A gate that is expected to fail, such as --cpus on a bundle older than its
-# fix, does not stop a go. Anything else that is not a pass does.
-GO_STATUSES = {"pass", "expected"}
+# A gate that fails as expected, such as --cpus on a bundle older than its
+# fix, does not stop a go. Neither does one a host skips or has no use for.
+GO_STATUSES = {"pass", "expected", "skip", "na"}
 
-HOST = "gha"
+# The hosts the workflow runs, by the prefix of their id: linux, and
+# linux-rc10 for a leg with another runtime bundle. os decides which gates
+# apply to a host.
+HOSTS = {
+    "linux": {"short": "Linux", "label": "GitHub-hosted ubuntu-24.04, x64", "os": "linux"},
+    "mac": {"short": "macOS", "label": "Self-hosted macOS, arm64, SIP enabled", "os": "macos"},
+    "tap": {"short": "Homebrew tap", "label": "GitHub-hosted macos-15, Homebrew only", "os": "none"},
+}
+NOT_HERE = {
+    "linux": "Linux only.",
+    "macos": "macOS only.",
+}
 
 
 def link(text, url):
@@ -48,11 +60,12 @@ def link(text, url):
 BRIG = "https://github.com/brig-sh/brig"
 BUNDLE = "https://github.com/NOFireAI/brig-standalone-linux"
 
-# One gate per release blocker the v0.3.0 stress runs found on Linux, in the
-# order the canary runs them.
+# One gate per release blocker the v0.3.0 stress runs found, in the order
+# the scripts run them.
 GATES = [
     {
         "id": "home",
+        "os": "linux",
         "name": "A forced image pull with DOCKER_CONFIG unset",
         "detail": "brig put the guest's HOME into the runtime's own environment. "
                   "Rootless nerdctl then read /root/.docker/config.json, and every image pull failed.",
@@ -60,6 +73,7 @@ GATES = [
     },
     {
         "id": "exec",
+        "os": "linux",
         "name": "Short guest commands return their output",
         "detail": "The runtime's in-guest agent reported a command's exit before its output was "
                   "drained, so about 15 in 100 short commands came back empty with exit 0.",
@@ -67,6 +81,7 @@ GATES = [
     },
     {
         "id": "claude",
+        "os": "linux",
         "name": "claude-code boots without a .claude refusal",
         "detail": "brig reads a few answers from the guest before it hands claude-code a credential. "
                   "A lost answer read as a .claude mount that was not ephemeral, so brig refused.",
@@ -74,6 +89,7 @@ GATES = [
     },
     {
         "id": "nosudo",
+        "os": "linux",
         "name": "A no-sudo user install stops before the download",
         "detail": "A user without sudo unpacked the whole bundle and then waited at a sudo prompt. "
                   "The installer should stop first and print the commands for root.",
@@ -81,14 +97,24 @@ GATES = [
     },
     {
         "id": "cpus",
+        "os": "linux",
         "name": "--cpus sizes the guest",
         "detail": "Bundle rc9 boots every guest with one vCPU, whatever the profile or --cpus asks. "
                   "The fix ships in bundle rc10.",
         "fix": [link("bundle #11", BUNDLE + "/pull/11")],
     },
+    {
+        "id": "gatekeeper",
+        "os": "macos",
+        "name": "A quarantined channel build answers at once",
+        "detail": "An ad-hoc signed brig@main waited silently for a Gatekeeper prompt that a "
+                  "headless session cannot show. Channel builds are notarized now.",
+        "fix": [link("#331", BRIG + "/pull/331")],
+    },
 ]
+GATE_IDS = {g["id"] for g in GATES}
 
-# The timings the report shows, in this order, when the run measured them.
+# The timings the report shows, in this order, when a run measured them.
 METRICS = ["ubuntu boot", "claude-code boot", "claude-code in parallel", "claude-code restart"]
 
 VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-rc\.?(\d+))?$")
@@ -106,8 +132,7 @@ def append(record):
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def read_records():
-    path = records_path()
+def read_records(path):
     if not os.path.exists(path):
         return []
     with open(path, encoding="utf-8") as fh:
@@ -128,33 +153,50 @@ def median(values):
     return round(statistics.median(values), 2) if values else None
 
 
-def load_baseline(path):
-    """Returns (data, run id) of a previous results.json, or (None, None)."""
-    if not path or not os.path.exists(path):
-        return None, None
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError) as err:
-        print("results.py: ignoring the baseline %s: %s" % (path, err), file=sys.stderr)
-        return None, None
-    if data.get("schema") != 1:
-        return None, None
-    current = (data.get("timings") or {}).get("current") or (data.get("checks") or {}).get("run")
-    return data, current
+def known_host(host_id):
+    """Returns the defaults for a host id, matched on its prefix."""
+    for prefix, known in HOSTS.items():
+        if host_id == prefix or host_id.startswith(prefix + "-"):
+            return known
+    return {"short": host_id, "label": host_id, "os": "none"}
 
 
-def build(out, baseline_path):
-    records = read_records()
-    meta = {}
-    gates = {}
-    checks = []
-    samples = {}
-    notes = {}
+def host_entry(host_id, meta):
+    known = known_host(host_id)
+    return {
+        "id": host_id,
+        "short": meta.get("host_short", known["short"]),
+        "label": meta.get("host_label", known["label"]),
+        "detail": meta.get("host_detail", ""),
+    }
+
+
+def host_os(host_id, meta):
+    return meta.get("host_os", known_host(host_id)["os"])
+
+
+def gate_for_host(gate, os_name, recorded):
+    """Returns the result a host gets for a gate: what it recorded, n/a, or a failure."""
+    if gate["os"] != os_name:
+        note = NOT_HERE.get(gate["os"], "Not on this host.")
+        if os_name == "none":
+            note = "This job boots no VM."
+        return {"status": "na", "note": note}
+    if gate["id"] in recorded:
+        return recorded[gate["id"]]
+    return {"status": "fail", "note": "Did not run: the block stopped before it recorded this gate. See the logs."}
+
+
+def build_host(records):
+    """Returns one host's results, in schema 1, from its records."""
+    meta, facts, gates, checks, samples, notes = {}, [], {}, [], {}, {}
     for r in records:
         kind = r.get("kind")
         if kind == "meta":
             meta[r["key"]] = r["value"]
+        elif kind == "fact":
+            facts.append({k: v for k, v in (("label", r["label"]), ("value", r["value"]),
+                                            ("url", r.get("url"))) if v})
         elif kind == "gate":
             gates[r["id"]] = {"status": r["status"], "note": r["note"]}
         elif kind == "check":
@@ -164,159 +206,183 @@ def build(out, baseline_path):
         elif kind == "note":
             notes[r["metric"]] = r["text"]
 
+    host_id = meta.get("host", "linux")
+    os_name = host_os(host_id, meta)
     level = meta.get("level", "canary")
     commit = meta.get("commit", "")
     short = commit[:7] or "unknown"
-    bundle = meta.get("bundle_version", "unknown")
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
-    date = now.strftime("%Y-%m-%d")
 
-    base, base_run = load_baseline(baseline_path)
-
-    runs = []
-    if base:
-        brun = next((r for r in base.get("runs", []) if r.get("id") == base_run), {})
-        runs.append({
-            "id": "base",
-            "label": "Baseline",
-            "date": brun.get("date", ""),
-            "target": brun.get("target", ""),
-            "hosts": [HOST],
-            "note": "the last scheduled run that passed (%s)." % (base.get("source") or "no source"),
-        })
-    runs.append({
-        "id": "now",
-        "label": "This run",
-        "date": date,
-        "target": "brig %s · bundle %s" % (short, bundle),
-        "hosts": [HOST],
-        "note": meta.get("run_note", "LEVEL=%s." % level),
-    })
-
-    blockers = []
-    for g in GATES:
-        res = gates.get(g["id"], {"status": "skip", "note": "Did not run. See the logs."})
-        results = {"now": {HOST: res}}
-        if base:
-            for b in base.get("blockers", []):
-                prev = (b.get("results", {}).get(base_run) or {}).get(HOST)
-                if b.get("id") == g["id"] and prev:
-                    results["base"] = {HOST: prev}
-        blockers.append(dict(g, results=results))
-
-    failed = [b for b in blockers if b["results"]["now"][HOST]["status"] not in GO_STATUSES]
-    expected = [b for b in blockers if b["results"]["now"][HOST]["status"] == "expected"]
-    bad_checks = [c for c in checks if c["status"] == "fail"]
-    go = not failed
-
-    if go:
-        headline = "No gate fails on brig %s" % short
-        text = "No gate fails."
-        if expected:
-            text += " Expected to fail on bundle %s: %s." % (bundle, "; ".join(b["name"] for b in expected))
-    else:
-        headline = "%s of %d gates fail on brig %s" % (len(failed), len(blockers), short)
-        text = "Failing or not run: %s." % "; ".join(b["name"] for b in failed)
-    if bad_checks:
-        text += " %d of %d checks %s." % (len(bad_checks), len(checks),
-                                         "fails" if len(bad_checks) == 1 else "fail")
-    else:
-        text += " No check fails."
-
-    facts = [{"label": "brig", "value": short}]
+    head = []
     if commit:
-        facts[0]["url"] = "%s/commit/%s" % (BRIG, commit)
-    if meta.get("brig_version"):
-        facts.append({"label": "brig version", "value": meta["brig_version"]})
-    facts.append({"label": "runtime bundle", "value": bundle})
-    if bundle.startswith("v"):
-        facts[-1]["url"] = "%s/releases/tag/%s" % (BUNDLE, bundle)
-    if meta.get("urunc_ref"):
-        ref = meta["urunc_ref"]
-        fact = {"label": "urunc", "value": ref[:7]}
-        if re.match(r"^[0-9a-f]{40}$", ref):
-            fact["url"] = "https://github.com/urunc-dev/urunc/commit/" + ref
-        facts.append(fact)
-    facts.append({"label": "level", "value": level})
+        head.append({"label": "brig", "value": short, "url": "%s/commit/%s" % (BRIG, commit)})
+    head.append({"label": "level", "value": level})
     if meta.get("run_url"):
-        facts.append({"label": "workflow run", "value": meta.get("run_id", "run"), "url": meta["run_url"]})
-    if base and base.get("source_url"):
-        facts.append({"label": "baseline", "value": "previous scheduled run", "url": base["source_url"]})
+        head.append({"label": "workflow run", "value": meta.get("run_id", "run"), "url": meta["run_url"]})
 
     metrics = []
-    base_values = {}
-    if base:
-        for m in (base.get("timings") or {}).get("metrics", []):
-            pair = (m.get("values") or {}).get(HOST)
-            if isinstance(pair, list) and len(pair) == 2:
-                base_values[m.get("name")] = pair[1]
     for name in METRICS:
         cur = median(samples.get(name, []))
-        if cur is None:
-            continue
-        note = notes.get(name) or "median of %d" % len(samples[name])
-        metrics.append({"name": name, "note": note, "values": {HOST: [base_values.get(name), cur]}})
+        if cur is not None:
+            note = notes.get(name) or "median of %d" % len(samples[name])
+            metrics.append({"name": name, "note": note, "values": {host_id: [None, cur]}})
 
     data = {
         "schema": 1,
         "title": "brig e2e %s" % level,
         "eyebrow": "brig · e2e · %s" % level,
-        "headline": headline,
-        "summary": ("The %s run of script/e2e/canary-linux.sh on a GitHub-hosted ubuntu-24.04 runner. "
-                    "It installs brig with this commit's install.sh as a rootless user, swaps in brig "
-                    "and brigd built from %s, and boots real microVMs under nested KVM.") % (level, short),
+        "level": level,
+        "commit": commit,
         "generated": now.isoformat().replace("+00:00", "Z"),
-        "source": meta.get("source", "canary-linux.sh, run by hand"),
-        "verdict": {
-            "status": "go" if go else "no-go",
-            "label": "Go" if go else "No-go",
-            "text": text,
-        },
-        "facts": facts,
-        "runs": runs,
-        "hosts": [{
-            "id": HOST,
-            "short": "ubuntu-24.04",
-            "label": "GitHub-hosted ubuntu-24.04, x64",
-            "detail": meta.get("host_detail", ""),
+        "source": meta.get("source", "script/e2e, run by hand"),
+        "facts": head + facts,
+        "runs": [{
+            "id": "now",
+            "label": "This run",
+            "date": now.strftime("%Y-%m-%d"),
+            "target": meta.get("target", "brig %s" % short),
+            "hosts": [host_id],
+            "note": meta.get("run_note", ""),
         }],
+        "hosts": [host_entry(host_id, meta)],
         "headings": {
             "blockers": ["Gates", "One gate per past release blocker", "Gate"],
             "checks": ["Checks", "Every check, with its evidence"],
         },
-        "blockers": blockers,
-        "checks": {"run": "now", "hosts": {HOST: checks}},
+        "blockers": [dict(g, results={"now": {host_id: gate_for_host(g, os_name, gates)}})
+                     for g in GATES],
+        "checks": {"run": "now", "hosts": {host_id: checks}},
     }
     if meta.get("run_url"):
         data["source_url"] = meta["run_url"]
     if metrics:
         data["timings"] = {
             "unit": "s",
-            "baseline": "base" if base else None,
+            "baseline": None,
             "current": "now",
-            # Nested KVM on a shared runner is noisy, so only a large change is flagged.
+            # Nested KVM and shared runners are noisy, so only a large change is flagged.
             "flag_percent": 50,
             "metrics": metrics,
         }
+    return data
 
+
+def load(path):
+    """Returns a results.json in schema 1, or None."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as err:
+        print("results.py: ignoring %s: %s" % (path, err), file=sys.stderr)
+        return None
+    return data if data.get("schema") == 1 else None
+
+
+def apply_baseline(data, base):
+    """Adds an earlier run's results as the "base" run, for every host both have."""
+    if not base:
+        return
+    base_run = (base.get("timings") or {}).get("current") or (base.get("checks") or {}).get("run")
+    brun = next((r for r in base.get("runs", []) if r.get("id") == base_run), {})
+    hosts = [h for h in data["runs"][-1]["hosts"] if h in brun.get("hosts", [])]
+    if not hosts:
+        return
+    data["runs"].insert(0, {
+        "id": "base",
+        "label": "Baseline",
+        "date": brun.get("date", ""),
+        "target": brun.get("target", ""),
+        "hosts": hosts,
+        "note": "the last scheduled run that passed (%s)." % (base.get("source") or "no source"),
+    })
+    for b in data["blockers"]:
+        prev = next((x for x in base.get("blockers", []) if x.get("id") == b["id"]), None)
+        cells = ((prev or {}).get("results") or {}).get(base_run) or {}
+        kept = {h: cells[h] for h in hosts if h in cells}
+        if kept:
+            b["results"]["base"] = kept
+    base_values = {}
+    for m in (base.get("timings") or {}).get("metrics", []):
+        for h, pair in (m.get("values") or {}).items():
+            if isinstance(pair, list) and len(pair) == 2:
+                base_values[(m.get("name"), h)] = pair[1]
+    timings = data.get("timings")
+    if timings:
+        timings["baseline"] = "base"
+        for m in timings["metrics"]:
+            for h, pair in m["values"].items():
+                pair[0] = base_values.get((m["name"], h))
+    if base.get("source_url"):
+        data["facts"].append({"label": "baseline", "value": "previous scheduled run", "url": base["source_url"]})
+
+
+def finish(data):
+    """Sets the verdict, headline and summary over every host, checks the schema, and returns go or no-go."""
+    host_ids = data["runs"][-1]["hosts"]
+    shorts = {h["id"]: h["short"] for h in data["hosts"]}
+    failed, expected, skipped = [], [], []
+    for b in data["blockers"]:
+        for h in host_ids:
+            status = (b["results"].get("now") or {}).get(h, {}).get("status")
+            where = "%s on %s" % (b["name"], shorts.get(h, h))
+            if status not in GO_STATUSES:
+                failed.append(where)
+            elif status == "expected":
+                expected.append(where)
+            elif status == "skip":
+                skipped.append(where)
+    # A host with no results of its own, such as a crashed job, is a no-go even
+    # when no gate applies to it.
+    for h in data.get("missing_hosts", []):
+        failed.append("no results from %s" % shorts.get(h, h))
+    bad_checks = sum(1 for rows in data["checks"]["hosts"].values() for c in rows if c["status"] == "fail")
+    all_checks = sum(len(rows) for rows in data["checks"]["hosts"].values())
+    short = (data.get("commit") or "")[:7] or "unknown"
+    go = not failed
+
+    if go:
+        data["headline"] = "No gate fails on brig %s" % short
+        text = "No gate fails."
+    else:
+        data["headline"] = "%d gate %s fail on brig %s" % (
+            len(failed), "result" if len(failed) == 1 else "results", short)
+        text = "Failing, or did not run: %s." % "; ".join(failed)
+    if expected:
+        text += " Expected to fail: %s." % "; ".join(expected)
+    if skipped:
+        text += " Skipped: %s." % "; ".join(skipped)
+    if bad_checks:
+        text += " %d of %d checks %s." % (bad_checks, all_checks, "fails" if bad_checks == 1 else "fail")
+    else:
+        text += " No check fails."
+    data["verdict"] = {"status": "go" if go else "no-go", "label": "Go" if go else "No-go", "text": text}
+    names = [h["short"] for h in data["hosts"]]
+    hosts = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    data["summary"] = ("The %s run of the real-runtime checks in script/e2e/, against brig %s, on %s. "
+                       "The Linux and macOS jobs install brig the way a user does and boot real microVMs."
+                       % (data.get("level", "canary"), short, hosts))
     problems = check_schema(data)
     if problems:
         for p in problems:
             print("results.py: " + p, file=sys.stderr)
         sys.exit(1)
-    with open(out, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
-    print(data["verdict"]["status"])
+    return data["verdict"]["status"]
 
 
 def check_schema(data):
     """Returns what render-report.py would refuse in data."""
-    import importlib.util
     spec = importlib.util.spec_from_file_location("render_report", os.path.join(HERE, "render-report.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.check(data)
+
+
+def write(data, out):
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
 
 
 def field(path, keys):
@@ -331,8 +397,14 @@ def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__)
     cmd, args = argv[1], argv[2:]
-    if cmd == "gate" and len(args) == 3:
-        if args[0] not in {g["id"] for g in GATES}:
+    if cmd == "host" and len(args) == 1:
+        append({"kind": "meta", "key": "host", "value": args[0]})
+    elif cmd == "meta" and len(args) == 2:
+        append({"kind": "meta", "key": args[0], "value": args[1]})
+    elif cmd == "fact" and len(args) in (2, 3):
+        append({"kind": "fact", "label": args[0], "value": args[1], "url": args[2] if len(args) == 3 else ""})
+    elif cmd == "gate" and len(args) == 3:
+        if args[0] not in GATE_IDS:
             sys.exit("results.py: unknown gate %s" % args[0])
         if args[1] not in STATUSES:
             sys.exit("results.py: bad status %s" % args[1])
@@ -341,8 +413,6 @@ def main(argv):
         if args[2] not in STATUSES:
             sys.exit("results.py: bad status %s" % args[2])
         append({"kind": "check", "group": args[0], "name": args[1], "status": args[2], "evidence": args[3]})
-    elif cmd == "meta" and len(args) == 2:
-        append({"kind": "meta", "key": args[0], "value": args[1]})
     elif cmd == "sample" and len(args) == 2:
         append({"kind": "sample", "metric": args[0], "seconds": float(args[1])})
     elif cmd == "note" and len(args) == 2:
@@ -353,12 +423,11 @@ def main(argv):
             baseline, args = args[1], args[2:]
         if len(args) != 1:
             sys.exit(__doc__)
-        build(args[0], baseline)
-    elif cmd == "median" and len(args) == 1:
-        with open(args[0], encoding="utf-8") as fh:
-            values = [float(x) for x in fh.read().split()]
-        m = median(values)
-        print("" if m is None else "%.2f" % m)
+        data = build_host(read_records(records_path()))
+        apply_baseline(data, load(baseline))
+        verdict = finish(data)
+        write(data, args[0])
+        print(verdict)
     elif cmd == "at-least" and len(args) == 2:
         have, floor = version_key(args[0]), version_key(args[1])
         if have is None or floor is None:
@@ -366,7 +435,7 @@ def main(argv):
         return 0 if have >= floor else 1
     elif cmd == "field" and len(args) == 2:
         value = field(args[0], args[1])
-        print(value if not isinstance(value, (dict, list)) else json.dumps(value))
+        print(json.dumps(value) if isinstance(value, (dict, list, bool)) or value is None else value)
     else:
         sys.exit(__doc__)
     return 0
