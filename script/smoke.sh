@@ -482,7 +482,7 @@ esac
 "$WORK/brig" sh claude echo hi > /dev/null 2> "$WORK/shproj.err"
 grep -qF -- '[--][bash][-lc]["$@"][bash][echo][hi]' "$STUB_LOG" \
   && ok "sh still reads a second bare word as the guest command" \
-  || bad "sh still reads a second bare word as the guest command -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1) $(cat "$WORK/shproj.err")"
+  || bad "sh still reads a second bare word as the guest command -- got: $(grep '^words:' "$STUB_LOG" | tail -1) $(cat "$WORK/shproj.err")"
 
 # The project is inherited by a verb that names none, the way the home already
 # is. Reading that silence as "no project" is what real-runtime testing caught:
