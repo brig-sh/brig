@@ -718,13 +718,34 @@ func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, erro
 // shellArgv is the login-shell command line, built once so Shell and
 // ShellAttached spell it the same way.
 //
-// The trailing words are joined into a single string before the shell sees
-// them, so they land as one argument -- the script text for -c -- rather than
-// one per word. Passed individually, bash takes the first as the script and
-// the rest as $0, $1, ...
+// The trailing words run as the argument vector the caller gave, under a login
+// shell for its environment. They reach bash as positional parameters, after
+// a fixed script and a $0, and the script is "$@", so bash never parses them:
+// spaces, quotes, a `;`, a `$` or a glob in a word arrive unchanged. Joining
+// them into the -c script instead let bash re-split every word boundary the
+// caller had set.
+//
+// The script is not `exec "$@"`. exec runs only a program, so a builtin or a
+// function the login profile defines (ulimit, nvm) would stop working as the
+// command, and exec reads a first word starting with a dash as its own option.
+// bash still execs a lone simple command without forking, so the command is
+// the top process in the guest either way, unless the first word is a profile
+// function or the profile sets an EXIT trap. bash then stays as the parent,
+// and a SIGTERM to the session ends bash but not the command; see
+// docs/migration.md.
+//
+// The words are data in the shell rather than the script text, so the login
+// profile can now reach them: -l sources it before the "$@" script runs, and
+// a top-level `shift` or `set --` there rewrites the positional parameters
+// and so the command brig was asked to run. The joined form could not be
+// touched that way, because the command was the script. No spelling of the
+// script defends against it -- `command "$@"` reads the same clobbered
+// parameters -- so it is a property of the profile the guest sources, from
+// the image or from the mounted home. docs/guest-image.md states it as a
+// constraint next to the rest of what an image has to provide.
 func shellArgv(command []string) []string {
 	if len(command) > 0 {
-		return []string{"bash", "-lc", strings.Join(command, " ")}
+		return append([]string{"bash", "-lc", `"$@"`, "bash"}, command...)
 	}
 	return []string{"bash", "-l"}
 }

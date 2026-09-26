@@ -39,7 +39,7 @@ Resolved through the guest's `PATH` unless the table says otherwise.
 | `chmod` | sets the mode a `files:` binding declares, inside the create script | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `rm` | `rm -f --` at the credential path before creating it, so a planted symlink is removed rather than followed | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `sleep` | **Linux only.** nerdctl runs the container as `sleep infinity`, because a container exits when its command does and the sandbox has to outlive the exec that uses it | `internal/runtime/nerdctl.go`, `runArgs` |
-| `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> '<command>'` runs `bash -lc`, for every profile regardless of its `binary:` field | `internal/wrap/run.go`, `Shell` |
+| `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> <command...>` runs `bash -lc '"$@"' bash <command...>`, for every profile regardless of its `binary:` field | `internal/wrap/run.go`, `shellArgv` |
 | the profile's `binary:` | `brig run` execs it. `claude` for claude-code, `codex` for codex, and so on | `cmd/brig/main.go`, `runAgent` |
 
 Two of these are conditional, and it is worth knowing which.
@@ -53,6 +53,23 @@ required.
 `bash` is only reached by `brig sh`. That is also the verb people reach for
 when a sandbox is misbehaving. An image without it works right up to the
 moment somebody needs to look inside it.
+
+**The login profile must not rewrite the positional parameters.** `brig sh`
+hands the command words to bash as `$1`, `$2` and on, and `-l` sources
+`/etc/profile` -- which by its own convention sources `/etc/profile.d/*.sh`
+-- and then the guest user's `~/.bash_profile` or `~/.profile`, all before
+the `"$@"` script runs. A top-level `shift` or `set --` in any of them
+rewrites the parameters, and with them the command brig was asked to run:
+with a `shift`, `brig sh <agent> echo hi` looks for a command called `hi` and
+exits 127. Nothing on brig's side can defend against it -- `command "$@"`
+reads the same rewritten parameters -- so `brig sh` with a command breaks
+while a bare `brig sh` still opens a shell. Keep `set --` and `shift` inside
+a function, where bash scopes them to the call.
+
+The home half of that is not only the image's to get right. The guest home is
+a host directory brig mounts, so a `~/.bash_profile` you wrote on the host is
+sourced in the guest too, and one that shifts breaks `brig sh` on an image
+that is otherwise fine.
 
 Everything from `sh` down to `rm` is only run when the profile declares
 `volumes:` or `files:`. A profile with neither returns before any of it
