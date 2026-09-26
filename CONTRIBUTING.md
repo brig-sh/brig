@@ -38,6 +38,12 @@ CI does not call `make`. It runs its own steps
 - `goreleaser check`, and a full snapshot build, so the release config stays
   exercised before a tag depends on it.
 
+A separate workflow, [.github/workflows/e2e.yml](.github/workflows/e2e.yml),
+drives brig against a real runtime. It runs `script/e2e/canary-linux.sh` on a
+hosted `ubuntu-24.04` runner with nested KVM: nightly, on demand, and on a pull
+request that touches `script/e2e/`, the workflow or `install.sh`. Each run
+uploads an HTML report as the `e2e-report` artifact.
+
 There is no linter. No `golangci-lint` configuration exists in this
 repository, and the Makefile has no lint target. `gofmt` and `go vet` are the
 only static gates.
