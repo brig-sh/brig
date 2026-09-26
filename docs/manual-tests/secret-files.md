@@ -72,7 +72,7 @@ brig: starting sandbox brig-claude-code...
 VMM started (PID 55252)
 brig-claude-code
 
-$ brig sh claude-code bash -c \
+$ brig sh claude-code -c \
     'grep -E "claude|persist" /proc/self/mountinfo | awk "{print \$5, \$(NF-2)}"'
 /home/claude                                virtiofs
 /run/brig/persist/.claude%2Fsessions        virtiofs
@@ -94,7 +94,7 @@ depth, never from the file.
 ## 2. `stat -f -c %T`: the fail-closed check
 
 ```
-$ brig sh claude-code bash -c \
+$ brig sh claude-code -c \
     'for p in ~/.claude ~/.claude/sessions ~/.claude/history.jsonl \
               ~/.claude/projects ~/.claude/.credentials.json; do
        printf "%-38s %s\n" "$p" "$(stat -f -c %T $p)"; done'
@@ -121,7 +121,7 @@ Header only. Nothing for a tmpfs page to be written out to.
 ## 3. The credential
 
 ```
-$ brig sh claude-code bash -c 'stat -c "%n %F %U:%G %a %s" ~/.claude/.credentials.json'
+$ brig sh claude-code -c 'stat -c "%n %F %U:%G %a %s" ~/.claude/.credentials.json'
 /home/claude/.claude/.credentials.json regular file claude:root 600 170
 ```
 
@@ -165,7 +165,7 @@ real path; against the bind mount D4 originally specified that `renameat`
 returned `EBUSY`, and the temp file landed in the workspace. Simulated exactly:
 
 ```
-$ brig sh claude-code bash -c '
+$ brig sh claude-code -c '
     C=~/.claude/.credentials.json
     echo "inode before: $(stat -c %i $C)"
     T=$C.tmp.$$
@@ -190,11 +190,11 @@ file (section 4's `find` was re-run and is unchanged).
 that runs every time after the first.
 
 ```
-$ brig sh claude-code bash -c 'grep -cE "claude|persist" /proc/self/mountinfo'
+$ brig sh claude-code -c 'grep -cE "claude|persist" /proc/self/mountinfo'
 8
 $ brig run -d claude-code
 brig-claude-code
-$ brig sh claude-code bash -c '
+$ brig sh claude-code -c '
     echo "mount lines: $(grep -cE "claude|persist" /proc/self/mountinfo)"
     stat -c "%n %U %a %s" ~/.claude/.credentials.json
     stat -f -c %T ~/.claude
@@ -214,7 +214,7 @@ cannot do:
 $ printf '%s' '{"claudeAiOauth":{"accessToken":"probe-rotated",...}}' \
     | brig secret update volumes-probe-cred -f -
 $ brig run -d claude-code
-$ brig sh claude-code bash -c \
+$ brig sh claude-code -c \
     'wc -c < ~/.claude/.credentials.json; grep -o probe-rotated ~/.claude/.credentials.json'
 108
 probe-rotated

@@ -39,7 +39,7 @@ Resolved through the guest's `PATH` unless the table says otherwise.
 | `chmod` | sets the mode a `files:` binding declares, inside the create script | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `rm` | `rm -f --` at the credential path before creating it, so a planted symlink is removed rather than followed | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `sleep` | **Linux only.** nerdctl runs the container as `sleep infinity`, because a container exits when its command does and the sandbox has to outlive the exec that uses it | `internal/runtime/nerdctl.go`, `runArgs` |
-| `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> <command...>` runs `bash -lc '"$@"' bash <command...>`, for every profile regardless of its `binary:` field | `internal/wrap/run.go`, `shellArgv` |
+| `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> <command...>` runs `bash -lc '"$@"' bash <command...>`, and `brig sh <agent> -c '<script>'` runs `bash -lc '<script>'`, for every profile regardless of its `binary:` field | `internal/wrap/run.go`, `shellArgv` |
 | the profile's `binary:` | `brig run` execs it. `claude` for claude-code, `codex` for codex, and so on | `cmd/brig/main.go`, `runAgent` |
 
 Two of these are conditional, and it is worth knowing which.

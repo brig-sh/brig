@@ -1992,6 +1992,21 @@ grep -qF -- '[--][bash][-lc]["$@"][bash][echo][hi][there]' "$STUB_LOG" \
 grep -q '^SANDBOX ' "$WORK/shell.err" \
   && bad "sh printed the envelope" || ok "sh does not print the envelope"
 
+# -c asks for the one parse the plain form never does: the script reaches bash
+# as a single word, for the login shell to read in the guest.
+: > "$STUB_LOG"
+"$WORK/brig" sh claude -c 'echo hi | wc -l' > /dev/null 2>&1
+grep -qF -- '[--][bash][-lc][echo hi | wc -l]' "$STUB_LOG" \
+  && ok "sh -c hands the script to the login shell as one word" \
+  || bad "sh -c hands the script to the login shell as one word -- got: $(grep '^words:' "$STUB_LOG" | tail -1)"
+
+# A script typed as one word still runs as a command name, and brig names -c
+# before it does.
+"$WORK/brig" sh claude 'echo hi | wc -l' > /dev/null 2>"$WORK/shhint.err"
+grep -qF 'put -c in front of it' "$WORK/shhint.err" \
+  && ok "a one-word script gets the -c hint" \
+  || bad "a one-word script gets the -c hint -- got: $(cat "$WORK/shhint.err")"
+
 # And with no command it is a login shell. One verb, and which of the two you
 # get is said by whether you typed a command -- not by which word you reached
 # for, which is what exec and shell made you choose.

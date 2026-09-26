@@ -734,24 +734,67 @@ func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, erro
 // and a SIGTERM to the session ends bash but not the command; see
 // docs/migration.md.
 //
-// The words are data in the shell rather than the script text, so the login
-// profile can now reach them: -l sources it before the "$@" script runs, and
-// a top-level `shift` or `set --` there rewrites the positional parameters
-// and so the command brig was asked to run. The joined form could not be
-// touched that way, because the command was the script. No spelling of the
-// script defends against it -- `command "$@"` reads the same clobbered
+// A leading -c is sh's own: the word after it is a script for the login shell
+// and the rest are its $0, $1 and on. That is the one form bash parses, and
+// the caller asks for it by name. The flags people put in front of it with
+// sh -c (-ec, -xc, -uc) are set at the start of the script, so they cover the
+// script and not the login shell's profile: -ec runs `bash -lc 'set -e; ...'`.
+// ShellCommandError has already refused one with no script.
+//
+// Without -c the words are data in the shell rather than the script text, so
+// the login profile can reach them: -l sources it before the "$@" script
+// runs, and a top-level `shift` or `set --` there rewrites the positional
+// parameters and so the command brig was asked to run. The joined form could
+// not be touched that way, because the command was the script. No spelling
+// of the script defends against it -- `command "$@"` reads the same clobbered
 // parameters -- so it is a property of the profile the guest sources, from
 // the image or from the mounted home. docs/guest-image.md states it as a
 // constraint next to the rest of what an image has to provide.
 func shellArgv(command []string) []string {
+	if len(command) > 0 && isScriptFlag(command[0]) {
+		script, rest := "", []string(nil)
+		if len(command) > 1 {
+			script, rest = command[1], command[2:]
+		}
+		if flags := strings.ReplaceAll(command[0][1:len(command[0])-1], "l", ""); flags != "" {
+			script = "set -" + flags + "; " + script
+		}
+		return append([]string{"bash", "-lc", script}, rest...)
+	}
 	if len(command) > 0 {
 		return append([]string{"bash", "-lc", `"$@"`, "bash"}, command...)
 	}
 	return []string{"bash", "-l"}
 }
 
+// isScriptFlag reports whether a first word is sh's -c, alone or with the
+// flags that go in front of it: e to stop at the first failure, u for unset
+// variables, x to trace, l for a login shell, which it already is.
+func isScriptFlag(word string) bool {
+	return len(word) >= 2 && word[0] == '-' && word[len(word)-1] == 'c' &&
+		strings.Trim(word[1:len(word)-1], "eulx") == ""
+}
+
+// ShellCommandError refuses a script flag with no script after it, or with one
+// that is empty or only whitespace. bash -lc exits 0 on an empty script, so a
+// caller whose script variable was unset would read the run as a success.
+// Shell and ShellAttached check it themselves; the CLI asks first so it can
+// refuse before anything boots.
+func ShellCommandError(command []string) error {
+	if len(command) == 0 || !isScriptFlag(command[0]) {
+		return nil
+	}
+	if len(command) == 1 || strings.TrimSpace(command[1]) == "" {
+		return fmt.Errorf("%s needs a script after it, for example %s 'ls /work | wc -l'", command[0], command[0])
+	}
+	return nil
+}
+
 // Shell opens a login shell in the sandbox, or runs one command in it.
 func (c *Config) Shell(set creds.Set, command []string) error {
+	if err := ShellCommandError(command); err != nil {
+		return err
+	}
 	return c.Exec(set, shellArgv(command), true)
 }
 
@@ -759,6 +802,9 @@ func (c *Config) Shell(set creds.Set, command []string) error {
 // behaves like an agent one: brig runs it as a child and reports its exit
 // status rather than replacing itself with it.
 func (c *Config) ShellAttached(set creds.Set, command []string) (int, error) {
+	if err := ShellCommandError(command); err != nil {
+		return 0, err
+	}
 	return c.ExecAttached(set, shellArgv(command), true)
 }
 
