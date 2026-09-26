@@ -169,14 +169,18 @@ com.urunc.unikernel.bootInitrd
 ```
 
 hull takes them on its command line and urunc reads them out of the
-container's OCI spec. The pair is the whole contract on both operating
-systems (`internal/runtime/boot.go`). They are never read from the image's own
-metadata, which is what stops an image nominating a file on the host.
+container's OCI spec. The pair is the same on both operating systems
+(`internal/runtime/boot.go`). On Linux that takes the urunc the runtime
+bundle builds, because no urunc release reads the pair
+([runtimes.md](runtimes.md#what-brig-requires-of-each)). They are never read
+from the image's own metadata, which is what stops an image nominating a file
+on the host.
 
 The kernel file is named `Image` on arm64 and `bzImage` on x86_64. The
 initrd is `container-initrd` on both. They come from `BRIG_BOOT_ASSETS` if
 it is set, otherwise from whatever `hull assets dir` reports on macOS, or
 `$XDG_DATA_HOME/brig/assets` (default `~/.local/share/brig/assets`) on Linux.
+The Linux runtime bundle sets `BRIG_BOOT_ASSETS` to the pair it carries.
 Missing, they are fetched: with hull on macOS, which downloads the same
 bundle for its own use. On Linux, where hull does not build, Brig uses
 [`oras`](install.md#linux) instead. A zero-length file counts as missing

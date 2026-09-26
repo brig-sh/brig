@@ -193,11 +193,14 @@ reports which of those are missing before it unpacks anything. See the
 bundle's `docs/rootless.md` for what each one is for.
 
 `BRIG_INSTALL_RUNTIME=0` skips the bundle and installs `brig` and `brigd`
-alone, for a host that already has `nerdctl`, containerd and `urunc`. With the
-bundle, `BRIG_INSTALL_DIR` is ignored, since the binaries go into the bundle's
-tree, and `install.sh` says so. A
-`genericBoot` profile also needs `oras`, which the bundle carries.
-[runtimes.md](runtimes.md) covers the full command surface each one needs.
+alone, for a host that already has `nerdctl`, containerd and `urunc`. That
+urunc has to be a build of the branch the bundle uses. No urunc release reads
+the boot annotations, so a `genericBoot` profile never becomes ready on one
+([runtimes.md](runtimes.md#what-brig-requires-of-each)). A `genericBoot`
+profile also needs `oras` and `cloud-hypervisor`, which the bundle carries.
+With the bundle, `BRIG_INSTALL_DIR` is ignored, since the binaries go into the
+bundle's tree, and `install.sh` says so. [runtimes.md](runtimes.md) covers the
+full command surface each one needs.
 
 That combination is what makes a Linux sandbox a microVM rather than a
 container sharing the host kernel. What that boundary does and does not

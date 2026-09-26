@@ -11,8 +11,10 @@ use.
 If you adopt this stack, on macOS you take on Brig and hull. On Linux
 you take on Brig, plus three projects it does not own: nerdctl,
 containerd and urunc. `install.sh` installs those three for you on Linux,
-from the bundle described in [install.md](install.md#linux), but they are
-still three upstreams rather than ours.
+from the bundle described in [install.md](install.md#linux). nerdctl and
+containerd in that bundle are upstream releases. Its urunc is built from a
+branch, because no urunc release reads the boot annotations Brig passes
+([What Brig requires of each](#what-brig-requires-of-each)).
 
 ## What you are installing
 
@@ -28,10 +30,10 @@ live guarantee.
 | `hvi` | separate microVM monitor for hull's `hvi` backend, which talks to Hypervisor.framework directly | [brig-sh/hvi-vmm](https://github.com/brig-sh/hvi-vmm), a git submodule of hull, installed beside hull | Apache-2.0 |
 | `nerdctl` | Docker-compatible CLI for containerd, the binary Brig drives on Linux | [containerd/nerdctl](https://github.com/containerd/nerdctl) | Apache-2.0 |
 | `containerd` | daemon underneath nerdctl: it holds the image store and hands each container to a shim | [containerd/containerd](https://github.com/containerd/containerd) | Apache-2.0 |
-| `urunc` | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM instead of a process | [urunc-dev/urunc](https://github.com/urunc-dev/urunc) | Apache-2.0 |
+| `urunc` | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM instead of a process | [urunc-dev/urunc](https://github.com/urunc-dev/urunc), built by the Linux runtime bundle from the `feat/unchanged_containers-exec-fixes` branch | Apache-2.0 |
 | `cosign` | verifies the signature on a guest image before it boots. Optional, and verification degrades to a warning without it | [sigstore/cosign](https://github.com/sigstore/cosign) | Apache-2.0 |
 | `oras` | pulls the boot bundle on Linux for a `genericBoot` profile. Optional otherwise | [oras-project/oras](https://github.com/oras-project/oras) | Apache-2.0 |
-| boot bundle | the kernel, `container-initrd` and the in-guest agent that let Brig exec into an image built as an ordinary container. Published as an OCI artifact at `ghcr.io/nofireai/hull-assets`, one tag per guest platform | fetched by hull on macOS, by oras on Linux | unconfirmed: signed with keyless cosign, but the repository that builds it is not public and states no licence |
+| boot bundle | the kernel, `container-initrd` and the in-guest agent that let Brig exec into an image built as an ordinary container. Published as an OCI artifact at `ghcr.io/nofireai/hull-assets`, one tag per guest platform | fetched by hull on macOS. On Linux the runtime bundle carries its own kernel and initrd, and oras fetches this one only on a host without that bundle | unconfirmed: signed with keyless cosign, but the repository that builds it is not public and states no licence |
 
 hull is published by the same organisation as Brig and exists because
 Brig needed it. It is a usable runtime on its own, and its command
@@ -273,8 +275,19 @@ far from the cause.
 
 **urunc** has to read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the container's OCI spec and boot the
-image with them. That pair is the entire contract between Brig and urunc, and
-it is the same pair hull takes on its command line.
+image with them. It is the same pair hull takes on its command line. Brig
+also passes `com.urunc.unikernel.hypervisor=cloud-hypervisor` on every
+`genericBoot` run, so urunc has to find a `cloud-hypervisor` binary.
+
+No urunc release reads the pair, v0.8.0 included. A release ignores both
+annotations and looks for a `urunc.json` in the image instead. A stock image
+has none, so the sandbox never becomes ready, while `brig doctor` reports the
+runtime and the boot assets as `ok`. The pair is implemented on the
+`feat/unchanged_containers-exec-fixes` branch of
+[urunc-dev/urunc](https://github.com/urunc-dev/urunc). The runtime bundle
+builds its urunc from that branch, and its `container-initrd` from the same
+commit. A host that brings its own urunc (`BRIG_INSTALL_RUNTIME=0`) needs a
+build from that branch too.
 
 **containerd** has to be running with the urunc shim installed.
 `BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, which shares
@@ -292,12 +305,20 @@ brig` gets the exact build the tap names. Both casks are hand-written
 for the prerelease series, so read `Casks/hull.rb` for what an install
 will actually give you.
 
+On Linux the pin is `RUNTIME_VERSION` in `install.sh`, which names one
+release of the runtime bundle. With cosign available, `install.sh` checks the
+signature on that release's `checksums.txt` before it runs the bundle's
+installer. The bundle's `pins.env` records the urunc commit it was built
+from, and `brig-ctl version` prints it.
+
 The boot bundle is the other thing with a digest attached. hull verifies
 its signature with cosign against the publishing workflow before writing
 it, and records the digest it verified. Brig delegates the whole fetch
-to hull on macOS for exactly that reason. On Linux the same bundle
-arrives through `oras` with no such verification, and
-`BRIG_BOOT_ASSETS_REF` is how you pin a version or point at a mirror.
+to hull on macOS for exactly that reason. The Linux runtime bundle does not
+use it: its launcher points `BRIG_BOOT_ASSETS` at the kernel and initrd the
+bundle carries. On a Linux host without that bundle, the boot bundle arrives
+through `oras` with no such verification, and `BRIG_BOOT_ASSETS_REF` is how
+you pin a version or point at a mirror.
 
 ## Swapping one out
 
