@@ -487,6 +487,18 @@ default 30):
 BRIG_READY_TIMEOUT=60 brig run claude
 ```
 
+On Linux, a `genericBoot` profile also ends here when the host runs a urunc
+release. No release reads the boot annotations Brig passes, and `brig doctor`
+still reports the runtime and the boot assets as `ok`. Such a host brought
+its own urunc, either with `BRIG_INSTALL_RUNTIME=0` or after an `install.sh`
+from Brig 0.2.0 or earlier, which installed no runtime on Linux. Install the
+runtime bundle, which carries a urunc that reads them
+([runtimes.md](runtimes.md#what-brig-requires-of-each)):
+
+```bash
+curl -fsSL https://brig.sh/install | sh
+```
+
 Confirm:
 
 ```bash

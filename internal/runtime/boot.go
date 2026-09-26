@@ -17,7 +17,8 @@ import (
 // Both backends read the same two annotations: hull on its command line, and
 // urunc from the container's OCI spec on Linux, where nerdctl passes them
 // through with --annotation. So the pair below is the whole contract, and it
-// is spelled once.
+// is spelled once. On Linux that takes the urunc the runtime bundle builds,
+// since no urunc release reads the pair (docs/runtimes.md).
 const (
 	annotationBootKernel = "com.urunc.unikernel.bootKernel"
 	annotationBootInitrd = "com.urunc.unikernel.bootInitrd"

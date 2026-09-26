@@ -15,9 +15,10 @@ every platform, and how to verify a download.
 You need a Mac with Apple silicon, and macOS 15 or newer. On macOS 14, set
 `BRIG_HYPERVISOR=vz` before you run an agent. The default profiles,
 including `claude-code`, ask for hull's `hvi` hypervisor backend, and `hvi`
-needs macOS 15. On Linux you need `nerdctl`, containerd and the `urunc`
-shim instead. [install.md#platform-support](install.md#platform-support)
-has the full platform matrix.
+needs macOS 15. On Linux you need `nerdctl`, containerd and a `urunc` shim
+that reads Brig's boot annotations, which `install.sh` installs for you.
+[install.md#platform-support](install.md#platform-support) has the full
+platform matrix.
 
 ## Check what Brig found
 

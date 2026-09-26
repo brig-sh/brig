@@ -758,7 +758,9 @@ This works on both operating systems, and for the same reason: the kernel
 and the initrd travel as two OCI annotations. On macOS, hull takes them on
 its command line. On Linux, urunc reads the same two from the container's
 OCI spec, which nerdctl passes through. Nothing about the profile changes
-between them.
+between them. On Linux that takes the urunc the runtime bundle builds,
+because no urunc release reads the pair
+([runtimes.md](runtimes.md#what-brig-requires-of-each)).
 
 Three constraints come with it. The kernel and initrd are host files, and
 are never taken from image metadata. An image must not be able to nominate
