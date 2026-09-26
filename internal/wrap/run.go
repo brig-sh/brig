@@ -718,13 +718,13 @@ func (c *Config) ExecAttached(set creds.Set, argv []string, tty bool) (int, erro
 // shellArgv is the login-shell command line, built once so Shell and
 // ShellAttached spell it the same way.
 //
-// The trailing words are joined into a single string before the shell sees
-// them, so they land as one argument -- the script text for -c -- rather than
-// one per word. Passed individually, bash takes the first as the script and
-// the rest as $0, $1, ...
+// A command is passed as argv after bash -lc 'exec "$@"' bash, so the login
+// shell supplies the environment without re-parsing the caller's words.
+// Joining them into a -c script would drop quoting and split on spaces, ";",
+// globs, and "$". With no command, sh still opens an interactive login shell.
 func shellArgv(command []string) []string {
 	if len(command) > 0 {
-		return []string{"bash", "-lc", strings.Join(command, " ")}
+		return append([]string{"bash", "-lc", `exec "$@"`, "bash"}, command...)
 	}
 	return []string{"bash", "-l"}
 }
