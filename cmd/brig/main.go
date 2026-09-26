@@ -161,22 +161,30 @@ func main() {
 	if err == nil {
 		return
 	}
-	// The agent ran under --json: its own exit status is brig's, its output has
-	// already gone to the inherited streams, and runAgent has already printed the
-	// one-line Run object. brig adds nothing -- no "brig:" line, no second object
-	// -- it just returns what the agent returned.
+	os.Exit(finish(os.Stderr, err))
+}
+
+// finish prints the "brig:" line for err on stderr, unless stdout already
+// carries it, and returns the exit status.
+//
+// Two errors print nothing. An agentExit is an agent that ran under --json:
+// its own exit status is brig's, its output has already gone to the inherited
+// streams, and runAgent has already printed the Run object. A reportedError is
+// a refusal the Run object on stdout already carries, and docs/cli.md promises
+// a script that refusal on stdout and never on stderr.
+//
+// The exit status is a stable, documented set: a script can tell "you asked
+// for the wrong thing" from "it ran and failed" from "the sandbox could not be
+// verified" without parsing the message. exitCode owns the mapping; docs/cli.md
+// documents it. A run refused for any reason still exits non-zero, so a stop or
+// a boot that removed or started nothing never reads as success.
+func finish(stderr io.Writer, err error) int {
 	var ae *agentExit
-	if errors.As(err, &ae) {
-		os.Exit(ae.code)
+	var re *reportedError
+	if !errors.As(err, &ae) && !errors.As(err, &re) {
+		_, _ = fmt.Fprintln(stderr, "brig: "+err.Error())
 	}
-	fmt.Fprintln(os.Stderr, "brig: "+err.Error())
-	// The exit status is a stable, documented set: a script can tell "you
-	// asked for the wrong thing" from "it ran and failed" from "the sandbox
-	// could not be verified" without parsing the message. exitCode owns the
-	// mapping; docs/cli.md documents it. A run refused for any reason still
-	// exits non-zero, so a stop or a boot that removed or started nothing
-	// never reads as success.
-	os.Exit(exitCode(err))
+	return exitCode(err)
 }
 
 // run is the entry point dispatch is wrapped in, so the --json run/sh path has
@@ -189,7 +197,8 @@ func main() {
 // --json run ends in exactly one Run line whether the agent started or not. The
 // object carries stage "brig" and the reason, and brig's exit is the class the
 // error maps to -- the object is what tells "brig refused" from "the agent
-// exited non-zero", not the number.
+// exited non-zero", not the number. The refusal comes back as a reportedError,
+// so main does not print it again on stderr.
 //
 // jsonRun is nil unless this invocation is a --json run or sh, so an ordinary
 // command's errors are untouched.
@@ -204,8 +213,11 @@ func run(args []string) error {
 		// The agent ran; its object is already printed. Leave it to main.
 		return err
 	}
-	_ = writeRunObject("brig", exitCode(err), err.Error(), "")
-	return err
+	if werr := writeRunObject("brig", exitCode(err), err.Error(), ""); werr != nil {
+		// No object reached stdout, so main still has to print the refusal.
+		return err
+	}
+	return &reportedError{err: err}
 }
 
 // usageError is a command that was typed wrong: an unknown flag, a stray

@@ -2180,6 +2180,27 @@ case "$last" in
   *'"kind":"Run"'*) ok "brig --json run prints a compact Run object" ;;
   *) bad "brig --json run prints a compact Run object -- got: $last" ;;
 esac
+# A refusal is the Run object on stdout and nothing on stderr: an unknown
+# agent, and a project reached through a link, which is refused later.
+mkdir -p "$WORK/json-target"
+ln -sfn "$WORK/json-target" "$WORK/json-link"
+json_refused() {
+  local what="$1"; shift
+  "$WORK/brig" --json "$@" > "$WORK/jsonref.out" 2> "$WORK/jsonref.err"
+  local rc=$?
+  [ -s "$WORK/jsonref.err" ] \
+    && bad "a --json refusal of $what also wrote stderr -- got: $(cat "$WORK/jsonref.err")" \
+    || ok "a --json refusal of $what leaves stderr empty"
+  case "$(tail -n1 "$WORK/jsonref.out")" in
+    *'"stage":"brig"'*'"error":'*) ok "a --json refusal of $what is the Run object on stdout" ;;
+    *) bad "a --json refusal of $what is the Run object on stdout -- got: $(cat "$WORK/jsonref.out")" ;;
+  esac
+  [ "$rc" != 0 ] && ok "a --json refusal of $what exits non-zero" \
+    || bad "a --json refusal of $what exited 0"
+}
+json_refused "an unknown agent" run nosuchagent
+json_refused "an unknown agent on sh" sh nosuchagent
+json_refused "a linked project" run ubuntu "$WORK/json-link" -d
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== doctor =="

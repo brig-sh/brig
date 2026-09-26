@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -203,6 +204,58 @@ func TestRunJSONReportsABadRef(t *testing.T) {
 		if data["exit"] != float64(exitUsage) {
 			t.Errorf("%q: exit field %v, want %d", args, data["exit"], exitUsage)
 		}
+	}
+}
+
+// A refusal under --json is the Run object on stdout and nothing on stderr, as
+// docs/cli.md promises. main used to print the same message again as a
+// "brig:" line, so a script that captured both streams read it twice.
+func TestRunJSONRefusalLeavesStderrEmpty(t *testing.T) {
+	jsonRunHost(t, &jsonRuntime{})
+	// A project reached through a link is refused once the sandbox is named,
+	// later than an unknown agent is.
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		why  string
+	}{
+		{[]string{"--json", "run", "nosuchagent"}, "nosuchagent"},
+		{[]string{"--json", "sh", "nosuchagent"}, "nosuchagent"},
+		{[]string{"--json", "run", "faker", link, "-d"}, "symlink"},
+	} {
+		args := tc.args
+		var err error
+		out, _ := captureStdout(t, func() error { err = run(args); return nil })
+		if err == nil || !strings.Contains(err.Error(), tc.why) {
+			t.Fatalf("%q: want a refusal naming %q, got %v", args, tc.why, err)
+		}
+		var stderr bytes.Buffer
+		code := finish(&stderr, err)
+		if stderr.Len() != 0 {
+			t.Errorf("%q: the refusal reached stderr too: %q", args, stderr.String())
+		}
+		doc := lastJSONLine(t, out)
+		data, _ := doc["data"].(map[string]any)
+		if data["stage"] != "brig" || data["error"] != err.Error() {
+			t.Errorf("%q: stdout does not carry the refusal: %v", args, data)
+		}
+		if data["exit"] != float64(code) || code == exitOK {
+			t.Errorf("%q: exit %d, object says %v", args, code, data["exit"])
+		}
+	}
+
+	// Without --json there is no object, so the refusal is the stderr line.
+	err := run([]string{"run", "nosuchagent"})
+	var stderr bytes.Buffer
+	if code := finish(&stderr, err); code != exitNotFound {
+		t.Errorf("exit %d, want %d", code, exitNotFound)
+	}
+	if !strings.HasPrefix(stderr.String(), "brig: ") ||
+		!strings.Contains(stderr.String(), "nosuchagent") {
+		t.Errorf("a refusal without --json printed %q on stderr", stderr.String())
 	}
 }
 
