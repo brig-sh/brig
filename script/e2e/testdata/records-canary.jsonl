@@ -1,12 +1,15 @@
+{"kind": "meta", "key": "host", "value": "linux"}
+{"kind": "meta", "key": "host_os", "value": "linux"}
 {"kind": "meta", "key": "level", "value": "canary"}
 {"kind": "meta", "key": "run_note", "value": "LEVEL=canary: 100 execs each way, 3 claude-code boots, 3 ubuntu cycles."}
 {"kind": "meta", "key": "run_id", "value": "1000000001"}
 {"kind": "meta", "key": "run_url", "value": "https://github.com/brig-sh/brig/actions/runs/1000000001"}
 {"kind": "meta", "key": "source", "value": "GitHub Actions run 1000000001, attempt 1 (pull_request)"}
 {"kind": "meta", "key": "commit", "value": "3e5ae98b45ee5ecca94bc338ef451b92085dd75e"}
-{"kind": "meta", "key": "brig_version", "value": "v0.2.1-0.20260925234116-3e5ae98b45ee (3e5ae98, 2026-09-25, go1.26.5, linux/amd64)"}
-{"kind": "meta", "key": "bundle_version", "value": "v0.1.0-rc9"}
-{"kind": "meta", "key": "urunc_ref", "value": "0818ff104781087a12a75059062c3407a8b97c8a"}
+{"kind": "meta", "key": "target", "value": "brig 3e5ae98 · bundle v0.1.0-rc9"}
+{"kind": "fact", "label": "brig version", "value": "v0.2.1-0.20260925234116-3e5ae98b45ee (3e5ae98, 2026-09-25, go1.26.5, linux/amd64)", "url": ""}
+{"kind": "fact", "label": "runtime bundle", "value": "v0.1.0-rc9", "url": "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/v0.1.0-rc9"}
+{"kind": "fact", "label": "urunc", "value": "0818ff1", "url": "https://github.com/urunc-dev/urunc/commit/0818ff104781087a12a75059062c3407a8b97c8a"}
 {"kind": "meta", "key": "host_detail", "value": "4 vCPUs, 15 GB, kernel 6.11.0-1018-azure, nested KVM. A rootless user install from install.sh at 3e5ae98."}
 {"kind": "check", "group": "Install", "name": "brig version names this commit", "status": "pass", "evidence": "v0.2.1-0.20260925234116-3e5ae98b45ee (3e5ae98, 2026-09-25, go1.26.5, linux/amd64)"}
 {"kind": "check", "group": "Install", "name": "brig doctor", "status": "pass", "evidence": "exit 0: host virtual runtime boot verify profiles ok"}
@@ -22,7 +25,7 @@
 {"kind": "gate", "id": "nosudo", "status": "pass", "note": "Stopped after 21.30 s with exit 1 and a 24-line block of commands for root, with no prompt. No bundle tarball appeared."}
 {"kind": "sample", "metric": "ubuntu boot", "seconds": 3.12}
 {"kind": "sample", "metric": "ubuntu boot", "seconds": 2.95}
-{"kind": "sample", "metric": "ubuntu boot", "seconds": 3.40}
+{"kind": "sample", "metric": "ubuntu boot", "seconds": 3.4}
 {"kind": "note", "metric": "ubuntu boot", "text": "median of 3 runs of brig run -d ubuntu, in boot, command and rm cycles"}
 {"kind": "check", "group": "Cycles", "name": "3 sequential ubuntu cycles", "status": "pass", "evidence": "boot, one command and rm, 3 times with no failure"}
 {"kind": "check", "group": "Network", "name": "A published port answers from the host", "status": "fail", "evidence": "curl: curl: (56) Recv failure: Connection reset by peer </script><b>not markup</b>; after rm: curl: (7) Failed to connect"}
