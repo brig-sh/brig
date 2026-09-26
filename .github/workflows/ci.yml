@@ -174,3 +174,11 @@ jobs:
           bash -n script/network-isolation-vm.sh
           shellcheck script/network-isolation-vm.sh
           script/network-isolation-vm.sh --self-test
+
+      # The e2e job needs a real runtime and runs nightly. Its report tools
+      # need neither, so a broken renderer or results.py fails here first.
+      - name: Check the e2e scripts
+        run: |
+          set -eu
+          shellcheck script/e2e/*.sh
+          sh script/e2e/test-render-report.sh
