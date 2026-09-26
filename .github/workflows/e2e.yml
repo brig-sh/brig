@@ -1,0 +1,108 @@
+name: e2e
+
+# brig against real microVMs, for what the stub runtime in script/smoke.sh
+# cannot see: the runtime's own environment, a real package install, a second
+# user on the host. script/e2e/canary-linux.sh has the gates and the checks,
+# and #358 has the plan.
+#
+# A hosted ubuntu-24.04 runner exposes nested KVM, and each job gets a fresh VM
+# with passwordless sudo. The install-path checks need exactly that, since they
+# add udev rules, packages and a second user.
+#
+# Linux only for now. A macOS canary needs a SIP-enabled Mac, which means the
+# shared self-hosted runners.
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "canary is short; nightly boots more often, and adds a parallel block and stop/start churn"
+        type: choice
+        options: [canary, nightly]
+        default: canary
+  # A change to the checks, or to the installer they drive, proves itself on
+  # a real runner before it merges.
+  pull_request:
+    paths:
+      - "script/e2e/**"
+      - ".github/workflows/e2e.yml"
+      - "install.sh"
+
+permissions:
+  contents: read
+  # gh reads the last scheduled run's report, which is the timing baseline.
+  actions: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.level == 'nightly') && 180 || 75 }}
+    env:
+      LEVEL: ${{ github.event_name == 'schedule' && 'nightly' || inputs.level || 'canary' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The Go toolchain derives the version brig reports from the nearest
+          # tag, so a shallow clone gives it the wrong answer.
+          fetch-depth: 0
+          # The canary runs installers and guests on this runner. None of them
+          # needs the token.
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build brig and brigd
+        run: |
+          mkdir -p "$RUNNER_TEMP/brig-build"
+          make build BINDIR="$RUNNER_TEMP/brig-build"
+
+      - name: Run the ${{ env.LEVEL }} checks
+        env:
+          BRIG_BUILD_DIR: ${{ runner.temp }}/brig-build
+          E2E_OUT: ${{ runner.temp }}/brig-e2e
+          GH_TOKEN: ${{ github.token }}
+        run: bash script/e2e/canary-linux.sh
+
+      - name: Render the report
+        if: always()
+        env:
+          E2E_OUT: ${{ runner.temp }}/brig-e2e
+        run: |
+          set -euo pipefail
+          if [ -f "$E2E_OUT/results.json" ]; then
+            python3 script/e2e/render-report.py "$E2E_OUT/results.json" > "$E2E_OUT/report.html"
+          fi
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-report
+          path: |
+            ${{ runner.temp }}/brig-e2e/report.html
+            ${{ runner.temp }}/brig-e2e/results.json
+            ${{ runner.temp }}/brig-e2e/logs/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Write the job summary
+        if: always()
+        env:
+          E2E_OUT: ${{ runner.temp }}/brig-e2e
+        run: |
+          set -euo pipefail
+          if [ -f "$E2E_OUT/results.json" ]; then
+            python3 script/e2e/render-report.py --summary "$E2E_OUT/results.json" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The e2e job stopped before it wrote results.json. The job log has the reason." >> "$GITHUB_STEP_SUMMARY"
+          fi
