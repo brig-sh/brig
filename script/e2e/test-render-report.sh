@@ -67,7 +67,7 @@ assert set(d["checks"]["hosts"]) == {"linux", "mac"}
 m = {x["name"]: x["values"] for x in d["timings"]["metrics"]}
 assert set(m["ubuntu boot"]) == {"linux", "mac"}, m
 labels = [f["label"] for f in d["facts"]]
-assert labels.count("brig version") == 1 and "hull" in labels and "runtime bundle" in labels, labels
+assert labels.count("brig version") == 1 and "hull" in labels and "runtime bundle (Linux)" in labels, labels
 ' "$T/merged.json" || fail "the merge did not keep hosts, gates, checks and timings apart"
 verdict="$(merge --expect linux,mac,tap --out "$T/missing.json" "$T/canary.json" "$T/mac.json" 2> "$T/merge.err")" \
   || fail "merge-results.py failed with a host missing"
@@ -105,11 +105,14 @@ ok "evidence cannot end the page's data block"
 
 grep -q '^## brig e2e canary: Go$' "$T/canary.md" || fail "the summary does not lead with the verdict"
 grep -q '^| --cpus sizes the guest | Expected fail |$' "$T/canary.md" || fail "the summary has no row for the cpus gate"
+# The backticks are Markdown in the summary, not a command substitution.
+# shellcheck disable=SC2016
+grep -q -F 'runtime bundle (Linux) `v0.1.0-rc9 (install.sh pin)`' "$T/canary.md" || fail "the summary does not say which bundle ran"
 grep -q '^- \*\*Network: A published port answers from the host\*\*$' "$T/canary.md" \
   || fail "the summary does not list the failing check"
 grep -q 'Connection reset by peer' "$T/canary.md" || fail "the summary drops the failing check's evidence"
 grep -q '^| --cpus sizes the guest | Expected fail | N/A |$' "$T/merged.md" || fail "the merged summary has no column per host"
-ok "the summary has the verdict, the gates and the failing check with its evidence"
+ok "the summary has the verdict, the bundle, the gates and the failing check with its evidence"
 
 # A gate that fails, or does not run, is a no-go.
 grep -v '"id": "nosudo"' "$td/records-canary.jsonl" > "$T/records.jsonl"
