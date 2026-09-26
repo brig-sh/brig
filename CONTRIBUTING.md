@@ -57,6 +57,15 @@ It runs nightly, on demand, and on a pull request that touches `script/e2e/`,
 the workflow or `install.sh`. A report job merges the hosts into one HTML
 report, the `e2e-report` artifact.
 
+To try a runtime bundle before `install.sh` pins it, pass its tag. A second
+Linux leg then installs it in place of the pin:
+
+```bash
+gh workflow run e2e.yml -f runtime_version=v0.1.0-rc15
+```
+
+A tag equal to the pin adds no leg, since the pinned leg already installs it.
+
 There is no linter: no `golangci-lint` configuration, and no lint target in
 the Makefile. `gofmt` and `go vet` are the only static checks.
 
