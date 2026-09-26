@@ -175,6 +175,12 @@ When the first word is a profile function, or the login profile sets an
 the session then ends bash and leaves the command running until the sandbox
 stops.
 
+The words are now positional parameters, so a login profile that runs a
+top-level `shift` or `set --` rewrites them and so the command. This applies
+to `/etc/profile` in the image and to a `~/.bash_profile` in your own guest
+home. Move either into a function, where bash scopes it to the call. See
+[guest-image.md](guest-image.md).
+
 ## Session names
 
 `--name` is the flag this replaced most visibly. A session is now part of the

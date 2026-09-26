@@ -54,6 +54,23 @@ required.
 when a sandbox is misbehaving. An image without it works right up to the
 moment somebody needs to look inside it.
 
+**The login profile must not rewrite the positional parameters.** `brig sh`
+hands the command words to bash as `$1`, `$2` and on, and `-l` sources
+`/etc/profile` -- which by its own convention sources `/etc/profile.d/*.sh`
+-- and then the guest user's `~/.bash_profile` or `~/.profile`, all before
+the `"$@"` script runs. A top-level `shift` or `set --` in any of them
+rewrites the parameters, and with them the command brig was asked to run:
+with a `shift`, `brig sh <agent> echo hi` looks for a command called `hi` and
+exits 127. Nothing on brig's side can defend against it -- `command "$@"`
+reads the same rewritten parameters -- so `brig sh` with a command breaks
+while a bare `brig sh` still opens a shell. Keep `set --` and `shift` inside
+a function, where bash scopes them to the call.
+
+The home half of that is not only the image's to get right. The guest home is
+a host directory brig mounts, so a `~/.bash_profile` you wrote on the host is
+sourced in the guest too, and one that shifts breaks `brig sh` on an image
+that is otherwise fine.
+
 Everything from `sh` down to `rm` is only run when the profile declares
 `volumes:` or `files:`. A profile with neither returns before any of it
 (`deliverSecretFiles` in `internal/wrap/secretfiles.go`). Such an image
