@@ -1,0 +1,1048 @@
+{
+  "schema": 1,
+  "title": "brig v0.3.0 Release Gate",
+  "eyebrow": "brig · release gate",
+  "headline": "Every blocker from run 1 passes on the final main",
+  "summary": "Two stress runs against brig main on a SIP-enabled Mac and two Ubuntu 24.04 hosts, and a delta pass on the final main. Run 1 found seven release blockers. After their fixes, run 2 passes all of them except the Homebrew tap check, which waits on hull#88.",
+  "generated": "2026-09-26T01:20:00Z",
+  "source": "Manual release-gate runs, 2026-09-25 and 2026-09-26",
+  "verdict": {
+    "status": "pending",
+    "label": "Not tagged yet",
+    "text": "No release blocker fails on 3e5ae98, and the delta pass found no regression. The tag waits on bundle rc10, which carries the --cpus fix."
+  },
+  "facts": [
+    {
+      "label": "brig main",
+      "value": "3e5ae98",
+      "url": "https://github.com/brig-sh/brig/commit/3e5ae98b45ee5ecca94bc338ef451b92085dd75e"
+    },
+    {
+      "label": "runtime bundle",
+      "value": "v0.1.0-rc9",
+      "url": "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/v0.1.0-rc9"
+    },
+    {
+      "label": "urunc",
+      "value": "0818ff1",
+      "url": "https://github.com/urunc-dev/urunc/commit/0818ff104781087a12a75059062c3407a8b97c8a"
+    },
+    {
+      "label": "hull",
+      "value": "rc29 main channel"
+    },
+    {
+      "label": "hosts",
+      "value": "3"
+    }
+  ],
+  "runs": [
+    {
+      "id": "run1",
+      "label": "Run 1",
+      "date": "2026-09-25",
+      "target": "brig 4ce5eee · bundle rc8",
+      "hosts": [
+        "mac",
+        "lnx-a",
+        "lnx-b"
+      ],
+      "note": "Before the fixes: brig 4ce5eee with bundle rc8. It needed workarounds for the HOME bug to get through the plan."
+    },
+    {
+      "id": "run2",
+      "label": "Run 2",
+      "date": "2026-09-26",
+      "target": "brig 77d44b1 · bundle rc9",
+      "hosts": [
+        "mac",
+        "lnx-a",
+        "lnx-b"
+      ],
+      "note": "After #343, #344, #345, #352 and bundle rc9. No workarounds."
+    },
+    {
+      "id": "delta",
+      "label": "Delta",
+      "date": "2026-09-26",
+      "target": "brig 3e5ae98 · bundle rc9",
+      "hosts": [
+        "mac",
+        "lnx-a"
+      ],
+      "note": "The final main: adds #342 (network posture), #341 (brig shell removed) and the rc9 pin (#356)."
+    }
+  ],
+  "hosts": [
+    {
+      "id": "mac",
+      "short": "macOS",
+      "label": "macOS 26.5, SIP on",
+      "detail": "arm64, 18 cores, 48 GB. Homebrew brig@main and hull@main, hvi backend."
+    },
+    {
+      "id": "lnx-a",
+      "short": "Ubuntu A",
+      "label": "Ubuntu 24.04, host A",
+      "detail": "amd64, 16 CPUs, 13 GB. Rootless user install. Run 2: fresh install."
+    },
+    {
+      "id": "lnx-b",
+      "short": "Ubuntu B",
+      "label": "Ubuntu 24.04, host B",
+      "detail": "amd64, 14 CPUs, 30 GB, shared with other work. Rootless user install. Run 2: upgrade from rc8."
+    }
+  ],
+  "blockers": [
+    {
+      "id": "home",
+      "name": "The guest HOME reached the runtime",
+      "detail": "brig put the guest's HOME into the runtime's own environment. hull then looked for its store under /root, and rootless nerdctl for /root/.docker/config.json.",
+      "fix": [
+        {
+          "text": "#337",
+          "url": "https://github.com/brig-sh/brig/issues/337"
+        },
+        {
+          "text": "#343",
+          "url": "https://github.com/brig-sh/brig/pull/343"
+        }
+      ],
+      "results": {
+        "run1": {
+          "mac": {
+            "status": "fail",
+            "note": "Every boot failed: mkdir /root: read-only file system."
+          },
+          "lnx-a": {
+            "status": "fail",
+            "note": "Every image pull failed with EACCES on /root/.docker/config.json."
+          },
+          "lnx-b": {
+            "status": "fail",
+            "note": "Same pull failure. Passed only with a DOCKER_CONFIG workaround."
+          }
+        },
+        "run2": {
+          "mac": {
+            "status": "pass",
+            "note": "All six profiles boot with no wrapper. hull's store stays in ~/.hull."
+          },
+          "lnx-a": {
+            "status": "pass",
+            "note": "ubuntu:latest removed, re-pulled and booted in 6.43 s."
+          },
+          "lnx-b": {
+            "status": "pass",
+            "note": "debian:bookworm-slim pulled and booted in 5.83 s."
+          }
+        },
+        "delta": {
+          "mac": {
+            "status": "pass",
+            "note": "All six profiles boot through Homebrew 3e5ae98, no wrapper."
+          },
+          "lnx-a": {
+            "status": "pass",
+            "note": "ubuntu:latest re-pulled (39.7 M), DOCKER_CONFIG unset."
+          }
+        }
+      }
+    },
+    {
+      "id": "exec",
+      "name": "Short guest commands lost their output",
+      "detail": "urunc's in-guest agent reported a command's exit before its output was drained, so a short command could come back empty with exit 0.",
+      "fix": [
+        {
+          "text": "urunc 0818ff1",
+          "url": "https://github.com/urunc-dev/urunc/commit/0818ff104781087a12a75059062c3407a8b97c8a"
+        },
+        {
+          "text": "bundle #10",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/10"
+        },
+        {
+          "text": "#356",
+          "url": "https://github.com/brig-sh/brig/pull/356"
+        }
+      ],
+      "results": {
+        "run1": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only."
+          },
+          "lnx-a": {
+            "status": "fail",
+            "note": "Empty output: raw exec 15/100, exec -it 6/100, brig sh 12/100."
+          },
+          "lnx-b": {
+            "status": "skip",
+            "note": "Not counted per path on this host."
+          }
+        },
+        "run2": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only. The macOS path gave 100/100."
+          },
+          "lnx-a": {
+            "status": "pass",
+            "note": "0/100 empty on every path."
+          },
+          "lnx-b": {
+            "status": "pass",
+            "note": "0/100 empty on all five paths."
+          }
+        },
+        "delta": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only."
+          },
+          "lnx-a": {
+            "status": "pass",
+            "note": "brig sh: 100/100 correct."
+          }
+        }
+      }
+    },
+    {
+      "id": "claude",
+      "name": "claude-code refused healthy sandboxes",
+      "detail": "brig reads a few answers from the guest before it hands claude-code a credential. A lost answer read as a .claude mount that was not ephemeral, so brig refused.",
+      "fix": [
+        {
+          "text": "bundle rc9",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/v0.1.0-rc9"
+        },
+        {
+          "text": "#354 (retry, in review)",
+          "url": "https://github.com/brig-sh/brig/pull/354"
+        }
+      ],
+      "results": {
+        "run1": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only."
+          },
+          "lnx-a": {
+            "status": "fail",
+            "note": "3 of 20 sequential cycles refused."
+          },
+          "lnx-b": {
+            "status": "fail",
+            "note": "4 of 20 sequential cycles refused."
+          }
+        },
+        "run2": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only. 0 of 30 on macOS."
+          },
+          "lnx-a": {
+            "status": "pass",
+            "note": "0 of 30 boots refused, plus 0 of 20 sequential."
+          },
+          "lnx-b": {
+            "status": "pass",
+            "note": "0 of 30 boots refused, plus 0 of 20 sequential."
+          }
+        }
+      }
+    },
+    {
+      "id": "grants",
+      "name": "A second rootless user took the first one's device grant",
+      "detail": "Every user's setup wrote one shared udev rule, so the last user to run it held the grant, and every re-run asked for sudo.",
+      "fix": [
+        {
+          "text": "bundle #6",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/6"
+        }
+      ],
+      "results": {
+        "run1": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only."
+          },
+          "lnx-a": {
+            "status": "fail",
+            "note": "One shared 99-brig-kvm.rules; re-runs always wanted sudo."
+          },
+          "lnx-b": {
+            "status": "fail",
+            "note": "One shared 99-brig-kvm.rules; re-runs always wanted sudo."
+          }
+        },
+        "run2": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only."
+          },
+          "lnx-a": {
+            "status": "pass",
+            "note": "Fresh install and brig-ctl rootless: no sudo call, no rule file changed."
+          },
+          "lnx-b": {
+            "status": "pass",
+            "note": "Upgrade and brig-ctl rootless: 0 sudo calls, both rule hashes unchanged."
+          }
+        }
+      }
+    },
+    {
+      "id": "nosudo",
+      "name": "A no-sudo user install did not stop cleanly",
+      "detail": "A user without sudo rights and without the one-time host preparation got a half-done install.",
+      "fix": [
+        {
+          "text": "bundle #7",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/7"
+        }
+      ],
+      "results": {
+        "run1": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only."
+          },
+          "lnx-a": {
+            "status": "fail",
+            "note": "Unpacked the bundle, then prompted for a sudo password it could not read."
+          },
+          "lnx-b": {
+            "status": "fail",
+            "note": "Unpacked the bundle, then failed: sudo needs a password."
+          }
+        },
+        "run2": {
+          "mac": {
+            "status": "na",
+            "note": "Linux only."
+          },
+          "lnx-a": {
+            "status": "na",
+            "note": "Tested on host B."
+          },
+          "lnx-b": {
+            "status": "pass",
+            "note": "Stopped after 7.8 s with one root block. The bundle was not downloaded."
+          }
+        }
+      }
+    },
+    {
+      "id": "gatekeeper",
+      "name": "A quarantined brig@main hung over SSH",
+      "detail": "An ad-hoc signed channel build waited for a Gatekeeper prompt that a headless session cannot show.",
+      "fix": [
+        {
+          "text": "#331",
+          "url": "https://github.com/brig-sh/brig/pull/331"
+        }
+      ],
+      "results": {
+        "run1": {
+          "mac": {
+            "status": "pass",
+            "note": "Notarized build: the first run printed at once."
+          },
+          "lnx-a": {
+            "status": "na",
+            "note": "macOS only."
+          },
+          "lnx-b": {
+            "status": "na",
+            "note": "macOS only."
+          }
+        },
+        "run2": {
+          "mac": {
+            "status": "pass",
+            "note": "First brig version in 0.35 s. spctl: Notarized Developer ID."
+          },
+          "lnx-a": {
+            "status": "na",
+            "note": "macOS only."
+          },
+          "lnx-b": {
+            "status": "na",
+            "note": "macOS only."
+          }
+        },
+        "delta": {
+          "mac": {
+            "status": "pass",
+            "note": "Quarantined first run printed in 0.32 s. spctl: Notarized Developer ID."
+          },
+          "lnx-a": {
+            "status": "na",
+            "note": "macOS only."
+          }
+        }
+      }
+    },
+    {
+      "id": "tap",
+      "name": "Homebrew 7 rejects the tap",
+      "detail": "The tap's hull@main.rb has no URL for Intel Macs and no Linux stanza, so brew readall, and a re-tap of a trusted tap, fail for the whole tap.",
+      "fix": [
+        {
+          "text": "hull#88 (in review)",
+          "url": "https://github.com/brig-sh/hull/pull/88"
+        },
+        {
+          "text": "homebrew-brig#15",
+          "url": "https://github.com/brig-sh/homebrew-brig/pull/15"
+        }
+      ],
+      "results": {
+        "run1": {
+          "mac": {
+            "status": "fail",
+            "note": "brew readall brig-sh/brig fails on hull@main.rb."
+          },
+          "lnx-a": {
+            "status": "na",
+            "note": "macOS only."
+          },
+          "lnx-b": {
+            "status": "na",
+            "note": "macOS only."
+          }
+        },
+        "run2": {
+          "mac": {
+            "status": "expected",
+            "note": "Still fails, as expected until hull#88 merges."
+          },
+          "lnx-a": {
+            "status": "na",
+            "note": "macOS only."
+          },
+          "lnx-b": {
+            "status": "na",
+            "note": "macOS only."
+          }
+        }
+      }
+    }
+  ],
+  "checks": {
+    "run": "run2",
+    "hosts": {
+      "mac": [
+        {
+          "group": "Install",
+          "name": "brew upgrade to brig@main 77d44b1",
+          "status": "pass",
+          "evidence": "brig@main 0.2.1-0.20260925223834-80e3797f18b1 -> 0.2.1-0.20260925225110-77d44b107429, rc=0"
+        },
+        {
+          "group": "Install",
+          "name": "version, doctor, info",
+          "status": "pass",
+          "evidence": "version --json: \"commit\": \"77d44b107429...\"; doctor: runtime hull at /opt/homebrew/bin/hull"
+        },
+        {
+          "group": "Profiles",
+          "name": "Every shipped profile boots",
+          "status": "pass",
+          "evidence": "claude-code, codex, gemini, grok, opencode, ubuntu: rc=0. cursor: we do not publish an image for \"cursor\""
+        },
+        {
+          "group": "Profiles",
+          "name": "claude-desktop over SSH (vz)",
+          "status": "warn",
+          "evidence": "sandbox did not become ready after 86.7 s. Run 1 booted it. To investigate."
+        },
+        {
+          "group": "Features",
+          "name": "rm and --home (#328, #329)",
+          "status": "pass",
+          "evidence": "removed ubuntu and its guest home; The guest home .../keep-home stays on the host"
+        },
+        {
+          "group": "Features",
+          "name": "Failed first boot leaves no home (#344)",
+          "status": "pass",
+          "evidence": "after a pull failure: ~/.brig/homes: []"
+        },
+        {
+          "group": "Features",
+          "name": "Advice names --home (#345)",
+          "status": "pass",
+          "evidence": "Point --home (or BRIG_WORKSPACE) at the real directory"
+        },
+        {
+          "group": "Features",
+          "name": "Port publishing (#228)",
+          "status": "pass",
+          "evidence": "127.0.0.1 answers hello-from-guest; LAN gets curl rc=7; 0.0.0.0 answers on the LAN. See the 30 s restart finding."
+        },
+        {
+          "group": "Security",
+          "name": "Project symlink refused (#332)",
+          "status": "pass",
+          "evidence": "refusing to use .../mono/frontend as this run's project: it is a symlink; canary sha1 9dd825ce... unchanged"
+        },
+        {
+          "group": "Stress",
+          "name": "claude-code, 30 boots",
+          "status": "pass",
+          "evidence": "boot rc!=0: 0; missing ok-N: 0; .claude refusals: 0"
+        },
+        {
+          "group": "Stress",
+          "name": "100 short commands",
+          "status": "pass",
+          "evidence": "missing=0 wrong=0"
+        },
+        {
+          "group": "Stress",
+          "name": "Sequential, 20 cycles each",
+          "status": "pass",
+          "evidence": "ubuntu and claude-code: 0 failures, no home left"
+        },
+        {
+          "group": "Stress",
+          "name": "Parallel, N=6",
+          "status": "pass",
+          "evidence": "6/6 up per profile, distinct boot IDs and IPs, all rm rc=0"
+        },
+        {
+          "group": "Stress",
+          "name": "Stop/start churn, 10 cycles each",
+          "status": "pass",
+          "evidence": "home survived 10/10; after rm and a fresh run: NO-MARKER"
+        },
+        {
+          "group": "Stress",
+          "name": "Leftovers after each block",
+          "status": "pass",
+          "evidence": "hull ps: No instances found; no VMM processes; ~/.brig/homes empty"
+        },
+        {
+          "group": "Security",
+          "name": "Secrets in the keychain (#313)",
+          "status": "skip",
+          "evidence": "security show-keychain-info: User interaction is not allowed (rc=36) over SSH"
+        }
+      ],
+      "lnx-a": [
+        {
+          "group": "Install",
+          "name": "brig-ctl uninstall",
+          "status": "warn",
+          "evidence": "done in 2 s, but ~/.local/share/containerd (11 GB, subuid-owned) stays behind"
+        },
+        {
+          "group": "Install",
+          "name": "Fresh install with install.sh",
+          "status": "pass",
+          "evidence": "exit 0 in 11.73 s, no sudo: the brig runtime bundle v0.1.0-rc9 is installed (user)"
+        },
+        {
+          "group": "Install",
+          "name": "Swap in brig main 77d44b1",
+          "status": "pass",
+          "evidence": "brig-0.2.1-...-linux-amd64.tar.gz: OK; brig v0.2.1-0.20260925225110-77d44b107429"
+        },
+        {
+          "group": "Install",
+          "name": "PATH advice for a user install (#352)",
+          "status": "pass",
+          "evidence": "`brig` on your PATH is /usr/local/bin/brig, so it runs instead of this install"
+        },
+        {
+          "group": "Install",
+          "name": "brig-ctl ctr as a rootless user",
+          "status": "pass",
+          "evidence": "brig-ctl ctr containers ls: CONTAINER IMAGE RUNTIME, exit 0"
+        },
+        {
+          "group": "Install",
+          "name": "version, doctor, info",
+          "status": "pass",
+          "evidence": "doctor names the brig build; a stale v0.2.0 brigd shows !! restart brigd"
+        },
+        {
+          "group": "Profiles",
+          "name": "Every shipped profile boots",
+          "status": "pass",
+          "evidence": "six profiles as uid 0; claude-desktop and cursor refused by name"
+        },
+        {
+          "group": "Features",
+          "name": "Failed first boot leaves no home (#344)",
+          "status": "pass",
+          "evidence": "deleted the guest home .../brig-ubuntu-ghost2, since no sandbox booted on it"
+        },
+        {
+          "group": "Features",
+          "name": "Advice names --home (#345)",
+          "status": "pass",
+          "evidence": "Pass --home /home/brigtest/brig/ubuntu to keep using it."
+        },
+        {
+          "group": "Features",
+          "name": "rm and --home (#328, #329)",
+          "status": "pass",
+          "evidence": "home survives stop and goes with rm; --home and BRIG_WORKSPACE homes stay"
+        },
+        {
+          "group": "Features",
+          "name": "Port publishing (#228)",
+          "status": "pass",
+          "evidence": "curl from the host returns hello-from-guest. brig stop keeps the port (known)."
+        },
+        {
+          "group": "Security",
+          "name": "Project symlink refused (#332)",
+          "status": "pass",
+          "evidence": "links planted from inside the sandbox all refused; canary sha 110843a6... unchanged"
+        },
+        {
+          "group": "Security",
+          "name": "Guest-planted .claude.json link",
+          "status": "pass",
+          "evidence": "refusing to seed .../.claude.json: it is a symlink"
+        },
+        {
+          "group": "Stress",
+          "name": "Sequential, 20 cycles each",
+          "status": "pass",
+          "evidence": "ubuntu and claude-code: 0 failures, 0 refusals"
+        },
+        {
+          "group": "Stress",
+          "name": "Parallel, N=3",
+          "status": "pass",
+          "evidence": "3/3 up; 10546 MB still available at peak"
+        },
+        {
+          "group": "Stress",
+          "name": "Stop/start churn, 10 cycles",
+          "status": "pass",
+          "evidence": "10/10 restarts; home survives stop, goes with rm"
+        },
+        {
+          "group": "Stress",
+          "name": "Leftovers after each block",
+          "status": "pass",
+          "evidence": "0 containers and tasks, 38 committed snapshots (baseline), no VMM or shim"
+        },
+        {
+          "group": "Features",
+          "name": "--cpus sets guest vCPUs",
+          "status": "fail",
+          "evidence": "guest nproc=1 whatever --cpus says; cloud-hypervisor gets --cpus boot=1"
+        }
+      ],
+      "lnx-b": [
+        {
+          "group": "Install",
+          "name": "Upgrade rc8 to rc9 with install.sh",
+          "status": "pass",
+          "evidence": "exit 0 in 14.7 s; pins.env: BUNDLE_VERSION=v0.1.0-rc9, URUNC_REF=0818ff1...; image store kept"
+        },
+        {
+          "group": "Install",
+          "name": "PATH advice for a user install (#352)",
+          "status": "pass",
+          "evidence": "put /home/brigtest/.local/bin before .../shadowbin on PATH"
+        },
+        {
+          "group": "Install",
+          "name": "brig-ctl ctr as a rootless user",
+          "status": "pass",
+          "evidence": "brig-ctl ctr containers ls: rc=0. On rc8: cannot access socket"
+        },
+        {
+          "group": "Install",
+          "name": "Swap in brig main 77d44b1",
+          "status": "pass",
+          "evidence": "...77d44b107429-linux-amd64.tar.gz: OK"
+        },
+        {
+          "group": "Install",
+          "name": "doctor names brigd (#230)",
+          "status": "pass",
+          "evidence": "matching: ok brigd ... (77d44b1). Stale: !! brigd ... build 0.2.0, restart brigd"
+        },
+        {
+          "group": "Profiles",
+          "name": "Every shipped profile boots",
+          "status": "pass",
+          "evidence": "six profiles, uid 0, kernel 6.18.0urunc; claude has IS_SANDBOX=1"
+        },
+        {
+          "group": "Features",
+          "name": "rm and --home (#328, #329)",
+          "status": "pass",
+          "evidence": "The project ... stays on the host; kept.txt comes back through --home"
+        },
+        {
+          "group": "Features",
+          "name": "Failed first boot leaves no home (#344)",
+          "status": "pass",
+          "evidence": "missing image: no brig-ubuntu-fail344 home"
+        },
+        {
+          "group": "Features",
+          "name": "Advice names --home (#345)",
+          "status": "pass",
+          "evidence": "Point --home (or BRIG_WORKSPACE) at the real directory"
+        },
+        {
+          "group": "Features",
+          "name": "Port publishing (#228)",
+          "status": "pass",
+          "evidence": "curl gets pp-ok on 127.0.0.1 only. brig stop keeps the port (known)."
+        },
+        {
+          "group": "Security",
+          "name": "Project symlink refused (#332)",
+          "status": "pass",
+          "evidence": "canary tree hash 95271a725ffd63ee unchanged; projectRefused in info --json"
+        },
+        {
+          "group": "Stress",
+          "name": "Sequential, 20 cycles each",
+          "status": "pass",
+          "evidence": "0 failures and 0 refusals"
+        },
+        {
+          "group": "Stress",
+          "name": "Parallel, N=4",
+          "status": "pass",
+          "evidence": "all four Up, every sh ok, rm --all -y removes four"
+        },
+        {
+          "group": "Stress",
+          "name": "Stop/start churn, 10 cycles each",
+          "status": "pass",
+          "evidence": "home survives stop, gone after rm"
+        },
+        {
+          "group": "Stress",
+          "name": "Leftovers after each block",
+          "status": "pass",
+          "evidence": "VMM count 0, snapshots at baseline 39, no mounts, no loop devices"
+        }
+      ]
+    }
+  },
+  "timings": {
+    "unit": "s",
+    "baseline": "run1",
+    "current": "run2",
+    "flag_percent": 25,
+    "metrics": [
+      {
+        "name": "ubuntu boot",
+        "note": "median of 20 sequential boots",
+        "values": {
+          "mac": [
+            4.11,
+            4.09
+          ],
+          "lnx-a": [
+            2.78,
+            3.0
+          ],
+          "lnx-b": [
+            2.79,
+            2.97
+          ]
+        }
+      },
+      {
+        "name": "claude-code boot",
+        "note": "median of 20 sequential boots",
+        "values": {
+          "mac": [
+            9.85,
+            9.86
+          ],
+          "lnx-a": [
+            7.27,
+            7.44
+          ],
+          "lnx-b": [
+            7.2,
+            7.39
+          ]
+        }
+      },
+      {
+        "name": "claude-code in parallel",
+        "note": "wall time until all are up; N=6 on macOS, 3 on host A, 4 on host B",
+        "values": {
+          "mac": [
+            24.35,
+            22.96
+          ],
+          "lnx-a": [
+            7.55,
+            7.68
+          ],
+          "lnx-b": [
+            8.04,
+            8.22
+          ]
+        }
+      },
+      {
+        "name": "claude-code restart",
+        "note": "median start after stop, 10 cycles",
+        "values": {
+          "mac": [
+            10.67,
+            10.66
+          ],
+          "lnx-a": [
+            7.58,
+            7.46
+          ],
+          "lnx-b": [
+            7.37,
+            7.85
+          ]
+        }
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "title": "The guest HOME reached the runtime",
+      "component": "brig",
+      "status": "fixed",
+      "detail": "Every macOS boot and every rootless Linux image pull failed.",
+      "links": [
+        {
+          "text": "#343",
+          "url": "https://github.com/brig-sh/brig/pull/343"
+        }
+      ]
+    },
+    {
+      "severity": "high",
+      "title": "Short guest commands lost their output",
+      "component": "urunc",
+      "status": "fixed",
+      "detail": "Fixed in bundle rc9, which brig's install.sh now pins.",
+      "links": [
+        {
+          "text": "bundle #10",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/10"
+        },
+        {
+          "text": "#356",
+          "url": "https://github.com/brig-sh/brig/pull/356"
+        }
+      ]
+    },
+    {
+      "severity": "high",
+      "title": "claude-code refused healthy sandboxes",
+      "component": "brig, urunc",
+      "status": "fixed",
+      "detail": "Gone with rc9's exec fix. #354 adds a retry on top.",
+      "links": [
+        {
+          "text": "#354",
+          "url": "https://github.com/brig-sh/brig/pull/354"
+        }
+      ]
+    },
+    {
+      "severity": "high",
+      "title": "Homebrew 7 rejects the tap's hull@main.rb",
+      "component": "hull",
+      "status": "review",
+      "detail": "The channel cask is rendered with a top-level URL and depends_on :macos.",
+      "links": [
+        {
+          "text": "hull#88",
+          "url": "https://github.com/brig-sh/hull/pull/88"
+        }
+      ]
+    },
+    {
+      "severity": "medium",
+      "title": "A second rootless user took the first one's device grant",
+      "component": "bundle",
+      "status": "fixed",
+      "detail": "Each user now gets 99-brig-kvm-<user>.rules.",
+      "links": [
+        {
+          "text": "bundle #6",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/6"
+        }
+      ]
+    },
+    {
+      "severity": "medium",
+      "title": "A no-sudo user install did not stop cleanly",
+      "component": "bundle",
+      "status": "fixed",
+      "detail": "It now stops before the download and prints one root block.",
+      "links": [
+        {
+          "text": "bundle #7",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/7"
+        }
+      ]
+    },
+    {
+      "severity": "medium",
+      "title": "--cpus has no effect on Linux",
+      "component": "urunc",
+      "status": "progress",
+      "detail": "urunc used its default_vcpus (1) and never read the container's CPU limit. urunc 74dd0cc sizes the guest from it; bundle rc10 will carry it.",
+      "links": [
+        {
+          "text": "urunc 74dd0cc",
+          "url": "https://github.com/urunc-dev/urunc/commit/74dd0cc9e3028ea18c5daff69e4ba5452075f21d"
+        },
+        {
+          "text": "bundle #11",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/11"
+        }
+      ]
+    },
+    {
+      "severity": "medium",
+      "title": "brig-ctl uninstall leaves an image store the user cannot delete",
+      "component": "bundle",
+      "status": "open",
+      "detail": "About 11 GB under ~/.local/share/containerd stays behind, owned by subuids. A later install silently reuses it.",
+      "links": []
+    },
+    {
+      "severity": "medium",
+      "title": "A published port hangs for about 30 s after a restart",
+      "component": "hull",
+      "status": "open",
+      "detail": "On macOS the guest gets a new MAC on every boot but keeps its IP, so the gateway dials a stale entry.",
+      "links": []
+    },
+    {
+      "severity": "low",
+      "title": "Re-running brig-ctl rootless restarts containerd",
+      "component": "bundle",
+      "status": "open",
+      "detail": "Running sandboxes drop, and the next brig sh boots a new one.",
+      "links": []
+    },
+    {
+      "severity": "low",
+      "title": "\"Nothing was downloaded\" is not quite true",
+      "component": "brig install.sh",
+      "status": "open",
+      "detail": "brig's installer fetches cosign and the brig tarball before the bundle installer stops; ~/.sigstore stays.",
+      "links": []
+    },
+    {
+      "severity": "low",
+      "title": "brig stop keeps a published host port on rootless Linux",
+      "component": "brig",
+      "status": "review",
+      "detail": "Documented in #350; the port is freed on rm.",
+      "links": [
+        {
+          "text": "#350",
+          "url": "https://github.com/brig-sh/brig/pull/350"
+        }
+      ]
+    },
+    {
+      "severity": "low",
+      "title": "brig <verb> --help exits 2",
+      "component": "brig",
+      "status": "filed",
+      "detail": "Top-level verbs refuse --help and -h as unknown flags.",
+      "links": [
+        {
+          "text": "#357",
+          "url": "https://github.com/brig-sh/brig/issues/357"
+        }
+      ]
+    },
+    {
+      "severity": "low",
+      "title": "Publishing accepts a sandbox that does not exist",
+      "component": "brig",
+      "status": "open",
+      "detail": "Failed first boots also leave entries in slug-claims.json.",
+      "links": []
+    },
+    {
+      "severity": "low",
+      "title": "claude-desktop over SSH did not become ready",
+      "component": "brig, hull",
+      "status": "open",
+      "detail": "Timed out after 86.7 s in run 2; run 1 booted it. To investigate.",
+      "links": []
+    },
+    {
+      "severity": "low",
+      "title": "A guest home outlives a sandbox removed outside brig",
+      "component": "brig",
+      "status": "open",
+      "detail": "After hull rm and a brig ls prune, the home stays until that ref's next run. A refused vz run also leaves a slug claim.",
+      "links": []
+    }
+  ],
+  "open": [
+    {
+      "title": "Delta pass on brig main 3e5ae98",
+      "status": "fixed",
+      "detail": "Passed on macOS and host A with no regression: #342's postures on hvi and nerdctl, #341's brig shell removal, a forced pull, 100/100 exec, every profile."
+    },
+    {
+      "title": "Bundle rc10 with the --cpus fix",
+      "status": "progress",
+      "detail": "urunc 74dd0cc is on the combined branch and bundle #11's CI is green. A live nproc check runs next, then the tag and brig's install.sh pin.",
+      "links": [
+        {
+          "text": "bundle #11",
+          "url": "https://github.com/NOFireAI/brig-standalone-linux/pull/11"
+        }
+      ]
+    },
+    {
+      "title": "hull#88, the Homebrew 7 tap fix",
+      "status": "review",
+      "detail": "Ready for review. The tap check stays red until it merges.",
+      "links": [
+        {
+          "text": "hull#88",
+          "url": "https://github.com/brig-sh/hull/pull/88"
+        }
+      ]
+    },
+    {
+      "title": "Fix PRs waiting for review",
+      "status": "review",
+      "detail": "Not blockers: #346, #347, #348, #349, #350, #353, #354."
+    },
+    {
+      "title": "Scheduled real-runtime tests",
+      "status": "filed",
+      "detail": "A canary on every channel publish and a nightly run, rendering this same page.",
+      "links": [
+        {
+          "text": "#358",
+          "url": "https://github.com/brig-sh/brig/issues/358"
+        }
+      ]
+    }
+  ]
+}

@@ -152,3 +152,11 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -s sh install.sh script/test-install.sh
           sh script/test-install.sh
+
+      # The e2e job needs a real runtime and runs nightly. Its report tools
+      # need neither, so a broken renderer or results.py fails here first.
+      - name: Check the e2e scripts
+        run: |
+          set -eu
+          shellcheck script/e2e/*.sh
+          sh script/e2e/test-render-report.sh

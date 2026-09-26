@@ -1,0 +1,511 @@
+<title>__REPORT_TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #f4f5f2;
+  --surface: #ffffff;
+  --surface-2: #eceeea;
+  --ink: #15212a;
+  --ink-2: #4b5961;
+  --ink-3: #6f7c83;
+  --rule: #d6dbd8;
+  --accent: #946619;
+  --accent-soft: #f1e5cc;
+  --pass: #20704a;
+  --pass-bg: #dcefe3;
+  --fail: #b0382a;
+  --fail-bg: #f7ddd8;
+  --warn: #875800;
+  --warn-bg: #f5e7c6;
+  --na: #66737a;
+  --na-bg: #e5e9e8;
+  --run: #2c5d88;
+  --run-bg: #dbe7f2;
+  --bar-base: #aab4b9;
+  --bar-now: #15212a;
+  --sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --cond: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0e171d;
+    --surface: #152129;
+    --surface-2: #1b2932;
+    --ink: #e1e7e9;
+    --ink-2: #a3b3ba;
+    --ink-3: #7f8f97;
+    --rule: #2a3a44;
+    --accent: #d8a84c;
+    --accent-soft: #3a2f1a;
+    --pass: #6fcb99;
+    --pass-bg: #163427;
+    --fail: #f08b7b;
+    --fail-bg: #3d1f1a;
+    --warn: #e7b85c;
+    --warn-bg: #392d15;
+    --na: #93a2a9;
+    --na-bg: #23313a;
+    --run: #8fbbe1;
+    --run-bg: #1a2e40;
+    --bar-base: #4d5e68;
+    --bar-now: #e1e7e9;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e171d;
+  --surface: #152129;
+  --surface-2: #1b2932;
+  --ink: #e1e7e9;
+  --ink-2: #a3b3ba;
+  --ink-3: #7f8f97;
+  --rule: #2a3a44;
+  --accent: #d8a84c;
+  --accent-soft: #3a2f1a;
+  --pass: #6fcb99;
+  --pass-bg: #163427;
+  --fail: #f08b7b;
+  --fail-bg: #3d1f1a;
+  --warn: #e7b85c;
+  --warn-bg: #392d15;
+  --na: #93a2a9;
+  --na-bg: #23313a;
+  --run: #8fbbe1;
+  --run-bg: #1a2e40;
+  --bar-base: #4d5e68;
+  --bar-now: #e1e7e9;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 var(--sans);
+  padding-inline: 20px;
+  padding-block: 28px 56px;
+}
+.wrap { max-width: 1200px; margin: 0 auto; display: grid; gap: 44px; }
+a { color: inherit; text-decoration-color: var(--accent); text-underline-offset: 2px; }
+a:hover { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+h1, h2, h3 { font-family: var(--cond); text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(28px, 4.2vw, 42px); line-height: 1.08; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 22px; font-weight: 600; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow, .label {
+  font-family: var(--cond);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.eyebrow { color: var(--accent); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.muted { color: var(--ink-2); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* header */
+header { display: grid; gap: 18px; }
+.head-top { display: flex; flex-wrap: wrap; gap: 20px 32px; align-items: flex-start; justify-content: space-between; }
+.head-text { display: grid; gap: 10px; flex: 1 1 520px; }
+.verdict {
+  flex: 0 1 320px;
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--v, var(--run));
+  border-radius: 6px;
+}
+.verdict[data-status="go"] { --v: var(--pass); }
+.verdict[data-status="no-go"] { --v: var(--fail); }
+.verdict[data-status="pending"] { --v: var(--accent); }
+.verdict .v-label { font-family: var(--cond); font-size: 20px; font-weight: 700; }
+.verdict p { font-size: 14px; color: var(--ink-2); }
+.facts { display: flex; flex-wrap: wrap; gap: 10px 28px; padding-top: 14px; border-top: 1px solid var(--rule); }
+.fact { display: grid; gap: 2px; }
+.fact .value { font-family: var(--mono); font-size: 14px; }
+
+/* chips */
+.chip {
+  display: inline-block;
+  font-family: var(--cond);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+  color: var(--c);
+  background: var(--cb);
+}
+.s-pass { --c: var(--pass); --cb: var(--pass-bg); }
+.s-fail { --c: var(--fail); --cb: var(--fail-bg); }
+.s-expected, .s-warn, .s-review, .s-progress { --c: var(--warn); --cb: var(--warn-bg); }
+.s-na, .s-skip, .s-open, .s-filed { --c: var(--na); --cb: var(--na-bg); }
+.s-running { --c: var(--run); --cb: var(--run-bg); }
+.s-fixed { --c: var(--pass); --cb: var(--pass-bg); }
+
+/* sections */
+section { display: grid; gap: 16px; }
+.sec-head { display: grid; gap: 6px; }
+.scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+tbody tr:last-child td { border-bottom: 0; }
+thead th { background: var(--surface-2); font-weight: 500; }
+
+/* blocker matrix */
+.matrix { min-width: 900px; table-layout: fixed; }
+.matrix .run-head { border-left: 2px solid var(--rule); }
+.matrix .run-head .label { color: var(--ink); font-size: 13px; }
+.matrix .run-head .target { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); font-weight: 400; }
+.matrix .host-head { font-family: var(--cond); font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.matrix td.first-of-run, .matrix th.first-of-run { border-left: 2px solid var(--rule); }
+.matrix td.cell, .matrix th.host-head { width: 116px; font-size: 12.5px; color: var(--ink-2); padding: 10px 9px; }
+.matrix td.cell .chip { margin-bottom: 4px; }
+.matrix td.cell p { font-size: 12.5px; line-height: 1.4; }
+.matrix .b-name { font-weight: 600; font-size: 14.5px; }
+.matrix .b-detail { font-size: 13px; color: var(--ink-2); margin-top: 4px; }
+.matrix .b-fix { margin-top: 6px; font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.matrix .b-col { width: 232px; }
+.empty { color: var(--ink-3); }
+
+/* host checks */
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tab {
+  font: 600 13px/1 var(--cond);
+  letter-spacing: 0.02em;
+  padding: 9px 14px;
+  border-radius: 5px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.tab[aria-selected="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.host-meta { display: grid; gap: 4px; }
+.checks { min-width: 720px; }
+.checks td.g { width: 96px; color: var(--ink-3); font-family: var(--cond); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.checks td.n { width: 260px; font-weight: 500; }
+.checks td.s { width: 92px; }
+.checks td.e { font-family: var(--mono); font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* timings */
+.timing-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.metric { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: grid; gap: 12px; align-content: start; }
+.metric .m-note { font-size: 12.5px; color: var(--ink-3); }
+.bars { display: grid; gap: 10px; }
+.bar-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; }
+.bar-row .h { font-family: var(--cond); font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.bar-pair { display: grid; gap: 3px; }
+.bar { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; align-items: center; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.bar .track { display: block; height: 8px; }
+.bar .track i { display: block; height: 100%; border-radius: 2px; background: var(--bar-base); }
+.bar.now .track i { background: var(--bar-now); }
+.bar .v { white-space: nowrap; }
+.bar .d { color: var(--ink-3); }
+.bar .d.up { color: var(--warn); }
+.bar .d.flag { color: var(--fail); font-weight: 500; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--ink-2); align-items: center; }
+.legend span { display: inline-flex; gap: 6px; align-items: center; }
+.legend i { width: 14px; height: 8px; border-radius: 2px; background: var(--bar-base); display: inline-block; }
+.legend i.now { background: var(--bar-now); }
+
+/* findings */
+.findings { display: grid; gap: 10px; }
+.finding {
+  display: grid;
+  grid-template-columns: 6px 1fr;
+  gap: 0 14px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 12px 16px 12px 0;
+  overflow: hidden;
+}
+.finding .stripe { background: var(--sev); border-radius: 0 3px 3px 0; }
+.finding[data-sev="high"] { --sev: var(--fail); }
+.finding[data-sev="medium"] { --sev: var(--warn); }
+.finding[data-sev="low"] { --sev: var(--bar-base); }
+.finding .f-body { display: grid; gap: 5px; }
+.finding .f-top { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+.finding .f-title { font-weight: 600; }
+.finding .f-meta { font-size: 12.5px; color: var(--ink-3); }
+.finding .f-detail { font-size: 13.5px; color: var(--ink-2); }
+.finding .f-links { font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; }
+.filter { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* open items */
+.open-list { display: grid; gap: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+.open-item { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--rule); }
+.open-item:last-child { border-bottom: 0; }
+.open-item .o-title { font-weight: 600; }
+.open-item .o-detail { font-size: 13.5px; color: var(--ink-2); }
+
+footer { font-size: 12.5px; color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: 14px; display: grid; gap: 4px; }
+
+@media (max-width: 560px) {
+  body { padding-inline: 16px; }
+  .open-item { grid-template-columns: 1fr; gap: 6px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tab { transition: background-color .15s ease, color .15s ease; }
+}
+</style>
+
+<div class="wrap" id="app"></div>
+
+<script id="report-data" type="application/json">__REPORT_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var data = JSON.parse(document.getElementById("report-data").textContent);
+  var app = document.getElementById("app");
+
+  var LABELS = {
+    pass: "Pass", fail: "Fail", expected: "Expected fail", warn: "Needs a look",
+    skip: "Not tested", na: "N/A", running: "Running",
+    fixed: "Fixed", review: "In review", progress: "In progress", open: "Not filed", filed: "Filed"
+  };
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function chip(status) {
+    var s = String(status || "na");
+    return '<span class="chip s-' + esc(s) + '">' + esc(LABELS[s] || s) + "</span>";
+  }
+  function link(l) {
+    if (!l) return "";
+    if (!l.url) return esc(l.text);
+    return '<a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.text) + "</a>";
+  }
+  function hostById(id) {
+    var hs = data.hosts || [];
+    for (var i = 0; i < hs.length; i++) if (hs[i].id === id) return hs[i];
+    return { id: id, short: id, label: id };
+  }
+  function heading(key, label, title) {
+    var h = (data.headings || {})[key] || [];
+    return '<span class="label">' + esc(h[0] || label) + "</span><h2>" + esc(h[1] || title) + "</h2>";
+  }
+  function fmtDate(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  }
+
+  function renderHeader() {
+    var v = data.verdict || {};
+    var facts = (data.facts || []).map(function (f) {
+      var val = f.url ? '<a class="value" href="' + esc(f.url) + '" target="_blank" rel="noopener">' + esc(f.value) + "</a>"
+                      : '<span class="value">' + esc(f.value) + "</span>";
+      return '<div class="fact"><span class="label">' + esc(f.label) + "</span>" + val + "</div>";
+    }).join("");
+    return '<header>' +
+      '<div class="head-top">' +
+        '<div class="head-text">' +
+          '<div class="eyebrow">' + esc(data.eyebrow || "") + "</div>" +
+          "<h1>" + esc(data.headline || data.title) + "</h1>" +
+          (data.summary ? '<p class="muted">' + esc(data.summary) + "</p>" : "") +
+        "</div>" +
+        (v.label ? '<div class="verdict" data-status="' + esc(v.status || "pending") + '">' +
+          '<span class="label">Verdict</span>' +
+          '<span class="v-label">' + esc(v.label) + "</span>" +
+          (v.text ? "<p>" + esc(v.text) + "</p>" : "") +
+        "</div>" : "") +
+      "</div>" +
+      (facts ? '<div class="facts">' + facts + "</div>" : "") +
+    "</header>";
+  }
+
+  function renderBlockers() {
+    var runs = data.runs || [];
+    var bl = data.blockers || [];
+    if (!bl.length || !runs.length) return "";
+    var col = ((data.headings || {}).blockers || [])[2] || "Blocker";
+    var head1 = '<tr><th class="b-col" rowspan="2"><span class="label">' + esc(col) + "</span></th>" + runs.map(function (r) {
+      return '<th class="run-head" colspan="' + r.hosts.length + '"><div class="label">' + esc(r.label) +
+        " · " + esc(r.date || "") + '</div><div class="target">' + esc(r.target || "") + "</div></th>";
+    }).join("") + "</tr>";
+    var head2 = "<tr>" + runs.map(function (r) {
+      return r.hosts.map(function (h, i) {
+        return '<th class="host-head' + (i === 0 ? " first-of-run" : "") + '">' + esc(hostById(h).short) + "</th>";
+      }).join("");
+    }).join("") + "</tr>";
+    var rows = bl.map(function (b) {
+      var fix = (b.fix || []).map(link).join("");
+      var cells = runs.map(function (r) {
+        var res = (b.results || {})[r.id] || {};
+        return r.hosts.map(function (h, i) {
+          var c = res[h];
+          var cls = "cell" + (i === 0 ? " first-of-run" : "");
+          if (!c) return '<td class="' + cls + '"><span class="empty">—</span></td>';
+          return '<td class="' + cls + '">' + chip(c.status) + (c.note ? "<p>" + esc(c.note) + "</p>" : "") + "</td>";
+        }).join("");
+      }).join("");
+      return '<tr><td class="b-col"><div class="b-name">' + esc(b.name) + "</div>" +
+        (b.detail ? '<div class="b-detail">' + esc(b.detail) + "</div>" : "") +
+        (fix ? '<div class="b-fix"><span class="label">Fix</span>' + fix + "</div>" : "") +
+        "</td>" + cells + "</tr>";
+    }).join("");
+    var notes = runs.filter(function (r) { return r.note; }).map(function (r) {
+      return "<strong>" + esc(r.label) + ":</strong> " + esc(r.note);
+    }).join(" ");
+    return '<section id="blockers"><div class="sec-head">' + heading("blockers", "Release blockers", "What each run found") +
+      (notes ? '<p class="muted">' + notes + "</p>" : "") + "</div>" +
+      '<div class="scroll"><table class="matrix"><thead>' + head1 + head2 + "</thead><tbody>" + rows + "</tbody></table></div></section>";
+  }
+
+  function renderChecks() {
+    var c = data.checks;
+    if (!c || !c.hosts) return "";
+    var ids = Object.keys(c.hosts);
+    if (!ids.length) return "";
+    var runLabel = "";
+    (data.runs || []).forEach(function (r) { if (r.id === c.run) runLabel = r.label + " · " + r.target; });
+    var saved = null;
+    try { saved = localStorage.getItem("report-host-tab"); } catch (e) { saved = null; }
+    var active = ids.indexOf(saved) >= 0 ? saved : ids[0];
+    var tabs = ids.map(function (id) {
+      var rows = c.hosts[id];
+      var bad = rows.filter(function (r) { return r.status === "fail"; }).length;
+      var sel = id === active;
+      return '<button class="tab" role="tab" id="tab-' + esc(id) + '" aria-controls="panel-' + esc(id) +
+        '" aria-selected="' + sel + '" data-host="' + esc(id) + '">' + esc(hostById(id).short) +
+        ' <span class="num">' + rows.length + "</span>" + (bad ? " · " + bad + " fail" : "") + "</button>";
+    }).join("");
+    var panels = ids.map(function (id) {
+      var h = hostById(id);
+      var rows = c.hosts[id].map(function (r) {
+        return '<tr><td class="g">' + esc(r.group || "") + '</td><td class="n">' + esc(r.name) +
+          '</td><td class="s">' + chip(r.status) + '</td><td class="e">' + esc(r.evidence || "") + "</td></tr>";
+      }).join("");
+      return '<div class="panel" role="tabpanel" id="panel-' + esc(id) + '" aria-labelledby="tab-' + esc(id) + '"' +
+        (id === active ? "" : " hidden") + '><div class="host-meta" style="margin-bottom:12px"><h3>' + esc(h.label) +
+        '</h3><p class="muted" style="font-size:13.5px">' + esc(h.detail || "") + "</p></div>" +
+        '<div class="scroll"><table class="checks"><thead><tr><th>Area</th><th>Check</th><th>Result</th><th>Evidence</th></tr></thead><tbody>' +
+        rows + "</tbody></table></div></div>";
+    }).join("");
+    return '<section id="checks"><div class="sec-head">' + heading("checks", "Per host", "Every check, with its evidence") +
+      (runLabel ? '<p class="muted">' + esc(runLabel) + "</p>" : "") + "</div>" +
+      '<div class="tabs" role="tablist">' + tabs + "</div>" + panels + "</section>";
+  }
+
+  function renderTimings() {
+    var t = data.timings;
+    if (!t || !t.metrics || !t.metrics.length) return "";
+    var flag = t.flag_percent || 25;
+    var base = "", now = "";
+    (data.runs || []).forEach(function (r) {
+      if (r.id === t.baseline) base = r.label;
+      if (r.id === t.current) now = r.label;
+    });
+    var cards = t.metrics.map(function (m) {
+      var hosts = Object.keys(m.values);
+      var max = 0;
+      hosts.forEach(function (h) { m.values[h].forEach(function (v) { if (v != null && v > max) max = v; }); });
+      var rows = hosts.map(function (h) {
+        var b = m.values[h][0], n = m.values[h][1];
+        var pct = (b && n != null) ? ((n - b) / b) * 100 : null;
+        var dcls = pct == null ? "" : (pct > flag ? " flag" : (pct > 0 ? " up" : ""));
+        var dtxt = pct == null ? "" : (pct >= 0 ? "+" : "") + pct.toFixed(0) + "%";
+        function bar(v, cls) {
+          if (v == null) return '<div class="bar ' + cls + '"><span class="track"></span><span class="v d">—</span></div>';
+          var w = max ? Math.max(2, (v / max) * 100) : 0;
+          return '<div class="bar ' + cls + '"><span class="track"><i style="width:' + w.toFixed(1) + '%"></i></span>' +
+            '<span class="v">' + v.toFixed(2) + " " + esc(t.unit || "") +
+            (cls === "now" && dtxt ? ' <span class="d' + dcls + '">' + dtxt + "</span>" : "") + "</span></div>";
+        }
+        return '<div class="bar-row"><span class="h">' + esc(hostById(h).short) + '</span><div class="bar-pair">' +
+          bar(b, "base") + bar(n, "now") + "</div></div>";
+      }).join("");
+      return '<div class="metric"><div><h3>' + esc(m.name) + '</h3><div class="m-note">' + esc(m.note || "") +
+        '</div></div><div class="bars">' + rows + "</div></div>";
+    }).join("");
+    var title = base ? esc(now || "Now") + " against " + esc(base) : esc(now || "Now") + ", with no baseline yet";
+    return '<section id="timings"><div class="sec-head"><span class="label">Timings</span><h2>' + title + "</h2>" +
+      '<div class="legend">' + (base ? "<span><i></i>" + esc(base) + "</span>" : "") +
+      '<span><i class="now"></i>' + esc(now) + "</span>" +
+      (base ? "<span>Changes above +" + flag + "% are flagged in red.</span>" : "") + "</div></div>" +
+      '<div class="timing-grid">' + cards + "</div></section>";
+  }
+
+  function renderFindings() {
+    var f = data.findings || [];
+    if (!f.length) return "";
+    var order = { high: 0, medium: 1, low: 2 };
+    function rank(x) { return order.hasOwnProperty(x.severity) ? order[x.severity] : 3; }
+    var sorted = f.slice().sort(function (a, b) { return rank(a) - rank(b); });
+    var items = sorted.map(function (x) {
+      var links = (x.links || []).map(link).join("");
+      return '<div class="finding" data-sev="' + esc(x.severity) + '" data-state="' + esc(x.status) + '"><div class="stripe"></div>' +
+        '<div class="f-body"><div class="f-top">' + chip(x.status) + '<span class="f-title">' + esc(x.title) + "</span></div>" +
+        '<div class="f-meta">' + esc(x.severity) + " · " + esc(x.component || "") + "</div>" +
+        (x.detail ? '<div class="f-detail">' + esc(x.detail) + "</div>" : "") +
+        (links ? '<div class="f-links">' + links + "</div>" : "") + "</div></div>";
+    }).join("");
+    var counts = { all: f.length, fixed: 0, rest: 0 };
+    f.forEach(function (x) { if (x.status === "fixed") counts.fixed++; else counts.rest++; });
+    return '<section id="findings"><div class="sec-head"><span class="label">Findings</span><h2>Bugs found, and where each stands</h2></div>' +
+      '<div class="filter" role="group" aria-label="Filter findings">' +
+        '<button class="tab" data-filter="all" aria-selected="true">All <span class="num">' + counts.all + "</span></button>" +
+        '<button class="tab" data-filter="rest" aria-selected="false">Still open <span class="num">' + counts.rest + "</span></button>" +
+        '<button class="tab" data-filter="fixed" aria-selected="false">Fixed <span class="num">' + counts.fixed + "</span></button>" +
+      "</div>" +
+      '<div class="findings">' + items + "</div></section>";
+  }
+
+  function renderOpen() {
+    var o = data.open || [];
+    if (!o.length) return "";
+    var items = o.map(function (x) {
+      var links = (x.links || []).map(link).join(" ");
+      return '<div class="open-item"><div>' + chip(x.status) + '</div><div><div class="o-title">' + esc(x.title) + "</div>" +
+        (x.detail || links ? '<div class="o-detail">' + esc(x.detail || "") + (links ? " " + links : "") + "</div>" : "") + "</div></div>";
+    }).join("");
+    return '<section id="open"><div class="sec-head">' + heading("open", "Before the tag", "Still open") + "</div>" +
+      '<div class="open-list">' + items + "</div></section>";
+  }
+
+  function renderFooter() {
+    var source = data.source_url ? link({ text: data.source || data.source_url, url: data.source_url }) : esc(data.source || "");
+    return "<footer><div>" + source + (data.generated ? " · generated " + esc(fmtDate(data.generated)) : "") +
+      "</div><div>Rendered from results.json (schema " + esc(data.schema) + ") by script/e2e/render-report.py.</div></footer>";
+  }
+
+  app.innerHTML = renderHeader() + renderOpen() + renderBlockers() + renderChecks() + renderTimings() + renderFindings() + renderFooter();
+
+  app.addEventListener("click", function (ev) {
+    var tab = ev.target.closest(".tab[data-host]");
+    if (tab) {
+      var id = tab.getAttribute("data-host");
+      app.querySelectorAll(".tab[data-host]").forEach(function (t) { t.setAttribute("aria-selected", String(t === tab)); });
+      app.querySelectorAll("#checks .panel").forEach(function (p) { p.hidden = p.id !== "panel-" + id; });
+      try { localStorage.setItem("report-host-tab", id); } catch (e) { /* storage may be unavailable */ }
+      return;
+    }
+    var f = ev.target.closest(".tab[data-filter]");
+    if (f) {
+      var which = f.getAttribute("data-filter");
+      app.querySelectorAll(".tab[data-filter]").forEach(function (t) { t.setAttribute("aria-selected", String(t === f)); });
+      app.querySelectorAll(".finding").forEach(function (el) {
+        var st = el.getAttribute("data-state");
+        el.hidden = which === "fixed" ? st !== "fixed" : which === "rest" ? st === "fixed" : false;
+      });
+    }
+  });
+})();
+</script>
