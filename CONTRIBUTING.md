@@ -50,10 +50,16 @@ CI does not call `make`. It runs these steps
   before a tag depends on it.
 
 A separate workflow, [.github/workflows/e2e.yml](.github/workflows/e2e.yml),
-drives brig against a real runtime. It runs `script/e2e/canary-linux.sh` on a
-hosted `ubuntu-24.04` runner with nested KVM: nightly, on demand, and on a pull
-request that touches `script/e2e/`, the workflow or `install.sh`. Each run
-uploads an HTML report as the `e2e-report` artifact.
+drives brig against a real runtime on three hosts:
+
+- a hosted `ubuntu-24.04` runner with nested KVM, `script/e2e/canary-linux.sh`;
+- a self-hosted SIP-enabled Mac, `script/e2e/canary-macos.sh`;
+- a hosted `macos-15` runner that reads the Homebrew tap,
+  `script/e2e/tap-check.sh`.
+
+It runs nightly, on demand, and on a pull request that touches `script/e2e/`,
+the workflow or `install.sh`. A report job merges the hosts into one HTML
+report, the `e2e-report` artifact.
 
 `gofmt` and `go vet` are the only static checks. The repository has no
 `golangci-lint` configuration and no lint target in the Makefile.

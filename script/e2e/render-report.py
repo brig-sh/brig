@@ -27,6 +27,9 @@ Schema 1, as check() enforces it:
     headings  {blockers: [label, title, column], checks|open: [label, title]},
               all optional
 
+results.py and merge-results.py also write level, commit and missing_hosts,
+which the page does not show.
+
 Every status is one of STATUSES below. baseline and current are run ids, or
 null when there is no such run.
 """
