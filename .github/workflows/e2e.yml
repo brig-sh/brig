@@ -2,15 +2,20 @@ name: e2e
 
 # brig against real microVMs, for what the stub runtime in script/smoke.sh
 # cannot see: the runtime's own environment, a real package install, a second
-# user on the host. script/e2e/canary-linux.sh has the gates and the checks,
-# and #358 has the plan.
+# user on the host, Gatekeeper, the Homebrew tap. The scripts in script/e2e/
+# hold the gates and the checks, and #358 has the plan.
 #
-# A hosted ubuntu-24.04 runner exposes nested KVM, and each job gets a fresh VM
-# with passwordless sudo. The install-path checks need exactly that, since they
-# add udev rules, packages and a second user.
+# Three hosts, one report:
 #
-# Linux only for now. A macOS canary needs a SIP-enabled Mac, which means the
-# shared self-hosted runners.
+#   linux  a hosted ubuntu-24.04 runner. It exposes nested KVM, and each job
+#          gets a fresh VM with passwordless sudo, which the install-path
+#          checks need: they add udev rules, packages and a second user.
+#   macos  a self-hosted SIP-enabled Mac. Hosted macOS runners cannot nest
+#          virtualization, and Gatekeeper only means something with SIP on.
+#   tap    a hosted macos-15 runner that reads the Homebrew tap. No VM.
+#
+# Each host job uploads its own results, and the report job merges them. A
+# host whose job crashed shows as missing in the report, never as green.
 
 on:
   schedule:
@@ -18,12 +23,12 @@ on:
   workflow_dispatch:
     inputs:
       level:
-        description: "canary is short; nightly boots more often, and adds a parallel block and stop/start churn"
+        description: "canary is short; nightly boots more often, and on Linux adds a parallel block and stop/start churn"
         type: choice
         options: [canary, nightly]
         default: canary
   # A change to the checks, or to the installer they drive, proves itself on
-  # a real runner before it merges.
+  # real hosts before it merges.
   pull_request:
     paths:
       - "script/e2e/**"
@@ -32,20 +37,21 @@ on:
 
 permissions:
   contents: read
-  # gh reads the last scheduled run's report, which is the timing baseline.
+  # The report job reads the last scheduled run's report, the timing baseline.
   actions: read
 
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  LEVEL: ${{ github.event_name == 'schedule' && 'nightly' || inputs.level || 'canary' }}
+
 jobs:
   linux:
     name: linux
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.level == 'nightly') && 180 || 75 }}
-    env:
-      LEVEL: ${{ github.event_name == 'schedule' && 'nightly' || inputs.level || 'canary' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -70,39 +76,202 @@ jobs:
         env:
           BRIG_BUILD_DIR: ${{ runner.temp }}/brig-build
           E2E_OUT: ${{ runner.temp }}/brig-e2e
+          E2E_RESULTS: ${{ runner.temp }}/brig-e2e/results-linux.json
           GH_TOKEN: ${{ github.token }}
         run: bash script/e2e/canary-linux.sh
 
-      - name: Render the report
+      - name: Upload the results
         if: always()
-        env:
-          E2E_OUT: ${{ runner.temp }}/brig-e2e
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-host-linux
+          path: |
+            ${{ runner.temp }}/brig-e2e/results-linux.json
+            ${{ runner.temp }}/brig-e2e/logs/
+          retention-days: 30
+          if-no-files-found: warn
+
+  macos:
+    name: macos
+    # These Macs are persistent and shared, so code from a fork never runs on
+    # them. Everywhere else the job runs as linux does.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, sip-enabled]
+    timeout-minutes: 60
+    # One brig e2e job on these Macs at a time, and at most one waiting.
+    concurrency:
+      group: e2e-macos
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Everything the job writes goes under a scratch HOME: hull's store,
+      # ~/.brig, ~/.config/brig and the Go caches. The runner account's own
+      # ~/.hull and ~/.brig stay as they are. /private/tmp rather than
+      # $RUNNER_TEMP: hull's per-boot sockets live under the store, and a
+      # unix socket path on macOS has to fit in 104 bytes. /tmp itself is a
+      # link, and brig refuses a project reached through one.
+      - name: Make a scratch HOME
         run: |
           set -euo pipefail
-          if [ -f "$E2E_OUT/results.json" ]; then
-            python3 script/e2e/render-report.py "$E2E_OUT/results.json" > "$E2E_OUT/report.html"
+          scratch="$(mktemp -d /private/tmp/be2e.XXXXXX)"
+          echo "E2E_SCRATCH=$scratch" >> "$GITHUB_ENV"
+          echo "HOME=$scratch" >> "$GITHUB_ENV"
+          echo "scratch HOME: $scratch"
+
+      # The Mac's own Go builds it. With HOME moved, its caches and any
+      # toolchain go.mod asks for land in the scratch HOME. -modcacherw keeps
+      # the module cache writable, so the cleanup can delete it.
+      - name: Build brig and brigd
+        env:
+          GOFLAGS: -modcacherw
+        run: |
+          set -euo pipefail
+          go version
+          mkdir -p "$E2E_SCRATCH/build"
+          make build BINDIR="$E2E_SCRATCH/build"
+
+      - name: Run the ${{ env.LEVEL }} checks
+        env:
+          E2E_OUT: ${{ runner.temp }}/brig-e2e
+          E2E_RESULTS: ${{ runner.temp }}/brig-e2e/results-mac.json
+          # A pull request has no notarized channel build to put through
+          # Gatekeeper.
+          E2E_GATEKEEPER: ${{ github.event_name != 'pull_request' && '1' || '0' }}
+          GH_TOKEN: ${{ github.token }}
+        run: BRIG_BUILD_DIR="$E2E_SCRATCH/build" bash script/e2e/canary-macos.sh
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-host-mac
+          path: |
+            ${{ runner.temp }}/brig-e2e/results-mac.json
+            ${{ runner.temp }}/brig-e2e/logs/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Leave the Mac as it was
+        if: always()
+        run: bash script/e2e/cleanup-macos.sh
+
+  tap:
+    name: tap
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Read the Homebrew tap
+        env:
+          E2E_OUT: ${{ runner.temp }}/brig-e2e
+          E2E_RESULTS: ${{ runner.temp }}/brig-e2e/results-tap.json
+        run: bash script/e2e/tap-check.sh
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-host-tap
+          path: |
+            ${{ runner.temp }}/brig-e2e/results-tap.json
+            ${{ runner.temp }}/brig-e2e/logs/
+          retention-days: 30
+          if-no-files-found: warn
+
+  report:
+    name: report
+    needs: [linux, macos, tap]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: e2e-host-*
+          path: ${{ runner.temp }}/hosts
+
+      # The timing baseline is the report of the last scheduled run that
+      # passed. There is none until the first one does.
+      - name: Fetch the baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          id="$(gh run list -R "$REPO" --workflow e2e.yml --event schedule --status success \
+            -L 1 --json databaseId -q '.[0].databaseId')"
+          if [ -z "$id" ]; then
+            echo "no scheduled run has passed yet"
+            exit 0
           fi
+          gh run download "$id" -R "$REPO" -n e2e-report -D "$RUNNER_TEMP/baseline" \
+            || echo "could not download run $id's report"
+
+      # A host whose job was skipped, such as macos on a pull request from a
+      # fork, is not expected. One that failed or was cancelled is.
+      - name: Merge the hosts
+        id: merge
+        env:
+          LINUX: ${{ needs.linux.result }}
+          MACOS: ${{ needs.macos.result }}
+          TAP: ${{ needs.tap.result }}
+        run: |
+          set -euo pipefail
+          expect=""
+          [ "$LINUX" = skipped ] || expect="$expect,linux"
+          [ "$MACOS" = skipped ] || expect="$expect,mac"
+          [ "$TAP" = skipped ] || expect="$expect,tap"
+          out="$RUNNER_TEMP/e2e-report"
+          mkdir -p "$out"
+          args=(--expect "${expect#,}" --out "$out/results.json")
+          if [ -f "$RUNNER_TEMP/baseline/results.json" ]; then
+            args+=(--baseline "$RUNNER_TEMP/baseline/results.json")
+          fi
+          shopt -s nullglob
+          verdict="$(python3 script/e2e/merge-results.py "${args[@]}" "$RUNNER_TEMP"/hosts/*/results-*.json)"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          python3 script/e2e/render-report.py "$out/results.json" > "$out/report.html"
+          # The report carries each host's logs next to the page.
+          for d in "$RUNNER_TEMP"/hosts/e2e-host-*; do
+            mkdir -p "$out/hosts/${d##*/e2e-host-}"
+            cp -R "$d/." "$out/hosts/${d##*/e2e-host-}/"
+          done
 
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-report
-          path: |
-            ${{ runner.temp }}/brig-e2e/report.html
-            ${{ runner.temp }}/brig-e2e/results.json
-            ${{ runner.temp }}/brig-e2e/logs/
+          path: ${{ runner.temp }}/e2e-report/
           retention-days: 30
           if-no-files-found: warn
 
       - name: Write the job summary
         if: always()
-        env:
-          E2E_OUT: ${{ runner.temp }}/brig-e2e
         run: |
           set -euo pipefail
-          if [ -f "$E2E_OUT/results.json" ]; then
-            python3 script/e2e/render-report.py --summary "$E2E_OUT/results.json" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$RUNNER_TEMP/e2e-report/results.json" ]; then
+            python3 script/e2e/render-report.py --summary "$RUNNER_TEMP/e2e-report/results.json" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "The e2e job stopped before it wrote results.json. The job log has the reason." >> "$GITHUB_STEP_SUMMARY"
+            echo "The report job stopped before it wrote results.json. Its log has the reason." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Fail on a no-go
+        env:
+          VERDICT: ${{ steps.merge.outputs.verdict }}
+        run: |
+          echo "verdict: $VERDICT"
+          [ "$VERDICT" = go ]
