@@ -2186,9 +2186,10 @@ func warnProjectKept(cfg *wrap.Config) {
 // running or stopped.
 //
 // It is how rm and logs tell "there is nothing here" -- a not-found, exit 3 --
-// from a runtime that could not be asked -- its own error, exit 4. The two are
+// from a runtime that could not be asked -- its own error. The two are
 // different facts and docs/cli.md's exit table keeps them apart, so a List that
-// fails is returned as is rather than folded into absence.
+// fails is returned as is rather than folded into absence. That error carries
+// no runtime sentinel, so it exits 1, not 4.
 func sandboxPresent(rt runtime.Runtime, name string) (bool, error) {
 	list, err := rt.List()
 	if err != nil {
