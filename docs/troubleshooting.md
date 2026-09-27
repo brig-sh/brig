@@ -346,6 +346,11 @@ copy's signature was not reachable, and the copy can still be fine. The
 usual cause is being offline, or a captive portal that answers every host
 with its own page instead of the one you asked for.
 
+The detail is cosign's own error. A credential helper that cosign cannot run
+fails the same way. A `credsStore` in `~/.docker/config.json` names one, such
+as `docker-credential-desktop`, and a non-login SSH shell on macOS may not
+have it on `PATH`. Add the helper's directory to `PATH` and run again.
+
 Answering no aborts:
 
 ```

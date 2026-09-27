@@ -188,6 +188,57 @@ func TestVerifyFailedSignatureOnTheResolvedDigest(t *testing.T) {
 	}
 }
 
+// triangulateCredsFailure is what cosign 3.1.3 prints when triangulate cannot
+// run a credential helper: the deprecation notice first, then the error twice.
+const triangulateCredsFailure = `Command "triangulate" is deprecated, triangulate will be removed in v4.0.0 (see https://github.com/sigstore/cosign/issues/4696). Instead, please use ` + "`oras discover` or `cosign tree`" + ` to show referring artifacts
+Error: error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH, out: ` + "``" + `
+error during command execution: error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH, out: ` + "``" + `
+`
+
+// A resolve that fails reports cosign's error. The deprecation notice cosign
+// prints first is a warning about brig's own call, and reporting it hid the
+// credential helper that could not run.
+func TestVerifyUnresolvedReportsCosignsErrorNotItsWarning(t *testing.T) {
+	p := DefaultPolicy()
+	digestStub(t, triangulateCredsFailure, errors.New("exit status 1"), nil)
+
+	got := p.Verify("ghcr.io/brig-sh/claude-code:arm64", "")
+	if got.Outcome != Unresolved {
+		t.Fatalf("outcome = %v, want Unresolved", got.Outcome)
+	}
+	want := `error getting credentials - err: exec: "docker-credential-desktop": ` +
+		"executable file not found in $PATH, out: ``"
+	if got.Detail != want {
+		t.Errorf("detail = %q, want %q", got.Detail, want)
+	}
+	if strings.Contains(got.Message(), "deprecated") {
+		t.Errorf("the message reports cosign's warning: %q", got.Message())
+	}
+}
+
+func TestCosignReason(t *testing.T) {
+	exit := errors.New("exit status 1")
+	for _, tc := range []struct {
+		name, out, want string
+	}{
+		{"the Error line", "Error: no matching signatures\n", "no matching signatures"},
+		{"after a deprecation notice", triangulateCredsFailure,
+			`error getting credentials - err: exec: "docker-credential-desktop": ` +
+				"executable file not found in $PATH, out: ``"},
+		{"after a WARNING line", "WARNING: skipping tlog verification\nError: no signatures found\n",
+			"no signatures found"},
+		{"only the execution line", "Warning: x\nerror during command execution: dial tcp: i/o timeout\n",
+			"dial tcp: i/o timeout"},
+		{"a line cosign did not frame", "\nsomething went wrong\n", "something went wrong"},
+		{"only a notice", `Command "triangulate" is deprecated, use oras` + "\n", "exit status 1"},
+		{"no output", "", "exit status 1"},
+	} {
+		if got := cosignReason(tc.out, exit); got != tc.want {
+			t.Errorf("%s: cosignReason = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // Without cosign neither the resolve nor the check can happen, which is a
 // different thing from a bad signature.
 func TestVerifyDigestWithoutCosignIsNoTooling(t *testing.T) {
