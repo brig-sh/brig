@@ -529,6 +529,12 @@ func firstLine(out string, err error) string {
 			strings.HasPrefix(line, "  - ") {
 			continue
 		}
+		// cosign v3 opens with `Command "triangulate" is deprecated, ...` on
+		// every triangulate, success or not. It was quoted as the reason the
+		// registry was unreachable.
+		if strings.HasPrefix(line, `Command "`) && strings.Contains(line, "is deprecated") {
+			continue
+		}
 		return line
 	}
 	if err != nil {

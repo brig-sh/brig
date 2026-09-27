@@ -514,3 +514,40 @@ func TestARefusedThirdPartyImageUnderAReplacedPolicyDoesNotNameBrigSh(t *testing
 		t.Errorf("the shipped policy stopped naming the publisher: %q", got)
 	}
 }
+
+// deprecation is the line cosign v3 prints on stderr before anything else when
+// it runs triangulate. It says nothing about why the command failed.
+const deprecation = `Command "triangulate" is deprecated, triangulate will be removed in v4.0.0; use 'cosign tree' or 'cosign download signature' instead`
+
+const denied = "Error: GET https://ghcr.io/token?scope=repository%3Abrig-sh%2Fclaude-code%3Apull&service=ghcr.io: DENIED: requested access to the resource is denied"
+
+// cosign's deprecation warning comes first in its output, and brig quoted it as
+// the reason the registry was not reachable. The reason is the line after it.
+func TestADeprecationWarningIsNotTheReason(t *testing.T) {
+	p := DefaultPolicy()
+	digestStub(t, deprecation+"\n"+denied+"\n", errors.New("exit status 1"), nil)
+	got := p.Verify("ghcr.io/brig-sh/claude-code:arm64", "")
+	if got.Outcome != Unresolved {
+		t.Fatalf("outcome = %v, want Unresolved", got.Outcome)
+	}
+	if strings.Contains(got.Detail, "is deprecated") || !strings.Contains(got.Detail, "DENIED") {
+		t.Errorf("detail = %q, want the DENIED line and not the warning", got.Detail)
+	}
+
+	// The same output from the signature check, which is Failed.
+	stub(t, true, deprecation+"\n"+denied+"\n", errors.New("exit status 1"))
+	got = p.Image("ghcr.io/brig-sh/claude-code:arm64")
+	if got.Outcome != Failed {
+		t.Fatalf("outcome = %v, want Failed", got.Outcome)
+	}
+	if strings.Contains(got.Detail, "is deprecated") || !strings.Contains(got.Detail, "DENIED") {
+		t.Errorf("detail = %q, want the DENIED line and not the warning", got.Detail)
+	}
+
+	// With only the warning to go on, the error says more than the warning.
+	digestStub(t, deprecation+"\n", errors.New("exit status 1"), nil)
+	got = p.Verify("ghcr.io/brig-sh/claude-code:arm64", "")
+	if got.Detail != "exit status 1" {
+		t.Errorf("detail = %q, want the error itself", got.Detail)
+	}
+}

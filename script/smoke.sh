@@ -1993,8 +1993,14 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/cosign" <<'COSIGN'
 #!/bin/bash
 # `triangulate <ref>` names the signature tag for the digest a reference
-# resolves to, which is how brig learns the digest to verify and boot.
+# resolves to, which is how brig learns the digest to verify and boot. cosign v3
+# opens every triangulate with a deprecation warning on stderr, so this does too.
 if [ "$1" = triangulate ]; then
+  echo "Command \"triangulate\" is deprecated, triangulate will be removed in v4.0.0; use 'cosign tree' or 'cosign download signature' instead" >&2
+  if [ "${COSIGN_DENY:-0}" = 1 ]; then
+    echo "Error: GET https://ghcr.io/token?scope=repository%3Abrig-sh%2Fclaude-code%3Apull&service=ghcr.io: DENIED: requested access to the resource is denied" >&2
+    exit 1
+  fi
   printf '%s:sha256-%s.sig\n' "${2%%:*}" "$(printf 'a%.0s' $(seq 64))"
   exit 0
 fi
@@ -2124,6 +2130,19 @@ esac
 # tell it apart from a run that started and failed.
 [ "$rc" = 5 ] && ok "a bad signature stops the boot (exit 5) with no terminal to ask" \
   || bad "a bad signature stops the boot with exit 5 -- got $rc"
+
+# A resolve that fails gives cosign's reason. The deprecation warning cosign
+# prints first is not one, and brig quoted it as the reason the registry was
+# not reachable.
+fresh
+out="$(BRIG_VERIFY=require COSIGN_DENY=1 "$WORK/brig" run claude -p hi 2>&1)"; rc=$?
+case "$out" in
+  *"is deprecated"*) bad "a failed resolve quoted cosign's deprecation warning -- got: $out" ;;
+  *"DENIED"*) ok "a failed resolve gives cosign's reason, not its deprecation warning" ;;
+  *) bad "a failed resolve gives cosign's reason -- got: $out" ;;
+esac
+[ "$rc" = 5 ] && ok "require refuses an image it cannot resolve (exit 5)" \
+  || bad "require refuses an image it cannot resolve with exit 5 -- got $rc"
 
 fresh
 out="$(BRIG_VERIFY=warn BRIG_IMAGE=docker.io/library/ubuntu:24.04 \
