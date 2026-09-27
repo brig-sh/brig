@@ -31,6 +31,12 @@ type hull struct {
 	// telemetry gate both read.
 	versionOnce sync.Once
 	versionOut  string
+	// nested caches `hull capabilities --json`, asked at most once per
+	// process. See NestedVirt.
+	nested struct {
+		once sync.Once
+		s    NestedSupport
+	}
 }
 
 // version returns what `hull --version` printed, asked once per process.
@@ -104,6 +110,23 @@ func (h *hull) PinsDigest() bool {
 		h.pins = hullVersionPinsDigest(h.version())
 	})
 	return h.pins
+}
+
+// versionLabel is the version word out of `hull --version`, for a message that
+// names the hull in hand: the version when there is one, the first line of the
+// answer for a build from source, and "unknown version" for no answer.
+func (h *hull) versionLabel() string {
+	out := h.version()
+	// Through printable as well: the token is every non-space byte after the
+	// number, and an escape among them would act on the terminal the
+	// message is printed to.
+	if v := printable(VersionToken(out)); v != "" {
+		return v
+	}
+	if line := strings.TrimSpace(firstLines(strings.TrimSpace(out), 1)); line != "" {
+		return printable(line)
+	}
+	return "unknown version"
 }
 
 // LocalDigest answers "" on hull, which the verify path reads as "cannot say"
@@ -516,6 +539,11 @@ func (h *hull) Run(spec RunSpec) error {
 		// The forwards were installed for a guest that did not boot. On the
 		// shared gateway they would hold the host ports until it restarts.
 		withdrawPublications(spec.Name)
+		// A hull that does not know the flag refuses it in its CLI library's
+		// words, which read like a typo in brig. Said plainly instead.
+		if spec.NestedVirt && strings.Contains(said.buf.String(), "flag provided but not defined: -nested-virt") {
+			return fmt.Errorf("%s run: %s", h.bin, h.predatesNested())
+		}
 		return said.explain(fmt.Errorf("%s run: %w", h.bin, err))
 	}
 	// A guest that is not behind this sandbox's isolated gateway leaves nothing
@@ -570,6 +598,14 @@ func (h *hull) CanRun(spec RunSpec) error { return supports(spec, hypervisor(spe
 // naming the variable that caused it -- and the user who set BRIG_HYPERVISOR
 // is the only one who can undo it.
 func supports(spec RunSpec, hv string) error {
+	// Only hvi can hand the guest EL2. Refused here, without asking hull, so
+	// the refusal names the variable a person can change. Whether this host
+	// can give EL2 at all is hull's to say: it refuses --nested-virt itself,
+	// before it starts anything, on a host that cannot.
+	if spec.NestedVirt && hv != "hvi" {
+		return fmt.Errorf("nested virtualization (capability kvm) needs the hvi backend "+
+			"(BRIG_HYPERVISOR is %q); run it on hvi, or drop the capability from the profile", hv)
+	}
 	if spec.GUI && hv != "vz" {
 		return fmt.Errorf("this profile opens a graphical window, which only the vz backend provides "+
 			"(BRIG_HYPERVISOR is %q); unset it to run this profile", hv)
@@ -730,6 +766,13 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 		if spec.GUITitle != "" {
 			args = append(args, "--gui-title", spec.GUITitle)
 		}
+	}
+	// Only when asked, and ahead of the image: hull reads its flags before the
+	// positional, and a flag after the image would be taken as the guest's.
+	// Absent is the default a test holds, because a guest given EL2 is a guest
+	// running things brig's view does not reach.
+	if spec.NestedVirt {
+		args = append(args, "--nested-virt")
 	}
 	envArgs, envVals, err := splitEnv("--env", spec.Env)
 	if err != nil {
