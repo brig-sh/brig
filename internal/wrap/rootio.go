@@ -59,6 +59,9 @@ var betweenLstatAndOpen = func(name string) {}
 // workspace with a plain os.* call. Reads of the *host's* own files -- the
 // user's ~/.claude that seedHostConfig copies from -- are a different matter
 // and stay ordinary, because those live outside the workspace by design.
+// TestNothingReachesTheWorkspaceWithAPlainOSCall holds the rule: every plain
+// os call on a path in this package is on its allowlist, with the reason its
+// path is not the guest's, and a new one fails until someone adds it.
 type workspaceRoot struct {
 	heldDir
 }
