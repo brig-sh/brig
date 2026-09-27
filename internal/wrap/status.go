@@ -29,6 +29,7 @@ func (c *Config) Status(set creds.Set) {
 		c.sayf("runtime unavailable (no runtime found on PATH)")
 	}
 	c.reportNested()
+	c.reportRunningNested()
 	c.sayf("image %s (pull %s)", c.Image, c.Pull)
 	c.reportVerify()
 

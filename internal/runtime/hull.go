@@ -403,22 +403,30 @@ func (h *hull) Exists(name string) (bool, error) {
 }
 
 func (h *hull) exists(ctx context.Context, name string) (bool, error) {
+	_, found, err := h.inspect(ctx, name)
+	return found, err
+}
+
+// inspect runs `hull inspect` for one instance and returns the record it
+// printed. found is false with a nil error only when hull says the instance is
+// not there; any other failure is an error carrying hull's own words.
+func (h *hull) inspect(ctx context.Context, name string) (record []byte, found bool, err error) {
 	cmd := exec.CommandContext(ctx, h.bin, "inspect", name)
 	cmd.Env = mergeEnv(telemetryEnv(false))
-	var errb bytes.Buffer
-	cmd.Stderr = &errb
-	err := cmd.Run()
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err = cmd.Run()
 	if err == nil {
-		return true, nil
+		return out.Bytes(), true, nil
 	}
 	said := strings.TrimSpace(errb.String())
 	if strings.Contains(said, "instance not found") {
-		return false, nil
+		return nil, false, nil
 	}
 	if said != "" {
-		return false, fmt.Errorf("%s inspect %s: %w: %s", h.bin, name, err, firstLines(said, 3))
+		return nil, false, fmt.Errorf("%s inspect %s: %w: %s", h.bin, name, err, firstLines(said, 3))
 	}
-	return false, fmt.Errorf("%s inspect %s: %w", h.bin, name, err)
+	return nil, false, fmt.Errorf("%s inspect %s: %w", h.bin, name, err)
 }
 
 // List reads the same table Running does. A stopped instance still holds its

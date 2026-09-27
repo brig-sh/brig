@@ -116,6 +116,9 @@ case "$verb" in
     fi
     printf '%s' "$name" > "$STUB_STATE"
     printf '%s' "${share%%:*}" > "$STUB_STATE.share"
+    # The instance record keeps whether the guest was booted with EL2, the
+    # way hull's does, so inspect can answer for a sandbox brig joins.
+    if [ -n "$nested" ]; then : > "$STUB_STATE.nested"; else rm -f "$STUB_STATE.nested"; fi
     # Record which credential values arrived through the environment rather
     # than through argv, and the HOME this process runs with.
     printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG"
@@ -256,7 +259,12 @@ case "$verb" in
     # name is not there, in the words brig reads for that.
     if [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] ||
        [ "$1" = "$(cat "$STUB_STATE.stopped" 2>/dev/null)" ]; then
-      printf '{"name": "%s"}\n' "$1"
+      # nestedVirt only when set, as hull leaves it out when false.
+      if [ -f "$STUB_STATE.nested" ]; then
+        printf '{"name": "%s", "nestedVirt": true}\n' "$1"
+      else
+        printf '{"name": "%s"}\n' "$1"
+      fi
     else
       printf 'error: instance not found: %s\n' "$1" >&2
       exit 1
@@ -266,7 +274,7 @@ case "$verb" in
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
   rm)
-    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts"
+    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts" "$STUB_STATE.nested"
     ;;
 esac
 exit 0
@@ -3128,6 +3136,62 @@ for host in 0 missing; do
     || ok "$label: the run path asked hull no capabilities question"
 done
 "$WORK/brig" rm --all -y > /dev/null 2>&1
+
+# A plain sandbox running, and the same name re-imported with kvm. The restart
+# that would turn nesting on stops the sandbox first, so on a host or a hull
+# that cannot nest brig has to refuse before the stop: otherwise the running
+# sandbox is destroyed and hull's refusal at boot leaves nothing in its place.
+grep -v '^capabilities:' "$WORK/kvmtest.yaml" > "$WORK/kvmplain.yaml"
+for host in 0 missing; do
+  "$WORK/brig" agent import "$WORK/kvmplain.yaml" > /dev/null 2>&1
+  env BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > /dev/null 2>&1
+  "$WORK/brig" agent import "$WORK/kvmtest.yaml" > /dev/null 2>&1
+  : > "$STUB_LOG"
+  env STUB_NESTED="$host" BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > "$WORK/nv-up.out" 2>&1
+  rc=$?
+  label="STUB_NESTED=$host, sandbox running plain"
+  [ "$rc" != 0 ] && ok "$label: turning kvm on is refused" \
+    || bad "$label: turning kvm on went ahead: $(cat "$WORK/nv-up.out")"
+  grep -q 'was left as it is' "$WORK/nv-up.out" \
+    && ok "$label: and says the sandbox was left alone" \
+    || bad "$label: the refusal -- got: $(cat "$WORK/nv-up.out")"
+  grep -qE '^argv: (stop|rm) ' "$STUB_LOG" \
+    && bad "$label: the running sandbox was stopped or removed: $(grep -E '^argv: (stop|rm) ' "$STUB_LOG")" \
+    || ok "$label: no stop or rm was sent"
+  [ "$(cat "$STUB_STATE" 2>/dev/null)" = brig-kvmtest ] \
+    && ok "$label: the sandbox is still running" \
+    || bad "$label: the sandbox is gone"
+  "$WORK/brig" rm --all -y > /dev/null 2>&1
+done
+
+# A sandbox left running nested, joined by the same profile after kvm was
+# taken out of it. Joining would print no CAPABILITIES row over a guest that
+# still has /dev/kvm, so it is restarted, the way a changed network posture
+# is, and says why. brig reads how the guest booted from hull's own record.
+env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > /dev/null 2>&1
+"$WORK/brig" agent import "$WORK/kvmplain.yaml" > /dev/null 2>&1
+: > "$STUB_LOG"
+env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > "$WORK/nv-join.out" 2>&1
+rc=$?
+[ "$rc" = 0 ] && ok "a profile without kvm joining a nested sandbox runs" \
+  || bad "a profile without kvm joining a nested sandbox failed: $(cat "$WORK/nv-join.out")"
+grep -q '^argv: inspect brig-kvmtest' "$STUB_LOG" \
+  && ok "the join reads how the guest booted from hull's record" \
+  || bad "the join never asked hull how the guest booted: $(grep '^argv:' "$STUB_LOG")"
+grep -q 'started with nested virtualization and kvmtest no longer asks for it' "$WORK/nv-join.out" \
+  && ok "the restart says the guest was nested and the profile no longer is" \
+  || bad "the restart is explained -- got: $(cat "$WORK/nv-join.out")"
+if ! grep -q '^argv: stop brig-kvmtest' "$STUB_LOG"; then
+  bad "the nested guest was joined silently, not restarted: $(grep '^argv:' "$STUB_LOG")"
+elif grep '^argv: run ' "$STUB_LOG" | grep -q -- '--nested-virt'; then
+  bad "the restart booted the guest nested again: $(grep '^argv: run ' "$STUB_LOG")"
+elif ! grep -q '^argv: run ' "$STUB_LOG"; then
+  bad "the nested guest was stopped and never rebooted"
+else
+  ok "the nested guest is restarted without --nested-virt"
+fi
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+"$WORK/brig" agent import "$WORK/kvmtest.yaml" > /dev/null 2>&1
 
 # brig info: the row, the capability and the host's answer, in text and JSON.
 env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" info kvmtest > "$WORK/nv-info.out" 2>&1

@@ -46,6 +46,12 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 		s := prober.NestedVirt()
 		d.NestedVirtualization = &InfoNested{Supported: s.Supported, Backend: s.Backend, Detail: s.Detail}
 	}
+	// How the running guest booted, when one is running and hull says.
+	if d.NestedVirtualization != nil {
+		if nested, known := c.runningNested(); known {
+			d.NestedVirtualization.RunningNested = &nested
+		}
+	}
 	if c.Project != "" {
 		d.Project = &InfoProject{Host: c.Project, Guest: c.GuestProject}
 	}
@@ -303,4 +309,9 @@ type InfoNested struct {
 	Supported bool   `json:"supported"`
 	Backend   string `json:"backend,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	// RunningNested is whether the sandbox running now was booted with nested
+	// virtualization, which can differ from what the profile asks until the
+	// next run restarts it. Omitted when no sandbox is running or hull could
+	// not say.
+	RunningNested *bool `json:"runningNested,omitempty"`
 }
