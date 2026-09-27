@@ -768,6 +768,91 @@ case "$out" in
   *) ok "env prints names, never values" ;;
 esac
 
+echo "== only declared names reach the guest =="
+# The case above reads what info reports. These read what a real run hands
+# the runtime. hull puts into the guest exactly the names given to it as
+# `--env`, so the run and exec lines are the guest's environment. The stub
+# itself inherits brig's whole environment, so no case asks the stub for these
+# variables: a value the stub can see proves nothing about the guest.
+#
+# SNEAKY_SECRET stands for any ambient variable no profile declared. GH_TOKEN
+# is the name claude-code declares. The first run is a plain `brig run`, with
+# no BRIG_FORWARD_ENV and no hatch, because that is the path every run takes.
+# env -u keeps a developer's own shell from turning either run into a
+# different case. The per-agent spelling outranks the global one, so a
+# BRIG_CLAUDE_CODE_FORWARD_ENV left in the shell replaces the list the second
+# run sets, and the denylist is never asked about the key. BRIG_ENV_ARGV has
+# only the global spelling.
+unset_knobs=(-u BRIG_FORWARD_ENV -u BRIG_CLAUDE_CODE_FORWARD_ENV -u BRIG_ENV_ARGV
+  -u BRIG_ALLOW_DENIED -u BRIG_CLAUDE_CODE_ALLOW_DENIED)
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+: > "$STUB_LOG"
+env "${unset_knobs[@]}" SNEAKY_SECRET=sk-ambient \
+  GH_TOKEN=gh-secret CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude -p hi > "$WORK/declared.out" 2> "$WORK/declared.err"
+rc=$?
+runline="$(grep '^argv: run ' "$STUB_LOG")"
+execline="$(grep '^argv: exec ' "$STUB_LOG" | grep -- '-- claude -p hi')"
+# Every negative below passes on an empty log, so first prove the run reached
+# the runtime and the agent.
+if [ "$rc" = 0 ] && [ -n "$runline" ] && [ -n "$execline" ]; then
+  ok "a plain run with an ambient variable boots and execs the agent"
+else
+  bad "a plain run with an ambient variable boots -- got $rc: $(cat "$WORK/declared.err")"
+fi
+grep -q 'SNEAKY_SECRET\|sk-ambient' "$STUB_LOG" \
+  && bad "an undeclared ambient variable reached the runtime: $(grep 'SNEAKY_SECRET\|sk-ambient' "$STUB_LOG")" \
+  || ok "an undeclared ambient variable and its value reach no runtime argv or env line"
+case "$runline" in
+  *"--env GH_TOKEN"*) ok "the declared credential name reaches the guest" ;;
+  *) bad "the declared credential name reaches the guest -- got: $runline" ;;
+esac
+
+# ANTHROPIC_API_KEY is on claude-code's denylist, and naming it in
+# BRIG_FORWARD_ENV is the accident the denylist is for: a metered key swept in
+# from the shell, outranking the subscription credential. BRIG_ENV_ARGV=1 is
+# what gives the value check its teeth. With the hatch off no credential value
+# goes on argv at all, so a denylist that let the key through still left
+# sk-metered off the command line. With it on, a key that got past the
+# denylist lands in argv as NAME=value.
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+: > "$STUB_LOG"
+env "${unset_knobs[@]}" SNEAKY_SECRET=sk-ambient ANTHROPIC_API_KEY=sk-metered \
+  BRIG_FORWARD_ENV=ANTHROPIC_API_KEY BRIG_ENV_ARGV=1 GH_TOKEN=gh-secret \
+  CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
+  "$WORK/brig" run claude -p hi > "$WORK/declared.out" 2> "$WORK/declared.err"
+rc=$?
+runline="$(grep '^argv: run ' "$STUB_LOG")"
+execline="$(grep '^argv: exec ' "$STUB_LOG" | grep -- '-- claude -p hi')"
+if [ "$rc" = 0 ] && [ -n "$runline" ] && [ -n "$execline" ]; then
+  ok "a run with a denied key in BRIG_FORWARD_ENV boots and execs the agent"
+else
+  bad "a run with a denied key in BRIG_FORWARD_ENV boots -- got $rc: $(cat "$WORK/declared.err")"
+fi
+# The two negatives after these pass on a run that never asked for the key or
+# never had the hatch on, so prove the denylist refused the key and the hatch
+# put a value on argv.
+grep -q 'not forwarding ANTHROPIC_API_KEY: it is on the' "$WORK/declared.err" \
+  && ok "the denylist refused the key this run asked for" \
+  || bad "the denylist refused the key this run asked for -- got: $(cat "$WORK/declared.err")"
+grep '^argv:' "$STUB_LOG" | grep -q 'GH_TOKEN=gh-secret' \
+  && ok "the hatch put the declared value on argv, so the value check has teeth" \
+  || bad "the hatch put the declared value on argv -- got: run=$runline exec=$execline"
+grep -q 'SNEAKY_SECRET\|sk-ambient' "$STUB_LOG" \
+  && bad "an undeclared ambient variable reached the runtime under an override: $(grep 'SNEAKY_SECRET\|sk-ambient' "$STUB_LOG")" \
+  || ok "an undeclared ambient variable stays out under an override too"
+case "$runline $execline" in
+  *"--env ANTHROPIC_API_KEY"*) bad "a denied key reached the guest env line -- got: run=$runline exec=$execline" ;;
+  *) ok "a denied key never reaches the guest env line of a run" ;;
+esac
+grep '^argv:' "$STUB_LOG" | grep -q 'sk-metered' \
+  && bad "a denied key's value reached argv under BRIG_ENV_ARGV=1" \
+  || ok "a denied key's value never reaches argv, even under BRIG_ENV_ARGV=1"
+# The hatch put gh-secret on this run's argv. Emptying the log keeps a later
+# case that greps it for credential values from tripping on that.
+: > "$STUB_LOG"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
 echo "== unresolved reference =="
 out="$(GH_TOKEN='op://vault/item/field' "$WORK/brig" info claude 2>&1)"
 case "$out" in
