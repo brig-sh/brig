@@ -206,7 +206,11 @@ brig info claude
 
 Prints the execution envelope without booting anything. The envelope has the
 sandbox name, the isolation, the guest home, the image, the verification
-mode, the network, every published port and the credentials by name.
+mode, the network, every published port and the credentials by name. The
+network is the posture of the running sandbox, and the posture of its next
+boot when that one differs. `brig run -v` prints the same envelope before it
+boots. There the row can name the next boot's posture just before the same
+command restarts the sandbox onto it.
 
 `info` fails only when a required secret cannot be resolved. A declared
 secret marked `required: false` prints a warning, and the command still

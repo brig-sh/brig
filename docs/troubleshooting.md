@@ -710,6 +710,9 @@ no posture never trips this. `--network` or `BRIG_NETWORK` naming a
 different one does. If you did not mean to change it, check whether
 `BRIG_NETWORK` is exported in this shell.
 
+The warning names the posture the sandbox runs with. A sandbox that a
+policy isolated is named `isolated`, even after the policy is detached.
+
 **A different project than the one last used.**
 
 ```

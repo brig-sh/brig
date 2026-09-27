@@ -23,10 +23,12 @@ brig run claude --network isolated
 
 A sandbox keeps the posture it was started with. A later command that
 names no posture, such as `brig sh`, `brig info` or a bare `brig run`,
-uses the one the sandbox has, and the profile's `network:` does not move
-it. To change the posture, name a different one with `--network` or
-`BRIG_NETWORK`. The posture is fixed when a sandbox boots, so Brig
-restarts it and says which posture it leaves and which it goes to:
+uses that one, and the profile's `network:` does not move it. The
+posture kept is the one asked for, not the `isolated` posture a policy
+forces. See the note on policies below. To change the posture, name a
+different one with `--network` or `BRIG_NETWORK`. The posture is fixed
+when a sandbox boots, so Brig restarts it and says which posture it
+leaves and which it goes to:
 
 ```console
 $ brig run claude --network shared
@@ -41,8 +43,10 @@ the flag, the setting and the profile, as before.
 An older release that boots the sandbox again does not update the record.
 On a host where two releases share one sandbox, the record can name a
 posture the sandbox no longer has, and `brig info` reports the recorded
-one. `brig stop` and a `brig run` from this release boot it again and
-write a new record. `brig rm` drops the record with the sandbox.
+one. There is one exception: on `hvi`, when the record says `shared` and
+the sandbox is behind an isolated gateway, `brig info` names `isolated`.
+`brig stop` and a `brig run` from this release boot it again and write a
+new record. `brig rm` drops the record with the sandbox.
 
 | posture | what it permits |
 | --- | --- |
@@ -62,13 +66,26 @@ NETWORK      isolated (a network of this sandbox's own)
 NETWORK      offline (no egress)
 ```
 
+The row names the posture the running sandbox has. When its next boot
+gets a different one, for example after a policy is attached or detached,
+the row names that one too:
+
+```
+NETWORK      isolated (a network of this sandbox's own); shared from its next boot
+```
+
 `isolated` needs the `hvi` backend on macOS. `vz` and `qemu` take their
 network from vmnet, which Brig does not own, so Brig refuses `--network
 isolated` there. On Linux, nerdctl creates a network per sandbox for
 `isolated`, so the posture works on any Linux host.
 
 Binding an egress policy to a sandbox forces the `isolated` posture, whether
-or not `--network` asked for it. See
+or not `--network` asked for it. The record keeps the posture that was
+asked for, so the sandbox goes back to it once the policy is detached.
+Until its next boot, `brig info` names `isolated`, the posture it runs
+with. To keep `isolated` after a detach, ask for it with `--network
+isolated` while the policy is attached. Brig restarts the sandbox to
+record that posture. See
 [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 
 An unrecognized value refuses the run rather than picking a posture nobody
