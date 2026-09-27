@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -372,6 +373,15 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 		sock, gatewayReadyTimeout, logPath)
 }
 
+// gatewayProbeTimeout bounds the probe gatewayEnforces runs. Printing help
+// takes milliseconds, but the first run of a new binary on macOS can wait on
+// the system's security scan: a fresh script took 10.7s on its first run and
+// 8ms on its second. The probe refuses on a timeout, so a tight bound refuses
+// the first boot after a runtime upgrade. A variable so a test can shorten it.
+// docs/policies.md and docs/runtimes.md state the bound in seconds; change
+// them with it.
+var gatewayProbeTimeout = 30 * time.Second
+
 // gatewayEnforces checks that this runtime's gateway takes egress rules at
 // all, and is called only when a policy was asked for.
 //
@@ -381,13 +391,32 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 // sandbox whose network did not come up, with the real reason in a log file
 // they have no reason to open. Asked of the binary rather than derived from
 // its version string: what matters is whether this hull takes the flag.
+//
+// A probe that fails refuses the boot. That covers a binary that does not
+// run, one that exits non-zero, and one that does not answer in time. The
+// help text of a failed probe is not read, even when it lists the flag: a
+// wrapper or a broken build can print help and still not start the gateway
+// brig is about to hand the rules to. Letting the boot continue was the old
+// behaviour, and it booted a sandbox under a policy nothing had confirmed
+// (#171).
 func gatewayEnforces(bin string) error {
-	out, err := exec.Command(bin, "network-gateway", "--help").CombinedOutput()
+	probe := bin + " network-gateway --help"
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "network-gateway", "--help")
+	// Without WaitDelay a child the runtime left behind holds the output
+	// pipe open past the kill, and the probe hangs anyway. See
+	// agentCallWaitDelay.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
+	}
 	if err != nil {
-		// Nothing is concluded from a failed probe. If this runtime is broken
-		// enough not to print its own help, the boot below will say so with
-		// far better context than a guess made here.
-		return nil
+		return fmt.Errorf("a policy applies to this sandbox, but the probe of %s failed, "+
+			"so nothing confirms it enforces one: `%s`: %v. Fix the runtime, or detach "+
+			"the policy. brig will not boot a sandbox under a policy nothing confirmed "+
+			"is enforced", bin, probe, err)
 	}
 	if strings.Contains(string(out), "--egress-default") {
 		return nil

@@ -542,14 +542,10 @@ $ brig run claude
 brig: a policy applies to this sandbox, but hull cannot enforce one (its network-gateway has no --egress-default). Upgrade the runtime, or detach the policy -- brig will not boot a sandbox that reports a policy nothing enforces
 ```
 
-This probe has a gap, worth stating plainly rather than hiding. If the
-probe command itself fails to run, Brig draws no conclusion from that
-failure, and the boot proceeds anyway. The reasoning is that a runtime too
-broken to print its own help produces a clearer error later in the boot.
-But the probe cannot tell a broken binary from one that exits non-zero on
-`--help` for some other reason. In that one case, the capability check
-fails open. A policy can reach a gateway that does not take the flags,
-with no refusal from this check first.
+A probe that fails refuses the boot too. That covers a binary that does
+not run, a non-zero exit, and no answer within 30 seconds. A non-zero exit
+refuses even when the help text lists `--egress-default`. The refusal names
+the binary, the probe command and its error.
 
 Binding a policy has these properties:
 

@@ -134,7 +134,9 @@ and Brig says so. An unreadable answer counts as pinning.
 `network-gateway --help` is read for one word, `--egress-default`,
 before a sandbox carrying a policy is booted. A gateway that does not
 take the flag drops the rules on the floor, so Brig refuses the run
-instead.
+instead. A probe that fails confirms nothing, so Brig refuses the run then
+too: the binary does not run, it exits non-zero, or it gives no answer
+within 30 seconds. A sandbox with no policy runs no probe.
 
 Brig picks that subnet from 198.18.0.0/15, the range RFC 2544 reserves
 for network benchmarking. It is never routed on the public internet and

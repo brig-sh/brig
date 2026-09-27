@@ -3,9 +3,13 @@ package runtime
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // The socket a gateway is reached on names the network it serves, because
@@ -366,13 +370,150 @@ func TestGatewayEnforcesChecksTheRuntimeTakesRules(t *testing.T) {
 	}
 }
 
-// Nothing is concluded from a probe that could not run. A runtime broken
-// enough not to print its own help fails the boot below with better context
-// than a guess made here.
+// A probe that could not run refuses the boot. It used to return nil here, and
+// the boot went on to hand rules to a gateway nobody had asked about (#171).
+// The name is from that time and stays because check-tests-kept tracks test
+// names. What it asserts now is the opposite of what it says.
 func TestGatewayEnforcesConcludesNothingFromAFailedProbe(t *testing.T) {
-	if err := gatewayEnforces(filepath.Join(t.TempDir(), "not-a-runtime")); err != nil {
-		t.Errorf("a failed probe was read as a missing feature: %v", err)
+	bin := filepath.Join(t.TempDir(), "not-a-runtime")
+	err := gatewayEnforces(bin)
+	if err == nil {
+		t.Fatal("a runtime that could not be run was taken to enforce a policy")
 	}
+	assertProbeRefusal(t, err, bin)
+}
+
+// A non-zero exit is a failed probe even when the help text lists the flag.
+// Nothing says the help came from the gateway brig will start, and a wrapper
+// that prints stale help and then fails reads the same way.
+func TestGatewayEnforcesRefusesAProbeThatExitsNonZero(t *testing.T) {
+	bin := scriptHull(t, "echo '   --egress-default string   verdict'\nexit 2\n")
+	err := gatewayEnforces(bin)
+	if err == nil {
+		t.Fatal("a probe that exited 2 was read as a runtime that enforces a policy")
+	}
+	assertProbeRefusal(t, err, bin)
+	if !strings.Contains(err.Error(), "exit status 2") {
+		t.Errorf("the refusal does not carry the probe's error: %v", err)
+	}
+}
+
+// A probe that never answers refuses within its bound. Without one, a hung
+// runtime hangs the boot with it, and nobody sees which command is stuck.
+//
+// The stub starts its sleep in the background and waits on it, so the kill at
+// the deadline takes the script and leaves the sleep holding the output pipe.
+// Only WaitDelay gets the probe past that. With a bare sleep as the last
+// command, a survivor showed up when this test ran alone and not when it ran
+// with the rest of the package, so it often never reached WaitDelay. The
+// survivor is checked for below, so a stub that stops setting up that case
+// fails here and does not pass quietly.
+func TestGatewayEnforcesRefusesAHungProbe(t *testing.T) {
+	old := gatewayProbeTimeout
+	gatewayProbeTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { gatewayProbeTimeout = old })
+
+	pidFile := filepath.Join(t.TempDir(), "survivor")
+	bin := scriptHull(t, "[ \"$1\" = network-gateway ] || exit 0\n"+
+		"sleep 30 &\n"+
+		"echo $! > '"+pidFile+"'\n"+
+		"wait\n")
+	// The first run of a fresh script on macOS can wait seconds on the
+	// security scan. Paid here, it cannot eat the probe's bound before the
+	// script has started its sleep.
+	if out, err := exec.Command(bin).CombinedOutput(); err != nil {
+		t.Fatalf("the stub runtime did not run: %v: %s", err, out)
+	}
+
+	start := time.Now()
+	err := gatewayEnforces(bin)
+	took := time.Since(start)
+
+	blob, readErr := os.ReadFile(pidFile)
+	if readErr != nil {
+		t.Fatalf("the stub never started the sleep that holds the pipe, so this "+
+			"run did not test WaitDelay: %v", readErr)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(blob)))
+	if convErr != nil {
+		t.Fatalf("the stub wrote no pid: %q", blob)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatal("the sleep did not outlive the probe, so nothing held the pipe " +
+			"and this run did not test WaitDelay")
+	}
+
+	if took > 5*time.Second {
+		t.Fatalf("the probe took %s to give up, with a bound of %s", took, gatewayProbeTimeout)
+	}
+	if err == nil {
+		t.Fatal("a probe that never answered was read as a runtime that enforces a policy")
+	}
+	assertProbeRefusal(t, err, bin)
+	if !strings.Contains(err.Error(), gatewayProbeTimeout.String()) {
+		t.Errorf("the refusal does not say the probe timed out: %v", err)
+	}
+}
+
+// A sandbox with no policy never pays for the probe, and a runtime that fails
+// it cannot stop a boot that has nothing to enforce. The gateway here answers
+// and cannot be stopped, so both boots fail past the probe and before any
+// gateway starts. The one with a policy is the check that the log sees a probe
+// when there is one.
+func TestABootWithNoPolicyRunsNoProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy Egress
+		probed bool
+	}{
+		{"no policy", Egress{}, false},
+		{"a policy", Egress{Default: "deny"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scratchIsolatedDir(t)
+			const name = "brig-probe"
+			sock, err := isolatedSocket(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listenAt(t, sock)
+
+			calls := filepath.Join(t.TempDir(), "calls")
+			bin := scriptHull(t, "echo \"$*\" >> '"+calls+"'\n"+
+				"echo '   --egress-default string   verdict'\n")
+			if _, err := ensureIsolatedGateway(bin, name, 0, tc.policy); err == nil {
+				t.Fatal("a gateway that could not be replaced was reported ready")
+			}
+			blob, _ := os.ReadFile(calls)
+			probed := strings.Contains(string(blob), "network-gateway --help")
+			if probed != tc.probed {
+				t.Errorf("probed = %t, want %t; the runtime was called with: %q",
+					probed, tc.probed, blob)
+			}
+		})
+	}
+}
+
+// assertProbeRefusal checks that a refusal says enough to act on: which
+// binary, which command, and that brig will not boot on it.
+func assertProbeRefusal(t *testing.T, err error, bin string) {
+	t.Helper()
+	for _, want := range []string{bin, "network-gateway --help", "detach"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+// scriptHull writes a shell script to stand in for the runtime.
+func scriptHull(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "hull")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // fakeHull writes a script that answers `network-gateway --help` with the

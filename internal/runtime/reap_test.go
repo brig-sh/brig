@@ -3,6 +3,7 @@ package runtime
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,9 +69,16 @@ func TestReplacingAGatewayThatCannotBeStoppedIsRefused(t *testing.T) {
 	// has nothing to signal and the socket keeps answering.
 	listenAt(t, sock)
 
-	_, err := ensureIsolatedGateway("hull", name, 0, Egress{Default: "deny"})
+	// A runtime that passes the probe, so the refusal under test is the one
+	// for the gateway that stayed up, and not the probe's. A bare "hull" here
+	// failed the probe wherever hull is not installed.
+	bin := fakeHull(t, "OPTIONS:\n   --egress-default string   verdict\n")
+	_, err := ensureIsolatedGateway(bin, name, 0, Egress{Default: "deny"})
 	if err == nil {
 		t.Fatal("a gateway that could not be replaced was reported ready")
+	}
+	if strings.Contains(err.Error(), "network-gateway --help") {
+		t.Errorf("the boot stopped at the probe, before the replacement: %v", err)
 	}
 	if _, statErr := os.Stat(gatewaySpecPath(sock)); statErr == nil {
 		t.Error("a spec was recorded for rules no running gateway received")
