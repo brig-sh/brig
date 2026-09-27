@@ -83,6 +83,12 @@ func TestIsolatedIsRefusedWhereBrigOwnsNoNetwork(t *testing.T) {
 		if !strings.Contains(err.Error(), "hvi") {
 			t.Errorf("the error does not name the backend that can: %v", err)
 		}
+		// The other way out has to be one that keeps sandboxes apart. The
+		// error once sent the user to the shared network, and on hvi two
+		// sandboxes there reach each other.
+		if !strings.Contains(err.Error(), "separate hosts") {
+			t.Errorf("the error does not name separate hosts as the other way out: %v", err)
+		}
 	}
 	if err := supports(spec, "hvi"); err != nil {
 		t.Errorf("isolated was refused on the backend that implements it: %v", err)

@@ -497,8 +497,8 @@ func supports(spec RunSpec, hv string) error {
 	if spec.Net == "isolated" && hv != "hvi" {
 		return fmt.Errorf("--network isolated gives the sandbox a network of its own, which "+
 			"brig can only do on the hvi backend, where it owns the gateway (BRIG_HYPERVISOR "+
-			"is %q); vmnet decides what a %s sandbox shares. Run it on hvi, or use the shared "+
-			"network and read docs/security.md on what that backend separates anyway", hv, hv)
+			"is %q); vmnet decides what a %s sandbox shares. Run it on hvi, or run sandboxes "+
+			"that must not reach each other on separate hosts (see docs/security.md)", hv, hv)
 	}
 	return nil
 }
