@@ -176,9 +176,17 @@ func doctorExit(checks []check) error {
 // which is a dependency inside the runtime check rather than between two of
 // them. Everything else -- the host, virtualization, the signature tooling, the
 // profiles, the secret store, the daemon -- stands on its own.
+//
+// The trust policy is built once, the way a run of the agent builds it, so the
+// verify row, the image check and the trust row all describe the one policy.
 func runDoctor(agent *profile.Profile, loadErr error) []check {
 	rtCheck, rt := runtimeCheck(agent)
 	runtimeOK := rtCheck.State == statePass
+	name := ""
+	if agent != nil {
+		name = agent.Name
+	}
+	policy := wrap.HostVerifyPolicy(name)
 	checks := []check{
 		brigCheck(),
 		hostCheck(),
@@ -189,13 +197,18 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	for _, mc := range modeChecks {
 		checks = append(checks, mc(agent, rt))
 	}
-	return append(checks,
+	checks = append(checks,
 		bootCheck(rt),
-		verifyCheck(),
+		verifyCheck(policy),
+	)
+	if policy.Replaced() {
+		checks = append(checks, trustCheck(policy))
+	}
+	return append(checks,
 		profilesCheck(loadErr),
 		secretsCheck(),
 		brigdCheck(),
-		imageCheck(agent, runtimeOK),
+		imageCheck(agent, runtimeOK, policy),
 	)
 }
 
@@ -447,15 +460,11 @@ func bootCheck(rt runtime.Runtime) check {
 // nothing, so even require-with-no-cosign -- which would refuse every real boot
 // -- is reported for the reader to act on rather than made this command's exit
 // code.
-func verifyCheck() check {
+func verifyCheck(policy verify.Policy) check {
 	mode, err := verify.ParseModeStrict(os.Getenv("BRIG_VERIFY"))
 	if err != nil {
 		return check{Name: "verify", State: stateFail, Finding: err.Error(),
 			Fix: "set BRIG_VERIFY to off, warn or require"}
-	}
-	policy := verify.DefaultPolicy()
-	if bin := os.Getenv("BRIG_COSIGN_BIN"); bin != "" {
-		policy.Cosign = bin
 	}
 	switch path, ok := policy.Tooling(); {
 	case ok:
@@ -470,6 +479,19 @@ func verifyCheck() check {
 			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s (images boot unchecked)",
 				policy.CosignMissing(), mode)}
 	}
+}
+
+// trustCheck names the image trust policy when the host replaced the shipped
+// one. Only then: on a host that sets nothing the row says the same thing
+// every time, and readers learn to skip a line like that. Informational, since
+// a replaced policy is the host owner's choice. It still gets its own row with
+// all three settings, because an image check that says ok means ok against
+// this policy, and an identity regexp that matches every certificate passes
+// everything.
+func trustCheck(policy verify.Policy) check {
+	return check{Name: "trust", State: stateInfo,
+		Finding: fmt.Sprintf("image trust policy replaced: registry %s, identity %s, issuer %s",
+			policy.Registry, policy.Identity, policy.Issuer)}
 }
 
 // profilesCheck reports how many profiles loaded and from where, and names any
@@ -622,7 +644,7 @@ func brigdHolder(socket string) (running bool, pid string) {
 // the image. Diagnostic: a check that reaches a registry and a signature is not
 // one to hang an exit code on, so a mismatch prints !! and its fix and leaves
 // the status alone.
-func imageCheck(agent *profile.Profile, runtimeOK bool) check {
+func imageCheck(agent *profile.Profile, runtimeOK bool, policy verify.Policy) check {
 	if agent == nil {
 		return check{Name: "image", State: stateInfo,
 			Finding: "pass an agent to check its image: brig doctor claude"}
@@ -633,10 +655,6 @@ func imageCheck(agent *profile.Profile, runtimeOK bool) check {
 	if agent.Image == "" {
 		return check{Name: "image", State: stateInfo,
 			Finding: fmt.Sprintf("no image is published for %s -- build it yourself and pass --image", agent.Name)}
-	}
-	policy := verify.DefaultPolicy()
-	if bin := os.Getenv("BRIG_COSIGN_BIN"); bin != "" {
-		policy.Cosign = bin
 	}
 	// No local digest: doctor has no runtime store to compare against here, and
 	// the question it asks is what the registry serves for this reference, not
