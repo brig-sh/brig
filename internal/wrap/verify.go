@@ -25,6 +25,14 @@ type VerifyRefusedError struct{ Err error }
 func (e *VerifyRefusedError) Error() string { return e.Err.Error() }
 func (e *VerifyRefusedError) Unwrap() error { return e.Err }
 
+// checkTag and checkDigest are the two checks behind verifyImage, as variables
+// so a test can hand the decision a result that a real cosign reaches only
+// after cosignTimeout, such as one that timed out.
+var (
+	checkTag    = verify.Policy.Image
+	checkDigest = verify.Policy.Verify
+)
+
 // verifyImage checks the guest image before booting it, and decides what to
 // do about the answer.
 //
@@ -82,7 +90,7 @@ func (c *Config) verifyImage() error {
 // sees and what the runtime boots, and under the default pull policy those need
 // not be the same bytes -- the limitation documented in docs/security.md.
 func (c *Config) verifyTag() error {
-	res := c.VerifyPolicy.Image(c.Image)
+	res := checkTag(c.VerifyPolicy, c.Image)
 
 	switch res.Outcome {
 	case verify.Verified:
@@ -104,6 +112,9 @@ func (c *Config) verifyTag() error {
 
 	default:
 		c.alertf("%s", res.Message())
+		if res.TimedOut {
+			return c.cosignHung(res, "Boot it unverified?")
+		}
 		if c.Verify == verify.Require {
 			return errors.New("refusing to boot an image that failed verification")
 		}
@@ -139,7 +150,7 @@ func (c *Config) verifyDigest() error {
 	// compared against it. A runtime that cannot say returns "", which reads as
 	// "no local copy" and raises no mismatch.
 	local, _ := c.Runtime.LocalDigest(c.Image)
-	res := c.VerifyPolicy.Verify(c.Image, local)
+	res := checkDigest(c.VerifyPolicy, c.Image, local)
 
 	switch res.Outcome {
 	case verify.Verified, verify.NotOurs:
@@ -181,6 +192,9 @@ func (c *Config) verifyDigest() error {
 		// portal or a sinkhole, turn the default mode into "unchecked". Nothing
 		// is pinned either way: a yes boots the cached tag.
 		c.alertf("%s", res.Message())
+		if res.TimedOut {
+			return c.cosignHung(res, "Boot the cached copy unverified?")
+		}
 		if c.Verify == verify.Require {
 			return errors.New("refusing to boot an image that could not be verified " +
 				"(BRIG_VERIFY=require)")
@@ -221,6 +235,9 @@ func (c *Config) verifyDigest() error {
 	default: // verify.Failed
 		c.BootDigest = res.Digest
 		c.alertf("%s", res.Message())
+		if res.TimedOut {
+			return c.cosignHung(res, "Boot it unverified?")
+		}
 		if c.Verify == verify.Require {
 			return errors.New("refusing to boot an image that failed verification")
 		}
@@ -236,6 +253,27 @@ func (c *Config) verifyDigest() error {
 		}
 		return nil
 	}
+}
+
+// cosignHung decides an image check that cosign did not answer in time, on
+// either path and at either step. It stops as the row it came from does: under
+// require it refuses, otherwise it asks, and with nobody to ask it refuses.
+//
+// Only the words differ. No signature was read, so it does not say the image
+// failed verification. A hung credential helper is a local cause, so it does
+// not blame the registry. The detail goes in the error itself, so a caller that
+// shows only the error still sees the credential helper cosign waited on when
+// one is set.
+func (c *Config) cosignHung(res verify.Result, question string) error {
+	if c.Verify == verify.Require {
+		return fmt.Errorf("refusing to boot an image that was not verified: %s "+
+			"(BRIG_VERIFY=require)", res.Detail)
+	}
+	if !c.confirm(question) {
+		return fmt.Errorf("aborted: the image was not verified: %s. Try again once "+
+			"cosign answers, or set BRIG_VERIFY=off to boot it unchecked", res.Detail)
+	}
+	return nil
 }
 
 // sayVerified is the one line a default run prints about verification that
@@ -327,7 +365,7 @@ func (c *Config) verifyBootAssets() error {
 	// unit test.
 	policy := verify.BootAssetsPolicy()
 	policy.Cosign = c.VerifyPolicy.Cosign
-	res := policy.Verify(ref, "")
+	res := checkDigest(policy, ref, "")
 
 	switch res.Outcome {
 	case verify.Verified:
@@ -378,6 +416,13 @@ func (c *Config) verifyBootAssets() error {
 		// A signature that is present and wrong on the kernel brig is about to
 		// boot. This one stops whatever the mode, short of off: there is no
 		// reading of a bad signature here that is worth a prompt.
+		//
+		// A check cosign did not answer stops the same way, in words that do not
+		// call it a bad signature.
+		if res.TimedOut {
+			return fmt.Errorf("refusing to boot: the boot assets at %s were not verified (%s). "+
+				"Set BRIG_VERIFY=off to boot them regardless", ref, res.Detail)
+		}
 		return fmt.Errorf("refusing to boot: the boot assets at %s failed verification (%s). "+
 			"Set BRIG_VERIFY=off to boot them regardless", ref, res.Detail)
 	}

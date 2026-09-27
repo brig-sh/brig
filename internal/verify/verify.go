@@ -19,8 +19,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -190,6 +193,11 @@ type Result struct {
 	Ours bool
 	// Detail is cosign's own output when it failed, trimmed.
 	Detail string
+	// TimedOut reports that cosign was cut off at cosignTimeout. Detail then
+	// says so in brig's words, and the outcome is the one any other error at
+	// that step gets: Unresolved for the resolve, Failed for the signature
+	// check. Callers read it to word the refusal, not to decide it.
+	TimedOut bool
 }
 
 // Message is the line to show the user, phrased for the outcome.
@@ -223,6 +231,13 @@ func (r Result) Message() string {
 		return fmt.Sprintf("cannot verify image %s: %s. Booting it unchecked",
 			r.Image, r.Policy.CosignMissing())
 	case Unresolved:
+		if r.TimedOut {
+			// Not "cannot reach the registry". The usual cause of a hang is a
+			// credential helper on this machine, and Detail names it when one is
+			// set.
+			return fmt.Sprintf("cannot verify image %s: %s. The copy on disk was not "+
+				"checked against what the registry serves", r.Image, r.Detail)
+		}
 		return fmt.Sprintf("cannot reach the registry to verify image %s: %s. The copy "+
 			"on disk could not be checked against what the registry serves",
 			r.Image, r.Detail)
@@ -235,6 +250,12 @@ func (r Result) Message() string {
 		return fmt.Sprintf("image %s in your local store is %s, not the %s the registry "+
 			"now serves. Booting the registry digest", r.Image, r.Local, r.Digest)
 	default:
+		if r.TimedOut {
+			// Still Failed, so it still stops. But no signature was read, and
+			// "did not verify" sends the reader after a bad image that is not there.
+			return fmt.Sprintf("cannot verify image %s: %s. Its signature was not checked",
+				r.Image, r.Detail)
+		}
 		return fmt.Sprintf("image %s claims to be published by brig-sh, but its "+
 			"signature DID NOT VERIFY: %s", r.Image, r.Detail)
 	}
@@ -320,6 +341,9 @@ func (p Policy) Image(ref string) Result {
 		"--certificate-oidc-issuer", p.Issuer,
 		subject,
 	)
+	if errors.Is(err, errTimedOut) {
+		return Result{Policy: p, Outcome: Failed, Image: ref, TimedOut: true, Detail: timeoutDetail(ref)}
+	}
 	if err != nil {
 		return Result{Policy: p, Outcome: Failed, Image: ref, Detail: firstLine(out, err)}
 	}
@@ -369,6 +393,10 @@ func (p Policy) Verify(ref, localDigest string) Result {
 	// be reached fails here, and that is "could not check" rather than "failed":
 	// it must not read like a bad signature, so it lands on Unresolved.
 	digest, err := p.resolveDigest(ref)
+	if errors.Is(err, errTimedOut) {
+		return Result{Policy: p, Outcome: Unresolved, Image: ref, Ours: ours, TimedOut: true,
+			Detail: timeoutDetail(ref)}
+	}
 	if err != nil {
 		return Result{Policy: p, Outcome: Unresolved, Image: ref, Ours: ours, Detail: err.Error()}
 	}
@@ -380,6 +408,10 @@ func (p Policy) Verify(ref, localDigest string) Result {
 		"--certificate-oidc-issuer", p.Issuer,
 		refWithDigest(ref, digest),
 	)
+	if errors.Is(verr, errTimedOut) {
+		return Result{Policy: p, Outcome: Failed, Image: ref, Digest: digest, Ours: ours, TimedOut: true,
+			Detail: timeoutDetail(ref)}
+	}
 	if verr != nil {
 		return Result{Policy: p, Outcome: Failed, Image: ref, Digest: digest, Ours: ours, Detail: firstLine(out, verr)}
 	}
@@ -407,8 +439,20 @@ func (p Policy) Verify(ref, localDigest string) Result {
 // Resolving through cosign, not the runtime, is deliberate: the runtime's store
 // is on disk and is the very thing we are checking the registry against, so
 // asking it to resolve the tag would compare the local copy with itself.
+//
+// cosign v3 marks triangulate deprecated and says it goes in v4.0.0, pointing
+// at `cosign tree`. tree is not a drop-in: for ghcr.io/brig-sh/claude-code-stock
+// the first digest it prints is the signature referrer's, not the image's, and
+// digestFromOutput takes the first digest it finds, so brig then pins and
+// verifies the wrong object without complaint. The replacement has to name the
+// image's own digest, as triangulate and --type=digest do.
+//
+// A timeout is passed up as it is, so Verify can tell it from a failure.
 func (p Policy) resolveDigest(ref string) (string, error) {
 	out, err := run(p.Cosign, "triangulate", ref)
+	if errors.Is(err, errTimedOut) {
+		return "", err
+	}
 	if err != nil {
 		return "", errors.New(firstLine(out, err))
 	}
@@ -497,26 +541,124 @@ var lookPath = exec.LookPath
 // cosignTimeout bounds every cosign invocation. The registry is on the other
 // end of each one, and a dial that never completes is the ordinary shape of an
 // outage; without a bound that outage would sit on the boot path for as long
-// as the network stack cares to wait. A cosign that is cut off here reads as
-// "could not be verified", the same as any other failure to reach the registry.
+// as the network stack cares to wait. A cosign that is cut off here keeps the
+// outcome of any other failure at the same step, but its message says it timed
+// out, so it does not blame the registry or the signature.
+//
+// The other ordinary shape is a Docker credential helper that never answers:
+// with credsStore set to Docker Desktop and Docker Desktop not running,
+// docker-credential-desktop blocks and cosign waits on it.
 var cosignTimeout = 30 * time.Second
+
+// errTimedOut marks a cosign that run cut off at cosignTimeout. It is decided
+// from the deadline, never from what cosign printed.
+var errTimedOut = errors.New("cosign did not answer")
+
+// The signal calls run makes, as variables so a test can hand it a signal
+// without delivering one to the test binary.
+var (
+	notifySignals = signal.Notify
+	stopSignals   = signal.Stop
+	signalIgnored = signal.Ignored
+	reraise       = func(s os.Signal) {
+		if sig, ok := s.(syscall.Signal); ok {
+			_ = syscall.Kill(os.Getpid(), sig)
+		}
+	}
+)
+
+// forwarded are the signals that end brig while cosign runs. Each one kills
+// cosign's process group and is then raised again, so the process handles it
+// as it would have: under the default disposition it dies, and a handler of
+// its own, such as brigd's, still sees it. SIGQUIT is here because the Go
+// runtime exits on it without killing the group, and Ctrl-\ from the terminal
+// no longer reaches cosign.
+var forwarded = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
 
 var run = func(bin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cosignTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
-	// Killing the process is not the same as being done with it. Anything it
-	// spawned inherits the pipes below, and Run waits for those to close, so a
-	// helper left behind by a killed cosign would hold the boot for as long as
-	// it lived. WaitDelay is the bound on that wait: once the deadline has
-	// killed the process, a second is all the grandchildren get before Run
-	// returns without them.
+	// cosign gets a process group of its own, and the deadline kills the whole
+	// group. Killing cosign alone left behind what it spawned: a credential
+	// helper that cosign was waiting on outlived every failed boot.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	// Killing the group is not the same as being done with it. A helper that
+	// left the group with setsid still holds the pipes below, and Run waits for
+	// those to close. WaitDelay is the bound on that wait: once the deadline has
+	// killed the group, a second is all a straggler gets before Run returns
+	// without it.
 	cmd.WaitDelay = time.Second
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+
+	// Its own group also takes cosign out of brig's foreground group, so a
+	// Ctrl-C from the terminal reaches brig alone. Before, it killed cosign and
+	// its helper with brig. So run catches the signals that end brig, cancels
+	// the context (which kills the group), and raises the signal again after,
+	// so the process gets it as it did before. The brig CLI dies of it. brigd
+	// keeps a handler for SIGINT and SIGTERM and shuts down through that.
+	//
+	// Registered before Start, so a signal in the gap is held, not lost. A
+	// signal brig was started with ignored is left out: Notify stops it being
+	// ignored and Stop puts the ignore back, so raising it again does nothing
+	// and brig carries on with its cosign killed.
+	var watch []os.Signal
+	for _, s := range forwarded {
+		if !signalIgnored(s) {
+			watch = append(watch, s)
+		}
+	}
+	timedOut := func(err error) error {
+		if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %v", errTimedOut, err)
+		}
+		return err
+	}
+	// Notify with no signals relays every signal, so with all of them ignored
+	// run asks for none. Asking would let a terminal resize kill cosign.
+	if len(watch) == 0 {
+		err := cmd.Run()
+		return out.String(), timedOut(err)
+	}
+	sigs := make(chan os.Signal, 1)
+	notifySignals(sigs, watch...)
+
+	done := make(chan struct{})
+	caught := make(chan os.Signal, 1)
+	go func() {
+		defer close(caught)
+		select {
+		case s := <-sigs:
+			cancel()
+			caught <- s
+		case <-done:
+		}
+	}()
 	err := cmd.Run()
-	return out.String(), err
+	close(done)
+	s, got := <-caught
+	stopSignals(sigs)
+	if !got {
+		// One that arrived after Run returned and before Stop.
+		select {
+		case s, got = <-sigs:
+		default:
+		}
+	}
+	if got {
+		reraise(s)
+		return out.String(), err
+	}
+	return out.String(), timedOut(err)
 }
 
 func firstLine(out string, err error) string {

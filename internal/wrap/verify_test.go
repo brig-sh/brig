@@ -616,3 +616,151 @@ func TestVerifyOffSaysSo(t *testing.T) {
 		t.Errorf("the line does not say what it costs:\n%s", said)
 	}
 }
+
+// stubCheck makes both image checks, and the boot-assets check, answer res. A
+// real cosign reaches a timeout only after cosignTimeout, which is too long to
+// wait for in a unit test.
+func stubCheck(t *testing.T, res verify.Result) {
+	t.Helper()
+	origT, origD := checkTag, checkDigest
+	t.Cleanup(func() { checkTag, checkDigest = origT, origD })
+	checkTag = func(p verify.Policy, ref string) verify.Result {
+		res.Policy, res.Image = p, ref
+		return res
+	}
+	checkDigest = func(p verify.Policy, ref, _ string) verify.Result {
+		res.Policy, res.Image = p, ref
+		return res
+	}
+}
+
+// hungDetail is the Detail verify builds for a cosign that timed out with a
+// credential helper configured.
+const hungDetail = "cosign did not answer within 30s. It waits on docker-credential-desktop, " +
+	"set by credsStore in /home/u/.docker/config.json. Start the app that helper belongs to, " +
+	"or run brig with DOCKER_CONFIG set to an empty directory"
+
+// The hint that names the credential helper is in the error, so a caller that
+// shows only the error still sees it.
+func TestATimedOutResolveRefusalCarriesTheHint(t *testing.T) {
+	stubCheck(t, verify.Result{Outcome: verify.Unresolved, Ours: true, TimedOut: true, Detail: hungDetail})
+
+	c := digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Require, "cosign", "")
+	err := c.verifyImage()
+	if err == nil || !strings.Contains(err.Error(), "docker-credential-desktop") {
+		t.Errorf("require: the refusal does not name the helper: %v", err)
+	}
+
+	c = digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn, "cosign", "")
+	c.NoTerminal = true
+	err = c.verifyImage()
+	if err == nil {
+		t.Fatal("a timed-out resolve booted with nobody to ask")
+	}
+	if !strings.Contains(err.Error(), "docker-credential-desktop") || !namesAWayForward(err.Error()) {
+		t.Errorf("warn: the abort does not name the helper and a way forward: %v", err)
+	}
+	if strings.Contains(err.Error(), "registry could not be reached") {
+		t.Errorf("warn: a timeout is blamed on the registry: %v", err)
+	}
+}
+
+// Without a timeout the abort says what it said before.
+func TestAnUnresolvedAbortIsUnchangedWithoutATimeout(t *testing.T) {
+	stubCheck(t, verify.Result{Outcome: verify.Unresolved, Ours: true, Detail: "dial tcp: i/o timeout"})
+	c := digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn, "cosign", "")
+	c.NoTerminal = true
+	err := c.verifyImage()
+	want := "aborted: the registry could not be reached, so the image could not be verified. " +
+		"Try again with the registry reachable, or set BRIG_VERIFY=off to boot the cached copy unchecked"
+	if err == nil || err.Error() != want {
+		t.Errorf("abort = %v, want %q", err, want)
+	}
+	c = digestConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Require, "cosign", "")
+	if err := c.verifyImage(); err == nil ||
+		err.Error() != "refusing to boot an image that could not be verified (BRIG_VERIFY=require)" {
+		t.Errorf("require refusal = %v", err)
+	}
+}
+
+// A signature check that timed out stays a refusal, on both paths and for the
+// kernel. But nothing was checked, so it does not say the image failed
+// verification, and it names a way forward.
+func TestATimedOutSignatureCheckIsNotCalledAFailedSignature(t *testing.T) {
+	stubCheck(t, verify.Result{Outcome: verify.Failed, Ours: true, TimedOut: true, Detail: hungDetail})
+	for _, tc := range []struct {
+		what string
+		pins bool
+		mode verify.Mode
+	}{
+		{"digest path, warn", true, verify.Warn},
+		{"tag path, warn", false, verify.Warn},
+		{"digest path, require", true, verify.Require},
+		{"tag path, require", false, verify.Require},
+	} {
+		c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", tc.mode)
+		c.Runtime = verifyRuntime{pins: tc.pins}
+		c.NoTerminal = true
+		err := c.verifyImage()
+		if err == nil {
+			t.Errorf("%s: a timed-out signature check booted", tc.what)
+			continue
+		}
+		if strings.Contains(err.Error(), "failed verification") {
+			t.Errorf("%s: a timeout is called a failed verification: %v", tc.what, err)
+		}
+		if !strings.Contains(err.Error(), "docker-credential-desktop") {
+			t.Errorf("%s: the error does not carry the hint: %v", tc.what, err)
+		}
+		if tc.mode == verify.Warn && !namesAWayForward(err.Error()) {
+			t.Errorf("%s: the abort names no way forward: %v", tc.what, err)
+		}
+		if said := c.Err.(*bytes.Buffer).String(); strings.Contains(said, "DID NOT VERIFY") {
+			t.Errorf("%s: the warning says the signature did not verify: %q", tc.what, said)
+		}
+	}
+
+	c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
+	c.Profile.GenericBoot = true
+	err := c.verifyBootAssets()
+	if err == nil {
+		t.Fatal("boot assets whose check timed out were booted")
+	}
+	if strings.Contains(err.Error(), "failed verification") || !strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("boot assets: %v", err)
+	}
+}
+
+// A resolve of the boot assets that timed out is Unresolved, and it goes the
+// way every other unresolved boot-assets reference goes: under warn it says so,
+// naming the helper, and boots the kernel unchecked; under require it refuses.
+// It does not prompt, unlike the image's timed-out resolve. This pins that, so
+// a change to it is a decision someone makes and not a side effect.
+func TestATimedOutBootAssetsResolveFollowsTheUnresolvedRule(t *testing.T) {
+	stubCheck(t, verify.Result{Outcome: verify.Unresolved, Ours: true, TimedOut: true, Detail: hungDetail})
+
+	c := verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Warn)
+	c.Profile.GenericBoot = true
+	c.NoTerminal = true
+	if err := c.verifyBootAssets(); err != nil {
+		t.Errorf("warn: a timed-out boot-assets resolve did not boot: %v", err)
+	}
+	said := c.Err.(*bytes.Buffer).String()
+	if !strings.Contains(said, "docker-credential-desktop") {
+		t.Errorf("warn: the alert does not name the helper: %q", said)
+	}
+	if strings.Contains(said, "failed verification") {
+		t.Errorf("warn: a timeout is called a failed verification: %q", said)
+	}
+
+	c = verifyConfig(t, "ghcr.io/brig-sh/claude-code:arm64", verify.Require)
+	c.Profile.GenericBoot = true
+	err := c.verifyBootAssets()
+	if err == nil {
+		t.Fatal("require: a timed-out boot-assets resolve booted")
+	}
+	if !strings.Contains(err.Error(), "docker-credential-desktop") ||
+		!strings.Contains(err.Error(), "BRIG_VERIFY=require") {
+		t.Errorf("require: %v", err)
+	}
+}

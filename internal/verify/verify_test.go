@@ -2,6 +2,7 @@ package verify
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -549,5 +550,65 @@ func TestADeprecationWarningIsNotTheReason(t *testing.T) {
 	got = p.Verify("ghcr.io/brig-sh/claude-code:arm64", "")
 	if got.Detail != "exit status 1" {
 		t.Errorf("detail = %q, want the error itself", got.Detail)
+	}
+}
+
+// timedOut is the error run returns for a cosign cut off at the deadline.
+var timedOut = fmt.Errorf("%w: signal: killed", errTimedOut)
+
+// errExit1 is how run reports a cosign that failed and exited.
+var errExit1 = errors.New("exit status 1")
+
+// A resolve that timed out says so. What cosign printed before it was killed
+// is its deprecation warning, and that is not the reason.
+func TestATimedOutResolveDoesNotQuoteTheDeprecationWarning(t *testing.T) {
+	isolateDocker(t)
+	p := DefaultPolicy()
+	digestStub(t, deprecation+"\n", timedOut, nil)
+	got := p.Verify("ghcr.io/brig-sh/claude-code:arm64", "")
+	if got.Outcome != Unresolved {
+		t.Fatalf("outcome = %v, want Unresolved", got.Outcome)
+	}
+	if !got.TimedOut {
+		t.Error("a resolve cut off at the deadline is not marked TimedOut")
+	}
+	for what, s := range map[string]string{"detail": got.Detail, "message": got.Message()} {
+		if !strings.Contains(s, "did not answer") {
+			t.Errorf("the %s does not say cosign did not answer: %q", what, s)
+		}
+		if strings.Contains(s, "deprecated") || strings.Contains(s, "signal: killed") {
+			t.Errorf("the %s quotes cosign's noise as the reason: %q", what, s)
+		}
+	}
+	if strings.Contains(got.Message(), "cannot reach the registry") {
+		t.Errorf("a timeout claims the registry was unreachable: %q", got.Message())
+	}
+}
+
+// A timeout in the signature check is still Failed, as any error there was: a
+// timeout message must not move the trust decision. It does not say the
+// signature did not verify, because nothing was checked.
+func TestATimedOutSignatureCheckStaysFailed(t *testing.T) {
+	isolateDocker(t)
+	p := DefaultPolicy()
+	digestStub(t, sigTag("ghcr.io/brig-sh/claude-code"), nil, timedOut)
+	digestPath := p.Verify("ghcr.io/brig-sh/claude-code:arm64", "")
+	stub(t, true, "", timedOut)
+	tagPath := p.Image("ghcr.io/brig-sh/claude-code:arm64")
+
+	for what, got := range map[string]Result{"digest path": digestPath, "tag path": tagPath} {
+		if got.Outcome != Failed {
+			t.Errorf("%s: outcome = %v, want Failed", what, got.Outcome)
+		}
+		if !got.TimedOut {
+			t.Errorf("%s: not marked TimedOut", what)
+		}
+		if !strings.Contains(got.Detail, "did not answer") || strings.Contains(got.Detail, "signal: killed") ||
+			strings.Contains(got.Detail, "no matching signatures") {
+			t.Errorf("%s: detail = %q", what, got.Detail)
+		}
+		if msg := got.Message(); strings.Contains(msg, "DID NOT VERIFY") || !strings.Contains(msg, "did not answer") {
+			t.Errorf("%s: message = %q", what, msg)
+		}
 	}
 }
