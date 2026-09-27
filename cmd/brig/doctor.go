@@ -179,6 +179,7 @@ func doctorExit(checks []check) error {
 //
 // The trust policy is built once, the way a run of the agent builds it, so the
 // verify row, the image check and the trust row all describe the one policy.
+// The verify row reads the mode the run reads for the same reason.
 func runDoctor(agent *profile.Profile, loadErr error) []check {
 	rtCheck, rt := runtimeCheck(agent)
 	runtimeOK := rtCheck.State == statePass
@@ -199,7 +200,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	}
 	checks = append(checks,
 		bootCheck(rt),
-		verifyCheck(policy),
+		verifyCheck(name, policy),
 	)
 	if policy.Replaced() {
 		checks = append(checks, trustCheck(policy))
@@ -455,29 +456,30 @@ func bootCheck(rt runtime.Runtime) check {
 }
 
 // verifyCheck names the signature tooling and the mode it runs under. It reads
-// BRIG_VERIFY through the same strict parser a run does, so a typo in it is
-// named here rather than swallowed. Diagnostic throughout: doctor boots
-// nothing, so even require-with-no-cosign -- which would refuse every real boot
-// -- is reported for the reader to act on rather than made this command's exit
-// code.
-func verifyCheck(policy verify.Policy) check {
-	mode, err := verify.ParseModeStrict(os.Getenv("BRIG_VERIFY"))
+// the mode the way a run of the agent does, per-agent first and through the
+// same strict parser, so a typo in it is named here rather than swallowed, and
+// BRIG_<AGENT>_VERIFY=require is not reported as warn. The row quotes the
+// variable the mode came from. Diagnostic throughout: doctor boots nothing, so
+// even require-with-no-cosign -- which would refuse every real boot -- is
+// reported for the reader to act on rather than made this command's exit code.
+func verifyCheck(agent string, policy verify.Policy) check {
+	mode, from, err := wrap.HostVerifyMode(agent)
 	if err != nil {
 		return check{Name: "verify", State: stateFail, Finding: err.Error(),
-			Fix: "set BRIG_VERIFY to off, warn or require"}
+			Fix: "set " + from + " to off, warn or require"}
 	}
 	switch path, ok := policy.Tooling(); {
 	case ok:
 		return check{Name: "verify", State: statePass,
-			Finding: fmt.Sprintf("cosign at %s, BRIG_VERIFY=%s", path, mode)}
+			Finding: fmt.Sprintf("cosign at %s, %s=%s", path, from, mode)}
 	case mode == verify.Require:
 		return check{Name: "verify", State: stateFail,
-			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s", policy.CosignMissing(), mode),
-			Fix:     "supply cosign, or set BRIG_VERIFY=warn"}
+			Finding: fmt.Sprintf("%s, %s=%s", policy.CosignMissing(), from, mode),
+			Fix:     "supply cosign, or set " + from + "=warn"}
 	default:
 		return check{Name: "verify", State: statePass,
-			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s (images boot unchecked)",
-				policy.CosignMissing(), mode)}
+			Finding: fmt.Sprintf("%s, %s=%s (images boot unchecked)",
+				policy.CosignMissing(), from, mode)}
 	}
 }
 

@@ -42,6 +42,8 @@ func recordingCosign(t *testing.T) string {
 			os.Unsetenv(name)
 		}
 	}
+	t.Setenv("BRIG_X_VERIFY", "")
+	os.Unsetenv("BRIG_X_VERIFY")
 	return log
 }
 
@@ -177,5 +179,49 @@ func TestDoctorIgnoresPerAgentOverrideWithoutAgent(t *testing.T) {
 		if c.Name == "trust" {
 			t.Errorf("a per-agent override was reported with no agent named: %+v", c)
 		}
+	}
+}
+
+// BRIG_<AGENT>_VERIFY wins over BRIG_VERIFY for a run, so the verify row reads
+// it too. Doctor read only the global one, and on a host with no cosign and
+// BRIG_X_VERIFY=require it said images boot unchecked while every run of x
+// refused to boot.
+func TestDoctorVerifyUsesPerAgentMode(t *testing.T) {
+	healthyHost(t)
+	recordingCosign(t)
+	t.Setenv("BRIG_VERIFY", "warn")
+	t.Setenv("BRIG_X_VERIFY", "require")
+	t.Setenv("BRIG_COSIGN_BIN", filepath.Join(t.TempDir(), "no-cosign"))
+
+	agent := fakeProfile
+	row := findCheck(t, runDoctor(&agent, nil), "verify")
+	if row.State != stateFail {
+		t.Errorf("verify row with BRIG_X_VERIFY=require and no cosign did not fail: %+v", row)
+	}
+	if !strings.Contains(row.Finding, "BRIG_X_VERIFY=require") {
+		t.Errorf("verify row does not name the per-agent setting: %s", row.Finding)
+	}
+
+	// With no agent named, the per-agent setting applies to no run.
+	row = findCheck(t, runDoctor(nil, nil), "verify")
+	if row.State == stateFail || !strings.Contains(row.Finding, "BRIG_VERIFY=warn") {
+		t.Errorf("verify row with no agent read the per-agent mode: %+v", row)
+	}
+}
+
+// A typo in the per-agent mode is named by that variable, since a run of the
+// agent refuses on it and BRIG_VERIFY is not the setting to fix.
+func TestDoctorVerifyNamesBadPerAgentMode(t *testing.T) {
+	healthyHost(t)
+	recordingCosign(t)
+	t.Setenv("BRIG_X_VERIFY", "requrie")
+
+	agent := fakeProfile
+	row := findCheck(t, runDoctor(&agent, nil), "verify")
+	if row.State != stateFail {
+		t.Fatalf("verify row accepted BRIG_X_VERIFY=requrie: %+v", row)
+	}
+	if !strings.Contains(row.Finding, "BRIG_X_VERIFY") || !strings.Contains(row.Fix, "BRIG_X_VERIFY") {
+		t.Errorf("verify row does not send the reader to BRIG_X_VERIFY: %+v", row)
 	}
 }
