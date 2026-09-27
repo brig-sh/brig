@@ -260,13 +260,11 @@ beyond them:
 - `network-gateway`, for the `hvi` backend. That backend has no egress of its
   own, so Brig starts one shared gateway and joins every sandbox to it. Brig
   also hands out the addresses on that network itself. Guests on one gateway
-  share a broadcast domain, but cannot address each other. The gateway
-  carries an ARP broadcast between them and does not carry the unicast
-  reply, so neither learns the other's MAC address. See
-  [security.md](security.md#things-brig-does-not-claim) for what that means per
-  backend, which is not the same answer on Linux. A gateway started by an
-  older Brig has no API socket, so it cannot publish a port. The next boot
-  replaces it when no sandbox is on it and no other boot is starting on it.
+  reach each other, measured on hull 0.1.0-rc29. See
+  [security.md](security.md#things-brig-does-not-claim) for the answer per
+  backend. A gateway started by an older Brig has no API socket, so it cannot
+  publish a port. The next boot replaces it when no sandbox is on it and no
+  other boot is starting on it.
 
 Six of the eight shipped profiles ask for `hvi` and set `genericBoot: true`
 (`internal/profile/specs`). The default macOS path needs the `hvi` binary

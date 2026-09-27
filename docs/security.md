@@ -24,6 +24,9 @@ The guest can access:
 - the project you name on the run line, read-write at `/work/<name>`
 - the credentials you deliver to it
 - the internet, on the default `shared` network
+- a port another sandbox listens on, on the default `shared` network, on
+  `hvi` and on Linux (see
+  [things brig does not claim](#things-brig-does-not-claim))
 - any hostmount volume a profile declares
 
 The host can reach the guest on any port you publish with `--publish` or
@@ -777,27 +780,28 @@ no equivalent on `vz`, `qemu` or Linux.
 
 It does not promise that one sandbox cannot reach another under the default
 `shared` network. What happens there depends on the backend. Brig asks the
-runtime for its shared network, and what the runtime does with that request
-is the runtime's own behaviour, not Brig's. The measurements are in
+runtime for its shared network. On `hvi`, Brig also hands out the addresses
+on it. Whether that network forwards traffic from one guest to another is the
+runtime's behaviour, not Brig's. The measurements are in
 [docs/manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md).
 
 | backend | can one sandbox reach another? |
 | --- | --- |
-| `hvi` on macOS | no. A packet capture in both guests shows why: an ARP broadcast from one guest does reach the other, and the other answers, but the gateway does not forward that unicast reply back. The first guest never learns the second's MAC address, so it never sends a packet, and the second guest sees no TCP at all |
-| `vz` on macOS | no. vmnet does not carry traffic from one guest to another in the mode hull uses |
+| `hvi` on macOS | **yes.** Measured on 2026-09-27 with brig v0.3.0 and hull 0.1.0-rc29 ([#364](https://github.com/brig-sh/brig/issues/364)): one sandbox fetched a file over HTTP that only the other served. With `--network isolated` on both, the same request timed out. hull 0.1.0-rc21 gave "no" on the shared network. What changed the answer is not known |
+| `vz` on macOS | not measured on a current hull |
+| `qemu` on macOS | not measured. It takes its network from vmnet, as `vz` does |
 | Linux, measured with plain containers on the nerdctl bridge | **yes.** The CNI bridge is an ordinary layer 2 segment, and two sandboxes on it reach each other the way two containers do. The shipped default shim, `io.containerd.urunc.v2`, puts a microVM behind that same bridge, and nothing here has measured whether that changes the answer. Assume it does not |
 
-So on Linux, two agents you gave *different* credentials sit on one broadcast
-domain, each able to reach whatever the other is listening on. That is a real
-hole in the narrow-blast-radius argument above: there the radius is narrow per
-guest home and per token, not per sandbox. If it matters that two agents
-cannot reach each other, run them on separate hosts, or on macOS.
+So on Linux and on `hvi`, two agents you gave *different* credentials can
+each reach whatever the other is listening on. That is a real hole in the
+narrow-blast-radius argument above: there the radius is narrow per guest home
+and per token, not per sandbox. If it matters that two agents cannot reach
+each other, run both with `--network isolated` on `hvi` or on Linux. On `vz`
+and on `qemu`, where that posture is refused, run them on separate hosts.
 
-On macOS the separation under the *shared* network is real, but it is a
-property of the backend rather than something Brig asks for. Brig asks for a
-shared network and gets guests that cannot address each other. No test in Brig
-notices if a runtime change removes it. Treat it as a property that holds,
-not as a guarantee Brig makes.
+The `hvi` answer changed between two measurements, and nothing in Brig
+noticed. No test in Brig checks what the shared network carries between
+guests. Do not treat any answer in the table as a property of Brig.
 
 `--network isolated` is the guarantee. It gives the sandbox a network of its
 own. On Linux that is its own CNI network. On `hvi` it is its own gateway
@@ -856,10 +860,10 @@ is code that runs with your credentials.
 and any `files:` binding. A `files:` binding is the one channel the deny list
 does not cover. A profile is only as careful as whoever wrote it.
 
-**hull or nerdctl.** The kernel boundary, the shared-network separation on
-macOS, and every device and namespace decision belong to the runtime, not to
-Brig. Brig reports what it resolved. It neither hardens nor weakens what the
-runtime does.
+**hull or nerdctl.** The kernel boundary, whether the shared network
+forwards traffic between guests, and every device and namespace decision
+belong to the runtime, not to Brig. Brig reports what it resolved. It
+neither hardens nor weakens what the runtime does.
 
 **Brig itself.** Brig runs as you, on the host, outside the sandbox. A
 resolved credential sits in its process memory as plaintext for the run's

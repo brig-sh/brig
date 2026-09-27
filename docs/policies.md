@@ -54,9 +54,9 @@ new record. `brig rm` drops the record with the sandbox.
 | `isolated` | a network of this sandbox's own |
 | `offline` | no route out. The agent runs, the guest home is mounted, nothing leaves |
 
-`shared` is a shared network in name, not in reach. Sandboxes on it cannot
-reach each other on either macOS backend, but they can reach each other on
-Linux. See the per-backend table in
+Sandboxes on `shared` reach each other on `hvi` and on Linux. `vz` is not
+measured on a current hull. `--network isolated` keeps a sandbox off that
+network. See the per-backend table in
 [security.md](security.md#things-brig-does-not-claim) for how that was
 measured. `brig info` prints the posture as one of these three lines:
 

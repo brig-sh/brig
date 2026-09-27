@@ -12,8 +12,8 @@ type Network string
 const (
 	// NetShared is one network for every sandbox on the host. What brig has
 	// always done, and still the default. Whether the sandboxes on it can
-	// reach each other is the backend's answer, not brig's: on Linux they can,
-	// on both macOS backends they cannot. See docs/security.md.
+	// reach each other is the backend's answer, not brig's, and it is not the
+	// same answer everywhere. See docs/security.md.
 	NetShared Network = "shared"
 	// NetIsolated is a network of this sandbox's own, so no other sandbox is
 	// on it whatever the backend does with a shared one.
@@ -78,12 +78,11 @@ func (n Network) RuntimeNet() string {
 //
 // The shared line describes the topology and stops there. Whether one sandbox
 // can actually reach another on that network is a property of the backend, not
-// of this setting. On both macOS backends they cannot: a packet capture shows
-// an ARP broadcast crossing between guests on hvi, and the unicast reply not
-// crossing back, so neither guest ever learns the other's address. On Linux
-// they can. A row claiming either would be false somewhere, so it claims what
-// is true everywhere: these sandboxes are on one network rather than each on
-// its own.
+// of this setting, and it has changed under brig between runtime releases. A
+// row claiming either answer is false somewhere, or false after the next
+// release, so it claims what is true everywhere: these sandboxes are on one
+// network rather than each on its own. The answer per backend, and when it was
+// measured, is in docs/security.md and docs/manual-tests/sandbox-reachability.md.
 func (n Network) Line() string {
 	switch n {
 	case NetOffline:
