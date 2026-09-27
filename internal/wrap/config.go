@@ -462,7 +462,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// session recorded by an older release.
 	netValue, netSource := o.Network, "--network"
 	if netValue == "" {
-		netValue, netSource = env.String("NETWORK", ""), env.settingName("NETWORK")
+		netValue, netSource = env.String("NETWORK", ""), env.SettingName("NETWORK")
 	}
 	recordedNet, err := rememberedNetwork(sessionKey(t.Name, slug), vmName)
 	if err != nil && strictErr == nil {

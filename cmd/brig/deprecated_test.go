@@ -34,6 +34,7 @@ func TestDeprecatedVerbsStillWork(t *testing.T) {
 // "is now `brig profiles`", which after this change would have been one hop
 // short of an answer.
 func TestRetiredSpellingsWorkAndNameTheirReplacement(t *testing.T) {
+	noSandboxes(t)
 	for _, c := range []struct {
 		args        []string
 		replacement string

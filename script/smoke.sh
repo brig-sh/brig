@@ -1910,6 +1910,21 @@ grep -q -- '--name brig-mytool' "$STUB_LOG" \
 grep -q -- '-- claude -p hi' "$STUB_LOG" \
   && ok "the run is the agent it was copied from, renamed" \
   || bad "the run is the agent it was copied from, renamed"
+# rm refuses while a sandbox of the profile is up (#367). Once the file is
+# gone, `brig rm mytool` answers "unknown profile" and the sandbox is left for
+# `rm --all`. So it names the `brig rm` to run first, and deletes nothing.
+"$WORK/brig" agent rm mytool < /dev/null > "$WORK/rm-busy.out" 2>&1 \
+  && bad "agent rm removed a profile its sandbox still uses" \
+  || ok "agent rm refuses while a sandbox of the profile exists"
+[ -f "$BRIG_PROFILE_DIR/mytool.yaml" ] \
+  && ok "the refused rm leaves the file in place" \
+  || bad "the refused rm deleted the file anyway"
+grep -q 'brig rm mytool' "$WORK/rm-busy.out" \
+  && ok "the refusal names the brig rm to run first" \
+  || bad "the refusal names the brig rm to run first: $(cat "$WORK/rm-busy.out")"
+"$WORK/brig" rm mytool > /dev/null 2>&1 \
+  && ok "brig rm removes the sandbox the refusal named" \
+  || bad "brig rm removes the sandbox the refusal named"
 "$WORK/brig" agent rm mytool < /dev/null > /dev/null 2>&1
 [ -f "$BRIG_PROFILE_DIR/mytool.yaml" ] \
   && bad "rm did not remove the copy under the name it was given" \

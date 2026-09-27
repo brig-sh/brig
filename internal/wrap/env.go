@@ -116,9 +116,11 @@ func (e Env) setting(key string) string {
 	return "BRIG_" + key
 }
 
-// settingName is setting without the value, for a message that quotes the
-// value itself and would otherwise print it twice.
-func (e Env) settingName(key string) string {
+// SettingName is setting without the value, for a message that quotes the
+// value itself and would otherwise print it twice. It is also the variable to
+// set to change what key reads: a per-agent variable that is present wins even
+// when it is empty, so setting the global one under it changes nothing.
+func (e Env) SettingName(key string) string {
 	if name, _, ok := e.getNamed(key); ok {
 		return name
 	}

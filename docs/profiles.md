@@ -287,6 +287,21 @@ than assuming yes:
 brig agent rm claude -y   # the alias resolves to claude-code's file
 ```
 
+`rm` refuses while a sandbox of the profile exists, running or stopped, and
+names the `brig rm <ref>` for each. Once the file is gone, `brig rm <ref>`
+cannot reach those sandboxes. The way out is then `brig rm --all`, or a new
+profile of the same name. An override of a built-in is not refused, because
+the name still resolves to the built-in.
+
+To answer, `rm` asks the profile's runtime what it holds. That is the
+profile's `runtimeBin` only once brig has recorded a session of the profile,
+and the runtime on `PATH` before that, so `rm` never executes the `runtimeBin`
+of a profile you imported and never ran. If brig cannot ask, `rm` keeps the
+file and names the cause. `BRIG_RUNTIME` set to a runtime brig does not know,
+or a `runtimeBin` that points at nothing on a profile brig has run, is such a
+cause. Fix that setting first. With no runtime installed at all, there are no sandboxes,
+and `rm` goes ahead.
+
 Built-in profiles are compiled in, so there is nothing to remove. Import a
 profile of the same name to shadow one instead.
 

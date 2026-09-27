@@ -19,6 +19,7 @@ import (
 func TestAgentVerbsWork(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
+	noSandboxes(t)
 	stubEditor(t, `printf '\n# tuned by hand\n' >> "$1"`)
 
 	for _, args := range [][]string{

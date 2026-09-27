@@ -540,6 +540,7 @@ func TestListProfilesSeparatesImportableSecretsFromHandCreatedOnes(t *testing.T)
 func TestNewAgentIsEditableAndRemovableByItsNewName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
+	noSandboxes(t)
 	if err := profile.Load(profile.Dir()); err != nil {
 		t.Fatal(err)
 	}
@@ -610,6 +611,7 @@ func TestNewAgentIsEditableAndRemovableByItsNewName(t *testing.T) {
 func TestRemoveProfileAsksBeforeDeletingAFileYouDidNotName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
+	noSandboxes(t)
 	pinned := filepath.Join(dir, "pinned.yaml")
 	blob := []byte("name: mytool\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n")
 	if err := os.WriteFile(pinned, blob, 0o644); err != nil {
@@ -730,6 +732,7 @@ func TestRemoveProfileAsksWhenAnAliasResolvedElsewhere(t *testing.T) {
 func TestRemoveProfileNamesEveryFileItWouldDelete(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
+	noSandboxes(t)
 	blob := []byte("name: mytool\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\n")
 	for _, base := range []string{"mytool.yaml", "pinned.yaml"} {
 		if err := os.WriteFile(filepath.Join(dir, base), blob, 0o644); err != nil {

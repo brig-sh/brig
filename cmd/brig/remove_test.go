@@ -373,3 +373,25 @@ func TestRemoveAllStopsTheSharedGatewayOnlyWhenItRemoves(t *testing.T) {
 		})
 	}
 }
+
+// A sandbox whose profile is gone has no ref any verb accepts, so `rm --all`
+// is the way brig still removes it. The preview lists it under `-`, the way
+// `brig ls` shows it. This pins the way out that #367 leaves for a sandbox
+// stranded before agent rm refused to strand one.
+func TestRemoveAllRemovesASandboxWhoseProfileIsGone(t *testing.T) {
+	rt := &removeRuntime{list: []runtime.Instance{{Name: "brig-gone", State: "stopped"}}}
+	removeHost(t, rt)
+	out, err := run2(t, []string{"rm", "--all", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "-  brig-gone") {
+		t.Errorf("the preview does not list brig-gone under -:\n%s", out)
+	}
+	if _, err := run2(t, []string{"rm", "--all", "-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.removed) != 1 || rt.removed[0] != "brig-gone" {
+		t.Errorf("removed %v, want brig-gone", rt.removed)
+	}
+}

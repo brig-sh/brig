@@ -3164,8 +3164,32 @@ func removeProfile(args []string) error {
 		return fmt.Errorf("%s is a built-in profile, so there is nothing to remove. "+
 			"Import a profile of the same name to shadow it", p.Name)
 	}
-	if err := confirmRemoveProfile(name, p.Name, profile.Files(p.Name), yes); err != nil {
+	// Before the question about files, so nobody answers it and is then
+	// refused. An override of a built-in is skipped: once its file is gone the
+	// name resolves to the built-in, and `brig rm <ref>` still reaches every
+	// sandbox of it. An override that set its own runtimeBin is a gap this
+	// leaves: the built-in then drives the runtime on PATH, which need not be
+	// the one that holds the sandbox.
+	guard := !profile.OverridesBuiltIn(p.Name)
+	if guard {
+		if err := refuseWhileSandboxesExist(name, p); err != nil {
+			return err
+		}
+	}
+	asked, err := confirmRemoveProfile(name, p.Name, profile.Files(p.Name), yes)
+	if err != nil {
 		return err
+	}
+	// The question waits for as long as the person takes, and a sandbox of the
+	// profile can boot in that time. So the check runs again once it is
+	// answered, as the last step before the delete. A sandbox that boots
+	// between this check and the delete is still stranded. Closing that gap
+	// takes a lock every boot would have to hold, which is out of proportion
+	// to a window this short.
+	if guard && asked {
+		if err := refuseWhileSandboxesExist(name, p); err != nil {
+			return err
+		}
 	}
 	// Every file that declares the name, not just the one that loaded: see
 	// profile.Remove. Two of them is a mistake brig reports at load time and
@@ -3176,6 +3200,119 @@ func removeProfile(args []string) error {
 		fmt.Printf("removed %s\n", f)
 	}
 	return err
+}
+
+// refuseWhileSandboxesExist refuses to remove a profile while the runtime
+// still holds a sandbox of it, running or stopped, and names the `brig rm` for
+// each.
+//
+// Every verb that takes a ref resolves its agent through the profile set. Once
+// the file is gone, `brig rm mytool` answers "unknown profile", `brig ls`
+// prints `-` for the ref, and only `brig rm --all` still removes the sandbox,
+// along with every other one (#367). The sandboxes have to go first, so rm
+// asks for that order. -y does not skip this. It answers the question about
+// files, and this is not a question.
+//
+// Whose sandbox is whose comes from refOf, the same reading `brig ls` gives.
+// The recorded ref wins, and a name falls back to the longest profile that
+// prefixes it, so removing mine does not claim brig-mine-two from a mine-two
+// profile.
+//
+// The runtime is the one `brig rm <ref>` uses for this profile, so the check
+// looks where the suggested command acts. No runtime on PATH means no
+// sandboxes, which is how `brig ls` reads it too. Any other failure refuses:
+// brig cannot tell whether a sandbox exists, and deleting the file is the step
+// that cannot be undone.
+//
+// The profile's own runtimeBin is asked only once the index holds a session of
+// the profile. runtimeBin is a field of the file, and a profile imported from
+// someone else can name any executable on this host. A run executes it because
+// the person asked to run that profile. rm is how someone gets rid of a profile
+// they chose not to run, and without a session there it asks the runtime on
+// PATH, the one `brig ls` asks.
+func refuseWhileSandboxesExist(arg string, p profile.Profile) error {
+	var pref runtime.Preference
+	if p.RuntimeBin != "" && hasSession(p.Name) {
+		pref.Bin = p.RuntimeBin
+	}
+	rt, err := detectRuntimeFor(pref)
+	if errors.Is(err, runtime.ErrNoRuntime) {
+		return nil
+	}
+	// The cause is wrapped, so the exit code stays the runtime's. The words
+	// say why an rm of a file asked the runtime at all.
+	cannotTell := func(err error) error {
+		return fmt.Errorf("cannot tell whether a sandbox of %s exists, so the "+
+			"profile stays: %w", p.Name, err)
+	}
+	if err != nil {
+		return cannotTell(err)
+	}
+	list, err := rt.List()
+	if err != nil {
+		return cannotTell(err)
+	}
+	var lines []string
+	for _, inst := range list {
+		if !strings.HasPrefix(inst.Name, sandboxPrefix) {
+			continue
+		}
+		ref := refOf(inst.Name)
+		parsed, err := session.ParseRef(ref)
+		if ref == "" || err != nil {
+			continue
+		}
+		if owner, ok := profile.Lookup(parsed.Agent); !ok || owner.Name != p.Name {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %sbrig rm %s  (%s, %s)",
+			brigNameFor(inst.Name, p.Name, parsed.Label), ref, inst.Name, inst.State))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s still has sandboxes, and `brig rm` cannot reach them once the "+
+		"profile is gone. Remove them first, then run `brig agent rm %s` again:\n%s",
+		p.Name, arg, strings.Join(lines, "\n"))
+}
+
+// hasSession reports whether the session index holds a session of the named
+// profile. The index is keyed by the resolved profile name, so an alias does
+// not reach here.
+func hasSession(name string) bool {
+	for _, ref := range wrap.SessionRefs() {
+		if parsed, err := session.ParseRef(ref); err == nil && parsed.Agent == name {
+			return true
+		}
+	}
+	return false
+}
+
+// brigNameFor is the naming variable a `brig rm <ref>` needs to reach vmName,
+// or nothing when the name is the one brig builds in this shell.
+//
+// A sandbox booted under BRIG_NAME carries that name plus the session slug.
+// `brig rm <ref>` builds the name from the naming variables again and does not
+// read it back from the index, so without the same value it answers "no
+// sandbox" for a sandbox that is there. The printed line runs in the shell
+// that ran agent rm, so the comparison is with what that shell builds: a
+// BRIG_NAME exported there makes even the default name need the prefix. The
+// variable named is the one that wins in that shell, since BRIG_<AGENT>_NAME
+// outranks BRIG_NAME.
+func brigNameFor(vmName, agent, label string) string {
+	suffix := ""
+	if label != "" {
+		suffix = "-" + session.Slug(label)
+	}
+	base, ok := strings.CutSuffix(vmName, suffix)
+	if !ok {
+		return ""
+	}
+	env := wrap.NewEnv(agent, nil)
+	if base == env.String("NAME", sandboxPrefix+agent) {
+		return ""
+	}
+	return env.SettingName("NAME") + "=" + base + " "
 }
 
 // confirmRemoveProfile names the files an rm is about to delete, and asks
@@ -3207,7 +3344,10 @@ func removeProfile(args []string) error {
 // the scripted case the one that cannot be stopped, so it refuses and names
 // the flag that answers in advance -- the shape confirmDelete already uses,
 // for the same reason.
-func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error {
+//
+// asked reports whether a person was asked. The answer can take any time, so
+// the caller checks for sandboxes again after it.
+func confirmRemoveProfile(arg, resolved string, files []string, yes bool) (asked bool, err error) {
 	surprising := arg != resolved
 	for _, f := range files {
 		if stemOf(f) != arg {
@@ -3215,7 +3355,7 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 		}
 	}
 	if !surprising {
-		return nil
+		return false, nil
 	}
 	list := strings.Join(files, ", ")
 	// A verb that agrees with the list, because two files declaring one profile
@@ -3231,10 +3371,10 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 	if yes {
 		fmt.Fprintf(os.Stderr, "brig: removing %s, which %s the %s profile\n",
 			list, declares, resolved)
-		return nil
+		return false, nil
 	}
 	if !wrap.IsTerminal(os.Stdin) {
-		return fmt.Errorf("removing %q would delete %s, which brig worked out from the "+
+		return false, fmt.Errorf("removing %q would delete %s, which brig worked out from the "+
 			"name you typed rather than being told, and there is no terminal to ask on. "+
 			"Pass -y to answer in advance: brig agent rm %s -y", arg, list, arg)
 	}
@@ -3243,14 +3383,14 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 	line, err := readAnswer(os.Stdin)
 	if err != nil {
 		// EOF is the answer a closed stdin gives, and it is not yes.
-		return fmt.Errorf("aborted: nothing was removed. To answer in advance: "+
+		return true, fmt.Errorf("aborted: nothing was removed. To answer in advance: "+
 			"brig agent rm %s -y", arg)
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return nil
+		return true, nil
 	}
-	return errors.New("aborted: nothing was removed")
+	return true, errors.New("aborted: nothing was removed")
 }
 
 // retiredGoesIn is the release that removes the retired spellings. Every

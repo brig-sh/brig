@@ -410,6 +410,10 @@ Delete a file-backed agent, after asking:
 brig agent rm mine
 ```
 
+`rm` refuses while a sandbox of the agent exists, running or stopped, and
+names the `brig rm <ref>` to run first for each. It also refuses when brig
+cannot ask the agent's runtime, such as an unknown `BRIG_RUNTIME`.
+
 `--force` (or `-f`) with `new` or `export` overwrites a destination file that
 already exists. Without it, Brig refuses and names the file. `--json` with
 `show`, `new` or `export` prints the document as JSON instead
