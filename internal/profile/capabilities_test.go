@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -132,5 +133,19 @@ func TestCapabilitiesSurviveTheJSONExport(t *testing.T) {
 func TestExportHeaderDocumentsCapabilities(t *testing.T) {
 	if !strings.Contains(exportHeader, "#   capabilities") {
 		t.Error("the export header does not document capabilities")
+	}
+}
+
+// The example the docs point people at has to stay a profile brig accepts.
+// Nothing else reads it, so without this it would break silently the first
+// time a field it uses changed.
+func TestTheDocumentedKVMExampleParses(t *testing.T) {
+	p, err := Read(filepath.Join("..", "..", "docs", "manual-tests", "ubuntu-kvm.yaml"))
+	if err != nil {
+		t.Fatalf("docs/manual-tests/ubuntu-kvm.yaml does not parse: %v", err)
+	}
+	if !p.Nested() || p.Hypervisor != "hvi" {
+		t.Errorf("the example no longer asks for kvm on hvi: capabilities %v, hypervisor %q",
+			p.Capabilities, p.Hypervisor)
 	}
 }
