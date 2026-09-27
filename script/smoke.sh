@@ -206,14 +206,12 @@ case "$verb" in
     # The trailing arguments are for ps, not for python, which ignores them:
     # brig records a gateway as one it owns only when `ps -o command=` on the
     # pid it started shows both "network-gateway" and the control socket, and
-    # exec would otherwise leave an argv holding neither. Without the record,
+    # exec leaves an argv holding neither otherwise. Without the record,
     # `brig rm --all` finds no gateway to stop and the listener outlives the
-    # run.
-    exec python3 -c 'import socket, sys, time
-s = socket.socket(socket.AF_UNIX)
-s.bind(sys.argv[1])
-s.listen(8)
-time.sleep(120)' "$qsock" network-gateway "$@"
+    # run. One line, so ps prints the whole argv on one line. A socket file
+    # nothing answers on is removed first, the way hull claims the path: a
+    # gateway brig replaced leaves its file behind.
+    exec python3 -c "$STUB_GATEWAY" "$qsock" network-gateway "$@"
     ;;
   inspect)
     # An instance holds its name while it runs and once it stops. Any other
@@ -236,6 +234,9 @@ esac
 exit 0
 STUB
 chmod +x "$WORK/hull"
+# The stub gateway's listener, also started by hand below as a gateway from an
+# older brig.
+export STUB_GATEWAY='import os, socket, sys, time; p = sys.argv[1]; c = socket.socket(socket.AF_UNIX); r = c.connect_ex(p); c.close(); r != 0 and os.path.exists(p) and os.unlink(p); s = socket.socket(socket.AF_UNIX); s.bind(p); s.listen(8); time.sleep(120)'
 
 go build -o "$WORK/brig" ./cmd/brig || { echo "build failed"; exit 1; }
 
@@ -256,6 +257,10 @@ export BRIG_STATE_DIR="$WORK/state"
 # -- $WORK/gw/sandbox-brig-claude-code.sock.qemu -- measures 101 on a Mac,
 # where mktemp -d is at its longest.
 export BRIG_GATEWAY_DIR="$WORK/gw"
+# BRIG_GATEWAY_SOCK names the shared socket ahead of the directory, and rm
+# --all stops the gateway on it. One exported by the caller is not the
+# script's to stop.
+unset BRIG_GATEWAY_SOCK
 # The image checks get their own cases below, with a stub cosign. Everywhere
 # else they are off: a CI runner has no cosign and must not reach a registry.
 export BRIG_VERIFY=off
@@ -738,9 +743,47 @@ else
   ok "a run with no policy stays on the shared network and passes no egress rule"
 fi
 
-# rm --all stops the gateway raised for a sandbox; the shared one outlives it
-# by design, and its listener would outlive this script.
+# rm --all stops the shared gateway too once no sandbox is on it. Before, it
+# outlived every sandbox, and only a pkill stopped it. ps is read into a file
+# first, so the grep does not find its own argv.
+sharedsock="$(sed -n 's/.*--socket \([^ ]*\/gateway-[^ ]*\).*/\1/p' "$WORK/gw-off.argv" | head -n 1)"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
+ps -A -ww -o pid=,command= > "$WORK/ps.out"
+if [ -z "$sharedsock" ]; then
+  bad "no shared gateway was started, so rm --all stopping it was not measured"
+elif grep -qF -- "--socket $sharedsock " "$WORK/ps.out"; then
+  bad "rm --all left the shared gateway running: $(grep -F -- "--socket $sharedsock " "$WORK/ps.out")"
+else
+  ok "rm --all stops the shared gateway once no sandbox is on it"
+fi
+
+# A shared gateway from an older brig has no --api, so it cannot publish a
+# port. With no sandbox on it, the next boot replaces it with one that has
+# --api. Started by hand here, with the argv such a gateway has.
+if [ -n "$sharedsock" ]; then
+  python3 -c "$STUB_GATEWAY" "$sharedsock.qemu" network-gateway --socket "$sharedsock" \
+    --qemu-socket "$sharedsock.qemu" > /dev/null 2>&1 &
+  oldpid=$!
+  # The file appears at bind, a moment before listen.
+  for _ in $(seq 50); do [ -S "$sharedsock.qemu" ] && break; sleep 0.1; done
+  sleep 0.3
+  : > "$STUB_LOG"
+  env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/old-gw.out" 2>&1
+  oldrc=$?
+  newgw="$(grep "^argv: network-gateway --socket $sharedsock " "$STUB_LOG")"
+  if [ "$oldrc" != 0 ]; then
+    bad "a run behind a gateway from an older brig failed: $(cat "$WORK/old-gw.out")"
+  elif ! printf '%s' "$newgw" | grep -q -- '--api '; then
+    bad "the gateway from an older brig was not replaced with one that has --api: $newgw"
+  elif ps -ww -o command= -p "$oldpid" 2>/dev/null | grep -q network-gateway; then
+    bad "the gateway from an older brig (pid $oldpid) is still running beside its replacement"
+  else
+    ok "a boot replaces a shared gateway from an older brig that no sandbox is on"
+  fi
+  kill "$oldpid" > /dev/null 2>&1
+  "$WORK/brig" rm --all -y > /dev/null 2>&1
+fi
+# Whatever a failed case above left behind outlives this script otherwise.
 pkill -f "$BRIG_GATEWAY_DIR/" > /dev/null 2>&1
 unset BRIG_POLICY_DIR
 fi

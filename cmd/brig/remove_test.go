@@ -327,3 +327,49 @@ func run2(t *testing.T, args []string) (string, error) {
 	t.Helper()
 	return captureStdout(t, func() error { return run(args) })
 }
+
+// pruneRuntime is removeRuntime with a shared network, and counts how often it
+// was asked to stop it.
+type pruneRuntime struct {
+	*removeRuntime
+	pruned int
+}
+
+func (r *pruneRuntime) PruneSharedNetwork() bool {
+	r.pruned++
+	return true
+}
+
+// `brig rm --all` stops the shared gateway only when it goes through. A
+// preview, a refusal and a "no" at the prompt leave it running. An empty
+// list still asks, because that is the host after an upgrade: every sandbox
+// gone and the old gateway still up.
+func TestRemoveAllStopsTheSharedGatewayOnlyWhenItRemoves(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		list     []runtime.Instance
+		declined bool
+		want     int
+	}{
+		{"dry run", []string{"rm", "--all", "--dry-run"}, twoSandboxes().list, false, 0},
+		{"no terminal and no -y", []string{"rm", "--all"}, twoSandboxes().list, false, 0},
+		{"declined at the prompt", []string{"rm", "--all"}, twoSandboxes().list, true, 0},
+		{"confirmed", []string{"rm", "--all", "-y"}, twoSandboxes().list, false, 1},
+		{"nothing to remove", []string{"rm", "--all", "-y"}, nil, false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &pruneRuntime{removeRuntime: &removeRuntime{list: tc.list}}
+			jsonRunHost(t, rt)
+			withRuntime(t, rt)
+			if tc.declined {
+				_ = terminalStdin(t).Close()
+			}
+			captureStderr(t, func() { _, _ = run2(t, tc.args) })
+			if rt.pruned != tc.want {
+				t.Errorf("brig %s asked to stop the shared gateway %d time(s), want %d",
+					strings.Join(tc.args, " "), rt.pruned, tc.want)
+			}
+		})
+	}
+}

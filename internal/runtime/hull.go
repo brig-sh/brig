@@ -384,10 +384,13 @@ func (h *hull) Run(spec RunSpec) error {
 			}
 			gatewaySock, gatewayCidr = sock, sandboxCIDR(index)
 		} else {
-			sock, err := ensureGateway(h.bin)
+			sock, release, err := ensureGateway(h.bin)
 			if err != nil {
 				return err
 			}
+			// Held until `hull run` returns, by which time the VMM names the
+			// socket in the process table. See leaseSharedGateway.
+			defer release()
 			// One address on the network every shared sandbox is on. See
 			// gatewayip.go.
 			cidr, err := gatewayCIDR(spec.Name)
@@ -848,6 +851,24 @@ func (h *hull) Unpublish(name string, p Publication) error {
 	// would take the port from whichever sandbox has it now.
 	live, err := publishedOn(sock, guestIP)
 	if err != nil {
+		// A gateway with no /forwards behind its API, or one started without
+		// --api, cannot hold a forward, so there is nothing on it to withdraw.
+		// The refusal used to send the user to `brig network unpublish`, the
+		// command that got here. A gateway started with --api whose API
+		// socket is gone can still hold one, and succeeding there leaves the
+		// host port open behind a command that said it closed it.
+		if errors.Is(err, ErrNoForwardAPI) {
+			return nil
+		}
+		if noForwardAPI(err) {
+			if !mayHoldForwards(sock) {
+				return nil
+			}
+			return fmt.Errorf("brig has forgotten %s, but could not withdraw it from the "+
+				"network gateway serving %s: its API socket does not answer (%w), and "+
+				"brig cannot rule out that it holds the forward. A forward it holds "+
+				"stays until that gateway stops", p, name, err)
+		}
 		return unpublishable(err)
 	}
 	for _, q := range live {
@@ -975,6 +996,52 @@ func (h *hull) PruneNetworks(inUse []string) int {
 		stopGatewayAt(sock)
 	}
 	return gone
+}
+
+// PruneSharedNetwork stops the shared gateway when no sandbox is on it, and
+// reports whether one went.
+//
+// PruneNetworks cannot do this; SharedNetworkPruner says why. A boot in
+// flight is not in the list yet either. So the decision is made from the
+// leases of boots in flight and from the process table, the way
+// ensureGateway makes it. A table that cannot be read stops nothing.
+//
+// The gateway listening on the socket goes, with --api or without. A process
+// that only names the socket the way a gateway does is left alone; see
+// listeningGateway. A sandbox that is stopped keeps its publications
+// recorded, and its next boot starts a gateway and reconciles them. The log
+// stays, as the shared log always has.
+func (h *hull) PruneSharedNetwork() bool {
+	sock, err := gatewaySocket()
+	if err != nil {
+		return false
+	}
+	// Held until the signals are sent, so a boot cannot take a lease and
+	// reuse the gateway between the check and the stop.
+	unlock, err := flock(sock)
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	if bootsInFlight(sock, "") {
+		return false
+	}
+	procs, err := listProcesses()
+	if err != nil {
+		return false
+	}
+	gateways, members := sharedGatewayProcs(sock, procs)
+	if len(members) > 0 {
+		return false
+	}
+	g, ok := listeningGateway(sock, gateways)
+	if !ok {
+		return false
+	}
+	return signalGateway(g.pid, func() bool {
+		argv, ok := procArgv(g.pid)
+		return ok && servesSocket(argv, sock)
+	})
 }
 
 // releaseGateway shuts an isolated gateway down once the sandbox behind it is

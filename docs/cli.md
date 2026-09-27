@@ -134,7 +134,10 @@ each sandbox as its ref, sandbox name and state, one per line, and asks for
 confirmation. If stdin is not a terminal, the command refuses, removes
 nothing, and exits `1`. Pass `-y` (or `--yes`) to confirm in advance, for
 example in a script. If there is nothing to remove, the command asks nothing
-and exits `0`.
+and exits `0`. It also stops the shared network gateway that `hvi`
+sandboxes use, once no sandbox is on it. It checks the whole host first, so
+a sandbox of another session, or one still booting, keeps the gateway
+running.
 
 ```bash
 brig rm --all --dry-run

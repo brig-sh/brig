@@ -697,3 +697,19 @@ type NetworkPruner interface {
 	// and reports how many went.
 	PruneNetworks(inUse []string) int
 }
+
+// SharedNetworkPruner is a runtime with one network for the whole host, which
+// it can stop once no sandbox is on it.
+//
+// Apart from NetworkPruner because the question is different. inUse names
+// sandboxes, and an isolated network has a record to match a name against.
+// The shared network has no record of what is on it, and the list does not
+// say which network a sandbox is on. The runtime decides from what it can see
+// of the host, so this takes no list.
+//
+// Optional for the same reason NetworkPruner is.
+type SharedNetworkPruner interface {
+	// PruneSharedNetwork stops the shared network when nothing is on it, and
+	// reports whether it did.
+	PruneSharedNetwork() bool
+}

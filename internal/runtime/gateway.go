@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -26,7 +27,9 @@ import (
 // There are two kinds of gateway here, one per posture:
 //
 //   - shared: one gateway for the host, serving every sandbox that asked for
-//     the shared network. What brig has always done, unchanged.
+//     the shared network. It is host-wide: every brig state dir and every
+//     session on this host uses the same socket, so whether anything is on it
+//     is read from the process table. See sharedGatewayProcs.
 //   - isolated: a gateway per sandbox, each on a /30 of its own out of the
 //     same space. No other sandbox is on that network, whatever the backend
 //     would have done with a shared one.
@@ -114,10 +117,11 @@ func gatewayDir() (string, error) {
 // reach each other, which is what makes two sandboxes able to talk at all.
 //
 // The network it serves is part of the name. ensureGateway reuses whatever is
-// already listening here without asking what it serves, so a gateway left over
-// from a different subnet would be reused for guests that are not on it: brig
-// would hand out an address the process on the other end does not route, and
-// the sandbox would come up with no network and nothing pointing at the cause.
+// already listening here without asking what network it serves, so a gateway
+// left over from a different subnet would be reused for guests that are not
+// on it: brig would hand out an address the process on the other end does not
+// route, and the sandbox would come up with no network and nothing pointing
+// at the cause.
 // A different network is a different socket, which also lets sandboxes from
 // before a subnet move keep the gateway they were booted against until they
 // are removed.
@@ -233,21 +237,230 @@ func gatewaySpecPath(sock string) string { return strings.TrimSuffix(sock, ".soc
 func gatewayLogPath(sock string) string  { return strings.TrimSuffix(sock, ".sock") + ".log" }
 
 // ensureGateway returns the control socket of the shared gateway, starting one
-// if nothing answers on it.
+// if nothing answers on it, and a release the caller runs once `hull run` has
+// returned.
 //
 // Readiness is judged on the QEMU stream socket rather than the control
 // socket, because that is the one hull dials before boot and the one hvi
 // shuttles frames over. A gateway whose control socket exists but whose
 // stream socket does not is not yet usable.
-func ensureGateway(bin string) (string, error) {
+//
+// A gateway started by a brig from before port publishing has no --api, and
+// it can never publish a port. After an upgrade it is still the
+// gateway every boot finds here, so it is replaced when nothing is on it.
+// With a sandbox on it, it is kept: stopping it takes that sandbox's network,
+// and reconcilePublications refuses only a boot that publishes.
+//
+// This runs before `hull run`, so the sandbox being booted is not yet in the
+// process table. The lease stands in for it until the release. See
+// leaseSharedGateway.
+func ensureGateway(bin string) (string, func(), error) {
 	sock, err := gatewaySocket()
 	if err != nil {
-		return "", err
+		return "", nil, err
+	}
+	lease, release, err := leaseSharedGateway(sock)
+	if err != nil {
+		return "", nil, err
 	}
 	if gatewayReachable(sock) {
-		return sock, nil
+		// The API answering is the common case, and it costs no ps.
+		if !apiMissing(sock) || !stopOldGateway(sock, lease) {
+			return sock, release, nil
+		}
+		// Something still answers: a stop that failed, or a gateway another
+		// brig started in the meantime. Either is reused.
+		if gatewayReachable(sock) {
+			return sock, release, nil
+		}
 	}
-	return startGateway(bin, sock, gatewaySubnet, gatewayAddr, Egress{}, "")
+	if _, err := startGateway(bin, sock, gatewaySubnet, gatewayAddr, Egress{}, ""); err != nil {
+		release()
+		return "", nil, err
+	}
+	return sock, release, nil
+}
+
+// leaseSharedGateway marks one boot as on the shared gateway, and returns the
+// lease file and its release.
+//
+// A boot looks at the gateway, installs its forwards, fetches boot assets and
+// only then starts `hull run`, the first process that names the socket. The
+// fetch takes seconds. A `brig rm --all` in another session in that window
+// sees no sandbox on the gateway and stops it, and the boot comes up with no
+// network. The lease closes that window: a file beside the socket, locked for
+// as long as the boot holds it. A lock goes with its process, so a brig that
+// crashed mid-boot holds nothing. A name of its own per lease, because brigd
+// boots several sandboxes from one process, and two locks on one file in one
+// process conflict.
+//
+// It is created under the gateway lock, so a prune that is between reading
+// the leases and signalling the gateway finishes before this boot looks at
+// the socket.
+func leaseSharedGateway(sock string) (string, func(), error) {
+	unlock, err := flock(sock)
+	if err != nil {
+		return "", nil, fmt.Errorf("could not lock the network gateway directory: %w", err)
+	}
+	defer unlock()
+	f, err := os.CreateTemp(filepath.Dir(sock), filepath.Base(sock)+leaseInfix+"*")
+	if err != nil {
+		return "", nil, fmt.Errorf("could not hold the network gateway for this boot: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", nil, fmt.Errorf("could not hold the network gateway for this boot: %w", err)
+	}
+	// Removed before the unlock, so nobody finds it unlocked and takes it for
+	// one left by a crash.
+	return f.Name(), func() {
+		_ = os.Remove(f.Name())
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+// leaseInfix sits between the socket's name and a lease's own part.
+const leaseInfix = ".boot-"
+
+// bootsInFlight reports whether a boot other than own holds a lease on sock.
+// A lease whose lock can be taken has no holder, and it is removed. One that
+// cannot be opened or tested counts as held: nobody can say it is not.
+//
+// Called under the gateway lock, which makes the removal safe. A lease is
+// created and locked under the same lock, so none is ever seen between the
+// two.
+func bootsInFlight(sock, own string) bool {
+	entries, err := os.ReadDir(filepath.Dir(sock))
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	prefix := filepath.Base(sock) + leaseInfix
+	// Compared by name, because own is the path os.CreateTemp returned, and
+	// that is ./gw.sock.boot-N for a relative socket where filepath.Join
+	// below gives gw.sock.boot-N. The boot would take its own lease for
+	// another's and never replace the old gateway.
+	ownName := ""
+	if own != "" {
+		ownName = filepath.Base(own)
+	}
+	held := false
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), prefix) || e.Name() == ownName {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(sock), e.Name())
+		f, err := os.Open(path)
+		if err != nil {
+			held = true
+			continue
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			held = true
+		} else {
+			_ = os.Remove(path)
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		}
+		_ = f.Close()
+	}
+	return held
+}
+
+// apiMissing reports whether nothing can be listening on the gateway's API
+// socket: the file is not there, or nothing accepts on it. Any other failure
+// says nothing about how the gateway was started, so it is not read as old.
+func apiMissing(sock string) bool {
+	conn, err := net.DialTimeout("unix", gatewayAPISocket(sock), 2*time.Second)
+	if err == nil {
+		_ = conn.Close()
+		return false
+	}
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// stopOldGateway stops the shared gateway on sock if it was started without
+// --api and no sandbox is on it, and reports whether it did. own is this
+// boot's lease, which is not another boot on the gateway.
+//
+// Only a process started without --api is ever signalled. A gateway with
+// --api whose API does not answer yet is one another brig started a moment
+// ago, and stopping it breaks that brig's boot. So two brigs booting at
+// once cannot stop each other's gateway, and this can happen once per host,
+// at the first boot after an upgrade.
+//
+// Only the process listening on the socket is signalled, and its own argv is
+// what says whether it was started without --api. See listeningGateway.
+//
+// A process table that cannot be read leaves the gateway alone: nobody can
+// say it is unused.
+func stopOldGateway(sock, own string) bool {
+	unlock, err := flock(sock)
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	if bootsInFlight(sock, own) {
+		return false
+	}
+	procs, err := listProcesses()
+	if err != nil {
+		return false
+	}
+	gateways, members := sharedGatewayProcs(sock, procs)
+	if len(members) > 0 {
+		return false
+	}
+	g, ok := listeningGateway(sock, gateways)
+	if !ok || startedWithAPI(g.argv) {
+		return false
+	}
+	return signalGateway(g.pid, func() bool {
+		argv, ok := procArgv(g.pid)
+		return ok && servesSocket(argv, sock) && !startedWithAPI(argv)
+	})
+}
+
+// listeningGateway picks the one process on sock that brig may signal: the
+// one the kernel says is listening on the gateway's QEMU socket, when its argv
+// also reads as a gateway on sock.
+//
+// argv alone is not enough to kill on. Any process of this user can carry
+// `network-gateway --socket <sock>` in its argv, and a gateway from brig
+// 0.2.0 left no record to check it against. The listener is the process
+// actually serving the socket brig owns, whatever else names it. A gateway
+// process that is not listening is left running: it serves no sandbox, and
+// nobody can say brig started it.
+func listeningGateway(sock string, gateways []hostProc) (hostProc, bool) {
+	pid, ok := listenerPID(qemuGatewaySocket(sock))
+	if !ok {
+		return hostProc{}, false
+	}
+	for _, g := range gateways {
+		if g.pid == pid {
+			return g, true
+		}
+	}
+	return hostProc{}, false
+}
+
+// listenerPID is the pid of the process listening on a unix socket. darwin
+// answers only while the connection is up, so a listener that closes the
+// moment it accepts can win the race. hull's gateway holds a connection until
+// the other end closes it. A few tries cover one that does not.
+func listenerPID(path string) (int, bool) {
+	for range 3 {
+		conn, err := net.DialTimeout("unix", path, 2*time.Second)
+		if err != nil {
+			return 0, false
+		}
+		pid, err := peerPID(conn.(*net.UnixConn))
+		_ = conn.Close()
+		if err == nil && pid > 1 {
+			return pid, true
+		}
+	}
+	return 0, false
 }
 
 // ensureIsolatedGateway returns the control socket of the gateway serving this
@@ -299,8 +512,9 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 // startGateway runs one gateway and waits for it to answer.
 //
 // spec is what it was started to serve, recorded beside the socket for an
-// isolated gateway and empty for the shared one -- which is never replaced,
-// because its network is in its name and it carries no rules.
+// isolated gateway and empty for the shared one. The shared gateway needs no
+// record: its network is in its name and it carries no rules. ensureGateway
+// says when it is replaced.
 func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		return "", fmt.Errorf("could not create the gateway directory: %w", err)
@@ -515,7 +729,8 @@ func recordedSpec(sock string) string {
 // socket and 28.7 MB, but nothing about stopping or removing the sandbox
 // depends on it, and there is no answer to "the kill failed" worth
 // interrupting a `brig rm` with. The shared gateway is never stopped here: it
-// serves sandboxes this one knows nothing about.
+// serves sandboxes this one knows nothing about. PruneSharedNetwork stops it,
+// once the process table shows nothing on it.
 func shutDownGateway(name string) {
 	sock, err := isolatedSocket(name)
 	if err != nil {
@@ -536,10 +751,6 @@ func shutDownGateway(name string) {
 // beyond the reach of `brig reset`, of a later `brig stop`, and of this
 // function -- holding a socket and 28.7 MB until the login session ended, with
 // nothing left on disk to find it by.
-//
-// SIGTERM, then SIGKILL. The first is what a gateway should need; the second is
-// what makes "gone" a fact rather than a request, and this process has no state
-// to flush that would make killing it costly.
 func stopGatewayAt(sock string) bool {
 	pid, ok := gatewayPID(sock)
 	if !ok || !ownsGateway(pid, sock) {
@@ -550,19 +761,37 @@ func stopGatewayAt(sock string) bool {
 		clearGatewayRecord(sock)
 		return !gatewayReachable(sock)
 	}
+	if signalGateway(pid, func() bool { return ownsGateway(pid, sock) }) {
+		clearGatewayRecord(sock)
+		return true
+	}
+	// Still there after a kill. Leave the record: it is the only handle
+	// anything has on this process.
+	return false
+}
+
+// signalGateway stops one gateway process and reports whether it is gone.
+// still says whether pid is still that gateway. It is asked before each
+// signal and while waiting, because a pid that changed hands is not brig's to
+// signal.
+//
+// SIGTERM, then SIGKILL. The first is what a gateway should need; the second is
+// what makes "gone" a fact rather than a request, and this process has no state
+// to flush that would make killing it costly.
+func signalGateway(pid int, still func() bool) bool {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		if !still() {
+			return true
+		}
 		_ = syscall.Kill(pid, sig)
 		deadline := time.Now().Add(gatewayStopTimeout)
 		for time.Now().Before(deadline) {
-			if !ownsGateway(pid, sock) {
-				clearGatewayRecord(sock)
+			if !still() {
 				return true
 			}
 			time.Sleep(gatewayPollInterval)
 		}
 	}
-	// Still there after a kill. Leave the record: it is the only handle
-	// anything has on this process.
 	return false
 }
 
@@ -598,12 +827,129 @@ func gatewayPID(sock string) (int, bool) {
 // started with the socket path on its command line, and nothing else on the
 // host has a reason to carry that string.
 func ownsGateway(pid int, sock string) bool {
+	argv, ok := procArgv(pid)
+	return ok && strings.Contains(argv, "network-gateway") && strings.Contains(argv, sock)
+}
+
+// procArgv is one process's command line, or false when there is no such
+// process.
+func procArgv(pid int) (string, bool) {
 	out, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
-		return false
+		return "", false
 	}
-	argv := string(out)
-	return strings.Contains(argv, "network-gateway") && strings.Contains(argv, sock)
+	return strings.TrimSpace(string(out)), true
+}
+
+// hostProc is one process on the host and its command line.
+type hostProc struct {
+	pid  int
+	argv string
+}
+
+// listProcesses is the host's process table. A variable so a test can make
+// it fail.
+var listProcesses = hostProcesses
+
+// hostProcesses reads every process on the host with its whole command line.
+//
+// The whole host, because the shared gateway is. Its socket sits under the
+// real ~/.brig whatever BRIG_STATE_DIR says, so a sandbox of another state
+// dir, another session or another hull store can be on it, and no index brig
+// keeps sees all of those. The process table does. -A is the spelling both
+// macOS and procps take.
+func hostProcesses() ([]hostProc, error) {
+	out, err := exec.Command("ps", "-A", "-ww", "-o", "pid=,command=").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseProcesses(string(out)), nil
+}
+
+// parseProcesses reads `ps -o pid=,command=`. macOS escapes a newline inside
+// an argv, but a ps that prints it raw splits one process over two lines. A
+// line that does not start with a pid is read as the rest of the one above,
+// so that process is still seen whole.
+func parseProcesses(out string) []hostProc {
+	var procs []hostProc
+	for _, line := range strings.Split(out, "\n") {
+		head, rest, _ := strings.Cut(strings.TrimLeft(line, " "), " ")
+		pid, err := strconv.Atoi(head)
+		if err != nil {
+			if len(procs) > 0 && line != "" {
+				procs[len(procs)-1].argv += "\n" + line
+			}
+			continue
+		}
+		procs = append(procs, hostProc{pid: pid, argv: strings.TrimSpace(rest)})
+	}
+	return procs
+}
+
+// sharedGatewayProcs splits the process table into the gateways serving sock
+// and the processes attached to it. Both are read from argv. A process that
+// only looks like a gateway can keep the gateway up, but it is never
+// signalled: listeningGateway decides that.
+//
+// A guest on a gateway is a VMM that carries the gateway's QEMU socket in its
+// argv: hvi is started with --net-gateway <sock>.qemu, and qemu with
+// addr.path=<sock>.qemu. A `hull run --gateway-sock <sock>` that is still
+// booting carries the control socket. Either one counts. So does any other
+// process that names the socket, such as an lsof. That errs toward keeping
+// the gateway.
+func sharedGatewayProcs(sock string, procs []hostProc) (gateways, members []hostProc) {
+	for _, p := range procs {
+		switch {
+		case servesSocket(p.argv, sock):
+			gateways = append(gateways, p)
+		case namesSocket(p.argv, sock):
+			members = append(members, p)
+		}
+	}
+	return gateways, members
+}
+
+// servesSocket reports whether argv is a gateway listening on sock.
+func servesSocket(argv, sock string) bool {
+	return strings.Contains(argv, "network-gateway") && pathAt(argv, "--socket "+sock, false)
+}
+
+// namesSocket reports whether argv names sock, alone or as its .qemu sibling.
+func namesSocket(argv, sock string) bool {
+	return pathAt(argv, sock, true)
+}
+
+// pathAt reports whether s appears in argv as a whole word. A path that only
+// starts or ends with it, such as <sock>.bak or /elsewhere<sock>, is another
+// path. With qemu, s followed by .qemu counts too.
+func pathAt(argv, s string, qemu bool) bool {
+	for i := 0; ; {
+		j := strings.Index(argv[i:], s)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(s)
+		if start == 0 || strings.ContainsRune(" \t\n=", rune(argv[start-1])) {
+			rest := argv[end:]
+			if qemu {
+				rest = strings.TrimPrefix(rest, ".qemu")
+			}
+			if rest == "" || strings.ContainsRune(" \t\n,", rune(rest[0])) {
+				return true
+			}
+		}
+		i = start + 1
+	}
+}
+
+// startedWithAPI reports whether a gateway's argv carries --api.
+func startedWithAPI(argv string) bool {
+	for _, f := range strings.Fields(argv) {
+		if f == "--api" || strings.HasPrefix(f, "--api=") {
+			return true
+		}
+	}
+	return false
 }
 
 // gatewayReachable reports whether a gateway is accepting members.

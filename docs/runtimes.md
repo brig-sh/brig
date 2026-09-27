@@ -264,7 +264,9 @@ beyond them:
   carries an ARP broadcast between them and does not carry the unicast
   reply, so neither learns the other's MAC address. See
   [security.md](security.md#things-brig-does-not-claim) for what that means per
-  backend, which is not the same answer on Linux.
+  backend, which is not the same answer on Linux. A gateway started by an
+  older Brig has no API socket, so it cannot publish a port. The next boot
+  replaces it when no sandbox is on it and no other boot is starting on it.
 
 Six of the eight shipped profiles ask for `hvi` and set `genericBoot: true`
 (`internal/profile/specs`). The default macOS path needs the `hvi` binary

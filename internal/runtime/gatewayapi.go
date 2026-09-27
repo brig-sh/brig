@@ -289,9 +289,17 @@ func reconcilePublications(sock, guestIP string, want []Publication) error {
 //
 // Two shapes reach here, and they have different fixes. A gateway that answers
 // 404 predates the /forwards endpoint, so the runtime needs an upgrade. A
-// gateway with no API socket to dial was started without --api, by a brig from
-// before ports could be published. It keeps running while any sandbox uses it,
-// so it is replaced only once they have all stopped.
+// gateway with no API socket to dial is usually one started without --api, by
+// a brig from before port publishing. ensureGateway replaces a shared one at a
+// boot that finds no sandbox on it, and Stop takes an isolated one with its
+// sandbox, so the advice is how to get to a boot after that. It names this
+// sandbox's network and not the shared one, because an isolated sandbox
+// reaches here too and is on no other sandbox's network.
+// A gateway started with --api whose API socket is gone reaches here too, and
+// ensureGateway never replaces it, so the message names the older brig as the
+// usual cause and not as a fact. It does not say why this boot kept the
+// gateway: another sandbox on it is the usual reason, and a process table
+// brig failed to read is another.
 func unpublishable(err error) error {
 	switch {
 	case errors.Is(err, ErrNoForwardAPI):
@@ -299,12 +307,40 @@ func unpublishable(err error) error {
 			"(%w). Upgrade the runtime, or withdraw the ports with "+
 			"`brig network unpublish`", err)
 	case errors.Is(err, syscall.ENOENT), errors.Is(err, syscall.ECONNREFUSED):
-		return fmt.Errorf("the network gateway serving this sandbox was started by an older "+
-			"brig, without the socket a port is published through (%w). It is replaced "+
-			"once every sandbox on it has stopped: `brig ls` lists them, and `brig stop` "+
-			"stops one. Or withdraw the ports with `brig network unpublish`", err)
+		return fmt.Errorf("the network gateway serving this sandbox has no socket a port is "+
+			"published through (%w). A gateway started by an older brig has none, and brig "+
+			"replaces such a gateway at the next boot that finds no sandbox on it. Stop every "+
+			"sandbox on this sandbox's network, this one included (`brig ls` lists them, "+
+			"`brig stop` stops one), then start this one with `brig run --publish`. Or "+
+			"withdraw the ports with `brig network unpublish`", err)
 	}
 	return err
+}
+
+// noForwardAPI reports whether err means the gateway has no forward API at
+// all: no socket to dial, or no /forwards behind it.
+func noForwardAPI(err error) bool {
+	return errors.Is(err, ErrNoForwardAPI) ||
+		errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// mayHoldForwards reports whether the gateway on sock, whose API socket does
+// not answer, can still be holding a forward. Only a gateway started with
+// --api was ever given one, so this reads the argv of every process serving
+// sock. A process table that cannot be read counts as yes: nobody can say
+// the gateway was started without --api.
+func mayHoldForwards(sock string) bool {
+	procs, err := listProcesses()
+	if err != nil {
+		return true
+	}
+	gateways, _ := sharedGatewayProcs(sock, procs)
+	for _, g := range gateways {
+		if startedWithAPI(g.argv) {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(set []Publication, p Publication) bool {

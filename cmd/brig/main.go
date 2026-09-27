@@ -2289,6 +2289,13 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	}
 	warnf("removed %d sandbox(es) and %d guest home(s) brig created. Guest homes "+
 		"named with --home and projects stay on the host.", removed, homes)
+	// The shared network gateway too, once nothing is on it. Apart from the
+	// list below, for the reason on runtime.SharedNetworkPruner. It runs with
+	// an empty list as well, which is the host after an upgrade: every
+	// sandbox gone and the old gateway still up.
+	if p, ok := rt.(runtime.SharedNetworkPruner); ok {
+		p.PruneSharedNetwork()
+	}
 	// A network whose sandbox was removed outside brig is not reachable
 	// through Remove, because that sandbox is not in the list any more. This is
 	// the one command that leaves nothing behind, so it prunes those too. Only
