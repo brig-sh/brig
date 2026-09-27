@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// The old spellings keep working for one release. Anyone who scripted against
-// brig template should get a working command and a note, not a failure.
+// The old spellings keep working until retiredGoesIn. Anyone who scripted
+// against brig template should get a working command and a note, not a
+// failure.
 func TestDeprecatedVerbsStillWork(t *testing.T) {
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
 	for _, args := range [][]string{{"agents"}, {"template", "ls"}} {
@@ -90,6 +91,10 @@ func TestRetiredSpellingsWorkAndNameTheirReplacement(t *testing.T) {
 		if !strings.Contains(notice, "brig: `") {
 			t.Errorf("%s printed no deprecation notice:\n%s", line, notice)
 		}
+		// A deadline the reader can plan for is a version number.
+		if !strings.Contains(notice, retiredGoesIn) {
+			t.Errorf("%s does not name %s as the release that removes it:\n%s", line, retiredGoesIn, notice)
+		}
 	}
 }
 
@@ -159,8 +164,8 @@ func TestNoDeprecatedEditVerb(t *testing.T) {
 	}
 }
 
-// -t and -m keep working for one release and say what replaces them. They are
-// two of the four short flags #47 removes in v0.3, and the notice is the same
+// -t and -m keep working until retiredGoesIn and say what replaces them. They
+// are two of the four short flags #47 retires, and the notice is the same
 // one the retiring verbs print: a working command and a line about it, not a
 // failure.
 func TestDeprecatedShortFlagsStillWork(t *testing.T) {
@@ -248,6 +253,16 @@ func TestRetiredLifecycleSpellingsWorkAndNameTheirReplacement(t *testing.T) {
 		}
 		if !strings.Contains(notice, "brig: `") {
 			t.Errorf("%s printed no deprecation notice:\n%s", line, notice)
+		}
+		// exec names no release: it stays until brig sh can pipe a command's
+		// output (#335), and a date it cannot keep is the promise v0.3 broke.
+		// Every other spelling names the release that removes it.
+		dated := strings.Contains(notice, retiredGoesIn)
+		if c.args[0] == "exec" && dated {
+			t.Errorf("%s names %s, but it stays until brig sh can pipe:\n%s", line, retiredGoesIn, notice)
+		}
+		if c.args[0] != "exec" && !dated {
+			t.Errorf("%s does not name %s as the release that removes it:\n%s", line, retiredGoesIn, notice)
 		}
 	}
 }
@@ -352,5 +367,40 @@ func TestNameFlagRetiresOntoTheLabel(t *testing.T) {
 	})
 	if notice != "" {
 		t.Errorf("the label form printed a notice:\n%s", notice)
+	}
+}
+
+// The release in the notices is the one the docs, the help text and the
+// exported profile header name too. The date was typed in each of them once,
+// and v0.3.0 shipped with every one of them saying v0.3. One constant and this
+// test mean that moving the date is one edit, and a place that still names the
+// old one fails here.
+func TestDocsNameTheRemovalRelease(t *testing.T) {
+	for _, name := range []string{
+		"docs/stability.md",
+		"docs/migration.md",
+		"docs/cli.md",
+		"docs/secrets.md",
+		"docs/profiles.md",
+		"script/check-retired-spellings.sh",
+	} {
+		blob, err := os.ReadFile(filepath.Join("..", "..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(blob), retiredGoesIn) {
+			t.Errorf("%s does not name %s, the release that removes the retired spellings", name, retiredGoesIn)
+		}
+	}
+	if !strings.Contains(usage, retiredGoesIn) {
+		t.Errorf("the help text does not name %s for the retired spellings it mentions", retiredGoesIn)
+	}
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	out, err := captureStdout(t, func() error { return run([]string{"agent", "export", "codex"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, retiredGoesIn) {
+		t.Errorf("the exported profile header does not name %s for forward: and statePaths:", retiredGoesIn)
 	}
 }

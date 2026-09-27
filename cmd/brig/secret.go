@@ -54,7 +54,7 @@ func secretCmd(out io.Writer, args []string) error {
 		err = deleteSecret(out, args[1:])
 	case "ls":
 		err = listSecrets(out, args[1:])
-	// The undocumented second spellings, kept for one release. delete and ls
+	// The undocumented second spellings, kept until retiredGoesIn. delete and ls
 	// are the words this group settled on -- see the note on secretUsage about
 	// why the verb set here is not the one the other nouns use -- and rm and
 	// list were never in the help text, so they were found by accident and then

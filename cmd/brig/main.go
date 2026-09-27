@@ -88,7 +88,7 @@ global flags (left of the command, as in: brig -q run claude):
                          brig's warnings; with ls it prints the refs, one per
                          line. A verification that did not hold is printed
                          even here
-                         (-q after the verb still works this release)
+                         (-q after the verb works until v0.4.0)
       --json             machine-readable output, for the read verbs: ls, info,
                          agent ls, secret ls, doctor, version and the network
                          verbs. Also accepted after the verb (brig ls
@@ -152,7 +152,8 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off -- guest image signature
-  BRIG_PROFILE_DIR     where your own profiles live (BRIG_TEMPLATE_DIR still works)
+  BRIG_PROFILE_DIR     where your own profiles live
+                       (BRIG_TEMPLATE_DIR works until v0.4.0)
   BRIG_RUNTIME         hull | nerdctl
 `
 
@@ -435,7 +436,7 @@ func dispatch(args []string) error {
 		// does.
 		deprecated("brig exec", "brig sh")
 	case "env":
-		// Kept for one release as a spelling of `brig info`. The bug report
+		// Kept until retiredGoesIn as a spelling of `brig info`. The bug report
 		// template used to send reporters to `brig status`, which was never a
 		// command; info is the name that work settled on.
 		//
@@ -537,7 +538,7 @@ func dispatch(args []string) error {
 		return usagef("--no-project belongs to `brig run`, not `brig %s`. "+
 			"A session runs without its project from the next `brig run --no-project` onwards", verb)
 	}
-	// The run-line spelling of -q, for the one release in which both work. It
+	// The run-line spelling of -q, which works until retiredGoesIn. It
 	// is read here rather than in the global position, so everything above has
 	// already printed: that asymmetry is the notice's point, not a gap in it.
 	if opts.quiet {
@@ -937,8 +938,8 @@ var brigFlags = []struct {
 	{long: "verbose", position: posGlobal},
 	// -q is global from this release. It was on the run line, and `brig run
 	// claude -q` is a line people have written, so the run-line spelling below
-	// keeps working for one release and says where the flag went -- the same
-	// two-release window every other retiring spelling took. Global-only would
+	// keeps working until retiredGoesIn and says where the flag went -- the same
+	// window every other retiring spelling has. Global-only would
 	// have sent that -q to the agent, silently changing what a working command
 	// does.
 	{long: "quiet", short: "q", position: posGlobal},
@@ -965,8 +966,8 @@ var brigFlags = []struct {
 }
 
 // deprecatedFlags are the spellings on their way out, and what replaces each.
-// #47 ships both grammars in v0.2 and removes these in v0.3, so they keep
-// working and say so -- the same contract the retiring verbs have.
+// #47 shipped both grammars in v0.2, and these go in retiredGoesIn, so they
+// keep working and say so -- the same contract the retiring verbs have.
 //
 // -n and --name retire onto the label rather than onto another flag: the ref is
 // what names a session now, and `brig run claude@refactor` is what `brig run
@@ -2644,7 +2645,7 @@ func agentCmd(args []string) error {
 		err = editProfile(args[1:])
 	case "rm":
 		err = removeProfile(args[1:])
-	// The undocumented second spellings, kept for one release. They were never
+	// The undocumented second spellings, kept until retiredGoesIn. They were never
 	// in the help text, so they were found by accident and then written into
 	// scripts, which is exactly why they cannot simply disappear.
 	case "list":
@@ -3237,11 +3238,26 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) error 
 	return errors.New("aborted: nothing was removed")
 }
 
+// retiredGoesIn is the release that removes the retired spellings. Every
+// notice names it, so a script's author plans for a version number rather than
+// for "the next release". The date was v0.3 until v0.3.0 shipped with the
+// spellings still in, which is why it lives in one place and
+// TestDocsNameTheRemovalRelease holds the docs to it.
+const retiredGoesIn = "v0.4.0"
+
 // deprecated notes an old spelling once, on stderr so it never lands in
-// something being piped. Kept for one release: one commit of published history
-// is not long enough to have broken anyone's muscle memory on purpose.
+// something being piped, and names the release that removes it.
+//
+// brig exec names no release. It runs its command without a guest pty, and
+// until brig sh can do the same (#335) it is the only way to pipe a command's
+// output cleanly. A date it could not keep would repeat what v0.3 did.
 func deprecated(old, replacement string) {
-	warnf("`%s` is now `%s`", old, replacement)
+	if old == "brig exec" {
+		warnf("`%s` is now `%s`. The old spelling stays until `brig sh` "+
+			"can pipe a command's output", old, replacement)
+		return
+	}
+	warnf("`%s` is now `%s`. The old spelling is removed in %s", old, replacement, retiredGoesIn)
 }
 
 // removedVerbs are verbs brig no longer runs, each with the line that replaced

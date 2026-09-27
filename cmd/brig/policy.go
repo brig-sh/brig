@@ -75,7 +75,7 @@ func policyCmd(args []string) error {
 			err = listPolicies()
 		}
 	// list was never in the help text, so it was found by accident and then
-	// scripted. Kept for one release, saying which spelling to keep.
+	// scripted. Kept until retiredGoesIn, saying which spelling to keep.
 	case "list":
 		deprecated("brig policy list", "brig policy ls")
 		if err = rejectPolicyTail(args[1:]); err == nil {

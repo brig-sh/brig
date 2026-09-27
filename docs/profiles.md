@@ -48,8 +48,8 @@ setup: there is nothing to install before `brig run claude` boots a sandbox.
 
 Your own live as one file per profile in `$XDG_CONFIG_HOME/brig`, default
 `~/.config/brig`, flat: `~/.config/brig/claude-code.yaml`. `BRIG_PROFILE_DIR`
-overrides the location outright. The older `BRIG_TEMPLATE_DIR` is still
-honoured for one release.
+overrides the location outright. The older `BRIG_TEMPLATE_DIR` still works
+until v0.4.0.
 
 This follows the
 [XDG Base Directory Specification, version 0.8](https://specifications.freedesktop.org/basedir/latest/).

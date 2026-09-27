@@ -2116,7 +2116,7 @@ grep -q 'no space left on device' "$WORK/qfail.err" \
   || bad "brig -q still quotes what the runtime said -- got: $(cat "$WORK/qfail.err")"
 
 # The same flag after the verb, which is where it used to live. It keeps
-# working for this release and names the position it moved to.
+# working until v0.4.0 and names the position it moved to.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
   "$WORK/brig" run claude -q -d > /dev/null 2> "$WORK/runq.err"

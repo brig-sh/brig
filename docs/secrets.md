@@ -66,7 +66,7 @@ brig: no secret named "gh-tokne". To create it: brig secret create gh-tokne
 A successful write prints nothing. Silence is the report.
 
 `delete` and `ls` still answer to two retired spellings, `rm` and `list`. Both
-print a deprecation notice and are scheduled for removal in 0.3.
+print a deprecation notice and are removed in v0.4.0.
 [migration.md](migration.md#subverbs) has the full mapping of retired
 spellings Brig still accepts.
 

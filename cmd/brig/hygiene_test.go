@@ -158,9 +158,10 @@ func TestBrigFlagsDeclareAPosition(t *testing.T) {
 // through.
 //
 // The overlaps below are what that costs today, one map per shipped profile.
-// They are the reason #47 retires -n, -t, -w and -m in v0.3, and the maps are
-// expected to shrink as it does; a spelling that starts colliding, or one whose
-// collision has gone, fails here first so a map cannot outlive what it records.
+// They are the reason #47 retires -n, -t, -w and -m in retiredGoesIn, and the
+// maps are expected to shrink as it does; a spelling that starts colliding, or
+// one whose collision has gone, fails here first so a map cannot outlive what
+// it records.
 //
 // The flag lists are hand-maintained. No profile spec declares its agent's
 // flags -- internal/profile carries the image, the binary and the credentials

@@ -233,9 +233,9 @@ ls`, which reads the runtime directly, shows them throughout.
 
 ## Stability
 
-The protocol is versioned so a client can tell what it is talking to. It is
-**internal until Brig 0.3**: within a version a field can be added, but none
-is renamed or removed. A client that ignores unknown fields keeps working. A
-change that breaks such a client becomes a new version (`v: 2`), the same
-rule [docs/cli.md#--json-output](cli.md#--json-output) sets for `--json`
-output.
+The protocol is versioned so a client can tell what it is talking to, and
+[stability.md](stability.md#stable-enough-to-script-against) lists it as
+stable: within a version a field can be added, but none is renamed or
+removed. A client that ignores unknown fields keeps working. A change that
+breaks such a client becomes a new version (`v: 2`), the same rule
+[docs/cli.md#--json-output](cli.md#--json-output) sets for `--json` output.

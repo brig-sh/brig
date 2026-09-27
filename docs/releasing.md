@@ -59,6 +59,11 @@ answers in that case, and the binary prints what a normal clone would.
   A subject that reads badly, or sits in the wrong section, is fixed in the
   commit now, while it is still cheap.
 
+- If this is the release that `retiredGoesIn` in `cmd/brig/main.go` names,
+  remove the retired spellings first, or move that constant and the docs to
+  a later release. v0.3.0 shipped past its own removal date because nothing
+  asked.
+
 - Tag the release commit and push the tag:
 
   ```bash

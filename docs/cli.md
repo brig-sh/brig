@@ -5,9 +5,9 @@ exit codes, checked against the code that implements them. See
 [quickstart.md](quickstart.md) for the walkthrough of a first run. Read this
 page when you already know what you want and need the exact syntax.
 
-Every old spelling still works for one more release. This page teaches only
-the current one. [migration.md](migration.md) has the full old-to-new table
-and the deprecation window.
+Every old spelling but one still works until v0.4.0. This page teaches only
+the current one. [migration.md](migration.md) has the full old-to-new table,
+the one exception, and the deprecation window.
 
 ## Everyday commands
 
@@ -583,7 +583,7 @@ differently:
 
 | Flag | After the verb, on the run line |
 | --- | --- |
-| `-q`/`--quiet` | still works this release, and prints one deprecation notice moving it left. See [migration.md](migration.md) |
+| `-q`/`--quiet` | still works until v0.4.0, and prints one deprecation notice moving it left. See [migration.md](migration.md) |
 | `--json` | a permanent peer spelling. No notice, either position |
 
 ```bash
@@ -817,7 +817,7 @@ only" below.
 | --- | --- | --- |
 | `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set |
 | `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A named session appends `-<slug>` |
-| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig` | where your own agent files live. `BRIG_TEMPLATE_DIR` still works for one release |
+| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig` | where your own agent files live. `BRIG_TEMPLATE_DIR` still works until v0.4.0 |
 | `BRIG_POLICY_DIR` (global only) | `$XDG_CONFIG_HOME/brig/policies` | where policy files live |
 | `BRIG_STATE_DIR` (global only) | `~/.brig` | where Brig keeps what has to outlive one command, including the project each sandbox last ran with |
 

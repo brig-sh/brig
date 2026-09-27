@@ -126,7 +126,7 @@ func completeCmd(out io.Writer, words []string) {
 //
 // The retired spellings -- exec, env, create, reset, profiles, policies -- are
 // excluded. They still work and print what replaced them, but they are
-// removed in v0.3, so completion does not teach them. shell is already
+// on their way out, so completion does not teach them. shell is already
 // removed.
 var verbs = []string{
 	"agent",

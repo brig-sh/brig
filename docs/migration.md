@@ -2,17 +2,21 @@
 
 Brig renamed most of its commands while it was still a prerelease. Every old
 spelling on this page still works today, except the ones under
-[Removed](#removed). Each one prints one line on stderr naming its
-replacement, in this form:
+[Removed](#removed). Each one prints one line on stderr that names its
+replacement and the release that removes it, in this form:
 
 ```
-brig: `brig profiles` is now `brig agent ls`
+brig: `brig profiles` is now `brig agent ls`. The old spelling is removed in v0.4.0
 ```
 
-The old spellings are scheduled for removal in 0.3. `brig run` is never
-removed. If you have a script written against an older spelling, this page is
-the whole list of what to change. One entry is not a spelling at all: a word
-on the `brig run` line changed meaning, and it prints nothing. See
+The old spellings are removed in v0.4.0. `brig exec` is the exception: it
+stays until `brig sh` can pipe a command's output, and its notice says that
+instead of a release. `brig run` is never removed.
+[stability.md](stability.md#retired-spellings) has the rule.
+
+If you have a script written against an older spelling, this page is the
+whole list of what to change. One entry is not a spelling at all: a word on
+the `brig run` line changed meaning, and it prints nothing. See
 [One word whose meaning changed](#one-word-whose-meaning-changed).
 
 To find out whether a script still uses one, run
@@ -38,6 +42,11 @@ over your own files, or watch stderr for the notice.
 answer on, so a script that ran `brig reset` unattended needs
 `brig rm --all -y`. The same applies to `brig reset` itself: without a
 terminal it also refuses unless `-y` is passed.
+
+`brig exec` runs its command without a guest pty, and `brig sh` does not
+yet. Until [#335](https://github.com/brig-sh/brig/issues/335) lands, `brig
+exec` is the way to pipe a command's output cleanly, so it has no removal
+release yet.
 
 There is deliberately no `brig template edit`. The retired group kept only the
 verbs it already had, so asking for that one is an error rather than a
@@ -95,7 +104,7 @@ brig run claude -q      # still works, prints a notice
 The notice names the move rather than a new spelling:
 
 ```
-brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`
+brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`. The old spelling is removed in v0.4.0
 ```
 
 `--json` is different. It is accepted on both sides of the verb permanently,
@@ -151,9 +160,9 @@ the ref goes to the agent untouched. `brig run claude -- --name x` sends
 
 ## Profile keys
 
-These keys still parse in a profile file for one more release. `brig agent
-edit` on an old file is the quickest way to see the current spelling, because
-the header comment documents every field.
+These keys still parse in a profile file until v0.4.0. They print no notice
+at run time. `brig agent edit` on an old file is the quickest way to see the
+current spelling, because the header comment documents every field.
 
 | Retired key | Current |
 | --- | --- |
@@ -167,6 +176,15 @@ Declaring a retired key beside its replacement is an error, not a warning.
 `forward:` beside an `env:` entry of the same name, and `statePaths:` beside
 `volumes:`, are refused whatever their values. Brig refuses the profile
 rather than guessing which one you meant.
+
+## Settings
+
+| Retired | Current |
+| --- | --- |
+| `BRIG_TEMPLATE_DIR` | `BRIG_PROFILE_DIR` |
+
+`BRIG_TEMPLATE_DIR` still works until v0.4.0, and prints no notice.
+`BRIG_PROFILE_DIR` wins when both are set.
 
 ## The words `agent` and `profile`
 

@@ -87,7 +87,7 @@ func TestCompletePositions(t *testing.T) {
 		directive: dirNames,
 		want:      []string{"run", "sh", "stop", "rm", "ls", "info", "agent", "completion"},
 		// The retired spellings still work and print what replaced them, but
-		// they are removed in v0.3, so completion does not offer them.
+		// they are on their way out, so completion does not offer them.
 		absent: []string{"exec", "shell", "env", "create", "reset", "profiles", "policies", completeVerb},
 	}, {
 		name:      "left of the verb the flags are the global ones",

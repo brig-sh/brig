@@ -78,7 +78,7 @@ func TestVerboseAndQuietTogetherAreRefused(t *testing.T) {
 
 // -q moved to the global position, and moving it must not break the line it
 // works on today: `brig run claude -q` still means quiet, and says where the
-// flag lives now. The run-line spelling goes in v0.3.
+// flag lives now. The run-line spelling goes in retiredGoesIn.
 func TestQuietOnTheRunLineStillWorksAndSaysWhereItMoved(t *testing.T) {
 	atLevel(t, wrap.Normal)
 	for _, args := range [][]string{{"claude", "-q"}, {"claude", "--quiet"}} {

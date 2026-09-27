@@ -2,12 +2,12 @@
 # Refuse documentation that teaches a command spelling brig is about to remove.
 #
 # brig renamed most of its verbs during the 0.1 series. Every old spelling still
-# works and prints one line naming its replacement, and all of them are
-# scheduled for removal in 0.3. That grace period is exactly what makes the
+# works and prints one line naming its replacement, and all of them but
+# `brig exec` are removed in v0.4.0. That grace period is exactly what makes the
 # problem invisible: a doc teaching `brig profiles` is not broken today, so
 # nothing fails and no reader complains, and it becomes wrong on the release
 # that drops the alias. Issue #111 asks for this to be checked rather than
-# reviewed by eye, so it does not rot the first time a doc is edited after 0.3.
+# reviewed by eye, so it does not rot the first time a doc is edited.
 #
 # Only COMMANDS are checked, not prose. A retired spelling is reported when it
 # appears inside inline code or in a fenced code block, because that is where a
@@ -138,7 +138,8 @@ EOF
 if [ "$status" -ne 0 ]; then
 	cat <<'EOF'
 
-The commands above teach a spelling that brig removes in 0.3.
+The commands above teach a spelling that brig removes in v0.4.0, or, for
+`brig exec`, once `brig sh` can pipe a command's output.
 Every current spelling, and the whole mapping, is in docs/migration.md.
 
 If a passage legitimately needs to name a retired spelling, put that discussion
