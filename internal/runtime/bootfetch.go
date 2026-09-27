@@ -27,11 +27,16 @@ const bootAssetsRepo = "ghcr.io/nofireai/hull-assets"
 func BootAssetsRef() string { return bootAssetsRef() }
 
 func bootAssetsRef() string {
-	if r := os.Getenv("BRIG_BOOT_ASSETS_REF"); r != "" {
+	if r := bootAssetsRefOverride(); r != "" {
 		return r
 	}
 	return fmt.Sprintf("%s:%s-%s", bootAssetsRepo, goruntime.GOOS, goruntime.GOARCH)
 }
+
+// bootAssetsRefOverride is BRIG_BOOT_ASSETS_REF, or empty when it is unset.
+// The hull path needs to tell an override from the default, and bootAssetsRef
+// hides that by filling the default in.
+func bootAssetsRefOverride() string { return os.Getenv("BRIG_BOOT_ASSETS_REF") }
 
 // lookPath is a variable so a test can pretend a tool is or is not installed.
 // internal/verify does the same for cosign.

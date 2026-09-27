@@ -318,7 +318,12 @@ to hull on macOS for exactly that reason. The Linux runtime bundle does not
 use it: its launcher points `BRIG_BOOT_ASSETS` at the kernel and initrd the
 bundle carries. On a Linux host without that bundle, the boot bundle arrives
 through `oras` with no such verification, and `BRIG_BOOT_ASSETS_REF` is how
-you pin a version or point at a mirror.
+you pin a version or point at a mirror. On macOS Brig passes it to hull as
+`HULL_BOOT_ASSETS_REF`, so hull fetches the reference Brig checked. There it
+pins a version of `ghcr.io/nofireai/hull-assets`. hull refuses a reference in
+any other repository unless `HULL_BOOT_ASSETS_ALLOW_FOREIGN` is set, and Brig
+does not set it. With `BRIG_BOOT_ASSETS_REF` unset, Brig drops any
+`HULL_BOOT_ASSETS_REF` from the environment it hands hull.
 
 ## Swapping one out
 

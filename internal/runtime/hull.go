@@ -187,7 +187,22 @@ func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
 	// itself via assetDir, so this is not brig overriding a choice -- it is
 	// brig making sure the place it checked and the place hull writes are the
 	// same one, even if something changed between the two calls.
-	cmd.Env = mergeEnv(telemetryEnv(false), []string{"HULL_BOOT_ASSETS=" + dir})
+	//
+	// Pin the reference too. brig verified the bundle BRIG_BOOT_ASSETS_REF
+	// names, and hull reads its own HULL_BOOT_ASSETS_REF. Left alone, hull
+	// fetches its default and the kernel that boots comes from a bundle brig
+	// never checked. With no override brig verified its own default, so a
+	// HULL_BOOT_ASSETS_REF inherited from brig's environment is dropped for the
+	// same reason (#234).
+	pins := []string{"HULL_BOOT_ASSETS=" + dir}
+	ref := bootAssetsRefOverride()
+	if ref != "" {
+		pins = append(pins, "HULL_BOOT_ASSETS_REF="+ref)
+	}
+	cmd.Env = mergeEnv(telemetryEnv(false), pins)
+	if ref == "" {
+		cmd.Env = withoutEnv(cmd.Env, "HULL_BOOT_ASSETS_REF")
+	}
 	said := narrate(progress)
 	cmd.Stdout, cmd.Stderr = said, said
 	if err := cmd.Run(); err != nil {

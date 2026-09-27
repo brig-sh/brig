@@ -624,6 +624,19 @@ func mergeEnv(additions ...[]string) []string {
 	return out
 }
 
+// withoutEnv is env with every entry for key removed. mergeEnv starts from
+// brig's own environment, so a variable brig means to withhold from a child
+// has to be taken out after the merge.
+func withoutEnv(env []string, key string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); k != key {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // sandboxPrefix is the mark every sandbox brig starts carries, and so the mark
 // on anything else brig creates for one. cmd/brig enforces it on the name; the
 // adapters read it back to recognise their own leftovers.
