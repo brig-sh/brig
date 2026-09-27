@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -38,6 +39,12 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 		Credentials: c.infoCredentials(set),
 		Git:         c.infoGit(),
 		ArgvExposed: runtime.ArgvExposed(set.Vars),
+		// Cloned, so a caller editing the document cannot reach the profile.
+		Capabilities: slices.Clone(c.Profile.Capabilities),
+	}
+	if prober, ok := c.Runtime.(runtime.CapabilityProber); ok {
+		s := prober.NestedVirt()
+		d.NestedVirtualization = &InfoNested{Supported: s.Supported, Backend: s.Backend, Detail: s.Detail}
 	}
 	if c.Project != "" {
 		d.Project = &InfoProject{Host: c.Project, Guest: c.GuestProject}
@@ -80,6 +87,16 @@ type InfoDocument struct {
 	Identity    *InfoIdentity    `json:"identity,omitempty"`
 	// Broker is the credential broker of a run with routes.
 	Broker *InfoBroker `json:"broker,omitempty"`
+
+	// Capabilities is what the profile asks for beyond an ordinary microVM,
+	// the CAPABILITIES row's subject. Omitted when it asks for nothing, which
+	// is every shipped profile.
+	Capabilities []string `json:"capabilities,omitempty"`
+	// NestedVirtualization is the runtime's answer to whether it can give a
+	// guest virtualization of its own, the "nested virtualization:" line.
+	// Omitted when the runtime has no answer to give, as the Linux one does
+	// not.
+	NestedVirtualization *InfoNested `json:"nestedVirtualization,omitempty"`
 
 	// ProjectRefused is why the project this session remembers was not
 	// mounted, and so why Project is absent. It is omitted when nothing was
@@ -277,4 +294,13 @@ func (c *Config) infoGuestLogin(set creds.Set) []InfoGuestLogin {
 		}
 	}
 	return out
+}
+
+// InfoNested is the runtime's answer about nested virtualization. Detail is the
+// runtime's own account, or why brig could not get one, in which case
+// Supported is false.
+type InfoNested struct {
+	Supported bool   `json:"supported"`
+	Backend   string `json:"backend,omitempty"`
+	Detail    string `json:"detail,omitempty"`
 }

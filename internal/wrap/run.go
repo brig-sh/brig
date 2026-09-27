@@ -455,6 +455,9 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
 		GenericBoot: c.Profile.GenericBoot,
 		BootAssets:  bootAssets,
+		// From the same derivation checkBackend refused or passed, so a run
+		// cannot boot with the capability after being checked without it.
+		NestedVirt: check.NestedVirt,
 		// Resolved once at the top of EnsureRunning, where the preflight also
 		// read it, so the backend this spec boots is the one that was checked.
 		Hypervisor: check.Hypervisor,

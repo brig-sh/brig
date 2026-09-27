@@ -141,7 +141,8 @@ func (n Network) Line() string {
 }
 
 // backendSpec is the part of a run a backend is entitled to refuse: which
-// backend, what network, which rules, and whether it opens a window.
+// backend, what network, which rules, whether it opens a window, and whether
+// the guest gets virtualization of its own.
 //
 // One derivation, used both by the check before anything is started and by the
 // spec that is actually booted, so the two cannot come to different answers
@@ -154,6 +155,7 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Egress:     c.runtimeEgress(),
 		Publish:    c.Publish,
 		GUI:        c.Profile.IsGUI(),
+		NestedVirt: c.Profile.Nested(),
 	}
 }
 
