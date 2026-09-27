@@ -56,6 +56,7 @@ func telemetryCmd(out io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	sayFallback(rt)
 	reporter, ok := rt.(runtime.TelemetryReporter)
 	if !ok {
 		// A backend that collects nothing has nothing to report and nothing to

@@ -1522,6 +1522,60 @@ case "$out" in
   *) bad "ls with no runtime points at getting one -- got: $out" ;;
 esac
 
+echo "== docker fallback =="
+# With no nerdctl on PATH the nerdctl runtime drives docker. It used to do that
+# with no output, so someone who installed brig for a microVM boundary got
+# docker and no line said so (#30). The stubs answer every call with nothing,
+# which is all info needs from them.
+fb="$WORK/fallback-bin"
+mkdir -p "$fb"
+printf '#!/bin/sh\n' > "$fb/docker"
+chmod +x "$fb/docker"
+out="$(PATH="$fb" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN= "$WORK/brig" info claude 2>&1)"
+case "$out" in
+  *"brig is driving docker"*) ok "docker taken from PATH is reported" ;;
+  *) bad "docker taken from PATH is reported -- got: $out" ;;
+esac
+# The quiet cases also check that info exited 0 and resolved the binary they
+# are about. A missing note from an info that failed early proves nothing.
+out="$(PATH="$fb" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN=docker "$WORK/brig" info claude 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "info with docker named exits 0" || bad "info with docker named exits 0 -- got $rc: $out"
+case "$out" in
+  *"runtime docker ($fb/docker)"*) ok "info with docker named resolves the stub docker" ;;
+  *) bad "info with docker named resolves the stub docker -- got: $out" ;;
+esac
+case "$out" in
+  *"brig is driving docker"*) bad "docker named by BRIG_RUNTIME_BIN is not a fallback -- got: $out" ;;
+  *) ok "docker named by BRIG_RUNTIME_BIN is not a fallback" ;;
+esac
+# ls -q does not lower verbosity, so ls skips the note itself under -q. Plain
+# ls goes first: an empty stderr from ls -q then means the guard held, not that
+# ls never asked.
+out="$(PATH="$fb" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN= "$WORK/brig" ls 2>&1)"
+case "$out" in
+  *"brig is driving docker"*) ok "ls reports docker taken from PATH" ;;
+  *) bad "ls reports docker taken from PATH -- got: $out" ;;
+esac
+PATH="$fb" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN= "$WORK/brig" ls -q \
+  > "$WORK/fallback-ls.out" 2> "$WORK/fallback-ls.err"; rc=$?
+[ "$rc" = 0 ] && ok "ls -q on the docker fallback exits 0" \
+  || bad "ls -q on the docker fallback exits 0 -- got $rc: $(cat "$WORK/fallback-ls.err")"
+[ -s "$WORK/fallback-ls.err" ] \
+  && bad "ls -q leaves out the fallback note -- got: $(cat "$WORK/fallback-ls.err")" \
+  || ok "ls -q leaves out the fallback note"
+printf '#!/bin/sh\n' > "$fb/nerdctl"
+chmod +x "$fb/nerdctl"
+out="$(PATH="$fb" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN= "$WORK/brig" info claude 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "info with nerdctl found exits 0" || bad "info with nerdctl found exits 0 -- got $rc: $out"
+case "$out" in
+  *"runtime nerdctl ($fb/nerdctl)"*) ok "info with nerdctl found resolves the stub nerdctl" ;;
+  *) bad "info with nerdctl found resolves the stub nerdctl -- got: $out" ;;
+esac
+case "$out" in
+  *"brig is driving docker"*) bad "nerdctl found says nothing about docker -- got: $out" ;;
+  *) ok "nerdctl found says nothing about docker" ;;
+esac
+
 echo "== exit codes =="
 # The documented set, checked end to end so the numbers a script keys on cannot
 # drift from the README. Each verb here fails in a different way and the status

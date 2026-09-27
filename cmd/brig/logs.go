@@ -131,6 +131,7 @@ func resolveSandbox(ref string) (*wrap.Config, runtime.Runtime, string, error) {
 	if err != nil {
 		return nil, nil, "", err
 	}
+	sayFallback(rt)
 	cfg, err := wrap.Load(t, wrap.Options{Name: r.Label, Verbosity: verbosity}, rt)
 	if err != nil {
 		return nil, nil, "", err

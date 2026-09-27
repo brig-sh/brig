@@ -21,7 +21,14 @@ import (
 // container to the urunc shim, which boots it. That keeps the isolation story
 // the same on both operating systems, which is the whole reason brig has one
 // runtime interface rather than two behaviours.
-type nerdctl struct{ bin string }
+type nerdctl struct {
+	bin string
+	// fellBack is set when PATH had no nerdctl and newNerdctl took docker in
+	// its place. It records why this binary was chosen, not which one it is:
+	// a docker named by BRIG_RUNTIME_BIN or a profile's runtimeBin was a
+	// choice, and saying "brig fell back" about it is noise.
+	fellBack bool
+}
 
 // defaultRuntime is the containerd shim that boots the sandbox as a microVM.
 // BRIG_CONTAINERD_RUNTIME overrides it -- runc, for instance, when you want a
@@ -39,7 +46,7 @@ func newNerdctl(bin string) (Runtime, error) {
 	}
 	for _, candidate := range []string{"nerdctl", "docker"} {
 		if p, err := exec.LookPath(candidate); err == nil {
-			return &nerdctl{bin: p}, nil
+			return &nerdctl{bin: p, fellBack: candidate == "docker"}, nil
 		}
 	}
 	return nil, fmt.Errorf("%w: install nerdctl, "+
@@ -53,6 +60,18 @@ func newNerdctl(bin string) (Runtime, error) {
 // -- so there was never anything to find out, only something to say.
 func (n *nerdctl) Kind() string { return n.driver() }
 func (n *nerdctl) Bin() string  { return n.bin }
+
+// Fallback names the docker brig took because nerdctl was not on PATH, and
+// the setting that makes it a choice. It claims nothing about the boundary:
+// docker is still told to use the shim containerdRuntime names, and brig
+// cannot see from here whether docker has that shim.
+func (n *nerdctl) Fallback() string {
+	if !n.fellBack {
+		return ""
+	}
+	return fmt.Sprintf("nerdctl is not on PATH, so brig is driving docker (%s). "+
+		"Set BRIG_RUNTIME_BIN=docker to choose it, or install nerdctl", n.bin)
+}
 
 // Isolation is decided by the containerd shim, not by the driver: urunc boots
 // the container as a microVM, and BRIG_CONTAINERD_RUNTIME can point at one that

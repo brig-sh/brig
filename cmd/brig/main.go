@@ -587,6 +587,7 @@ func dispatch(args []string) error {
 		}
 		rt = nil
 	}
+	sayFallback(rt)
 	opts.load.Verbosity = verbosity
 	cfg, err := wrap.Load(t, opts.load, rt)
 	if err != nil {
@@ -1734,6 +1735,11 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 		fmt.Printf("  %s\n", strings.TrimPrefix(err.Error(), "no runtime found on PATH: "))
 		return nil
 	}
+	// ls -q is read by a script and does not lower verbosity, so it is
+	// checked here. The note is a line a loop reading refs has to skip.
+	if !quiet {
+		sayFallback(rt)
+	}
 	list, err := rt.List()
 	if err != nil {
 		return err
@@ -2230,6 +2236,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	if err != nil {
 		return err
 	}
+	sayFallback(rt)
 	list, err := rt.List()
 	if err != nil {
 		return err

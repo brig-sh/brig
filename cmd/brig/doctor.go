@@ -256,6 +256,7 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 		}
 		return check{Name: "runtime", State: stateFail, Finding: err.Error(), Fix: fix, err: err}, nil
 	}
+	sayFallback(rt)
 	bin := rt.Bin()
 	// Detect takes BRIG_RUNTIME_BIN on trust, where a profile's runtimeBin is
 	// checked for being on disk and executable before it is accepted. A doctor
