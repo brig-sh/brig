@@ -27,6 +27,9 @@ type forwardAPI struct {
 	// sock is the control socket the client is given; the API socket is
 	// derived from it the way startGateway derives the one it passes.
 	sock string
+	// outside are local addresses a process outside the gateway holds. A
+	// POST for one is refused the way hull refuses a bind that failed.
+	outside map[string]bool
 }
 
 func newFakeGateway(t *testing.T, missing bool) *forwardAPI {
@@ -63,6 +66,11 @@ func (g *forwardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var f gatewayForward
 		_ = json.NewDecoder(r.Body).Decode(&f)
+		if g.outside[f.Local] {
+			http.Error(w, "a forward already listens there: "+f.Local+" is held outside this "+
+				"gateway: listen tcp "+f.Local+": bind: address already in use", http.StatusConflict)
+			return
+		}
 		for _, have := range g.forwards {
 			if have.Local == f.Local && have.Protocol == f.Protocol {
 				http.Error(w, "a forward already listens there: "+have.Protocol+"/"+

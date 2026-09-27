@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -254,9 +255,94 @@ func (n *nerdctl) Run(spec RunSpec) error {
 	said := narrate(spec.Progress)
 	cmd.Stderr = said
 	if err := cmd.Run(); err != nil {
+		if held := n.heldPort(spec.Name, spec.Publish); held != nil {
+			return held
+		}
 		return said.explain(fmt.Errorf("%s run: %w", n.bin, err))
 	}
 	return nil
+}
+
+// heldPort returns the refusal for the first of these host ports that
+// something already holds, or nil when all of them are free. name is the
+// sandbox being run, which is never the holder.
+//
+// It runs after a failed run. nerdctl refuses a held port as "port is already
+// allocated", which names neither the holder nor the fix.
+func (n *nerdctl) heldPort(name string, ps []Publication) error {
+	for _, p := range ps {
+		if !hostPortHeld(p) {
+			continue
+		}
+		if owner := n.publisherOf(name, p); owner != "" {
+			return publishedBy(p, owner, "remove that sandbox with `brig rm`")
+		}
+		return portInUse(p)
+	}
+	return nil
+}
+
+// publisherOf returns the container other than name whose port mapping holds
+// p's host port, or "" when none does.
+//
+// A running container holds its ports. Under a rootless nerdctl a stopped one
+// holds them too: nerdctl hands the port to rootlesskit when the container
+// starts, and takes it back only when the container is removed.
+func (n *nerdctl) publisherOf(name string, p Publication) string {
+	cmd := exec.Command(n.bin, "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Ports}}")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	stoppedHolds := !n.isDocker() && os.Geteuid() != 0
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(strings.TrimSpace(line), "\t", 3)
+		if len(fields) < 3 || fields[0] == name {
+			continue
+		}
+		if !strings.HasPrefix(fields[1], "Up") && !stoppedHolds {
+			continue
+		}
+		for _, q := range mappedPorts(fields[2]) {
+			if q.Overlaps(p) {
+				return fields[0]
+			}
+		}
+	}
+	return ""
+}
+
+// mappedPorts reads the PORTS column of `nerdctl ps`, for instance
+// "127.0.0.1:18080->8000/tcp, 0.0.0.0:5353->53/udp". An entry it cannot read,
+// such as a port range, is skipped.
+func mappedPorts(column string) []Publication {
+	var out []Publication
+	for _, entry := range strings.Split(column, ",") {
+		host, guest, ok := strings.Cut(strings.TrimSpace(entry), "->")
+		if !ok {
+			continue
+		}
+		guest, proto, _ := strings.Cut(guest, "/")
+		addr, port, err := net.SplitHostPort(host)
+		if err != nil {
+			continue
+		}
+		hostPort, err := strconv.Atoi(port)
+		if err != nil {
+			continue
+		}
+		guestPort, err := strconv.Atoi(guest)
+		if err != nil {
+			continue
+		}
+		q := Publication{HostAddr: addr, HostPort: hostPort, GuestPort: guestPort}
+		if proto != "" && proto != "tcp" {
+			q.Protocol = proto
+		}
+		out = append(out, q)
+	}
+	return out
 }
 
 // runArgs is the one place the run command line is built, for the same reason

@@ -213,6 +213,44 @@ func publishedOn(sock, guestIP string) ([]Publication, error) {
 	return out, nil
 }
 
+// publisherElsewhere returns the sandbox whose forward on a brig gateway other
+// than sock holds p's host port, or "" when none does.
+//
+// The shared network has one gateway, and every isolated sandbox has its own.
+// A port one of them holds is taken for all the others.
+func publisherElsewhere(sock string, p Publication) string {
+	var socks []string
+	if shared, err := gatewaySocket(); err == nil {
+		socks = append(socks, shared)
+	}
+	if alloc, err := isolatedNets(); err == nil {
+		for name := range alloc.read() {
+			if s, err := isolatedSocket(name); err == nil {
+				socks = append(socks, s)
+			}
+		}
+	}
+	for _, s := range socks {
+		if s == sock || !gatewayReachable(s) {
+			continue
+		}
+		forwards, err := gatewayForwards(s)
+		if err != nil {
+			continue
+		}
+		for _, f := range forwards {
+			guest, port, err := net.SplitHostPort(f.Remote)
+			if err != nil {
+				continue
+			}
+			if q, err := publicationOf(f, port); err == nil && q.Overlaps(p) {
+				return sandboxAt(guest)
+			}
+		}
+	}
+	return ""
+}
+
 // publicationOf turns a gateway forward back into the publication that asked
 // for it.
 func publicationOf(f gatewayForward, guestPort string) (Publication, error) {
@@ -277,7 +315,7 @@ func reconcilePublications(sock, guestIP string, want []Publication) error {
 	for _, p := range want {
 		if !contains(have, p) {
 			if err := publishOn(sock, guestIP, p); err != nil {
-				return publishError(err, p)
+				return publishError(sock, err, p)
 			}
 		}
 	}
