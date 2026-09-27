@@ -369,6 +369,62 @@ brig run claude
 Once the registry answers, the run reaches `signature verified` instead of
 the prompt.
 
+## cosign did not answer
+
+```
+brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign did
+not answer within 30s. It waits on docker-credential-desktop, set by
+credsStore in /Users/you/.docker/config.json. Start the app that helper
+belongs to, or run brig with DOCKER_CONFIG set to an empty directory (and
+restart brigd with it set, if brigd is running). The copy on disk was not
+checked against what the registry serves
+brig: Boot the cached copy unverified? [y/N]
+```
+
+The usual cause is a Docker credential helper that never answers. cosign
+reads Docker's `config.json` to find credentials for `ghcr.io`, and when
+`credsStore` or `credHelpers` names a helper, cosign runs it and waits. With
+`"credsStore": "desktop"` and Docker Desktop not running,
+`docker-credential-desktop` blocks. The message names the helper and the
+file only when one is set. Without one, it goes from "within 30s" straight
+to "The copy on disk was not checked", and the causes in the section above
+apply.
+
+Brig gives cosign 30 seconds and then kills its process group, so a
+credential helper it started dies with it. A helper that leaves the group
+with `setsid` is not killed.
+
+Answering no aborts, and the error repeats the detail:
+
+```
+brig: aborted: the image was not verified: cosign did not answer within 30s.
+<detail>. Try again once cosign answers, or set BRIG_VERIFY=off to boot it
+unchecked
+```
+
+Under `BRIG_VERIFY=require` there is no prompt: Brig refuses outright, with
+exit code `5`.
+
+The images Brig boots are public, so cosign needs no credentials for them.
+Start Docker Desktop, or point `DOCKER_CONFIG` at an empty directory for the
+run:
+
+```bash
+DOCKER_CONFIG="$(mktemp -d)" brig run claude
+```
+
+cosign inherits the environment of the process that runs it. If brigd runs
+your boots, stop it and start it again with `DOCKER_CONFIG` set.
+
+Confirm:
+
+```bash
+brig run claude
+```
+
+The run prints `brig: image and boot assets verified` instead of the prompt,
+within a few seconds.
+
 ## The image failed to pull, or the architecture does not match
 
 ```
