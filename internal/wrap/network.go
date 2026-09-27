@@ -261,22 +261,68 @@ func (c *Config) networkLine() string {
 //
 // The posture it is leaving is the one it runs with, not the record. A policy
 // isolated the sandbox in #368 and was then detached, and the line said the
-// sandbox was started shared. When the posture it runs with is the one asked
-// for, there is no posture change to name, and the general wording stays.
+// sandbox was started shared.
+//
+// When the posture it runs with is the one asked for, there is no posture
+// change to name. If its rules are stale, a policy was detached and the
+// general wording is the change. If they are not, see keepsPosture. The
+// general wording there claimed a policy change that did not happen. The
+// line names the policy only when one is attached, the same test Load narrows
+// on: an older release that booted the sandbox --network isolated leaves the
+// same isolated gateway over a shared record, and no policy touched it.
 func (c *Config) networkChange() string {
+	change, _ := c.postureChange()
+	return change
+}
+
+// postureChange is networkChange, and whether keepsPosture holds, from one
+// look at the running sandbox. On hvi each look dials the sandbox's gateway,
+// and one restart warning needs both answers.
+func (c *Config) postureChange() (string, bool) {
 	now := c.askedNetwork
 	if !c.postureChanged() {
-		return generalNetworkChange
+		return generalNetworkChange, false
 	}
 	was := c.runningNet()
 	if was == "" {
 		was = c.recordedNet
 	}
+	if c.keepsPosture(was) {
+		if c.Egress.Default != "" {
+			return fmt.Sprintf("this sandbox is %s only because a policy narrowed it, and %s "+
+				"asks for %s as the posture it keeps", was, c.networkSource, now), true
+		}
+		return fmt.Sprintf("this sandbox is %s but its record says %s, and %s "+
+			"asks for %s as the posture it keeps", was, c.recordedNet, c.networkSource, now), true
+	}
 	if was == now {
-		return generalNetworkChange
+		return generalNetworkChange, false
 	}
 	return fmt.Sprintf("this sandbox was started with the %s posture and %s asks for %s",
-		was, c.networkSource, now)
+		was, c.networkSource, now), false
+}
+
+// keepsPosture reports whether this run asks for the posture the running
+// sandbox has, under the rules it has, while the record names another. That is
+// a sandbox isolated over a shared record, now asked for isolated. Nothing it
+// runs with changes. It is restarted only so that its boot records isolated as
+// the posture it keeps. running is what runningNet said.
+func (c *Config) keepsPosture(running Network) bool {
+	return c.postureChanged() && running == c.askedNetwork && !c.networkStale()
+}
+
+// networkRestart is the whole warning printed when a running sandbox is
+// restarted for its network. The reason is that rules are fixed at boot,
+// except where keepsPosture holds: there the rules stay the same, and the
+// reason is the record.
+func (c *Config) networkRestart() string {
+	change, keeps := c.postureChange()
+	reason := "Rules are fixed when a sandbox boots, so it is being restarted"
+	if keeps {
+		reason = "Its network and rules stay the same. It is restarted to record that posture"
+	}
+	return fmt.Sprintf("%s. %s; any other session using this sandbox will be disconnected.",
+		change, reason)
 }
 
 // generalNetworkChange is the restart warning when no change of posture can be

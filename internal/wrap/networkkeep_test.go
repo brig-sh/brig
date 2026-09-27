@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -565,13 +566,59 @@ func TestInfoMakesNoClaimAboutASandboxItCannotSee(t *testing.T) {
 	}
 }
 
-// A sandbox its policy isolated, asked for isolated while the policy is still
-// attached, runs with the posture it is asked for. The restart line does not
-// name the same posture twice as though it were a change.
-//
-// It is still restarted, because the record holds shared and the asked posture
-// is compared with the record. That predates #368 and is left alone here.
+// rulesRuntime is a sandbox behind the gateway it booted with and the egress
+// rules it booted with, stale when a run asks for either one differently. That
+// is how hull on hvi compares an isolated gateway. postureRuntime compares the
+// network alone and cannot tell a policy kept from a policy detached.
+type rulesRuntime struct {
+	*postureRuntime
+	rules runtime.Egress
+}
+
+func (r *rulesRuntime) NetworkStale(name, hv, net string, egress runtime.Egress) bool {
+	if r.postureRuntime.NetworkStale(name, hv, net, egress) {
+		return true
+	}
+	return net == "isolated" && !reflect.DeepEqual(egress, r.rules)
+}
+
+// isolatedByNoNet is a sandbox that is up behind the gateway and the rules the
+// no-net policy gave it at boot.
+func isolatedByNoNet(t *testing.T) *rulesRuntime {
+	t.Helper()
+	rules := runtimeEgress(loadWithPolicy(t, "no-net").Egress)
+	return &rulesRuntime{postureRuntime: runningAs("isolated"), rules: rules}
+}
+
+// A sandbox its policy isolated, the policy detached, then --network isolated.
+// The sandbox runs with the posture it is asked for, but under rules nothing
+// applies now, and that is the change the general wording names. The restart
+// line does not name the same posture twice as though it were a change.
 func TestTheRestartLineKeepsTheGeneralWordingWhenThePostureIsTheSame(t *testing.T) {
+	c := detachedAfterBoot(t, Options{Network: "isolated"})
+	c.Runtime = isolatedByNoNet(t)
+	if !c.networkStale() {
+		t.Fatal("the rules the detached policy left were not read as stale")
+	}
+
+	got := c.networkChange()
+	if strings.Contains(got, "isolated posture and --network asks for isolated") {
+		t.Errorf("the restart line names one posture as a change: %s", got)
+	}
+	if strings.Contains(got, "started with the shared posture") {
+		t.Errorf("the restart line calls an isolated sandbox shared: %s", got)
+	}
+	if !strings.Contains(got, "different network policy") {
+		t.Errorf("the restart line lost the general wording: %s", got)
+	}
+}
+
+// A sandbox its policy isolated, asked for isolated while the policy is still
+// attached. It runs with the posture and the rules this run asks for. It is
+// restarted all the same, because the record holds shared, and the restart
+// records isolated as the posture it keeps once the policy is detached. The
+// general wording claimed the policy had changed, and it had not.
+func TestTheRestartLineSaysThePolicyIsolatedTheSandbox(t *testing.T) {
 	isolateState(t)
 	policies := t.TempDir()
 	writeTestPolicy(t, policies, "no-net")
@@ -587,17 +634,96 @@ func TestTheRestartLineKeepsTheGeneralWordingWhenThePostureIsTheSame(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Runtime = runningAs("isolated")
+	c.Runtime = isolatedByNoNet(t)
+	if c.networkStale() {
+		t.Fatal("the rules of an attached policy were read as stale")
+	}
+	if !c.postureChanged() {
+		t.Fatal("an explicit isolated over a shared record was not read as a change")
+	}
 
 	got := c.networkChange()
+	if strings.Contains(got, "different network policy") {
+		t.Errorf("the restart line claims the policy changed: %s", got)
+	}
 	if strings.Contains(got, "isolated posture and --network asks for isolated") {
 		t.Errorf("the restart line names one posture as a change: %s", got)
 	}
 	if strings.Contains(got, "started with the shared posture") {
 		t.Errorf("the restart line calls an isolated sandbox shared: %s", got)
 	}
-	if !strings.Contains(got, "different network policy") {
-		t.Errorf("the restart line lost the general wording: %s", got)
+	want := "this sandbox is isolated only because a policy narrowed it, and --network " +
+		"asks for isolated as the posture it keeps"
+	if got != want {
+		t.Errorf("the restart line is %q, want %q", got, want)
+	}
+}
+
+// The same restart through EnsureRunning. The sandbox keeps its network and its
+// rules, so the warning does not give "Rules are fixed when a sandbox boots" as
+// the reason. The restart is there to record the posture, and the line says so.
+func TestKeepingThePostureSaysTheRestartOnlyRecordsIt(t *testing.T) {
+	live := &livenessRuntime{running: true}
+	run := livenessConfig(t, live)
+	policies := t.TempDir()
+	writeTestPolicy(t, policies, "no-net")
+	t.Setenv("BRIG_POLICY_DIR", policies)
+	run.Egress = loadWithPolicy(t, "no-net").Egress
+	run.Runtime = &rulesRuntime{
+		postureRuntime: &postureRuntime{livenessRuntime: live, booted: "isolated"},
+		rules:          runtimeEgress(run.Egress),
+	}
+	run.Network, run.askedNetwork = NetIsolated, NetIsolated
+	run.recordedNet, run.networkSource = NetShared, "--network"
+	var errOut bytes.Buffer
+	run.Err, run.Verbosity = &errOut, Normal
+
+	if err := run.EnsureRunning(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(errOut.String(), "Rules are fixed when a sandbox boots") {
+		t.Errorf("the warning blames rules that do not change:\n%s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "restarted to record that posture") {
+		t.Errorf("the warning does not say why the sandbox restarts:\n%s", errOut.String())
+	}
+	if live.stops != 1 || live.boots != 1 {
+		t.Errorf("%d stops and %d boots, want one of each", live.stops, live.boots)
+	}
+	if got := mustBootedNet(t, run.VMName); got != "isolated" {
+		t.Errorf("the record holds %q, want isolated", got)
+	}
+}
+
+// A sandbox behind an isolated gateway over a shared record, with no policy
+// attached, asked for isolated. An older release leaves it that way when it
+// boots the sandbox with --network isolated, because it does not update the
+// record (see docs/policies.md). No policy narrowed this sandbox, so the
+// restart line does not say one did.
+func TestTheRestartLineNamesNoPolicyWhenNoneIsAttached(t *testing.T) {
+	isolateState(t)
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	booted(mustLoad(t, Options{}))
+	c := mustLoad(t, Options{Network: "isolated"})
+	c.Runtime = runningAs("isolated")
+	if c.Egress.Default != "" {
+		t.Fatal("a policy is attached")
+	}
+	if !c.postureChanged() {
+		t.Fatal("an explicit isolated over a shared record was not read as a change")
+	}
+	if c.networkStale() {
+		t.Fatal("an unfiltered isolated gateway was read as stale for an unfiltered run")
+	}
+
+	got := c.networkChange()
+	if strings.Contains(got, "policy") {
+		t.Errorf("the restart line names a policy that is not attached: %s", got)
+	}
+	want := "this sandbox is isolated but its record says shared, and --network " +
+		"asks for isolated as the posture it keeps"
+	if got != want {
+		t.Errorf("the restart line is %q, want %q", got, want)
 	}
 }
 
@@ -694,4 +820,47 @@ func envelopeValue(t *testing.T, block, label string) string {
 	}
 	t.Fatalf("no %s row:\n%s", label, block)
 	return ""
+}
+
+// countingRuntime counts the NetworkStale questions put to it. On hvi each one
+// dials the sandbox's gateway with a two-second timeout.
+type countingRuntime struct {
+	*rulesRuntime
+	asked int
+}
+
+func (r *countingRuntime) NetworkStale(name, hv, net string, egress runtime.Egress) bool {
+	r.asked++
+	return r.rulesRuntime.NetworkStale(name, hv, net, egress)
+}
+
+// One restart warning looks at the running sandbox once for its posture and
+// once for its rules. It asked five times, and a gateway slow to answer made
+// every restart for the network wait on each of them.
+func TestTheRestartLineAsksTheRuntimeOnceForEachAnswer(t *testing.T) {
+	isolateState(t)
+	policies := t.TempDir()
+	writeTestPolicy(t, policies, "no-net")
+	t.Setenv("BRIG_POLICY_DIR", policies)
+
+	booted(loadWithPolicy(t, "no-net"))
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	p.Policy = []string{"no-net"}
+	c, err := Load(p, Options{Network: "isolated"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := &countingRuntime{rulesRuntime: isolatedByNoNet(t)}
+	c.Runtime = counted
+
+	got := c.networkRestart()
+	if !strings.Contains(got, "It is restarted to record that posture") {
+		t.Fatalf("not the keep-the-posture warning, so this test proves nothing: %s", got)
+	}
+	if counted.asked > 2 {
+		t.Errorf("one restart warning asked the runtime %d times, want at most 2", counted.asked)
+	}
 }

@@ -198,8 +198,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// were fixed when it booted, so a policy attached since is not in
 			// force on this sandbox -- and returning here would print a POLICY
 			// row for rules nothing is applying.
-			c.warnf("%s. Rules are fixed when a sandbox boots, so it is being restarted; "+
-				"any other session using this sandbox will be disconnected.", c.networkChange())
+			c.warnf("%s", c.networkRestart())
 		case !c.guestMountsWorkspace():
 			c.warnf("the running sandbox is not mounting %s -- its share went stale (the "+
 				"directory was renamed or replaced, or the workspace changed). Restarting "+
