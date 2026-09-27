@@ -68,8 +68,9 @@ there too. `BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, wh
 shares the host kernel. That is the weaker of the two, and it is something you
 have to choose rather than something you get.
 
-Which of them you got is the `ISOLATION` row of the execution envelope, printed
-before every boot and by `brig info`:
+Which of them you got is the `ISOLATION` row of the execution envelope.
+`brig info` prints it without booting anything, and `brig --verbose run`
+prints it before the boot:
 
 ```
 ISOLATION    microVM (hull, hvi backend)
@@ -114,7 +115,8 @@ reachable from this machine and not from the network this machine is on.
 `0.0.0.0:8080:80` is how you ask for the wider one, and it is never the
 default.
 
-It is named in the execution envelope, on a `PORTS` row, every run:
+It is named on the `PORTS` row of the execution envelope. `brig info` prints
+the row, and so does `brig --verbose run` before the boot:
 
 ```
 NETWORK      shared (one network for every sandbox on this host)
