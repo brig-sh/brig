@@ -92,7 +92,7 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		// The posture, said out loud. It decides what the agent can reach, and
 		// until it appeared here the only way to know was to remember which
 		// setting the run was started with.
-		envelopeRow{"NETWORK", c.Network.Line()},
+		envelopeRow{"NETWORK", c.networkLine()},
 	)
 	// Directly under the network, because a published port is a hole in it.
 	// One row per port, and only when there is one: a row reading "none" on

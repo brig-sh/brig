@@ -132,9 +132,10 @@ type Config struct {
 	// VerifyPolicy is what counts as ours.
 	Verify       verify.Mode
 	VerifyPolicy verify.Policy
-	// Network is the posture this run was resolved to. Held here so the
-	// envelope, the report and the spec handed to the runtime cannot disagree
-	// about what a reader was told.
+	// Network is the posture this run was resolved to, which is the one the
+	// next boot gets. Held here so the envelope, the report and the spec
+	// handed to the runtime cannot disagree about what a reader was told. A
+	// sandbox already up can run with another; see networkLine.
 	Network Network
 	// askedNetwork is the posture before a policy narrowed it, which is what a
 	// boot records: a sandbox isolated only by its policy goes back to shared
@@ -142,7 +143,8 @@ type Config struct {
 	// though it had been asked for. networkSource is where askedNetwork came
 	// from, and recordedNet is the posture recorded at the sandbox's last
 	// boot, or "" when none was. EnsureRunning and the restart warning read
-	// all three. See rememberedNetwork, postureChanged and networkChange.
+	// all three. See rememberedNetwork, postureChanged, networkChange and
+	// runningNet.
 	askedNetwork  Network
 	networkSource string
 	recordedNet   Network

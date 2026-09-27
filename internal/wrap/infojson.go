@@ -34,7 +34,7 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 		Workspace:   c.Workspace,
 		Image:       InfoImage{Ref: c.Image, Pull: c.Pull},
 		Verify:      c.infoVerify(),
-		Network:     c.Network.Line(),
+		Network:     c.networkLine(),
 		Credentials: c.infoCredentials(set),
 		Git:         c.infoGit(),
 		ArgvExposed: runtime.ArgvExposed(set.Vars),

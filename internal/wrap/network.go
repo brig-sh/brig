@@ -190,6 +190,64 @@ func (c *Config) recordPosture() {
 	}
 }
 
+// runningNet is the posture the sandbox that is up now runs with, or "" when
+// brig cannot tell. Callers ask whether the sandbox is running; this does not.
+//
+// The record holds the posture that was asked for, and a policy narrows shared
+// to isolated without changing it (see recordPosture). So a shared record is
+// checked against the runtime: asked about shared with no rules, hull on hvi
+// reports stale exactly when an isolated gateway is up for this sandbox. That
+// is the "the policy detached" case of runtime's TestNetworkStale. A policy
+// narrows the posture on hvi alone, because every other backend refuses one
+// unless the sandbox is offline, so a runtime that cannot answer leaves the
+// record as it is. A gateway left up by a sandbox that died without a stop
+// answers the same way, but nothing reads that answer. networkLine asks
+// whether the sandbox is running and reports the next boot when it is not.
+// networkChange and keepsPosture are reached only for a sandbox that is
+// running. The next run finds the dead sandbox not running and removes it,
+// and hull's Remove takes the gateway down once `hull rm` succeeds.
+//
+// No record, no answer. That is a sandbox an older release booted, or one
+// whose session entry names another sandbox, and rememberedNetwork hides both
+// for the reason it gives. Without a record brig cannot tell offline from
+// shared either. No runtime, no answer: there is no sandbox to ask about.
+func (c *Config) runningNet() Network {
+	if c.Runtime == nil {
+		return ""
+	}
+	if c.recordedNet != NetShared {
+		return c.recordedNet
+	}
+	checker, ok := c.Runtime.(runtime.NetworkChecker)
+	if ok && checker.NetworkStale(c.VMName, c.hypervisor(), NetShared.RuntimeNet(), runtime.Egress{}) {
+		return NetIsolated
+	}
+	return NetShared
+}
+
+// networkLine is the NETWORK row: the posture the running sandbox has, and the
+// one its next boot gets when the two differ.
+//
+// c.Network alone is the next boot. Printed on its own over a sandbox a policy
+// isolated and that policy since detached, it told a reader the sandbox was on
+// the shared network while its isolated gateway was still up (#368). The other
+// way round, a policy attached since a shared boot, it claimed a boundary the
+// running sandbox does not have.
+//
+// The record is checked before the runtime is asked whether the sandbox is up,
+// so a run with nothing recorded costs no extra call. A sandbox that is stopped,
+// or that brig cannot see, has only the next boot to report.
+func (c *Config) networkLine() string {
+	now := c.runningNet()
+	if now == "" || now == c.Network {
+		return c.Network.Line()
+	}
+	if up, err := c.Runtime.Running(c.VMName); err != nil || !up {
+		return c.Network.Line()
+	}
+	return fmt.Sprintf("%s; %s from its next boot", now.Line(), c.Network)
+}
+
 // networkChange is the first half of the warning printed when a running
 // sandbox is restarted because its network is stale: which posture it is
 // leaving and which it is going to, when that is the change.
@@ -200,15 +258,31 @@ func (c *Config) recordPosture() {
 // and the warning says which. Anything else -- a policy attached or detached
 // since the boot, or a sandbox booted before postures were recorded -- keeps
 // the general wording.
+//
+// The posture it is leaving is the one it runs with, not the record. A policy
+// isolated the sandbox in #368 and was then detached, and the line said the
+// sandbox was started shared. When the posture it runs with is the one asked
+// for, there is no posture change to name, and the general wording stays.
 func (c *Config) networkChange() string {
-	was, now := c.recordedNet, c.askedNetwork
-	if was == "" || now == "" || was == now {
-		return "this sandbox is running under a different network policy than the one " +
-			"that applies now"
+	now := c.askedNetwork
+	if !c.postureChanged() {
+		return generalNetworkChange
+	}
+	was := c.runningNet()
+	if was == "" {
+		was = c.recordedNet
+	}
+	if was == now {
+		return generalNetworkChange
 	}
 	return fmt.Sprintf("this sandbox was started with the %s posture and %s asks for %s",
 		was, c.networkSource, now)
 }
+
+// generalNetworkChange is the restart warning when no change of posture can be
+// named.
+const generalNetworkChange = "this sandbox is running under a different network policy " +
+	"than the one that applies now"
 
 // mergePublications is what a sandbox will be offering: everything it already
 // publishes, with what this command line asked for laid over it.

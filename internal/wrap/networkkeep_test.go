@@ -3,6 +3,7 @@ package wrap
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,15 @@ type postureRuntime struct {
 
 func (r *postureRuntime) NetworkStale(_, _, net string, _ runtime.Egress) bool {
 	return net != r.booted
+}
+
+// Stop takes the isolated gateway down with the sandbox, the way hull's Stop
+// does through releaseGateway. Without it, a read of the posture after the
+// restart still sees the old gateway, and
+// TestAFlaglessRunAfterADetachRestartsOntoShared makes that read.
+func (r *postureRuntime) Stop(name string) error {
+	r.booted = "shared"
+	return r.livenessRuntime.Stop(name)
 }
 
 // blindRuntime answers that nothing is stale, whatever it is asked. That is
@@ -364,4 +374,324 @@ func TestRemoveDropsThePosture(t *testing.T) {
 	if got := mustBootedNet(t, c.VMName); got != "" {
 		t.Errorf("rm left %q recorded", got)
 	}
+}
+
+// reportRuntime is a postureRuntime that also answers what `brig info` asks of
+// a runtime, so the envelope and the JSON can be read over it.
+type reportRuntime struct {
+	*postureRuntime
+}
+
+func (reportRuntime) Bin() string { return "hull" }
+func (reportRuntime) Isolation(hv string) runtime.Isolation {
+	return fakeRuntime{}.Isolation(hv)
+}
+
+// runningAs is a sandbox that is up behind the gateway a boot on net gives it.
+func runningAs(net string) *postureRuntime {
+	return &postureRuntime{livenessRuntime: &livenessRuntime{running: true}, booted: net}
+}
+
+// detachedAfterBoot is the setup in #368: a sandbox booted while a policy
+// isolated it, then a command resolved after the policy was detached. The
+// record holds shared, the posture that was asked for, while the sandbox that
+// is up is still behind its isolated gateway.
+func detachedAfterBoot(t *testing.T, o Options) *Config {
+	t.Helper()
+	isolateState(t)
+	policies := t.TempDir()
+	writeTestPolicy(t, policies, "no-net")
+	t.Setenv("BRIG_POLICY_DIR", policies)
+
+	booted(loadWithPolicy(t, "no-net"))
+	c := mustLoad(t, o)
+	if c.recordedNet != NetShared {
+		t.Fatalf("the record holds %q, want shared", c.recordedNet)
+	}
+	return c
+}
+
+// The report in #368. A sandbox isolated by its policy, the policy detached,
+// then --network offline. The restart line said the sandbox was started with
+// the shared posture, which it never ran with: that is the record of what was
+// asked for, and the policy had narrowed it.
+func TestTheRestartLineDoesNotCallAPolicyIsolatedSandboxShared(t *testing.T) {
+	c := detachedAfterBoot(t, Options{Network: "offline"})
+	c.Runtime = runningAs("isolated")
+	got := c.networkChange()
+	if strings.Contains(got, "started with the shared posture") {
+		t.Errorf("the restart line calls an isolated sandbox shared: %s", got)
+	}
+	want := "this sandbox was started with the isolated posture and --network asks for offline"
+	if got != want {
+		t.Errorf("the restart line is %q, want %q", got, want)
+	}
+
+	// The same through the restart itself, with the record written after.
+	live := &livenessRuntime{running: true}
+	run := livenessConfig(t, live)
+	run.Runtime = &postureRuntime{livenessRuntime: live, booted: "isolated"}
+	run.Network, run.askedNetwork = NetOffline, NetOffline
+	run.recordedNet, run.networkSource = NetShared, "--network"
+	var errOut bytes.Buffer
+	run.Err, run.Verbosity = &errOut, Normal
+
+	if err := run.EnsureRunning(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(errOut.String(), "started with the shared posture") {
+		t.Errorf("the warning calls an isolated sandbox shared:\n%s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), want) {
+		t.Errorf("the warning does not name the isolated posture:\n%s", errOut.String())
+	}
+	if live.stops != 1 || live.boots != 1 {
+		t.Errorf("%d stops and %d boots, want one of each", live.stops, live.boots)
+	}
+	if live.spec.Net != "none" {
+		t.Errorf("booted on %q, want none", live.spec.Net)
+	}
+	if got := mustBootedNet(t, run.VMName); got != "none" {
+		t.Errorf("the record holds %q, want none", got)
+	}
+}
+
+// The other half of #368. After the detach `brig info` printed NETWORK shared
+// while the isolated sandbox was still up. The row names the posture the
+// running sandbox has, and the one its next boot gets.
+func TestInfoDoesNotCallAPolicyIsolatedSandboxSharedAfterADetach(t *testing.T) {
+	c := detachedAfterBoot(t, Options{})
+	c.Runtime = reportRuntime{runningAs("isolated")}
+
+	var block bytes.Buffer
+	c.renderEnvelope(&block, creds.Set{})
+	row := envelopeValue(t, block.String(), "NETWORK")
+	for form, got := range map[string]string{"the envelope": row, "the JSON": c.InfoData(creds.Set{}).Network} {
+		if strings.HasPrefix(got, "shared (one network") {
+			t.Errorf("%s calls a sandbox behind its isolated gateway shared: %s", form, got)
+		}
+		if !strings.Contains(got, NetIsolated.Line()) {
+			t.Errorf("%s does not name the isolated posture the sandbox runs with: %s", form, got)
+		}
+		if !strings.Contains(got, "shared from its next boot") {
+			t.Errorf("%s does not say the next boot is shared: %s", form, got)
+		}
+	}
+}
+
+// The reverse. A sandbox booted shared, then a policy attached: the next boot
+// isolates it, but the sandbox that is up runs shared and filters nothing, and
+// a row calling it isolated overstates the boundary.
+func TestInfoDoesNotCallASandboxIsolatedWhenAPolicyWasAttachedAfterItBooted(t *testing.T) {
+	isolateState(t)
+	policies := t.TempDir()
+	writeTestPolicy(t, policies, "no-net")
+	t.Setenv("BRIG_POLICY_DIR", policies)
+
+	booted(mustLoad(t, Options{}))
+	c := loadWithPolicy(t, "no-net")
+	c.Runtime = runningAs("shared")
+
+	got := c.networkLine()
+	if strings.HasPrefix(got, "isolated") {
+		t.Errorf("the row calls a sandbox running shared isolated: %s", got)
+	}
+	if !strings.HasPrefix(got, NetShared.Line()) {
+		t.Errorf("the row does not name the shared posture the sandbox runs with: %s", got)
+	}
+	if !strings.Contains(got, "isolated from its next boot") {
+		t.Errorf("the row does not say the next boot is isolated: %s", got)
+	}
+	if c.Network != NetIsolated {
+		t.Errorf("the boot this run asks for moved to %q, want isolated", c.Network)
+	}
+}
+
+// Where brig cannot see the sandbox that is up, the row describes the boot
+// this run asks for, as it did before. A guess about a sandbox it cannot see
+// is the claim the row exists to avoid.
+func TestInfoMakesNoClaimAboutASandboxItCannotSee(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T) *Config{
+		"no runtime": func(t *testing.T) *Config {
+			c := detachedAfterBoot(t, Options{})
+			c.Runtime = nil
+			return c
+		},
+		"no runtime, a policy attached since the boot": func(t *testing.T) *Config {
+			isolateState(t)
+			policies := t.TempDir()
+			writeTestPolicy(t, policies, "no-net")
+			t.Setenv("BRIG_POLICY_DIR", policies)
+			booted(mustLoad(t, Options{}))
+			c := loadWithPolicy(t, "no-net")
+			c.Runtime = nil
+			return c
+		},
+		"the sandbox is stopped": func(t *testing.T) *Config {
+			c := detachedAfterBoot(t, Options{})
+			rt := runningAs("isolated")
+			rt.running = false
+			c.Runtime = rt
+			return c
+		},
+		"the runtime cannot say": func(t *testing.T) *Config {
+			c := detachedAfterBoot(t, Options{})
+			rt := runningAs("isolated")
+			rt.runningErr = errors.New("cannot connect")
+			c.Runtime = rt
+			return c
+		},
+		"the session entry names another sandbox": func(t *testing.T) *Config {
+			isolateState(t)
+			if err := writeSessionIndex(map[string]sessionEntry{
+				"claude-code": {Home: t.TempDir(), Sandbox: "brig-elsewhere"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.RecordBootedNet("brig-claude-code", "shared"); err != nil {
+				t.Fatal(err)
+			}
+			c := mustLoad(t, Options{})
+			c.Runtime = runningAs("isolated")
+			return c
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := setup(t)
+			if got, want := c.networkLine(), c.Network.Line(); got != want {
+				t.Errorf("the row is %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A sandbox its policy isolated, asked for isolated while the policy is still
+// attached, runs with the posture it is asked for. The restart line does not
+// name the same posture twice as though it were a change.
+//
+// It is still restarted, because the record holds shared and the asked posture
+// is compared with the record. That predates #368 and is left alone here.
+func TestTheRestartLineKeepsTheGeneralWordingWhenThePostureIsTheSame(t *testing.T) {
+	isolateState(t)
+	policies := t.TempDir()
+	writeTestPolicy(t, policies, "no-net")
+	t.Setenv("BRIG_POLICY_DIR", policies)
+
+	booted(loadWithPolicy(t, "no-net"))
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	p.Policy = []string{"no-net"}
+	c, err := Load(p, Options{Network: "isolated"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runtime = runningAs("isolated")
+
+	got := c.networkChange()
+	if strings.Contains(got, "isolated posture and --network asks for isolated") {
+		t.Errorf("the restart line names one posture as a change: %s", got)
+	}
+	if strings.Contains(got, "started with the shared posture") {
+		t.Errorf("the restart line calls an isolated sandbox shared: %s", got)
+	}
+	if !strings.Contains(got, "different network policy") {
+		t.Errorf("the restart line lost the general wording: %s", got)
+	}
+}
+
+// A bare `brig run` after the detach. The rule keeps the posture that was
+// asked for, which is shared, and the sandbox does not keep running under
+// rules nobody applies any more, so it is restarted onto shared. The warning
+// keeps the general wording: nobody asked for a different posture.
+func TestAFlaglessRunAfterADetachRestartsOntoShared(t *testing.T) {
+	c := detachedAfterBoot(t, Options{})
+	if c.Network != NetShared {
+		t.Fatalf("a flagless run after the detach resolved %q, want shared", c.Network)
+	}
+	if c.postureChanged() {
+		t.Error("a flagless run after the detach was read as a posture change")
+	}
+
+	live := &livenessRuntime{running: true}
+	run := livenessConfig(t, live)
+	run.Runtime = &postureRuntime{livenessRuntime: live, booted: "isolated"}
+	run.Network, run.askedNetwork = NetShared, NetShared
+	run.recordedNet, run.networkSource = NetShared, "the posture this sandbox was started with"
+	var errOut bytes.Buffer
+	run.Err, run.Verbosity = &errOut, Normal
+
+	if err := run.EnsureRunning(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	if live.stops != 1 || live.boots != 1 {
+		t.Errorf("%d stops and %d boots, want one of each", live.stops, live.boots)
+	}
+	if live.spec.Net != "shared" {
+		t.Errorf("booted on %q, want shared", live.spec.Net)
+	}
+	if !strings.Contains(errOut.String(), "different network policy") {
+		t.Errorf("the warning does not use the general wording:\n%s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "asks for") {
+		t.Errorf("the warning names a posture change nobody asked for:\n%s", errOut.String())
+	}
+	if got := mustBootedNet(t, run.VMName); got != "shared" {
+		t.Errorf("the record holds %q, want shared", got)
+	}
+	// After the restart the isolated gateway is gone, so the sandbox runs
+	// shared and the row says so with no second posture.
+	if got := run.runningNet(); got != NetShared {
+		t.Errorf("after the restart the sandbox reads as %q, want shared", got)
+	}
+	if got, want := run.networkLine(), NetShared.Line(); got != want {
+		t.Errorf("after the restart the row is %q, want %q", got, want)
+	}
+}
+
+// Only an isolated gateway is visible to the runtime. Offline and isolated
+// come from the record as they are, and a shared record with no gateway to
+// contradict it stays shared. A runtime that cannot see gateways at all never
+// turns a record into isolated.
+func TestTheRunningPostureComesFromTheRecordWhenTheRuntimeCannotTell(t *testing.T) {
+	for name, rt := range map[string]runtime.Runtime{
+		"a runtime that sees nothing stale": &blindRuntime{&livenessRuntime{running: true}},
+		"a runtime that is never asked":     &livenessRuntime{running: true},
+	} {
+		for _, rec := range []Network{NetShared, NetIsolated, NetOffline} {
+			t.Run(name+", recorded "+string(rec), func(t *testing.T) {
+				c := livenessConfig(t, &livenessRuntime{running: true})
+				c.Runtime, c.recordedNet = rt, rec
+				if got := c.runningNet(); got != rec {
+					t.Errorf("runningNet = %q, want the recorded %q", got, rec)
+				}
+			})
+		}
+	}
+	c := livenessConfig(t, &livenessRuntime{running: true})
+	c.Runtime, c.recordedNet = runningAs("shared"), NetShared
+	if got := c.runningNet(); got != NetShared {
+		t.Errorf("a shared sandbox with no isolated gateway read as %q", got)
+	}
+	c.Runtime = runningAs("isolated")
+	if got := c.runningNet(); got != NetIsolated {
+		t.Errorf("a shared record behind an isolated gateway read as %q, want isolated", got)
+	}
+	c.recordedNet = ""
+	if got := c.runningNet(); got != "" {
+		t.Errorf("a sandbox with no record read as %q, want no answer", got)
+	}
+}
+
+// envelopeValue is the value of the row labelled label in a rendered envelope.
+func envelopeValue(t *testing.T, block, label string) string {
+	t.Helper()
+	for _, line := range strings.Split(block, "\n") {
+		if rest, ok := strings.CutPrefix(line, label+" "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	t.Fatalf("no %s row:\n%s", label, block)
+	return ""
 }
