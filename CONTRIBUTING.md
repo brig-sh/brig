@@ -72,6 +72,13 @@ A tag equal to the pin adds no leg, since the pinned leg already installs it.
 The pin is meant to be the newest release, and the Linux canary fails a check
 when it is not, so no leg installs the newest release on its own.
 
+The macOS leg installs the newest hull@main channel build. To run it on
+another one, pass its tag:
+
+```bash
+gh workflow run e2e.yml -f hull_channel=channel-main-0.1.0-rc31-main.20261025114854.94e458e
+```
+
 `gofmt` and `go vet` are the only static checks. The repository has no
 `golangci-lint` configuration and no lint target in the Makefile.
 
