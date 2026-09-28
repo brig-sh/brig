@@ -616,6 +616,384 @@ check_symlink() {
   rm -rf "$canary" "$proj"
 }
 
+# ---------------------------------------------------------------- fixes
+
+# ENVCHK prints each variable the credential check looks for, or UNSET.
+ENVCHK='for v in E2E_FWD E2E_SNEAKY ANTHROPIC_API_KEY; do echo "$v=${!v:-UNSET}"; done'
+
+# env_field TEXT NAME: the value ENVCHK printed for NAME.
+env_field() { echo "$1" | sed -n "s/^$2=//p" | head -n 1 | tr -d ' '; }
+
+# check_creds boots claude-code with three variables in the shell: one named
+# in BRIG_FORWARD_ENV, one named nowhere, and ANTHROPIC_API_KEY, which is
+# named but on the claude-code denylist. Only the first may reach the guest.
+check_creds() {
+  local err out fwd sneaky denied rc=0
+  export E2E_FWD="fwd-$RANDOM$RANDOM" E2E_SNEAKY="sneaky-$RANDOM$RANDOM" ANTHROPIC_API_KEY="sk-e2e-$RANDOM$RANDOM"
+  export BRIG_FORWARD_ENV="E2E_FWD ANTHROPIC_API_KEY"
+  unset BRIG_CLAUDE_CODE_FORWARD_ENV BRIG_ALLOW_DENIED BRIG_CLAUDE_CODE_ALLOW_DENIED
+  err="$(tmo 900 brig run -d claude-code@creds --mem 2048 < /dev/null 2>&1 > /dev/null)" || rc=$?
+  echo "$err"
+  out="$(gsh claude-code@creds "$ENVCHK")" || true
+  run 300 brig rm claude-code@creds || true
+  fwd="$(env_field "$out" E2E_FWD)"
+  sneaky="$(env_field "$out" E2E_SNEAKY)"
+  denied="$(env_field "$out" ANTHROPIC_API_KEY)"
+  if [ "$rc" = 0 ] && [ "$fwd" = "$E2E_FWD" ] && [ "$sneaky" = UNSET ] && [ "$denied" = UNSET ] &&
+     echo "$err" | grep -q 'not forwarding ANTHROPIC_API_KEY'; then
+    res check Credentials "Only the variables brig is told to forward reach the guest (#236)" pass \
+      "E2E_FWD, named in BRIG_FORWARD_ENV, arrived. E2E_SNEAKY, set and never named, did not. ANTHROPIC_API_KEY, named but on the claude-code denylist, did not, and brig said so"
+  else
+    res check Credentials "Only the variables brig is told to forward reach the guest (#236)" fail \
+      "run exit $rc; guest: E2E_FWD=[$fwd] E2E_SNEAKY=[$sneaky] ANTHROPIC_API_KEY=[$denied]; stderr: $(echo "$err" | grep -i forward | one_line 200)"
+  fi
+}
+
+check_agent_rm() {
+  local w f rc=0 out kept=no rc2=0 out2
+  w="$(tmo 60 brig agent export ubuntu e2e-rm --force < /dev/null 2>&1)"
+  echo "$w"
+  f="$(echo "$w" | sed -n 's/^wrote .* -> //p' | head -n 1)"
+  run 900 brig run -d e2e-rm
+  out="$(tmo 120 brig agent rm e2e-rm < /dev/null 2>&1)" || rc=$?
+  echo "agent rm with the sandbox up: exit $rc: $out"
+  [ -n "$f" ] && [ -f "$f" ] && kept=yes
+  run 300 brig rm e2e-rm || true
+  out2="$(tmo 120 brig agent rm e2e-rm < /dev/null 2>&1)" || rc2=$?
+  echo "agent rm after brig rm: exit $rc2: $out2"
+  if [ "$rc" != 0 ] && echo "$out" | grep -q 'still has sandboxes' && echo "$out" | grep -q 'brig rm e2e-rm' &&
+     [ "$kept" = yes ] && [ "$rc2" = 0 ] && [ ! -e "$f" ]; then
+    res check CLI "agent rm refuses while a sandbox of the profile exists (#367)" pass \
+      "exit $rc with brig-e2e-rm up, the file kept and brig rm e2e-rm named; after brig rm, agent rm removed $f"
+  else
+    res check CLI "agent rm refuses while a sandbox of the profile exists (#367)" fail \
+      "first rm: exit $rc, file kept: $kept: $(echo "$out" | one_line 200); second rm: exit $rc2: $(echo "$out2" | one_line 120)"
+  fi
+  [ -z "$f" ] || rm -f "$f"
+}
+
+new_policy() { tmo 60 env -u VISUAL EDITOR=true brig policy create e2e-deny --force < /dev/null; }
+
+check_policy_refusals() {
+  local vz vz_rc=0 out rc=0 bp="$SCRATCH/.e2e/badprobe"
+  new_policy
+  run 60 brig policy attach e2e-deny claude-code -n pvz
+  vz="$(tmo 120 env BRIG_HYPERVISOR=vz brig run -d claude-code@pvz --mem 2048 < /dev/null 2>&1)" || vz_rc=$?
+  echo "vz: exit $vz_rc: $vz"
+  if [ "$vz_rc" != 0 ] && echo "$vz" | grep -q 'hull on vz cannot enforce the egress policy' && [ -z "$(hull_rows)" ]; then
+    res check Policy "A policy on vz is refused before boot, naming the backend (#237)" pass "exit $vz_rc: $(echo "$vz" | one_line 200)"
+  else
+    res check Policy "A policy on vz is refused before boot, naming the backend (#237)" fail "exit $vz_rc; hull ps: [$(hull_rows | one_line 120)]; $(echo "$vz" | one_line 300)"
+  fi
+  run 60 brig policy detach e2e-deny claude-code -n pvz || true
+  tmo 60 brig rm claude-code@pvz < /dev/null > /dev/null 2>&1 || true
+
+  # A hull whose network-gateway --help fails, and the real hull for the rest.
+  mkdir -p "$bp"
+  cat > "$bp/hull" << EOS
+#!/bin/bash
+if [ "\$1" = network-gateway ] && [ "\${2:-}" = --help ]; then
+  echo "e2e: this hull answers no --help" >&2
+  exit 1
+fi
+exec "$BIN/hull" "\$@"
+EOS
+  chmod +x "$bp/hull"
+  run 60 brig policy attach e2e-deny claude-code -n pprobe
+  out="$(tmo 900 env BRIG_RUNTIME_BIN="$bp/hull" brig run -d claude-code@pprobe --mem 2048 < /dev/null 2>&1)" || rc=$?
+  echo "failing probe: exit $rc: $out"
+  if [ "$rc" != 0 ] && echo "$out" | grep -q 'whether hull on hvi enforces the egress policy is unknown' && [ -z "$(hull_rows)" ]; then
+    res check Policy "A policy boot is refused when the gateway probe fails (#171)" pass "exit $rc, no instance: $(echo "$out" | grep 'is unknown' | one_line 240)"
+  else
+    res check Policy "A policy boot is refused when the gateway probe fails (#171)" fail "exit $rc; hull ps: [$(hull_rows | one_line 120)]; $(echo "$out" | one_line 300)"
+  fi
+  run 60 brig policy detach e2e-deny claude-code -n pprobe || true
+  tmo 60 brig rm claude-code@pprobe < /dev/null > /dev/null 2>&1 || true
+  rm -rf "$bp"
+}
+
+check_posture_info() {
+  local before after want="isolated (a network of this sandbox's own); shared from its next boot"
+  new_policy
+  run 60 brig policy attach e2e-deny claude-code -n pinfo
+  # The profile asks for isolated. #368 is a shared boot a policy narrowed.
+  run 900 brig run -d claude-code@pinfo --network shared --mem 2048
+  before="$(tmo 60 brig info claude-code@pinfo < /dev/null 2> /dev/null | grep -E '^NETWORK' || true)"
+  run 60 brig policy detach e2e-deny claude-code -n pinfo
+  after="$(tmo 60 brig info claude-code@pinfo < /dev/null 2> /dev/null | grep -E '^NETWORK' || true)"
+  echo "with the policy: $before"
+  echo "after detach: $after"
+  run 300 brig rm claude-code@pinfo || true
+  if echo "$before" | grep -q isolated && echo "$after" | grep -qF "$want"; then
+    res check Network "brig info names the posture a running sandbox has (#368)" pass \
+      "isolated by a policy, then the policy detached: $(echo "$after" | one_line 160)"
+  else
+    res check Network "brig info names the posture a running sandbox has (#368)" fail \
+      "with the policy: [$(echo "$before" | one_line 120)]; after detach: [$(echo "$after" | one_line 160)]"
+  fi
+}
+
+GWSOCK="$HOME/.brig/gateway-198-18-0-0_24.sock"
+
+# gw_pids: the shared gateways serving this scratch HOME's socket, as pid and
+# arguments.
+gw_pids() { pgrep -fl "network-gateway --socket $GWSOCK " 2> /dev/null || true; }
+
+gone() { ! kill -0 "$1" 2> /dev/null; }
+
+check_shared_gateway() {
+  local before after old rc=0 t port="" p now waited=0
+  run 900 brig run -d ubuntu@gw1 --network shared
+  before="$(gw_pids)"
+  run 300 brig rm ubuntu@gw1 || true
+  run 300 brig rm --all -y || true
+  sleep 2
+  after="$(gw_pids)"
+  echo "with a sandbox: [$before]; after rm --all: [$after]"
+  if [ -n "$before" ] && [ -z "$after" ]; then
+    res check Network "rm --all stops the shared gateway once no sandbox is on it (#366)" pass \
+      "pid $(echo "$before" | awk '{ print $1 }' | paste -s -d, -) served the sandbox; after brig rm and rm --all, no gateway is left"
+  else
+    res check Network "rm --all stops the shared gateway once no sandbox is on it (#366)" fail \
+      "with a sandbox: [$(echo "$before" | one_line 160)]; after rm --all: [$(echo "$after" | one_line 160)]"
+  fi
+
+  # A gateway started the way brig 0.2.0 started it, with no --api, so it
+  # cannot publish a port. It runs detached, so launchd reaps it.
+  (nohup hull network-gateway --socket "$GWSOCK" --qemu-socket "$GWSOCK.qemu" \
+    --subnet 198.18.0.0/24 --gateway-ip 198.18.0.1 > "$LOGS/gateway-0.2.0.log" 2>&1 < /dev/null &
+   echo $! > "$SCRATCH/.e2e/old-gateway.pid")
+  old="$(cat "$SCRATCH/.e2e/old-gateway.pid")"
+  while [ ! -S "$GWSOCK.qemu" ] && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
+  echo "0.2.0-style gateway: pid $old; $(gw_pids)"
+  for p in $(seq 28480 28499); do
+    lsof -nP -iTCP:"$p" -sTCP:LISTEN > /dev/null 2>&1 || { port=$p; break; }
+  done
+  [ -n "$port" ] || { res check Network "A boot replaces the gateway an older brig left (#366)" skip "no free port in 28480-28499"; kill "$old" 2> /dev/null || true; return 0; }
+  run 900 brig run -d ubuntu@gw2 --network shared --publish "$port:8000" || rc=$?
+  gsh ubuntu@gw2 "$SRV" > /dev/null || true
+  t="$(first_answer "$port" 60)"
+  now="$(gw_pids)"
+  if [ "$rc" = 0 ] && gone "$old" && [ -n "$t" ] && echo "$now" | grep -q -- '--api'; then
+    res check Network "A boot replaces the gateway an older brig left (#366)" pass \
+      "pid $old, started without --api, was stopped; the new gateway has --api, and 127.0.0.1:$port answered after $t s"
+  else
+    res check Network "A boot replaces the gateway an older brig left (#366)" fail \
+      "run exit $rc; old pid $old gone: $(gone "$old" && echo yes || echo no); gateways: [$(echo "$now" | one_line 200)]; port answered after: [$t]"
+  fi
+  run 300 brig rm ubuntu@gw2 || true
+  run 300 brig rm --all -y || true
+  kill "$old" 2> /dev/null || true
+}
+
+# fetch_txt IP: guest text that fetches http://IP:8000/ with bash alone. The
+# ubuntu image has no curl.
+fetch_txt() { printf 'timeout 10 bash -c %q' "exec 3<>/dev/tcp/$1/8000; printf 'GET / HTTP/1.0\r\n\r\n' >&3; cat <&3"; }
+
+# guest_fetch REF IP SECONDS: fetches http://IP:8000/ from REF until it
+# answers or SECONDS pass, and prints the last answer. A fresh guest can wait
+# seconds for entropy, and perl waits with it before it listens.
+guest_fetch() {
+  local ref=$1 ip=$2 s=$3 t0 out
+  t0="$(now)"
+  while :; do
+    out="$(gsh "$ref" "$(fetch_txt "$ip")")" || true
+    if echo "$out" | grep -q hello-from-guest ||
+       ! awk -v t="$(dt "$t0" "$(now)")" -v m="$s" 'BEGIN { exit !(t < m) }'; then
+      echo "$out"
+      return 0
+    fi
+    sleep 2
+  done
+}
+
+check_reach() {
+  local hv out rc refused=0 ev="" ip_a ctl got
+  for hv in vz qemu; do
+    rc=0
+    out="$(tmo 120 env BRIG_HYPERVISOR=$hv brig run -d "ubuntu@iso-$hv" --network isolated < /dev/null 2>&1)" || rc=$?
+    echo "$hv: exit $rc: $out"
+    if [ "$rc" != 0 ] && echo "$out" | grep -q 'separate hosts' && [ -z "$(hull_rows)" ]; then
+      refused=$((refused + 1))
+    fi
+    ev+="$hv: exit $rc; "
+    tmo 60 brig rm "ubuntu@iso-$hv" < /dev/null > /dev/null 2>&1 || true
+  done
+  if [ "$refused" = 2 ]; then
+    res check Network "vz and qemu refuse --network isolated and point at separate hosts (#364)" pass "$ev$(echo "$out" | one_line 200)"
+  else
+    res check Network "vz and qemu refuse --network isolated and point at separate hosts (#364)" fail "$refused of 2 named separate hosts; $ev$(echo "$out" | one_line 200)"
+  fi
+
+  # The profile asks for isolated, so shared is named.
+  run 900 brig run -d ubuntu@ra --network shared
+  run 900 brig run -d ubuntu@rb --network shared
+  gsh ubuntu@ra "$SRV" > /dev/null || true
+  ip_a="$(hull_rows | awk '$1 == "brig-ubuntu-ra" { print $5 }')"
+  ctl="$(guest_fetch ubuntu@ra 127.0.0.1 90)"
+  got="$(guest_fetch ubuntu@rb "$ip_a" 30)"
+  run 300 brig rm ubuntu@ra || true
+  run 300 brig rm ubuntu@rb || true
+  if echo "$got" | grep -q hello-from-guest; then
+    res check Network "Shared sandboxes on hvi reach each other, as docs/security.md says (#364)" pass \
+      "ubuntu@rb fetched http://$ip_a:8000/, which only ubuntu@ra serves"
+  elif ! echo "$ctl" | grep -q hello-from-guest; then
+    res check Network "Shared sandboxes on hvi reach each other, as docs/security.md says (#364)" fail \
+      "the listener in ubuntu@ra did not answer from inside it, so nothing was measured: $(echo "$ctl" | one_line 160)"
+  else
+    res check Network "Shared sandboxes on hvi reach each other, as docs/security.md says (#364)" fail \
+      "ubuntu@ra answered itself, and ubuntu@rb got nothing from $ip_a:8000, which docs/security.md says it reaches: $(echo "$got" | one_line 160)"
+  fi
+}
+
+# check_cosign_hang points DOCKER_CONFIG at a credsStore helper that never
+# answers, the shape Docker Desktop leaves when it is installed and not
+# running. cosign asks that helper for registry credentials and hangs.
+# claude-code, because brig verifies only the images brig-sh signs.
+check_cosign_hang() {
+  local d="$SCRATCH/.e2e/dockercfg" out rc=0 t0 t1 left ls
+  if ! command -v cosign > /dev/null; then
+    res check Verify "A hung credential helper is named, and killed with cosign (#365)" skip "no cosign on this Mac, so brig verifies nothing here"
+    return 0
+  fi
+  rm -rf "$d"
+  mkdir -p "$d/bin"
+  printf '{"credsStore": "e2ehang"}\n' > "$d/config.json"
+  printf '#!/bin/sh\nexec sleep 600\n' > "$d/bin/docker-credential-e2ehang"
+  chmod +x "$d/bin/docker-credential-e2ehang"
+  t0="$(now)"
+  out="$(PATH="$d/bin:$PATH" DOCKER_CONFIG="$d" BRIG_VERIFY=require tmo 300 brig run -d claude-code@cos --mem 2048 < /dev/null 2>&1)" || rc=$?
+  t1="$(now)"
+  echo "brig run claude-code@cos: exit $rc after $(dt "$t0" "$t1") s: $out"
+  sleep 2
+  left="$(pgrep -fl 'docker-credential-e2ehang' || true)"
+  ls="$(tmo 30 brig ls -q < /dev/null 2> /dev/null | grep -v '^(none' || true)"
+  if [ "$rc" = 5 ] && echo "$out" | grep -q 'It waits on docker-credential-e2ehang' && [ -z "$left" ] && [ -z "$ls" ]; then
+    res check Verify "A hung credential helper is named, and killed with cosign (#365)" pass \
+      "exit 5 after $(dt "$t0" "$t1") s under BRIG_VERIFY=require, naming docker-credential-e2ehang; no helper process and no sandbox left"
+  else
+    res check Verify "A hung credential helper is named, and killed with cosign (#365)" fail \
+      "exit $rc after $(dt "$t0" "$t1") s; helpers left: [$(echo "$left" | one_line 120)]; brig ls: [$ls]; $(echo "$out" | one_line 300)"
+  fi
+  pkill -f 'docker-credential-e2ehang' 2> /dev/null || true
+  tmo 60 brig rm claude-code@cos < /dev/null > /dev/null 2>&1 || true
+  rm -rf "$d"
+}
+
+# boot_try MODE REF [ENV...]: one brig run -d REF under BRIG_VERIFY=MODE, with
+# ENV added. It prints what brig said, removes the sandbox and returns brig's
+# exit status.
+boot_try() {
+  local mode=$1 ref=$2 out rc=0
+  shift 2
+  out="$(env BRIG_VERIFY="$mode" "$@" perl -e 'alarm shift @ARGV; exec @ARGV or die "exec: $!"' 900 \
+    brig run -d "$ref" --mem 2048 < /dev/null 2>&1)" || rc=$?
+  printf '$ BRIG_VERIFY=%s %s brig run -d %s\n%s\n[exit %s]\n' "$mode" "$*" "$ref" "$out" "$rc" >&2
+  tmo 120 brig rm "$ref" < /dev/null > /dev/null 2>&1 || true
+  printf '%s\n' "$out"
+  return "$rc"
+}
+
+BOOT_DIGEST_CHECKS=(
+  "A first fetch is pinned to the digest that verified (#403)"
+  "A changed kernel where brig fetches refuses under warn, and is not fetched over (#234)"
+  "A named directory that differs refuses under require (#234)"
+  "An older bundle where brig fetches is fetched again by digest (#403)"
+)
+
+# An older published bundle for the re-fetch case. Any tag the moving
+# darwin-arm64 tag has left behind will do.
+OLD_BUNDLE=ghcr.io/nofireai/hull-assets:0.1.6-darwin-arm64
+
+# check_boot_digests runs the boot-asset digest checks against a scratch
+# directory that HULL_BOOT_ASSETS hands hull, so hull's own store is left
+# alone. brig counts that directory as its own choice, the one it fetches into.
+check_boot_digests() {
+  local a="$SCRATCH/.e2e/assets-bd" n="$SCRATCH/.e2e/assets-named" head name
+  head="$(git -C "$REPO" rev-parse --short HEAD)"
+  if ! command -v cosign > /dev/null; then
+    for name in "${BOOT_DIGEST_CHECKS[@]}"; do
+      res check Verify "$name" skip "no cosign on this Mac, so brig verifies nothing here"
+    done
+    return 0
+  fi
+  if ! grep -q 'func (c \*Config) checkBootDigests' "$REPO/internal/wrap/verify.go"; then
+    for name in "${BOOT_DIGEST_CHECKS[@]}"; do
+      res check Verify "$name" skip "brig at $head does not compare the boot assets with the bundle"
+    done
+    return 0
+  fi
+  local pinned=false
+  if grep -q 'func (c \*Config) refetchBootAssets' "$REPO/internal/wrap/verify.go"; then
+    pinned=true
+  fi
+  # shellcheck disable=SC2064
+  trap "rm -rf '$a' '$n'" EXIT
+  rm -rf "$a" "$n"
+  mkdir -p "$a"
+
+  local r0=0 o0 ref0
+  o0="$(boot_try require claude-code@bd HULL_BOOT_ASSETS="$a")" || r0=$?
+  ref0="$(field ref < "$a/provenance.json" 2> /dev/null || true)"
+  if ! $pinned; then
+    res check Verify "${BOOT_DIGEST_CHECKS[0]}" skip "brig at $head fetches the boot bundle by its tag"
+  elif [ "$r0" = 0 ] && echo "$o0" | grep -q 'image and boot assets verified' && [ "${ref0#*@sha256:}" != "$ref0" ]; then
+    res check Verify "${BOOT_DIGEST_CHECKS[0]}" pass \
+      "an empty directory under require: exit 0, image and boot assets verified; hull's record names $ref0"
+  else
+    res check Verify "${BOOT_DIGEST_CHECKS[0]}" fail "exit $r0; hull's record names [$ref0]; $(echo "$o0" | one_line 300)"
+  fi
+
+  local w1=0 o1 before after
+  if [ ! -f "$a/Image" ]; then
+    res check Verify "${BOOT_DIGEST_CHECKS[1]}" fail "the first fetch left no Image in $a: $(cd "$a" && printf '%s ' *)"
+  else
+    printf 'x' >> "$a/Image"
+    before="$(shasum -a 256 "$a/Image" | cut -c1-64)"
+    o1="$(boot_try warn ubuntu@bd HULL_BOOT_ASSETS="$a")" || w1=$?
+    after="$(shasum -a 256 "$a/Image" | cut -c1-64)"
+    if [ "$w1" = 5 ] && echo "$o1" | grep -q 'are not the bundle that verified' && [ "$before" = "$after" ]; then
+      res check Verify "${BOOT_DIGEST_CHECKS[1]}" pass \
+        "one byte appended to Image: exit 5 under warn, and the file is still the changed one. $(echo "$o1" | grep refusing | one_line 200)"
+    else
+      res check Verify "${BOOT_DIGEST_CHECKS[1]}" fail \
+        "exit $w1; Image ${before:0:12} before, ${after:0:12} after; $(echo "$o1" | one_line 300)"
+    fi
+  fi
+
+  local r2=0 o2
+  cp -R "$a" "$n"
+  o2="$(boot_try require claude-code@bd BRIG_BOOT_ASSETS="$n")" || r2=$?
+  if [ "$r2" = 5 ] && echo "$o2" | grep -q 'BRIG_BOOT_ASSETS names' && echo "$o2" | grep -q 'BRIG_VERIFY=require'; then
+    res check Verify "${BOOT_DIGEST_CHECKS[2]}" pass "a named copy with the changed Image: exit 5 under require, before hull"
+  else
+    res check Verify "${BOOT_DIGEST_CHECKS[2]}" fail "exit $r2; $(echo "$o2" | one_line 300)"
+  fi
+
+  if ! $pinned; then
+    res check Verify "${BOOT_DIGEST_CHECKS[3]}" skip "brig at $head refuses an older bundle and leaves the files to delete"
+    return 0
+  fi
+  local w3=0 o3 old new ref3
+  rm -rf "$a"
+  mkdir -p "$a"
+  HULL_BOOT_ASSETS="$a" run 600 hull assets pull "$OLD_BUNDLE" || true
+  old="$(field digest < "$a/provenance.json" 2> /dev/null || true)"
+  o3="$(boot_try warn ubuntu@bd HULL_BOOT_ASSETS="$a")" || w3=$?
+  new="$(field digest < "$a/provenance.json" 2> /dev/null || true)"
+  ref3="$(field ref < "$a/provenance.json" 2> /dev/null || true)"
+  if [ -n "$old" ] && [ "$old" = "$new" ] && [ "$w3" = 0 ]; then
+    res check Verify "${BOOT_DIGEST_CHECKS[3]}" skip "the moving tag still names $OLD_BUNDLE ($old)"
+  elif [ "$w3" = 0 ] && [ -n "$old" ] && [ "$new" != "$old" ] && [ "${ref3#*@sha256:}" != "$ref3" ] &&
+       echo "$o3" | grep -q 'boot assets verified'; then
+    res check Verify "${BOOT_DIGEST_CHECKS[3]}" pass \
+      "$OLD_BUNDLE (${old:0:19}) in the directory: warn boots, boot assets verified, and hull's record now names $ref3"
+  else
+    res check Verify "${BOOT_DIGEST_CHECKS[3]}" fail \
+      "exit $w3; record before [${old:0:19}], after [${new:0:19}], ref [$ref3]; $(echo "$o3" | one_line 300)"
+  fi
+}
+
 # ---------------------------------------------------------------- main
 
 say "brig e2e $LEVEL on macOS, results in $RESULTS"
@@ -642,6 +1020,14 @@ if [ -f "$OUT/setup.ok" ]; then
   block postures check_postures
   block ports check_ports
   block symlink check_symlink
+  block creds check_creds
+  block agent-rm check_agent_rm
+  block policy check_policy_refusals
+  block posture-info check_posture_info
+  block gateway check_shared_gateway
+  block reach check_reach
+  block cosign check_cosign_hang
+  block boot-digests check_boot_digests
 else
   say "setup failed, so no gate ran"
 fi
