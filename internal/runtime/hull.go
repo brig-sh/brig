@@ -367,6 +367,7 @@ func (h *hull) Run(spec RunSpec) error {
 	// than booting a sandbox whose network silently swallows every
 	// connection. See gateway.go.
 	gatewaySock, gatewayCidr := "", ""
+	usedIsolated := false
 	if hv == "hvi" && net != "none" {
 		// hull takes the socket and the address together and configures the
 		// guest statically, so both are ours to assign.
@@ -382,7 +383,7 @@ func (h *hull) Run(spec RunSpec) error {
 			if err != nil {
 				return err
 			}
-			gatewaySock, gatewayCidr = sock, sandboxCIDR(index)
+			gatewaySock, gatewayCidr, usedIsolated = sock, sandboxCIDR(index), true
 		} else {
 			sock, release, err := ensureGateway(h.bin)
 			if err != nil {
@@ -433,6 +434,16 @@ func (h *hull) Run(spec RunSpec) error {
 		// shared gateway they would hold the host ports until it restarts.
 		withdrawPublications(spec.Name)
 		return said.explain(fmt.Errorf("%s run: %w", h.bin, err))
+	}
+	// A guest that is not behind this sandbox's isolated gateway leaves nothing
+	// for that gateway to serve. One still up here outlived an earlier
+	// instance whose stop or removal failed, and NetworkStale would read it as
+	// the posture of this guest, so brig info named `isolated` for a sandbox
+	// with no isolation. After the boot rather than before: a `hull run` that
+	// fails can be one refused because the old instance still holds the name,
+	// and that guest is still behind the gateway.
+	if !usedIsolated {
+		shutDownGateway(spec.Name)
 	}
 	return nil
 }
@@ -1053,7 +1064,8 @@ func (h *hull) PruneSharedNetwork() bool {
 // and taking the network out from under it would turn one failure into two --
 // but asking `hull ps` to confirm would put another process on the path of
 // every stop to answer a question the exit status already answers. A gateway
-// left behind by the failed case is what PruneNetworks is for.
+// left behind by the failed case is stopped by the next boot of the sandbox
+// that is not isolated (see Run), or by PruneNetworks once the sandbox is gone.
 func releaseGateway(name string, err error) {
 	if err != nil {
 		return

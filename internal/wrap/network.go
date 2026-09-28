@@ -205,7 +205,10 @@ func (c *Config) recordPosture() {
 // whether the sandbox is running and reports the next boot when it is not.
 // networkChange and keepsPosture are reached only for a sandbox that is
 // running. The next run finds the dead sandbox not running and removes it,
-// and hull's Remove takes the gateway down once `hull rm` succeeds.
+// and hull's Remove takes the gateway down once `hull rm` succeeds. When a
+// stop or a removal fails and leaves the gateway up, hull's Run takes it down
+// once the sandbox boots on another network, so a gateway still up under a
+// running shared sandbox is one it is behind.
 //
 // No record, no answer. That is a sandbox an older release booted, or one
 // whose session entry names another sandbox, and rememberedNetwork hides both
