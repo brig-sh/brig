@@ -474,7 +474,10 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `x is already declared inline in y's policy: list, which binds every run already. Nothing was written` | `attach` naming a policy the profile's own `policy:` list already declares |
 | `x is declared inline in y's policy: list, not attached; edit the profile directly to remove it` | `detach` naming a policy the profile's own `policy:` list declares, without `-n` |
 | `x is bound to y. Detach it first, or pass --force to remove it anyway` | `rm` on a policy attached to a profile or a session (a policy declared only inline says "edit the profile's policy: list" instead) |
-| ``a policy applies to this sandbox, but <bin> cannot enforce one (its network-gateway has no --egress-default). Upgrade the runtime, or detach the policy`` | the runtime is older than the hull that added the `--egress-*` gateway flags |
+| `a policy applies to this sandbox, and hull on vz cannot enforce the egress policy: …` | a policy on a run path whose answer is `cannot enforce`: hull's `vz` or `qemu` backend, nerdctl or docker. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
+| `a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of <bin> has no --egress-default. Upgrade the runtime, or detach the policy` | the runtime is older than the hull that added the `--egress-*` gateway flags |
+| ``a policy applies to this sandbox, and whether hull on hvi enforces the egress policy is unknown: the probe `<bin> network-gateway --help` failed: …`` | the probe of the runtime did not run, exited non-zero, or gave no answer within 30 seconds |
+| `a policy applies to this sandbox, and whether hull on krun enforces the egress policy is unknown: brig holds no answer for this run path. Run it on hull's hvi backend (BRIG_HYPERVISOR=hvi), or detach the policy` | `BRIG_HYPERVISOR` names a backend brig holds no record for, such as `krun`. Brig refuses the run instead of guessing |
 
 ## The default is no policy at all
 
@@ -504,6 +507,24 @@ Exactly one backend can enforce an egress policy: hull's `hvi` backend, at
 the user-mode network gateway Brig gives that sandbox. `vz` and `qemu` take
 their network from vmnet, and every Linux runtime takes its network from
 the container network. Neither of those is something Brig filters.
+
+Brig holds one answer for each run path, a runtime with one backend. The
+answer is `enforced`, `cannot enforce` or `unknown`, and it comes from one
+table in `internal/runtime/capability.go`. On `hvi` the gateway probe
+confirms the table's answer or overturns it:
+
+| Run path | Egress policy | Why |
+|---|---|---|
+| hull on `hvi` | `enforced` | the rules go on the gateway that is the sandbox's only way out. The gateway probe confirms it before Brig starts that gateway |
+| hull on `vz` | `cannot enforce` | vmnet, which Brig does not filter |
+| hull on `qemu` | `cannot enforce` | vmnet, which Brig does not filter |
+| nerdctl or docker, on any shim | `cannot enforce` | nothing reads the rules into the run, and the container network is not filtered |
+| hull on any other backend | `unknown` | Brig holds no answer for it |
+
+Brig boots a policy-bound run only on `enforced`. On `cannot enforce` or
+`unknown` it refuses, and the refusal names the property, the runtime and
+the backend. A run with no policy asks nothing, and a run under
+`--network offline` asks nothing either.
 
 On the `hvi` backend, a boot reads every policy bound to the run and puts
 the rules on the network gateway it gives that sandbox. That gateway is the
@@ -539,13 +560,14 @@ $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
 note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig run claude
-brig: a policy applies to this sandbox, but hull cannot enforce one (its network-gateway has no --egress-default). Upgrade the runtime, or detach the policy -- brig will not boot a sandbox that reports a policy nothing enforces
+brig: a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of /opt/homebrew/bin/hull has no --egress-default. Upgrade the runtime, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```
 
-A probe that fails refuses the boot too. That covers a binary that does
-not run, a non-zero exit, and no answer within 30 seconds. A non-zero exit
-refuses even when the help text lists `--egress-default`. The refusal names
-the binary, the probe command and its error.
+A probe that fails answers `unknown`, and Brig refuses the boot on that
+too. That covers a binary that does not run, a non-zero exit, and no answer
+within 30 seconds. A non-zero exit refuses even when the help text lists
+`--egress-default`. The refusal names the binary, the probe command and its
+error.
 
 Binding a policy has these properties:
 

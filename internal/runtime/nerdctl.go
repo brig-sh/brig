@@ -261,10 +261,11 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 			"display on either driver (%s here); run it on macOS, where hull's vz backend can show it",
 			n.driver())
 	}
-	if spec.Egress.Filtered() && spec.Net != "none" {
-		return fmt.Errorf("a policy applies to this sandbox, and brig enforces one at the " +
-			"user-mode network gateway on macOS; there is no equivalent behind this runtime " +
-			"yet, so the rules would not be enforced here. Detach the policy to run it")
+	// Named by the binary in hand and the shim the run uses, so the refusal
+	// says which, though the answer is the same on every shim. See
+	// capability.go.
+	if err := requireEgress(spec, RunPath{n.driver(), containerdRuntime()}); err != nil {
+		return err
 	}
 	if len(spec.Publish) > 0 && spec.Net == "none" {
 		return offlinePublishError(spec.Publish)

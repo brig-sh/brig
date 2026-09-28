@@ -454,13 +454,11 @@ func supports(spec RunSpec, hv string) error {
 	// reports a policy and enforces nothing -- worse than no policy, because
 	// someone would rely on it.
 	//
-	// Except with no network at all, which every rule set is satisfied by. An
-	// offline sandbox reaches nothing, so refusing one for carrying a policy
-	// would be refusing the stricter posture for not being the weaker one.
-	if spec.Egress.Filtered() && hv != "hvi" && spec.Net != "none" {
-		return fmt.Errorf("a policy applies to this sandbox, and brig enforces one at the "+
-			"user-mode network gateway that only the hvi backend uses (BRIG_HYPERVISOR is %q); "+
-			"run it on hvi, or detach the policy", hv)
+	// The answer comes from the contract, so this and the nerdctl refusal
+	// read one table. A backend the table does not know answers unknown and
+	// is refused too. See capability.go.
+	if err := requireEgress(spec, RunPath{"hull", hv}); err != nil {
+		return err
 	}
 	// Published on the gateway, which is the hvi backend's alone. vz takes its
 	// network from vmnet, where brig has nothing to ask. Refused rather than

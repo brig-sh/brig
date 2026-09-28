@@ -412,19 +412,23 @@ func gatewayEnforces(bin string) error {
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
 	}
+	// The table answers enforced for hvi, and this is where that answer
+	// meets the binary that starts the gateway. A probe that failed confirms
+	// neither answer, so it is unknown. A gateway that runs and lacks the
+	// flag is known not to enforce.
+	hvi := RunPath{"hull", "hvi"}
 	if err != nil {
-		return fmt.Errorf("a policy applies to this sandbox, but the probe of %s failed, "+
-			"so nothing confirms it enforces one: `%s`: %v. Fix the runtime, or detach "+
-			"the policy. brig will not boot a sandbox under a policy nothing confirmed "+
-			"is enforced", bin, probe, err)
+		return &CapabilityError{Property: EgressPolicy, Path: hvi, State: Unknown,
+			Why:    fmt.Sprintf("the probe `%s` failed", probe),
+			Remedy: "Fix the runtime, or detach the policy",
+			Err:    err}
 	}
 	if strings.Contains(string(out), "--egress-default") {
 		return nil
 	}
-	return fmt.Errorf("a policy applies to this sandbox, but %s cannot enforce one "+
-		"(its network-gateway has no --egress-default). Upgrade the runtime, or detach "+
-		"the policy -- brig will not boot a sandbox that reports a policy nothing "+
-		"enforces", bin)
+	return &CapabilityError{Property: EgressPolicy, Path: hvi, State: CannotEnforce,
+		Why:    fmt.Sprintf("the network-gateway of %s has no --egress-default", bin),
+		Remedy: "Upgrade the runtime, or detach the policy"}
 }
 
 // args is the policy as the gateway's command line takes it. Empty when no

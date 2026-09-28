@@ -133,10 +133,11 @@ store, so Brig pins the image it verified. An older one boots the tag,
 and Brig says so. An unreadable answer counts as pinning.
 `network-gateway --help` is read for one word, `--egress-default`,
 before a sandbox carrying a policy is booted. A gateway that does not
-take the flag drops the rules on the floor, so Brig refuses the run
-instead. A probe that fails confirms nothing, so Brig refuses the run then
-too: the binary does not run, it exits non-zero, or it gives no answer
-within 30 seconds. A sandbox with no policy runs no probe.
+take the flag drops the rules on the floor, so the answer is `cannot
+enforce` and Brig refuses the run. A probe that fails confirms nothing, so
+the answer is `unknown` and Brig refuses the run then too: the binary does
+not run, it exits non-zero, or it gives no answer within 30 seconds. A
+sandbox with no policy runs no probe.
 
 Brig picks that subnet from 198.18.0.0/15, the range RFC 2544 reserves
 for network benchmarking. It is never routed on the public internet and
@@ -300,6 +301,18 @@ build from that branch too.
 the host kernel. That is the weaker boundary, the envelope's `ISOLATION` row
 says which one a run got, and `docs/security.md` says what the weaker one
 costs.
+
+**Each run path**, a runtime with one backend, answers one capability
+question before a run that carries an egress policy: does it enforce the
+policy. The answer is `enforced`, `cannot enforce` or `unknown`, and it
+comes from one table, shown in
+[docs/policies.md](policies.md#where-a-policy-is-enforced-and-where-it-is-not).
+hull on `hvi` answers `enforced` as long as its `network-gateway --help`
+exits zero within 30 seconds and lists `--egress-default`. hull on `vz`
+and `qemu`, and nerdctl or docker on any shim, answer `cannot enforce` and
+run no probe. hull on a backend the table does not name answers `unknown`.
+Brig boots a policy-bound run only on `enforced`, and the refusal names
+the property, the runtime and the backend.
 
 ### Versions and pins
 
