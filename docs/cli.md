@@ -225,6 +225,138 @@ command restarts the sandbox onto it.
 secret marked `required: false` prints a warning, and the command still
 exits `0`.
 
+### `brig plan`
+
+```bash
+brig plan claude
+brig plan claude ~/src/demo
+brig plan claude@refactor --json
+```
+
+Prints the permissions of a run without booting anything and without
+opening a secret. The plan has the guest home and the project with
+their mode and guest path, the host directories `--skills` copies into the
+guest home, the network posture, every published port, every bound policy,
+the merged egress rules, the limits, the image, the verification mode, the
+runtime and its backend, and every credential with how it reaches the guest
+and where its value comes from.
+
+`plan` reads the run line the way `brig run` does: a project after the ref,
+`--no-project`, and the run-line flags that shape a run. So the first
+`brig run claude ~/src/demo` can be planned before it happens. A project
+directory that `brig run` would refuse to mount fails the plan the same way.
+
+When `brig run` would refuse the run before it starts anything, the plan
+opens with a `REFUSED` row that carries the run's own message, and `--json`
+carries the same message as `refused.reason`. The plan sees these refusals:
+
+- a remembered project reached through a symlink;
+- a sandbox the runtime holds whose network brig cannot determine;
+- a hypervisor this host cannot boot, such as `hvi` on macOS 14;
+- what the backend cannot honor: a policy or a published port it cannot
+  enforce, an isolated network on `vz` or `qemu`, or a graphical profile on
+  a backend with no display.
+
+The plan still prints, and `brig plan` still exits `0`, so a script reads
+`refused` rather than the exit code. With no runtime on PATH the backend is
+not asked, and `runtime.available` is `false`. A required secret missing from
+the store also stops the run, with exit `6`. The plan marks that credential
+`unresolved` and `required` rather than `refused`.
+
+Some refusals are not in the plan, because the plan does not ask:
+
+- A session name another session already owns. The run checks it after the
+  first two checks above and before the last two, and the check writes the
+  name down, which a plan must not do. When a name collides and one of the
+  last two checks would refuse too, the run reports the collision and the
+  plan reports the other refusal.
+- Refusals at boot: an image that fails verification, and, on `hvi` under a
+  policy, a network gateway that does not confirm it can enforce the policy.
+  brig asks the runtime about the gateway only when it starts one.
+
+It reads the secret store the way `brig secret ls` does, by name. A secret
+missing from the store is marked `unresolved`, and the command still exits
+`0`. A store it cannot list marks a credential `unknown` when nothing later in
+its chain has a value. A credential the run drops at the denylist, or an
+unresolved secret-manager reference in the shell, is marked `withheld`.
+
+A listing reads names, not values, so a credential `resolved` from the store
+means the store lists the name, and nothing more. The run reads the value,
+and that read can still fail where the listing did not:
+
+- A value another tool emptied. brig refuses to store an empty value, so
+  only another tool leaves one. The run does not forward it. It moves on to
+  the next source in the chain, or, when the secret is the last one, prints
+  a warning that names it.
+- A damaged item, such as a macOS keychain item whose sealed half is gone.
+- A keychain or keyring prompt you deny.
+- A Linux keyring collection that is locked.
+
+On the last three, the run stops with exit `6` for a required secret and
+drops an optional one with a warning.
+
+With no policy bound, `POLICY` reads `(none)` and `noPolicy` is `true`.
+
+The last row is a digest of the plan. It is `sha256:` over the `data` object
+with `digest` set to the empty string, in the compact encoding Go's
+`encoding/json` writes: the fields in the order of the table below, no
+whitespace, non-ASCII text as UTF-8, and `<`, `>` and `&` escaped as
+`\u003c`, `\u003e` and `\u0026`. Every list in it is sorted, so the digest is
+the same for the same run and changes when any field does. To check one,
+encode `data` that way and hash it. Python's
+`json.dumps(data, separators=(",", ":"), ensure_ascii=False)` gives the same
+bytes when no string in it holds `<`, `>`, `&`, U+2028 or U+2029.
+
+The digest covers every field, the sentences included: `isolation`,
+`network`, `refused.reason`, each credential's `reason`, and `runtime.bin`. A
+release that rewords one of them moves the digest with no permission
+changed.
+
+`brig plan --json` prints `kind: Plan`. Its `network`, `image.ref` and
+`image.pull` are the same values `brig info --json` prints. Its
+`argvExposed` has the same names as info's, sorted, where info keeps the
+order the run adds them in: the order of a profile's bindings is not a
+permission, so it stays out of the digest. The `data` fields, in order:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session` | string, omitted for an unnamed run | the session name, as typed |
+| `profile` | string | the profile the ref resolved to |
+| `sandbox` | string | the sandbox name |
+| `refused` | object, omitted when nothing refuses the run | `reason`: the message `brig run` prints when it refuses this run |
+| `runtime` | object | `kind`, `bin` and `available`, as in `brig info --json`, and `backend`: the hypervisor the profile or `BRIG_HYPERVISOR` names, omitted for the runtime's own default |
+| `isolation` | string | what the sandbox stands on, as a sentence |
+| `home` | mount | the guest home |
+| `project` | mount, omitted when the run has none | the project |
+| `projectRefused` | string, omitted when nothing was refused | why the project this session remembers is not mounted. `refused` carries the same reason |
+| `skills` | list of mounts | the host directories `--skills` copies into the guest home |
+| `image` | object | `ref` and `pull` |
+| `verify` | object | `mode` (`off`, `warn` or `require`) and `policy` (`brig`, `replaced` or `off`), as in `brig info --json` |
+| `network` | string | the posture as a sentence |
+| `posture` | string | `shared`, `isolated` or `offline` for the next boot, or `unknown` when the run refuses a sandbox whose network brig cannot determine |
+| `ports` | list of strings | every published port |
+| `policies` | list of strings | every bound policy |
+| `noPolicy` | bool | `true` when no policy is bound |
+| `egress` | object, omitted when no policy is bound | `default` (`allow` or `deny`), and the `allow` and `deny` lists. Each rule has a `host` or a `cidr` |
+| `credentials` | list | one entry per credential, below |
+| `argvExposed` | list of strings, omitted when empty | the variables whose values `BRIG_ENV_ARGV=1` puts on the runtime's command line, by name, sorted |
+| `limits` | object | `mem` in MB and `cpus` |
+| `digest` | string | `sha256:` and 64 hex digits |
+
+A mount is `host`, `guest` and `mode`. `mode` is `read-write` for the home
+and the project, and `copy` for a skills directory. Each credential has these
+fields:
+
+| Field | Values |
+| --- | --- |
+| `name` | the guest variable for `env`, the path under the guest home for `file`, and the secret itself for `none` |
+| `delivery` | `env`, `file`, or `none` for a required secret that no binding delivers |
+| `source` | `environment` or `secret`, omitted when nothing in the chain has a value |
+| `secret` | the store name the binding reads, omitted when it reads none |
+| `required` | whether the run stops without it |
+| `state` | `resolved`, `unresolved`, `withheld` (the run drops it at a guard), or `unknown` (the store did not answer a listing) |
+| `reason` | why the credential is not `resolved`, omitted when it is |
+
 ### `brig network`
 
 ```bash
@@ -551,8 +683,9 @@ needs cleaning up first is refused rather than silently changed.
 line, told apart by position and count, never by the filesystem:
 
 1. The first bare word is the ref.
-2. On `run` only, the second bare word is a project directory. Brig mounts
-   it read-write at `/work/<basename>` and starts the agent there.
+2. On `run` and `plan`, the second bare word is a project directory. Brig
+   mounts it read-write at `/work/<basename>` and starts the agent there.
+   `plan` shows the run that would.
 3. The next bare word, or anything after `--`, is the agent's own argument.
 
 The directory named as the project must exist. Brig does not read a bare
@@ -574,7 +707,7 @@ because both are Brig's own operands too:
 brig run claude ~/code/demo --mem 4096 -d
 ```
 
-Only `run` takes a project this way. `brig sh claude ~/code/demo` reads
+Only `run` and `plan` take a project this way. `brig sh claude ~/code/demo` reads
 `~/code/demo` as the start of the guest command, not as a directory to
 mount.
 
@@ -641,8 +774,8 @@ Brig's own flag but stood where the agent's arguments already begin.
 | `--home PATH` | host directory | the agent's own guest home | mounted as the agent's home. Replaces `--workspace`, see [migration.md](migration.md). The environment variable is still `BRIG_WORKSPACE`. There is no `BRIG_HOME` |
 | `--mem MB` | number | the agent's own (`4096` for most shipped agents) | guest memory |
 | `--cpus N` | number | the agent's own (`4` for most shipped agents) | guest vCPUs |
-| `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run`, refused by name as a usage error |
-| `-d`, `--detach` | (none) | off | start the sandbox and exit, without attaching. Parses on every verb, but only `run` reads it. On `sh`, `stop`, `rm` and `info` it is silently inert |
+| `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run` and `plan`, refused by name as a usage error |
+| `-d`, `--detach` | (none) | off | start the sandbox and exit, without attaching. Parses on every verb, but only `run` reads it. On `sh`, `stop`, `rm`, `info` and `plan` it is silently inert |
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
 | `--network MODE` | `shared`, `isolated` or `offline` | the recorded or runtime-inspected posture, then the profile's `network:`, then `isolated` (`shared` fallback on `vz` or `qemu` only when no posture is named) | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. An existing sandbox whose posture cannot be established requires an explicit choice. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox |
@@ -665,6 +798,7 @@ verb.
 | --- | --- | --- |
 | `ls` | global, or local after `ls` | envelope |
 | `info`, `env` | global, or local on the run line | envelope |
+| `plan` | global, or local on the run line | envelope, `kind: Plan` |
 | `doctor` | global, or local after `doctor` | envelope |
 | `version` | global, or local after `version` | envelope |
 | `network ls`, `network publish`, `network unpublish` | global, or local after the ref | envelope, `kind: Ports` |
@@ -687,8 +821,8 @@ that works:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, agent ls, secret ls, doctor, version and the network verbs (env takes
-it too, but env is deprecated; prefer info), and for run and sh
+info, plan, agent ls, secret ls, doctor, version and the network verbs (env
+takes it too, but env is deprecated; prefer info), and for run and sh
 ```
 
 The flag has to follow `agent show`, not precede `agent`. Every verb not

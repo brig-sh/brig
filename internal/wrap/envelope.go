@@ -236,7 +236,12 @@ func bareName(s string) string {
 // longer label a future row introduces widens the column instead of breaking
 // the alignment.
 func (c *Config) renderEnvelope(w io.Writer, set creds.Set) {
-	rows := c.envelope(set)
+	writeRows(w, c.envelope(set))
+}
+
+// writeRows is the aligned renderer, shared with the plan so the two read the
+// same way.
+func writeRows(w io.Writer, rows []envelopeRow) {
 	width := 0
 	for _, r := range rows {
 		if len(r.label) > width {

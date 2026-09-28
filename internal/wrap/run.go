@@ -108,10 +108,13 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 	return creds.ResolveSecrets(c.Profile, c.VMName, open, os.LookupEnv)
 }
 
-// EnsureRunning brings the sandbox up if it is not already, and makes sure
-// the one that is up is mounting this workspace.
-func (c *Config) EnsureRunning(set creds.Set) (err error) {
-	// First of all. The session has no project this run, and every check below
+// sessionRefusal is why this session cannot be run at all, whatever the
+// backend, or nil. EnsureRunning returns it before anything else, and Plan
+// reports it, so a plan cannot promise a run that `brig run` then refuses.
+//
+// Read-only, because Plan calls it: both answers were settled in Load.
+func (c *Config) sessionRefusal() error {
+	// The session has no project this run, and every check after this one
 	// that compares the sandbox with this run would read that as a project to
 	// drop, and recreate the sandbox without it. See Load.
 	if c.projectRefused != nil {
@@ -127,6 +130,37 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		}
 		return errors.New(message)
 	}
+	return nil
+}
+
+// backendRefusal is what this host and this backend refuse about the run, or
+// nil. EnsureRunning returns it before the workspace is prepared, and Plan
+// reports it, for the reason sessionRefusal gives.
+//
+// Read-only too. preflightHypervisor reads the macOS version, and
+// checkBackend asks the runtime's CanRun, which starts and writes nothing.
+func (c *Config) backendRefusal(hypervisor string) error {
+	// Refuse a backend the host cannot boot before the workspace is prepared
+	// or an image is pulled, so the floor lands as one sentence that names the
+	// way past it rather than as the runtime dying at boot with no name. See
+	// preflightHypervisor.
+	if err := c.preflightHypervisor(hypervisor); err != nil {
+		return err
+	}
+	// What this backend cannot honour about the run, refused here rather than
+	// inside Run: the path that finds the sandbox already up never calls Run,
+	// and a policy nothing can enforce must not be waved through by the
+	// accident of the sandbox happening to be running. See checkBackend.
+	return c.checkBackend(hypervisor)
+}
+
+// EnsureRunning brings the sandbox up if it is not already, and makes sure
+// the one that is up is mounting this workspace.
+func (c *Config) EnsureRunning(set creds.Set) (err error) {
+	// First of all. See sessionRefusal.
+	if err := c.sessionRefusal(); err != nil {
+		return err
+	}
 	// Before anything is prepared or booted: a name that sanitises onto a
 	// sandbox another name already owns is refused here rather than dropped
 	// into that sandbox's home directory. See slugclaim.go.
@@ -136,18 +170,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// Read once, so the preflight below and the spec built later cannot
 	// disagree about which backend this run wants. See hypervisor.
 	hypervisor := c.hypervisor()
-	// Refuse a backend the host cannot boot before the workspace is prepared or
-	// an image is pulled, so the floor lands as one sentence that names the way
-	// past it rather than as the runtime dying at boot with no name. See
-	// preflightHypervisor.
-	if err := c.preflightHypervisor(hypervisor); err != nil {
-		return err
-	}
-	// What this backend cannot honour about the run, refused here rather than
-	// inside Run: the path below that finds the sandbox already up never calls
-	// Run, and a policy nothing can enforce must not be waved through by the
-	// accident of the sandbox happening to be running. See checkBackend.
-	if err := c.checkBackend(hypervisor); err != nil {
+	if err := c.backendRefusal(hypervisor); err != nil {
 		return err
 	}
 	// Said on the run, not in BuildEnv: BuildEnv resolves the set for every

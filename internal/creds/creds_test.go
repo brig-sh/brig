@@ -2,6 +2,7 @@ package creds
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/internal/profile"
@@ -57,6 +58,45 @@ func TestUnresolvedReferencesAreRejectedButOrdinaryURLsAreNot(t *testing.T) {
 		lookupFrom(map[string]string{"GH_TOKEN": "op://vault/item"}), Options{AllowRefs: true})
 	if len(set.Vars) != 1 {
 		t.Error("BRIG_ALLOW_REFS did not forward the reference")
+	}
+}
+
+// The warning about an unresolved reference quotes its scheme, and everything
+// before :// is part of the shell value. A token with :// after it would be
+// echoed into the warning, and into `brig plan --json`, which carries the
+// warning as a reason. Only a scheme spelled like one is quoted.
+func TestAnUnresolvedReferenceQuotesOnlyAPlainScheme(t *testing.T) {
+	tmpl, _ := profile.Lookup("claude-code")
+	bindings := []profile.EnvBinding{{Name: "TOK", Ref: "env.TOK"}}
+	for _, c := range []struct {
+		value, quoted, hidden string
+	}{
+		{"op://vault/item/field", "(op://...)", ""},
+		{"vault+kv2.v1://secret", "(vault+kv2.v1://...)", ""},
+		{"ghp_REALTOKENPREFIX://x", "", "ghp_REALTOKENPREFIX"},
+		{"Op://vault/item", "", "Op"},
+		{"9op://vault/item", "", "9op"},
+	} {
+		lookup := lookupFrom(map[string]string{"TOK": c.value})
+		set := Bind(tmpl, bindings, nil, lookup, Options{})
+		if len(set.Vars) != 0 || len(set.Warnings) != 1 {
+			t.Errorf("%q: forwarded %d, warned %d times, want it withheld with one warning",
+				c.value, len(set.Vars), len(set.Warnings))
+			continue
+		}
+		reason := Preview(tmpl, bindings, func(string) (bool, bool) { return false, true },
+			lookup, Options{})[0].Reason
+		for _, said := range []string{set.Warnings[0], reason} {
+			if !strings.Contains(said, "unresolved secret reference") {
+				t.Errorf("%q: the warning does not say what it is: %s", c.value, said)
+			}
+			if c.quoted != "" && !strings.Contains(said, c.quoted) {
+				t.Errorf("%q: the warning does not quote %s: %s", c.value, c.quoted, said)
+			}
+			if c.hidden != "" && strings.Contains(said, c.hidden) {
+				t.Errorf("%q: the warning echoes part of the value: %s", c.value, said)
+			}
+		}
 	}
 }
 

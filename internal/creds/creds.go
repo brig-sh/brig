@@ -122,13 +122,40 @@ func admit(t profile.Profile, name, value string, fromEnv bool, opt Options) (st
 			// "Invalid username or token" in the guest, indistinguishable from a
 			// wrong username or a broken helper. A real credential is a token
 			// and never takes this form.
+			//
+			// The scheme is quoted only when it reads as one. What comes
+			// before :// is part of the value, and a token with :// pasted
+			// after it would otherwise be echoed here, and into `brig plan
+			// --json`, which carries this text as a reason.
+			shown := ""
+			if plainScheme(scheme) {
+				shown = " (" + scheme + "://...)"
+			}
 			return notice.Newf("not forwarding %s: it looks like an unresolved secret "+
-				"reference (%s://...), not a credential", name, scheme).
+				"reference%s, not a credential", name, shown).
 				Do("resolve it on the host before you run brig", "").
 				Do("to forward it as it is", "BRIG_ALLOW_REFS=1").String(), false
 		}
 	}
 	return "", true
+}
+
+// plainScheme reports whether s is spelled the way a secret manager spells a
+// scheme, such as op or vault: a lowercase letter, then lowercase letters,
+// digits, +, . or -. A token's own prefix has upper case or an underscore in
+// it more often than not, and fails this.
+func plainScheme(s string) bool {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		switch ch := s[i]; {
+		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '+', ch == '.', ch == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // unresolvedRef reports whether a value is a scheme://... reference that is

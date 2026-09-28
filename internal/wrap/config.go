@@ -688,8 +688,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		// refused with the reason and the two ways on.
 		//
 		// Refused at the boot, not here. Every verb loads the session, and stop,
-		// rm, info and logs must still reach it. Only `brig run` takes a
-		// directory or --no-project, so the advice names that verb.
+		// rm, info and logs must still reach it. Only `brig run` mounts a
+		// directory or drops one with --no-project, so the advice names that
+		// verb. `brig plan` takes both too, to preview that run.
 		if err := c.mountProject(remembered); errors.Is(err, errPlantedSymlink) {
 			c.projectRefused = fmt.Errorf("%w\nThis session's project was remembered from an "+
 				"earlier run. Run `brig run` with the real directory after the ref, or with "+
@@ -980,9 +981,11 @@ func (c *Config) mountProject(dir string) error {
 		err = fmt.Errorf("it is not a directory")
 	}
 	if err != nil {
-		return fmt.Errorf("cannot mount %s as this run's project: %w. brig run reads the "+
-			"word after the ref as a directory to mount; if it is an argument for the "+
-			"agent, put it after -- instead", abs, err)
+		// brig plan reads the word too, and has no agent to hand it to, so
+		// the way past names the run line rather than this one.
+		return fmt.Errorf("cannot mount %s as this run's project: %w. brig run and brig plan "+
+			"read the word after the ref as a directory to mount; if it is an argument for "+
+			"the agent, put it after -- on the brig run line instead", abs, err)
 	}
 	// A filesystem root has no basename to mount it under -- filepath.Base
 	// gives back the separator -- and /work// is not a guest path. Nobody means

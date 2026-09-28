@@ -51,8 +51,8 @@ Completion offers the verbs, the refs ` + "`brig ls`" + ` prints, and the flags 
 legal where the cursor is. brig's own flags stand on either side of the ref,
 and are offered on both. What brig does not own it does not complete: once a
 word or a flag it does not recognise has begun the agent's own arguments,
-completion stops. On run the first word after the ref is the project directory
-brig mounts, and directories are offered for it.
+completion stops. On run and plan the first word after the ref is the project
+directory, and directories are offered for it.
 `
 
 // completionCmd prints the script for one shell.
@@ -135,6 +135,7 @@ var verbs = []string{
 	"info",
 	"ls",
 	"network",
+	"plan",
 	"policy",
 	"rm",
 	"run",
@@ -152,6 +153,7 @@ var refVerbs = map[string]bool{
 	"stop": true,
 	"rm":   true,
 	"info": true,
+	"plan": true,
 }
 
 // complete decides what may stand where the cursor is.
@@ -292,9 +294,10 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	if !line.refGiven {
 		return names(cur, refsFor(verb))
 	}
-	// On run the first bare word after the ref is the project directory. On
-	// every other verb, and for later words, the agent's argv starts here.
-	if verb == "run" && !line.projectTaken {
+	// On run and plan the first bare word after the ref is the project
+	// directory. On every other verb, and for later words, the agent's argv
+	// starts here.
+	if readsProject(verb) && !line.projectTaken {
 		return dirDirs, nil
 	}
 	return dirNone, nil
@@ -309,7 +312,7 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 type runLine struct {
 	// refGiven: the session ref has been named.
 	refGiven bool
-	// projectTaken: run's one project word has been given.
+	// projectTaken: the one project word of run or plan has been given.
 	projectTaken bool
 	// tailBegun: brig's parsing has ended and the rest is the agent's -- `--`,
 	// a flag brig does not own once the ref is named, or a bare word past the
@@ -322,7 +325,7 @@ type runLine struct {
 
 func walkRunLine(verb string, args []string) runLine {
 	var line runLine
-	takesProject := verb == "run"
+	takesProject := readsProject(verb)
 	at := verbPosition(verb)
 	for i := 0; i < len(args); i++ {
 		a := args[i]

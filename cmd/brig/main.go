@@ -56,6 +56,10 @@ usage:
   brig info <ref>                                print the execution envelope and the
                                                  full environment, by name -- fails
                                                  if a declared secret is missing
+  brig plan <ref> [project]                      the mounts, network, policies
+                                                 and credentials by name that a
+                                                 run gets. Opens no secret, and
+                                                 marks a missing one unresolved
   brig network ls        <ref>                   the ports a sandbox publishes
   brig network publish   <ref> PORT...           open a guest port on the host
   brig network unpublish <ref> PORT...|--all     close one again
@@ -91,8 +95,8 @@ global flags (left of the command, as in: brig -q run claude):
                          even here
                          (-q after the verb works until v0.4.0)
       --json             machine-readable output, for the read verbs: ls, info,
-                         agent ls, secret ls, doctor, version and the network
-                         verbs. Also accepted after the verb (brig ls
+                         plan, agent ls, secret ls, doctor, version and the
+                         network verbs. Also accepted after the verb (brig ls
                          --json). Every other verb refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
                          JSON line with its exit status -- so a script can tell
@@ -105,8 +109,8 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --image IMAGE      guest image to boot
       --home PATH        host directory to mount as the guest home
                          (-w and --workspace still work, with a note)
-      --no-project       with run: this session's project is not mounted,
-                         whatever it ran with last
+      --no-project       with run or plan: this session's project is not
+                         mounted, whatever it ran with last
       --mem MB           guest memory
       --cpus N           guest vCPUs
   -d, --detach           with run: start the sandbox and exit
@@ -411,7 +415,7 @@ func dispatch(args []string) error {
 		}
 		rmDryRun = o.dryRun
 		rest = others
-	case "run", "sh", "stop", "info":
+	case "run", "sh", "stop", "info", "plan":
 		// The taught lifecycle spellings. They fall through to the run line
 		// below, which is where the ref and the flags are read.
 	case "network":
@@ -512,7 +516,7 @@ func dispatch(args []string) error {
 	wantJSON := globalJSON || opts.json
 	switch {
 	case !wantJSON:
-	case verb == "info" || verb == "env":
+	case verb == "info" || verb == "env" || verb == "plan":
 	// All three answer with what the sandbox publishes.
 	case onPortLine(verb):
 	case verb == "run" || verb == "sh":
@@ -533,10 +537,11 @@ func dispatch(args []string) error {
 	if opts.all && verb != "network unpublish" {
 		return usagef("--all goes with `brig network unpublish`, not `brig %s`", verb)
 	}
-	// --no-project is run's, like the positional it answers. Elsewhere it is a
-	// flag that does nothing, which is worse than one that is refused.
-	if opts.load.NoProject && verb != "run" {
-		return usagef("--no-project belongs to `brig run`, not `brig %s`. "+
+	// --no-project is run's, like the positional it answers, and plan's, which
+	// previews that run. Elsewhere it is a flag that does nothing, which is
+	// worse than one that is refused.
+	if opts.load.NoProject && !readsProject(verb) {
+		return usagef("--no-project belongs to `brig run` and `brig plan`, not `brig %s`. "+
 			"A session runs without its project from the next `brig run --no-project` onwards", verb)
 	}
 	// The run-line spelling of -q, which works until retiredGoesIn. It
@@ -573,7 +578,8 @@ func dispatch(args []string) error {
 		// So it carries on without one, and the report marks that single line
 		// unavailable. env is the old spelling of the same command and gets the
 		// same treatment, or the spelling brig recommends would be the one that
-		// fails. Every other verb needs the runtime to do its work, so they
+		// fails. plan is a preview of the same kind and answers the same way.
+		// Every other verb needs the runtime to do its work, so they
 		// still fail here, naming what is missing.
 		//
 		// But only "no runtime on PATH" is a state the report should paper
@@ -582,7 +588,7 @@ func dispatch(args []string) error {
 		// surface here as they do for run, naming the real cause. Match the
 		// sentinel, not any error, or a future error type silently rejoins the
 		// swallow.
-		reports := verb == "info" || verb == "env"
+		reports := verb == "info" || verb == "env" || verb == "plan"
 		if !reports || !errors.Is(err, runtime.ErrNoRuntime) {
 			return err
 		}
@@ -629,6 +635,18 @@ func dispatch(args []string) error {
 		return publishPorts(cfg, refDisplay(profileName, opts), tail, wantJSON)
 	case "network unpublish":
 		return unpublishPorts(cfg, refDisplay(profileName, opts), tail, opts.all, wantJSON)
+	case "plan":
+		// Ahead of BuildEnv, which reads every needed secret and fails on a
+		// missing one. The plan lists the store instead. It lists the store
+		// `brig secret ls` lists, through the same seam, so the two agree
+		// about what is there.
+		cfg.OpenStore = func() (creds.SecretReader, error) { return openStore() }
+		d := cfg.Plan()
+		if wantJSON {
+			return writeJSONDocument(cfg.Out, "Plan", d)
+		}
+		cfg.PrintPlan(d)
+		return nil
 	}
 
 	set, err := cfg.BuildEnv()
@@ -1137,10 +1155,10 @@ func parseGlobal(args []string) (g globals, rest []string, err error) {
 // split divides a run line into brig's own arguments, the session ref, the
 // project positional, and the agent's tail.
 //
-// The verb is a parameter because only run takes a positional: on run the
-// second bare word is a directory to mount, and on sh it is the start of the
-// guest command. Every other verb gets that word back at the head of its tail,
-// where rejectTail names it.
+// The verb is a parameter because only run and plan take a positional: on
+// them the second bare word is a directory to mount, and on sh it is the start
+// of the guest command. Every other verb gets that word back at the head of
+// its tail, where rejectTail names it.
 //
 // This exists because the flag package stops at the first non-flag argument
 // and treats an unknown flag as an error, and brig's line is the opposite on
@@ -1158,7 +1176,7 @@ func parseGlobal(args []string) (g globals, rest []string, err error) {
 // 4096 -d` is read by brig throughout. The next bare word after the positional
 // does end it, which is where the agent's argv starts.
 func split(verb string, args []string) (mine []string, ref session.Ref, word string, tail []string, err error) {
-	takesProject := verb == "run"
+	takesProject := readsProject(verb)
 	// Which vocabulary brig reads on this line. publish and unpublish shape no
 	// run, so a run-line flag on one of them is a mistake to name rather than
 	// a flag to honour. See posPublish.
@@ -1193,9 +1211,10 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				passed = true
 				continue
 			}
-			// A bare word after the ref. On run the first one is the
-			// project, which brig owns and so reads past; anywhere else, and
-			// for the next one on run, it is where the agent's argv starts.
+			// A bare word after the ref. On run and plan the first one is
+			// the project, which brig owns and so reads past; anywhere else,
+			// and for the next one, it is where the agent's argv starts, which
+			// rejectTail refuses on a verb that forwards none.
 			if takesProject && word == "" {
 				word = a
 				continue
@@ -1343,8 +1362,8 @@ func networkSub(rest []string) (string, error) {
 //
 // A verb that forwards no tail says nothing here. It has no agent to hand a
 // token to, so the token is not the agent's and calling it that would only
-// contradict rejectTail, which gives the one correct message that the verb
-// takes a ref and nothing more.
+// contradict rejectTail, which gives the one correct message: what the verb
+// takes, and that nothing more goes after it.
 //
 // Only the tail brig ended itself. A tail after -- was declared the agent's by
 // the person typing it, and there is nothing to point out about a decision
@@ -1430,6 +1449,10 @@ func honorsRunLine(verb, long string) bool {
 	if verb == "run" {
 		return true
 	}
+	// --no-project is run-only, and plan reads it too. See readsProject.
+	if long == "no-project" && readsProject(verb) {
+		return true
+	}
 	for _, f := range brigFlags {
 		if f.long == long && f.position == posRun && f.runOnly {
 			return false
@@ -1438,17 +1461,30 @@ func honorsRunLine(verb, long string) bool {
 	return true
 }
 
+// readsProject reports whether verb reads a project: the bare word after the
+// ref, and --no-project. run mounts it. plan reads it too, because it
+// previews that run, and the first `brig run claude ~/src/x` is the one most
+// worth previewing: before it, no session remembers the directory.
+func readsProject(verb string) bool { return verb == "run" || verb == "plan" }
+
 // rejectTail refuses a token a verb has no use for, rather than dropping it.
 //
 // The verbs that forward a tail keep whatever follows the ref; the rest take a
-// ref and nothing after it, so a word left there is a mistake to name, not an
-// operand to swallow. forwardsTail is the same set agentTail stays silent for,
-// so the two never disagree about which message a stray tail should get.
+// ref and nothing after it, or plan a ref and a project, so a word left there
+// is a mistake to name, not an operand to swallow. forwardsTail is the same
+// set agentTail stays silent for, so the two never disagree about which
+// message a stray tail should get.
 func rejectTail(verb string, tail []string) error {
 	if forwardsTail(verb) || takesPorts(verb) {
 		return nil
 	}
 	if len(tail) > 0 {
+		// plan reads one project word after the ref, so what it takes is
+		// that and no more. run reads one too, and forwards the rest.
+		if readsProject(verb) {
+			return usagef("unexpected argument %q; `brig %s` takes a ref and a project directory, "+
+				"and nothing more", tail[0], verb)
+		}
 		return usagef("unexpected argument %q; `brig %s` takes a ref and nothing more", tail[0], verb)
 	}
 	return nil
@@ -3516,14 +3552,14 @@ var verbosity = wrap.Normal
 var globalJSON bool
 
 // verbTakesGlobalJSON reports whether the verb in the global position has a
-// --json form to ask for. The five read verbs do; run and sh do since #110,
+// --json form to ask for. The read verbs do; run and sh do since #110,
 // where --json runs the agent as a child and prints its outcome; agent and
 // secret only in their ls subcommand, which is the one that lists. Everything
 // else -- stop, rm, and the verbs that manage rather than list -- has none, so
 // --json left of it is a usage error rather than a flag dropped on the floor.
 func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
-	case "ls", "info", "env", "doctor", "version", "--version", "run", "sh":
+	case "ls", "info", "plan", "env", "doctor", "version", "--version", "run", "sh":
 		return true
 	case "agent", "secret":
 		return len(rest) > 0 && rest[0] == "ls"
@@ -3541,7 +3577,7 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // from here.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, agent ls, secret ls, doctor, version and the network verbs "+
+		"ls, info, plan, agent ls, secret ls, doctor, version and the network verbs "+
 		"(env takes it too, but env is deprecated; prefer info), and for run "+
 		"and sh", verb)
 }
