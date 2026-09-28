@@ -406,7 +406,7 @@ func TestNerdctlLeavesAPathToAnUnknownBinaryUnplaced(t *testing.T) {
 		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
 			t.Errorf("CanRun refused %q, a path to a binary brig cannot place: %v", shim, err)
 		}
-		if got := n.Isolation(""); got.Boundary != BoundaryUnknown {
+		if got := n.Isolation(RunSpec{}); got.Boundary != BoundaryUnknown {
 			t.Errorf("%q is not established either way, but the row says: %s", shim, got.Line())
 		}
 	}

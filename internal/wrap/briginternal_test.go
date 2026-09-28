@@ -89,7 +89,7 @@ func (r *hullRecorder) ProbeBrigInternal() error              { return r.probe }
 func (r *hullRecorder) BrigInternalAddr(string) (netip.Addr, error) {
 	return netip.MustParseAddr("198.18.1.1"), nil
 }
-func (r *hullRecorder) Isolation(string) runtime.Isolation {
+func (r *hullRecorder) Isolation(runtime.RunSpec) runtime.Isolation {
 	return runtime.Isolation{Boundary: runtime.BoundaryVM, Detail: "hull, hvi backend"}
 }
 func (r *hullRecorder) Run(spec runtime.RunSpec) error {
@@ -105,7 +105,7 @@ type nerdctlRecorder struct {
 
 func (r *nerdctlRecorder) Kind() string { return "nerdctl" }
 func (r *nerdctlRecorder) Bin() string  { return "nerdctl" }
-func (r *nerdctlRecorder) Isolation(string) runtime.Isolation {
+func (r *nerdctlRecorder) Isolation(runtime.RunSpec) runtime.Isolation {
 	return runtime.Isolation{Boundary: runtime.BoundaryVM, Detail: "nerdctl over containerd, io.containerd.urunc.v2"}
 }
 

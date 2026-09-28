@@ -88,11 +88,11 @@ run resolved. `brig info` prints the row and boots nothing. `brig --verbose
 run` prints it before the boot:
 
 ```
-ISOLATION    microVM (hull, hvi backend)
-ISOLATION    microVM (hull, vz backend)
-ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2)
-ISOLATION    container (nerdctl over containerd, runc: the guest shares the host kernel)
-ISOLATION    unknown (nerdctl over containerd, io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
+ISOLATION    microVM (hull, hvi backend, rootfs hull default)
+ISOLATION    microVM (hull, vz backend, rootfs block)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
+ISOLATION    container (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=runc: the guest shares the host kernel)
+ISOLATION    unknown (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
 ```
 
 The row reports the binary in hand, the backend the run settled on, and the
@@ -101,6 +101,12 @@ recognise. Brig cannot establish the isolation of that sandbox from a shim
 name alone, so the row says that Brig cannot tell. For a shim that Brig
 recognises as sharing the host kernel, `brig info` names it and the run is
 refused.
+
+On hull the row names the rootfs type Brig passes, or `hull default` when
+Brig passes none. Under urunc it names the hypervisor Brig passes, which is
+`cloud-hypervisor` for a `genericBoot` profile, or `urunc default` when Brig
+passes none. A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed with the
+variable.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write.
 Name a project on the run line and that project is a second host directory,
