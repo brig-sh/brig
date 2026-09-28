@@ -50,9 +50,12 @@ claims:
 	./script/check-claims.sh
 
 # The claims only a booted sandbox proves, run against the brig this checkout
-# builds. Skips with no hull or nerdctl on PATH, and fails there under
+# builds. The self-test runs the checks against a fake guest first, so a
+# check that stopped failing on a leak fails here before anything boots.
+# Skips with no hull or nerdctl on PATH, and fails there under
 # BRIG_CLAIMS_VM=require.
 claims-vm: build
+	./script/claims-vm.sh --self-test
 	BRIG=$(BINDIR)/brig ./script/claims-vm.sh
 
 clean:

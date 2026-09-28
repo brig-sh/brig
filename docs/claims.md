@@ -38,15 +38,21 @@ merge that touches the run path. Run by hand, `script/claims-vm.sh` tests the
 brig on `PATH` unless `BRIG` names another. The CI check resolves a `vm` row
 by name and lists it as not yet run.
 
+CI does run `script/claims-vm.sh --self-test`. It answers every check from a
+fake guest that leaks one thing at a time, and each check has to fail on its
+own leak. A few checks also run their real probes through a stub `brig` on
+the host, so a probe with no answer fails too. That proves each check judges
+an answer right. Only a booted sandbox proves the guest has none.
+
 Any other token, a row with none, or text beside the tokens fails the check.
 
 ## The table
 
 | Claim | Section | Defended by |
 | --- | --- | --- |
-| "Beyond those, the guest does not have your keychain, your SSH agent, your secret manager, or any other directory on the host." (your keychain) | The boundary | `go:TestTheRunPathReadsNoKeychain` |
+| "Beyond those, the guest does not have your keychain, your SSH agent, your secret manager, or any other directory on the host." (your keychain) | The boundary | `go:TestTheRunPathReadsNoKeychain` `vm:keychain-not-reachable` `vm:secret-service-not-reachable` |
 | "Beyond those, the guest does not have your keychain, your SSH agent, your secret manager, or any other directory on the host." (your secret manager) | The boundary | `go:TestTheRunPathCannotReachTheImporter` `go:TestUnresolvedReferencesAreRejectedButOrdinaryURLsAreNot` |
-| "Beyond those, the guest does not have your keychain, your SSH agent, your secret manager, or any other directory on the host." (your SSH agent) | The boundary | `vm:ssh-agent-not-forwarded` |
+| "Beyond those, the guest does not have your keychain, your SSH agent, your secret manager, or any other directory on the host." (your SSH agent) | The boundary | `vm:ssh-agent-not-forwarded` `vm:no-agent-socket` |
 | "Beyond those, the guest does not have your keychain, your SSH agent, your secret manager, or any other directory on the host." (any other host directory) | The boundary | `vm:other-host-directory` |
 | "Forwarded values go into the runtime process's own environment, and only the variable *name* appears on its command line." | Not in argv | `go:TestSplitEnvKeepsValuesOutOfArgv` `go:TestRunArgsKeepsSecretValuesOutOfArgv` `smoke:credential values reach the runtime, but never through argv` `smoke:argv names the variables only` |
 | "Nothing is written into the guest home from the host for this." | Credentials | `smoke:no credential is written into the workspace` |
