@@ -24,8 +24,9 @@ import (
 // against either keeps working. The rest name the failure shapes brig's own
 // paths already produce -- a profile that does not exist, a runtime that is
 // missing or broken, a boot refused over verification, a credential that could
-// not be resolved -- and nothing else, because a code no path returns is worse
-// than no code at all.
+// not be resolved, a run path that cannot enforce a property the run asks for
+// -- and nothing else, because a code no path returns is worse than no code at
+// all.
 const (
 	exitOK          = 0
 	exitFailure     = 1
@@ -34,6 +35,7 @@ const (
 	exitRuntime     = 4
 	exitVerify      = 5
 	exitCredentials = 6
+	exitCapability  = 7
 )
 
 // agentExit carries the agent's own exit status up to main, so brig returns
@@ -67,6 +69,13 @@ func exitCode(err error) int {
 	var nf *notFoundError
 	if errors.As(err, &nf) {
 		return exitNotFound
+	}
+	// A runtime that works and cannot enforce what the run asked for, or cannot
+	// confirm it does. Read ahead of the runtime class, since the refusal is
+	// about a property the run asked for and 7 is the code that says so.
+	var refusal *runtime.CapabilityError
+	if errors.As(err, &refusal) {
+		return exitCapability
 	}
 	// Missing and broken are one class to a script: both mean "fix the runtime
 	// before this can run", and neither is something the command itself did

@@ -32,9 +32,14 @@ func TestOfClassifiesEachErrorClass(t *testing.T) {
 		{"a broken runtime", runtime.ErrBadRuntime, Runtime},
 		{"a refused verification", &wrap.VerifyRefusedError{Err: errors.New("bad signature")}, Verify},
 		{"a credential failure", &creds.MissingSecretsError{}, Credentials},
+		{"a run path that cannot enforce a property", capabilityRefusal(runtime.CannotEnforce), 7},
+		{"a run path whose answer is unknown", capabilityRefusal(runtime.Unknown), 7},
 		{"a wrapped runtime failure keeps its class", wrapped(runtime.ErrBadRuntime), Runtime},
 		{"a wrapped verify failure keeps its class",
 			wrapped(&wrap.VerifyRefusedError{Err: errors.New("mismatch")}), Verify},
+		{"a wrapped capability refusal keeps its class", wrapped(capabilityRefusal(runtime.CannotEnforce)), 7},
+		// The class is the type. A message that reads like the refusal is not one.
+		{"the refusal's words without its type", errors.New(capabilityRefusal(runtime.CannotEnforce).Error()), Failure},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -43,4 +48,10 @@ func TestOfClassifiesEachErrorClass(t *testing.T) {
 			}
 		})
 	}
+}
+
+func capabilityRefusal(state runtime.Capability) error {
+	return &runtime.CapabilityError{Property: runtime.EgressPolicy,
+		Path: runtime.RunPath{Runtime: "nerdctl", Backend: "runc"}, State: state,
+		Why: "the container network is not filtered", Remedy: "Detach the policy"}
 }

@@ -1778,6 +1778,57 @@ YAML
 [ "$rc" = 6 ] && ok "an unresolved required secret exits 6" \
   || bad "an unresolved required secret exits 6 -- got $rc"
 rm -f "$BRIG_PROFILE_DIR/needsecret.yaml"
+# A policy the backend cannot enforce is 7, kept apart from a boot that failed
+# for any other reason. claude-code sets network: isolated, which vz and qemu
+# refuse as well. The first runs leave BRIG_NETWORK unset, so the profile
+# chooses the posture the way it does on a default run, and the policy refusal
+# has to answer all the same.
+mkdir -p "$WORK/cap-policies"
+cat > "$WORK/cap-policies/no-net.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: no-net
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+export BRIG_POLICY_DIR="$WORK/cap-policies"
+"$WORK/brig" policy attach no-net claude-code > /dev/null 2>&1 \
+  || bad "a policy attaches to a profile for the exit 7 cases"
+: > "$STUB_LOG"
+for hv in vz qemu; do
+  out="$(env -u BRIG_NETWORK BRIG_HYPERVISOR=$hv "$WORK/brig" run claude -d 2>&1)"; rc=$?
+  [ "$rc" = 7 ] && ok "a policy $hv cannot enforce exits 7" \
+    || bad "a policy $hv cannot enforce exits 7 -- got $rc: $(printf '%s\n' "$out" | tail -n 1)"
+done
+env -u BRIG_NETWORK "$WORK/brig" run --json claude -d > "$WORK/cap.json" 2> /dev/null; rc=$?
+last="$(tail -n1 "$WORK/cap.json")"
+case "$rc:$last" in
+  '7:'*'"stage":"brig","exit":7'*) ok "run --json reports a policy vz cannot enforce as stage brig, exit 7" ;;
+  *) bad "run --json reports a policy vz cannot enforce as stage brig, exit 7 -- got $rc: $last" ;;
+esac
+# The same refusal when a setting chose the network, and on the verb that only
+# records a port.
+"$WORK/brig" run claude -d > /dev/null 2>&1; rc=$?
+[ "$rc" = 7 ] && ok "a policy vz cannot enforce exits 7 under BRIG_NETWORK=shared" \
+  || bad "a policy vz cannot enforce exits 7 under BRIG_NETWORK=shared -- got $rc"
+env -u BRIG_NETWORK "$WORK/brig" network publish claude 3000 > /dev/null 2>&1; rc=$?
+[ "$rc" = 7 ] && ok "network publish under a policy vz cannot enforce exits 7" \
+  || bad "network publish under a policy vz cannot enforce exits 7 -- got $rc"
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "a run refused with exit 7 reached the runtime" \
+  || ok "a run refused with exit 7 reached no runtime"
+"$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
+unset BRIG_POLICY_DIR
+# With no policy, the isolated network vz cannot give is a separate refusal,
+# and it stays a 1: no policy is involved, and 7 would send a script looking
+# for one.
+out="$(env -u BRIG_NETWORK "$WORK/brig" run claude -d 2>&1)"; rc=$?
+case "$rc:$out" in
+  '1:'*'sets network: isolated'*) ok "an isolated network vz cannot give, with no policy, exits 1" ;;
+  *) bad "an isolated network vz cannot give, with no policy, exits 1 -- got $rc: $(printf '%s\n' "$out" | tail -n 1)" ;;
+esac
+"$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== flags =="
 : > "$STUB_LOG"

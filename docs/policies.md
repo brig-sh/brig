@@ -624,9 +624,9 @@ confirms the table's answer or overturns it:
 | hull on any other backend | `unknown` | Brig holds no answer for it |
 
 Brig boots a policy-bound run only on `enforced`. On `cannot enforce` or
-`unknown` it refuses, and the refusal names the property, the runtime and
-the backend. A run with no policy asks nothing, and a run under
-`--network offline` asks nothing either.
+`unknown` it refuses with exit code `7`, and the refusal names the
+property, the runtime and the backend. A run with no policy asks nothing,
+and a run under `--network offline` asks nothing either.
 
 On the `hvi` backend, a boot reads every policy bound to the run and puts
 the rules on the network gateway it gives that sandbox. That gateway is the

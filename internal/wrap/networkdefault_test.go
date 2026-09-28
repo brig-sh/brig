@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -344,6 +345,65 @@ func TestARecoveredPostureIsNotCreditedToTheProfile(t *testing.T) {
 	c.networkSource = "the profile's network:"
 	if msg := c.profileIsolationOnFallback("vz"); msg != "" {
 		t.Errorf("a recovered isolated posture got the profile refusal: %s", msg)
+	}
+}
+
+// vz and qemu refuse a policy and an isolated network alike. When both apply,
+// the policy refusal answers, as the CapabilityError a caller reads exit 7
+// from, whatever chose the network. Most shipped profiles set network:
+// isolated, so the profile refusal answering first turned the common
+// policy-bound run into an exit 1. With no policy, the profile refusal still
+// answers, and it names the profile.
+func TestAPolicyRefusalOutranksTheProfileIsolationRefusal(t *testing.T) {
+	for _, hv := range []string{"vz", "qemu"} {
+		t.Run(hv, func(t *testing.T) {
+			isolateState(t)
+			t.Setenv("BRIG_RUNTIME", "hull")
+			t.Setenv("BRIG_HYPERVISOR", hv)
+			bin := filepath.Join(t.TempDir(), "hull")
+			script := "#!/bin/sh\necho \"instance not found: $2\" >&2\nexit 1\n"
+			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("BRIG_RUNTIME_BIN", bin)
+			rt, err := runtime.Detect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			writeTestPolicy(t, dir, "no-net")
+			t.Setenv("BRIG_POLICY_DIR", dir)
+
+			bound, err := Load(testProfile(t, "network: isolated\npolicy:\n  - no-net\n"),
+				Options{Workspace: t.TempDir()}, rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bound.netFromProfile || !runtimeEgress(bound.Egress).Filtered() {
+				t.Fatalf("the premise does not hold: profile chose the network %v, policy bound %v",
+					bound.netFromProfile, runtimeEgress(bound.Egress).Filtered())
+			}
+			err = bound.checkBackend(bound.hypervisor())
+			var refusal *runtime.CapabilityError
+			if !errors.As(err, &refusal) {
+				t.Fatalf("%s: the policy refusal did not answer: %v", hv, err)
+			}
+			if refusal.Path.Backend != hv {
+				t.Errorf("the refusal names backend %q, want %q", refusal.Path.Backend, hv)
+			}
+
+			unbound, err := Load(testProfile(t, "network: isolated\n"), Options{Workspace: t.TempDir()}, rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = unbound.checkBackend(unbound.hypervisor())
+			if errors.As(err, &refusal) {
+				t.Fatalf("a run with no policy got the policy refusal: %v", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), "the x profile sets network: isolated") {
+				t.Errorf("a run with no policy lost the profile refusal: %v", err)
+			}
+		})
 	}
 }
 
