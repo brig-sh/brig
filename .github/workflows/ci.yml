@@ -78,6 +78,14 @@ jobs:
       - name: smoke test
         run: ./script/smoke.sh
 
+      # docs/claims.md ties each promise in docs/security.md to its tests. The
+      # self-test runs first against seeded bad rows, so a guard that stopped
+      # refusing them fails the build before the real table passes through it.
+      - name: claims table
+        run: |
+          ./script/check-claims.sh --self-test
+          ./script/check-claims.sh
+
       - name: cross-compile darwin/arm64
         run: GOOS=darwin GOARCH=arm64 go build ./...
 

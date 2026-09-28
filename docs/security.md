@@ -9,7 +9,7 @@ run line. No other host directory is mounted.
 No host credential source is read on the run path: the only store a run
 opens is Brig's own. See [secrets.md](secrets.md). What the agent can reach
 over the network is a separate question, with a much weaker answer, covered
-below.
+below. [claims.md](claims.md) ties promises on this page to the tests that defend them.
 
 If you have found a flaw in one of these boundaries, [SECURITY.md](../SECURITY.md)
 is how to report it privately. The section below on
@@ -42,6 +42,8 @@ The guest cannot access:
 - your SSH agent
 - your secret manager
 - an environment variable a profile's `deny` list refuses
+
+The guest gets only the credentials you deliver to it.
 
 Mounting a project or delivering a credential changes both lists. The agent
 can change the real files at those two mounts, not a copy of them. Anything

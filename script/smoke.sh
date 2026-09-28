@@ -328,7 +328,15 @@ homes="$(grep '^env-home:' "$STUB_LOG" | sort -u)"
   && ok "hull runs with the caller's HOME" \
   || bad "hull runs with the caller's HOME ($HOME) -- got: $homes"
 
-grep -q -- "--shared-dir $WS:$GUEST_HOME" "$STUB_LOG" \
+# shared_dir SPEC succeeds when a run line carries --shared-dir SPEC as a
+# whole argument. A substring match would take SPEC:ro for SPEC, and the
+# claims these checks back say read-write.
+shared_dir() {
+  awk -v want=" --shared-dir $1 " \
+    '/^argv: run / && index($0 " ", want) { found = 1 } END { exit !found }' "$STUB_LOG"
+}
+
+shared_dir "$WS:$GUEST_HOME" \
   && ok "the workspace is mounted as the guest home" || bad "workspace is mounted as the guest home"
 grep -q -- '-- claude -p hi' "$STUB_LOG" \
   && ok "agent arguments pass through" || bad "agent arguments pass through"
@@ -380,9 +388,15 @@ echo "== workspace =="
 [ -f "$WS/.claude.json" ] && ok "onboarding is seeded" || bad "onboarding is seeded"
 grep -q hasCompletedOnboarding "$WS/.claude.json" \
   && ok "the seed carries the onboarding flags" || bad "the seed carries the onboarding flags"
-grep -qi 'token' "$WS/.claude.json" \
-  && bad "a credential was written into the workspace" \
-  || ok "no credential is written into the workspace"
+# Every file in the guest home, for every value the runs above delivered.
+# grep exits 1 only when it read all of them and found none.
+leaked="$(grep -rlF -e env-token-secret -e gh-secret "$WS")"
+rc=$?
+if [ "$rc" = 1 ] && ! grep -qi 'token' "$WS/.claude.json"; then
+  ok "no credential is written into the workspace"
+else
+  bad "a credential was written into the workspace (grep exit $rc): $leaked"
+fi
 [ -f "$WS/.brig-workspace" ] && ok "the workspace marker is written" || bad "workspace marker is written"
 
 echo "== reuse =="
@@ -407,7 +421,7 @@ CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
 rc=$?
 [ "$rc" = 0 ] && ok "a run with a project exits 0" \
   || bad "a run with a project exits 0 -- got $rc: $(cat "$WORK/proj.err")"
-grep -q -- "--shared-dir $PROJ:/work/myproject" "$STUB_LOG" \
+shared_dir "$PROJ:/work/myproject" \
   && ok "the project is mounted at /work/<basename>" \
   || bad "the project is mounted at /work/<basename> -- got: $(grep '^argv: run' "$STUB_LOG")"
 grep -q -- "--shared-dir $WS:$GUEST_HOME" "$STUB_LOG" \

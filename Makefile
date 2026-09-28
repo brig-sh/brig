@@ -11,7 +11,7 @@ LDFLAGS := -s -w \
 	-X $(BUILDINFO).gitDescribe=$(shell git describe --tags --long --match 'v[0-9]*' 2>/dev/null) \
 	-X $(BUILDINFO).gitModified=$(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo true)
 
-.PHONY: all build test vet fmt snapshot notes clean
+.PHONY: all build test vet fmt snapshot notes claims claims-vm clean
 
 all: vet test build
 
@@ -41,6 +41,19 @@ snapshot:
 notes:
 	@test -n "$(TAG)" || { echo "usage: make notes TAG=v0.1.0-rc19" >&2; exit 2; }
 	git cliff --unreleased --tag $(TAG)
+
+# docs/claims.md ties each promise in docs/security.md to its tests. The
+# self-test runs first, so a guard that stopped refusing bad rows fails here
+# before the real table can pass through it.
+claims:
+	./script/check-claims.sh --self-test
+	./script/check-claims.sh
+
+# The claims only a booted sandbox proves, run against the brig this checkout
+# builds. Skips with no hull or nerdctl on PATH, and fails there under
+# BRIG_CLAIMS_VM=require.
+claims-vm: build
+	BRIG=$(BINDIR)/brig ./script/claims-vm.sh
 
 clean:
 	rm -rf dist brig brigd

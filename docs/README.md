@@ -9,6 +9,7 @@ index is the map of everything else, in the order a new reader needs it.
 | --- | --- |
 | [sessions.md](sessions.md) | Guest homes, projects, named sessions, and what survives which command |
 | [security.md](security.md) | What the sandbox isolates, and what an agent can still do |
+| [claims.md](claims.md) | The tests behind each claim on the security page |
 | [non-goals.md](non-goals.md) | What Brig does not try to be |
 | [runtimes.md](runtimes.md) | The macOS backends, the Linux runtimes, and how one is chosen |
 | [brigd.md](brigd.md) | What the daemon is for |
