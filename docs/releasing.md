@@ -228,6 +228,26 @@ answers in that case, and the binary prints what a normal clone would.
   grep's work rather than relying on the grep to find it. Run the grep
   everywhere a version can hide, not only where you expect one.
 
+- A release on a hull version with no conformance record gets one before
+  the docs quote that version. On a Mac with that hull on `PATH`:
+
+  ```bash
+  script/egress-conformance.sh
+  ```
+
+  It boots three sandboxes on `hvi`, one at a time, runs the network cases
+  from #264 in each, and writes
+  `docs/manual-tests/egress-conformance-hvi-<hull version>.md`. Commit the
+  record. A `FAIL` in it means the egress claims in
+  [docs/policies.md](policies.md) and [docs/security.md](security.md) do not
+  hold on that hull, or that the run proved nothing for a case: read the
+  reason, then fix the claims, run it again or hold the release. An
+  `unproven` case is no evidence for the claim: the guest got no further
+  without a policy. Only `metadata` may end there, since hull resets every
+  connection to 169.254.0.0/16. Any other `unproven` case fails the run.
+  An interrupted run writes no record. CI never boots a guest, so this run
+  is the only check of them.
+
 - `install.sh` pins `cosign` by version **and** by SHA-256, one hash per
   platform. That pin is deliberate: cosign's own release cannot be verified
   without cosign, so the hash in this repository is the trust root. It
