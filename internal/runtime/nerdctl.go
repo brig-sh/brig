@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -187,6 +188,28 @@ func (n *nerdctl) List() ([]Instance, error) {
 // same reason urunc grew urunc.json.
 func (n *nerdctl) isDocker() bool { return filepath.Base(n.bin) == "docker" }
 
+// refuseGenericBootOnDocker refuses a genericBoot run on docker. docker does
+// not pass annotations to the runtime, so a sandbox there boots without a
+// kernel and fails far from the cause. Both runArgs and ResolveBootAssets ask,
+// so a docker user gets this before any download starts.
+func (n *nerdctl) refuseGenericBootOnDocker() error {
+	if !n.isDocker() {
+		return nil
+	}
+	return fmt.Errorf("this profile boots an unmodified image, which needs the " +
+		"kernel passed as an OCI annotation; docker does not carry annotations through to " +
+		"the runtime. Use nerdctl, or point BRIG_RUNTIME_BIN at it")
+}
+
+// ResolveBootAssets is the resolve runArgs makes for a spec with no
+// BootAssets, made ahead of Run, with oras as the fetcher. See BootResolver.
+func (n *nerdctl) ResolveBootAssets(notice, progress io.Writer) (BootAssets, error) {
+	if err := n.refuseGenericBootOnDocker(); err != nil {
+		return BootAssets{}, err
+	}
+	return resolveBootAssets(nil, func(dir string) error { return orasFetch(dir, notice, progress) })
+}
+
 // RootfsType is ignored here, deliberately: it selects how a VM reaches its
 // root filesystem, and that is urunc's decision on Linux rather than something
 // nerdctl has a flag for. GenericBoot is not ignored -- urunc reads the same
@@ -366,17 +389,13 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 	// behaviour for anyone who had configured a different one.
 	if spec.GenericBoot {
 		// urunc reads these from the container's OCI spec, so nerdctl only has
-		// to carry them through. docker is refused rather than attempted: it
-		// does not pass annotations to the runtime, so the sandbox would boot
-		// without a kernel and fail somewhere further away from the cause.
-		if n.isDocker() {
-			return nil, nil, fmt.Errorf("this profile boots an unmodified image, which needs the " +
-				"kernel passed as an OCI annotation; docker does not carry annotations through to " +
-				"the runtime. Use nerdctl, or point BRIG_RUNTIME_BIN at it")
+		// to carry them through.
+		if err := n.refuseGenericBootOnDocker(); err != nil {
+			return nil, nil, err
 		}
 		// oras rather than hull: hull does not build on Linux, so there is
 		// nothing to ask. See bootfetch.go.
-		annotations, err := bootAnnotations(nil, orasFetcher(spec))
+		annotations, err := bootAnnotations(spec.BootAssets, nil, orasFetcher(spec))
 		if err != nil {
 			return nil, nil, err
 		}

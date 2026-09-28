@@ -106,9 +106,16 @@ type RunSpec struct {
 	Tmpfs []string
 	// GenericBoot asks the runtime to boot this image as an ordinary OCI
 	// image rather than one built to be a guest -- no kernel inside it, no
-	// urunc metadata. The runtime supplies the kernel and initrd; see
-	// bootArtifacts.
+	// urunc metadata. The runtime supplies the kernel and initrd. See
+	// bootArtifacts and BootAssets below.
 	GenericBoot bool
+	// BootAssets are the kernel and initrd a GenericBoot run boots, when the
+	// caller resolved them before Run. An adapter given both boots them as
+	// they are. It does not ask where the assets live and does not fetch
+	// them. wrap resolves them before the verify summary through
+	// BootResolver, so the summary follows the resolve (#234). Left empty,
+	// the adapter resolves them itself inside Run.
+	BootAssets BootAssets
 	// Egress is what this sandbox may open a connection to: the rules of
 	// every policy bound to it, merged. The zero value is unfiltered, which
 	// is what every sandbox got before anything read a policy at boot.

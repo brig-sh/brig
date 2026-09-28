@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -178,12 +179,56 @@ func bootArtifactsPresent(kernel, initrd string) bool {
 	return true
 }
 
-// bootAnnotations are the annotations that carry those artifacts, in the form
-// both runtimes take them.
-func bootAnnotations(locate assetLocator, fetch assetFetcher) (kv []string, err error) {
+// BootAssets are the host paths of the kernel and initrd a GenericBoot run
+// boots.
+type BootAssets struct {
+	Kernel string
+	Initrd string
+}
+
+// given reports whether both paths are set. One path alone is not a resolve,
+// so the adapter resolves both itself.
+func (b BootAssets) given() bool { return b.Kernel != "" && b.Initrd != "" }
+
+// BootResolver is a runtime that finds the kernel and initrd a GenericBoot
+// profile boots, and fetches them when they are missing, ahead of Run.
+//
+// wrap calls it before the verify summary. The fetch used to happen inside
+// Run, after the summary had already said the boot assets verified. Moving it
+// up puts the files on disk before the summary, which is where #234 needs them
+// to compare their digests. Optional for the same reason NetworkChecker is. A runtime
+// without it resolves inside Run, as before.
+type BootResolver interface {
+	// ResolveBootAssets returns the paths for RunSpec.BootAssets. notice and
+	// progress are the writers a download narrates to, the same pair
+	// RunSpec.Notice and RunSpec.Progress carry.
+	ResolveBootAssets(notice, progress io.Writer) (BootAssets, error)
+}
+
+// resolveBootAssets is bootArtifacts in the shape BootResolver returns, for
+// the adapters' ResolveBootAssets.
+func resolveBootAssets(locate assetLocator, fetch assetFetcher) (BootAssets, error) {
 	kernel, initrd, err := bootArtifacts(locate, fetch)
 	if err != nil {
-		return nil, err
+		return BootAssets{}, err
+	}
+	return BootAssets{Kernel: kernel, Initrd: initrd}, nil
+}
+
+// bootAnnotations are the annotations that carry those artifacts, in the form
+// both runtimes take them.
+//
+// given is RunSpec.BootAssets. When the caller resolved both paths, they are
+// the ones that boot, and locate and fetch are not called. A second locate
+// costs every run another `hull assets dir`. Otherwise the adapter resolves
+// here, as it did before wrap resolved early.
+func bootAnnotations(given BootAssets, locate assetLocator, fetch assetFetcher) (kv []string, err error) {
+	kernel, initrd := given.Kernel, given.Initrd
+	if !given.given() {
+		kernel, initrd, err = bootArtifacts(locate, fetch)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return []string{
 		annotationBootKernel + "=" + kernel,

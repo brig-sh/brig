@@ -251,6 +251,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err := c.verifyBootAssets(); err != nil {
 		return &VerifyRefusedError{Err: err}
 	}
+	// The kernel and initrd are found, and fetched when missing, before the
+	// summary. Inside Run the fetch came after it, and the summary spoke for
+	// files not yet on disk (#234).
+	bootAssets, err := c.resolveBootAssets()
+	if err != nil {
+		return fmt.Errorf("could not start the sandbox: %w", err)
+	}
 	// Both checks are in, so the run can state the outcome in one line. Here
 	// rather than inside either check, because there is one answer for the step
 	// and two checks that reach it. See sayVerified.
@@ -342,6 +349,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// decided in the runtime adapter.
 		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
 		GenericBoot: c.Profile.GenericBoot,
+		BootAssets:  bootAssets,
 		// Resolved once at the top of EnsureRunning, where the preflight also
 		// read it, so the backend this spec boots is the one that was checked.
 		Hypervisor: check.Hypervisor,
@@ -787,4 +795,24 @@ func (c *Config) publishLive() error {
 		}
 	}
 	return nil
+}
+
+// resolveBootAssets finds the kernel and initrd a genericBoot profile boots,
+// and fetches them when they are missing, before the verify summary.
+//
+// Keyed on the profile only. BRIG_VERIFY=off still boots a kernel. A runtime
+// that is not a BootResolver returns nothing here and resolves inside Run, as
+// every runtime did before.
+//
+// The download notices go to the writers the spec carries, so a first run
+// says it is downloading at the default level and -q silences it.
+func (c *Config) resolveBootAssets() (runtime.BootAssets, error) {
+	if !c.Profile.GenericBoot {
+		return runtime.BootAssets{}, nil
+	}
+	r, ok := c.Runtime.(runtime.BootResolver)
+	if !ok {
+		return runtime.BootAssets{}, nil
+	}
+	return r.ResolveBootAssets(c.runtimeNotice(), c.runtimeOutput())
 }

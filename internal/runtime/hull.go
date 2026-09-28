@@ -213,11 +213,20 @@ func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
 }
 
 // assetFetcher binds the boot-asset download to one run's writers, so a fetch
-// that happens deep inside runArgs still narrates where that run's output
-// goes. The alternative is another two parameters threaded through runArgs,
-// which has enough of them.
+// inside runArgs still narrates where that run's output goes. The alternative
+// is another two parameters threaded through runArgs, which has enough of
+// them. runArgs fetches only when the spec carries no BootAssets.
 func (h *hull) assetFetcher(spec RunSpec) assetFetcher {
 	return func(dir string) error { return h.pullAssets(dir, spec.Notice, spec.Progress) }
+}
+
+// ResolveBootAssets is the resolve runArgs makes for a spec with no
+// BootAssets, made ahead of Run. It asks hull where the assets live with no
+// deadline, as a run does. See BootResolver.
+func (h *hull) ResolveBootAssets(notice, progress io.Writer) (BootAssets, error) {
+	return resolveBootAssets(h.assetDir, func(dir string) error {
+		return h.pullAssets(dir, notice, progress)
+	})
 }
 
 // assetDir asks hull where its boot assets live.
@@ -529,7 +538,7 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 		args = append(args, "--rootfs-type", spec.RootfsType)
 	}
 	if spec.GenericBoot {
-		annotations, err := bootAnnotations(locate, fetch)
+		annotations, err := bootAnnotations(spec.BootAssets, locate, fetch)
 		if err != nil {
 			return nil, nil, err
 		}
