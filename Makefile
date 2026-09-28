@@ -11,7 +11,7 @@ LDFLAGS := -s -w \
 	-X $(BUILDINFO).gitDescribe=$(shell git describe --tags --long --match 'v[0-9]*' 2>/dev/null) \
 	-X $(BUILDINFO).gitModified=$(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo true)
 
-.PHONY: all build test vet fmt snapshot notes claims claims-vm clean
+.PHONY: all build test vet fmt snapshot notes claims claims-vm clean netprobe
 
 all: vet test build
 
@@ -27,6 +27,17 @@ vet:
 
 fmt:
 	gofmt -w .
+
+# The network probe the conformance suite copies into a guest, one binary per
+# guest architecture, at $(NETPROBE_DIR)/linux-<arch>/netprobe. Static and
+# standard library only, so it runs on any guest image whatever libc it
+# carries. See test/netprobe.
+NETPROBE_DIR ?= dist/netprobe
+netprobe:
+	for arch in arm64 amd64; do \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags '-s -w' \
+			-o $(NETPROBE_DIR)/linux-$$arch/netprobe ./test/netprobe || exit 1; \
+	done
 
 # What CI runs before a tag can depend on it. Signing is skipped: keyless
 # signing opens a browser for the OIDC flow, which is not what you want from a
