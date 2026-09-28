@@ -1,0 +1,23 @@
+# An example profile for nested virtualization (brig-sh/brig#376). It is the
+# shipped ubuntu profile with two changes: capabilities: [kvm], so the guest
+# boots with EL2 and has /dev/kvm, and rootfsType: block, so there is room to
+# install a VMM. It is not a built-in profile. Import it with
+#
+#   brig agent import docs/manual-tests/ubuntu-kvm.yaml
+#
+# and read docs/security.md#nested-virtualization-opt-in first.
+name: ubuntu-kvm
+desc: A plain Ubuntu shell whose guest can run VMs of its own
+kind: shell
+binary: bash
+image: docker.io/library/ubuntu:latest
+hypervisor: hvi
+genericBoot: true
+rootfsType: block
+guestHome: /root/work
+env:
+  - name: GH_TOKEN
+    ref: env.GH_TOKEN
+mem: 2048
+cpus: 2
+capabilities: [kvm]

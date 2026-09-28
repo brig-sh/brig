@@ -10,8 +10,9 @@ Homebrew. Where a message is not Brig's, it says so. That is the first
 thing to know when the wording does not match anything in Brig.
 
 Before reading further, run `brig doctor`. It checks the host, the
-hypervisor, the runtime and its version, the boot assets, cosign, the
-profiles, the secret store and brigd, one line each. It names the fix for
+hypervisor, the runtime and its version, the boot assets, whether the runtime
+can nest virtualization, cosign, the profiles, the secret store and brigd, one
+line each. It names the fix for
 a line that is not `ok`. `brig doctor <agent>` checks that agent's image too.
 `--json` prints the same report as one document, for a script or a bug
 report.
@@ -619,6 +620,58 @@ dyld[33351]: missing symbol called
 is the whole log, and the symbol is never named. That is what an unnamed
 crash looked like before Brig added the refusal above.
 
+## nested virtualization (capability kvm) needs the hvi backend
+
+```
+brig: nested virtualization (capability kvm) needs the hvi backend
+(BRIG_HYPERVISOR is "vz"); run it on hvi, or drop the capability from the
+profile
+```
+
+The profile lists `capabilities: [kvm]` and the run resolved to another
+backend: `BRIG_HYPERVISOR` if set, otherwise the profile's `hypervisor:`,
+otherwise `vz`. Unset `BRIG_HYPERVISOR`, or set it to `hvi`, and give the
+profile `hypervisor: hvi`. Nothing was booted.
+
+## nested virtualization requested but not supported by this host
+
+```
+brig: could not start the sandbox: /opt/homebrew/bin/hull run: exit status 1
+  error: nested virtualization requested but not supported by this host: <reason>
+```
+
+hull refused `--nested-virt` because this Mac cannot give a guest EL2. It does
+so before it creates anything. There is no setting that works around it: drop
+the capability to run the profile without nesting. `brig doctor` shows the
+same answer on its `nested` row.
+
+When the profile gained the capability while its sandbox was running, Brig
+asks first and refuses before it stops anything, ending with
+`The running sandbox <name> was left as it is`.
+
+## this hull predates nested virtualization
+
+```
+brig: could not start the sandbox: /opt/homebrew/bin/hull run: this hull
+(0.1.0-rc29) predates nested virtualization; upgrade hull
+```
+
+The hull in use was released before `--nested-virt`. Upgrade hull, or point
+`BRIG_RUNTIME_BIN` at a build that has it. `brig doctor` says the same on its
+`nested` row.
+
+## this profile asks for the kvm capability
+
+Linux only:
+
+```
+brig: this profile asks for the kvm capability (nested virtualization), which
+brig provides only on macOS through hull's hvi backend; the Linux runtime does
+not pass /dev/kvm through
+```
+
+Run the profile on a Mac, or drop `capabilities: [kvm]` from it.
+
 ## docker does not carry annotations through to the runtime
 
 Linux only, and only for a profile that boots an unmodified image (six of the
@@ -652,11 +705,12 @@ The `runtime` line names `nerdctl`, not `docker`.
 
 ## The sandbox restarted when I ran sh
 
-Three things trigger this: a stale share, a stale policy, or a session run
-against a different project than it last used (see
-[sessions.md](sessions.md)). Each recreates the sandbox rather than failing
-it. All persistent state lives in the guest home on the host either way.
-Any other session on that sandbox is disconnected when it restarts.
+Each of these recreates the sandbox: a stale share, a stale policy or posture,
+a session run against a different project than it last used (see
+[sessions.md](sessions.md)), and a profile whose `capabilities: [kvm]` was
+added or removed since the sandbox booted. All persistent state lives in the
+guest home on the host either way. Any other session on that sandbox is
+disconnected when it restarts.
 
 **A different guest home than the one remembered.**
 
@@ -709,6 +763,21 @@ A sandbox keeps the posture it was started with, so a command that names
 no posture never trips this. `--network` or `BRIG_NETWORK` naming a
 different one does. If you did not mean to change it, check whether
 `BRIG_NETWORK` is exported in this shell.
+
+**Nested virtualization added to or removed from the profile.**
+
+```
+brig: this sandbox was started with nested virtualization and ubuntu-kvm no
+longer asks for it. A guest's virtualization is fixed when it boots, so it is
+being restarted; any other session using this sandbox will be disconnected.
+```
+
+Whether a guest has EL2 is fixed at boot, and hull records it. A run of a
+profile that no longer matches that record restarts the sandbox, so the
+envelope's `CAPABILITIES` row describes the guest that runs. The opposite case
+reads `started without nested virtualization and <profile> now asks for it`,
+and happens only when this host can nest; otherwise the run is refused and the
+sandbox left running.
 
 **A different project than the one last used.**
 

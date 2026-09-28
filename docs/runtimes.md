@@ -57,7 +57,10 @@ refused on `hvi` and `qemu`.
 `hvi` talks to Hypervisor.framework directly, through the `hvi` microVM
 monitor. It is the only backend that runs a network gateway of its own.
 An attached egress policy and `--network isolated` both refuse to run on
-anything else.
+anything else. It is also the only backend that can give a guest nested
+virtualization, for a profile that lists `capabilities: [kvm]`. Brig refuses
+a kvm run on the other two backends, and hull refuses one on a host that
+cannot give a guest EL2.
 Six of the eight shipped profiles set `hypervisor: hvi`, so most runs use
 `hvi` rather than the `vz` fallback.
 
@@ -80,6 +83,7 @@ Brig decides, and the runtime never sees the reasoning:
   which are handed in by name rather than by value
 - the sandbox name, memory, CPU count, network mode, pull policy, root
   filesystem type, hypervisor backend and shared directories
+- whether the guest gets nested virtualization
 - on macOS, the kernel and initrd paths for an image that carries no kernel,
   and the gateway address each sandbox takes
 
@@ -102,6 +106,8 @@ file is named:
 hull --version                          # does this hull boot a digest? (0.1.0-rc23 and later)
 hull assets pull                        # HULL_BOOT_ASSETS=<dir> in the environment
 hull assets dir
+hull capabilities --json                # can this host nest? see below
+hull inspect <name>                     # does it exist; was it booted nested? (a run joining it)
 hull ps
 hull ps -a                              # falls back to `hull ps` if -a is refused
 hull run --detach --name <name>
@@ -113,6 +119,7 @@ hull run --detach --name <name>
      [--gateway-sock <path> --gateway-cidr <cidr>]
      [--shared-dir <host>:<guest>[:ro]]...
      [--gui [--gui-title <title>]]
+     [--nested-virt]                    # capabilities: [kvm], on hvi only
      [--env <NAME>|<NAME>=<value>]... <image>
 hull exec [-t] [--cwd <dir>] [-u <user>] [--env <NAME>|<NAME>=<value>]... <name> -- <cmd>...
 hull logs [--follow] [--tail <n>] <name>
@@ -131,6 +138,16 @@ hull network-gateway --socket <path> --qemu-socket <path>.qemu
 decision. A hull from 0.1.0-rc23 boots a digest reference from its own
 store, so Brig pins the image it verified. An older one boots the tag,
 and Brig says so. An unreadable answer counts as pinning.
+`hull capabilities --json` is asked by `brig info` and `brig doctor`, and on
+the run path only before a restart that would turn nesting on for a sandbox
+already running: the restart stops that sandbox first, so a host that cannot
+nest has to be found out before it. A hull that has no such command is
+reported as too old, by the version `hull --version` gives. Only schema 1 of
+the answer is read.
+`hull inspect` answers whether a sandbox exists, and, when a run joins a
+running sandbox, whether hull booted it with `--nested-virt`. A record
+without that field is not nested. A join that cannot read the record is
+refused, and the sandbox is left running.
 `network-gateway --help` is read for one word, `--egress-default`,
 before a sandbox carrying a policy is booted. A gateway that does not
 take the flag drops the rules on the floor, so Brig refuses the run
@@ -220,15 +237,15 @@ those names for itself. See [security.md](security.md#not-in-argv).
 4. Otherwise PATH: `hull` for the hull runtime, and `nerdctl` then `docker`
    for the other one.
 
-What Brig asks the runtime about itself is short. It asks hull where its
-boot assets live (`hull assets dir`). They sit under hull's own
-store, and a path compiled into Brig can drift out of date silently. It asks either
-runtime which sandboxes exist and what state they are in (`ps`). And it
-asks hull two capability questions, `hull --version` for digest pinning
-and `network-gateway --help` for policy enforcement, both described
-above. `brig info <ref>` prints what it settled on, as
-`runtime hull (/opt/homebrew/bin/hull)`, and `brig doctor` reports the
-runtime's version beside the rest of the host.
+What Brig asks the runtime about itself is short. It asks hull where its boot
+assets live (`hull assets dir`). They sit under hull's own store, and a path
+compiled into Brig can drift out of date silently. It asks either runtime
+which sandboxes exist and what state they are in (`ps`). And it asks hull
+three capability questions, `hull --version` for digest pinning,
+`network-gateway --help` for policy enforcement and `capabilities --json` for
+nested virtualization, all described above. `brig info <ref>` prints what it
+settled on, as `runtime hull (/opt/homebrew/bin/hull)`, and `brig doctor`
+reports the runtime's version beside the rest of the host.
 
 Neither answer gates the run outright, and that is deliberate: Brig degrades
 one feature at a time rather than refusing an old build. A hull without
@@ -240,7 +257,7 @@ message.
 
 ## What Brig requires of each
 
-**hull** has to accept the verbs and flags listed above, and three things
+**hull** has to accept the verbs and flags listed above, and these things
 beyond them:
 
 - a bare `--env NAME`, taking the value from its own environment. Without it
@@ -250,6 +267,11 @@ beyond them:
 - `exec -u root`, which is how Brig mounts a tmpfs inside a running sandbox.
   Container runtimes get their tmpfs at create time instead
   (`internal/wrap/secretfiles.go`).
+- `run --nested-virt`, only for a profile that lists `capabilities: [kvm]`.
+  hull passes it to `hvi`, which boots the guest with EL2, and refuses it
+  before it creates anything on a host that cannot. `capabilities --json`
+  answers `brig info`, `brig doctor` and the check before a restart into
+  kvm, and `inspect` carries `nestedVirt` for a guest booted with it.
 - `network-gateway`, for the `hvi` backend. That backend has no egress of its
   own, so Brig starts one shared gateway and joins every sandbox to it. Brig
   also hands out the addresses on that network itself. Guests on one gateway

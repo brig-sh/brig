@@ -189,6 +189,16 @@ type Profile struct {
 	// operating systems support this: the artifacts travel as OCI annotations
 	// either way, on hull's command line or through nerdctl to urunc.
 	GenericBoot bool `json:"genericBoot,omitempty"`
+	// Capabilities widens what the guest gets from the host beyond an
+	// ordinary microVM. kvm is the only one: the guest kernel is booted with
+	// hardware virtualization of its own, gets /dev/kvm, and can run VMs
+	// inside the sandbox. Only hull's hvi backend provides it.
+	//
+	// Security-relevant, and off unless a profile lists it: no shipped
+	// profile does, and a test holds that. What stays enforced and what brig
+	// can no longer observe once a guest runs VMs of its own is in
+	// docs/security.md.
+	Capabilities []string `json:"capabilities,omitempty"`
 	// StaleCredentialFiles are paths under GuestHome that an older wrapper
 	// used to write a credential into. brig never does, so finding one means
 	// a real token is sitting on disk that nothing needs any more.
@@ -265,6 +275,9 @@ func (p Profile) clone() Profile {
 	p.ProjectPaths = slices.Clone(p.ProjectPaths)
 	p.StaleCredentialFiles = slices.Clone(p.StaleCredentialFiles)
 	p.Policy = slices.Clone(p.Policy)
+	// A caller appending kvm through a clone would hand every later caller in
+	// the process a guest with a hypervisor of its own that no file asked for.
+	p.Capabilities = slices.Clone(p.Capabilities)
 	if p.Onboarding != nil {
 		o := *p.Onboarding
 		o.Seed = maps.Clone(o.Seed)
@@ -282,6 +295,15 @@ func (p Profile) Denied(name string) bool {
 	}
 	return false
 }
+
+// CapabilityKVM is the capability that asks for nested virtualization: the
+// guest gets hardware virtualization of its own and a /dev/kvm to use it.
+const CapabilityKVM = "kvm"
+
+// Nested reports whether this profile asks for nested virtualization. The one
+// place the rest of brig asks, so nothing below here spells the capability
+// name itself.
+func (p Profile) Nested() bool { return slices.Contains(p.Capabilities, CapabilityKVM) }
 
 // GuestUser is the guest account the home directory belongs to, derived from
 // GuestHome so a profile states it once.

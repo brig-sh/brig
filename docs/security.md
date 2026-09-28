@@ -25,6 +25,9 @@ The guest can access:
 - the credentials you deliver to it
 - the internet, on the default `shared` network
 - any hostmount volume a profile declares
+- hardware virtualization of its own (`/dev/kvm`), only when the profile
+  lists `capabilities: [kvm]`. See
+  [Nested virtualization](#nested-virtualization-opt-in)
 
 The host can reach the guest on any port you publish with `--publish` or
 `brig network publish`, and on no other. A published port is the one inbound
@@ -130,6 +133,82 @@ And it is ingress, so no egress rule applies to it. A policy decides what the
 guest may open a connection *to*; it has nothing to say about a connection
 opened *into* the guest. A sandbox under a strict egress policy with a port
 published is still reachable on that port.
+
+## Nested virtualization (opt-in)
+
+A profile can give the guest hardware virtualization of its own. With
+`capabilities: [kvm]`, the guest kernel boots with EL2, KVM starts inside
+it, and `/dev/kvm` exists. The agent can then run virtual machines inside
+the sandbox, with Firecracker or QEMU for example. Below, the sandbox is L1
+and a VM it runs is an L2 guest.
+
+It is off unless a profile lists it. No shipped profile does, and a test
+fails if one ever does. A guest booted without it has no `/dev/kvm`, and its
+kernel says `kvm [1]: HYP mode not available`.
+
+One backend provides it: `hvi`, on an Apple silicon Mac whose
+Hypervisor.framework reports EL2 support. A run that asks for it anywhere else
+is refused before anything boots:
+
+- on `vz` or `qemu`, by Brig, before the guest home is prepared;
+- on Linux, by Brig, since that runtime does not pass `/dev/kvm` through;
+- on a host that cannot give a guest EL2, by hull, which refuses
+  `--nested-virt` before it creates anything. Brig names a hull too old to
+  know the flag and says to upgrade it.
+
+### What still holds inside an L2 guest
+
+An L2 guest is memory and vCPU time inside the L1 guest, which is one `hvi`
+process on the host. Every control Brig enforces outside L1 holds for L2 as
+well:
+
+- **Host directories.** L2 sees what L1 hands it, and L1 sees only the
+  directories Brig names. The capability exports no new host path.
+- **Network.** L2 traffic leaves through L1's network interface, which is the
+  hvi gateway, so the posture and any egress policy apply to it, and
+  `--network offline` leaves L2 with no route out too. That is argued from
+  where L2's traffic has to go, not measured: the recorded test
+  ([manual-tests/nested-virtualization.md](manual-tests/nested-virtualization.md))
+  checks that an offline L1 has no route out, and its L2 has no network
+  device at all.
+- **Credentials.** L2 gets only what something in L1 passes it, and Brig
+  delivers to L1 only the credentials the profile names.
+- **Resources.** L2 runs inside the sandbox's memory and CPU count.
+- **Lifetime.** `brig stop` ends the `hvi` process, and every L2 guest with
+  it.
+
+### What changes: observation
+
+hvi's event ledger and plugins, and anything else that reads the guest's
+registers or memory from the host, see L1. They do not see the processes or
+system calls inside an L2 guest. To them, L2 is L1 running KVM.
+
+On the Mac this was tested on (Apple M5 Pro, macOS 26.7), KVM in L1 starts
+in nVHE mode: `kvm [1]: Hyp nVHE mode initialized successfully`. The L1
+kernel runs at EL1, and a small KVM hypervisor runs at EL2. When a vCPU is
+stopped while it is running an L2 guest, the EL1 registers hvi reads belong
+to L2, and hvi's plugin view cannot tell them from L1's. So a register or a
+page walk read at that moment can describe L2 while it is labelled as the
+sandbox.
+
+Brig makes no claim that what it or hvi observes of the guest covers
+anything running in an L2 guest. A run that asks for the capability says so
+in the envelope, before it boots:
+
+```
+CAPABILITIES  kvm (nested virtualization: the guest can run VMs of its own; brig's view of the guest does not extend into them)
+```
+
+`brig info` also prints whether this host can give a guest nested
+virtualization, and `brig doctor` answers the same question on its `nested`
+row. The row and the envelope describe the profile, which is what a run
+boots. When a run joins a sandbox that is already running, Brig reads from
+hull's record of the instance whether it was booted nested, and restarts it
+when the profile's capability no longer matches, so the guest the run uses is
+the one its envelope described. A restart that would turn nesting on asks hull
+first whether this host can, and leaves the running sandbox alone if not.
+`brig info`, which boots nothing, keeps the envelope on the profile and adds a
+line when the running sandbox was booted the other way.
 
 ## Credentials
 
@@ -835,6 +914,11 @@ model, run Brig inside a terminal you are willing to lose, or through
 It does not protect the guest home from the agent. Everything in there is
 writable by design, since that is the work.
 
+It does not observe what runs inside a nested guest. A profile with
+`capabilities: [kvm]` lets the agent start VMs of its own, and neither Brig
+nor hvi sees the processes in them. See
+[Nested virtualization](#nested-virtualization-opt-in).
+
 It does not stop an agent from spending your money. The `deny` list keeps a
 metered key from being forwarded by accident, which is a different and much
 smaller promise.
@@ -852,7 +936,9 @@ is code that runs with your credentials.
 
 **The profile author.** A profile names the image, the volumes it hostmounts,
 and any `files:` binding. A `files:` binding is the one channel the deny list
-does not cover. A profile is only as careful as whoever wrote it.
+does not cover. A profile that lists `capabilities: [kvm]` hands the workload
+a hypervisor of its own, and what runs under it is outside what Brig or hvi
+can observe. A profile is only as careful as whoever wrote it.
 
 **hull or nerdctl.** The kernel boundary, the shared-network separation on
 macOS, and every device and namespace decision belong to the runtime, not to

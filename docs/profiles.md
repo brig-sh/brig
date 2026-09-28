@@ -316,6 +316,7 @@ profile of the same name to shadow one instead.
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. Unlike every other field this is about your machine rather than the workload, so it does not travel usefully to anyone else: it is how you pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the microVM: `block`, `virtiofs` or `9pfs`. Left unset, the runtime picks its own default, which is what a profile that only runs an agent wants. Set `block` when the sandbox installs packages and needs a real writable disk rather than a share sized to the image |
 | `genericBoot` | no | The image was never built to be a guest, a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See below |
+| `capabilities` | no | What the guest gets beyond an ordinary microVM. `[kvm]` is the only value: nested virtualization, a `/dev/kvm` in the guest. macOS `hvi` backend only, and off unless listed. See below |
 | `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the guest home, only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both fields are required together, and only `claude-code` declares them, so `--skills` does nothing on the other seven |
 | `onboarding` | no | A first-run state file to seed. See below |
 | `reserved` | no | Marks a profile that owns the guest home a session name can otherwise slug onto. See above |
@@ -797,6 +798,43 @@ builds it is not public. `oras pull ghcr.io/nofireai/hull-assets:<os>-<arch>
 On Linux this needs `nerdctl` rather than `docker`. Docker does not carry
 OCI annotations through to the runtime, and a sandbox booted through it has
 no kernel. Brig refuses up front instead.
+
+## `capabilities`, for a guest that runs VMs of its own
+
+```yaml
+capabilities: [kvm]
+```
+
+`kvm` is the only capability. It asks for nested virtualization: the guest
+kernel boots with EL2, and `/dev/kvm` is there for Firecracker, QEMU or
+anything else that runs VMs through KVM.
+
+Only hull's `hvi` backend provides it, on an Apple silicon Mac whose
+Hypervisor.framework reports EL2 support. Brig refuses a kvm run on `vz`,
+`qemu` or Linux before anything boots, and hull refuses one on a host without
+EL2. [troubleshooting.md](troubleshooting.md#nested-virtualization-requested-but-not-supported-by-this-host)
+has each message.
+`brig doctor` says in advance whether this host can do it.
+
+It gives the agent a hypervisor of its own, and Brig cannot see what runs
+under it. Read
+[security.md](security.md#nested-virtualization-opt-in) before you turn it
+on. No shipped profile lists it, so using it means a profile of your own. The
+repository has one to start from,
+[manual-tests/ubuntu-kvm.yaml](manual-tests/ubuntu-kvm.yaml): the `ubuntu`
+profile with the capability and a block root filesystem.
+
+```bash
+brig agent import ubuntu-kvm.yaml
+brig info ubuntu-kvm
+```
+
+Any value other than `kvm` is refused when the file is read, and so is
+`kvm` listed twice. A guest keeps the capability it booted with. Running the
+profile after the capability was added or removed restarts the sandbox, the
+same way a changed network posture does. Adding it to a profile whose sandbox
+is running, on a host that cannot nest, is refused and leaves that sandbox
+running.
 
 ## Building the image
 

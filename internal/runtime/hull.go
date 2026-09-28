@@ -23,12 +23,24 @@ type hull struct {
 	// while brig is running.
 	pinsOnce sync.Once
 	pins     bool
+	// version caches what `hull --version` printed, which PinsDigest reads and
+	// a message about an outdated hull quotes. Asked once per process.
+	version struct {
+		once sync.Once
+		out  string
+	}
 	// consent caches whether hull has an answer on file about telemetry, which
 	// decides whether an operation the user asked for may be counted. See
 	// consentRecorded.
 	consent struct {
 		once sync.Once
 		on   bool
+	}
+	// nested caches `hull capabilities --json`, asked at most once per
+	// process. See NestedVirt.
+	nested struct {
+		once sync.Once
+		s    NestedSupport
 	}
 }
 
@@ -76,15 +88,39 @@ func (h *hull) Isolation(hv string) Isolation {
 // From then on the store answers. Under --pull=never that first boot fails
 // until the image is pulled again.
 func (h *hull) PinsDigest() bool {
-	h.pinsOnce.Do(func() {
+	h.pinsOnce.Do(func() { h.pins = hullVersionPinsDigest(h.versionOutput()) })
+	return h.pins
+}
+
+// versionOutput is what `hull --version` printed, asked once per process and
+// "" when the binary did not answer.
+func (h *hull) versionOutput() string {
+	h.version.once.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, h.bin, "--version")
 		cmd.Env = mergeEnv(telemetryEnv(false))
 		out, _ := cmd.Output()
-		h.pins = hullVersionPinsDigest(string(out))
+		h.version.out = string(out)
 	})
-	return h.pins
+	return h.version.out
+}
+
+// versionLabel is the version word out of `hull --version`, for a message that
+// names the hull in hand: the version when there is one, the first line of the
+// answer for a build from source, and "unknown version" for no answer.
+func (h *hull) versionLabel() string {
+	out := h.versionOutput()
+	// Through printable as well: the token is every non-space byte after the
+	// number, and an escape among them would act on the terminal the
+	// message is printed to.
+	if v := printable(VersionToken(out)); v != "" {
+		return v
+	}
+	if line := strings.TrimSpace(firstLines(strings.TrimSpace(out), 1)); line != "" {
+		return printable(line)
+	}
+	return "unknown version"
 }
 
 // LocalDigest answers "" on hull, which the verify path reads as "cannot say"
@@ -281,22 +317,30 @@ func (h *hull) Running(name string) (bool, error) {
 // promise stopped instances. Only hull's own "instance not found" reads as
 // absent.
 func (h *hull) Exists(name string) (bool, error) {
+	_, found, err := h.inspect(name)
+	return found, err
+}
+
+// inspect runs `hull inspect` for one instance and returns the record it
+// printed. found is false with a nil error only when hull says the instance is
+// not there; any other failure is an error carrying hull's own words.
+func (h *hull) inspect(name string) (record []byte, found bool, err error) {
 	cmd := exec.Command(h.bin, "inspect", name)
 	cmd.Env = mergeEnv(telemetryEnv(false))
-	var errb bytes.Buffer
-	cmd.Stderr = &errb
-	err := cmd.Run()
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err = cmd.Run()
 	if err == nil {
-		return true, nil
+		return out.Bytes(), true, nil
 	}
 	said := strings.TrimSpace(errb.String())
 	if strings.Contains(said, "instance not found") {
-		return false, nil
+		return nil, false, nil
 	}
 	if said != "" {
-		return false, fmt.Errorf("%s inspect %s: %w: %s", h.bin, name, err, firstLines(said, 3))
+		return nil, false, fmt.Errorf("%s inspect %s: %w: %s", h.bin, name, err, firstLines(said, 3))
 	}
-	return false, fmt.Errorf("%s inspect %s: %w", h.bin, name, err)
+	return nil, false, fmt.Errorf("%s inspect %s: %w", h.bin, name, err)
 }
 
 // List reads the same table Running does. A stopped instance still holds its
@@ -405,6 +449,11 @@ func (h *hull) Run(spec RunSpec) error {
 		// The forwards were installed for a guest that did not boot. On the
 		// shared gateway they would hold the host ports until it restarts.
 		withdrawPublications(spec.Name)
+		// A hull that does not know the flag refuses it in its CLI library's
+		// words, which read like a typo in brig. Said plainly instead.
+		if spec.NestedVirt && strings.Contains(said.buf.String(), "flag provided but not defined: -nested-virt") {
+			return fmt.Errorf("%s run: %s", h.bin, h.predatesNested())
+		}
 		return said.explain(fmt.Errorf("%s run: %w", h.bin, err))
 	}
 	return nil
@@ -420,6 +469,14 @@ func (h *hull) CanRun(spec RunSpec) error { return supports(spec, hypervisor(spe
 // naming the variable that caused it -- and the user who set BRIG_HYPERVISOR
 // is the only one who can undo it.
 func supports(spec RunSpec, hv string) error {
+	// Only hvi can hand the guest EL2. Refused here, without asking hull, so
+	// the refusal names the variable a person can change. Whether this host
+	// can give EL2 at all is hull's to say: it refuses --nested-virt itself,
+	// before it starts anything, on a host that cannot.
+	if spec.NestedVirt && hv != "hvi" {
+		return fmt.Errorf("nested virtualization (capability kvm) needs the hvi backend "+
+			"(BRIG_HYPERVISOR is %q); run it on hvi, or drop the capability from the profile", hv)
+	}
 	if spec.GUI && hv != "vz" {
 		return fmt.Errorf("this profile opens a graphical window, which only the vz backend provides "+
 			"(BRIG_HYPERVISOR is %q); unset it to run this profile", hv)
@@ -542,6 +599,13 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 		if spec.GUITitle != "" {
 			args = append(args, "--gui-title", spec.GUITitle)
 		}
+	}
+	// Only when asked, and ahead of the image: hull reads its flags before the
+	// positional, and a flag after the image would be taken as the guest's.
+	// Absent is the default a test holds, because a guest given EL2 is a guest
+	// running things brig's view does not reach.
+	if spec.NestedVirt {
+		args = append(args, "--nested-virt")
 	}
 	envArgs, envVals, err := splitEnv("--env", spec.Env)
 	if err != nil {

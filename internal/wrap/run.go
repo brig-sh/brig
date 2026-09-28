@@ -183,7 +183,34 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		return fmt.Errorf("cannot tell whether the sandbox %s is already running, so "+
 			"refusing to start a second one over it: %w", c.VMName, err)
 	}
+	// How the running guest booted, asked before anything below acts on it.
+	// Refused, and the sandbox left alone, when the runtime cannot say:
+	// joining would print an envelope about a guest nobody checked, and
+	// restarting on a guess would disconnect sessions over a question that
+	// went unanswered. A sandbox that exited since Running answered is not
+	// running, and takes the ordinary boot below.
+	nestedChanged := false
 	if running {
+		changed, err := c.nestedChanged()
+		switch {
+		case errors.Is(err, runtime.ErrSandboxGone):
+			running = false
+		case err != nil:
+			return fmt.Errorf("cannot tell whether the running sandbox %s was started with "+
+				"nested virtualization, so it was left as it is: %w", c.VMName, err)
+		default:
+			nestedChanged = changed
+		}
+	}
+	if running {
+		// Every case below that restarts stops the sandbox first. When the
+		// restart is what turns nesting on, the host has to be able to do it,
+		// or the stop destroys a working sandbox for a boot that is refused.
+		if nestedChanged && c.Profile.Nested() {
+			if err := c.nestedRestartRefused(); err != nil {
+				return err
+			}
+		}
 		// Two things can be wrong with the mounts of a sandbox that is up, and
 		// both are answered the same way, so they share the one recreate below
 		// rather than growing a second path: a share is bound at boot and
@@ -200,6 +227,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// row for rules nothing is applying.
 			c.warnf("%s. Rules are fixed when a sandbox boots, so it is being restarted; "+
 				"any other session using this sandbox will be disconnected.", c.networkChange())
+		case nestedChanged:
+			// Fixed at boot like the network. Joining would leave the envelope
+			// naming the profile's capability over a guest that has the other
+			// one: no CAPABILITIES row over a guest that still has /dev/kvm.
+			c.warnf("%s. A guest's virtualization is fixed when it boots, so it is being "+
+				"restarted; any other session using this sandbox will be disconnected.",
+				c.nestedChange())
 		case !c.guestMountsWorkspace():
 			c.warnf("the running sandbox is not mounting %s -- its share went stale (the "+
 				"directory was renamed or replaced, or the workspace changed). Restarting "+
@@ -342,6 +376,9 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// decided in the runtime adapter.
 		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
 		GenericBoot: c.Profile.GenericBoot,
+		// From the same derivation checkBackend refused or passed, so a run
+		// cannot boot with the capability after being checked without it.
+		NestedVirt: check.NestedVirt,
 		// Resolved once at the top of EnsureRunning, where the preflight also
 		// read it, so the backend this spec boots is the one that was checked.
 		Hypervisor: check.Hypervisor,

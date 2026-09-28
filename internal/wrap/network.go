@@ -96,7 +96,8 @@ func (n Network) Line() string {
 }
 
 // backendSpec is the part of a run a backend is entitled to refuse: which
-// backend, what network, which rules, and whether it opens a window.
+// backend, what network, which rules, whether it opens a window, and whether
+// the guest gets virtualization of its own.
 //
 // One derivation, used both by the check before anything is started and by the
 // spec that is actually booted, so the two cannot come to different answers
@@ -109,6 +110,7 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Egress:     runtimeEgress(c.Egress),
 		Publish:    c.Publish,
 		GUI:        c.Profile.IsGUI(),
+		NestedVirt: c.Profile.Nested(),
 	}
 }
 
@@ -172,6 +174,98 @@ func (c *Config) networkStale() bool {
 // has nothing to compare, and is left to networkStale as before.
 func (c *Config) postureChanged() bool {
 	return c.recordedNet != "" && c.askedNetwork != "" && c.askedNetwork != c.recordedNet
+}
+
+// nestedChanged reports whether the running sandbox was booted with nested
+// virtualization and this run's profile does not ask for it, or the other way
+// round.
+//
+// Asked of the runtime's record of the instance, which hull wrote when the
+// guest booted. A runtime that keeps none never boots a nested guest, and a
+// profile asking for kvm on it has already been refused by checkBackend.
+func (c *Config) nestedChanged() (bool, error) {
+	inspector, ok := c.Runtime.(runtime.NestedInspector)
+	if !ok {
+		return false, nil
+	}
+	nested, err := inspector.RunningNestedVirt(c.VMName)
+	if err != nil {
+		return false, err
+	}
+	return nested != c.Profile.Nested(), nil
+}
+
+// nestedRestartRefused is why a running sandbox must not be restarted to give
+// it nested virtualization, or nil when it may.
+//
+// Asked before the sandbox is stopped. Without it, a host or a hull that
+// cannot nest is found out only at the boot, after the sandbox this run found
+// running is already gone, and nothing replaces it. A fresh boot has nothing
+// to lose and is left to hull's own refusal.
+func (c *Config) nestedRestartRefused() error {
+	prober, ok := c.Runtime.(runtime.CapabilityProber)
+	if !ok {
+		return nil
+	}
+	s := prober.NestedVirt()
+	switch {
+	case s.Supported:
+		return nil
+	case s.Outdated:
+		return fmt.Errorf("%s. The running sandbox %s was left as it is", s.Detail, c.VMName)
+	default:
+		return fmt.Errorf("nested virtualization requested but not supported by this host: %s. "+
+			"The running sandbox %s was left as it is", s.Detail, c.VMName)
+	}
+}
+
+// runningNested reports how the running sandbox was booted, and whether that
+// is known. It is not known when the runtime keeps no such record, the sandbox
+// is not running, or either question failed: brig info asks this, and a
+// report must not fail over a question it only adds to.
+func (c *Config) runningNested() (nested, known bool) {
+	inspector, ok := c.Runtime.(runtime.NestedInspector)
+	if !ok {
+		return false, false
+	}
+	running, err := c.Runtime.Running(c.VMName)
+	if err != nil || !running {
+		return false, false
+	}
+	nested, err = inspector.RunningNestedVirt(c.VMName)
+	if err != nil {
+		return false, false
+	}
+	return nested, true
+}
+
+// reportRunningNested says, in brig info, when the running guest was booted
+// differently from what the profile asks now. The envelope above it describes
+// the profile, which is what the next run boots; without this line the report
+// would describe a guest that is not the one running.
+func (c *Config) reportRunningNested() {
+	nested, known := c.runningNested()
+	if !known || nested == c.Profile.Nested() {
+		return
+	}
+	if nested {
+		c.sayf("the running sandbox was booted with nested virtualization; the profile no " +
+			"longer asks for it, so the next run restarts it")
+		return
+	}
+	c.sayf("the running sandbox was booted without nested virtualization; the profile asks " +
+		"for it, so the next run restarts it, or refuses if this host cannot nest")
+}
+
+// nestedChange is the first half of the warning printed when a running sandbox
+// is restarted because its nested virtualization differs from the profile's.
+func (c *Config) nestedChange() string {
+	if c.Profile.Nested() {
+		return fmt.Sprintf("this sandbox was started without nested virtualization and %s "+
+			"now asks for it (capabilities: [kvm])", c.Profile.Name)
+	}
+	return fmt.Sprintf("this sandbox was started with nested virtualization and %s no "+
+		"longer asks for it", c.Profile.Name)
 }
 
 // recordPosture records the posture this run has just booted the sandbox on.

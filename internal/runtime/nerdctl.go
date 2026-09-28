@@ -227,6 +227,16 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 	if len(spec.Publish) > 0 && spec.Net == "none" {
 		return offlinePublishError(spec.Publish)
 	}
+	// Refused. Handing the container /dev/kvm
+	// would only mean something under runc, the weaker of the two boundaries,
+	// and under urunc the guest is a microVM with no virtualization of its own
+	// to give. Booting without it would leave the agent to discover a missing
+	// /dev/kvm that the profile plainly asked for.
+	if spec.NestedVirt {
+		return fmt.Errorf("this profile asks for the kvm capability (nested virtualization), " +
+			"which brig provides only on macOS through hull's hvi backend; the Linux runtime " +
+			"does not pass /dev/kvm through")
+	}
 	return nil
 }
 

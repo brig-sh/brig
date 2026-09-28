@@ -42,8 +42,8 @@ ok()  { printf '  ok   %s\n' "$1"; }
 bad() { printf '  FAIL %s\n' "$1"; fail=1; }
 
 # --- the stub runtime ---
-# It answers the questions brig asks (ps, run, exec, stop/rm, and the network
-# gateway one case below needs) and logs
+# It answers the questions brig asks (ps, run, exec, stop/rm, capabilities, and
+# the network gateway one case below needs) and logs
 # every argument it is given, so the test can assert on what reached argv.
 cat > "$WORK/hull" <<'STUB'
 #!/bin/bash
@@ -77,11 +77,12 @@ case "$verb" in
     # Every share is logged, and the FIRST one is the home: brig puts the
     # workspace first and a project after it, and it is the home the marker is
     # read back out of below.
-    name=""; share=""
+    name=""; share=""; nested=""
     : > "$STUB_STATE.shares"
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
+        --nested-virt) nested=1; shift ;;
         --shared-dir)
           printf '%s\n' "$2" >> "$STUB_STATE.shares"
           [ -z "$share" ] && share="$2"
@@ -89,8 +90,24 @@ case "$verb" in
         *) shift ;;
       esac
     done
+    # hull refuses --nested-virt on a host that cannot give a guest EL2,
+    # before it creates anything, in the words every layer uses. A hull
+    # released before the flag rejects it as a flag it does not know.
+    if [ -n "$nested" ]; then
+      case "${STUB_NESTED:-missing}" in
+        1) ;;
+        0) printf 'error: nested virtualization requested but not supported by this host: stub host has no EL2\n' >&2
+           exit 1 ;;
+        *) printf 'Incorrect Usage: flag provided but not defined: -nested-virt\n' >&2
+           printf 'error: flag provided but not defined: -nested-virt\n' >&2
+           exit 1 ;;
+      esac
+    fi
     printf '%s' "$name" > "$STUB_STATE"
     printf '%s' "${share%%:*}" > "$STUB_STATE.share"
+    # The instance record keeps whether the guest was booted with EL2, the
+    # way hull's does, so inspect can answer for a sandbox brig joins.
+    if [ -n "$nested" ]; then : > "$STUB_STATE.nested"; else rm -f "$STUB_STATE.nested"; fi
     # Record which credential values arrived through the environment rather
     # than through argv, and the HOME this process runs with.
     printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG"
@@ -215,12 +232,27 @@ s.bind(sys.argv[1])
 s.listen(8)
 time.sleep(120)' "$qsock" network-gateway "$@"
     ;;
+  capabilities)
+    # `hull capabilities --json`. STUB_NESTED picks the host: 1 can nest, 0
+    # cannot, and unset is a hull released before the command existed,
+    # answered the way 0.1.0-rc29 answers it: a usage error and exit 1.
+    case "${STUB_NESTED:-missing}" in
+      1) printf '{"schemaVersion":1,"nestedVirt":{"supported":true,"backend":"hvi","detail":"stub EL2"}}\n' ;;
+      0) printf '{"schemaVersion":1,"nestedVirt":{"supported":false,"backend":"hvi","detail":"stub host has no EL2"}}\n' ;;
+      *) printf 'Incorrect Usage: flag provided but not defined: -json\n' >&2; exit 1 ;;
+    esac
+    ;;
   inspect)
     # An instance holds its name while it runs and once it stops. Any other
     # name is not there, in the words brig reads for that.
     if [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] ||
        [ "$1" = "$(cat "$STUB_STATE.stopped" 2>/dev/null)" ]; then
-      printf '{"name": "%s"}\n' "$1"
+      # nestedVirt only when set, as hull leaves it out when false.
+      if [ -f "$STUB_STATE.nested" ]; then
+        printf '{"name": "%s", "nestedVirt": true}\n' "$1"
+      else
+        printf '{"name": "%s"}\n' "$1"
+      fi
     else
       printf 'error: instance not found: %s\n' "$1" >&2
       exit 1
@@ -230,7 +262,7 @@ time.sleep(120)' "$qsock" network-gateway "$@"
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
   rm)
-    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts"
+    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts" "$STUB_STATE.nested"
     ;;
 esac
 exit 0
@@ -2181,6 +2213,216 @@ case "$last" in
   *) bad "brig --json run prints a compact Run object -- got: $last" ;;
 esac
 "$WORK/brig" rm --all -y > /dev/null 2>&1
+
+echo "== nested virtualization =="
+# A profile asks for a guest with virtualization of its own with
+# `capabilities: [kvm]`, and only hvi can give one. Off by default is the claim
+# worth most here, so the ordinary runs come first: nothing asked, nothing on
+# argv, and hull not even asked the question.
+: > "$STUB_LOG"
+env BRIG_HYPERVISOR=hvi BRIG_NETWORK=offline "$WORK/brig" run claude -d > "$WORK/nv-default.out" 2>&1
+rc=$?
+if [ "$rc" != 0 ]; then
+  bad "an ordinary hvi run failed: $(cat "$WORK/nv-default.out")"
+elif grep '^argv: run ' "$STUB_LOG" | grep -q -- '--nested-virt'; then
+  bad "an ordinary run carries --nested-virt: $(grep '^argv: run ' "$STUB_LOG")"
+elif ! grep -q '^argv: run ' "$STUB_LOG"; then
+  bad "the ordinary hvi run never booted, so nothing was measured"
+else
+  ok "an ordinary run boots without --nested-virt"
+fi
+grep -q '^argv: capabilities' "$STUB_LOG" \
+  && bad "an ordinary run asked hull about nested virtualization" \
+  || ok "an ordinary run does not ask hull about nested virtualization"
+grep -q '^CAPABILITIES' "$WORK/nv-default.out" \
+  && bad "an ordinary run printed a CAPABILITIES row: $(cat "$WORK/nv-default.out")" \
+  || ok "an ordinary run prints no CAPABILITIES row"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
+# A profile of your own that asks. Offline, so the hvi boot needs no gateway.
+cat > "$WORK/kvmtest.yaml" <<'YAML'
+name: kvmtest
+kind: shell
+binary: bash
+image: docker.io/library/ubuntu:latest
+hypervisor: hvi
+genericBoot: true
+guestHome: /root/work
+network: offline
+mem: 1024
+cpus: 1
+capabilities: [kvm]
+YAML
+"$WORK/brig" agent import "$WORK/kvmtest.yaml" > "$WORK/nv-import.out" 2>&1 \
+  && ok "a profile listing capabilities: [kvm] imports" \
+  || bad "a profile listing capabilities: [kvm] imports: $(cat "$WORK/nv-import.out")"
+printf 'name: kvmbad\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\ncapabilities: [gpu]\n' \
+  | "$WORK/brig" agent import - > "$WORK/nv-bad.out" 2>&1 \
+  && bad "an unknown capability was accepted" \
+  || { grep -q 'is not one of: kvm' "$WORK/nv-bad.out" \
+         && ok "an unknown capability is refused, naming the one there is" \
+         || bad "an unknown capability is refused -- got: $(cat "$WORK/nv-bad.out")"; }
+
+# On a host that can: the flag reaches hull, ahead of the image, and the
+# envelope says what the reader is about to trust. --verbose, because a quiet
+# run keeps the envelope to itself.
+: > "$STUB_LOG"
+env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" --verbose run kvmtest -d > "$WORK/nv-on.out" 2>&1
+rc=$?
+runline="$(grep '^argv: run ' "$STUB_LOG")"
+if [ "$rc" != 0 ]; then
+  bad "a kvm run on a host that can nest failed: $(cat "$WORK/nv-on.out")"
+elif ! printf '%s' "$runline" | grep -q -- ' --nested-virt '; then
+  bad "the kvm run did not put --nested-virt on hull's command line: $runline"
+elif ! printf '%s' "$runline" | grep -q -- ' --nested-virt .* docker.io/library/ubuntu:latest$'; then
+  bad "--nested-virt is not ahead of the image: $runline"
+else
+  ok "a kvm run puts --nested-virt on hull's command line, ahead of the image"
+fi
+grep -q "^CAPABILITIES  kvm (nested virtualization: the guest can run VMs of its own; brig's view of the guest does not extend into them)$" "$WORK/nv-on.out" \
+  && ok "the envelope names the capability before the boot" \
+  || bad "the envelope names the capability -- got: $(cat "$WORK/nv-on.out")"
+grep -q '^argv: capabilities' "$STUB_LOG" \
+  && bad "the run path asked hull about capabilities: hull refuses the flag itself" \
+  || ok "and the run path asked hull no capabilities question"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
+# On vz: refused on the spec alone. hull is not asked the question, and is
+# never told to boot.
+: > "$STUB_LOG"
+env STUB_NESTED=1 BRIG_HYPERVISOR=vz "$WORK/brig" run kvmtest -d > "$WORK/nv-vz.out" 2>&1
+rc=$?
+[ "$rc" != 0 ] && ok "a kvm run on vz is refused" || bad "a kvm run on vz started: $(cat "$WORK/nv-vz.out")"
+grep -qF 'nested virtualization (capability kvm) needs the hvi backend (BRIG_HYPERVISOR is "vz")' "$WORK/nv-vz.out" \
+  && ok "the refusal names the backend and the variable" \
+  || bad "the vz refusal names the backend -- got: $(cat "$WORK/nv-vz.out")"
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "hull was told to boot a kvm run on vz: $(grep '^argv: run ' "$STUB_LOG")" \
+  || ok "and hull was never told to boot it"
+grep -q '^argv: capabilities' "$STUB_LOG" \
+  && bad "hull was asked about capabilities for a run refused on the spec" \
+  || ok "and hull was not asked about capabilities"
+
+# On a host that cannot, hull refuses --nested-virt before it creates
+# anything, in the phrase every layer uses, and brig passes its words on. A hull
+# released before the flag rejects it as unknown, and brig says to upgrade it.
+# Either way no instance is left behind.
+for host in 0 missing; do
+  : > "$STUB_LOG"
+  rm -f "$STUB_STATE"
+  env STUB_NESTED="$host" BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > "$WORK/nv-no.out" 2>&1
+  rc=$?
+  label="STUB_NESTED=$host"
+  [ "$rc" != 0 ] && ok "$label: a kvm run is refused" \
+    || bad "$label: a kvm run started: $(cat "$WORK/nv-no.out")"
+  case "$host" in
+    0) want='nested virtualization requested but not supported by this host: stub host has no EL2' ;;
+    *) want='this hull (0.1.0-rc23) predates nested virtualization; upgrade hull' ;;
+  esac
+  grep -qF "$want" "$WORK/nv-no.out" \
+    && ok "$label: the refusal carries hull's own words" \
+    || bad "$label: the refusal carries hull's own words -- got: $(cat "$WORK/nv-no.out")"
+  [ -f "$STUB_STATE" ] \
+    && bad "$label: an instance was left behind" \
+    || ok "$label: no instance was left behind"
+  grep -q '^argv: capabilities' "$STUB_LOG" \
+    && bad "$label: the run path asked hull about capabilities" \
+    || ok "$label: the run path asked hull no capabilities question"
+done
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
+# A plain sandbox running, and the same name re-imported with kvm. The restart
+# that would turn nesting on stops the sandbox first, so on a host or a hull
+# that cannot nest brig has to refuse before the stop: otherwise the running
+# sandbox is destroyed and hull's refusal at boot leaves nothing in its place.
+grep -v '^capabilities:' "$WORK/kvmtest.yaml" > "$WORK/kvmplain.yaml"
+for host in 0 missing; do
+  "$WORK/brig" agent import "$WORK/kvmplain.yaml" > /dev/null 2>&1
+  env BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > /dev/null 2>&1
+  "$WORK/brig" agent import "$WORK/kvmtest.yaml" > /dev/null 2>&1
+  : > "$STUB_LOG"
+  env STUB_NESTED="$host" BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > "$WORK/nv-up.out" 2>&1
+  rc=$?
+  label="STUB_NESTED=$host, sandbox running plain"
+  [ "$rc" != 0 ] && ok "$label: turning kvm on is refused" \
+    || bad "$label: turning kvm on went ahead: $(cat "$WORK/nv-up.out")"
+  grep -q 'was left as it is' "$WORK/nv-up.out" \
+    && ok "$label: and says the sandbox was left alone" \
+    || bad "$label: the refusal -- got: $(cat "$WORK/nv-up.out")"
+  grep -qE '^argv: (stop|rm) ' "$STUB_LOG" \
+    && bad "$label: the running sandbox was stopped or removed: $(grep -E '^argv: (stop|rm) ' "$STUB_LOG")" \
+    || ok "$label: no stop or rm was sent"
+  [ "$(cat "$STUB_STATE" 2>/dev/null)" = brig-kvmtest ] \
+    && ok "$label: the sandbox is still running" \
+    || bad "$label: the sandbox is gone"
+  "$WORK/brig" rm --all -y > /dev/null 2>&1
+done
+
+# A sandbox left running nested, joined by the same profile after kvm was
+# taken out of it. Joining would print no CAPABILITIES row over a guest that
+# still has /dev/kvm, so it is restarted, the way a changed network posture
+# is, and says why. brig reads how the guest booted from hull's own record.
+env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > /dev/null 2>&1
+"$WORK/brig" agent import "$WORK/kvmplain.yaml" > /dev/null 2>&1
+: > "$STUB_LOG"
+env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" run kvmtest -d > "$WORK/nv-join.out" 2>&1
+rc=$?
+[ "$rc" = 0 ] && ok "a profile without kvm joining a nested sandbox runs" \
+  || bad "a profile without kvm joining a nested sandbox failed: $(cat "$WORK/nv-join.out")"
+grep -q '^argv: inspect brig-kvmtest' "$STUB_LOG" \
+  && ok "the join reads how the guest booted from hull's record" \
+  || bad "the join never asked hull how the guest booted: $(grep '^argv:' "$STUB_LOG")"
+grep -q 'started with nested virtualization and kvmtest no longer asks for it' "$WORK/nv-join.out" \
+  && ok "the restart says the guest was nested and the profile no longer is" \
+  || bad "the restart is explained -- got: $(cat "$WORK/nv-join.out")"
+if ! grep -q '^argv: stop brig-kvmtest' "$STUB_LOG"; then
+  bad "the nested guest was joined silently, not restarted: $(grep '^argv:' "$STUB_LOG")"
+elif grep '^argv: run ' "$STUB_LOG" | grep -q -- '--nested-virt'; then
+  bad "the restart booted the guest nested again: $(grep '^argv: run ' "$STUB_LOG")"
+elif ! grep -q '^argv: run ' "$STUB_LOG"; then
+  bad "the nested guest was stopped and never rebooted"
+else
+  ok "the nested guest is restarted without --nested-virt"
+fi
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+"$WORK/brig" agent import "$WORK/kvmtest.yaml" > /dev/null 2>&1
+
+# brig info: the row, the capability and the host's answer, in text and JSON.
+env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" info kvmtest > "$WORK/nv-info.out" 2>&1
+for want in '^CAPABILITIES  kvm (nested virtualization' '^brig: capabilities: kvm$' \
+            '^brig: nested virtualization: supported (backend hvi)$'; do
+  grep -q "$want" "$WORK/nv-info.out" \
+    && ok "info prints $want" || bad "info prints $want -- got: $(cat "$WORK/nv-info.out")"
+done
+env STUB_NESTED=1 BRIG_HYPERVISOR=hvi "$WORK/brig" --json info kvmtest > "$WORK/nv-info.json" 2>/dev/null
+tr -d ' \n' < "$WORK/nv-info.json" > "$WORK/nv-info.flat"
+grep -q '"capabilities":\["kvm"\]' "$WORK/nv-info.flat" \
+  && ok "info --json carries the capability" \
+  || bad "info --json carries the capability -- got: $(cat "$WORK/nv-info.json")"
+grep -q '"nestedVirtualization":{"supported":true,"backend":"hvi"' "$WORK/nv-info.flat" \
+  && ok "info --json carries the host's answer" \
+  || bad "info --json carries the host's answer -- got: $(cat "$WORK/nv-info.json")"
+"$WORK/brig" info claude > "$WORK/nv-info-claude.out" 2>&1
+grep -q '^CAPABILITIES\|^brig: capabilities:' "$WORK/nv-info-claude.out" \
+  && bad "info on a profile that asks for nothing names a capability" \
+  || ok "info on a profile that asks for nothing names no capability"
+grep -q '^brig: nested virtualization: this hull (0.1.0-rc23) predates nested virtualization; upgrade hull$' "$WORK/nv-info-claude.out" \
+  && ok "info names a hull too old to answer, and does not call the host unable" \
+  || bad "info on a hull too old to answer -- got: $(grep nested "$WORK/nv-info-claude.out")"
+
+# doctor: the nested row, which never gates the exit.
+env STUB_NESTED=1 "$WORK/brig" doctor > "$WORK/nv-doc.out" 2>&1
+grep -q '^  ok  nested    supported (hull hvi backend; stub EL2)$' "$WORK/nv-doc.out" \
+  && ok "doctor reports a host that can nest" \
+  || bad "doctor reports a host that can nest -- got: $(grep nested "$WORK/nv-doc.out")"
+env STUB_NESTED=0 "$WORK/brig" doctor > "$WORK/nv-doc0.out" 2>&1
+rc=$?
+grep -q '^  --  nested    not supported on this host: stub host has no EL2$' "$WORK/nv-doc0.out" \
+  && ok "doctor reports a host that cannot" \
+  || bad "doctor reports a host that cannot -- got: $(grep nested "$WORK/nv-doc0.out")"
+[ "$rc" = 0 ] && ok "and a host that cannot nest still exits 0" \
+  || bad "a host that cannot nest made doctor exit $rc"
+"$WORK/brig" agent rm kvmtest -y > /dev/null 2>&1
 
 echo "== doctor =="
 # brig doctor reports the prerequisites a first run hits, in boot order. On the

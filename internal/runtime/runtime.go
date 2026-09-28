@@ -109,6 +109,11 @@ type RunSpec struct {
 	// urunc metadata. The runtime supplies the kernel and initrd; see
 	// bootArtifacts.
 	GenericBoot bool
+	// NestedVirt asks for a guest with hardware virtualization of its own: a
+	// kernel booted with EL2 and a /dev/kvm to run VMs with. It comes from a
+	// profile's `capabilities: [kvm]` and reaches hull as --nested-virt. Only
+	// the hvi backend provides it; every adapter refuses it where it cannot.
+	NestedVirt bool
 	// Egress is what this sandbox may open a connection to: the rules of
 	// every policy bound to it, merged. The zero value is unfiltered, which
 	// is what every sandbox got before anything read a policy at boot.

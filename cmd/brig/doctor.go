@@ -22,7 +22,8 @@ import (
 
 // brig doctor reports, one line each and in the order a boot hits them, the
 // prerequisites a first run can fail on: the host OS, hardware virtualization,
-// the runtime binary, its boot assets, the signature tooling, the profiles, the
+// the runtime binary, its boot assets, whether it can nest virtualization, the
+// signature tooling, the profiles, the
 // secret store, the daemon, and -- when an agent is named -- its image. A first
 // run that dies at any of these surfaces the failure in the words of the layer
 // underneath (a macOS host too old shows up as `dyld: missing symbol` from the
@@ -181,6 +182,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		virtualCheck(),
 		rtCheck,
 		bootCheck(rt),
+		nestedCheck(rt),
 		verifyCheck(),
 		profilesCheck(loadErr),
 		secretsCheck(),
@@ -332,6 +334,44 @@ func bootCheck(rt runtime.Runtime) check {
 	}
 	return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
 		Fix: "run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them"}
+}
+
+// nestedCheck reports whether the runtime can give a guest virtualization of
+// its own, which a profile asks for with `capabilities: [kvm]`. Not reached
+// without a runtime, since the runtime is what is asked.
+//
+// Never !! and never a gate, the same rule virtualCheck follows. Most hosts
+// will never run a kvm profile, and a Mac without EL2, or a hull that cannot
+// answer, is not something to fix before brig can be used: it is a fact about
+// the host, reported so the answer is on hand before anyone writes the profile.
+func nestedCheck(rt runtime.Runtime) check {
+	if rt == nil {
+		return notReached("nested")
+	}
+	prober, ok := rt.(runtime.CapabilityProber)
+	if !ok {
+		return check{Name: "nested", State: stateInfo,
+			Finding: "not available: the " + rt.Kind() + " runtime does not pass /dev/kvm through"}
+	}
+	s := prober.NestedVirt()
+	switch {
+	case s.Outdated:
+		return check{Name: "nested", State: stateInfo, Finding: s.Detail}
+	case s.Supported:
+		backend := s.Backend
+		if backend == "" {
+			backend = "hvi"
+		}
+		finding := "supported (" + rt.Kind() + " " + backend + " backend"
+		if s.Detail != "" {
+			finding += "; " + s.Detail
+		}
+		return check{Name: "nested", State: statePass, Finding: finding + ")"}
+	case s.Detail != "":
+		return check{Name: "nested", State: stateInfo, Finding: "not supported on this host: " + s.Detail}
+	default:
+		return check{Name: "nested", State: stateInfo, Finding: "not supported on this host"}
+	}
 }
 
 // verifyCheck names the signature tooling and the mode it runs under. It reads

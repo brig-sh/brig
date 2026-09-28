@@ -203,7 +203,21 @@ brig info claude
 
 Prints the execution envelope without booting anything. The envelope has the
 sandbox name, the isolation, the guest home, the image, the verification
-mode, the network, every published port and the credentials by name.
+mode, the network, every published port and the credentials by name. A
+profile that lists `capabilities: [kvm]` adds a `CAPABILITIES` row, which
+says that brig's view of the guest does not extend into the VMs it runs (see
+[security.md](security.md#nested-virtualization-opt-in)).
+
+On macOS the report under the envelope also says whether this host can give a
+guest nested virtualization: `nested virtualization: supported (backend hvi)`,
+`not supported on this host: <reason>`, where the reason is hull's or why
+hull could not answer, or `this hull (<version>) predates nested
+virtualization; upgrade hull`. When the sandbox is running and was booted
+with or without nested virtualization against what the profile now asks, one
+more line says so and that the next run restarts it. `--json` carries the same
+facts as `capabilities` and `nestedVirtualization`, the running guest's state
+as `nestedVirtualization.runningNested`, each left out when there is nothing
+to report.
 
 `info` fails only when a required secret cannot be resolved. A declared
 secret marked `required: false` prints a warning, and the command still
@@ -269,13 +283,13 @@ that is already running says to remove it and run it again.
 brig doctor
 ```
 
-Checks, one line each: the brig build, the host, the hypervisor, the
-runtime, the boot assets, cosign, the profile directory, the secret store and
-brigd. The first line is the same build `brig version` prints, so a report
-pasted whole says which binary produced it. A running brigd is asked which
-build it is; one that differs from the brig binary is marked `!!` with a
-restart as its fix, because a daemon left up across an upgrade serves the
-old code with no other sign.
+Checks, one line each: the brig build, the host, the hypervisor, the runtime,
+the boot assets, whether the runtime can give a guest nested virtualization,
+cosign, the profile directory, the secret store and brigd. The first line is
+the same build `brig version` prints, so a report pasted whole says which
+binary produced it. A running brigd is asked which build it is; one that
+differs from the brig binary is marked `!!` with a restart as its fix, because
+a daemon left up across an upgrade serves the old code with no other sign.
 
 ```bash
 brig doctor claude
@@ -294,8 +308,10 @@ Prints the same checks as a JSON array, each with `name`, `state`, `finding`
 and, when the check failed, `fix`.
 
 Only two checks gate the exit status: a missing or broken runtime, and a
-secret store that will not open. Every other finding, including one marked
-`!!`, prints its fix and leaves the exit status at `0`.
+secret store that will not open. The `nested` row is never `!!`: a host that
+cannot nest, or a hull that cannot answer, is reported with `--`. Every other
+finding, including one marked `!!`, prints its fix and leaves the exit status
+at `0`.
 
 ### `brig version`
 

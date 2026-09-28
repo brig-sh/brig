@@ -27,6 +27,8 @@ func (c *Config) Status(set creds.Set) {
 	} else {
 		c.sayf("runtime unavailable (no runtime found on PATH)")
 	}
+	c.reportNested()
+	c.reportRunningNested()
 	c.sayf("image %s (pull %s)", c.Image, c.Pull)
 	c.reportVerify()
 
@@ -78,6 +80,40 @@ func (c *Config) Status(set creds.Set) {
 	if c.GitIdentity {
 		c.sayf("guest commit identity, as resolved in %s:", c.Cwd)
 		c.sayf("  %s <%s> (unsigned)", orUnset(c.GitName), orUnset(c.GitEmail))
+	}
+}
+
+// reportNested says what the profile asks for beyond an ordinary microVM, and
+// whether the runtime can give a guest virtualization of its own.
+//
+// The host's answer is printed whether or not this profile asks, so the report
+// answers "could I turn this on here" before anyone edits a profile to find
+// out. A runtime that has no answer to give, such as the Linux one, which
+// passes no /dev/kvm through, prints no line.
+func (c *Config) reportNested() {
+	if len(c.Profile.Capabilities) > 0 {
+		c.sayf("capabilities: %s", strings.Join(c.Profile.Capabilities, ", "))
+	}
+	prober, ok := c.Runtime.(runtime.CapabilityProber)
+	if !ok {
+		return
+	}
+	c.sayf("nested virtualization: %s", nestedLine(prober.NestedVirt()))
+}
+
+// nestedLine is the runtime's answer as the report prints it.
+func nestedLine(s runtime.NestedSupport) string {
+	switch {
+	case s.Outdated:
+		return s.Detail
+	case s.Supported && s.Backend != "":
+		return "supported (backend " + s.Backend + ")"
+	case s.Supported:
+		return "supported"
+	case s.Detail != "":
+		return "not supported on this host: " + s.Detail
+	default:
+		return "not supported on this host"
 	}
 }
 

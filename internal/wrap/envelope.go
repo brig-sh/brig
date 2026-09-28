@@ -113,7 +113,24 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 	if line := c.policyLine(); line != "" {
 		rows = append(rows, envelopeRow{"POLICY", line})
 	}
+	// Only when the profile asks, and then always: a guest with a hypervisor
+	// of its own is the one run where what brig observes of the guest stops
+	// covering everything that runs in it, and the reader has to be told that
+	// before it boots.
+	if line := c.capabilitiesLine(); line != "" {
+		rows = append(rows, envelopeRow{"CAPABILITIES", line})
+	}
 	return rows
+}
+
+// capabilitiesLine is the CAPABILITIES row: what this run's guest gets beyond
+// an ordinary microVM, or "" when it gets nothing more.
+func (c *Config) capabilitiesLine() string {
+	if !c.Profile.Nested() {
+		return ""
+	}
+	return profile.CapabilityKVM + " (nested virtualization: the guest can run VMs of its own; " +
+		"brig's view of the guest does not extend into them)"
 }
 
 // policyLine is the POLICY row: which policies this run answers to.
