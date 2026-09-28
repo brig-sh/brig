@@ -9,19 +9,11 @@ import (
 )
 
 // scratchIsolatedDir points the isolated sockets -- and the network map beside
-// -- at a directory this test owns.
-//
-// Not t.TempDir(), which names the directory after the test: on macOS that
-// alone can push a socket path past what one fits in, and a test would be
-// exercising the shortening rather than what it is about.
+// them -- at a directory this test owns. It is scratchHome, named for what
+// these tests use it for.
 func scratchIsolatedDir(t *testing.T) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "gw")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("BRIG_GATEWAY_DIR", dir)
+	scratchHome(t)
 }
 
 // Two sandboxes must not land on one network, and a sandbox must keep its own

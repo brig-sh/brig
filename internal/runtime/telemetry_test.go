@@ -20,6 +20,9 @@ func stubTelemetryHull(t *testing.T, state string) (*hull, func() string) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stand-in is not portable to windows")
 	}
+	// The boot and the stop these tests drive release the gateway under the
+	// sandbox's name, which without a home of their own is the real ~/.brig.
+	scratchHome(t)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "env.log")
 	script := `#!/bin/sh

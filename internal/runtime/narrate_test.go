@@ -27,6 +27,7 @@ func stubRuntimeBin(t *testing.T, said string, status int) string {
 // fails must still quote what the runtime said. Losing it would make a broken
 // boot unreportable.
 func TestRunQuotesWhatTheRuntimeSaidWhenItFails(t *testing.T) {
+	scratchHome(t)
 	h := &hull{bin: stubRuntimeBin(t, "pulling ghcr.io/x\nError: no space left on device", 1)}
 
 	err := h.Run(RunSpec{Name: "brig-x", Image: "img", Hypervisor: "vz"})
@@ -41,6 +42,7 @@ func TestRunQuotesWhatTheRuntimeSaidWhenItFails(t *testing.T) {
 // A boot that works says nothing at all: what the runtime printed on its way
 // up is held and then dropped, which is the whole point of holding it.
 func TestRunSaysNothingWhenItWorks(t *testing.T) {
+	scratchHome(t)
 	h := &hull{bin: stubRuntimeBin(t, "pulling ghcr.io/x", 0)}
 
 	if err := h.Run(RunSpec{Name: "brig-x", Image: "img", Hypervisor: "vz"}); err != nil {
@@ -51,6 +53,7 @@ func TestRunSaysNothingWhenItWorks(t *testing.T) {
 // Under --verbose the caller hands the runtime a writer, and the output goes
 // there as it happens rather than being held for a failure that may not come.
 func TestRunStreamsTheRuntimeOutputWhenItIsAskedFor(t *testing.T) {
+	scratchHome(t)
 	h := &hull{bin: stubRuntimeBin(t, "pulling ghcr.io/x", 0)}
 
 	var progress bytes.Buffer
@@ -66,6 +69,7 @@ func TestRunStreamsTheRuntimeOutputWhenItIsAskedFor(t *testing.T) {
 // Streamed output is not quoted back on the error as well: the reader watched
 // it happen, and repeating it at the bottom reads like a second failure.
 func TestRunDoesNotQuoteOutputItAlreadyPrinted(t *testing.T) {
+	scratchHome(t)
 	h := &hull{bin: stubRuntimeBin(t, "Error: no space left on device", 1)}
 
 	var progress bytes.Buffer

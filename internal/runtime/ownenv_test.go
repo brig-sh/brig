@@ -46,8 +46,7 @@ func adapterCalls(rt func(bin string) Runtime, env []Var) map[string]func(bin st
 // credential. The runtime must keep the host's HOME, the guest HOME must be on
 // its command line, and the credential must not.
 func checkGuestHome(t *testing.T, flag string, rt func(bin string) Runtime) {
-	host := t.TempDir()
-	t.Setenv("HOME", host)
+	host := scratchHome(t)
 	t.Setenv("BRIG_ENV_ARGV", "")
 	env := []Var{{Name: "HOME", Value: "/root"}, {Name: "GH_TOKEN", Value: "ghp_secret"}}
 	for name, call := range adapterCalls(rt, env) {
@@ -91,8 +90,9 @@ func TestNerdctlRunsWithTheHostHome(t *testing.T) {
 // both adapters and on both paths. See splitEnv.
 func TestAStoredSecretTheRuntimeReadsStartsNothing(t *testing.T) {
 	// A failed hull boot withdraws the sandbox's publications, which reads the
-	// gateway state under HOME.
-	t.Setenv("HOME", t.TempDir())
+	// gateway state under HOME. The directory and the socket are emptied after
+	// scratchHome so that it is HOME the lookup falls back to.
+	scratchHome(t)
 	t.Setenv("BRIG_GATEWAY_DIR", "")
 	t.Setenv("BRIG_GATEWAY_SOCK", "")
 	env := []Var{{Name: "HOME", Value: "sk-fromkeychain", Secret: true}}

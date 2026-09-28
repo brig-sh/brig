@@ -9,9 +9,12 @@ import (
 )
 
 // scratchGatewayDir points the socket -- and so the address map beside it --
-// at a directory this test owns.
+// at a directory this test owns. BRIG_GATEWAY_DIR is emptied because it wins
+// over the socket, and one set in the developer's shell took the map there.
 func scratchGatewayDir(t *testing.T) {
 	t.Helper()
+	scratchHome(t)
+	t.Setenv("BRIG_GATEWAY_DIR", "")
 	t.Setenv("BRIG_GATEWAY_SOCK", filepath.Join(t.TempDir(), "gateway.sock"))
 }
 
