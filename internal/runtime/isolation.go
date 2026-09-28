@@ -72,16 +72,22 @@ var sharedKernelShims = map[string]bool{
 // another name -- may well be a VM, and brig has no way to establish that from
 // a shim name, so it says so instead of picking the answer the reader would
 // prefer.
-func containerdIsolation(driver, shim string) Isolation {
+//
+// shim decides the boundary and named is how the row prints it, which is the
+// shim with the setting that chose it when one did. monitor is the hypervisor
+// brig passed urunc, or "" for urunc's own default. Only urunc reads it, so
+// only the urunc row names a hypervisor.
+func containerdIsolation(driver, shim, named, monitor string) Isolation {
 	over := driver + " over containerd"
 	switch {
 	case shim == uruncShim || strings.HasPrefix(shim, "io.containerd.urunc."):
-		return Isolation{BoundaryVM, fmt.Sprintf("%s, %s", over, shim)}
+		return Isolation{BoundaryVM, fmt.Sprintf("%s, %s, hypervisor %s",
+			over, named, orDefault(monitor, "urunc default"))}
 	case sharedKernelShims[shim]:
 		return Isolation{BoundaryContainer, fmt.Sprintf(
-			"%s, %s: the guest shares the host kernel", over, shim)}
+			"%s, %s: the guest shares the host kernel", over, named)}
 	default:
 		return Isolation{BoundaryUnknown, fmt.Sprintf(
-			"%s, %s: brig cannot tell whether that shim boots a kernel of its own", over, shim)}
+			"%s, %s: brig cannot tell whether that shim boots a kernel of its own", over, named)}
 	}
 }

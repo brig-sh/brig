@@ -54,7 +54,7 @@ func TestEnvelopeNamesTheBoundary(t *testing.T) {
 		"SESSION      review",
 		"PROFILE      claude-code",
 		"SANDBOX      brig-claude-code-review (hull)",
-		"ISOLATION    microVM (hull, vz backend)",
+		"ISOLATION    microVM (hull, vz backend, rootfs hull default)",
 		"WORKSPACE    /Users/me/src/brig (read-write)",
 		"IMAGE        ghcr.io/brig-sh/claude-code:latest (pull missing)",
 	} {
@@ -185,7 +185,7 @@ func TestEnvelopeNamesTheResolvedHypervisor(t *testing.T) {
 	c.renderEnvelope(block, creds.Set{})
 
 	got := block.String()
-	if !strings.Contains(got, "ISOLATION    microVM (hull, hvi backend)") {
+	if !strings.Contains(got, "ISOLATION    microVM (hull, hvi backend, rootfs hull default)") {
 		t.Errorf("the isolation row does not name the backend the run resolved to:\n%s", got)
 	}
 }
@@ -273,5 +273,44 @@ func TestEnvelopeOmitsProjectWhenThereIsNone(t *testing.T) {
 	c.renderEnvelope(out, creds.Set{})
 	if strings.Contains(out.String(), "PROJECT") {
 		t.Errorf("a run with no project printed a PROJECT row:\n%s", out.String())
+	}
+}
+
+// The row names the rootfs type the boot is handed, so it reads the one
+// resolution the run reads: BRIG_ROOTFS_TYPE over the profile's own field. brig
+// info --json carries the same line.
+func TestEnvelopeNamesTheRootfsTypeTheRunPasses(t *testing.T) {
+	c := envelopeConfig()
+	c.Profile.RootfsType = "virtiofs"
+	if got := c.isolationLine(); !strings.Contains(got, "rootfs virtiofs") {
+		t.Errorf("the row does not name the profile's rootfs type: %s", got)
+	}
+
+	c.env = NewEnv(c.Profile.Name, oneVar("BRIG_ROOTFS_TYPE", "block"))
+	if got := c.backendSpec(c.hypervisor()).RootfsType; got != "block" {
+		t.Errorf("the boot is handed rootfs %q, want the setting's block", got)
+	}
+	block := &bytes.Buffer{}
+	c.renderEnvelope(block, creds.Set{})
+	if !strings.Contains(block.String(), "rootfs block") {
+		t.Errorf("the row does not name the rootfs type the setting passes:\n%s", block)
+	}
+	if strings.Contains(block.String(), "virtiofs") {
+		t.Errorf("the row names the profile's rootfs type, which the setting replaced:\n%s", block)
+	}
+	if got := c.InfoData(creds.Set{}).Isolation; got != c.isolationLine() {
+		t.Errorf("brig info --json isolation = %q, want the row %q", got, c.isolationLine())
+	}
+}
+
+// Nothing set, nothing passed: the row says hull picks rather than naming a
+// type brig never handed it.
+func TestEnvelopeNamesNoRootfsTypeItDidNotPass(t *testing.T) {
+	c := envelopeConfig()
+	got := c.isolationLine()
+	for _, never := range []string{"block", "virtiofs", "9pfs"} {
+		if strings.Contains(got, never) {
+			t.Errorf("the row names %s with no rootfs type set: %s", never, got)
+		}
 	}
 }

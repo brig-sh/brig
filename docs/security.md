@@ -72,10 +72,10 @@ Which of them you got is the `ISOLATION` row of the execution envelope, printed
 before every boot and by `brig info`:
 
 ```
-ISOLATION    microVM (hull, hvi backend)
-ISOLATION    microVM (hull, vz backend)
-ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2)
-ISOLATION    container (docker over containerd, runc: the guest shares the host kernel)
+ISOLATION    microVM (hull, hvi backend, rootfs hull default)
+ISOLATION    microVM (hull, vz backend, rootfs block)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
+ISOLATION    container (docker over containerd, BRIG_CONTAINERD_RUNTIME=runc: the guest shares the host kernel)
 ```
 
 The row reports what this run resolved: the binary in hand, the backend it
@@ -84,6 +84,12 @@ paragraph above promises. Brig may not recognise a shim but could still use it
 to boot a sandbox, and Brig cannot establish the isolation that sandbox gets from a
 shim name alone. So the row says it cannot tell, instead of claiming the
 stronger boundary.
+
+On hull the row names the rootfs type Brig passes, or `hull default` when
+Brig passes none. Under urunc it names the hypervisor Brig passes, which is
+`cloud-hypervisor` for a `genericBoot` profile, or `urunc default` when Brig
+passes none. A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed with the
+variable.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write. Name
 a project on the run line and that project is a second host directory, also

@@ -58,10 +58,30 @@ func (n *nerdctl) Bin() string  { return n.bin }
 // does not. containerdRuntime is the same call runArgs makes, so the row names
 // the shim the run will actually name.
 //
-// The hypervisor is nothing to this runtime: the backend is hull's business,
-// and what boots a microVM here is the shim.
-func (n *nerdctl) Isolation(string) Isolation {
-	return containerdIsolation(n.driver(), containerdRuntime())
+// The hypervisor named is the monitor brig hands urunc, read from monitor, the
+// same call runArgs makes. spec.Hypervisor is hull's backend and nerdctl has no
+// flag for it, so it is not read here, and neither is RootfsType.
+//
+// The variable is named beside the shim only when it is set. That is when it
+// decided the boundary, and a reader has to know which setting to undo.
+func (n *nerdctl) Isolation(spec RunSpec) Isolation {
+	shim := containerdRuntime()
+	named := shim
+	if os.Getenv("BRIG_CONTAINERD_RUNTIME") != "" {
+		named = "BRIG_CONTAINERD_RUNTIME=" + shim
+	}
+	return containerdIsolation(n.driver(), shim, named, n.monitor(spec))
+}
+
+// monitor is the hypervisor brig tells urunc to boot with, or "" when brig
+// names none and urunc picks. Only a generic boot names one, and never on
+// docker, which refuses that boot. runArgs writes this value into the
+// annotation, so the boot and the ISOLATION row read it from one place.
+func (n *nerdctl) monitor(spec RunSpec) string {
+	if spec.GenericBoot && !n.isDocker() {
+		return monitorCloudHypervisor
+	}
+	return ""
 }
 
 // driver is the binary in hand, by name. newNerdctl takes either.
@@ -380,7 +400,7 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		annotations = append(annotations, annotationHypervisor+"="+monitorCloudHypervisor)
+		annotations = append(annotations, annotationHypervisor+"="+n.monitor(spec))
 		for _, kv := range annotations {
 			args = append(args, "--annotation", kv)
 		}

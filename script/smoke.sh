@@ -352,8 +352,9 @@ grep -q '^WORKSPACE ' "$WORK/env.err" \
 # What the sandbox stands on, not only what drives it. The stub is a hull
 # stand-in and BRIG_HYPERVISOR is pinned to vz above, so the row names that
 # backend; which containerd shim maps to which boundary is settled in the
-# runtime package's own tests, there being no containerd here to ask.
-grep -q '^ISOLATION .*microVM (hull, vz backend)' "$WORK/env.err" \
+# runtime package's own tests, there being no containerd here to ask. No
+# rootfs type is set, so brig passes none and the row says hull picks.
+grep -q '^ISOLATION .*microVM (hull, vz backend, rootfs hull default)' "$WORK/env.err" \
   && ok "the envelope names the isolation boundary" \
   || bad "the envelope names the isolation boundary -- got: $(grep '^ISOLATION' "$WORK/env.err")"
 # A value must never reach the block, the same promise argv keeps. Scan the

@@ -25,11 +25,16 @@ func (fakeRuntime) Bin() string  { return "hull" }
 // answers what the real hull answers for the backend it is handed, so a row
 // asserted here is the row a macOS run prints. Which shim or backend maps to
 // which boundary is settled in the runtime package, where the mapping lives.
-func (fakeRuntime) Isolation(hv string) runtime.Isolation {
+func (fakeRuntime) Isolation(spec runtime.RunSpec) runtime.Isolation {
+	hv := spec.Hypervisor
 	if hv == "" {
 		hv = "vz"
 	}
-	return runtime.Isolation{Boundary: runtime.BoundaryVM, Detail: "hull, " + hv + " backend"}
+	rootfs := spec.RootfsType
+	if rootfs == "" {
+		rootfs = "hull default"
+	}
+	return runtime.Isolation{Boundary: runtime.BoundaryVM, Detail: "hull, " + hv + " backend, rootfs " + rootfs}
 }
 
 func statusOutput(t *testing.T, body string, set creds.Set) string {

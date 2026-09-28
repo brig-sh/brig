@@ -185,3 +185,16 @@ func TestSecretKeepsItsOwnVerbSetOnPurpose(t *testing.T) {
 		}
 	}
 }
+
+// BRIG_CONTAINERD_RUNTIME decides whether a Linux sandbox is a microVM at all,
+// and the ISOLATION row names it when it is set. A reader who sees it there
+// has to be able to find it in the help.
+func TestUsageListsTheContainerdRuntimeSetting(t *testing.T) {
+	_, settings, ok := strings.Cut(usage, "\nsettings (")
+	if !ok {
+		t.Fatal("the usage text has no settings list")
+	}
+	if !strings.Contains(settings, "BRIG_CONTAINERD_RUNTIME") {
+		t.Error("the settings list does not name BRIG_CONTAINERD_RUNTIME")
+	}
+}

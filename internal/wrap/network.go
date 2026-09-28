@@ -101,14 +101,20 @@ func (n Network) Line() string {
 // One derivation, used both by the check before anything is started and by the
 // spec that is actually booted, so the two cannot come to different answers
 // about the same run. The boot fills in the rest.
+//
+// The ISOLATION row reads it too, which is why the rootfs type and the generic
+// boot are here: the row names the rootfs and the hypervisor the runtime is
+// handed, and this is where the boot takes them from.
 func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 	return runtime.RunSpec{
-		Name:       c.VMName,
-		Hypervisor: hypervisor,
-		Net:        c.Network.RuntimeNet(),
-		Egress:     runtimeEgress(c.Egress),
-		Publish:    c.Publish,
-		GUI:        c.Profile.IsGUI(),
+		Name:        c.VMName,
+		Hypervisor:  hypervisor,
+		Net:         c.Network.RuntimeNet(),
+		Egress:      runtimeEgress(c.Egress),
+		Publish:     c.Publish,
+		GUI:         c.Profile.IsGUI(),
+		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
+		GenericBoot: c.Profile.GenericBoot,
 	}
 }
 

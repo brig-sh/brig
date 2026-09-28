@@ -145,7 +145,7 @@ func (c *Config) isolationLine() string {
 		return string(runtime.BoundaryUnknown) +
 			" (no runtime, so brig cannot tell what a sandbox here would stand on)"
 	}
-	return c.Runtime.Isolation(c.hypervisor()).Line()
+	return c.Runtime.Isolation(c.backendSpec(c.hypervisor())).Line()
 }
 
 // verifyLine is the VERIFY row: whether the guest image and the kernel it boots

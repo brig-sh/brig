@@ -55,8 +55,13 @@ func (h *hull) Bin() string  { return h.bin }
 //
 // The default is applied here rather than reported as blank, so the row names
 // the backend that will actually boot rather than the absence of a setting.
-func (h *hull) Isolation(hv string) Isolation {
-	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend", hypervisorOrDefault(hv))}
+//
+// The rootfs type is the value runArgs hands --rootfs-type. With none, brig
+// passes no flag and hull picks per backend. The row says that and names no
+// type, because hull's default is hull's to change.
+func (h *hull) Isolation(spec RunSpec) Isolation {
+	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s",
+		hypervisor(spec), orDefault(spec.RootfsType, "hull default"))}
 }
 
 // PinsDigest asks the hull on this machine whether it can boot a digest

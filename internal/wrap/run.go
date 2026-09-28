@@ -339,9 +339,10 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
-		// decided in the runtime adapter.
-		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
-		GenericBoot: c.Profile.GenericBoot,
+		// decided in the runtime adapter. Taken from check, which the
+		// ISOLATION row read, so the row names what boots.
+		RootfsType:  check.RootfsType,
+		GenericBoot: check.GenericBoot,
 		// Resolved once at the top of EnsureRunning, where the preflight also
 		// read it, so the backend this spec boots is the one that was checked.
 		Hypervisor: check.Hypervisor,

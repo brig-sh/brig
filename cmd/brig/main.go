@@ -155,6 +155,9 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_PROFILE_DIR     where your own profiles live
                        (BRIG_TEMPLATE_DIR works until v0.4.0)
   BRIG_RUNTIME         hull | nerdctl
+  BRIG_CONTAINERD_RUNTIME
+                       Linux: the containerd shim, io.containerd.urunc.v2
+                       (default). Another shim can give up the microVM
 `
 
 func main() {
