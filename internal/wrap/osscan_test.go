@@ -19,6 +19,9 @@ import (
 // planted on the way to a host path the guest cannot reach itself. Every such
 // call in the package's non-test sources has to be on osPathAllowlist, so a new
 // one cannot land without someone reading why its path is not the guest's.
+// ioutil, the filepath walkers, syscall and unix resolve a path the same way
+// and are held to the same list. osPathFuncs names what the scan sees, and a
+// wrapper in another package is outside it.
 //
 // The scan reads every file whatever its build tags, so a call in a file for
 // the other platform is seen too.
@@ -102,6 +105,60 @@ func peek(p string) ([]byte, error) { return os.ReadFile(p) }
 	}
 }
 
+// os is not the only package that resolves a path. ioutil, the filepath walkers
+// and syscall or unix under any name follow a link the guest planted the same
+// way, so a call through them has to be found too, and a dot import of one of
+// them hides its calls like a dot import of os.
+func TestTheOSScanSeesPathCallsOutsideOS(t *testing.T) {
+	const src = `package wrap
+
+import (
+	"io/fs"
+	"io/ioutil"
+	"path/filepath"
+	"syscall"
+
+	sys "golang.org/x/sys/unix"
+)
+
+func (c *Config) sweep() error {
+	b, _ := ioutil.ReadFile(c.Workspace + "/.brig-marker")
+	_ = syscall.Unlink(c.Workspace + "/.brig-marker")
+	_, _ = sys.Openat(sys.AT_FDCWD, c.Workspace, sys.O_RDONLY, 0)
+	_, _ = filepath.EvalSymlinks(c.Workspace)
+	_ = b
+	return filepath.WalkDir(c.Workspace, func(string, fs.DirEntry, error) error { return nil })
+}
+`
+	calls := scanSource(t, "sweep.go", src)
+	errs := checkOSPathCalls(calls, nil)
+	if len(errs) != 5 {
+		t.Fatalf("got %d findings, want 5: %q", len(errs), errs)
+	}
+	joined := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"Config.sweep calls ioutil.ReadFile(c.Workspace + \"/.brig-marker\")",
+		"Config.sweep calls syscall.Unlink(c.Workspace + \"/.brig-marker\")",
+		"Config.sweep calls unix.Openat(sys.AT_FDCWD, c.Workspace)",
+		"Config.sweep calls filepath.EvalSymlinks(c.Workspace)",
+		"Config.sweep calls filepath.WalkDir(c.Workspace)",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("findings %q do not name %s", errs, want)
+		}
+	}
+
+	const dot = `package wrap
+
+import . "path/filepath"
+
+func walk(p string) error { return WalkDir(p, nil) }
+`
+	if errs := checkOSPathCalls(scanSource(t, "dotwalk.go", dot), nil); len(errs) != 1 {
+		t.Fatalf("dot import of path/filepath: got %d findings, want 1: %q", len(errs), errs)
+	}
+}
+
 // A dot import hides every os call behind a bare name the scanner cannot tell
 // from a local function, so the import itself is the finding.
 func TestTheOSScanRefusesADotImport(t *testing.T) {
@@ -170,27 +227,63 @@ func scanSource(t *testing.T, name, src string) []osPathCall {
 	return scanOSPathCalls(fset, name, f)
 }
 
-// osPathFuncs are the os functions that take a path and resolve it themselves,
-// following every link on the way. The value is how many leading arguments are
-// paths, which is how many an allowlist entry spells out.
-var osPathFuncs = map[string]int{
-	"Chdir": 1, "Chmod": 1, "Chown": 1, "Chtimes": 1, "CopyFS": 1, "Create": 1,
-	"CreateTemp": 1, "DirFS": 1, "Lchown": 1, "Link": 2, "Lstat": 1, "Mkdir": 1,
-	"MkdirAll": 1, "MkdirTemp": 1, "Open": 1, "OpenFile": 1, "OpenInRoot": 2,
-	"OpenRoot": 1, "ReadDir": 1, "ReadFile": 1, "Readlink": 1, "Remove": 1,
-	"RemoveAll": 1, "Rename": 2, "Stat": 1, "Symlink": 2, "Truncate": 1,
-	"WriteFile": 1,
+// osPathFuncs are the functions that take a path and resolve it themselves,
+// following every link on the way, keyed by import path. The value is how many
+// leading arguments an allowlist entry spells out: the paths, and for an *at
+// call the directory descriptor before them. A call is spelled with the last
+// element of the import path, os.Name or unix.Name, whatever the file imports
+// the package as.
+//
+// A wrapper in another package, or a tool brig runs, reaches a path in a way
+// this list cannot see. Such a call is kept to what its package documents.
+var osPathFuncs = map[string]map[string]int{
+	"os": {
+		"Chdir": 1, "Chmod": 1, "Chown": 1, "Chtimes": 1, "CopyFS": 1, "Create": 1,
+		"CreateTemp": 1, "DirFS": 1, "Lchown": 1, "Link": 2, "Lstat": 1, "Mkdir": 1,
+		"MkdirAll": 1, "MkdirTemp": 1, "Open": 1, "OpenFile": 1, "OpenInRoot": 2,
+		"OpenRoot": 1, "ReadDir": 1, "ReadFile": 1, "Readlink": 1, "Remove": 1,
+		"RemoveAll": 1, "Rename": 2, "Stat": 1, "Symlink": 2, "Truncate": 1,
+		"WriteFile": 1,
+	},
+	"io/ioutil": {
+		"ReadDir": 1, "ReadFile": 1, "TempDir": 1, "TempFile": 1, "WriteFile": 1,
+	},
+	"path/filepath": {
+		"EvalSymlinks": 1, "Glob": 1, "Walk": 1, "WalkDir": 1,
+	},
+	"syscall":               sysPathFuncs,
+	"golang.org/x/sys/unix": sysPathFuncs,
 }
 
-const dotImportOS = `import . "os"`
+// sysPathFuncs covers syscall and unix together. A name one of them lacks
+// never matches a call through it.
+var sysPathFuncs = map[string]int{
+	"Access": 1, "Acct": 1, "Chdir": 1, "Chflags": 1, "Chmod": 1, "Chown": 1,
+	"Chroot": 1, "Creat": 1, "Exec": 1, "Faccessat": 2, "Fchmodat": 2,
+	"Fchownat": 2, "Fstatat": 2, "Getxattr": 1, "Lchown": 1, "Lgetxattr": 1,
+	"Link": 2, "Linkat": 4, "Listxattr": 1, "Llistxattr": 1, "Lremovexattr": 1,
+	"Lsetxattr": 1, "Lstat": 1, "Lutimes": 1, "Mkdir": 1, "Mkdirat": 2,
+	"Mkfifo": 1, "Mkfifoat": 2, "Mknod": 1, "Mknodat": 2, "Mount": 2, "Open": 1,
+	"Openat": 2, "Openat2": 2, "PivotRoot": 2, "Readlink": 1, "Readlinkat": 2,
+	"Removexattr": 1, "Rename": 2, "Renameat": 4, "Renameat2": 4, "Revoke": 1,
+	"Rmdir": 1, "Setxattr": 1, "Stat": 1, "Statfs": 1, "Statx": 2, "Symlink": 2,
+	"Symlinkat": 3, "Truncate": 1, "Undelete": 1, "Unlink": 1, "Unlinkat": 2,
+	"Unmount": 1, "Uselib": 1, "Utime": 1, "Utimes": 1, "UtimesNano": 1,
+	"UtimesNanoAt": 2,
+}
 
-// osPathCall is one use of an osPathFuncs function in a source file.
+// dotImport marks a dot import of a scanned package in osPathCall.Call.
+const dotImport = `import . `
+
+// osPathCall is one use of an osPathFuncs function in a source file, or a dot
+// import of one of those packages.
 type osPathCall struct {
 	File string
 	// Func is the enclosing function, "Recv.name" for a method, or "var x"
 	// for a package-level initializer.
 	Func string
-	// Call is spelled os.Name whatever the file imports os as.
+	// Call is spelled os.Name, unix.Name and so on, whatever the file
+	// imports the package as.
 	Call string
 	// Arg is the path arguments as the source writes them, comma-separated.
 	// Empty when the function is taken as a value and not called.
@@ -214,41 +307,46 @@ func (a osPathAllow) key() string { return a.File + "\x00" + a.Func + "\x00" + a
 // scan does not look.
 func scanOSPathCalls(fset *token.FileSet, file string, f *ast.File) []osPathCall {
 	var out []osPathCall
-	// A set, since a file can import os twice under two names, and keeping
-	// only the last name let every call through the first one pass unseen.
-	osNames := map[string]bool{}
+	// Local name to import path. A file can import os twice under two names,
+	// and keeping only the last name let every call through the first one
+	// pass unseen.
+	pkgs := map[string]string{}
 	for _, imp := range f.Imports {
 		path, _ := strconv.Unquote(imp.Path.Value)
-		if path != "os" {
+		if _, ok := osPathFuncs[path]; !ok {
 			continue
 		}
-		name := "os"
+		name := path[strings.LastIndex(path, "/")+1:]
 		if imp.Name != nil {
 			name = imp.Name.Name
 		}
 		switch name {
 		case ".":
-			out = append(out, osPathCall{File: file, Call: dotImportOS,
+			out = append(out, osPathCall{File: file, Call: dotImport + strconv.Quote(path),
 				Line: fset.Position(imp.Pos()).Line})
 		case "_":
 		default:
-			osNames[name] = true
+			pkgs[name] = path
 		}
 	}
-	if len(osNames) == 0 {
+	if len(pkgs) == 0 {
 		return out
 	}
-	match := func(e ast.Expr) (string, bool) {
+	match := func(e ast.Expr) (call string, paths int, ok bool) {
 		sel, ok := e.(*ast.SelectorExpr)
 		if !ok {
-			return "", false
+			return "", 0, false
 		}
 		id, ok := sel.X.(*ast.Ident)
-		if !ok || !osNames[id.Name] {
-			return "", false
+		if !ok {
+			return "", 0, false
 		}
-		_, ok = osPathFuncs[sel.Sel.Name]
-		return sel.Sel.Name, ok
+		path, ok := pkgs[id.Name]
+		if !ok {
+			return "", 0, false
+		}
+		paths, ok = osPathFuncs[path][sel.Sel.Name]
+		return path[strings.LastIndex(path, "/")+1:] + "." + sel.Sel.Name, paths, ok
 	}
 	for _, decl := range f.Decls {
 		fn := declName(decl)
@@ -256,20 +354,20 @@ func scanOSPathCalls(fset *token.FileSet, file string, f *ast.File) []osPathCall
 		ast.Inspect(decl, func(n ast.Node) bool {
 			switch n := n.(type) {
 			case *ast.CallExpr:
-				name, ok := match(n.Fun)
+				call, paths, ok := match(n.Fun)
 				if !ok {
 					return true
 				}
 				called[n.Fun] = true
 				var args []string
-				for i := 0; i < osPathFuncs[name] && i < len(n.Args); i++ {
+				for i := 0; i < paths && i < len(n.Args); i++ {
 					args = append(args, types.ExprString(n.Args[i]))
 				}
-				out = append(out, osPathCall{File: file, Func: fn, Call: "os." + name,
+				out = append(out, osPathCall{File: file, Func: fn, Call: call,
 					Arg: strings.Join(args, ", "), Line: fset.Position(n.Pos()).Line})
 			case *ast.SelectorExpr:
-				if name, ok := match(n); ok && !called[n] {
-					out = append(out, osPathCall{File: file, Func: fn, Call: "os." + name,
+				if call, _, ok := match(n); ok && !called[n] {
+					out = append(out, osPathCall{File: file, Func: fn, Call: call,
 						Line: fset.Position(n.Pos()).Line})
 				}
 			}
@@ -327,9 +425,9 @@ func checkOSPathCalls(calls []osPathCall, allow []osPathAllow) []string {
 			used[k] = true
 			continue
 		}
-		if c.Call == dotImportOS {
-			errs = append(errs, fmt.Sprintf("%s:%d: %s hides every os call from this scan. "+
-				"Import os by name", c.File, c.Line, dotImportOS))
+		if strings.HasPrefix(c.Call, dotImport) {
+			errs = append(errs, fmt.Sprintf("%s:%d: %s hides its path calls from this scan. "+
+				"Import the package by name", c.File, c.Line, c.Call))
 			continue
 		}
 		what := fmt.Sprintf("calls %s(%s)", c.Call, c.Arg)
@@ -351,8 +449,9 @@ func checkOSPathCalls(calls []osPathCall, allow []osPathAllow) []string {
 	return errs
 }
 
-// osPathAllowlist is every plain os call on a path the package makes, with the
-// reason the guest cannot turn it into a read or write of a host path.
+// osPathAllowlist is every call on a path through an osPathFuncs function the
+// package makes, with the reason the guest cannot turn it into a read or write
+// of a host path.
 var osPathAllowlist = []osPathAllow{
 	// Opening the workspace and the project. These run before a root exists,
 	// or resolve the path afresh only to compare it against the handle, where
@@ -375,6 +474,8 @@ var osPathAllowlist = []osPathAllow{
 		"p sits in a directory resolveTrusted just found the guest cannot write"},
 	{"rootio.go", "resolveTrusted", "os.Readlink", "p",
 		"p sits in a directory resolveTrusted just found the guest cannot write"},
+	{"owner_unix.go", "var dirWritableByUs", "syscall.Access", "path",
+		"asks about the directory resolveTrusted just stat'ed, before it looks inside it"},
 	{"fdroot.go", "rootFromFile", "os.OpenRoot", "fmt.Sprintf(\"%s/%d\", dir, f.Fd())",
 		"names a descriptor brig already holds, so no name is resolved again"},
 
@@ -415,6 +516,10 @@ var osPathAllowlist = []osPathAllow{
 	{"config.go", "Config.slugMigrationNotice", "os.Stat", "oldWorkspace", "existence only, to decide on a notice"},
 	{"config.go", "Config.mountProject", "os.Stat", "abs",
 		"a friendly error for a missing project, which openHeldDir then descends into"},
+	{"config.go", "Config.mountProject", "filepath.EvalSymlinks", "abs",
+		"the project path to print, which nothing opens"},
+	{"workspace.go", "Marker", "filepath.EvalSymlinks", "dir",
+		"the path for the stale-share marker, and a wrong one costs a restart"},
 	{"workspace.go", "Marker", "os.Stat", "real",
 		"the inode for the stale-share marker, and a wrong one costs a restart"},
 	{"workspace.go", "TrustKey", "os.Lstat", "filepath.Join(dir, \".git\")",
