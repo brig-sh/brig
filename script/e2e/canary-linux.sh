@@ -930,6 +930,262 @@ check_churn() {
   fi
 }
 
+# ---------------------------------------------------------------- fixes
+
+# ENVCHK prints each variable the credential check looks for, or UNSET.
+ENVCHK='for v in E2E_FWD E2E_SNEAKY ANTHROPIC_API_KEY; do echo "$v=${!v:-UNSET}"; done'
+
+# env_field TEXT NAME: the value ENVCHK printed for NAME.
+env_field() { echo "$1" | sed -n "s/^$2=//p" | head -n 1 | tr -d ' '; }
+
+# check_creds boots claude-code with three variables in the shell: one named
+# in BRIG_FORWARD_ENV, one named nowhere, and ANTHROPIC_API_KEY, which is
+# named but on the claude-code denylist. Only the first may reach the guest.
+check_creds() {
+  local err out fwd sneaky denied rc=0
+  export E2E_FWD="fwd-$RANDOM$RANDOM" E2E_SNEAKY="sneaky-$RANDOM$RANDOM" ANTHROPIC_API_KEY="sk-e2e-$RANDOM$RANDOM"
+  export BRIG_FORWARD_ENV="E2E_FWD ANTHROPIC_API_KEY"
+  unset BRIG_CLAUDE_CODE_FORWARD_ENV BRIG_ALLOW_DENIED BRIG_CLAUDE_CODE_ALLOW_DENIED
+  err="$(timeout --kill-after=10 900 brig run -d claude-code@creds 2>&1 > /dev/null)" || rc=$?
+  echo "$err"
+  out="$(gsh claude-code@creds "$ENVCHK")" || true
+  run 300 brig rm claude-code@creds || true
+  fwd="$(env_field "$out" E2E_FWD)"
+  sneaky="$(env_field "$out" E2E_SNEAKY)"
+  denied="$(env_field "$out" ANTHROPIC_API_KEY)"
+  if [ "$rc" = 0 ] && [ "$fwd" = "$E2E_FWD" ] && [ "$sneaky" = UNSET ] && [ "$denied" = UNSET ] &&
+     echo "$err" | grep -q 'not forwarding ANTHROPIC_API_KEY'; then
+    res check Credentials "Only the variables brig is told to forward reach the guest (#236)" pass \
+      "E2E_FWD, named in BRIG_FORWARD_ENV, arrived. E2E_SNEAKY, set and never named, did not. ANTHROPIC_API_KEY, named but on the claude-code denylist, did not, and brig said so"
+  else
+    res check Credentials "Only the variables brig is told to forward reach the guest (#236)" fail \
+      "run exit $rc; guest: E2E_FWD=[$fwd] E2E_SNEAKY=[$sneaky] ANTHROPIC_API_KEY=[$denied]; stderr: $(echo "$err" | grep -i forward | one_line 200)"
+  fi
+}
+
+check_agent_rm() {
+  local w f rc=0 out kept=no rc2=0 out2
+  w="$(timeout 60 brig agent export ubuntu e2e-rm --force 2>&1 < /dev/null)"
+  echo "$w"
+  f="$(echo "$w" | sed -n 's/^wrote .* -> //p' | head -n 1)"
+  run 900 brig run -d e2e-rm
+  out="$(timeout 120 brig agent rm e2e-rm 2>&1 < /dev/null)" || rc=$?
+  echo "agent rm with the sandbox up: exit $rc: $out"
+  [ -n "$f" ] && [ -f "$f" ] && kept=yes
+  run 300 brig rm e2e-rm || true
+  out2="$(timeout 120 brig agent rm e2e-rm 2>&1 < /dev/null)" || rc2=$?
+  echo "agent rm after brig rm: exit $rc2: $out2"
+  if [ "$rc" != 0 ] && echo "$out" | grep -q 'still has sandboxes' && echo "$out" | grep -q 'brig rm e2e-rm' &&
+     [ "$kept" = yes ] && [ "$rc2" = 0 ] && [ ! -e "$f" ]; then
+    res check CLI "agent rm refuses while a sandbox of the profile exists (#367)" pass \
+      "exit $rc with brig-e2e-rm up, the file kept and brig rm e2e-rm named; after brig rm, agent rm removed $f"
+  else
+    res check CLI "agent rm refuses while a sandbox of the profile exists (#367)" fail \
+      "first rm: exit $rc, file kept: $kept: $(echo "$out" | one_line 200); second rm: exit $rc2: $(echo "$out2" | one_line 120)"
+  fi
+  [ -z "$f" ] || rm -f "$f"
+}
+
+check_policy_refused() {
+  local out rc=0 left
+  env -u VISUAL EDITOR=true timeout 60 brig policy create e2e-deny --force < /dev/null
+  run 60 brig policy attach e2e-deny claude-code -n pol
+  out="$(timeout --kill-after=10 300 brig run -d claude-code@pol 2>&1 < /dev/null)" || rc=$?
+  echo "brig run claude-code@pol: exit $rc: $out"
+  left="$(rk ps -a --format '{{.Names}}' 2>&1 | grep 'brig-claude-code-pol' || true)"
+  if [ "$rc" != 0 ] && echo "$out" | grep -q 'cannot enforce the egress policy' &&
+     echo "$out" | grep -q 'will not boot a sandbox under a policy nothing enforces' && [ -z "$left" ]; then
+    res check Policy "A policy this runtime cannot enforce is refused before boot (#237)" pass \
+      "exit $rc, no container: $(echo "$out" | one_line 200)"
+  else
+    res check Policy "A policy this runtime cannot enforce is refused before boot (#237)" fail \
+      "exit $rc; containers: [$left]; $(echo "$out" | one_line 300)"
+  fi
+  run 60 brig policy detach e2e-deny claude-code -n pol || true
+  timeout 60 brig rm claude-code@pol > /dev/null 2>&1 || true
+}
+
+# check_cosign_hang points DOCKER_CONFIG at a credsStore helper that never
+# answers, the shape Docker Desktop leaves when it is installed and not
+# running. cosign asks that helper for registry credentials and hangs.
+# claude-code, because brig verifies only the images brig-sh signs.
+check_cosign_hang() {
+  local d="$OUT/e2e-dockercfg" out rc=0 t0 t1 left ls
+  rm -rf "$d"
+  mkdir -p "$d/bin"
+  printf '{"credsStore": "e2ehang"}\n' > "$d/config.json"
+  printf '#!/bin/sh\nexec sleep 600\n' > "$d/bin/docker-credential-e2ehang"
+  chmod +x "$d/bin/docker-credential-e2ehang"
+  t0="$(now)"
+  out="$(PATH="$d/bin:$PATH" DOCKER_CONFIG="$d" BRIG_VERIFY=require \
+    timeout --kill-after=10 300 brig run -d claude-code@cos 2>&1 < /dev/null)" || rc=$?
+  t1="$(now)"
+  echo "brig run claude-code@cos: exit $rc after $(dt "$t0" "$t1") s: $out"
+  sleep 2
+  left="$(pgrep -a -f 'docker-credential-e2ehang' || true)"
+  ls="$(timeout 30 brig ls -q 2> /dev/null | grep -v '^(none' || true)"
+  if [ "$rc" = 5 ] && echo "$out" | grep -q 'It waits on docker-credential-e2ehang' && [ -z "$left" ] && [ -z "$ls" ]; then
+    res check Verify "A hung credential helper is named, and killed with cosign (#365)" pass \
+      "exit 5 after $(dt "$t0" "$t1") s under BRIG_VERIFY=require, naming docker-credential-e2ehang; no helper process and no sandbox left"
+  else
+    res check Verify "A hung credential helper is named, and killed with cosign (#365)" fail \
+      "exit $rc after $(dt "$t0" "$t1") s; helpers left: [$(echo "$left" | one_line 120)]; brig ls: [$ls]; $(echo "$out" | one_line 300)"
+  fi
+  pkill -f 'docker-credential-e2ehang' 2> /dev/null || true
+  timeout 60 brig rm claude-code@cos > /dev/null 2>&1 || true
+  rm -rf "$d"
+}
+
+# boot_try MODE REF [ENV...]: one brig run -d REF under BRIG_VERIFY=MODE, with
+# ENV added. It prints what brig said, removes the sandbox and returns brig's
+# exit status.
+boot_try() {
+  local mode=$1 ref=$2 out rc=0
+  shift 2
+  out="$(env BRIG_VERIFY="$mode" "$@" timeout --kill-after=10 900 brig run -d "$ref" 2>&1 < /dev/null)" || rc=$?
+  printf '$ BRIG_VERIFY=%s %s brig run -d %s\n%s\n[exit %s]\n' "$mode" "$*" "$ref" "$out" "$rc" >&2
+  timeout 120 brig rm "$ref" > /dev/null 2>&1 || true
+  printf '%s\n' "$out"
+  return "$rc"
+}
+
+RECORD_CHECKS=(
+  "An intact runtime bundle boots with its kernel and initrd verified (#403)"
+  "A changed kernel, or a record the release does not list, refuses in every mode (#403)"
+  "A record brig cannot check boots under warn and refuses under require (#403)"
+  "A cosign that does not answer is \"cannot check\", not a refusal (#403)"
+)
+
+# check_record_refusals changes the files in share/guest one at a time and
+# boots against each: a changed kernel, a record the release's checksums.txt
+# does not list, and a missing signature. The files are put back after each
+# case and when the block ends, however it ends.
+check_record_refusals() {
+  local g="$BUNDLE_DIR/share/guest" keep="$OUT/guest-keep" k name out rc
+  if [ ! -f "$REPO/internal/verify/record.go" ]; then
+    for name in "${RECORD_CHECKS[@]}"; do
+      res check Verify "$name" skip "brig at $(git -C "$REPO" rev-parse --short HEAD) does not check the runtime bundle's record"
+    done
+    return 0
+  fi
+  if [ ! -f "$g/SHA256SUMS" ]; then
+    for name in "${RECORD_CHECKS[@]}"; do
+      res check Verify "$name" skip "the installed bundle keeps no record"
+    done
+    return 0
+  fi
+  k=Image
+  [ ! -f "$g/bzImage" ] || k=bzImage
+  rm -rf "$keep"
+  mkdir -p "$keep"
+  cp -p "$g/$k" "$g/SHA256SUMS" "$g/checksums.txt.sig" "$keep/"
+  # shellcheck disable=SC2064
+  trap "cp -p '$keep/$k' '$keep/SHA256SUMS' '$keep/checksums.txt.sig' '$g/'" EXIT
+  put_back() { cp -p "$keep/$k" "$keep/SHA256SUMS" "$keep/checksums.txt.sig" "$g/"; }
+
+  local w0=0 r0=0 o_w0 o_r0
+  o_w0="$(boot_try warn ubuntu@rec)" || w0=$?
+  o_r0="$(boot_try require claude-code@rec)" || r0=$?
+  if [ "$w0" = 0 ] && echo "$o_w0" | grep -q 'boot assets verified' &&
+     [ "$r0" = 0 ] && echo "$o_r0" | grep -q 'image and boot assets verified'; then
+    res check Verify "${RECORD_CHECKS[0]}" pass \
+      "warn: exit 0, $(echo "$o_w0" | grep 'verified' | one_line 80). require, claude-code: exit 0, $(echo "$o_r0" | grep 'verified' | one_line 80)"
+  else
+    res check Verify "${RECORD_CHECKS[0]}" fail \
+      "warn: exit $w0, $(echo "$o_w0" | one_line 200); require: exit $r0, $(echo "$o_r0" | one_line 200)"
+  fi
+
+  local w1=0 r1=0 u1=0 w9=0 o_w1 o_r1 o_u1 o_w9
+  printf 'x' >> "$g/$k"
+  o_w1="$(boot_try warn ubuntu@rec)" || w1=$?
+  o_r1="$(boot_try require claude-code@rec)" || r1=$?
+  put_back
+  printf '\n' >> "$g/SHA256SUMS"
+  o_u1="$(boot_try warn ubuntu@rec)" || u1=$?
+  put_back
+  o_w9="$(boot_try warn ubuntu@rec)" || w9=$?
+  if [ "$w1" = 5 ] && [ "$r1" = 5 ] && [ "$u1" = 5 ] && [ "$w9" = 0 ] &&
+     echo "$o_w1" | grep -q "are not the ones the Linux runtime bundle's" &&
+     echo "$o_u1" | grep -q "are not the ones the Linux runtime bundle's" &&
+     echo "$o_w9" | grep -q 'boot assets verified'; then
+    res check Verify "${RECORD_CHECKS[1]}" pass \
+      "one byte appended to $k: exit 5 under warn and require. SHA256SUMS changed: exit 5 under warn. The files put back boot again. $(echo "$o_w1" | grep refusing | one_line 200)"
+  else
+    res check Verify "${RECORD_CHECKS[1]}" fail \
+      "kernel changed: warn exit $w1, require exit $r1; record changed: warn exit $u1; put back: warn exit $w9. $(echo "$o_w1 $o_r1 $o_u1" | one_line 300)"
+  fi
+
+  local w2=0 r2=0 o_w2 o_r2
+  mv "$g/checksums.txt.sig" "$keep/sig.aside"
+  o_w2="$(boot_try warn ubuntu@rec)" || w2=$?
+  o_r2="$(boot_try require claude-code@rec)" || r2=$?
+  rm -f "$keep/sig.aside"
+  put_back
+  if [ "$w2" = 0 ] && [ "$r2" = 5 ] &&
+     echo "$o_w2" | grep -q "cannot check the Linux runtime bundle's kernel and initrd" &&
+     ! echo "$o_w2" | grep -q 'boot assets verified'; then
+    res check Verify "${RECORD_CHECKS[2]}" pass \
+      "checksums.txt.sig moved away: warn boots and says $(echo "$o_w2" | grep 'cannot check' | one_line 120); require exits 5"
+  else
+    res check Verify "${RECORD_CHECKS[2]}" fail \
+      "warn: exit $w2, $(echo "$o_w2" | one_line 200); require: exit $r2, $(echo "$o_r2" | one_line 200)"
+  fi
+
+  # A proxy that takes the connection and never answers holds cosign's calls
+  # to Sigstore until brig's cosign timeout cuts it off. The registries stay
+  # off the proxy, so only cosign waits.
+  local hang w3=0 o_w3 t0 t1
+  python3 -c '
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 18181))
+s.listen(64)
+held = []
+while True:
+    held.append(s.accept()[0])
+' &
+  hang=$!
+  sleep 1
+  t0="$(now)"
+  o_w3="$(boot_try warn ubuntu@rec HTTPS_PROXY=http://127.0.0.1:18181 https_proxy=http://127.0.0.1:18181 \
+    NO_PROXY=docker.io,registry-1.docker.io,auth.docker.io,production.cloudflare.docker.com,ghcr.io,pkg-containers.githubusercontent.com \
+    no_proxy=docker.io,registry-1.docker.io,auth.docker.io,production.cloudflare.docker.com,ghcr.io,pkg-containers.githubusercontent.com)" || w3=$?
+  t1="$(now)"
+  kill "$hang" 2> /dev/null || true
+  wait "$hang" 2> /dev/null || true
+  if [ "$w3" = 0 ] && echo "$o_w3" | grep -q 'cosign did not answer within' &&
+     echo "$o_w3" | grep -q "cannot check the Linux runtime bundle's kernel and initrd"; then
+    res check Verify "${RECORD_CHECKS[3]}" pass \
+      "Sigstore behind a proxy that never answers: warn boots after $(dt "$t0" "$t1") s, $(echo "$o_w3" | grep 'did not answer' | one_line 200)"
+  else
+    res check Verify "${RECORD_CHECKS[3]}" fail "warn: exit $w3 after $(dt "$t0" "$t1") s, $(echo "$o_w3" | one_line 300)"
+  fi
+}
+
+# check_docker_fallback runs brig itself, outside the launcher, with docker
+# alone on PATH, and through the launcher, where the bundle puts nerdctl.
+check_docker_fallback() {
+  local real="$BUNDLE_DIR/bin/brig" out ctl nd dk
+  nd="$(env PATH=/usr/bin:/bin sh -c 'command -v nerdctl' || true)"
+  dk="$(env PATH=/usr/bin:/bin sh -c 'command -v docker' || true)"
+  if [ -z "$dk" ] || [ -n "$nd" ]; then
+    res check Runtime "brig says when it falls back to docker (#30)" skip "needs docker and no nerdctl on /usr/bin:/bin; docker [$dk], nerdctl [$nd]"
+    return 0
+  fi
+  out="$(env -u BRIG_RUNTIME -u BRIG_RUNTIME_BIN PATH=/usr/bin:/bin timeout 60 "$real" ls 2>&1 < /dev/null || true)"
+  ctl="$(timeout 60 brig ls 2>&1 < /dev/null || true)"
+  echo "docker alone: $out"
+  echo "launcher: $ctl"
+  if echo "$out" | grep -q 'nerdctl is not on PATH, so brig is driving docker' && ! echo "$ctl" | grep -q 'driving docker'; then
+    res check Runtime "brig says when it falls back to docker (#30)" pass \
+      "with $dk alone on PATH: $(echo "$out" | grep 'driving docker' | one_line 200). Through the launcher, with nerdctl: no note"
+  else
+    res check Runtime "brig says when it falls back to docker (#30)" fail \
+      "docker alone: $(echo "$out" | one_line 200); launcher: $(echo "$ctl" | one_line 120)"
+  fi
+}
+
 # ---------------------------------------------------------------- main
 
 say "brig e2e $LEVEL, results in $RESULTS"
@@ -959,6 +1215,12 @@ if [ -f "$OUT/setup.ok" ]; then
   block postures check_postures
   block shell check_shell_removed
   block symlink check_symlink
+  block creds check_creds
+  block agent-rm check_agent_rm
+  block policy check_policy_refused
+  block cosign check_cosign_hang
+  block record check_record_refusals
+  block fallback check_docker_fallback
   if [ "$LEVEL" = nightly ]; then
     block parallel check_parallel
     block churn check_churn
