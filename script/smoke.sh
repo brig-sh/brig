@@ -1626,6 +1626,30 @@ ls "$BRIG_PROFILE_DIR" | grep -q -- '--json' \
 grep -q 'brig agent rm' "$WORK/rmhelp.out" \
   && ok "agent rm --help prints the usage" \
   || bad "agent rm --help prints the usage: $(cat "$WORK/rmhelp.out")"
+# Every top-level verb answers a help request, and the two spellings --
+# `brig <verb> --help` / -h and `brig help <verb>` -- print the same text.
+# stdout alone is compared: `help <verb>` loads the profiles first, so a notice
+# about one of them can precede the usage on stderr.
+for v in run sh info rm stop ls logs doctor version; do
+  "$WORK/brig" "$v" --help > "$WORK/vhelp.out" 2>&1 \
+    && ok "brig $v --help exits 0" \
+    || bad "brig $v --help exits 0: $(cat "$WORK/vhelp.out")"
+  grep -q -- "brig $v" "$WORK/vhelp.out" \
+    && ok "brig $v --help prints its usage" \
+    || bad "brig $v --help prints its usage: $(cat "$WORK/vhelp.out")"
+  "$WORK/brig" "$v" -h > "$WORK/vhelp-h.out" 2>/dev/null \
+    && ok "brig $v -h exits 0" \
+    || bad "brig $v -h exits 0: $(cat "$WORK/vhelp-h.out")"
+  cmp -s "$WORK/vhelp.out" "$WORK/vhelp-h.out" \
+    && ok "brig $v -h prints the same text as --help" \
+    || bad "brig $v -h prints the same text as --help"
+  "$WORK/brig" help "$v" > "$WORK/vhelp-help.out" 2>/dev/null \
+    && ok "brig help $v exits 0" \
+    || bad "brig help $v exits 0: $(cat "$WORK/vhelp-help.out")"
+  cmp -s "$WORK/vhelp.out" "$WORK/vhelp-help.out" \
+    && ok "brig help $v prints the same text as --help" \
+    || bad "brig help $v prints the same text as --help"
+done
 # rm resolves the name inside the file, not the file name: rename what
 # bare.yaml declares, and codex is the word that reaches it. Nothing is deleted
 # for that word without a question first, though -- the file it would take is

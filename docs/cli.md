@@ -25,6 +25,20 @@ The nine commands you type most, before the exhaustive reference below.
 | `brig rm claude` | stops the sandbox and removes it |
 | `brig network publish claude 3000` | opens the agent's port 3000 on `localhost:3000` |
 
+## Help
+
+Every verb answers `--help`, `-h` and `brig help <verb>` with its own usage,
+printed to stdout with a zero exit. The two spellings print the same text:
+
+```bash
+brig run --help
+brig help run
+```
+
+`brig help` alone prints the command list and the flags the verbs share. A
+word after the ref is still the agent's, so `brig run claude --help` passes
+`--help` through to the agent rather than answering it.
+
 ## Verbs
 
 ### `brig run`
@@ -594,11 +608,12 @@ brig --json info claude
 Both print the same report, and neither is deprecated.
 
 An unrecognized flag before the ref is refused by name, because there is no
-agent yet to hand it to:
+agent yet to hand it to (a help flag there is a help request, not a mistake --
+see [Help](#help)):
 
 ```
-brig: unknown flag "--help" before the profile name. brig's own flags come
-before the profile and the agent's after it; put "--help" after the profile
+brig: unknown flag "--nope" before the profile name. brig's own flags come
+before the profile and the agent's after it; put "--nope" after the profile
 to pass it through, or -- to end brig's flags
 ```
 
