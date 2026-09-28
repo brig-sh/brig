@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/runtime"
@@ -65,8 +66,16 @@ func (c *Config) verifyImage() error {
 		// reader starts skipping. Said exactly once at every level: by the row
 		// when there is one, by this line when there is not, which is every
 		// default run, every -q run and every cold `brig sh`.
+		//
+		// A genericBoot run skips the kernel's checks too, and says so in the
+		// same line, so the setting is still named once.
 		if !c.envelopeShown {
-			c.alertf("BRIG_VERIFY=off, so the guest image is not checked before it boots")
+			if c.Profile.GenericBoot {
+				c.alertf("BRIG_VERIFY=off, so the signature and digest checks are skipped: " +
+					"the guest image and the kernel it boots are not checked")
+			} else {
+				c.alertf("BRIG_VERIFY=off, so the guest image is not checked before it boots")
+			}
 		}
 		return nil
 	}
@@ -349,10 +358,10 @@ func (c *Config) confirm(question string) bool {
 // success -- worse than no check, because it reads like one.
 //
 // The modes are the image's modes, so a reader has one rule to learn rather
-// than two. Nothing is pinned from the result: the bundle is fetched by oras
-// or by hull, neither of which brig hands a digest to, so what this buys is a
-// refusal before the boot rather than a pinned download. Naming the digest in
-// the report is the next step, and it needs the fetchers to take one.
+// than two. The signature covers the bundle's manifest, not the files on
+// disk, so a signature that verified records the digest and checkBootDigests
+// compares the files with it once they are resolved. The summary names the
+// boot assets only after that comparison.
 func (c *Config) verifyBootAssets() error {
 	if c.Verify == verify.Off || !c.Profile.GenericBoot {
 		return nil
@@ -369,10 +378,11 @@ func (c *Config) verifyBootAssets() error {
 
 	switch res.Outcome {
 	case verify.Verified:
-		// Narration for the same reason the image's success line is: the kernel
-		// verified, and there is nothing here for anybody to do about it. It
-		// joins the summary the run prints for the whole step.
-		c.verified = append(c.verified, "boot assets")
+		// Narration for the same reason the image's success line is: the
+		// signature verified, and there is nothing here for anybody to do about
+		// it. The summary waits for checkBootDigests, because the signature
+		// vouches for a manifest and not yet for the files that boot.
+		c.bundleRef, c.bundleDigest = ref, res.Digest
 		c.progressf("boot assets %s: signature verified", ref)
 		return nil
 
@@ -426,4 +436,165 @@ func (c *Config) verifyBootAssets() error {
 		return fmt.Errorf("refusing to boot: the boot assets at %s failed verification (%s). "+
 			"Set BRIG_VERIFY=off to boot them regardless", ref, res.Detail)
 	}
+}
+
+// registryDigests reads a bundle's per-file digests from its registry
+// manifest. A variable so a unit test reads a bundle without a registry.
+var registryDigests = verify.BundleDigests
+
+// checkBootDigests compares the kernel and initrd brig hands the runtime with
+// the digests the verified bundle lists for them, before the boot (#234).
+//
+// The signature verifyBootAssets checked covers the bundle's manifest, and
+// the manifest lists each file's sha256. The files on disk are what boots,
+// and nothing tied them to that manifest: a kernel swapped in the asset
+// directory, or left there from an older bundle, booted under a line saying
+// the boot assets verified.
+//
+// Who chose the directory decides what a difference means. brig chose it and
+// fetched into it when BRIG_BOOT_ASSETS is unset, so a file that differs has
+// no innocent reading and refuses in every mode but off. A directory named in
+// BRIG_BOOT_ASSETS is somebody's build, so warn states the difference and
+// boots, and require refuses. Digests brig cannot read are "cannot check",
+// as elsewhere: said under warn, a refusal under require.
+//
+// Only a signature that verified gets here. A bundle that is not brig's, or
+// one brig cannot check, has already said so, and there is no digest to
+// bind.
+func (c *Config) checkBootDigests(assets runtime.BootAssets) error {
+	if c.Verify == verify.Off || !c.Profile.GenericBoot || c.bundleDigest == "" {
+		return nil
+	}
+	bundle := fmt.Sprintf("%s (%s)", c.bundleRef, c.bundleDigest)
+	if assets.Kernel == "" || assets.Initrd == "" {
+		return c.bootDigestsUnread(assets, bundle,
+			fmt.Errorf("this %s finds the kernel and initrd inside its own run", c.Runtime.Kind()))
+	}
+
+	expected, source, fallback, err := expectedBootDigests(c.bundleRef, c.bundleDigest, filepath.Dir(assets.Kernel))
+	var other *verify.OtherBundleError
+	switch {
+	case errors.As(err, &other):
+		return c.bootAssetsDiffer(assets, bundle, other.Error())
+	case err != nil:
+		return c.bootDigestsUnread(assets, bundle, err)
+	}
+
+	var differ []string
+	for _, path := range []string{assets.Kernel, assets.Initrd} {
+		name := filepath.Base(path)
+		want := expected[name]
+		if want == "" {
+			return c.bootDigestsUnread(assets, bundle, fmt.Errorf("%s lists no digest for %s", source, name))
+		}
+		got, err := verify.FileDigest(path)
+		if err != nil {
+			return c.bootDigestsUnread(assets, bundle, err)
+		}
+		if got != want {
+			differ = append(differ, fmt.Sprintf("%s is %s, not the %s it lists", name, got, want))
+		}
+	}
+	if len(differ) > 0 {
+		return c.bootAssetsDiffer(assets, bundle, strings.Join(differ, ". "))
+	}
+	if fallback != nil {
+		return c.bootDigestsUnread(assets, bundle, recordOnly(fallback))
+	}
+	c.verified = append(c.verified, "boot assets")
+	c.progressf("boot assets: %s and %s match the digests %s lists for %s",
+		filepath.Base(assets.Kernel), filepath.Base(assets.Initrd), source, c.bundleDigest)
+	return nil
+}
+
+// expectedBootDigests reads what the verified bundle lists for its files: the
+// registry manifest at that digest first, and hull's provenance record in dir
+// when the manifest cannot be read. fallback is the registry's error when the
+// list comes from the record, and nil when it comes from the registry. A
+// record of another bundle comes back as verify.OtherBundleError, whatever the
+// registry said.
+//
+// A registry that answered with a manifest brig refused gets no fallback. A
+// record that agrees with the files would say nothing about the registry
+// answering the signed digest with other bytes.
+func expectedBootDigests(ref, digest, dir string) (files verify.BootDigests, source string, fallback, err error) {
+	files, err = registryDigests(ref, digest)
+	if err == nil {
+		return files, "the registry manifest", nil, nil
+	}
+	var refused *verify.ManifestRefusedError
+	if errors.As(err, &refused) {
+		return nil, "", nil, fmt.Errorf("brig refused the registry's answer for it: %w", err)
+	}
+	recorded, perr := verify.ProvenanceDigests(dir, digest)
+	if perr == nil {
+		return recorded, "hull's provenance record", err, nil
+	}
+	var other *verify.OtherBundleError
+	if errors.As(perr, &other) {
+		return nil, "", nil, perr
+	}
+	return nil, "", nil, fmt.Errorf("the registry manifest could not be read (%v), and there is no provenance record for it in %s", err, dir)
+}
+
+// recordOnly is the "cannot check" cause for files that match hull's
+// provenance record while the registry manifest could not be read. hull writes
+// the record into the directory it describes, so anything that can rewrite the
+// kernel there can rewrite the record to match, and a match is not a
+// verification.
+func recordOnly(registryErr error) error {
+	return fmt.Errorf("the registry manifest could not be read (%v), and only hull's provenance "+
+		"record lists them. That record sits beside the files, so it does not vouch for them", registryErr)
+}
+
+// bootAssetsDiffer decides a kernel or initrd that is not the file the
+// verified bundle lists.
+func (c *Config) bootAssetsDiffer(assets runtime.BootAssets, bundle, detail string) error {
+	dir := filepath.Dir(assets.Kernel)
+	if !assets.Named {
+		// Deleting the files is the remedy on both runtimes: the resolve then
+		// fetches the reference brig verified, hull pinned to it as well.
+		return fmt.Errorf("refusing to boot: the boot assets in %s are not the bundle that "+
+			"verified, %s: %s. Delete both files there and run again to fetch the bundle, or "+
+			"set BRIG_BOOT_ASSETS to that directory if they are your own build", dir, bundle, detail)
+	}
+	if c.Verify == verify.Require {
+		return fmt.Errorf("refusing to boot: BRIG_BOOT_ASSETS names %s, and its boot assets "+
+			"are not the bundle that verified, %s: %s (BRIG_VERIFY=require).%s Set "+
+			"BRIG_VERIFY=warn to boot them", dir, bundle, detail, c.linuxBundleNote(assets))
+	}
+	c.alertf("BRIG_BOOT_ASSETS names %s, and its boot assets are not the bundle that "+
+		"verified, %s: %s. Booting them as your own build, so nothing vouches for the kernel "+
+		"this sandbox boots", dir, bundle, detail)
+	return nil
+}
+
+// bootDigestsUnread decides digests brig cannot read, or files it cannot
+// hash: "cannot check", said under warn and refused under require.
+func (c *Config) bootDigestsUnread(assets runtime.BootAssets, bundle string, cause error) error {
+	if c.Verify == verify.Require {
+		return fmt.Errorf("refusing to boot: cannot read the digests of the boot bundle %s: %v, "+
+			"so the kernel and initrd were not compared with it (BRIG_VERIFY=require).%s Set "+
+			"BRIG_VERIFY=warn to boot them without the comparison", bundle, cause, c.linuxBundleNote(assets))
+	}
+	c.alertf("cannot read the digests of the boot bundle %s: %v. The kernel and initrd boot "+
+		"without being compared with it", bundle, cause)
+	return nil
+}
+
+// linuxBundleNote says why a directory from the Linux runtime bundle refuses
+// under require. Its launcher sets BRIG_BOOT_ASSETS to the kernel and initrd
+// it carries, and it records no digests for them.
+//
+// brig cannot tell that launcher's directory from anyone else's, so the note
+// is about the launcher, and only a named directory on nerdctl gets it. On
+// hull the bundle plays no part, and a note about it sent a Mac user who
+// named a build of their own looking in the wrong place.
+func (c *Config) linuxBundleNote(assets runtime.BootAssets) string {
+	if !assets.Named || c.Runtime.Kind() != "nerdctl" {
+		return ""
+	}
+	return " The Linux runtime bundle's launcher sets BRIG_BOOT_ASSETS to the kernel and " +
+		"initrd it carries and ships no digests for them yet, so a run through it refuses " +
+		"here until it does."
 }

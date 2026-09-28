@@ -18,11 +18,20 @@ type resolvingRuntime struct {
 	verifyRuntime
 	assets runtime.BootAssets
 	err    error
+	// kind stands in for Runtime.Kind. Empty is hull, as verifyRuntime says.
+	kind string
 
 	said      *bytes.Buffer
 	asked     int
 	atResolve string
 	booted    *runtime.RunSpec
+}
+
+func (r *resolvingRuntime) Kind() string {
+	if r.kind != "" {
+		return r.kind
+	}
+	return r.verifyRuntime.Kind()
 }
 
 func (r *resolvingRuntime) ResolveBootAssets(io.Writer, io.Writer) (runtime.BootAssets, error) {
@@ -36,7 +45,13 @@ func (r *resolvingRuntime) Run(spec runtime.RunSpec) error {
 	return errors.New("stub runtime: not booting")
 }
 
-var givenAssets = runtime.BootAssets{Kernel: "/resolved/Image", Initrd: "/resolved/container-initrd"}
+// givenAssets is a kernel and an initrd on disk whose digests the stand-in
+// registry lists, so the digest check passes and the summary names them.
+func givenAssets(t *testing.T) runtime.BootAssets {
+	t.Helper()
+	registryServes(t, published())
+	return writeBootAssets(t, publishedKernel, publishedInitrd, false)
+}
 
 // resolvingConfig is a genericBoot run whose image and bundle both verify, so
 // the summary has something to say and its place in the output is testable.
@@ -57,7 +72,7 @@ func resolvingConfig(t *testing.T, mode verify.Mode, rr *resolvingRuntime) *Conf
 // before the files it spoke for were on disk. #234 needs them here to compare
 // their digests before the summary.
 func TestEnsureRunningResolvesBootAssetsBeforeTheSummary(t *testing.T) {
-	rr := &resolvingRuntime{assets: givenAssets}
+	rr := &resolvingRuntime{assets: givenAssets(t)}
 	c := resolvingConfig(t, verify.Warn, rr)
 
 	_ = c.EnsureRunning(creds.Set{})
@@ -74,8 +89,8 @@ func TestEnsureRunningResolvesBootAssetsBeforeTheSummary(t *testing.T) {
 	if rr.booted == nil {
 		t.Fatal("the run never reached the runtime")
 	}
-	if rr.booted.BootAssets != givenAssets {
-		t.Errorf("Run got boot assets %+v, want the resolved %+v", rr.booted.BootAssets, givenAssets)
+	if rr.booted.BootAssets != rr.assets {
+		t.Errorf("Run got boot assets %+v, want the resolved %+v", rr.booted.BootAssets, rr.assets)
 	}
 }
 
@@ -109,12 +124,12 @@ func TestEnsureRunningStopsWhenTheResolveFails(t *testing.T) {
 // BRIG_VERIFY=off still boots a kernel, so the resolve is keyed on the
 // profile and not on verification.
 func TestEnsureRunningResolvesBootAssetsWithVerifyOff(t *testing.T) {
-	rr := &resolvingRuntime{assets: givenAssets}
+	rr := &resolvingRuntime{assets: givenAssets(t)}
 	c := resolvingConfig(t, verify.Off, rr)
 
 	_ = c.EnsureRunning(creds.Set{})
 
-	if rr.booted == nil || rr.booted.BootAssets != givenAssets {
+	if rr.booted == nil || rr.booted.BootAssets != rr.assets {
 		t.Errorf("with BRIG_VERIFY=off Run did not get the resolved boot assets: %+v", rr.booted)
 	}
 }
@@ -122,7 +137,7 @@ func TestEnsureRunningResolvesBootAssetsWithVerifyOff(t *testing.T) {
 // A profile that boots its own image has no kernel to find, and nothing is
 // fetched for it.
 func TestEnsureRunningDoesNotResolveWithoutGenericBoot(t *testing.T) {
-	rr := &resolvingRuntime{assets: givenAssets}
+	rr := &resolvingRuntime{assets: givenAssets(t)}
 	c := resolvingConfig(t, verify.Warn, rr)
 	c.Profile.GenericBoot = false
 

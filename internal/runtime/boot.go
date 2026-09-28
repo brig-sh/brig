@@ -107,7 +107,11 @@ type assetLocator func() (string, error)
 func bootAssetsDir(locate assetLocator) (dir, explicit string, err error) {
 	explicit = os.Getenv("BRIG_BOOT_ASSETS")
 	if explicit != "" {
-		return explicit, explicit, nil
+		// brig hashes the files from its own working directory and the runtime
+		// opens them from another, urunc's shim among them, so both get the
+		// same absolute path.
+		dir, err = filepath.Abs(explicit)
+		return dir, explicit, err
 	}
 	if locate != nil {
 		// A runtime that cannot answer is not fatal: fall through to the
@@ -184,6 +188,10 @@ func bootArtifactsPresent(kernel, initrd string) bool {
 type BootAssets struct {
 	Kernel string
 	Initrd string
+	// Named reports that BRIG_BOOT_ASSETS chose the directory. A directory
+	// someone named is their build, and wrap weighs a digest that differs
+	// from the verified bundle differently there (#234).
+	Named bool
 }
 
 // given reports whether both paths are set. One path alone is not a resolve,
@@ -212,7 +220,9 @@ func resolveBootAssets(locate assetLocator, fetch assetFetcher) (BootAssets, err
 	if err != nil {
 		return BootAssets{}, err
 	}
-	return BootAssets{Kernel: kernel, Initrd: initrd}, nil
+	// bootAssetsDir takes BRIG_BOOT_ASSETS whenever it is set, so the same
+	// test says who chose the directory.
+	return BootAssets{Kernel: kernel, Initrd: initrd, Named: os.Getenv("BRIG_BOOT_ASSETS") != ""}, nil
 }
 
 // bootAnnotations are the annotations that carry those artifacts, in the form

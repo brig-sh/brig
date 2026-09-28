@@ -184,9 +184,16 @@ type Config struct {
 	//
 	// Collected rather than reported as it happens because the run says it in
 	// one line for the whole step. See sayVerified.
-	verified    []string
-	AllowRefs   bool
-	AllowDenied bool
+	verified []string
+	// bundleDigest is the registry digest whose signature verifyBootAssets
+	// checked, and bundleRef the reference it resolved from. Empty unless the
+	// signature verified. checkBootDigests compares the kernel and initrd on
+	// disk with that bundle's files, so the bundle it names is the one that
+	// verified (#234).
+	bundleRef    string
+	bundleDigest string
+	AllowRefs    bool
+	AllowDenied  bool
 	// Cwd is the host directory the command was invoked from, and GuestCwd is
 	// where that lands inside the guest.
 	Cwd      string

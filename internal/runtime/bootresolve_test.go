@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -112,6 +113,36 @@ func TestResolveBootAssetsReturnsThePair(t *testing.T) {
 		if got.Kernel != kernel || got.Initrd != initrd {
 			t.Errorf("%T resolved %+v, want %s and %s", rt, got, kernel, initrd)
 		}
+	}
+}
+
+// The resolve says whether BRIG_BOOT_ASSETS chose the directory. wrap refuses
+// a differing digest in a directory brig chose, and only states one in a
+// directory somebody named. A resolve that reports a named directory as
+// brig's own turns a refusal into a warning (#234).
+func TestResolveBootAssetsSaysWhoChoseTheDirectory(t *testing.T) {
+	stageBootAssets(t)
+	got, err := resolveBootAssets(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Named {
+		t.Error("a directory BRIG_BOOT_ASSETS named reads as one brig chose")
+	}
+
+	emptyAssetHome(t)
+	dir := t.TempDir()
+	for _, name := range []string{bootKernelName(), bootInitrdName} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err = resolveBootAssets(func() (string, error) { return dir, nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Named {
+		t.Error("the directory the runtime reported reads as one BRIG_BOOT_ASSETS named")
 	}
 }
 

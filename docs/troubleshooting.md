@@ -297,8 +297,12 @@ anyway. A check that did not run is not a check that failed.
 Under `BRIG_VERIFY=off` cosign is never looked up, and the only line is:
 
 ```
-brig: BRIG_VERIFY=off, so the guest image is not checked before it boots
+brig: BRIG_VERIFY=off, so the signature and digest checks are skipped: the
+guest image and the kernel it boots are not checked
 ```
+
+A profile that boots its own image has no kernel of Brig's to skip, and the
+line names the image alone.
 
 Under `BRIG_VERIFY=require` nothing boots, and the line says so rather than
 describing the boot it refused (exit `5`):
@@ -512,6 +516,26 @@ brig run claude
 
 A pull that now verifies reaches `signature verified` and boots, instead of
 the DID NOT VERIFY prompt.
+
+## The boot assets are not the bundle that verified
+
+```
+brig: refusing to boot: the boot assets in ~/.hull/store/assets are not the
+bundle that verified, ghcr.io/nofireai/hull-assets:darwin-arm64
+(sha256:e82a...): container-initrd is sha256:55d2..., not the sha256:05cb...
+it lists. Delete both files there and run again to fetch the bundle, or set
+BRIG_BOOT_ASSETS to that directory if they are your own build
+```
+
+The kernel and initrd on disk are not the files the signed bundle lists. The
+usual cause is a bundle fetched before a newer one was published under the
+same tag. Brig refuses it under `warn` as well as `require`, with exit `5`.
+
+Delete the two files the line names and run again. Brig fetches the bundle
+whose signature it just checked, and the next run compares that. If the files
+are your own build, point `BRIG_BOOT_ASSETS` at their directory: `warn` then
+states the difference and boots them. See
+[security.md](security.md#the-kernel-not-only-the-image).
 
 ## The sandbox never became ready
 

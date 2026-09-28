@@ -692,14 +692,59 @@ that fails stops the boot outright, in every mode except `off`. There is no
 `[y/N]` prompt the way there is for the image, because there is no reading of
 a bad kernel signature worth asking about.
 
-One thing the check does not buy: nothing is pinned from the result. The
-check verifies a registry reference, not the bytes that boot. What actually
-starts the guest is whatever kernel and initrd sit in `BRIG_BOOT_ASSETS`, or
-failing that the runtime's own asset directory, or the platform default.
-Only existence and being non-empty are checked there. Brig does not bind the
-kernel on disk to the artifact it just verified. `BRIG_VERIFY_REGISTRY`,
-`BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER` repoint the image's trust
-policy only: the kernel's identity is fixed.
+The signature covers the bundle's manifest, and the manifest lists a sha256
+for each file. Brig keeps the digest whose signature verified, reads the
+manifest from the registry by that digest, and checks that its bytes hash to
+it. A registry that answers with bytes that are not that digest, an index, a
+redirect loop, or a token realm or redirect over plain http is refused. Brig
+then hashes the kernel and initrd it hands the runtime and compares them with
+that list before the boot. `brig: image and boot assets verified` appears
+only after both files match.
+
+On macOS, when the manifest cannot be read, Brig reads hull's
+`provenance.json` in the asset directory instead, but only a record that names
+the verified digest. hull writes that record into the directory it describes,
+so anything that can rewrite the kernel there can rewrite the record to match.
+Files that differ from it still count as a difference. Files that match it are
+"cannot check", never verified. A registry answer Brig refused gets no
+fallback.
+
+What a difference does depends on who chose the directory:
+
+- `BRIG_BOOT_ASSETS` unset: Brig chose the directory and fetched into it,
+  so a file that differs, or a `provenance.json` for another bundle, refuses
+  the run under `warn` and `require`. The refusal names the file, its digest
+  and the digest the bundle lists. Deleting the two files fetches the bundle
+  again. hull's store is such a directory wherever `HULL_BOOT_ASSETS` puts it,
+  since hull fetches into it.
+- `BRIG_BOOT_ASSETS` set: the directory is someone's build. `warn` states the
+  difference and boots it, and nothing vouches for that kernel. `require`
+  refuses. The Linux runtime bundle points `BRIG_BOOT_ASSETS` at its own
+  kernel and initrd and ships no digests for them yet, so under `require` its
+  directory refuses until it does. hull checks a directory against its own
+  `provenance.json` too, so a named copy of hull's directory with a changed
+  file fails at hull even under `warn`.
+- Digests Brig cannot check (no manifest and no record of the verified
+  bundle, a registry answer Brig refused, a record with no entry for one of
+  the files, or files that match only hull's record): `warn` states it and
+  boots, `require` refuses.
+
+`BRIG_VERIFY=off` skips the signature and the digest checks, and one line
+says so. A `BRIG_BOOT_ASSETS_REF` under `ghcr.io/nofireai/` is checked the
+same way against its own digest. Any other reference has no signature of ours,
+so there is no digest to bind.
+
+The comparison happens before the runtime starts. The runtime opens the files
+later by path, after the workspace and the image pull, which can take minutes
+on a first pull. Something that can write to the asset directory in between
+can still swap a file. That is the host's own user, and a sandbox only when it
+mounts that directory: a user install keeps its asset directory under
+`$HOME`, and `brig run claude ~` shares `$HOME` read-write. On macOS hull
+narrows the window. It stages a copy of each file and checks the copy against
+its `provenance.json`, so a swap has to rewrite the record too. On Linux
+nothing checks the files again after Brig does.
+`BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
+repoint the image's trust policy only: the kernel's identity is fixed.
 
 ## Brig's own binaries
 

@@ -257,6 +257,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
 	}
+	// The files just resolved are the ones the runtime boots, so they are
+	// the ones compared with the bundle whose signature verified above.
+	if err := c.checkBootDigests(bootAssets); err != nil {
+		return &VerifyRefusedError{Err: err}
+	}
 	// Both checks are in, so the run can state the outcome in one line. Here
 	// rather than inside either check, because there is one answer for the step
 	// and two checks that reach it. See sayVerified.

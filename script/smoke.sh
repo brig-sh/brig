@@ -2038,6 +2038,18 @@ exit 0
 COSIGN
 chmod +x "$WORK/bin/cosign"
 export BRIG_COSIGN_BIN="$WORK/bin/cosign"
+# The boot-asset digest check reads the verified bundle's manifest over https.
+# A proxy on a closed port keeps that request on this machine, so it fails at
+# once, and hull's provenance record beside the stand-ins is read instead. It
+# names the digest the stub cosign resolves and the sha256 of "stand-in\n".
+export HTTPS_PROXY=http://127.0.0.1:9
+standin=f5f8eeae987b3e68b4592b2c02ba1dd277eba1fbfa716c3c829c7dbb513a2773
+bundle="sha256:$(printf 'a%.0s' $(seq 64))"
+cat > "$WORK/assets/provenance.json" <<PROVENANCE
+{"digest":"$bundle","verifiedDigest":"$bundle","files":{
+  "Image":{"sha256":"$standin"},"bzImage":{"sha256":"$standin"},
+  "container-initrd":{"sha256":"$standin"}}}
+PROVENANCE
 
 fresh() { "$WORK/brig" stop claude > /dev/null 2>&1; }
 
@@ -2063,11 +2075,18 @@ grep 'argv: run ' "$STUB_LOG" | tail -1 | grep -q '@sha256:' \
   || bad "hull was told to boot the tag, not the verified digest: $(grep 'argv: run ' "$STUB_LOG" | tail -1)"
 
 # What the default run gets instead of the detail is the outcome, in one line.
-# One line for the whole step, not one per check: the shipped profiles boot a
-# downloaded kernel as well as an image, so both checks reach the same summary.
+# One line for the whole step, not one per check. The registry is out of reach
+# here, so the stand-ins match only hull's record beside them, and that record
+# does not verify them: the summary names the image alone, and one line says
+# why the boot assets are missing from it.
 case "$out" in
-  *"brig: image and boot assets verified"*) ok "a default run says verification held" ;;
+  *"boot assets verified"*) bad "hull's record verified the boot assets -- got: $out" ;;
+  *"brig: image verified"*) ok "a default run says verification held" ;;
   *) bad "a default run says verification held -- got: $out" ;;
+esac
+case "$out" in
+  *"only hull's provenance record lists them"*) ok "a match with hull's record alone is not a verification" ;;
+  *) bad "a match with hull's record alone is not a verification -- got: $out" ;;
 esac
 # The policy that outcome held under is the envelope's VERIFY row, which
 # --verbose carries. Stating neither would leave "it verified" to be inferred
@@ -2188,7 +2207,35 @@ out="$(BRIG_VERIFY=require BRIG_IMAGE=docker.io/library/ubuntu:24.04 \
 [ "$rc" = 5 ] && ok "require refuses what it cannot check (exit 5)" \
   || bad "require refuses what it cannot check with exit 5 -- got $rc"
 
-unset BRIG_COSIGN_BIN
+# The kernel and initrd are compared with the bundle that verified. Here the
+# record beside them is for another bundle. BRIG_BOOT_ASSETS names the
+# directory, so warn states the difference and boots, and require refuses.
+mkdir -p "$WORK/other-assets"
+cp "$WORK/assets/Image" "$WORK/assets/bzImage" "$WORK/assets/container-initrd" "$WORK/other-assets/"
+other="sha256:$(printf 'b%.0s' $(seq 64))"
+printf '{"digest":"%s","verifiedDigest":"%s","files":{}}\n' "$other" "$other" \
+  > "$WORK/other-assets/provenance.json"
+fresh
+out="$(BRIG_VERIFY=warn BRIG_BOOT_ASSETS="$WORK/other-assets" "$WORK/brig" run claude -p hi 2>&1)"; rc=$?
+case "$out" in
+  *"not the bundle that verified"*) ok "warn states that a named directory is not the verified bundle" ;;
+  *) bad "warn states that a named directory is not the verified bundle -- got: $out" ;;
+esac
+case "$out" in
+  *"boot assets verified"*) bad "the summary named boot assets that did not match -- got: $out" ;;
+  *) ok "the summary leaves out boot assets that did not match" ;;
+esac
+[ "$rc" = 0 ] && ok "warn boots a named directory that differs" || bad "warn refused a named directory -- got $rc"
+fresh
+out="$(BRIG_VERIFY=require BRIG_BOOT_ASSETS="$WORK/other-assets" "$WORK/brig" run claude -p hi 2>&1)"; rc=$?
+case "$out" in
+  *"not the bundle that verified"*"BRIG_VERIFY=require"*) ok "require names the bundle difference it refuses" ;;
+  *) bad "require names the bundle difference it refuses -- got: $out" ;;
+esac
+[ "$rc" = 5 ] && ok "require refuses a named directory that is not the verified bundle (exit 5)" \
+  || bad "require refuses a named directory that differs with exit 5 -- got $rc: $out"
+
+unset BRIG_COSIGN_BIN HTTPS_PROXY
 export BRIG_VERIFY=off
 # The built-in profiles boot generically now, which means brig wants a kernel
 # and an initrd before it starts anything. Point it at a pair of stand-ins: the

@@ -3,12 +3,14 @@ package wrap
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/verify"
 )
 
 // The registry is built at run time now rather than being a package-level
@@ -29,6 +31,11 @@ func TestMain(m *testing.M) {
 	}
 	if err := os.Setenv("BRIG_GATEWAY_DIR", gw); err != nil {
 		panic(err)
+	}
+	// The boot-asset digest check reads the bundle's manifest from a registry.
+	// No unit test reaches one: a case that wants an answer stands one in.
+	registryDigests = func(string, string) (verify.BootDigests, error) {
+		return nil, errors.New("no registry in unit tests")
 	}
 	code := m.Run()
 	_ = os.RemoveAll(gw)

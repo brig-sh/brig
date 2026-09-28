@@ -357,3 +357,23 @@ func TestAnEmptyAnswerFromTheRuntimeFallsBack(t *testing.T) {
 		t.Errorf("an empty answer resolved %q, want the fallback %s", dir, fallback)
 	}
 }
+
+// A relative BRIG_BOOT_ASSETS names a directory under brig's working
+// directory. The runtime resolves the paths it is handed from a directory of
+// its own, so they leave here absolute.
+func TestARelativeBootAssetsDirectoryIsMadeAbsolute(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	t.Setenv("BRIG_BOOT_ASSETS", "guest")
+
+	dir, explicit, err := bootAssetsDir(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(dir) || filepath.Base(dir) != "guest" {
+		t.Errorf("BRIG_BOOT_ASSETS=guest resolved %q, want an absolute path ending in guest", dir)
+	}
+	if explicit != "guest" {
+		t.Errorf("explicit is %q, want the variable's value", explicit)
+	}
+}
