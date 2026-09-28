@@ -125,6 +125,13 @@ func bootAssetsDir(locate assetLocator) (dir, explicit string, err error) {
 }
 
 func bootArtifacts(locate assetLocator, fetch assetFetcher) (kernel, initrd string, err error) {
+	return replaceBootArtifacts(locate, fetch, false)
+}
+
+// replaceBootArtifacts is bootArtifacts that, with replace, fetches over files
+// that are there, in a directory brig chose. A directory named in
+// BRIG_BOOT_ASSETS keeps what it holds.
+func replaceBootArtifacts(locate assetLocator, fetch assetFetcher, replace bool) (kernel, initrd string, err error) {
 	dir, explicit, err := bootAssetsDir(locate)
 	if err != nil {
 		return "", "", err
@@ -132,7 +139,7 @@ func bootArtifacts(locate assetLocator, fetch assetFetcher) (kernel, initrd stri
 	kernel = filepath.Join(dir, bootKernelName())
 	initrd = filepath.Join(dir, bootInitrdName)
 
-	if !bootArtifactsPresent(kernel, initrd) {
+	if !bootArtifactsPresent(kernel, initrd) || (replace && explicit == "") {
 		switch {
 		case explicit != "":
 			// BRIG_BOOT_ASSETS points at a build someone is iterating on.
@@ -198,6 +205,18 @@ type BootAssets struct {
 // so the adapter resolves both itself.
 func (b BootAssets) given() bool { return b.Kernel != "" && b.Initrd != "" }
 
+// BootFetch is what a resolve fetches, and when.
+type BootFetch struct {
+	// Ref is the boot bundle to fetch, pinned to the digest whose signature
+	// brig verified, repo@sha256:... Fetching the tag instead lets a tag that
+	// moved after the check deliver a bundle nobody checked. Empty fetches the
+	// tag BootAssetsRef names, for a bundle brig had no signature to check.
+	Ref string
+	// Replace fetches even when both files are there, over them. wrap asks for
+	// it when the files are an older bundle's, in a directory brig chose.
+	Replace bool
+}
+
 // BootResolver is a runtime that finds the kernel and initrd a GenericBoot
 // profile boots, and fetches them when they are missing, ahead of Run.
 //
@@ -207,16 +226,25 @@ func (b BootAssets) given() bool { return b.Kernel != "" && b.Initrd != "" }
 // to compare their digests. Optional for the same reason NetworkChecker is. A runtime
 // without it resolves inside Run, as before.
 type BootResolver interface {
-	// ResolveBootAssets returns the paths for RunSpec.BootAssets. notice and
-	// progress are the writers a download narrates to, the same pair
+	// ResolveBootAssets returns the paths for RunSpec.BootAssets, fetching
+	// what fetch names when a file is missing or fetch.Replace asks. notice
+	// and progress are the writers a download narrates to, the same pair
 	// RunSpec.Notice and RunSpec.Progress carry.
-	ResolveBootAssets(notice, progress io.Writer) (BootAssets, error)
+	ResolveBootAssets(fetch BootFetch, notice, progress io.Writer) (BootAssets, error)
 }
+
+// wrap finds a BootResolver through a type assertion, which an adapter whose
+// signature drifted fails without a word: the run then resolves inside Run,
+// after the checks. These fail the build instead.
+var (
+	_ BootResolver = (*hull)(nil)
+	_ BootResolver = (*nerdctl)(nil)
+)
 
 // resolveBootAssets is bootArtifacts in the shape BootResolver returns, for
 // the adapters' ResolveBootAssets.
-func resolveBootAssets(locate assetLocator, fetch assetFetcher) (BootAssets, error) {
-	kernel, initrd, err := bootArtifacts(locate, fetch)
+func resolveBootAssets(locate assetLocator, fetch assetFetcher, replace bool) (BootAssets, error) {
+	kernel, initrd, err := replaceBootArtifacts(locate, fetch, replace)
 	if err != nil {
 		return BootAssets{}, err
 	}

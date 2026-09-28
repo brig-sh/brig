@@ -25,7 +25,15 @@ type resolvingRuntime struct {
 	asked     int
 	atResolve string
 	booted    *runtime.RunSpec
+	// fetches are what each resolve was asked to fetch, and replaced, when
+	// set, stands in for a fetch over the files there.
+	fetches  []runtime.BootFetch
+	replaced func()
 }
+
+// A stand-in that drifted from BootResolver would pass every test here by
+// not resolving at all.
+var _ runtime.BootResolver = (*resolvingRuntime)(nil)
 
 func (r *resolvingRuntime) Kind() string {
 	if r.kind != "" {
@@ -34,9 +42,13 @@ func (r *resolvingRuntime) Kind() string {
 	return r.verifyRuntime.Kind()
 }
 
-func (r *resolvingRuntime) ResolveBootAssets(io.Writer, io.Writer) (runtime.BootAssets, error) {
+func (r *resolvingRuntime) ResolveBootAssets(fetch runtime.BootFetch, _, _ io.Writer) (runtime.BootAssets, error) {
 	r.asked++
 	r.atResolve = r.said.String()
+	r.fetches = append(r.fetches, fetch)
+	if fetch.Replace && r.replaced != nil {
+		r.replaced()
+	}
 	return r.assets, r.err
 }
 

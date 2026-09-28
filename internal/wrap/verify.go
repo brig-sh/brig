@@ -491,32 +491,23 @@ func (c *Config) checkBootDigests(assets runtime.BootAssets) error {
 			fmt.Errorf("this %s finds the kernel and initrd inside its own run", c.Runtime.Kind()))
 	}
 
-	expected, source, fallback, err := expectedBootDigests(c.bundleRef, c.bundleDigest, filepath.Dir(assets.Kernel))
-	var other *verify.OtherBundleError
+	differ, source, fallback, err := compareBootDigests(c.bundleRef, c.bundleDigest, assets)
+	// Files an earlier fetch left, of a bundle the tag named before it moved,
+	// are fetched again: brig chose the directory and fetches into it, so
+	// replacing them is its own business. A run after every publish refused
+	// until somebody deleted them by hand.
+	if differ != "" && c.staleBundle(assets) {
+		if rerr := c.refetchBootAssets(assets); rerr != nil {
+			return fmt.Errorf("refusing to boot: the boot assets in %s are an older bundle than the "+
+				"one that verified, %s, and fetching that one failed: %v", filepath.Dir(assets.Kernel), bundle, rerr)
+		}
+		differ, source, fallback, err = compareBootDigests(c.bundleRef, c.bundleDigest, assets)
+	}
 	switch {
-	case errors.As(err, &other):
-		return c.bootAssetsDiffer(assets, bundle, other.Error())
 	case err != nil:
 		return c.bootDigestsUnread(assets, bundle, err)
-	}
-
-	var differ []string
-	for _, path := range []string{assets.Kernel, assets.Initrd} {
-		name := filepath.Base(path)
-		want := expected[name]
-		if want == "" {
-			return c.bootDigestsUnread(assets, bundle, fmt.Errorf("%s lists no digest for %s", source, name))
-		}
-		got, err := verify.FileDigest(path)
-		if err != nil {
-			return c.bootDigestsUnread(assets, bundle, err)
-		}
-		if got != want {
-			differ = append(differ, fmt.Sprintf("%s is %s, not the %s it lists", name, got, want))
-		}
-	}
-	if len(differ) > 0 {
-		return c.bootAssetsDiffer(assets, bundle, strings.Join(differ, ". "))
+	case differ != "":
+		return c.bootAssetsDiffer(assets, bundle, differ)
 	}
 	if fallback != nil {
 		return c.bootDigestsUnread(assets, bundle, recordOnly(fallback))
@@ -524,6 +515,91 @@ func (c *Config) checkBootDigests(assets runtime.BootAssets) error {
 	c.verified = append(c.verified, "boot assets")
 	c.progressf("boot assets: %s and %s match the digests %s lists for %s",
 		filepath.Base(assets.Kernel), filepath.Base(assets.Initrd), source, c.bundleDigest)
+	return nil
+}
+
+// verifiedBootRef is the boot bundle at the digest whose signature verified,
+// or "" when none did.
+func (c *Config) verifiedBootRef() string {
+	if c.bundleDigest == "" {
+		return ""
+	}
+	return verify.RefWithDigest(c.bundleRef, c.bundleDigest)
+}
+
+// compareBootDigests compares the kernel and initrd with what the verified
+// bundle lists. differ says how they differ, empty when they match, and
+// source names where the list came from. fallback is the registry's error
+// when that list is hull's record, as expectedBootDigests returns it. err is
+// a list brig could not read.
+func compareBootDigests(ref, digest string, assets runtime.BootAssets) (differ, source string, fallback, err error) {
+	expected, source, fallback, err := expectedBootDigests(ref, digest, filepath.Dir(assets.Kernel))
+	var other *verify.OtherBundleError
+	switch {
+	case errors.As(err, &other):
+		return other.Error(), "", nil, nil
+	case err != nil:
+		return "", "", nil, err
+	}
+	var lines []string
+	for _, path := range []string{assets.Kernel, assets.Initrd} {
+		name := filepath.Base(path)
+		want := expected[name]
+		if want == "" {
+			return "", "", nil, fmt.Errorf("%s lists no digest for %s", source, name)
+		}
+		got, err := verify.FileDigest(path)
+		if err != nil {
+			return "", "", nil, err
+		}
+		if got != want {
+			lines = append(lines, fmt.Sprintf("%s is %s, not the %s it lists", name, got, want))
+		}
+	}
+	return strings.Join(lines, ". "), source, fallback, nil
+}
+
+// staleBundle reports whether the files are an older bundle's, in a directory
+// brig chose: the record beside them names a bundle other than the one that
+// verified, and they are the files it lists. Files that match no record are
+// somebody's change, and stay a refusal.
+func (c *Config) staleBundle(assets runtime.BootAssets) bool {
+	if assets.Named {
+		return false
+	}
+	recorded, files, err := verify.RecordedBundle(filepath.Dir(assets.Kernel))
+	if err != nil || recorded == c.bundleDigest {
+		return false
+	}
+	for _, path := range []string{assets.Kernel, assets.Initrd} {
+		want := files[filepath.Base(path)]
+		got, err := verify.FileDigest(path)
+		if want == "" || err != nil || got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// refetchBootAssets fetches the bundle that verified, by its digest, over an
+// older bundle's files.
+func (c *Config) refetchBootAssets(assets runtime.BootAssets) error {
+	r, ok := c.Runtime.(runtime.BootResolver)
+	if !ok {
+		return fmt.Errorf("this %s cannot fetch them", c.Runtime.Kind())
+	}
+	c.progressf("boot assets in %s are an older bundle; fetching %s",
+		filepath.Dir(assets.Kernel), c.verifiedBootRef())
+	fresh, err := r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef(), Replace: true},
+		c.runtimeNotice(), c.runtimeOutput())
+	if err != nil {
+		return err
+	}
+	// The run boots the paths resolved before. A fetch that put the files
+	// anywhere else leaves those paths holding the older bundle.
+	if fresh.Kernel != assets.Kernel || fresh.Initrd != assets.Initrd {
+		return fmt.Errorf("the fetch resolved %s and %s, not the files compared", fresh.Kernel, fresh.Initrd)
+	}
 	return nil
 }
 

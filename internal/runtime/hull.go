@@ -181,21 +181,36 @@ func hypervisorOrDefault(hv string) string { return orDefault(hv, "vz") }
 // Progress, which is empty unless somebody asked for it, and the two notices
 // say that a minute of silence is a download rather than a hang.
 func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
-	noticef(notice, "downloading the kernel and initrd this profile boots (once)...")
-	cmd := exec.Command(h.bin, "assets", "pull")
+	return h.fetchAssets(dir, BootFetch{}, notice, progress)
+}
+
+// fetchAssets is pullAssets for the bundle fetch names, over the files there
+// when fetch.Replace asks.
+func (h *hull) fetchAssets(dir string, fetch BootFetch, notice, progress io.Writer) error {
+	noticef(notice, "%s", fetchNotice(fetch))
+	args := []string{"assets", "pull"}
+	if fetch.Replace {
+		args = append(args, "--force")
+	}
+	cmd := exec.Command(h.bin, args...)
 	// Pin hull to the directory brig resolved. That directory came from hull
 	// itself via assetDir, so this is not brig overriding a choice -- it is
 	// brig making sure the place it checked and the place hull writes are the
 	// same one, even if something changed between the two calls.
 	//
-	// Pin the reference too. brig verified the bundle BRIG_BOOT_ASSETS_REF
-	// names, and hull reads its own HULL_BOOT_ASSETS_REF. Left alone, hull
-	// fetches its default and the kernel that boots comes from a bundle brig
-	// never checked. With no override brig verified its own default, so a
+	// Pin the reference too. brig verified a digest of the bundle
+	// BRIG_BOOT_ASSETS_REF names, and hull reads its own HULL_BOOT_ASSETS_REF.
+	// Left alone, hull fetches its default and the kernel that boots comes
+	// from a bundle brig never checked. fetch.Ref is that bundle at the digest
+	// that verified, so a tag that moved since cannot deliver another. With no
+	// verified digest and no override brig checked its own default, so a
 	// HULL_BOOT_ASSETS_REF inherited from brig's environment is dropped for the
 	// same reason (#234).
 	pins := []string{"HULL_BOOT_ASSETS=" + dir}
-	ref := bootAssetsRefOverride()
+	ref := fetch.Ref
+	if ref == "" {
+		ref = bootAssetsRefOverride()
+	}
 	if ref != "" {
 		pins = append(pins, "HULL_BOOT_ASSETS_REF="+ref)
 	}
@@ -223,10 +238,10 @@ func (h *hull) assetFetcher(spec RunSpec) assetFetcher {
 // ResolveBootAssets is the resolve runArgs makes for a spec with no
 // BootAssets, made ahead of Run. It asks hull where the assets live with no
 // deadline, as a run does. See BootResolver.
-func (h *hull) ResolveBootAssets(notice, progress io.Writer) (BootAssets, error) {
+func (h *hull) ResolveBootAssets(fetch BootFetch, notice, progress io.Writer) (BootAssets, error) {
 	return resolveBootAssets(h.assetDir, func(dir string) error {
-		return h.pullAssets(dir, notice, progress)
-	})
+		return h.fetchAssets(dir, fetch, notice, progress)
+	}, fetch.Replace)
 }
 
 // assetDir asks hull where its boot assets live.

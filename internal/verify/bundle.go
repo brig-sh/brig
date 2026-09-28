@@ -300,10 +300,44 @@ func splitRef(ref string) (host, repo string, err error) {
 // signature it checked. If either names another bundle, the files beside it
 // came from that bundle, and that comes back as an OtherBundleError.
 func ProvenanceDigests(dir, digest string) (BootDigests, error) {
+	recorded, files, err := readProvenance(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range recorded {
+		if d != "" && d != digest {
+			return nil, &OtherBundleError{Dir: dir, Recorded: d, Verified: digest}
+		}
+	}
+	return files, nil
+}
+
+// RecordedBundle reads the same record for the bundle it names and the files
+// it lists, whichever bundle that is. A record of another bundle, whose
+// files match, is an older bundle fetched before the tag moved rather than
+// files somebody changed.
+func RecordedBundle(dir string) (digest string, files BootDigests, err error) {
+	recorded, files, err := readProvenance(dir)
+	if err != nil {
+		return "", nil, err
+	}
+	digest = recorded[0]
+	if digest == "" {
+		digest = recorded[1]
+	}
+	if recorded[1] != "" && recorded[1] != digest {
+		return "", nil, fmt.Errorf("the record in %s names two bundles, %s and %s", dir, recorded[0], recorded[1])
+	}
+	return digest, files, nil
+}
+
+// readProvenance reads provenance.json in dir: the digest it fetched and the
+// one whose signature it checked, and the files it lists.
+func readProvenance(dir string) (recorded [2]string, files BootDigests, err error) {
 	path := filepath.Join(dir, "provenance.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return recorded, nil, err
 	}
 	var rec struct {
 		Digest         string `json:"digest"`
@@ -313,23 +347,18 @@ func ProvenanceDigests(dir, digest string) (BootDigests, error) {
 		} `json:"files"`
 	}
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return nil, fmt.Errorf("%s is not JSON: %w", path, err)
+		return recorded, nil, fmt.Errorf("%s is not JSON: %w", path, err)
 	}
 	if rec.Digest == "" && rec.VerifiedDigest == "" {
-		return nil, fmt.Errorf("%s names no bundle digest", path)
+		return recorded, nil, fmt.Errorf("%s names no bundle digest", path)
 	}
-	for _, recorded := range []string{rec.Digest, rec.VerifiedDigest} {
-		if recorded != "" && recorded != digest {
-			return nil, &OtherBundleError{Dir: dir, Recorded: recorded, Verified: digest}
-		}
-	}
-	files := BootDigests{}
+	files = BootDigests{}
 	for name, f := range rec.Files {
 		if d := "sha256:" + f.SHA256; isDigest(d) {
 			files[name] = d
 		}
 	}
-	return files, nil
+	return [2]string{rec.Digest, rec.VerifiedDigest}, files, nil
 }
 
 // FileDigest is the sha256 of the file at path, spelled as BootDigests

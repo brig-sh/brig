@@ -89,7 +89,7 @@ func TestNerdctlResolveRefusesDockerBeforeFetching(t *testing.T) {
 	t.Cleanup(func() { lookPath = was })
 
 	d := &nerdctl{bin: "/usr/bin/docker"}
-	_, err := d.ResolveBootAssets(nil, nil)
+	_, err := d.ResolveBootAssets(BootFetch{}, nil, nil)
 	if err == nil {
 		t.Fatal("resolved boot assets for docker, which cannot pass them on")
 	}
@@ -106,7 +106,7 @@ func TestResolveBootAssetsReturnsThePair(t *testing.T) {
 		&hull{bin: "/nonexistent/hull"},
 		&nerdctl{bin: "/usr/local/bin/nerdctl"},
 	} {
-		got, err := rt.ResolveBootAssets(nil, nil)
+		got, err := rt.ResolveBootAssets(BootFetch{}, nil, nil)
 		if err != nil {
 			t.Fatalf("%T: %v", rt, err)
 		}
@@ -122,7 +122,7 @@ func TestResolveBootAssetsReturnsThePair(t *testing.T) {
 // brig's own turns a refusal into a warning (#234).
 func TestResolveBootAssetsSaysWhoChoseTheDirectory(t *testing.T) {
 	stageBootAssets(t)
-	got, err := resolveBootAssets(nil, nil)
+	got, err := resolveBootAssets(nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestResolveBootAssetsSaysWhoChoseTheDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err = resolveBootAssets(func() (string, error) { return dir, nil }, nil)
+	got, err = resolveBootAssets(func() (string, error) { return dir, nil }, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

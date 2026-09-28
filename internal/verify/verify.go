@@ -497,6 +497,9 @@ func isHex(s string) bool {
 	return true
 }
 
+// RefWithDigest is ref at digest, for a fetch of exactly what verified.
+func RefWithDigest(ref, digest string) string { return refWithDigest(ref, digest) }
+
 // refWithDigest rewrites ref to name a digest in place of its tag, so cosign
 // verifies the exact object the tag resolved to. A digest and a tag cannot both
 // sit on a reference (repo:tag@sha256:... is not a thing), so the tag is

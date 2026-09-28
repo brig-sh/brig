@@ -527,9 +527,11 @@ it lists. Delete both files there and run again to fetch the bundle, or set
 BRIG_BOOT_ASSETS to that directory if they are your own build
 ```
 
-The kernel and initrd on disk are not the files the signed bundle lists. The
-usual cause is a bundle fetched before a newer one was published under the
-same tag. Brig refuses it under `warn` as well as `require`, with exit `5`.
+The kernel and initrd on disk are not the files the signed bundle lists, and
+not the files of an older bundle either: an older bundle, one the record
+beside it names, is fetched again, and the run says so. So something changed a
+file after the fetch, or the files were fetched by a Brig or hull that kept no
+record. Brig refuses it under `warn` as well as `require`, with exit `5`.
 
 Delete the two files the line names and run again. Brig fetches the bundle
 whose signature it just checked, and the next run compares that. If the files

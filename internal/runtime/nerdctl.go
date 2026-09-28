@@ -222,11 +222,13 @@ func (n *nerdctl) refuseGenericBootOnDocker() error {
 
 // ResolveBootAssets is the resolve runArgs makes for a spec with no
 // BootAssets, made ahead of Run, with oras as the fetcher. See BootResolver.
-func (n *nerdctl) ResolveBootAssets(notice, progress io.Writer) (BootAssets, error) {
+func (n *nerdctl) ResolveBootAssets(fetch BootFetch, notice, progress io.Writer) (BootAssets, error) {
 	if err := n.refuseGenericBootOnDocker(); err != nil {
 		return BootAssets{}, err
 	}
-	return resolveBootAssets(nil, func(dir string) error { return orasFetch(dir, notice, progress) })
+	return resolveBootAssets(nil, func(dir string) error {
+		return orasPull(dir, fetch, notice, progress)
+	}, fetch.Replace)
 }
 
 // RootfsType is ignored here, deliberately: it selects how a VM reaches its

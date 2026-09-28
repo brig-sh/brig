@@ -823,6 +823,10 @@ func (c *Config) publishLive() error {
 //
 // The download notices go to the writers the spec carries, so a first run
 // says it is downloading at the default level and -q silences it.
+//
+// A download is the bundle whose signature verified, by its digest, so the
+// files that arrive are the ones checked rather than whatever the tag names
+// by then.
 func (c *Config) resolveBootAssets() (runtime.BootAssets, error) {
 	if !c.Profile.GenericBoot {
 		return runtime.BootAssets{}, nil
@@ -831,5 +835,5 @@ func (c *Config) resolveBootAssets() (runtime.BootAssets, error) {
 	if !ok {
 		return runtime.BootAssets{}, nil
 	}
-	return r.ResolveBootAssets(c.runtimeNotice(), c.runtimeOutput())
+	return r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef()}, c.runtimeNotice(), c.runtimeOutput())
 }
