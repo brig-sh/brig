@@ -386,7 +386,7 @@ type reportRuntime struct {
 }
 
 func (reportRuntime) Bin() string { return "hull" }
-func (reportRuntime) Isolation(hv string) runtime.Isolation {
+func (reportRuntime) Isolation(hv runtime.RunSpec) runtime.Isolation {
 	return fakeRuntime{}.Isolation(hv)
 }
 

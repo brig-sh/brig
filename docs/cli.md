@@ -259,6 +259,8 @@ brig info claude
 has the sandbox name, the isolation, the guest home, the image and the
 verification mode. It also has the network, every published port and the
 credentials by name. `brig --verbose run` prints the same envelope before it boots.
+The isolation row names the hull backend and rootfs type on macOS, and the
+containerd shim and urunc hypervisor on Linux.
 
 The network row gives the posture of the running sandbox. When the posture of
 the next boot is different, the row gives that posture too.
@@ -1126,7 +1128,7 @@ does and does not catch.
 | `BRIG_RUNTIME_BIN` (global only) | `hull` on the `hull` runtime, `nerdctl` then `docker` on the `nerdctl` runtime, each found on `PATH` | path to that binary. `BRIG_RUNTIME` picks the runtime first, and this only overrides its executable |
 | `BRIG_HYPERVISOR` | the agent's own `hypervisor:` field, else `vz` | macOS only: `vz`, `hvi` or `qemu`. Wins over the agent's own field when set |
 | `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` ignores it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked |
-| `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. Another microVM shim is accepted. A shim Brig knows shares the host kernel (`runc` or `crun`, by name or by path, or a shim name containerd resolves to the runc shim, such as `io.containerd.runc.v2`) is refused |
+| `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. Another microVM shim is accepted. A shim Brig knows shares the host kernel (`runc` or `crun`, by name or by path, or a shim name containerd resolves to the runc shim, such as `io.containerd.runc.v2`) is refused. The `ISOLATION` row names the variable when it is set |
 
 On macOS, `hvi` is the only backend that enforces an attached egress policy
 or `--network isolated`. It needs macOS 15 or newer. Linux also supports the
