@@ -166,19 +166,29 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 // run and waved through on every one after, printing a POLICY row over a
 // sandbox filtering nothing. A runtime with no opinion is not asked.
 func (c *Config) checkBackend(hypervisor string) error {
-	// Before CanRun. Its isolated refusal names --network isolated, which is
-	// what the user typed when the flag or BRIG_NETWORK said so. A profile's
-	// network: is not that: BRIG_HYPERVISOR=vz, the macOS 14 advice, then
-	// refuses a flag that is not on the command line and never says that
-	// --network shared or BRIG_NETWORK=shared is the way through.
+	var err error
+	if checker, ok := c.Runtime.(runtime.RunChecker); ok {
+		err = checker.CanRun(c.backendSpec(hypervisor))
+	}
+	// A policy the backend cannot enforce is refused as that, whatever chose
+	// the network. Its exit code is 7, and a script reads that code to tell
+	// this refusal from every other one. Most shipped profiles set network:
+	// isolated, so the profile refusal below would otherwise answer first on
+	// vz and qemu, and the policy refusal would exit 1.
+	var refusal *runtime.CapabilityError
+	if errors.As(err, &refusal) {
+		return err
+	}
+	// Ahead of CanRun's other refusals. Its isolated refusal names --network
+	// isolated, which is what the user typed when the flag or BRIG_NETWORK
+	// said so. A profile's network: is not that: BRIG_HYPERVISOR=vz, the
+	// macOS 14 advice, then refuses a flag that is not on the command line
+	// and never says that --network shared or BRIG_NETWORK=shared is the way
+	// through.
 	if msg := c.profileIsolationOnFallback(hypervisor); msg != "" {
 		return errors.New(msg)
 	}
-	checker, ok := c.Runtime.(runtime.RunChecker)
-	if !ok {
-		return nil
-	}
-	return checker.CanRun(c.backendSpec(hypervisor))
+	return err
 }
 
 // profileIsolationOnFallback is the refusal for a profile that asks for an

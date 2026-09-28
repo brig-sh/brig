@@ -4,7 +4,8 @@
 // The set is the exit-code table in docs/cli.md, "Exit codes": 1 a
 // general failure, 2 a usage error, 3 no such profile or sandbox, 4 a runtime
 // that is missing or broken, 5 a boot verification refused, 6 a credential that
-// could not be resolved. A caller that only checked "zero or not" keeps working;
+// could not be resolved, 7 a run path that cannot enforce a property the run
+// asks for. A caller that only checked "zero or not" keeps working;
 // one that wants to branch on the reason now can.
 //
 // cmd/brig/exit.go is the other producer of these numbers -- it classifies the
@@ -33,6 +34,7 @@ const (
 	Runtime     = 4
 	Verify      = 5
 	Credentials = 6
+	Capability  = 7
 )
 
 // UsageError marks a request brigd refused as malformed: an unknown op, an
@@ -66,6 +68,13 @@ func Of(err error) int {
 	var nf *NotFoundError
 	if errors.As(err, &nf) {
 		return NotFound
+	}
+	// A runtime that works and cannot enforce what the run asked for, or cannot
+	// confirm it does. Read ahead of the runtime class, since the refusal is
+	// about a property the run asked for and 7 is the code that says so.
+	var refusal *runtime.CapabilityError
+	if errors.As(err, &refusal) {
+		return Capability
 	}
 	// Missing and broken are one class to a script: both mean "fix the runtime
 	// before this can run", and neither is something the request itself did

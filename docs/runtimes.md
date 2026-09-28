@@ -317,7 +317,7 @@ exits zero within 30 seconds and lists `--egress-default`. hull on `vz`
 and `qemu`, and nerdctl or docker on any shim, answer `cannot enforce` and
 run no probe. hull on a backend the table does not name answers `unknown`.
 Brig boots a policy-bound run only on `enforced`, and the refusal names
-the property, the runtime and the backend.
+the property, the runtime and the backend. It exits `7`.
 
 ### Versions and pins
 
