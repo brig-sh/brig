@@ -629,6 +629,14 @@ func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	said := &bytes.Buffer{}
 	cfg.Out = said
 	cfg.Err = said
+	// A docker taken because PATH had no nerdctl is something to act on, and
+	// the CLI prints it on stderr (#30). The daemon's stderr is nobody's
+	// terminal, so it goes back to the client with the other warnings.
+	if f, ok := rt.(runtime.FallbackReporter); ok {
+		if note := f.Fallback(); note != "" {
+			fmt.Fprintln(said, note)
+		}
+	}
 	// Not into that buffer. What the run narrates about its own progress is not
 	// a warning, and the buffer is delivered to the client as the request's
 	// warnings: with the narration in it, an ensure that did everything right

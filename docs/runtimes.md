@@ -219,8 +219,10 @@ those names for itself. See [security.md](security.md#not-in-argv).
    is missing or not executable is reported against the profile that named it.
 4. Otherwise PATH: `hull` for the hull runtime, and `nerdctl` then `docker`
    for the other one. When PATH has no `nerdctl` and Brig takes `docker`, it
-   says so in one line on stderr. Name `docker` in `BRIG_RUNTIME_BIN` or
-   `runtimeBin` to make it a choice, and the line goes away.
+   says so in one line: `brig` on stderr, `brigd` in the response's warnings.
+   Name `docker` in `BRIG_RUNTIME_BIN`, or its full path in `runtimeBin`, to
+   make it a choice, and the line goes away. `runtimeBin` does no PATH lookup,
+   so a bare `docker` there is refused as missing.
 
 What Brig asks the runtime about itself is short. It asks hull where its
 boot assets live (`hull assets dir`). They sit under hull's own

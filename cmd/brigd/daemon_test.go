@@ -737,3 +737,56 @@ func TestServeInAHelperProcess(t *testing.T) {
 	}
 	os.Exit(0)
 }
+
+// fallbackPath puts a PATH of its own in place, holding a runtime binary that
+// exists and does nothing under each name given, and pins the nerdctl runtime
+// so darwin's default of hull does not decide the question.
+func fallbackPath(t *testing.T, names ...string) {
+	t.Helper()
+	dir := shortDir(t)
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("BRIG_RUNTIME", "nerdctl")
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+}
+
+// The daemon resolves its runtime the way the CLI does, so with no nerdctl on
+// PATH it drives docker too. The CLI says so on stderr (#30); the daemon's
+// stderr is nobody's terminal, so the note has to reach the client that asked
+// with the request's warnings, or a client is handed a docker-backed sandbox
+// with {"ok":true} and nothing else.
+func TestTheDaemonSaysWhenItFellBackToDocker(t *testing.T) {
+	fallbackPath(t, "docker")
+	agent := testProfile(t, "fellback")
+
+	cfg, said, err := newDaemon().config(Request{Agent: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(cfg.Runtime.Bin()) != "docker" {
+		t.Fatalf("the daemon drives %q, want the docker on PATH", cfg.Runtime.Bin())
+	}
+	got := strings.Join(warnings(said), "\n")
+	if !strings.Contains(got, "nerdctl is not on PATH") || !strings.Contains(got, cfg.Runtime.Bin()) {
+		t.Errorf("the client is not told the daemon took docker: %q", got)
+	}
+}
+
+// docker sits beside nerdctl here, so a note keyed off docker being installed
+// rather than taken fails this.
+func TestTheDaemonSaysNothingWhenNerdctlIsThere(t *testing.T) {
+	fallbackPath(t, "nerdctl", "docker")
+	agent := testProfile(t, "nofallback")
+
+	_, said, err := newDaemon().config(Request{Agent: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := warnings(said); len(got) != 0 {
+		t.Errorf("nerdctl was found, yet the client is warned: %q", got)
+	}
+}
