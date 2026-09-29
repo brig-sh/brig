@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -121,5 +122,148 @@ func TestASocketPathWithinTheLimitIsAccepted(t *testing.T) {
 	}
 	if want := filepath.Join(dir, "brigd.sock"); got != want {
 		t.Errorf("the default socket is %q, want %q", got, want)
+	}
+}
+
+// A symlink or hard link planted at the lock path must be refused, not
+// followed and truncated. brigd opens the lock with O_NOFOLLOW and, from the
+// descriptor, refuses a file it does not own by a single name -- so the file a
+// planted link points at keeps its contents. Reachable when --socket names a
+// directory another local user can write.
+func TestLockSocketRefusesAPlantedLink(t *testing.T) {
+	dir := shortDir(t)
+	socket := filepath.Join(dir, "brigd.sock")
+	lockPath := socket + ".lock"
+
+	const content = "keep me"
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertUntouched := func(t *testing.T) {
+		t.Helper()
+		b, err := os.ReadFile(victim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != content {
+			t.Errorf("the file the link pointed at was written through the lock path: %q", b)
+		}
+	}
+
+	t.Run("symlink", func(t *testing.T) {
+		if err := os.Symlink(victim, lockPath); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Remove(lockPath) }()
+		f, err := lockSocket(socket)
+		if err == nil {
+			_ = f.Close()
+			t.Fatal("brigd followed a symlink planted at the lock path")
+		}
+		if !strings.Contains(err.Error(), "planted at the lock path") {
+			t.Errorf("the symlink refusal is not the diagnosable one: %v", err)
+		}
+		assertUntouched(t)
+	})
+
+	t.Run("hardlink", func(t *testing.T) {
+		if err := os.Link(victim, lockPath); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Remove(lockPath) }()
+		f, err := lockSocket(socket)
+		if err == nil {
+			_ = f.Close()
+			t.Fatal("brigd truncated a hard link planted at the lock path")
+		}
+		if !strings.Contains(err.Error(), "hard link") {
+			t.Errorf("the refusal does not name the hard link: %v", err)
+		}
+		assertUntouched(t)
+	})
+}
+
+// The link check has to run before the flock, not after: a hard link whose
+// target the attacker also holds an exclusive lock on would otherwise make the
+// flock fail first, so the check never runs and the holder message reads the
+// linked file. With the check first, the hard link is refused whatever its lock
+// state, and the target is neither read nor written.
+func TestLockSocketRefusesAHardLinkEvenWhenLocked(t *testing.T) {
+	dir := shortDir(t)
+	socket := filepath.Join(dir, "brigd.sock")
+	lockPath := socket + ".lock"
+
+	const content = "victim-bytes-that-must-not-leak"
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(victim, lockPath); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("could not hold the lock for the test: %v", err)
+	}
+
+	f, err := lockSocket(socket)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("brigd used a flock-held hard link as its lock")
+	}
+	if !strings.Contains(err.Error(), "hard link") {
+		t.Errorf("the refusal is the flock message, not the hard-link one, so the check ran too late: %v", err)
+	}
+	if strings.Contains(err.Error(), content) {
+		t.Errorf("the target file's contents leaked into the refusal: %v", err)
+	}
+	b, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != content {
+		t.Errorf("the target file was modified through the lock path: %q", b)
+	}
+}
+
+// A non-regular entry that still opens read-write -- a FIFO -- is refused as
+// not a regular file, so the type check covers what O_NOFOLLOW and the O_RDWR
+// open do not turn away on their own.
+func TestLockSocketRefusesANonRegularFile(t *testing.T) {
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	if err := syscall.Mkfifo(socket+".lock", 0o600); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	f, err := lockSocket(socket)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("brigd accepted a FIFO as its lock")
+	}
+	if !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("the refusal does not name the file type: %v", err)
+	}
+}
+
+// The clean path still works: a lock file brigd creates itself -- a plain file
+// it owns by one name -- is accepted and carries this process's pid, so the
+// check the planted-link test relies on does not refuse the normal case.
+func TestLockSocketAcceptsAFileItCreates(t *testing.T) {
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	f, err := lockSocket(socket)
+	if err != nil {
+		t.Fatalf("lockSocket refused a clean lock path: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	b, err := os.ReadFile(socket + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(b)) != strconv.Itoa(os.Getpid()) {
+		t.Errorf("the lock file does not hold this pid: %q", b)
 	}
 }

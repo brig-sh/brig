@@ -231,12 +231,40 @@ func chooseSocket(flagValue string) (string, error) {
 // two daemons, two locks, one socket, which is the bug this exists to stop.
 func lockSocket(socket string) (*os.File, error) {
 	path := socket + ".lock"
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	// O_NOFOLLOW so a symlink planted at the lock path fails the open (ELOOP)
+	// rather than being followed: this file is about to be truncated, and a
+	// followed link would truncate whatever it named. When --socket names a
+	// directory another local user can write, that user can pre-plant a link
+	// here aimed at any file the operator can write. The default per-user socket
+	// dir is not writable by anyone else, so this only ever bites the shared
+	// case, but it bites silently -- before the socket is even bound. See
+	// verifyLockFile for the file-type and hard-link half, which O_NOFOLLOW does
+	// not cover.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
+		// O_NOFOLLOW turns a symlink at the path into ELOOP. Name it the way
+		// verifyLockFile names the tricks it catches, rather than passing the
+		// kernel's opaque "too many levels of symbolic links" through: the
+		// symlink is the attack this open exists to stop, so it should be the
+		// one whose refusal reads clearest.
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("refusing to use %s as the socket lock: it is a symlink, so "+
+				"something was planted at the lock path", path)
+		}
+		return nil, err
+	}
+	// Before the flock, not after: a planted hard link or non-regular entry has
+	// to be refused whether or not the attacker also holds a lock on it. Run
+	// after a successful flock, the check was skipped whenever flock failed --
+	// so a hard link whose target the attacker flock-held slipped past it, and
+	// lockHolder then read the linked file into the "already serving" message.
+	// Refused from the descriptor, so it and the truncate below name one inode.
+	if err := verifyLockFile(f); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		holder := lockHolder(path)
+		holder := lockHolder(f)
 		_ = f.Close()
 		return nil, fmt.Errorf("another brigd%s is already serving %s. Stop it, or "+
 			"start this one on a socket of its own with --socket", holder, socket)
@@ -254,15 +282,56 @@ func lockSocket(socket string) (*os.File, error) {
 	return f, nil
 }
 
-// lockHolder names the process holding the lock, as " (pid 123)", or says
-// nothing at all when the file has no readable pid in it. It is only ever part
-// of a message, so an unreadable file is not worth an error of its own.
-func lockHolder(path string) string {
-	b, err := os.ReadFile(path)
+// verifyLockFile refuses to truncate anything but a plain file this user owns
+// by a single name.
+//
+// It reads the descriptor, not the path, so it and the Truncate that follows
+// name the same inode: a swap after the open cannot make the check pass and the
+// truncate land elsewhere. O_NOFOLLOW already turned a symlink at the path into
+// a failed open, and a directory or socket fails the O_RDWR open before this
+// runs; what reaches here is what opened. A hard link to another file opens as
+// that file itself, indistinguishable but for the link count, so more than one
+// link is refused. A FIFO opens read-write but is not a regular file, so a
+// non-regular entry is refused too. Ownership is the effective uid, the identity
+// brigd creates the lock as.
+func verifyLockFile(f *os.File) error {
+	fi, err := f.Stat()
 	if err != nil {
-		return ""
+		return err
 	}
-	pid := strings.TrimSpace(string(b))
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("refusing to use %s as the socket lock: it is not a regular file, so "+
+			"something was planted at the lock path", f.Name())
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("refusing to use %s as the socket lock: its identity could not be "+
+			"read", f.Name())
+	}
+	if st.Nlink != 1 {
+		return fmt.Errorf("refusing to use %s as the socket lock: it has %d hard links, so "+
+			"truncating it would truncate another file sharing its data", f.Name(), st.Nlink)
+	}
+	if st.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("refusing to use %s as the socket lock: it is owned by uid %d, not by "+
+			"this user (%d), so someone else put it there", f.Name(), st.Uid, os.Geteuid())
+	}
+	return nil
+}
+
+// lockHolder names the process holding the lock, as " (pid 123)", or says
+// nothing at all when the file has no readable pid in it.
+//
+// It reads the held descriptor rather than reopening the path. The pid the
+// other daemon wrote is in the same inode this one opened, so the descriptor
+// has it; reopening by name would resolve the path afresh and follow a symlink
+// swapped in after the O_NOFOLLOW open, leaking the target's contents into a
+// string that is only ever part of a message. An unreadable file is not worth
+// an error of its own for that reason.
+func lockHolder(f *os.File) string {
+	b := make([]byte, 64)
+	n, _ := f.ReadAt(b, 0) // best effort; a short read (io.EOF) still gives the pid
+	pid := strings.TrimSpace(string(b[:n]))
 	if pid == "" {
 		return ""
 	}
