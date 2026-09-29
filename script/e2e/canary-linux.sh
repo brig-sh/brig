@@ -877,6 +877,105 @@ check_symlink() {
   rm -rf "$canary" "$proj"
 }
 
+# check_hostmount_symlink plants a symlink at a hostmount volume SOURCE inside a
+# stopped sandbox's workspace and asserts the next boot refuses it rather than
+# handing the runtime a source that now points out of the workspace. The
+# workspace is the guest home, which the guest holds read-write, so a .claude
+# hostmount source it swapped for a link would otherwise be bound host-side into
+# a later boot. brig re-checks each source before the share is built.
+check_hostmount_symlink() {
+  local ref=claude-code@hmv home src canary sum0 sum1 rc=0 out refused=no
+  home="$HOME/.brig/homes/brig-claude-code-hmv"
+  canary="$HOME/e2e-hm-canary"
+  rm -rf "$canary"
+  mkdir -p "$canary"
+  echo "operator-only $(date -u +%s)" > "$canary/secret.txt"
+  sum0="$(canary_sum "$canary")"
+
+  # Boot once so brig creates the .claude/* hostmount sources, then stop so the
+  # runtime releases them and the source can be replaced on the host.
+  run 900 brig run -d "$ref"
+  run 120 brig stop "$ref" || true
+  src="$home/.claude/sessions"
+  if [ ! -d "$src" ]; then
+    res check Boundary "A hostmount source reached through a planted link is refused (#405)" fail \
+      "no hostmount source at $src after a boot; the home layout may have changed"
+    run 300 brig rm "$ref" || true
+    rm -rf "$canary"
+    return
+  fi
+
+  # The swap: the source now points at a directory outside the workspace.
+  rm -rf "$src"
+  ln -s "$canary" "$src"
+  echo "planted: $src -> $(readlink "$src")"
+
+  out="$(timeout --kill-after=10 300 brig run -d "$ref" 2>&1)" || rc=$?
+  echo "brig run $ref after the swap: exit $rc: $out"
+  if [ "$rc" != 0 ] && echo "$out" | grep -qiE 'refusing to (mount|use)|symlink'; then
+    refused=yes
+  fi
+
+  run 300 brig rm "$ref" || true
+  sum1="$(canary_sum "$canary")"
+
+  if [ "$refused" = yes ]; then
+    res check Boundary "A hostmount source reached through a planted link is refused (#405)" pass \
+      "the boot refused a .claude/sessions source swapped for a symlink out of the workspace: $(echo "$out" | one_line 200)"
+  else
+    res check Boundary "A hostmount source reached through a planted link is refused (#405)" fail \
+      "exit $rc: $(echo "$out" | one_line 300)"
+  fi
+  if [ "$sum0" = "$sum1" ]; then
+    res check Boundary "The directory a hostmount link pointed at is unchanged" pass "sha256 ${sum0:0:16}... before and after"
+  else
+    res check Boundary "The directory a hostmount link pointed at is unchanged" fail "before ${sum0:0:16}, after ${sum1:0:16}"
+  fi
+  rm -rf "$canary"
+}
+
+# check_brigd_lock plants a symlink and a hard link at brigd's socket lock path
+# and asserts brigd refuses each rather than following it and truncating the
+# target. It is reachable when --socket names a directory another local user
+# can write; a scratch directory stands in for that here. brigd opens the lock
+# with O_NOFOLLOW and verifies a regular, singly-linked file it owns.
+check_brigd_lock() {
+  local brigd d canary before after rc out refused=0
+  brigd="${BRIG_BUILD_DIR:-$OUT/build}/brigd"
+  d="$(mktemp -d "$OUT/brigd-lock.XXXXXX")"
+  canary="$d/operator-file"
+  echo "operator-only $(date -u +%s)" > "$canary"
+  before="$(cat "$canary")"
+
+  ln -s "$canary" "$d/sock.lock"
+  rc=0
+  out="$(timeout --kill-after=5 30 "$brigd" --socket "$d/sock" 2>&1)" || rc=$?
+  echo "symlink at the lock path: exit $rc: $out"
+  if [ "$rc" != 0 ] && echo "$out" | grep -qiE 'symlink|planted'; then
+    refused=$((refused + 1))
+  fi
+  rm -f "$d/sock.lock" "$d/sock"
+
+  ln "$canary" "$d/sock.lock"
+  rc=0
+  out="$(timeout --kill-after=5 30 "$brigd" --socket "$d/sock" 2>&1)" || rc=$?
+  echo "hard link at the lock path: exit $rc: $out"
+  if [ "$rc" != 0 ] && echo "$out" | grep -qi 'hard link'; then
+    refused=$((refused + 1))
+  fi
+  rm -f "$d/sock.lock" "$d/sock"
+
+  after="$(cat "$canary")"
+  if [ "$refused" = 2 ] && [ "$before" = "$after" ]; then
+    res check Boundary "brigd refuses a symlinked or hard-linked socket lock (#406)" pass \
+      "a symlink and a hard link at <socket>.lock were each refused before the socket bound; the target file is unchanged"
+  else
+    res check Boundary "brigd refuses a symlinked or hard-linked socket lock (#406)" fail \
+      "refused $refused of 2; target file before [$before] after [$after]"
+  fi
+  rm -rf "$d"
+}
+
 check_parallel() {
   local j t0 t1 ok=0 rc out
   t0="$(now)"
@@ -1215,6 +1314,8 @@ if [ -f "$OUT/setup.ok" ]; then
   block postures check_postures
   block shell check_shell_removed
   block symlink check_symlink
+  block hostmount-symlink check_hostmount_symlink
+  block brigd-lock check_brigd_lock
   block creds check_creds
   block agent-rm check_agent_rm
   block policy check_policy_refused

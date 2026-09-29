@@ -616,6 +616,48 @@ check_symlink() {
   rm -rf "$canary" "$proj"
 }
 
+# check_brigd_lock plants a symlink and a hard link at brigd's socket lock path
+# and asserts brigd refuses each rather than following it and truncating the
+# target. macOS is the platform this bites on: /tmp is sticky but has no
+# protected-symlinks equivalent, so a shared --socket dir is reachable. brigd
+# opens the lock with O_NOFOLLOW and verifies a regular, singly-linked file it
+# owns; a scratch directory stands in for the shared dir here.
+check_brigd_lock() {
+  local d canary before after rc out refused=0
+  d="$(mktemp -d "$OUT/brigd-lock.XXXXXX")"
+  canary="$d/operator-file"
+  echo "operator-only $(date -u +%s)" > "$canary"
+  before="$(cat "$canary")"
+
+  ln -s "$canary" "$d/sock.lock"
+  rc=0
+  out="$(tmo 30 "$BIN/brigd" --socket "$d/sock" < /dev/null 2>&1)" || rc=$?
+  echo "symlink at the lock path: exit $rc: $out"
+  if [ "$rc" != 0 ] && echo "$out" | grep -qiE 'symlink|planted'; then
+    refused=$((refused + 1))
+  fi
+  rm -f "$d/sock.lock" "$d/sock"
+
+  ln "$canary" "$d/sock.lock"
+  rc=0
+  out="$(tmo 30 "$BIN/brigd" --socket "$d/sock" < /dev/null 2>&1)" || rc=$?
+  echo "hard link at the lock path: exit $rc: $out"
+  if [ "$rc" != 0 ] && echo "$out" | grep -qi 'hard link'; then
+    refused=$((refused + 1))
+  fi
+  rm -f "$d/sock.lock" "$d/sock"
+
+  after="$(cat "$canary")"
+  if [ "$refused" = 2 ] && [ "$before" = "$after" ]; then
+    res check Boundary "brigd refuses a symlinked or hard-linked socket lock (#406)" pass \
+      "a symlink and a hard link at <socket>.lock were each refused before the socket bound; the target file is unchanged"
+  else
+    res check Boundary "brigd refuses a symlinked or hard-linked socket lock (#406)" fail \
+      "refused $refused of 2; target file before [$before] after [$after]"
+  fi
+  rm -rf "$d"
+}
+
 # ---------------------------------------------------------------- fixes
 
 # ENVCHK prints each variable the credential check looks for, or UNSET.
@@ -1020,6 +1062,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block postures check_postures
   block ports check_ports
   block symlink check_symlink
+  block brigd-lock check_brigd_lock
   block creds check_creds
   block agent-rm check_agent_rm
   block policy check_policy_refusals
