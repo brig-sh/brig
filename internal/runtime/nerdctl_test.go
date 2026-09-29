@@ -328,3 +328,28 @@ func TestPruneNetworksKeepsWhatIsInUseAndWhatIsNotOurs(t *testing.T) {
 		}
 	}
 }
+
+// Stop runs `nerdctl stop` and nothing else. Under a rootless nerdctl the host
+// port stays bound until the container is removed, and docs/cli.md says so.
+// Releasing it through rootlesskit's API instead lets another sandbox take the
+// port, and nerdctl's postStop hook then withdraws that sandbox's forward when
+// this container is removed.
+func TestNerdctlStopOnlyStops(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "argv")
+	bin := filepath.Join(dir, "nerdctl")
+	script := "#!/bin/sh\necho \"$@\" >> '" + log + "'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&nerdctl{bin: bin}).Stop("brig-x"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	got, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "stop brig-x\n" {
+		t.Errorf("Stop ran %q, want only `stop brig-x`", got)
+	}
+}
