@@ -46,6 +46,14 @@ type agentExit struct{ code int }
 
 func (e *agentExit) Error() string { return "" }
 
+// reportedError is a refusal that a --json run or sh has already printed as its
+// Run object on stdout. main exits with the class of the wrapped error and
+// prints nothing more, since the object carries the message.
+type reportedError struct{ err error }
+
+func (e *reportedError) Error() string { return e.err.Error() }
+func (e *reportedError) Unwrap() error { return e.err }
+
 // exitCode reads the exit status for a finished run out of its error. It reads
 // the cause rather than the message, so a wrapped error keeps its class the
 // whole way up the stack, and the order is most specific first.
