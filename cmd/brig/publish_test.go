@@ -295,3 +295,64 @@ func TestAMarkerKeepsThePortsBeforeIt(t *testing.T) {
 		t.Fatalf("ports = %q, want both", got)
 	}
 }
+
+// existsRuntime is a stoppedPublisher that can say whether a sandbox exists.
+type existsRuntime struct {
+	stoppedPublisher
+	exists bool
+}
+
+func (r *existsRuntime) Exists(string) (bool, error) { return r.exists, nil }
+
+// publishNotice runs `brig network publish` and returns what it said on
+// stderr.
+func publishNotice(t *testing.T, ref, port string) string {
+	t.Helper()
+	var err error
+	said := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error {
+			return run([]string{"network", "publish", ref, port})
+		})
+	})
+	if err != nil {
+		t.Fatalf("network publish %s %s: %v", ref, port, err)
+	}
+	return said
+}
+
+// A stress test published onto ubuntu@nosuch, a ref with no sandbox, and was
+// told that brig-ubuntu-nosuch "is not running". Publishing ahead of a first
+// run is allowed, so the command succeeds. The notice says that the ref has
+// no sandbox, which run takes the port up, and how to drop it.
+func TestPublishAheadOfTheFirstRunSaysSo(t *testing.T) {
+	jsonRunHost(t, &existsRuntime{})
+	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	said := publishNotice(t, "faker@nosuch", "18083")
+	for _, want := range []string{
+		"faker@nosuch has no sandbox yet",
+		"the next `brig run faker@nosuch` publishes them",
+		"`brig network unpublish faker@nosuch --all`",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the notice does not say %q:\n%s", want, said)
+		}
+	}
+	if got, _ := runtime.Publications("brig-faker-nosuch"); len(got) != 1 {
+		t.Fatalf("the port was not recorded: %v", got)
+	}
+}
+
+// A stopped sandbox is told apart from a missing one, and the notice names
+// the run that publishes the port.
+func TestPublishOntoAStoppedSandboxNamesTheRun(t *testing.T) {
+	jsonRunHost(t, &existsRuntime{exists: true})
+	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	said := publishNotice(t, "faker", "3000")
+	if !strings.Contains(said, "faker is not running") ||
+		!strings.Contains(said, "The next `brig run faker` publishes these ports") {
+		t.Errorf("the notice does not name the run that publishes the port:\n%s", said)
+	}
+	if strings.Contains(said, "no sandbox") {
+		t.Errorf("a stopped sandbox was reported as missing:\n%s", said)
+	}
+}
