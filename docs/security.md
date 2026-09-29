@@ -531,6 +531,14 @@ with an overlapping project, such as `~/monorepo` while this run names
 the same gap, and closing either needs the runtime to accept a directory
 handle rather than a path.
 
+A hostmount volume source is reached the same way, and gets the same second
+look. Its path lives inside the guest home, so the guest owns every component:
+Brig checks it symlink-safe when the run begins, and because a restart reopens
+the boot after the guest has held the workspace, checks it again through the
+held handle before the share is built. A source swapped for a link is refused
+rather than exported. The handover carries the same residual as the home and
+the project above, for the same reason.
+
 A link you made yourself is refused too. Brig cannot tell it from a planted
 one: same owner, same directory, same bytes. So the rule is about links and
 not about who made them, and the message names the target so you can type

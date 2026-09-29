@@ -103,6 +103,27 @@ func (c *Config) prepareVolumeTargets() error {
 		return err
 	}
 	defer func() { _ = r.Close() }()
+	return c.ensureVolumeTargets(r)
+}
+
+// ensureVolumeTargets walks every volume path through the root and makes each
+// the right kind, refusing a symlink at any component.
+//
+// It takes the root rather than opening its own so the boot's second pass can
+// run it against the handle it already holds: the hostmount sources are paths
+// inside the workspace, so the guest owns every component the way it owns the
+// home and the project, and a source checked when the run began can be a symlink
+// by the time it is handed to the runtime one restart later. Re-running this
+// immediately before the share is built is the second look the workspace and the
+// project already get, and the one a hostmount source lacked. ensureTarget
+// refuses a symlink at any component, leaves an existing well-typed target
+// alone, and recreates one the guest removed -- so a clean run is unchanged, a
+// deleted source is remade empty rather than bound as whatever took its place,
+// and a symlinked one is refused before its source reaches the runtime.
+func (c *Config) ensureVolumeTargets(r *workspaceRoot) error {
+	if len(c.Profile.Volumes) == 0 {
+		return nil
+	}
 	for _, v := range profile.MountOrder(c.Profile.Volumes) {
 		wantFile := v.Kind == profile.VolumeHostMount && v.File
 		if err := ensureTarget(r, v.Path, wantFile); err != nil {
@@ -592,7 +613,13 @@ func nonEmptyLines(s string) []string {
 // privileged exec to mount with, so the tmpfs and the hostmounts have to be
 // part of the create request; runc orders mounts by destination depth, which
 // is the same rule MountOrder applies.
-func (c *Config) createTimeVolumes() (tmpfs []string, shares []runtime.Share) {
+// home is the workspace path the boot just re-checked and holds a handle to,
+// not c.Workspace read afresh: a hostmount source is built under it, so the path
+// handed to the runtime is the one ensureVolumeTargets verified, the same way
+// shares threads the checked home and project rather than re-reading the config.
+// They are equal today, and passing the checked one keeps them equal if the held
+// path ever stops being c.Workspace verbatim.
+func (c *Config) createTimeVolumes(home string) (tmpfs []string, shares []runtime.Share) {
 	if c.Runtime.Kind() == "hull" {
 		return nil, nil
 	}
@@ -602,7 +629,7 @@ func (c *Config) createTimeVolumes() (tmpfs []string, shares []runtime.Share) {
 			tmpfs = append(tmpfs, c.guestPath(v.Path)+":"+v.TmpfsOptions())
 		case profile.VolumeHostMount:
 			shares = append(shares, runtime.Share{
-				Host:  filepath.Join(c.Workspace, filepath.FromSlash(v.Path)),
+				Host:  filepath.Join(home, filepath.FromSlash(v.Path)),
 				Guest: c.guestPath(v.Path),
 			})
 		}

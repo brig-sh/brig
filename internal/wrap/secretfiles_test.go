@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -463,17 +464,85 @@ func TestAPlantedSymlinkAtAVolumeTargetFailsTheRun(t *testing.T) {
 	}
 }
 
+// The early check refuses a link that is already there when the run begins;
+// this is the window it does not cover on its own. A hostmount source that
+// passed prepareVolumeTargets can be swapped for a symlink by the guest -- which
+// holds the workspace as its home -- before the share is built one restart
+// later, and nothing re-checked it until the runtime resolved it host-side and
+// bound its target read-write into the next boot. The boot
+// re-runs the check through the handle it already holds, so a source that has
+// stopped meaning what it did is refused before it reaches the runtime, the same
+// as the workspace and the project.
+func TestAVolumeSourceSwappedForASymlinkAfterPrepIsRefusedBeforeBoot(t *testing.T) {
+	c := bindingConfig(t, volumeProfile)
+	c.Runtime = newGuestFake()
+
+	// The run begins: the sources are checked and created.
+	if err := c.prepareVolumeTargets(); err != nil {
+		t.Fatalf("prepareVolumeTargets: %v", err)
+	}
+
+	// A directory outside the workspace the sandbox was never granted, holding a
+	// file the run must not reach.
+	victim := t.TempDir()
+	if err := os.WriteFile(filepath.Join(victim, "keep"), []byte("host"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The guest swaps the checked source for a symlink out of the workspace --
+	// the move prepareVolumeTargets can no longer see, because it already ran.
+	source := filepath.Join(c.Workspace, ".claude/sessions")
+	if err := os.RemoveAll(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, source); err != nil {
+		t.Fatal(err)
+	}
+
+	// The boot's second look, through the handle it holds, before the share is
+	// built. The workspace itself still verifies -- only a child was swapped --
+	// so the hostmount re-check is what has to catch it.
+	ws, err := c.openWorkspace()
+	if err != nil {
+		t.Fatalf("openWorkspace: %v", err)
+	}
+	defer func() { _ = ws.Close() }()
+	if err := ws.verifyStillOurs(); err != nil {
+		t.Fatalf("workspace verifyStillOurs refused a workspace nothing moved: %v", err)
+	}
+
+	err = c.ensureVolumeTargets(ws)
+	if err == nil {
+		t.Fatal("a hostmount source swapped for a symlink was handed to the runtime")
+	}
+	if !errors.Is(err, errPlantedSymlink) {
+		t.Errorf("the refusal is not a planted-symlink error: %v", err)
+	}
+	if !strings.Contains(err.Error(), ".claude/sessions") {
+		t.Errorf("the refusal does not name the source: %v", err)
+	}
+
+	// The link target is untouched: nothing was written or created through it.
+	entries, err := os.ReadDir(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "keep" {
+		t.Errorf("the run reached through the link: %v", entries)
+	}
+}
+
 // A container runtime has no privileged exec to mount with, so its mounts have
 // to be part of the create request. hull gets neither: it does the three-phase
 // mount itself, and passing these would mount the same paths twice.
 func TestCreateTimeVolumesAreForTheRuntimesThatCannotMount(t *testing.T) {
 	g := newGuestFake()
 	c := deliveryConfig(t, g)
-	if tmpfs, shares := c.createTimeVolumes(); tmpfs != nil || shares != nil {
+	if tmpfs, shares := c.createTimeVolumes(c.Workspace); tmpfs != nil || shares != nil {
 		t.Errorf("hull was handed create-time mounts: %v, %v", tmpfs, shares)
 	}
 	g.kind = "nerdctl"
-	tmpfs, shares := c.createTimeVolumes()
+	tmpfs, shares := c.createTimeVolumes(c.Workspace)
 	if len(tmpfs) != 1 || !strings.HasPrefix(tmpfs[0], "/home/x/.claude:size=") {
 		t.Errorf("tmpfs = %v", tmpfs)
 	}

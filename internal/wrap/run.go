@@ -303,11 +303,24 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		project = held.dir
 	}
 
+	// A hostmount source is a path inside the workspace, so the guest owns its
+	// components the way it owns the home and the project above. prepareVolumeTargets
+	// checked each one symlink-safe when the run began; a restart reopens the boot
+	// after the guest has held the workspace, so they are re-checked here through
+	// the handle already open above -- the second look the workspace and project
+	// get, and the one a hostmount source lacked. A source swapped for a symlink
+	// is refused rather than handed to the runtime, which would follow it
+	// host-side and bind its target read-write into the next boot. The handover
+	// stays a path, so the runtime-side window is the same as theirs.
+	if err := c.ensureVolumeTargets(ws); err != nil {
+		return err
+	}
+
 	c.progressf("starting sandbox %s...", c.VMName)
 	// What a runtime that cannot mount after boot needs handed to it now
 	// instead. Empty for hull, which execs as root and does the three-phase
 	// mount itself; see createTimeVolumes.
-	tmpfs, volumeShares := c.createTimeVolumes()
+	tmpfs, volumeShares := c.createTimeVolumes(ws.dir)
 	// The fields a backend can refuse the run over, taken from the one place
 	// that derives them, so the spec that boots and the spec that was checked
 	// before the boot cannot disagree about any of them.
