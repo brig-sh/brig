@@ -201,6 +201,66 @@ func TestCheckBackendPassesARuntimeThatCannotAnswer(t *testing.T) {
 	}
 }
 
+// A second `brig run` finds the sandbox up and joins it through checkBackend,
+// never Run. With the real nerdctl adapter behind it, a path to runc or crun is
+// refused on that path as its bare name is, and a path to a binary brig cannot
+// place is not.
+func TestCheckBackendRefusesAPathToASharedKernelRuntime(t *testing.T) {
+	checkJoinRefusals(t, map[string]bool{
+		"crun":                 true,
+		"/usr/bin/crun":        true,
+		"/usr/local/sbin/runc": true,
+		"./runc":               true,
+		"/usr/local/bin/urunc": false,
+	})
+}
+
+// The same join path for a shim name, which containerd resolves by its last two
+// dot-separated parts. A name that resolves to the runc shim is refused under
+// any prefix, a urunc prefix included. crun ships no shim, so
+// io.containerd.crun.v2 is one brig cannot place, and it is allowed.
+func TestCheckBackendRefusesAShimNameThatResolvesToRunc(t *testing.T) {
+	checkJoinRefusals(t, map[string]bool{
+		"x.runc.v2":                   true,
+		"io.containerd.foo.runc.v2":   true,
+		"io.containerd.urunc.runc.v2": true,
+		"io.containerd.urunc.v2":      false,
+		"io.containerd.crun.v2":       false,
+	})
+}
+
+// checkJoinRefusals asks checkBackend about each BRIG_CONTAINERD_RUNTIME value,
+// with the real nerdctl adapter over a stub binary, and checks that exactly
+// the values marked true are refused for sharing the host kernel.
+func checkJoinRefusals(t *testing.T, refused map[string]bool) {
+	t.Helper()
+	stub := filepath.Join(t.TempDir(), "nerdctl")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIG_RUNTIME", "nerdctl")
+	t.Setenv("BRIG_RUNTIME_BIN", stub)
+	rt, err := runtime.Detect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for shim, want := range refused {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		c := envelopeConfig()
+		c.Runtime = rt
+
+		err := c.checkBackend("")
+		switch {
+		case want && err == nil:
+			t.Errorf("the join path let %q through", shim)
+		case want && !strings.Contains(err.Error(), "host's own kernel"):
+			t.Errorf("%q was refused for another reason: %v", shim, err)
+		case !want && err != nil:
+			t.Errorf("the join path refused %q, which does not share the host kernel as far as brig can tell: %v", shim, err)
+		}
+	}
+}
+
 type refusingChecker struct {
 	fakeRuntime
 	err   error

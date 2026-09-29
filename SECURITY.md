@@ -34,8 +34,8 @@ To use email instead, write to **security@brig.sh**. Both reach the same
 people.
 
 Include what a fix needs: the version from `brig version`, the operating
-system, and the runtime. Name the runtime as hull on macOS, nerdctl with the
-urunc shim on Linux, or runc when `BRIG_CONTAINERD_RUNTIME=runc` is set.
+system, and the runtime. Name the runtime as hull on macOS, or nerdctl with the
+urunc shim on Linux. If `BRIG_CONTAINERD_RUNTIME` names another shim, say which.
 Also include what you did, what happened, and what you expected instead. A
 proof of concept helps, even a rough one.
 

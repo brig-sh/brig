@@ -82,9 +82,10 @@ The sandbox is a microVM on both macOS and Linux. On macOS it is booted by
 `brew install --cask brig` brings along. On Linux Brig drives `nerdctl` and
 hands the container to the urunc shim (`io.containerd.urunc.v2`), which is the
 default rather than the direction. That gives the guest a kernel of its own
-there too. `BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, which
-shares the host kernel. That is the weaker of the two, and it is something you
-have to choose rather than something you get.
+there too. `BRIG_CONTAINERD_RUNTIME` can point at another microVM shim, for a
+host that has one. A shim Brig knows shares the host kernel, `runc` or `crun`,
+by name or by path, is refused: a container sharing the host kernel is not the
+boundary Brig provides.
 
 Which of them you got is the `ISOLATION` row of the execution envelope.
 `brig info` prints it without booting anything, and `brig --verbose run`
@@ -94,7 +95,8 @@ prints it before the boot:
 ISOLATION    microVM (hull, hvi backend)
 ISOLATION    microVM (hull, vz backend)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2)
-ISOLATION    container (docker over containerd, runc: the guest shares the host kernel)
+ISOLATION    container (nerdctl over containerd, runc: the guest shares the host kernel)
+ISOLATION    unknown (nerdctl over containerd, io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
 ```
 
 The row reports what this run resolved: the binary in hand, the backend it
@@ -102,7 +104,8 @@ settled on, and the shim it will name. That is not the same as what the
 paragraph above promises. Brig may not recognise a shim but could still use it
 to boot a sandbox, and Brig cannot establish the isolation that sandbox gets from a
 shim name alone. So the row says it cannot tell, instead of claiming the
-stronger boundary.
+stronger boundary. A shim Brig recognises as sharing the host kernel is
+different: `brig info` names it, and the run is refused.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write. Name
 a project on the run line and that project is a second host directory, also
