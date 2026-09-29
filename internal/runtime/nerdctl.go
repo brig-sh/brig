@@ -32,14 +32,40 @@ type nerdctl struct {
 	fellBack bool
 }
 
-// defaultRuntime is the containerd shim that boots the sandbox as a microVM.
-// BRIG_CONTAINERD_RUNTIME overrides it -- runc, for instance, when you want a
-// plain container and accept what that costs you.
+// containerdRuntime is the shim that boots the sandbox as a microVM.
+// BRIG_CONTAINERD_RUNTIME overrides it, for a host with a different microVM
+// shim. A shim brig knows shares the host kernel -- runc, crun -- is refused;
+// see refuseSharedKernel.
 func containerdRuntime() string {
 	if v := os.Getenv("BRIG_CONTAINERD_RUNTIME"); v != "" {
 		return v
 	}
-	return "io.containerd.urunc.v2"
+	return uruncShim
+}
+
+// refuseSharedKernel stops a boot whose containerd shim brig knows gives the
+// guest the host's own kernel. brig puts a kernel between an agent and the
+// host, and the egress refusals, the isolation row and docs/security.md all
+// assume a microVM; a plain container shares the host kernel, so brig will not
+// boot one. urunc is the default and needs nothing set. BRIG_CONTAINERD_RUNTIME
+// may still name a microVM shim brig cannot classify -- a kata shim, a urunc
+// fork -- which brig cannot prove is not a VM, so it allows those. runc and
+// crun it can identify, by name or by path, as it can a shim name that
+// containerd resolves to the runc shim. See shimBoundary.
+func refuseSharedKernel() error {
+	shim := containerdRuntime()
+	if sharesHostKernel(shim) {
+		// Not "refusing to boot": the join path and `brig network publish`
+		// boot nothing. The last sentence is for a sandbox an older brig
+		// started on such a shim. A run finds a sandbox by name, so unsetting
+		// the variable alone joins that container instead of booting urunc.
+		return fmt.Errorf("refusing BRIG_CONTAINERD_RUNTIME=%s: that shim gives the guest the "+
+			"host's own kernel, which is not the boundary brig provides. Unset "+
+			"BRIG_CONTAINERD_RUNTIME to use the default microVM shim %s. A sandbox already "+
+			"started on such a shim keeps it, and the next run would join it by name: stop it "+
+			"first with brig stop <ref>", shim, uruncShim)
+	}
+	return nil
 }
 
 func newNerdctl(bin string) (Runtime, error) {
@@ -270,6 +296,12 @@ func (n *nerdctl) ResolveBootAssets(fetch BootFetch, notice, progress io.Writer)
 // an isolated NETWORK row over a sandbox with unrestricted egress, which is the
 // exact outcome the refusals on the other backend exist to prevent.
 func (n *nerdctl) CanRun(spec RunSpec) error {
+	// First, and in CanRun so the join path a second `brig run` takes is
+	// covered too: a shim that shares the host kernel is not the boundary brig
+	// provides, so brig will not boot it.
+	if err := refuseSharedKernel(); err != nil {
+		return err
+	}
 	if spec.GUI {
 		return fmt.Errorf("this profile opens a graphical window, which the container runtime cannot "+
 			"display on either driver (%s here); run it on macOS, where hull's vz backend can show it",

@@ -213,16 +213,11 @@ kernel. A `genericBoot` profile is refused on `docker` rather than
 attempted: six of the eight shipped profiles are `genericBoot`. `docker`
 does not pass the boot annotations `urunc` needs through to the runtime.
 
-`BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, using
-`runc` directly:
-
-```bash
-BRIG_CONTAINERD_RUNTIME=runc brig run claude
-```
-
-A `runc` sandbox shares the host kernel with the agent, instead of running
-it in its own microVM. That is a weaker boundary, and `brig info` reports
-which one a run got.
+`BRIG_CONTAINERD_RUNTIME` can name another microVM shim, for a host that has
+one. A shim Brig knows shares the host kernel, `runc` or `crun`, by name or by
+path, is refused: a container sharing the host kernel with the agent is not
+the boundary Brig provides. `brig info` still names the shim a run would
+resolve; the run is refused.
 
 `oras` fetches the boot bundle, the kernel and `container-initrd` that let
 an ordinary container image boot as a guest, for a `genericBoot` profile.

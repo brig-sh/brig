@@ -302,10 +302,10 @@ commit. A host that brings its own urunc (`BRIG_INSTALL_RUNTIME=0`) needs a
 build from that branch too.
 
 **containerd** has to be running with the urunc shim installed.
-`BRIG_CONTAINERD_RUNTIME=runc` asks for a plain container instead, which shares
-the host kernel. That is the weaker boundary, the envelope's `ISOLATION` row
-says which one a run got, and `docs/security.md` says what the weaker one
-costs.
+`BRIG_CONTAINERD_RUNTIME` can point at another microVM shim, but a shim Brig
+knows shares the host kernel, `runc` or `crun`, by name or by path, is
+refused; `docs/security.md` says why a kernel of the guest's own is the
+boundary Brig provides.
 
 **Each run path**, a runtime with one backend, answers one capability
 question before a run that carries an egress policy: does it enforce the
@@ -371,7 +371,8 @@ Cheap swaps, no code:
   the two boot annotations replaces urunc without Brig noticing. The envelope's
   `ISOLATION` row names the shim you put there. It calls the boundary unknown
   rather than a microVM for any shim other than urunc's own that it cannot
-  place.
+  place. A shim Brig can place as sharing the host kernel, `runc` or `crun`,
+  by name or by path, is refused.
 - a different hypervisor backend under hull: `BRIG_HYPERVISOR`, or
   `hypervisor:` in a profile.
 

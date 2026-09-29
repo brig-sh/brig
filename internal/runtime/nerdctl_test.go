@@ -328,3 +328,105 @@ func TestPruneNetworksKeepsWhatIsInUseAndWhatIsNotOurs(t *testing.T) {
 		}
 	}
 }
+
+// runc and crun give the guest the host's own kernel, which is not the boundary
+// brig provides, so a run that asks for one through BRIG_CONTAINERD_RUNTIME is
+// refused before the runtime is touched. The refusal lives in CanRun, not just
+// Run, so the join path a second `brig run` takes is covered too.
+func TestNerdctlRefusesASharedKernelShim(t *testing.T) {
+	for _, shim := range []string{"runc", "crun", "io.containerd.runc.v2"} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		err := n.Run(RunSpec{Name: "brig-x", Image: "img"})
+		if err == nil {
+			t.Fatalf("a run on the shared-kernel shim %q was not refused", shim)
+		}
+		if strings.Contains(err.Error(), "STUB RAN") {
+			t.Errorf("%q reached the runtime before the refusal: %v", shim, err)
+		}
+		if !strings.Contains(err.Error(), shim) {
+			t.Errorf("the refusal does not name the shim asked for: %v", err)
+		}
+		if !strings.Contains(err.Error(), uruncShim) {
+			t.Errorf("the refusal does not point back at the default microVM shim: %v", err)
+		}
+		// CanRun refuses too, so the join path (no Run) is covered.
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err == nil {
+			t.Errorf("CanRun let the shared-kernel shim %q through", shim)
+		}
+	}
+}
+
+// The default shim, and an unknown one brig cannot classify, are not refused:
+// urunc is a microVM, and a kata or urunc-fork shim may well be one, so the
+// shared-kernel refusal must not reach past the shims it can actually name.
+func TestNerdctlDoesNotRefuseUruncOrAnUnknownShim(t *testing.T) {
+	for _, shim := range []string{"", "io.containerd.kata.v2", "io.containerd.urunc.v2"} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
+			t.Errorf("CanRun refused a shim it should allow (%q): %v", shim, err)
+		}
+	}
+}
+
+// nerdctl looks a --runtime value outside io.containerd. up on PATH and runs it
+// as the runc shim's binary, so a path to runc or crun boots the same plain
+// container its bare name does. The refusal matches such a value by its file
+// name, on Run and on CanRun, which is the check the join path makes.
+func TestNerdctlRefusesAPathToASharedKernelRuntime(t *testing.T) {
+	for _, shim := range []string{"/usr/bin/runc", "/usr/local/sbin/runc", "/usr/bin/crun", "./crun", "bin/runc"} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		err := n.Run(RunSpec{Name: "brig-x", Image: "img"})
+		if err == nil {
+			t.Fatalf("a run on %q, a path to a shared-kernel runtime, was not refused", shim)
+		}
+		if strings.Contains(err.Error(), "STUB RAN") {
+			t.Errorf("%q reached the runtime before the refusal: %v", shim, err)
+		}
+		if !strings.Contains(err.Error(), "BRIG_CONTAINERD_RUNTIME="+shim+":") {
+			t.Errorf("the refusal does not name the path asked for: %v", err)
+		}
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err == nil {
+			t.Errorf("CanRun let %q, a path to a shared-kernel runtime, through", shim)
+		}
+	}
+}
+
+// Matching by file name must not reach past runc and crun. A path to another
+// binary, even one under a directory named runc, keeps the answer its bare name
+// gets: allowed, and reported as a boundary brig cannot tell.
+func TestNerdctlLeavesAPathToAnUnknownBinaryUnplaced(t *testing.T) {
+	for _, shim := range []string{"/usr/local/bin/urunc", "/opt/runc/bin/kata-runtime", "./runcx"} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
+			t.Errorf("CanRun refused %q, a path to a binary brig cannot place: %v", shim, err)
+		}
+		if got := n.Isolation(""); got.Boundary != BoundaryUnknown {
+			t.Errorf("%q is not established either way, but the row says: %s", shim, got.Line())
+		}
+	}
+}
+
+// The refusal is what a user reads on a boot, on the join path and on `brig
+// network publish`, so it does not speak of a boot. It also names the way past
+// a sandbox an older brig started on such a shim: unsetting the variable alone
+// makes the next run join that container by name.
+func TestTheSharedKernelRefusalCoversASandboxAlreadyRunning(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "runc")
+
+	err := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).CanRun(RunSpec{Name: "brig-x", Image: "img"})
+	if err == nil {
+		t.Fatal("runc was not refused")
+	}
+	if strings.Contains(err.Error(), "refusing to boot") {
+		t.Errorf("the refusal speaks of a boot, but the join path and network publish boot nothing: %v", err)
+	}
+	if !strings.Contains(err.Error(), "brig stop <ref>") {
+		t.Errorf("the refusal does not say to stop a sandbox already running on such a shim: %v", err)
+	}
+}

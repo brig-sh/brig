@@ -20,9 +20,11 @@ func TestNerdctlReportsAMicroVMOnTheUruncShim(t *testing.T) {
 	}
 }
 
-// The case the row exists for. BRIG_CONTAINERD_RUNTIME=runc is a supported
-// thing to ask for and it costs the kernel boundary, and until this row nothing
-// said so: the block reported the same sandbox either way.
+// brig now refuses to boot runc, but the row still names it: `brig info`
+// resolves the shim without booting, so a reader who set
+// BRIG_CONTAINERD_RUNTIME=runc still sees what it would be. It costs the kernel
+// boundary, and until this row nothing said so: the block reported the same
+// sandbox either way.
 func TestNerdctlReportsASharedKernelWhenTheShimIsReplaced(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "runc")
 
@@ -100,5 +102,96 @@ func TestIsolationLineIsTheBoundaryThenTheDetail(t *testing.T) {
 	got := Isolation{BoundaryVM, "hull, vz backend"}.Line()
 	if got != "microVM (hull, vz backend)" {
 		t.Errorf("Line() = %q", got)
+	}
+}
+
+// A path to runc or crun is the same plain container as the bare name, because
+// nerdctl runs it as the runc shim's binary. The row says so and names the path
+// that was set, rather than calling the boundary unknown.
+func TestNerdctlReportsASharedKernelForAPathToRuncOrCrun(t *testing.T) {
+	for _, shim := range []string{"/usr/bin/runc", "/usr/bin/crun", "./crun"} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+
+		got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation("")
+		if got.Boundary != BoundaryContainer {
+			t.Errorf("%s shares the host kernel, so this is a container: %s", shim, got.Line())
+		}
+		if !strings.Contains(got.Detail, shim+": the guest shares the host kernel") {
+			t.Errorf("the row does not name the path and what it costs: %s", got.Line())
+		}
+	}
+}
+
+// containerd starts a shim by the last two dot-separated parts of the runtime
+// name (BinaryName in containerd's pkg/shim), so the rest of the name says
+// nothing about what boots. Each name is placed by the shim it resolves to. A
+// runc shim under any prefix is a container and refused before the runtime
+// runs. urunc's v2 shim alone is a microVM. A shim brig cannot place -- crun
+// ships none, so io.containerd.crun.v2 is whatever containerd-shim-crun-v2 is
+// -- stays unknown and is allowed, as does a dotted name outside
+// io.containerd. that resolves to urunc, since nerdctl may find a binary of
+// that name first.
+func TestNerdctlPlacesAShimNameByTheShimContainerdStarts(t *testing.T) {
+	for _, tc := range []struct {
+		shim string
+		want Boundary
+	}{
+		{"io.containerd.runc.v2", BoundaryContainer},
+		{"io.containerd.runc.v1", BoundaryContainer},
+		{"x.runc.v2", BoundaryContainer},
+		{"runc.v2", BoundaryContainer},
+		{"io.containerd.foo.runc.v2", BoundaryContainer},
+		{"io.containerd.urunc.runc.v2", BoundaryContainer},
+		{"io.containerd.urunc.v2", BoundaryVM},
+		{"io.containerd.foo.urunc.v2", BoundaryVM},
+		{"io.containerd.urunc.v3", BoundaryUnknown},
+		{"x.urunc.v2", BoundaryUnknown},
+		{"io.containerd.crun.v2", BoundaryUnknown},
+		{"io.containerd.kata.v2", BoundaryUnknown},
+		// nerdctl's prefix is io.containerd. with its dot, at the start. These
+		// two are looked up on PATH first, like x.urunc.v2.
+		{"io.containerdx.urunc.v2", BoundaryUnknown},
+		{"x.io.containerd.urunc.v2", BoundaryUnknown},
+		// containerd refuses a relative name with a slash before it derives a
+		// shim, so neither of these starts the shim its last parts name.
+		{"io.containerd.x/y.urunc.v2", BoundaryUnknown},
+		{"io.containerd.x/y.runc.v2", BoundaryUnknown},
+	} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", tc.shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		got := n.Isolation("")
+		if got.Boundary != tc.want {
+			t.Errorf("%s: the row says %s, want %s", tc.shim, got.Line(), tc.want)
+		}
+		if !strings.Contains(got.Detail, tc.shim) {
+			t.Errorf("%s: the row does not name the value that was set: %s", tc.shim, got.Line())
+		}
+		err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"})
+		if refused, want := err != nil, tc.want == BoundaryContainer; refused != want {
+			t.Errorf("%s: CanRun refused = %v, want %v (%v)", tc.shim, refused, want, err)
+		}
+		if tc.want != BoundaryContainer {
+			continue
+		}
+		err = n.Run(RunSpec{Name: "brig-x", Image: "img"})
+		if err == nil || strings.Contains(err.Error(), "STUB RAN") {
+			t.Errorf("%s: Run reached the runtime instead of refusing: %v", tc.shim, err)
+		}
+	}
+}
+
+// io.containerd.urunc.runc.v2 starts containerd-shim-runc-v2. The row matched
+// the io.containerd.urunc. prefix and called that a microVM, which is the one
+// mistake the row must not make: the stronger boundary over a plain container.
+func TestNerdctlDoesNotCallARuncShimUnderAUruncPrefixAMicroVM(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.urunc.runc.v2")
+
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	if got := n.Isolation(""); got.Boundary != BoundaryContainer {
+		t.Errorf("the name resolves to the runc shim, so this is a container: %s", got.Line())
+	}
+	if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err == nil {
+		t.Error("CanRun let a runc shim through under a urunc prefix")
 	}
 }

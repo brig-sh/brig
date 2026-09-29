@@ -158,9 +158,11 @@ func TestAFailedProbeAnswersUnknown(t *testing.T) {
 
 // nerdctl reads no policy into the run on any shim, so the answer is cannot
 // enforce whatever BRIG_CONTAINERD_RUNTIME names, and the refusal names the
-// shim the run asked for.
+// shim the run asked for. The non-default shim here is a kata one, not runc:
+// brig now refuses runc for sharing the host kernel, so it never reaches the
+// policy question. A shim brig cannot classify reaches it.
 func TestNerdctlAnswersCannotEnforceOnEveryShim(t *testing.T) {
-	for _, shim := range []string{"", "io.containerd.runc.v2"} {
+	for _, shim := range []string{"", "io.containerd.kata.v2"} {
 		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
 		d := newHullDouble(t, egressHelp, "0")
 		n := &nerdctl{bin: d.bin}
