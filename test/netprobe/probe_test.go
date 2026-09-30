@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -641,19 +642,62 @@ func TestCurlExitCodes(t *testing.T) {
 
 // curl killed at the probe's deadline after it connected has let a packet
 // through, the same as a stall its own --max-time ends.
+//
+// The test kills curl by cancelling the caller's context once the stand-in
+// has written its line, which takes the same path as the deadline. A short
+// deadline raced the stand-in's startup: under a loaded -race run the kill
+// came before the echo, stderr was empty and the probe rightly said timeout.
+// A 1 s timeout still lost that race on a busy machine.
 func TestCurlKilledAfterConnectIsNotATimeout(t *testing.T) {
 	for line, want := range map[string]outcome{
 		"* Established connection to 1.1.1.1 (1.1.1.1 port 443) from 10.0.0.2 port 5": failedAfterConnect,
 		"* Trying 1.1.1.1:443...": timedOut,
 	} {
-		path := filepath.Join(t.TempDir(), "curl")
-		script := "#!/bin/sh\ncat >/dev/null\necho '" + line + "' >&2\nexec sleep 30\n"
+		dir := t.TempDir()
+		path, said := filepath.Join(dir, "curl"), filepath.Join(dir, "said")
+		script := fmt.Sprintf(`#!/bin/sh
+cat >/dev/null
+echo '%s' >&2
+# The line is out: the test can kill curl now. The marker sits beside
+# this script, so no temp path is spliced into it.
+: >"$(dirname "$0")/said"
+exec sleep 30
+`, line)
 		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		p := testProber(200 * time.Millisecond)
+		// The deadline stays well past any startup delay, so it fires only
+		// if the stand-in never writes its line.
+		p := testProber(10 * time.Second)
 		p.lookPath = func(string) (string, error) { return path, nil }
-		r := p.dohCurl(context.Background(), "https://doh.example/dns-query", "example.com")
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		// saw closes before the cancel, so once dohCurl returns it tells a
+		// kill by this test from the deadline. The "Trying" case ends in
+		// timedOut either way and would pass on the deadline alone.
+		saw := make(chan struct{})
+		go func() {
+			for {
+				if _, err := os.Stat(said); err == nil {
+					close(saw)
+					cancel()
+					return
+				}
+				select {
+				case <-done:
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+		}()
+		r := p.dohCurl(ctx, "https://doh.example/dns-query", "example.com")
+		close(done)
+		cancel()
+		select {
+		case <-saw:
+		default:
+			t.Errorf("%q: the stand-in never wrote its marker, so this test did not end curl (%s)", line, r.detail)
+		}
 		if r.outcome != want {
 			t.Errorf("%q: outcome = %q (%s), want %q", line, r.outcome, r.detail, want)
 		}
