@@ -61,11 +61,12 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 #
 # v0.1.0-rc7 is the floor: it is the first release carrying the rootless
 # bundle, so BRIG_INSTALL_ROOTLESS against anything older fails naming the
-# asset it wanted. rc10 is the pin. Its urunc returns the whole output of a
-# short command run in the guest, and gives the guest the vCPUs --cpus asks
-# for. It also gives each rootless user a device grant of their own.
+# asset it wanted. rc13 is the pin. It records the sha256 of its kernel and
+# initrd, and keeps that record with the release's signed checksums.txt where
+# brig checks it before a boot. Its amd64 kernel brings up every vCPU --cpus
+# asks for, and its urunc boots arm64 guests under cloud-hypervisor.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc10
+RUNTIME_VERSION=v0.1.0-rc13
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 
