@@ -359,7 +359,7 @@ func TestTwoOptionalImportableMissesAreOneBlock(t *testing.T) {
 		t.Fatalf("warnings = %#v; want one block", res.Warnings)
 	}
 	block := res.Warnings[0]
-	for _, want := range []string{`"claude-credentials"`, `"gh-token"`,
+	for _, want := range []string{"claude-credentials", "gh-token",
 		"brig secret import claude-code", "run `claude` on the host once to log in"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("%q missing from the block:\n%s", want, block)
@@ -395,5 +395,35 @@ func TestTheHintOnASourceReachesTheWarning(t *testing.T) {
 	joined := strings.Join(res.Warnings, "\n")
 	if !strings.Contains(joined, "run `mytool login` on the host once") {
 		t.Errorf("the source's hint did not reach the warning:\n%s", joined)
+	}
+}
+
+// The block a first claude-code run prints: a heading that counts the
+// missing secrets, a row per command, the commands in one column, and the
+// hint under the command it belongs to.
+func TestMissingSecretsBlockLinesUpTheCommands(t *testing.T) {
+	p := profile.Profile{
+		Name: "claude-code",
+		Secrets: []profile.SecretDecl{
+			{Name: "gh-token", Required: ptr(false)},
+			{Name: "claude-credentials", Required: ptr(false), From: "keychain",
+				Service: "Claude Code-credentials", Hint: "run `claude` on the host once to log in"},
+		},
+		Env: []profile.EnvBinding{
+			{Name: "GH_TOKEN", Ref: "secrets.gh-token"},
+			{Name: "TOK", Ref: "secrets.claude-credentials"},
+		},
+	}
+	res, err := ResolveSecrets(p, "brig-claude-code",
+		func() (SecretReader, error) { return fakeStore{}, nil }, noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "claude-code runs without 2 secrets\n" +
+		"  ○ gh-token            → brig secret create gh-token\n" +
+		"  ○ claude-credentials  → brig secret import claude-code\n" +
+		"                          ↳ run `claude` on the host once to log in"
+	if len(res.Warnings) != 1 || res.Warnings[0] != want {
+		t.Errorf("warnings = %q\nwant one block:\n%s", res.Warnings, want)
 	}
 }

@@ -1282,7 +1282,7 @@ EPH="$BRIG_STATE_DIR/homes/brig-claude-code"
 mkdir -p "$WORK/home"
 out="$(env -u BRIG_WORKSPACE HOME="$WORK/home" "$WORK/brig" run claude -d 2>&1)"
 case "$out" in
-  *"none of your directories is shared with claude-code"*) ok "a run with no --home says its home is ephemeral" ;;
+  *"the guest home of claude-code is temporary"*) ok "a run with no --home says its home is ephemeral" ;;
   *) bad "a run with no --home says its home is ephemeral -- got: $out" ;;
 esac
 [ -d "$EPH" ] && ok "a run with no --home creates its home under the state dir" \

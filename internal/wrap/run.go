@@ -43,12 +43,11 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	}
 	c.secrets = res
 	for _, w := range res.Warnings {
-		// Multi-line by construction: each of these is a sentence about what
-		// will happen plus the command that changes it, and warnf prefixes
-		// every line so a copied one still reads as brig's.
-		for _, line := range strings.Split(w, "\n") {
-			c.warnf("%s", line)
-		}
+		// Multi-line by construction: a heading and a row per command that
+		// changes it. warnBlock prefixes every line off a terminal, so a line
+		// copied from a log still reads as brig's, and only the heading on
+		// one.
+		c.warnBlock(w)
 	}
 	set := creds.Bind(c.Profile, c.Env, res.Values, os.LookupEnv, creds.Options{
 		AllowRefs:   c.AllowRefs,

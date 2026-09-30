@@ -215,18 +215,33 @@ func (c *Config) ephemeralNotice() {
 		return
 	}
 	ref := sessionKey(c.Profile.Name, c.Slug)
-	if c.Project != "" {
-		c.warnf("%s is the only directory of yours shared with %s. Its guest home "+
-			"is deleted by `brig rm %s`; pass --home <dir> to keep it.",
-			c.Project, ref, ref)
-	} else {
-		c.warnf("none of your directories is shared with %s, so its guest home "+
-			"and everything in it are deleted by `brig rm %s`. Name a project "+
-			"(`brig run %s <dir>`) or pass --home <dir> to keep it.", ref, ref, ref)
+	block := []string{
+		"the guest home of " + ref + " is temporary",
+		"  ↳ `brig rm " + ref + "` deletes it and every file in it",
 	}
+	if c.Project != "" {
+		// The project is on the host and outlives the sandbox. What goes is
+		// everything the agent kept outside it.
+		block = append(block, "  ↳ only "+c.Project+" is shared with it")
+		block = append(block, choices([][2]string{
+			{"to keep the guest home", "brig run " + ref + " " + c.Project + " --home <dir>"},
+		})...)
+	} else {
+		block = append(block, choices([][2]string{
+			{"to keep your work, share a project", "brig run " + ref + " <dir>"},
+			{"to keep the guest home", "brig run " + ref + " --home <dir>"},
+		})...)
+	}
+	c.warnBlock(strings.Join(block, "\n"))
 	if c.legacyHome != "" {
 		// --home takes the base, and a named session appends its slug to it.
-		c.warnf("%s is no longer the default guest home. Pass --home %s to keep "+
-			"using it.", c.legacyHome, legacyDefaultWorkspace(c.Profile, ""))
+		legacy := []string{
+			"the default guest home moved",
+			"  ↳ the old one is " + c.legacyHome,
+		}
+		legacy = append(legacy, choices([][2]string{
+			{"to keep using it", "brig run " + ref + " --home " + legacyDefaultWorkspace(c.Profile, "")},
+		})...)
+		c.warnBlock(strings.Join(legacy, "\n"))
 	}
 }

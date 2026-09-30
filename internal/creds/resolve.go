@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/secret"
@@ -364,17 +365,16 @@ func newMissing(d profile.SecretDecl, reason error) Missing {
 }
 
 // warnOptional is what a run says about the secrets it could not resolve and
-// did not stop for. The three reasons need three sentences: telling someone to
+// did not stop for. The three reasons need three answers: telling someone to
 // import a credential when the store could not be opened sends them at a wall
 // they have already hit.
 //
-// The importable misses are collected into ONE block rather than one each,
-// because the command is the same command: import takes the PROFILE, so a
-// block per secret would print the identical "brig secret import claude-code"
-// line once per name with nothing but the name to tell them apart.
+// Every secret with no value goes into ONE block, a row per fix: a missing
+// secret is one fact, and the reader wants the list and the commands, not a
+// paragraph per name. See missingBlock.
 func warnOptional(p profile.Profile, misses []Missing) []string {
 	var out []string
-	var importable []Missing
+	var absent []Missing
 	for _, m := range misses {
 		switch {
 		case errors.Is(m.Reason, secret.ErrUnsupported):
@@ -382,64 +382,91 @@ func warnOptional(p profile.Profile, misses []Missing) []string {
 			// on this run, and saying so every time is noise rather than
 			// information. Silent. Everything else -- a locked keychain, a
 			// denied access dialog -- is a state the user can change.
-		case errors.Is(m.Reason, secret.ErrNotFound) && m.Importable:
-			importable = append(importable, m)
 		case errors.Is(m.Reason, secret.ErrNotFound):
-			// Names the secret, not the profile: a profile may declare
-			// several, and two lines differing in nothing leave the reader
-			// unable to tell which one to supply.
-			out = append(out, fmt.Sprintf("no value for the secret %q, and %s will run "+
-				"without it.\nTo supply one: brig secret create %s", m.Name, p.Name, m.Name))
+			absent = append(absent, m)
 		default:
 			out = append(out, fmt.Sprintf("could not read brig's secret store: %v. "+
 				"%s will run without %s", m.Reason, p.Name, m.Name))
 		}
 	}
-	if len(importable) > 0 {
-		out = append(out, importBlock(p, importable))
+	if len(absent) > 0 {
+		out = append([]string{missingBlock(p, absent)}, out...)
 	}
 	return out
 }
 
-// importBlock is the one block the importable misses share.
+// missingBlock is the one block every secret with no value shares: a heading
+// that counts them, then a row per command that fills one.
 //
-// It does not assert what the sandbox will do about it: a profile with two
-// optional secrets has no business claiming a missing gh-token means the agent
-// will ask you to log in. It names them, says the one command that fills them,
-// and carries each declaration's own hint: -- attributed to its secret where
-// there is more than one, because an unattributed list of hints under a list of
-// names is a puzzle rather than advice.
-func importBlock(p profile.Profile, misses []Missing) string {
-	names := make([]string, 0, len(misses))
+//	claude-code runs without 2 secrets
+//	  ○ gh-token            → brig secret create gh-token
+//	  ○ claude-credentials  → brig secret import claude-code
+//	                          ↳ run `claude` on the host once to log in
+//
+// ○ marks a secret with no value, → the command that gives it one, and ↳ a note
+// on the row above. The glyphs carry what the old sentences said, so a first
+// run is a short list rather than a wall of prose.
+//
+// A hand-created secret gets a row of its own, since create takes the NAME.
+// The importable ones share ONE row, because import takes the PROFILE: a row
+// per secret would print the identical `brig secret import claude-code` once
+// per name with nothing but the name to tell them apart.
+//
+// It does not assert what the sandbox will do about a missing secret: a
+// profile with two optional secrets has no business claiming a missing
+// gh-token means the agent will ask you to log in. Each declaration's own hint
+// goes under the import row, attributed to its secret where there is more than
+// one, because an unattributed list of hints is a puzzle rather than advice.
+func missingBlock(p profile.Profile, misses []Missing) string {
+	type row struct{ names, command string }
+	var rows []row
+	var importable []Missing
+	importRow := -1
 	for _, m := range misses {
-		names = append(names, fmt.Sprintf("%q", m.Name))
+		if m.Importable {
+			if importRow < 0 {
+				importRow = len(rows)
+				rows = append(rows, row{command: "brig secret import " + p.Name})
+			}
+			importable = append(importable, m)
+			continue
+		}
+		rows = append(rows, row{names: m.Name, command: "brig secret create " + m.Name})
 	}
-	var msg string
-	if len(misses) == 1 {
-		msg = fmt.Sprintf("no value for the secret %s, and %s will run without it.\n"+
-			"To carry it in from your host: brig secret import %s", names[0], p.Name, p.Name)
-	} else {
-		msg = fmt.Sprintf("no value for the secrets %s, and %s will run without them.\n"+
-			"To carry them in from your host: brig secret import %s",
-			list(names), p.Name, p.Name)
+	if importRow >= 0 {
+		names := make([]string, 0, len(importable))
+		for _, m := range importable {
+			names = append(names, m.Name)
+		}
+		rows[importRow].names = strings.Join(names, ", ")
 	}
-	for _, m := range misses {
-		switch {
-		case m.Hint == "":
-		case len(misses) == 1:
-			msg += "\n" + m.Hint
-		default:
-			msg += fmt.Sprintf("\n%s: %s", m.Name, m.Hint)
+
+	width := 0
+	for _, r := range rows {
+		width = max(width, utf8.RuneCountInString(r.names))
+	}
+	count := "1 secret"
+	if len(misses) > 1 {
+		count = fmt.Sprintf("%d secrets", len(misses))
+	}
+	lines := []string{fmt.Sprintf("%s runs without %s", p.Name, count)}
+	// The column the commands start at, so a note lines up under its command.
+	under := strings.Repeat(" ", len("  ○ ")+width+len("  "))
+	for i, r := range rows {
+		lines = append(lines, fmt.Sprintf("  ○ %s%s  → %s", r.names,
+			strings.Repeat(" ", width-utf8.RuneCountInString(r.names)), r.command))
+		if i != importRow {
+			continue
+		}
+		for _, m := range importable {
+			switch {
+			case m.Hint == "":
+			case len(importable) == 1:
+				lines = append(lines, under+"↳ "+m.Hint)
+			default:
+				lines = append(lines, fmt.Sprintf("%s↳ %s: %s", under, m.Name, m.Hint))
+			}
 		}
 	}
-	return msg
-}
-
-// list joins names the way a sentence does, because this one is read as a
-// sentence rather than scanned as a column.
-func list(names []string) string {
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	return strings.Join(lines, "\n")
 }

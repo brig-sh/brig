@@ -242,7 +242,7 @@ func TestEphemeralNoticeNamesTheLegacyHome(t *testing.T) {
 	c := mustLoad(t, Options{Name: "refactor"})
 	c.Err, c.Verbosity = &errOut, Normal
 	c.ephemeralNotice()
-	if want := "Pass --home " + legacy + " to keep"; !strings.Contains(errOut.String(), want) {
+	if want := "--home " + legacy + "\n"; !strings.Contains(errOut.String(), want) {
 		t.Errorf("the notice does not say %q:\n%s", want, errOut.String())
 	}
 }
@@ -585,5 +585,18 @@ func TestAFailedBootKeepsAHomeTheRuntimeMayHold(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(c.Workspace, markerFile)); err != nil {
 			t.Errorf("%s: the home went: %v", name, err)
 		}
+	}
+}
+
+// Off a terminal every line of a block carries brig's prefix, so a line
+// copied out of a log, or handed to brigd's client, still says whose it is.
+func TestWarnBlockOffATerminalPrefixesEveryLine(t *testing.T) {
+	var errOut bytes.Buffer
+	c := &Config{Err: &errOut, Verbosity: Normal}
+	c.warnBlock("heading\n  ○ a row")
+	c.warnBlock("another\n  → a command")
+	want := "brig: heading\nbrig:   ○ a row\nbrig: another\nbrig:   → a command\n"
+	if errOut.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", errOut.String(), want)
 	}
 }

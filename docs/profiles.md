@@ -482,17 +482,17 @@ the command that supplies it, and the run boots:
 
 ```console
 $ brig run claude-code
-brig: no value for the secret "claude-credentials", and claude-code will run without it.
-brig: To carry it in from your host: brig secret import claude-code
-brig: run `claude` on the host once to log in
+brig: claude-code runs without 1 secret
+  ○ claude-credentials  → brig secret import claude-code
+                          ↳ run `claude` on the host once to log in
 ```
 
 A secret with no `sources:` gets the other verb, because import cannot fill
 it:
 
 ```console
-brig: no value for the secret "gh-token", and claude-code will run without it.
-brig: To supply one: brig secret create gh-token
+brig: claude-code runs without 1 secret
+  ○ gh-token  → brig secret create gh-token
 ```
 
 On Linux the store is a Secret Service keyring, and a host without one, no

@@ -32,12 +32,15 @@ anything:
 
 ```console
 $ brig info claude
-brig: no value for the secret "gh-token", and claude-code will run without it.
-brig: To supply one: brig secret create gh-token
-brig: no value for the secret "claude-credentials", and claude-code will run without it.
-brig: To carry it in from your host: brig secret import claude-code
-brig: run `claude` on the host once to log in
+brig: claude-code runs without 2 secrets
+  ○ claude-credentials  → brig secret import claude-code
+                          ↳ run `claude` on the host once to log in
+  ○ gh-token            → brig secret create gh-token
 ```
+
+`○` marks a secret with no value. `→` is the command that gives it one, and
+`↳` is a note about the row above it. In a log or a pipe, every line starts
+with `brig:`, so a line you copy still says where it came from.
 
 That run exits 0. Only a **required** secret stops a run before the sandbox
 exists. None of the eight built-in profiles declares one, so a missing
