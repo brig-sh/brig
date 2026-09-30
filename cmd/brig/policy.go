@@ -933,9 +933,11 @@ func checkPolicy(args []string) error {
 			if len(recorded) == 1 {
 				which = recorded[0]
 			}
-			warnf("%s is recorded under %q, which no run reaches: %s. Remove it with "+
-				"`brig policy detach %s %s -n %q`",
-				strings.Join(recorded, ", "), sessionName, becomes, which, p.Name, sessionName)
+			warnf("%s", (&wrap.Rows{}).
+				Note("%s", becomes).
+				Do("to remove it", fmt.Sprintf("brig policy detach %s %s -n %q", which, p.Name, sessionName)).
+				Block(fmt.Sprintf("%s is recorded under %q, which no run reaches",
+					strings.Join(recorded, ", "), sessionName)))
 		}
 	}
 	entries, err := loadPolicies(policy.Dir())

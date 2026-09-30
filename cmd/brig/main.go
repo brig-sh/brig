@@ -747,7 +747,7 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 			_ = writeRunObject("gui", exitOK, "", "")
 			return nil
 		}
-		warnf("sandbox %s is running; the %s window should be visible.", cfg.VMName, t.GUITitle)
+		warnf("sandbox %s is running in the %s window", cfg.VMName, t.GUITitle)
 		return nil
 	case detach:
 		// The sandbox is up and will stay up; print the name so a script can
@@ -1369,15 +1369,16 @@ func agentTail(verb string, tail []string) []string {
 			// nowhere to send the reader. --no-project and -d belong to run
 			// alone; on sh, sending them "before the profile" would only earn a
 			// second refusal. Say that instead.
-			warnf("%s is one of brig's own flags, but here it is the agent's: "+
-				"brig stopped reading the line at the argument before it, and "+
-				"`brig %s` reads %s in no position, so there is nowhere to put it "+
-				"for brig to read it.", name, verb, name)
+			warnf("%s", (&wrap.Rows{}).
+				Note("brig stopped reading the line at the argument before it").
+				Note("`brig %s` reads %s in no position, so there is nowhere to put it", verb, name).
+				Block(name+" is one of brig's own flags, but here it is the agent's"))
 			continue
 		}
-		warnf("%s is one of brig's own flags, but here it is the "+
-			"agent's: brig stopped reading the line at the argument before it. "+
-			"Put %s %s for brig to read it.", name, name, where)
+		warnf("%s", (&wrap.Rows{}).
+			Note("brig stopped reading the line at the argument before it").
+			Do(fmt.Sprintf("for brig to read it, put %s %s", name, where), "").
+			Block(name+" is one of brig's own flags, but here it is the agent's"))
 	}
 	return tail
 }
@@ -2152,33 +2153,44 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		return fmt.Errorf("removed %s, but %w. The next run of %s deletes what is left",
 			ref, cfg.HomeErr, ref)
 	case cfg.RemovedHome != "":
-		warnf("removed %s and its guest home %s", ref, cfg.RemovedHome)
+		warnf("%s", kept(cfg, false).Block("removed "+ref+" and its guest home "+cfg.RemovedHome))
 	default:
-		warnf("removed %s", ref)
-		warnHomeKept(cfg)
+		warnf("%s", kept(cfg, true).Block("removed "+ref))
 	}
-	warnProjectKept(cfg)
 	return nil
 }
 
-// warnHomeKept says where the guest home rm left behind is. An ephemeral home
-// that was never created is not mentioned, since there is nothing on the host
-// to find.
-func warnHomeKept(cfg *wrap.Config) {
-	if cfg.EphemeralHome {
-		if _, err := os.Stat(cfg.Workspace); err != nil {
-			return
+// kept is the notes on what rm leaves on the host: the guest home, when home
+// asks and there is one, and the project. An ephemeral home that was never
+// created is not mentioned, since there is nothing on the host to find.
+// brig never deletes a project, whichever kind of guest home the session has,
+// and whether or not this run could mount it.
+func kept(cfg *wrap.Config, home bool) *wrap.Rows {
+	rows := &wrap.Rows{}
+	if home {
+		if _, err := os.Stat(cfg.Workspace); err == nil || !cfg.EphemeralHome {
+			rows.Note("the guest home %s stays on the host", cfg.Workspace)
 		}
 	}
-	warnf("The guest home %s stays on the host", cfg.Workspace)
+	if p := cfg.KeptProject(); p != "" {
+		rows.Note("the project %s stays on the host", p)
+	}
+	return rows
 }
 
-// warnProjectKept says that rm leaves the project alone. brig never deletes
-// a project, whichever kind of guest home the session has, and whether or not
-// this run could mount it.
+// warnHomeKept says where the guest home rm leaves behind is, for the preview
+// whose heading went to stdout. See kept.
+func warnHomeKept(cfg *wrap.Config) {
+	if _, err := os.Stat(cfg.Workspace); err == nil || !cfg.EphemeralHome {
+		warnf("the guest home %s stays on the host", cfg.Workspace)
+	}
+}
+
+// warnProjectKept says that rm leaves the project alone, for the preview and
+// for the rm that ends in an error, which have no block to put the note in.
 func warnProjectKept(cfg *wrap.Config) {
 	if p := cfg.KeptProject(); p != "" {
-		warnf("The project %s stays on the host", p)
+		warnf("the project %s stays on the host", p)
 	}
 }
 
@@ -2253,7 +2265,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		// goes; the sentence about workspaces is a notice, and goes with the
 		// other notices.
 		fmt.Print(removalList(mine))
-		warnf("would remove %d sandbox(es). %s", len(mine), homesSentence(mine))
+		warnf("%s", homesRows(mine).Block(fmt.Sprintf("would remove %d sandbox(es)", len(mine))))
 		return nil
 	}
 	if err := confirmRemoveAll(spelling, mine, o.yes != ""); err != nil {
@@ -2288,8 +2300,9 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		fmt.Println(inst.Name)
 		removed++
 	}
-	warnf("removed %d sandbox(es) and %d guest home(s) brig created. Guest homes "+
-		"named with --home and projects stay on the host.", removed, homes)
+	warnf("%s", (&wrap.Rows{}).
+		Note("guest homes named with --home and projects stay on the host").
+		Block(fmt.Sprintf("removed %d sandbox(es) and %d guest home(s) brig created", removed, homes)))
 	// The shared network gateway too, once nothing is on it. Apart from the
 	// list below, for the reason on runtime.SharedNetworkPruner. It runs with
 	// an empty list as well, which is the host after an upgrade: every
@@ -2363,6 +2376,20 @@ func homesSentence(list []runtime.Instance) string {
 	}
 	return fmt.Sprintf("%d guest home(s) brig created go with them. Guest homes "+
 		"named with --home and projects stay on the host.", n)
+}
+
+// homesRows is homesSentence as the notes of a block, for the preview of
+// `rm --all`.
+func homesRows(list []runtime.Instance) *wrap.Rows {
+	n := 0
+	for _, inst := range list {
+		if wrap.EphemeralHomeOf(inst.Name) != "" {
+			n++
+		}
+	}
+	return (&wrap.Rows{}).
+		Note("%d guest home(s) brig created go with them", n).
+		Note("guest homes named with --home and projects stay on the host")
 }
 
 // confirmRemoveAll names every sandbox `rm --all` is about to remove and asks.
@@ -3408,11 +3435,14 @@ const retiredGoesIn = "v0.4.0"
 // output cleanly. A date it could not keep would repeat what v0.3 did.
 func deprecated(old, replacement string) {
 	if old == "brig exec" {
-		warnf("`%s` is now `%s`. The old spelling stays until `brig sh` "+
-			"can pipe a command's output", old, replacement)
+		warnf("%s", (&wrap.Rows{}).
+			Note("the old spelling stays until `brig sh` can pipe a command's output").
+			Block(fmt.Sprintf("`%s` is now `%s`", old, replacement)))
 		return
 	}
-	warnf("`%s` is now `%s`. The old spelling is removed in %s", old, replacement, retiredGoesIn)
+	warnf("%s", (&wrap.Rows{}).
+		Note("the old spelling is removed in %s", retiredGoesIn).
+		Block(fmt.Sprintf("`%s` is now `%s`", old, replacement)))
 }
 
 // removedVerbs are verbs brig no longer runs, each with the line that replaced
@@ -3654,8 +3684,9 @@ func publishPorts(cfg *wrap.Config, ref string, ports []string, wantJSON bool) e
 		if _, err := runtime.RecordPublications(cfg.VMName, add); err != nil {
 			return err
 		}
-		warnf("%s is not running, so nothing is listening on the host yet. "+
-			"These ports are published when it starts.", cfg.VMName)
+		warnf("%s", (&wrap.Rows{}).
+			Note("brig publishes these ports when it starts").
+			Block(cfg.VMName+" is not running, so nothing is listening on the host yet"))
 		return reportPorts(cfg, ref, wantJSON)
 	}
 	publisher, ok := cfg.Runtime.(runtime.Publisher)
@@ -3801,14 +3832,15 @@ func reportPorts(cfg *wrap.Config, ref string, wantJSON bool) error {
 		running, err := cfg.Runtime.Running(cfg.VMName)
 		switch {
 		case err != nil:
-			warnf("cannot tell whether %s is running, so its ports read unknown: %v", ref, err)
+			warnf("%s", (&wrap.Rows{}).Note("its ports read unknown").
+				Block(fmt.Sprintf("cannot tell whether %s is running: %v", ref, err)))
 		case !running:
 			live = map[string]bool{}
 		default:
 			have, err := publisher.Published(cfg.VMName)
 			if err != nil {
-				warnf("could not ask the gateway what %s forwards, so its ports read "+
-					"unknown: %v", ref, err)
+				warnf("%s", (&wrap.Rows{}).Note("its ports read unknown").
+					Block(fmt.Sprintf("could not ask the gateway what %s forwards: %v", ref, err)))
 				break
 			}
 			live = map[string]bool{}

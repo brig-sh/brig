@@ -189,8 +189,9 @@ func readSecret(out io.Writer, args []string) error {
 		// outlives the command, and may be in a saved session besides. Said on
 		// stderr, so a pipe is unaffected and so the value itself stays the
 		// only thing on stdout.
-		fmt.Fprintf(os.Stderr, "brig: %s is now in this terminal's scrollback. "+
-			"Pipe it instead to keep it out: brig secret read %s | ...\n", name, name)
+		wrap.Stderr.Say((&wrap.Rows{}).
+			Do("to keep it out, pipe it", "brig secret read "+name+" | ...").
+			Block(name + " is now in this terminal's scrollback"))
 	}
 	return nil
 }
