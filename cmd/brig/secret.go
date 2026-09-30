@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/wrap"
 )
@@ -189,9 +190,8 @@ func readSecret(out io.Writer, args []string) error {
 		// outlives the command, and may be in a saved session besides. Said on
 		// stderr, so a pipe is unaffected and so the value itself stays the
 		// only thing on stdout.
-		wrap.Stderr.Say((&wrap.Rows{}).
-			Do("to keep it out, pipe it", "brig secret read "+name+" | ...").
-			Block(name + " is now in this terminal's scrollback"))
+		wrap.Stderr.Say(notice.New(name+" is now in this terminal's scrollback").
+			Do("to keep it out, pipe it", "brig secret read "+name+" | ...").String())
 	}
 	return nil
 }
@@ -349,7 +349,7 @@ func confirmDelete(name string, yes bool) error {
 	}
 	// The question goes to stderr, so a delete inside a pipeline still asks it
 	// where a person can see it rather than into whatever is reading stdout.
-	fmt.Fprintf(os.Stderr, "brig: delete %q? The value cannot be recovered [y/N] ", name)
+	wrap.Stderr.Ask(fmt.Sprintf("delete %q? The value cannot be recovered", name))
 	line, err := readAnswer(os.Stdin)
 	if err != nil {
 		// EOF is the answer a closed stdin gives, and it is not yes.

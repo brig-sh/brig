@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/verify"
 )
@@ -89,10 +90,9 @@ func (c *Config) verifyImage() error {
 	// records -- so a reader told nothing would believe a digest was pinned
 	// when none was. The upgrade advice in it is incidental; the substance is
 	// that brig's guarantee is weaker on this host than it otherwise is.
-	c.alertf("%s", (&Rows{}).
+	c.alertf("%s", notice.New("this "+c.Runtime.Kind()+" cannot boot by digest").
 		Note("brig verifies and boots the tag, not a pinned digest").
-		Do("to boot by digest, upgrade to hull 0.1.0-rc23 or newer", "").
-		Block("this "+c.Runtime.Kind()+" cannot boot by digest"))
+		Do("to boot by digest, upgrade to hull 0.1.0-rc23 or newer", ""))
 	return c.verifyTag()
 }
 
@@ -330,12 +330,11 @@ func (c *Config) sayVerified() {
 // front of nobody while the client waits.
 func (c *Config) confirm(question string) bool {
 	if c.NoTerminal || !IsTerminal(os.Stdin) {
-		c.alertf("%s", (&Rows{}).
-			Do("to boot it regardless", "BRIG_VERIFY=off").
-			Block("not a terminal, so there is nobody to ask: refusing"))
+		c.alertf("%s", notice.New("not a terminal, so there is nobody to ask: refusing").
+			Do("to boot it regardless", "BRIG_VERIFY=off"))
 		return false
 	}
-	fmt.Fprintf(c.Err, "brig: %s [y/N] ", question)
+	c.notices().Ask(question)
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
 		return false
@@ -412,9 +411,8 @@ func (c *Config) verifyBootAssets() error {
 				"by brig, so their signature cannot be checked (BRIG_VERIFY=require). "+
 				"Set BRIG_VERIFY=warn to boot them unchecked", ref)
 		}
-		c.alertf("%s", (&Rows{}).
-			Note("nothing was checked about the kernel this sandbox boots").
-			Block("boot assets "+ref+" are not published by brig"))
+		c.alertf("%s", notice.New("boot assets "+ref+" are not published by brig").
+			Note("nothing was checked about the kernel this sandbox boots"))
 		return nil
 
 	case verify.NoTooling, verify.Unresolved:
@@ -436,9 +434,8 @@ func (c *Config) verifyBootAssets() error {
 				"verified: %s (BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot "+
 				"them unchecked", ref, cause)
 		}
-		c.alertf("%s", (&Rows{}).
-			Note("nothing was checked about the kernel this sandbox boots").
-			Block(fmt.Sprintf("the boot assets at %s could not be verified: %s", ref, cause)))
+		c.alertf("%s", notice.Newf("the boot assets at %s could not be verified: %s", ref, cause).
+			Note("nothing was checked about the kernel this sandbox boots"))
 		return nil
 
 	default:
@@ -664,13 +661,13 @@ func (c *Config) bootAssetsDiffer(assets runtime.BootAssets, bundle, detail stri
 			"are not the bundle that verified, %s: %s (BRIG_VERIFY=require).%s Set "+
 			"BRIG_VERIFY=warn to boot them", dir, bundle, detail, c.linuxBundleNote(assets))
 	}
-	rows := (&Rows{}).Note("booting them as your own build, so nothing vouches for the kernel " +
-		"this sandbox boots")
-	if note := strings.TrimSpace(c.linuxBundleNote(assets)); note != "" {
-		rows.Note("%s", strings.ToLower(note[:1])+note[1:])
+	rows := notice.Newf("BRIG_BOOT_ASSETS names %s, and its boot assets are not the bundle "+
+		"that verified, %s: %s", dir, bundle, detail).
+		Note("booting them as your own build, so nothing vouches for the kernel this sandbox boots")
+	if c.linuxBundleNote(assets) != "" {
+		rows.Note("%s", linuxBundleOld).Do("to install a bundle that keeps one, re-run brig's install.sh", "")
 	}
-	c.alertf("%s", rows.Block(fmt.Sprintf("BRIG_BOOT_ASSETS names %s, and its boot assets "+
-		"are not the bundle that verified, %s: %s", dir, bundle, detail)))
+	c.alertf("%s", rows)
 	return nil
 }
 
@@ -682,9 +679,8 @@ func (c *Config) bootDigestsUnread(assets runtime.BootAssets, bundle string, cau
 			"so the kernel and initrd were not compared with it (BRIG_VERIFY=require).%s Set "+
 			"BRIG_VERIFY=warn to boot them without the comparison", bundle, cause, c.linuxBundleNote(assets))
 	}
-	c.alertf("%s", (&Rows{}).
-		Note("the kernel and initrd boot without being compared with it").
-		Block(fmt.Sprintf("cannot read the digests of the boot bundle %s: %v", bundle, cause)))
+	c.alertf("%s", notice.Newf("cannot read the digests of the boot bundle %s: %v", bundle, cause).
+		Note("the kernel and initrd boot without being compared with it"))
 	return nil
 }
 
@@ -701,10 +697,13 @@ func (c *Config) linuxBundleNote(assets runtime.BootAssets) string {
 	if !assets.Named || c.Runtime.Kind() != "nerdctl" {
 		return ""
 	}
-	return " The Linux runtime bundle's launcher sets BRIG_BOOT_ASSETS to the kernel and " +
-		"initrd it carries, and a bundle this old keeps no signed record of them. Re-run " +
-		"brig's install.sh to install one that does."
+	return " T" + linuxBundleOld[1:] + ". Re-run brig's install.sh to install one that does."
 }
+
+// linuxBundleOld is why an old Linux runtime bundle's kernel cannot be
+// checked: said as a note in a warning, and as a sentence in a refusal.
+const linuxBundleOld = "the Linux runtime bundle's launcher sets BRIG_BOOT_ASSETS to the kernel " +
+	"and initrd it carries, and a bundle this old keeps no signed record of them"
 
 // checkBundleRecord checks the Linux runtime bundle's kernel and initrd
 // against the record its release signed (#234).
@@ -803,9 +802,8 @@ func (c *Config) bundleRecordUnread(dir string, cause error) error {
 			"and initrd in %s against its signed record: %v (BRIG_VERIFY=require). Set "+
 			"BRIG_VERIFY=warn to boot them without the check", dir, cause)
 	}
-	c.alertf("%s", (&Rows{}).
-		Note("they boot without the check").
-		Block(fmt.Sprintf("cannot check the Linux runtime bundle's kernel and initrd in %s "+
-			"against its signed record: %v", dir, cause)))
+	c.alertf("%s", notice.Newf("cannot check the Linux runtime bundle's kernel and initrd in %s "+
+		"against its signed record: %v", dir, cause).
+		Note("they boot without the check"))
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -113,9 +114,9 @@ type Config struct {
 	// was created, held until BuildEnv for the same reason. See
 	// slugMigrationNotice.
 	slugMigration []string
-	// ownNotices prints the warnings when Err is not the process's stderr.
-	// See notices.
-	ownNotices *Notices
+	// own prints the warnings when Err is not the process's stderr. See
+	// notices.
+	own Notices
 	// secrets is what the store gave this run, kept so file delivery does not
 	// read it twice -- and cleared the moment delivery is done, because a
 	// plaintext refresh token has no business outliving its use.
@@ -702,13 +703,12 @@ func (c *Config) slugMigrationNotice(base, vmBase string) []string {
 	if _, err := os.Stat(oldWorkspace); err != nil {
 		return nil
 	}
-	return []string{(&Rows{}).
+	return []string{notice.Newf("session %q used to be shortened to %q and now keeps its name in full",
+		c.RawName, old).
 		Note("its new home and sandbox: %s (%s)", c.Workspace, c.VMName).
 		Note("nothing reads the old ones now: %s (%s)", oldWorkspace, oldVM).
 		Note("the work in %s is on the host, so you can move or delete it", oldWorkspace).
-		Note("state inside the old sandbox does not come across, so this session can ask you to log in again").
-		Block(fmt.Sprintf("session %q used to be shortened to %q and now keeps its name in full",
-			c.RawName, old))}
+		Note("state inside the old sandbox does not come across, so this session can ask you to log in again").String()}
 }
 
 // envOverride applies BRIG_FORWARD_ENV, which replaces the env-sourced set,

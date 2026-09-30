@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/notice"
 )
 
 // The two managed files brig writes into the workspace when guest git is
@@ -207,11 +208,10 @@ func (c *Config) SetupGit(set *creds.Set) error {
 
 	if !c.GitUserFromHost {
 		if _, overridden := c.env.Get("GIT_USER"); !overridden {
-			c.warnf("%s", (&Rows{}).
+			c.warnf("%s", notice.Newf("github.user is not set, falling back to %q", c.GitUser).
 				Note("if git in the sandbox reports \"Invalid username or token\" while "+
 					"your token is valid, set it once on the host").
-				Do("to set it", "git config --global github.user <your-github-login>").
-				Block(fmt.Sprintf("github.user is not set, falling back to %q", c.GitUser)))
+				Do("to set it", "git config --global github.user <your-github-login>"))
 		}
 	}
 
@@ -345,11 +345,10 @@ func (c *Config) wireInclude(r *workspaceRoot) error {
 	}
 
 	if bytes.Contains(existing, []byte(managedGitconfig)) {
-		c.warnf("%s", (&Rows{}).
+		c.warnf("%s", notice.Newf("%s names %s, but git does not load it", target, managedGitconfig).
 			Note("an earlier append landed on a line with no trailing newline").
 			Note("brig adds it again on a line of its own").
-			Do("look at the line above it for a stray '[include]'", "").
-			Block(fmt.Sprintf("%s names %s, but git does not load it", target, managedGitconfig)))
+			Do("look at the line above it for a stray '[include]'", ""))
 	}
 
 	f, err := r.openFile(gitconfig, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

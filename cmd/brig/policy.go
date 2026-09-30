@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/session"
@@ -933,11 +934,10 @@ func checkPolicy(args []string) error {
 			if len(recorded) == 1 {
 				which = recorded[0]
 			}
-			warnf("%s", (&wrap.Rows{}).
+			warnf("%s", notice.Newf("%s is recorded under %q, which no run reaches",
+				strings.Join(recorded, ", "), sessionName).
 				Note("%s", becomes).
-				Do("to remove it", fmt.Sprintf("brig policy detach %s %s -n %q", which, p.Name, sessionName)).
-				Block(fmt.Sprintf("%s is recorded under %q, which no run reaches",
-					strings.Join(recorded, ", "), sessionName)))
+				Do("to remove it", fmt.Sprintf("brig policy detach %s %s -n %q", which, p.Name, sessionName)))
 		}
 	}
 	entries, err := loadPolicies(policy.Dir())

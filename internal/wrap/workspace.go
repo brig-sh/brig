@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/brig-sh/brig/internal/notice"
 )
 
 // markerFile identifies the workspace from inside the guest. See Marker.
@@ -229,10 +231,9 @@ func (c *Config) warnStaleCredentials(r *workspaceRoot) {
 		rel = filepath.FromSlash(rel)
 		path := r.path(rel)
 		if _, err := r.lstat(rel); err == nil {
-			c.warnf("%s", (&Rows{}).
+			c.warnf("%s", notice.New(path+" holds a token on disk and is no longer used").
 				Note("brig keeps credentials in its own store and hands them to the sandbox in memory").
-				Do("to delete it", "rm "+path).
-				Block(path+" holds a token on disk and is no longer used"))
+				Do("to delete it", "rm "+path))
 		}
 	}
 }
@@ -349,9 +350,8 @@ func (c *Config) trustGuestCwd(r *workspaceRoot) error {
 	if err := dec.Decode(&doc); err != nil || doc == nil {
 		// The agent owns this file, so it owns a parse failure too. Say what
 		// happened and leave the file alone.
-		c.warnf("%s", (&Rows{}).
-			Note("%s will ask you to trust %s", c.Profile.Binary, key).
-			Block(path+" holds invalid JSON, so brig leaves it as it is"))
+		c.warnf("%s", notice.New(path+" holds invalid JSON, so brig leaves it as it is").
+			Note("%s will ask you to trust %s", c.Profile.Binary, key))
 		return nil
 	}
 

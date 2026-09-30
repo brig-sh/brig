@@ -46,8 +46,7 @@ var inForeground = foreground
 // group. A TERM of dumb, or none, may print the codes as text. A job in the
 // background would redraw over the line the user is typing on.
 func canSpin(f *os.File) bool {
-	term := os.Getenv("TERM")
-	return term != "" && term != "dumb" && IsTerminal(f) && inForeground(f.Fd())
+	return readable(f) && inForeground(f.Fd())
 }
 
 // spinner is the notice writer for a terminal at the default level. It draws a

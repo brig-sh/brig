@@ -3,6 +3,7 @@ package creds
 import (
 	"fmt"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/profile"
 )
 
@@ -90,11 +91,10 @@ func Bind(
 				// (cmd/brig/secret.go), so one reaching here means another
 				// keychain tool emptied it. Silence would leave the guest
 				// failing to authenticate with no explanation.
-				s.Warnings = append(s.Warnings, fmt.Sprintf(
-					"not forwarding %s: the secret %s is empty, not absent\n"+
-						"  → to set it again:  brig secret update %s\n"+
-						"  → to delete it:     brig secret delete %s",
-					b.Name, r.Name, r.Name, r.Name))
+				s.Warnings = append(s.Warnings, notice.Newf(
+					"not forwarding %s: the secret %s is empty, not absent", b.Name, r.Name).
+					Do("to set it again", "brig secret update "+r.Name).
+					Do("to delete it", "brig secret delete "+r.Name).String())
 			case fromSecret:
 				if _, declared := p.Secret(r.Name); declared {
 					// An OPTIONAL secret the store does not have. Resolution

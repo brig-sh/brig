@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
@@ -165,9 +166,8 @@ func (c *Config) reapOrphanHome() {
 	if removed, err := removeHome(c.Workspace); err != nil {
 		c.warnf("%v", err)
 	} else if removed {
-		c.warnf("%s", (&Rows{}).
-			Note("its sandbox was removed outside brig, or an earlier run stopped before it booted").
-			Block("deleted the guest home "+c.Workspace+", which no sandbox owned"))
+		c.warnf("%s", notice.New("deleted the guest home "+c.Workspace+", which no sandbox owned").
+			Note("its sandbox was removed outside brig, or an earlier run stopped before it booted"))
 	}
 }
 
@@ -215,7 +215,8 @@ func (c *Config) ephemeralNotice() {
 		return
 	}
 	ref := sessionKey(c.Profile.Name, c.Slug)
-	rows := (&Rows{}).Note("`brig rm %s` deletes it and every file in it", ref)
+	rows := notice.New("the guest home of "+ref+" is temporary").
+		Note("`brig rm %s` deletes it and every file in it", ref)
 	if c.Project != "" {
 		// The project is on the host and outlives the sandbox. What goes is
 		// everything the agent kept outside it.
@@ -225,12 +226,11 @@ func (c *Config) ephemeralNotice() {
 		rows.Do("to keep your work, share a project", "brig run "+ref+" <dir>").
 			Do("to keep the guest home", "brig run "+ref+" --home <dir>")
 	}
-	c.warnf("%s", rows.Block("the guest home of "+ref+" is temporary"))
+	c.warnf("%s", rows)
 	if c.legacyHome != "" {
 		// --home takes the base, and a named session appends its slug to it.
-		c.warnf("%s", (&Rows{}).
+		c.warnf("%s", notice.New("the default guest home moved").
 			Note("the old one is %s", c.legacyHome).
-			Do("to keep using it", "brig run "+ref+" --home "+legacyDefaultWorkspace(c.Profile, "")).
-			Block("the default guest home moved"))
+			Do("to keep using it", "brig run "+ref+" --home "+legacyDefaultWorkspace(c.Profile, "")))
 	}
 }

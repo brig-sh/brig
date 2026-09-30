@@ -13,9 +13,9 @@
 package creds
 
 import (
-	"fmt"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 )
@@ -110,10 +110,10 @@ type Options struct {
 // refuse a perfectly good value that merely looks like a reference.
 func admit(t profile.Profile, name, value string, fromEnv bool, opt Options) (string, bool) {
 	if t.Denied(name) && !opt.AllowDenied {
-		return fmt.Sprintf("not forwarding %s: it is on the %s denylist\n"+
-			"  ↳ it outranks the subscription credential, and would move this sandbox "+
-			"onto metered billing without saying so\n"+
-			"  → to forward it anyway:  BRIG_ALLOW_DENIED=1", name, t.Name), false
+		return notice.Newf("not forwarding %s: it is on the %s denylist", name, t.Name).
+			Note("it outranks the subscription credential, and would move this sandbox onto "+
+				"metered billing without saying so").
+			Do("to forward it anyway", "BRIG_ALLOW_DENIED=1").String(), false
 	}
 	if fromEnv && !opt.AllowRefs {
 		if scheme, ok := unresolvedRef(value); ok {
@@ -122,10 +122,10 @@ func admit(t profile.Profile, name, value string, fromEnv bool, opt Options) (st
 			// "Invalid username or token" in the guest, indistinguishable from a
 			// wrong username or a broken helper. A real credential is a token
 			// and never takes this form.
-			return fmt.Sprintf("not forwarding %s: it looks like an unresolved secret "+
-				"reference (%s://...), not a credential\n"+
-				"  → resolve it on the host before you run brig\n"+
-				"  → to forward it as it is:  BRIG_ALLOW_REFS=1", name, scheme), false
+			return notice.Newf("not forwarding %s: it looks like an unresolved secret "+
+				"reference (%s://...), not a credential", name, scheme).
+				Do("resolve it on the host before you run brig", "").
+				Do("to forward it as it is", "BRIG_ALLOW_REFS=1").String(), false
 		}
 	}
 	return "", true

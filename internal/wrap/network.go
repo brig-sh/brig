@@ -3,6 +3,7 @@ package wrap
 import (
 	"fmt"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
@@ -183,9 +184,8 @@ func (c *Config) recordPosture() {
 		return
 	}
 	if err := runtime.RecordBootedNet(c.VMName, c.askedNetwork.RuntimeNet()); err != nil {
-		c.warnf("%s", (&Rows{}).
-			Note("a later command that names no posture uses the default one and restarts the sandbox").
-			Block(fmt.Sprintf("could not record that %s was started %s: %v", c.VMName, c.askedNetwork, err)))
+		c.warnf("%s", notice.Newf("could not record that %s was started %s: %v", c.VMName, c.askedNetwork, err).
+			Note("a later command that names no posture uses the default one and restarts the sandbox"))
 	}
 }
 
@@ -323,7 +323,7 @@ func (c *Config) networkRestart() string {
 	if keeps {
 		reason = "its network and rules stay the same. brig restarts it to record that posture"
 	}
-	return (&Rows{}).Note("%s", reason).Note("%s", disconnects).Block(change)
+	return notice.New(change).Note("%s", reason).Note("%s", disconnects).String()
 }
 
 // disconnects is the note on every restart of a running sandbox. It is word

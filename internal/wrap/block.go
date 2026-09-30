@@ -1,11 +1,9 @@
 package wrap
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strings"
-	"unicode/utf8"
 )
 
 // Notices prints brig's own warnings to one writer: a line, or a block of a
@@ -46,21 +44,20 @@ func (n *Notices) out() io.Writer {
 	return n.W
 }
 
-// Say prints msg: one line, or a block when msg has more than one.
+// Say prints msg: one line, or a block when msg has more than one. A block
+// goes out in one write, so it does not interleave with a child's output.
 func (n *Notices) Say(msg string) {
 	lines := strings.Split(msg, "\n")
-	block := len(lines) > 1
+	var b strings.Builder
 	if !n.isTerminal() {
 		for _, line := range lines {
-			fmt.Fprintf(n.out(), "brig: %s\n", line)
+			b.WriteString("brig: " + line + "\n")
 		}
-		return
+	} else {
+		n.part(&b, len(lines) > 1)
+		b.WriteString("brig: " + msg + "\n")
 	}
-	n.part(block)
-	fmt.Fprintf(n.out(), "brig: %s\n", lines[0])
-	for _, line := range lines[1:] {
-		fmt.Fprintln(n.out(), line)
-	}
+	_, _ = io.WriteString(n.out(), b.String())
 }
 
 // Error prints the error a command ended with. Its lines stay as the error
@@ -68,95 +65,48 @@ func (n *Notices) Say(msg string) {
 // error is quoted whole into bug reports and scripts, and its wording is its
 // own. It only takes part in the spacing, so it does not run into a block.
 func (n *Notices) Error(msg string) {
+	var b strings.Builder
 	if n.isTerminal() {
-		n.part(true)
+		n.part(&b, true)
 	}
-	fmt.Fprintln(n.out(), "brig: "+msg)
+	b.WriteString("brig: " + msg + "\n")
+	_, _ = io.WriteString(n.out(), b.String())
 }
 
-// part puts a blank line on the terminal between a block and the warning next
-// to it, before or after. Warnings that are one line each stay together.
-func (n *Notices) part(block bool) {
+// Ask puts a yes-or-no question after the warnings, parted from a block above
+// it like any other line, and leaves the cursor after it for the answer.
+func (n *Notices) Ask(question string) {
+	var b strings.Builder
+	if n.isTerminal() {
+		n.part(&b, false)
+	}
+	b.WriteString("brig: " + question + " [y/N] ")
+	_, _ = io.WriteString(n.out(), b.String())
+}
+
+// part puts a blank line on the terminal between a block and the line next to
+// it, before or after. Lines that are one each stay together.
+func (n *Notices) part(b *strings.Builder, block bool) {
 	if n.warned && (block || n.lastWasBlock) {
-		fmt.Fprintln(n.out())
+		b.WriteString("\n")
 	}
 	n.warned, n.lastWasBlock = true, block
 }
 
-// isTerminal returns whether W is a terminal that a person reads. brigd hands
-// a buffer, and a pipe or a TERM of dumb is a reader that wants every line to
-// stand alone.
+// isTerminal returns whether the writer is a terminal that a person reads.
+// brigd hands a buffer, and a pipe or a TERM of dumb is a reader that wants
+// every line to stand alone.
 func (n *Notices) isTerminal() bool {
 	f, ok := n.out().(*os.File)
-	if !ok || n.NoTerminal {
-		return false
-	}
-	term := os.Getenv("TERM")
-	return term != "" && term != "dumb" && IsTerminal(f)
+	return ok && !n.NoTerminal && readable(f)
 }
 
 // notices is the Notices for Err: the shared Stderr when Err is the process's
-// stderr, and one of the Config's own otherwise.
+// stderr, and the Config's own otherwise.
 func (c *Config) notices() *Notices {
 	if c.Err == os.Stderr && !c.NoTerminal {
 		return Stderr
 	}
-	if c.ownNotices == nil || c.ownNotices.W != c.Err || c.ownNotices.NoTerminal != c.NoTerminal {
-		c.ownNotices = &Notices{W: c.Err, NoTerminal: c.NoTerminal}
-	}
-	return c.ownNotices
-}
-
-// Rows builds the rows of a block. Note is a line about the heading, Do a
-// command to type, labelled with what it does. The commands line up in one
-// column, so the eye finds them:
-//
-//	↳ `brig rm claude-code` deletes it and every file in it
-//	→ to keep your work, share a project:  brig run claude-code <dir>
-//	→ to keep the guest home:              brig run claude-code --home <dir>
-//
-// ↳ marks a note and → something to do, the same two glyphs in every block.
-type Rows struct {
-	rows []row
-}
-
-type row struct {
-	note         string
-	label, input string
-}
-
-// Note adds a line about the heading.
-func (r *Rows) Note(format string, a ...any) *Rows {
-	r.rows = append(r.rows, row{note: fmt.Sprintf(format, a...)})
-	return r
-}
-
-// Do adds something to do. input is what to type, and may be empty when the
-// label says it all.
-func (r *Rows) Do(label, input string) *Rows {
-	r.rows = append(r.rows, row{label: label, input: input})
-	return r
-}
-
-// Block returns the heading and the rows as one message for Say.
-func (r *Rows) Block(heading string) string {
-	width := 0
-	for _, x := range r.rows {
-		if x.note == "" && x.input != "" {
-			width = max(width, utf8.RuneCountInString(x.label))
-		}
-	}
-	lines := []string{heading}
-	for _, x := range r.rows {
-		switch {
-		case x.note != "":
-			lines = append(lines, "  ↳ "+x.note)
-		case x.input == "":
-			lines = append(lines, "  → "+x.label)
-		default:
-			pad := strings.Repeat(" ", width-utf8.RuneCountInString(x.label))
-			lines = append(lines, fmt.Sprintf("  → %s:%s  %s", x.label, pad, x.input))
-		}
-	}
-	return strings.Join(lines, "\n")
+	c.own.W, c.own.NoTerminal = c.Err, c.NoTerminal
+	return &c.own
 }

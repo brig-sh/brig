@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 )
@@ -129,10 +130,9 @@ func (c *Config) warnArgvExposure(set creds.Set) {
 	if len(names) == 0 {
 		return
 	}
-	c.warnf("%s", (&Rows{}).
+	c.warnf("%s", notice.New("BRIG_ENV_ARGV=1 puts these values on the runtime's command line: "+strings.Join(names, " ")).
 		Note("`ps` can read them there, and the host's argv log keeps them after the sandbox is gone").
-		Do("to forward them by name only, unset it", "").
-		Block("BRIG_ENV_ARGV=1 puts these values on the runtime's command line: "+strings.Join(names, " ")))
+		Do("to forward them by name only, unset it", ""))
 }
 
 // reportDeny says what the denylist did to THIS run, rather than reciting the

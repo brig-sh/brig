@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/secret"
 )
@@ -396,16 +396,8 @@ func warnOptional(p profile.Profile, misses []Missing) []string {
 }
 
 // missingBlock is the one block every secret with no value shares: a heading
-// that counts them, then a row per command that fills one.
-//
-//	claude-code runs without 2 secrets
-//	  ○ gh-token            → brig secret create gh-token
-//	  ○ claude-credentials  → brig secret import claude-code
-//	                          ↳ run `claude` on the host once to log in
-//
-// ○ marks a secret with no value, → the command that gives it one, and ↳ a note
-// on the row above. The glyphs carry what the old sentences said, so a first
-// run is a short list rather than a wall of prose.
+// that counts them, then a row per command that fills one. See notice.Block
+// for the layout and its glyphs.
 //
 // A hand-created secret gets a row of its own, since create takes the NAME.
 // The importable ones share ONE row, because import takes the PROFILE: a row
@@ -418,55 +410,36 @@ func warnOptional(p profile.Profile, misses []Missing) []string {
 // goes under the import row, attributed to its secret where there is more than
 // one, because an unattributed list of hints is a puzzle rather than advice.
 func missingBlock(p profile.Profile, misses []Missing) string {
-	type row struct{ names, command string }
-	var rows []row
-	var importable []Missing
-	importRow := -1
+	var names, hints []string
 	for _, m := range misses {
 		if m.Importable {
-			if importRow < 0 {
-				importRow = len(rows)
-				rows = append(rows, row{command: "brig secret import " + p.Name})
-			}
-			importable = append(importable, m)
-			continue
-		}
-		rows = append(rows, row{names: m.Name, command: "brig secret create " + m.Name})
-	}
-	if importRow >= 0 {
-		names := make([]string, 0, len(importable))
-		for _, m := range importable {
 			names = append(names, m.Name)
 		}
-		rows[importRow].names = strings.Join(names, ", ")
 	}
-
-	width := 0
-	for _, r := range rows {
-		width = max(width, utf8.RuneCountInString(r.names))
+	for _, m := range misses {
+		switch {
+		case !m.Importable || m.Hint == "":
+		case len(names) == 1:
+			hints = append(hints, m.Hint)
+		default:
+			hints = append(hints, m.Name+": "+m.Hint)
+		}
 	}
 	count := "1 secret"
 	if len(misses) > 1 {
 		count = fmt.Sprintf("%d secrets", len(misses))
 	}
-	lines := []string{fmt.Sprintf("%s runs without %s", p.Name, count)}
-	// The column the commands start at, so a note lines up under its command.
-	under := strings.Repeat(" ", len("  ○ ")+width+len("  "))
-	for i, r := range rows {
-		lines = append(lines, fmt.Sprintf("  ○ %s%s  → %s", r.names,
-			strings.Repeat(" ", width-utf8.RuneCountInString(r.names)), r.command))
-		if i != importRow {
-			continue
-		}
-		for _, m := range importable {
-			switch {
-			case m.Hint == "":
-			case len(importable) == 1:
-				lines = append(lines, under+"↳ "+m.Hint)
-			default:
-				lines = append(lines, fmt.Sprintf("%s↳ %s: %s", under, m.Name, m.Hint))
-			}
+	b := notice.Newf("%s runs without %s", p.Name, count)
+	imported := false
+	for _, m := range misses {
+		switch {
+		case !m.Importable:
+			b.Missing(m.Name, "brig secret create "+m.Name)
+		case !imported:
+			// The import row stands where the first importable secret does.
+			imported = true
+			b.Missing(strings.Join(names, ", "), "brig secret import "+p.Name, hints...)
 		}
 	}
-	return strings.Join(lines, "\n")
+	return b.String()
 }

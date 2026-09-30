@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/session"
 )
@@ -431,10 +432,9 @@ func (c *Config) rememberSession() {
 	}
 	index[key] = entry
 	if err := writeSessionIndex(index); err != nil {
-		c.warnf("%s", (&Rows{}).
+		c.warnf("%s", notice.Newf("could not record %s as the workspace of %s: %v", c.Workspace, c.VMName, err).
 			Note("a later command that names no workspace falls back to the default one "+
-				"and restarts the sandbox").
-			Block(fmt.Sprintf("could not record %s as the workspace of %s: %v", c.Workspace, c.VMName, err)))
+				"and restarts the sandbox"))
 	}
 }
 

@@ -26,3 +26,12 @@ func IsTerminal(f *os.File) bool {
 	}
 	return isatty(f.Fd())
 }
+
+// readable returns whether f is a terminal whose TERM names one that
+// understands escape codes and a layout drawn for a person: a TERM of dumb, or
+// none, may print the codes as text. The spinner and the warnings' layout
+// both ask it.
+func readable(f *os.File) bool {
+	term := os.Getenv("TERM")
+	return term != "" && term != "dumb" && IsTerminal(f)
+}

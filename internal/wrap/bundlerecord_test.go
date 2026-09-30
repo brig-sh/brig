@@ -322,7 +322,7 @@ func TestAnOlderRuntimeBundleIsNamedUnderWarnToo(t *testing.T) {
 	rr.kind = "nerdctl"
 	_ = c.EnsureRunning(creds.Set{})
 	reachedRun(t, "warn", rr)
-	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "Re-run brig's install.sh") {
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "re-run brig's install.sh") {
 		t.Errorf("warn does not say an older runtime bundle keeps no record:\n%s", said)
 	}
 }

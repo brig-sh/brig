@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
@@ -197,15 +198,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// row for rules nothing is applying.
 			c.warnf("%s", c.networkRestart())
 		case !c.guestMountsWorkspace():
-			c.warnf("%s", (&Rows{}).
+			c.warnf("%s", notice.New("the running sandbox is not mounting "+c.Workspace+": its share went stale").
 				Note("the directory was renamed or replaced, or the workspace changed").
-				Note("brig restarts it, and %s", disconnects).
-				Block("the running sandbox is not mounting "+c.Workspace+": its share went stale"))
+				Note("brig restarts it, and %s", disconnects))
 		case stale != "":
-			c.warnf("%s", (&Rows{}).
+			c.warnf("%s", notice.New(stale).
 				Note("a share cannot be attached to a live sandbox, so brig restarts it").
-				Note("%s", disconnects).
-				Block(stale))
+				Note("%s", disconnects))
 		default:
 			// The guest has confirmed this workspace, so record it. Nothing has
 			// changed for a session brig already knows about; for one created
