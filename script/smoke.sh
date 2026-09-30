@@ -67,6 +67,12 @@ case "$verb" in
     # ended up. STUB_RUN_FAIL turns the boot into the one that has to stay
     # reportable however quiet brig is.
     printf 'pulling ghcr.io/brig-sh/claude-code-stock:latest\n' >&2
+    # STUB_RUN_PULL prints what hull prints while it pulls an image that is not
+    # in its store, in the format of its pkg/ociclient/progress.go.
+    if [ -n "${STUB_RUN_PULL:-}" ]; then
+      printf 'pull: layer 1/2, 12.0 MB extracted (image 480.2 MB compressed)\n' >&2
+      printf 'pull: 2/2 layers, 1.1 GB extracted\n' >&2
+    fi
     if [ -n "${STUB_RUN_FAIL:-}" ]; then
       printf 'FATAL: no space left on device\n' >&2
       exit 1
@@ -2340,6 +2346,26 @@ grep -q 'starting sandbox' "$WORK/say.err" \
 grep -q 'pulling ghcr.io' "$WORK/say.err" \
   && bad "a default run passed the runtime's output through -- got: $(cat "$WORK/say.err")" \
   || ok "a default run holds the runtime's output"
+
+# An image pull inside `hull run` gets a line each end by default (#306). stderr
+# is a file here, so the lines are plain; a terminal gets a spinner instead.
+"$WORK/brig" rm --all -y > /dev/null 2> "$WORK/pull-rm.err" \
+  || bad "clean up before the pull case -- got: $(cat "$WORK/pull-rm.err")"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret STUB_RUN_PULL=1 \
+  "$WORK/brig" run claude -d > /dev/null 2> "$WORK/pull.err"
+grep -q '^brig: pulling .*\.\.\.$' "$WORK/pull.err" && grep -q '^brig: .* pulled$' "$WORK/pull.err" \
+  && ok "a default run announces an image pull" \
+  || bad "a default run announces an image pull -- got: $(cat "$WORK/pull.err")"
+grep -q '^pull: ' "$WORK/pull.err" \
+  && bad "a default run passed hull's pull lines through -- got: $(cat "$WORK/pull.err")" \
+  || ok "a default run holds hull's pull lines"
+"$WORK/brig" rm --all -y > /dev/null 2> "$WORK/pull-rm.err" \
+  || bad "clean up before the -q pull case -- got: $(cat "$WORK/pull-rm.err")"
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret STUB_RUN_PULL=1 \
+  "$WORK/brig" -q run claude -d > /dev/null 2> "$WORK/qpull.err"
+grep -q '^brig: pulling' "$WORK/qpull.err" \
+  && bad "brig -q announced an image pull -- got: $(cat "$WORK/qpull.err")" \
+  || ok "brig -q does not announce an image pull"
 
 # --verbose asks for both, and gets both.
 "$WORK/brig" rm --all -y > /dev/null 2>&1

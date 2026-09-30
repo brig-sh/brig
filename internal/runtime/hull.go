@@ -176,10 +176,11 @@ func hypervisorOrDefault(hv string) string { return orDefault(hv, "vz") }
 // driving that is one implementation instead of two that have to agree, and it
 // means a genericBoot profile works on a clean machine with no manual step.
 //
-// This is the one long operation brig starts on a first run, and it gets one
-// line each end rather than a stream: hull's own download progress goes to
-// Progress, which is empty unless somebody asked for it, and the two notices
-// say that a minute of silence is a download rather than a hang.
+// A first run downloads the boot assets here and the image inside `hull run`
+// (see pullWatch). Both get a notice at each end rather than a stream: hull's
+// own download progress goes to Progress, which is empty unless somebody asked
+// for it, and the two notices say that a minute of silence is a download rather
+// than a hang. On a terminal the notice spins instead; see announce.
 func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
 	return h.fetchAssets(dir, BootFetch{}, notice, progress)
 }
@@ -187,7 +188,7 @@ func (h *hull) pullAssets(dir string, notice, progress io.Writer) error {
 // fetchAssets is pullAssets for the bundle fetch names, over the files there
 // when fetch.Replace asks.
 func (h *hull) fetchAssets(dir string, fetch BootFetch, notice, progress io.Writer) error {
-	noticef(notice, "%s", fetchNotice(fetch))
+	end := announce(notice, fetchNotice(fetch), "kernel and initrd downloaded")
 	args := []string{"assets", "pull"}
 	if fetch.Replace {
 		args = append(args, "--force")
@@ -221,9 +222,10 @@ func (h *hull) fetchAssets(dir string, fetch BootFetch, notice, progress io.Writ
 	said := narrate(progress)
 	cmd.Stdout, cmd.Stderr = said, said
 	if err := cmd.Run(); err != nil {
+		end(false)
 		return said.explain(fmt.Errorf("%s assets pull: %w", h.bin, err))
 	}
-	noticef(notice, "kernel and initrd downloaded")
+	end(true)
 	return nil
 }
 
@@ -444,7 +446,17 @@ func (h *hull) Run(spec RunSpec) error {
 	// the error and otherwise dropped. See narration.
 	said := narrate(spec.Progress)
 	cmd.Stderr = said
-	if err := cmd.Run(); err != nil {
+	// hull pulls a missing image inside `hull run` and reports the pull only on
+	// this stream, so pullWatch reads it from here. Under --verbose the stream
+	// is on screen and shows the pull itself.
+	var pull *pullWatch
+	if spec.Progress == nil && spec.Notice != nil {
+		pull = &pullWatch{notice: spec.Notice, ref: spec.Image}
+		cmd.Stderr = io.MultiWriter(said, pull)
+	}
+	err = cmd.Run()
+	pull.finish(err == nil)
+	if err != nil {
 		// The forwards were installed for a guest that did not boot. On the
 		// shared gateway they would hold the host ports until it restarts.
 		withdrawPublications(spec.Name)

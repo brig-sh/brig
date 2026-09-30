@@ -91,10 +91,35 @@ func indent(s string) string { return "  " + strings.ReplaceAll(s, "\n", "\n  ")
 //
 // It carries brig's prefix because it is brig's voice rather than the tool's --
 // the tool's own words go to Progress. A nil writer is silence, which is what a
-// caller that wants neither hands in.
+// caller that wants neither hands in. A long operation goes through announce.
 func noticef(w io.Writer, format string, a ...any) {
 	if w == nil {
 		return
 	}
 	fmt.Fprintf(w, "brig: "+format+"\n", a...)
+}
+
+// Spinner is a notice writer that shows a long operation while it runs. The
+// caller hands one in as RunSpec.Notice when the notice goes to a terminal.
+type Spinner interface {
+	// Spin shows what until stop is called, and stop clears it.
+	Spin(what string) (stop func())
+}
+
+// announce says on w that a long operation has started, and returns the
+// function that ends it. end(true) prints done. end(false) prints nothing,
+// because the error that follows says why the operation stopped.
+//
+// A Spinner spins for the operation instead, and prints neither line.
+func announce(w io.Writer, doing, done string) (end func(ok bool)) {
+	if s, ok := w.(Spinner); ok {
+		stop := s.Spin(doing)
+		return func(bool) { stop() }
+	}
+	noticef(w, "%s...", doing)
+	return func(ok bool) {
+		if ok {
+			noticef(w, "%s", done)
+		}
+	}
 }

@@ -98,9 +98,17 @@ func (c *Config) runtimeOutput() io.Writer {
 // downloads a kernel, and a minute of silence with nothing on screen reads as a
 // hang. The stream behind that line is
 // runtimeOutput's, and it stays behind --verbose.
+//
+// On a terminal at the default level the operation spins instead of printing
+// a line each end; canSpin says which terminals. Under --verbose the runtime's
+// stream follows the notice, and a line redrawn in place would break it up. A
+// caller with no terminal of its own, such as brigd, gets the lines.
 func (c *Config) runtimeNotice() io.Writer {
 	if c.Verbosity < Normal {
 		return nil
+	}
+	if f, ok := c.Progress.(*os.File); ok && c.Verbosity < Verbose && !c.NoTerminal && canSpin(f) {
+		return newSpinner(f)
 	}
 	return c.Progress
 }

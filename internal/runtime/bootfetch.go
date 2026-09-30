@@ -55,21 +55,22 @@ var lookPath = exec.LookPath
 // oras exactly as it shells out to cosign for signatures: use the tool when it
 // is present, say so plainly when it is not.
 //
-// One line each end and the stream behind Progress, the same shape the hull
-// path takes: a first run downloads a bundle, and the reader is owed the fact
-// that it is downloading rather than every layer of how.
+// One line each end (a spinner on a terminal) and the stream behind Progress,
+// the same shape the hull path takes: a first run downloads a bundle, and the
+// reader is owed the fact that it is downloading rather than every layer of
+// how.
 func orasFetch(dir string, notice, progress io.Writer) error {
 	return orasPull(dir, BootFetch{}, notice, progress)
 }
 
-// fetchNotice is the line a boot-asset download says before it starts. A
+// fetchNotice returns what a boot-asset download announces while it runs. A
 // first fetch happens once. A replace fetches the bundle that verified over an
 // older one an earlier fetch left.
 func fetchNotice(fetch BootFetch) string {
 	if fetch.Replace {
-		return "the kernel and initrd here are an older bundle; downloading the one that verified..."
+		return "the kernel and initrd here are an older bundle; downloading the one that verified"
 	}
-	return "downloading the kernel and initrd this profile boots (once)..."
+	return "downloading the kernel and initrd this profile boots (once)"
 }
 
 // orasPull is orasFetch for the bundle fetch names: fetch.Ref, pinned to the
@@ -89,18 +90,20 @@ func orasPull(dir string, fetch BootFetch, notice, progress io.Writer) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create boot asset directory %s: %w", dir, err)
 	}
-	noticef(notice, "%s", fetchNotice(fetch))
+	end := announce(notice, fetchNotice(fetch), "kernel and initrd downloaded")
 	cmd := exec.Command(bin, "pull", ref, "--output", dir)
 	said := narrate(progress)
 	cmd.Stdout, cmd.Stderr = said, said
 	if err := cmd.Run(); err != nil {
+		end(false)
 		return said.explain(fmt.Errorf("oras pull %s: %w (if the package is private, run "+
 			"`oras login ghcr.io` with a read:packages token)", ref, err))
 	}
 	if err := writeFetchRecord(dir, ref); err != nil {
+		end(false)
 		return fmt.Errorf("record the bundle fetched into %s: %w", dir, err)
 	}
-	noticef(notice, "kernel and initrd downloaded")
+	end(true)
 	return nil
 }
 

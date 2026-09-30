@@ -22,3 +22,27 @@ func isatty(fd uintptr) bool {
 		uintptr(unsafe.Pointer(&t)), 0, 0, 0)
 	return errno == 0
 }
+
+// termWidth returns the width of the terminal on fd in columns, or 0 when fd is
+// not a terminal or the driver reports no size. TIOCGWINSZ fills a struct
+// winsize, four unsigned shorts on both operating systems.
+func termWidth(fd uintptr) int {
+	var ws struct{ row, col, xpixel, ypixel uint16 }
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGWINSZ,
+		uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 {
+		return 0
+	}
+	return int(ws.col)
+}
+
+// foreground returns whether this process is in the foreground process group
+// of the terminal on fd. A job sent to the background shares the terminal
+// with the shell, and is not. The driver answers only for this process's
+// controlling terminal, so any other descriptor reads as false.
+func foreground(fd uintptr) bool {
+	var pgrp int32
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGPGRP,
+		uintptr(unsafe.Pointer(&pgrp)))
+	return errno == 0 && int(pgrp) == syscall.Getpgrp()
+}

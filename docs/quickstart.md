@@ -60,9 +60,15 @@ is the project this run mounts.
 
 The first run downloads two things: the guest image, and the boot assets,
 the kernel and the initrd. Both are cached, and later runs reuse the copy
-already on disk. `brig --verbose run` prints the execution envelope before
-it boots, and `brig info claude` prints the same thing without running
-anything:
+already on disk. On a terminal, each download shows a spinner while it runs.
+With stderr redirected, with the run in the background, or with `TERM=dumb`,
+brig prints a line when each download starts and another when it completes.
+A download that fails prints the error instead. With nerdctl on Linux, only
+the boot assets are announced: nerdctl pulls the image without a notice from
+brig.
+
+`brig --verbose run` prints the execution envelope before it boots, and
+`brig info claude` prints the same thing without running anything:
 
 ```
 PROFILE      claude-code

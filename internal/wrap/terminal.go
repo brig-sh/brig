@@ -17,9 +17,9 @@ import "os"
 // so. /dev/zero is the same mistake with a worse ending: an unbounded read
 // that never returns.
 //
-// golang.org/x/term does exactly this and is not used on purpose. brig has one
-// direct dependency and keeps it that way; the whole of the check is one ioctl
-// per platform, below.
+// brig does not take golang.org/x/term for this. The check is one ioctl per
+// platform, and syscall declares everything it needs. termWidth and foreground
+// are one ioctl each in the same way.
 func IsTerminal(f *os.File) bool {
 	if f == nil {
 		return false

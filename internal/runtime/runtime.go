@@ -152,6 +152,10 @@ type RunSpec struct {
 	// stream is detail and waits to be asked for; a download that takes a
 	// minute has to say so whether or not anyone asked, or the terminal looks
 	// hung. nil is silence.
+	//
+	// A Notice that implements Spinner shows the operation while it runs
+	// instead of printing the two lines. A writer wrapped around one prints
+	// the lines. See announce.
 	Notice io.Writer
 }
 
