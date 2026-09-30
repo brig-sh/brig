@@ -58,9 +58,10 @@ func (b *Block) Note(format string, a ...any) *Block {
 }
 
 // Do adds something to do: label says what it is for, and input is what to
-// type. With no input the label is the whole instruction.
-func (b *Block) Do(label, input string) *Block {
-	b.rows = append(b.rows, row{mark: doMark, left: label, right: input})
+// type. With no input the label is the whole instruction. notes go under the
+// input.
+func (b *Block) Do(label, input string, notes ...string) *Block {
+	b.rows = append(b.rows, row{mark: doMark, left: label, right: input, under: notes})
 	return b
 }
 
@@ -107,9 +108,13 @@ func (b *Block) String() string {
 		default:
 			fmt.Fprintf(&s, "%-*s  %s %s", width[r.mark], r.left, doMark, r.right)
 		}
-		// Four columns of "  ○ " and four of "  → " around the padded name:
-		// the column the command starts at, so a note lines up under it.
+		// The column right starts at, so a note on it lines up under it: the
+		// "  ○ " before the padded left, then "  → " after it for a missing
+		// thing, or ":" and two spaces for an action.
 		under := strings.Repeat(" ", 4+width[r.mark]+4)
+		if r.mark == doMark {
+			under = strings.Repeat(" ", 4+width[r.mark]+1+2)
+		}
 		for _, u := range r.under {
 			s.WriteString("\n" + under + noteMark + " " + u)
 		}
@@ -123,13 +128,18 @@ func (b *Block) Prose() string {
 	out := b.heading
 	for _, r := range b.rows {
 		if r.mark == noteMark {
-			out += ". " + upperFirst(r.left)
+			out += ". " + Sentence(r.left)
 		}
 	}
 	return out
 }
 
-func upperFirst(s string) string {
+// Sentence is s with its first letter upper-cased, for a clause worded as a
+// note that also has to start a sentence.
+func Sentence(s string) string {
+	if s == "" {
+		return s
+	}
 	r, n := utf8.DecodeRuneInString(s)
 	return strings.ToUpper(string(r)) + s[n:]
 }

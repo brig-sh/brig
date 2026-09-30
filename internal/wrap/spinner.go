@@ -41,9 +41,8 @@ var (
 // pseudo-terminal that is not the test binary's controlling terminal.
 var inForeground = foreground
 
-// canSpin returns whether a spinner may draw on f: a terminal whose TERM names
-// one that understands the escape codes, with brig in its foreground process
-// group. A TERM of dumb, or none, may print the codes as text. A job in the
+// canSpin returns whether a spinner may draw on f: a readable terminal (see
+// readable), with brig in its foreground process group. A job in the
 // background would redraw over the line the user is typing on.
 func canSpin(f *os.File) bool {
 	return readable(f) && inForeground(f.Fd())

@@ -697,7 +697,7 @@ func (c *Config) linuxBundleNote(assets runtime.BootAssets) string {
 	if !assets.Named || c.Runtime.Kind() != "nerdctl" {
 		return ""
 	}
-	return " T" + linuxBundleOld[1:] + ". Re-run brig's install.sh to install one that does."
+	return " " + notice.Sentence(linuxBundleOld) + ". Re-run brig's install.sh to install one that does."
 }
 
 // linuxBundleOld is why an old Linux runtime bundle's kernel cannot be

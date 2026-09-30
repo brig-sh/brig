@@ -405,7 +405,7 @@ func TestMissingSecretsBlockLinesUpTheCommands(t *testing.T) {
 	p := profile.Profile{
 		Name: "claude-code",
 		Secrets: []profile.SecretDecl{
-			{Name: "gh-token", Required: ptr(false)},
+			{Name: "gh-token", Required: ptr(false), Hint: "export GH_TOKEN before running brig"},
 			{Name: "claude-credentials", Required: ptr(false), From: "keychain",
 				Service: "Claude Code-credentials", Hint: "run `claude` on the host once to log in"},
 		},
@@ -421,6 +421,7 @@ func TestMissingSecretsBlockLinesUpTheCommands(t *testing.T) {
 	}
 	want := "claude-code runs without 2 secrets\n" +
 		"  ○ gh-token            → brig secret create gh-token\n" +
+		"                          ↳ export GH_TOKEN before running brig\n" +
 		"  ○ claude-credentials  → brig secret import claude-code\n" +
 		"                          ↳ run `claude` on the host once to log in"
 	if len(res.Warnings) != 1 || res.Warnings[0] != want {

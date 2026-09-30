@@ -36,6 +36,7 @@ brig: claude-code runs without 2 secrets
   ○ claude-credentials  → brig secret import claude-code
                           ↳ run `claude` on the host once to log in
   ○ gh-token            → brig secret create gh-token
+                          ↳ export GH_TOKEN before running brig, or store one: gh auth token | brig secret create gh-token
 ```
 
 `○` marks a secret with no value. `→` is the command that gives it one, and

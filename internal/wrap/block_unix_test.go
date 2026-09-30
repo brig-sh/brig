@@ -79,3 +79,40 @@ func TestWarnfAfterABlockIsPartedFromIt(t *testing.T) {
 		}
 	}
 }
+
+// A question and an error after a block get a blank line above them, like any
+// other line, and a question leaves the cursor on its own line for the answer.
+func TestAskAndErrorArePartedFromABlock(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	ptm, tty := ttytest.Pair(t)
+	n := &Notices{W: tty}
+	n.Say("a heading\n  ↳ a note")
+	n.Ask("go on?")
+	_, _ = tty.WriteString("\n")
+	n.Say("another\n  → a command")
+	n.Error("it failed")
+
+	want := []string{"brig: a heading", "  ↳ a note", "", "brig: go on? [y/N] ",
+		"", "brig: another", "  → a command", "", "brig: it failed"}
+	r := bufio.NewReader(ptm)
+	lines := make(chan string)
+	go func() {
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			lines <- strings.TrimRight(line, "\r\n")
+		}
+	}()
+	for i, w := range want {
+		select {
+		case got := <-lines:
+			if got != w {
+				t.Errorf("line %d = %q, want %q", i, got, w)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("line %d never arrived, want %q", i, w)
+		}
+	}
+}

@@ -2271,7 +2271,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	if err := confirmRemoveAll(spelling, mine, o.yes != ""); err != nil {
 		return err
 	}
-	removed, homes := 0, 0
+	removed, homesGone := 0, 0
 	for _, inst := range mine {
 		_ = rt.Stop(inst.Name)
 		err := rt.Remove(inst.Name)
@@ -2286,7 +2286,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 				warnf("%v", homeErr)
 			}
 			if home != "" {
-				homes++
+				homesGone++
 			}
 		}
 		wrap.ForgetSandbox(inst.Name)
@@ -2300,7 +2300,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		fmt.Println(inst.Name)
 		removed++
 	}
-	warnf("%s", notice.Newf("removed %d sandbox(es) and %d guest home(s) brig created", removed, homes).
+	warnf("%s", notice.Newf("removed %d sandbox(es) and %d guest home(s) brig created", removed, homesGone).
 		Note("%s", namedHomesStay))
 	// The shared network gateway too, once nothing is on it. Apart from the
 	// list below, for the reason on runtime.SharedNetworkPruner. It runs with

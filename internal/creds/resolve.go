@@ -434,7 +434,11 @@ func missingBlock(p profile.Profile, misses []Missing) string {
 	for _, m := range misses {
 		switch {
 		case !m.Importable:
-			b.Missing(m.Name, "brig secret create "+m.Name)
+			var hint []string
+			if m.Hint != "" {
+				hint = []string{m.Hint}
+			}
+			b.Missing(m.Name, "brig secret create "+m.Name, hint...)
 		case !imported:
 			// The import row stands where the first importable secret does.
 			imported = true

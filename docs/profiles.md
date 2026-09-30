@@ -493,6 +493,7 @@ it:
 ```console
 brig: claude-code runs without 1 secret
   ○ gh-token  → brig secret create gh-token
+                ↳ export GH_TOKEN before running brig, or store one: gh auth token | brig secret create gh-token
 ```
 
 On Linux the store is a Secret Service keyring, and a host without one, no

@@ -19,13 +19,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/brig-sh/brig/internal/notice"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/brig-sh/brig/internal/notice"
 )
 
 // Mode is how strict the check is.
