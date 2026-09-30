@@ -215,33 +215,22 @@ func (c *Config) ephemeralNotice() {
 		return
 	}
 	ref := sessionKey(c.Profile.Name, c.Slug)
-	block := []string{
-		"the guest home of " + ref + " is temporary",
-		"  ↳ `brig rm " + ref + "` deletes it and every file in it",
-	}
+	rows := (&Rows{}).Note("`brig rm %s` deletes it and every file in it", ref)
 	if c.Project != "" {
 		// The project is on the host and outlives the sandbox. What goes is
 		// everything the agent kept outside it.
-		block = append(block, "  ↳ only "+c.Project+" is shared with it")
-		block = append(block, choices([][2]string{
-			{"to keep the guest home", "brig run " + ref + " " + c.Project + " --home <dir>"},
-		})...)
+		rows.Note("only %s is shared with it", c.Project).
+			Do("to keep the guest home", "brig run "+ref+" "+c.Project+" --home <dir>")
 	} else {
-		block = append(block, choices([][2]string{
-			{"to keep your work, share a project", "brig run " + ref + " <dir>"},
-			{"to keep the guest home", "brig run " + ref + " --home <dir>"},
-		})...)
+		rows.Do("to keep your work, share a project", "brig run "+ref+" <dir>").
+			Do("to keep the guest home", "brig run "+ref+" --home <dir>")
 	}
-	c.warnBlock(strings.Join(block, "\n"))
+	c.warnf("%s", rows.Block("the guest home of "+ref+" is temporary"))
 	if c.legacyHome != "" {
 		// --home takes the base, and a named session appends its slug to it.
-		legacy := []string{
-			"the default guest home moved",
-			"  ↳ the old one is " + c.legacyHome,
-		}
-		legacy = append(legacy, choices([][2]string{
-			{"to keep using it", "brig run " + ref + " --home " + legacyDefaultWorkspace(c.Profile, "")},
-		})...)
-		c.warnBlock(strings.Join(legacy, "\n"))
+		c.warnf("%s", (&Rows{}).
+			Note("the old one is %s", c.legacyHome).
+			Do("to keep using it", "brig run "+ref+" --home "+legacyDefaultWorkspace(c.Profile, "")).
+			Block("the default guest home moved"))
 	}
 }

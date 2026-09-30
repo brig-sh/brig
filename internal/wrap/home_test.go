@@ -593,8 +593,8 @@ func TestAFailedBootKeepsAHomeTheRuntimeMayHold(t *testing.T) {
 func TestWarnBlockOffATerminalPrefixesEveryLine(t *testing.T) {
 	var errOut bytes.Buffer
 	c := &Config{Err: &errOut, Verbosity: Normal}
-	c.warnBlock("heading\n  ○ a row")
-	c.warnBlock("another\n  → a command")
+	c.warnf("%s", "heading\n  ○ a row")
+	c.warnf("%s", "another\n  → a command")
 	want := "brig: heading\nbrig:   ○ a row\nbrig: another\nbrig:   → a command\n"
 	if errOut.String() != want {
 		t.Errorf("got:\n%s\nwant:\n%s", errOut.String(), want)

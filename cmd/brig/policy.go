@@ -16,6 +16,7 @@ import (
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/session"
+	"github.com/brig-sh/brig/internal/wrap"
 	"sigs.k8s.io/yaml"
 )
 
@@ -121,7 +122,7 @@ func loadPolicies(dir string) (map[string]policy.Entry, error) {
 		return nil, err
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
+		wrap.Stderr.Error(err.Error())
 	}
 	return entries, nil
 }
@@ -151,7 +152,7 @@ func listPolicies() error {
 	// without the bound-to lines rather than print nothing at all.
 	bound, err := policy.Bindings(policy.Dir(), profile.All())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "brig: "+err.Error())
+		wrap.Stderr.Error(err.Error())
 	}
 	for _, name := range names {
 		fmt.Printf("%-15s %s\n", name, entries[name].Policy.Desc)

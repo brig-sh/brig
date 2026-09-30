@@ -113,10 +113,9 @@ type Config struct {
 	// was created, held until BuildEnv for the same reason. See
 	// slugMigrationNotice.
 	slugMigration []string
-	// warned and lastWasBlock are what partFromBlock needs to know about the
-	// warnings already on the terminal: whether there are any, and whether
-	// the last one was a block.
-	warned, lastWasBlock bool
+	// ownNotices prints the warnings when Err is not the process's stderr.
+	// See notices.
+	ownNotices *Notices
 	// secrets is what the store gave this run, kept so file delivery does not
 	// read it twice -- and cleared the moment delivery is done, because a
 	// plaintext refresh token has no business outliving its use.

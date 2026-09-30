@@ -17,8 +17,8 @@ func TestWarnBlockOnATerminalPrefixesOnlyTheHeading(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	ptm, tty := ttytest.Pair(t)
 	c := &Config{Err: tty, Verbosity: Normal}
-	c.warnBlock("first heading\n  ○ a row")
-	c.warnBlock("second heading\n  → a command")
+	c.warnf("%s", "first heading\n  ○ a row")
+	c.warnf("%s", "second heading\n  → a command")
 
 	want := []string{"brig: first heading", "  ○ a row", "", "brig: second heading", "  → a command"}
 	lines := make(chan string)
@@ -52,7 +52,7 @@ func TestWarnfAfterABlockIsPartedFromIt(t *testing.T) {
 	c := &Config{Err: tty, Verbosity: Normal}
 	c.warnf("one line")
 	c.warnf("another line")
-	c.warnBlock("a heading\n  ○ a row")
+	c.warnf("%s", "a heading\n  ○ a row")
 	c.warnf("after the block")
 
 	want := []string{"brig: one line", "brig: another line", "", "brig: a heading",

@@ -170,7 +170,7 @@ func main() {
 	if errors.As(err, &ae) {
 		os.Exit(ae.code)
 	}
-	fmt.Fprintln(os.Stderr, "brig: "+err.Error())
+	wrap.Stderr.Error(err.Error())
 	// The exit status is a stable, documented set: a script can tell "you
 	// asked for the wrong thing" from "it ran and failed" from "the sandbox
 	// could not be verified" without parsing the message. exitCode owns the
@@ -3617,7 +3617,7 @@ func warnf(format string, a ...any) {
 	if verbosity < wrap.Normal {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "brig: "+format+"\n", a...)
+	wrap.Stderr.Say(fmt.Sprintf(format, a...))
 }
 
 // isTerminal reports whether stdin is a tty, which decides whether the guest

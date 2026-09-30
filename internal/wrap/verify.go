@@ -89,8 +89,10 @@ func (c *Config) verifyImage() error {
 	// records -- so a reader told nothing would believe a digest was pinned
 	// when none was. The upgrade advice in it is incidental; the substance is
 	// that brig's guarantee is weaker on this host than it otherwise is.
-	c.alertf("this %s cannot boot by digest (hull 0.1.0-rc23 or newer can), so the tag "+
-		"is verified and booted rather than a pinned digest", c.Runtime.Kind())
+	c.alertf("%s", (&Rows{}).
+		Note("brig verifies and boots the tag, not a pinned digest").
+		Do("to boot by digest, upgrade to hull 0.1.0-rc23 or newer", "").
+		Block("this "+c.Runtime.Kind()+" cannot boot by digest"))
 	return c.verifyTag()
 }
 
@@ -116,11 +118,11 @@ func (c *Config) verifyTag() error {
 		if c.Verify == verify.Require {
 			return errors.New(res.Refusal())
 		}
-		c.alertf("%s", res.Message())
+		c.alertf("%s", res.Notice())
 		return nil
 
 	default:
-		c.alertf("%s", res.Message())
+		c.alertf("%s", res.Notice())
 		if res.TimedOut {
 			return c.cosignHung(res, "Boot it unverified?")
 		}
@@ -178,7 +180,7 @@ func (c *Config) verifyDigest() error {
 			c.progressf("%s", res.Message())
 			return nil
 		}
-		c.alertf("%s", res.Message())
+		c.alertf("%s", res.Notice())
 		return nil
 
 	case verify.NoTooling:
@@ -189,7 +191,7 @@ func (c *Config) verifyDigest() error {
 		if c.Verify == verify.Require {
 			return errors.New(res.Refusal())
 		}
-		c.alertf("%s", res.Message())
+		c.alertf("%s", res.Notice())
 		return nil
 
 	case verify.Unresolved:
@@ -200,7 +202,7 @@ func (c *Config) verifyDigest() error {
 		// would let anyone who can make the registry unreachable, a captive
 		// portal or a sinkhole, turn the default mode into "unchecked". Nothing
 		// is pinned either way: a yes boots the cached tag.
-		c.alertf("%s", res.Message())
+		c.alertf("%s", res.Notice())
 		if res.TimedOut {
 			return c.cosignHung(res, "Boot the cached copy unverified?")
 		}
@@ -219,7 +221,7 @@ func (c *Config) verifyDigest() error {
 		// Boot the resolved digest whatever we decide below: the object on disk
 		// is the one we are refusing to trust, so a "yes" must not boot it.
 		c.BootDigest = res.Digest
-		c.alertf("%s", res.Message())
+		c.alertf("%s", res.Notice())
 		if !res.Ours {
 			// A third party's copy differing from the registry is said and
 			// booted, the same weight as NotOurs -- unless Require, which
@@ -243,7 +245,7 @@ func (c *Config) verifyDigest() error {
 
 	default: // verify.Failed
 		c.BootDigest = res.Digest
-		c.alertf("%s", res.Message())
+		c.alertf("%s", res.Notice())
 		if res.TimedOut {
 			return c.cosignHung(res, "Boot it unverified?")
 		}
@@ -328,8 +330,9 @@ func (c *Config) sayVerified() {
 // front of nobody while the client waits.
 func (c *Config) confirm(question string) bool {
 	if c.NoTerminal || !IsTerminal(os.Stdin) {
-		c.alertf("not a terminal, so there is nobody to ask: refusing. " +
-			"Set BRIG_VERIFY=off to boot it regardless.")
+		c.alertf("%s", (&Rows{}).
+			Do("to boot it regardless", "BRIG_VERIFY=off").
+			Block("not a terminal, so there is nobody to ask: refusing"))
 		return false
 	}
 	fmt.Fprintf(c.Err, "brig: %s [y/N] ", question)
@@ -409,8 +412,9 @@ func (c *Config) verifyBootAssets() error {
 				"by brig, so their signature cannot be checked (BRIG_VERIFY=require). "+
 				"Set BRIG_VERIFY=warn to boot them unchecked", ref)
 		}
-		c.alertf("boot assets %s are not published by brig, so nothing was checked "+
-			"about the kernel this sandbox boots", ref)
+		c.alertf("%s", (&Rows{}).
+			Note("nothing was checked about the kernel this sandbox boots").
+			Block("boot assets "+ref+" are not published by brig"))
 		return nil
 
 	case verify.NoTooling, verify.Unresolved:
@@ -432,8 +436,9 @@ func (c *Config) verifyBootAssets() error {
 				"verified: %s (BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot "+
 				"them unchecked", ref, cause)
 		}
-		c.alertf("the boot assets at %s could not be verified: %s, so nothing was "+
-			"checked about the kernel this sandbox boots", ref, cause)
+		c.alertf("%s", (&Rows{}).
+			Note("nothing was checked about the kernel this sandbox boots").
+			Block(fmt.Sprintf("the boot assets at %s could not be verified: %s", ref, cause)))
 		return nil
 
 	default:
@@ -659,9 +664,13 @@ func (c *Config) bootAssetsDiffer(assets runtime.BootAssets, bundle, detail stri
 			"are not the bundle that verified, %s: %s (BRIG_VERIFY=require).%s Set "+
 			"BRIG_VERIFY=warn to boot them", dir, bundle, detail, c.linuxBundleNote(assets))
 	}
-	c.alertf("BRIG_BOOT_ASSETS names %s, and its boot assets are not the bundle that "+
-		"verified, %s: %s. Booting them as your own build, so nothing vouches for the kernel "+
-		"this sandbox boots.%s", dir, bundle, detail, c.linuxBundleNote(assets))
+	rows := (&Rows{}).Note("booting them as your own build, so nothing vouches for the kernel " +
+		"this sandbox boots")
+	if note := strings.TrimSpace(c.linuxBundleNote(assets)); note != "" {
+		rows.Note("%s", strings.ToLower(note[:1])+note[1:])
+	}
+	c.alertf("%s", rows.Block(fmt.Sprintf("BRIG_BOOT_ASSETS names %s, and its boot assets "+
+		"are not the bundle that verified, %s: %s", dir, bundle, detail)))
 	return nil
 }
 
@@ -673,8 +682,9 @@ func (c *Config) bootDigestsUnread(assets runtime.BootAssets, bundle string, cau
 			"so the kernel and initrd were not compared with it (BRIG_VERIFY=require).%s Set "+
 			"BRIG_VERIFY=warn to boot them without the comparison", bundle, cause, c.linuxBundleNote(assets))
 	}
-	c.alertf("cannot read the digests of the boot bundle %s: %v. The kernel and initrd boot "+
-		"without being compared with it", bundle, cause)
+	c.alertf("%s", (&Rows{}).
+		Note("the kernel and initrd boot without being compared with it").
+		Block(fmt.Sprintf("cannot read the digests of the boot bundle %s: %v", bundle, cause)))
 	return nil
 }
 
@@ -793,7 +803,9 @@ func (c *Config) bundleRecordUnread(dir string, cause error) error {
 			"and initrd in %s against its signed record: %v (BRIG_VERIFY=require). Set "+
 			"BRIG_VERIFY=warn to boot them without the check", dir, cause)
 	}
-	c.alertf("cannot check the Linux runtime bundle's kernel and initrd in %s against its "+
-		"signed record: %v. They boot without the check", dir, cause)
+	c.alertf("%s", (&Rows{}).
+		Note("they boot without the check").
+		Block(fmt.Sprintf("cannot check the Linux runtime bundle's kernel and initrd in %s "+
+			"against its signed record: %v", dir, cause)))
 	return nil
 }

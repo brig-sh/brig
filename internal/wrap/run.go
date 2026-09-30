@@ -44,10 +44,8 @@ func (c *Config) BuildEnv() (creds.Set, error) {
 	c.secrets = res
 	for _, w := range res.Warnings {
 		// Multi-line by construction: a heading and a row per command that
-		// changes it. warnBlock prefixes every line off a terminal, so a line
-		// copied from a log still reads as brig's, and only the heading on
-		// one.
-		c.warnBlock(w)
+		// changes it. See Notices for how a block prints.
+		c.warnf("%s", w)
 	}
 	set := creds.Bind(c.Profile, c.Env, res.Values, os.LookupEnv, creds.Options{
 		AllowRefs:   c.AllowRefs,

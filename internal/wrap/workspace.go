@@ -26,8 +26,7 @@ func (c *Config) warnf(format string, a ...any) {
 	if c.Verbosity < Normal {
 		return
 	}
-	c.partFromBlock(false)
-	fmt.Fprintf(c.Err, "brig: "+format+"\n", a...)
+	c.notices().Say(fmt.Sprintf(format, a...))
 }
 
 // alertf says something about verification that has to reach the reader
@@ -49,8 +48,7 @@ func (c *Config) warnf(format string, a ...any) {
 // about stays a warning: the credential expiry, the workspace notices, the
 // deprecations.
 func (c *Config) alertf(format string, a ...any) {
-	c.partFromBlock(false)
-	fmt.Fprintf(c.Err, "brig: "+format+"\n", a...)
+	c.notices().Say(fmt.Sprintf(format, a...))
 }
 
 // sayf writes one line of the report `brig info` prints.

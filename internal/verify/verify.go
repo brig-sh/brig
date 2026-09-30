@@ -202,8 +202,30 @@ type Result struct {
 	TimedOut bool
 }
 
-// Message is the line to show the user, phrased for the outcome.
+// Message is the line to show the user, phrased for the outcome: the heading
+// and its notes as one run of sentences. doctor prints it on a row of its own,
+// and a refusal quotes it.
 func (r Result) Message() string {
+	head, notes := r.parts()
+	for _, n := range notes {
+		head += ". " + strings.ToUpper(n[:1]) + n[1:]
+	}
+	return head
+}
+
+// Notice is Message as a block for a run to print: the heading, then each
+// note on a row under it. See wrap.Notices.
+func (r Result) Notice() string {
+	head, notes := r.parts()
+	for _, n := range notes {
+		head += "\n  ↳ " + n
+	}
+	return head
+}
+
+// parts is what the user is told about the outcome: a heading that says what
+// the check found, and notes on what brig does about it.
+func (r Result) parts() (head string, notes []string) {
 	switch r.Outcome {
 	case Verified:
 		// Naming the digest is the point of this whole path: the line vouches
@@ -222,44 +244,44 @@ func (r Result) Message() string {
 		if r.Policy.Replaced() {
 			return fmt.Sprintf("image %s: matched the replaced trust policy, booting %s "+
 				"(BRIG_VERIFY_REGISTRY, BRIG_VERIFY_IDENTITY or BRIG_VERIFY_ISSUER is set, "+
-				"so this is not brig's own check)", r.Image, booted)
+				"so this is not brig's own check)", r.Image, booted), nil
 		}
-		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, booted)
+		return fmt.Sprintf("image %s: signature verified, booting %s", r.Image, booted), nil
 	case NotOurs:
 		return fmt.Sprintf("image %s is not published by brig-sh, so there is no "+
-			"signature of ours to check. That is expected for your own image -- "+
-			"just be sure you trust where it came from", r.Image)
+				"signature of ours to check", r.Image),
+			[]string{"that is expected for your own image. Boot it only if you trust where it came from"}
 	case NoTooling:
-		return fmt.Sprintf("cannot verify image %s: %s. Booting it unchecked",
-			r.Image, r.Policy.CosignMissing())
+		return fmt.Sprintf("cannot verify image %s: %s", r.Image, r.Policy.CosignMissing()),
+			[]string{"booting it unchecked"}
 	case Unresolved:
 		if r.TimedOut {
 			// Not "cannot reach the registry". The usual cause of a hang is a
 			// credential helper on this machine, and Detail names it when one is
 			// set.
-			return fmt.Sprintf("cannot verify image %s: %s. The copy on disk was not "+
-				"checked against what the registry serves", r.Image, r.Detail)
+			return fmt.Sprintf("cannot verify image %s: %s", r.Image, r.Detail),
+				[]string{"the copy on disk was not checked against what the registry serves"}
 		}
-		return fmt.Sprintf("cannot reach the registry to verify image %s: %s. The copy "+
-			"on disk could not be checked against what the registry serves",
-			r.Image, r.Detail)
+		return fmt.Sprintf("cannot reach the registry to verify image %s: %s", r.Image, r.Detail),
+			[]string{"the copy on disk could not be checked against what the registry serves"}
 	case Mismatch:
 		if r.Ours {
 			return fmt.Sprintf("image %s claims to be published by brig-sh, but the copy "+
-				"in your local store is %s, NOT the %s that verified. Booting the verified "+
-				"digest", r.Image, r.Local, r.Digest)
+					"in your local store is %s, NOT the %s that verified", r.Image, r.Local, r.Digest),
+				[]string{"booting the verified digest"}
 		}
 		return fmt.Sprintf("image %s in your local store is %s, not the %s the registry "+
-			"now serves. Booting the registry digest", r.Image, r.Local, r.Digest)
+				"now serves", r.Image, r.Local, r.Digest),
+			[]string{"booting the registry digest"}
 	default:
 		if r.TimedOut {
 			// Still Failed, so it still stops. But no signature was read, and
 			// "did not verify" sends the reader after a bad image that is not there.
-			return fmt.Sprintf("cannot verify image %s: %s. Its signature was not checked",
-				r.Image, r.Detail)
+			return fmt.Sprintf("cannot verify image %s: %s", r.Image, r.Detail),
+				[]string{"its signature was not checked"}
 		}
 		return fmt.Sprintf("image %s claims to be published by brig-sh, but its "+
-			"signature DID NOT VERIFY: %s", r.Image, r.Detail)
+			"signature DID NOT VERIFY: %s", r.Image, r.Detail), nil
 	}
 }
 
