@@ -335,11 +335,12 @@ its signature with cosign against the publishing workflow before writing
 it, and records the digest it verified. Brig delegates the whole fetch
 to hull on macOS for exactly that reason. The Linux runtime bundle does not
 use it: its launcher points `BRIG_BOOT_ASSETS` at the kernel and initrd the
-bundle carries. On a Linux host without that bundle, the boot bundle arrives
+bundle carries, and its release signs a record of their digests, which the
+bundle's installer keeps beside them. On a Linux host without that bundle, the boot bundle arrives
 through `oras`, which checks no signature, and `BRIG_BOOT_ASSETS_REF` is how
 you pin a version or point at a mirror. On both platforms Brig compares the
-kernel and initrd with the digests the verified bundle lists before it boots
-them ([security.md](security.md#the-kernel-not-only-the-image)). On macOS
+kernel and initrd with the digests the verified bundle, or that signed record,
+lists before it boots them ([security.md](security.md#the-kernel-not-only-the-image)). On macOS
 Brig passes `BRIG_BOOT_ASSETS_REF` to hull as `HULL_BOOT_ASSETS_REF`, so hull
 fetches the reference Brig checked. There it pins a version of
 `ghcr.io/nofireai/hull-assets`. hull refuses a reference in any other

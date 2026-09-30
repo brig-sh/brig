@@ -537,6 +537,28 @@ are your own build, point `BRIG_BOOT_ASSETS` at their directory: `warn` then
 states the difference and boots them. See
 [security.md](security.md#the-kernel-not-only-the-image).
 
+## The runtime bundle's kernel is not the one its record lists
+
+```
+brig: refusing to boot: the kernel and initrd in
+/var/lib/brig/data/share/guest are not the ones the Linux runtime bundle's
+signed record lists: bzImage is sha256:9c1e..., not the sha256:4f0a... it
+lists. Re-run brig's install.sh to reinstall the bundle, or point
+BRIG_BOOT_ASSETS at a directory of your own build
+```
+
+On Linux the runtime bundle carries the kernel and initrd, and its release
+signs a record of their digests. A file in the bundle's `share/guest` that the
+record does not list was changed after the install. Brig refuses it under
+`warn` as well as `require`, with exit `5`. The same refusal names a record the
+release's `checksums.txt` does not list, or a `checksums.txt` whose signature
+does not verify.
+
+Run brig's `install.sh` again to put the bundle's files back. If the kernel is
+your own build, keep it in a directory of its own and point `BRIG_BOOT_ASSETS`
+there. If the bundle was released from a fork, its signature names the fork's
+release workflow: set `BRIG_VERIFY_RUNTIME_IDENTITY` to it. See [security.md](security.md#the-kernel-not-only-the-image).
+
 ## The sandbox never became ready
 
 ```

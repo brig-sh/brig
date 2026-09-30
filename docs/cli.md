@@ -879,6 +879,8 @@ what each of these does with the credential once it is in the guest.
 | `BRIG_VERIFY_REGISTRY` | `ghcr.io/brig-sh/` | image prefix treated as Brig's own, so a signature is expected |
 | `BRIG_VERIFY_IDENTITY` | Brig's own community-images build workflow | certificate identity regexp cosign must match |
 | `BRIG_VERIFY_ISSUER` | GitHub Actions OIDC | certificate OIDC issuer |
+| `BRIG_VERIFY_RUNTIME_IDENTITY` | the Linux runtime bundle's release workflow, on a tag | certificate identity regexp the runtime bundle's signed record must match. Set it for a bundle released from a fork, as `INSTALL_BRIG_SIG_IDENTITY` is set for its installer |
+| `BRIG_VERIFY_RUNTIME_ISSUER` | GitHub Actions OIDC | certificate OIDC issuer for that record |
 | `BRIG_COSIGN_BIN` | `cosign` on `PATH` | path to the cosign binary |
 
 `warn` reports an unverifiable image and boots anyway, and also stops to ask

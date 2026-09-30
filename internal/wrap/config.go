@@ -132,6 +132,10 @@ type Config struct {
 	// VerifyPolicy is what counts as ours.
 	Verify       verify.Mode
 	VerifyPolicy verify.Policy
+	// RuntimePolicy is who signs the Linux runtime bundle's releases, whose
+	// record vouches for the kernel and initrd the bundle carries. A zero
+	// value is the bundle's own release workflow.
+	RuntimePolicy verify.Policy
 	// Network is the posture this run was resolved to, which is the one the
 	// next boot gets. Held here so the envelope, the report and the spec
 	// handed to the runtime cannot disagree about what a reader was told. A
@@ -192,6 +196,11 @@ type Config struct {
 	// verified (#234).
 	bundleRef    string
 	bundleDigest string
+	// bundleRecord is the BRIG_BOOT_ASSETS directory when it holds the Linux
+	// runtime bundle's record. The record, not the boot bundle's signature,
+	// vouches for the files there, so verifyBootAssets leaves the signature
+	// alone and checkBootDigests checks the record instead.
+	bundleRecord string
 	AllowRefs    bool
 	AllowDenied  bool
 	// Cwd is the host directory the command was invoked from, and GuestCwd is
@@ -556,6 +565,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Policies:       policies,
 		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
+		RuntimePolicy:  runtimePolicy(env),
 		AllowRefs:      strict("ALLOW_REFS", false),
 		AllowDenied:    strict("ALLOW_DENIED", false),
 		Cwd:            cwd,
@@ -826,6 +836,17 @@ func verifyPolicy(env Env) verify.Policy {
 	p.Identity = env.String("VERIFY_IDENTITY", p.Identity)
 	p.Issuer = env.String("VERIFY_ISSUER", p.Issuer)
 	p.Cosign = env.String("COSIGN_BIN", p.Cosign)
+	return p
+}
+
+// runtimePolicy lets a host that installed a runtime bundle released from a
+// fork point the record check at that fork's workflow, as the bundle's own
+// installer takes INSTALL_BRIG_SIG_IDENTITY. Left alone, a fork's record fails
+// the signature check before every boot.
+func runtimePolicy(env Env) verify.Policy {
+	p := verify.RuntimeBundlePolicy()
+	p.Identity = env.String("VERIFY_RUNTIME_IDENTITY", p.Identity)
+	p.Issuer = env.String("VERIFY_RUNTIME_ISSUER", p.Issuer)
 	return p
 }
 

@@ -366,6 +366,20 @@ func (c *Config) verifyBootAssets() error {
 	if c.Verify == verify.Off || !c.Profile.GenericBoot {
 		return nil
 	}
+	// The Linux runtime bundle's kernel and initrd are its own, and the boot
+	// bundle in the registry lists neither. Its release's signed record does,
+	// and checkBootDigests checks that once the files are resolved, so a
+	// signature on the boot bundle has nothing to say here.
+	// The bundle runs on Linux alone. On another runtime, a SHA256SUMS in a
+	// named directory is somebody's build and gets the boot bundle's check.
+	if dir := os.Getenv("BRIG_BOOT_ASSETS"); dir != "" && c.Runtime.Kind() == "nerdctl" {
+		// The runtime resolves the files from the absolute path, so the
+		// record's directory is kept in the same form.
+		if abs, err := filepath.Abs(dir); err == nil && verify.HasBundleRecord(abs) {
+			c.bundleRecord = abs
+			return nil
+		}
+	}
 	ref := runtime.BootAssetsRef()
 	// Its own identity and registry, but the same cosign binary: which tool to
 	// run is a fact about the machine, set once by BRIG_COSIGN_BIN, and not
@@ -462,7 +476,13 @@ var registryDigests = verify.BundleDigests
 // one brig cannot check, has already said so, and there is no digest to
 // bind.
 func (c *Config) checkBootDigests(assets runtime.BootAssets) error {
-	if c.Verify == verify.Off || !c.Profile.GenericBoot || c.bundleDigest == "" {
+	if c.Verify == verify.Off || !c.Profile.GenericBoot {
+		return nil
+	}
+	if c.bundleRecord != "" {
+		return c.checkBundleRecord(assets)
+	}
+	if c.bundleDigest == "" {
 		return nil
 	}
 	bundle := fmt.Sprintf("%s (%s)", c.bundleRef, c.bundleDigest)
@@ -565,7 +585,7 @@ func (c *Config) bootAssetsDiffer(assets runtime.BootAssets, bundle, detail stri
 	}
 	c.alertf("BRIG_BOOT_ASSETS names %s, and its boot assets are not the bundle that "+
 		"verified, %s: %s. Booting them as your own build, so nothing vouches for the kernel "+
-		"this sandbox boots", dir, bundle, detail)
+		"this sandbox boots.%s", dir, bundle, detail, c.linuxBundleNote(assets))
 	return nil
 }
 
@@ -582,19 +602,122 @@ func (c *Config) bootDigestsUnread(assets runtime.BootAssets, bundle string, cau
 	return nil
 }
 
-// linuxBundleNote says why a directory from the Linux runtime bundle refuses
-// under require. Its launcher sets BRIG_BOOT_ASSETS to the kernel and initrd
-// it carries, and it records no digests for them.
+// linuxBundleNote says why a directory from an older Linux runtime bundle
+// gets here. Its launcher sets BRIG_BOOT_ASSETS to the kernel and initrd it
+// carries, and a bundle that keeps no signed record of them reaches the boot
+// bundle's check, which lists neither.
 //
-// brig cannot tell that launcher's directory from anyone else's, so the note
-// is about the launcher, and only a named directory on nerdctl gets it. On
-// hull the bundle plays no part, and a note about it sent a Mac user who
-// named a build of their own looking in the wrong place.
+// brig cannot tell that launcher's directory from anyone else's once it keeps
+// no record, so the note is about the launcher, and only a named directory on
+// nerdctl gets it. On hull the bundle plays no part, and a note about it sent
+// a Mac user who named a build of their own looking in the wrong place.
 func (c *Config) linuxBundleNote(assets runtime.BootAssets) string {
 	if !assets.Named || c.Runtime.Kind() != "nerdctl" {
 		return ""
 	}
 	return " The Linux runtime bundle's launcher sets BRIG_BOOT_ASSETS to the kernel and " +
-		"initrd it carries and ships no digests for them yet, so a run through it refuses " +
-		"here until it does."
+		"initrd it carries, and a bundle this old keeps no signed record of them. Re-run " +
+		"brig's install.sh to install one that does."
+}
+
+// checkBundleRecord checks the Linux runtime bundle's kernel and initrd
+// against the record its release signed (#234).
+//
+// The bundle chose these files, not whoever runs brig, so a file the record
+// does not list refuses in every mode but off, as a file in a directory brig
+// chose does. So does a record the release's checksums.txt does not list, and
+// a checksums.txt whose signature does not verify. The files are compared with
+// the record first, since that needs no network: a record brig cannot check
+// -- no cosign, no signature files beside it, no answer from Sigstore -- is
+// "cannot check" only for files that match it. That is said under warn, and a
+// refusal under require.
+func (c *Config) checkBundleRecord(assets runtime.BootAssets) error {
+	dir := c.bundleRecord
+	if assets.Kernel == "" || assets.Initrd == "" {
+		return c.bundleRecordUnread(dir,
+			fmt.Errorf("this %s finds the kernel and initrd inside its own run", c.Runtime.Kind()))
+	}
+	for _, path := range []string{assets.Kernel, assets.Initrd} {
+		if filepath.Dir(path) != filepath.Clean(dir) {
+			return c.bundleRecordUnread(dir, fmt.Errorf("the runtime resolved %s, which is not beside the record", path))
+		}
+	}
+
+	files, err := verify.RecordDigests(dir)
+	if err != nil {
+		return c.bundleRecordUnread(dir, err)
+	}
+	var differ []string
+	for _, path := range []string{assets.Kernel, assets.Initrd} {
+		name := filepath.Base(path)
+		want := files[name]
+		if want == "" {
+			return c.bundleRecordDiffers(dir, fmt.Sprintf("the record lists no %s", name))
+		}
+		got, err := verify.FileDigest(path)
+		if err != nil {
+			return c.bundleRecordUnread(dir, err)
+		}
+		if got != want {
+			differ = append(differ, fmt.Sprintf("%s is %s, not the %s it lists", name, got, want))
+		}
+	}
+	if len(differ) > 0 {
+		return c.bundleRecordDiffers(dir, strings.Join(differ, ". "))
+	}
+
+	rec, err := verify.ReadBundleRecord(dir)
+	var unlisted *verify.UnlistedRecordError
+	switch {
+	case errors.As(err, &unlisted):
+		return c.bundleRecordDiffers(dir, err.Error())
+	case err != nil:
+		return c.bundleRecordUnread(dir, err)
+	}
+
+	// Its own identity, and the same cosign binary, for the reason
+	// verifyBootAssets gives.
+	policy := c.RuntimePolicy
+	if policy.Identity == "" || policy.Issuer == "" {
+		policy = verify.RuntimeBundlePolicy()
+	}
+	policy.Cosign = c.VerifyPolicy.Cosign
+	switch res := policy.Blob(rec.Checksums, rec.Signature, rec.Cert); res.Outcome {
+	case verify.Verified:
+	case verify.NoTooling:
+		return c.bundleRecordUnread(dir, errors.New(c.VerifyPolicy.CosignMissing()))
+	case verify.Unresolved:
+		return c.bundleRecordUnread(dir,
+			fmt.Errorf("cosign could not reach Sigstore to check the release's signature: %s", res.Detail))
+	default:
+		return c.bundleRecordDiffers(dir,
+			fmt.Sprintf("the signature on the release's checksums.txt did not verify (%s); a bundle "+
+				"released from a fork needs BRIG_VERIFY_RUNTIME_IDENTITY set to its release workflow", res.Detail))
+	}
+	c.verified = append(c.verified, "boot assets")
+	c.progressf("boot assets: %s and %s match the runtime bundle's signed record, %s",
+		filepath.Base(assets.Kernel), filepath.Base(assets.Initrd), rec.Release)
+	return nil
+}
+
+// bundleRecordDiffers refuses a runtime bundle's kernel or initrd that its
+// signed record does not vouch for.
+func (c *Config) bundleRecordDiffers(dir, detail string) error {
+	return fmt.Errorf("refusing to boot: the kernel and initrd in %s are not the ones the "+
+		"Linux runtime bundle's signed record lists: %s. Re-run brig's install.sh to "+
+		"reinstall the bundle, or point BRIG_BOOT_ASSETS at a directory of your own build",
+		dir, detail)
+}
+
+// bundleRecordUnread decides a runtime bundle's record that brig cannot
+// check: said under warn, refused under require.
+func (c *Config) bundleRecordUnread(dir string, cause error) error {
+	if c.Verify == verify.Require {
+		return fmt.Errorf("refusing to boot: cannot check the Linux runtime bundle's kernel "+
+			"and initrd in %s against its signed record: %v (BRIG_VERIFY=require). Set "+
+			"BRIG_VERIFY=warn to boot them without the check", dir, cause)
+	}
+	c.alertf("cannot check the Linux runtime bundle's kernel and initrd in %s against its "+
+		"signed record: %v. They boot without the check", dir, cause)
+	return nil
 }

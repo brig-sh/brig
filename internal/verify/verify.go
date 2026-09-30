@@ -196,7 +196,9 @@ type Result struct {
 	// TimedOut reports that cosign was cut off at cosignTimeout. Detail then
 	// says so in brig's words, and the outcome is the one any other error at
 	// that step gets: Unresolved for the resolve, Failed for the signature
-	// check. Callers read it to word the refusal, not to decide it.
+	// check. Blob is the exception: it is Unresolved, as a Blob that could
+	// not reach Sigstore is. Callers read it to word the refusal, not to
+	// decide it.
 	TimedOut bool
 }
 

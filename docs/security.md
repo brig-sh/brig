@@ -719,15 +719,41 @@ What a difference does depends on who chose the directory:
   since hull fetches into it.
 - `BRIG_BOOT_ASSETS` set: the directory is someone's build. `warn` states the
   difference and boots it, and nothing vouches for that kernel. `require`
-  refuses. The Linux runtime bundle points `BRIG_BOOT_ASSETS` at its own
-  kernel and initrd and ships no digests for them yet, so under `require` its
-  directory refuses until it does. hull checks a directory against its own
-  `provenance.json` too, so a named copy of hull's directory with a changed
-  file fails at hull even under `warn`.
+  refuses. A Linux runtime bundle from before its signed record (below) lands
+  here, so under `require` its directory refuses until `install.sh` installs
+  a newer one. hull checks a directory against its own `provenance.json` too,
+  so a named copy of hull's directory with a changed file fails at hull even
+  under `warn`.
 - Digests Brig cannot check (no manifest and no record of the verified
   bundle, a registry answer Brig refused, a record with no entry for one of
   the files, or files that match only hull's record): `warn` states it and
   boots, `require` refuses.
+
+The Linux runtime bundle's kernel and initrd are its own, and the boot
+bundle's manifest lists neither. What lists them is the bundle's release: it
+publishes `share/guest/SHA256SUMS` as an asset, its signed `checksums.txt`
+covers that asset, and the bundle's installer keeps `checksums.txt`,
+`checksums.txt.sig` and `checksums.txt.pem` beside the files. On Linux, when
+the directory `BRIG_BOOT_ASSETS` names holds a `SHA256SUMS`, Brig checks that
+record instead of the boot bundle's signature, in this order:
+
+- the kernel and initrd must hash to what `SHA256SUMS` lists;
+- `checksums.txt` must list the `SHA256SUMS` in the directory, byte for byte;
+- cosign checks the signature on `checksums.txt` against the release workflow
+  of `NOFireAI/brig-standalone-linux`, on a tag, with the same issuer as the
+  image check. `BRIG_VERIFY_RUNTIME_IDENTITY` and `BRIG_VERIFY_RUNTIME_ISSUER`
+  point it at a fork's release workflow instead.
+
+The bundle chose those files, so a file the record does not list, a record the
+release does not list, or a signature that does not verify refuses the run
+under `warn` and `require`. Reinstalling the bundle with `install.sh` puts its
+files back. The first two checks need no network, so a changed file refuses
+even where the signature cannot be checked. Files that match a record Brig
+cannot check (no cosign, no signature files beside it, or no answer from
+Sigstore) are said under `warn` and refused under `require`. cosign checks the
+signature online, as it does for the image, and takes about as long as the
+boot bundle's check it replaces. Only a run through nerdctl reads the record.
+On hull a `SHA256SUMS` in a named directory is ignored.
 
 `BRIG_VERIFY=off` skips the signature and the digest checks, and one line
 says so. A `BRIG_BOOT_ASSETS_REF` under `ghcr.io/nofireai/` is checked the
