@@ -118,7 +118,8 @@ func (f *fakeBrig) exec(_ context.Context, env []string, name string, args ...st
 			f.restarted = true
 			stderr = f.restartWarning
 			if stderr == "" {
-				stderr = "brig: the running sandbox is not mounting /x -- its share went stale. Restarting it; any other session using this sandbox will be disconnected.\n"
+				stderr = "brig: the running sandbox is not mounting /x: its share went stale\n" +
+					"brig:   ↳ brig restarts it, and any other session using this sandbox will be disconnected\n"
 			}
 		}
 		return fmt.Sprintf("%s %s %s detail\n", o, rest[1], rest[len(rest)-1]), stderr, probeExit[o], nil
@@ -1109,8 +1110,12 @@ func TestImageIsOneYAMLString(t *testing.T) {
 // warning. Every one of them starts the gateway over.
 func TestRestartIsSeenWhateverTheReason(t *testing.T) {
 	for want, warning := range map[string]string{
-		"its network or its rules changed": "brig: this sandbox is running under a different network policy than the one that applies now. Rules are fixed when a sandbox boots, so it is being restarted; any other session using this sandbox will be disconnected.\n",
-		"its project changed":              "brig: the running sandbox has /a mounted as its project and this run names /b. A share cannot be attached to a live sandbox, so it is being restarted; any other session using this sandbox will be disconnected.\n",
+		"its network or its rules changed": "brig: this sandbox is running under a different network policy than the one that applies now\n" +
+			"brig:   ↳ rules are fixed when a sandbox boots, so brig restarts it\n" +
+			"brig:   ↳ any other session using this sandbox will be disconnected\n",
+		"its project changed": "brig: the running sandbox has /a mounted as its project and this run names /b\n" +
+			"brig:   ↳ a share cannot be attached to a live sandbox, so brig restarts it\n" +
+			"brig:   ↳ any other session using this sandbox will be disconnected\n",
 	} {
 		f := newFake(t)
 		f.restartOn = "doh https://8.8.8.8/dns-query git.kernel.org"

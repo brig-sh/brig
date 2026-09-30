@@ -702,14 +702,13 @@ func (c *Config) slugMigrationNotice(base, vmBase string) []string {
 	if _, err := os.Stat(oldWorkspace); err != nil {
 		return nil
 	}
-	return []string{
-		fmt.Sprintf("session %q used to be shortened to %q and now keeps its name in full, "+
-			"so it has a new home and a new sandbox: %s (%s) instead of %s (%s).",
-			c.RawName, old, c.Workspace, c.VMName, oldWorkspace, oldVM),
-		fmt.Sprintf("Nothing reads %s now. The work in it is on the host, so move or delete "+
-			"it at your leisure -- but state inside the old sandbox does not come across, "+
-			"so this session may ask you to log in again.", oldWorkspace),
-	}
+	return []string{(&Rows{}).
+		Note("its new home and sandbox: %s (%s)", c.Workspace, c.VMName).
+		Note("nothing reads the old ones now: %s (%s)", oldWorkspace, oldVM).
+		Note("the work in %s is on the host, so you can move or delete it", oldWorkspace).
+		Note("state inside the old sandbox does not come across, so this session can ask you to log in again").
+		Block(fmt.Sprintf("session %q used to be shortened to %q and now keeps its name in full",
+			c.RawName, old))}
 }
 
 // envOverride applies BRIG_FORWARD_ENV, which replaces the env-sourced set,

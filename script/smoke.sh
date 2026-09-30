@@ -1089,10 +1089,10 @@ echo "== the slug migration =="
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 mkdir -p "$WS-refactorin"
 "$WORK/brig" run claude --name refactoring -d > /dev/null 2> "$WORK/moved.err"
-grep -q -- "instead of $WS-refactorin (brig-claude-code-refactorin)" "$WORK/moved.err" \
+grep -q -- "nothing reads the old ones now: $WS-refactorin (brig-claude-code-refactorin)" "$WORK/moved.err" \
   && ok "the migration notice names the home that was left behind" \
   || bad "the notice does not name the old home -- got: $(cat "$WORK/moved.err")"
-grep -q -- "new sandbox: $WS-refactoring (brig-claude-code-refactoring)" "$WORK/moved.err" \
+grep -q -- "its new home and sandbox: $WS-refactoring (brig-claude-code-refactoring)" "$WORK/moved.err" \
   && ok "the migration notice names the home in use now" \
   || bad "the notice does not name the new home -- got: $(cat "$WORK/moved.err")"
 

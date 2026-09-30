@@ -183,9 +183,9 @@ func (c *Config) recordPosture() {
 		return
 	}
 	if err := runtime.RecordBootedNet(c.VMName, c.askedNetwork.RuntimeNet()); err != nil {
-		c.warnf("could not record that %s was started %s (%v). A later command that "+
-			"names no posture will use the default one and restart the sandbox.",
-			c.VMName, c.askedNetwork, err)
+		c.warnf("%s", (&Rows{}).
+			Note("a later command that names no posture uses the default one and restarts the sandbox").
+			Block(fmt.Sprintf("could not record that %s was started %s: %v", c.VMName, c.askedNetwork, err)))
 	}
 }
 
@@ -319,13 +319,17 @@ func (c *Config) keepsPosture(running Network) bool {
 // reason is the record.
 func (c *Config) networkRestart() string {
 	change, keeps := c.postureChange()
-	reason := "Rules are fixed when a sandbox boots, so it is being restarted"
+	reason := "rules are fixed when a sandbox boots, so brig restarts it"
 	if keeps {
-		reason = "Its network and rules stay the same. It is restarted to record that posture"
+		reason = "its network and rules stay the same. brig restarts it to record that posture"
 	}
-	return fmt.Sprintf("%s. %s; any other session using this sandbox will be disconnected.",
-		change, reason)
+	return (&Rows{}).Note("%s", reason).Note("%s", disconnects).Block(change)
 }
+
+// disconnects is the note on every restart of a running sandbox. It is word
+// for word the same in each, because test/conformance reads a restart out of
+// brig's output by it.
+const disconnects = "any other session using this sandbox will be disconnected"
 
 // generalNetworkChange is the restart warning when no change of posture can be
 // named.

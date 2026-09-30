@@ -129,10 +129,10 @@ func (c *Config) warnArgvExposure(set creds.Set) {
 	if len(names) == 0 {
 		return
 	}
-	c.warnf("BRIG_ENV_ARGV=1 puts these values on the runtime's command line, where "+
-		"`ps` can read them and the host's argv log keeps them after the sandbox is "+
-		"gone: %s. Unset BRIG_ENV_ARGV to forward them by name only",
-		strings.Join(names, " "))
+	c.warnf("%s", (&Rows{}).
+		Note("`ps` can read them there, and the host's argv log keeps them after the sandbox is gone").
+		Do("to forward them by name only, unset it", "").
+		Block("BRIG_ENV_ARGV=1 puts these values on the runtime's command line: "+strings.Join(names, " ")))
 }
 
 // reportDeny says what the denylist did to THIS run, rather than reciting the

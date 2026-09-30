@@ -40,8 +40,8 @@ func TestExpiredImportedCredentialWarnsBeforeBoot(t *testing.T) {
 	}
 	c.warnExpiredSecrets()
 
-	want := "brig: the imported credential claude-credentials (claude-code) expired 3h ago.\n" +
-		"brig: Renew it on the host, then: brig secret import claude-code\n"
+	want := "brig: the imported credential claude-credentials (claude-code) expired 3h ago\n" +
+		"brig:   → renew it on the host, then:  brig secret import claude-code\n"
 	if errb.String() != want {
 		t.Errorf("warning was:\n%s\nwant:\n%s", errb.String(), want)
 	}
@@ -73,8 +73,8 @@ func TestExpiredSecretWithNoSourcesIsSentToTheCommandForm(t *testing.T) {
 	}
 	c.warnExpiredSecrets()
 
-	want := "brig: the imported credential vault-token (mytool) expired 3h ago.\n" +
-		"brig: Renew it, then store it again: brig secret import mytool vault-token --from-command '<command>'\n"
+	want := "brig: the imported credential vault-token (mytool) expired 3h ago\n" +
+		"brig:   → renew it, then store it again:  brig secret import mytool vault-token --from-command '<command>'\n"
 	if errb.String() != want {
 		t.Errorf("warning was:\n%s\nwant:\n%s", errb.String(), want)
 	}

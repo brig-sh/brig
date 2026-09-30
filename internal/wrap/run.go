@@ -197,12 +197,15 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// row for rules nothing is applying.
 			c.warnf("%s", c.networkRestart())
 		case !c.guestMountsWorkspace():
-			c.warnf("the running sandbox is not mounting %s -- its share went stale (the "+
-				"directory was renamed or replaced, or the workspace changed). Restarting "+
-				"it; any other session using this sandbox will be disconnected.", c.Workspace)
+			c.warnf("%s", (&Rows{}).
+				Note("the directory was renamed or replaced, or the workspace changed").
+				Note("brig restarts it, and %s", disconnects).
+				Block("the running sandbox is not mounting "+c.Workspace+": its share went stale"))
 		case stale != "":
-			c.warnf("%s. A share cannot be attached to a live sandbox, so it is being "+
-				"restarted; any other session using this sandbox will be disconnected.", stale)
+			c.warnf("%s", (&Rows{}).
+				Note("a share cannot be attached to a live sandbox, so brig restarts it").
+				Note("%s", disconnects).
+				Block(stale))
 		default:
 			// The guest has confirmed this workspace, so record it. Nothing has
 			// changed for a session brig already knows about; for one created

@@ -229,9 +229,10 @@ func (c *Config) warnStaleCredentials(r *workspaceRoot) {
 		rel = filepath.FromSlash(rel)
 		path := r.path(rel)
 		if _, err := r.lstat(rel); err == nil {
-			c.warnf("note: %s holds a token on disk and is no longer used -- "+
-				"brig keeps credentials in its own store and hands them to the sandbox "+
-				"in memory. Delete it when convenient.", path)
+			c.warnf("%s", (&Rows{}).
+				Note("brig keeps credentials in its own store and hands them to the sandbox in memory").
+				Do("to delete it", "rm "+path).
+				Block(path+" holds a token on disk and is no longer used"))
 		}
 	}
 }
@@ -348,8 +349,9 @@ func (c *Config) trustGuestCwd(r *workspaceRoot) error {
 	if err := dec.Decode(&doc); err != nil || doc == nil {
 		// The agent owns this file, so it owns a parse failure too. Say what
 		// happened and leave the file alone.
-		c.warnf("%s holds invalid JSON, so it stays as it is and %s will ask you to "+
-			"trust %s.", path, c.Profile.Binary, key)
+		c.warnf("%s", (&Rows{}).
+			Note("%s will ask you to trust %s", c.Profile.Binary, key).
+			Block(path+" holds invalid JSON, so brig leaves it as it is"))
 		return nil
 	}
 

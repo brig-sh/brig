@@ -165,9 +165,9 @@ func (c *Config) reapOrphanHome() {
 	if removed, err := removeHome(c.Workspace); err != nil {
 		c.warnf("%v", err)
 	} else if removed {
-		c.warnf("deleted the guest home %s. No sandbox owns it: its sandbox was "+
-			"removed outside brig, or an earlier run stopped before it booted",
-			c.Workspace)
+		c.warnf("%s", (&Rows{}).
+			Note("its sandbox was removed outside brig, or an earlier run stopped before it booted").
+			Block("deleted the guest home "+c.Workspace+", which no sandbox owned"))
 	}
 }
 

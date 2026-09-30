@@ -660,7 +660,7 @@ func TestTheRestartLineSaysThePolicyIsolatedTheSandbox(t *testing.T) {
 }
 
 // The same restart through EnsureRunning. The sandbox keeps its network and its
-// rules, so the warning does not give "Rules are fixed when a sandbox boots" as
+// rules, so the warning does not give "rules are fixed when a sandbox boots" as
 // the reason. The restart is there to record the posture, and the line says so.
 func TestKeepingThePostureSaysTheRestartOnlyRecordsIt(t *testing.T) {
 	live := &livenessRuntime{running: true}
@@ -681,10 +681,10 @@ func TestKeepingThePostureSaysTheRestartOnlyRecordsIt(t *testing.T) {
 	if err := run.EnsureRunning(creds.Set{}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(errOut.String(), "Rules are fixed when a sandbox boots") {
+	if strings.Contains(errOut.String(), "rules are fixed when a sandbox boots") {
 		t.Errorf("the warning blames rules that do not change:\n%s", errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "restarted to record that posture") {
+	if !strings.Contains(errOut.String(), "restarts it to record that posture") {
 		t.Errorf("the warning does not say why the sandbox restarts:\n%s", errOut.String())
 	}
 	if live.stops != 1 || live.boots != 1 {
@@ -857,7 +857,7 @@ func TestTheRestartLineAsksTheRuntimeOnceForEachAnswer(t *testing.T) {
 	c.Runtime = counted
 
 	got := c.networkRestart()
-	if !strings.Contains(got, "It is restarted to record that posture") {
+	if !strings.Contains(got, "restarts it to record that posture") {
 		t.Fatalf("not the keep-the-posture warning, so this test proves nothing: %s", got)
 	}
 	if counted.asked > 2 {

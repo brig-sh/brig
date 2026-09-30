@@ -431,9 +431,10 @@ func (c *Config) rememberSession() {
 	}
 	index[key] = entry
 	if err := writeSessionIndex(index); err != nil {
-		c.warnf("could not record %s as the workspace of %s (%v). A later command "+
-			"that names no workspace will fall back to the default one and restart "+
-			"the sandbox.", c.Workspace, c.VMName, err)
+		c.warnf("%s", (&Rows{}).
+			Note("a later command that names no workspace falls back to the default one "+
+				"and restarts the sandbox").
+			Block(fmt.Sprintf("could not record %s as the workspace of %s: %v", c.Workspace, c.VMName, err)))
 	}
 }
 

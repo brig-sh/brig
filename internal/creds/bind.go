@@ -91,9 +91,9 @@ func Bind(
 				// keychain tool emptied it. Silence would leave the guest
 				// failing to authenticate with no explanation.
 				s.Warnings = append(s.Warnings, fmt.Sprintf(
-					"not forwarding %s: the secret %s is empty, not absent. Set it "+
-						"again with `brig secret update %s`, or remove it with "+
-						"`brig secret delete %s` if it should not exist",
+					"not forwarding %s: the secret %s is empty, not absent\n"+
+						"  → to set it again:  brig secret update %s\n"+
+						"  → to delete it:     brig secret delete %s",
 					b.Name, r.Name, r.Name, r.Name))
 			case fromSecret:
 				if _, declared := p.Secret(r.Name); declared {

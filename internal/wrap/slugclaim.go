@@ -138,8 +138,9 @@ func (c *Config) claimSlug() error {
 	}
 	index[c.VMName] = c.RawName
 	if err := writeIndex(slugClaimIndexName, index); err != nil {
-		c.warnf("could not record %s as the owner of %s (%v). A later run whose name "+
-			"lands on the same sandbox will not be refused.", c.RawName, c.VMName, err)
+		c.warnf("%s", (&Rows{}).
+			Note("a later run whose name lands on the same sandbox is not refused").
+			Block(fmt.Sprintf("could not record %s as the owner of %s: %v", c.RawName, c.VMName, err)))
 	}
 	return nil
 }
