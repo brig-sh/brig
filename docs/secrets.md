@@ -113,13 +113,13 @@ decrypting anything, that a stored copy has gone stale:
 
 ```console
 $ brig run claude-code ~/code/demo
-brig: the imported credential claude-credentials (claude-code) expired 3h ago.
-brig: Renew it on the host, then: brig secret import claude-code
+brig: the imported credential claude-credentials (claude-code) expired 3h ago
+  → renew it on the host, then:  brig secret import claude-code
 ```
 
 A secret with no `sources:`, filled instead with `--from-command`, gets a
 different second line. The profile-wide `import` cannot refill it:
-`Renew it, then store it again: brig secret import <profile> <name> --from-command '<command>'`.
+`renew it, then store it again:  brig secret import <profile> <name> --from-command '<command>'`.
 
 An empty store is an ordinary state, not an error, and says how to leave it:
 
@@ -371,7 +371,8 @@ command.
 ```console
 $ brig secret read gh-token
 ghp_16C7e42F292c6912E7710c838347Ae178B4a
-brig: gh-token is now in this terminal's scrollback. Pipe it instead to keep it out: brig secret read gh-token | ...
+brig: gh-token is now in this terminal's scrollback
+  → to keep it out, pipe it:  brig secret read gh-token | ...
 ```
 
 The warning is on stderr, so a pipe never sees it and stdout carries the value
@@ -519,4 +520,4 @@ around having one.
 | `nothing to import for "x": … held no value` | the profile's sources exist and none of them had anything. Usually: run the agent on the host once to log in |
 | `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. `-y` if replacing it is what you meant |
 | `--from-command fills one secret, so it needs one name` | it supplies a value, and nothing in the command says which secret it is for |
-| `the imported credential x (y) expired N ago.`, followed by `Renew it on the host, then: brig secret import y` | a run found a stored, imported credential past its `expiryField:`. Log in on the host again and re-import |
+| `the imported credential x (y) expired N ago`, followed by `renew it on the host, then:  brig secret import y` | a run found a stored, imported credential past its `expiryField:`. Log in on the host again and re-import |

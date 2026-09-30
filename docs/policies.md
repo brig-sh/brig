@@ -32,7 +32,9 @@ leaves and which it goes to:
 
 ```console
 $ brig run claude --network shared
-brig: this sandbox was started with the isolated posture and --network asks for shared. Rules are fixed when a sandbox boots, so it is being restarted; any other session using this sandbox will be disconnected.
+brig: this sandbox was started with the isolated posture and --network asks for shared
+  ↳ rules are fixed when a sandbox boots, so brig restarts it
+  ↳ any other session using this sandbox will be disconnected
 ```
 
 Brig records the posture when it boots a sandbox, and drops the record
@@ -397,7 +399,9 @@ run reaches:
 
 ```console
 $ brig policy check claude-code -n "My Work"
-brig: no-net is recorded under "My Work", which no run reaches: a session named "My Work" starts "my-work". Remove it with `brig policy detach <policy> claude-code -n "My Work"`
+brig: no-net is recorded under "My Work", which no run reaches
+  ↳ a session named "My Work" starts "my-work"
+  → to remove it:  brig policy detach no-net claude-code -n "My Work"
 no-net
 note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```

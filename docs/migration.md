@@ -2,11 +2,12 @@
 
 Brig renamed most of its commands while it was still a prerelease. Every old
 spelling on this page still works today, except the ones under
-[Removed](#removed). Each one prints one line on stderr that names its
+[Removed](#removed). Each one prints a notice on stderr that names its
 replacement and the release that removes it, in this form:
 
 ```
-brig: `brig profiles` is now `brig agent ls`. The old spelling is removed in v0.4.0
+brig: `brig profiles` is now `brig agent ls`
+  ↳ the old spelling is removed in v0.4.0
 ```
 
 The old spellings are removed in v0.4.0. `brig exec` is the exception: it
@@ -104,7 +105,8 @@ brig run claude -q      # still works, prints a notice
 The notice names the move rather than a new spelling:
 
 ```
-brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`. The old spelling is removed in v0.4.0
+brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`
+  ↳ the old spelling is removed in v0.4.0
 ```
 
 `--json` is different. It is accepted on both sides of the verb permanently,

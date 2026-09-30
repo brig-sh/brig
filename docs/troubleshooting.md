@@ -193,10 +193,9 @@ why.
 **It is on the denylist.**
 
 ```
-brig: not forwarding ANTHROPIC_API_KEY: it is on the claude-code denylist,
-because it outranks the subscription credential and would move this sandbox
-onto metered billing without saying so. Set BRIG_ALLOW_DENIED=1 if that is
-what you want
+brig: not forwarding ANTHROPIC_API_KEY: it is on the claude-code denylist
+  ↳ it outranks the subscription credential, and would move this sandbox onto metered billing without saying so
+  → to forward it anyway:  BRIG_ALLOW_DENIED=1
 ```
 
 A key that switches the sandbox from your subscription onto metered
@@ -206,9 +205,9 @@ genuinely what you want, with `BRIG_ALLOW_DENIED=1`.
 **It looks like an unresolved reference.**
 
 ```
-brig: not forwarding GH_TOKEN: it looks like an unresolved secret reference
-(op://...), not a credential. Resolve it on the host before invoking brig,
-or set BRIG_ALLOW_REFS=1 to forward it as-is
+brig: not forwarding GH_TOKEN: it looks like an unresolved secret reference (op://...), not a credential
+  → resolve it on the host before you run brig
+  → to forward it as it is:  BRIG_ALLOW_REFS=1
 ```
 
 A `scheme://` value is what tools like direnv leave in the environment when a
@@ -226,8 +225,8 @@ is and warns before boot. Dropping it silently looks exactly
 like an unexplained login failure with nothing to act on:
 
 ```
-brig: the imported credential claude-credentials (claude-code) expired 3d ago.
-brig: Renew it on the host, then: brig secret import claude-code
+brig: the imported credential claude-credentials (claude-code) expired 3d ago
+  → renew it on the host, then:  brig secret import claude-code
 ```
 
 Renew the login on the host and import it again, as the second line says.
@@ -238,8 +237,8 @@ A secret you stored with `--from-command` prints a different second line,
 naming that command instead of an import:
 
 ```
-brig: the imported credential <name> (claude-code) expired 3d ago.
-brig: Renew it, then store it again: brig secret import claude-code <name> --from-command '<command>'
+brig: the imported credential <name> (claude-code) expired 3d ago
+  → renew it, then store it again:  brig secret import claude-code <name> --from-command '<command>'
 ```
 
 Confirm:
@@ -286,8 +285,8 @@ The agent starts already logged in instead of showing its login screen.
 ## cosign is not installed
 
 ```
-brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign is not
-installed (`brew install cosign`). Booting it unchecked
+brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign is not installed (`brew install cosign`)
+  ↳ booting it unchecked
 ```
 
 That is `BRIG_VERIFY=warn`, the default. Brig checked the image against its
@@ -339,9 +338,8 @@ Cosign prints its version instead of "command not found", and the next run under
 ## The registry could not be reached to verify an image
 
 ```
-brig: cannot reach the registry to verify image
-ghcr.io/brig-sh/claude-code-stock:root: <detail>. The copy on disk could
-not be checked against what the registry serves
+brig: cannot reach the registry to verify image ghcr.io/brig-sh/claude-code-stock:root: <detail>
+  ↳ the copy on disk could not be checked against what the registry serves
 brig: Boot the cached copy unverified? [y/N]
 ```
 
@@ -380,8 +378,8 @@ brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign did
 not answer within 30s. It waits on docker-credential-desktop, set by
 credsStore in /Users/you/.docker/config.json. Start the app that helper
 belongs to, or run brig with DOCKER_CONFIG set to an empty directory (and
-restart brigd with it set, if brigd is running). The copy on disk was not
-checked against what the registry serves
+restart brigd with it set, if brigd is running)
+  ↳ the copy on disk was not checked against what the registry serves
 brig: Boot the cached copy unverified? [y/N]
 ```
 
@@ -486,8 +484,8 @@ match the workflow that is meant to have built it. That combination has no
 innocent reading, so Brig stops and asks. With no terminal to ask, it refuses:
 
 ```
-brig: not a terminal, so there is nobody to ask: refusing. Set
-BRIG_VERIFY=off to boot it regardless.
+brig: not a terminal, so there is nobody to ask: refusing
+  → to boot it regardless:  BRIG_VERIFY=off
 ```
 
 Answering no aborts, with exit code `5`:
@@ -765,9 +763,9 @@ Any other session on that sandbox is disconnected when it restarts.
 **A different guest home than the one remembered.**
 
 ```
-brig: the running sandbox is not mounting /Users/alex/work -- its share went
-stale (the directory was renamed or replaced, or the workspace changed).
-Restarting it; any other session using this sandbox will be disconnected.
+brig: the running sandbox is not mounting /Users/alex/work: its share went stale
+  ↳ the directory was renamed or replaced, or the workspace changed
+  ↳ brig restarts it, and any other session using this sandbox will be disconnected
 ```
 
 Brig compares the guest home the running sandbox has against the one this
@@ -786,9 +784,9 @@ the same session the sandbox already has.
 **A network policy that no longer matches what is running.**
 
 ```
-brig: this sandbox is running under a different network policy than the one
-that applies now. Rules are fixed when a sandbox boots, so it is being
-restarted; any other session using this sandbox will be disconnected.
+brig: this sandbox is running under a different network policy than the one that applies now
+  ↳ rules are fixed when a sandbox boots, so brig restarts it
+  ↳ any other session using this sandbox will be disconnected
 ```
 
 Egress rules are fixed at boot. Attaching or detaching a policy after a
@@ -804,9 +802,9 @@ brig policy check claude
 **A different posture than the one the sandbox was started with.**
 
 ```
-brig: this sandbox was started with the isolated posture and --network asks
-for shared. Rules are fixed when a sandbox boots, so it is being restarted;
-any other session using this sandbox will be disconnected.
+brig: this sandbox was started with the isolated posture and --network asks for shared
+  ↳ rules are fixed when a sandbox boots, so brig restarts it
+  ↳ any other session using this sandbox will be disconnected
 ```
 
 A sandbox keeps the posture it was started with, so a command that names
@@ -820,10 +818,9 @@ policy isolated is named `isolated`, even after the policy is detached.
 **A different project than the one last used.**
 
 ```
-brig: the running sandbox has /Users/alex/app mounted as its project and
-this run names /Users/alex/other-app. A share cannot be attached to a live
-sandbox, so it is being restarted; any other session using this sandbox
-will be disconnected.
+brig: the running sandbox has /Users/alex/app mounted as its project and this run names /Users/alex/other-app
+  ↳ a share cannot be attached to a live sandbox, so brig restarts it
+  ↳ any other session using this sandbox will be disconnected
 ```
 
 A project is a share too, fixed at boot the same as the guest home. Naming
