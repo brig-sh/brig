@@ -13,7 +13,8 @@ Brig itself must already be installed. [install.md](install.md) covers
 every platform, and how to verify a download.
 
 You need a Mac with Apple silicon, and macOS 15 or newer. On macOS 14, set
-`BRIG_HYPERVISOR=vz` before you run an agent. The default profiles,
+`BRIG_HYPERVISOR=vz` and `BRIG_NETWORK=shared` before you run an agent.
+That network does not promise separation between sandboxes. The default profiles,
 including `claude-code`, ask for hull's `hvi` hypervisor backend, and `hvi`
 needs macOS 15. On Linux you need `nerdctl`, containerd and a `urunc` shim
 that reads Brig's boot annotations, which `install.sh` installs for you.
@@ -78,13 +79,17 @@ WORKSPACE    /Users/you/brig/claude-code (read-write)
 IMAGE        ghcr.io/brig-sh/claude-code-stock:root (pull missing)
 VERIFY       warn, against brig's own trust policy
 CREDENTIALS  (none)
-NETWORK      shared (one network for every sandbox on this host)
+NETWORK      isolated (a network of this sandbox's own)
 ```
 
 `claude-code` asks for hull's `hvi` backend, which is why `ISOLATION`
 names it: `hvi` drives Apple's Hypervisor.framework directly, not
 Virtualization.framework. `WORKSPACE` is the CLI's label for the guest
-home.
+home. The new sandbox's `isolated` network keeps it off other sandboxes'
+networks while allowing internet access. An existing session keeps its
+recorded network, or the actual posture inspected from the runtime when
+an older session has no record, so an older shared session can still
+report `shared`.
 
 On macOS, hull can ask one question about telemetry before the agent
 appears. See [telemetry.md](telemetry.md) for what it counts and how to

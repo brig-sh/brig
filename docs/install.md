@@ -12,8 +12,9 @@ only `brig` and `brigd`, never a runtime.
 ## macOS with Homebrew
 
 Prerequisites: a Mac with Apple silicon, macOS 15 or newer, and Homebrew
-([brew.sh](https://brew.sh)). On macOS 14, set `BRIG_HYPERVISOR=vz` before
-you run an agent. See [Platform support](#platform-support).
+([brew.sh](https://brew.sh)). On macOS 14, set `BRIG_HYPERVISOR=vz` and
+`BRIG_NETWORK=shared` before you run an agent. See
+[Platform support](#platform-support).
 
 ```bash
 brew tap brig-sh/brig
@@ -308,7 +309,7 @@ why Brig signs releases this way.
 | Host | Supported |
 | --- | --- |
 | Mac, Apple silicon, macOS 15 or newer | Yes |
-| Mac, Apple silicon, macOS 14 | Yes, with `BRIG_HYPERVISOR=vz` |
+| Mac, Apple silicon, macOS 14 | Yes, with `BRIG_HYPERVISOR=vz BRIG_NETWORK=shared` |
 | Intel Mac | No |
 | Linux, x86-64 or arm64 | Yes, with the runtime bundle `install.sh` installs |
 
@@ -319,6 +320,10 @@ monitor crash. That refusal needs a version it can read from the host. A
 host that will not report its version proceeds to the boot instead of
 being refused. Six of the eight shipped profiles ask for `hvi`, so a first
 run on macOS 14 hits this floor unless you set `BRIG_HYPERVISOR=vz`.
+Those profiles also ask for isolated networking, which `vz` cannot provide.
+Set `BRIG_NETWORK=shared` too, or pass `--network shared` on each run;
+that network does not promise to separate sandboxes. See
+[Network postures](policies.md#network-postures).
 
 macOS 26 is what the project tests on, a separate fact from the floor.
 Nothing in Brig or hull refuses macOS 15 or macOS 16 for being older than

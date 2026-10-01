@@ -43,6 +43,27 @@ func TestBuiltInsLoadFromTheEmbeddedSpecs(t *testing.T) {
 	}
 }
 
+// Exporting a built-in should carry its network choice with it. Cursor leaves
+// that choice to the backend: its macOS default is vz, but Linux can isolate.
+func TestBuiltInsDeclareTheirNetworkPosture(t *testing.T) {
+	reset(t)
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range All() {
+		want := "isolated"
+		switch p.Name {
+		case "claude-desktop":
+			want = "shared" // The GUI requires vz, which cannot isolate networks.
+		case "cursor":
+			want = "" // Keep the backend's default when this example is exported.
+		}
+		if p.Network != want {
+			t.Errorf("built-in %s declares network %q, want %s", p.Name, p.Network, want)
+		}
+	}
+}
+
 // A fresh install has no profile directory. Nothing pre-seeds it: every
 // profile comes from the binary until you put a file there yourself.
 func TestLoadWritesNothing(t *testing.T) {

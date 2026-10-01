@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // nerdctl drives the Linux path. It is the same product logic over
@@ -170,7 +172,13 @@ func (n *nerdctl) Running(name string) (bool, error) {
 // Exists looks for the sandbox in List, which is `nerdctl ps -a` with no
 // fallback to running containers only, so a missing name is a removed one.
 func (n *nerdctl) Exists(name string) (bool, error) {
-	list, err := n.List()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return n.exists(ctx, name)
+}
+
+func (n *nerdctl) exists(ctx context.Context, name string) (bool, error) {
+	list, err := n.list(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -183,7 +191,11 @@ func (n *nerdctl) Exists(name string) (bool, error) {
 }
 
 func (n *nerdctl) List() ([]Instance, error) {
-	cmd := exec.Command(n.bin, "ps", "-a", "--format", "{{.Names}}\t{{.Status}}")
+	return n.list(context.Background())
+}
+
+func (n *nerdctl) list(ctx context.Context) ([]Instance, error) {
+	cmd := exec.CommandContext(ctx, n.bin, "ps", "-a", "--format", "{{.Names}}\t{{.Status}}")
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	var out bytes.Buffer
 	cmd.Stdout = &out

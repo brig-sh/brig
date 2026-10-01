@@ -6,6 +6,7 @@ image: ghcr.io/brig-sh/grok-stock:root
 # Boots as an ordinary OCI image: the image carries no kernel, so the
 # runtime supplies one. hvi is the backend that path is built around.
 hypervisor: hvi
+network: isolated
 genericBoot: true
 # The root account, which is what makes this work on a rootless Linux install:
 # rootlesskit maps container uid 0 to the invoking user, so a root guest IS

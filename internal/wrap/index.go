@@ -280,7 +280,10 @@ func rememberedProject(ref, vmName string) string {
 
 // rememberedNetwork is the posture the sandbox of this session was last booted
 // with, or "" when none is recorded: a sandbox an older release booted, one
-// never booted, or one whose session entry names a different sandbox.
+// never booted, or one whose session entry names a different sandbox. The
+// boolean reports whether any session entry names this sandbox, even when
+// there is no usable posture record. That history requires inspection even
+// if the runtime's existence check can no longer find its metadata.
 //
 // Kept by the runtime package beside the publications, in a file no older
 // release rewrites. See runtime.BootedNet.
@@ -291,22 +294,24 @@ func rememberedProject(ref, vmName string) string {
 // name would inherit a posture from the one that was removed.
 //
 // A recorded word that is not a posture reads as absent. brig wrote it, nobody
-// typed it, and the posture then comes from the profile or the default. A file
+// typed it, and the posture then comes from runtime inspection. A file
 // that cannot be read at all is an error, the way the publication record is.
-func rememberedNetwork(ref, vmName string) (Network, error) {
-	if readSessionIndex()[ref].Sandbox != vmName {
-		return "", nil
+func rememberedNetwork(ref, vmName string) (Network, bool, error) {
+	index := readSessionIndex()
+	if index[ref].Sandbox != vmName {
+		for _, entry := range index {
+			if entry.Sandbox == vmName {
+				return "", true, nil
+			}
+		}
+		return "", false, nil
 	}
 	word, err := runtime.BootedNet(vmName)
 	if err != nil {
-		return "", err
+		return "", true, err
 	}
-	for _, n := range AllNetworks() {
-		if n.RuntimeNet() == word {
-			return n, nil
-		}
-	}
-	return "", nil
+	network, _ := networkFromRuntime(word)
+	return network, true, nil
 }
 
 // WorkspaceOfSandbox is the workspace recorded for whichever session is

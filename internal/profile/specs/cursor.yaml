@@ -8,6 +8,9 @@ binary: cursor-agent
 unpublished: true
 image: ghcr.io/brig-sh/cursor:latest
 
+# Leave network unset: Linux and hvi isolate; the default macOS backend, vz,
+# falls back to shared because it cannot isolate networks.
+
 guestHome: /home/cursor
 forward: [CURSOR_API_KEY, GH_TOKEN]
 statePaths: [.cursor, .local/share/cursor-agent]

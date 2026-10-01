@@ -28,6 +28,8 @@ CI does not call `make`. It runs its own steps
 - `script/smoke.sh`.
 - `sh -n` and `shellcheck` over `install.sh`, and `script/test-install.sh`,
   which runs its Linux path against a stub curl and fixture releases.
+- Syntax, ShellCheck and `--self-test` for `script/network-isolation-vm.sh`.
+  The real-VM comparison is run manually; the self-test validates its guards.
 - A cross-compile for `darwin/arm64` and one for `linux/amd64`.
 - A check that no test disappeared (`script/check-tests-kept.sh`). Label a
   pull request that renames or deliberately removes a test `removes-tests`,

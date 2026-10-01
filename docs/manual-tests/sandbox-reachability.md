@@ -1,10 +1,11 @@
 # Manual test: can one sandbox reach another?
 
-*Historical evidence, not current validation. It evidences whether one
-sandbox can reach another, across hvi, vz, and Linux's shared and isolated
-networks. The first runs have no calendar date. They are identified by
-version: hull `0.1.0-rc21` on macOS, and Amazon Linux 2023 (kernel 6.18.41)
-with nerdctl 2.0.3 and containerd 2.0.2 on Linux. The section
+*The [2026-09-30 run](#2026-09-30-default-isolation-on-macos-hvi) validates
+the default-network change on macOS `hvi`. Earlier sections are historical
+evidence across hvi, vz, and Linux's shared and isolated networks. The first
+runs have no calendar date. They are identified by version: hull
+`0.1.0-rc21` on macOS, and Amazon Linux 2023 (kernel 6.18.41) with nerdctl
+2.0.3 and containerd 2.0.2 on Linux. The section
 [macOS, `hvi`, hull 0.1.0-rc29](#macos-hvi-hull-010-rc29) is a later run, on
 2026-09-27, with hull `0.1.0-rc29` on macOS 26.7.*
 
@@ -16,7 +17,178 @@ measured since rc21.
 
 CI cannot run any of this. `ci.yml` runs on Linux only and never boots a VM.
 
+## Recheck the default with real VMs
+
+[`script/network-isolation-vm.sh`](../../script/network-isolation-vm.sh)
+checks what a new sandbox gets when the run names no network. Run it on
+macOS with hull's `hvi` backend, or on Linux with nerdctl and the
+`io.containerd.urunc.v2` shim. It requires host `curl` and a guest image
+with `bash`, `curl`, `ip` and `python3`; the default image is
+`ghcr.io/brig-sh/claude-code-stock:root`.
+
+From the repository root, compare a binary from before the default change
+with the new build:
+
+```bash
+BRIG=/absolute/path/to/previous-brig script/network-isolation-vm.sh --expect reachable
+BRIG="$PWD/brig" script/network-isolation-vm.sh --expect reachable # must fail: exit 1
+BRIG="$PWD/brig" script/network-isolation-vm.sh --expect isolated
+```
+
+The first command reproduces the old behavior and exits `0`. The same
+reachability expectation against the fixed binary must exit `1`: the
+client, started without `--network`, cannot reach the other sandbox's
+listener. The third command is the regression check and must exit `0`.
+Each command first runs a shared control: a separate pair with explicit
+`--network shared` must connect. `--skip-shared-control` omits that check.
+
+A blocked request only counts after the host has reached the listener
+through a published port and the client has reached an outbound HTTPS
+endpoint. The default controls use `127.0.0.1:18369` and
+`https://example.com`; `--publish-port` and `--outbound-url` override them.
+`--image` selects another image with the required guest tools.
+
+The script creates private temporary profile, state, guest-home and gateway
+directories, and cleans up only the new sandbox refs it created. Exit `0`
+means the controls passed and the observed result matched `--expect`;
+exit `1` means the opposite reachability was observed; exit `2` means
+setup or a control left the result uncertain. `--self-test` exercises the
+harness without a VM and does not establish runtime isolation.
+
+## 2026-09-30: default isolation on macOS hvi
+
+Tested on macOS 26.6.2 (25G83), arm64, with hull `0.1.0-rc29`
+(`e54923f`) and its `hvi` backend. The baseline was built from `2e4de3f83736`
+before the production edits for #369; the patched binary was built from the
+working tree based on that same commit. Both reported
+`v0.3.1-0.20260929191113-2e4de3f83736+dirty`. The guest image was
+`ghcr.io/brig-sh/claude-code-stock:root`, verified and booted at digest
+`sha256:070d601482c07c9fe09bbda5ee0d841abed9924a2b36a44e6dcf9a265cb99d96`.
+
+With the saved baseline named `brig-before` and the patched build named
+`brig`, these were the three invocations (binary locations normalized):
+
+```bash
+BRIG="$PWD/brig-before" script/network-isolation-vm.sh --expect reachable # exit 0
+BRIG="$PWD/brig" script/network-isolation-vm.sh --expect reachable        # exit 1
+BRIG="$PWD/brig" script/network-isolation-vm.sh --expect isolated         # exit 0
+```
+
+Each invocation first passed its explicit `--network shared` positive
+control. The target pair received no `--network` flag:
+
+| binary and expectation | B to A | script exit |
+| --- | --- | --- |
+| baseline, reachable | A's unique marker from `198.18.0.2:8080`; curl `0`, peer `198.18.0.2` | `0` |
+| patched, reachable | timeout to `198.18.1.2:8080`; curl `28`, empty peer | `1` |
+| patched, isolated | timeout to `198.18.1.2:8080`; curl `28`, empty peer | `0` |
+
+Before **and** after each cross-guest probe, A fetched its own marker, the
+host fetched it through `127.0.0.1:18369`, and B fetched the outbound HTTPS
+control at `https://example.com`. The guests kept their boot IDs. Probes
+and the listener used native runtime exec after Brig booted the sandboxes;
+they could not silently replace a sandbox through `brig sh`. Cleanup
+removed the test sandboxes, private gateways and scratch directories, and
+`hull ps` reported no remaining instances.
+
+During the patched pair's boot, its two separate gateway processes used
+32,752 KiB and 32,528 KiB RSS (65,280 KiB combined). These are process
+snapshots, including any shared pages counted in both; guest RAM and other
+VMM processes are additional. They do not establish a timing or memory
+performance bound.
+
+Separate one-sandbox runs of the patched binary measured the complete
+`brig run -d` command, including verification, with the image and boot
+assets already cached:
+
+| network | fresh-VM command wall time | gateway RSS |
+| --- | --- | --- |
+| explicit shared | 12.795 s | 30,624 KiB |
+| default isolated | 12.476 s | 32,656 KiB |
+
+There was one sample per mode, with no distribution or repeated timing
+trial. These observations do not establish a speed improvement.
+
+Both modes also passed dynamic publication with an existing guest listener:
+
+```bash
+brig network publish "$ref" 18470:8080
+brig network unpublish "$ref" 18470
+```
+
+Between these commands, host `curl` fetched the listener's marker through
+`127.0.0.1:18470`. After unpublishing, the host connection failed with curl
+exit `7`; the listener still answered through native guest exec and the
+guest boot ID was unchanged.
+
+Three earlier attempts were rejected as inconclusive: a harness output
+overwrite, a failed host-publish control, and a changed guest boot ID while
+probing through `brig sh`. They are not isolation evidence. The accepted
+runs above used the corrected harness and a fresh gateway for each pair.
+Linux's real nerdctl/urunc path was **not tested** in this validation.
+
+### Follow-up: preserve sessions without a posture record
+
+The review of `87b4a83` exposed a separate upgrade failure: an indexed,
+running sandbox without a posture record inherited the new profile default.
+The regression test `TestAnUnrecordedSandboxKeepsItsActualNetworkOnUpgrade`
+failed before the follow-up fix using the shipped `ubuntu` profile. Shared
+and offline guests were reported as isolated; the hvi stub restarted them,
+while the nerdctl stub reused them with the wrong report. The test now checks
+all three postures through `Load` and `EnsureRunning`, with no change to the
+shipped profile's `network:` field.
+
+On the same macOS/hull setup described above, the follow-up working tree
+based on `87b4a83` also passed a real hvi check. This simulated missing legacy
+metadata on current hull; it did not install an older Brig or hull release.
+For each posture, a credential-free scratch profile declared
+`network: isolated`, and the test:
+
+1. Booted it with an explicit `--network shared`, `isolated` or `offline`.
+2. Captured its boot ID using native `hull exec`, then deleted only its
+   entry in the private gateway directory's `networks.json`, leaving the
+   session index and address allocations intact.
+3. Checked both text and JSON `brig info`, then ran `brig run -d` without
+   a network flag and captured the boot ID again through native exec.
+
+| existing network | `brig info` after removing the record | flagless run |
+| --- | --- | --- |
+| shared | shared | same boot ID |
+| isolated | isolated | same boot ID |
+| offline | offline | same boot ID |
+
+Neither form of `info` changed the session index or posture file. All three
+guests were removed afterward, private gateways and scratch directories
+were cleaned up, and the temporary runtime store was detached. Linux's
+real nerdctl/urunc path remains **untested**; its recovery and explicit
+posture changes are covered by fixture and lifecycle tests only.
+
+## 2026-10-01: legacy Hull gateway spec recovery
+
+A working tree based on `0af38cc`, with `.spec` recovery added, passed a real
+HVI check on macOS with Hull `v0.1.0-rc29`. The test used private profile,
+state, workspace and gateway directories and a cloned runtime store. Legacy
+metadata was simulated by removing only the guest's posture entry; this did
+not boot an older Brig binary.
+
+| case | result |
+| --- | --- |
+| Running isolated guest, posture entry removed, `.spec` retained | Text and JSON `info` reported isolated without writing records. A flagless run kept the boot ID, PID and VMM argv, then saved the recovered posture. |
+| Posture entry removed again, then ordinary `brig stop` | Stop deleted `.spec` and retained Hull's stopped argv. `info` reported unknown. A flagless run was refused, with no new VM or gateway and no changed runtime or posture record. |
+| Explicit `--network isolated` after that refusal | Boot succeeded with a new boot ID and a recreated `.spec`. |
+
+The test removed its guest and gateway; the private store was detached.
+The tested binary's SHA256 was
+`9364f0825fb981197ac0a29724710016245fd82bf51afeb3f78576b1a92b5ece`.
+Unit tests also cover an explicit shared restart, unreadable or empty specs,
+old spec formats, hashed socket names and reading beside a previous gateway
+path. This does not verify a legacy shared override with a stale isolated
+spec; that [recovery ambiguity](../policies.md#network-postures) remains.
+
 ## Result
+
+This table summarizes the earlier backend measurements below; the dated
+section above records validation of the new default.
 
 | backend | can one sandbox reach another? |
 | --- | --- |
@@ -166,4 +338,5 @@ On `hvi` and on Linux, the shared network does not separate sandboxes.
 refuses `--network isolated`.
 
 The `hvi` answer changed between rc21 and rc29, and no test in brig noticed.
-Nothing in brig checks it now.
+The real-VM harness now checks the default and an explicit shared control.
+CI still does not boot a guest to run it.

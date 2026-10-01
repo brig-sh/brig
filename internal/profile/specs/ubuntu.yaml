@@ -7,6 +7,7 @@ image: docker.io/library/ubuntu:latest
 # Boots as an ordinary OCI image: the image carries no kernel, so the
 # runtime supplies one. hvi is the backend that path is built around.
 hypervisor: hvi
+network: isolated
 genericBoot: true
 
 # The workspace is mounted at /root/work rather than over the home directory:

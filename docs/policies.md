@@ -15,10 +15,16 @@ satisfies any egress rule and is never refused. See
 Every sandbox runs under one of three postures: `shared`, `isolated` or
 `offline`. Set one with `--network`, with `BRIG_NETWORK`, or with a
 profile's own `network:` field. A flag beats the setting, and the setting
-beats the profile. Leave all three unset and you get `shared`.
+beats the profile. A new sandbox defaults to `isolated` on `hvi` and Linux.
+The six built-in `hvi` profiles name that posture explicitly.
+`claude-desktop` names `shared` because its GUI requires `vz`, where Brig
+cannot give a sandbox its own network. The unpublished `cursor` profile
+leaves the choice unset: it gets isolation on Linux and `hvi`, and the
+`shared` fallback on `vz` and `qemu`.
 
 ```bash
-brig run claude --network isolated
+brig run claude                         # a new sandbox gets its own network
+brig run claude@shared --network shared # explicitly share one with other sandboxes
 ```
 
 A sandbox keeps the posture it was started with. A later command that
@@ -38,9 +44,63 @@ brig: this sandbox was started with the isolated posture and --network asks for 
 ```
 
 Brig records the posture when it boots a sandbox, and drops the record
-with `brig rm`. A sandbox started by an older Brig release has no record
-until its next boot. Until then a command on it resolves the posture from
-the flag, the setting and the profile, as before.
+with `brig rm`. For an existing session without that record, Brig asks the
+runtime how its sandbox was configured and keeps that posture ahead of the
+profile's default when it can recover that configuration. Reading the
+posture does not write a new record or restart the sandbox. A successful
+run that reuses it records the recovered posture for later commands.
+
+`sandbox-*.sock`, including case variants, is reserved for isolated
+gateways. Brig rejects a shared `BRIG_GATEWAY_SOCK` override using that
+name before starting or replacing a networked guest. For an unrecorded Hull
+guest using such a socket, Brig reads the `.spec` beside the socket path in
+Hull's saved argv. Only isolated gateways write that file, so a readable,
+nonempty spec recovers `isolated`, even under a previous gateway directory.
+Other gateway names recover as shared. Today's gateway environment does not
+choose which spec is read.
+
+A missing, empty or unreadable spec leaves a `sandbox-*.sock` gateway
+`unknown`, and a flagless run is refused. `brig stop` removes the spec, and
+writing it at gateway startup is best effort: neither case proves shared
+networking. An older isolated guest stopped before posture records were
+introduced therefore still needs an explicit network choice.
+
+The spec records gateway configuration, not a VM creation identity. Older
+versions allowed shared overrides named `sandbox-*.sock`; if one reuses an
+old isolated socket path with a leftover spec, this recovery can wrongly
+report isolation. Runtime metadata tied to the VM's creation is needed to
+remove that ambiguity.
+
+Changing `BRIG_GATEWAY_DIR`, or the directory of `BRIG_GATEWAY_SOCK` when
+no gateway directory is set, also changes where Brig reads `networks.json`
+and allocator records. Restore the original settings to find those records,
+or choose a network explicitly to recreate the guest if its recovered
+configuration cannot be reused.
+Choose a non-reserved shared socket name before recreating a shared guest.
+
+Recovering an older sandbox's posture does not reconstruct lost allocator
+or gateway records. If a recovered posture does not pass the current
+gateway consistency check, a flagless run refuses to replace the guest.
+Restore its gateway settings or name `--network` explicitly. The normal
+consistency checks still apply to sandboxes with a saved posture record.
+
+If Brig cannot establish an existing sandbox's posture, it refuses a run
+that names none rather than applying the new default. With no runtime able
+to inspect it, `brig info` reports the posture as unknown. Name the intended
+posture explicitly with `--network` or `BRIG_NETWORK` to recreate it; that
+disconnects any session using it. A sandbox the runtime confirms is absent
+uses the defaults for a new sandbox.
+
+Hull rc29's `inspect` cannot distinguish absence from unreadable metadata,
+and its listing omits unreadable records. Brig therefore keeps an indexed
+legacy session unknown even when Hull says "instance not found". If you
+removed the VM directly with `hull rm`, `brig ls` prunes its stale session
+entry; you can also name the intended posture explicitly. Check runtime
+access and saved state before using either remedy for an unexplained error.
+If all session-index evidence is also lost, Hull cannot distinguish that
+case from a new name, and Brig's ordinary discovery uses the new-sandbox
+default. Reliable absence detection in that case needs a runtime response
+that distinguishes a missing record from an unreadable one.
 
 An older release that boots the sandbox again does not update the record.
 On a host where two releases share one sandbox, the record can name a
@@ -52,9 +112,13 @@ new record. `brig rm` drops the record with the sandbox.
 
 | posture | what it permits |
 | --- | --- |
-| `shared` | one network for every sandbox on the host. The default |
-| `isolated` | a network of this sandbox's own |
+| `shared` | one network for every sandbox using this posture on the host. Opt-in, except for the `vz` profiles and retained older sessions |
+| `isolated` | a network of this sandbox's own. The default for new `hvi` and Linux sandboxes |
 | `offline` | no route out. The agent runs, the guest home is mounted, nothing leaves |
+
+Both `shared` and `isolated` permit internet access. Isolation separates
+sandboxes; it does not apply an outbound allow list or promise that host
+services are unreachable. An egress policy is a separate choice.
 
 Sandboxes on `shared` reach each other on `hvi` and on Linux. `vz` is not
 measured on a current hull. `--network isolated` keeps a sandbox off that
@@ -78,8 +142,21 @@ NETWORK      isolated (a network of this sandbox's own); shared from its next bo
 
 `isolated` needs the `hvi` backend on macOS. `vz` and `qemu` take their
 network from vmnet, which Brig does not own, so Brig refuses `--network
-isolated` there. On Linux, nerdctl creates a network per sandbox for
-`isolated`, so the posture works on any Linux host.
+isolated` there. A custom profile with no `network:` field falls back to
+`shared` on `vz` or `qemu` only when no flag, environment setting or retained
+posture names a network; the `NETWORK` row in `brig info` names that backend
+fallback. An explicit `isolated` remains an error. In particular, overriding
+one of the built-in `hvi` profiles to `vz` or `qemu` also needs
+`--network shared` or `BRIG_NETWORK=shared`, because its profile explicitly
+asks for isolation.
+On Linux, nerdctl creates a network per sandbox for `isolated`.
+
+On `hvi`, isolation also costs one gateway process per sandbox: about
+28.7 MB per gateway in the measurement recorded in
+[#369](https://github.com/brig-sh/brig/issues/369), not a fixed resource
+guarantee. The isolated address pool has 64 networks; exhaustion refuses
+another boot. Remove unused sandboxes with `brig rm <ref>` to free their
+networks. Linux uses the runtime's network allocation instead of this pool.
 
 Binding an egress policy to a sandbox forces the `isolated` posture, whether
 or not `--network` asked for it. The record keeps the posture that was
@@ -508,10 +585,12 @@ default, and it is not an empty allow list either. A sandbox nobody
 attached a policy to has unrestricted egress, exactly as it did before any
 of this existed. No profile Brig ships binds a policy, and `brig run
 <agent>` on a fresh install filters nothing. No gateway is given a rule
-until a policy is attached to that profile or that session by hand.
+until a policy is attached to that profile or that session by hand. The
+default `isolated` posture gives each new sandbox a network of its own;
+it does not filter that sandbox's outbound traffic.
 
 That is deliberate, and it is a test rather than an intention
-(`TestNoShippedProfileBindsAPolicy`, `TestASandboxWithNoPolicyIsUnfilteredAndShared`).
+(`TestNoShippedProfileBindsAPolicy`).
 An agent that cannot reach its own API is not a safer agent. It is a
 broken one, and a default that broke every sandbox on upgrade costs
 everyone, to benefit the few runs that want a rule.

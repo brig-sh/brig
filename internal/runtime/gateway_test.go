@@ -48,6 +48,32 @@ func TestGatewaySocketNamesTheSubnet(t *testing.T) {
 	}
 }
 
+func TestSharedGatewayRefusesReservedSandboxNames(t *testing.T) {
+	scratchIsolatedDir(t)
+	for _, name := range []string{"sandbox-brig-s.sock", "sandbox-a1b2c3d4.sock", "SANDBOX-brig-s.SOCK"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("BRIG_GATEWAY_SOCK", filepath.Join(t.TempDir(), name))
+			if _, err := gatewaySocket(); err == nil || !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("shared gateway error = %v; want reserved name", err)
+			}
+			// CanRun is the preflight before wrap can stop a running guest.
+			h := &hull{bin: "hull-must-not-run"}
+			for _, net := range []string{"", "shared", "isolated"} {
+				spec := RunSpec{Name: "brig-s", Hypervisor: "hvi", Net: net}
+				if err := h.CanRun(spec); err == nil || !strings.Contains(err.Error(), "reserved") {
+					t.Fatalf("CanRun(%q) = %v; want reserved name", net, err)
+				}
+				if err := h.Run(spec); err == nil || !strings.Contains(err.Error(), "reserved") {
+					t.Fatalf("Run(%q) = %v; want refusal before starting hull", net, err)
+				}
+			}
+			if err := h.CanRun(RunSpec{Hypervisor: "hvi", Net: "none"}); err != nil {
+				t.Fatalf("offline run unnecessarily depends on gateway naming: %v", err)
+			}
+		})
+	}
+}
+
 // hull's --net takes none or shared and nothing else. Passing "isolated"
 // through was what made the posture a no-op on this backend: hull reads any
 // value other than "none" as networked, so the flag was accepted and the
@@ -64,11 +90,9 @@ func TestHullNetIsOnlyNoneOrShared(t *testing.T) {
 	}
 }
 
-// The default is unchanged: a sandbox that asked for nothing is on the shared
-// network, which is the same sandbox it was before the isolated posture did
-// anything. Worth a test of its own rather than an implication of several --
-// the failure mode of getting it wrong is every sandbox on the host moving at
-// once.
+// The runtime seam keeps its zero-value compatibility. wrap resolves the
+// user-facing default and always supplies Net; older callers constructing an
+// empty RunSpec must not silently move an existing sandbox to another network.
 func TestTheDefaultPostureIsStillShared(t *testing.T) {
 	spec := RunSpec{Name: "brig-s", Image: "img"}
 	if got := orDefault(spec.Net, "shared"); got != "shared" {
@@ -268,17 +292,12 @@ func TestEgressArgsAreEmptyWithoutAPolicy(t *testing.T) {
 	}
 }
 
-// The default is open, and stays open.
-//
-// A sandbox nobody attached a policy to is unfiltered and on the shared
-// network: the same sandbox it was before any of this existed. That is the
-// whole of what an ordinary `brig run` gets, and it is worth a test of its own
-// rather than an implication of several -- a tool people cannot use is not
-// safer than one they can, and the failure mode of getting this wrong is every
-// sandbox on the host losing its network at once.
+// The runtime's zero-value spec retains its shared, unfiltered behavior for
+// compatibility with callers that leave the posture empty. Ordinary brig
+// runs resolve their network posture before reaching this seam; changing
+// that product default must not silently change an empty runtime spec too.
 func TestASandboxWithNoPolicyIsUnfilteredAndShared(t *testing.T) {
-	// The zero value of the spec, which is what a run with nothing attached
-	// builds: no rules, and the empty posture that orDefault reads as shared.
+	// No rules, and the empty posture that orDefault reads as shared.
 	spec := RunSpec{Name: "brig-s", Image: "img"}
 
 	if spec.Egress.Filtered() {

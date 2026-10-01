@@ -1,9 +1,12 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // inspectHull is a hull whose `inspect` knows one instance, reports hull's
@@ -24,9 +27,17 @@ func inspectHull(t *testing.T) *hull {
 	return &hull{bin: bin}
 }
 
-// Exists asks `hull inspect`, which answers for a stopped instance too. Only
-// hull's own not-found is absence: any other failure must not read as a
-// removed sandbox.
+func TestHullExistsHonorsInspectionDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if exists, err := inspectHull(t).exists(ctx, "brig-stopped"); exists || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("exists = %t, %v; want false, deadline exceeded", exists, err)
+	}
+}
+
+// Exists asks `hull inspect`, which answers for a stopped instance too. It
+// preserves errors other than hull's ambiguous not-found response; legacy
+// posture recovery cannot use the latter as proof of absence.
 func TestHullExists(t *testing.T) {
 	h := inspectHull(t)
 	if ok, err := h.Exists("brig-stopped"); !ok || err != nil {

@@ -48,7 +48,7 @@ full model.
 | Host | Supported |
 | --- | --- |
 | Mac, Apple silicon, macOS 15 or newer | Yes |
-| Mac, Apple silicon, macOS 14 | Yes, with `BRIG_HYPERVISOR=vz` |
+| Mac, Apple silicon, macOS 14 | Yes, with `BRIG_HYPERVISOR=vz BRIG_NETWORK=shared` |
 | Intel Mac | No |
 | Linux, x86-64 or arm64 | Yes, with the runtime bundle `install.sh` installs |
 
@@ -106,8 +106,13 @@ so the one inbound hole in the sandbox is one you asked for and can see.
 </p>
 
 The project mount is read-write, and those are your real files: the agent
-can change anything under it. On the default `shared` network the agent
-reaches the internet, so anything it can read it can also send. Brig
+can change anything under it. New CLI sandboxes on `hvi` and Linux default to an
+`isolated` network of their own. That keeps them off each other's network;
+they still reach the internet, so anything an agent can read it can also send.
+Existing sandboxes keep their recorded posture, or the runtime's actual
+posture when an older session has no record. The `vz` profiles use
+`shared`. [Network postures](docs/policies.md#network-postures) names the
+exceptions and how to opt into a shared network. Brig
 enforces egress policy only on hull's `hvi` backend, and refuses a
 policy-bound run on any other backend rather than run it unenforced. Image
 verification defaults to `warn`, which reports an unverifiable image and

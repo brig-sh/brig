@@ -80,7 +80,7 @@ type RunSpec struct {
 	// PinsDigest, and the note on the nerdctl and hull adapters.
 	Digest   string
 	Pull     string // missing (default) | always | never
-	Net      string // none | shared
+	Net      string // none | shared | isolated
 	Mem      int    // MB
 	CPUs     int
 	Shares   []Share
@@ -266,6 +266,17 @@ type FeedLimiter interface {
 // Optional: a runtime without it cannot vouch that a sandbox is gone.
 type Exister interface {
 	Exists(name string) (bool, error)
+}
+
+// NetworkInspector reads the network an existing sandbox was booted with,
+// including a stopped sandbox. It lets sessions from before posture records
+// keep an explicitly isolated or offline network without guessing from the
+// old default. No record is written and no gateway is started by this read.
+type NetworkInspector interface {
+	// SandboxNetwork returns shared, isolated or none. Empty with no error
+	// means the runtime confirmed the sandbox is absent; missing or unknown
+	// network metadata is an error, never evidence of a shared network.
+	SandboxNetwork(name string) (string, error)
 }
 
 type Runtime interface {

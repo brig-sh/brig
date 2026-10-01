@@ -43,8 +43,7 @@ bad() { printf '  FAIL %s\n' "$1"; fail=1; }
 
 # --- the stub runtime ---
 # It answers the questions brig asks (ps, run, exec, stop/rm, and the network
-# gateway one case below needs) and logs
-# every argument it is given, so the test can assert on what reached argv.
+# gateway cases below) and logs every argument so the test can assert on argv.
 cat > "$WORK/hull" <<'STUB'
 #!/bin/bash
 { printf 'argv:'; printf ' %s' "$@"; printf '\n'; } >> "$STUB_LOG"
@@ -285,10 +284,11 @@ printf 'stand-in\n' > "$WORK/assets/container-initrd"
 export BRIG_BOOT_ASSETS="$WORK/assets"
 # The built-in profiles ask for hvi, and brig starts a network gateway for it
 # before booting anything. Most cases here are about what reaches argv and have
-# no use for one, so the default is the backend that needs no gateway. The
-# egress case is the exception: it overrides this per command, and the stub
-# answers as a gateway for it.
+# no use for one, so those fixtures explicitly select vz and shared. The
+# default-network and egress cases override these settings per command, and
+# the stub answers as a gateway for them.
 export BRIG_HYPERVISOR=vz
+export BRIG_NETWORK=shared
 # Your own profiles go in a scratch directory, never the caller's own.
 export BRIG_PROFILE_DIR="$WORK/profiles"
 # Brig's own secret store is read here: it is the login keychain, so on a
@@ -602,13 +602,30 @@ grep -q '^NETWORK .*offline' "$WORK/off.out" \
 
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 : > "$STUB_LOG"
-"$WORK/brig" --verbose run claude -d > "$WORK/on.out" 2>&1
+# An unset posture on vz still takes its documented shared fallback. Use a
+# profile that leaves the field unset and remove the fixture's override, so
+# this proves the fallback instead of merely echoing BRIG_NETWORK=shared.
+mkdir -p "$BRIG_PROFILE_DIR"
+cat > "$BRIG_PROFILE_DIR/vz-default.yaml" <<'YAML'
+name: vz-default
+image: smoke/image:latest
+binary: sh
+guestHome: /root
+mem: 256
+cpus: 1
+hypervisor: vz
+YAML
+env -u BRIG_NETWORK "$WORK/brig" --verbose run vz-default -d > "$WORK/on.out" 2>&1
 grep -q -- '--net shared' "$STUB_LOG" \
   && ok "a default run still asks for the shared network" \
   || bad "a default run still asks for the shared network -- got: $(grep '^argv: run' "$STUB_LOG")"
 grep -q '^NETWORK .*shared' "$WORK/on.out" \
   && ok "the envelope names the shared posture" \
   || bad "the envelope names the shared posture -- got: $(cat "$WORK/on.out")"
+grep -q '^NETWORK .*vz does not support isolated networking' "$WORK/on.out" \
+  && ok "the vz default explains why its network is shared" \
+  || bad "the vz default did not explain its fallback -- got: $(cat "$WORK/on.out")"
+rm -f "$BRIG_PROFILE_DIR/vz-default.yaml"
 
 # isolated gives the sandbox a network of its own, which brig can only do where
 # it owns the gateway. This run is pinned to vz, where the network comes from
@@ -669,8 +686,8 @@ unset BRIG_POLICY_DIR
 # have to arrive. The case above proves brig refuses what it cannot enforce,
 # which would still pass with the whole feature deleted -- an attach that
 # writes a file and a boot that reads nothing would refuse on vz just the same.
-# This one proves the rules travel. It is the only case here that needs a
-# gateway, so it is the only one that leaves BRIG_HYPERVISOR=vz behind.
+# This one proves the rules travel. It and the default-network case below
+# need a gateway, so they leave the vz fixture behind.
 #
 # The stub gateway is a python listener, so a runner without python3 would
 # otherwise skip the only automated proof of #15 and stay green. In CI that is
@@ -682,6 +699,45 @@ if ! command -v python3 > /dev/null 2>&1; then
     printf '  skip a policy reaches the gateway (no python3 for the stub gateway)\n'
   fi
 else
+# A fresh custom profile on hvi leaves network unset. Clear the fixture
+# override: leaving it set would make every other assertion green while never
+# testing the default. Hull still takes --net shared for an isolated sandbox,
+# so the proof is the guest's own /30 and its exact gateway, not that flag alone.
+: > "$STUB_LOG"
+cat > "$BRIG_PROFILE_DIR/hvi-default.yaml" <<'YAML'
+name: hvi-default
+image: smoke/image:latest
+binary: sh
+guestHome: /root
+mem: 256
+cpus: 1
+hypervisor: hvi
+YAML
+env -u BRIG_NETWORK BRIG_HYPERVISOR=hvi \
+  "$WORK/brig" --verbose run hvi-default -d > "$WORK/default-net.out" 2>&1
+defaultrc=$?
+grep '^argv: network-gateway --socket' "$STUB_LOG" > "$WORK/gw-default.argv"
+defaultsock="$(sed -n 's/.*--socket \([^ ]*\).*/\1/p' "$WORK/gw-default.argv")"
+defaultrun="$(grep '^argv: run' "$STUB_LOG")"
+if [ "$defaultrc" != 0 ]; then
+  bad "the new default hvi run failed: $(cat "$WORK/default-net.out")"
+elif [ -z "$defaultsock" ] || ! grep -q -- '--socket [^ ]*/sandbox-' "$WORK/gw-default.argv"; then
+  bad "the new default started no gateway of its own: $(cat "$WORK/gw-default.argv")"
+elif ! grep -qE -- '--subnet [0-9.]+/30' "$WORK/gw-default.argv"; then
+  bad "the new default has no private subnet: $(cat "$WORK/gw-default.argv")"
+elif ! printf '%s' "$defaultrun" | grep -qF -- "--gateway-sock $defaultsock" ||
+     ! printf '%s' "$defaultrun" | grep -qE -- '--gateway-cidr [0-9.]+/30'; then
+  bad "the new default guest was not attached to its own gateway: $defaultrun"
+elif grep -q -- '--egress' "$WORK/gw-default.argv"; then
+  bad "the new default applied an egress rule nobody attached: $(cat "$WORK/gw-default.argv")"
+elif ! grep -q '^NETWORK .*isolated' "$WORK/default-net.out"; then
+  bad "the new default envelope did not name isolation: $(cat "$WORK/default-net.out")"
+else
+  ok "a new default hvi run uses its own unfiltered gateway"
+fi
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+rm -f "$BRIG_PROFILE_DIR/hvi-default.yaml"
+
 cat > "$WORK/policies/reachable.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
 name: reachable
@@ -732,8 +788,8 @@ else
   ok "and the sandbox is put on the network that gateway serves"
 fi
 
-# The default stays open. Held here as well as in Go because this is the path
-# a person takes: attach nothing, and nothing is filtered.
+# The explicit shared fixture stays open after a policy is detached. This
+# also proves that shared remains available even though new runs isolate.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 "$WORK/brig" policy detach reachable claude-code > /dev/null 2>&1
 : > "$STUB_LOG"
@@ -743,9 +799,9 @@ grep '^argv: network-gateway --socket' "$STUB_LOG" > "$WORK/gw-off.argv"
 # Four claims, because three of them pass on an empty file. A gateway has to
 # have been started at all -- otherwise a reused one from the case above would
 # let the rest pass while measuring nothing; it has to be a shared gateway
-# rather than one raised for this sandbox alone, which is the shape of the
-# failure worth fearing, every run quietly isolated and filtered; and it must
-# carry no rule. The shared one is named for its network and the per-sandbox
+# rather than one raised for this sandbox alone, because the fixture asks
+# for shared; and it must carry no rule. The shared one is named for its
+# network and the per-sandbox
 # one for its sandbox, and only the shared network is a /24 -- both read off
 # the argv rather than compared against a literal subnet, which has moved once
 # already.
@@ -2258,10 +2314,10 @@ printf 'stand-in\n' > "$WORK/assets/container-initrd"
 export BRIG_BOOT_ASSETS="$WORK/assets"
 # The built-in profiles ask for hvi, and brig starts a network gateway for it
 # before booting anything. Most cases here are about what reaches argv and have
-# no use for one, so the default is the backend that needs no gateway. The
-# egress case is the exception: it overrides this per command, and the stub
-# answers as a gateway for it.
+# no use for one, so the fixture explicitly uses vz and shared. The network
+# cases above exercise the isolated default and policy gateway separately.
 export BRIG_HYPERVISOR=vz
+export BRIG_NETWORK=shared
 
 echo "== sh =="
 : > "$STUB_LOG"

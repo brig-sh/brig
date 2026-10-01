@@ -150,12 +150,22 @@ type Config struct {
 	// when the policy is detached, so the narrowing is never remembered as
 	// though it had been asked for. networkSource is where askedNetwork came
 	// from, and recordedNet is the posture recorded at the sandbox's last
-	// boot, or "" when none was. EnsureRunning and the restart warning read
-	// all three. See rememberedNetwork, postureChanged, networkChange and
-	// runningNet.
+	// boot, or recovered from a legacy sandbox's runtime. EnsureRunning and
+	// the restart warning read all three. See rememberedNetwork,
+	// postureChanged, networkChange and runningNet.
 	askedNetwork  Network
 	networkSource string
 	recordedNet   Network
+	// A legacy session has no posture record. Inspection recovers its actual
+	// network without writing a record; if unavailable, only an explicit
+	// choice authorizes recreating it. A confirmed absence is kept apart so a
+	// sandbox that appears during Load cannot be silently joined as isolated.
+	netRecovery   networkRecoveryState
+	netInspectErr error
+	// Explicitness controls permission to recreate an unknown sandbox. Keep
+	// it independent of networkSource, whose wording is only diagnostic.
+	netExplicit bool
+	netFallback string
 	// Publish is every guest port this sandbox offers on the host: what
 	// --publish asked for on this line, and what the sandbox was already
 	// publishing. PublishAsked is the first half alone.
@@ -478,21 +488,63 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// sandbox started with --network isolated resolved shared, read the running
 	// sandbox as stale and restarted it onto the shared network (#340). The
 	// profile's network: is a default for a new sandbox, not a request to move
-	// one, so it only applies when nothing was recorded -- which is also every
-	// session recorded by an older release.
+	// one, so it only applies when nothing was recorded or recovered from the
+	// runtime of a session an older release started.
 	netValue, netSource := o.Network, "--network"
 	if netValue == "" {
 		netValue, netSource = env.String("NETWORK", ""), env.SettingName("NETWORK")
 	}
-	recordedNet, err := rememberedNetwork(sessionKey(t.Name, slug), vmName)
+	netExplicit := netValue != ""
+	recordedNet, knownSandbox, err := rememberedNetwork(sessionKey(t.Name, slug), vmName)
 	if err != nil && strictErr == nil {
 		strictErr = err
+	}
+	netRecovery := networkNoRecovery
+	var netInspectErr error
+	if strictErr == nil && recordedNet == "" && !knownSandbox {
+		// The session index is bookkeeping, not an inventory. A runtime can
+		// still own this name after the entry is lost or changes profile.
+		if exister, ok := rt.(runtime.Exister); ok {
+			knownSandbox, netInspectErr = exister.Exists(vmName)
+			if netInspectErr != nil {
+				netRecovery = networkUnknown
+			} else if !knownSandbox {
+				netRecovery = networkAbsent
+			}
+		}
+	}
+	if strictErr == nil && recordedNet == "" && knownSandbox && netInspectErr == nil {
+		// The old default was shared, but an old run could deliberately ask
+		// for isolated or offline. Only the runtime can distinguish them.
+		netRecovery = networkUnknown
+		if inspector, ok := rt.(runtime.NetworkInspector); ok {
+			word, inspectErr := inspector.SandboxNetwork(vmName)
+			switch {
+			case inspectErr != nil:
+				netInspectErr = inspectErr
+			case word == "":
+				netRecovery = networkAbsent
+			default:
+				recordedNet, netInspectErr = networkFromRuntime(word)
+				if netInspectErr == nil {
+					netRecovery = networkRecovered
+				}
+			}
+		}
 	}
 	if netValue == "" && recordedNet != "" {
 		netValue, netSource = string(recordedNet), "the posture this sandbox was started with"
 	}
 	if netValue == "" {
 		netValue, netSource = t.Network, "the profile's network:"
+	}
+	netFallback := ""
+	if netValue == "" {
+		netSource = "the default network posture"
+		netFallback = sharedNetworkBackend(rt, env.String("HYPERVISOR", t.Hypervisor))
+		if netFallback != "" {
+			netValue, netSource = string(NetShared), "the "+netFallback+" backend's shared default"
+		}
 	}
 	network, err := ParseNetworkStrict(netValue, netSource)
 	if err != nil && strictErr == nil {
@@ -563,6 +615,10 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		askedNetwork:   askedNet,
 		networkSource:  netSource,
 		recordedNet:    recordedNet,
+		netRecovery:    netRecovery,
+		netInspectErr:  netInspectErr,
+		netExplicit:    netExplicit,
+		netFallback:    netFallback,
 		Publish:        published,
 		PublishAsked:   asked,
 		Egress:         egress,

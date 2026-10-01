@@ -23,8 +23,8 @@ The guest can access:
 - its guest home, read-write
 - the project you name on the run line, read-write at `/work/<name>`
 - the credentials you deliver to it
-- the internet, on the default `shared` network
-- a port another sandbox listens on, on the default `shared` network, on
+- the internet, on either `isolated` or `shared`
+- a port another sandbox listens on, when both use `shared`, on
   `hvi` and on Linux (see
   [things brig does not claim](#things-brig-does-not-claim))
 - any hostmount volume a profile declares
@@ -44,6 +44,19 @@ The guest cannot access:
 - an environment variable a profile's `deny` list refuses
 
 The guest gets only the credentials you deliver to it.
+
+New sandboxes default to `isolated` on `hvi` and Linux, with an explicit
+`shared` exception in the graphical `claude-desktop` profile. The unpublished
+`cursor` profile leaves its posture unset, so it also isolates on Linux and
+`hvi` and takes the backend fallback on `vz` or `qemu`.
+An existing sandbox keeps its recorded posture, or the actual
+posture inspected from the runtime when an older session has no record.
+Brig refuses a flagless run if it cannot establish that existing posture.
+A custom profile without a network choice falls back to `shared` on `vz`
+or `qemu`, and `brig info` names that fallback. `isolated` separates sandbox
+networks; it does not restrict internet access or establish whether host
+services are reachable. See [Network postures](policies.md#network-postures)
+for overrides and the backend limits.
 
 Mounting a project or delivering a credential changes both lists. The agent
 can change the real files at those two mounts, not a copy of them. Anything
@@ -124,7 +137,7 @@ It is named on the `PORTS` row of the execution envelope. `brig info` prints
 the row, and so does `brig --verbose run` before the boot:
 
 ```
-NETWORK      shared (one network for every sandbox on this host)
+NETWORK      isolated (a network of this sandbox's own)
 PORTS        127.0.0.1:8080 -> 80
              0.0.0.0:443 -> 443 (reachable from the network this host is on)
 ```
@@ -862,11 +875,14 @@ on every backend. The one control that exists is an egress policy on `hvi`,
 with `default: deny` and no `cidr` allow for the host's own ranges. There is
 no equivalent on `vz`, `qemu` or Linux.
 
-It does not promise that one sandbox cannot reach another under the default
-`shared` network. What happens there depends on the backend. Brig asks the
-runtime for its shared network. On `hvi`, Brig also hands out the addresses
-on it. Whether that network forwards traffic from one guest to another is the
-runtime's behaviour, not Brig's. The measurements are in
+It does not promise that one sandbox cannot reach another under a
+`shared` network. A flag, setting or profile can choose that posture, and
+older sandboxes keep it if it was recorded or recovered from the runtime.
+`vz` and `qemu` also use it when no posture is named. What happens there
+depends on the backend. Brig asks the runtime for its shared network. On
+`hvi`, Brig also hands out the addresses on it. Whether that network forwards
+traffic from one guest to another is the runtime's behaviour, not Brig's.
+The measurements are in
 [docs/manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md).
 
 | backend | can one sandbox reach another? |
@@ -876,18 +892,20 @@ runtime's behaviour, not Brig's. The measurements are in
 | `qemu` on macOS | not measured. It takes its network from vmnet, as `vz` does |
 | Linux, measured with plain containers on the nerdctl bridge | **yes.** The CNI bridge is an ordinary layer 2 segment, and two sandboxes on it reach each other the way two containers do. The shipped default shim, `io.containerd.urunc.v2`, puts a microVM behind that same bridge, and nothing here has measured whether that changes the answer. Assume it does not |
 
-So on Linux and on `hvi`, two agents you gave *different* credentials can
-each reach whatever the other is listening on. That is a real hole in the
+So on Linux and on `hvi`, two agents on `shared` that you gave *different*
+credentials can each reach whatever the other is listening on. That is a real hole in the
 narrow-blast-radius argument above: there the radius is narrow per guest home
 and per token, not per sandbox. If it matters that two agents cannot reach
 each other, run both with `--network isolated` on `hvi` or on Linux. On `vz`
 and on `qemu`, where that posture is refused, run them on separate hosts.
 
 The `hvi` answer changed between two measurements, and nothing in Brig
-noticed. No test in Brig checks what the shared network carries between
-guests. Do not treat any answer in the table as a property of Brig.
+noticed at the time. Do not treat any answer about `shared` in the table
+as a property of Brig.
 
-`--network isolated` is the guarantee. It gives the sandbox a network of its
+`isolated`, the default for new `hvi` and Linux sandboxes unless another
+posture is named, is the guarantee. `--network isolated` also moves an
+existing shared sandbox onto it. It gives the sandbox a network of its
 own. On Linux that is its own CNI network. On `hvi` it is its own gateway
 process on a `/30` of its own. No other sandbox is on it, no matter what the
 backend does with a shared one. A sandbox carrying an egress policy is

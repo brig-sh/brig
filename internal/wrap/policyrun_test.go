@@ -235,6 +235,9 @@ func loadWithPolicy(t *testing.T, name string) *Config {
 		t.Fatal("no claude-code profile")
 	}
 	p.Policy = []string{name}
+	// These cases exercise a policy narrowing shared and a detach restoring it.
+	// Name the opt-in now that a new sandbox already defaults to isolated.
+	p.Network = "shared"
 	c, err := Load(p, Options{}, nil)
 	if err != nil {
 		t.Fatal(err)

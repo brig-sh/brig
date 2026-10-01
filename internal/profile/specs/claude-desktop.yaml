@@ -5,6 +5,9 @@ desc: Claude Desktop (Anthropic), in a graphical window
 kind: gui
 guiTitle: Claude Desktop
 image: ghcr.io/nofireai/urunc-claude-desktop:aarch64
+# The graphical console uses vz, which cannot provide isolated networking.
+network: shared
+
 guestHome: /home/claude
 
 # The same secret as claude-code, with the same sources, written out in full.

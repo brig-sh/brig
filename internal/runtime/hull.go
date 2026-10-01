@@ -319,10 +319,18 @@ func (h *hull) Running(name string) (bool, error) {
 
 // Exists asks `hull inspect`, which answers for one instance, stopped ones
 // included. List may come from the plain `hull ps` fallback, which does not
-// promise stopped instances. Only hull's own "instance not found" reads as
-// absent.
+// promise stopped instances. Hull's "instance not found" reads as absent for
+// ordinary discovery, but rc29 also uses it for unreadable metadata. A known
+// legacy session must use SandboxNetwork instead of treating this as proof
+// that its old network can be discarded.
 func (h *hull) Exists(name string) (bool, error) {
-	cmd := exec.Command(h.bin, "inspect", name)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return h.exists(ctx, name)
+}
+
+func (h *hull) exists(ctx context.Context, name string) (bool, error) {
+	cmd := exec.CommandContext(ctx, h.bin, "inspect", name)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -526,6 +534,12 @@ func supports(spec RunSpec, hv string) error {
 			"brig can only do on the hvi backend, where it owns the gateway (BRIG_HYPERVISOR "+
 			"is %q); vmnet decides what a %s sandbox shares. Run it on hvi, or run sandboxes "+
 			"that must not reach each other on separate hosts (see docs/security.md)", hv, hv)
+	}
+	if hv == "hvi" && spec.Net != "none" {
+		// Validate before wrap can stop a guest to apply a network change.
+		if _, err := gatewaySocket(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

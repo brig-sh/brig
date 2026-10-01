@@ -670,8 +670,8 @@ The secret no longer shows as missing, and its name appears in the
 
 ```
 brig: the hvi hypervisor needs macOS 15 or newer (this is 14.5): its in-kernel
-interrupt controller does not exist here. Set BRIG_HYPERVISOR=vz for this run,
-or upgrade macOS
+interrupt controller does not exist here. Set BRIG_HYPERVISOR=vz BRIG_NETWORK=shared
+for this run, or upgrade macOS
 ```
 
 Six of the eight built-in profiles ask for the `hvi` hypervisor backend. It
@@ -683,11 +683,14 @@ boot fail further in with nothing to name.
 For one run, use the `vz` backend, Virtualization.framework, instead:
 
 ```bash
-BRIG_HYPERVISOR=vz brig run claude
+BRIG_HYPERVISOR=vz brig run claude --network shared
 ```
 
-For good, put `BRIG_HYPERVISOR=vz` in your shell profile, or upgrade to
-macOS 15 or newer.
+The built-in `hvi` profiles also name `network: isolated`. `vz` cannot
+provide it, so this command explicitly chooses a shared network, where
+sandboxes are not promised separation. For later runs, put both
+`BRIG_HYPERVISOR=vz` and `BRIG_NETWORK=shared` in your shell profile, or
+upgrade to macOS 15 or newer and keep `hvi`.
 
 Confirm:
 
@@ -695,8 +698,8 @@ Confirm:
 brig run claude
 ```
 
-With `BRIG_HYPERVISOR=vz` set, or on macOS 15 or newer, the run reaches the
-agent's prompt instead of refusing.
+With both settings applied, or on macOS 15 or newer using `hvi`, the run
+reaches the agent's prompt instead of refusing.
 
 An older Brig did not check the version first, and left this to find another
 way. Its boot log:

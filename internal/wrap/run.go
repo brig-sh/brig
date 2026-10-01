@@ -117,6 +117,16 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if c.projectRefused != nil {
 		return c.projectRefused
 	}
+	// Load also serves info, stop and rm. An unavailable inspector must not
+	// prevent those commands from reporting or removing a legacy sandbox.
+	if c.netRecovery == networkUnknown && !c.netExplicit {
+		message := fmt.Sprintf("cannot determine the network of sandbox %s; check runtime access and saved state "+
+			"or name --network explicitly to recreate it", c.VMName)
+		if c.netInspectErr != nil {
+			return fmt.Errorf("%s: %w", message, c.netInspectErr)
+		}
+		return errors.New(message)
+	}
 	// Before anything is prepared or booted: a name that sanitises onto a
 	// sandbox another name already owns is refused here rather than dropped
 	// into that sandbox's home directory. See slugclaim.go.
@@ -182,6 +192,10 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			"refusing to start a second one over it: %w", c.VMName, err)
 	}
 	if running {
+		if c.netRecovery == networkAbsent {
+			return fmt.Errorf("sandbox %s appeared after its network was inspected; run the command again "+
+				"to recover its posture before reusing it", c.VMName)
+		}
 		// Two things can be wrong with the mounts of a sandbox that is up, and
 		// both are answered the same way, so they share the one recreate below
 		// rather than growing a second path: a share is bound at boot and
@@ -191,6 +205,10 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// workspace on the host, so restarting costs nothing but the boot.
 		switch stale := c.projectShareStale(); {
 		case c.postureChanged() || c.networkStale():
+			if c.netRecovery == networkRecovered && !c.netExplicit {
+				return fmt.Errorf("cannot reuse the recovered network of sandbox %s with the current gateway configuration; "+
+					"restore its gateway settings or name --network explicitly to recreate it", c.VMName)
+			}
 			// A third thing that cannot change on a live guest, answered the
 			// same way for the same reason. Its network and its egress rules
 			// were fixed when it booted, so a policy attached since is not in
@@ -210,6 +228,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// changed for a session brig already knows about; for one created
 			// before the index existed, this is where its entry appears.
 			c.rememberSession()
+			if c.netRecovery == networkRecovered {
+				// Inspection found the posture and the guest confirmed its
+				// workspace. Keep it so later commands need no legacy probe.
+				c.recordPosture()
+			}
 			// Running a graphical agent again is how you get back to its
 			// window, so the focus is not part of the boot -- it belongs on
 			// every path that leaves a sandbox running.
@@ -465,7 +488,7 @@ func (c *Config) preflightHypervisor(hv string) error {
 	}
 	return fmt.Errorf("the hvi hypervisor needs macOS 15 or newer (this is %s): "+
 		"its in-kernel interrupt controller does not exist here. "+
-		"Set BRIG_HYPERVISOR=vz for this run, or upgrade macOS", version)
+		"Set BRIG_HYPERVISOR=vz BRIG_NETWORK=shared for this run, or upgrade macOS", version)
 }
 
 // majorVersion pulls the major number out of a "15.4.1"-style version string,

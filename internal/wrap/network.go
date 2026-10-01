@@ -1,20 +1,32 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	goruntime "runtime"
 
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
+)
+
+// A runtime probe has one outcome. Unknown metadata must not also look like
+// confirmed absence, which would authorize applying the new default.
+type networkRecoveryState uint8
+
+const (
+	networkNoRecovery networkRecoveryState = iota
+	networkUnknown
+	networkAbsent
+	networkRecovered
 )
 
 // Network is the posture a sandbox runs with.
 type Network string
 
 const (
-	// NetShared is one network for every sandbox on the host. What brig has
-	// always done, and still the default. Whether the sandboxes on it can
-	// reach each other is the backend's answer, not brig's, and it is not the
-	// same answer everywhere. See docs/security.md.
+	// NetShared is one network for sandboxes on the host. Whether they can
+	// reach each other depends on the backend. See docs/security.md.
 	NetShared Network = "shared"
 	// NetIsolated is a network of this sandbox's own, so no other sandbox is
 	// on it whatever the backend does with a shared one.
@@ -37,7 +49,7 @@ const (
 func ParseNetworkStrict(s, source string) (Network, error) {
 	switch s {
 	case "":
-		return NetShared, nil
+		return NetIsolated, nil
 	case string(NetShared):
 		return NetShared, nil
 	case string(NetIsolated):
@@ -48,6 +60,39 @@ func ParseNetworkStrict(s, source string) (Network, error) {
 		return NetShared, fmt.Errorf("%s %q is not a posture: use shared, isolated or offline",
 			source, s)
 	}
+}
+
+// sharedNetworkBackend names the backends that need shared as their unset
+// default: vz and qemu use vmnet, which cannot honour isolated. Load asks only
+// when no posture was named, so an explicit isolated choice is still refused.
+// It also answers for info when no runtime is installed. The selected kind
+// follows DetectFor; a Linux run must never inherit the macOS fallback just
+// because its portable profile has no hypervisor field.
+func sharedNetworkBackend(rt runtime.Runtime, hypervisor string) string {
+	kind := os.Getenv("BRIG_RUNTIME")
+	if rt != nil {
+		kind = rt.Kind()
+	} else if kind == "" && goruntime.GOOS == "darwin" {
+		kind = "hull"
+	}
+	if kind == "hull" {
+		switch hypervisor {
+		case "", "vz":
+			return "vz"
+		case "qemu":
+			return "qemu"
+		}
+	}
+	return ""
+}
+
+func networkFromRuntime(word string) (Network, error) {
+	for _, n := range AllNetworks() {
+		if n.RuntimeNet() == word {
+			return n, nil
+		}
+	}
+	return "", fmt.Errorf("runtime reported an unknown network posture %q", word)
 }
 
 // AllNetworks is every posture that exists. A list rather than a comment, so a
@@ -121,11 +166,46 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 // run and waved through on every one after, printing a POLICY row over a
 // sandbox filtering nothing. A runtime with no opinion is not asked.
 func (c *Config) checkBackend(hypervisor string) error {
+	// Before CanRun. Its isolated refusal names --network isolated, which is
+	// what the user typed when the flag or BRIG_NETWORK said so. A profile's
+	// network: is not that: BRIG_HYPERVISOR=vz, the macOS 14 advice, then
+	// refuses a flag that is not on the command line and never says that
+	// --network shared or BRIG_NETWORK=shared is the way through.
+	if msg := c.profileIsolationOnFallback(hypervisor); msg != "" {
+		return errors.New(msg)
+	}
 	checker, ok := c.Runtime.(runtime.RunChecker)
 	if !ok {
 		return nil
 	}
 	return checker.CanRun(c.backendSpec(hypervisor))
+}
+
+// profileIsolationOnFallback is the refusal for a profile that asks for an
+// isolated network on a backend that can only share one.
+//
+// sharedNetworkBackend is the same test Load uses for the unset-posture
+// fallback, so this fires only where that fallback would have replaced an
+// empty network: and does not fire for hvi. The sentence is also what the
+// NETWORK row appends, so info and the refusal name one fix.
+func (c *Config) profileIsolationOnFallback(hypervisor string) string {
+	if c.askedNetwork != NetIsolated || c.networkSource != "the profile's network:" {
+		return ""
+	}
+	backend := sharedNetworkBackend(c.Runtime, hypervisor)
+	if backend == "" {
+		return ""
+	}
+	// An unset hypervisor on hull is that same fallback. Quoting the empty
+	// string would blame a variable the user did not set.
+	shown := hypervisor
+	if shown == "" {
+		shown = backend
+	}
+	return fmt.Sprintf("the %s profile sets network: isolated, and the %s backend cannot "+
+		"give a sandbox its own network (BRIG_HYPERVISOR is %q). Pass --network shared "+
+		"or set BRIG_NETWORK=shared to run it on the shared network, or run it on hvi",
+		c.Profile.Name, backend, shown)
 }
 
 // CanPublish reports what this backend cannot honour about opening these ports
@@ -165,27 +245,33 @@ func (c *Config) networkStale() bool {
 // postureChanged reports whether this run asks for a different posture than
 // the one the running sandbox was booted with.
 //
-// Decided from the record, whatever the runtime says. hull on hvi can compare
+// Decided from the record or recovered legacy configuration. hull on hvi can compare
 // an isolated gateway, but it has no answer for offline, vz has none at all, and
 // nerdctl is not asked. A running sandbox kept on any of them would leave this
-// run reporting a posture the sandbox does not have. A sandbox with no record
-// has nothing to compare, and is left to networkStale as before.
+// run reporting a posture the sandbox does not have. If legacy inspection
+// failed, an explicit choice authorizes recreation without guessing its old
+// posture; a flagless run is refused before this check.
 func (c *Config) postureChanged() bool {
+	if c.netRecovery == networkUnknown {
+		return c.netExplicit
+	}
 	return c.recordedNet != "" && c.askedNetwork != "" && c.askedNetwork != c.recordedNet
 }
 
-// recordPosture records the posture this run has just booted the sandbox on.
+// recordPosture records the requested posture after a boot, or the recovered
+// posture after successfully reusing an older sandbox with no record.
 //
 // A warning when it fails, the way rememberSession treats its own write: the
-// sandbox is up, and the cost is that a later command that names no posture
-// resolves the default and restarts the sandbox onto it.
+// sandbox is up, and a later command must inspect it to recover its posture.
+// That cannot recover a requested posture before a policy narrowed it.
 func (c *Config) recordPosture() {
 	if c.askedNetwork == "" {
 		return
 	}
+	c.netRecovery = networkNoRecovery
 	if err := runtime.RecordBootedNet(c.VMName, c.askedNetwork.RuntimeNet()); err != nil {
 		c.warnf("%s", notice.Newf("could not record that %s was started %s: %v", c.VMName, c.askedNetwork, err).
-			Note("a later command that names no posture uses the default one and restarts the sandbox"))
+			Note("a later command must inspect its actual network and cannot recover the posture before a policy narrowed it"))
 	}
 }
 
@@ -209,10 +295,9 @@ func (c *Config) recordPosture() {
 // once the sandbox boots on another network, so a gateway still up under a
 // running shared sandbox is one it is behind.
 //
-// No record, no answer. That is a sandbox an older release booted, or one
-// whose session entry names another sandbox, and rememberedNetwork hides both
-// for the reason it gives. Without a record brig cannot tell offline from
-// shared either. No runtime, no answer: there is no sandbox to ask about.
+// Load also fills recordedNet from a legacy sandbox's persisted runtime
+// configuration. If neither source answers, this cannot infer a posture.
+// No runtime, no answer: there is no sandbox to ask about.
 func (c *Config) runningNet() Network {
 	if c.Runtime == nil {
 		return ""
@@ -240,12 +325,36 @@ func (c *Config) runningNet() Network {
 // so a run with nothing recorded costs no extra call. A sandbox that is stopped,
 // or that brig cannot see, has only the next boot to report.
 func (c *Config) networkLine() string {
+	if c.netRecovery == networkUnknown {
+		reason := "runtime inspection unavailable"
+		if c.netInspectErr != nil {
+			reason = c.netInspectErr.Error()
+		}
+		line := "unknown (no recorded posture; " + reason + ")"
+		if c.netExplicit {
+			line += fmt.Sprintf("; %s from its next boot", c.Network)
+		}
+		return line
+	}
+	line := c.Network.Line()
+	if c.Network == NetShared && c.netFallback != "" {
+		line += "; " + c.netFallback + " does not support isolated networking"
+	}
+	// A Config built without a settings lookup has nothing to resolve, and
+	// hypervisor reads that lookup. info always comes from Load, which sets it.
+	hv := ""
+	if c.env.get != nil {
+		hv = c.hypervisor()
+	}
+	if msg := c.profileIsolationOnFallback(hv); msg != "" {
+		line += "; " + msg
+	}
 	now := c.runningNet()
 	if now == "" || now == c.Network {
-		return c.Network.Line()
+		return line
 	}
 	if up, err := c.Runtime.Running(c.VMName); err != nil || !up {
-		return c.Network.Line()
+		return line
 	}
 	return fmt.Sprintf("%s; %s from its next boot", now.Line(), c.Network)
 }
@@ -282,6 +391,10 @@ func (c *Config) networkChange() string {
 // and one restart warning needs both answers.
 func (c *Config) postureChange() (string, bool) {
 	now := c.askedNetwork
+	if c.netRecovery == networkUnknown && c.netExplicit {
+		return fmt.Sprintf("this sandbox's previous network is unknown and %s asks for %s",
+			c.networkSource, now), false
+	}
 	if !c.postureChanged() {
 		return generalNetworkChange, false
 	}

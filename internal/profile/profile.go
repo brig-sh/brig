@@ -158,14 +158,12 @@ type Profile struct {
 	// Ignored on Linux, where the shim decides.
 	Hypervisor string `json:"hypervisor,omitempty"`
 	// Network is the posture this workload wants: shared, isolated or offline.
-	// Empty means shared, which is what every sandbox has had until now: one
-	// network for every sandbox on the host. Whether the sandboxes on it can
-	// reach each other is the backend's answer rather than brig's, and it is
-	// not the same answer everywhere -- see docs/security.md. isolated is a
-	// network of this sandbox's own, so nothing else brig started is on it,
-	// whatever the backend does with a shared one. offline is a sandbox with
-	// no route out at all: the agent runs, the workspace is there, nothing
-	// leaves.
+	// Empty defaults to isolated, a network of this sandbox's own. The vz and
+	// qemu backends cannot honour that and fall back to shared only when no
+	// posture was set. An explicit isolated choice on either is refused.
+	// Shared is one network for sandboxes on the host; whether peers can reach
+	// each other depends on the backend. Offline has no route out.
+	// See docs/security.md.
 	//
 	// A profile states it when the workload's posture is a property of the
 	// work rather than of the run: a formatter that only ever touches the

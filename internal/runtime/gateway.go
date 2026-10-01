@@ -127,6 +127,10 @@ func gatewayDir() (string, error) {
 // are removed.
 func gatewaySocket() (string, error) {
 	if s := os.Getenv("BRIG_GATEWAY_SOCK"); s != "" {
+		if sandboxSocketName(s) {
+			return "", fmt.Errorf("BRIG_GATEWAY_SOCK %q uses a name reserved for isolated gateways; "+
+				"choose a shared socket name that does not match sandbox-*.sock", s)
+		}
 		return s, nil
 	}
 	dir, err := gatewayDir()
@@ -134,6 +138,12 @@ func gatewaySocket() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "gateway-"+socketTag(gatewaySubnet)+".sock"), nil
+}
+
+func sandboxSocketName(sock string) bool {
+	// The usual macOS filesystem also resolves case variants to the same name.
+	base := strings.ToLower(filepath.Base(sock))
+	return strings.HasPrefix(base, "sandbox-") && strings.HasSuffix(base, ".sock")
 }
 
 // GatewayLogPath is where the shared gateway's own output is written, beside

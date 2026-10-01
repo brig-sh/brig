@@ -71,9 +71,10 @@ lists them under
 [Things brig does not claim](docs/security.md#things-brig-does-not-claim):
 
 - Brig does not sandbox the agent from the network by default
-- Brig does not isolate one sandbox from another under the default shared
-  network (`--network isolated` and `--network offline` are the postures
-  that do)
+- Brig does not isolate one sandbox from another when it uses the shared
+  network, including a retained older session or a `vz`/`qemu` backend fallback
+  (`isolated`, the default for new `hvi` and Linux sandboxes, and `offline`
+  are the postures that do)
 - Brig does not filter terminal escape sequences the agent writes
 - Brig does not stop an agent misusing a credential it was deliberately
   handed

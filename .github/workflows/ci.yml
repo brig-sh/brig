@@ -163,3 +163,9 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -s sh install.sh script/test-install.sh
           sh script/test-install.sh
+
+      - name: Check network reproducer guards
+        run: |
+          bash -n script/network-isolation-vm.sh
+          shellcheck script/network-isolation-vm.sh
+          script/network-isolation-vm.sh --self-test

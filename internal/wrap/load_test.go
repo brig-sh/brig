@@ -181,13 +181,14 @@ func TestNetworkPrecedence(t *testing.T) {
 	if !ok {
 		t.Fatal("no claude-code profile")
 	}
-	// Default: shared.
+	// Default: isolated, without relying on a built-in profile's choice.
+	pr.Network = ""
 	c, err := Load(pr, Options{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Network != "shared" {
-		t.Errorf("default network = %q, want shared", c.Network)
+	if c.Network != "isolated" {
+		t.Errorf("default network = %q, want isolated", c.Network)
 	}
 	// Profile beats default.
 	pp := pr

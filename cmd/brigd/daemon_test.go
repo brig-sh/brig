@@ -20,13 +20,20 @@ import (
 	"github.com/brig-sh/brig/internal/ttytest"
 )
 
-// stubRuntime points the daemon at a runtime binary that exists and does
-// nothing. The machine running the tests has neither hull nor nerdctl, and a
-// request whose profile names no runtimeBin of its own has to find one.
+// stubRuntime points the daemon at a runtime with no existing instances.
+// Commands other than inspect succeed without doing anything. An empty
+// successful inspect would claim an existing instance with unreadable state,
+// stopping cold-boot tests before they reach the behavior they exercise.
 func stubRuntime(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(shortDir(t), "hull")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(`#!/bin/sh
+if [ "$1" = inspect ]; then
+  printf 'instance not found: %s\n' "$2" >&2
+  exit 1
+fi
+exit 0
+`), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME", "hull")

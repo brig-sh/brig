@@ -163,23 +163,27 @@ func TestARememberedPostureBeatsTheProfile(t *testing.T) {
 	}
 }
 
-// A sandbox booted before postures were recorded resolves its posture the way
-// it always did, and the restart warning keeps its general wording because
-// there is no recorded posture to name.
+// The shipped profile's new default must not move a sandbox started before
+// postures were recorded. Recover its network from the runtime, not a copy of
+// the profile changed back to the old default.
 func TestASessionWithNoRecordedPostureKeepsTheOldResolution(t *testing.T) {
-	isolateState(t)
-	if err := writeSessionIndex(map[string]sessionEntry{
-		"claude-code": {Home: t.TempDir(), Sandbox: "brig-claude-code"},
-	}); err != nil {
+	p, home := legacySession(t, "claude-code")
+	live := &legacyNetworkRuntime{
+		livenessRuntime: &livenessRuntime{running: true, workspace: home},
+		kind:            "hull", network: "shared",
+	}
+	c, err := Load(p, Options{}, live)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	c := mustLoad(t, Options{})
 	if c.Network != NetShared {
 		t.Errorf("an old entry resolved %q, want shared", c.Network)
 	}
 	if c.postureChanged() {
 		t.Error("a sandbox with no recorded posture was read as changed")
+	}
+	if got := mustBootedNet(t, c.VMName); got != "" {
+		t.Errorf("inspection fabricated boot record %q", got)
 	}
 	if got := c.networkChange(); !strings.Contains(got, "different network policy") {
 		t.Errorf("an old entry changed the restart warning: %s", got)
@@ -197,11 +201,11 @@ func TestAnotherSandboxesPostureIsNotInherited(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.RecordBootedNet("brig-claude-code", "isolated"); err != nil {
+	if err := runtime.RecordBootedNet("brig-claude-code", "none"); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := mustLoad(t, Options{}).Network; got != NetShared {
+	if got := mustLoad(t, Options{}).Network; got != NetIsolated {
 		t.Errorf("inherited %q through an entry naming another sandbox", got)
 	}
 }
@@ -228,8 +232,8 @@ func TestARecordedPostureThatIsNotOneIsIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a bad recorded posture refused the run: %v", err)
 	}
-	if c.Network != NetShared {
-		t.Errorf("a bad recorded posture resolved %q, want shared", c.Network)
+	if c.Network != NetIsolated {
+		t.Errorf("a bad recorded posture resolved %q, want isolated", c.Network)
 	}
 }
 
@@ -310,10 +314,8 @@ func TestAPostureChangeRestartsWhenTheRuntimeCannotTell(t *testing.T) {
 	}
 }
 
-// Reusing a running sandbox records no posture. The runtime was not told a
-// network by this command, so what the command asked for says nothing about
-// the one the sandbox has. A sandbox booted before postures were recorded
-// stays unrecorded until its next boot.
+// Reusing a running sandbox without inspecting it records no posture. What
+// the command asked for says nothing about the network the guest actually has.
 func TestReusingASandboxRecordsNoPosture(t *testing.T) {
 	live := &livenessRuntime{running: true}
 	c := livenessConfig(t, live)
@@ -489,7 +491,7 @@ func TestInfoDoesNotCallASandboxIsolatedWhenAPolicyWasAttachedAfterItBooted(t *t
 	writeTestPolicy(t, policies, "no-net")
 	t.Setenv("BRIG_POLICY_DIR", policies)
 
-	booted(mustLoad(t, Options{}))
+	booted(mustLoad(t, Options{Network: "shared"}))
 	c := loadWithPolicy(t, "no-net")
 	c.Runtime = runningAs("shared")
 
@@ -703,7 +705,7 @@ func TestKeepingThePostureSaysTheRestartOnlyRecordsIt(t *testing.T) {
 func TestTheRestartLineNamesNoPolicyWhenNoneIsAttached(t *testing.T) {
 	isolateState(t)
 	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
-	booted(mustLoad(t, Options{}))
+	booted(mustLoad(t, Options{Network: "shared"}))
 	c := mustLoad(t, Options{Network: "isolated"})
 	c.Runtime = runningAs("isolated")
 	if c.Egress.Default != "" {

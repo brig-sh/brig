@@ -121,6 +121,14 @@ one shipped `kind: shell` profile. The other six are `kind: agent`, the
 default. See [`kind`, and what each one does](#kind-and-what-each-one-does)
 below.
 
+The six shipped `hvi` profiles use `network: isolated`; `claude-desktop`
+uses `network: shared` because its GUI requires `vz`. The unpublished
+`cursor` profile leaves the choice unset: Linux and `hvi` isolate, while
+`vz` and `qemu` fall back to `shared`.
+These are defaults for new sandboxes. Existing sessions keep their
+recorded posture, or the actual posture inspected from the runtime when
+an older session has no record. See [Network postures](policies.md#network-postures).
+
 ## Export and import
 
 ```bash
@@ -136,6 +144,11 @@ With one, it writes the file, comments and all, exactly as Brig ships it,
 not a re-marshalled struct with the explanations stripped. Import stores
 your bytes exactly as written too, so whichever way the file reached you,
 your comments and your ordering survive.
+
+An exported built-in also carries its explicit `network:` choice. If you
+copy a profile that names `isolated` and change its backend to `vz` or
+`qemu`, change the network to `shared` too: those backends cannot enforce
+isolation, and an explicit request for it is refused.
 
 **The destination is a name, never a path.** Brig writes to the profile
 directory and nowhere else, so a path, or a typo that looks like one, is
@@ -326,7 +339,7 @@ profile of the same name to shadow one instead.
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. Brig never does, so finding one is worth a warning rather than a deletion |
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
-| `network` | no | The sandbox's network posture: `shared` (the default, one network for every sandbox on this host), `isolated` (a network of this sandbox's own) or `offline` (no route out at all). A default for a new sandbox: a sandbox keeps the posture it was started with, and `BRIG_NETWORK`, `--network` and `--offline` win over both |
+| `network` | no | The sandbox's network posture: `shared` (one network for sandboxes using it), `isolated` (a network of this sandbox's own) or `offline` (no route out at all). Defaults to `isolated` for a new sandbox, with a reported `shared` fallback on hull's `vz` and `qemu` backends when no posture is named. An explicit `isolated` is refused on `vz` and `qemu`. An existing sandbox keeps its recorded or runtime-inspected posture; `BRIG_NETWORK`, `--network` and `--offline` win over both |
 | `hypervisor` | no | macOS backend to boot on: `vz` (the default when the field is absent, and the only one with a graphical console), `hvi` or `qemu`. Six of the eight shipped profiles say `hvi`. `BRIG_HYPERVISOR` wins over it. Ignored on Linux, where the shim decides |
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. Unlike every other field this is about your machine rather than the workload, so it does not travel usefully to anyone else: it is how you pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the microVM: `block`, `virtiofs` or `9pfs`. Left unset, the runtime picks its own default, which is what a profile that only runs an agent wants. Set `block` when the sandbox installs packages and needs a real writable disk rather than a share sized to the image |

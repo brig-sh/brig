@@ -58,8 +58,11 @@ refused on `hvi` and `qemu`.
 monitor. It is the only backend that runs a network gateway of its own.
 An attached egress policy and `--network isolated` both refuse to run on
 anything else.
-Six of the eight shipped profiles set `hypervisor: hvi`, so most runs use
-`hvi` rather than the `vz` fallback.
+Six of the eight shipped profiles set `hypervisor: hvi` and
+`network: isolated`, so their new sandboxes use `hvi` with a network of
+their own. The two `vz` profiles name `shared`. A custom profile with no
+network choice falls back to `shared` on `vz` or `qemu`, and the `NETWORK` row in
+`brig info` names the reason; an explicit `isolated` is still refused.
 
 `qemu` is a third value hull accepts. Which framework it uses, if any, and
 what it needs on the host are questions for hull's own documentation.
@@ -258,8 +261,9 @@ beyond them:
   Container runtimes get their tmpfs at create time instead
   (`internal/wrap/secretfiles.go`).
 - `network-gateway`, for the `hvi` backend. That backend has no egress of its
-  own, so Brig starts one shared gateway and joins every sandbox to it. Brig
-  also hands out the addresses on that network itself. Guests on one gateway
+  own, so Brig starts a gateway for each isolated sandbox, or one shared
+  gateway for sandboxes that request `shared`. Brig also hands out the
+  addresses on those networks itself. Guests on one shared gateway
   reach each other, measured on hull 0.1.0-rc29. See
   [security.md](security.md#things-brig-does-not-claim) for the answer per
   backend. A gateway started by an older Brig has no API socket, so it cannot
@@ -268,9 +272,10 @@ beyond them:
 
 Six of the eight shipped profiles ask for `hvi` and set `genericBoot: true`
 (`internal/profile/specs`). The default macOS path needs the `hvi` binary
-beside hull, a working gateway, and the boot bundle. `BRIG_HYPERVISOR=vz` moves
-to the other backend, and the graphical profile is refused anywhere but `vz`,
-which is the backend with a console.
+beside hull, a working gateway, and the boot bundle. `BRIG_HYPERVISOR=vz`
+with `BRIG_NETWORK=shared` moves those profiles to the other backend and
+overrides the isolation it cannot provide. The graphical profile is refused
+anywhere but `vz`, which is the backend with a console.
 
 **nerdctl** has to carry `--annotation` through to the shim, take
 `--runtime`, and honour `-v`, `--tmpfs` and a bare `-e NAME`. `docker` is

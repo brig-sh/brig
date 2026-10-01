@@ -189,9 +189,9 @@ brig logs --gateway [<ref>]
 | `--raw` | skip Brig's own formatting |
 | `--gateway` | read the network gateway's log instead of the sandbox's own |
 
-With no ref, `--gateway` reads the shared gateway that serves the default
-network. With a ref, it reads that sandbox's own gateway log, which exists
-only for a sandbox on `--network isolated` or one carrying a policy:
+With no ref, `--gateway` reads the gateway for sandboxes using `shared`.
+With a ref, it reads that sandbox's own gateway log, which exists for an
+isolated sandbox, including a new default `hvi` sandbox or one carrying a policy:
 
 ```bash
 brig logs --gateway
@@ -635,7 +635,7 @@ Brig's own flag but stood where the agent's arguments already begin.
 | `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run`, refused by name as a usage error |
 | `-d`, `--detach` | (none) | off | start the sandbox and exit, without attaching. Parses on every verb, but only `run` reads it. On `sh`, `stop`, `rm` and `info` it is silently inert |
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
-| `--network MODE` | `shared`, `isolated` or `offline` | the posture this sandbox was started with, then the agent's own profile `network:` (none of the shipped agents set one), then `shared` | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. See [policies.md](policies.md) |
+| `--network MODE` | `shared`, `isolated` or `offline` | the recorded or runtime-inspected posture, then the profile's `network:`, then `isolated` (`shared` fallback on `vz` or `qemu` only when no posture is named) | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. An existing sandbox whose posture cannot be established requires an explicit choice. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox |
 | `--publish PORT` | `3000`, `8080:80`, `127.0.0.1:8080:80`, `5353:53/udp` | nothing published | open a guest port on the host. Repeatable. Binds to `127.0.0.1` unless the address says otherwise. There is no `-p`: that is the agent's. See [`brig network`](#brig-network) |
 
@@ -841,7 +841,7 @@ only" below.
 | `BRIG_MEM` | the agent's own | guest memory, MB |
 | `BRIG_CPUS` | the agent's own | guest vCPUs |
 | `BRIG_READY_TIMEOUT` | `30` | seconds to wait for the in-guest agent once the runtime reports the sandbox running. The two are not the same moment |
-| `BRIG_NETWORK` | `shared` | `shared`, `isolated` or `offline`. Beats the posture the sandbox was started with. An unrecognized value refuses the run. See [policies.md](policies.md) |
+| `BRIG_NETWORK` | recorded or runtime-inspected posture, then profile, then `isolated` (`shared` fallback on `vz` or `qemu`) | `shared`, `isolated` or `offline`. Beats the retained posture of an existing sandbox. The fallback applies only when no posture is named, and `brig info` reports it. An unrecognized value refuses the run. See [policies.md](policies.md) |
 | `BRIG_SKILLS` | `0` | `1` copies your own `~/.claude` skills and plugins into the guest home. Same as `--skills` |
 | `BRIG_FORWARD_ENV` | (unset) | a space-separated list of environment variable names to carry into the guest, read live on every run |
 | `BRIG_TITLE` | the agent's own | window title for a graphical agent |
@@ -898,11 +898,13 @@ boot anything it cannot positively verify, cosign missing included. See
 | `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` ignores it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked |
 | `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. A different shim, for example one that runs a plain container, gives up that isolation |
 
-`hvi` is the only backend that enforces an attached egress policy or
-`--network isolated`, and it needs macOS 15 or newer. `vz` is the only
-backend with a graphical console. On macOS 14, set `BRIG_HYPERVISOR=vz` to
-run at all, since Brig refuses an `hvi` run there rather than falling back
-on its own. See [runtimes.md](runtimes.md).
+On macOS, `hvi` is the only backend that enforces an attached egress policy
+or `--network isolated`, and it needs macOS 15 or newer. Linux also supports
+the isolated posture, but refuses egress policies. `vz` is the only backend
+with a graphical console. On macOS 14, set `BRIG_HYPERVISOR=vz` and
+`BRIG_NETWORK=shared` for the built-in `hvi` profiles: Brig refuses an
+`hvi` run there, and `vz` cannot satisfy those profiles' isolated posture.
+See [runtimes.md](runtimes.md).
 
 ### Boot assets and the network gateway
 
@@ -910,8 +912,8 @@ on its own. See [runtimes.md](runtimes.md).
 | --- | --- | --- |
 | `BRIG_BOOT_ASSETS` (global only) | on macOS, wherever `hull assets dir` says (`~/.hull/assets` if hull cannot answer); `$XDG_DATA_HOME/brig/assets` on Linux | directory holding the host kernel and initrd a `genericBoot` agent needs |
 | `BRIG_BOOT_ASSETS_REF` (global only) | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | the bundle Brig fetches when the boot assets are missing |
-| `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway |
-| `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where every gateway socket and log lives, shared and per-sandbox alike |
+| `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway; `sandbox-*.sock` names are reserved for isolated gateways |
+| `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where gateway sockets, logs and network records live, shared and per-sandbox alike |
 
 ## See also
 

@@ -16,9 +16,10 @@ instead of a release. `brig run` is never removed.
 [stability.md](stability.md#retired-spellings) has the rule.
 
 If you have a script written against an older spelling, this page is the
-whole list of what to change. One entry is not a spelling at all: a word on
+whole list of what to change. Some changes go beyond spelling: a word on
 the `brig run` line changed meaning, and it prints nothing. See
-[One word whose meaning changed](#one-word-whose-meaning-changed).
+[One word whose meaning changed](#one-word-whose-meaning-changed). New
+sandboxes also use a different [network default](#network-defaults).
 
 To find out whether a script still uses one, run
 [`script/check-retired-spellings.sh`](../script/check-retired-spellings.sh)
@@ -178,6 +179,56 @@ Declaring a retired key beside its replacement is an error, not a warning.
 `forward:` beside an `env:` entry of the same name, and `statePaths:` beside
 `volumes:`, are refused whatever their values. Brig refuses the profile
 rather than guessing which one you meant.
+
+## Network defaults
+
+New sandboxes on `hvi` and Linux now default to `isolated`, a network of
+their own. They still reach the internet. This change separates sandbox
+networks; it adds no egress policy and makes no new claim about access to
+host services.
+
+Existing sandboxes keep the posture recorded when they started. For an
+older session with no posture record, Brig inspects its sandbox's runtime
+configuration to recover `shared`, `isolated` or `offline` when possible.
+An unrecorded Hull gateway named `sandbox-*.sock` recovers as isolated when
+a readable, nonempty `.spec` remains beside its recorded socket path. Without
+that evidence it stays unknown: `brig stop` removes the spec, so its absence
+does not mean shared. Restore its posture record or choose `--network`
+explicitly; see the [recovery limits](policies.md#network-postures), including
+the ambiguity of stale specs left beside old shared overrides.
+Upgrading does not restart it to apply the new profile default.
+A sandbox the runtime confirms is absent gets the default for a new sandbox.
+
+If the runtime cannot establish an existing sandbox's posture, Brig
+refuses a flagless run instead of guessing. Choose its intended posture
+explicitly to recreate it. To move a sandbox deliberately, run:
+
+```bash
+brig run claude --network isolated
+```
+
+That restarts the sandbox and disconnects any session using it. If one
+sandbox needs to reach another, start both with `--network shared`, set
+`BRIG_NETWORK=shared`, or put `network: shared` in their profiles.
+
+The six `hvi` profiles explicitly use `isolated`; the graphical
+`claude-desktop` profile uses `shared` for `vz`. The unpublished `cursor`
+profile leaves its posture unset: it isolates on Linux and `hvi`, and takes
+the shared fallback on `vz` or `qemu`. Any profile without a network choice
+falls back to `shared` on `vz` or `qemu`, and `brig info` reports why. An explicit `isolated`
+remains refused on `vz` and `qemu`.
+
+If you override an `hvi` profile to `vz` or `qemu`, also override its
+explicit isolated posture. For example, on macOS 14:
+
+```bash
+BRIG_HYPERVISOR=vz brig run claude --network shared
+```
+
+An exported profile is a copy: it keeps whatever `network:` it names.
+Add that field if you want a custom profile to keep a particular posture
+for new sessions. [Network postures](policies.md#network-postures) covers
+the precedence, backend exceptions and resource costs.
 
 ## Settings
 
