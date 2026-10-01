@@ -1,7 +1,9 @@
 # Manual test: can one sandbox reach another?
 
-*The [2026-09-30 run](#2026-09-30-default-isolation-on-macos-hvi) validates
-the default-network change on macOS `hvi`. Earlier sections are historical
+*The [macOS run](#2026-09-30-default-isolation-on-macos-hvi) validates
+the default-network change on `hvi`. The later
+[Linux run](#2026-09-30-linux-arm64-under-qemu) checks nerdctl/urunc with an
+explicitly documented ARM console workaround. Earlier sections are historical
 evidence across hvi, vz, and Linux's shared and isolated networks. The first
 runs have no calendar date. They are identified by version: hull
 `0.1.0-rc21` on macOS, and Amazon Linux 2023 (kernel 6.18.41) with nerdctl
@@ -125,7 +127,7 @@ Three earlier attempts were rejected as inconclusive: a harness output
 overwrite, a failed host-publish control, and a changed guest boot ID while
 probing through `brig sh`. They are not isolation evidence. The accepted
 runs above used the corrected harness and a fresh gateway for each pair.
-Linux's real nerdctl/urunc path was **not tested** in this validation.
+Linux was not part of this macOS validation; see the later Linux run below.
 
 ### Follow-up: preserve sessions without a posture record
 
@@ -159,9 +161,166 @@ For each posture, a credential-free scratch profile declared
 
 Neither form of `info` changed the session index or posture file. All three
 guests were removed afterward, private gateways and scratch directories
-were cleaned up, and the temporary runtime store was detached. Linux's
-real nerdctl/urunc path remains **untested**; its recovery and explicit
-posture changes are covered by fixture and lifecycle tests only.
+were cleaned up, and the temporary runtime store was detached. Linux was
+not part of this follow-up run.
+
+## 2026-09-30: Linux ARM64 under QEMU
+
+The before/after network comparison passed on Ubuntu 24.04.5 ARM64, kernel
+`6.8.0-142-generic`, using the system installation of the signed
+`NOFireAI/brig-standalone-linux` `v0.1.0-rc10` bundle. This supplies
+containerd and nerdctl `2.3.5`, CNI plugins `1.9.1`, Cloud Hypervisor `50.0`,
+and urunc commit `74dd0cc9e3028ea18c5daff69e4ba5452075f21d`.
+The snapshotter was overlayfs, with private containerd at
+`/run/brig/containerd.sock` and namespace `brig`.
+
+The Linux host was a QEMU `11.1.1` VM on an Apple M2 Pro: four vCPUs, 8 GiB
+RAM, a 64 GiB sparse disk, and user-mode NAT with SSH forwarded only on
+host loopback. No Mac directories were shared. Provisioning used HVF;
+microVM tests used `-accel tcg,thread=multi -cpu max` with
+`-machine virt,gic-version=3,virtualization=on`. Linux initialized KVM in
+VHE mode; `KVM_GET_API_VERSION` returned `12` and `KVM_CREATE_VM` succeeded.
+This is functional evidence from an emulated Linux machine, not a native
+Linux performance measurement.
+
+### Runtime setup exceptions
+
+The unmodified ARM bundle did **not** complete the first sandbox boot.
+These tests therefore do **not** establish that the shipped ARM runtime
+works without changes:
+
+- The overlayfs install left an unavailable devmapper pool configured.
+  Its plugin failure prevented containerd metadata and leases from loading.
+  The test host disabled `io.containerd.snapshotter.v1.devmapper` and
+  removed its transfer `unpack_config` stanza, keeping overlayfs.
+- The stock ARM Cloud Hypervisor console path appended
+  `earlycon=pl011,mmio,0x09000000` after `-- sleep infinity`. Linux passed
+  that option to init, and `sleep` rejected it as an invalid time interval.
+  A console-only diagnostic build exposed the error. The working runtime
+  used the same urunc commit with the
+  [recorded console patch](urunc-arm64-virtio-console.patch): ARM Cloud
+  Hypervisor uses `--console tty --serial off`, and the kernel uses
+  `console=hvc0`. The shipped kernel has `CONFIG_VIRTIO_CONSOLE=y`.
+  Apply the patch to the pinned urunc source with `git apply --unidiff-zero`.
+  Focused console and container-boot tests passed inside Linux.
+
+Cloud Hypervisor's [command-line assembly](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/v50.0/vmm/src/vm.rs#L1115)
+and [serial-device setup](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/v50.0/vmm/src/device_manager.rs#L2242)
+explain the extra argument. The workaround changes console transport only;
+the urunc network code, VMM, CNI plugins and guest image were unchanged.
+Both Brig binaries used this same runtime. The patched urunc executable's
+SHA256 was `8e145ef18849d205aac241f339ab73dd08dd142c314370835343190e766adaf4`.
+
+### Before/after reachability
+
+The baseline came from `2e4de3f83736`; the fixed binary came from
+`72f77d64fae0`. Both were cross-compiled for Linux ARM64 with Go `1.27.1`.
+The signed image was `ghcr.io/brig-sh/claude-code-stock:root`, resolved to
+`sha256:070d601482c07c9fe09bbda5ee0d841abed9924a2b36a44e6dcf9a265cb99d96`.
+Boot assets came from the verified runtime bundle. Verification remained
+required. Each binary had a wrapper setting only `BRIG_READY_TIMEOUT=600`
+to accommodate emulation; the harness deliberately clears ambient Brig
+settings, so this deadline must be set inside the wrapper.
+
+After sourcing `/var/lib/brig/data/etc/brig-env.sh` as root:
+
+```bash
+BRIG=/opt/brig369/bin/brig-before BRIG_VERIFY=require \
+  script/network-isolation-vm.sh --expect reachable # exit 0
+BRIG=/opt/brig369/bin/brig-fixed BRIG_VERIFY=require \
+  script/network-isolation-vm.sh --expect reachable # exit 1
+BRIG=/opt/brig369/bin/brig-fixed BRIG_VERIFY=require \
+  script/network-isolation-vm.sh --expect isolated # exit 0
+```
+
+| binary and expectation | default B to A | script exit |
+| --- | --- | --- |
+| baseline, reachable | unique marker from `10.44.0.7:8080`; curl `0`, peer `10.44.0.7` | `0` |
+| fixed, reachable | timeout to `10.4.1.2:8080`; curl `28`, empty peer | `1` |
+| fixed, isolated | timeout to `10.4.1.2:8080`; curl `28`, empty peer | `0` |
+
+All three invocations first passed the explicit shared-network control.
+Each default probe was bracketed by successful listener self-connect,
+host published-port and outbound HTTPS controls. Native nerdctl exec
+checked unchanged guest boot IDs. Every invocation removed its sandboxes
+and custom networks. The earlier failed boot attempts were setup failures
+and are excluded from these results.
+
+### Empty-network allocation and reuse
+
+A separate exercise on the same Linux disk and runtime configuration,
+before switching from HVF to TCG, created 32 nerdctl networks sequentially,
+kept all 32 allocated together, inspected their IPv4 IPAM subnets, then
+removed them. It repeated
+this three times: 96 successful create/remove pairs, with no overlapping
+subnets within a wave. All 32 subnets were reused in both later waves,
+and the network list returned to its initial set after each wave.
+
+This exercise started **zero containers or VMs**. It establishes bounded
+configuration allocation and reuse, not CNI endpoint cleanup, the maximum
+pool capacity, or behavior under unlimited concurrent sandboxes.
+
+### Real sandbox removal and replacement
+
+A separate run of the fixed binary created six actual urunc microVMs,
+with four alive at once. Each was configured for 1 GiB RAM and one vCPU,
+and received no network flag. Native exec reported kernel `6.12.95`, with
+distinct guest boot IDs that also differed from the outer host. Containerd
+identified every sandbox's runtime as `io.containerd.urunc.v2`.
+
+The first four guests occupied `10.4.1.0/24` through `10.4.4.0/24`.
+All 12 directed cross-guest probes timed out before connecting, bracketed
+by successful listener, host-publication and outbound HTTPS controls.
+After removing the guests on `10.4.2.0/24` and `10.4.4.0/24`, two new
+guests reused those subnets and the released host ports. All 12 directed
+probes among the resulting four guests passed the same isolation checks.
+The two surviving guests kept their boot IDs and network identities.
+
+Each of the six `brig rm` operations removed its container, named network,
+CNI configuration and host-local IP allocation record. The allocator kept
+only its `lock` and `last_reserved_ip.0` bookkeeping files; these did not
+reserve the released subnets. The final container and network lists
+matched their initial sets. This is bounded endpoint-cleanup evidence,
+separate from the 96 empty-network allocation operations above.
+
+### Legacy posture recovery
+
+The first real Linux recovery check found a bug missed by the fixtures.
+After removing the posture record of a running shared guest, `brig info`
+reported `unknown`. Its inspect response contained one persisted network,
+`bridge`, but two interface entries: `unknown-eth0` and the addressless
+`unknown-tap0_urunc`. Urunc wires that TAP to the CNI interface inside the
+same network namespace. Nerdctl's
+[inspect implementation](https://github.com/containerd/nerdctl/blob/v2.3.5/pkg/inspecttypes/dockercompat/dockercompat.go#L783)
+reports both interfaces; they are not two CNI attachments.
+
+`TestNerdctlSandboxNetworkRecognizesUruncHelperTAP` reproduced the rejection
+for shared and isolated guests before the parser fix. The corrected parser
+ignores this exact addressless helper only for `io.containerd.urunc.v2`,
+with a matching singleton persisted network and one other valid interface.
+Malformed helper metadata, addressed helpers, unexpected interfaces and
+multiple persisted networks remain unknown. The focused regression tests
+pass with the fix.
+
+The follow-up working tree based on `72f77d64fae0`, including that parser
+fix, then passed all three real recovery checks on the same runtime:
+
+| existing network | `brig info` without its posture record | flagless run |
+| --- | --- | --- |
+| shared | shared | same boot ID and runtime network |
+| isolated | isolated | same boot ID and runtime network |
+| offline | offline | same boot ID and runtime network |
+
+The scratch profile declared `network: isolated`. Each guest booted with
+an explicit posture, then the test removed only its `networks.json` entry,
+leaving the session index intact. Text and JSON `info` recovered the actual
+posture without changing the session index or gateway files. A subsequent
+flagless run preserved the guest and its runtime network configuration.
+All three guests and their owned networks were removed afterward.
+
+This simulates missing legacy metadata on the current stack; it does not
+install an older Linux runtime. The follow-up binary SHA256 was
+`913544aeaedacd8bfa9d601dd38cc85a047937f4c5c2db31d7344eb28594e958`.
 
 ## 2026-10-01: legacy Hull gateway spec recovery
 
@@ -188,7 +347,7 @@ spec; that [recovery ambiguity](../policies.md#network-postures) remains.
 ## Result
 
 This table summarizes the earlier backend measurements below; the dated
-section above records validation of the new default.
+sections above record validation of the new default.
 
 | backend | can one sandbox reach another? |
 | --- | --- |

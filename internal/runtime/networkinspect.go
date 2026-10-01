@@ -127,7 +127,7 @@ func (n *nerdctl) SandboxNetwork(name string) (string, error) {
 		return "", fmt.Errorf("inspect network of %s: %w: %s", name, err, firstLines(stderr, 3))
 	}
 	var state struct {
-		HostConfig      struct{ NetworkMode string }
+		HostConfig      struct{ NetworkMode, Runtime string }
 		Config          struct{ Labels map[string]string }
 		NetworkSettings struct{ Networks map[string]json.RawMessage }
 	}
@@ -135,9 +135,6 @@ func (n *nerdctl) SandboxNetwork(name string) (string, error) {
 		return "", fmt.Errorf("inspect network of %s: invalid container response: %w", name, err)
 	}
 	mode := state.HostConfig.NetworkMode
-	if len(state.NetworkSettings.Networks) > 1 {
-		return "", fmt.Errorf("inspect network of %s: multiple container network attachments", name)
-	}
 	persistedMode := false
 	if raw, ok := state.Config.Labels["nerdctl/networks"]; ok {
 		var networks []string
@@ -146,8 +143,19 @@ func (n *nerdctl) SandboxNetwork(name string) (string, error) {
 		}
 		persistedMode = true
 	}
+	// nerdctl reports interfaces in the container's network namespace,
+	// including the addressless TAP urunc wires to its one CNI interface.
+	// That pair is one attachment. Require its persisted label and exact
+	// runtime/interface shape so an unexpected second network stays unknown.
+	if persistedMode && mode != "none" && state.HostConfig.Runtime == "io.containerd.urunc.v2" &&
+		len(state.NetworkSettings.Networks) == 2 && addresslessUruncTAP(state.NetworkSettings.Networks["unknown-tap0_urunc"]) {
+		delete(state.NetworkSettings.Networks, "unknown-tap0_urunc")
+	}
+	if len(state.NetworkSettings.Networks) > 1 {
+		return "", fmt.Errorf("inspect network of %s: multiple container network attachments", name)
+	}
 	for network := range state.NetworkSettings.Networks {
-		// Older nerdctl named the first guest interface unknown-eth0. Only
+		// nerdctl can name the guest-facing interface unknown-eth0. Only
 		// the unambiguous persisted attachment can identify that network;
 		// the placeholder alone is not evidence of any posture.
 		if persistedMode && mode != "none" && network == "unknown-eth0" {
@@ -167,6 +175,22 @@ func (n *nerdctl) SandboxNetwork(name string) (string, error) {
 	default:
 		return "", fmt.Errorf("inspect network of %s: unrecognised container network mode %q", name, mode)
 	}
+}
+
+func addresslessUruncTAP(raw json.RawMessage) bool {
+	var tap struct {
+		IPAddress, GlobalIPv6Address     *string
+		IPPrefixLen, GlobalIPv6PrefixLen *int
+	}
+	// Missing fields are not evidence of an addressless interface. A null,
+	// truncated or differently shaped inspect response must still fail closed.
+	if err := json.Unmarshal(raw, &tap); err != nil {
+		return false
+	}
+	return tap.IPAddress != nil && *tap.IPAddress == "" &&
+		tap.GlobalIPv6Address != nil && *tap.GlobalIPv6Address == "" &&
+		tap.IPPrefixLen != nil && *tap.IPPrefixLen == 0 &&
+		tap.GlobalIPv6PrefixLen != nil && *tap.GlobalIPv6PrefixLen == 0
 }
 
 func inspectNetwork(bin string, args ...string) ([]byte, string, error) {

@@ -156,6 +156,116 @@ func TestNerdctlSandboxNetworkRecoversTheLegacyInterfaceName(t *testing.T) {
 	}
 }
 
+func TestNerdctlSandboxNetworkRecognizesUruncHelperTAP(t *testing.T) {
+	for _, tt := range []struct {
+		name, mode, runtime, helperName, ipv4, ipv6, want string
+		ipv4Prefix, ipv6Prefix                            int
+		labels                                            []string
+		omitLabel                                         bool
+		missingField, nullField                           string
+		nullHelper                                        bool
+		remainingInterfaces                               []string
+	}{
+		{name: "shared urunc guest", want: "shared"},
+		{name: "isolated urunc guest", mode: "brig-legacy", want: "isolated"},
+		{name: "non-urunc runtime", runtime: "io.containerd.runc.v2"},
+		{name: "helper has IPv4", ipv4: "192.0.2.8"},
+		{name: "helper has IPv6", ipv6: "2001:db8::8"},
+		{name: "helper has IPv4 prefix", ipv4Prefix: 24},
+		{name: "helper has IPv6 prefix", ipv6Prefix: 64},
+		{name: "null helper metadata", nullHelper: true},
+		{name: "missing helper IPv4", missingField: "IPAddress"},
+		{name: "missing helper IPv6", missingField: "GlobalIPv6Address"},
+		{name: "missing helper IPv4 prefix", missingField: "IPPrefixLen"},
+		{name: "missing helper IPv6 prefix", missingField: "GlobalIPv6PrefixLen"},
+		{name: "null helper IPv4", nullField: "IPAddress"},
+		{name: "null helper IPv6", nullField: "GlobalIPv6Address"},
+		{name: "null helper IPv4 prefix", nullField: "IPPrefixLen"},
+		{name: "null helper IPv6 prefix", nullField: "GlobalIPv6PrefixLen"},
+		{name: "unknown helper interface", helperName: "unknown-tap1_urunc"},
+		{name: "multiple persisted attachments", labels: []string{"bridge", "other"}},
+		{name: "mismatched persisted attachment", labels: []string{"other"}},
+		{name: "missing persisted attachment", omitLabel: true},
+		{name: "offline mode with interfaces", mode: "none"},
+		{name: "helper without a network interface", remainingInterfaces: []string{}},
+		{name: "helper with two network interfaces", remainingInterfaces: []string{"unknown-eth0", "bridge"}},
+		{name: "helper with wrong remaining interface", remainingInterfaces: []string{"unknown-eth1"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mode := tt.mode
+			if mode == "" {
+				mode = "bridge"
+			}
+			runtime := tt.runtime
+			if runtime == "" {
+				runtime = "io.containerd.urunc.v2"
+			}
+			helperName := tt.helperName
+			if helperName == "" {
+				helperName = "unknown-tap0_urunc"
+			}
+			labels := map[string]string{}
+			if !tt.omitLabel {
+				networks := tt.labels
+				if networks == nil {
+					networks = []string{mode}
+				}
+				encoded, err := json.Marshal(networks)
+				if err != nil {
+					t.Fatal(err)
+				}
+				labels["nerdctl/networks"] = string(encoded)
+			}
+			helper := map[string]any{
+				"IPAddress": tt.ipv4, "IPPrefixLen": tt.ipv4Prefix,
+				"GlobalIPv6Address": tt.ipv6, "GlobalIPv6PrefixLen": tt.ipv6Prefix,
+				"MacAddress": "02:00:00:00:00:02",
+			}
+			if tt.missingField != "" {
+				delete(helper, tt.missingField)
+			}
+			if tt.nullField != "" {
+				helper[tt.nullField] = nil
+			}
+			if tt.nullHelper {
+				helper = nil
+			}
+			interfaces := map[string]any{helperName: helper}
+			remaining := tt.remainingInterfaces
+			if remaining == nil {
+				remaining = []string{"unknown-eth0"}
+			}
+			for _, name := range remaining {
+				interfaces[name] = map[string]any{
+					"IPAddress": "192.0.2.7", "IPPrefixLen": 24,
+					"GlobalIPv6Address": "", "GlobalIPv6PrefixLen": 0,
+					"MacAddress": "02:00:00:00:00:01",
+				}
+			}
+			// Real urunc inspect includes its unaddressed helper TAP beside
+			// unknown-eth0. Keep that shape, including zero prefix lengths
+			// and a MAC, without copying image, mount or session metadata.
+			fixture, err := json.Marshal(map[string]any{
+				"HostConfig":      map[string]string{"NetworkMode": mode, "Runtime": runtime},
+				"Config":          map[string]any{"Labels": labels},
+				"NetworkSettings": map[string]any{"Networks": interfaces},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := &nerdctl{bin: networkInspectFixture(t, string(fixture), "", 0, "", 0)}
+			got, err := n.SandboxNetwork("brig-legacy")
+			if tt.want == "" {
+				if got != "" || err == nil {
+					t.Fatalf("SandboxNetwork = %q, %v; want unknown with error", got, err)
+				}
+			} else if got != tt.want || err != nil {
+				t.Fatalf("SandboxNetwork = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestNerdctlSandboxNetworkConfirmsAbsence(t *testing.T) {
 	for _, tt := range []struct {
 		name, list string

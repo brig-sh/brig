@@ -1,0 +1,18 @@
+--- a/pkg/unikontainers/hypervisors/cloud_hypervisor.go
++++ b/pkg/unikontainers/hypervisors/cloud_hypervisor.go
+@@ -18,0 +19 @@
++	"runtime"
+@@ -92 +93,5 @@
+-	exArgs = append(exArgs, "--console", "off", "--serial", "tty")
++	if runtime.GOARCH == "arm64" {
++		exArgs = append(exArgs, "--console", "tty", "--serial", "off")
++	} else {
++		exArgs = append(exArgs, "--console", "off", "--serial", "tty")
++	}
+--- a/pkg/unikontainers/unikernels/linux.go
++++ b/pkg/unikontainers/unikernels/linux.go
+@@ -19,0 +20 @@
++	"runtime"
+@@ -109,0 +111,2 @@
++	} else if runtime.GOARCH == "arm64" && l.Monitor == "cloud-hypervisor" {
++		consoleStr = "console=hvc0"
