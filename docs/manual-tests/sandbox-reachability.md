@@ -3,7 +3,9 @@
 *The [macOS run](#2026-09-30-default-isolation-on-macos-hvi) validates
 the default-network change on `hvi`. The later
 [Linux run](#2026-09-30-linux-arm64-under-qemu) checks nerdctl/urunc with an
-explicitly documented ARM console workaround. Earlier sections are historical
+explicitly documented ARM console workaround, and the
+[amd64 run](#2026-10-02-linux-amd64-with-the-stock-runtime) repeats it on
+the shipped runtime with no workaround. Earlier sections are historical
 evidence across hvi, vz, and Linux's shared and isolated networks. The first
 runs have no calendar date. They are identified by version: hull
 `0.1.0-rc21` on macOS, and Amazon Linux 2023 (kernel 6.18.41) with nerdctl
@@ -343,6 +345,59 @@ Unit tests also cover an explicit shared restart, unreadable or empty specs,
 old spec formats, hashed socket names and reading beside a previous gateway
 path. This does not verify a legacy shared override with a stale isolated
 spec; that [recovery ambiguity](../policies.md#network-postures) remains.
+
+## 2026-10-02: Linux amd64 with the stock runtime
+
+The before/after comparison and the legacy recovery checks passed on an EC2
+`c8i.2xlarge` (Intel Xeon 6975P-C, 8 vCPUs, 16 GiB) with nested
+virtualization enabled, running Ubuntu 24.04.5 with kernel
+`7.0.0-1013-aws`. `/dev/kvm` was present with no host setup. The runtime was
+the `NOFireAI/brig-standalone-linux` `v0.1.0-rc13` bundle, installed as root
+by this repository's `install.sh` and used as installed: containerd and
+nerdctl `2.3.5`, Cloud Hypervisor `50.0`, urunc `0.8.0-f6d54d6`. None of the
+[ARM setup exceptions](#runtime-setup-exceptions) were needed.
+
+The baseline came from `bde00d4`, the parent of the network-default change.
+The fixed binary came from `acc9527`, whose tree is identical to the merged
+`1731cf5`. Both were built on the host with Go `1.27.1`; their SHA256 values
+were `85ffd47876979a46a521d568e5ccae18aef4b026de5ffbc9cccf3b8ffe9315ab` and
+`47dfd6441fd3641623cdeebc8b7d13e8bbf229670d5999a1c4844d40d4c7cd12`. The image
+was `ghcr.io/brig-sh/claude-code-stock:root`, resolved to
+`sha256:070d601482c07c9fe09bbda5ee0d841abed9924a2b36a44e6dcf9a265cb99d96`.
+
+After sourcing `/var/lib/brig/data/etc/brig-env.sh` as root:
+
+```bash
+BRIG=/usr/local/bin/brig-before script/network-isolation-vm.sh --expect reachable # exit 0
+BRIG=/usr/local/bin/brig-fixed script/network-isolation-vm.sh --expect reachable  # exit 1
+BRIG=/usr/local/bin/brig-fixed script/network-isolation-vm.sh --expect isolated   # exit 0
+```
+
+| binary and expectation | default B to A | script exit |
+| --- | --- | --- |
+| baseline, reachable | unique marker from `10.44.0.4:8080`; curl `0`, peer `10.44.0.4` | `0` |
+| fixed, reachable | timeout to `10.4.1.2:8080`; curl `28`, empty peer | `1` |
+| fixed, isolated | timeout to `10.4.1.2:8080`; curl `28`, empty peer | `0` |
+
+All three passed the shared-network control first, and every default probe
+was bracketed by passing listener, published-port and outbound controls.
+
+Legacy sessions were made by booting with the baseline binary and then
+deleting the sandbox's entry from `networks.json`. A flagless run of the
+fixed binary then gave:
+
+| case | result |
+| --- | --- |
+| shared, running | reused with the same boot ID; `shared` recorded |
+| `--network isolated`, running | reused with the same boot ID; `isolated` recorded |
+| `--network offline`, stopped | restarted with network mode `none`; `none` recorded |
+| shared, session index entry also removed | found through the runtime and reused with the same boot ID |
+| new sandbox | its own CNI network, `brig-<sandbox>` |
+| removed with `nerdctl rm`, index entry kept | booted new on its own network |
+| shared, then `--network isolated` | recreated with a new boot ID on its own network |
+
+Every guest ran under `io.containerd.urunc.v2`. After `brig rm`, `nerdctl ps
+-a` was empty and only the shared `bridge` network remained.
 
 ## Result
 

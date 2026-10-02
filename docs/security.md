@@ -890,7 +890,7 @@ The measurements are in
 | `hvi` on macOS | **yes.** Measured on 2026-09-27 with brig v0.3.0 and hull 0.1.0-rc29 ([#364](https://github.com/brig-sh/brig/issues/364)): one sandbox fetched a file over HTTP that only the other served. With `--network isolated` on both, the same request timed out. hull 0.1.0-rc21 gave "no" on the shared network. What changed the answer is not known |
 | `vz` on macOS | not measured on a current hull |
 | `qemu` on macOS | not measured. It takes its network from vmnet, as `vz` does |
-| Linux, nerdctl/urunc microVMs | **yes** on `shared`. On 2026-09-30, one microVM fetched the other's HTTP marker; on separate isolated networks, the same request timed out while connection controls passed. The [Linux run](manual-tests/sandbox-reachability.md#2026-09-30-linux-arm64-under-qemu) used documented ARM console and runtime setup workarounds, so it does not establish that the unmodified shipped runtime boots |
+| Linux, nerdctl/urunc microVMs | **yes** on `shared`. On 2026-09-30, one microVM fetched the other's HTTP marker; on separate isolated networks, the same request timed out while connection controls passed. The [ARM run](manual-tests/sandbox-reachability.md#2026-09-30-linux-arm64-under-qemu) used documented console and runtime setup workarounds. The [amd64 run](manual-tests/sandbox-reachability.md#2026-10-02-linux-amd64-with-the-stock-runtime) on 2026-10-02 gave the same results with the shipped `v0.1.0-rc13` runtime, unmodified |
 
 So on Linux and on `hvi`, two agents on `shared` that you gave *different*
 credentials can each reach whatever the other is listening on. That is a real hole in the
