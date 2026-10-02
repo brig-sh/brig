@@ -20,6 +20,11 @@ func (r *recordingRuntime) Replace(spec runtime.ExecSpec) error {
 	return nil
 }
 
+func (r *recordingRuntime) Attach(spec runtime.ExecSpec) (int, error) {
+	r.spec = spec
+	return 0, nil
+}
+
 // Shell forces a pty on because a login shell wants one, but whether hull may
 // ask its consent question is a fact about brig's own stdin, not the guest's
 // pty. Under test, stdin is not a terminal (a script or CI is the same), so a
@@ -39,6 +44,50 @@ func TestShellSeparatesPtyFromConsent(t *testing.T) {
 	if rec.spec.CanAsk {
 		t.Error("a non-terminal stdin was treated as askable")
 	}
+}
+
+// shellArgv used to join the caller's words with spaces and hand the result to
+// bash -lc, so quoting, spaces, ";" and "$" were re-parsed. The guest must
+// receive the original argv under a login shell.
+func TestShellArgvPreservesCommandVector(t *testing.T) {
+	command := []string{"sh", "-c", "echo FIRST; echo SECOND", "a   b"}
+	want := []string{"bash", "-lc", `exec "$@"`, "bash", "sh", "-c", "echo FIRST; echo SECOND", "a   b"}
+	if got := shellArgv(command); !equalStrings(got, want) {
+		t.Fatalf("shellArgv = %#v, want %#v", got, want)
+	}
+	if got := shellArgv(nil); !equalStrings(got, []string{"bash", "-l"}) {
+		t.Fatalf("empty shellArgv = %#v, want interactive login shell", got)
+	}
+
+	rec := &recordingRuntime{}
+	c := &Config{VMName: "vm", Runtime: rec}
+	if err := c.Shell(creds.Set{}, command); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	if !equalStrings(rec.spec.Cmd, want) {
+		t.Fatalf("Shell handed guest %#v, want unmodified vector %#v", rec.spec.Cmd, want)
+	}
+
+	rec = &recordingRuntime{}
+	c = &Config{VMName: "vm", Runtime: rec}
+	if _, err := c.ShellAttached(creds.Set{}, command); err != nil {
+		t.Fatalf("shell attached: %v", err)
+	}
+	if !equalStrings(rec.spec.Cmd, want) {
+		t.Fatalf("ShellAttached handed guest %#v, want %#v", rec.spec.Cmd, want)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // The Run path already fed the terminal check to both jobs by passing it as the
