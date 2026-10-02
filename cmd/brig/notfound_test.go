@@ -109,7 +109,7 @@ func TestRemoveSandboxPropagatesAListError(t *testing.T) {
 // hull.List falls back to a plain ps on a hull without ps -a, and that listing
 // carries only the running instances, so a stopped sandbox reads as absent
 // while it is still in hull's store. Its index entry stays until a removal
-// actually happens, or until ls prunes against a full listing.
+// actually happens, the runtime reports no sandbox of that name, or ls prunes.
 func TestRemoveSandboxKeepsTheIndexOnMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_STATE_DIR", dir)
@@ -129,6 +129,181 @@ func TestRemoveSandboxKeepsTheIndexOnMissing(t *testing.T) {
 	}
 	if !strings.Contains(string(blob), "brig-claude-code") {
 		t.Errorf("the index entry was pruned on a listing that may not have been complete: %s", blob)
+	}
+}
+
+// existsRuntime is a listRuntime that can also say whether a sandbox exists
+// when the listing leaves stopped ones out.
+type existsRuntime struct {
+	*listRuntime
+	exists bool
+	err    error
+}
+
+func (r *existsRuntime) Exists(string) (bool, error) { return r.exists, r.err }
+
+// A sandbox removed outside brig leaves a session behind. Once the runtime
+// reports no sandbox of that name, rm forgets the session, its slug claim and
+// its network record, so the next run starts a new one. A sandbox the listing
+// missed but the runtime still has keeps all three, and so does one the
+// runtime cannot answer for: an error is not an absence. --dry-run says that
+// rm would forget the session, and forgets nothing.
+func TestRemoveSandboxForgetsTheSessionOfAReportedAbsence(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		exists     bool
+		err        error
+		dryRun     bool
+		wantForget bool
+		wantSay    string
+	}{
+		{"reported absent", false, nil, false, true, "so brig forgot its session"},
+		{"stopped and missed by the listing", true, nil, false, false, "`brig ls` lists them"},
+		{"runtime cannot say", false, errors.New("inspect: store locked"), false, false, "`brig ls` lists them"},
+		{"dry run", false, nil, true, false, "so `brig rm claude@refactor` would forget its session"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := lostSession(t)
+			sessions := filepath.Join(dir, "sessions.json")
+			rt := &existsRuntime{listRuntime: absent(), exists: tt.exists, err: tt.err}
+			err := removeSandbox(&wrap.Config{VMName: "brig-claude-code", Runtime: rt}, "claude@refactor", tt.dryRun)
+			if exitCode(err) != exitNotFound {
+				t.Fatalf("rm of a sandbox not in the listing exits %d, want %d: %v", exitCode(err), exitNotFound, err)
+			}
+			if forgot := strings.Contains(err.Error(), "forgot its session"); forgot != tt.wantForget {
+				t.Errorf("rm said it forgot the session: %v, want %v: %v", forgot, tt.wantForget, err)
+			}
+			if !strings.Contains(err.Error(), tt.wantSay) {
+				t.Errorf("rm does not say %q: %v", tt.wantSay, err)
+			}
+			claims, readErr := os.ReadFile(filepath.Join(dir, "slug-claims.json"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if kept := strings.Contains(string(claims), "brig-claude-code"); kept == tt.wantForget {
+				t.Errorf("slug claim kept: %v, want %v: %s", kept, !tt.wantForget, claims)
+			}
+			blob, readErr := os.ReadFile(sessions)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if kept := strings.Contains(string(blob), "brig-claude-code"); kept == tt.wantForget {
+				t.Errorf("index entry kept: %v, want %v: %s", kept, !tt.wantForget, blob)
+			}
+			word, recErr := runtime.BootedNet("brig-claude-code")
+			if recErr != nil {
+				t.Fatal(recErr)
+			}
+			if kept := word != ""; kept == tt.wantForget {
+				t.Errorf("network record kept: %v, want %v", kept, !tt.wantForget)
+			}
+			if rt.removed {
+				t.Error("rm reached the runtime's Remove for a sandbox not in the listing")
+			}
+		})
+	}
+}
+
+// rm of a ref brig has no session for, a typo or a ref ls already pruned, is
+// the commonest not-found, and both runtimes now answer Exists for it. There
+// is no session to forget, so rm and its preview give the plain not-found and
+// say nothing about forgetting one, or about what stays on the host.
+func TestRemoveSandboxWithNoSessionForgetsNothing(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		dryRun bool
+	}{
+		{"rm", false},
+		{"dry run", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BRIG_STATE_DIR", t.TempDir())
+			t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+			rt := &existsRuntime{listRuntime: absent(), exists: false}
+			var err error
+			stderr := captureStderr(t, func() {
+				err = removeSandbox(&wrap.Config{VMName: "brig-claude-code", Runtime: rt}, "claude@typo", tt.dryRun)
+			})
+			if exitCode(err) != exitNotFound {
+				t.Fatalf("rm of a ref with no sandbox exits %d, want %d: %v", exitCode(err), exitNotFound, err)
+			}
+			if !strings.Contains(err.Error(), "`brig ls` lists them") {
+				t.Errorf("rm does not give the plain not-found: %v", err)
+			}
+			if strings.Contains(err.Error(), "forgot") || strings.Contains(err.Error(), "forget") {
+				t.Errorf("rm talks about forgetting a session it never had: %v", err)
+			}
+			if strings.Contains(stderr, "stays on the host") {
+				t.Errorf("rm says what it leaves for a session it never had:\n%s", stderr)
+			}
+			if rt.removed {
+				t.Error("rm reached the runtime's Remove for a sandbox not in the listing")
+			}
+		})
+	}
+}
+
+// lostSession writes what brig keeps for the session claude@refactor on
+// brig-claude-code: its index entry, its slug claim and an offline network
+// record. It returns the state directory.
+func lostSession(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", dir)
+	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	if err := os.WriteFile(filepath.Join(dir, "sessions.json"),
+		[]byte(`{"claude@refactor":{"home":"/ws","sandbox":"brig-claude-code"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "slug-claims.json"),
+		[]byte(`{"brig-claude-code":"refactor"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordBootedNet("brig-claude-code", "none"); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// rm forgets the session before the network record. When the index cannot be
+// rewritten, it keeps the record too and does not say it forgot anything: an
+// entry without its record is the state #432 is about, which makes the next
+// flagless run ask the runtime and be refused. Kept whole, that run boots on
+// the recorded network.
+func TestRemoveSandboxKeepsTheSessionWholeWhenItCannotForgetIt(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write a mode-500 directory, so this cannot be reproduced")
+	}
+	dir := lostSession(t)
+	// Readable, so the entry is found; not writable, so the rewrite fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+
+	rt := &existsRuntime{listRuntime: absent(), exists: false}
+	err := removeSandbox(&wrap.Config{VMName: "brig-claude-code", Runtime: rt}, "claude@refactor", false)
+	if err == nil {
+		t.Fatal("rm reported nothing with an index it could not rewrite")
+	}
+	if strings.Contains(err.Error(), "forgot its session") {
+		t.Errorf("rm said it forgot a session it could not forget: %v", err)
+	}
+	if !strings.Contains(err.Error(), "could not forget its session") {
+		t.Errorf("rm does not say it could not forget the session: %v", err)
+	}
+	if got := exitCode(err); got != exitFailure {
+		t.Errorf("exit %d, want %d: %v", got, exitFailure, err)
+	}
+	blob, readErr := os.ReadFile(filepath.Join(dir, "sessions.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(blob), "brig-claude-code") {
+		t.Errorf("the index entry is gone: %s", blob)
+	}
+	if word, recErr := runtime.BootedNet("brig-claude-code"); recErr != nil || word != "none" {
+		t.Errorf("the network record was dropped from a session that stays: %q, %v", word, recErr)
 	}
 }
 

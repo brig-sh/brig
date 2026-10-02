@@ -20,6 +20,9 @@ func (h *hull) SandboxNetwork(name string) (string, error) {
 		// hull rc29 also says "instance not found" for unreadable or corrupt
 		// metadata, and ps silently omits those records. Neither proves
 		// absence, so an indexed legacy session must stay unknown here.
+		// `brig rm` acts on the same answer anyway, through Exists: it
+		// forgets the session with its record, which leaves nothing here to
+		// recover. See hull.Exists.
 		return "", fmt.Errorf("inspect network of %s: %w: %s", name, err, firstLines(stderr, 3))
 	}
 	var state struct {

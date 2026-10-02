@@ -2097,33 +2097,73 @@ func takeRemoveFlags(args []string) (rest []string, o removeOpts, err error) {
 // --dry-run says what the removal would be -- the ref, the sandbox, and the
 // workspace it would leave behind -- and stops. It is still a not-found when
 // there is nothing to remove: "would remove" about a sandbox that is not there
-// is a preview of nothing.
+// is a preview of nothing. When brig still has a session for it, the preview
+// says rm would forget that session.
 func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 	present, err := sandboxPresent(cfg.Runtime, cfg.VMName)
 	if err != nil {
 		return err
 	}
 	if !present {
-		// Not pruned here. Nothing was removed, so nothing about the index has
-		// been settled: the entry goes when a removal actually happens, in
-		// Remove, or when ls prunes against a listing of what the runtime
-		// really holds. Dropping it on the strength of one absence would put
-		// this path in the business of deciding a sandbox is gone, which is a
-		// judgement the verb that removes it is better placed to make. A stale
-		// entry for a sandbox that is truly gone costs nothing until then.
-		//
-		// Published ports are the exception. `brig network publish` records a
-		// port for a sandbox that has never booted, and the next run would
-		// open it, so rm drops the record whatever the runtime holds.
+		// Published ports go whatever the index holds. `brig network publish`
+		// records a port for a sandbox that has never booted, and the next run
+		// would open it.
 		if ports, err := runtime.Publications(cfg.VMName); err == nil && len(ports) > 0 && !dryRun {
 			runtime.ForgetPublications(cfg.VMName)
 			warnf("dropped the ports recorded for %s", ref)
 		}
-		// A network is recorded only at a boot, so a record for a sandbox the
-		// runtime does not have was left by a removal brig did not make. The
-		// next sandbox to take the name must not inherit it.
-		if !dryRun {
-			runtime.ForgetBootedNet(cfg.VMName)
+		// A session whose sandbox went away outside brig is forgotten here,
+		// with its slug claim and network record, once the runtime reports
+		// no sandbox of this name, stopped or running. The listing above is
+		// not enough: hull without ps -a lists only running sandboxes.
+		// Forgetting only part of a session is worse than either: an entry
+		// with no network record makes the next flagless run ask the runtime,
+		// and hull cannot tell a removed VM from an unreadable one, so that
+		// run is refused. A home brig created is deleted by the next run,
+		// which finds no session owning it.
+		//
+		// The report is not proof that the sandbox is gone: hull also says
+		// "instance not found" for an instance whose metadata it cannot read
+		// (see hull.Exists). rm acts on it anyway, because the reader asked
+		// to be rid of this sandbox. If hull does still hold the instance,
+		// the next run deletes the home and then fails on the taken name,
+		// which is where `brig ls` already leads when it prunes the entry.
+		//
+		// The session goes first, and the record and slug claim only once
+		// that write went through. A record dropped from a session that stays
+		// is the state the next run refuses, and an rm that could not forget
+		// the session leaves it whole.
+		//
+		// --dry-run asks the same question, since `hull inspect` changes
+		// nothing, and says what rm would forget.
+		if ex, ok := cfg.Runtime.(runtime.Exister); ok {
+			if exists, err := ex.Exists(cfg.VMName); err == nil && !exists {
+				// Read before the entry that names the home goes.
+				stays := forgetNotes(cfg, ref)
+				if dryRun {
+					if wrap.RefOfSandbox(cfg.VMName) == "" {
+						return noSandboxf(ref)
+					}
+					for _, n := range stays {
+						warnf("%s", n)
+					}
+					return notFoundf("no sandbox for %s; the runtime reported none, "+
+						"so `brig rm %s` would forget its session", ref, ref)
+				}
+				forgot, err := wrap.ForgetSandbox(cfg.VMName)
+				if err != nil {
+					return fmt.Errorf("no sandbox for %s; the runtime reported none, "+
+						"but brig could not forget its session: %w", ref, err)
+				}
+				runtime.ForgetBootedNet(cfg.VMName)
+				wrap.ForgetSlugClaim(cfg.VMName)
+				if forgot {
+					for _, n := range stays {
+						warnf("%s", n)
+					}
+					return notFoundf("no sandbox for %s; the runtime reported none, so brig forgot its session", ref)
+				}
+			}
 		}
 		return noSandboxf(ref)
 	}
@@ -2184,6 +2224,22 @@ func kept(cfg *wrap.Config, home bool) []string {
 		out = append(out, "the project "+p+" stays on the host")
 	}
 	return out
+}
+
+// forgetNotes is what rm leaves on the host when it forgets the session of a
+// sandbox the runtime reported missing, as notes.
+//
+// A guest home brig created stays. rm deletes one only with its sandbox, and
+// here the runtime's answer may come from metadata hull cannot read. The next
+// run of the ref deletes it, once it finds no session owning it, and until
+// then the reader can still copy work out of it. The boot notice said rm
+// deletes that home, so rm says where it is and what will.
+func forgetNotes(cfg *wrap.Config, ref string) []string {
+	if home := wrap.EphemeralHomeOf(cfg.VMName); home != "" {
+		return append([]string{"the guest home " + home + " stays on the host; the next run of " +
+			ref + " deletes it"}, kept(cfg, false)...)
+	}
+	return kept(cfg, true)
 }
 
 // notes adds each of lines to b as a note.

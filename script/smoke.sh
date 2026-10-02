@@ -1383,6 +1383,43 @@ case "$out" in
   *) bad "logs names the ref -- got: $out" ;;
 esac
 
+echo "== rm of a sandbox the runtime lost =="
+# A sandbox removed behind brig's back still has its session. rm finds no
+# sandbox, exits 3, and forgets the session the way ls would. The next run is
+# a new sandbox on the default network, not the old posture, and is not
+# refused for want of a network record.
+mkdir -p "$BRIG_PROFILE_DIR"
+cat > "$BRIG_PROFILE_DIR/vz-lost.yaml" <<'YAML'
+name: vz-lost
+image: smoke/image:latest
+binary: sh
+guestHome: /root
+mem: 256
+cpus: 1
+hypervisor: vz
+YAML
+env -u BRIG_NETWORK "$WORK/brig" run vz-lost --network offline -d > "$WORK/lost.out" 2>&1 \
+  || bad "the sandbox to lose did not boot: $(cat "$WORK/lost.out")"
+rm -f "$STUB_STATE" "$STUB_STATE.stopped"
+out="$("$WORK/brig" rm vz-lost 2>&1)"; rc=$?
+[ "$rc" = 3 ] && ok "rm of a lost sandbox exits 3" \
+  || bad "rm of a lost sandbox exits 3 -- got $rc: $out"
+case "$out" in
+  *"the runtime reported none, so brig forgot its session"*) ok "rm says it forgot the lost sandbox's session" ;;
+  *) bad "rm says it forgot the lost sandbox's session -- got: $out" ;;
+esac
+: > "$STUB_LOG"
+if env -u BRIG_NETWORK "$WORK/brig" --verbose run vz-lost -d > "$WORK/lost.out" 2>&1; then
+  ok "a flagless run after rm of a lost sandbox boots"
+else
+  bad "a flagless run after rm of a lost sandbox was refused: $(cat "$WORK/lost.out")"
+fi
+grep -q '^NETWORK .*shared' "$WORK/lost.out" && grep -q -- '--net shared' "$STUB_LOG" \
+  && ok "and it takes the default network, not the lost sandbox's offline" \
+  || bad "the run after rm kept the lost sandbox's posture: $(grep '^NETWORK' "$WORK/lost.out")"
+"$WORK/brig" rm vz-lost > /dev/null 2>&1
+rm -f "$BRIG_PROFILE_DIR/vz-lost.yaml"
+
 echo "== remembered workspace =="
 # A session created with -w used to be restarted by the next verb that left the
 # flag off: the workspace resolved back to the default, the running sandbox was

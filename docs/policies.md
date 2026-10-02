@@ -95,8 +95,9 @@ Hull rc29's `inspect` cannot distinguish absence from unreadable metadata,
 and its listing omits unreadable records. Brig therefore keeps an indexed
 legacy session unknown even when Hull says "instance not found". If you
 removed the VM directly with `hull rm`, `brig ls` prunes its stale session
-entry; you can also name the intended posture explicitly. Check runtime
-access and saved state before using either remedy for an unexplained error.
+entry and `brig rm <ref>` forgets it; you can also name the intended posture
+explicitly. Check runtime access and saved state before using any of these
+for an unexplained error.
 If all session-index evidence is also lost, Hull cannot distinguish that
 case from a new name, and Brig's ordinary discovery uses the new-sandbox
 default. Reliable absence detection in that case needs a runtime response
@@ -108,7 +109,8 @@ posture the sandbox no longer has, and `brig info` reports the recorded
 one. There is one exception: on `hvi`, when the record says `shared` and
 the sandbox is behind an isolated gateway, `brig info` names `isolated`.
 `brig stop` and a `brig run` from this release boot it again and write a
-new record. `brig rm` drops the record with the sandbox.
+new record. `brig rm` drops the record with the sandbox, and with the
+session when the sandbox was already removed outside Brig.
 
 | posture | what it permits |
 | --- | --- |

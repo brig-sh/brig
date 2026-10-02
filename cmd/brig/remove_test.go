@@ -30,7 +30,7 @@ func (r *removeRuntime) Remove(name string) error {
 // removeHost is jsonRunHost with the same fake wired into both detection
 // seams: `rm --all` reads the instance list off the read-verb detector, and
 // `rm <ref>` goes through the run line's.
-func removeHost(t *testing.T, rt *removeRuntime) {
+func removeHost(t *testing.T, rt runtime.Runtime) {
 	t.Helper()
 	jsonRunHost(t, rt)
 	withRuntime(t, rt)
