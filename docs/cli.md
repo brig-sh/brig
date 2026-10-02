@@ -633,7 +633,7 @@ Brig's own flag but stood where the agent's arguments already begin.
 | `--mem MB` | number | the agent's own (`4096` for most shipped agents) | guest memory |
 | `--cpus N` | number | the agent's own (`4` for most shipped agents) | guest vCPUs |
 | `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run`, refused by name as a usage error |
-| `-d`, `--detach` | (none) | off | start the sandbox and exit, without attaching. Parses on every verb, but only `run` reads it. On `sh`, `stop`, `rm` and `info` it is silently inert |
+| `-d`, `--detach` | (none) | off | start the sandbox and exit, without attaching. No agent runs, so agent arguments after the project are refused. Parses on every verb, but only `run` reads it. On `sh`, `stop`, `rm` and `info` it is silently inert |
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
 | `--network MODE` | `shared`, `isolated` or `offline` | the recorded or runtime-inspected posture, then the profile's `network:`, then `isolated` (`shared` fallback on `vz` or `qemu` only when no posture is named) | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. An existing sandbox whose posture cannot be established requires an explicit choice. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox |

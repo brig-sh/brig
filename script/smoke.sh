@@ -649,6 +649,21 @@ grep -q '^argv: run' "$STUB_LOG" \
   || ok "nothing reached the runtime for isolated"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
+# -d runs no agent, so agent arguments given with it would be dropped while
+# brig exits 0, and the prompt goes nowhere. The refusal has to come before
+# the boot: a sandbox started for a task it will never run is the bug.
+: > "$STUB_LOG"
+if "$WORK/brig" run claude -d -- -p "say hi" > "$WORK/detach-args.out" 2>&1; then
+  bad "-d accepted agent arguments it would drop"
+else
+  grep -q 'Drop -d' "$WORK/detach-args.out" \
+    && ok "-d refuses agent arguments and says how to pass them" \
+    || bad "-d refusal does not say how to pass them -- got: $(cat "$WORK/detach-args.out")"
+fi
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "a sandbox booted for agent arguments -d would drop" \
+  || ok "nothing booted for agent arguments given with -d"
+
 # A policy is enforced at the user-mode gateway, which only the hvi backend
 # uses. This run is pinned to vz, so the boot must be refused rather than
 # started with the rules dropped: a sandbox that reports a policy and enforces

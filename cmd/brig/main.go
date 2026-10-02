@@ -733,6 +733,14 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 		return fmt.Errorf("%s is a graphical agent, so it takes no arguments "+
 			"(use `brig sh %s` or `brig stop %s`)", t.Name, t.Name, t.Name)
 	}
+	// -d boots the sandbox and returns before any agent runs, so arguments
+	// meant for the agent had nowhere to go and were dropped while brig
+	// exited 0. Refuse them before the boot, as for a graphical agent, until
+	// -d gets a session to hand them to (#284).
+	if detach && len(tail) > 0 {
+		return fmt.Errorf("-d starts the sandbox and runs no agent, so it takes no agent arguments. "+
+			"Drop -d to run %s with them", t.Name)
+	}
 	if err := cfg.EnsureRunning(set); err != nil {
 		return err
 	}
