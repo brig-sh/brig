@@ -189,7 +189,7 @@ func (c *Config) checkBackend(hypervisor string) error {
 // empty network: and does not fire for hvi. The sentence is also what the
 // NETWORK row appends, so info and the refusal name one fix.
 func (c *Config) profileIsolationOnFallback(hypervisor string) string {
-	if c.askedNetwork != NetIsolated || c.networkSource != "the profile's network:" {
+	if c.askedNetwork != NetIsolated || !c.netFromProfile {
 		return ""
 	}
 	backend := sharedNetworkBackend(c.Runtime, hypervisor)

@@ -162,10 +162,12 @@ type Config struct {
 	// sandbox that appears during Load cannot be silently joined as isolated.
 	netRecovery   networkRecoveryState
 	netInspectErr error
-	// Explicitness controls permission to recreate an unknown sandbox. Keep
-	// it independent of networkSource, whose wording is only diagnostic.
-	netExplicit bool
-	netFallback string
+	// Explicitness controls permission to recreate an unknown sandbox, and
+	// netFromProfile marks a posture the profile's network: chose. Keep both
+	// independent of networkSource, whose wording is only diagnostic.
+	netExplicit    bool
+	netFromProfile bool
+	netFallback    string
 	// Publish is every guest port this sandbox offers on the host: what
 	// --publish asked for on this line, and what the sandbox was already
 	// publishing. PublishAsked is the first half alone.
@@ -535,8 +537,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if netValue == "" && recordedNet != "" {
 		netValue, netSource = string(recordedNet), "the posture this sandbox was started with"
 	}
-	if netValue == "" {
-		netValue, netSource = t.Network, "the profile's network:"
+	netFromProfile := false
+	if netValue == "" && t.Network != "" {
+		netValue, netSource, netFromProfile = t.Network, "the profile's network:", true
 	}
 	netFallback := ""
 	if netValue == "" {
@@ -618,6 +621,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		netRecovery:    netRecovery,
 		netInspectErr:  netInspectErr,
 		netExplicit:    netExplicit,
+		netFromProfile: netFromProfile,
 		netFallback:    netFallback,
 		Publish:        published,
 		PublishAsked:   asked,

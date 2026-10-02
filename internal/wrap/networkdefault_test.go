@@ -258,4 +258,93 @@ func TestProfileIsolationOnVZNamesTheProfileNotTheFlag(t *testing.T) {
 	}
 }
 
+// networkSource is message text. Rewording where Load writes it must not
+// turn the profile refusal off, and no wording may turn it on for a posture
+// the setting or a recorded posture chose over the profile's network:. Both
+// of those profiles name a network, so a Load that credits the profile with
+// the posture turns the refusal on. The flag has its own test above.
+func TestProfileIsolationRefusalDoesNotReadTheSourceWording(t *testing.T) {
+	isolateState(t)
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_HYPERVISOR", "vz")
+	bin := filepath.Join(t.TempDir(), "hull")
+	script := "#!/bin/sh\necho \"instance not found: $2\" >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIG_RUNTIME_BIN", bin)
+	rt, err := runtime.Detect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fromProfile, err := Load(testProfile(t, "network: isolated\n"), Options{Workspace: t.TempDir()}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromProfile.networkSource = "reworded"
+	if fromProfile.profileIsolationOnFallback("vz") == "" {
+		t.Error("rewording the profile source turned its refusal off")
+	}
+
+	t.Setenv("BRIG_NETWORK", "isolated")
+	fromSetting, err := Load(testProfile(t, "network: isolated\n"), Options{Workspace: t.TempDir()}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromSetting.networkSource = "the profile's network:"
+	if msg := fromSetting.profileIsolationOnFallback("vz"); msg != "" {
+		t.Errorf("BRIG_NETWORK=isolated got the profile refusal: %s", msg)
+	}
+
+	// This profile says shared, so the profile refusal here would claim an
+	// isolation the profile never asked for.
+	t.Setenv("BRIG_NETWORK", "")
+	shared, ws := testProfile(t, "network: shared\n"), t.TempDir()
+	started, err := Load(shared, Options{Workspace: ws, Network: "isolated"}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	booted(started)
+	fromRecord, err := Load(shared, Options{Workspace: ws}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromRecord.askedNetwork != NetIsolated {
+		t.Fatalf("the recorded posture did not win over the profile: %q", fromRecord.askedNetwork)
+	}
+	fromRecord.networkSource = "the profile's network:"
+	if msg := fromRecord.profileIsolationOnFallback("vz"); msg != "" {
+		t.Errorf("a recorded isolated posture got the profile refusal: %s", msg)
+	}
+}
+
+// A sandbox an older release started has no posture record, and the runtime
+// reports the network it booted with. That posture outranks the profile's
+// network: the way a record does, so it must not get the profile refusal
+// either: this profile says shared, and the refusal would call it isolated.
+func TestARecoveredPostureIsNotCreditedToTheProfile(t *testing.T) {
+	isolateState(t)
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	t.Setenv("BRIG_HYPERVISOR", "vz")
+	home := t.TempDir()
+	if err := writeSessionIndex(map[string]sessionEntry{
+		sessionKey("x", ""): {Home: home, Sandbox: NamePrefix + "x"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rt := &legacyNetworkRuntime{livenessRuntime: &livenessRuntime{}, kind: "hull", network: "isolated"}
+	c, err := Load(testProfile(t, "network: shared\n"), Options{Workspace: home}, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.askedNetwork != NetIsolated || c.netRecovery != networkRecovered {
+		t.Fatalf("the recovered posture did not win over the profile: asked %q, recovery %v", c.askedNetwork, c.netRecovery)
+	}
+	c.networkSource = "the profile's network:"
+	if msg := c.profileIsolationOnFallback("vz"); msg != "" {
+		t.Errorf("a recovered isolated posture got the profile refusal: %s", msg)
+	}
+}
+
 var _ runtime.Runtime = (*networkDefaultRuntime)(nil)
