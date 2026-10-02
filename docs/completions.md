@@ -84,4 +84,5 @@ The labels come from Brig's session index, a file rather than a question
 put to the runtime. Completion has to answer in milliseconds, and on a
 host with no runtime installed it has to answer at all. A sandbox removed
 outside Brig (with `nerdctl rm`, for example) stays on offer until the
-next `brig ls` prunes it. The command that follows says it is gone.
+next `brig ls` prunes it or `brig rm <ref>` forgets it. The command that
+follows says it is gone.

@@ -147,8 +147,8 @@ func (c *Config) claimSlug() error {
 }
 
 // ForgetSlugClaim drops a removed sandbox's claim, so the next session name
-// that lands on it can take it. Errors are dropped the way ForgetSandbox
-// drops its own: a removal that worked must not report a failure because a
+// that lands on it can take it. Errors are dropped the way Remove drops
+// ForgetSandbox's: a removal that worked must not report a failure because a
 // bookkeeping file could not be rewritten.
 func ForgetSlugClaim(vmName string) {
 	index := readSlugClaimIndex()

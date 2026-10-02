@@ -319,10 +319,18 @@ func (h *hull) Running(name string) (bool, error) {
 
 // Exists asks `hull inspect`, which answers for one instance, stopped ones
 // included. List may come from the plain `hull ps` fallback, which does not
-// promise stopped instances. Hull's "instance not found" reads as absent for
-// ordinary discovery, but rc29 also uses it for unreadable metadata. A known
-// legacy session must use SandboxNetwork instead of treating this as proof
-// that its old network can be discarded.
+// promise stopped instances.
+//
+// False means hull said "instance not found". That is hull holding no
+// instance it can read under the name, which is not proof that none exists:
+// rc29 gives the same answer for unreadable metadata, and ps leaves that
+// instance out. brig reads it as absence all the same in Load's ordinary
+// discovery of a name the session index has no entry for (its network and
+// its legacy home), in reapOrphanHome and dropUnbootedHome, which delete a
+// home no session owns, and in `brig rm`, which forgets the session of a
+// sandbox the reader asked to remove. Network recovery for a known legacy
+// session does not. It asks SandboxNetwork, so a posture hull cannot read
+// stays unknown rather than discarded.
 func (h *hull) Exists(name string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

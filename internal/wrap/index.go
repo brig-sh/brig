@@ -356,10 +356,13 @@ func RefOfSandbox(vmName string) string {
 // the next session to take that name starts from the ordinary resolution
 // rather than inheriting a directory chosen for a different one.
 //
-// Errors are dropped rather than returned, the way releaseGatewayIP drops its
-// own: a removal that worked must not report a failure because a bookkeeping
-// file could not be rewritten.
-func ForgetSandbox(vmName string) {
+// It reports whether any entry named vmName, and the error of the rewrite
+// that drops it. Remove and `brig rm --all` ignore that error, the way
+// releaseGatewayIP drops its own: a removal that worked must not report a
+// failure because a bookkeeping file could not be rewritten. rm of a sandbox
+// the runtime does not have needs it, since forgetting the session is all
+// that rm does.
+func ForgetSandbox(vmName string) (bool, error) {
 	index := readSessionIndex()
 	dropped := false
 	for key, entry := range index {
@@ -369,9 +372,9 @@ func ForgetSandbox(vmName string) {
 		}
 	}
 	if !dropped {
-		return
+		return false, nil
 	}
-	_ = writeSessionIndex(index)
+	return true, writeSessionIndex(index)
 }
 
 // PruneSessions drops every entry whose sandbox is not in the list of what the
@@ -451,8 +454,8 @@ func (c *Config) rememberSession() {
 // milliseconds on a keystroke, and returns nothing at all on a host that has
 // no runtime installed. The cost of reading the index instead is bounded --
 // a sandbox removed outside brig stays listed until the next `brig ls` prunes
-// it -- and a stale candidate is a name that fails when run, not a wrong
-// action.
+// it or `brig rm <ref>` forgets it -- and a stale candidate is a name that
+// fails when run, not a wrong action.
 func SessionRefs() []string {
 	index := readSessionIndex()
 	refs := make([]string, 0, len(index))

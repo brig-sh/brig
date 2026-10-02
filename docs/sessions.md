@@ -107,19 +107,22 @@ on `brig rm` when Brig created the guest home.
 | `brig stop` | kept | gone with the sandbox | stopped, still named in `brig ls` | kept |
 | `brig rm` | deleted if Brig created it, kept if you named it | gone | removed | dropped |
 | `brig rm --all` | as `brig rm`, every session | gone | every sandbox removed | dropped, every session |
+| The sandbox is removed outside Brig, then `brig rm` | kept; the next run of the ref deletes it if Brig created it | gone with the sandbox | already gone; `rm` exits `3` | dropped |
 | A host reboot | kept, an ordinary host directory | gone, guest memory cannot survive a reboot | the runtime's own business, not established here | kept as host files |
 
 `brig stop` keeps the sandbox's name, its row in `brig ls`, and what Brig
 recorded about the session. `brig rm` drops the last of those too, and
 deletes the guest home when Brig created it. Neither touches a project or a
-guest home you named.
+guest home you named. When the runtime reports no sandbox for the ref, as
+after a removal outside Brig, `brig rm` forgets the session and names the
+guest home it leaves. The next run of that ref deletes a home Brig created.
 
 A host reboot cannot take your work: the guest home is a host directory,
 and what Brig recorded is host files. It does take everything inside the
 sandbox, including a `claude-code` login that had landed on memory.
 Whether the sandbox itself is still listed afterward is the runtime's own
-business. If it has gone, the next `brig ls` forgets it, and the next run
-boots a new one.
+business. If it has gone, the next `brig ls` or `brig rm` of its ref
+forgets it, and the next run boots a new one.
 
 Brig keeps its own bookkeeping, the session index among it, under
 `~/.brig`. That layout is not a stable interface: do not build a script

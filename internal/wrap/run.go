@@ -697,8 +697,9 @@ func (c *Config) Remove() error {
 		c.RemovedHome, c.HomeErr = DropEphemeralHome(c.VMName)
 	}
 	// The index entries that name this sandbox: the workspace record and the
-	// slug claim. Both are idempotent. Removal is the only thing that clears
-	// them -- rm's not-found path leaves them alone, since it removed nothing.
+	// slug claim. Both are idempotent. Removal clears them, and so does rm of
+	// a sandbox the runtime reports missing, which removes nothing but
+	// forgets the session it left behind.
 	ForgetSandbox(c.VMName)
 	ForgetSlugClaim(c.VMName)
 	// And what it published. A publication survives a stop and a recreate,

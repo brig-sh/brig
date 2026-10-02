@@ -121,6 +121,15 @@ its path. A guest home you named and your project are host directories
 Brig only mounted, so neither is touched, and `rm` prints the path of each
 one it left behind.
 
+If the runtime reports no sandbox for the ref, for example after `hull rm`,
+`rm` exits `3`, says so, and forgets the session Brig still had for it. The
+next run of that ref starts a new session, on the network a new session
+gets rather than the one the old sandbox had. A guest home Brig created
+stays until that run, which deletes it, and `rm` prints its path.
+`--dry-run` says that `rm` would forget the session, and forgets nothing.
+If Brig cannot rewrite its session index, `rm` exits `1` and keeps the
+session as it was.
+
 If the sandbox is removed but its guest home cannot be deleted, `rm` exits
 `1` and names the home. The sandbox stays removed, and the next run of the
 session deletes what is left of the home before it boots.
