@@ -30,6 +30,8 @@ CI does not call `make`. It runs its own steps
   `script/claims-vm.sh`. It checks the claims table in `docs/claims.md`.
 - `script/check-retired-spellings.sh`, which fails a doc that teaches a
   command spelling scheduled for removal.
+- `script/check-binaries.sh`, with its `--self-test`. It fails when a tracked
+  file is a compiled executable or object file.
 - `sh -n` and `shellcheck` over `install.sh`, and `script/test-install.sh`,
   which runs its Linux path against a stub curl and fixture releases.
 - `bash -n`, `shellcheck` and `--self-test` for

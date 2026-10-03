@@ -94,6 +94,14 @@ jobs:
       - name: retired spellings in docs
         run: ./script/check-retired-spellings.sh
 
+      # A pull request shows a committed binary as one line with no diff, and
+      # one reached main that way. The self-test runs first, so a check that
+      # stopped refusing a header fails before the tree passes through it.
+      - name: binaries in the tree
+        run: |
+          ./script/check-binaries.sh --self-test
+          ./script/check-binaries.sh
+
       - name: cross-compile darwin/arm64
         run: GOOS=darwin GOARCH=arm64 go build ./...
 
