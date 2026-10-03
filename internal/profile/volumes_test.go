@@ -221,3 +221,39 @@ func TestCloneDoesNotShareVolumesOrFiles(t *testing.T) {
 		t.Error("a clone shares the original's volumes or files")
 	}
 }
+
+// fileBase is a profile that parses, ending in a files: binding whose mode a
+// test appends.
+const fileBase = bindingBase + "secrets:\n  - cred\nvolumes:\n  - kind: tmpfs\n    path: .cfg\n" +
+	"files:\n  - ref: secrets.cred\n    path: .cfg/c\n"
+
+func TestAQuotedModeParsesAsOctal(t *testing.T) {
+	p, err := Parse([]byte(fileBase + "    mode: \"0644\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.Files[0].FileMode(); err != nil || got != 0o644 {
+		t.Errorf("FileMode() = %v, %v; want 0644", got, err)
+	}
+}
+
+// YAML reads a bare 0644 as the number 420. Decoded into a plain string, it
+// arrived as "420" and the file was created 0o420.
+func TestAnUnquotedModeIsRefused(t *testing.T) {
+	for _, mode := range []string{"0644", "0640", "0400", "0600", "644", "true"} {
+		_, err := Parse([]byte(fileBase + "    mode: " + mode + "\n"))
+		if err == nil || !strings.Contains(err.Error(), "mode must be a quoted string") {
+			t.Errorf("mode: %s gave %v; want the quoted-string refusal", mode, err)
+		}
+	}
+}
+
+func TestANumericModeInAJSONProfileIsRefused(t *testing.T) {
+	doc := `{"name": "x", "image": "i", "guestHome": "/home/x", "binary": "x",
+		"mem": 1, "cpus": 1, "secrets": ["cred"],
+		"volumes": [{"kind": "tmpfs", "path": ".cfg"}],
+		"files": [{"ref": "secrets.cred", "path": ".cfg/c", "mode": 420}]}`
+	if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), "mode must be a quoted string") {
+		t.Errorf("Parse = %v; want the quoted-string refusal", err)
+	}
+}

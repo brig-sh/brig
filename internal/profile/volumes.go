@@ -2,6 +2,7 @@ package profile
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path"
@@ -179,11 +180,29 @@ type FileBinding struct {
 	Ref string `json:"ref"`
 	// Path is relative to GuestHome, for example, ".claude/.credentials.json".
 	Path string `json:"path"`
-	// Mode is the octal permission the file is created with, for example, "0600".
-	// A string, quoted in the profile, because YAML reads a bare 0600 as a
-	// number, and a number arrives here as its decimal digits ("384"), not as
-	// the octal the profile meant.
-	Mode string `json:"mode,omitempty"`
+	// Mode is the octal permission the file is created with, as a quoted
+	// string, for example, "0600".
+	Mode OctalMode `json:"mode,omitempty"`
+}
+
+// OctalMode is a file mode written in a profile as a quoted octal string.
+//
+// YAML reads an unquoted 0644 as the octal number 420, and sigs.k8s.io/yaml
+// hands a number decoded into a plain string over as its decimal digits. A
+// plain string field would get "420" and create the file 0o420. The YAML
+// library does not convert a value for a type with its own UnmarshalJSON, so
+// a bare number reaches UnmarshalJSON and is refused there.
+type OctalMode string
+
+// UnmarshalJSON accepts a JSON string and refuses any other value.
+func (m *OctalMode) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("mode must be a quoted string, e.g. mode: \"0600\"; " +
+			"YAML reads an unquoted 0600 as the number 384")
+	}
+	*m = OctalMode(s)
+	return nil
 }
 
 // DefaultFileMode is what a binding gets when it names none: owner-only, which
@@ -195,7 +214,7 @@ func (b FileBinding) FileMode() (fs.FileMode, error) {
 	if b.Mode == "" {
 		return DefaultFileMode, nil
 	}
-	n, err := strconv.ParseUint(b.Mode, 8, 32)
+	n, err := strconv.ParseUint(string(b.Mode), 8, 32)
 	if err != nil {
 		return 0, fmt.Errorf("mode %q is not octal, e.g. \"0600\"", b.Mode)
 	}
