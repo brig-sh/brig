@@ -2,9 +2,13 @@ name: Release
 
 # Publish binaries when a version tag lands.
 #
-# The built-in GITHUB_TOKEN is enough: the release goes to this repository,
-# which is where the token already has write access. No signing key and no
-# registry secret are involved.
+# The release itself is published with the built-in GITHUB_TOKEN, and cosign
+# signs the checksums keylessly against the job's id-token, so neither needs
+# a stored secret. Signing and notarizing the macOS binaries does: it takes
+# the Developer ID certificate and its password, and the notary key with its
+# key and issuer IDs. Publishing the Homebrew cask takes a token for the tap
+# repository, minted from the NOFire bot App's private key, with a stored tap
+# token as its fallback.
 
 on:
   push:
