@@ -233,6 +233,10 @@ func Import(blob []byte, dir string) (Profile, string, error) {
 		return Profile{}, "", fmt.Errorf("name %q is reserved: a file of that name in the "+
 			"profile directory is brig's own, so the profile would never load", t.Name)
 	}
+	if reservedWords[t.Name] {
+		return Profile{}, "", fmt.Errorf("name %q is reserved: `brig doctor %s` is a command, "+
+			"so `brig doctor` could never check a profile of that name", t.Name, t.Name)
+	}
 	// 0700 per the XDG spec cited on Dir, and the better default anyway for a
 	// directory of files that name credential variables.
 	if err := os.MkdirAll(dir, 0o700); err != nil {

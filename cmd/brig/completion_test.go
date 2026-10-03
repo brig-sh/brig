@@ -698,3 +698,42 @@ func globalFlagSpellings() []string {
 	sort.Strings(out)
 	return out
 }
+
+// After `brig doctor bundle`, -o and --output take a shell-completed path,
+// the flags include --output, and a given path is not a second agent.
+func TestCompleteDoctorBundle(t *testing.T) {
+	completionHost(t)
+	cases := []struct {
+		words     []string
+		directive string
+		want      []string
+	}{
+		{[]string{"doctor", "bundle", "-o", ""}, dirFiles, nil},
+		{[]string{"doctor", "bundle", "--output", ""}, dirFiles, nil},
+		{[]string{"doctor", "bundle", "claude-code", "-o", ""}, dirFiles, nil},
+		{[]string{"doctor", "bundle", "-"}, dirNames, []string{"-o", "--output", "--include-logs"}},
+		{[]string{"doctor", "bundle", ""}, dirNames, []string{"claude-code", "mine"}},
+		{[]string{"doctor", "bundle", "-o", "/tmp/x.zip", ""}, dirNames, []string{"claude-code", "mine"}},
+		{[]string{"doctor", "bundle", "--output=/tmp/x.zip", ""}, dirNames, []string{"claude-code", "mine"}},
+		{[]string{"doctor", "bundle", "--output", "=", ""}, dirFiles, nil},
+		{[]string{"doctor", "bundle", "--output", "=", "/tmp/x.zip", ""}, dirNames, []string{"claude-code", "mine"}},
+		{[]string{"doctor", "bundle", "mine", ""}, dirNone, nil},
+	}
+	for _, tc := range cases {
+		directive, candidates := complete(tc.words)
+		line := strings.Join(tc.words, " ")
+		if directive != tc.directive {
+			t.Errorf("brig %s: directive %s, want %s", line, directive, tc.directive)
+			continue
+		}
+		for _, w := range tc.want {
+			found := false
+			for _, c := range candidates {
+				found = found || c == w
+			}
+			if !found {
+				t.Errorf("brig %s: %q not offered in %v", line, w, candidates)
+			}
+		}
+	}
+}

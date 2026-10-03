@@ -66,6 +66,10 @@ type check struct {
 	// nil. It is not serialised -- an exit code is not a fact about the host --
 	// and only two checks set it: see the note on doctorExit.
 	err error
+	// paths are the host paths the finding names. Not serialised; `brig
+	// doctor bundle` registers them with its redactor, since a path outside
+	// $HOME matches no other rule.
+	paths []string
 }
 
 // virtualization is the seam a test replaces to force a hostile host: the probe
@@ -76,6 +80,15 @@ var virtualization = probeVirtualization
 
 // doctorCmd is `brig doctor [<agent>]`, with an optional --json flag of its own.
 func doctorCmd(out io.Writer, args []string) error {
+	// bundle is a sub-verb in the first position only; profile.Import
+	// refuses it as a profile name.
+	if len(args) > 0 && args[0] == "bundle" {
+		if globalJSON {
+			return usagef("`brig doctor bundle` writes a zip and has no --json form")
+		}
+		return bundleCmd(out, args[1:])
+	}
+
 	jsonOut, agentName, err := parseDoctorArgs(args)
 	if err != nil {
 		return err
@@ -129,6 +142,10 @@ func parseDoctorArgs(args []string) (jsonOut bool, agent string, err error) {
 		case strings.HasPrefix(a, "-"):
 			return false, "", usagef("unknown flag %q for `brig doctor` "+
 				"(it takes an optional agent and --json)", a)
+		case a == "bundle" && jsonOut:
+			// No profile is named bundle: this is `brig --json doctor
+			// bundle` and gets the same answer.
+			return false, "", usagef("`brig doctor bundle` writes a zip and has no --json form")
 		default:
 			if agent != "" {
 				return false, "", usagef("`brig doctor` checks one agent's image, "+
@@ -271,6 +288,7 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 		return check{Name: "runtime", State: stateFail,
 			Finding: fmt.Sprintf("%s at %s is not an executable on this host", rt.Kind(), bin),
 			Fix:     fix,
+			paths:   []string{bin},
 			err:     fmt.Errorf("%w: %s is not there or not executable", runtime.ErrBadRuntime, bin),
 		}, nil
 	}
@@ -281,7 +299,7 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	if v, verr := runtime.Version(bin); verr == nil && v != "" {
 		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), bin)
 	}
-	return check{Name: "runtime", State: statePass, Finding: finding}, rt
+	return check{Name: "runtime", State: statePass, Finding: finding, paths: []string{bin}}, rt
 }
 
 // shortVersion is the version out of a `--version` line, read the way
@@ -323,15 +341,15 @@ func bootCheck(rt runtime.Runtime) check {
 			Fix: "set BRIG_BOOT_ASSETS to a directory holding the kernel and initrd"}
 	}
 	if present {
-		return check{Name: "boot", State: statePass, Finding: "assets present at " + dir}
+		return check{Name: "boot", State: statePass, Finding: "assets present at " + dir, paths: []string{dir}}
 	}
 	if explicit {
 		// A run does not download into a directory the user chose.
 		kernel, initrd := runtime.BootAssetNames()
-		return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
+		return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir, paths: []string{dir},
 			Fix: fmt.Sprintf("put %s and %s in %s, or unset BRIG_BOOT_ASSETS so brig fetches them", kernel, initrd, dir)}
 	}
-	return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
+	return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir, paths: []string{dir},
 		Fix: "run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them"}
 }
 
@@ -354,7 +372,7 @@ func verifyCheck() check {
 	switch path, ok := policy.Tooling(); {
 	case ok:
 		return check{Name: "verify", State: statePass,
-			Finding: fmt.Sprintf("cosign at %s, BRIG_VERIFY=%s", path, mode)}
+			Finding: fmt.Sprintf("cosign at %s, BRIG_VERIFY=%s", path, mode), paths: []string{path}}
 	case mode == verify.Require:
 		return check{Name: "verify", State: stateFail,
 			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s", policy.CosignMissing(), mode),
@@ -383,9 +401,10 @@ func profilesCheck(loadErr error) check {
 	if loadErr != nil {
 		return check{Name: "profiles", State: stateFail,
 			Finding: finding + "; " + oneLine(loadErr.Error()),
-			Fix:     "fix or remove the profile file(s) named above"}
+			Fix:     "fix or remove the profile file(s) named above",
+			paths:   []string{profile.Dir()}}
 	}
-	return check{Name: "profiles", State: statePass, Finding: finding}
+	return check{Name: "profiles", State: statePass, Finding: finding, paths: []string{profile.Dir()}}
 }
 
 // secretsCheck opens brig's secret store and closes it again, never reading a
@@ -416,8 +435,10 @@ func secretsCheck() check {
 // without it -- so this never gates the exit status; the one thing it will call
 // out is a socket whose mode is wider than 0600, which is a lifecycle-control
 // channel left readable by others.
-func brigdCheck() check {
+func brigdCheck() (c check) {
 	socket, _ := brigsock.Default()
+	// Every finding below names the socket.
+	defer func() { c.paths = []string{socket} }()
 	info, err := os.Stat(socket)
 	if err != nil {
 		return check{Name: "brigd", State: stateInfo, Finding: "not running (no socket at " + socket + ")"}

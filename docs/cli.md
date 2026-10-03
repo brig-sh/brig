@@ -304,6 +304,52 @@ Only two checks gate the exit status: a missing or broken runtime, and a
 secret store that will not open. Every other finding, including one marked
 `!!`, prints its fix and leaves the exit status at `0`.
 
+### `brig doctor bundle`
+
+```bash
+brig doctor bundle [<agent>] [-o <path>] [--include-logs]
+```
+
+Writes a zip of diagnostics to attach to a public issue: the `brig doctor`
+report, host and runtime versions, every sandbox with its last boot result,
+your own profiles and policies (not the shipped ones), and, with an agent,
+that agent's profile and local image digest. Identifying values become
+numbered placeholders, and no secret value is read; see
+[security.md](security.md#the-diagnostics-bundle) for the redaction model and
+its limits.
+
+| Entry | Content |
+| --- | --- |
+| `MANIFEST.txt` | Every file in the zip, every collector's outcome, and which kinds of value were replaced |
+| `environment.json` | OS and version, architecture, WSL, brig's version and commit, the runtime and its version, install method |
+| `doctor.json` | The same report `brig doctor --json` prints, with a profile-load error reduced to a count |
+| `sandboxes.json` | `brig ls`'s rows, each with its last boot result, image and digest |
+| `profiles/profiles.json`, `profiles/policies.json` | Your own profiles and policies, one field at a time |
+| `agent/<name>/profile.json` | Only with `<agent>`: its profile, and the local image digest when the runtime reports one |
+| `logs/` | A sandbox's console log, when its last boot failed, or every sandbox's with `--include-logs` |
+
+With no `-o`, the zip is `./brig-diagnostics-<UTC time>.zip`, for example
+`brig-diagnostics-20260927T132923Z.zip`. `-o <dir>` puts that name in the
+directory; `-o <path>` writes to the path. An existing file at the target is
+refused, not overwritten.
+
+Stdout is two lines: the zip's absolute path, then a summary of the file
+count, the kinds of value replaced, and whether logs are included and why.
+There is no prompt and no other output.
+
+A sandbox's log is included only when its last boot failed; the agent never
+started, so none of its output is in it. `--include-logs` adds every
+sandbox's log, running or not, and the network gateway logs. Read them before
+attaching: a running sandbox's log can hold the agent's prompts and output.
+
+Exit `0` once the zip is written; a collector that failed or timed out is
+recorded in `MANIFEST.txt`. Exit `1` when no zip is written: the final check
+found a value that should have been replaced, or the file could not be
+written. `2` is a usage error, `3` an agent name `brig agent ls` does not
+know.
+
+`--json`, global or local, is refused.
+
 ### `brig version`
 
 ```bash

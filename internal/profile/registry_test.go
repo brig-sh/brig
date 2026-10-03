@@ -3,6 +3,8 @@ package profile
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -217,5 +219,32 @@ func TestAliasesDropsASpellingAProfileHasTaken(t *testing.T) {
 	}
 	if got := Aliases("claude-code"); len(got) != 0 {
 		t.Errorf("Aliases(claude-code) = %v, but %q now looks up the file-backed profile", got, "claude")
+	}
+}
+
+// bundle is a sub-verb of doctor, so no profile can take the name.
+func TestImportRefusesTheReservedWordBundle(t *testing.T) {
+	reset(t)
+	blob := []byte(`{"name":"bundle","image":"i","guestHome":"/home/x","binary":"x","mem":1,"cpus":1}`)
+	if _, _, err := Import(blob, t.TempDir()); err == nil {
+		t.Error("imported a profile called bundle")
+	}
+}
+
+// BuiltIn reads the shipped spec, not an override of it.
+func TestBuiltInIgnoresAnOverride(t *testing.T) {
+	reset(t)
+	dir := t.TempDir()
+	override := []byte(`{"name":"claude-code","image":"ghcr.io/acme/private","guestHome":"/home/x","binary":"x","mem":1,"cpus":1}`)
+	if err := os.WriteFile(filepath.Join(dir, "claude-code.json"), override, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = Load(dir)
+	p, ok := BuiltIn("claude-code")
+	if !ok || p.Image == "" || strings.Contains(p.Image, "acme") {
+		t.Errorf("BuiltIn(claude-code) = %q, %v; want the shipped image", p.Image, ok)
+	}
+	if names := BuiltInNames(); !slices.Contains(names, "claude-code") {
+		t.Errorf("BuiltInNames = %v, missing claude-code", names)
 	}
 }

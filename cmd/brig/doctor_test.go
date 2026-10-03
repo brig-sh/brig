@@ -46,6 +46,7 @@ func healthyHost(t *testing.T) string {
 	t.Helper()
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
 	t.Setenv("BRIG_STATE_DIR", t.TempDir())
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
 	t.Setenv("BRIG_VERIFY", "off")
 	// A brigd socket of no one's, so the daemon check is informational rather
 	// than reaching whatever socket the host running the test happens to have.

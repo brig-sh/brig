@@ -849,6 +849,49 @@ drops IP addresses at ingestion and keeps raw events for a year.
 If you find one of those excluded items in a payload, that is a bug and
 [SECURITY.md](../SECURITY.md) is how to report it.
 
+## The diagnostics bundle
+
+`brig doctor bundle` (see
+[docs/cli.md#brig-doctor-bundle](cli.md#brig-doctor-bundle)) writes a zip
+meant for a public issue. The second promise applies to it: it never reads a
+secret value, from the store or from the environment of a variable a profile
+forwards. It uses the names a profile declares and does not call `brig info`,
+whose envelope resolves values.
+
+An identifying value (`$HOME`, the hostname, a workspace path, a variable
+name not on a built-in profile's list, an image's registry and repository, a
+domain) becomes a numbered placeholder, such as `<workspace-1>`, the same
+everywhere in that bundle. A release-like tag, such as `1.4.2` or
+`v0.3.0-rc2`, stays readable, as does a digest (`sha256:` and its hex). Any
+other tag becomes a placeholder, as does anything after the `@` that is not
+a digest. No map from placeholder to value is kept, in the zip or beside it;
+once the bundle is written, brig cannot say what `<workspace-1>` was.
+
+Structured files (`sandboxes.json`, `profiles/*.json`) are redacted field by
+field: a field the bundle does not project is absent. Free text
+(`doctor.json`'s findings, a sandbox's console log, captured command output,
+the collector status lines in `MANIFEST.txt` and `environment.json`'s runtime
+error) is redacted best-effort: the values replaced in the structured pass,
+then common credential shapes (`sk-ant-…`, a GitHub token, an AWS access key,
+a JWT, a `Bearer …` header, a PEM block, a `KEY=value` whose key looks like
+one), then an email address, an address outside the allowlist, and a MAC
+address. A secret in an unrecognised shape can survive. `MANIFEST.txt` says
+which files are free text. A status line or runtime error can quote a path
+outside `$HOME` that brig does not know; read those before attaching.
+
+`doctor.json` is in every bundle and is free text: read it, as a log, before
+attaching. Logs are off by default. A sandbox's log is included only when
+its last boot failed; the agent never started, so none of its output is in
+it. `--include-logs` adds every sandbox's log, running or not, and the
+network gateway logs.
+
+Before writing, brig scans the in-memory archive for any registered value,
+common token shape, email address or MAC address. A hit is scrubbed again,
+since a collector that timed out may have registered a value late, and the
+archive is checked again. A hit that survives stops the write: no zip, a
+nonzero exit, and a message asking you to report the bug without the bundle.
+The check does not cover a token shape brig does not know.
+
 ## Things brig does not claim
 
 It does not sandbox the agent from the network by default, on any backend. A

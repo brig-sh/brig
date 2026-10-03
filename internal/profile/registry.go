@@ -342,9 +342,8 @@ func ReservedFor(slug, agent string) (string, bool) {
 // brig's own. Listings say so, because "the image is not what I expected" and
 // "there is a file I forgot about" are the same question.
 //
-// This is the one accessor that reads builtinFS directly rather than through
-// the registry, so it stays here rather than beside the other provenance
-// accessors in file.go: nothing outside this file is meant to touch that
+// It reads builtinFS directly, as BuiltInDeny, BuiltIn and BuiltInNames do,
+// so it stays in this file: nothing outside it is meant to touch that
 // variable, per the note on it.
 func OverridesBuiltIn(name string) bool {
 	return IsCustom(name) && Embedded(name)
@@ -381,6 +380,40 @@ func BuiltInDeny(name string) []string {
 		return nil
 	}
 	return p.Deny
+}
+
+// reservedWords are names a profile cannot take because a command reads them
+// as a sub-verb, as `brig doctor bundle` does.
+var reservedWords = map[string]bool{"bundle": true}
+
+// BuiltIn is the profile brig ships under name, ignoring any override. The
+// diagnostics bundle builds its allowlist from it.
+func BuiltIn(name string) (Profile, bool) {
+	blob, err := builtinFS.ReadFile("specs/" + name + ".yaml")
+	if err != nil {
+		return Profile{}, false
+	}
+	p, err := Parse(blob)
+	if err != nil {
+		return Profile{}, false
+	}
+	return p, true
+}
+
+// BuiltInNames is every profile brig ships, sorted.
+func BuiltInNames() []string {
+	entries, err := fs.ReadDir(builtinFS, "specs")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func lastDash(s string) int {

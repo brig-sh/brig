@@ -9,9 +9,15 @@ There is no other channel yet.
 
 ## File a bug
 
-Open an issue and pick the bug report template. Include:
+Open an issue and pick the bug report template. Attach the zip from
+`brig doctor bundle`: the doctor report, host and runtime versions, your
+sandboxes and their last boot, and your own profiles and policies, with
+identifying values replaced by placeholders. It replaces pasting
+`brig version` and `brig doctor` output, and most of the template's
+Environment section.
 
-- The command you ran.
+To not attach a file, paste the two commands' output instead:
+
 - The output of `brig version`.
 - The output of `brig doctor`.
 
@@ -19,6 +25,10 @@ Open an issue and pick the bug report template. Include:
 verify, profiles, secrets, brigd and image.
 [../CONTRIBUTING.md#issues](../CONTRIBUTING.md#issues) lists what else helps:
 logs, your environment, and the steps to reproduce.
+
+With `brig doctor bundle --include-logs`, read `logs/` in the zip before
+attaching it: a running sandbox's log can hold agent output the bundle
+cannot redact.
 
 If Brig or its runtime will not install or start, check whether your platform
 is supported first: [install.md](install.md#platform-support) has the full

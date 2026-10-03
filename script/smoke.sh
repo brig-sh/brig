@@ -2561,6 +2561,31 @@ build="$("$WORK/brig" version | sed 's/^brig //')"
   && ok "doctor opens with the brig build" \
   || bad "doctor opens with the brig build -- want '$build', got: $(head -1 "$WORK/doctor.out")"
 
+echo "== doctor bundle =="
+# The bundle is written against the stub runtime, lists the entries a bug
+# report needs, and prints its path first.
+bundle_dir="$WORK/bundle"
+mkdir -p "$bundle_dir"
+"$WORK/brig" doctor bundle -o "$bundle_dir" > "$WORK/bundle.out" 2> "$WORK/bundle.err"
+rc=$?
+[ "$rc" = 0 ] && ok "doctor bundle exits 0 on the stub host" \
+  || bad "doctor bundle exits 0 -- got $rc: $(cat "$WORK/bundle.err")"
+zip_path=$(head -1 "$WORK/bundle.out")
+case "$zip_path" in
+  "$bundle_dir"/brig-diagnostics-*.zip) ok "doctor bundle prints the zip path first" ;;
+  *) bad "doctor bundle prints the zip path first -- got: $zip_path" ;;
+esac
+# unzip -l goes to a file, not a pipe into grep -q: grep exits at its first
+# match, unzip dies of SIGPIPE, and pipefail fails the check.
+unzip -l "$zip_path" > "$WORK/bundle.lst" 2>/dev/null
+for entry in MANIFEST.txt environment.json doctor.json; do
+  grep -q " $entry\$" "$WORK/bundle.lst" \
+    && ok "bundle has $entry" || bad "bundle has $entry"
+done
+"$WORK/brig" doctor bundle -o "$zip_path" > /dev/null 2>&1
+[ "$?" = 2 ] && ok "doctor bundle refuses an existing file" \
+  || bad "doctor bundle refuses an existing file"
+
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's
 # replies; these cover the scripts that render them.

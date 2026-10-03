@@ -59,6 +59,10 @@ Paste it in full, fenced. `brig doctor` prints a fix beside every line that
 is not `ok`, and still exits 0 for most of them. Only a missing or broken
 runtime and an unreachable secret store set a nonzero status, so the whole
 report matters more than whether the command "passed".
+
+The zip from `brig doctor bundle` replaces this paste and most of the
+Environment section above: the same report, host and runtime versions, and
+sandboxes, with identifying values replaced by placeholders.
 -->
 
 ## Logs and additional context

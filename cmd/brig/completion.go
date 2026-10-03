@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -218,13 +219,17 @@ func complete(words []string) (string, []string) {
 		}
 		return dirNone, nil
 	case verb == "doctor":
+		words := bareWords(rest, posRun)
+		if len(words) > 0 && words[0] == "bundle" {
+			return completeBundle(rest[slices.Index(rest, "bundle")+1:], cur)
+		}
 		if strings.HasPrefix(cur, "-") {
 			return names(cur, []string{"--json"})
 		}
-		if len(bareWords(rest, posRun)) > 0 {
+		if len(words) > 0 {
 			return dirNone, nil
 		}
-		return names(cur, agentNames())
+		return names(cur, append([]string{"bundle"}, agentNames()...))
 	case verb == "network":
 		return completeNetwork(rest, cur)
 	case groups[verb] != nil:
@@ -233,6 +238,39 @@ func complete(words []string) (string, []string) {
 		return completeRunLine(verb, rest, cur)
 	}
 	return dirNone, nil
+}
+
+// completeBundle answers after `brig doctor bundle`. Not bareWords: -o is not
+// in the flag table, so the path after it would read as a second agent.
+func completeBundle(args []string, cur string) (string, []string) {
+	last := ""
+	if n := len(args); n > 0 {
+		last = args[n-1]
+		// bash sends `--output=<cursor>` as "--output", "=".
+		if last == "=" && n > 1 {
+			last = args[n-2]
+		}
+	}
+	if last == "-o" || last == "--output" {
+		return dirFiles, nil
+	}
+	if strings.HasPrefix(cur, "-") {
+		return names(cur, []string{"-o", "--output", "--include-logs"})
+	}
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "-o" || a == "--output":
+			i++
+			if i < len(args) && args[i] == "=" {
+				i++
+			}
+		case strings.HasPrefix(a, "-") || a == "=":
+		default:
+			// One agent at most.
+			return dirNone, nil
+		}
+	}
+	return names(cur, agentNames())
 }
 
 // completeRunLine answers for a lifecycle verb: flags, then the ref, then

@@ -14,7 +14,9 @@ hypervisor, the runtime and its version, the boot assets, cosign, the
 profiles, the secret store and brigd, one line each. It names the fix for
 a line that is not `ok`. `brig doctor <agent>` checks that agent's image too.
 `--json` prints the same report as one document, for a script or a bug
-report.
+report. For a bug report, `brig doctor bundle` writes that report and the
+rest of what one needs into a zip to attach; see
+[cli.md#brig-doctor-bundle](cli.md#brig-doctor-bundle).
 
 ## Exit codes
 

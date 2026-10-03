@@ -72,6 +72,7 @@ usage:
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
   brig doctor [<agent>]                          check the host, runtime and, given an agent, its image
+  brig doctor bundle [<agent>] [-o <path>]       write a redacted diagnostics zip for a bug report
   brig completion bash|zsh|fish                  a completion script for your shell
   brig version
 
