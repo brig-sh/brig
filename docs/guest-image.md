@@ -6,21 +6,19 @@ and the file the agent reads that credential from. Any Linux CLI in an
 image works under Brig as long as the image carries what those commands
 need.
 
-This page is that list, taken from the code that runs it rather than from
-memory. Each entry names the file you can go and read. There is also a
-script: `script/check-guest-image.sh <image> [profile]` runs the list against a
-real image and prints one line per requirement.
+This page is that list. Each entry names the source file that runs it.
+`script/check-guest-image.sh <image> [profile]` runs the list against a real
+image and prints one line per requirement.
 
-Nothing here is a Brig-specific format. A stock distribution image satisfies
-all of it without being told about Brig, which is the point. What follows
-matters when you are building something smaller than that.
+None of it is specific to Brig. A stock distribution image satisfies all of
+it. The details matter when you build something smaller.
 
 Guest images for the built-in profiles are open source, built in
 [brig-sh/community-images](https://github.com/brig-sh/community-images).
 Building your own from scratch is documented there, at
 [bring-your-own-image.md](https://github.com/brig-sh/community-images/blob/main/docs/bring-your-own-image.md).
-The other half of the job is [profiles.md](profiles.md): the fields that
-name this image and hand it a credential.
+[profiles.md](profiles.md) covers the profile fields that name this image
+and hand it a credential.
 
 ## The binaries
 
@@ -34,7 +32,7 @@ Resolved through the guest's `PATH` unless the table says otherwise.
 | `stat` | `stat -c '%F\|%U\|%a'` proves a credential's target is a regular file of the right ownership and mode before the value goes into it, `stat -c %s` proves it is not empty afterwards, and `stat -f -c %T` reports the filesystem a path sits on | `internal/wrap/secretfiles.go`, `verifySecretFile`, `writeSecretFile`, `guestFstype` |
 | `mount` | `mount -t tmpfs` covers a directory the profile declares, and `mount --bind` pins each hostmount out of the way first and binds it back after | `internal/wrap/secretfiles.go`, `mountVolumes` |
 | `mkdir` | creates mount targets, as `mkdir -p` and inside a shell script as `mkdir -p -- "$(dirname "$1")"` | `internal/wrap/secretfiles.go`, `createGuestTarget` |
-| `dirname` | inside that same script. It is an external command, not a shell builtin, and it is the one nobody guesses | `internal/wrap/secretfiles.go`, `createGuestTarget` |
+| `dirname` | inside that same script. It is an external command, not a shell builtin | `internal/wrap/secretfiles.go`, `createGuestTarget` |
 | `chown` | hands the covered directories to root across a credential write and back to the guest user afterwards, and sets the owner of the credential file itself | `internal/wrap/secretfiles.go`, `chownGuest`, `writeSecretFile` |
 | `chmod` | sets the mode a `files:` binding declares, inside the create script | `internal/wrap/secretfiles.go`, `writeSecretFile` |
 | `rm` | `rm -f --` at the credential path before creating it, so a planted symlink is removed rather than followed | `internal/wrap/secretfiles.go`, `writeSecretFile` |
@@ -42,32 +40,31 @@ Resolved through the guest's `PATH` unless the table says otherwise.
 | `bash` | `brig sh` runs `bash -l`, and `brig sh <agent> <command...>` runs `bash -lc '"$@"' bash <command...>`, and `brig sh <agent> -c '<script>'` runs `bash -lc '<script>'`, for every profile regardless of its `binary:` field | `internal/wrap/run.go`, `shellArgv` |
 | the profile's `binary:` | `brig run` execs it. `claude` for claude-code, `codex` for codex, and so on | `cmd/brig/main.go`, `runAgent` |
 
-Two of these are conditional, and it is worth knowing which.
+Two of these are conditional.
 
 `sleep` is the container command on the nerdctl path only. On the hull path,
-the image's own entrypoint runs instead, so a macOS-only image can get away
-without `sleep` and then fail on Linux. Since `:latest` on the published
-profiles is a multi-arch index meant to work on both, treat `sleep` as
-required.
+the image's own entrypoint runs instead, so an image without `sleep` works on
+macOS and fails on Linux. Treat `sleep` as required if the image is meant to
+run on both.
 
-`bash` is only reached by `brig sh`. That is also the verb people reach for
-when a sandbox is misbehaving. An image without it works right up to the
-moment somebody needs to look inside it.
+`bash` is run only by `brig sh`, and by `brig run` on a `kind: shell` profile.
+`brig sh` is how you look inside a misbehaving sandbox, so an image without
+`bash` cannot be inspected that way.
 
 **The login profile must not rewrite the positional parameters.** `brig sh`
 hands the command words to bash as `$1`, `$2` and on, and `-l` sources
 `/etc/profile` -- which by its own convention sources `/etc/profile.d/*.sh`
 -- and then the guest user's `~/.bash_profile` or `~/.profile`, all before
 the `"$@"` script runs. A top-level `shift` or `set --` in any of them
-rewrites the parameters, and with them the command brig was asked to run:
+rewrites the parameters, and with them the command Brig was asked to run:
 with a `shift`, `brig sh <agent> echo hi` looks for a command called `hi` and
-exits 127. The `"$@"` script brig runs cannot defend against it -- `command
+exits 127. The `"$@"` script Brig runs cannot defend against it -- `command
 "$@"` reads the same rewritten parameters -- so `brig sh` with a command breaks
 while a bare `brig sh` still opens a shell. Keep `set --` and `shift` inside
 a function, where bash scopes them to the call.
 
 The home half of that is not only the image's to get right. The guest home is
-a host directory brig mounts at the profile's `guestHome`. When that path is
+a host directory Brig mounts at the profile's `guestHome`. When that path is
 the guest user's `$HOME`, as `/root` is for `claude-code`, a `.bash_profile`
 in the guest home is the one bash sources. One that shifts breaks `brig sh` on
 an image that is otherwise fine. `ubuntu` mounts the guest home at
@@ -80,13 +77,13 @@ needs only `/bin/true`, `cat`, `sleep` on Linux, and its own binary.
 Two of the eight shipped profiles declare them, `claude-code` and
 `claude-desktop`, which are the two that deliver a credential as a file. If
 your profile forwards everything as environment variables, most of this table
-is dead weight for you.
+does not apply to it.
 
-Build against that narrower list and know what it costs. Adding one
-`files:` binding later brings the whole table back. The run then fails at
-delivery rather than at boot, well after the sandbox looked fine.
+If you build against that narrower list, adding a `files:` binding later
+brings the whole table back. The run then fails at delivery, after the
+sandbox has booted.
 
-`stat` is the fussiest entry. The `-c` and `-f` format flags are the GNU
+`stat` has the strictest requirement. The `-c` and `-f` format flags are the GNU
 coreutils spelling, which busybox also implements when it was compiled with
 its format feature. BSD `stat` spells them differently and fails the run.
 Right after Brig creates a file, `%F` has to answer `regular file` or
@@ -98,7 +95,7 @@ Brig mounted.
 
 - **`/proc`, mounted.** `cat /proc/self/mountinfo` is how Brig decides what is
   already a mountpoint. It reads the kernel's own table rather than running
-  `mountpoint -q`, precisely because a minimal image can lack that binary. A
+  `mountpoint -q`, because a minimal image can lack that binary. A
   missing binary reads as "not mounted", stacking a second mount on
   every run until the guest runs out. `cat /proc/swaps` is the swap tripwire.
   More than a header line there, and Brig refuses to hand the sandbox a
@@ -107,8 +104,8 @@ Brig mounted.
 - **`/run`, writable by root.** Each hostmount is pinned at
   `/run/brig/persist/<escaped path>` while the tmpfs goes over its real
   location, then bound back. `/run` keeps the pin off the workspace, so it
-  never reaches host disk and never survives a boot. The shipped profiles run
-  the guest as root, so the pin is not out of the agent's reach. See
+  never reaches host disk and never survives a boot. `claude-code` runs the
+  guest as root, so the agent can reach the pin. See
   `persistRoot` in `internal/wrap/secretfiles.go`.
 - **`/bin/true`, at that literal path.** The probe is not `true` resolved
   through `PATH`.
@@ -126,10 +123,12 @@ last path element: `/home/claude` means the user `claude` (`GuestUser` in
 `internal/profile/profile.go`). The profile states the home once and the user
 follows from it. There is no field to set the user separately.
 
-The five shipped agent profiles set `guestHome: /root`, so the guest is root.
-A rootless Linux install maps container uid 0 to the invoking user, which is
-what lets the guest open `/dev/kvm` and own the workspace it writes. Each spec
-carries the rationale next to the field.
+Five of the six shipped agent profiles set `guestHome: /root`, so the guest
+is root: `claude-code`, `codex`, `gemini`, `grok` and `opencode`. A rootless
+Linux install maps container uid 0 to the invoking user, which is what lets
+the guest open `/dev/kvm` and own the workspace it writes. Each of those
+specs carries the rationale next to the field. The sixth, `cursor`, uses
+`/home/cursor`.
 
 `ubuntu`'s `guestHome` is `/root/work`, so the derived name is `work`, which
 is not an account in that image. Nothing reads it there, because the image
@@ -152,25 +151,22 @@ carry `User: "root"` (`guestRootUser` in `internal/wrap/secretfiles.go`). Only
 the mount syscall needs the privilege.
 
 On a profile whose guest is root, the agent and those execs are the same
-account. The boundary is the VM, not the guest account: brig claims nothing
+account. The boundary is the VM, not the guest account: Brig claims nothing
 about what the agent can reach inside the sandbox. A profile whose `guestHome`
 sits under a real user's home keeps the two apart, and the symlink guards in
 `writeSecretFiles` cover that case.
 
-That privilege comes from the boot, and there are two boots to tell apart. A
-bare `hull run <image>` or `nerdctl run <image>` starts the image as an
-ordinary container. Root inside it holds only the runtime's default
-capability set, with no `CAP_SYS_ADMIN`. `mount -t tmpfs` fails there with
-`permission denied`, in an image Brig mounts a tmpfs in every day. Brig
-never boots that way. It passes the profile's hypervisor and rootfs type,
-and for a `genericBoot` profile the kernel and initrd annotations. The
-image comes up as a microVM instead. Brig's boot gives root every
-capability. A bare container run does not (`runArgs` in
-`internal/runtime/hull.go`, and the nerdctl equivalent in
-`internal/runtime/nerdctl.go`). Checking an image under the bare boot
-therefore reports failures against a boundary Brig never gives it. That is
-why `script/check-guest-image.sh` boots through `brig run -d` rather than
-through the runtime.
+That privilege comes from how Brig boots the image. A bare
+`hull run <image>` or `nerdctl run <image>` starts the image as an ordinary
+container. Root inside it holds only the runtime's default capability set,
+with no `CAP_SYS_ADMIN`, so `mount -t tmpfs` fails there with
+`permission denied`. Brig never boots that way. It passes the profile's
+hypervisor and rootfs type, and for a `genericBoot` profile the kernel and
+initrd annotations, so the image comes up as a microVM in which root has
+every capability (`runArgs` in `internal/runtime/hull.go`, and the nerdctl
+equivalent in `internal/runtime/nerdctl.go`). Checking an image under a bare
+container run reports failures that Brig's own boot does not have. That is
+why `script/check-guest-image.sh` boots through `brig run -d`.
 
 ## What `genericBoot` changes
 
@@ -200,22 +196,21 @@ initrd is `container-initrd` on both. They come from `BRIG_BOOT_ASSETS` if
 it is set, otherwise from whatever `hull assets dir` reports on macOS, or
 `$XDG_DATA_HOME/brig/assets` (default `~/.local/share/brig/assets`) on Linux.
 The Linux runtime bundle sets `BRIG_BOOT_ASSETS` to the pair it carries.
-Missing, they are fetched: with hull on macOS, which downloads the same
-bundle for its own use. On Linux, where hull does not build, Brig uses
-[`oras`](install.md#linux) instead. A zero-length file counts as missing
-rather than passing an existence check and failing at boot. The one case
-Brig refuses to fix is `BRIG_BOOT_ASSETS` pointing at a directory you
-chose. It will not download over a build somebody is iterating on.
+If they are missing, Brig fetches them: through hull on macOS, and with
+[`oras`](install.md#linux) on Linux, where hull does not build. A zero-length
+file counts as missing. Brig does not fetch into a directory that
+`BRIG_BOOT_ASSETS` names, so it never downloads over a build you are working
+on.
 
 Two consequences for the image itself:
 
 - **It does not have to carry a guest agent.** The agent comes out of the
-  initrd and is copied into the guest, which is what lets Brig exec into a
-  stock image at all.
+  initrd and is copied into the guest, which lets Brig exec into a stock
+  image.
 - **On Linux, docker is refused for a `genericBoot` profile.** docker does
   not carry annotations through to the runtime, so a sandbox booted through
-  it has no kernel and fails somewhere further from the cause. Use
-  nerdctl, or point `BRIG_RUNTIME_BIN` at it (`internal/runtime/nerdctl.go`).
+  it would have no kernel. Use nerdctl, or point `BRIG_RUNTIME_BIN` at it
+  (`internal/runtime/nerdctl.go`).
 
 An image that carries its own kernel and urunc metadata leaves `genericBoot`
 off and needs none of the above.
@@ -228,8 +223,8 @@ default size of `64m`. This is what keeps a credential off host disk. The
 guest home is a host directory, and a tmpfs over part of it is a region
 with no path to the host at all.
 
-How they get there differs by runtime, and the image does not have to care,
-but it explains what you will see inside the guest:
+How they are mounted differs by runtime. The image needs nothing extra for
+either, but the difference explains what you see inside the guest:
 
 - **hull** has no create-time tmpfs, so Brig mounts them with a privileged
   exec, in three phases. It pins every hostmount that sits under a directory
@@ -239,8 +234,8 @@ but it explains what you will see inside the guest:
   A container runtime has no privileged exec to mount with
   (`createTimeVolumes` in `internal/wrap/secretfiles.go`).
 
-Either way Brig verifies the result from inside the guest rather than assuming
-it. Each covered directory must read as `tmpfs`, each hostmount must not, and
+Either way, Brig verifies the result from inside the guest. Each covered
+directory must read as `tmpfs`, each hostmount must not, and
 a guest that cannot answer fails the run. The covered directory stays
 root-owned until every credential is written, and is handed to the guest user
 last. There is no window in which the agent can plant a symlink at a
@@ -261,9 +256,9 @@ host-side path in the guest home before the sandbox is created. It goes
 through an `os.Root`, so a planted symlink is refused rather than written
 through. It also creates the guest-side target under a directory root
 owns. What it will not do is change the kind of something already there.
-A bind mount onto the wrong kind of target fails. A directory in the guest
-home where the profile says `file: true` then stops the run. It names
-both, rather than surfacing later as the kernel's own `EINVAL`.
+A bind mount onto the wrong kind of target fails, so a directory in the
+guest home where the profile says `file: true` stops the run with an error
+that names both.
 
 **A tmpfs entry hides whatever the guest home had under that path**, not what
 the image had. The image's copy was already hidden by the mount, one
@@ -271,13 +266,11 @@ layer down. What the agent writes into the tmpfs is gone at shutdown. A
 hostmount under it is how a path is carved back out and kept. Brig checks
 every hostmount really is a mountpoint once the cover is on, and fails the
 run if one is not. A path the agent writes to, believing it persists, can
-otherwise vanish silently. That is the kind of loss nobody notices until
-they go looking for last week's work.
+otherwise vanish without an error.
 
-**`files:` targets must land in a declared tmpfs.** That is validation, not
-convention. A `files:` path not covered by a tmpfs is a refused profile.
-An uncovered target writes a credential into the guest home, which is
-host disk.
+**`files:` targets must land in a declared tmpfs.** Brig refuses a profile
+whose `files:` path is not covered by one. An uncovered target writes a
+credential into the guest home, which is host disk.
 
 **A `files:` binding is an ordinary file, never a bind mount.** Agents rewrite
 a credential atomically, temp file then rename, and rename onto a mountpoint
@@ -285,8 +278,6 @@ returns `EBUSY`. So the file is created, checked and filled through the three
 execs described above, and the image needs a `stat` that answers them.
 
 ## A minimal image
-
-Small is fine. Empty is not.
 
 ```dockerfile
 FROM alpine:3.20
@@ -315,12 +306,11 @@ mem: 2048
 cpus: 2
 ```
 
-`mem:` and `cpus:` are not optional in a profile of your own. Brig
-refuses one that leaves either at zero, so a file without them is skipped
-rather than imported.
+`mem:` and `cpus:` are required. Brig refuses a profile that leaves either
+at zero.
 
-Then check it rather than trusting this file, naming the profile it will run
-under. That profile has to be one Brig knows, so import it first:
+Then check the image, naming the profile it will run under. Brig has to know
+that profile, so import it first:
 
 ```bash
 brig agent import mine.yaml
@@ -331,12 +321,12 @@ Debian and Ubuntu bases pass as they ship: bash, coreutils and util-linux are
 all in the base. Alpine's busybox provides every name on the list too.
 Whether a given busybox was compiled with the `stat` format flags Brig
 parses depends on the build. The two extra packages above remove that
-doubt. Run the script rather than taking either sentence on trust.
+doubt, and the script confirms it.
 
 ## What a scratch image is missing
 
-`FROM scratch` with one static binary is missing the entire list, and the
-failure order is the unhelpful part. In rough order of what you hit:
+`FROM scratch` with one static binary is missing the entire list. In rough
+order of what you hit:
 
 - **On Linux, the container exits immediately.** Brig runs it as
   `sleep infinity` and there is no `sleep`, so the sandbox is gone before the
@@ -353,16 +343,14 @@ failure order is the unhelpful part. In rough order of what you hit:
   not exist even if the binaries did.
 - **`brig sh` cannot get you in to look.** No `bash`.
 
-Distroless is the same story with a tidier base. The `static` and `base`
-variants carry no shell and no coreutils, so every point above applies except
-the last two. They do ship an `/etc/passwd` with a `nonroot` user, and the
-missing `bash` is the least of it. The `:debug` variants add a busybox shell,
-which is closer and still not the whole list.
+Distroless images fail the same way. The `static` and `base` variants carry
+no shell and no coreutils, so every point above applies except the
+`/etc/passwd` one: they ship that file with a `nonroot` user. The `:debug`
+variants add a busybox shell, which still does not cover the whole list.
 
-If a static binary in a tiny image is what you want, put it in a distribution
-base rather than in `scratch`. The difference is a few megabytes of userland
-against a sandbox that fails with `sandbox did not become ready` and no
-further clue.
+To run a static binary in a small image, put it in a distribution base. That
+costs a few megabytes of userland. A `scratch` image fails with
+`sandbox did not become ready` and nothing more specific.
 
 ## Checking an image
 
@@ -381,22 +369,20 @@ that works.
 
 The profile also decides what is checked. Its `guestHome:` is the guest home.
 Its last path element is the user `chown` has to resolve, and its `binary:` is
-the agent CLI the last line looks for. So the check is of this image under
-this profile rather than of an image in the abstract, which is the question
-you actually have. A profile of your own has to be one Brig knows, through
-`brig agent import`.
+the agent CLI the last line looks for. The check is of this image under
+this profile. Import a profile of your own with `brig agent import` first.
 
 The requirements themselves run as root through the runtime's own exec against
-the sandbox Brig created, one exec per line of the table above. What they
-report is behaviour rather than a file being present. An image that will not
-come up falls back to listing the image filesystem, and says so: those checks
-are presence only. `BRIG_VERIFY=off` is set for the boot, so an image nobody
+the sandbox Brig created, one exec per line of the table above. They test
+behavior, not only that a file is present. An image that will not come up
+falls back to listing the image filesystem, and says so: those checks are
+presence only. `BRIG_VERIFY=off` is set for the boot, so an image nobody
 has signed is not refused on the way in.
 
-It is not part of CI, which has no registry access and no runtime to boot
-with. It is something you run yourself against an image you are building.
-Bear in mind that it is a real run of a real profile: the credentials that
-profile delivers are delivered into the image under test.
+The script is not part of CI, which has no registry access and no runtime
+to boot with. Run it yourself against an image you are building. It is a
+real run of the profile: the credentials that profile delivers are delivered
+into the image under test.
 
 Exit status `0` means every requirement is met. Exit status `1` means
 something is missing. Exit status `2` means there was nothing to check

@@ -5,29 +5,29 @@ A profile declares the names it wants under `secrets:`. What is in this
 store under those names reaches the sandbox. It arrives as a file
 where the agent reads one, or as an environment variable where it does not.
 
-Most people never fill it by hand. One command carries the login already on
-your Mac into it:
+You rarely need to fill it by hand. One command copies the login already on
+your host into it:
 
 ```bash
 brig run claude-code               # log in inside the sandbox, or:
 brig secret import claude-code     # carry your host login in, once
 ```
 
-The first of those does not persist: an in-sandbox login is written to
-`~/.claude/.credentials.json` on a memory-backed mount. That is what keeps that
-credential off host disk, so it dies with the sandbox on `brig stop`. Importing
-is what survives a stop.
+The first does not persist. An in-sandbox login is written to
+`~/.claude/.credentials.json` on a memory-backed mount. That keeps the
+credential off host disk, so it is gone after `brig stop`. An imported login
+survives a stop.
 
-If you keep credentials in 1Password, Vault or `pass`, you have two roads.
+If you keep credentials in 1Password, Vault or `pass`, you have two options.
 Pipe the value in once, with `op read ... | brig secret create <name>` or
 `brig secret import <profile> <name> --from-command 'op read ...'`. Or keep
 using the environment: an `env.<name>` binding still reads Brig's own
-environment on every run. That is why
-`<your secret manager's run-with-env command> -- brig run claude-code` remains
-a working integration for the variables a profile binds that way.
+environment on every run, so
+`<your secret manager's run-with-env command> -- brig run claude-code` works
+for the variables a profile binds that way.
 
-What the keychain does and does not protect is
-[security.md](security.md#the-secret-store). This page is about using it.
+[security.md](security.md#the-secret-store) says what the keychain does and
+does not protect.
 
 ## The six verbs
 
@@ -42,18 +42,17 @@ What the keychain does and does not protect is
 
 Neither `create` nor `update` takes the value as an argument. See
 [Getting a value in](#getting-a-value-in). `import` is the one verb whose
-argument is a **profile** rather than a secret name. It says so when you
-give it a name by mistake:
+argument is a **profile**. It says so when you give it a secret name by
+mistake:
 
 ```console
 $ brig secret import claude-credentials
 brig: "claude-credentials" is a secret, not a profile, and import takes the profile that declares it: brig secret import claude-code claude-credentials
 ```
 
-`create` and `update` are each other's mirror. Neither will do the other's
-job: `create` refuses a name that is taken, `update` refuses one that is not
-there. That is what turns a mistyped name into a message rather than a
-silently lost secret. Each refusal names the command you evidently meant:
+`create` refuses a name that is taken, and `update` refuses one that is not
+there, so a mistyped name produces an error. Each refusal names the command
+you probably meant:
 
 ```console
 $ printf %s "$TOKEN" | brig secret create gh-token
@@ -63,7 +62,7 @@ $ printf %s "$TOKEN" | brig secret update gh-tokne
 brig: no secret named "gh-tokne". To create it: brig secret create gh-tokne
 ```
 
-A successful write prints nothing. Silence is the report.
+A successful write prints nothing.
 
 `delete` and `ls` still answer to two retired spellings, `rm` and `list`. Both
 print a deprecation notice and are removed in v0.4.0.
@@ -92,24 +91,21 @@ $ brig secret ls --json
 }
 ```
 
-It reads keychain attributes only, never a value, which is why it raises no
-access prompt however many secrets you have. `UPDATED` is the item's own
-modification date. A backend that cannot supply one renders as `-` in the text
-form, or omits `modified` in the JSON form, rather than inventing a date. The
-keychain always supplies one, so you will not see that today. A future
-backend can omit it.
+`ls` reads keychain attributes only, never a value, so it raises no access
+prompt however many secrets you have. `UPDATED` is the item's own modification
+date. A backend that cannot supply one prints `-` in the text form and omits
+`modified` in the JSON form.
 
 `FROM` is provenance: where `brig secret import` read the value. `import`
-records it in the keychain item's comment attribute, which is why listing
-costs no decrypt. A dash in the text form, or an absent `provenance` field in
-the JSON form, means Brig did not put the value there. You created it by
-hand. A `--from-command` value reads as `command (a command you gave)` rather
-than the command line itself, because the line can hold a quote, a pipe or a
-credential.
+records it in the keychain item's comment attribute, so listing decrypts
+nothing. A dash in the text form, or an absent `provenance` field in the JSON
+form, means Brig did not put the value there: you created it by hand. A
+`--from-command` value reads as `command`. Brig does not record the command
+line, because it can hold a quote, a pipe or a credential.
 
-Provenance also carries the credential's expiry when the profile declared an
-`expiryField:`. That is what lets a run warn, before boot and without
-decrypting anything, that a stored copy has gone stale:
+Provenance also carries the credential's expiry when the profile declares an
+`expiryField:`. A run uses it to warn, before boot and without decrypting
+anything, that a stored copy has expired:
 
 ```console
 $ brig run claude-code ~/code/demo
@@ -121,17 +117,17 @@ A secret with no `sources:`, filled instead with `--from-command`, gets a
 different second line. The profile-wide `import` cannot refill it:
 `renew it, then store it again:  brig secret import <profile> <name> --from-command '<command>'`.
 
-An empty store is an ordinary state, not an error, and says how to leave it:
+An empty store is not an error:
 
 ```console
 $ brig secret ls
 no secrets yet. To add one: brig secret create <name>
 ```
 
-`delete` is the one verb that stops to ask, because it is the one whose
-mistake cannot be undone. Nothing in Brig keeps a copy, and the keychain keeps
-no history of its own. Every other destructive Brig command acts on something
-that can be made again: a sandbox reboots, a profile is re-exported.
+`delete` asks before it acts, because a deleted value cannot be recovered.
+Nothing in Brig keeps a copy, and the keychain keeps no history. Every other
+destructive Brig command acts on something that can be made again: a sandbox
+reboots, a profile is re-exported.
 
 ```console
 $ brig secret delete gh-token
@@ -139,8 +135,7 @@ brig: delete "gh-token"? The value cannot be recovered [y/N] y
 deleted gh-token
 ```
 
-With no terminal to ask on, it refuses rather than assuming yes. Assuming yes
-makes the scripted case the one that cannot be stopped:
+With no terminal to ask on, it refuses:
 
 ```console
 $ echo | brig secret delete gh-token
@@ -149,12 +144,9 @@ brig: deleting "gh-token" cannot be undone, and there is no terminal to ask on. 
 
 ## A worked example
 
-Storing a GitHub token, using it, rotating it and removing it. The commands
-are real. The exact wording Brig prints is illustrative, since no test pins it
-byte for byte.
+This example stores a GitHub token, uses it, rotates it and removes it.
 
-Store it. `printf %s` rather than `echo`, so no newline is stored, and the
-value comes down a pipe rather than sitting in your history:
+Store it. The value goes in on stdin:
 
 ```console
 $ printf %s 'ghp_16C7e42F292c6912E7710c838347Ae178B4a' | brig secret create gh-token
@@ -163,19 +155,20 @@ NAME      UPDATED           FROM
 gh-token  2026-08-15 21:09  -
 ```
 
-Use it. `claude-code` declares `gh-token`, so nothing else is needed: the
-name in the store is the binding:
+Use it. `claude-code` declares `gh-token`, so storing a secret under that
+name is all it takes:
 
 ```console
 $ brig info claude-code
 ...
 brig: forwarding to guest:
+brig:   IS_SANDBOX
 brig:   GH_TOKEN(secret)
 brig: never forwarded for claude-code: ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN (they would move this sandbox onto metered billing)
 ```
 
 `(secret)` says the value came from Brig's store rather than from your shell.
-`brig info` reports it. `brig run claude-code` does it.
+`brig info` only reports this. `brig run claude-code` forwards it.
 
 That denylist covers environment forwarding only. It does not check a
 `files:` binding. It does not stop an agent that reads a credential inside the
@@ -185,20 +178,18 @@ why the guard is scoped that way.
 
 An exported `GH_TOKEN` still wins, because the profile binds the name as a
 chain (`refs: [env.GH_TOKEN, secrets.gh-token]`). So
-`GH_TOKEN=$(gh auth token) brig run claude-code` keeps working exactly as it
-did before the store existed. The stored value is the fallback for a shell
-that exports nothing.
+`GH_TOKEN=$(gh auth token) brig run claude-code` still works. The stored
+value is the fallback for a shell that exports nothing.
 
-Rotate it. `update` refuses to create, so a typo here cannot quietly leave you
-with two secrets and the old one still in use:
+Rotate it. `update` refuses to create, so a typo cannot leave you with two
+secrets and the old one still in use:
 
 ```console
 $ printf %s 'ghp_9a1FfE0d5B7c4A2e8D3b6C1a0F5e9D8c7B6a' | brig secret update gh-token
 ```
 
-Nothing else has to change. Brig re-reads what it hands the guest on every
-exec. The next command picks up the new value, and the sandbox does not need
-restarting.
+Brig re-reads what it hands the guest on every exec, so the next command
+picks up the new value without a restart.
 
 Remove it:
 
@@ -213,9 +204,8 @@ no secrets yet. To add one: brig secret create <name>
 ## `import`, to fill a profile from your host
 
 `brig secret import <profile>` reads where your host already keeps that
-profile's credentials and copies them into Brig's store, so that every run
-afterwards reads only the store. No test pins the exact wording Brig prints,
-so treat this as the shape rather than a literal transcript:
+profile's credentials and copies them into Brig's store. Every run
+afterwards reads only the store:
 
 ```console
 $ brig secret import claude-code
@@ -225,10 +215,10 @@ claude-code: importing 1 secret
 note: claude-desktop also declares claude-credentials, so this fills it there too
 ```
 
-Where it looks is data in the profile, not knowledge in Brig: each secret
-carries a `sources:` list and the first that exists wins. `brig agent ls` shows
-which names a profile can import and which it cannot, and
-[profiles.md](profiles.md) is how to declare them in one of your own.
+The profile declares where it looks: each secret carries a `sources:` list,
+and the first source that exists wins. `brig agent ls` shows which names a
+profile can import and which it cannot. [profiles.md](profiles.md) describes
+how to declare them in a profile of your own.
 
 | flag | what it does |
 | --- | --- |
@@ -238,7 +228,7 @@ which names a profile can import and which it cannot, and
 
 `[name...]` after the profile narrows it to the names you list.
 
-Four rules worth knowing before you build anything on it:
+Four rules apply:
 
 - **It reads your host's own credential stores when you type it, and never
   again.** A run afterwards reads only Brig's own keychain item, which carries
@@ -256,38 +246,34 @@ Four rules worth knowing before you build anything on it:
   brig: "claude-credentials" is already stored and brig did not put it there, so importing would replace a value you supplied. To replace it: brig secret import claude-code claude-credentials -y
   ```
 
-- **An unchanged value is skipped rather than rewritten**, so `UPDATED` keeps
-  meaning "the value last changed" rather than "an import last ran".
+- **An unchanged value is skipped**, so `UPDATED` keeps meaning "the value
+  last changed" rather than "an import last ran".
 
 ### The exit status
 
-Non-zero when a secret that **has** an importer is not filled: the
-source was there and gave nothing, or reading it failed. A name with no
-importer at all is informational and does not fail the command.
+`import` exits non-zero when a secret that **has** a source is not filled:
+no source held a value, or reading one failed. A name with no source is
+reported and does not fail the command, so
 `brig secret import x && brig run x` works for a profile that mixes imported
 and hand-created secrets.
 
-The consequence to plan around: on a machine that has never run the agent,
-there is nothing to import and the command exits non-zero. That is why these
-docs lead with `brig run claude-code`. Putting `import` first greets a
-fresh machine with a red exit code for a state that is perfectly normal.
+On a machine that has never run the agent, there is nothing to import and the
+command exits non-zero. That is why these docs lead with
+`brig run claude-code`.
 
 ### Large credential documents fit
 
-A value has no ceiling near the keychain's. On macOS the value is sealed
-into a keychain item of its own, with the key in another, so a credential
-document of several kilobytes stores the same way a token does. That
-covers Claude Code's document once plugins add their MCP OAuth state to
-it, and `codex`'s `~/.codex/auth.json` with its two JWTs. See
-[Where a value lives](#where-a-value-lives) for the layout. The one limit
-left is the 64 KiB read cap below, which refuses a stream rather than a
-secret.
+On macOS the value is sealed into a keychain item of its own, with the key
+in another, so a credential document of several kilobytes stores the same
+way a token does. That covers Claude Code's document once plugins add their
+MCP OAuth state to it, and `codex`'s `~/.codex/auth.json` with its two JWTs.
+See [Where a value lives](#where-a-value-lives) for the layout. The one
+limit is the 64 KiB read cap below.
 
 ## Getting a value in
 
-The value is never an argument. That is what keeps it out of `ps` and out of
-your shell history. It is also why there is no `brig secret create gh-token
-ghp_...` to type. It comes from stdin, or from a file:
+The value is never an argument, which keeps it out of `ps` and out of your
+shell history. It comes from stdin, or from a file:
 
 | how | what gets stored |
 | --- | --- |
@@ -303,15 +289,12 @@ $ brig secret create x < /dev/zero
 brig: the value on stdin is over 65536 bytes, which is larger than any secret brig can store. If that is a file or a stream rather than a credential, this is the wrong one
 ```
 
-That cap is a refusal of streams, not a limit on secrets. No credential comes
-near it.
+The cap exists to refuse a stream. No credential comes near it.
 
-**stdin strips exactly one trailing line ending, and `-f` does not**. The
-asymmetry is the one thing on this page most worth remembering, so here is
-each half of it.
+**stdin strips exactly one trailing line ending, and `-f` does not.**
 
-`echo tok |` is the line people actually type, and `echo` adds a newline that
-was never part of the secret:
+`echo tok |` is the line people type, and `echo` adds a newline that was
+never part of the secret:
 
 ```console
 $ echo tok | brig secret create with-echo
@@ -319,15 +302,11 @@ $ brig secret read with-echo | xxd
 00000000: 746f 6b                                  tok
 ```
 
-Three bytes, not four. Storing the newline is the worse default by some
-distance. A trailing newline inside an `Authorization:` header fails in a way
-that reads like a bad token rather than a bad store. You go looking
-at GitHub's settings page rather than here. CRLF counts as one line ending for
-the same reason. A lone `\r` left behind fails identically, and it is harder
-to spot in a bug report.
+Three bytes, not four. A stored newline ends up inside an `Authorization:`
+header, and the failure looks like a bad token. CRLF counts as one line
+ending for the same reason: a lone `\r` left behind fails the same way.
 
-A file is taken as it is, because a file's bytes are what it holds and a PEM
-key's final newline belongs to it:
+A file is stored as it is, because a PEM key's final newline belongs to it:
 
 ```console
 $ printf 'tok\n' > tok.txt
@@ -336,8 +315,8 @@ $ brig secret read from-file | xxd
 00000000: 746f 6b0a                                tok.
 ```
 
-Four bytes. So when you want exact bytes from stdin, say so with `printf %s`
-rather than reaching for a flag. There is no flag, because this covers it:
+Four bytes. For exact bytes from stdin, use `printf %s`. There is no flag
+for it:
 
 ```console
 $ printf %s 'tok' | brig secret create exact
@@ -362,11 +341,9 @@ $ brig secret read from-file | xxd
 00000000: 746f 6b0a                                tok.
 ```
 
-A terminal is the exception. It gets a newline, so your prompt does not land
-against the tail of a token. It also gets a warning on stderr. The reason
-`create` will not take a value from a terminal does not stop applying on the
-way out. The value is now in the scrollback of a window that outlives the
-command.
+A terminal is the exception. It gets a trailing newline, so your prompt does
+not run into the token. It also gets a warning, because the value is now in
+the scrollback of a window that outlives the command.
 
 ```console
 $ brig secret read gh-token
@@ -378,11 +355,10 @@ brig: gh-token is now in this terminal's scrollback
 The warning is on stderr, so a pipe never sees it and stdout carries the value
 and nothing else.
 
-Command substitution is the case worth being careful with, and the care is the
-shell's rather than Brig's: `$(...)` strips *all* trailing newlines. For a
-token, that is exactly what you want, and it is why the composed run at the
-top of this page is correct. For a value whose trailing newline matters (a PEM
-key stored with `-f`), it is not:
+Take care with command substitution. The shell, not Brig, changes the value:
+`$(...)` strips *all* trailing newlines. For a token, that is what you want.
+For a value whose trailing newline matters (a PEM key stored with `-f`), it
+is not:
 
 ```console
 $ brig secret read from-file | wc -c
@@ -391,7 +367,7 @@ $ printf %s "$(brig secret read from-file)" | wc -c
        3
 ```
 
-Redirect rather than substitute when the bytes matter:
+When the bytes matter, redirect:
 
 ```bash
 (umask 077; brig secret read deploy-key > ./deploy-key)
@@ -399,8 +375,7 @@ Redirect rather than substitute when the bytes matter:
 
 ## Naming a secret
 
-The grammar is narrow, and it is enforced on every verb, so it is worth
-knowing rather than discovering:
+Every verb enforces the same narrow grammar:
 
 - letters, digits, `-` and `_`
 - it starts with a letter
@@ -413,13 +388,12 @@ $ printf %s v | brig secret create 1password
 brig: a secret name starts with a letter, and "1password" starts with "1"
 ```
 
-The reason it is this narrow is that the name is three things at once. It is
-the keychain account, where a space or a slash makes the item awkward to
-address by hand. It is a word in Brig's own error messages. And a profile
-references it as the tail of `ref: secrets.<name>`, which is what rules out
-the `.` specifically, since a dot makes that reference ambiguous. A
-leading digit reads as a number rather than a name, and a leading dash reads
-as a flag wherever the name is typed.
+The grammar is narrow because the name is used in three places. It is the
+keychain account, where a space or a slash makes the item awkward to address
+by hand. It is a word in Brig's own error messages. And a profile references
+it as the tail of `ref: secrets.<name>`, which rules out the `.`, since a dot
+makes that reference ambiguous. A leading digit reads as a number, and a
+leading dash reads as a flag wherever the name is typed.
 
 ## Where a value lives
 
@@ -433,11 +407,11 @@ secret's name bound in so a sealed item moved under another name does not
 open. `brig secret ls` never shows the sealed item: the dot puts its name
 outside the grammar a secret can have, and the listing skips such names.
 
-Why two items: Brig writes a keychain item through `security -i`, which
-reads one command into a 4096-byte buffer and shortens a longer line
-without saying so. With the value on that line, a secret over about 3KB
-could not be stored, and a credential document with plugin state or two
-JWTs is larger than that. The key item is still written that way. The
+There are two items because Brig writes a keychain item through
+`security -i`, which reads one command into a 4096-byte buffer and shortens
+a longer line without saying so. With the value on that line, a secret over
+about 3KB could not be stored, and a credential document with plugin state
+or two JWTs is larger than that. The key item is still written that way. The
 sealed item is written through `security`'s own arguments instead, which
 have no such cap. A command line is readable by other processes on the
 host, and what stands on this one is ciphertext and the secret's name. The
@@ -450,7 +424,7 @@ does whole, so the one step that changes the value is that replacement.
 gone the sealed item is unreadable, so a failure between the two leaves
 nothing usable behind.
 
-What protects the value is what protected it before. Anything that can
+Sealing does not change what protects the value. Anything that can
 read Brig's keychain items as you can read the key and open the sealed
 item. Anything that cannot open the keychain gets ciphertext.
 [security.md](security.md#the-secret-store) says what the keychain item's
@@ -459,11 +433,11 @@ ACL does and does not stop.
 A secret stored by an older Brig holds its value in the keychain item
 itself. `read` returns it as before, and the next `update` or re-import
 moves it into the layout above. Nothing has to be migrated by hand. An
-older Brig reading a key item refuses it as one it did not write, rather
-than handing a guest the key bytes.
+older Brig reading a key item refuses it as one it did not write, so it
+never hands a guest the key bytes.
 
-Brig also reads back what it just wrote and compares the bytes, which is
-the one check that both items landed and agree. A `create` that does not
+Brig also reads back what it just wrote and compares the bytes, which
+checks that both items landed and agree. A `create` that does not
 match is removed, since a caller told the write failed expects nothing to
 be there. An `update` that does not match cannot be undone the same way,
 since the previous value is already gone, so it only reports the mismatch.
@@ -480,22 +454,19 @@ else in the keyring. It opens the collection through your keyring UI when it
 is locked.
 
 When there is no D-Bus session bus, or no keyring answering on it, `brig
-secret` says which is missing. It does not fall back to a file. That is
-a downgrade nothing told you about:
+secret` says which is missing. It does not fall back to a file, because
+that would be a downgrade nothing told you about:
 
 ```console
 $ brig secret create gh-token
 brig: no secret store on this platform: a D-Bus session bus is running but no Secret Service answers on it. Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session that starts it, or read the secret once from a command's output with `brig secret import <profile> --from-command '<sh>'`, which stores it like any other import
 ```
 
-It says so *before* asking for a value. The check happens ahead of the read
-from stdin. You are not sent off to find a token only to be told afterwards
-that there is nowhere to put it. `--from-command` is the other way out for a
-value that lives in an external secret manager. The import runs the command
-once, takes its stdout, and stores that the way it stores any other import.
-It still needs a store to write into. So on a host with no keyring, it is a
-way to fill the store from somewhere other than a file. It is not a way
-around having one.
+The check runs before Brig reads stdin, so you learn there is no store
+before you go and fetch a token. `--from-command` is for a value that lives
+in an external secret manager. The import runs the command once, takes its
+stdout, and stores that the way it stores any other import. It still needs a
+store to write into, so it does not replace a keyring.
 
 ## Errors you are likely to meet
 

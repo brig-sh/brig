@@ -1,25 +1,24 @@
 # Logging an agent in
 
-By the end of this page you can pick how an agent gets its credentials. It
-can then reach GitHub over HTTPS from inside the guest.
+This page covers the three ways an agent gets its credentials, and how to
+give the guest git access to GitHub over HTTPS.
 
 Prerequisites: Brig installed ([install.md](install.md)) and a shipped agent,
-such as `claude-code`. Nothing else.
+such as `claude-code`.
 
 This page uses **agent** for the CLI surface you run: `brig run claude`, a
 session. It uses **profile** for the file that declares credentials:
 `brig secret import claude-code`. A built-in agent and its profile share one
-name, but they are not the same thing. A profile has no session, and
-`brig secret import` takes no `@label`.
+name. A profile has no session, so `brig secret import` takes no `@label`.
 
 ## Three ways to give an agent a credential
 
-Pick based on whether the login already exists on your host, and whether you
-want it to survive `brig stop`.
+Which one fits depends on whether the login already exists on your host, and
+whether you want it to survive `brig stop`.
 
 ### 1. Log in inside the guest
 
-The default. It needs no setup:
+This is the default, and it needs no setup:
 
 ```bash
 brig run claude ~/code/demo
@@ -27,7 +26,7 @@ brig run claude ~/code/demo
 
 `claude-code` declares two secrets, `claude-credentials` and `gh-token`.
 Both are optional, so neither must exist before the sandbox boots.
-`brig info claude` prints the same warnings a `run` prints, without booting
+`brig info claude` prints the warnings a `run` prints, without booting
 anything:
 
 ```console
@@ -37,33 +36,37 @@ brig: claude-code runs without 2 secrets
                           ↳ run `claude` on the host once to log in
   ○ gh-token            → brig secret create gh-token
                           ↳ export GH_TOKEN before running brig, or store one: gh auth token | brig secret create gh-token
+...
 ```
 
 `○` marks a secret with no value. `→` is the command that gives it one, and
 `↳` is a note about the row above it. In a log or a pipe, every line starts
 with `brig:`, so a line you copy still says where it came from.
 
-That run exits 0. Only a **required** secret stops a run before the sandbox
-exists. None of the eight built-in profiles declares one, so a missing
-secret never stops a run.
+The warnings do not stop the run. Only a **required** secret stops a run
+before the sandbox exists, and none of the eight built-in profiles declares
+one.
+
+On a Linux host with no keyring there is no secret store. Brig prints no
+warning for an optional secret there, so the block above does not appear. A
+required secret still stops the run, and the error names the store it could
+not read.
 
 Claude Code prompts for the login the sandbox does not have. Complete it
-inside the guest, the same way a fresh machine's first login works.
+inside the guest, as you would on a new machine.
 
-Where that login lands next depends on the profile. `claude-code` and
-`claude-desktop` write it to a memory-backed mount. `brig stop claude` takes
-the whole sandbox with it, and the next `brig run claude` prompts again. The
-other five agent profiles mount the guest home from host disk instead: `codex`,
-`cursor`, `gemini`, `grok`, `opencode`. A login written there survives a stop.
+Where that login is stored depends on the profile. `claude-code` and
+`claude-desktop` write it to a memory-backed mount. `brig stop claude` discards
+that mount, so the next `brig run claude` prompts again. The other five agent
+profiles keep the whole guest home on host disk: `codex`, `cursor`, `gemini`,
+`grok`, `opencode`. A login written there survives a stop.
 
-Choose this path for a first run with no setup. On `claude-code` or
-`claude-desktop`, you log in again after every `brig stop`. On the other five
-profiles, the login persists on its own.
+Choose this path for a first run with no setup.
 
 ### 2. Carry your host login in, once
 
-You already logged in to the agent's own app or CLI on this Mac. You want
-that login to survive a stop, without repeating it inside the guest:
+Use this when you have already logged in to the agent's own app or CLI on
+this host, and you want that login to survive a stop:
 
 ```bash
 brig secret import claude-code
@@ -72,18 +75,18 @@ brig secret import claude-code
 `claude-code` and `claude-desktop` fill `claude-credentials` from the first
 of two places on your host: the macOS keychain's `Claude Code-credentials`
 generic-password item, then the file `~/.claude/.credentials.json`. Neither
-declares a source for `gh-token`. That one takes a value you supply by hand
-(`brig secret create gh-token`) or export live, path 3 below.
+declares a source for `gh-token`. Store that one by hand
+(`brig secret create gh-token`) or export `GH_TOKEN` on each run
+([Git access in the guest](#git-access-in-the-guest)).
 
 The other six shipped profiles declare no `secrets:` at all: `codex`,
-`cursor`, `gemini`, `grok`, `opencode`, `ubuntu`. There is nothing on your
-host for `import` to read. The command prints
+`cursor`, `gemini`, `grok`, `opencode`, `ubuntu`. For those, the command prints
 `<profile> declares no secrets, so there is nothing to import` and exits 0,
 on any host, without opening the secret store.
 
 **If a long `claude-code` session stops authenticating.** Brig re-delivers the
 stored `claude-credentials` document on every command that reaches the
-sandbox. `run`, `sh` and `exec` all count, not only the first boot.
+sandbox: every `run`, `sh` and `exec`.
 
 Measured 2026-08-19 against a live account: Claude Code refreshes that
 document in place, and Anthropic rotates the refresh token single-use. A
@@ -93,13 +96,13 @@ change with either the agent or the provider. If a session starts failing to
 authenticate, log in on the host again and re-run
 `brig secret import claude-code`.
 
-Choose this path when you already have a working login on this Mac, and want
-the sandbox to start already authenticated.
+Choose this path when you already have a working login on this host and want
+the sandbox to start authenticated.
 
 ### 3. Live environment bindings
 
-Some agents read a credential straight from your own environment, live, on
-every run:
+Four profiles forward an API key from your own environment, read on every
+run:
 
 | profile | variable |
 | --- | --- |
@@ -115,13 +118,13 @@ export GEMINI_API_KEY=<key>
 brig run gemini ~/code/demo
 ```
 
-`claude-code` and `claude-desktop` refuse `ANTHROPIC_API_KEY` and
-`ANTHROPIC_AUTH_TOKEN` from your environment on purpose: forwarding either
-one moves the sandbox off your subscription and onto metered billing.
-`codex` denies `OPENAI_API_KEY` for the same reason. It signs in with
-`codex login --device-auth` inside the guest instead, which is path 1 above.
-`codex` also declares no `secrets:`, so path 2 cannot fill one either.
-[secrets.md](secrets.md) has the exact message Brig prints and the override.
+`claude-code` and `claude-desktop` do not forward `ANTHROPIC_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` from your environment: forwarding either one moves the
+sandbox off your subscription and onto metered billing. `codex` denies
+`OPENAI_API_KEY` for the same reason. It signs in with
+`codex login --device-auth` inside the guest, which is path 1 above, and it
+declares no `secrets:`, so path 2 has nothing to fill.
+[profiles.md](profiles.md#deny-is-the-billing-guard) names the override.
 
 Choose this path when a key already lives in your shell, a CI job, or a
 secret manager's run-with-env wrapper. Brig reads it fresh on every run
@@ -129,8 +132,8 @@ instead of storing a copy.
 
 ## Git access in the guest
 
-A token in `GH_TOKEN` is for git over HTTPS inside the guest, not for the
-agent's own authentication to its provider.
+A token in `GH_TOKEN` is for git over HTTPS inside the guest. It does not
+log the agent in to its provider.
 
 Guest git over HTTPS is off by default. `brig info` reports the setting:
 
