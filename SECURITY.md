@@ -1,9 +1,9 @@
 # Security policy
 
-Brig exists to hold a boundary. An agent gets one directory and the credentials
-it was named, and nothing else on the host. Anything that weakens that boundary,
-or that reaches something the agent was never given, belongs here rather than in
-a public issue.
+Brig exists to hold a boundary. An agent gets the host directories and the
+credentials Brig names for it, and nothing else on the host. Anything that
+weakens that boundary, or that reaches something the agent was never given,
+belongs here rather than in a public issue.
 
 Tell us privately first and we will fix it with you before it is public. If you
 are unsure whether something counts, report it and we will work that out with
@@ -54,10 +54,10 @@ back inside the response window, send a reminder to security@brig.sh.
 
 ## Scope
 
-In scope is anything that breaks a promise Brig actually makes:
+In scope is anything that breaks a promise Brig makes:
 
-- a run that reaches a host credential it was not given, or a file outside
-  the guest home
+- a run that reaches a host credential it was not given, or a host path
+  outside the directories Brig names for it
 - a credential that leaks off the intended channel
 - the secret store handing back an item it must not
 - image verification passing something it must reject
@@ -80,7 +80,7 @@ lists them under
   handed
 
 A report that Brig does one of those is describing a known limitation, not a
-vulnerability. That page is the authority on the boundary, so we point at it
-here rather than restate it, which keeps the two from drifting apart. If you
-think one of those limitations is worse than the page admits, that is worth
-a report. The same is true if the page is wrong about where a line sits.
+vulnerability. That page is the authority on the boundary, so this file
+points at it instead of restating it. If you think one of those limitations
+is worse than the page admits, or the page is wrong about where a line sits,
+report it.
