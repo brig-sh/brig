@@ -372,7 +372,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// ran. See sandboxPrefix in cmd/brig, which reads the same mark back.
 	if !strings.HasPrefix(vmName, NamePrefix) {
 		return nil, fmt.Errorf("BRIG_NAME is %q, but a brig sandbox name must begin with %q so that "+
-			"`brig ls` and `brig reset` can find it; use %q instead", vmName, NamePrefix, NamePrefix+vmName)
+			"`brig ls` and `brig rm --all` can find it; use %q instead", vmName, NamePrefix, NamePrefix+vmName)
 	}
 	// Kept before the suffix goes on, for the migration notice below: it has
 	// to name the sandbox an older release derived from this same profile.

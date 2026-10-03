@@ -45,8 +45,8 @@ const (
 // Some agents stop on a first-run screen that is not authentication and that
 // the guest cannot complete -- picking a login method there opens a browser
 // the microVM does not have. Seeding a couple of non-secret flags into the
-// agent's own state file settles it. Never a credential: credentials are
-// forwarded as environment and are never written to the workspace.
+// agent's own state file settles it. Never a credential: a credential
+// reaches the guest as environment or through a files: binding, not here.
 type Onboarding struct {
 	// File is relative to the guest home, e.g. ".claude.json".
 	File string `json:"file"`
@@ -195,12 +195,12 @@ type Profile struct {
 	Onboarding *Onboarding `json:"onboarding,omitempty"`
 	// HostConfigDir is where the user's own agent configuration lives on the
 	// host, and ProjectPaths are the subdirectories of it worth handing to
-	// the guest. They are projected read-only under GuestHome at the same
-	// relative location, so the agent finds them exactly where it looks for
-	// its own, and only when the user opts in.
+	// the guest. They are copied under GuestHome at the same relative
+	// location, so the agent finds them exactly where it looks for its own,
+	// and only when the user opts in.
 	//
-	// Read-only is the point. These are the user's real skills, shared rather
-	// than copied, so the sandbox cannot edit them.
+	// The host copy is never written, so the sandbox cannot edit the user's
+	// real skills.
 	HostConfigDir string   `json:"hostConfigDir,omitempty"`
 	ProjectPaths  []string `json:"projectPaths,omitempty"`
 	// Unpublished marks a profile whose image we do not publish, so brig

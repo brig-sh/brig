@@ -134,8 +134,9 @@ type RunSpec struct {
 	// publication is part of a sandbox's configuration and outlives one run.
 	// See publish.go.
 	Publish []Publication
-	// Counted marks an operation that is a user action rather than brig's own
-	// plumbing, so telemetry counts one command once. See telemetryEnv.
+	// Counted marks a user action, which hull's telemetry counts, rather than
+	// brig's own plumbing. One brig command can run more than one counted
+	// operation. See telemetryEnv.
 	Counted bool
 	// Progress is where the runtime's own output goes: the image pull, the
 	// boot messages, whatever the binary underneath writes on its way up.
@@ -600,9 +601,12 @@ func withDigest(image, digest string) string {
 }
 
 // telemetryEnv attributes events to brig and suppresses the wrapper's own
-// plumbing -- reachability probes, ps lookups, cleanup -- so one brig command
-// counts once. Only the operations a user asked for are counted. DO_NOT_TRACK
-// and the runtime's own opt-out pass through untouched and always win.
+// plumbing -- reachability probes, ps lookups, cleanup -- so none of those
+// steps is counted. Only the operations a user asked for are counted, and each
+// counted operation counts on its own. One brig command can run more than one:
+// a run that boots counts the boot and the handover, and `brig rm` counts the
+// stop of each sandbox it removes. DO_NOT_TRACK and the runtime's own opt-out
+// pass through untouched and always win.
 //
 // Being an operation the user asked for is necessary but not sufficient: an
 // operation that runs with no terminal is also not counted until an answer
