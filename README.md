@@ -19,6 +19,10 @@ An agent working unattended can only damage what you handed it. Point it at one
 project, and a bad edit or a bad command reaches no further than that project.
 When you are done, throw the sandbox away and start clean.
 
+<p align="center">
+  <img alt="Terminal recording. brig run opens Claude Code in a sandbox, in /work/demo. Asked to write hello.py and run it, Claude writes the file, runs it and lists the directory. After exit, ls on the host shows hello.py in the project." src="assets/brig-run-claude.gif" width="900">
+</p>
+
 ## How it works
 
 One command starts a sandbox and runs the agent in it:

@@ -34,6 +34,7 @@ font: the letters are rectangles.
 | `brig-avatar.svg`, `brig-avatar-480.png` | Org and repo avatar: the `b` on a full-bleed navy square, no baked corner radius, because GitHub rounds it. |
 | `brig-mark-on-{dark,light}.svg` | The same glyph with the field taken away. |
 | `nofire-logo.svg`, `nofire-logo-on-dark.svg` | The NOFire AI logo, for the README footer. |
+| `brig-run-claude.gif` | The recording under the README's opening: Claude Code in a sandbox, writing a file into the project. It is a real session, recorded with [vhs](https://github.com/charmbracelet/vhs). Record it again when the output of `brig run` or of Claude Code changes enough to date it. |
 | `architecture.svg` | The diagram in the README's "The boundary". README embeds it with `<img src>`, so the SVG's own internal `<title>` and `<desc>` are never read by a browser. The `img` element's `alt` attribute carries the description instead. Keep that alt text current whenever you change the diagram. |
 
 The directory is flat. hull's own set of marks lives in
@@ -52,6 +53,6 @@ sources for these.
 - Scale by whole units. A fractional unit puts a stroke on a half pixel and the
   letters go soft.
 
-These files are generated. Do not hand-edit them. Change the glyph table in
+The marks are generated. Do not hand-edit them. Change the glyph table in
 [brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork), rebuild, and
 copy the result back here.
