@@ -30,6 +30,8 @@ type livenessRuntime struct {
 	boots   int
 	stops   int
 	removes int
+	// lost is how many of the next Output calls lose what the guest printed.
+	lost int
 }
 
 func (r *livenessRuntime) Kind() string                 { return "hull" }
@@ -46,9 +48,19 @@ func (r *livenessRuntime) LogsHint(name string) string { return "hull logs " + n
 
 // Output stands in for the guest reading its own home: a guest that mounts the
 // workspace reads back the marker brig put there.
-func (r *livenessRuntime) Output(runtime.ExecSpec) (string, error) {
+func (r *livenessRuntime) Output(spec runtime.ExecSpec) (string, error) {
 	b, err := os.ReadFile(filepath.Join(r.workspace, markerFile))
-	return string(b), err
+	if err != nil {
+		return "", err
+	}
+	if r.lost > 0 {
+		r.lost--
+		return "", nil
+	}
+	if _, asked := question(spec.Cmd); asked {
+		return answered(string(b)), nil
+	}
+	return string(b), nil
 }
 
 // livenessConfig is a run with nothing in its way: no secret files to deliver,
@@ -125,5 +137,20 @@ func TestEnsureRunningReusesASandboxThatIsUp(t *testing.T) {
 	if rt.stops != 0 || rt.removes != 0 {
 		t.Errorf("a running sandbox mounting this workspace was torn down (%d stops, %d removes)",
 			rt.stops, rt.removes)
+	}
+}
+
+// A marker the runtime lost read as a stale share, and the sandbox was
+// restarted under whoever was using it. It is asked for again instead.
+func TestALostMarkerDoesNotRestartTheSandbox(t *testing.T) {
+	noPause(t)
+	rt := &livenessRuntime{running: true, lost: answerTries - 1}
+	c := livenessConfig(t, rt)
+
+	if err := c.EnsureRunning(creds.Set{}); err != nil {
+		t.Fatalf("a running sandbox was not reused: %v", err)
+	}
+	if rt.boots != 0 || rt.stops != 0 {
+		t.Errorf("a lost marker restarted the sandbox (%d boots, %d stops)", rt.boots, rt.stops)
 	}
 }
