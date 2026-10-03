@@ -1803,6 +1803,7 @@ func pruneSessionIndex(list []runtime.Instance) {
 	}
 	wrap.PruneSessions(live)
 	runtime.PruneBootedNets(live)
+	runtime.PruneBoots(live)
 }
 
 // sandboxRow is one line of the listing, gathered before anything is printed
@@ -2124,6 +2125,7 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		// next sandbox to take the name must not inherit it.
 		if !dryRun {
 			runtime.ForgetBootedNet(cfg.VMName)
+			runtime.ForgetBoot(cfg.VMName)
 		}
 		return noSandboxf(ref)
 	}
@@ -2293,6 +2295,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		wrap.ForgetSlugClaim(inst.Name)
 		runtime.ForgetPublications(inst.Name)
 		runtime.ForgetBootedNet(inst.Name)
+		runtime.ForgetBoot(inst.Name)
 		if err != nil {
 			warnf("could not remove %s: %v", inst.Name, err)
 			continue
@@ -2338,6 +2341,7 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	// given a port and never booted, and for the network each one booted on.
 	runtime.PrunePublications(live)
 	runtime.PruneBootedNets(live)
+	runtime.PruneBoots(live)
 	return nil
 }
 

@@ -421,8 +421,10 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// to find out.
 	c.rememberSession()
 	if !c.waitReady() {
+		c.recordBoot(runtime.BootFailed)
 		return fmt.Errorf("sandbox did not become ready; check '%s'", c.logHint())
 	}
+	c.recordBoot(runtime.BootOK)
 	if c.Profile.IsGUI() {
 		focusWindow()
 	}
@@ -538,6 +540,19 @@ func (c *Config) waitReady() bool {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+}
+
+// recordBoot records how a boot this command started ended, for brig doctor
+// bundle. Write errors are ignored: nothing on the run path reads the record.
+// Image and Digest are the values the RunSpec was built from, not resolved
+// again, since the tag may have moved.
+func (c *Config) recordBoot(result string) {
+	_ = runtime.RecordBoot(c.VMName, runtime.BootRecord{
+		Result: result,
+		At:     time.Now(),
+		Image:  c.Image,
+		Digest: c.BootDigest,
+	})
 }
 
 // guestMountsWorkspace asks the guest which workspace it actually has.
@@ -706,6 +721,7 @@ func (c *Config) Remove() error {
 	// the one place the sandbox itself goes away.
 	runtime.ForgetPublications(c.VMName)
 	runtime.ForgetBootedNet(c.VMName)
+	runtime.ForgetBoot(c.VMName)
 	return err
 }
 
