@@ -35,6 +35,8 @@ CI does not call `make`. It runs its own steps
 - `bash -n`, `shellcheck` and `--self-test` for
   `script/network-isolation-vm.sh`. The self-test checks the script's guards.
   The comparison on a real VM is run by hand.
+- `shellcheck` over `script/e2e/`, and `script/e2e/test-render-report.sh`,
+  which builds and renders an e2e report from fixtures.
 - A cross-compile for `darwin/arm64` and one for `linux/amd64`.
 - A check that no test disappeared (`script/check-tests-kept.sh`). Label a
   pull request that renames or deliberately removes a test `removes-tests`,
@@ -42,6 +44,27 @@ CI does not call `make`. It runs its own steps
   reads.
 - `goreleaser check`, and a full snapshot build, so the release config is
   run before a tag depends on it.
+
+A separate workflow, [.github/workflows/e2e.yml](.github/workflows/e2e.yml),
+drives brig against a real runtime on three hosts:
+
+- a hosted `ubuntu-24.04` runner with nested KVM, `script/e2e/canary-linux.sh`;
+- a self-hosted SIP-enabled Mac, `script/e2e/canary-macos.sh`;
+- a hosted `macos-15` runner that reads the Homebrew tap,
+  `script/e2e/tap-check.sh`.
+
+It runs nightly, on demand, and on a pull request that touches `script/e2e/`,
+the workflow or `install.sh`. A report job merges the hosts into one HTML
+report, the `e2e-report` artifact.
+
+To try a runtime bundle before `install.sh` pins it, pass its tag. A second
+Linux leg then installs it in place of the pin:
+
+```bash
+gh workflow run e2e.yml -f runtime_version=v0.1.0-rc15
+```
+
+A tag equal to the pin adds no leg, since the pinned leg already installs it.
 
 There is no linter: no `golangci-lint` configuration, and no lint target in
 the Makefile. `gofmt` and `go vet` are the only static checks.
