@@ -84,7 +84,7 @@ fi
 # Read from brig rather than from internal/profile/specs, so a profile of your
 # own and a file that overrides a built-in are read the same way brig will read
 # them at boot. The JSON export is the resolved profile, one field per line.
-if ! SPEC="$("$BRIG_BIN" profile export "$PROFILE" --json 2>&1)"; then
+if ! SPEC="$("$BRIG_BIN" agent export "$PROFILE" --json 2>&1)"; then
 	printf '%s\n' "$SPEC" >&2
 	printf 'Nothing was checked.\n' >&2
 	exit 2

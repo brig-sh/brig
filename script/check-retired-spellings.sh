@@ -55,7 +55,7 @@ patterns=(
 	'brig policy list\b'
 	'brig secret (list|rm)\b'
 	'brig (run|sh|create)\b.* (-t|-m|-n|-w)( |=|$)'
-	'brig (run|sh|create)\b.* (--name|--workspace|--memory)( |=|$)'
+	'brig (run|sh|create)\b.* (--name|--workspace)( |=|$)'
 )
 
 names=(
@@ -68,7 +68,7 @@ names=(
 	'brig policy list -> brig policy ls'
 	'brig secret list|rm -> brig secret ls|delete'
 	'the run-line short flags -t -m -n -w -> --image --mem <agent>@<label> --home'
-	'--name / --workspace / --memory on the run line -> <agent>@<label> / --home / --mem'
+	'--name / --workspace on the run line -> <agent>@<label> / --home'
 )
 
 # Print "<line>:<command text>" for every place a reader could copy a command

@@ -50,7 +50,7 @@ snapshot:
 # cheap to fix while the commit is still unpushed. Needs git-cliff
 # (brew install git-cliff).
 notes:
-	@test -n "$(TAG)" || { echo "usage: make notes TAG=v0.1.0-rc19" >&2; exit 2; }
+	@test -n "$(TAG)" || { echo "usage: make notes TAG=v0.3.0" >&2; exit 2; }
 	git cliff --unreleased --tag $(TAG)
 
 # docs/claims.md ties each promise in docs/security.md to its tests. The
