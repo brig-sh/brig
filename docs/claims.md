@@ -32,10 +32,10 @@ Each defence in the last column is one token:
   `vm_check <check>` line.
 
 A `vm` check needs a booted sandbox, and CI has no runtime. `make claims-vm`
-builds brig from this checkout and runs those checks against that binary
+builds `brig` from this checkout and runs those checks against that binary
 where hull or nerdctl is on `PATH`. It skips where neither is. Run it before a
 merge that touches the run path. Run by hand, `script/claims-vm.sh` tests the
-brig on `PATH` unless `BRIG` names another. The CI check resolves a `vm` row
+`brig` on `PATH` unless `BRIG` names another. The CI check resolves a `vm` row
 by name and lists it as not yet run.
 
 CI does run `script/claims-vm.sh --self-test`. It answers every check from a

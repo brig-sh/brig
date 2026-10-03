@@ -1,9 +1,8 @@
 # What Brig counts, and how to turn it off
 
 Brig keeps no telemetry store and runs no collector of its own. The sandbox
-runtime it drives is what actually counts anything and sends it. On macOS
-the runtime is `hull`. On Linux the runtime is `nerdctl`, and nothing is
-sent at all.
+runtime it drives does the counting and the sending. On macOS the runtime is
+`hull`. On Linux the runtime is `nerdctl`, and nothing is sent at all.
 
 ## Turn it off
 
@@ -11,9 +10,9 @@ sent at all.
 brig telemetry off
 ```
 
-Durable, on this machine, whether Brig is the one asking again or not.
-`DO_NOT_TRACK=1` in your environment does the same thing without recording
-anything, and beats any answer already on disk:
+The answer is recorded on this machine and holds whether or not Brig is the
+caller. `DO_NOT_TRACK=1` in your environment does the same thing without
+recording anything, and beats any answer already on disk:
 
 ```bash
 DO_NOT_TRACK=1 brig run claude
@@ -21,25 +20,29 @@ DO_NOT_TRACK=1 brig run claude
 
 ## What is counted
 
-Three things, each once per Brig command:
+Brig lets the runtime count three operations, and suppresses counting on
+every other call it makes:
 
 - **A sandbox boot.**
 - **A sandbox stop**, including the stop inside a restart, when Brig recreates
-  a sandbox whose shares or policy went stale. `brig rm` is not counted.
+  a sandbox whose shares or policy went stale. `brig rm` stops each sandbox
+  before it removes it, so each of those stops is counted. The removal is not.
 - **The command that hands your terminal to the agent**, which is `run`
   without `--json`, `sh`, or the `--json` child path either one takes.
 
-Nothing else Brig does on its own behalf is ever counted. A reachability
-probe, a `ps` lookup, cleanup work, and the telemetry query itself all run
-with counting suppressed. One command you type counts at most once, never
-once per internal step it takes.
+Each counted operation is counted on its own, so one command can count more than
+once. A `brig run` that boots a sandbox counts the boot and the handover.
+`brig rm --all` counts the stop of each sandbox it removes. A reachability
+probe, a `ps` lookup, cleanup work, and the telemetry query itself all run with
+counting suppressed, so an internal step is never counted.
 
-Brig suppresses counting for a sandbox boot until hull reports a recorded
-answer. A boot with no terminal attached is never counted before anyone has
-answered. The one exception is the command that hands your terminal to the
-agent. There Brig lets hull's own prompt through instead of suppressing it,
-so you are asked before anything is sent. Whether that prompt always
-precedes the send is a fact about hull's own code, outside this checkout.
+Brig suppresses counting for a sandbox boot or stop until hull reports that
+telemetry is on. Neither has a terminal attached, so neither is counted
+before anyone has answered. The one exception is the command that hands your
+terminal to the agent, when Brig's own standard input is a terminal. There
+Brig lets hull's own prompt through instead of suppressing it, so you are
+asked before anything is sent. Whether that prompt always precedes the send
+is a fact about hull's own code, outside this checkout.
 
 ## `brig telemetry status`, `on`, `off`
 
@@ -90,22 +93,20 @@ The sandbox runtime did not report a state this version of brig
 recognises. Boots are not counted while that is true.
 ```
 
-The last of the four is deliberate rather than a guess. Brig reads one line
-from the runtime. A phrase it does not recognize is read as unanswered in
-effect. This happens whether the phrase comes from an older or a newer
-runtime speaking a dialect this version has never seen. Nothing is counted,
-and Brig reports `cannot tell` rather than assume either on or off.
+Brig reads one line from the runtime. When it does not recognize the phrase,
+from an older runtime or a newer one, it treats the question as unanswered:
+boots are not counted, and Brig reports `cannot tell` rather than assume on
+or off.
 
 A recorded answer stops counting as an answer once hull widens what it
 collects. `status` then reports the same unanswered state a fresh install
 gets, until you answer again.
 
-Neither the report nor `brig telemetry --help` names the runtime underneath.
-The point of the command is that opting out does not require knowing which
-binary is doing the sending.
+Neither the report nor `brig telemetry --help` names the runtime underneath,
+so opting out does not require knowing which binary does the sending.
 
 On a runtime that implements no telemetry reporting at all, which is
-`nerdctl` on Linux today, the report is direct instead of an error:
+`nerdctl` on Linux today, the report says so instead of failing:
 
 ```
 telemetry: off
@@ -126,14 +127,17 @@ source, which is a separate repository this checkout does not include.
 
 An event's envelope carries the product name and version, the OS version
 and CPU architecture. It also carries an install identifier generated on
-your machine, a timestamp and a checksum. On top of that, one event per
-operation carries:
+your machine, a timestamp and a checksum. On top of that, the events hull
+sends for an operation carry:
 
 - which runtime operation ran, and whether it succeeded, with a failure
   bucketed into a class such as `network` or `permission`, never its
   error text
 - which hypervisor backend booted, and whether the boot worked
 - how long the sandbox lived
+- while a session is attached to the sandbox, the memory use and CPU share
+  of its VMM process, first a few seconds after the attach and then every
+  30 seconds
 - if Brig or the runtime panics, the panic type, with a stack trace whose
   paths are trimmed
 
