@@ -61,9 +61,12 @@ For a documentation change, also run:
 
 ```bash
 script/check-retired-spellings.sh
+script/check-claims.sh
 ```
 
-It fails a doc that teaches a command spelling scheduled for removal.
+The first fails a doc that teaches a command spelling scheduled for removal.
+The second fails when a sentence [docs/claims.md](docs/claims.md) quotes
+from [docs/security.md](docs/security.md) no longer matches.
 [docs/migration.md](docs/migration.md) lists the current spellings.
 
 Things the local gates cannot catch:

@@ -89,6 +89,11 @@ jobs:
           ./script/check-claims.sh
           ./script/claims-vm.sh --self-test
 
+      # A doc that teaches a spelling scheduled for removal sends a reader to
+      # a command that warns today and fails after the removal release.
+      - name: retired spellings in docs
+        run: ./script/check-retired-spellings.sh
+
       - name: cross-compile darwin/arm64
         run: GOOS=darwin GOARCH=arm64 go build ./...
 
