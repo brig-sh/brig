@@ -1,13 +1,15 @@
 # Install Brig
 
-Homebrew is the path to prefer on macOS. Use `install.sh` when Homebrew is
-not available.
+| Host | Use | What it installs |
+| --- | --- | --- |
+| macOS | [Homebrew](#macos-with-homebrew) | `brig`, `brigd`, `hull`, `cosign`, shell completions |
+| macOS without Homebrew | [install.sh](#installsh) | `brig`, `brigd`, `hull`, `cosign` |
+| Linux | [install.sh](#linux) | the runtime bundle (`nerdctl`, containerd, the `urunc` shim), with `brig` and `brigd` from the Brig release, and `cosign` |
+| Any | [A source build](#building-from-source) | `brig` and `brigd` only, never a runtime |
 
-Homebrew and `install.sh` both install `hull` on macOS. On Linux,
-`install.sh` installs the runtime bundle, which carries `nerdctl`,
-containerd and the `urunc` shim, and puts `brig` from the Brig release into
-it. Building from source writes
-only `brig` and `brigd`, never a runtime.
+`hull` is the runtime Brig drives on macOS. On Linux the runtime is
+`nerdctl` over containerd, with `urunc` booting each container as a microVM.
+[Platform support](#platform-support) lists the hosts Brig runs on.
 
 ## macOS with Homebrew
 
@@ -30,9 +32,8 @@ Homebrew refuses to install one that has not been trusted. If it reports
 `Unknown command: trust`, run `brew update` first, then run the command
 again.
 
-During the `0.1.0-rc` series, the tap can lag the newest release. If
-`brew install` gives you an older version than you expected, or fails, use
-[install.sh](#installsh) instead.
+The tap can lag the newest release. If `brew install` gives you an older
+version than you expected, or fails, use [install.sh](#installsh) instead.
 
 ### Trying something before it is released
 
@@ -49,8 +50,8 @@ what is coming. `brig@experimental` moves only when a maintainer promotes a
 particular ref to it, which is how an unmerged branch reaches a tester; ask on
 the pull request, or run the `channel` workflow with that ref.
 
-Each pulls the matching `hull` -- `hull@main` or `hull@experimental` -- because
-a feature usually spans both.
+Each pulls the matching `hull` (`hull@main` or `hull@experimental`),
+because a feature usually spans both.
 
 Neither is supported. They can break, they move without notice, and they are
 not what a bug report should be filed against unless the bug is the reason you
@@ -80,8 +81,8 @@ and `hvi` executables it drives. On Linux it installs the runtime bundle,
 and `brig` and `brigd` from the Brig release inside it. Both platforms get
 `cosign`.
 
-It downloads the newest release for your OS and architecture. There is no
-stable release yet, so that includes prereleases. It checks every archive
+It downloads the newest `v`-tagged release for your OS and architecture,
+release candidates included. It checks every archive
 against a SHA-256 checksum, and installs to `BRIG_INSTALL_DIR` or
 `/usr/local/bin`. It uses `sudo` when that directory is not writable.
 
@@ -163,7 +164,18 @@ launcher, which sets the environment that points brig at the private
 containerd.
 
 Run it under `sudo` for a node-wide install, which is the default and needs
-root. Run it as a normal user and everything lands under `$HOME` instead:
+root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sudo sh
+```
+
+A node-wide install serves root only. Its containerd belongs to root, and
+a normal user's `nerdctl` cannot reach it, so a run as that user fails. Run
+Brig as root afterwards, for example `sudo brig doctor`. To give other users
+a containerd of their own, see `BRIG_INSTALL_ROOTLESS=1` below.
+
+Run `install.sh` as a normal user and everything lands under `$HOME` instead:
 `~/.local/share/brig` for the tree, `~/.local/bin` for the launchers, and a
 containerd of your own under a systemd user unit. That path writes nothing
 outside your home and asks for `sudo` at no point, which is why `install.sh`
@@ -256,13 +268,13 @@ brig doctor
 ```
 
 `brig version` prints the version you installed. `brig doctor` prints one
-line per check: host, virtual, runtime, boot, verify, profiles, secrets,
-brigd and image. Each line is marked `ok`, `!!` or `--`.
+line per check: brig, host, virtual, runtime, boot, verify, profiles,
+secrets, brigd and image. Each line is marked `ok`, `!!` or `--`.
 
 `ok` beside `runtime` means Brig found the `hull` or `nerdctl` it drives,
 and where. `!!` beside `boot` is normal before you run an agent: Brig
 fetches boot assets on first use. Anything else marked `!!` names the fix
-beside it.
+under it.
 
 Next: [quickstart.md](quickstart.md).
 
@@ -321,8 +333,7 @@ that network does not promise to separate sandboxes. See
 [Network postures](policies.md#network-postures).
 
 macOS 26 is what the project tests on, a separate fact from the floor.
-Nothing in Brig or hull refuses macOS 15 or macOS 16 for being older than
-26.
+Nothing in Brig or hull refuses macOS 15 for being older than 26.
 
 Nothing in Brig's own source checks the host architecture. The release
 publishes a `darwin/amd64` archive of `brig` and `brigd` alongside the
