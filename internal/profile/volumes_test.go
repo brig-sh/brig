@@ -109,8 +109,8 @@ func TestFileModeDefaultsAndParses(t *testing.T) {
 	if got, err := (FileBinding{Mode: "0640"}).FileMode(); err != nil || got != 0o640 {
 		t.Errorf("FileMode(0640) = %v, %v", got, err)
 	}
-	// "600" would parse as octal 0600 either way, but 0o1130 -- what YAML
-	// gives a bare 0600 read as decimal -- must not be accepted as a mode.
+	// "600" would parse as octal 0600 either way, but 0o1130 -- a value above
+	// 0777 -- must not be accepted as a mode.
 	if _, err := (FileBinding{Mode: "1130"}).FileMode(); err == nil {
 		t.Error("a mode above 0777 was accepted")
 	}

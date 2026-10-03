@@ -55,8 +55,8 @@ usage:
                                                  one, or with a ref the gateway
                                                  serving that sandbox alone
   brig info <ref>                                print the execution envelope and the
-                                                 full environment, by name -- fails
-                                                 if a declared secret is missing
+                                                 full environment, by name. Fails
+                                                 if a required secret is missing
   brig plan <ref> [project]                      the mounts, network, policies
                                                  and credentials by name that a
                                                  run gets. Opens no secret, and
@@ -81,10 +81,10 @@ usage:
   brig version
 
 A <ref> is the session. claude is that agent's default session, and
-claude@refactor is a session of its own -- its own workspace, its own sandbox,
-and the label reaching the agent as its display name. A label brig would have
-to rewrite is refused rather than rewritten. brig ls prints the ref of every
-sandbox, and every verb above takes one.
+claude@refactor is a session of its own, with its own guest home, its own
+sandbox, and the label reaching the agent as its display name. A label brig
+would have to rewrite is refused rather than rewritten. brig ls prints the ref
+of every sandbox, and every verb above takes one.
 
 global flags (left of the command, as in: brig -q run claude):
       --verbose          the execution envelope, brig's own progress and the
@@ -100,10 +100,10 @@ global flags (left of the command, as in: brig -q run claude):
                          network verbs. Also accepted after the verb (brig ls
                          --json). Every other verb refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
-                         JSON line with its exit status -- so a script can tell
+                         JSON line with its exit status, so a script can tell
                          "brig refused" from "the agent failed"
 Within one apiVersion the JSON only ever gains fields, never renames or drops
-one, and no field carries a credential value -- so a script written against it
+one, and no field carries a credential value. A script written against it
 keeps parsing, and a machine-readable dump stays a place a secret cannot leak.
 
 flags (before the agent's own arguments; -- ends brig's parsing):
@@ -133,12 +133,13 @@ the sandbox until brig network unpublish, so a later run offers it again.
 
 By default a run prints what you have to act on, then the agent: warnings,
 errors, and one line saying verification held. The execution envelope, brig's
-own progress and the runtime's output wait for --verbose -- and a boot that
-fails quotes what the runtime said whether or not you asked. brig info prints
-the envelope on demand, without booting anything.
+own progress and the runtime's output wait for --verbose. A boot that fails
+quotes what the runtime said whether or not you asked. brig info prints the
+envelope on demand, without booting anything.
 
-Workspaces persist. The sandbox keeps running between commands, so a second
-run is immediate; state lives in the workspace on the host either way.
+The sandbox keeps running between commands, so a second run is immediate.
+The guest home is a host directory. It survives brig stop, and brig rm
+deletes it unless you named it with --home or BRIG_WORKSPACE.
 
 Any Linux CLI in an OCI image runs under brig, if the image also carries the
 utilities brig uses to set the sandbox up and deliver the credential: a shell
@@ -157,7 +158,7 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_SKILLS          1 to copy your ~/.claude skills and plugins into the guest
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
-  BRIG_VERIFY          warn (default) | require | off -- guest image signature
+  BRIG_VERIFY          warn (default) | require | off: guest image signature
   BRIG_PROFILE_DIR     where your own profiles live
                        (BRIG_TEMPLATE_DIR works until v0.4.0)
   BRIG_RUNTIME         hull | nerdctl
