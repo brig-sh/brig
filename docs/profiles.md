@@ -589,9 +589,8 @@ The parser enforces four rules:
   variable a shell override and a store fallback, and a file has no shell
   to override it. `env.<name>` is refused as well: a file binding exists to
   put a stored credential where an agent reads one.
-- **`mode:` is a quoted string.** YAML turns an unquoted `0600` into a number
-  before Brig sees it, and the result is refused or, for some values, read
-  as a different mode.
+- **`mode:` is a quoted string.** YAML reads an unquoted `0644` as the
+  number 420, so Brig refuses a mode that is not quoted.
 - **The target must sit inside a `tmpfs` volume**, and must not be carved
   back out by a `hostmount` under it. This is refused at parse time, before
   any token can reach your disk.
