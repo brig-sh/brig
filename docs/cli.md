@@ -1,17 +1,16 @@
 # Command line reference
 
 Every Brig verb and flag, the environment variables, the JSON output and the
-exit codes, checked against the code that implements them. See
-[quickstart.md](quickstart.md) for the walkthrough of a first run. Read this
-page when you already know what you want and need the exact syntax.
+exit codes. For a walkthrough of a first run, see
+[quickstart.md](quickstart.md).
 
-Every old spelling but one still works until v0.4.0. This page teaches only
-the current one. [migration.md](migration.md) has the full old-to-new table,
-the one exception, and the deprecation window.
+This page teaches only the current spellings. Most retired spellings still
+work until v0.4.0. [migration.md](migration.md) has the old-to-new table and
+the exceptions.
 
 ## Everyday commands
 
-The nine commands you type most, before the exhaustive reference below.
+The nine commands you type most.
 
 | Command | What it does |
 | --- | --- |
@@ -47,7 +46,7 @@ brig run <ref> [project] [args...]
   [The run line](#the-run-line-ref-project-and-the-agents-own-arguments).
 - `[args...]` reach the agent untouched.
 
-Name no project, and Brig remounts whatever this session ran with last:
+With no project named, Brig remounts the one this session ran with last:
 
 ```bash
 brig run claude
@@ -72,8 +71,8 @@ Run with no project mounted at all, even one this session ran with before:
 brig run claude --no-project
 ```
 
-Pass an argument through to the agent rather than have Brig read it. `--`
-ends Brig's own parsing:
+To pass the agent an argument that Brig would otherwise read, put it after
+`--`, which ends Brig's parsing:
 
 ```bash
 brig run claude ~/code/demo -- --version
@@ -93,8 +92,8 @@ brig sh <ref> [command...]
 brig sh <ref> -c '<script>' [args...]
 ```
 
-`sh` takes no project argument. The first bare word after the ref is already
-the guest command:
+`sh` takes no project argument. The first bare word after the ref starts the
+guest command:
 
 ```bash
 brig sh claude ls /work
@@ -131,8 +130,7 @@ brig stop claude
 ```
 
 Stops the sandbox and keeps its name and its state on disk. Stopping a
-sandbox that is not running is not an error, because that is already the
-state `stop` asks for.
+sandbox that is not running is not an error.
 
 ### `brig rm`
 
@@ -168,10 +166,11 @@ each sandbox as its ref, sandbox name and state, one per line, and asks for
 confirmation. If stdin is not a terminal, the command refuses, removes
 nothing, and exits `1`. Pass `-y` (or `--yes`) to confirm in advance, for
 example in a script. If there is nothing to remove, the command asks nothing
-and exits `0`. It also stops the shared network gateway that `hvi`
-sandboxes use, once no sandbox is on it. It checks the whole host first, so
-a sandbox of another session, or one still booting, keeps the gateway
-running.
+and exits `0`.
+
+It also stops the shared network gateway that `hvi` sandboxes use, once no
+sandbox is on it. It checks the whole host first, so a sandbox of another
+session, or one still booting, keeps the gateway running.
 
 ```bash
 brig rm --all --dry-run
@@ -181,11 +180,10 @@ brig rm claude --dry-run
 `--dry-run` prints what the command would remove and exits `0` without
 removing anything. For `rm --all` this is the same list the prompt shows.
 For `rm <ref>` it is the one sandbox, and the guest home it would delete or
-leave. A ref
-with no sandbox still exits `3`. `brig rm <ref>` asks no question, so it
-refuses `-y`.
+leave. A ref with no sandbox still exits `3`. `brig rm <ref>` asks no
+question, so it refuses `-y`.
 
-`rm` and `stop` each take exactly one ref. Neither takes a list of them.
+`rm` and `stop` each take exactly one ref.
 
 ### `brig ls`
 
@@ -220,12 +218,13 @@ brig logs --gateway [<ref>]
 | --- | --- |
 | `--follow` | keep streaming as new lines arrive |
 | `--tail N` | show the last `N` lines. Default: `-1`, meaning every line |
-| `--raw` | skip Brig's own formatting |
+| `--raw` | keep terminal control sequences, which Brig strips by default |
 | `--gateway` | read the network gateway's log instead of the sandbox's own |
 
-With no ref, `--gateway` reads the gateway for sandboxes using `shared`.
-With a ref, it reads that sandbox's own gateway log, which exists for an
-isolated sandbox, including a new default `hvi` sandbox or one carrying a policy:
+With no ref, `--gateway` reads the log of the gateway that `shared`
+sandboxes use. With a ref, it reads that sandbox's own gateway log. Only an
+isolated sandbox has one, which includes a new default `hvi` sandbox and one
+carrying a policy. For any other sandbox, the command exits `3`.
 
 ```bash
 brig logs --gateway
@@ -241,14 +240,13 @@ brig info claude
 Prints the execution envelope without booting anything. The envelope has the
 sandbox name, the isolation, the guest home, the image, the verification
 mode, the network, every published port and the credentials by name. The
-network is the posture of the running sandbox, and the posture of its next
-boot when that one differs. `brig run -v` prints the same envelope before it
-boots. There the row can name the next boot's posture just before the same
-command restarts the sandbox onto it.
+network row gives the posture of the running sandbox, and the posture of its
+next boot when the two differ. `brig --verbose run` prints the same envelope
+before it boots.
 
-`info` fails only when a required secret cannot be resolved. A declared
-secret marked `required: false` prints a warning, and the command still
-exits `0`.
+A required secret that cannot be resolved fails `info` with exit `6`. A
+declared secret marked `required: false` prints a warning, and the command
+still exits `0`.
 
 ### `brig plan`
 
@@ -398,43 +396,40 @@ asks for the same thing at boot. `ls` lists the ports and whether each is open
 right now.
 
 `brig info` prints the ports too, as the `PORTS` row of the execution
-envelope. `ls` is the one to reach for when the ports are all you want: it
-resolves no credentials, so it answers even when a declared secret is
-missing.
+envelope. `brig network ls` resolves no credentials, so it answers even when
+a required secret is missing.
 
-A port is written the way docker writes one:
+A port uses Docker's syntax:
 
 | Written | Means |
 | --- | --- |
 | `3000` | host `127.0.0.1:3000` carries guest `3000` |
 | `8080:80` | host `127.0.0.1:8080` carries guest `80` |
-| `127.0.0.1:8080:80` | the same, said explicitly |
+| `127.0.0.1:8080:80` | the same, with the address written out |
 | `0.0.0.0:8080:80` | offered to the network this host is on |
-| `5353:53/udp` | UDP rather than TCP |
+| `5353:53/udp` | host `127.0.0.1:5353` carries guest `53` over UDP |
 
 The host address defaults to `127.0.0.1`, so a published port is reachable
-from this machine and not from the network this machine is on. `0.0.0.0` is
-how you ask for the wider one, and the execution envelope says so on the row
-for that port.
+from this machine only. Use `0.0.0.0` to offer it to the network this
+machine is on. The execution envelope shows the address on the row for that
+port.
 
-A publication belongs to the sandbox rather than to one run of it. `brig stop`
-releases the host port, because nothing else on the machine could take it
-otherwise, and keeps the publication: the next `brig run` offers the same
-ports without being asked again. `brig network unpublish` is what takes one
-away, and `brig rm` takes all of them with the sandbox.
+A publication belongs to the sandbox and outlives a run. `brig stop`
+releases the host port and keeps the publication, so the next `brig run`
+opens the same ports again. `brig network unpublish` removes one, and
+`brig rm` removes all of them with the sandbox.
 
-`unpublish` names a port by its host side alone, which is the half you can
-see. `brig network unpublish claude 8080` closes whatever `8080` was
-carrying. The HOST column of `brig network ls` works as printed:
+`unpublish` names a port by its host side. `brig network unpublish claude
+8080` closes whatever host port `8080` carries. A value from the HOST column
+of `brig network ls` works as printed:
 `brig network unpublish claude 0.0.0.0:8080` closes the port on that address
 only.
 
-Publishing needs a network gateway that brig owns, which is the `hvi` backend
-on macOS. On `vz` the sandbox takes its network from vmnet and brig has
-nothing to ask, so `--publish` is refused there by name rather than ignored.
-On Linux the container runtime publishes, and it can only do that when the
-sandbox is created: `brig run --publish` works, and publishing onto a sandbox
-that is already running says to remove it and run it again.
+On macOS, publishing needs the `hvi` backend, where Brig owns the network
+gateway. On `vz` and `qemu`, Brig refuses a run that publishes a port. On
+Linux the container runtime publishes, and only when it creates the sandbox:
+`brig run --publish` works, and `brig network publish` on a running sandbox
+fails and tells you to remove the sandbox and run it again with `--publish`.
 
 ### `brig doctor`
 
@@ -442,33 +437,33 @@ that is already running says to remove it and run it again.
 brig doctor
 ```
 
-Checks, one line each: the brig build, the host, the hypervisor, the
+Checks, one line each: the Brig build, the host, the hypervisor, the
 runtime, the boot assets, cosign, the profile directory, the secret store and
-brigd. The first line is the same build `brig version` prints, so a report
-pasted whole says which binary produced it. A running brigd is asked which
-build it is; one that differs from the brig binary is marked `!!` with a
-restart as its fix, because a daemon left up across an upgrade serves the
-old code with no other sign.
+brigd. The first line is the build `brig version` prints, so a pasted report
+says which binary produced it. Doctor asks a running brigd which build it
+is. One that differs from the `brig` binary is marked `!!` with a restart as
+its fix, because a daemon left up across an upgrade still serves the old
+code.
 
 ```bash
 brig doctor claude
 ```
 
-Fills in the image line, which is otherwise the one check doctor cannot make
-without knowing which agent you mean. When the agent's profile names a
-`runtimeBin`, the runtime and boot lines report on that binary, the one a
-run of the agent drives, rather than the one on `PATH`.
+Adds the image check, which needs an agent. When the agent's profile names
+a `runtimeBin`, the runtime and boot lines report on that binary instead of
+the one on `PATH`. An unknown agent exits `3`.
 
 ```bash
 brig doctor --json
 ```
 
-Prints the same checks as a JSON array, each with `name`, `state`, `finding`
-and, when the check failed, `fix`.
+Prints the same checks in the [envelope](#--json-output), as
+`kind: Doctor`. `data` is an array, and each entry has `name`, `state`
+(`ok`, `!!` or `--`), `finding` and, when the check failed, `fix`.
 
-Only two checks gate the exit status: a missing or broken runtime, and a
-secret store that will not open. Every other finding, including one marked
-`!!`, prints its fix and leaves the exit status at `0`.
+Only two checks set the exit status: a missing or broken runtime exits `4`,
+and a secret store that will not open exits `6`. Every other finding,
+including one marked `!!`, prints its fix and leaves the exit status at `0`.
 
 ### `brig version`
 
@@ -481,17 +476,17 @@ commit, the commit date, the Go version and the platform. `--version` is the
 same command.
 
 ```
-brig v0.2.0 (131e3bc, 2026-09-15, go1.26.0, darwin/arm64)
+brig v0.3.0 (91b0c7b, 2026-09-26, go1.26.0, darwin/arm64)
 ```
 
 The version is what Go derived from the nearest tag when the binary was
 built. A release prints its tag. A build from a commit after a tag prints a
 pseudo-version naming that commit, such as
-`v0.2.1-0.20260915210404-ef4aa8b0efb6`, with `+dirty` appended when the tree
+`v0.3.1-0.20261002125255-d872cb5622d0`, with `+dirty` appended when the tree
 had uncommitted changes. A build with no git history behind it, such as one
 from a source tarball, prints `dev` and no commit.
 
-`--json` prints the same build under the envelope, with the commit in full.
+`--json` prints the same build in the envelope, with the commit in full.
 `commit` and `commitTime` are absent when the build carried no git history.
 
 ```bash
@@ -503,9 +498,9 @@ brig version --json
   "apiVersion": "brig.sh/v1alpha1",
   "kind": "Version",
   "data": {
-    "version": "v0.2.0",
-    "commit": "131e3bc5615df5ff74e6b5af9a5bcf2ed42b1d57",
-    "commitTime": "2026-09-15T09:36:19Z",
+    "version": "v0.3.0",
+    "commit": "91b0c7b81fa38eeeb519e9108ae3d1506e0db744",
+    "commitTime": "2026-09-26T08:47:10Z",
     "modified": false,
     "goVersion": "go1.26.0",
     "os": "darwin",
@@ -520,9 +515,9 @@ brig version --json
 brig completion zsh > "${fpath[1]}/_brig"
 ```
 
-Prints a completion script for `bash`, `zsh` or `fish` to stdout. Nothing is
-installed for you. See [completions.md](completions.md) for where each shell
-reads its script from, and exactly what completes where.
+Prints a completion script for `bash`, `zsh` or `fish` to stdout. Brig
+installs nothing. See [completions.md](completions.md) for where each shell
+reads its script from, and what completes where.
 
 ### `brig agent`
 
@@ -534,12 +529,12 @@ Lists the agents you can run.
 
 ```
 brig agent ls
-brig agent show <agent>
-brig agent new <name> --from <agent> [--force]
+brig agent show <agent> [--json]
+brig agent new <name> --from <agent> [--json] [--force]
 brig agent edit <name>
-brig agent rm <name>
+brig agent rm <name> [-y]
 brig agent import <file>
-brig agent export <agent> [name] [--force]
+brig agent export <agent> [name] [--json] [--force]
 ```
 
 Copy a built-in agent under a name of your own, then edit the copy:
@@ -556,28 +551,28 @@ agent, to read it or pipe it:
 brig agent show claude-code
 ```
 
-`export` is the alternative to `new --from`: same result, the other
-direction. Save a copy of an agent you did not create, under a name you
-choose:
+`export` with a destination name does what `new --from` does, with the
+arguments the other way round:
 
 ```bash
 brig agent export claude-code mine
 ```
 
-Add a file you wrote or received:
+Add a file you wrote or received. `-` reads it from stdin:
 
 ```bash
 brig agent import mine.yaml
 ```
 
-Delete a file-backed agent, after asking:
+Delete an agent that has a file of its own. `rm` asks first, and `-y`
+answers in advance:
 
 ```bash
 brig agent rm mine
 ```
 
 `rm` refuses while a sandbox of the agent exists, running or stopped, and
-names the `brig rm <ref>` to run first for each. It also refuses when brig
+names the `brig rm <ref>` to run first for each. It also refuses when Brig
 cannot ask the agent's runtime, such as an unknown `BRIG_RUNTIME`.
 
 `--force` (or `-f`) with `new` or `export` overwrites a destination file that
@@ -596,16 +591,16 @@ Lists every policy, and what binds it.
 
 ```
 brig policy ls
-brig policy create <name>
-brig policy edit <name>
-brig policy show <name>
-brig policy rm <name>
+brig policy create <name> [--force]
+brig policy edit <name> [--force]
+brig policy show <name> [--json]
+brig policy rm <name> [--force]
 brig policy attach <policy> <agent> [-n <label>]
 brig policy detach <policy> <agent> [-n <label>]
 brig policy check <agent> [-n <label>]
 ```
 
-Write a starter policy, then open it:
+Write a starter policy and open it in your editor:
 
 ```bash
 brig policy create locked-down
@@ -644,7 +639,7 @@ Reads the value from stdin and stores it under that name in your keyring.
 brig secret create <name> [-f FILE]
 brig secret update <name> [-f FILE]
 brig secret read <name>
-brig secret delete <name>
+brig secret delete <name> [-y]
 brig secret ls
 brig secret import <agent>
 brig secret import <agent> <name>
@@ -678,34 +673,34 @@ Reports whether usage data is sent, and what decided the answer.
 brig telemetry off
 ```
 
-Turns it off, durably, on this machine. See [telemetry.md](telemetry.md) for
-what is counted, what is never collected, and how the answer is stored.
+Turns it off on this machine and records the answer. `brig telemetry on`
+reverses it. See [telemetry.md](telemetry.md) for what is counted, what is
+never collected, and how the answer is stored.
 
 ## The ref
 
-A ref is `<agent>` or `<agent>@<label>`. An empty label is the agent's
-default session, so `claude` and `claude@refactor` are two sessions of one
-agent, never two agents. See [sessions.md](sessions.md) for what a session
-keeps separate, and what survives which command.
+A ref is `<agent>` or `<agent>@<label>`. With no label, the ref names the
+agent's default session, so `claude` and `claude@refactor` are two sessions
+of one agent. See [sessions.md](sessions.md) for what a session keeps
+separate, and what survives which command.
 
-The separator is exactly one `@`. Brig refuses a ref instead of rewriting
-it:
+The separator is exactly one `@`. Brig refuses these refs:
 
 | Written | Refused because |
 | --- | --- |
 | `claude@@x` | more than one `@` |
 | `@refactor` | no agent named before the `@` |
 | `claude@` | a trailing `@` names no session. Drop it for the default session, or name one |
-| `claude@Refactor` | the label is not already clean. Labels use lowercase letters, digits, dot, dash and underscore |
+| `claude@Refactor` | the label has a character Brig would have to change. Labels use lowercase letters, digits, dot, dash and underscore |
 
-A label is never rewritten for you. The label reaches two places that must
-agree on it: the sandbox name and the guest home directory. A label that
-needs cleaning up first is refused rather than silently changed.
+The label becomes part of the sandbox name and of the guest home directory,
+and the two must agree. That is why Brig refuses a label it would have to
+change.
 
 ## The run line: ref, project, and the agent's own arguments
 
 `brig run <ref> [project] [args...]` reads three kinds of token from one
-line, told apart by position and count, never by the filesystem:
+line and tells them apart by position:
 
 1. The first bare word is the ref.
 2. On `run` and `plan`, the second bare word is a project directory. Brig
@@ -713,28 +708,25 @@ line, told apart by position and count, never by the filesystem:
    `plan` shows the run that would.
 3. The next bare word, or anything after `--`, is the agent's own argument.
 
-The directory named as the project must exist. Brig does not read a bare
-word as a project only when a directory of that name happens to exist. An
-argument's meaning does not depend on the filesystem. A directory that is
-not there is an error rather than a silent fallback to the agent's argv.
+The second bare word is the project whether or not a directory of that name
+exists. If it does not exist, or is not a directory, Brig refuses the run
+and tells you to put the word after `--`.
 
-`--` ends Brig's own parsing outright. No word after it is ever read as a
-project, and a project already read before the marker stands:
+`--` ends Brig's parsing. No word after it is read as a project, and a
+project named before it still counts:
 
 ```bash
 brig run claude ~/code/demo -- --version
 ```
 
-Brig's own flags keep being read after the ref and after the project,
-because both are Brig's own operands too:
+Brig still reads its own flags after the ref and after the project:
 
 ```bash
 brig run claude ~/code/demo --mem 4096 -d
 ```
 
-Only `run` and `plan` take a project this way. `brig sh claude ~/code/demo` reads
-`~/code/demo` as the start of the guest command, not as a directory to
-mount.
+Only `run` and `plan` take a project. `brig sh claude ~/code/demo` reads
+`~/code/demo` as the start of the guest command.
 
 ## Flag placement
 
@@ -745,10 +737,10 @@ own arguments begin.
 | Position | Flags |
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
-| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish`, and, as peers, `-q`/`--quiet` and `--json` |
+| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish`, `-q`/`--quiet` and `--json` |
 
-The global position is a closed set. A token there that is none of the three
-global flags is refused by name, never forwarded to an agent:
+The global position takes only those three flags. Brig refuses any other
+flag there by name:
 
 ```
 brig: unknown flag "--nope" before the command. brig takes a command first:
@@ -756,8 +748,7 @@ brig: unknown flag "--nope" before the command. brig takes a command first:
 profile
 ```
 
-Exactly two flags are accepted in both positions, and they behave
-differently:
+Two flags are accepted in both positions:
 
 | Flag | After the verb, on the run line |
 | --- | --- |
@@ -769,10 +760,10 @@ brig info claude --json
 brig --json info claude
 ```
 
-Both print the same report, and neither is deprecated.
+Both print the same report.
 
-An unrecognized flag before the ref is refused by name, because there is no
-agent yet to hand it to:
+Brig refuses an unrecognized flag before the ref by name, because there is
+no agent yet to hand it to:
 
 ```
 brig: unknown flag "--help" before the profile name. brig's own flags come
@@ -780,49 +771,47 @@ before the profile and the agent's after it; put "--help" after the profile
 to pass it through, or -- to end brig's flags
 ```
 
-The same spelling after the ref reaches the agent untouched. Brig names one
-of its own flags found past that point, without taking it, so a working line
-keeps working:
+The same flag after the ref reaches the agent untouched. Once the agent's
+arguments have begun, Brig stops reading its own flags too. It warns about
+one it finds there and passes it on:
 
 ```bash
 brig run claude -p hi --quiet
 ```
 
-runs the agent with `-p hi --quiet` and warns that `--quiet` looked like
-Brig's own flag but stood where the agent's arguments already begin.
+This runs the agent with `-p hi --quiet` and warns that `--quiet` is one of
+Brig's own flags but here is the agent's.
 
 ### Run-line flags
 
 | Flag | Value | Default | Notes |
 | --- | --- | --- | --- |
 | `--image IMAGE` | image ref | the agent's own | guest image to boot |
-| `--home PATH` | host directory | the agent's own guest home | mounted as the agent's home. Replaces `--workspace`, see [migration.md](migration.md). The environment variable is still `BRIG_WORKSPACE`. There is no `BRIG_HOME` |
+| `--home PATH` | host directory | `~/.brig/homes/<sandbox>` | mounted as the guest home. Replaces `--workspace`, see [migration.md](migration.md). The environment variable is still `BRIG_WORKSPACE`. There is no `BRIG_HOME` |
 | `--mem MB` | number | the agent's own (`4096` for most shipped agents) | guest memory |
 | `--cpus N` | number | the agent's own (`4` for most shipped agents) | guest vCPUs |
 | `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run` and `plan`, refused by name as a usage error |
-| `-d`, `--detach` | (none) | off | start the sandbox and exit, without attaching. Parses on every verb, but only `run` reads it. On `sh`, `stop`, `rm`, `info` and `plan` it is silently inert |
+| `-d`, `--detach` | (none) | off | start the sandbox, print its name and exit, without attaching. Only `run` acts on it. `sh`, `stop`, `rm`, `info` and `plan` accept it and ignore it |
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
-| `--network MODE` | `shared`, `isolated` or `offline` | the recorded or runtime-inspected posture, then the profile's `network:`, then `isolated` (`shared` fallback on `vz` or `qemu` only when no posture is named) | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. An existing sandbox whose posture cannot be established requires an explicit choice. See [policies.md](policies.md) |
-| `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox |
-| `--publish PORT` | `3000`, `8080:80`, `127.0.0.1:8080:80`, `5353:53/udp` | nothing published | open a guest port on the host. Repeatable. Binds to `127.0.0.1` unless the address says otherwise. There is no `-p`: that is the agent's. See [`brig network`](#brig-network) |
+| `--network MODE` | `shared`, `isolated` or `offline` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture) | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. If Brig cannot establish the posture of an existing sandbox, name one with this flag or `BRIG_NETWORK`. See [policies.md](policies.md) |
+| `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox. Refused together with a different `--network` value |
+| `--publish PORT` | `3000`, `8080:80`, `127.0.0.1:8080:80`, `5353:53/udp` | nothing published | open a guest port on the host. Repeatable. Binds to `127.0.0.1` unless the address says otherwise. There is no `-p`, which stays the agent's flag. See [`brig network`](#brig-network) |
 
-Flag beats an environment setting beats the profile's own field, in that
-order, for every value above with an `env` counterpart in
-[Environment variables](#environment-variables) below.
+For every value above that also has an
+[environment variable](#environment-variables), the flag wins over the
+variable, and the variable wins over the profile's field.
 
-`--mem` and `--cpus` take a positive whole number. Anything else, including
-`0`, is refused by name rather than silently rounded or ignored.
+`--mem` and `--cpus` take a positive whole number. Brig refuses anything
+else, including `0`.
 
 ## `--json` output
 
-The set of verbs that accept `--json` is larger than `brig --help`'s own
-summary line suggests. It also splits by where the flag stands, not only by
-verb.
+Which verbs accept `--json` depends on where the flag stands.
 
 | Verb | Where `--json` is accepted | Shape |
 | --- | --- | --- |
 | `ls` | global, or local after `ls` | envelope |
-| `info`, `env` | global, or local on the run line | envelope |
+| `info` | global, or local on the run line | envelope |
 | `plan` | global, or local on the run line | envelope, `kind: Plan` |
 | `doctor` | global, or local after `doctor` | envelope |
 | `version` | global, or local after `version` | envelope |
@@ -850,20 +839,17 @@ info, plan, agent ls, secret ls, doctor, version and the network verbs (env
 takes it too, but env is deprecated; prefer info), and for run and sh
 ```
 
-The flag has to follow `agent show`, not precede `agent`. Every verb not
-listed in the table above refuses `--json` in both positions, naming the
-verbs that do accept it. `env` is the deprecated spelling of `info` and
-takes the flag on the same terms. Prefer `info`.
+Put the flag after `agent show` instead. Every verb not listed in the table
+above refuses `--json` in both positions.
 
 **Envelope shape.** A list or report verb prints
 `{"apiVersion": "brig.sh/v1alpha1", "kind": "...", "data": ...}`. Within one
-`apiVersion`, a field is only ever added, never renamed or removed, so a
-script written against it keeps parsing as Brig grows. No field carries a
-credential value, names only.
+`apiVersion`, fields are added but never renamed or removed, so a script
+written against it keeps parsing. No field carries a credential value.
 
 **Bare shape.** `agent show`, `agent export`, `agent new` and `policy show`
-print the document itself, with no envelope. Each renders a file meant to
-be saved and read back by Brig:
+print the document itself, with no envelope. Each is a file that Brig can
+read back:
 
 ```bash
 brig agent show claude-code --json
@@ -894,13 +880,13 @@ publishes, after whatever the command changed, as `kind: Ports`:
 }
 ```
 
-`live` is whether the gateway is forwarding that port this moment. A port
-recorded but not live belongs to a sandbox that is not running, and it is
-published again when that sandbox starts.
+`live` says whether the gateway is forwarding that port now. A recorded port
+that is not live belongs to a sandbox that is not running, and Brig opens it
+again when the sandbox starts.
 
-It is `null`, and `STATE` reads `unknown`, on a runtime brig cannot ask. The
-Linux runtime answers nothing here, so a port it forwards reports neither open
-nor pending until it does.
+`live` is `null`, and the `STATE` column of `brig network ls` reads
+`unknown`, when Brig cannot ask the runtime. Brig cannot ask the Linux
+runtime, so a port there always reports `unknown`.
 
 **`run` and `sh` under `--json`.** The agent runs as a child of Brig. After
 it exits, Brig prints one compact JSON line with the outcome, the last line
@@ -910,12 +896,13 @@ of stdout:
 {"apiVersion":"brig.sh/v1alpha1","kind":"Run","data":{"ref":"claude","sandbox":"brig-claude-code","stage":"agent","exit":0}}
 ```
 
-`data.stage` is one of four values. `"brig"` means a refusal before the
-agent ran. `"agent"` means an agent that ran. `"gui"` means a windowed
-agent. `"detached"` applies under `-d`. `data.exit` is the agent's own exit
-status when `stage` is `"agent"`, and one of Brig's own exit codes
-otherwise. See [Exit codes](#exit-codes) for what those carve-outs mean for
-a script.
+`data.stage` is one of four values. `"brig"` means Brig refused before the
+agent ran, and `data.error` carries the reason. `"agent"` means the agent
+ran. `"gui"` means a windowed agent. `"detached"` applies under `-d`.
+`data.exit` is the agent's own exit status when `stage` is `"agent"`, and
+one of Brig's own exit codes otherwise. `data.signal` names the signal when
+the agent was killed by one. See [Exit codes](#exit-codes) for how a script
+should read them.
 
 ## Exit codes
 
@@ -930,34 +917,30 @@ a script.
 | `6` | a required secret was not resolved, or the secret store did not open |
 | `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The one such property today is an egress policy: on hull's `vz` or `qemu`, on nerdctl or docker, on `hvi` with a gateway probe that fails or finds no `--egress-default`, or on a hull backend Brig holds no answer for. `brig run` and `brig sh` refuse it with `7`, and so do the retired spellings that stand for them. That holds whether a flag, `BRIG_NETWORK` or the profile's `network:` chose the posture. `brig network publish` refuses with `7` on `vz`, `qemu`, nerdctl, docker and a backend Brig holds no answer for. It runs no gateway probe, so on `hvi` it records the port, and a failed probe refuses the next run with `7`. The refusal names the property, the runtime and the backend. Brig v0.3.0 and earlier exit `1` for all of these but the failed probe. On a failed probe, those releases started the gateway with the rules anyway: the run booted with the rules on the gateway, or exited `1` when the gateway did not come up. With no policy bound, the refusal of an isolated network on `vz` or `qemu` is a different one, and it exits `1`. A refusal Brig reaches first keeps its own code: a graphical profile on a backend with no window exits `1`, under a policy or not |
 
-This table is asserted end to end by `script/smoke.sh` and
-`cmd/brig/exit_test.go`, and is the one [docs/stability.md](stability.md)
-calls stable enough to script against.
+`script/smoke.sh` and `cmd/brig/exit_test.go` assert this table, and
+[stability.md](stability.md) lists it as stable enough to script against.
 
 **6 is for required secrets only.** A declared secret marked
-`required: false` produces a warning, not a failure. `claude-code`'s two
+`required: false` produces a warning and no failure. `claude-code`'s two
 secrets are both optional, so `brig info claude` with neither one set exits
 `0`.
 
-**Two carve-outs under `run --json` and `sh --json`.** The agent runs as a
-child of Brig. Its own exit status becomes Brig's, read ahead of every
-class above. An exit `3` from `brig --json run claude` can be the agent's
-own `3`, not Brig's "no such agent".
+**Under `run --json` and `sh --json`, the agent's exit status becomes
+Brig's.** An exit `3` from `brig --json run claude` can be the agent's own
+`3` or Brig's "no such agent". Branch on the `Run` object's `data.stage`
+field: `"agent"` means the code is the agent's, and anything else means it
+is one of the classes in the table.
 
-Branch on the `Run` object's `data.stage` field, not on the number alone.
-`"agent"` means the code is the agent's. Anything else means it is one of
-the classes in the table.
+When Brig refuses under `--json`, it prints the `Run` object on stdout, where
+every success case goes, and the usual error line on stderr.
 
-Separately, a Brig refusal under `--json` is written to stdout as the `Run`
-object, the same place as every success case, never to stderr.
-
-**A handful of usage mistakes exit `1` instead of `2`.** These currently
-return a plain error, not the usage type, so they exit `1`:
+**Some usage mistakes exit `1` instead of `2`:**
 
 - an unknown top-level command
 - a run-line verb given no ref
 - a missing subcommand on `agent`, `policy` or `secret`
 - `secret import` or `policy check` given no agent
+- a `--mem` or `--cpus` value that is not a positive whole number
 
 ```
 brig nosuchverb
@@ -970,13 +953,10 @@ brig: run needs a profile, for example `brig run claude`. `brig agent ls`
 lists them
 ```
 
-Both exit `1`, while the same class of mistake on `brig ls extra` or
-`brig completion bogus` exits `2`. To tell a usage mistake apart from a
-general failure here, check for a nonzero status, not for exactly `2`.
+Both exit `1`, while `brig ls extra` and `brig completion bogus` exit `2`.
+A script that looks for a usage mistake should test for a nonzero status.
 
-A bare `brig telemetry` is not one of these. `telemetry` defaults to
-`status` with no subcommand and exits `0`. `agent`, `policy` and `secret`
-are the three that refuse a bare invocation.
+A bare `brig telemetry` is not a usage mistake. It runs `status`.
 
 ## Environment variables
 
@@ -986,18 +966,17 @@ shell can carry a different value per agent. The agent name is upper-cased
 with dashes turned to underscores, so `claude-code` reads
 `BRIG_CLAUDE_CODE_MEM` ahead of `BRIG_MEM`.
 
-A handful of settings have no per-agent form. Brig reads each once for the
-invocation, not per run: the directories, the runtime choice, the
-boot-asset and gateway paths, and `BRIG_ENV_ARGV`. Each is marked "global
-only" below.
+Some settings have no per-agent form: the directories, the runtime choice,
+the boot-asset and gateway paths, and `BRIG_ENV_ARGV`. Each is marked
+"global only" below.
 
 ### Sandbox and profile locations
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set |
+| `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set. A sandbox that a release before 0.3.0 started on `~/brig/<agent>` keeps that home, and Brig does not delete it |
 | `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A named session appends `-<slug>` |
-| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig` | where your own agent files live. `BRIG_TEMPLATE_DIR` still works until v0.4.0 |
+| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. `BRIG_TEMPLATE_DIR` still works until v0.4.0 |
 | `BRIG_POLICY_DIR` (global only) | `$XDG_CONFIG_HOME/brig/policies` | where policy files live |
 | `BRIG_STATE_DIR` (global only) | `~/.brig` | where Brig keeps what has to outlive one command, including the project each sandbox last ran with |
 
@@ -1007,21 +986,20 @@ only" below.
 | --- | --- | --- |
 | `BRIG_IMAGE` | the agent's own | guest image to boot |
 | `BRIG_PULL` | `missing` | `missing` pulls only when the image is not already on the host. `always` re-pulls every run. `never` refuses to boot an image that is not already there |
-| `BRIG_MEM` | the agent's own | guest memory, MB |
-| `BRIG_CPUS` | the agent's own | guest vCPUs |
-| `BRIG_READY_TIMEOUT` | `30` | seconds to wait for the in-guest agent once the runtime reports the sandbox running. The two are not the same moment |
-| `BRIG_NETWORK` | recorded or runtime-inspected posture, then profile, then `isolated` (`shared` fallback on `vz` or `qemu`) | `shared`, `isolated` or `offline`. Beats the retained posture of an existing sandbox. The fallback applies only when no posture is named, and `brig info` reports it. An unrecognized value refuses the run. See [policies.md](policies.md) |
+| `BRIG_MEM` | the agent's own | guest memory, MB. A value that is not a positive whole number is ignored |
+| `BRIG_CPUS` | the agent's own | guest vCPUs. A value that is not a positive whole number is ignored |
+| `BRIG_READY_TIMEOUT` | `30` | seconds to wait for the in-guest agent once the runtime reports the sandbox running |
+| `BRIG_NETWORK` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu`) | `shared`, `isolated` or `offline`. Wins over the posture an existing sandbox was started with. The `shared` fallback applies only when nothing names a posture, and `brig info` reports it. An unrecognized value refuses the run. See [policies.md](policies.md) |
 | `BRIG_SKILLS` | `0` | `1` copies your own `~/.claude` skills and plugins into the guest home. Same as `--skills` |
 | `BRIG_FORWARD_ENV` | (unset) | a space-separated list of environment variable names to carry into the guest, read live on every run |
 | `BRIG_TITLE` | the agent's own | window title for a graphical agent |
 
-`BRIG_FORWARD_ENV` replaces only a profile's own `env:` bindings that
-declare the singular `ref: env.<name>` form. It leaves a binding that names
-its source through a `refs:` chain untouched, even one whose chain includes
-an `env.` entry. A name the profile binds from somewhere else, `secrets.` or
-a literal `value:`, is dropped from the override rather than layered onto
-it. Brig warns about each one it drops. The profile's own binding wins,
-because the profile is what you wrote.
+`BRIG_FORWARD_ENV` replaces only the profile's `env:` bindings that use the
+singular `ref: env.<name>` form. A binding that names its source through a
+`refs:` chain stays, even when the chain includes an `env.` entry. If the
+list names a variable the profile already binds from somewhere else, such as
+`secrets.` or a literal `value:`, the profile's binding wins. Brig ignores
+that name and warns about it.
 
 ### Credentials and Git
 
@@ -1035,7 +1013,11 @@ because the profile is what you wrote.
 | `BRIG_GIT_IDENTITY` | `1` | `0` stops Brig from forwarding the host commit identity resolved from the invoking directory |
 | `BRIG_GIT_NAME`, `BRIG_GIT_EMAIL` | the host's `git config` | override that identity |
 | `BRIG_TRUST_WORKSPACE` | `1` | pre-answers the agent's own "do you trust this folder" question for the directory a run starts in |
-| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. Never applies to a value Brig resolved itself, such as a stored secret; those stay off the command line regardless |
+| `BRIG_ENV_ARGV` (global only) | (unset) | exactly `1` puts a forwarded value on the runtime's own command line, where `ps` can read it. It never applies to a value Brig resolved itself, such as a stored secret |
+
+`BRIG_SKILLS`, `BRIG_GIT_CONFIG`, `BRIG_TRUST_WORKSPACE`, `BRIG_ALLOW_REFS`
+and `BRIG_ALLOW_DENIED` accept `1`, `true`, `yes` or `on`, and `0`, `false`,
+`no` or `off`. Any other value refuses the run.
 
 [authentication.md](authentication.md) and [secrets.md](secrets.md) cover
 what each of these does with the credential once it is in the guest.
@@ -1044,7 +1026,7 @@ what each of these does with the credential once it is in the guest.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BRIG_VERIFY` | `warn` | `warn`, `require` or `off`. `strict` is an alias for `require`, and `none` and `0` both alias `off`. An unrecognized value refuses the run rather than falling back to `warn` |
+| `BRIG_VERIFY` | `warn` | `warn`, `require` or `off`. `strict` is an alias for `require`, and `none` and `0` both alias `off`. An unrecognized value refuses the run |
 | `BRIG_VERIFY_REGISTRY` | `ghcr.io/brig-sh/` | image prefix treated as Brig's own, so a signature is expected |
 | `BRIG_VERIFY_IDENTITY` | Brig's own community-images build workflow | certificate identity regexp cosign must match |
 | `BRIG_VERIFY_ISSUER` | GitHub Actions OIDC | certificate OIDC issuer |
@@ -1079,14 +1061,14 @@ See [runtimes.md](runtimes.md).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BRIG_BOOT_ASSETS` (global only) | on macOS, wherever `hull assets dir` says (`~/.hull/assets` if hull cannot answer); `$XDG_DATA_HOME/brig/assets` on Linux | directory holding the host kernel and initrd a `genericBoot` agent needs |
+| `BRIG_BOOT_ASSETS` (global only) | on macOS, wherever `hull assets dir` says (`~/.hull/assets` if hull cannot answer); on Linux, `$XDG_DATA_HOME/brig/assets` (`~/.local/share/brig/assets` when that is unset) | directory holding the host kernel and initrd a `genericBoot` agent needs |
 | `BRIG_BOOT_ASSETS_REF` (global only) | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | the bundle Brig fetches when the boot assets are missing |
-| `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway; `sandbox-*.sock` names are reserved for isolated gateways |
+| `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway. Names matching `sandbox-*.sock` are reserved for isolated gateways and refused here |
 | `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where gateway sockets, logs and network records live, shared and per-sandbox alike |
 
 ## See also
 
-See [migration.md](migration.md) for every retired verb, subverb, flag,
-position and profile key, and what replaces each one. See
-[stability.md](stability.md) for which parts of this page you can write a
-script against today.
+[migration.md](migration.md) lists every retired verb, subverb, flag,
+position and profile key, and what replaces each one.
+[stability.md](stability.md) says which parts of this page you can write a
+script against.

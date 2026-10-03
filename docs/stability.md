@@ -39,17 +39,16 @@ Brig's own and can change or go without notice.
 
 **The profile schema.** The fields that the `brig agent export` header
 documents. Brig refuses a profile file with a field it does not know, so a
-field that goes away is an error you see, not a setting Brig ignores.
+field that goes away becomes an error you see.
 
 **The `--json` envelope.** Within one `apiVersion`, the JSON only gains
-fields. It never renames or drops one, and no field carries a credential value.
-A script written against it keeps parsing, and a machine-readable dump stays a
-place a secret cannot leak. `--json` works on the read verbs, and on `run` and
-`sh` it reports the agent's own exit status.
+fields. It never renames or drops one, so a script written against it keeps
+parsing. No field carries a credential value. `--json` works on the read
+verbs, and on `run` and `sh` it reports the agent's own exit status.
 
-**Exit codes.** The numbers a script branches on are pinned end to end by
-`script/smoke.sh`. See [docs/cli.md](cli.md#exit-codes) for the table. brigd
-reports the same codes for the same causes.
+**Exit codes.** `script/smoke.sh` asserts the numbers a script branches on.
+See [docs/cli.md](cli.md#exit-codes) for the table. brigd reports the same
+codes for the same causes.
 
 **The brigd protocol.** Every brigd response carries the protocol version,
 `v`, which is 1 today. Within one version, a field can be added, but none is
@@ -68,7 +67,7 @@ out in that store is Brig's own, and
 
 ## Not stable
 
-Treat the following as subject to change without a deprecation cycle:
+These can change without a deprecation cycle:
 
 - The layout of `~/.brig`, Brig's state directory, and its session index.
   This includes the default guest home under `~/.brig/homes`, which Brig
@@ -88,7 +87,8 @@ A spelling is removed only in a minor release, and at least one release after
 its first notice. `brig run` is never removed.
 
 The retired spellings that still work today are removed in v0.4.0. The first
-date was v0.3.0, which removed only `brig shell`. Two kinds of exception:
+date was v0.3.0, which removed only `brig shell` and the `hostCredential:`
+profile key. Two exceptions:
 
 - `brig exec` names no release. It stays until `brig sh` can pipe a command's
   output ([#335](https://github.com/brig-sh/brig/issues/335)). Its notice says
@@ -114,6 +114,6 @@ Which computers Brig runs on is in
 ## Reporting a break
 
 If a version bump breaks a script that used only the surfaces above, that is a
-bug worth filing. Open an issue with the command, the version from
-`brig version`, and the output. For anything security-related, follow
+bug. Open an issue with the command, the version from `brig version`, and
+the output. For anything security-related, follow
 [SECURITY.md](../SECURITY.md) instead of opening a public issue.
