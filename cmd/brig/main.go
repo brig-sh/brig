@@ -257,6 +257,17 @@ func dispatch(args []string) error {
 		return nil
 	}
 	verb, rest := verbLine[0], verbLine[1:]
+	// Asking a verb for help is a question, not a mistake, so it is answered
+	// before the verb runs -- from the same text `brig help <verb>` reads, so
+	// the two spellings cannot drift. A help flag is read wherever brig's own
+	// flags can stand before the ref: `brig run -d --help` asks the same
+	// question as `brig run --help`. Once the ref is named, `--help` is the
+	// agent's word and is forwarded, which is what keeps
+	// `brig run <ref> --help` working.
+	if text, ok := verbUsages[verb]; ok && helpRequested(verb, rest) {
+		fmt.Print(text)
+		return nil
+	}
 	// rm's --dry-run, read off the line in the switch below and acted on where
 	// the run line reaches rm, after the ref has been resolved to a sandbox.
 	rmDryRun := false
@@ -310,6 +321,16 @@ func dispatch(args []string) error {
 
 	switch verb {
 	case "-h", "--help", "help":
+		// `brig help <verb>` names a verb and answers with that verb's usage,
+		// the text `brig <verb> --help` prints. A bare `brig help`, or a word
+		// that is not a verb, is the global text: the command list and the
+		// flags the verbs share.
+		if len(rest) > 0 {
+			if text, ok := verbUsages[rest[0]]; ok {
+				fmt.Print(text)
+				return nil
+			}
+		}
 		fmt.Print(usage)
 		return nil
 	case "version", "--version":
@@ -1107,6 +1128,41 @@ func verbSpelling(arg string) bool {
 		return true
 	}
 	return false
+}
+
+// helpRequested reports whether rest asks the verb for its usage: --help or -h
+// stands among brig's own flags before the ref. It follows split's boundary --
+// the first bare word names the ref and ends brig's flags, and a flag that
+// takes a value consumes the argument after it -- so a --help that is a flag's
+// value (`--image --help`) or stands after the ref (`run claude --help`) is
+// not read here, and is left to whatever owns it.
+func helpRequested(verb string, rest []string) bool {
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		if a == "--" || !strings.HasPrefix(a, "-") {
+			return false
+		}
+		if a == "--help" || a == "-h" {
+			return true
+		}
+		name, _, inline := strings.Cut(a, "=")
+		if !inline && helpFlagTakesValue(verb, name) {
+			i++
+		}
+	}
+	return false
+}
+
+// helpFlagTakesValue reports whether one of brig's own flags consumes the
+// argument after it, for helpRequested's scan. It reads the run line's table,
+// plus --tail, because `brig logs` parses its own line rather than going
+// through split.
+func helpFlagTakesValue(verb, name string) bool {
+	if verb == "logs" {
+		return name == "--tail"
+	}
+	mine, takesValue := ours(name, posRun)
+	return mine && takesValue
 }
 
 // globals are brig's flags in the global position: how much this invocation
