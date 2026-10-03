@@ -169,8 +169,8 @@ isolated` while the policy is attached. Brig restarts the sandbox to
 record that posture. See
 [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 
-An unrecognized value refuses the run rather than picking a posture nobody
-asked for, and names where the value came from:
+Brig refuses a run with an unrecognized value, and names where the value
+came from:
 
 ```console
 $ BRIG_NETWORK=bogus brig info claude-code
@@ -191,29 +191,26 @@ brig policy edit locked-down     # change the rules
 
 See
 [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not)
-for what a bound policy actually gets you.
+for what a bound policy enforces.
 
 ## Where policies live
 
 One file per policy in `$XDG_CONFIG_HOME/brig/policies`, default
 `~/.config/brig/policies`, flat: `~/.config/brig/policies/locked-down.yaml`.
-`BRIG_POLICY_DIR` overrides the location outright, taken as given. Unlike
-`$XDG_CONFIG_HOME`, an explicit override is not second-guessed for
-absoluteness. This follows the
-[XDG Base Directory Specification, version 0.8](https://specifications.freedesktop.org/basedir/latest/):
-an empty or relative `$XDG_CONFIG_HOME` counts as unset.
+`BRIG_POLICY_DIR` overrides the location and is used as given, relative or
+not. An empty or relative `$XDG_CONFIG_HOME` counts as unset, as the
+[XDG Base Directory Specification, version 0.8](https://specifications.freedesktop.org/basedir/latest/)
+requires.
 
-The directory starts empty, and Brig never writes there unless you ask it
-to. `brig policy create` and `brig policy edit` are the only commands that
-write to it.
+The directory starts empty. Brig writes there only when you run `brig
+policy create`, `edit`, `rm`, `attach` or `detach`.
 
-`name:` inside the file wins over the filename, the same rule a profile
-already follows. A file need not be named after the policy it declares,
-though `create` always names them the same way. A directory can hold any
-number of policies. One file that fails to parse does not stop the others
-loading: `brig policy ls` reports it on stderr, and lists everything that
-did load. Two files declaring the same name is a mistake with no winner
-worth having, and is reported the same way.
+`name:` inside the file wins over the filename, as it does for a profile. A
+file need not be named after the policy it declares, though `create` always
+names them the same. A directory can hold any number of policies. One file
+that fails to parse does not stop the others loading: `brig policy ls`
+reports it on stderr, and lists everything that did load. Two files that
+declare the same name are reported the same way.
 
 ## The document
 
@@ -232,7 +229,7 @@ egress:
 
 | field | required | what it is |
 | --- | --- | --- |
-| `apiVersion` | yes | Pins the document shape. `brig.sh/v1alpha1` is the only value this build knows. Anything else is refused rather than guessed at |
+| `apiVersion` | yes | Pins the document shape. `brig.sh/v1alpha1` is the only value this build knows. Anything else is refused |
 | `name` | yes | The policy's identifier. Wins over the filename, and follows the same character rule as a profile name. See [Naming a policy](#naming-a-policy) |
 | `desc` | no | One line, shown by `brig policy ls` |
 | `egress.default` | yes | `allow` or `deny`, applied to any traffic neither list below names |
@@ -242,37 +239,32 @@ egress:
 Each entry in `allow` or `deny` names exactly one of `host:` or `cidr:`. Both,
 or neither, is refused. `host:` is a domain, or a glob such as
 `"*.githubusercontent.com"`. `cidr:` is a network range such as
-`10.0.0.0/8`, checked with Go's own `net.ParseCIDR`. A typo like
-`10.0.0/8` (an octet short) is refused rather than accepted and silently
-doing nothing at the gateway that enforces it.
+`10.0.0.0/8`, checked with Go's `net.ParseCIDR`. Brig refuses a typo like
+`10.0.0/8` (an octet short), so it cannot reach the gateway as a rule that
+matches nothing.
 
-`host:` is not held to a pinned glob grammar here. Which wildcard forms an
-enforcer honors is that enforcer's business, and this document format is
-deliberately independent of it. A host is refused only for what is
-unambiguously wrong however it ends up read: whitespace or a control
-character. The gateway that enforces it today matches the glob against the
-name the guest asks its resolver for.
+Brig does not hold `host:` to a glob grammar. The enforcer decides which
+wildcard forms it honors. Brig refuses a host only for whitespace or a
+control character. The gateway that enforces it today matches the glob
+against the name the guest asks its resolver for.
 
-Parsing is strict throughout. A field this format does not recognize, such
-as `engine:`, `mode:`, or a plain typo like `dsc:`, fails to parse rather
-than being silently dropped. The format carries no field naming how a rule
-gets applied. That is a deliberate limit, and it stays that way as this
-feature grows.
+Parsing is strict. A field the format does not recognize, such as
+`engine:`, `mode:`, or a typo like `dsc:`, fails to parse. The format has no
+field that names how a rule is applied.
 
 ## Naming a policy
 
-The same character rule a profile name already follows: lowercase letters,
-digits, dot, dash and underscore, starting with a letter or digit. It is
-checked before a path is built from it, so a bad name never gets as far as
-touching disk.
+A policy name follows the same character rule as a profile name: lowercase
+letters, digits, dot, dash and underscore, starting with a letter or digit.
+Brig checks the name before it builds a path from it, so a bad name never
+reaches disk.
 
-One rule is particular to policies. A bare word like `no`, `true` or `123`
-is inside that character set. But YAML reads an *unquoted* one of those as
-a boolean or a number rather than as the string you typed. A policy named
-`no` is actually named `false`, unreachable by the name you gave it.
-`brig policy create` checks a name by writing it the way the starter
-template writes it, then reading the result back. It refuses one that does
-not come back as itself:
+One rule applies only to policies. A bare word like `no`, `true` or `123`
+is inside that character set, but YAML reads it unquoted as a boolean or a
+number. A policy named `no` would be named `false`, and you could not reach
+it by the name you gave it. `brig policy create` writes the name the way
+the starter template writes it, reads the result back, and refuses a name
+that does not come back as itself:
 
 ```console
 $ brig policy create no
@@ -284,7 +276,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | verb | what it does |
 | --- | --- |
 | `brig policy ls` | every policy that parses, by name and description, and, for one bound to anything, what binds it |
-| `brig policy create <name>` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
+| `brig policy create <name> [--force]` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
 | `brig policy edit <name> [--force]` | open an existing one, and only replace it if the save still parses and validates. Refuses a rename that orphans anything bound to it, inline or attached, unless `--force` |
 | `brig policy show <name> [--json]` | print the parsed document |
 | `brig policy rm <name> [--force]` | delete it. Refuses one that is bound to anything, inline or attached, unless `--force` |
@@ -307,15 +299,18 @@ brig policy rm locked-down --force
 
 `create` refuses to overwrite a file that is already at the target path,
 unless you pass `--force`. It refuses a name already taken by some *other*
-file regardless of `--force`. Forcing leaves two files declaring the same
-name, which is the thing this check exists to prevent.
+file regardless of `--force`, because forcing would leave two files
+declaring the same name.
 
 `attach` and `detach` write to `attachments.yaml` in the same directory, not
 to the policy or the profile. `attach` refuses, and writes nothing, in
-three cases. Either name does not exist. The profile is `kind: shell` or
-`kind: gui`, which has no agent to hook an egress rule into. Or the profile
-already declares the policy inline in its own `policy:` list. Attaching it
-again adds an entry `detach` can never remove:
+three cases:
+
+- Either name does not exist.
+- The profile is `kind: shell` or `kind: gui`, which has no agent to hook an
+  egress rule into.
+- The profile already declares the policy inline in its own `policy:` list.
+  Attaching it again would add an entry `detach` cannot remove.
 
 ```console
 $ brig policy attach locked-down claude-code
@@ -328,12 +323,10 @@ $ brig policy attach locked-down ubuntu
 brig: cannot attach locked-down to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
 
-Both `attach` and `check` print that last line. "attached" and a
+Both `attach` and `check` print the `note:` line, because "attached" and a
 `check` that prints a policy name can both read as a rule already in force.
 See [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
-It goes to stderr, where this CLI puts every advisory, so stdout stays the
-command's answer. Both commands print the same constant from
-`internal/policy`, so the two cannot drift into saying different things.
+The note goes to stderr, so stdout stays the command's answer.
 
 `detach` reverses `attach`:
 
@@ -342,11 +335,9 @@ $ brig policy detach locked-down claude-code -n refactor
 detached locked-down from claude-code -n refactor
 ```
 
-`detach` refuses a policy the profile declares inline, the same way: it was
-never `attach`'s to add, so it is not `detach`'s to remove. Edit the
-profile's `policy:` list directly instead. A `-n` detach is unaffected.
-Inline binds every run, `-n` narrows to one session, and the two do not
-name the same binding.
+`detach` refuses a policy the profile declares inline. Edit the profile's
+`policy:` list instead. A `-n` detach is unaffected: inline binds every
+run, `-n` binds one session, and the two are separate bindings.
 
 `check` resolves the same union `attach`/`detach` write to (inline,
 profile-level, session-level) for one profile, or, with `-n`, one of its
@@ -362,10 +353,10 @@ no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
 ```
 
-"Whether Brig can enforce it" means exactly two structural checks. The
-first is whether the profile is `kind: shell` or `kind: gui`. Neither of
-those can ever enforce a policy. The second is whether every bound name
-still resolves to a policy that loaded.
+"Whether Brig can enforce it" means two checks. The first is whether the
+profile is `kind: shell` or `kind: gui`, which can never enforce a policy.
+The second is whether every bound name still resolves to a policy that
+loaded.
 
 `check` does not resolve the current runtime, the current hypervisor, or
 the runtime's version. It cannot tell you whether the host you are on
@@ -394,14 +385,14 @@ locked-down     only Anthropic's API and one internal range
                 bound to: claude-code, claude-code -n refactor
 ```
 
-"not loaded" rather than "no such policy", because there are two ways to
-get there, and Brig cannot always tell them apart. Either nothing declares
-that name, or the file that declares it did not parse. In that second case
-the file and its parse error are named separately on stderr.
+`check` says "not loaded" because Brig cannot always tell two cases apart:
+nothing declares that name, or the file that declares it did not parse. In
+the second case the file and its parse error are named separately on
+stderr.
 
 `rm` refuses a policy that is bound to anything (an inline `policy:` entry,
 a profile-level attach, or a session-level one) unless you pass `--force`.
-The file is gone either way, but whatever named it is still pointing at
+With `--force` the file is removed, and whatever named it then points at
 nothing:
 
 ```console
@@ -411,15 +402,13 @@ $ brig policy rm locked-down --force
 removed /home/you/.config/brig/policies/locked-down.yaml
 ```
 
-The instruction fits what is actually bound. It says "detach it" for an
-attach, "edit the profile's `policy:` list" for an inline entry, or both
-when a policy is bound both ways. `detach` explicitly refuses to touch an
-inline entry, so telling you to detach one is a dead end.
+The message names the fix for what is bound: "Detach it" for an attach,
+"Edit the profile's policy: list" for an inline entry, or both when a
+policy is bound both ways.
 
-`edit` never touches the real file until the new content is known to be
-good. It opens a scratch copy, and only replaces the original if that copy
+`edit` opens a scratch copy, and replaces the original only if that copy
 still parses and validates. The replace goes through a temp file and a
-rename in the same directory. A crash or a full disk mid-write cannot
+rename in the same directory, so a crash or a full disk mid-write cannot
 leave the real file half written:
 
 ```console
@@ -428,9 +417,9 @@ brig: not saved, /home/you/.config/brig/policies/locked-down.yaml is unchanged: 
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
-Renaming it (changing `name:` to something else) is refused the same way if
-the old name is bound to anything. The binding then points at a name
-nothing declares:
+Renaming it (changing `name:`) is refused the same way if the old name is
+bound to anything, because the binding would then point at a name nothing
+declares:
 
 ```console
 $ brig policy edit locked-down
@@ -438,8 +427,7 @@ brig: not saved, /home/you/.config/brig/policies/locked-down.yaml is unchanged: 
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
-A save that keeps the same name never triggers this check: the file a
-binding points at is still right there either way.
+A save that keeps the same name never triggers this check.
 
 ## Binding one session, not every run
 
@@ -464,7 +452,7 @@ reaches the same policy. `brig run` sanitizes `Refactor` to the slug
 under that slug too, so `brig policy attach locked-down claude-code -n
 refactor` covers the session whichever way it was named on the way in.
 
-One identity, in other words. The slug names the sandbox and the
+The session has one identity. The slug names the sandbox and the
 workspace, keys the session index, and selects the policy. Whether you
 typed `claude@refactor` or `--name Refactor`, you are in session
 `refactor` and you get `refactor`'s policy.
@@ -485,12 +473,11 @@ no-net
 note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
-One gap is left, and it is not about spelling. `attach -n` refuses a name
-that any reserved profile ends in, while a session is only refused one
-reserved for the agent it belongs to. So `claude@desktop` opens an
-ordinary session, but `brig policy attach locked-down claude-code -n
-desktop` is refused for colliding with `claude-desktop`. That session
-cannot be given a policy of its own.
+One gap remains. `attach -n` refuses a name that any reserved profile ends in,
+while a session is only refused one reserved for the agent it belongs to. So
+`claude@desktop` opens an ordinary session, but
+`brig policy attach locked-down claude-code -n desktop` is refused for colliding
+with `claude-desktop`. That session cannot be given a policy of its own.
 
 ## A worked example
 
@@ -539,9 +526,8 @@ $ brig policy show locked-down --json
 }
 ```
 
-`show` prints the parsed document back out, not the file verbatim, which is
-why the field order differs from what you typed. YAML's own marshalling
-sorts keys, the same way `brig agent show --json` does.
+`show` prints the parsed document, not the file as you typed it, so the
+field order differs: the YAML output sorts keys.
 
 Edit it, and remove it:
 
@@ -581,27 +567,22 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 
 ## The default is no policy at all
 
-Read from the source rather than assumed: the default egress stance is
-allow everything, with no filtering applied at all. It is not a deny-all
-default, and it is not an empty allow list either. A sandbox nobody
-attached a policy to has unrestricted egress, exactly as it did before any
-of this existed. No profile Brig ships binds a policy, and `brig run
-<agent>` on a fresh install filters nothing. No gateway is given a rule
-until a policy is attached to that profile or that session by hand. The
-default `isolated` posture gives each new sandbox a network of its own;
-it does not filter that sandbox's outbound traffic.
+The default egress stance is allow everything, with no filtering applied at all.
+It is not a deny-all default, and it is not an empty allow list. A sandbox
+nobody attached a policy to has unrestricted egress. No profile Brig ships binds
+a policy, and `brig run <agent>` on a fresh install filters nothing. No gateway
+is given a rule until a policy is attached to that profile or that session by
+hand. The default `isolated` posture gives each new sandbox a network of its
+own; it does not filter that sandbox's outbound traffic.
 
-That is deliberate, and it is a test rather than an intention
-(`TestNoShippedProfileBindsAPolicy`).
-An agent that cannot reach its own API is not a safer agent. It is a
-broken one, and a default that broke every sandbox on upgrade costs
-everyone, to benefit the few runs that want a rule.
+A test holds that default (`TestNoShippedProfileBindsAPolicy`). An agent
+that cannot reach its own API does not work, and a deny default would break
+every sandbox on upgrade.
 
-Note the shape of the two defaults, which are easy to confuse. Attaching no
-policy means no filtering. Attaching a policy whose `default:` is `deny`
-means the opposite: everything is refused except what its `allow` list
-names. An empty `allow` list under it is a sandbox with no way out. The
-first is what you get. The second is what you ask for.
+Two defaults are easy to confuse. Attaching no policy means no filtering.
+Attaching a policy whose `default:` is `deny` means everything is refused
+except what its `allow` list names. An empty `allow` list under it is a
+sandbox with no way out.
 
 ## Where a policy is enforced, and where it is not
 
@@ -642,14 +623,13 @@ filtered run outright, naming the backend that does enforce. Refusing it
 beats booting a sandbox that reports a policy and filters nothing. There is
 one exception: a policy-carrying run whose posture is `offline` is not
 refused on any backend. A sandbox with no route out satisfies every rule
-set, regardless of who is watching.
+set.
 
-That refusal is checked before anything starts, and again on the path that
-finds the sandbox already running. A policy cannot be waved through by the
-accident of the sandbox being up already. Every runtime Brig ships refuses
-a policy it cannot enforce. This is a guarantee about the runtimes Brig
-ships today, not a property of the interface. A runtime that never answers
-the question is never asked, and stays unrefused.
+That refusal is checked before anything starts, and again on the path that finds
+the sandbox already running, so a sandbox that is already up does not skip the
+check. Every runtime Brig ships refuses a policy it cannot enforce. This is a
+guarantee about the runtimes Brig ships today, not a property of the interface.
+A runtime that never answers the question is never asked, and stays unrefused.
 
 The runtime has to be new enough, too. The gateway's `--egress-*` flags
 arrived after hull 0.1.0-rc21. Brig probes the binary itself, `<bin>
@@ -685,13 +665,12 @@ Binding a policy has these properties:
   rules of its own gets a network of its own: the run is `isolated`,
   whether or not it asked to be. The `NETWORK` row of the execution
   envelope says so. That only ever narrows what was asked for.
-- **Several policies at once are unioned.** A rule in any of them is a
-  rule of the run's. The default is the strictest any of them names: one
-  `deny` makes the run deny-by-default. A host the second policy allows is
-  reachable even when the first policy alone denies it. Attaching is
-  granting. At the gateway that enforces the rules, `deny` still takes
-  priority over `allow` across the whole set. See the precedence note
-  below.
+- **Several policies at once are unioned.** A rule in any of them is a rule of
+  the run's. The default is the strictest any of them names: one `deny` makes
+  the run deny-by-default. A host the second policy allows is reachable even
+  when the first policy alone denies it. At the gateway that enforces the rules,
+  `deny` still takes priority over `allow` across the whole set. See the
+  precedence note below.
 
 ### What this does not do yet
 

@@ -1,7 +1,7 @@
 # The runtimes Brig drives
 
-Brig delegates booting to a runtime, `hull` on macOS or `nerdctl` on
-Linux, instead of booting a sandbox itself. See
+Brig does not boot a sandbox itself. It drives a runtime: `hull` on macOS,
+`nerdctl` on Linux. See
 [non-goals.md](non-goals.md#a-container-runtime-or-a-vmm) for why.
 
 This page calls `hull` and `nerdctl` runtimes. Under hull, `vz`, `hvi`
@@ -18,9 +18,8 @@ branch, because no urunc release reads the boot annotations Brig passes
 
 ## What you are installing
 
-Licences were read from each repository's `LICENSE` file on 2026-08-26,
-and not checked again since. Treat this table as a starting point, not a
-live guarantee.
+Licenses were read from each repository's `LICENSE` file on 2026-08-26,
+and not checked again since.
 
 | component | what it does | where it comes from | licence |
 | --- | --- | --- | --- |
@@ -35,11 +34,10 @@ live guarantee.
 | `oras` | pulls the boot bundle on Linux for a `genericBoot` profile. Optional otherwise | [oras-project/oras](https://github.com/oras-project/oras) | Apache-2.0 |
 | boot bundle | the kernel, `container-initrd` and the in-guest agent that let Brig exec into an image built as an ordinary container. Published as an OCI artifact at `ghcr.io/nofireai/hull-assets`, one tag per guest platform | fetched by hull on macOS. On Linux the runtime bundle carries its own kernel and initrd, and oras fetches this one only on a host without that bundle | unconfirmed: signed with keyless cosign, but the repository that builds it is not public and states no licence |
 
-hull is published by the same organisation as Brig and exists because
-Brig needed it. It is a usable runtime on its own, and its command
-surface is not `brig`-shaped. nerdctl, containerd and urunc predate Brig
-and are used far outside it. Brig is an ordinary caller of all three: it
-passes flags any other caller can pass.
+hull is published by the same organization as Brig and exists because Brig
+needed it. It works as a runtime on its own, with its own command surface.
+nerdctl, containerd and urunc predate Brig and are used far outside it. Brig is
+an ordinary caller of all three: it passes flags any other caller can pass.
 
 ## The three macOS backends
 
@@ -60,18 +58,19 @@ An attached egress policy and `--network isolated` both refuse to run on
 anything else.
 Six of the eight shipped profiles set `hypervisor: hvi` and
 `network: isolated`, so their new sandboxes use `hvi` with a network of
-their own. The two `vz` profiles name `shared`. A custom profile with no
-network choice falls back to `shared` on `vz` or `qemu`, and the `NETWORK` row in
-`brig info` names the reason; an explicit `isolated` is still refused.
+their own. The other two name no backend and run on `vz`: `claude-desktop`
+names `shared`, and `cursor` names no network. A profile with no network
+choice falls back to `shared` on `vz` or `qemu`, and the `NETWORK` row in
+`brig info` names the reason. An explicit `isolated` is still refused.
 
 `qemu` is a third value hull accepts. Which framework it uses, if any, and
 what it needs on the host are questions for hull's own documentation.
 Nothing in Brig's source answers them.
 
-`brig doctor`'s `Hypervisor.framework available` line is not a report on any
-of these three backends. It is the pass string of one `kern.hv_support`
-sysctl read, which asks only whether this Mac can back a microVM at all. It
-never gates the exit status.
+The `Hypervisor.framework available` line in `brig doctor` does not report
+on any of these three backends. It comes from one read of the
+`kern.hv_support` sysctl, which says only whether this Mac can run a microVM
+at all. It never changes the exit status.
 
 ## Where the boundary sits
 
@@ -98,15 +97,16 @@ applies to `cosign` and `oras`.
 
 ## Every command Brig runs
 
-Taken from the source. On macOS, from `internal/runtime/hull.go` unless another
-file is named:
+On macOS, from `internal/runtime/hull.go` unless another file is named:
 
 ```
 hull --version                          # does this hull boot a digest? (0.1.0-rc23 and later)
-hull assets pull                        # HULL_BOOT_ASSETS=<dir> in the environment
+hull assets pull [--force]              # HULL_BOOT_ASSETS=<dir> in the environment
 hull assets dir
 hull ps
 hull ps -a                              # falls back to `hull ps` if -a is refused
+hull inspect <name>                     # does this sandbox exist, stopped or running?
+                                        # and its network: networkinspect.go
 hull run --detach --name <name>
      --hypervisor <vz|hvi|qemu> --net <shared|none>   # none is --network offline
      --pull <missing|always|never> --mem <MB> --cpus <n>
@@ -122,41 +122,42 @@ hull logs [--follow] [--tail <n>] <name>
 hull stop <name>
 hull rm <name>
 hull network-gateway --help             # does this hull enforce a policy? (--egress-default)
-hull network-gateway --socket <path> --qemu-socket <path>.qemu
-     --subnet 198.18.0.0/24 --gateway-ip 198.18.0.1   # internal/runtime/gateway.go
+hull network-gateway --socket <path> --qemu-socket <path>.qemu   # internal/runtime/gateway.go
+     --subnet 198.18.0.0/24 --gateway-ip 198.18.0.1 --api <api socket>
 hull network-gateway --socket <path> --qemu-socket <path>.qemu
      --subnet <a /30 of its own> --gateway-ip <first address on it>
+     --api <api socket>
      [--egress-default <allow|deny>]                  # an isolated sandbox, or one
      [--egress-allow <rule>]... [--egress-deny <rule>]...   # carrying a policy
 ```
 
-`hull --version` is the one version Brig reads, and it reads it for one
-decision. A hull from 0.1.0-rc23 boots a digest reference from its own
-store, so Brig pins the image it verified. An older one boots the tag,
-and Brig says so. An unreadable answer counts as pinning.
+A run reads `hull --version` for one decision. A hull from 0.1.0-rc23
+boots a digest reference from its own store, so Brig pins the image it
+verified. An older one boots the tag, and Brig says so. An unreadable
+answer counts as pinning.
 `network-gateway --help` is read for one word, `--egress-default`,
 before a sandbox carrying a policy is booted. A gateway that does not
-take the flag drops the rules on the floor, so the answer is `cannot
+take the flag cannot apply the rules, so the answer is `cannot
 enforce` and Brig refuses the run. A probe that fails confirms nothing, so
 the answer is `unknown` and Brig refuses the run then too: the binary does
 not run, it exits non-zero, or it gives no answer within 30 seconds. A
 sandbox with no policy runs no probe.
 
-Brig picks that subnet from 198.18.0.0/15, the range RFC 2544 reserves
+Brig picks those subnets from 198.18.0.0/15, the range RFC 2544 reserves
 for network benchmarking. It is never routed on the public internet and
-almost nothing claims it. A sandbox network is unlikely to collide
-with something you need to reach. The alternatives are all
-crowded: 10.0.0.0/8 by corporate VPNs and cloud VPCs, and 172.16.0.0/12
-by Docker. Home routers and vmnet on macOS use 192.168.0.0/16, and
-Tailscale uses 100.64.0.0/10. The sibling 198.19.0.0/16 is left alone
-because OrbStack uses it.
+almost nothing uses it, so a sandbox network is unlikely to collide with
+something you need to reach. The other candidate ranges are in common use:
+10.0.0.0/8 by corporate VPNs and cloud VPCs, 172.16.0.0/12 by Docker,
+192.168.0.0/16 by home routers and vmnet on macOS, and 100.64.0.0/10 by
+Tailscale. Brig leaves the sibling 198.19.0.0/16 alone because OrbStack
+uses it.
 
-`hull exec` is the whole exec path. The reachability probe, the captured
+Every exec goes through `hull exec`. The reachability probe, the captured
 read, the credential written over stdin, and the terminal handover all
 build the same argv (`execArgs`). The handover replaces the Brig process
-with hull, so the guest gets a real terminal. `hull logs <name>` is what
-`brig logs <ref>` runs, and it is also named in Brig's error output when
-a sandbox will not come up.
+with hull, so the guest gets a real terminal. `brig logs <ref>` runs
+`hull logs <name>`, and Brig's error output names that command when a
+sandbox does not come up.
 
 On Linux, from `internal/runtime/nerdctl.go`:
 
@@ -164,6 +165,7 @@ On Linux, from `internal/runtime/nerdctl.go`:
 nerdctl image inspect --format {{index .RepoDigests 0}} <ref>   # the digest to pin
 nerdctl ps --filter name=^<name>$ --format {{.Names}}
 nerdctl ps -a --format {{.Names}}\t{{.Status}}
+nerdctl inspect --format {{json .}} <name>   # its network: networkinspect.go
 nerdctl network ls --format {{.Name}}
 nerdctl network create <name>            # --network isolated: a network per sandbox
 nerdctl network rm <name>                # with the sandbox, and by rm --all
@@ -172,6 +174,7 @@ nerdctl run --detach --name <name>
      --memory <MB>m --cpus <n>
      [--pull <missing|always|never>]
      [--network none | --network <name>]      # offline, or isolated
+     [--publish <addr>:<host port>:<guest port>/<proto>]...
      [--annotation com.urunc.unikernel.bootKernel=<path>]
      [--annotation com.urunc.unikernel.bootInitrd=<path>]
      [--annotation com.urunc.unikernel.hypervisor=cloud-hypervisor]
@@ -183,23 +186,31 @@ nerdctl stop <name>
 nerdctl rm <name>
 ```
 
-The container is parked on `sleep infinity` because a container exits when its
+The container runs `sleep infinity` because a container exits when its
 command does, and the sandbox has to outlive the exec that used it. As on
-macOS, `nerdctl logs <name>` is what `brig logs <ref>` runs.
+macOS, `brig logs <ref>` runs `nerdctl logs <name>`.
 
-Two commands are not aimed at a runtime but run on the same paths:
+Two more tools run on the same paths:
 
 ```
 oras pull ghcr.io/nofireai/hull-assets:<os>-<arch> --output <dir>
                                                 # internal/runtime/bootfetch.go
+cosign triangulate <image>                      # internal/verify/verify.go
 cosign verify --certificate-identity-regexp <identity>
-     --certificate-oidc-issuer <issuer> <image> # internal/verify/verify.go
+     --certificate-oidc-issuer <issuer> <image>
+cosign verify-blob --certificate <cert> --signature <sig>
+     --certificate-identity-regexp <identity>
+     --certificate-oidc-issuer <issuer> <file>  # internal/verify/record.go
 ```
 
 Every runtime command carries `HULL_TELEMETRY_PRODUCT=brig` and
 `HULL_TELEMETRY_SUPPRESS=1` in its environment. Brig lifts the suppression
-only for the operations a user asked for, so one Brig command counts once.
+only for the operations it marks as counted: a boot, the terminal handover,
+and a stop. Each counted operation counts on its own, and one Brig command
+can run more than one of them. A run that boots counts the boot and the
+handover, and `brig rm` counts the stop of each sandbox it removes.
 `DO_NOT_TRACK` and `HULL_TELEMETRY_DISABLED` pass through untouched and win.
+[telemetry.md](telemetry.md) says what a counted operation sends.
 
 Forwarded values travel in that same environment and only the bare variable
 name goes in argv, so nothing readable in `ps` carries a secret. `BRIG_ENV_ARGV=1`
@@ -230,18 +241,18 @@ those names for itself. See [security.md](security.md#not-in-argv).
    make it a choice, and the line goes away. `runtimeBin` does no PATH lookup,
    so a bare `docker` there is refused as missing.
 
-What Brig asks the runtime about itself is short. It asks hull where its
-boot assets live (`hull assets dir`). They sit under hull's own
-store, and a path compiled into Brig can drift out of date silently. It asks either
-runtime which sandboxes exist and what state they are in (`ps`). And it
-asks hull two capability questions, `hull --version` for digest pinning
-and `network-gateway --help` for policy enforcement, both described
-above. `brig info <ref>` prints what it settled on, as
+Brig asks the runtime few questions about itself. It asks hull where its
+boot assets live (`hull assets dir`), because they sit under hull's own
+store and a path compiled into Brig could go out of date. It asks either
+runtime which sandboxes exist and what state they are in (`ps`), and which
+network a sandbox has (`inspect`). It asks hull two capability questions,
+both described above: `hull --version` for digest pinning and
+`network-gateway --help` for policy enforcement.
+`brig info <ref>` prints the runtime it settled on, as
 `runtime hull (/opt/homebrew/bin/hull)`, and `brig doctor` reports the
-runtime's version beside the rest of the host.
+runtime's version.
 
-Neither answer gates the run outright, and that is deliberate: Brig degrades
-one feature at a time rather than refusing an old build. A hull without
+On an old build Brig drops one feature at a time. A hull without
 `assets dir` falls back to `~/.hull/assets`. A runtime without `ps -a` falls
 back to the plain listing, and a hull that cannot pin a digest boots the tag
 and says so. The one refusal is a policy on a gateway that cannot enforce it.
@@ -278,12 +289,11 @@ overrides the isolation it cannot provide. The graphical profile is refused
 anywhere but `vz`, which is the backend with a console.
 
 **nerdctl** has to carry `--annotation` through to the shim, take
-`--runtime`, and honour `-v`, `--tmpfs` and a bare `-e NAME`. `docker` is
+`--runtime`, and honor `-v`, `--tmpfs` and a bare `-e NAME`. `docker` is
 accepted in its place and works for an image that carries its own
-kernel. docker does not pass annotations to the runtime, so a
-`genericBoot` profile is refused on it rather than attempted. Without
-the annotations, the sandbox boots with no kernel and fails somewhere
-far from the cause.
+kernel. docker does not pass annotations to the runtime, so Brig refuses a
+`genericBoot` profile on it. Without the annotations the sandbox would
+boot with no kernel.
 
 **urunc** has to read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the container's OCI spec and boot the
@@ -325,9 +335,9 @@ Brig's source pins no version of hull, nerdctl, containerd or urunc, and
 verifies no digest of any of them. The pin lives on the install path: the
 hull cask in `brig-sh/homebrew-brig` names one release tarball and its
 sha256. Brig's cask depends on that cask, so `brew install --cask
-brig` gets the exact build the tap names. Both casks are hand-written
-for the prerelease series, so read `Casks/hull.rb` for what an install
-will actually give you.
+brig` gets the exact build the tap names. The hull cask is written by hand
+while hull is in its prerelease series, so read `Casks/hull.rb` for the
+build an install gives you.
 
 On Linux the pin is `RUNTIME_VERSION` in `install.sh`, which names one
 release of the runtime bundle. With cosign available, `install.sh` checks the
@@ -337,8 +347,8 @@ from, and `brig-ctl version` prints it.
 
 The boot bundle is the other thing with a digest attached. hull verifies
 its signature with cosign against the publishing workflow before writing
-it, and records the digest it verified. Brig delegates the whole fetch
-to hull on macOS for exactly that reason. The Linux runtime bundle does not
+it, and records the digest it verified. That is why Brig delegates the
+whole fetch to hull on macOS. The Linux runtime bundle does not
 use it: its launcher points `BRIG_BOOT_ASSETS` at the kernel and initrd the
 bundle carries, and its release signs a record of their digests, which the
 bundle's installer keeps beside them. On a Linux host without that bundle,
@@ -361,7 +371,7 @@ drops any `HULL_BOOT_ASSETS_REF` from the environment it hands hull.
 
 ## Swapping one out
 
-Cheap swaps, no code:
+These swaps need no code:
 
 - a different build of the same runtime: `BRIG_RUNTIME_BIN`, or `runtimeBin` in
   a profile.
@@ -376,41 +386,50 @@ Cheap swaps, no code:
 - a different hypervisor backend under hull: `BRIG_HYPERVISOR`, or
   `hypervisor:` in a profile.
 
-Replacing hull or nerdctl entirely is a code change, not a setting.
-`BRIG_RUNTIME` accepts those two words and nothing else. A third
-runtime means implementing the `Runtime` interface in
-`internal/runtime/runtime.go`, and adding a case to `DetectFor`. That
-interface lists kind, binary, running, list, run, probe, output, feed,
-replace, stop, remove, and logs hint. It is the whole of what Brig needs
-from a runtime, which is the useful part of the answer. If hull stopped
-tomorrow, what needs rebuilding is a program that boots an OCI image as
-a microVM and can exec into it. Nothing about guest homes, credentials
-or profiles needs to change. Those live above the seam and are written
-once for both operating systems.
+Replacing hull or nerdctl with a third runtime is a code change.
+`BRIG_RUNTIME` accepts those two words and nothing else. A third runtime
+means implementing the `Runtime` interface in
+`internal/runtime/runtime.go`, and adding a case to `DetectFor`. Every
+runtime implements that interface: name itself and its isolation, list
+sandboxes, read an image's digest, run a sandbox, exec into it in several
+ways, stop it, remove it, and show its logs. A replacement for hull is a
+program that boots an OCI image as a microVM and can exec into it. Guest
+homes, credentials and profiles sit above that interface, are written once
+for both operating systems, and do not change.
+
+The rest of what Brig asks of a runtime is in optional interfaces in
+`internal/runtime`. Brig checks for each one separately:
+
+- `Exister` and `NetworkInspector`: whether a sandbox exists, and its
+  network.
+- `RunChecker`: what the backend refuses before a boot, such as a policy it
+  cannot enforce. Brig never asks a runtime without it, so it refuses
+  nothing there.
+- `NetworkChecker`, `NetworkPruner` and `SharedNetworkPruner`: a network
+  that went stale, and networks left behind.
+- `Publisher`: ports opened on a running sandbox.
+- `BootResolver`: the boot assets, fetched before the boot.
+- `FeedLimiter`, `FallbackReporter` and `TelemetryReporter`: a size limit on
+  stdin, a stand-in binary such as docker, and the runtime's telemetry.
 
 ### What is shared, and what is Brig's alone
 
-Shared with other projects: containerd, nerdctl and urunc, none of which know
-Brig exists. cosign and oras likewise.
+Shared with other projects: containerd, nerdctl, urunc, cosign and oras.
 
 Shared between Brig and hull: the boot bundle, the on-disk layout it lands in,
 and the two annotation names. A machine that has run either runtime has already
 seeded the other.
 
-hull, `vz-runner` and `hvi` exist for this stack, though hull is a general
-microVM runtime and does not depend on Brig.
-
 Brig's alone: profiles, the secret store and its provenance records, the
-credential forwarding rules, and the billing denylist. Also alone: the
-guest home contract, image verification policy and `brigd`.
+credential forwarding rules, the billing denylist, the guest home contract,
+the image verification policy and `brigd`.
 
 ## Building hull from source on macOS
 
 Skip this section unless you are working on hull itself.
 
 A from-source hull cannot boot a microVM unless it is signed with an
-Apple identity. This is the requirement that surprises people, so it is
-worth being exact about it.
+Apple identity.
 
 The backends do not talk to the hypervisor themselves. `vz-runner` does,
 and it needs the `com.apple.security.virtualization` entitlement. `hvi`
