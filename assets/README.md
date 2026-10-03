@@ -35,7 +35,7 @@ font: the letters are rectangles.
 | `brig-mark-on-{dark,light}.svg` | The same glyph with the field taken away. |
 | `nofire-logo.svg`, `nofire-logo-on-dark.svg` | The NOFire AI logo, for the README footer. |
 | `brig-run-claude.gif` | The recording under the README's opening: Claude Code in a sandbox, writing a file into the project. It is a real session, recorded with [vhs](https://github.com/charmbracelet/vhs). Record it again when the output of `brig run` or of Claude Code changes enough to date it. |
-| `architecture.svg` | The diagram in the README's "The boundary". README embeds it with `<img src>`, so the SVG's own internal `<title>` and `<desc>` are never read by a browser. The `img` element's `alt` attribute carries the description instead. Keep that alt text current whenever you change the diagram. |
+| `architecture.svg` | The diagram in the README's "What the agent can reach". README embeds it with `<img src>`, so the SVG's own internal `<title>` and `<desc>` are never read by a browser. The `img` element's `alt` attribute carries the description instead. Keep that alt text current whenever you change the diagram. |
 
 The directory is flat. hull's own set of marks lives in
 [brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork) with the

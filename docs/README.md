@@ -1,18 +1,7 @@
 # Brig documentation
 
 Start with [the README](../README.md) for what Brig is and a first run. This
-index is the map of everything else, in the order a new reader needs it.
-
-## Understand
-
-| Page | What it gives you |
-| --- | --- |
-| [sessions.md](sessions.md) | Guest homes, projects, named sessions, and what survives which command |
-| [security.md](security.md) | What the sandbox isolates, and what an agent can still do |
-| [claims.md](claims.md) | The tests behind each claim on the security page |
-| [non-goals.md](non-goals.md) | What Brig does not try to be |
-| [runtimes.md](runtimes.md) | The macOS backends, the Linux runtimes, and how one is chosen |
-| [brigd.md](brigd.md) | What the daemon is for |
+index lists every other page, in the order a new reader needs it.
 
 ## Install
 
@@ -25,6 +14,17 @@ index is the map of everything else, in the order a new reader needs it.
 | Page | What it gives you |
 | --- | --- |
 | [quickstart.md](quickstart.md) | One agent running on a throwaway project, start to finish |
+
+## Understand
+
+| Page | What it gives you |
+| --- | --- |
+| [sessions.md](sessions.md) | Guest homes, projects, named sessions, and what survives which command |
+| [security.md](security.md) | What the sandbox isolates, and what an agent can still do |
+| [claims.md](claims.md) | The tests behind each claim on the security page |
+| [non-goals.md](non-goals.md) | What Brig does not try to be |
+| [runtimes.md](runtimes.md) | The macOS backends, the Linux runtimes, and how one is chosen |
+| [brigd.md](brigd.md) | What the daemon is for |
 
 ## Everyday tasks
 
@@ -65,4 +65,5 @@ index is the map of everything else, in the order a new reader needs it.
 | [../assets/README.md](../assets/README.md) | The logo and diagram assets, and how to use them |
 
 [manual-tests/](manual-tests/) holds dated engineering records from specific
-changes, each one historical evidence rather than current validation.
+changes. Each is a record of what was measured on that date. None is
+revalidated against the current release.
