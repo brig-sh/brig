@@ -1,9 +1,9 @@
 # Releasing
 
-How a release of Brig is cut. One tag, one release. The release workflow
-([.github/workflows/release.yml](../.github/workflows/release.yml)) does the
-building, signing, notarizing and drafting. This page is the human part
-around it, in order.
+One tag makes one release. The release workflow
+([.github/workflows/release.yml](../.github/workflows/release.yml)) builds,
+signs, notarizes and drafts it. This page lists the steps a maintainer does
+around the workflow, in order.
 
 ## The tag is the version
 
@@ -19,8 +19,8 @@ reachable from the commit:
 | after `v0.4.0-rc1` | `v0.4.0-rc1.0.<commit time>-<commit>` |
 | any of these with uncommitted changes | the same, with `+dirty` |
 
-So a bump is a tag, a release candidate is a prerelease tag, and every build
-between tags names the release it follows and the commit it is. Only tags
+A version bump is a tag, a release candidate is a prerelease tag, and every
+build between tags names the release it follows and its commit. Only tags
 reachable from the commit count: a maintenance branch cut from `v0.2.0` keeps
 counting `v0.2.x` however far `main` has moved.
 
@@ -56,13 +56,13 @@ answers in that case, and the binary prints what a normal clone would.
   This runs git-cliff over the commits since the previous tag, with the
   same [cliff.toml](../cliff.toml) the workflow uses, so what it prints is
   what the release will say. It needs `git-cliff` (`brew install git-cliff`).
-  A subject that reads badly, or sits in the wrong section, is fixed in the
-  commit now, while it is still cheap.
+  If a subject reads badly or sits in the wrong section, fix the commit now,
+  before the tag exists.
 
 - If this is the release that `retiredGoesIn` in `cmd/brig/main.go` names,
   remove the retired spellings first, or move that constant and the docs to
-  a later release. v0.3.0 shipped past its own removal date because nothing
-  asked.
+  a later release. v0.3.0 shipped with the retired spellings still in,
+  because no step checked.
 
 - Tag the release commit and push the tag:
 
@@ -84,9 +84,8 @@ answers in that case, and the binary prints what a normal clone would.
 
   The push starts the workflow. It builds both binaries for every target,
   signs the checksums with cosign, and signs and notarizes the macOS
-  binaries. It also opens a **draft** release for the tag. `draft: true` is
-  deliberate: a tag never publishes itself before someone has read the
-  notes.
+  binaries. It also opens a **draft** release for the tag. `draft: true`
+  means a tag never publishes itself before someone has read the notes.
 
 - Two signing paths run here, and only one needs a stored secret. `cosign`
   signs the checksum file keylessly: it gets a short-lived certificate from
@@ -104,23 +103,21 @@ answers in that case, and the binary prints what a normal clone would.
   [cliff.toml](../cliff.toml) defines: breaking changes first, then
   features, fixes, refactors and docs, each entry linking its commit and any
   `Fixes`/`Refs` issue, then the contributors by GitHub handle and the
-  first-time contributors with their pull request. These come from the
-  GitHub API; `make notes` uses `GITHUB_TOKEN` when set, else the anonymous
-  rate limit. A commit in the wrong section has the wrong type in
-  its subject; a section that behaves wrongly is a rule in `cliff.toml`. Fix
-  the one at fault rather than the draft: a re-run of the workflow rewrites
-  the draft's body, and a hand-edit is lost with it.
+  first-time contributors with their pull request. The contributor lists
+  come from the GitHub API. `make notes` uses `GITHUB_TOKEN` when set, and
+  the anonymous rate limit otherwise. A commit in the wrong section has the
+  wrong type in its subject. A section that behaves wrongly is a rule in
+  `cliff.toml`. Fix the commit or the rule, not the draft: a re-run of the
+  workflow rewrites the draft's body and loses a hand-edit.
 
 - **Publish that draft.** Editing it to "published" is the release. Do not
   create a new release for the tag. That is how `v0.1.0-rc16` ended up with
   two releases of the same name, a Draft beside a Pre-release.
 
-- You can re-run the workflow for a tag that already has a draft. This can
-  happen with a `workflow_dispatch` retry, or a second push of the tag. It
-  targets the existing draft rather than opening a second release.
-  `use_existing_draft: true` in [.goreleaser.yaml](../.goreleaser.yaml) is
-  what makes that safe.
-  Still publish only the one draft, never two.
+- You can re-run the workflow for a tag that already has a draft, with a
+  `workflow_dispatch` retry or a second push of the tag. The re-run updates
+  the existing draft and opens no second release, because
+  [.goreleaser.yaml](../.goreleaser.yaml) sets `use_existing_draft: true`.
 
 ## The Homebrew tap
 
@@ -134,17 +131,16 @@ answers in that case, and the binary prints what a normal clone would.
   (`actions/create-github-app-token`, `continue-on-error: true`). If the App
   is not installed, it falls back to the `HOMEBREW_TAP_GITHUB_TOKEN` secret.
   If neither resolves, goreleaser skips the cask and the release
-  still goes green, so check that the cask PR actually exists before you
-  walk away.
+  still goes green, so check that the cask PR exists.
 
 - The cask is uploaded only on a **stable** tag. `skip_upload: auto` skips
-  it for a prerelease, on purpose: an rc must not move what `brew upgrade`
-  follows. So a normal rc opens no cask PR, and that is correct.
+  it for a prerelease, because an rc must not move what `brew upgrade`
+  follows. An rc opens no cask PR.
 
-- Until the first stable tag, the casks in the tap are maintained by hand and
-  carry a header saying so. The first stable release is what retires that
-  header and hands the tap over to this workflow. Do not hand-edit a cask
-  the workflow now owns.
+- goreleaser generates `Casks/brig.rb` in the tap, and the next stable
+  release overwrites it. Make lasting changes in `.goreleaser.yaml`. So far
+  each release has been followed by a commit that applies `brew style` to
+  the generated file.
 
 - The cask PR opens while the release is still a draft. goreleaser's cask
   pipe checks `skip_upload` and the prerelease marker, not the draft flag.
@@ -158,9 +154,9 @@ answers in that case, and the binary prints what a normal clone would.
 
 - `.github/workflows/channel.yml` publishes two casks that are not releases:
   `brig@main`, rebuilt on every merge to `main`, and `brig@experimental`,
-  promoted by hand from any ref with a `workflow_dispatch`. They exist so a
-  feature can be tried before there is a release, or a release candidate, to
-  try. See [install.md](install.md#trying-something-before-it-is-released).
+  promoted by hand from any ref with a `workflow_dispatch`. They let you try
+  a feature before a release or a release candidate has it. See
+  [install.md](install.md#trying-something-before-it-is-released).
 
 - Each build is a prerelease of its own, tagged `channel-<channel>-<version>`.
   Releases in this org are immutable: once published, a release takes no more
@@ -185,12 +181,12 @@ answers in that case, and the binary prints what a normal clone would.
   `brig@experimental` is signed too, with the Developer ID, whatever branch it
   came from.
 
-- The channel cask is pushed to the tap directly, not opened as a pull request.
-  It is regenerated on every merge, and a reviewed PR per merge is noise. The
-  tap's `main` ruleset requires a reviewed pull request, so the push depends on
-  the `brig-release-bot` App being a bypass actor there; the workflow mints that
-  App's token, the same one `release.yml` uses. The commit is signed off for
-  the tap's `DCO sign-off` check. hull's channel publishes the same way.
+- The channel cask is pushed to the tap directly, not opened as a pull request,
+  because it is regenerated on every merge. The tap's `main` ruleset requires a
+  reviewed pull request, so the push depends on the `brig-release-bot` App being
+  a bypass actor there; the workflow mints that App's token, the same one
+  `release.yml` uses. The commit is signed off for the tap's `DCO sign-off`
+  check. hull's channel publishes the same way.
 
 - The cask is rendered by `script/render-cask.py`, not by goreleaser. A
   channel has no version of its own, so there is nothing for goreleaser's cask
@@ -221,12 +217,9 @@ answers in that case, and the binary prints what a normal clone would.
   [docs/security.md](security.md), and the files under
   [docs/manual-tests/](manual-tests/).
 
-  This grep exists because a version quoted in a comment survives copy-paste.
-  Through `0.1.0-rc18`, `install.sh`'s own `BRIG_VERSION` example still named
-  the previous release, `rc17`: the exact staleness this step is meant to
-  catch. That example now names no tag at all, which removes it from this
-  grep's work rather than relying on the grep to find it. Run the grep
-  everywhere a version can hide, not only where you expect one.
+  Run the grep over the whole repository, comments included. Through
+  `0.1.0-rc18`, the `BRIG_VERSION` example in `install.sh` still named the
+  previous release, `rc17`. That example now names no tag.
 
 - A release on a hull version with no conformance record gets one before
   the docs quote that version. On a Mac with that hull on `PATH`:
@@ -249,21 +242,18 @@ answers in that case, and the binary prints what a normal clone would.
   is the only check of them.
 
 - `install.sh` pins `cosign` by version **and** by SHA-256, one hash per
-  platform. That pin is deliberate: cosign's own release cannot be verified
-  without cosign, so the hash in this repository is the trust root. It
-  is the one version here that no release of ours moves. Bump the version
-  and all three hashes together, from the checksums file on the cosign
-  release, and never one without the others.
+  platform. cosign's own release cannot be verified without cosign, so the
+  hash in this repository is the trust root. No release of Brig moves this
+  version. Bump the version and all three hashes together, from the
+  checksums file on the cosign release.
 
 ## Check before you walk away
 
-- A downloaded binary prints the tag: `brig version` says `brig v0.2.0`, not
-  a pseudo-version, which would mean the workflow built without the tag in
-  reach, and not `v0.2.0+dirty`, which would mean the tree changed during
-  the build.
+- A downloaded binary prints the tag: the `brig version` line starts with
+  `brig v0.2.0`. A pseudo-version means the workflow built without the tag
+  in reach, and `v0.2.0+dirty` means the tree changed during the build.
 - There is exactly one release for the tag, and it is published.
 - On a stable tag: the cask PR against `brig-sh/homebrew-brig` exists.
-  Goreleaser skips it silently if neither tap token resolved, so check
-  rather than assume.
-- The tap README describes an install path that actually works for the
-  release you shipped.
+  Goreleaser skips it silently if neither tap token resolved.
+- The install path the tap README describes works for the release you
+  shipped.

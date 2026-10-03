@@ -6,15 +6,14 @@ prove it worked.
 
 Some of these messages are Brig's own. Others come from the layer underneath:
 the microVM runtime (`hull` on macOS, `nerdctl` on Linux), cosign, or
-Homebrew. Where a message is not Brig's, it says so. That is the first
-thing to know when the wording does not match anything in Brig.
+Homebrew. Where a message is not Brig's, the entry says so.
 
-Before reading further, run `brig doctor`. It checks the host, the
-hypervisor, the runtime and its version, the boot assets, cosign, the
-profiles, the secret store and brigd, one line each. It names the fix for
-a line that is not `ok`. `brig doctor <agent>` checks that agent's image too.
-`--json` prints the same report as one document, for a script or a bug
-report.
+Run `brig doctor` first. It prints the build of `brig` you are running,
+then checks the host, the hypervisor, the runtime and its version, the boot
+assets, cosign, the profiles, the secret store and brigd, one line each.
+Under a line marked `!!` it prints the fix. `brig doctor <agent>` checks
+that agent's image too. `--json` prints the same report as one document,
+for a script or a bug report.
 
 ## Exit codes
 
@@ -22,21 +21,22 @@ Every failure exits with one of a small, stable set of codes. The full table,
 and what each one means, is at
 [docs/cli.md#exit-codes](cli.md#exit-codes).
 
-One thing that page does not say: `brig rm` and `brig logs` on a ref with no
-sandbox exit `3`, naming the ref you typed. They do not pass the runtime's
-own "instance not found" back as a general failure (`1`).
+`brig rm` and `brig logs` on a ref with no sandbox exit `3` and name the ref
+you typed. They do not pass the runtime's own "instance not found" back as a
+general failure (`1`).
 
 ## What `brig doctor` does not catch
 
-Only two lines in `brig doctor` change its exit status, using the codes a
-run exits with: see [Exit codes](cli.md#exit-codes). Every other line, a
-`!!` included, prints its fix and leaves the exit status at `0`.
+Only the `runtime` and `secrets` lines change the exit status of `brig
+doctor`: a missing or broken runtime exits `4`, and a secret store that
+will not open exits `6`, the codes a run exits with
+([Exit codes](cli.md#exit-codes)). Every other line, a `!!` included,
+prints its fix and leaves the exit status at `0`.
 
 That includes verification. A `BRIG_VERIFY` value Brig does not recognize,
 and `BRIG_VERIFY=require` with no cosign installed, both print `!!` with the
-right fix. Neither one stops `brig doctor` from exiting `0`, and both stop a
-real run cold. A script that checks only the exit status, not the lines,
-misses both.
+fix. `brig doctor` still exits `0`, and a real run stops on either. A script
+that checks only the exit status misses both.
 
 Check the setting yourself before you rely on it:
 
@@ -47,7 +47,7 @@ echo "$BRIG_VERIFY"
 `require` also refuses any image outside Brig's own registry,
 `ghcr.io/brig-sh/`. `claude-desktop` and `ubuntu` are both outside it.
 `brig doctor claude-desktop` reports that image as `--`, informational,
-whatever `BRIG_VERIFY` is set to. It does not simulate the refusal a
+whatever `BRIG_VERIFY` is set to. It does not report the refusal a
 `require` run hits.
 
 ## No runtime found on PATH
@@ -57,7 +57,7 @@ brig: no runtime found on PATH: brig drives hull on macOS, and none was there.
 See https://github.com/brig-sh/brig#macos, or point BRIG_RUNTIME_BIN at a build
 ```
 
-On Linux the second half is different, because the runtime there is `nerdctl`:
+On Linux the runtime is `nerdctl`, and the message names it:
 
 ```
 brig: no runtime found on PATH: install nerdctl, or point BRIG_RUNTIME_BIN at one
@@ -65,10 +65,10 @@ brig: no runtime found on PATH: install nerdctl, or point BRIG_RUNTIME_BIN at on
 
 Either way the exit code is `4`.
 
-Brig delegates every boot to a runtime it does not ship, and none was there.
-On macOS the cask depends on hull, so this usually means a from-source
-install without hull on PATH. Full install instructions, both platforms, are
-at [docs/install.md](install.md).
+Brig boots every sandbox through a runtime, and found none on PATH. On macOS
+the cask depends on hull, so this usually means a from-source install
+without hull on PATH. [docs/install.md](install.md) has the install
+instructions for both platforms.
 
 Check whether the runtime is there:
 
@@ -98,10 +98,10 @@ The `runtime` line reads `ok` and names the binary it found.
 brig: runtime unavailable: unknown BRIG_RUNTIME "podman" (want hull or nerdctl)
 ```
 
-This is not the same failure as a missing runtime. Brig treats it as a
-different mistake on purpose: `BRIG_RUNTIME` names something Brig does not
-drive. `brig ls` and `brig info` fail this same way rather than reporting
-no sandboxes, because reading a typo as "you have none" hides it.
+`BRIG_RUNTIME` names a runtime Brig does not drive. The exit code is `4`.
+With no runtime on PATH, `brig ls` reports no sandboxes and exits `0`. With
+an unknown `BRIG_RUNTIME`, `brig ls` and `brig info` fail with this
+message, so the typo is not hidden.
 
 Check what is set:
 
@@ -125,18 +125,19 @@ The `runtime` line reads `ok` again.
 
 ## assets missing at ...
 
-Seen in `brig doctor`, not from a run:
+`brig doctor` prints this. A run does not:
 
 ```
-!!  boot      assets missing at /Users/alex/.hull/store/assets
-        run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
+  !!  boot      assets missing at /Users/alex/.hull/store/assets
+          run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
 ```
 
-Six of the eight built-in profiles boot an unmodified OCI image rather than
-their own. They need a shared kernel and initrd, which Brig calls the boot
-assets. Nothing has downloaded that bundle yet. This is normal before a first
-boot and does not stop one: the next `brig run` on any of those profiles
-fetches it.
+Six of the eight built-in profiles boot an unmodified OCI image, which
+carries no kernel. They need a shared kernel and initrd, which Brig calls
+the boot assets, and nothing has downloaded that bundle yet. This is normal
+before a first boot and does not stop one: the next `brig run` on any of
+those profiles fetches it. A run does not download into a directory
+`BRIG_BOOT_ASSETS` names, and the fix line then says so.
 
 Confirm:
 
@@ -149,15 +150,14 @@ The `boot` line reads `ok  boot      assets present at /Users/alex/.hull/store/a
 ## The secret store could not be read during a run
 
 ```
-brig: the mine sandbox needs gh-token from brig's secret store, which could
-not be read: <cause>
+brig: the brig-mine sandbox needs gh-token from brig's secret store, which
+could not be read: <cause>
 ```
 
-This is not the same as a missing secret. The store itself did not answer,
-so Brig cannot tell whether the value is there. The usual causes: a locked
-keychain, a keyring daemon that is not running, or a permission Brig does
-not have. It exits with code `6`, the same code a missing secret does,
-because both stop the run for a credential it needed.
+The store itself did not answer, so Brig cannot tell whether the value is
+there. The usual causes are a locked keychain, a keyring daemon that is not
+running, or a permission Brig does not have. The exit code is `6`, the same
+as for a missing secret.
 
 Read what the store itself says:
 
@@ -165,9 +165,8 @@ Read what the store itself says:
 brig doctor
 ```
 
-The `secrets` line's own finding names the failure. Fix what it names: open
-a locked keychain, start a keyring that is not running, or grant a missing
-permission, then run again.
+The `secrets` line names the failure. Unlock the keychain, start the
+keyring daemon, or grant the missing permission, then run again.
 
 Confirm:
 
@@ -180,7 +179,7 @@ platform's own store.
 
 ## My credential did not arrive
 
-First, ask Brig what it forwards, by name:
+Ask Brig what it forwards, by name:
 
 ```bash
 brig info claude
@@ -198,9 +197,9 @@ brig: not forwarding ANTHROPIC_API_KEY: it is on the claude-code denylist
   → to forward it anyway:  BRIG_ALLOW_DENIED=1
 ```
 
-A key that switches the sandbox from your subscription onto metered
-billing is refused by default. Forward it only when metered billing is
-genuinely what you want, with `BRIG_ALLOW_DENIED=1`.
+Brig refuses by default a key that switches the sandbox from your
+subscription onto metered billing. Set `BRIG_ALLOW_DENIED=1` to forward it
+when you want metered billing.
 
 **It looks like an unresolved reference.**
 
@@ -211,18 +210,17 @@ brig: not forwarding GH_TOKEN: it looks like an unresolved secret reference (op:
 ```
 
 A `scheme://` value is what tools like direnv leave in the environment when a
-secret-manager reference was never resolved. Forwarded as-is it produces
-"Invalid username or token" inside the guest, which looks exactly like a
-broken sandbox, so Brig refuses it. Resolve it on the host so the variable
-holds the real token, then run again. A stored secret or a profile literal is
-exempt from this check, because it was put there on purpose.
+secret-manager reference was never resolved. Forwarded as it is, it produces
+"Invalid username or token" inside the guest, which reads like a broken
+sandbox, so Brig refuses it. Resolve it on the host so the variable holds
+the real token, then run again. Brig does not apply this check to a stored
+secret or a profile literal.
 
 **It is empty, or it expired.** An unset or empty variable is skipped so it
 cannot shadow a value baked into the image.
 
-A stored credential that has expired is not withheld. Brig forwards it as it
-is and warns before boot. Dropping it silently looks exactly
-like an unexplained login failure with nothing to act on:
+Brig does not withhold a stored credential that has expired. It forwards
+the credential and warns before boot:
 
 ```
 brig: the imported credential claude-credentials (claude-code) expired 3d ago
@@ -230,8 +228,8 @@ brig: the imported credential claude-credentials (claude-code) expired 3d ago
 ```
 
 Renew the login on the host and import it again, as the second line says.
-Renewing on the host alone does not help: a run reads Brig's stored copy, and
-nothing re-reads the host until an import says so.
+Renewing on the host alone does not help: a run reads Brig's stored copy,
+and only an import reads the host again.
 
 A secret you stored with `--from-command` prints a different second line,
 naming that command instead of an import:
@@ -252,15 +250,14 @@ warning above it is gone.
 
 ## The agent asked me to log in again after a stop
 
-There is no error here. The agent shows its login screen on a sandbox you had
+Brig prints no error. The agent shows its login screen on a sandbox you had
 already logged into.
 
 On `claude-code` and `claude-desktop`, the in-guest login lives in the
 sandbox's memory. It is written to a memory-backed mount that never reaches
-host disk. `brig stop` takes it with the microVM, and the next `brig run`
-starts fresh. That is by design, and it is specific to those two profiles. The other
-six mount the guest home from host disk, so a login written there survives a
-stop.
+host disk. `brig stop` removes it with the microVM, and the next `brig run`
+starts without it. Only those two profiles do this. The other six keep the
+whole guest home on host disk, so a login written there survives a stop.
 
 To make a `claude-code` or `claude-desktop` login survive a stop, import the
 one already on this Mac into Brig's own store, once:
@@ -289,9 +286,9 @@ brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign is not 
   ↳ booting it unchecked
 ```
 
-That is `BRIG_VERIFY=warn`, the default. Brig checked the image against its
-own registry, found no way to run the check, and says so before it boots
-anyway. A check that did not run is not a check that failed.
+That is `BRIG_VERIFY=warn`, the default. The image is under Brig's own
+registry, Brig found no cosign to check its signature with, and it says so
+before it boots the image unchecked. Nothing failed: the check did not run.
 
 Under `BRIG_VERIFY=off` cosign is never looked up, and the only line is:
 
@@ -303,14 +300,12 @@ guest image and the kernel it boots are not checked
 A profile that boots its own image has no kernel of Brig's to skip, and the
 line names the image alone.
 
-Under `BRIG_VERIFY=require` nothing boots, and the line says so rather than
-describing the boot it refused (exit `5`):
+Under `BRIG_VERIFY=require` nothing boots, and the exit code is `5`:
 
 ```
 brig: refusing to boot image ghcr.io/brig-sh/claude-code-stock:root: cosign is
 not installed (`brew install cosign`), so nothing could be checked
-(BRIG_VERIFY=require). Install cosign, or set BRIG_VERIFY=warn to boot it
-unchecked
+(BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it unchecked
 ```
 
 `require` with no cosign refuses every image, Brig's own included.
@@ -333,7 +328,8 @@ Confirm:
 cosign version
 ```
 
-Cosign prints its version instead of "command not found", and the next run under `BRIG_VERIFY=warn` or `require` checks the image instead of skipping it.
+cosign prints its version, and the next run under `BRIG_VERIFY=warn` or
+`require` checks the image.
 
 ## The registry could not be reached to verify an image
 
@@ -343,10 +339,10 @@ brig: cannot reach the registry to verify image ghcr.io/brig-sh/claude-code-stoc
 brig: Boot the cached copy unverified? [y/N]
 ```
 
-Nothing has been checked either way. The registry that verifies the local
-copy's signature was not reachable, and the copy can still be fine. The
-usual cause is being offline, or a captive portal that answers every host
-with its own page instead of the one you asked for.
+Nothing was checked. Brig could not reach the registry it verifies the
+local copy against, and the copy can still be fine. The usual cause is
+being offline, or a captive portal that answers every host with its own
+page.
 
 Answering no aborts:
 
@@ -356,8 +352,8 @@ verified. Try again with the registry reachable, or set BRIG_VERIFY=off to
 boot the cached copy unchecked
 ```
 
-Under `BRIG_VERIFY=require` there is no prompt: Brig refuses outright, with
-the same exit code, `5`.
+Under `BRIG_VERIFY=require` there is no prompt: Brig refuses, with the same
+exit code, `5`.
 
 Reconnect and try again, or answer `y` at the prompt if you trust the copy on
 disk enough to boot it once unverified.
@@ -368,8 +364,8 @@ Confirm:
 brig run claude
 ```
 
-Once the registry answers, the run reaches `signature verified` instead of
-the prompt.
+Once the registry answers, the run prints `brig: image and boot assets
+verified` instead of the prompt.
 
 ## cosign did not answer
 
@@ -389,7 +385,7 @@ reads Docker's `config.json` to find credentials for `ghcr.io`, and when
 `"credsStore": "desktop"` and Docker Desktop not running,
 `docker-credential-desktop` blocks. The message names the helper and the
 file only when one is set. Without one, it goes from "within 30s" straight
-to "The copy on disk was not checked", and the causes in the section above
+to "the copy on disk was not checked", and the causes in the section above
 apply.
 
 Brig gives cosign 30 seconds and then kills its process group, so a
@@ -404,8 +400,8 @@ brig: aborted: the image was not verified: cosign did not answer within 30s.
 unchecked
 ```
 
-Under `BRIG_VERIFY=require` there is no prompt: Brig refuses outright, with
-exit code `5`.
+Under `BRIG_VERIFY=require` there is no prompt: Brig refuses, with exit
+code `5`.
 
 The images Brig boots are public, so cosign needs no credentials for them.
 Start Docker Desktop, or point `DOCKER_CONFIG` at an empty directory for the
@@ -433,14 +429,14 @@ within a few seconds.
 brig: could not start the sandbox: <runtime error>
 ```
 
-The detail after the colon is the runtime's, not Brig's. It is a registry
-Brig cannot reach, an image reference that does not exist, or a manifest
-with no build for your architecture. The five published agents default to
-`:root`, which `brig-sh/community-images` publishes as a multi-arch index
-covering `linux/arm64` and `linux/amd64`. One reference is meant to work on
-both an Apple Silicon Mac and an x86 Linux host. A mismatch usually means a
-`--image` or `BRIG_IMAGE` pinned to a single-architecture tag (`:arm64` or
-`:amd64`) that is not yours.
+The detail after the colon is the runtime's. The cause is a registry Brig
+cannot reach, an image reference that does not exist, or a manifest with no
+build for your architecture. The five published agents default to `:root`,
+which `brig-sh/community-images` publishes as a multi-arch index covering
+`linux/arm64` and `linux/amd64`, so one reference works on an Apple Silicon
+Mac and on an x86 Linux host. A mismatch usually means a `--image` or
+`BRIG_IMAGE` pinned to a single-architecture tag (`:arm64` or `:amd64`)
+that is not yours.
 
 Check the reference you are booting:
 
@@ -448,19 +444,17 @@ Check the reference you are booting:
 brig info claude      # shows the image, among other things
 ```
 
-Read the runtime's error for which of the two it is. If it is the wrong
-architecture, drop the pinned tag or pin the one for your machine (`:arm64` or
-`:amd64`). If the registry was the problem, try again once it is reachable. A
-moving tag that was republished stays invisible under the default pull policy
-until you ask for it:
+The runtime's error says which it is. For the wrong architecture, drop the
+pinned tag or pin the one for your machine (`:arm64` or `:amd64`). If the
+registry was unreachable, try again once you can reach it. Under the default
+pull policy a republished tag is not pulled again until you ask for it:
 
 ```bash
 BRIG_PULL=always brig run claude
 ```
 
 If the image is one Brig does not publish, such as `cursor`, Brig says so
-before it reaches the registry. It does not fail with a 404. Build the
-image yourself and pass `--image`.
+before it reaches the registry. Build the image yourself and pass `--image`.
 
 Confirm:
 
@@ -478,10 +472,9 @@ brig-sh, but its signature DID NOT VERIFY: <detail>
 brig: Boot it anyway? [y/N]
 ```
 
-This is not the same as a check that did not run. cosign ran and the answer
-was no. The image sits under Brig's own registry, and its signature does not
-match the workflow that is meant to have built it. That combination has no
-innocent reading, so Brig stops and asks. With no terminal to ask, it refuses:
+cosign ran, and the check failed. The image is under Brig's own registry,
+and its signature does not match the workflow that builds Brig's images.
+Brig stops and asks. With no terminal to ask on, it refuses:
 
 ```
 brig: not a terminal, so there is nobody to ask: refusing
@@ -495,16 +488,17 @@ brig: aborted: the image failed verification. Pull it again (BRIG_PULL=always),
 or set BRIG_IMAGE to a digest you have checked yourself
 ```
 
-The usual innocent cause is a stale local copy. Pull the image again
-(`BRIG_PULL=always brig run claude`) and let the check run against the current
-registry.
+Under `BRIG_VERIFY=require` there is no prompt: Brig refuses, with the same
+exit code.
 
-If it still fails and you do not know why, do not boot it. Naming a digest
-you checked yourself is the deliberate way past it.
+The usual harmless cause is a stale local copy. Pull the image again with
+`BRIG_PULL=always brig run claude`.
 
-An image published by someone else warns rather than stopping: bring-your-own
-images are supported. A failure under Brig's own registry is the one case
-that stops.
+If it still fails and you do not know why, do not boot it. To boot an image
+you checked yourself, set `BRIG_IMAGE` to its digest.
+
+An image published by someone else gets a warning and boots, because Brig
+supports bring-your-own images.
 
 Confirm:
 
@@ -512,8 +506,8 @@ Confirm:
 brig run claude
 ```
 
-A pull that now verifies reaches `signature verified` and boots, instead of
-the DID NOT VERIFY prompt.
+The run prints `brig: image and boot assets verified` and boots, with no
+DID NOT VERIFY prompt.
 
 ## The boot assets are not the bundle that verified
 
@@ -525,17 +519,25 @@ it lists. Delete both files there and run again to fetch the bundle, or set
 BRIG_BOOT_ASSETS to that directory if they are your own build
 ```
 
-The kernel and initrd on disk are not the files the signed bundle lists, and
-not the files of an older bundle either: an older bundle, one the record
-beside it names, is fetched again, and the run says so. So something changed a
-file after the fetch, or the files were fetched by a Brig or hull that kept no
-record. Brig refuses it under `warn` as well as `require`, with exit `5`.
+The kernel and initrd on disk are not the files the signed bundle lists.
+They are not an older bundle either: when the record beside the files names
+an older bundle, Brig fetches the verified bundle over it and says so. So a file
+changed after the fetch, or a Brig or hull that kept no record fetched the
+files. Brig refuses under `warn` as well as `require`, with exit `5`.
 
-Delete the two files the line names and run again. Brig fetches the bundle
-whose signature it just checked, and the next run compares that. If the files
-are your own build, point `BRIG_BOOT_ASSETS` at their directory: `warn` then
-states the difference and boots them. See
+Delete the two files in the directory the message names and run again. Brig
+fetches the bundle whose signature it checked, and compares the files with
+it. If the files are your own build, point `BRIG_BOOT_ASSETS` at their
+directory: `warn` then states the difference and boots them. See
 [security.md](security.md#the-kernel-not-only-the-image).
+
+Confirm:
+
+```bash
+brig run claude
+```
+
+The run prints `brig: image and boot assets verified`.
 
 ## The runtime bundle's kernel is not the one its record lists
 
@@ -548,42 +550,49 @@ BRIG_BOOT_ASSETS at a directory of your own build
 ```
 
 On Linux the runtime bundle carries the kernel and initrd, and its release
-signs a record of their digests. A file in the bundle's `share/guest` that the
-record does not list was changed after the install. Brig refuses it under
+signs a record of their digests. A file in the bundle's `share/guest` that
+differs from the record was changed after the install. Brig refuses under
 `warn` as well as `require`, with exit `5`. The same refusal names a record the
 release's `checksums.txt` does not list, or a `checksums.txt` whose signature
 does not verify.
 
-Run brig's `install.sh` again to put the bundle's files back. If the kernel is
+Run Brig's `install.sh` again to put the bundle's files back. If the kernel is
 your own build, keep it in a directory of its own and point `BRIG_BOOT_ASSETS`
 there. If the bundle was released from a fork, its signature names the fork's
-release workflow: set `BRIG_VERIFY_RUNTIME_IDENTITY` to it. See [security.md](security.md#the-kernel-not-only-the-image).
+release workflow: set `BRIG_VERIFY_RUNTIME_IDENTITY` to it. See
+[security.md](security.md#the-kernel-not-only-the-image).
+
+Confirm:
+
+```bash
+brig run claude
+```
+
+The run prints `brig: image and boot assets verified`.
 
 ## The sandbox never became ready
 
 ```
-brig: sandbox did not become ready; check 'brig logs claude (or the runtime's own, hull logs brig-claude-code)'
+brig: sandbox did not become ready; check 'brig logs claude-code (or the runtime's own, /opt/homebrew/bin/hull logs brig-claude-code)'
 ```
 
-On Linux the second half names `nerdctl logs` instead.
+On Linux the second half names `nerdctl logs`.
 
 The runtime reported the sandbox running, but the agent inside it never
-answered. Those are two different moments: the microVM starts, and a few
-seconds later the guest binds its listener. Brig waits for the second one and
-gave up.
+answered. The microVM starts first, and the guest binds its listener a few
+seconds later. Brig waited for the listener and gave up.
 
-Read the log, which is what the message points at:
+Read the log the message names:
 
 ```bash
 brig logs claude
 ```
 
-That is `hull logs` underneath, and the message names that spelling too, for
-a boot that never became a sandbox Brig can address by ref.
+That runs `hull logs`. The message names that command too, for a boot that
+never became a sandbox Brig can address by ref.
 
-The guest's own errors are there, not in Brig's output. If the guest is only
-slow rather than broken, give it longer with `BRIG_READY_TIMEOUT` (seconds,
-default 30):
+The guest's own errors are in that log. If the guest is slow, give it
+longer with `BRIG_READY_TIMEOUT` (seconds, default 30):
 
 ```bash
 BRIG_READY_TIMEOUT=60 brig run claude
@@ -617,9 +626,9 @@ not there: stat /old/path/hull: no such file or directory
 ```
 
 Your own profile's `runtimeBin:` field names a binary that moved or was
-removed. `brig doctor` does not catch this: its `runtime` line reads
-`BRIG_RUNTIME_BIN`, never a single profile's own field. A broken
-`runtimeBin` in `mine` reads `ok` there, and fails only when you run `mine`.
+removed. The exit code is `4`. A bare `brig doctor` does not catch this: it
+reads no profile's `runtimeBin`, so its `runtime` line can read `ok`.
+`brig doctor mine` checks that profile's binary.
 
 Open the profile and fix or remove the line:
 
@@ -630,32 +639,31 @@ brig agent edit mine
 Confirm:
 
 ```bash
-brig info mine
+brig doctor mine
 ```
 
-No runtime error means the field is fixed.
+The `runtime` line reads `ok` and names the binary.
 
 ## A required secret is missing
 
 ```
-brig: missing secret "gh-token" needed by the mine sandbox -- create it
+brig: missing secret "gh-token" needed by the brig-mine sandbox -- create it
 first with: brig secret create gh-token
 ```
 
-A profile's secret declared `required: true` has no value in Brig's secret
-store yet. This run exits with code `6`. None of the built-in profiles ship
-a required secret, so this is your own profile's declaration (`brig agent
-edit mine`). Two secrets missing at once list one line each instead of one
-sentence.
+A secret the profile declares `required: true` has no value in Brig's secret
+store. The exit code is `6`. No built-in profile declares a required secret,
+so the declaration is in your own profile (`brig agent edit mine`). When
+several secrets are missing, the message lists one line for each.
 
-Supply the value the message names:
+Store the value with the command the message names:
 
 ```bash
 brig secret create gh-token
 ```
 
-A secret the profile marks importable names `brig secret import <profile>`
-instead, to carry the value in from your host rather than typing it in.
+For a secret the profile marks importable, the message names `brig secret
+import <profile>`, which carries the value in from your host.
 
 Confirm:
 
@@ -677,10 +685,9 @@ for this run, or upgrade macOS
 Six of the eight built-in profiles ask for the `hvi` hypervisor backend. It
 uses Apple's in-kernel interrupt controller, the `hv_gic_*` calls that
 arrived in macOS 15. Brig reads the macOS version before it asks the runtime
-for anything. It refuses an `hvi` run on an older one rather than let the
-boot fail further in with nothing to name.
+for anything, and refuses an `hvi` run on an older one.
 
-For one run, use the `vz` backend, Virtualization.framework, instead:
+For one run, use the `vz` backend (Virtualization.framework):
 
 ```bash
 BRIG_HYPERVISOR=vz brig run claude --network shared
@@ -701,8 +708,7 @@ brig run claude
 With both settings applied, or on macOS 15 or newer using `hvi`, the run
 reaches the agent's prompt instead of refusing.
 
-An older Brig did not check the version first, and left this to find another
-way. Its boot log:
+An older Brig did not check the version first. Its boot failed like this:
 
 ```
 VMM started (PID 33351)
@@ -710,19 +716,54 @@ brig: sandbox did not become ready; check 'brig logs claude (or the runtime's
 own, /opt/homebrew/bin/hull logs brig-claude-code)'
 ```
 
-`VMM started (PID 33351)` is hull's own line, not Brig's. Reading the log
-the message points at:
+`VMM started (PID 33351)` is hull's own line. The log that message names
+held one line, `dyld[33351]: missing symbol called`, which does not name
+the symbol. Upgrade Brig to get the refusal above.
+
+## A policy or an isolated network was refused on vz or qemu
+
+```
+brig: a policy applies to this sandbox, and hull on vz cannot enforce the egress
+policy: vz takes its network from vmnet, which brig does not filter. brig
+enforces a policy at the user-mode network gateway that only the hvi backend
+uses. Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy. brig will not
+boot a sandbox under a policy nothing enforces
+```
+
+Brig enforces an egress policy at the network gateway of the `hvi` backend.
+On `vz` and `qemu` the sandbox takes its network from vmnet, which Brig does
+not filter, so Brig refuses the run. The exit code is `7`. On Linux, nerdctl
+and docker cannot enforce a policy either, and the message says to detach
+it.
+
+An isolated network needs the same gateway. With no policy bound, its
+refusal exits `1`:
+
+```
+brig: --network isolated gives the sandbox a network of its own, which brig can
+only do on the hvi backend, where it owns the gateway (BRIG_HYPERVISOR is "vz");
+vmnet decides what a vz sandbox shares. Run it on hvi, or run sandboxes that
+must not reach each other on separate hosts (see docs/security.md)
+```
+
+When the profile's `network: isolated` asked for it, the message names the
+profile and the way to run it on the shared network.
+
+Run it on `hvi`. To stay on `vz` or `qemu`, detach the policy and pass
+`--network shared`. `brig policy check` names what is bound:
 
 ```bash
-brig logs claude
+BRIG_HYPERVISOR=hvi brig run claude
+brig policy check claude-code
 ```
 
-```
-dyld[33351]: missing symbol called
+Confirm:
+
+```bash
+BRIG_HYPERVISOR=hvi brig plan claude
 ```
 
-is the whole log, and the symbol is never named. That is what an unnamed
-crash looked like before Brig added the refusal above.
+The plan has no `REFUSED` row.
 
 ## docker does not carry annotations through to the runtime
 
@@ -737,9 +778,9 @@ it
 ```
 
 Brig accepts Docker where it looks for nerdctl, and most of what it needs
-works either way. Passing the kernel as an OCI annotation does not: Docker
-drops it, so the guest starts with no kernel to boot. Brig refuses
-rather than let that fail somewhere further from the cause.
+works on both. Passing the kernel as an OCI annotation does not: Docker
+drops it, so the guest would start with no kernel to boot. Brig refuses
+before the boot.
 
 Install nerdctl, or point Brig at one you already have:
 
@@ -753,15 +794,50 @@ Confirm:
 brig doctor
 ```
 
-The `runtime` line names `nerdctl`, not `docker`.
+The `runtime` line names `nerdctl`.
+
+## A containerd shim that shares the host kernel was refused
+
+Linux only:
+
+```
+brig: refusing BRIG_CONTAINERD_RUNTIME=runc: that shim gives the guest the
+host's own kernel, which is not the boundary brig provides. Unset
+BRIG_CONTAINERD_RUNTIME to use the default microVM shim io.containerd.urunc.v2.
+A sandbox already started on such a shim keeps it, and the next run would join
+it by name: stop it first with brig stop <ref>
+```
+
+`BRIG_CONTAINERD_RUNTIME` names `runc` or `crun`, by name or by path. Those
+shims run the guest as a plain container on the host's kernel. Brig puts a
+kernel of the guest's own between the agent and the host, so it refuses the
+run. The exit code is `1`. A shim Brig cannot place, such as another microVM
+shim, is allowed.
+
+Unset the variable. If an older Brig started this sandbox on such a shim,
+stop it first:
+
+```bash
+unset BRIG_CONTAINERD_RUNTIME
+brig stop claude
+```
+
+Confirm:
+
+```bash
+brig plan claude
+```
+
+The plan has no `REFUSED` row, and its `ISOLATION` row names
+`io.containerd.urunc.v2`.
 
 ## The sandbox restarted when I ran sh
 
-Three things trigger this: a stale share, a stale policy, or a session run
-against a different project than it last used (see
-[sessions.md](sessions.md)). Each recreates the sandbox rather than failing
-it. All persistent state lives in the guest home on the host either way.
-Any other session on that sandbox is disconnected when it restarts.
+Four things cause this: a stale share, a stale policy, a different network
+posture, or a different project than the session last used (see
+[sessions.md](sessions.md)). In each case Brig warns and recreates the
+sandbox. The guest home on the host is kept. Any other session on that
+sandbox is disconnected when it restarts.
 
 **A different guest home than the one remembered.**
 
@@ -771,18 +847,17 @@ brig: the running sandbox is not mounting /Users/alex/work: its share went stale
   ↳ brig restarts it, and any other session using this sandbox will be disconnected
 ```
 
-Brig compares the guest home the running sandbox has against the one this
-command asked for. Passing an explicit `--home` (or `BRIG_WORKSPACE`) that
-does not match what the sandbox already has trips this.
+Brig compares the guest home the running sandbox mounts with the one this
+command asked for. A `--home` (or `BRIG_WORKSPACE`) that differs from the
+one the sandbox mounts causes the restart.
 
-Check which guest home a sandbox is mounting, in the `WORKSPACE` column:
+The `WORKSPACE` column shows which guest home a sandbox mounts:
 
 ```bash
 brig ls
 ```
 
-If you did not mean to change it, drop the `--home` flag so `sh` addresses
-the same session the sandbox already has.
+If you did not mean to change it, drop the `--home` flag.
 
 **A network policy that no longer matches what is running.**
 
@@ -792,9 +867,9 @@ brig: this sandbox is running under a different network policy than the one that
   ↳ any other session using this sandbox will be disconnected
 ```
 
-Egress rules are fixed at boot. Attaching or detaching a policy after a
-sandbox is already up changes nothing it can reach until the next restart.
-The next `brig sh` or `brig run` on that session triggers one.
+Egress rules are fixed at boot. Attaching or detaching a policy while a
+sandbox is up changes nothing it can reach until the next restart. The next
+`brig sh` or `brig run` on that session restarts it.
 
 Check what a profile has bound, and whether Brig can enforce it:
 
@@ -811,7 +886,7 @@ brig: this sandbox was started with the isolated posture and --network asks for 
 ```
 
 A sandbox keeps the posture it was started with, so a command that names
-no posture never trips this. `--network` or `BRIG_NETWORK` naming a
+no posture never causes this. `--network` or `BRIG_NETWORK` naming a
 different one does. If you did not mean to change it, check whether
 `BRIG_NETWORK` is exported in this shell.
 
@@ -826,9 +901,9 @@ brig: the running sandbox has /Users/alex/app mounted as its project and this ru
   ↳ any other session using this sandbox will be disconnected
 ```
 
-A project is a share too, fixed at boot the same as the guest home. Naming
-a directory on the run line that differs from the one the session last used
-trips this.
+A project is a share too, fixed at boot like the guest home. Naming a
+directory on the run line that differs from the one the session last used
+causes the restart.
 
 Check what a session last used:
 
@@ -837,7 +912,7 @@ brig info claude
 ```
 
 The `PROJECT` row, when there is one, names it. Pass the same directory, or
-none, to keep the sandbox up instead of restarting it.
+none, to keep the sandbox up.
 
 Confirm:
 
@@ -854,8 +929,7 @@ does not print another restart warning.
 Error: Unknown command: trust
 ```
 
-This message is Homebrew's, not Brig's. `brew trust` needs a recent Homebrew,
-and an older one does not have it.
+This message is Homebrew's. `brew trust` needs a recent Homebrew.
 
 Check your version and update:
 
@@ -870,31 +944,30 @@ Confirm:
 brew trust brig-sh/brig
 ```
 
-The command runs, and you can carry on with the install.
+The command runs, and you can continue the install.
 
 ## A symlinked or moved guest home was refused
 
 ```
-brig: refusing to write /Users/alex/brig/claude-code/.claude.json: it is a
-symlink to "/Users/alex/.ssh/authorized_keys", and brig writes only regular
-files inside the workspace. The workspace is mounted read-write as the
-sandbox's home, so that link was put there from inside the sandbox, to have
-brig -- which runs as you, on the host -- reach a file the sandbox cannot.
-Nothing was written; inspect /Users/alex/brig/claude-code/.claude.json and
-remove it before running brig again: a symlink leads out of a directory brig
-is checking
+brig: refusing to write /Users/alex/.brig/homes/brig-claude-code/.claude.json:
+it is a symlink to "/Users/alex/.ssh/authorized_keys", and brig writes only
+regular files inside the workspace. The workspace is mounted read-write as the
+sandbox's home, so that link was put there from inside the sandbox, to have brig
+-- which runs as you, on the host -- reach a file the sandbox cannot. Nothing
+was written; inspect /Users/alex/.brig/homes/brig-claude-code/.claude.json and
+remove it before running brig again: a symlink leads out of a directory brig is
+checking
 ```
 
 Brig writes state files into the guest home from the host, as you. A
 symlink where one of those files belongs points Brig at a host path the
-sandbox itself cannot reach. Brig refuses rather than following it. It
-writes only regular files there, so a link in the way was put there on
-purpose, or by the sandbox reaching for the host. Nothing was written.
+sandbox cannot reach. Brig refuses to follow it. Brig writes only regular
+files there, so it did not create the link: you did, or the sandbox did.
+Nothing was written.
 
-This is not a case for retrying. Inspect the path the message names and
-remove the link, or point the guest home somewhere else. Pointing `--home`
-at a symlink is refused the same way, and is fixed by naming the real
-directory.
+Retrying gives the same refusal. Inspect the path the message names and
+remove the link, or point the guest home somewhere else. Brig refuses a
+`--home` that is a symlink the same way: name the real directory.
 
 Confirm:
 
@@ -928,11 +1001,11 @@ brig run claude /Volumes/data/work/app
 ```
 
 When the message ends with "This session's project was remembered from an
-earlier run", the project came from an earlier `brig run` of this session,
-not from this command. `brig run` with the real directory after the ref, or
-with `--no-project`, replaces it. Until then only the verbs that boot or join
-the sandbox are refused. `brig stop`, `brig rm` and `brig info` still work,
-and `brig info` repeats the refusal.
+earlier run", the project came from an earlier `brig run` of this session.
+`brig run` with the real directory after the ref, or with `--no-project`,
+replaces it. Until then Brig refuses only the verbs that boot or join the
+sandbox. `brig stop`, `brig rm` and `brig info` still work, and `brig info`
+repeats the refusal.
 
 Confirm:
 
