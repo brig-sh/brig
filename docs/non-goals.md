@@ -1,7 +1,7 @@
 # What Brig will not do
 
 Brig delegates every mechanical operation to a runtime it does not own. It
-keeps its dependencies to three and needs no account. It adds only the
+keeps its dependencies to four and needs no account. It adds only the
 things that the runtime has no concept of. The limits below are written
 decisions, so a proposal to cross one has a place to start.
 
@@ -16,7 +16,7 @@ where the decisions of Brig end and the decisions of the runtime start.
 
 To own the boot path is to own Virtualization.framework, a kernel command
 line, an image store, a snapshotter, and the vulnerability surface of all of
-them. Brig exists to handle your credentials carefully, with three direct
+them. Brig exists to handle your credentials carefully, with four direct
 dependencies. The README section "How it works" lists the four things that
 Brig adds on top:
 
@@ -123,9 +123,8 @@ There is nothing to sign in to. Every piece of state is on your disk:
 | Guest homes | `~/.brig/homes` |
 | Sessions | The inventory of `brigd` |
 
-Brig registers nowhere and sends no usage data itself.
-[Telemetry](telemetry.md) lists the usage events that the macOS runtime
-sends.
+Brig registers nowhere. [Telemetry](telemetry.md) lists the anonymous usage
+events it sends, and how to turn them off.
 
 Nothing we run can be down while you try to boot a sandbox. An account also
 widens the security page. The threat model of Brig then has to include our

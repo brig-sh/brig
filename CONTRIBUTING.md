@@ -52,13 +52,14 @@ CI does not call `make`. It runs these steps
 
 ## Dependencies
 
-Brig has three direct dependencies:
+Brig has four direct dependencies:
 
 | Module | Use |
 | --- | --- |
 | `sigs.k8s.io/yaml` | Profiles |
 | `golang.org/x/sys` | Terminal and process calls |
 | `github.com/godbus/dbus/v5` | The Linux secret store |
+| `github.com/brig-sh/hull/pkg/telemetry` | Usage and crash telemetry, under the answer hull keeps. Its only dependency is `golang.org/x/sys` |
 
 The project keeps this list short. Brig runs `cosign`, `oras` and `security`
 as subprocesses and does not link them. That keeps the attack surface small

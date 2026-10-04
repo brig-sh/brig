@@ -183,19 +183,19 @@ func TestSplitEnvRefusesAStoredSecretTheRuntimeReads(t *testing.T) {
 // just misattributes or double-counts, which is exactly the kind of thing
 // nobody notices for months.
 func TestTelemetrySuppressesPlumbing(t *testing.T) {
-	for _, prefix := range []string{"HULL"} {
-		plumbing := strings.Join(telemetryEnv(false), " ")
-		if !strings.Contains(plumbing, prefix+"_TELEMETRY_SUPPRESS=1") {
-			t.Errorf("plumbing call is counted for %s: %v", prefix, plumbing)
-		}
-		if !strings.Contains(plumbing, prefix+"_TELEMETRY_PRODUCT=brig") {
-			t.Errorf("%s attribution missing: %v", prefix, plumbing)
-		}
-		counted := strings.Join(telemetryEnv(true), " ")
-		if !strings.Contains(counted, prefix+"_TELEMETRY_SUPPRESS= ") &&
-			!strings.HasSuffix(counted, prefix+"_TELEMETRY_SUPPRESS=") {
-			t.Errorf("user action is suppressed for %s: %v", prefix, counted)
-		}
+	counting(t, true)
+	plumbing := strings.Join(telemetryEnv(false), " ")
+	if !strings.Contains(plumbing, "HULL_TELEMETRY_SUPPRESS=1") {
+		t.Errorf("plumbing call is counted: %v", plumbing)
+	}
+	if !strings.Contains(plumbing, "HULL_TELEMETRY_PRODUCT=brig") {
+		t.Errorf("attribution missing: %v", plumbing)
+	}
+	// A user action reports what only hull sees, and never hull's own command
+	// event: brig sends that one.
+	counted := strings.Join(telemetryEnv(true), " ")
+	if !strings.Contains(counted, "HULL_TELEMETRY_SUPPRESS=command") {
+		t.Errorf("user action is suppressed, or counted twice: %v", counted)
 	}
 }
 

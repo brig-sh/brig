@@ -27,6 +27,7 @@ import (
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/session"
+	"github.com/brig-sh/brig/internal/telemetry"
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
@@ -172,8 +173,16 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == egress.Verb {
 		os.Exit(egress.Main(os.Args[2:], os.Stderr))
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			handlePanic(r)
+		}
+	}()
+	startTelemetry = telemetry.Start
+	telemetry.SpawnUploader = spawnUploader
 	err := run(os.Args[1:])
 	if err == nil {
+		finishTelemetry(nil)
 		return
 	}
 	// The agent ran under --json: its own exit status is brig's, its output has
@@ -182,9 +191,13 @@ func main() {
 	// -- it just returns what the agent returned.
 	var ae *agentExit
 	if errors.As(err, &ae) {
+		finishTelemetry(err)
 		os.Exit(ae.code)
 	}
 	wrap.Stderr.Error(err.Error())
+	// After the message, so whatever the event waits for is not in front of
+	// it.
+	finishTelemetry(err)
 	// The exit status is a stable, documented set: a script can tell "you
 	// asked for the wrong thing" from "it ran and failed" from "the sandbox
 	// could not be verified" without parsing the message. exitCode owns the
@@ -308,6 +321,9 @@ func dispatch(args []string) error {
 	if hint := profile.LegacyHint(); hint != "" {
 		warnf("%s", hint)
 	}
+	// After the profiles, which a bare ref is looked up in, and before
+	// anything boots: the question, when there is one, comes first.
+	beginTelemetry(verb)
 	// --json in the global position is refused here, before the verb runs, when
 	// the verb has no JSON form. The run-line spelling is refused later, where
 	// opts.json is known; this catches the canonical position. See
@@ -562,6 +578,9 @@ func dispatch(args []string) error {
 	if err := rejectTail(verb, tail); err != nil {
 		return err
 	}
+	// The run line is read, and nothing has booted: the question, when
+	// there is one, comes now.
+	askTelemetry(wantJSON)
 	t, ok := profile.Lookup(profileName)
 	if !ok {
 		if profileName == "" {
@@ -570,6 +589,7 @@ func dispatch(args []string) error {
 		}
 		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
 	}
+	telemetry.SetAgent(t.Name, profile.Embedded(t.Name))
 	// sh, and run on a shell profile, hand their words to the login shell.
 	// Read them before anything boots, so a -c missing its script is a usage
 	// error and a script typed as one word gets its hint up front. run -d

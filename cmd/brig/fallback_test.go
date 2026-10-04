@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +10,8 @@ import (
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
-// fellBackRuntime is a runtime that drives a binary nobody named. It collects
-// no telemetry, so `brig telemetry status` reaches it and calls nothing else.
+// fellBackRuntime is a runtime that drives a binary nobody named. It answers
+// nothing but the note, so a test that reaches anything else panics.
 type fellBackRuntime struct {
 	runtime.Runtime
 	note string
@@ -28,24 +27,29 @@ func withVerbosity(t *testing.T, v wrap.Verbosity) {
 }
 
 // A detected runtime that fell back says so on stderr at default verbosity.
-// Driven through telemetry. The other verbs that detect a runtime have a test
-// each below, so a call site that stops asking fails one of them.
+// Driven through rm --all --dry-run, whose list is the only thing on stdout.
+// The other verbs that detect a runtime have a test each below, so a call site
+// that stops asking fails one of them.
 func TestFallbackNotePrintedAtDefaultVerbosity(t *testing.T) {
 	withVerbosity(t, wrap.Normal)
 	const note = "nerdctl is not on PATH, so brig is driving docker (/usr/bin/docker)"
-	withRuntime(t, &fellBackRuntime{note: note})
+	withRuntime(t, &fellBackListRuntime{fellBackRuntime{note: note}})
 
-	var out bytes.Buffer
+	var stdout string
 	stderr := captureStderr(t, func() {
-		if err := telemetryCmd(&out, []string{"status"}); err != nil {
+		var err error
+		stdout, err = captureStdout(t, func() error {
+			return removeAll("brig rm --all", nil, removeOpts{all: true, dryRun: true})
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
 	})
 	if !strings.Contains(stderr, "brig: "+note) {
 		t.Errorf("stderr does not carry the fallback note: %q", stderr)
 	}
-	if strings.Contains(out.String(), "docker") {
-		t.Errorf("the note leaked into stdout, where a script reads: %q", out.String())
+	if strings.Contains(stdout, "docker") {
+		t.Errorf("the note leaked into stdout, where a script reads: %q", stdout)
 	}
 }
 

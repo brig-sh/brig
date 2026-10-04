@@ -1,7 +1,7 @@
 # Telemetry
 
-Brig lets its sandbox runtime count three operations, and you can turn the
-counting off.
+Brig sends anonymous usage events and crash reports, and you can turn them
+off.
 
 ## Turn it off
 
@@ -10,7 +10,8 @@ brig telemetry off
 ```
 
 Brig records the answer on this machine. The answer holds whether or not
-Brig is the caller.
+Brig is the caller: hull, the runtime Brig drives on macOS, reads the same
+answer.
 
 To turn telemetry off without a recorded answer, set `DO_NOT_TRACK=1` in
 your environment:
@@ -19,49 +20,72 @@ your environment:
 DO_NOT_TRACK=1 brig run claude
 ```
 
-`HULL_TELEMETRY_DISABLED=1` reaches hull the same way as `DO_NOT_TRACK=1`,
-untouched. Both variables beat an answer already recorded on disk.
+`HULL_TELEMETRY_DISABLED=1` works the same way as `DO_NOT_TRACK=1`. Both
+variables are compared to the exact string `1`, and both beat an answer
+already recorded on disk.
 
 ## What is counted
 
-Brig keeps no telemetry store and runs no collector. The sandbox runtime
-does the counting and the sending.
+Brig sends two kinds of event itself:
 
-| Host | Runtime | What is sent |
-| --- | --- | --- |
-| macOS | `hull` | the events for the three operations below |
-| Linux | `nerdctl` | nothing |
+- **One event per command.** It names the command, the agent it ran, and
+  whether it worked. A command that failed carries the class of the failure,
+  never its message.
+- **A crash report** when Brig panics.
 
-Brig lets the runtime count three operations:
+On macOS, hull also reports what only it can see, for the sandboxes Brig
+asks it to run:
 
-- **A sandbox boot.**
-- **A sandbox stop**, including the stop inside a restart, when Brig recreates
-  a sandbox whose shares or policy went stale. `brig rm` stops each sandbox
-  before it removes it, so each of those stops is counted. The removal is not
-  counted.
-- **The command that hands your terminal to the agent**, which is `run`
-  without `--json`, `sh`, or the `--json` child path either one takes.
+- **A sandbox boot**, with the hypervisor backend.
+- **How long the sandbox lived**, when it stops.
+- **The memory use and CPU share of its VM**, while a session is attached to
+  it: first a few seconds after the attach, then every 30 seconds.
+- **A crash report** when hull panics.
 
-Each operation is counted on its own, so one command can count more than
-once:
+| Host | What is sent |
+| --- | --- |
+| macOS | Brig's events, and hull's events for the sandboxes Brig runs |
+| Linux | Brig's events. `nerdctl` and `docker` send nothing |
 
-- A `brig run` that boots a sandbox counts the boot and the handover.
-- `brig rm --all` counts the stop of each sandbox it removes.
+Every other call Brig makes to hull is not counted. A reachability probe, a
+`ps` lookup and cleanup work send nothing. hull never sends a command event
+of its own for a call Brig makes, so a command counts once.
 
-Brig suppresses counting on every other call it makes. A reachability probe,
-a `ps` lookup, cleanup work and the telemetry query are never counted.
+Some invocations send no command event:
+
+- `brig telemetry`, which is how you answer, and the shell completion
+  script, which runs in every new shell
+- a bare `brig`, a mistyped global flag, and a spelling Brig has removed
+- a command stopped by Ctrl-C or a signal before it hands your terminal to
+  the agent. A panic sends its crash report instead
+
+A `brig run` or `brig sh` that hands your terminal to the agent counts as
+`ok` once the handover starts, whatever the agent does after it.
 
 ### Before you answer
 
-Until hull reports that telemetry is on, Brig suppresses counting for a
-sandbox boot and a sandbox stop. Neither has a terminal attached, so neither
-is counted before you answer.
+Nothing is sent until someone answers.
 
-The command that hands your terminal to the agent is the one exception, when
-the standard input of Brig is a terminal. There Brig lets the prompt from
-hull through, so you are asked before anything is sent. Whether that prompt
-always comes before the send depends on hull's code, which is outside the
-Brig repository.
+The first `brig run` or `brig sh` on a terminal asks the question, before
+anything boots, when Brig runs in the foreground of that terminal:
+
+```
+brig collects anonymous usage events and crash reports to help us
+improve it: command names, which agent and backend you run, OS and tool
+versions, and stack traces. An agent of your own goes out as a salted
+hash of its name. File paths, arguments and image names are never sent.
+Docs: https://github.com/brig-sh/brig/blob/main/docs/telemetry.md
+Enable telemetry? [Y/n]
+```
+
+A single enter or `y` answers yes, and `n` answers no. Ctrl-D is not an
+answer, and the question stays open. Any other command, a script, a pipe, a
+job in the background, CI, `--json` and `-q` never ask, and send nothing
+until there is an answer.
+
+A recorded yes stops counting as an answer when Brig or hull widens what it
+collects. The next `brig run` or `brig sh` on a terminal asks again, and
+nothing is sent until you answer.
 
 ## Check or change the state
 
@@ -80,103 +104,121 @@ After `on` or `off`, Brig reports the state that resulted, which can differ
 from the answer you recorded. If `DO_NOT_TRACK` is set in your shell,
 `brig telemetry on` still reports off and names the variable.
 
-The report is one of four states: on, off, not answered yet, and cannot
-tell.
+The report is one of three states: on, off, and not answered yet. Under the
+state, `↳` lines say what decided it, and `→` lines say what to type to change
+it. When the machine has an install identifier, the report names it.
 
 Telemetry is on:
 
 ```
 telemetry: on
-A sandbox boot and the command that takes your terminal each count
-once. `brig telemetry off` stops it.
+  ↳ each brig command counts once
+  ↳ on macOS, a sandbox also reports its boot and how long it ran
+  ↳ install id: 12345678-90ab-4cde-8f01-234567890abc
+  → to turn it off:  brig telemetry off
 ```
 
 Telemetry is off because a variable in your shell decided it:
 
 ```
 telemetry: off
-DO_NOT_TRACK=1 in this environment turns it off, and beats any
-answer recorded on this machine.
+  ↳ DO_NOT_TRACK=1 in this environment turns it off
+  ↳ it beats any answer recorded on this machine
+  ↳ install id: 12345678-90ab-4cde-8f01-234567890abc
+  → to let the recorded answer decide:  unset DO_NOT_TRACK
 ```
 
 Telemetry is off because you recorded the answer with `brig telemetry off`:
 
 ```
 telemetry: off
-The answer is recorded on this machine. `brig telemetry on` reverses it.
+  ↳ the answer is recorded on this machine
+  ↳ install id: 12345678-90ab-4cde-8f01-234567890abc
+  → to turn it on:  brig telemetry on
 ```
 
-Nobody answered yet:
+Nobody answered yet, or the answer was to a shorter list than today's:
 
 ```
 telemetry: not answered yet
-Nothing goes out for a sandbox boot until you answer, and the first
-command that hands your terminal to an agent asks the question.
-`brig telemetry on` or `brig telemetry off` answers it now.
+  ↳ nothing goes out until you answer
+  ↳ the first `brig run` or `brig sh` on a terminal asks the question
+  → to turn it on:   brig telemetry on
+  → to turn it off:  brig telemetry off
 ```
 
-A recorded answer stops counting as an answer once hull widens what it
-collects. `status` then reports this unanswered state until you answer
-again.
-
-Brig cannot tell:
-
-```
-telemetry: cannot tell
-The sandbox runtime did not report a state this version of brig
-recognises. Boots are not counted while that is true.
-```
-
-Brig reads one line from the runtime. If Brig does not recognize the phrase,
-it treats the question as unanswered, reports `cannot tell` and does not
-count boots. An older
-runtime or a newer one can cause this.
-
-The runtime implements no telemetry reporting, which is `nerdctl` on Linux
-today:
-
-```
-telemetry: off
-The sandbox runtime on this host sends nothing, so there is nothing
-to turn off.
-```
+Every event carries the install identifier, so it finds the events this
+machine sent, for example when you ask for them to be deleted. Asking for the
+report creates no identifier.
 
 The report and `brig telemetry --help` do not name the runtime, so you can
 opt out without knowing which binary sends. `brig telemetry` takes no
 `--json` form.
 
+## Where the answer lives
+
+The answer and the install identifier are in `~/.hull/telemetry.json`. You
+can read or delete that file at any time. Deleting it rotates the install
+identifier and forgets the answer.
+
+Brig never waits on the network. When a command ends, or right before it
+hands your terminal to the agent, Brig writes its event to `~/.hull/outbox/`
+and starts `brig telemetry flush` in the background. That process uploads the
+outbox and the crash reports in `~/.hull/crashes/`, then exits, within about
+30 seconds. It has no terminal and prints nothing, and only one runs at a
+time. An event it cannot send stays queued, and the next command's upload
+tries again.
+
+A build of Brig with no endpoint, such as one from `go install`, sends
+nothing and queues nothing. `brig telemetry off` empties the queues.
+
+These are hull's files, so one answer covers both tools. On Linux, where hull
+does not run yet, Brig creates `~/.hull` for these files alone. Brig run
+under sudo with your HOME leaves no files there.
+
 ## What an event carries
 
-The events come from hull, and
-[hull's own telemetry docs](https://github.com/brig-sh/hull/blob/main/docs/telemetry.md)
-are the field-by-field reference. The summary below, and the list in
-[What is never collected](#what-is-never-collected), are not checked against
-hull's source.
+Every event carries:
 
-The envelope of an event carries:
+| Field | Example | What it is |
+| --- | --- | --- |
+| `schema_version` | `3` | which version of this list the event follows |
+| `event` | `command` | `command` or `crash` from Brig; `start`, `end`, `metrics` and `crash` from hull |
+| `product` | `brig` | |
+| `version` | `0.4.0` | Brig's version |
+| `platform` | `macos` | `macos` or `linux` |
+| `os` | `26.3.1` | the macOS version, or the distribution and its version from os-release, such as `ubuntu 24.04` |
+| `arch` | `arm64` | the CPU architecture |
+| `uname` | `Darwin 25.3.0 arm64` | the kernel's name, the version at the start of its release, and the machine; not the hostname, the kernel's build string, or the rest of the release |
+| `install_id` | random UUID | generated on your machine, and not derived from it |
+| `captured_at` | RFC 3339 time | when the event happened |
+| `checksum` | hex SHA-256 | over a few of the fields above, so the collector can drop a forged event |
 
-- the product name and version
-- the OS version and CPU architecture
-- an install identifier generated on your machine
-- a timestamp and a checksum
+A command event also carries:
 
-The events that hull sends for an operation also carry:
+| Field | Example | What it is |
+| --- | --- | --- |
+| `command` | `run` | the command, such as `run`, `sh` or `ls`. A word that is not one of Brig's commands is sent as `unknown` |
+| `outcome` | `ok` | `ok` or `error` |
+| `error_class` | `credentials` | on a failure, one of `usage`, `not-found`, `runtime`, `verify`, `credentials`, `capability` and `other`: the classes of the [exit codes](cli.md), never the message |
+| `agent` | `claude-code` | a profile that Brig ships, by name. Any other profile is sent as `custom` |
+| `agent_hash` | `91805c9cfd386de4` | for a `custom` profile only: a salted hash of its name |
+| `runtime` | `hull` | the runtime Brig drove: `hull`, `nerdctl` or `docker` |
 
-- which runtime operation ran, and whether it succeeded, with a failure
-  bucketed into a class such as `network` or `permission`, never its
-  error text
-- which hypervisor backend booted, and whether the boot worked
-- how long the sandbox lived
-- while a session is attached to the sandbox, the memory use and CPU share
-  of its VMM process, first a few seconds after the attach and then every
-  30 seconds
-- if Brig or the runtime panics, the panic type, with a stack trace whose
-  paths are trimmed
+`agent_hash` lets one profile of your own be counted across machines without
+sending its name. The salt is in Brig's source, so anyone who guesses the name
+can compute the same hash. A name that is easy to guess is as good as sent.
+
+A crash report carries the command, the Go type of the panic, and a stack
+trace whose paths are trimmed. It never carries the panic message, which can
+hold a path.
+
+The events hull sends for a sandbox carry Brig's version, and hull's own as
+`runtime_version`.
+[hull's telemetry docs](https://github.com/brig-sh/hull/blob/main/docs/telemetry.md)
+are the field-by-field reference for those, and for the transport.
 
 ## What is never collected
-
-The list below is a commitment from hull, and it is not limited to one
-build:
 
 - guest home paths, or any host path
 - repository names, branches or remotes

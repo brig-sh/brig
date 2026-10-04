@@ -9,7 +9,7 @@ import (
 )
 
 // The DNS wire format, as far as the resolver needs it. brig keeps its
-// dependencies to three, so this reads and rewrites messages by hand instead
+// dependencies to four, so this reads and rewrites messages by hand instead
 // of pulling in a DNS library. It never builds a record. It forwards the
 // upstream answer, rewrites the TTLs and reads the A records out of it.
 

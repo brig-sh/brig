@@ -1,40 +1,44 @@
 package runtime
 
 import (
+	"bytes"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/telemetry"
 )
 
-// stubTelemetryHull writes a stand-in for the hull binary that answers `telemetry
-// status` with the state a test names, and records the telemetry environment
-// every other invocation was given.
+// stubTelemetryHull writes a stand-in for the hull binary that records the
+// telemetry environment of every invocation but --version.
 //
-// Recording the environment is the whole point: what decides whether a fresh
-// install sends anything is one variable in the child's environment, and the
-// only honest way to assert on it is to be the child and write it down.
-func stubTelemetryHull(t *testing.T, state string) (*hull, func() string) {
+// Recording the environment is the whole point: what decides whether hull
+// sends anything is one variable in the child's environment, and the only
+// honest way to assert on it is to be the child and write it down.
+func stubTelemetryHull(t *testing.T) (*hull, func() string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stand-in is not portable to windows")
 	}
-	// The boot and the stop these tests drive release the gateway under the
-	// sandbox's name, which without a home of their own is the real ~/.brig.
-	scratchHome(t)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "env.log")
+	// It answers --version as a hull that takes a suppress list.
 	script := `#!/bin/sh
-if [ "$1" = telemetry ]; then
-  printf 'telemetry-verb=%s\n' "$2" >> "$STUB_LOG"
-  [ "$2" = status ] && printf 'telemetry: %s\n' "$STUB_TELEMETRY"
+if [ "$1" = --version ]; then
+  echo "hull 0.1.0-rc31 (stub)"
   exit 0
 fi
 {
   printf 'verb=%s\n' "$1"
   printf 'HULL_TELEMETRY_SUPPRESS=%s\n' "${HULL_TELEMETRY_SUPPRESS-<unset>}"
   printf 'HULL_TELEMETRY_PRODUCT=%s\n' "${HULL_TELEMETRY_PRODUCT-<unset>}"
+  printf 'HULL_TELEMETRY_VERSION=%s\n' "${HULL_TELEMETRY_VERSION-<unset>}"
   printf 'DO_NOT_TRACK=%s\n' "${DO_NOT_TRACK-<unset>}"
 } >> "$STUB_LOG"
 exit 0
@@ -44,7 +48,6 @@ exit 0
 		t.Fatal(err)
 	}
 	t.Setenv("STUB_LOG", log)
-	t.Setenv("STUB_TELEMETRY", state)
 	return &hull{bin: bin}, func() string {
 		b, err := os.ReadFile(log)
 		if err != nil {
@@ -54,6 +57,32 @@ exit 0
 	}
 }
 
+// counting starts brig's telemetry in a home of the test's own, with a yes on
+// file when answered is true and nothing on file otherwise. It also gives the
+// boots and stops the tests drive a home: they release the gateway under the
+// sandbox's name, which would otherwise be the real ~/.brig.
+func counting(t *testing.T, answered bool) {
+	t.Helper()
+	scratchHome(t)
+	for _, v := range []string{"DO_NOT_TRACK", "HULL_TELEMETRY_DISABLED", "HULL_TELEMETRY_DEBUG",
+		"HULL_TELEMETRY_SUPPRESS", "HULL_TELEMETRY_ENDPOINT", "HULL_TELEMETRY_PRODUCT", "HULL_TELEMETRY_VERSION"} {
+		t.Setenv(v, "")
+	}
+	// A build with no endpoint queues nothing. Nothing listens on this one.
+	t.Setenv("HULL_TELEMETRY_ENDPOINT", "http://127.0.0.1:1")
+	if answered {
+		if err := telemetry.Set(true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	telemetry.Start("run", false)
+	// The next test starts from a client that sends nothing.
+	t.Cleanup(func() {
+		_ = telemetry.Set(false)
+		telemetry.Start("run", false)
+	})
+}
+
 func boot(t *testing.T, h *hull) {
 	t.Helper()
 	if err := h.Run(RunSpec{Name: "vm", Image: "img", Mem: 2048, CPUs: 2, Counted: true}); err != nil {
@@ -61,12 +90,12 @@ func boot(t *testing.T, h *hull) {
 	}
 }
 
-// The gap this closes: hull defaults telemetry on when it cannot prompt, and
-// the boot hands it no terminal, so a fresh install used to send events for
-// its first boot before anyone had been asked anything -- with brig's name on
-// them. Nothing may go out until an answer exists.
+// hull defaults telemetry on when it cannot prompt, and the boot hands it no
+// terminal. A fresh install must not send events for its first boot before
+// anyone has been asked anything, with brig's name on them.
 func TestFreshInstallDoesNotCountTheBoot(t *testing.T) {
-	h, logged := stubTelemetryHull(t, "not configured (on by default; interactive runs will be asked)")
+	counting(t, false)
+	h, logged := stubTelemetryHull(t)
 
 	boot(t, h)
 	if err := h.Stop("vm"); err != nil {
@@ -84,26 +113,33 @@ func TestFreshInstallDoesNotCountTheBoot(t *testing.T) {
 	}
 }
 
-// The other half of the same rule: once there is an answer, the operations the
-// user asked for count again. A gate that never opens is not a consent gate,
-// it is an opt-out brig imposed on the user's behalf.
+// The other half of the same rule: once there is an answer, the boot reports
+// what only hull sees. brig counts the command itself, so hull is told to send
+// everything but its own command event, and to report brig's version.
 func TestRecordedConsentCountsTheBoot(t *testing.T) {
-	h, logged := stubTelemetryHull(t, "enabled")
+	counting(t, true)
+	h, logged := stubTelemetryHull(t)
 
 	boot(t, h)
 
-	if got := logged(); !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=\n") {
-		t.Errorf("a recorded yes did not count the boot:\n%s", got)
+	got := logged()
+	if !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=command\n") {
+		t.Errorf("a recorded yes did not count the boot, or let hull count the command twice:\n%s", got)
+	}
+	if !strings.Contains(got, "HULL_TELEMETRY_VERSION="+telemetry.Version()+"\n") {
+		t.Errorf("the boot's events would carry hull's version, not brig's:\n%s", got)
 	}
 }
 
 // DO_NOT_TRACK is the cross-tool opt-out, and it wins over everything: over
-// the boot gate, over an answer recorded on this machine, over brig's own
-// attribution. It also has to reach the child untouched, because the tool that
-// honours it is the one brig spawns.
+// an answer recorded on this machine and over brig's own attribution. It also
+// has to reach the child untouched, because the tool that honours it is the
+// one brig spawns.
 func TestDoNotTrackWins(t *testing.T) {
+	counting(t, true)
 	t.Setenv("DO_NOT_TRACK", "1")
-	h, logged := stubTelemetryHull(t, "disabled (DO_NOT_TRACK=1)")
+	telemetry.Start("run", false)
+	h, logged := stubTelemetryHull(t)
 
 	boot(t, h)
 
@@ -114,139 +150,156 @@ func TestDoNotTrackWins(t *testing.T) {
 	if !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
 		t.Errorf("DO_NOT_TRACK was set and the boot was still counted:\n%s", got)
 	}
-	state, err := h.TelemetryStatus()
+	answer, setting, err := telemetry.Status()
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if state.State != TelemetryOff {
-		t.Errorf("state = %q, want off", state.State)
+	if answer != telemetry.Off {
+		t.Errorf("answer = %q, want off", answer)
 	}
 	// Reported, because "off" with no explanation is the state a user cannot
 	// then turn back on: the answer is in the shell, not on the disk.
-	if state.Setting != "DO_NOT_TRACK=1" {
-		t.Errorf("setting = %q, want DO_NOT_TRACK=1", state.Setting)
+	if setting != "DO_NOT_TRACK=1" {
+		t.Errorf("setting = %q, want DO_NOT_TRACK=1", setting)
 	}
 }
 
-// The exception, and the reason the gate does not simply suppress everything:
-// the exec that hands over the terminal is where hull can ask the question.
-// Suppressing there would mean the prompt never appears and the answer is
-// never recorded, so telemetry would be off for good with nobody having
-// chosen that.
-func TestTerminalHandoverStaysAskable(t *testing.T) {
-	h, _ := stubTelemetryHull(t, "not configured (on by default; interactive runs will be asked)")
-
-	withTerminal := strings.Join(h.telemetryEnvFor(true, true), " ")
-	if strings.Contains(withTerminal, "HULL_TELEMETRY_SUPPRESS=1") {
-		t.Errorf("the invocation that can ask was suppressed: %s", withTerminal)
-	}
-	// Same invocation without a terminal on stdin: nobody to ask, so the boot
-	// rule applies.
-	withoutTerminal := strings.Join(h.telemetryEnvFor(true, false), " ")
-	if !strings.Contains(withoutTerminal, "HULL_TELEMETRY_SUPPRESS=1") {
-		t.Errorf("a non-interactive handover was counted: %s", withoutTerminal)
-	}
-}
-
-// A shell handover always gives the guest a pty, but only a real terminal on
-// brig's own stdin means hull has someone to answer its consent question. The
-// two are separate signals: TTY drives `hull exec -t`, CanAsk drives the boot
-// gate. A scripted `brig sh <ref> cmd` sets TTY (a login shell wants a pty)
-// without CanAsk, and on a fresh install that must still suppress -- the exact
-// case the boot gate closes and which reading TTY for both jobs had left open.
+// A shell handover always gives the guest a pty, and brig asked its question
+// before anything booted, so hull is never left to ask one. Under a script
+// with nothing answered, the handover is suppressed and the pty is unchanged.
 func TestShellHandoverSeparatesPtyFromConsent(t *testing.T) {
-	h, _ := stubTelemetryHull(t, "not configured (on by default; interactive runs will be asked)")
+	counting(t, false)
+	h, _ := stubTelemetryHull(t)
 
-	argv, env, err := h.replaceCmd(ExecSpec{Name: "vm", Cmd: []string{"bash", "-lc", "ls"}, Counted: true, TTY: true, CanAsk: false})
+	argv, env, err := h.replaceCmd(ExecSpec{Name: "vm", Cmd: []string{"bash", "-lc", "ls"}, Counted: true, TTY: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if line := strings.Join(argv, " "); !strings.Contains(line, "exec -t") {
-		t.Errorf("the guest lost its pty when brig's stdin was not a terminal: %s", line)
+		t.Errorf("the guest lost its pty: %s", line)
 	}
 	if got := strings.Join(env, " "); !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
-		t.Errorf("a scripted shell on a fresh install was counted: %s", got)
-	}
-
-	// Same handover with a terminal on brig's stdin: hull can put the question
-	// to a person, so the gate leaves it unsuppressed, and the pty is unchanged.
-	argv, env, err = h.replaceCmd(ExecSpec{Name: "vm", Cmd: []string{"bash", "-l"}, Counted: true, TTY: true, CanAsk: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(env, " "); strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
-		t.Errorf("an interactive shell could not be asked the consent question: %s", got)
-	}
-	if line := strings.Join(argv, " "); !strings.Contains(line, "exec -t") {
-		t.Errorf("an interactive shell lost its pty: %s", line)
+		t.Errorf("a shell on an unanswered install was counted: %s", got)
 	}
 }
 
 // Plumbing stays suppressed whatever the answer is: one user command counts
-// once, which is the rule that predates the gate.
+// once.
 func TestPlumbingStaysSuppressedWithConsent(t *testing.T) {
-	h, _ := stubTelemetryHull(t, "enabled")
+	counting(t, true)
 
-	if got := strings.Join(h.telemetryEnvFor(false, true), " "); !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
+	if got := strings.Join(telemetryEnv(false), " "); !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
 		t.Errorf("plumbing counted: %s", got)
 	}
 }
 
-func TestSetTelemetryRecordsTheAnswer(t *testing.T) {
-	h, logged := stubTelemetryHull(t, "disabled")
+// The handover replaces brig's process, so brig's command event has to be
+// queued before the exec: after it there is no brig left. It is queued and not
+// sent, so the agent's terminal does not wait on the network. The stub stands
+// in for the exec and checks what is on disk and what the collector has.
+func TestHandoverQueuesTheCommandEventFirst(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b.String())
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	counting(t, true)
+	t.Setenv("HULL_TELEMETRY_ENDPOINT", srv.URL)
+	h, _ := stubTelemetryHull(t)
 
-	if err := h.SetTelemetry(false); err != nil {
-		t.Fatalf("off: %v", err)
+	var queued []string
+	var sent int
+	prev := execHandover
+	execHandover = func(string, []string, []string) error {
+		queued, _ = filepath.Glob(filepath.Join(telemetry.StateDir(), "outbox", "*.json"))
+		mu.Lock()
+		sent = len(bodies)
+		mu.Unlock()
+		return nil
 	}
-	if err := h.SetTelemetry(true); err != nil {
-		t.Fatalf("on: %v", err)
-	}
+	t.Cleanup(func() { execHandover = prev })
 
-	got := logged()
-	for _, want := range []string{"telemetry-verb=off", "telemetry-verb=on"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("%s not driven:\n%s", want, got)
+	if err := h.Replace(ExecSpec{Name: "vm", Cmd: []string{"claude"}, Counted: true, TTY: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 {
+		t.Fatalf("the outbox held %v when the exec ran, want brig's command event", queued)
+	}
+	if sent != 0 {
+		t.Errorf("the handover waited on the network: %d sent before the exec", sent)
+	}
+	body, err := os.ReadFile(queued[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"event":"command"`, `"outcome":"ok"`, `"product":"brig"`, `"command":"run"`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("the queued event lacks %s: %s", want, body)
 		}
 	}
 }
 
-// Every phrase hull documents, plus the two that matter most: a state this
-// version has not seen must not read as "on", and an answer given to a
-// narrower disclosure than today's is not an answer to today's.
-func TestParseTelemetry(t *testing.T) {
-	for _, tt := range []struct {
-		out     string
-		want    TelemetryState
-		setting string
-	}{
-		{"telemetry: enabled\n", TelemetryOn, ""},
-		{"telemetry: disabled\n", TelemetryOff, ""},
-		{"telemetry: disabled (DO_NOT_TRACK=1)\n", TelemetryOff, "DO_NOT_TRACK=1"},
-		{"telemetry: disabled (HULL_TELEMETRY_DISABLED=1)\n", TelemetryOff, "HULL_TELEMETRY_DISABLED=1"},
-		{"telemetry: enabled (HULL_TELEMETRY_ENABLED=1)\n", TelemetryOn, "HULL_TELEMETRY_ENABLED=1"},
-		{"telemetry: not configured (on by default; interactive runs will be asked)\n", TelemetryUnanswered, ""},
-		{"telemetry: enabled for an older schema (interactive runs will be re-asked)\n", TelemetryUnanswered, ""},
-		{"", TelemetryUnknown, ""},
-		{"telemetry: something this version has never heard of\n", TelemetryUnknown, ""},
+// A hull before 0.1.0-rc31 reads a suppress list as no suppression at all and
+// would send its own command event next to brig's. Such a hull gets "1", and
+// so does a build from source, which may be one.
+func TestOlderHullIsNotCountedTwice(t *testing.T) {
+	counting(t, true)
+	for version, want := range map[string]string{
+		"hull 0.1.0-rc30 (go1.26.4, darwin/arm64)":                                         "HULL_TELEMETRY_SUPPRESS=1",
+		"hull 0.1.0-rc29-main.20260930191353.cc1def9":                                      "HULL_TELEMETRY_SUPPRESS=1",
+		"hull 0.1.0-rc31 (go1.26.4, darwin/arm64)":                                         "HULL_TELEMETRY_SUPPRESS=command",
+		"hull 0.1.0 (go1.26.4, darwin/arm64)":                                              "HULL_TELEMETRY_SUPPRESS=command",
+		"hull v0.1.0-rc30.0.20261004171943-6c40ea424cbf (6c40ea4, go1.26.5, darwin/arm64)": "HULL_TELEMETRY_SUPPRESS=1",
+		"hull dev": "HULL_TELEMETRY_SUPPRESS=1",
 	} {
-		got := parseTelemetry(tt.out)
-		if got.State != tt.want || got.Setting != tt.setting {
-			t.Errorf("parseTelemetry(%q) = (%q, %q), want (%q, %q)",
-				tt.out, got.State, got.Setting, tt.want, tt.setting)
+		h := &hull{bin: "unused"}
+		h.versionOnce.Do(func() { h.versionOut = version })
+		if got := strings.Join(h.countedEnv(true), " "); !strings.Contains(got, want) {
+			t.Errorf("%s: env %q, want %s", version, got, want)
 		}
 	}
 }
 
-// An older runtime with no telemetry command at all, or one that will not
-// answer, is not an answer either. The gate must close, not open, and asking
-// must not take the whole run down with it.
-func TestUnansweredRuntimeSuppresses(t *testing.T) {
-	h := &hull{bin: filepath.Join(t.TempDir(), "not-there")}
+// An exec that returns did not replace brig, so the run failed. The event
+// Handover queued says ok, so it is taken back, and the exit path sends the
+// failure instead.
+func TestAFailedHandoverIsNotReportedAsOK(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b.String())
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	counting(t, true)
+	t.Setenv("HULL_TELEMETRY_ENDPOINT", srv.URL)
+	telemetry.Start("run", false)
+	h, _ := stubTelemetryHull(t)
 
-	if _, err := h.TelemetryStatus(); err == nil {
-		t.Fatal("a missing runtime reported a telemetry state")
+	prev := execHandover
+	execHandover = func(string, []string, []string) error { return errors.New("exec: no such file") }
+	t.Cleanup(func() { execHandover = prev })
+
+	if err := h.Replace(ExecSpec{Name: "vm", Cmd: []string{"claude"}, Counted: true, TTY: true}); err == nil {
+		t.Fatal("a failed exec returned no error")
 	}
-	if got := strings.Join(h.telemetryEnvFor(true, false), " "); !strings.Contains(got, "HULL_TELEMETRY_SUPPRESS=1") {
-		t.Errorf("a runtime that would not answer counted the operation: %s", got)
+	if queued, _ := filepath.Glob(filepath.Join(telemetry.StateDir(), "outbox", "*.json")); len(queued) != 0 {
+		t.Fatalf("the ok event stayed queued after the exec failed: %v", queued)
+	}
+	telemetry.Finish("error", "runtime")
+	telemetry.Upload()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"outcome":"error"`) {
+		t.Fatalf("the collector got %q, want one failed command", bodies)
 	}
 }

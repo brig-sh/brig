@@ -36,6 +36,7 @@ import (
 	"github.com/brig-sh/brig/internal/exitcode"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/telemetry"
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
@@ -176,6 +177,10 @@ func main() {
 	if err := profile.Load(profile.Dir()); err != nil {
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
 	}
+
+	// The answer on file decides whether the sandboxes brigd boots report
+	// their boot and lifetime through hull. A daemon never asks.
+	telemetry.Start("", false)
 
 	if err := serve(socket); err != nil {
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())

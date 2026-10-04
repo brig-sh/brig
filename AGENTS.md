@@ -91,7 +91,7 @@ rename, say why in the pull request and ask a maintainer for the
 
 ## Dependencies
 
-Brig keeps its direct dependencies to three. It runs `cosign`, `oras` and
+Brig keeps its direct dependencies to four. It runs `cosign`, `oras` and
 `security` as subprocesses and does not link them. Do not add a module to
 `go.mod` unless the pull request says why the standard library or a
 subprocess is not sufficient.
