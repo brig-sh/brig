@@ -184,6 +184,8 @@ jobs:
           MACOS_NOTARY_KEY: ${{ runner.temp }}/notary-key.p8
           MACOS_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          # Baked into brig by ldflags, as in release.yml.
+          TELEMETRY_ENDPOINT: ${{ vars.TELEMETRY_ENDPOINT }}
 
       # Each build is a release of its own, under a tag no other build uses.
       # Releases in this org are immutable: once published, a release takes no

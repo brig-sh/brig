@@ -10,6 +10,10 @@ LDFLAGS := -s -w \
 	-X $(BUILDINFO).gitCommitTime=$(shell git log -1 --format=%cI 2>/dev/null) \
 	-X $(BUILDINFO).gitDescribe=$(shell git describe --tags --long --match 'v[0-9]*' 2>/dev/null) \
 	-X $(BUILDINFO).gitModified=$(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo true)
+# The telemetry endpoint. Left empty (a dev build), brig sends nothing.
+ifneq ($(TELEMETRY_ENDPOINT),)
+LDFLAGS += -X github.com/brig-sh/hull/pkg/telemetry.Endpoint=$(TELEMETRY_ENDPOINT)
+endif
 
 .PHONY: all build test vet fmt snapshot notes claims claims-vm clean netprobe
 

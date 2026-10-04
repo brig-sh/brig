@@ -13,6 +13,11 @@ version: 2
 
 project_name: brig
 
+env:
+  # Always defined, so the ldflag below resolves where the variable is absent
+  # (a fork, a local snapshot). An empty endpoint sends nothing.
+  - TELEMETRY_ENDPOINT={{ if isEnvSet "TELEMETRY_ENDPOINT" }}{{ .Env.TELEMETRY_ENDPOINT }}{{ end }}
+
 before:
   hooks:
     - go mod tidy
@@ -34,6 +39,9 @@ builds:
     goarch: [arm64, amd64]
     ldflags:
       - -s -w
+      # Where brig's own telemetry goes. hull bakes the same endpoint into its
+      # copy of the client.
+      - -X github.com/brig-sh/hull/pkg/telemetry.Endpoint={{ .Env.TELEMETRY_ENDPOINT }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
   - id: brigd
@@ -44,6 +52,8 @@ builds:
     goarch: [arm64, amd64]
     ldflags:
       - -s -w
+      # brigd sends no command event, but it uploads what is queued.
+      - -X github.com/brig-sh/hull/pkg/telemetry.Endpoint={{ .Env.TELEMETRY_ENDPOINT }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 # Developer ID signing and notarization for the macOS binaries.
