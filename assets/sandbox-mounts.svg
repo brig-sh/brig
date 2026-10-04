@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 410" width="820" height="410" role="img" aria-labelledby="dg-mounts-t dg-mounts-d">
+<title id="dg-mounts-t">What a sandbox mounts</title>
+<desc id="dg-mounts-d">Two host directories reach the sandbox: the project you name, mounted read-write at /work/demo, and the guest home, mounted as the agent’s home. Other projects, your documents, your keychain and your SSH agent do not.</desc>
+<defs>
+<filter id="sk-mounts" x="-2%" y="-2%" width="104%" height="104%"><feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3.2"/></filter>
+<marker id="ok-mounts" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" class="dg-head"/></marker>
+</defs>
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 15px; fill: #0E2233; }
+  .dg-h { font-size: 16px; font-weight: 800; }
+  .dg-b { font-weight: 700; }
+  .dg-n { fill: #071521; }
+  .dg-sub { font-size: 12.5px; fill: #4A5561; }
+  .dg-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .dg-dim { fill: #6B7682; }
+  rect, circle, path { fill: none; stroke: #0E2233; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .bg { fill: #ffffff; stroke: none; }
+  .dg-zone { fill: #F5F6F8; }
+  .dg-vm { fill: #FDF5E6; stroke: #B9761C; stroke-width: 2.5; }
+  .dg-box { fill: #ffffff; }
+  .dg-on { stroke: #B9761C; stroke-width: 2.5; }
+  .dg-off { stroke: #C9CFD6; stroke-dasharray: 5 5; }
+  .dg-num { fill: #E7A33E; }
+  .dg-ok { stroke: #E7A33E; stroke-width: 3.5; stroke-dasharray: 9 7; animation: flow 1s linear infinite; }
+  .dg-head { fill: #E7A33E; stroke: none; }
+  .dg-no { stroke: #C9CFD6; stroke-dasharray: 3 6; }
+  .dg-x { stroke: #B4401A; stroke-width: 3; }
+  @keyframes flow { to { stroke-dashoffset: -32; } }
+  @media (prefers-reduced-motion: reduce) { .dg-ok { animation: none; } }
+  @media (prefers-color-scheme: dark) {
+    text { fill: #F2EFE6; }
+    .dg-n { fill: #071521; }
+    .dg-sub { fill: #C9D1D8; }
+    .dg-dim { fill: #97A5B1; }
+    rect, circle, path { stroke: #F2EFE6; }
+    .bg { fill: #0E2233; stroke: none; }
+    .dg-zone { fill: #13293B; }
+    .dg-vm { fill: #2B2416; stroke: #E7A33E; }
+    .dg-box { fill: #071521; }
+    .dg-on { stroke: #E7A33E; }
+    .dg-off { stroke: #35536B; }
+    .dg-num { stroke: #071521; }
+    .dg-no { stroke: #35536B; }
+    .dg-x { stroke: #F18150; }
+    .dg-head { stroke: none; }
+  }
+</style>
+<rect class="bg" x="0" y="0" width="820" height="410"/>
+<g filter="url(#sk-mounts)">
+<rect class="dg-zone" x="20" y="20" width="350" height="370" rx="3"/>
+<rect class="dg-vm" x="470" y="20" width="330" height="370" rx="3"/>
+<rect class="dg-box dg-on" x="40" y="72" width="310" height="44" rx="3"/>
+<rect class="dg-box dg-on" x="40" y="128" width="310" height="44" rx="3"/>
+<rect class="dg-box dg-off" x="40" y="200" width="310" height="34" rx="3"/>
+<rect class="dg-box dg-off" x="40" y="244" width="310" height="34" rx="3"/>
+<rect class="dg-box dg-off" x="40" y="288" width="310" height="34" rx="3"/>
+<rect class="dg-box dg-off" x="40" y="332" width="310" height="34" rx="3"/>
+<rect class="dg-box dg-on" x="490" y="72" width="290" height="44" rx="3"/>
+<rect class="dg-box dg-on" x="490" y="128" width="290" height="44" rx="3"/>
+<rect class="dg-box" x="490" y="236" width="290" height="60" rx="3"/>
+<path class="dg-ok" d="M350 94H486" marker-end="url(#ok-mounts)"/>
+<path class="dg-ok" d="M350 150H486" marker-end="url(#ok-mounts)"/>
+<path class="dg-no" d="M350 217H410"/>
+<path class="dg-x" d="M417 210L431 224M431 210L417 224"/>
+<path class="dg-no" d="M350 261H410"/>
+<path class="dg-x" d="M417 254L431 268M431 254L417 268"/>
+<path class="dg-no" d="M350 305H410"/>
+<path class="dg-x" d="M417 298L431 312M431 298L417 312"/>
+<path class="dg-no" d="M350 349H410"/>
+<path class="dg-x" d="M417 342L431 356M431 342L417 356"/>
+</g>
+<text x="40" y="50" class="dg-h">Your machine</text>
+<text x="490" y="50" class="dg-h">Sandbox</text>
+<text x="780" y="50" class="dg-sub" text-anchor="end">microVM, own kernel</text>
+<text x="54" y="91" class="dg-mono">~/code/demo</text>
+<text x="54" y="107" class="dg-sub">the project you name</text>
+<text x="54" y="147" class="dg-mono">~/.brig/homes/brig-claude-code</text>
+<text x="54" y="163" class="dg-sub">guest home</text>
+<text x="54" y="222" class="dg-mono dg-dim">~/code/other-project</text>
+<text x="54" y="266" class="dg-mono dg-dim">~/Documents</text>
+<text x="54" y="310" class="dg-dim">Keychain</text>
+<text x="54" y="354" class="dg-dim">SSH agent</text>
+<text x="504" y="91" class="dg-mono">/work/demo</text>
+<text x="504" y="107" class="dg-sub">read-write</text>
+<text x="504" y="147" class="dg-mono">/root</text>
+<text x="504" y="163" class="dg-sub">the agent’s home: settings and history</text>
+<text x="504" y="262" class="dg-mono">claude</text>
+<text x="504" y="280" class="dg-sub">starts in /work/demo</text>
+<text x="635" y="340" class="dg-sub" text-anchor="middle">Nothing else from your machine is mounted.</text>
+</svg>

@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 822 176" width="822" height="176" role="img" aria-labelledby="dg-flow-t dg-flow-d">
+<title id="dg-flow-t">What brig run does</title>
+<desc id="dg-flow-d">Four steps. You name an agent and a project with brig run claude ~/code/demo. Brig checks the image signature. A microVM boots with its own kernel. The agent starts in your project at /work/demo.</desc>
+<defs>
+<filter id="sk-flow" x="-2%" y="-2%" width="104%" height="104%"><feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3.2"/></filter>
+<marker id="ok-flow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" class="dg-head"/></marker>
+</defs>
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 15px; fill: #0E2233; }
+  .dg-h { font-size: 16px; font-weight: 800; }
+  .dg-b { font-weight: 700; }
+  .dg-n { fill: #071521; }
+  .dg-sub { font-size: 12.5px; fill: #4A5561; }
+  .dg-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .dg-dim { fill: #6B7682; }
+  rect, circle, path { fill: none; stroke: #0E2233; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .bg { fill: #ffffff; stroke: none; }
+  .dg-zone { fill: #F5F6F8; }
+  .dg-vm { fill: #FDF5E6; stroke: #B9761C; stroke-width: 2.5; }
+  .dg-box { fill: #ffffff; }
+  .dg-on { stroke: #B9761C; stroke-width: 2.5; }
+  .dg-off { stroke: #C9CFD6; stroke-dasharray: 5 5; }
+  .dg-num { fill: #E7A33E; }
+  .dg-ok { stroke: #E7A33E; stroke-width: 3.5; stroke-dasharray: 9 7; animation: flow 1s linear infinite; }
+  .dg-head { fill: #E7A33E; stroke: none; }
+  .dg-no { stroke: #C9CFD6; stroke-dasharray: 3 6; }
+  .dg-x { stroke: #B4401A; stroke-width: 3; }
+  @keyframes flow { to { stroke-dashoffset: -32; } }
+  @media (prefers-reduced-motion: reduce) { .dg-ok { animation: none; } }
+  @media (prefers-color-scheme: dark) {
+    text { fill: #F2EFE6; }
+    .dg-n { fill: #071521; }
+    .dg-sub { fill: #C9D1D8; }
+    .dg-dim { fill: #97A5B1; }
+    rect, circle, path { stroke: #F2EFE6; }
+    .bg { fill: #0E2233; stroke: none; }
+    .dg-zone { fill: #13293B; }
+    .dg-vm { fill: #2B2416; stroke: #E7A33E; }
+    .dg-box { fill: #071521; }
+    .dg-on { stroke: #E7A33E; }
+    .dg-off { stroke: #35536B; }
+    .dg-num { stroke: #071521; }
+    .dg-no { stroke: #35536B; }
+    .dg-x { stroke: #F18150; }
+    .dg-head { stroke: none; }
+  }
+</style>
+<rect class="bg" x="0" y="0" width="822" height="176"/>
+<g filter="url(#sk-flow)">
+<rect class="dg-box" x="20" y="24" width="176" height="128" rx="3"/>
+<circle class="dg-num" cx="46" cy="52" r="14"/>
+<path class="dg-ok" d="M196 88H218" marker-end="url(#ok-flow)"/>
+<rect class="dg-box" x="222" y="24" width="176" height="128" rx="3"/>
+<circle class="dg-num" cx="248" cy="52" r="14"/>
+<path class="dg-ok" d="M398 88H420" marker-end="url(#ok-flow)"/>
+<rect class="dg-vm" x="424" y="24" width="176" height="128" rx="3"/>
+<circle class="dg-num" cx="450" cy="52" r="14"/>
+<path class="dg-ok" d="M600 88H622" marker-end="url(#ok-flow)"/>
+<rect class="dg-vm" x="626" y="24" width="176" height="128" rx="3"/>
+<circle class="dg-num" cx="652" cy="52" r="14"/>
+</g>
+<text x="46" y="57" class="dg-b dg-n" text-anchor="middle">1</text>
+<text x="34" y="92">You name an agent</text>
+<text x="34" y="111">and a project.</text>
+<text x="248" y="57" class="dg-b dg-n" text-anchor="middle">2</text>
+<text x="236" y="92">Brig checks the</text>
+<text x="236" y="111">image signature.</text>
+<text x="450" y="57" class="dg-b dg-n" text-anchor="middle">3</text>
+<text x="438" y="92">A microVM boots</text>
+<text x="438" y="111">with its own kernel.</text>
+<text x="652" y="57" class="dg-b dg-n" text-anchor="middle">4</text>
+<text x="640" y="92">The agent starts</text>
+<text x="640" y="111">in your project.</text>
+<text x="640" y="136" class="dg-mono">/work/demo</text>
+</svg>
