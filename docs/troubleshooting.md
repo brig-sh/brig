@@ -730,11 +730,19 @@ uses. Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy. brig will not
 boot a sandbox under a policy nothing enforces
 ```
 
-Brig enforces an egress policy at the network gateway of the `hvi` backend.
-On `vz` and `qemu` the sandbox takes its network from vmnet, which Brig does
-not filter, so Brig refuses the run. The exit code is `7`. On Linux, nerdctl
-and docker cannot enforce a policy either, and the message says to detach
-it.
+Brig enforces an egress policy at the network gateway of the `hvi` backend,
+and on Linux at the bridge of a nerdctl sandbox's own network. On `vz` and
+`qemu` the sandbox takes its network from vmnet, which Brig does not
+filter, so Brig refuses the run. The exit code is `7`. On Linux, docker
+cannot enforce a policy either, and the message says to use nerdctl or to
+detach it.
+
+On nerdctl the refusal reads `whether nerdctl on <shim> enforces the egress
+policy is unknown` when Brig cannot put the rules in place. Install
+`nftables` and util-linux's `nsenter`. For a rootless install, check that
+rootless containerd is running: `$XDG_RUNTIME_DIR/containerd-rootless/child_pid`
+exists. When the resolver could not start, the refusal quotes the start of
+its log, `~/.brig/egress/<sandbox>.log`.
 
 An isolated network needs the same gateway. With no policy bound, its
 refusal exits `1`:

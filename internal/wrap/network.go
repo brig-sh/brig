@@ -292,10 +292,11 @@ func (c *Config) recordPosture() {
 // to isolated without changing it (see recordPosture). So a shared record is
 // checked against the runtime: asked about shared with no rules, hull on hvi
 // reports stale exactly when an isolated gateway is up for this sandbox. That
-// is the "the policy detached" case of runtime's TestNetworkStale. A policy
-// narrows the posture on hvi alone, because every other backend refuses one
-// unless the sandbox is offline, so a runtime that cannot answer leaves the
-// record as it is. A gateway left up by a sandbox that died without a stop
+// is the "the policy detached" case of runtime's TestNetworkStale. nerdctl
+// answers the same way from its egress records. A policy narrows the posture
+// on hvi and nerdctl alone, because every other backend refuses one unless the
+// sandbox is offline, so a runtime that cannot answer leaves the record as it
+// is. A gateway left up by a sandbox that died without a stop
 // answers the same way, but nothing reads that answer. networkLine asks
 // whether the sandbox is running and reports the next boot when it is not.
 // networkChange and keepsPosture are reached only for a sandbox that is

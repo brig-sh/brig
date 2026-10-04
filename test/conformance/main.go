@@ -40,7 +40,7 @@ func mainErr(args []string, stdout, stderr io.Writer) int {
 	probe := fs.String("probe", "", "netprobe built for the guest (required)")
 	runtime := fs.String("runtime", "", "the runtime brig boots, whose version the record names (default $BRIG_RUNTIME_BIN, else hull)")
 	image := fs.String("image", defaultImage, "guest image; it needs curl for the proxy case")
-	backend := fs.String("backend", "hvi", "backend to boot on; hvi is the only one that enforces a policy")
+	backend := fs.String("backend", "hvi", "backend to boot on; the runner boots hvi only")
 	record := fs.String("record", "", "where to write the record (default docs/manual-tests/egress-conformance-<backend>-<runtime version>.md)")
 	if err := fs.Parse(args); err != nil {
 		return 2

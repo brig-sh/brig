@@ -54,14 +54,16 @@ type Record struct {
 }
 
 // anyBackend is a record's backend when the answer holds for every backend of
-// its runtime. Nothing on the nerdctl path reads a policy into the run, so the
-// shim makes no difference to the answer there.
+// its runtime. On the nerdctl path the rules sit on the bridge the shim's
+// guest is attached to, so the shim makes no difference to the answer there.
 const anyBackend = ""
 
 // records is the one table of answers. supports and the nerdctl adapter read
 // it, so the two refusals cannot come to different answers about the same
-// question. hvi reads Enforced here, and the gateway probe confirms it at boot
-// against the binary that starts the gateway. See gatewayEnforces.
+// question. hvi and nerdctl read Enforced here, and a probe confirms it at
+// boot: the gateway probe against the binary that starts the gateway on hvi,
+// and an nft probe in the bridges' network namespace on nerdctl. See
+// gatewayEnforces and egressEnforces.
 var records = []Record{
 	{EgressPolicy, RunPath{"hull", "hvi"}, Enforced,
 		"brig puts the rules on the user-mode network gateway that is this sandbox's only way out",
@@ -74,15 +76,16 @@ var records = []Record{
 		"qemu takes its network from vmnet, which brig does not filter. brig enforces a policy " +
 			"at the user-mode network gateway that only the hvi backend uses",
 		"Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy"},
-	{EgressPolicy, RunPath{"nerdctl", anyBackend}, CannotEnforce, containerWhy, "Detach the policy to run it"},
-	// The nerdctl adapter drives docker too, and names it, so docker gets a
-	// row of its own with the same answer.
-	{EgressPolicy, RunPath{"docker", anyBackend}, CannotEnforce, containerWhy, "Detach the policy to run it"},
+	{EgressPolicy, RunPath{"nerdctl", anyBackend}, Enforced,
+		"brig puts the rules in nftables on the bridge of the sandbox's own network, and answers its DNS",
+		""},
+	// The nerdctl adapter drives docker too, and names it. docker manages its
+	// own bridges and firewall, and brig does not put rules on them.
+	{EgressPolicy, RunPath{"docker", anyBackend}, CannotEnforce, dockerWhy,
+		"Use nerdctl (BRIG_RUNTIME_BIN=nerdctl), or detach the policy"},
 }
 
-const containerWhy = "nothing on this runtime reads the rules into the run, and the container network is not " +
-	"filtered, so the rules are not enforced here. brig enforces a policy at the " +
-	"user-mode network gateway of hull's hvi backend on macOS"
+const dockerWhy = "brig enforces a policy on nerdctl's container network, and does not filter docker's"
 
 // Records returns every answer brig holds for a property.
 func Records(p Property) []Record {

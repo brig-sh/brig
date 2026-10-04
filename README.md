@@ -186,8 +186,8 @@ the output of each.
   use a `shared` network. An existing sandbox keeps the network it was created
   with. See [Network postures](docs/policies.md#network-postures).
 - **Egress policy.** A policy restricts what the guest can reach. Brig
-  enforces one only on hull's `hvi` backend, and refuses a policy-bound run on
-  any other backend. See [docs/policies.md](docs/policies.md).
+  enforces one on hull's `hvi` backend and on Linux with nerdctl, and refuses
+  a policy-bound run on any other backend. See [docs/policies.md](docs/policies.md).
 - **Unverified images.** Image verification defaults to `warn`: Brig reports
   an image it cannot verify and boots it anyway. Set `BRIG_VERIFY=require` to
   refuse one.

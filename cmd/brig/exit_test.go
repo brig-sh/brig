@@ -114,7 +114,6 @@ func TestAPolicyNothingEnforcesExits7(t *testing.T) {
 		{"hull", "hull", "vz"},
 		{"hull", "hull", "qemu"},
 		{"hull", "hull", "krun"}, // no record, so unknown
-		{"nerdctl", "nerdctl", ""},
 		{"nerdctl", "docker", ""},
 	} {
 		t.Run(c.name+" "+c.hv, func(t *testing.T) {
@@ -149,6 +148,42 @@ func TestAFailedGatewayProbeExits7(t *testing.T) {
 	rt := stubRuntime(t, "hull", "hull")
 	err := rt.Run(runtime.RunSpec{Name: "brig-exit", Image: "img", Hypervisor: "hvi",
 		Net: "isolated", Egress: runtime.Egress{Default: "deny"}})
+	err = fmt.Errorf("could not start the sandbox: %w", err)
+	if got := exitCode(err); got != 7 {
+		t.Fatalf("exitCode = %d, want 7, for %v", got, err)
+	}
+}
+
+// On nerdctl the table answers enforced too, and an nft probe in the
+// bridges' namespace decides at boot. A probe that fails exits 7, as on hvi.
+func TestAFailedNFTProbeExits7(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BRIG_GATEWAY_DIR", "")
+	bin := t.TempDir()
+	for name, sh := range map[string]string{
+		"nerdctl": "#!/bin/sh\nexit 0\n",
+		"nsenter": "#!/bin/sh\necho 'nsenter: reassociate to namespace failed: Operation not permitted' >&2\nexit 1\n",
+		"nft":     "#!/bin/sh\necho 'Error: Could not process rule: Operation not permitted' >&2\nexit 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(sh), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := t.TempDir()
+	if err := os.WriteFile(filepath.Join(state, "child_pid"), []byte("4242\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ROOTLESSKIT_STATE_DIR", state)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BRIG_RUNTIME", "nerdctl")
+	t.Setenv("BRIG_RUNTIME_BIN", filepath.Join(bin, "nerdctl"))
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	rt, err := runtime.DetectFor(runtime.Preference{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = rt.Run(runtime.RunSpec{Name: "brig-exit", Image: "img", Net: "isolated",
+		Egress: runtime.Egress{Default: "deny"}})
 	err = fmt.Errorf("could not start the sandbox: %w", err)
 	if got := exitCode(err); got != 7 {
 		t.Fatalf("exitCode = %d, want 7, for %v", got, err)

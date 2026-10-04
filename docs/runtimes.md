@@ -168,6 +168,7 @@ nerdctl ps -a --format {{.Names}}\t{{.Status}}
 nerdctl inspect --format {{json .}} <name>   # its network: networkinspect.go
 nerdctl network ls --format {{.Name}}
 nerdctl network create <name>            # --network isolated: a network per sandbox
+nerdctl network inspect --mode native <name>   # its bridge, under a policy
 nerdctl network rm <name>                # with the sandbox, and by rm --all
 nerdctl run --detach --name <name>
      --runtime io.containerd.urunc.v2         # BRIG_CONTAINERD_RUNTIME overrides
@@ -295,6 +296,23 @@ kernel. docker does not pass annotations to the runtime, so Brig refuses a
 `genericBoot` profile on it. Without the annotations the sandbox would
 boot with no kernel.
 
+Under an egress policy, nerdctl also has to report the bridge of a sandbox
+network in `network inspect --mode native` and take `--dns`, and the host
+has to have `nft` and `nsenter`. Brig probes `nft` in the network namespace
+that holds the bridge, and starts its own resolver there, which installs
+the rules. See
+[How nerdctl enforces a policy](policies.md#how-nerdctl-enforces-a-policy).
+
+The Linux enforcement point is that bridge. It is the first hop outside the
+guest that all of the sandbox's traffic crosses, and Brig owns it: the
+network is the sandbox's own, and the user owns the namespace it lives in,
+rootless or not. hull's user-mode gateway does not build on Linux, and
+attaching a urunc guest to it would take a change to how urunc gives the VM
+its network. A filter inside the guest is one the guest can remove. The
+bridge covers any shim that attaches the sandbox to it.
+`BRIG_CONTAINERD_RUNTIME=runc` never reaches the question, because Brig
+refuses `runc` and `crun` for sharing the host kernel.
+
 **urunc** has to read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the container's OCI spec and boot the
 image with them. It is the same pair hull takes on its command line. Brig
@@ -323,9 +341,12 @@ policy. The answer is `enforced`, `cannot enforce` or `unknown`, and it
 comes from one table, shown in
 [docs/policies.md](policies.md#where-a-policy-is-enforced-and-where-it-is-not).
 hull on `hvi` answers `enforced` as long as its `network-gateway --help`
-exits zero within 30 seconds and lists `--egress-default`. hull on `vz`
-and `qemu`, and nerdctl or docker on any shim, answer `cannot enforce` and
-run no probe. hull on a backend the table does not name answers `unknown`.
+exits zero within 30 seconds and lists `--egress-default`. nerdctl on any
+shim answers `enforced` as long as `nft list tables` runs in the network
+namespace that holds its bridges, entered with `nsenter` when nerdctl is
+rootless. hull on `vz` and `qemu`, and docker on any shim, answer
+`cannot enforce` and run no probe. hull on a backend the table does not
+name answers `unknown`.
 Brig boots a policy-bound run only on `enforced`, and the refusal names
 the property, the runtime and the backend. It exits `7`.
 

@@ -1,5 +1,8 @@
 # Manual test: is an attached policy actually enforced?
 
+This file measures hull's `hvi` backend on macOS.
+[egress-policy-linux.md](egress-policy-linux.md) measures nerdctl on Linux.
+
 *Historical evidence, not current validation. It evidences whether an attached
 egress policy is enforced at the gateway brig starts. No calendar date was
 recorded. It is identified instead by build: hull from `main` at `a7a5d1e`,

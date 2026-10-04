@@ -22,6 +22,7 @@ import (
 	"syscall"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/egress"
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -165,6 +166,12 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
 `
 
 func main() {
+	// The egress resolver brig starts for a sandbox under a policy on Linux.
+	// It reads no profile and no state, and runs inside a network namespace
+	// brig entered for it, so it is handled before anything else.
+	if len(os.Args) > 1 && os.Args[1] == egress.Verb {
+		os.Exit(egress.Main(os.Args[2:], os.Stderr))
+	}
 	err := run(os.Args[1:])
 	if err == nil {
 		return

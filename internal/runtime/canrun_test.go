@@ -5,35 +5,37 @@ import (
 	"testing"
 )
 
-// A policy on a container runtime was dropped in silence: nothing in the
-// nerdctl adapter reads spec.Egress, and the only refusal lived in the hull
-// adapter. So on Linux a policied run printed a POLICY row and an isolated
-// NETWORK row over a sandbox with unrestricted egress -- the one outcome the
-// rest of this feature exists to prevent.
-func TestNerdctlRefusesAPolicyItCannotEnforce(t *testing.T) {
-	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
-	spec := RunSpec{Name: "brig-s", Image: "img", Net: "shared",
+// A policy on a container runtime was once dropped in silence, and printed a
+// POLICY row over a sandbox with unrestricted egress. nerdctl now enforces
+// one. docker, which the same adapter drives, still does not, and must refuse.
+func TestDockerRefusesAPolicyItCannotEnforce(t *testing.T) {
+	spec := RunSpec{Name: "brig-s", Image: "img", Net: "isolated",
 		Egress: Egress{Default: "deny", Allow: []Rule{{Host: "example.com"}}}}
 
-	err := n.CanRun(spec)
-	if err == nil {
-		t.Fatal("a policy was accepted by a runtime that cannot enforce it")
+	if err := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).CanRun(spec); err != nil {
+		t.Errorf("nerdctl refused a policy it enforces: %v", err)
 	}
-	if !strings.Contains(err.Error(), "enforced") {
+
+	d := &nerdctl{bin: "/usr/local/bin/docker"}
+	err := d.CanRun(spec)
+	if err == nil {
+		t.Fatal("docker accepted a policy it cannot enforce")
+	}
+	if !strings.Contains(err.Error(), "enforce") {
 		t.Errorf("the error does not say the rules would not be enforced: %v", err)
 	}
 	// Run refuses it too, so a caller that never asks CanRun is still covered.
-	if err := n.Run(spec); err == nil {
-		t.Error("Run booted a sandbox whose policy it cannot enforce")
+	if err := d.Run(spec); err == nil {
+		t.Error("Run booted a docker sandbox whose policy it cannot enforce")
 	}
 
 	// An offline sandbox reaches nothing, which satisfies every rule set.
 	spec.Net = "none"
-	if err := n.CanRun(spec); err != nil {
+	if err := d.CanRun(spec); err != nil {
 		t.Errorf("an offline sandbox with a policy was refused: %v", err)
 	}
 	// And an ordinary run is untouched.
-	if err := n.CanRun(RunSpec{Name: "brig-s", Image: "img", Net: "shared"}); err != nil {
+	if err := d.CanRun(RunSpec{Name: "brig-s", Image: "img", Net: "shared"}); err != nil {
 		t.Errorf("a sandbox with no policy was refused: %v", err)
 	}
 }
@@ -53,7 +55,7 @@ func TestBothAdaptersAnswerCanRun(t *testing.T) {
 		rt   RunChecker
 	}{
 		{"hull on vz", &hull{bin: "hull"}},
-		{"nerdctl", &nerdctl{bin: "nerdctl"}},
+		{"docker", &nerdctl{bin: "docker"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.rt.CanRun(policied); err == nil {
@@ -61,7 +63,10 @@ func TestBothAdaptersAnswerCanRun(t *testing.T) {
 			}
 		})
 	}
-	// hull on hvi is the one that can, and must not refuse it.
+	// nerdctl and hull on hvi can, and must not refuse it.
+	if err := (&nerdctl{bin: "nerdctl"}).CanRun(policied); err != nil {
+		t.Errorf("nerdctl refused a policy it can enforce: %v", err)
+	}
 	policied.Hypervisor = "hvi"
 	if err := (&hull{bin: "hull"}).CanRun(policied); err != nil {
 		t.Errorf("hvi refused a policy it can enforce: %v", err)

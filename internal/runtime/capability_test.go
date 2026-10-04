@@ -21,8 +21,8 @@ func TestEgressContractAnswersEveryRunPath(t *testing.T) {
 		{RunPath{"hull", "hvi"}, Enforced},
 		{RunPath{"hull", "vz"}, CannotEnforce},
 		{RunPath{"hull", "qemu"}, CannotEnforce},
-		{RunPath{"nerdctl", "io.containerd.urunc.v2"}, CannotEnforce},
-		{RunPath{"nerdctl", "runc"}, CannotEnforce},
+		{RunPath{"nerdctl", "io.containerd.urunc.v2"}, Enforced},
+		{RunPath{"nerdctl", "io.containerd.kata.v2"}, Enforced},
 		{RunPath{"docker", "io.containerd.urunc.v2"}, CannotEnforce},
 		{RunPath{"docker", "runc"}, CannotEnforce},
 		// A backend brig was never taught about is not waved through.
@@ -156,17 +156,21 @@ func TestAFailedProbeAnswersUnknown(t *testing.T) {
 	assertProbeRefusal(t, err, bin)
 }
 
-// nerdctl reads no policy into the run on any shim, so the answer is cannot
-// enforce whatever BRIG_CONTAINERD_RUNTIME names, and the refusal names the
-// shim the run asked for. The non-default shim here is a kata one, not runc:
-// brig now refuses runc for sharing the host kernel, so it never reaches the
-// policy question. A shim brig cannot classify reaches it.
-func TestNerdctlAnswersCannotEnforceOnEveryShim(t *testing.T) {
+// nerdctl enforces a policy once the nft probe in the bridges' namespace
+// confirms it. A probe that cannot run answers unknown and refuses the boot
+// before `nerdctl run`, naming the shim, as the gateway probe does on hvi.
+func TestNerdctlRefusesWhenTheNFTProbeFails(t *testing.T) {
 	for _, shim := range []string{"", "io.containerd.kata.v2"} {
 		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		// No rootless containerd state, so the probe cannot find the namespace.
+		t.Setenv("ROOTLESSKIT_STATE_DIR", "")
+		t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+		defer func(prev func() bool) { rootless = prev }(rootless)
+		rootless = func() bool { return true }
+
 		d := newHullDouble(t, egressHelp, "0")
 		n := &nerdctl{bin: d.bin}
-		spec := RunSpec{Name: "brig-cap", Image: "img", Net: "shared",
+		spec := RunSpec{Name: "brig-cap", Image: "img", Net: "isolated",
 			Egress: Egress{Default: "deny"}}
 		err := n.Run(spec)
 		var ce *CapabilityError
@@ -174,15 +178,35 @@ func TestNerdctlAnswersCannotEnforceOnEveryShim(t *testing.T) {
 			t.Fatalf("want a capability refusal, got %v", err)
 		}
 		want := RunPath{"nerdctl", containerdRuntime()}
-		if ce.State != CannotEnforce || ce.Path != want {
-			t.Errorf("refused as %q on %s, want %q on %s", ce.State, ce.Path, CannotEnforce, want)
+		if ce.State != Unknown || ce.Path != want || ce.Err == nil {
+			t.Errorf("refused as %q on %s, want %q on %s", ce.State, ce.Path, Unknown, want)
 		}
 		if !strings.Contains(err.Error(), containerdRuntime()) {
 			t.Errorf("the refusal does not name the shim: %v", err)
 		}
-		if calls := d.calls(); calls != "" {
-			t.Errorf("a refused run reached the runtime: %q", calls)
+		if calls := d.calls(); strings.Contains(calls, "run ") {
+			t.Errorf("a refused run reached `nerdctl run`: %q", calls)
 		}
+	}
+}
+
+// The rules match the sandbox's own bridge. A run that asks for the shared
+// network has none, and must be refused before the runtime is asked anything.
+func TestNerdctlRefusesAPolicyWithoutANetworkOfItsOwn(t *testing.T) {
+	d := newHullDouble(t, egressHelp, "0")
+	n := &nerdctl{bin: d.bin}
+	err := n.Run(RunSpec{Name: "brig-cap", Image: "img", Net: "shared",
+		Egress: Egress{Default: "deny"}})
+	if err == nil || !strings.Contains(err.Error(), "network of its own") {
+		t.Fatalf("want a refusal naming the network, got %v", err)
+	}
+	// A policy refusal, so it exits 7 like the others.
+	var ce *CapabilityError
+	if !errors.As(err, &ce) || ce.State != CannotEnforce {
+		t.Errorf("want a capability refusal, got %v", err)
+	}
+	if calls := d.calls(); calls != "" {
+		t.Errorf("a refused run reached the runtime: %q", calls)
 	}
 }
 
@@ -208,8 +232,9 @@ func TestDockerRefusalNamesDocker(t *testing.T) {
 	if ce.State != CannotEnforce || ce.Path != want {
 		t.Errorf("refused as %q on %s, want %q on %s", ce.State, ce.Path, CannotEnforce, want)
 	}
-	if strings.Contains(err.Error(), "nerdctl") {
-		t.Errorf("the refusal on docker names nerdctl: %v", err)
+	// nerdctl appears only as the remedy, never as the runtime refusing.
+	if strings.Contains(err.Error(), "nerdctl on") {
+		t.Errorf("the refusal on docker names nerdctl as the run path: %v", err)
 	}
 	if !strings.Contains(err.Error(), "docker on "+containerdRuntime()) {
 		t.Errorf("the refusal does not name docker and the shim: %v", err)

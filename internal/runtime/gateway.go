@@ -843,7 +843,14 @@ func ownsGateway(pid int, sock string) bool {
 
 // procArgv is one process's command line, or false when there is no such
 // process.
+//
+// /proc first, where there is one: a Linux host without procps would
+// otherwise read every process as gone, and brig would lose track of the
+// ones it started.
 func procArgv(pid int) (string, bool) {
+	if blob, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline"); err == nil {
+		return strings.TrimSpace(strings.ReplaceAll(string(blob), "\x00", " ")), true
+	}
 	out, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return "", false
