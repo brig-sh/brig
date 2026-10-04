@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 340" width="820" height="340" role="img" aria-labelledby="dg-egress-t dg-egress-d">
+<title id="dg-egress-t">An egress policy at the gateway</title>
+<desc id="dg-egress-d">The sandbox sends every connection through a network gateway that enforces the policy. Connections to api.anthropic.com and 10.0.0.0/8, which the policy allows, pass. A name the policy does not allow does not resolve, and a connection to an address it does not allow does not open.</desc>
+<defs>
+<filter id="sk-egress" x="-2%" y="-2%" width="104%" height="104%"><feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3.2"/></filter>
+<marker id="ok-egress" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" class="dg-head"/></marker>
+</defs>
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 15px; fill: #0E2233; }
+  .dg-h { font-size: 16px; font-weight: 800; }
+  .dg-b { font-weight: 700; }
+  .dg-n { fill: #071521; }
+  .dg-sub { font-size: 12.5px; fill: #4A5561; }
+  .dg-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .dg-dim { fill: #6B7682; }
+  rect, circle, path { fill: none; stroke: #0E2233; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .bg { fill: #ffffff; stroke: none; }
+  .dg-zone { fill: #F5F6F8; }
+  .dg-vm { fill: #FDF5E6; stroke: #B9761C; stroke-width: 2.5; }
+  .dg-box { fill: #ffffff; }
+  .dg-on { stroke: #B9761C; stroke-width: 2.5; }
+  .dg-off { stroke: #C9CFD6; stroke-dasharray: 5 5; }
+  .dg-num { fill: #E7A33E; }
+  .dg-ok { stroke: #E7A33E; stroke-width: 3.5; stroke-dasharray: 9 7; animation: flow 1s linear infinite; }
+  .dg-head { fill: #E7A33E; stroke: none; }
+  .dg-no { stroke: #C9CFD6; stroke-dasharray: 3 6; }
+  .dg-x { stroke: #B4401A; stroke-width: 3; }
+  @keyframes flow { to { stroke-dashoffset: -32; } }
+  @media (prefers-reduced-motion: reduce) { .dg-ok { animation: none; } }
+  @media (prefers-color-scheme: dark) {
+    text { fill: #F2EFE6; }
+    .dg-n { fill: #071521; }
+    .dg-sub { fill: #C9D1D8; }
+    .dg-dim { fill: #97A5B1; }
+    rect, circle, path { stroke: #F2EFE6; }
+    .bg { fill: #0E2233; stroke: none; }
+    .dg-zone { fill: #13293B; }
+    .dg-vm { fill: #2B2416; stroke: #E7A33E; }
+    .dg-box { fill: #071521; }
+    .dg-on { stroke: #E7A33E; }
+    .dg-off { stroke: #35536B; }
+    .dg-num { stroke: #071521; }
+    .dg-no { stroke: #35536B; }
+    .dg-x { stroke: #F18150; }
+    .dg-head { stroke: none; }
+  }
+</style>
+<rect class="bg" x="0" y="0" width="820" height="340"/>
+<g filter="url(#sk-egress)">
+<rect class="dg-vm" x="20" y="90" width="190" height="170" rx="3"/>
+<rect class="dg-zone" x="300" y="70" width="220" height="210" rx="3"/>
+<path class="dg-ok" d="M210 175H296" marker-end="url(#ok-egress)"/>
+<rect class="dg-box dg-on" x="610" y="30" width="190" height="48" rx="3"/>
+<rect class="dg-box dg-on" x="610" y="96" width="190" height="48" rx="3"/>
+<rect class="dg-box dg-off" x="610" y="206" width="190" height="48" rx="3"/>
+<rect class="dg-box dg-off" x="610" y="272" width="190" height="48" rx="3"/>
+<path class="dg-ok" d="M520 130C560 130 560 54 606 54" marker-end="url(#ok-egress)"/>
+<path class="dg-ok" d="M520 150C570 150 560 120 606 120" marker-end="url(#ok-egress)"/>
+<path class="dg-no" d="M520 210C550 210 550 230 570 230"/>
+<path class="dg-x" d="M577 223L591 237M591 223L577 237"/>
+<path class="dg-no" d="M520 235C550 235 545 296 570 296"/>
+<path class="dg-x" d="M577 289L591 303M591 289L577 303"/>
+</g>
+<text x="36" y="120" class="dg-h">Sandbox</text>
+<text x="36" y="160" class="dg-mono">claude</text>
+<text x="36" y="178" class="dg-sub">every connection goes</text>
+<text x="36" y="194" class="dg-sub">through the gateway</text>
+<text x="316" y="100" class="dg-h">Network gateway</text>
+<text x="316" y="120" class="dg-sub">enforces your policy</text>
+<text x="316" y="156" class="dg-mono">default: deny</text>
+<text x="316" y="178" class="dg-mono">allow:</text>
+<text x="332" y="200" class="dg-mono">- api.anthropic.com</text>
+<text x="332" y="222" class="dg-mono">- 10.0.0.0/8</text>
+<text x="624" y="51" class="dg-mono">api.anthropic.com</text>
+<text x="624" y="68" class="dg-sub">allowed</text>
+<text x="624" y="117" class="dg-mono">10.0.0.0/8</text>
+<text x="624" y="134" class="dg-sub">allowed</text>
+<text x="624" y="227" class="dg-mono dg-dim">example.com</text>
+<text x="624" y="244" class="dg-sub">the name does not resolve</text>
+<text x="624" y="293" class="dg-mono dg-dim">203.0.113.7</text>
+<text x="624" y="310" class="dg-sub">the connection does not open</text>
+</svg>

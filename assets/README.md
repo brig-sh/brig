@@ -1,15 +1,18 @@
 # brig / hull brand marks
 
-The wordmark is the mark. There is no symbol.
+The mark is the wordmark. There is no symbol.
 
-The letters are drawn on a square grid with a two-unit stroke. That stroke
-is the shape of a terminal cell and the shape of a bar. `brig` and `hull`
-share the grid, the stroke and the palette. The relationship between them
-is the drawing itself, rather than a symbol they both carry.
+The letters are drawn on a square grid. `brig` and `hull` share the grid,
+the stroke and the palette. That shared drawing relates the two marks. They
+carry no common symbol.
 
-Every stroke is two units. The x-height is five units, the ascender is eight,
-and the descender drops three below the baseline. Letters are tracked two units
-apart.
+| Measure | Units |
+| --- | --- |
+| Stroke | 2. It is the shape of a terminal cell and the shape of a bar. |
+| x-height | 5 |
+| Ascender | 8 |
+| Descender | 3 below the baseline |
+| Space between letters | 2 |
 
 ## Palette
 
@@ -21,9 +24,8 @@ apart.
 | Brass | `#E7A33E` | The avatar glyph, and one accent per page |
 | Brass deep | `#B9761C` | Brass on a light background, where the lighter brass fails contrast |
 
-Brass because ships are brass. Navy because it is the sea, not another
-cloud-native blue. The files carry no font dependency, because there is no
-font: the letters are rectangles.
+Brass refers to ships. Navy refers to the sea. The files have no font
+dependency, because the letters are rectangles.
 
 ## Files
 
@@ -35,24 +37,25 @@ font: the letters are rectangles.
 | `brig-mark-on-{dark,light}.svg` | The same glyph with the field taken away. |
 | `nofire-logo.svg`, `nofire-logo-on-dark.svg` | The NOFire AI logo, for the README footer. |
 | `brig-run-claude.gif` | The recording under the README's opening: Claude Code in a sandbox, writing a file into the project. It is a real session, recorded with [vhs](https://github.com/charmbracelet/vhs). Record it again when the output of `brig run` or of Claude Code changes enough to date it. |
-| `architecture.svg` | The diagram in the README's "What the agent can reach". README embeds it with `<img src>`, so the SVG's own internal `<title>` and `<desc>` are never read by a browser. The `img` element's `alt` attribute carries the description instead. Keep that alt text current whenever you change the diagram. |
+| `architecture.svg` | The diagram in "Where the boundary sits" on the runtimes page. The page embeds it with `<img src>`, so a browser never reads the internal `<title>` and `<desc>` of the SVG. The `alt` attribute of the `img` element carries the description instead. When you change the diagram, update that alt text. |
+| `brig-run-steps.svg`, `sandbox-mounts.svg`, `egress-policy.svg`, `secret-delivery.svg` | The diagrams on the quickstart, sessions, networking and secrets pages. Each carries its own styles and a dark variant, and draws its own background, so it reads on any page. The same alt-text rule applies. |
 
-The directory is flat. hull's own set of marks lives in
-[brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork) with the
-sources for these.
+The directory is flat. The marks of hull, and the sources for these files,
+are in [brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork).
 
 ## Rules
 
-- Lowercase, always. There is no capital form.
-- Do not put the on-dark files on a light background. The ink is paper-coloured
-  and disappears. That is what the on-light pair is for.
-- Clear space is four units on every side. The badge already carries it. The
-  transparent files do not.
-- The wordmark holds down to about 33 px tall. Below that the stroke falls
-  under two device pixels and the counters close up. Use the avatar instead.
-- Scale by whole units. A fractional unit puts a stroke on a half pixel and the
-  letters go soft.
-
-The marks are generated. Do not hand-edit them. Change the glyph table in
-[brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork), rebuild, and
-copy the result back here.
+- Write the marks in lowercase. There is no capital form.
+- Do not put the on-dark files on a light background. The ink is
+  paper-coloured and disappears. Use the on-light pair there.
+- Keep four units of clear space on every side. The badge already carries
+  that space. The transparent files do not.
+- Use the wordmark down to about 33 px tall. Below that height, the stroke
+  is less than two device pixels and the counters close. Use the avatar
+  there.
+- Scale by whole units. A fractional unit puts a stroke on a half pixel and
+  blurs the letters.
+- Do not edit the marks by hand, because they are generated. Change the
+  glyph table in
+  [brig-sh/brig-artwork](https://github.com/brig-sh/brig-artwork), rebuild,
+  and copy the result back here.
