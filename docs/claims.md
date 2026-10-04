@@ -1,29 +1,27 @@
 # Claims and the tests behind them
 
-[security.md](security.md) promises what the guest can and cannot reach. A
-promise nothing checks holds until a refactor ends it. Each row below quotes
-one sentence from that page and names the tests that defend it.
+Each row in [the table](#the-table) quotes one sentence from
+[security.md](security.md) and names the tests that defend it. security.md
+states what the guest can and cannot reach.
 
-`script/check-claims.sh` reads this table on every pull request. It fails when
-a quoted sentence is gone from the page, or when a named test no longer
+`script/check-claims.sh` reads the table on every pull request. It fails when
+a quoted sentence is gone from security.md, or when a named test no longer
 exists. `make claims` runs the same check after its self-test.
 
 ## Reading a row
 
-The claim cell quotes the page. Only the part in double quotes is matched, so
-a note in parentheses after it says which part of the sentence the row covers.
-Quote the whole sentence, through its period, so that a qualifier added to it
-on the page ends the match. The page wraps its prose, and the match ignores
-line breaks and runs of spaces.
+A row has three cells.
 
-The section cell names the heading the sentence sits under. The quote has to
-be under that heading or under one nested in it.
+**Claim.** The cell quotes security.md. The check matches only the part in
+double quotes. A note in parentheses after the quote says which part of the
+sentence the row covers. Quote the whole sentence, through its period. Then a
+qualifier added to the sentence in security.md ends the match. security.md
+wraps its prose, so the match ignores line breaks and runs of spaces.
 
-Every line after the table's delimiter row is a row, up to the first blank
-line, with or without its outer pipes. A line there that is not three cells
-fails the check, and so does a pipe line outside the table.
+**Section.** The cell names the heading the sentence is under. The quote must
+be under that heading or under a heading nested in it.
 
-Each defence in the last column is one token:
+**Defended by.** Each defence is one token:
 
 - `go:TestName` is a Go test, found as `func TestName(` in a `_test.go` file.
 - `smoke:<text>` is an assertion in `script/smoke.sh`, found as its
@@ -31,20 +29,29 @@ Each defence in the last column is one token:
 - `vm:<check>` is a check in `script/claims-vm.sh`, found as its
   `vm_check <check>` line.
 
-A `vm` check needs a booted sandbox, and CI has no runtime. `make claims-vm`
-builds `brig` from this checkout and runs those checks against that binary
-where hull or nerdctl is on `PATH`. It skips where neither is. Run it before a
-merge that touches the run path. Run by hand, `script/claims-vm.sh` tests the
-`brig` on `PATH` unless `BRIG` names another. The CI check resolves a `vm` row
-by name and lists it as not yet run.
+Any other token, a row with no token, or text beside the tokens fails the
+check.
 
-CI does run `script/claims-vm.sh --self-test`. It answers every check from a
-fake guest that leaks one thing at a time, and each check has to fail on its
-own leak. A few checks also run their real probes through a stub `brig` on
-the host, so a probe with no answer fails too. That proves each check judges
-an answer right. Only a booted sandbox proves the guest has none.
+Every line after the table's delimiter row is a row, up to the first blank
+line, with or without its outer pipes. A line there that is not three cells
+fails the check. A pipe line outside the table fails it too.
 
-Any other token, a row with none, or text beside the tokens fails the check.
+## Checks that need a sandbox
+
+A `vm` check needs a booted sandbox, and CI has no runtime. The CI check
+resolves a `vm` row by name and lists it as not yet run.
+
+Before a merge that touches the run path, run `make claims-vm`. It builds
+`brig` from this checkout and runs the `vm` checks against that binary where
+hull or nerdctl is on `PATH`. It skips where neither is. Run by hand,
+`script/claims-vm.sh` tests the `brig` on `PATH` unless `BRIG` names another.
+
+CI does run `script/claims-vm.sh --self-test`. The self-test answers every
+check from a fake guest that leaks one thing at a time, and each check must
+fail on its own leak. A few checks also run their real probes through a stub
+`brig` on the host, so a probe with no answer fails too. The self-test proves
+that each check judges an answer correctly. Only a booted sandbox proves that
+the guest has none.
 
 ## The table
 
@@ -64,4 +71,4 @@ Any other token, a row with none, or text beside the tokens fails the check.
 | "`--home` pointed at a symlink is refused for the same reason, with the same kind of message, and is fixed by naming the real directory." | Writing into the workspace | `go:TestWorkspaceStillRefusesASymlinkAtTheWorkspace` `go:TestSymlinkedWorkspaceRootIsRefused` `go:TestWorkspaceRefusesASymlinkedParentComponent` |
 | "The one case with no innocent reading is an image sitting under our registry whose signature does not verify. That is the case that stops." (an image under `ghcr.io/brig-sh/`) | Guest images | `smoke:a bad signature on our own image is reported` `smoke:a bad signature stops the boot (exit 5) with no terminal to ask` `go:TestVerifyRefusesAFailedSignatureWithNoTerminal` `go:TestVerifyRefusesAFailedSignatureWithStdinOnDevNull` |
 | "A `scheme://` value read from the environment is refused as an unresolved secret-manager reference." | Credentials | `smoke:a secret-manager reference is not forwarded` `go:TestUnresolvedReferencesAreRejectedButOrdinaryURLsAreNot` `go:TestEnvRefsStillGetTheUnresolvedRefGuard` |
-| "The object cosign checked is the object that runs, and the success line names the digest rather than the tag it came from." (the object that runs) | The digest, not the tag | `go:TestVerifyResolvesVerifiesAndPinsAMatchingDigest` `go:TestRunArgsBootsThePinnedDigest` `go:TestNerdctlBootsTheVerifiedDigest` `smoke:the verified digest is what hull was told to boot` |
+| "The object cosign checked is the object that runs, and the success line names the digest instead of the tag it came from." (the object that runs) | Digest pinning | `go:TestVerifyResolvesVerifiesAndPinsAMatchingDigest` `go:TestRunArgsBootsThePinnedDigest` `go:TestNerdctlBootsTheVerifiedDigest` `smoke:the verified digest is what hull was told to boot` |

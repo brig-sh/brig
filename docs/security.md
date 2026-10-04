@@ -1,99 +1,91 @@
-# What Brig protects, and what it does not
+# What Brig protects
 
-An agent runs code you did not write. You run it in a sandbox because that
-code executes against a machine that holds everything you have. Brig narrows
-what "everything" means. On the host, the agent can reach its guest home and
-the credentials you gave it. It can also reach any project you name on the
-run line. No other host directory is mounted.
+Brig runs an agent in a microVM. On the host, the agent can reach its guest
+home, the credentials you deliver to it, and any project you name on the run
+line. No other host directory is mounted.
 
-No host credential source is read on the run path: the only store a run
-opens is Brig's own. See [secrets.md](secrets.md). What the agent can reach
-over the network is a separate question, with a much weaker answer, covered
-below. [claims.md](claims.md) ties promises on this page to the tests that
-defend them.
+A run reads no host credential source. See [Credentials](#credentials).
 
-If you have found a flaw in one of these boundaries, [SECURITY.md](../SECURITY.md)
-is how to report it privately. The section below on
-[things brig does not claim](#things-brig-does-not-claim) is the line between a
-vulnerability and a known limitation.
+Network reach has weaker limits. See
+[Things brig does not claim](#things-brig-does-not-claim). That section is
+also the line between a vulnerability and a known limitation.
+
+[Claims and the tests behind them](claims.md) ties promises here to the tests
+that defend them. To report a flaw in a boundary privately, see
+[SECURITY.md](../SECURITY.md).
 
 ## What the agent can reach
 
-The guest can access:
+The guest can reach:
 
 - its guest home, read-write
 - the project you name on the run line, read-write at `/work/<name>`
 - the credentials you deliver to it
-- the internet, on either `isolated` or `shared`
-- a port another sandbox listens on, when both use `shared`, on
-  `hvi` and on Linux (see
-  [things brig does not claim](#things-brig-does-not-claim))
-- any hostmount volume a profile declares
+- the internet, on either `isolated` or `shared` (see
+  [Network egress](#network-egress) and [Host services](#host-services))
+- a port another sandbox listens on, when both use `shared`, on `hvi` and on
+  Linux (see [Sandbox to sandbox](#sandbox-to-sandbox))
+- any hostmount volume a profile declares (see [The boundary](#the-boundary))
 
-The host can reach the guest on any port you publish with `--publish` or
-`brig network publish`, and on no other. A published port is the one inbound
-hole in the boundary. It exists only because you asked for it, and
-`brig network unpublish` closes it. See [Published ports](#published-ports)
-below.
-
-The guest cannot access:
+The guest cannot reach:
 
 - any other host directory
 - your keychain
 - your SSH agent
 - your secret manager
-- an environment variable a profile's `deny` list refuses
+- an environment variable a profile's `deny` list refuses. A `deny` list does
+  not cover a `files:` binding (see
+  [file delivery](#what-file-delivery-buys-and-what-it-costs)).
 
 The guest gets only the credentials you deliver to it.
 
-New sandboxes default to `isolated` on `hvi` and Linux, with an explicit
-`shared` exception in the graphical `claude-desktop` profile. The unpublished
-`cursor` profile leaves its posture unset, so it also isolates on Linux and
-`hvi` and takes the backend fallback on `vz` or `qemu`.
+The host can reach the guest only on a port you publish. See
+[Published ports](#published-ports).
 
-An existing sandbox keeps its recorded posture, or the actual
-posture inspected from the runtime when an older session has no record.
-Brig refuses a flagless run if it cannot establish that existing posture.
-A custom profile without a network choice falls back to `shared` on `vz`
-or `qemu`, and `brig info` names that fallback.
+The agent changes your real files in the guest home and in the project, not a
+copy of them. It can send anything it reads there over the network. The agent
+can use a delivered credential for as long as it holds it. The agent can
+misuse that credential the same way a person who holds it can.
+
+### Network posture
+
+A new sandbox on `hvi` or on Linux gets the `isolated` posture.
+
+| Case | Posture |
+| --- | --- |
+| New sandbox on `hvi` or Linux | `isolated` |
+| The graphical `claude-desktop` profile | `shared`, set explicitly in the profile |
+| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on Linux and `hvi`. The backend fallback on `vz` or `qemu` |
+| Custom profile without a network choice, on `vz` or `qemu` | `shared`. `brig info` names that fallback |
+| Existing sandbox | Its recorded posture |
+| Existing sandbox from an older session with no record | The actual posture, inspected from the runtime |
+
+Brig refuses a flagless run if it cannot establish the posture of an existing
+sandbox.
 
 `isolated` separates sandbox networks. It does not restrict internet access
 or establish whether host services are reachable. See
+[Sandbox to sandbox](#sandbox-to-sandbox) for what `isolated` guarantees, and
 [Network postures](policies.md#network-postures) for overrides and the
 backend limits.
 
-Mounting a project or delivering a credential changes both lists. The agent
-can change the real files at those two mounts, not a copy of them. Anything
-it can read there it can also send over the network. A credential you deliver
-is usable by the agent for as long as it holds it. The agent can misuse it
-the same way a person holding it can.
-
-Every hostmount in a shipped profile already lives inside the guest home.
-So no shipped hostmount exposes anything today. That is a property of the
-shipped profiles, not a guarantee about a profile you write yourself.
-
-A `deny` list only ever covers an environment variable. A `files:` binding
-reaches the guest by a different channel, and the list does not see it.
-
-What "the internet" means in practice is in
-[Things brig does not claim](#things-brig-does-not-claim) below. So is
-whether the guest can reach a service bound on the host.
-
 ## The boundary
 
-The sandbox is a microVM on both macOS and Linux. On macOS it is booted by
-[hull](https://github.com/brig-sh/hull) over Virtualization.framework, which
-`brew install --cask brig` brings along. On Linux Brig drives `nerdctl` and
-hands the container to the urunc shim (`io.containerd.urunc.v2`) by default.
-That gives the guest a kernel of its own there too.
-`BRIG_CONTAINERD_RUNTIME` can point at another microVM shim, for a host that
-has one. A shim Brig knows shares the host kernel, `runc` or `crun`, by name or
-by path, is refused: a container sharing the host kernel is not the boundary
-Brig provides.
+The sandbox is a microVM on macOS and on Linux.
 
-Which of them you got is the `ISOLATION` row of the execution envelope.
-`brig info` prints it without booting anything, and `brig --verbose run`
-prints it before the boot:
+| Host | How the microVM boots |
+| --- | --- |
+| macOS | [hull](https://github.com/brig-sh/hull) boots it over Virtualization.framework. `brew install --cask brig` installs hull |
+| Linux | Brig drives `nerdctl` and hands the container to the urunc shim (`io.containerd.urunc.v2`) by default. The guest gets its own kernel |
+
+On a Linux host that has another microVM shim, `BRIG_CONTAINERD_RUNTIME` can
+name that shim. Brig refuses a shim that it knows shares the host kernel:
+`runc` or `crun`, by name or by path. A container that shares the host kernel
+is not the boundary Brig provides.
+
+The `ISOLATION` row of the execution envelope names the boundary that this
+run resolved. `brig info` prints the row and boots nothing. `brig --verbose
+run` prints it before the boot:
 
 ```
 ISOLATION    microVM (hull, hvi backend)
@@ -103,46 +95,44 @@ ISOLATION    container (nerdctl over containerd, runc: the guest shares the host
 ISOLATION    unknown (nerdctl over containerd, io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
 ```
 
-The row reports what this run resolved: the binary in hand, the backend it
-settled on, and the shim it will name. That is not the same as what the
-paragraph above promises. Brig may not recognise a shim but could still use it
-to boot a sandbox, and Brig cannot establish the isolation that sandbox gets
-from a shim name alone. So the row says it cannot tell, instead of claiming
-the stronger boundary. A shim Brig recognises as sharing the host kernel is
-different: `brig info` names it, and the run is refused.
+The row reports the binary in hand, the backend the run settled on, and the
+shim the run will name. Brig can boot a sandbox with a shim that it does not
+recognise. Brig cannot establish the isolation of that sandbox from a shim
+name alone, so the row says that Brig cannot tell. For a shim that Brig
+recognises as sharing the host kernel, `brig info` names it and the run is
+refused.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write.
 Name a project on the run line and that project is a second host directory,
-also mounted read-write, at `/work/<name>`. The agent can change those files
-too.
+also mounted read-write, at `/work/<name>`.
 
-Each hostmount volume in the profile is an additional share. Every hostmount
-volume in a shipped profile lives inside the guest home already, so nothing
-extra is exposed today. That is a property of the shipped profiles, not a
-guarantee. A hostmount your own profile declares outside a tmpfs cover is a
-host path the guest can see.
+Each hostmount volume in the profile is one more share. Every hostmount
+volume in a shipped profile is inside the guest home, so no shipped hostmount
+exposes anything more today. That is a property of the shipped profiles. It
+is not a guarantee about a profile that you write. A hostmount that your own
+profile declares outside a tmpfs cover is a host path the guest can see.
 
 Beyond those, the guest does not have your keychain, your SSH agent, your
-secret manager, or any other directory on the host. That inaccessibility is
-the isolation boundary for everything else. It is also the reason credentials
-have to be forwarded in explicitly: the guest cannot fetch them for itself.
+secret manager, or any other directory on the host. The guest cannot fetch a
+credential for itself, so you must deliver each credential explicitly. See
+[Credentials](#credentials).
 
 ### Published ports
 
 Nothing on the host can open a connection into the sandbox until you publish
-a port. `--publish` on a run, and `brig network publish` on a sandbox already
-up, are the two ways to ask.
+a port. To publish a port, use `--publish` on a run, or `brig network publish`
+on a sandbox that is up. `brig network unpublish` closes the port. A
+published port is the only inbound opening in the boundary.
 
-A published port widens the boundary, per port and on request. Three things
-hold it down.
+**The port binds to loopback by default.** A published port binds to
+`127.0.0.1` unless you write an address. The port is then reachable from this
+machine, and not from the network this machine is on. To ask for the wider
+binding, write the address, as in `0.0.0.0:8080:80`. The wider binding is
+never the default.
 
-It binds to `127.0.0.1` unless you write an address yourself, so the port is
-reachable from this machine and not from the network this machine is on.
-`0.0.0.0:8080:80` is how you ask for the wider one, and it is never the
-default.
-
-It is named on the `PORTS` row of the execution envelope. `brig info` prints
-the row, and so does `brig --verbose run` before the boot:
+**The execution envelope names the port.** The `PORTS` row lists every port
+the sandbox publishes. `brig info` prints the row, and `brig --verbose run`
+prints it before the boot:
 
 ```
 NETWORK      isolated (a network of this sandbox's own)
@@ -150,199 +140,203 @@ PORTS        127.0.0.1:8080 -> 80
              0.0.0.0:443 -> 443 (reachable from the network this host is on)
 ```
 
-The row carries every port the sandbox publishes, not only the ones this
-command line asked for, because a publication outlives the run that made it.
-An address other than loopback says so on its own row.
+A publication outlives the run that made it, so the row is not limited to the
+ports this command line asked for. A row with an address other than loopback
+says so.
 
-And it is ingress, so no egress rule applies to it. A policy decides what the
-guest may open a connection *to*; it has nothing to say about a connection
-opened *into* the guest. A sandbox under a strict egress policy with a port
-published is still reachable on that port.
+**No egress rule applies to the port.** A published port is ingress. A policy
+decides where the guest can open a connection *to*. It does not apply to a
+connection opened *into* the guest. A sandbox under a strict egress policy is
+still reachable on a port it publishes.
 
 ## Credentials
 
-**A run reads no host credential source.** Nothing on the
-`brig run`, `sh` or `exec` path reaches a keychain item Brig did not write.
-Nothing on that path reaches a credential file outside the guest home, or a
-host command that produces one.
-
-Two host reads do happen, and no setting turns either off. Brig runs
-`git config --get` in the directory you invoked it from, for `user.name`,
-`user.email` and `github.user`, to resolve the commit identity forwarded into
-the guest. If `github.user` comes back empty, it then reads the `user:` line
-from the stanza for your git host in gh's `hosts.yml`, under `$GH_CONFIG_DIR`
-or `~/.config/gh`. That line names the login that pairs with the forwarded
-token. That file usually carries gh's own OAuth token as well. Brig takes the
-login and nothing else. `BRIG_GIT_IDENTITY=0`, `BRIG_GIT_CONFIG=0` and
-`BRIG_GIT_USER` change what Brig does with the answers, not whether it asks.
-
-Your host login enters Brig's own store once, when you type
-`brig secret import <profile>`, and every run afterwards reads only that
-store:
+You choose how the agent gets a login. Log in inside the sandbox, or import
+your host login once:
 
 ```bash
 brig run claude-code               # log in inside the sandbox, or:
 brig secret import claude-code     # carry the host login in, once
 ```
 
-A credential reaches the guest by one of two channels, and the profile picks
-per secret. `files:` writes it into the guest at the path the agent already
-reads. `env:` binds it as an environment variable, for credentials whose
-consumer offers no file interface. For an `env.<name>` binding, or the
-deprecated `forward:` spelling of one, Brig still reads the named variable
-from its own environment. Whatever populates that environment remains a
-usable backend for those.
+`brig secret import <profile>` puts your host login into Brig's own store.
+Every run afterwards reads only [that store](#the-secret-store).
 
-On Linux the store is a Secret Service keyring on your session bus,
-gnome-keyring or KWallet ([secrets.md](secrets.md#linux)). A host with no
-keyring has no store. A profile whose secrets are *optional* still runs
-there: the run boots and the agent asks for a login. That is what
-`claude-code` does. A **required** secret does fail outright, because there
-is nowhere on that host to read it from.
+**A run reads no host credential source.** Nothing on the
+`brig run`, `sh` or `exec` path reaches a keychain item Brig did not write.
+Nothing on that path reaches a credential file outside the guest home, or a
+host command that produces one.
 
-Values are re-read on every exec, so a rotated credential is picked up without
-restarting the sandbox. Nothing is written into the guest home from the host
-for this.
+Two host reads do happen on a run, and no setting turns either off:
 
-### What file delivery buys, and what it costs
+1. Brig runs `git config --get` in the directory you invoked it from, for
+   `user.name`, `user.email` and `github.user`. The answers give the commit
+   identity that Brig forwards into the guest.
+2. If `github.user` is empty, Brig reads the `user:` line from the stanza for
+   your git host in gh's `hosts.yml`, under `$GH_CONFIG_DIR` or
+   `~/.config/gh`. That line names the login that pairs with the forwarded
+   token. That file usually holds gh's own OAuth token too. Brig takes the
+   login and nothing else.
 
-A credential delivered as a file stays out of `/proc/<pid>/environ` and is not
-inherited by processes the agent spawns. It can also be rewritten under a
-running agent, so a rotated secret can reach a live session, which no
-environment variable can. The bytes land on a memory-backed mount covering
-the agent's whole config directory, verified to be `tmpfs` with no swap
-before anything is written. So there is no path from the credential to your
-disk to check.
+`BRIG_GIT_IDENTITY=0`, `BRIG_GIT_CONFIG=0` and `BRIG_GIT_USER` change what
+Brig does with the answers. They do not stop the reads.
 
-Weigh these costs before you rely on file delivery.
+A credential reaches the guest by one of two channels. The profile picks the
+channel for each secret.
 
-- **Brig stores and hands over a refresh token.** There is no way to give
-  Claude Code a working `.credentials.json` without `refreshToken` and
-  `refreshTokenExpiresAt`. A file carrying only an access token is *worse*
-  than an environment variable, because the agent attempts a refresh, fails,
-  and prompts. So a compromised agent inside the sandbox can mint access
-  tokens indefinitely, and keeps doing so after the host's own token has
-  expired. In exchange, the guest refreshes for itself, so a long session
-  stops breaking every few hours. Brig makes that trade deliberately.
-- **Brig's copy is less protected than the item it came from.** The host's
-  Claude item is ACL-scoped to the application that wrote it. That is why it
-  raises a dialog the first time something else reads it. The copy Brig
-  writes carries the default ACL, the same one every secret in
-  [the secret store](#the-secret-store) carries. The same consequence
-  applies: keeping the stored copy low-value is the only real mitigation, and
-  a refresh token is not low-value. When you are not using it, delete it:
-  `brig secret delete claude-credentials`.
-- **The denylist stays env-scoped.** A `files:` binding bypasses the deny check
-  entirely, and no name check can fix that. A profile can deliver a metered
-  API key inside a `settings.json`, and nothing sees it. That is defensible
-  rather than a hole. `deny` exists to catch **accident**, an ambient
-  variable swept into the guest because it happened to be in your shell. A file
-  binding takes an explicit stored secret and an explicit binding written by
-  the profile author. Nobody file-binds an `ANTHROPIC_API_KEY` by mistake. The
-  two names on `claude-code`'s denylist are env-shaped by the agent's own
-  design, so the guard still covers the channel the risk uses.
-- **The stored copy does not rotate.** A credential renewed on the host does
-  not update Brig's copy. One *revoked* on the host stays valid in Brig's
-  store until you re-import or delete it. Brig warns before boot when the
-  stored copy has expired, and names the command that refreshes it. It cannot
-  see a revocation at all.
+| Channel | What it does |
+| --- | --- |
+| `files:` | Writes the credential into the guest at the path the agent already reads |
+| `env:` | Binds the credential as an environment variable, for a credential whose consumer offers no file interface |
 
-A `0600` file is also still readable by anything running as the agent's uid
-inside the sandbox. Files narrow the exposure. They do not draw a boundary.
-See [what is still exposed](#what-is-still-exposed) below.
+For an `env.<name>` binding, or the deprecated `forward:` spelling of one,
+Brig still reads the named variable from its own environment. Whatever
+populates that environment remains a usable backend for those bindings.
+
+Brig reads values again on every exec, so the sandbox picks up a rotated
+credential without a restart. Nothing is written into the guest home from the
+host for this.
 
 Brig applies these rules when it resolves a secret:
 
-- Unset or empty is skipped, so it cannot shadow a value baked into the image.
+- Brig skips a variable that is unset or empty, so it cannot shadow a value
+  baked into the image.
 - A `scheme://` value read from the environment is refused as an unresolved
-  secret-manager reference. direnv and friends leave those in the environment
-  readily. Forwarded verbatim, it yields "Invalid username or token" in the
-  guest, which looks exactly like a broken sandbox. A `value:` literal or a
-  value from Brig's own secret store skips this check. That value was set
-  deliberately, so it is not a reference a tool failed to resolve. Refusing it
-  would reject a good credential because it looks like a reference.
-  `BRIG_ALLOW_REFS=1` forwards an ambient reference anyway.
+  secret-manager reference. Tools such as direnv leave those references in the
+  environment. Forwarded verbatim, a reference yields "Invalid username or
+  token" in the guest, which looks like a broken sandbox. A `value:` literal
+  or a value from Brig's own secret store skips this check. That value is not
+  a reference a tool failed to resolve. `BRIG_ALLOW_REFS=1` forwards an
+  ambient reference anyway.
 - A variable on the profile's `deny` list is refused, with the reason.
 
-`brig info <agent>` reports the guest's environment, by name, and fails the
-same way a run does if a required secret cannot be resolved. It never
-prints a value: a secret-sourced variable comes back annotated, for example
+`brig info <agent>` reports the guest's environment by name. It fails the
+same way a run does if a required secret cannot be resolved. It never prints
+a value. A variable that comes from a secret is annotated, for example
 `GH_TOKEN(secret)`. A credential delivered as a file is not an environment
-variable and does not appear in that list at all.
+variable, so it does not appear in that list.
+
+On a Linux host with no keyring there is no
+[secret store](#the-secret-store):
+
+| Profile secrets | Result |
+| --- | --- |
+| *Optional*, as in `claude-code` | The run boots and the agent asks for a login |
+| **Required** | The run fails, because that host has no place to read the secret from |
+
+### What file delivery buys, and what it costs
+
+A credential delivered as a file:
+
+- stays out of `/proc/<pid>/environ`
+- is not inherited by processes the agent spawns
+- can be rewritten under a running agent, so a rotated secret can reach a
+  live session. No environment variable can do that.
+- lands on a memory-backed mount and does not reach your disk (see
+  [What reaches host disk](#what-reaches-host-disk))
+
+Weigh these costs before you rely on file delivery.
+
+- **Brig stores and hands over a refresh token.** Claude Code cannot use a
+  `.credentials.json` without `refreshToken` and `refreshTokenExpiresAt`. A
+  file with only an access token is *worse* than an environment variable,
+  because the agent attempts a refresh, fails, and prompts. So a compromised
+  agent inside the sandbox can mint access tokens indefinitely. It continues
+  after the host's own token expires. In exchange, the guest refreshes for
+  itself, so a long session does not break every few hours.
+- **Brig's copy is less protected than the item it came from.** The host's
+  Claude item is ACL-scoped to the application that wrote it, so it raises a
+  dialog the first time something else reads it. Brig's copy has the default
+  ACL, like every secret in [the secret store](#the-secret-store). The only
+  real mitigation is to keep the stored copy low-value, and a refresh token is
+  not low-value. When you do not use the copy, delete it:
+  `brig secret delete claude-credentials`.
+- **The `deny` list covers only environment variables.** A `files:` binding
+  bypasses the deny check, and no name check can fix that. A profile can
+  deliver a metered API key inside a `settings.json`, and nothing sees it.
+  `deny` exists to catch an **accident**: an ambient variable from your shell
+  that is swept into the guest. A file binding takes an explicit stored secret
+  and an explicit binding that the profile author wrote. The two names on the
+  `deny` list of `claude-code` are environment variables by the agent's own
+  design. So the check still covers the channel the risk uses.
+- **The stored copy does not rotate.** A credential renewed on the host does
+  not update Brig's copy. A credential *revoked* on the host stays valid in
+  Brig's store until you import it again or delete it. Brig warns before boot
+  when the stored copy is expired, and names the command that refreshes it.
+  Brig cannot see a revocation.
+
+A `0600` file is still readable by anything that runs as the agent's uid
+inside the sandbox. File delivery narrows the exposure. It does not make a
+boundary. See [What is still exposed](#what-is-still-exposed).
 
 ### What reaches host disk
 
-The credential file is the part that does not. It lands on a `tmpfs` mount
-covering `~/.claude`, checked to be `tmpfs` with no swap before anything is
-written. So `~/.claude/.credentials.json` and the temp file the agent renames
-onto it never touch your disk. `brig stop` takes that mount with the sandbox,
-which is why an in-sandbox login on this profile does not outlive a stop.
+The credential file does not reach host disk. It lands on a `tmpfs` mount
+that covers `~/.claude`. Brig checks that the mount is `tmpfs` with no swap
+before it writes anything. So `~/.claude/.credentials.json`, and the temp file
+the agent renames onto it, never touch your disk. `brig stop` removes that
+mount with the sandbox, so an in-sandbox login on this profile does not
+outlive a stop.
 
-The rest of `~/.claude` is not on that mount. Seven paths under it are
-hostmounted, so they live in the guest home on host disk and persist across
-boots:
+Seven paths under `~/.claude` are hostmounted. They are in the guest home on
+host disk, and they persist across boots:
 
-- `settings.json` and `CLAUDE.md`, your permission allowlist and your
-  user-level memory, written by hand or by the agent on your instruction.
-- `sessions`, `projects` and `history.jsonl`, which are the conversation.
-- `plugins` and `skills`, which are also where `--skills` copies your own, so
-  leaving either off makes that flag do nothing.
+| Paths | Contents |
+| --- | --- |
+| `settings.json`, `CLAUDE.md` | Your permission allowlist and your user-level memory, written by hand or by the agent on your instruction |
+| `sessions`, `projects`, `history.jsonl` | The conversation |
+| `plugins`, `skills` | Plugins and skills. `--skills` copies your own here, so that flag does nothing if a profile leaves either off |
 
-Anything else under `~/.claude` is ephemeral, including anything a future
-Claude Code version starts writing there. This list follows the `volumes:`
-block of the `claude-code` profile, which is the source.
+Anything else under `~/.claude` is ephemeral. That includes anything a future
+Claude Code version starts to write there. The source of this list is the
+`volumes:` block of the `claude-code` profile.
 
 ### Not in argv
 
 Forwarded values go into the runtime process's own environment, and only the
-variable *name* appears on its command line. So a forwarded credential is not
-readable in `ps` by other processes on the host.
+variable *name* appears on its command line. So other processes on the host
+cannot read a forwarded credential in `ps`.
 
-`HOME`, `PATH`, `TMPDIR` and any `XDG_` variable are the exception. The
-runtime reads these for itself: hull keeps its store under `HOME` and finds
-`hvi` on `PATH`, and a rootless nerdctl reads its registry config under
-`HOME`. A guest value there would redirect the runtime, so Brig passes these
-on the command line as `NAME=value`, on every run. None of them carries a
-credential, and `BRIG_ENV_ARGV`'s warning does not list them. A stored
-secret bound to one of these names is refused.
+`HOME`, `PATH`, `TMPDIR` and any `XDG_` variable are the exception. Brig
+passes these on the command line as `NAME=value`, on every run. The runtime
+reads these variables for itself, and a guest value there redirects the
+runtime. hull keeps its store under `HOME` and finds `hvi` on `PATH`. A
+rootless nerdctl reads its registry config under `HOME`. None of these
+variables carries a credential, and Brig refuses a stored secret bound to one
+of these names. The `BRIG_ENV_ARGV` warning does not list them.
 
 `BRIG_ENV_ARGV=1` puts forwarded values back on the command line, for a
-runtime build that does not accept a bare `--env KEY`. That gives up the
-guarantee for a value read from the environment. A value Brig resolved on
-your behalf, one bound from its own secret store, is exempt from the hatch
-and stays off the command line regardless. The host durably logs every
-exec's argv, and an opt-in debugging hatch must not turn that log into a
-credential leak.
+runtime build that does not accept a bare `--env KEY`. A value read from the
+environment then loses this guarantee. A value Brig resolved from its own
+secret store stays off the command line with or without `BRIG_ENV_ARGV`. The
+host durably logs the argv of every exec, so a value on the command line
+stays in that log.
 
 ### What is still exposed
 
-The credential is readable inside the sandbox by anything running alongside
-the agent. That is inherent: the sandbox cannot use a credential it cannot
-see. Docker's sandboxes avoid it by rewriting auth headers in a host-side
-proxy. That works for proxied HTTP, but not for `git push`, a vendor CLI's
-own token refresh, or an MCP server holding its own connection.
+Give the agent a narrow credential. Prefer a fine-grained `GH_TOKEN` scoped
+to the repositories you want reachable, over a classic PAT that carries your
+whole account.
 
-Our answer is a narrow blast radius rather than a sentinel value. Prefer a
-fine-grained `GH_TOKEN` scoped to the repositories you want reachable, over a
-classic PAT carrying your whole account.
+Anything that runs alongside the agent inside the sandbox can read the
+credential. The sandbox cannot use a credential it cannot see. Brig forwards
+the credential and limits the blast radius. It does not use a sentinel value
+or a host-side proxy (see
+[A TLS-terminating host proxy](non-goals.md#a-tls-terminating-host-proxy)).
 
 ## The secret store
 
-`brig secret` is the one place Brig stores something rather than reading it,
-and after the switchover above it is the **only** store a run reads. A profile
-names what it wants out of it under `secrets:`, and `brig secret import` is how
-a host login gets in.
+`brig secret` is the **only** store a run reads, and the one place where Brig
+stores a value. A profile names the secrets it wants under `secrets:`. `brig
+secret import` puts a host login in.
 
-Prefer that over composing a value into Brig's environment, for one concrete
-reason. A value Brig resolved on your behalf is exempt from the
-`BRIG_ENV_ARGV` escape hatch above, and an ambient one is not. The two paths
-end at the same variable in the same guest. Only one of them stays off the
-command line the host logs no matter what anyone sets later.
+Prefer the store to a value you compose into Brig's environment. A value from
+the store stays off the command line the host logs, whatever anyone sets
+later. An ambient value does not (see [Not in argv](#not-in-argv)).
 
-[secrets.md](secrets.md) covers using it, and
-[profiles.md](profiles.md#secrets-and-env-for-a-credential-brig-resolves-itself)
-covers the profile side. This section covers what the keychain does and does
-not protect.
+[Keeping secrets in your keyring](secrets.md) covers how to use the store.
+[Secrets and env](profiles.md#secrets-and-env-for-a-credential-brig-resolves-itself)
+covers the profile side.
 
 On macOS the backend is the login keychain. Every item is a generic password
 under the service `sh.brig.secret`, with the secret's name as the account:
@@ -353,148 +347,111 @@ brig secret create deploy-key -f ~/.ssh/id_ed25519
 brig secret ls
 ```
 
-What that means for this page:
+**The value never appears in argv.** A secret is two keychain items, written
+by two `security` invocations. The whole `add-generic-password` command for
+the key item, with the base64 key, goes to `security -i` through a pipe. So
+that command line is `security -i` and nothing else. The sealed item is
+written through the arguments of `security`. Those arguments hold the
+ciphertext and the secret's name.
 
-- **The value never appears in argv.** A secret is two keychain items (see
-  below), written by two `security` invocations. The key item's whole
-  `add-generic-password` command, base64 key and all, goes to `security -i`
-  down a pipe, so that command line is `security -i` and nothing else. The
-  sealed item is written through `security`'s arguments, and what stands
-  there is the ciphertext and the secret's name. This is the same
-  guarantee the forwarding path makes above, for the same reason. `security -i`
-  reads one command per line and blocks for the next. So the write is on the
-  process table only for as long as the pipe stays open. Reproduce it by
-  running `security -i` against a fifo, holding the fifo open with an idle
-  writer. Send the real `add-generic-password` line down it, then read
-  `ps -Ao args` while it sits there. The argv shows `security -i` and nothing
-  more. `security find-generic-password` afterwards confirms the value
-  really was stored. Closing the fifo and deleting the probe item cleans up.
-- **The item's ACL is the default one.** `security` created these items, so
-  `security` is trusted to read them back, with no keychain dialog. The
-  consequence: **anything that can run
-  `/usr/bin/security` as you can read them back too.** That is the same
-  boundary as your own shell, and it is weaker than a per-application ACL.
-  Brig does not ask for the broad `-A`, but it does not narrow the
-  default either. This is the same fact [file delivery](#what-file-delivery-buys-and-what-it-costs)
-  states for the Claude credential copy specifically.
-- **The keychain holds the key in one item and the sealed value in another.**
-  [secrets.md](secrets.md#where-a-value-lives) has the layout and why it
-  exists. This changes nothing in the threat model. A process that
-  can read Brig's items, which is any process running as you (the ACL point
-  above), reads the key and opens the sealed item. A copy of the keychain
-  file without the login password holds two encrypted items it cannot open.
-  Keychain Access shows a base64 key and base64 ciphertext, not the secret.
-- **`brig secret ls` never decrypts.** It reads attributes only, which is why
-  listing raises no access prompt and why it can show names and dates but
-  never values. What it reads is wider than Brig's own items:
-  `security dump-keychain` takes no service filter. Its options are
-  `[-adhir] [keychain...]` and nothing else, and Brig names no keychain
-  either, so the dump covers the whole keychain *search list*. On a stock Mac
-  that is your login keychain **and the System keychain**, which is a wider
-  net than the login keychain alone. `security list-keychains` shows yours.
-  `ls` enumerates the attributes of every item in all of them and discards the
-  ones that are not Brig's. Nothing is decrypted and nothing leaves the
-  process. Names and dates belonging to other applications, and to the
-  system, do pass through Brig on their way to being thrown away.
-- **Brig writes only under its own service, which contains Brig rather than
-  vouching for what it finds.** Every command that creates, changes or removes
-  an item carries `-s sh.brig.secret`, so Brig cannot reach outside that
-  namespace. The converse does not follow. The service name is a label, not
-  an authenticity check, and nothing stops another process running as you
-  from adding an item under it. Brig then reads, updates and deletes that
-  item as its own. What Brig does instead: `read` reports a value that is
-  not in Brig's encoding, and `ls` skips a name outside Brig's grammar. So an
-  item Brig did not write is either reported or passed over rather than
-  presented as yours. An item belonging to another application, Claude Code's
-  own, say, is read by `brig secret import` and never written. That read
-  *does* raise a dialog, for exactly the ACL reason above: `security` did not
-  create it. A run never performs that read at all, which is the point of the
-  import verb. The dialog appears when you asked for it, once, and never
-  again on the boot path.
+<details>
+<summary>Check the key item's argv</summary>
 
-On Linux the store is a Secret Service keyring, and a host without one has no
-store. `brig secret` says which half is missing, rather than falling back to
-a file, which is a downgrade nothing told you about.
+`security -i` reads one command per line and then blocks for the next line.
+So the write stays on the process table for as long as the pipe stays open.
+
+1. Run `security -i` against a fifo.
+2. Hold the fifo open with an idle writer.
+3. Send the real `add-generic-password` line down the fifo.
+4. Read `ps -Ao args`. The argv shows `security -i` and nothing more.
+5. Run `security find-generic-password`. It shows that the value was stored.
+6. Close the fifo and delete the probe item.
+
+</details>
+
+**Each item has the default ACL.** `security` created these items, so
+`security` can read them back with no keychain dialog. **Anything that can
+run `/usr/bin/security` as you can read them back too.** That is the same
+boundary as your own shell, and it is weaker than a per-application ACL. Brig
+does not ask for the broad `-A`, and it does not narrow the default.
+
+**The keychain holds the key in one item and the sealed value in another.**
+[Where a value lives](secrets.md#where-a-value-lives) has the layout and the
+reason for it. The layout changes nothing in the threat model. A process that
+can read Brig's items, which is any process that runs as you, reads the key
+and opens the sealed item. A copy of the keychain file without the login
+password holds two encrypted items it cannot open. Keychain Access shows a
+base64 key and base64 ciphertext, not the secret.
+
+**`brig secret ls` never decrypts.** It reads attributes only. So a listing
+raises no access prompt, and it shows names and dates but never values. The
+read is wider than Brig's own items:
+
+- `security dump-keychain` takes no service filter. Its options are
+  `[-adhir] [keychain...]` and nothing else.
+- Brig names no keychain, so the dump covers the whole keychain *search
+  list*. On a stock Mac that is your login keychain **and the System
+  keychain**. `security list-keychains` shows yours.
+- `ls` enumerates the attributes of every item in those keychains and
+  discards the items that are not Brig's.
+- Nothing is decrypted and nothing leaves the process. Names and dates that
+  belong to other applications, and to the system, do pass through Brig
+  before Brig discards them.
+
+**Brig writes only under its own service.** Every command that creates,
+changes or removes an item carries `-s sh.brig.secret`, so Brig cannot reach
+outside that namespace. The service name is a label. It is not an
+authenticity check. Another process that runs as you can add an item under
+that service, and Brig then reads, updates and deletes that item as its own.
+Two checks limit this. `read` reports a value that is not in Brig's encoding,
+and `ls` skips a name outside Brig's grammar. So an item Brig did not write is
+reported or skipped, and is not presented as yours.
+
+**`brig secret import` reads another application's item and never writes
+it.** Claude Code's own item is one example. That read raises a keychain
+dialog, because `security` did not create the item. A run never performs that
+read. The dialog appears once, when you run the import, and never on the boot
+path.
+
+On Linux the store is a Secret Service keyring on your session bus,
+gnome-keyring or KWallet (see [Linux](secrets.md#linux)). A host with no
+keyring has no store. `brig secret` says which half is missing. It does not
+fall back to a file.
 
 ## Writing into the workspace
 
-The guest home is mounted read-write, so its contents are the
-sandbox's to choose. Brig also writes into it from the host on every
-invocation. Those writes are the stale-share marker, the onboarding seed,
-the trust key, the guest git files, and the skills copied in by `--skills`.
-Together, those two facts make this the one place where the sandbox can
-influence what happens on the host.
+Brig refuses a symlink in the guest home that it is about to write through.
+The run fails before anything is written, and the error names the link and
+its target. Remove the link, or point the guest home somewhere else.
+
+The guest home is mounted read-write, so the sandbox chooses its contents.
+Brig also writes into it from the host on every invocation. Those writes are
+the stale-share marker, the onboarding seed, the trust key, the guest git
+files, and the skills that `--skills` copies in. So the guest home is the one
+place where the sandbox can influence what happens on the host.
 
 Brig runs as you and outside the sandbox. A guest can plant a symlink where
-Brig writes next. That aims Brig at a host path the guest itself can never
-reach, your `~/.ssh` or your shell profile. Brig follows it anyway, because
-to Brig it is just a path inside the guest home. Nothing about the microVM
-boundary stops this: the write is on the host side of it.
+Brig writes next. The link aims Brig at a host path the guest itself cannot
+reach, such as your `~/.ssh` or your shell profile. The microVM boundary does
+not stop that write, because the write is on the host side of the boundary.
 
 So every host-side read and write Brig makes inside the guest home goes
-through an `os.Root` opened on it. It resolves each path itself, refuses an
-absolute symlink outright, and will not let a relative one climb past the
-root. A symlink that escapes the guest home this way is refused everywhere,
-on a read or a write. There is no window between the check and the open for
-the guest to swap the file in.
+through an `os.Root` opened on it. `os.Root` resolves each path itself. It
+refuses an absolute symlink, and it does not let a relative symlink climb
+past the root. There is no window between the check and the open in which the
+guest can swap the file.
 
-`brig rm` deletes a guest home Brig created, and that tree is the guest's.
-The delete takes only a direct child of `~/.brig/homes`, and it goes through
-an `os.Root` opened there, so nothing it does can resolve outside that
-directory. Inside it, the delete removes a symlink as a link and never
-descends into it. That is what keeps the target of a symlink the guest left
-in its home untouched. `os.Root` alone would not: it follows a link whose
-target stays inside the root. A first run whose boot fails deletes the home
-it created the same way. A guest home you named with `--home` or
-`BRIG_WORKSPACE` is never deleted, wherever it is.
+| Symlink | On a write | On a read |
+| --- | --- | --- |
+| Escapes the guest home | Refused | Refused |
+| Stays *inside* the guest home | Refused. Brig writes only regular files where a state file belongs | Followed. A `.gitconfig` symlinked to your own dotfiles, inside the guest home, keeps working |
+| At the guest home, or on the way to it | Refused before anything is created (see [The path to the guest home](#the-path-to-the-guest-home)) | Refused |
 
-A symlink that stays *inside* the guest home is handled differently for
-reads and for writes. Where Brig writes a state file, the
-symlink is refused even though it does not escape. Brig writes only regular
-files there, so a link where a state file belongs was put there rather than
-left there.
+In each case, Brig decides from what it opened, not from an earlier check. A
+fifo, socket, device or directory where a regular file belongs is refused.
+That closes the window in which the guest renames one file type over another.
 
-Where Brig reads a file, an internal symlink is followed instead. A
-`.gitconfig` symlinked to your own dotfiles, inside the guest home, has to
-keep working. The refusal it replaced used to claim such a link "leads out
-of" the guest home, which was never true for one that stays inside.
-
-Either way, Brig decides from what it actually opened, not from a check made
-beforehand. A fifo, socket, device or directory where a regular file belongs
-is refused there. That closes the window where the guest renames one file
-type over another between the two.
-
-The one escape a root cannot see is a symlink *at* the guest home or on the
-way to it. Resolving that still leaves every path below it honestly "inside
-the root". That is checked separately, before anything is created.
-
-The guest writes as you, so it can swap an entry only inside a directory you can
-write. The path to the guest home is split where the first such directory
-appears. Above it, every entry sits where the guest cannot reach, and that part
-is opened by name. It follows the links the system or an administrator put there
-(`/tmp` and `/var` on macOS are links). From there down, Brig descends one
-component at a time against the directory it already holds, and refuses every
-symlink. It confirms after each step that what it opened is what it looked at.
-The guest home itself is always in the descended part, so a link there is
-refused wherever it sits.
-
-Whether you can write a directory is what the kernel says, asked through
-`access(2)`, plus ownership: a directory you own you can always `chmod`. So a
-group membership past the first sixteen and an ACL both count, on both
-platforms. A link above the split whose target passes through a directory
-you can write is refused like any other link the guest can reach. A
-root-owned `/data` pointing into your home is one example. Name the real
-directory instead.
-
-When Brig runs as root, ownership tells it nothing, because the guest's writes
-are root's too. A directory a root sandbox had read-write looks like one of
-the machine's own. Brig then trusts only the entries of `/`, which it never
-mounts. The system's own links there, such as `/tmp` on macOS or `/home` on
-an ostree system, still resolve. Every component below them is walked link
-by link, so a link on the way to the guest home or the project is refused.
-
-When it fires, the run fails before anything is written, and the error
-names the link and where it points:
+A refusal looks like this:
 
 ```console
 $ brig run claude
@@ -508,69 +465,78 @@ Nothing was written; inspect
 running brig again: a symlink leads out of a directory brig is checking
 ```
 
-Brig does not create the links it writes through. One in the way is either
-something you put there deliberately, or the sandbox reaching for the host.
-Neither is a case for retrying: remove the link, or point the guest home
-somewhere else.
+Brig does not create the links it writes through. A link in the way is one
+that you put there, or one that the sandbox planted. Do not retry the run
+with the link in place.
 
-`--home` pointed at a symlink is refused for the same reason, with the
-same kind of message, and is fixed by naming the real directory.
+`--home` pointed at a symlink is refused for the same reason, with the same
+kind of message, and is fixed by naming the real directory.
+
+### The path to the guest home
+
+A root cannot see a symlink *at* the guest home or on the way to it. Every
+path below that link still resolves inside the root. So Brig checks the path
+separately, before it creates anything.
+
+The guest writes as you, so it can swap an entry only inside a directory you
+can write. Brig splits the path to the guest home at the first directory you
+can write.
+
+| Part of the path | How Brig opens it |
+| --- | --- |
+| Above the split | By name. The guest cannot reach these entries. Brig follows the links the system or an administrator put there (`/tmp` and `/var` on macOS are links) |
+| From the split down | One component at a time, against the directory Brig already holds. Brig refuses every symlink, and checks after each step that it opened what it looked at |
+
+The guest home is always in the lower part, so a link there is refused
+wherever it is.
+
+To decide whether you can write a directory, Brig asks the kernel through
+`access(2)`. It also counts ownership, because you can always `chmod` a
+directory you own. So a group membership past the first sixteen and an ACL
+both count, on both platforms.
+
+A link above the split whose target passes through a directory you can write
+is refused, like any other link the guest can reach. A root-owned `/data`
+that points into your home is one example. Name the real directory instead.
+
+<details>
+<summary>When Brig runs as root</summary>
+
+Ownership tells Brig nothing, because the guest's writes are root's too. A
+directory that a root sandbox had read-write looks like one of the machine's
+own. Brig then trusts only the entries of `/`, which it never mounts. The
+system's own links there, such as `/tmp` on macOS or `/home` on an ostree
+system, still resolve. Brig walks every component below them link by link.
+So a link on the way to the guest home or the project is refused.
+
+</details>
+
+### Deleting a guest home
+
+`brig rm` deletes a guest home Brig created. It never deletes a guest home
+you named with `--home` or `BRIG_WORKSPACE`, wherever that home is.
+
+The tree that `brig rm` deletes is the guest's, so the delete has limits:
+
+- The delete takes only a direct child of `~/.brig/homes`.
+- The delete goes through an `os.Root` opened there, so nothing it does can
+  resolve outside that directory.
+- Inside that directory, the delete removes a symlink as a link and never
+  descends into it. So the target of a symlink the guest left in its home
+  stays untouched. `os.Root` alone does not give that, because it follows a
+  link whose target stays inside the root.
+
+A first run whose boot fails deletes the home it created the same way.
 
 ## Mounting a project
 
 Name a project on the run line and Brig mounts it read-write at
-`/work/<name>`. It is the second host directory the sandbox can change, and
-every component at or below it is the sandbox's to replace.
+`/work/<name>`. The project is the second host directory the sandbox can
+change, and the sandbox can replace every component at or below it.
 
-A share is a path, and the runtime resolves it. Brig runs as you and outside
-the sandbox, so a link planted in the project is a link something follows on
-the host side of the boundary. The microVM does not stop this either. The VMM
-is asked to export a directory and it exports the one the link points at.
-
-What makes it reachable is a second sandbox with write access to the path.
-A run's own sandbox gains nothing by a swap, since it already has the project
-read-write. Another one does: the sandbox of an earlier run, or one from
-another session that is still running with an overlapping project. An agent
-replaces a subdirectory with a link to somewhere else on the host. The
-operator later narrows a run to that subdirectory, which is the ordinary way
-to point an agent at one part of a repository. The path is the operator's own
-and the directory it reaches is the agent's choice.
-
-So the project is reached the same way the guest home is. The path is split
-where the first directory you can write appears. Above the split, entries sit
-where the guest cannot reach and that part is opened by name, so the links
-the system put there keep working. From there down, Brig descends one
-component at a time against the directory it already holds, refuses every
-symlink, and confirms after each step that what it opened is what it looked
-at. The boot descends again and refuses a path that no longer names the
-directory it holds.
-
-That does not close the handover. The share is a string the VMM resolves
-later, on its own time. A sandbox from another session that is still running
-with an overlapping project, such as `~/monorepo` while this run names
-`~/monorepo/frontend`, can swap a component in that window. The guest home has
-the same gap, and closing either needs the runtime to accept a directory
-handle rather than a path.
-
-A hostmount volume source is reached the same way, and gets the same second
-look. Its path lives inside the guest home, so the guest owns every
-component. Brig checks it symlink-safe when the run begins. A restart reopens
-the boot after the guest has held the guest home, so Brig checks it again
-through the held handle before the share is built. A source swapped for a
-link is refused rather than exported. The handover carries the same residual
-as the home and the project above, for the same reason.
-
-A link you made yourself is refused too. Brig cannot tell it from a planted
-one: same owner, same directory, same bytes. So the rule is about links and
-not about who made them, and the message names the target so you can type
-that instead.
-
-The guest home refuses links for a different reason: Brig creates it, so a
-link there has no legitimate author. One walk produces both refusals, and
-only the wording differs.
-
-When it fires, the run fails before anything is mounted, and the error names
-the link and where it points:
+Brig refuses a project path that goes through a symlink. The run fails before
+anything is mounted, and the error names the link and its target. Name the
+real directory instead:
 
 ```console
 $ brig run claude ~/lab/monorepo/frontend
@@ -581,8 +547,8 @@ directory reached through a link. Name the real directory instead: a symlink
 leads out of a directory brig is checking
 ```
 
-A link further up the path reads the same way, naming the component that is a
-link rather than the directory you typed:
+For a link further up the path, the error names the component that is a link,
+not the directory you typed:
 
 ```console
 $ brig run claude ~/lab/monorepo/frontend/src
@@ -593,17 +559,65 @@ than the one you named. Name the real directory instead: a symlink leads out
 of a directory brig is checking
 ```
 
-The `PROJECT` row in the run envelope reports the directory this resolved to,
-not the path as typed. On macOS that costs a difference in spelling: a
-project under `/tmp` prints as `/private/tmp`. It is the directory the
-sandbox gets, which is the question the row is there to answer.
+A link you made yourself is refused too. Brig cannot tell it from a planted
+link: same owner, same directory, same bytes. So the rule is about links and
+not about who made them.
+
+The `PROJECT` row in the run envelope reports the directory the path resolved
+to, not the path as typed. On macOS a project under `/tmp` prints as
+`/private/tmp`. That is the directory the sandbox gets.
+
+### Why a link is refused
+
+A share is a path, and the runtime resolves it. Brig runs as you and outside
+the sandbox, so a link planted in the project is followed on the host side of
+the boundary. The microVM does not stop this. The VMM is asked to export a
+directory, and it exports the directory the link points at.
+
+The risk needs a second sandbox with write access to the path. A run's own
+sandbox gains nothing from a swap, because it already has the project
+read-write. Another sandbox does: the sandbox of an earlier run, or one from
+another session that still runs with an overlapping project. The sequence is:
+
+1. An agent replaces a subdirectory with a link to another place on the host.
+2. The operator later narrows a run to that subdirectory. That is the
+   ordinary way to point an agent at one part of a repository.
+3. The path is the operator's own, and the directory it reaches is the
+   agent's choice.
+
+So Brig reaches the project the same way it reaches the guest home (see
+[The path to the guest home](#the-path-to-the-guest-home)). The boot descends
+again and refuses a path that no longer names the directory it holds.
+
+The guest home refuses links for a different reason: Brig creates it, so a
+link there has no legitimate author. One walk produces both refusals, and
+only the wording differs.
+
+A hostmount volume source is reached the same way, and gets the same second
+check. Its path is inside the guest home, so the guest owns every component.
+Brig checks that the source is symlink-safe when the run begins. A restart
+reopens the boot after the guest held the guest home. So Brig checks the
+source again through the held handle before it builds the share. A source
+swapped for a link is refused and is not exported.
+
+### The handover gap
+
+> [!WARNING]
+> The path walk does not close the handover. The share is a string that the
+> VMM resolves later, on its own time.
+
+A sandbox from another session that still runs with an overlapping project
+can swap a component in that window. One example is `~/monorepo` while this
+run names `~/monorepo/frontend`. The guest home has the same gap, and so does
+a hostmount volume source. To close the gap, the runtime must accept a
+directory handle and not a path.
 
 ## Guest images
 
-An image is code that will run with your credentials, so Brig checks where it
-came from before booting it. The check is cosign's keyless verification. It
-asks more than whether the image was signed: it asks whether that workflow,
-in that repo, built it:
+Brig checks where an image came from before it boots the image, because an
+image is code that runs with your credentials. The check is cosign's keyless
+verification. It asks more than whether the image was signed: it asks whether
+that workflow, in that repo, built it. You can run the same check:
 
 ```bash
 cosign verify \
@@ -613,7 +627,7 @@ cosign verify \
   ghcr.io/brig-sh/claude-code-stock:root
 ```
 
-That works anonymously: the images are public, and the signature lives in
+The command works anonymously. The images are public, and the signature is in
 Sigstore's transparency log, not behind a registry login. `:root` is a
 multi-arch index. The per-architecture tags (`:arm64`, `:amd64`) and the
 immutable `:<arch>-<sha>` pins are signed the same way and verify with the
@@ -623,11 +637,18 @@ The identity is anchored on the repository and the workflow file. A
 signature from anywhere else fails, including one from another workflow in
 the same repository.
 
-`BRIG_VERIFY` has three modes: `off`, `warn` and `require`. `warn` is the
-default. The table below is `warn`'s behavior: it reports what it found, then
-boots anyway, except for the one row with no innocent reading. `require`
-refuses anything it cannot positively verify, third-party images included.
-`off` skips the check entirely.
+### Verification modes
+
+`BRIG_VERIFY` sets the mode.
+
+| Mode | Behaviour |
+| --- | --- |
+| `warn` (the default) | Reports what it found, then boots. The one exception is the last row of the next table |
+| `require` | Refuses anything it cannot positively verify, third-party images included |
+| `off` | Skips the check |
+
+A typo in `BRIG_VERIFY` refuses the run and names the three values. Brig does
+not read a typo as one of them.
 
 What `warn` does with the answer:
 
@@ -638,173 +659,218 @@ What `warn` does with the answer:
 | cosign not installed | warning, boots |
 | image under `ghcr.io/brig-sh/`, signature fails | stops and asks `[y/N]`. Refuses when there is no terminal |
 
-The asymmetry is deliberate. Bring-your-own images are a supported way to use
-Brig, so refusing to boot one makes the feature useless. "Unable to
-check" is not the same as "failed". The one case with no innocent reading is
-an image sitting under our registry whose signature does not verify. That
-is the case that stops.
-
-A typo in `BRIG_VERIFY` refuses the run, naming the three values, rather than
-being read as one of them.
-
-Point `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
-at your own registry and workflow if you publish signed images yourself.
-
-### The digest, not the tag
-
-A tag is a name, and a name can resolve to different bytes in the registry and
-in your local store. The provenance claim is about the bytes that run. Brig
-resolves the reference to the digest the registry serves before the check,
-verifies that digest, and boots it. The object cosign checked is the object
-that runs, and the success line names the digest rather than the tag it came
-from.
-
-A local store holding a different digest under the tag is treated as
-the signature-failure row above: it stops. A yes boots the verified
-digest rather than the copy on disk. A registry that cannot be reached stops
-in the same way. One of our images was not checked, and a
-network failure must not be what turns the default mode into "unchecked".
-`BRIG_VERIFY=require` refuses outright. Every cosign call is bounded, so an
-outage fails in seconds rather than hanging the boot.
-
-All of this is for images under `ghcr.io/brig-sh/`. An image Brig did not
-publish carries no signature of ours to check, so Brig makes no cosign call for
-it at all. It boots by tag, as it always has, with one line saying whose
-image it is. Resolving a digest for it costs a registry round trip on
-every boot and buys a pin Brig cannot vouch for.
-
-This holds wherever the runtime's store answers a digest: containerd on
-Linux, and hull from 0.1.0-rc23 on macOS. Brig asks the hull it is driving
-rather than assuming, because the one on PATH can be older than Brig. An
-older hull cannot find a digest reference in its store, so a pinned boot
-there re-pulls on every run. It fails outright under `BRIG_PULL=never`
-with the bytes on disk. Brig therefore verifies and boots the tag on such a
-hull, prints one line saying so, and the gap remains there until you upgrade.
-Under the default `missing` pull policy, cosign checks the tag in the
-registry, not necessarily the copy hull already holds. `BRIG_PULL=always`
-is the workaround. Brig does not name a digest on a boot that did not pin
-one.
-
-Two things are still narrower on macOS than on Linux. An image pulled under an
-older hull has no index digest on record, and a multi-arch tag resolves to
-its index digest. The first pinned boot of such an image after upgrading
-hull misses the cache and pulls once. Under `BRIG_PULL=never` it fails until
-the image is pulled again. The second gap is that hull does not yet expose
-the digest its store holds for a reference. The report that the local copy
-differs from what the registry serves is Linux-only for now. The boot is
-pinned either way.
+Bring-your-own images are a supported way to use Brig, so `warn` boots them.
+"Unable to check" is not the same as "failed". The one case with no innocent
+reading is an image sitting under our registry whose signature does not
+verify. That is the case that stops.
 
 `claude-desktop` points at a `ghcr.io/nofireai/` image, and `ubuntu` at
 `docker.io/library/ubuntu`. Brig has no signing policy for either registry, so
 both warn on every boot until those images move.
 
+If you publish signed images yourself, point `BRIG_VERIFY_REGISTRY`,
+`BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER` at your own registry and
+workflow.
+
+### Digest pinning
+
+Brig boots the bytes that cosign checked. A tag is a name, and a name can
+resolve to different bytes in the registry and in your local store. So before
+the check, Brig resolves the reference to the digest the registry serves.
+Brig verifies that digest and boots it. The object cosign checked is the
+object that runs, and the success line names the digest instead of the tag it
+came from.
+
+| Case | Under `warn` | Under `require` |
+| --- | --- | --- |
+| The local store holds a different digest under the tag | Stops and asks, like the signature-failure row. A yes boots the verified digest, not the copy on disk | Refuses |
+| The registry cannot be reached | Stops in the same way, because the image was not checked | Refuses |
+
+Every cosign call is bounded, so an outage fails in seconds and does not hang
+the boot.
+
+Pinning is for images under `ghcr.io/brig-sh/`. An image Brig did not publish
+carries no signature of ours, so Brig makes no cosign call for it. That image
+boots by tag, with one line that says whose image it is.
+
+Pinning works where the runtime's store answers a digest: containerd on Linux,
+and a current hull on macOS (see
+[Every command Brig runs](runtimes.md#every-command-brig-runs)). Brig asks the
+hull it drives, because the hull on `PATH` can be older than Brig.
+
+An older hull cannot find a digest reference in its store:
+
+- A pinned boot on that hull pulls again on every run. Under
+  `BRIG_PULL=never` it fails with the bytes on disk.
+- So Brig verifies and boots the tag on that hull, and prints one line that
+  says so. The gap remains until you upgrade hull.
+- Under the default `missing` pull policy, cosign checks the tag in the
+  registry. That is not necessarily the copy hull already holds.
+  `BRIG_PULL=always` is the workaround.
+- Brig does not name a digest on a boot that did not pin one.
+
+Two things are narrower on macOS than on Linux:
+
+- An image pulled under an older hull has no index digest on record, and a
+  multi-arch tag resolves to its index digest. After a hull upgrade, the first
+  pinned boot of that image misses the cache and pulls once. Under
+  `BRIG_PULL=never` it fails until the image is pulled again.
+- hull does not yet expose the digest its store holds for a reference. So the
+  report that the local copy differs from what the registry serves is
+  Linux-only for now. The boot is pinned on both platforms.
+
 ### The kernel, not only the image
 
-Six of the eight shipped profiles boot a kernel and an initrd Brig downloads,
-rather than one baked into the image. They are `claude-code`, `codex`,
-`gemini`, `grok`, `opencode` and `ubuntu`. `cursor` and `claude-desktop` boot
-their own image and skip everything below. `cursor` has no published image
-today: `brig agent ls` marks it `(no published image)`, so a run of it fails
-before any of this applies.
+Six of the eight shipped profiles boot a kernel and an initrd that Brig
+downloads. They are `claude-code`, `codex`, `gemini`, `grok`, `opencode` and
+`ubuntu`. Brig checks that bundle too, under the same
+[`BRIG_VERIFY` mode](#verification-modes), as a second check with its own
+trust root.
 
-That bundle is checked too, under the same `BRIG_VERIFY` setting, but as a
-second and separately-rooted check. Its trust root is its own: registry
-prefix `ghcr.io/nofireai/`, signing identity the `build-assets.yml` workflow
-in `NOFireAI/hull-assets`, the same issuer as the image check. A signature
-that fails stops the boot outright, in every mode except `off`. There is no
-`[y/N]` prompt the way there is for the image, because there is no reading of
-a bad kernel signature worth asking about.
+`cursor` and `claude-desktop` boot the kernel in their own image, so nothing
+in this section applies to them. `cursor` has no published image today.
+`brig agent ls` marks it `(no published image)`, and a run of it fails before
+any of these checks.
+
+| Trust root of the bundle | Value |
+| --- | --- |
+| Registry prefix | `ghcr.io/nofireai/` |
+| Signing identity | The `build-assets.yml` workflow in `NOFireAI/hull-assets` |
+| Issuer | The same issuer as the image check |
+
+The kernel's identity is fixed. `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY`
+and `BRIG_VERIFY_ISSUER` repoint the image's trust policy only.
+
+A signature that fails stops the boot, in every mode except `off`. There is
+no `[y/N]` prompt as there is for the image.
 
 The signature covers the bundle's manifest, and the manifest lists a sha256
-for each file. Brig keeps the digest whose signature verified, reads the
-manifest from the registry by that digest, and checks that its bytes hash to
-it. A registry that answers with bytes that are not that digest, an index, a
-redirect loop, or a token realm or redirect over plain http is refused. Brig
-then hashes the kernel and initrd it hands the runtime and compares them with
-that list before the boot. `brig: image and boot assets verified` appears
-only after both files match.
+for each file. Brig does these steps before the boot:
 
-On macOS, when the manifest cannot be read, Brig reads hull's
-`provenance.json` in the asset directory instead, but only a record that names
-the verified digest. hull writes that record into the directory it describes,
-so anything that can rewrite the kernel there can rewrite the record to match.
-Files that differ from it still count as a difference. Files that match it are
-"cannot check", never verified. A registry answer Brig refused gets no
-fallback.
+1. Brig keeps the digest whose signature verified.
+2. Brig reads the manifest from the registry by that digest, and checks that
+   its bytes hash to it.
+3. Brig hashes the kernel and initrd it hands the runtime, and compares them
+   with that list.
 
-What a difference does depends on who chose the directory:
+`brig: image and boot assets verified` appears only after both files match.
 
-- `BRIG_BOOT_ASSETS` unset: Brig chose the directory and fetches into it, by
-  the digest whose signature verified. Files that match a `provenance.json`
-  for another bundle are that bundle, fetched before the tag moved: Brig
-  fetches the verified digest over them and compares again. Any other file
-  that differs refuses the run under `warn` and `require`, and nothing is
-  fetched over it. The refusal names the file, its digest and the digest the
-  bundle lists. Deleting the two files fetches the bundle again. hull's store
-  is such a directory wherever `HULL_BOOT_ASSETS` puts it, since hull fetches
-  into it.
-- `BRIG_BOOT_ASSETS` set: the directory is someone's build. `warn` states the
-  difference and boots it, and nothing vouches for that kernel. `require`
-  refuses. A Linux runtime bundle from before its signed record (below) lands
-  here, so under `require` its directory refuses until `install.sh` installs
-  a newer one. hull checks a directory against its own `provenance.json` too,
-  so a named copy of hull's directory with a changed file fails at hull even
-  under `warn`.
-- Digests Brig cannot check (no manifest and no record of the verified
-  bundle, a registry answer Brig refused, a record with no entry for one of
-  the files, or files that match only hull's record): `warn` states it and
-  boots, `require` refuses.
+Brig refuses a registry that answers with any of these:
 
-The Linux runtime bundle's kernel and initrd are its own, and the boot
-bundle's manifest lists neither. What lists them is the bundle's release: it
-publishes `share/guest/SHA256SUMS` as an asset, its signed `checksums.txt`
-covers that asset, and the bundle's installer keeps `checksums.txt`,
-`checksums.txt.sig` and `checksums.txt.pem` beside the files. On Linux, when
-the directory `BRIG_BOOT_ASSETS` names holds a `SHA256SUMS`, Brig checks that
-record instead of the boot bundle's signature, in this order:
+- bytes that are not that digest
+- an index
+- a redirect loop
+- a token realm or redirect over plain http
 
-- the kernel and initrd must hash to what `SHA256SUMS` lists;
-- `checksums.txt` must list the `SHA256SUMS` in the directory, byte for byte;
-- cosign checks the signature on `checksums.txt` against the release workflow
-  of `NOFireAI/brig-standalone-linux`, on a tag, with the same issuer as the
-  image check. `BRIG_VERIFY_RUNTIME_IDENTITY` and `BRIG_VERIFY_RUNTIME_ISSUER`
-  point it at a fork's release workflow instead.
+On macOS, when Brig cannot read the manifest, it reads hull's
+`provenance.json` in the asset directory instead. It accepts only a record
+that names the verified digest. hull writes that record into the directory it
+describes, so anything that can rewrite the kernel there can rewrite the
+record to match. Files that differ from the record still count as a
+difference. Files that match it are "cannot check", never verified. A registry
+answer Brig refused gets no fallback.
 
-The bundle chose those files, so a file the record does not list, a record the
-release does not list, or a signature that does not verify refuses the run
-under `warn` and `require`. Reinstalling the bundle with `install.sh` puts its
-files back. The first two checks need no network, so a changed file refuses
-even where the signature cannot be checked. Files that match a record Brig
-cannot check (no cosign, no signature files beside it, or no answer from
-Sigstore) are stated under `warn` and refused under `require`. cosign checks the
-signature online, as it does for the image, and takes about as long as the
-boot bundle's check it replaces. Only a run through nerdctl reads the record.
-On hull a `SHA256SUMS` in a named directory is ignored.
+What a difference does depends on who chose the directory.
+
+**`BRIG_BOOT_ASSETS` unset.** Brig chose the directory and fetches into it,
+by the digest whose signature verified.
+
+- Files that match a `provenance.json` for another bundle are that bundle,
+  fetched before the tag moved. Brig fetches the verified digest over them and
+  compares again.
+- Any other file that differs refuses the run under `warn` and `require`, and
+  nothing is fetched over it. The refusal names the file, its digest and the
+  digest the bundle lists. To fetch the bundle again, delete the two files.
+- hull's store is such a directory wherever `HULL_BOOT_ASSETS` puts it,
+  because hull fetches into it.
+
+**`BRIG_BOOT_ASSETS` set.** The directory is someone's build.
+
+- `warn` states the difference and boots it, and nothing vouches for that
+  kernel.
+- `require` refuses.
+- A [Linux runtime bundle](#the-linux-runtime-bundle) from before its signed
+  record is this case.
+  Under `require` its directory refuses until `install.sh` installs a newer
+  bundle.
+- hull checks a directory against its own `provenance.json` too. So a named
+  copy of hull's directory with a changed file fails at hull even under
+  `warn`.
+
+**Digests Brig cannot check.** `warn` states it and boots. `require` refuses.
+The cases are:
+
+- no manifest and no record of the verified bundle
+- a registry answer Brig refused
+- a record with no entry for one of the files
+- files that match only hull's record
 
 `BRIG_VERIFY=off` skips the signature and the digest checks, and one line
 says so. A `BRIG_BOOT_ASSETS_REF` under `ghcr.io/nofireai/` is checked the
 same way against its own digest. Any other reference has no signature of ours,
 so there is no digest to bind.
 
-The comparison happens before the runtime starts. The runtime opens the files
-later by path, after the workspace and the image pull, which can take minutes
-on a first pull. Something that can write to the asset directory in between
-can still swap a file. That is the host's own user, and a sandbox only when it
-mounts that directory: a user install keeps its asset directory under
-`$HOME`, and `brig run claude ~` shares `$HOME` read-write. On macOS hull
-narrows the window. It stages a copy of each file and checks the copy against
-its `provenance.json`, so a swap has to rewrite the record too. On Linux
-nothing checks the files again after Brig does.
+#### The Linux runtime bundle
 
-`BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
-repoint the image's trust policy only: the kernel's identity is fixed.
+The Linux runtime bundle's kernel and initrd are its own, and the boot
+bundle's manifest lists neither. The bundle's release lists them:
+
+- The release publishes `share/guest/SHA256SUMS` as an asset.
+- The signed `checksums.txt` of the release covers that asset.
+- The bundle's installer keeps `checksums.txt`, `checksums.txt.sig` and
+  `checksums.txt.pem` beside the files.
+
+On Linux, when the directory `BRIG_BOOT_ASSETS` names holds a `SHA256SUMS`,
+Brig checks that record instead of the boot bundle's signature, in this
+order:
+
+1. The kernel and initrd must hash to what `SHA256SUMS` lists.
+2. `checksums.txt` must list the `SHA256SUMS` in the directory, byte for
+   byte.
+3. cosign checks the signature on `checksums.txt` against the release
+   workflow of `NOFireAI/brig-standalone-linux`, on a tag, with the same
+   issuer as the image check. `BRIG_VERIFY_RUNTIME_IDENTITY` and
+   `BRIG_VERIFY_RUNTIME_ISSUER` point it at a fork's release workflow
+   instead.
+
+| Result | `warn` | `require` |
+| --- | --- | --- |
+| A file the record does not list, a record the release does not list, or a signature that does not verify | Refuses | Refuses |
+| Files match a record Brig cannot check (no cosign, no signature files beside it, or no answer from Sigstore) | States it and boots | Refuses |
+
+The bundle chose those files, which is why the first row refuses under both
+modes. To put the files back, reinstall the bundle with `install.sh`.
+
+The first two checks need no network, so a changed file refuses even where
+the signature cannot be checked. cosign checks the signature online, as it
+does for the image. That takes about as long as the boot bundle's check it
+replaces.
+
+Only a run through nerdctl reads the record. On hull a `SHA256SUMS` in a
+named directory is ignored.
+
+#### After the check
+
+The comparison happens before the runtime starts. The runtime opens the files
+later by path, after the workspace and the image pull. A first pull can take
+minutes. Something that can write to the asset directory in that time can
+still swap a file:
+
+- the host's own user
+- a sandbox, only when it mounts that directory. A user install keeps its
+  asset directory under `$HOME`, and `brig run claude ~` shares `$HOME`
+  read-write.
+
+On macOS hull narrows the window. It stages a copy of each file and checks
+the copy against its `provenance.json`, so a swap has to rewrite the record
+too. On Linux nothing checks the files again after Brig does.
 
 ## Brig's own binaries
 
-Releases are signed with keyless cosign as well. There is no key to
-distribute and none for us to lose. The certificate is short-lived, bound to
-the release workflow's OIDC identity, and recorded in a public transparency
-log.
+You can verify a release yourself. Releases are signed with keyless cosign,
+so there is no key to distribute and none for us to lose. The certificate is
+short-lived, bound to the release workflow's OIDC identity, and recorded in a
+public transparency log.
 
 ```bash
 cosign verify-blob \
@@ -821,175 +887,212 @@ shasum -a 256 -c checksums.txt --ignore-missing
 The first command vouches for the checksum file, and the second ties every
 archive to it. Each archive also ships an SPDX SBOM.
 
-The macOS binaries are signed with a Developer ID certificate and notarized
-with Apple as well, because cosign proves provenance and Gatekeeper wants
-something else. The two answer different questions and neither substitutes for
-the other. Nothing strips the quarantine attribute: it is still on the files
-Homebrew installed, and Gatekeeper accepts them anyway, which is what being
-notarized buys.
+The macOS binaries are also signed with a Developer ID certificate and
+notarized with Apple. cosign proves provenance and Gatekeeper checks
+something else, so neither replaces the other. Nothing strips the quarantine
+attribute. It is still on the files Homebrew installed, and Gatekeeper
+accepts them because they are notarized.
 
 ```bash
 spctl -a -vv -t install "$(which brig)"  # source=Notarized Developer ID
 xattr -l "$(which brig)"                 # com.apple.quarantine, still there
 ```
 
-A from-source build is neither signed nor notarized, so it is yours to trust
-by having built it.
+A from-source build is neither signed nor notarized. You trust it because you
+built it.
 
 ## Telemetry
 
-Telemetry must not cross the boundary this page describes. The runtime Brig
-drives sends usage events to NOFire AI, on macOS only: nothing is sent on
-Linux. `brig telemetry off` (or `DO_NOT_TRACK=1`) turns it off everywhere
-it does run. See [docs/telemetry.md](telemetry.md) for how to check the
-current state, and for the field-by-field list of what an event carries.
-That list is
+`brig telemetry off` (or `DO_NOT_TRACK=1`) turns telemetry off everywhere it
+runs. The runtime Brig drives sends usage events to NOFire AI, on macOS only.
+Nothing is sent on Linux. [Telemetry](telemetry.md) shows how to check the
+current state, and lists what an event carries field by field.
+
+Telemetry must not cross the boundary that Brig protects. The field list is
 [hull's stated commitment](https://github.com/brig-sh/hull/blob/main/docs/telemetry.md),
-not something this repository verifies. It excludes host paths, repository
-names, command arguments and agent prompts. It also excludes secret names
-and values, image references, network destinations and file metadata.
+and this repository does not verify it. The commitment:
 
-Four more hull behaviors matter for checking that commitment yourself.
-`HULL_TELEMETRY_DEBUG=1` prints payloads to stderr instead of sending them,
-so you can read what an event actually carries. The install identifier is a
-random value hull stores in `~/.hull/telemetry.json`. Deleting the file
-rotates that identifier. Crash reports queue in `~/.hull/crashes/`, and you
-can read or delete one there before it is uploaded. That commitment also
-drops IP addresses at ingestion and keeps raw events for a year.
+- excludes host paths, repository names, command arguments and agent prompts
+- excludes secret names and values, image references, network destinations
+  and file metadata
+- drops IP addresses at ingestion and keeps raw events for a year
 
-If you find one of those excluded items in a payload, that is a bug and
-[SECURITY.md](../SECURITY.md) is how to report it.
+To check that commitment yourself, use these hull behaviors:
+
+- `HULL_TELEMETRY_DEBUG=1` prints payloads to stderr and does not send them.
+  You can then read what an event carries.
+- The install identifier is a random value hull stores in
+  `~/.hull/telemetry.json`. Delete the file to rotate the identifier.
+- Crash reports queue in `~/.hull/crashes/`. You can read or delete a report
+  there before it is uploaded.
+
+If you find an excluded item in a payload, that is a bug. Report it as
+[SECURITY.md](../SECURITY.md) describes.
 
 ## Things brig does not claim
 
-It does not sandbox the agent from the network by default, on any backend. A
-sandbox nobody attached a policy to has unrestricted egress. That is what
-every sandbox had before policies existed, and what `brig run <agent>` gets on
-a fresh install. `--network offline` is the one posture with no route out at
-all, on every backend.
+### Network egress
 
-Attach one and that changes, on `hvi` and on Linux with nerdctl. On `hvi` the
-rules are enforced at the network gateway Brig gives that sandbox. On nerdctl
-they are enforced in nftables on the sandbox's own bridge, with a resolver of
-Brig's that answers the guest's DNS. Both sit outside the guest's kernel. Every
-runtime Brig ships refuses to boot a policy it cannot enforce, rather than
-booting it unconstrained (see [docs/policies.md](policies.md)). That refusal is
-each adapter's own choice, not a guarantee Brig imposes on every runtime it
-will ever drive. The one exception is `--network offline`: a policy-carrying
-sandbox with no route out satisfies every rule set, so it is not refused on any
-backend. Short of that, on `vz`, on `qemu` and on docker there is no policy to
-be had at all. Outbound traffic there is whatever the runtime allows.
+To restrict egress, attach a policy on `hvi` or on Linux with nerdctl.
+`--network offline` is the one posture with no route out at all, on every
+backend.
 
-On nerdctl the table is the sandbox's only filter, and it outlives Brig's
-resolver. A resolver that dies leaves the table refusing every new
-connection. A table that something removes is unfiltered until the resolver
-installs it again, within 5 seconds, or until the next boot if the resolver
-is gone too. A table installed again has lost the addresses the guest looked
-up, so it refuses them until the guest asks again.
+Brig does not sandbox the agent from the network by default, on any backend.
+A sandbox nobody attached a policy to has unrestricted egress. That is what
+`brig run <agent>` gets on a fresh install.
 
-It does not say whether the guest can reach services bound on the host
+| Backend | Where a policy is enforced |
+| --- | --- |
+| `hvi` | At the network gateway Brig gives that sandbox |
+| Linux with nerdctl | In nftables on the sandbox's own bridge, with a resolver of Brig's that answers the guest's DNS |
+| `vz`, `qemu`, docker | No policy is available. Outbound traffic is whatever the runtime allows |
+
+Both enforcement points are outside the guest's kernel.
+
+Every runtime Brig ships refuses to boot a policy it cannot enforce. It does
+not boot that sandbox unconstrained (see
+[Networking and egress policy](policies.md)). That refusal is each adapter's
+own choice. It is not a guarantee Brig imposes on every runtime it will ever
+drive. The one exception is `--network offline`: a sandbox with a policy and
+no route out satisfies every rule set, so no backend refuses it.
+
+On nerdctl the nftables table is the sandbox's only filter, and it outlives
+Brig's resolver:
+
+- If the resolver dies, the table refuses every new connection.
+- If something removes the table, the sandbox is unfiltered until the
+  resolver installs the table again, within 5 seconds. If the resolver is
+  gone too, the sandbox is unfiltered until the next boot.
+- A table installed again has lost the addresses the guest looked up. It
+  refuses them until the guest asks again.
+
+### Host services
+
+The one control is an egress policy on `hvi` or on nerdctl, with
+`default: deny` and no `cidr` allow for the host's own ranges.
+
+Brig does not say whether the guest can reach services bound on the host
 itself. That covers a dev server, a local model, an MCP server, a metadata
 endpoint. Brig adds nothing to narrow that. What the guest's network reaches
-is the runtime's default, and whether that includes the host is unmeasured
-on every backend. The one control that exists is an egress policy on `hvi`
-or on nerdctl, with `default: deny` and no `cidr` allow for the host's own
-ranges. On nerdctl a policy of either default also refuses the addresses of
-the network namespace that holds the sandbox's bridge, except DNS and ping
-to the bridge address. With rootful nerdctl that namespace is the host's,
-which covers every address of the host. With rootless nerdctl it is
-rootlesskit's, and the host's own addresses are judged by the rules like any
-other. There is no equivalent on `vz`, `qemu` or docker.
+is the runtime's default. Whether that includes the host is unmeasured on
+every backend.
 
-It does not promise that one sandbox cannot reach another under a
-`shared` network. A flag, setting or profile can choose that posture, and
-older sandboxes keep it if it was recorded or recovered from the runtime.
-`vz` and `qemu` also use it when no posture is named. What happens there
-depends on the backend. Brig asks the runtime for its shared network. On
-`hvi`, Brig also hands out the addresses on it. Whether that network forwards
-traffic from one guest to another is the runtime's behaviour, not Brig's.
-The measurements are in
-[docs/manual-tests/sandbox-reachability.md](manual-tests/sandbox-reachability.md).
+On nerdctl a policy of either default also refuses the addresses of the
+network namespace that holds the sandbox's bridge. DNS and ping to the bridge
+address are the exception.
+
+| nerdctl | Whose namespace | Effect |
+| --- | --- | --- |
+| Rootful | The host's | The policy covers every address of the host |
+| Rootless | rootlesskit's | The rules judge the host's own addresses like any other |
+
+There is no equivalent on `vz`, `qemu` or docker.
+
+### Sandbox to sandbox
+
+If two agents must not reach each other, run both with `--network isolated`
+on `hvi` or on Linux. On `vz` and on `qemu`, where that posture is refused,
+run them on separate hosts.
+
+`isolated` is the guarantee. It is the default for new `hvi` and Linux
+sandboxes unless another posture is named (see
+[Network posture](#network-posture)). `--network isolated` also moves an
+existing shared sandbox onto it.
+
+`isolated` gives the sandbox its own network. On Linux that is its own CNI
+network. On `hvi` it is its own gateway process on its own `/30`. No other
+sandbox is on that network, whatever the backend does with a shared one. A
+sandbox that carries an egress policy is isolated whether or not it asked to
+be. The rules live on that gateway and cover everything behind it.
+
+`isolated` is **refused** on `vz` and on `qemu`, where Brig owns no network to
+give. A run that asks for it there is stopped and told which backend
+implements it. Brig does not boot that run onto the shared network under a
+row that claims otherwise.
+
+The guarantee is about reachability, not resources. An isolated sandbox is
+one process and one network more than a shared one. `brig rm --all` prunes
+them.
+
+Brig does not promise that one sandbox cannot reach another under a `shared`
+network. A sandbox gets `shared` in these cases:
+
+- A flag, a setting or a profile chooses it.
+- An older sandbox keeps it, if it was recorded or recovered from the
+  runtime.
+- `vz` and `qemu` use it when no posture is named.
+
+Brig asks the runtime for its shared network. On `hvi`, Brig also hands out
+the addresses on it. Whether that network forwards traffic from one guest to
+another is the runtime's behaviour, not Brig's. The measurements are in
+[Manual test: can one sandbox reach another?](manual-tests/sandbox-reachability.md).
 
 | backend | can one sandbox reach another? |
 | --- | --- |
-| `hvi` on macOS | **yes.** Measured on 2026-09-27 with brig v0.3.0 and hull 0.1.0-rc29 ([#364](https://github.com/brig-sh/brig/issues/364)): one sandbox fetched a file over HTTP that only the other served. With `--network isolated` on both, the same request timed out. hull 0.1.0-rc21 gave "no" on the shared network. What changed the answer is not known |
+| `hvi` on macOS | **yes.** Measured on 2026-09-27 with brig v0.3.0 ([#364](https://github.com/brig-sh/brig/issues/364)): one sandbox fetched a file over HTTP that only the other served. With `--network isolated` on both, the same request timed out. An earlier hull release gave "no" on the shared network. What changed the answer is not known |
 | `vz` on macOS | not measured on a current hull |
 | `qemu` on macOS | not measured. It takes its network from vmnet, as `vz` does |
-| Linux, nerdctl/urunc microVMs | **yes** on `shared`. On 2026-09-30, one microVM fetched the other's HTTP marker; on separate isolated networks, the same request timed out while connection controls passed. The [ARM run](manual-tests/sandbox-reachability.md#2026-09-30-linux-arm64-under-qemu) used documented console and runtime setup workarounds. The [amd64 run](manual-tests/sandbox-reachability.md#2026-10-02-linux-amd64-with-the-stock-runtime) on 2026-10-02 gave the same results with the shipped `v0.1.0-rc13` runtime, unmodified |
+| Linux, nerdctl/urunc microVMs | **yes** on `shared`. On 2026-09-30, one microVM fetched the other's HTTP marker. On separate isolated networks, the same request timed out while connection controls passed. The [ARM run](manual-tests/sandbox-reachability.md#2026-09-30-linux-arm64-under-qemu) used documented console and runtime setup workarounds. The [amd64 run](manual-tests/sandbox-reachability.md#2026-10-02-linux-amd64-with-the-stock-runtime) on 2026-10-02 gave the same results with the shipped runtime, unmodified |
 
 So on Linux and on `hvi`, two agents on `shared` that you gave *different*
 credentials can each reach whatever the other is listening on. That is a real
-hole in the narrow-blast-radius argument above: there the radius is narrow per
-guest home and per token, not per sandbox. If it matters that two agents
-cannot reach each other, run both with `--network isolated` on `hvi` or on
-Linux. On `vz` and on `qemu`, where that posture is refused, run them on
-separate hosts.
+hole in the [narrow blast radius](#what-is-still-exposed). The radius is
+narrow per guest home and per token, not per sandbox.
 
 The `hvi` answer changed between two measurements, and nothing in Brig
-noticed at the time. Do not treat any answer about `shared` in the table
-as a property of Brig.
+noticed at the time. Do not treat any answer about `shared` in the table as a
+property of Brig.
 
-`isolated`, the default for new `hvi` and Linux sandboxes unless another
-posture is named, is the guarantee. `--network isolated` also moves an
-existing shared sandbox onto it. It gives the sandbox a network of its
-own. On Linux that is its own CNI network. On `hvi` it is its own gateway
-process on a `/30` of its own. No other sandbox is on it, no matter what the
-backend does with a shared one. A sandbox carrying an egress policy is
-isolated whether or not it asked to be. The rules live on that gateway and
-cover everything behind it.
+### Terminal output
 
-That posture is **refused** on `vz` and on `qemu`, where
-Brig owns no network to give. A run asking for it there is stopped and told
-which backend implements it. It is not booted onto the shared network under a
-row claiming otherwise. The guarantee is about reachability, not resources. An
-isolated sandbox is one process and one network more than a shared one, which
-is what `brig rm --all` prunes.
+If terminal output matters for your threat model, run Brig inside a terminal
+you are willing to lose, or through `hull exec`.
 
-It does not filter what the agent writes to your terminal. `brig` hands the
+Brig does not filter what the agent writes to your terminal. `brig` hands the
 tty over with `syscall.Exec` and is gone before the agent produces a byte.
-That buys correct `^C` handling and a truthful exit status. Every byte the
+That gives correct `^C` handling and a truthful exit status. Every byte the
 agent emits reaches your terminal emulator unexamined.
 
-The one exception is `--json`: there `brig` stays alive as the agent's parent
-so it can print one status line after the agent exits. The tty is still the
-agent's. `brig` reads nothing the agent prints and writes nothing to it, and
-the exit status is still the agent's own. What changes is only that `brig` is
-present for the run rather than gone.
+That is a real surface. An agent that read a hostile README can do any of
+these:
 
-That is a real surface. OSC 52 writes to, and reads from, the system
-clipboard. DCS sequences are forwarded verbatim by `tmux` and `screen` to the
-*outer* terminal. A cursor-position query makes the terminal type its
-reply onto your shell's standard input. An agent that has read a hostile
-README can do any of those.
+- OSC 52 writes to, and reads from, the system clipboard.
+- `tmux` and `screen` forward DCS sequences verbatim to the *outer* terminal.
+- A cursor-position query makes the terminal type its reply onto your shell's
+  standard input.
 
-`hull exec` and `hull logs` do filter, because hull stays in the middle of that
-stream. `brig run` deliberately does not stay. `brig logs` does: it reads a log
-back rather than driving a terminal, so it filters control sequences by default.
-`--raw` turns that off and hands you the bytes with the surface above intact. If
-this matters for your threat model, run Brig inside a terminal you are willing
-to lose, or through `hull exec`.
+| Command | Filters control sequences? |
+| --- | --- |
+| `brig run` | No |
+| `brig run` with `--json` | No. `brig` stays alive as the agent's parent, so that it can print one status line after the agent exits. The tty is still the agent's. `brig` reads nothing the agent prints and writes nothing to it, and the exit status is still the agent's own |
+| `hull exec`, `hull logs` | Yes. hull stays in the middle of that stream |
+| `brig logs` | Yes, by default. It reads a log back and does not drive a terminal. `--raw` turns the filter off and hands you the bytes with that surface intact |
 
-It does not protect the guest home from the agent. Everything in there is
-writable by design, since that is the work.
+### The guest home
 
-It does not stop an agent from spending your money. The `deny` list keeps a
-metered key from being forwarded by accident, which is a different and much
+Brig does not protect the guest home from the agent. Everything in there is
+writable, because that is where the agent works.
+
+### Spending
+
+Brig does not stop an agent from spending your money. The `deny` list keeps a
+metered key from being forwarded by accident. That is a different and much
 smaller promise.
 
 ## Trust assumptions
 
-Everything above narrows what an agent can reach. None of it removes the need
-to trust four things.
+Brig narrows what an agent can reach. You must still trust four things.
 
 **The guest image, and whoever publishes it.** An image under
 `ghcr.io/brig-sh/` is checked against a specific build workflow. An image Brig
-did not publish boots on a warning under the default mode, and
-`BRIG_VERIFY=off` turns the check off for either kind. Either way, the image
-is code that runs with your credentials.
+did not publish boots on a warning under the default mode. `BRIG_VERIFY=off`
+turns the check off for either kind (see
+[Verification modes](#verification-modes)). In each case, the image is code
+that runs with your credentials.
 
 **The profile author.** A profile names the image, the volumes it hostmounts,
-and any `files:` binding. A `files:` binding is the one channel the deny list
-does not cover. A profile is only as careful as whoever wrote it.
+and any `files:` binding. A `files:` binding is the one channel the `deny`
+list does not cover. A profile is only as careful as its author.
 
 **hull or nerdctl.** The kernel boundary, whether the shared network
 forwards traffic between guests, and every device and namespace decision
@@ -997,7 +1100,7 @@ belong to the runtime, not to Brig. Brig reports what it resolved. It
 neither hardens nor weakens what the runtime does.
 
 **Brig itself.** Brig runs as you, on the host, outside the sandbox. A
-resolved credential sits in its process memory as plaintext for the run's
+resolved credential is in its process memory as plaintext for the run's
 lifetime. Brig clears that memory on the way out. That is defence in depth,
-not a control. A process already holding your credentials in memory is not
-something this page claims to protect against.
+not a control. Brig does not claim to protect against a process that already
+holds your credentials in memory.
