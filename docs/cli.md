@@ -915,7 +915,7 @@ should read them.
 | `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing. The refusal names the setting that caused it |
 | `5` | a boot refused over image verification |
 | `6` | a required secret was not resolved, or the secret store did not open |
-| `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The one such property today is an egress policy: on hull's `vz` or `qemu`, on nerdctl or docker, on `hvi` with a gateway probe that fails or finds no `--egress-default`, or on a hull backend Brig holds no answer for. `brig run` and `brig sh` refuse it with `7`, and so do the retired spellings that stand for them. That holds whether a flag, `BRIG_NETWORK` or the profile's `network:` chose the posture. `brig network publish` refuses with `7` on `vz`, `qemu`, nerdctl, docker and a backend Brig holds no answer for. It runs no gateway probe, so on `hvi` it records the port, and a failed probe refuses the next run with `7`. The refusal names the property, the runtime and the backend. Brig v0.3.0 and earlier exit `1` for all of these but the failed probe. On a failed probe, those releases started the gateway with the rules anyway: the run booted with the rules on the gateway, or exited `1` when the gateway did not come up. With no policy bound, the refusal of an isolated network on `vz` or `qemu` is a different one, and it exits `1`. A refusal Brig reaches first keeps its own code: a graphical profile on a backend with no window exits `1`, under a policy or not |
+| `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The one such property today is an egress policy: on hull's `vz` or `qemu`, on docker, on `hvi` with a gateway probe that fails or finds no `--egress-default`, on nerdctl with an nft probe that fails, or on a hull backend Brig holds no answer for. `brig run` and `brig sh` refuse it with `7`, and so do the retired spellings that stand for them. That holds whether a flag, `BRIG_NETWORK` or the profile's `network:` chose the posture. `brig network publish` refuses with `7` on `vz`, `qemu`, docker and a backend Brig holds no answer for. It runs no gateway probe, so on `hvi` it records the port, and a failed probe refuses the next run with `7`. The refusal names the property, the runtime and the backend. Brig v0.3.0 and earlier exit `1` for all of these but the failed probe. On a failed probe, those releases started the gateway with the rules anyway: the run booted with the rules on the gateway, or exited `1` when the gateway did not come up. With no policy bound, the refusal of an isolated network on `vz` or `qemu` is a different one, and it exits `1`. A refusal Brig reaches first keeps its own code: a graphical profile on a backend with no window exits `1`, under a policy or not |
 
 `script/smoke.sh` and `cmd/brig/exit_test.go` assert this table, and
 [stability.md](stability.md) lists it as stable enough to script against.
@@ -1050,9 +1050,9 @@ boot anything it cannot positively verify, cosign missing included. See
 | `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. Another microVM shim is accepted; a shim Brig knows shares the host kernel (`runc` or `crun`, by name or by path, or a shim name containerd resolves to the runc shim, such as `io.containerd.runc.v2`) is refused |
 
 On macOS, `hvi` is the only backend that enforces an attached egress policy
-or `--network isolated`, and it needs macOS 15 or newer. Linux also supports
-the isolated posture, but refuses egress policies. `vz` is the only backend
-with a graphical console. On macOS 14, set `BRIG_HYPERVISOR=vz` and
+or `--network isolated`, and it needs macOS 15 or newer. Linux supports the
+isolated posture too, and enforces egress policies with nerdctl. `vz` is the
+only backend with a graphical console. On macOS 14, set `BRIG_HYPERVISOR=vz` and
 `BRIG_NETWORK=shared` for the built-in `hvi` profiles: Brig refuses an
 `hvi` run there, and `vz` cannot satisfy those profiles' isolated posture.
 See [runtimes.md](runtimes.md).

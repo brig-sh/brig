@@ -868,23 +868,37 @@ every sandbox had before policies existed, and what `brig run <agent>` gets on
 a fresh install. `--network offline` is the one posture with no route out at
 all, on every backend.
 
-Attach one and that changes, on `hvi`: the rules are enforced at the network
-gateway Brig gives that sandbox. Every runtime Brig ships refuses to boot a
-policy it cannot enforce, rather than booting it unconstrained (see
-[docs/policies.md](policies.md)). That refusal is each adapter's own choice,
-not a guarantee Brig imposes on every runtime it will ever drive. The
-one exception is `--network offline`: a policy-carrying sandbox with no route
-out satisfies every rule set, so it is not refused on any backend. Short of
-that, on `vz`, on `qemu` and on Linux there is no policy to be had at all.
-Outbound traffic there is whatever the runtime allows.
+Attach one and that changes, on `hvi` and on Linux with nerdctl. On `hvi` the
+rules are enforced at the network gateway Brig gives that sandbox. On nerdctl
+they are enforced in nftables on the sandbox's own bridge, with a resolver of
+Brig's that answers the guest's DNS. Both sit outside the guest's kernel. Every
+runtime Brig ships refuses to boot a policy it cannot enforce, rather than
+booting it unconstrained (see [docs/policies.md](policies.md)). That refusal is
+each adapter's own choice, not a guarantee Brig imposes on every runtime it
+will ever drive. The one exception is `--network offline`: a policy-carrying
+sandbox with no route out satisfies every rule set, so it is not refused on any
+backend. Short of that, on `vz`, on `qemu` and on docker there is no policy to
+be had at all. Outbound traffic there is whatever the runtime allows.
+
+On nerdctl the table is the sandbox's only filter, and it outlives Brig's
+resolver. A resolver that dies leaves the table refusing every new
+connection. A table that something removes is unfiltered until the resolver
+installs it again, within 5 seconds, or until the next boot if the resolver
+is gone too. A table installed again has lost the addresses the guest looked
+up, so it refuses them until the guest asks again.
 
 It does not say whether the guest can reach services bound on the host
 itself. That covers a dev server, a local model, an MCP server, a metadata
 endpoint. Brig adds nothing to narrow that. What the guest's network reaches
 is the runtime's default, and whether that includes the host is unmeasured
-on every backend. The one control that exists is an egress policy on `hvi`,
-with `default: deny` and no `cidr` allow for the host's own ranges. There is
-no equivalent on `vz`, `qemu` or Linux.
+on every backend. The one control that exists is an egress policy on `hvi`
+or on nerdctl, with `default: deny` and no `cidr` allow for the host's own
+ranges. On nerdctl a policy of either default also refuses the addresses of
+the network namespace that holds the sandbox's bridge, except DNS and ping
+to the bridge address. With rootful nerdctl that namespace is the host's,
+which covers every address of the host. With rootless nerdctl it is
+rootlesskit's, and the host's own addresses are judged by the rules like any
+other. There is no equivalent on `vz`, `qemu` or docker.
 
 It does not promise that one sandbox cannot reach another under a
 `shared` network. A flag, setting or profile can choose that posture, and

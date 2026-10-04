@@ -144,7 +144,7 @@ func (s *suite) do(ctx context.Context) *report {
 		return rep
 	}
 	if s.backend != "hvi" {
-		return problem("backend %q: hvi is the only backend that enforces a policy", s.backend)
+		return problem("backend %q: this runner boots the hvi backend only", s.backend)
 	}
 
 	out, stderr, code, err := s.exec(ctx, s.env, s.runtime, "--version")

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/egress"
 )
 
 // Every boot, stop and removal through hull reaches the gateway directory: a
@@ -20,6 +22,11 @@ import (
 // anything was written there: a test that writes into it would have written
 // into the real ~/.brig without this.
 func TestMain(m *testing.M) {
+	// startResolver runs the resolver from the running executable, which is
+	// this test binary under go test.
+	if len(os.Args) > 1 && os.Args[1] == egress.Verb {
+		os.Exit(egress.Main(os.Args[2:], os.Stderr))
+	}
 	home, err := os.MkdirTemp("", "brig-home-")
 	if err != nil {
 		panic(err)

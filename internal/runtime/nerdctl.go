@@ -290,11 +290,9 @@ func (n *nerdctl) ResolveBootAssets(fetch BootFetch, notice, progress io.Writer)
 // built, so the two paths exit alike instead of booting headless with the window
 // silently dropped.
 //
-// The policy refusal is here for the same reason: nothing on this runtime reads
-// spec.Egress into the run, which hands the sandbox to the container network
-// that brig does not filter. A boot that carried on would print a POLICY row and
-// an isolated NETWORK row over a sandbox with unrestricted egress, which is the
-// exact outcome the refusals on the other backend exist to prevent.
+// The policy refusal is here for the same reason. nerdctl enforces a policy
+// (see nerdctlegress.go) and docker does not, and a boot on docker that carried
+// on would print a POLICY row over a sandbox with unrestricted egress.
 func (n *nerdctl) CanRun(spec RunSpec) error {
 	// First, and in CanRun so the join path a second `brig run` takes is
 	// covered too: a shim that shares the host kernel is not the boundary brig
@@ -335,6 +333,45 @@ func (n *nerdctl) Run(spec RunSpec) error {
 			return err
 		}
 	}
+	// The rules go on the sandbox's own bridge before the guest boots, so its
+	// first packet is already filtered. wrap gives a sandbox under a policy a
+	// network of its own, and the rules have nothing to match without one.
+	filtered := spec.Egress.Filtered() && spec.Net != "none"
+	if filtered && spec.Net != "isolated" {
+		return &CapabilityError{Property: EgressPolicy, Path: nerdctlPath(), State: CannotEnforce,
+			Why:    fmt.Sprintf("its rules need a network of its own, and the run asks for the %s network", spec.Net),
+			Remedy: "Run it with --network isolated, or detach the policy"}
+	}
+	// The lock is held through `nerdctl run`. Another brig's stop, remove or
+	// prune then cannot take the rules from under this boot. And this boot
+	// cannot take them from a sandbox another brig booted since wrap looked.
+	// --detach returns once the container starts, so the lock covers the boot
+	// and not the sandbox's life.
+	if filtered || hasEgressFiles(spec.Name) {
+		unlock, err := egressLock(spec.Name)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		running, err := n.Running(spec.Name)
+		if err != nil {
+			return err
+		}
+		if running {
+			return fmt.Errorf("%s is already running, so brig leaves its egress rules alone", spec.Name)
+		}
+	}
+	var boot egressBoot
+	if filtered {
+		if boot, err = egressStart(n, spec.Name, spec.Egress); err != nil {
+			return err
+		}
+		args = withDNS(args, boot.resolver)
+	} else if !stopEgress(spec.Name) {
+		// A sandbox booted again without its policy must not keep the
+		// previous boot's resolver or table.
+		return fmt.Errorf("the egress resolver of %s's previous boot is still running", spec.Name)
+	}
 	cmd := exec.Command(n.bin, args...)
 	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
 	// Held rather than passed through, for the reason the hull adapter gives:
@@ -343,7 +380,18 @@ func (n *nerdctl) Run(spec RunSpec) error {
 	said := narrate(spec.Progress)
 	cmd.Stderr = said
 	if err := cmd.Run(); err != nil {
+		if filtered {
+			n.dropEgressLocked(spec.Name)
+		}
 		return said.explain(fmt.Errorf("%s run: %w", n.bin, err))
+	}
+	if filtered {
+		if err := boot.up(); err != nil {
+			_ = exec.Command(n.bin, "rm", "-f", spec.Name).Run()
+			n.dropEgressLocked(spec.Name)
+			return egressRefusal("the sandbox's bridge is not where brig put the rules", "Point BRIG_RUNTIME_BIN "+
+				"at the nerdctl of the containerd brig finds, or detach the policy", err)
+		}
 	}
 	return nil
 }
@@ -395,6 +443,7 @@ func (n *nerdctl) PruneNetworks(inUse []string) int {
 			gone++
 		}
 	}
+	n.pruneEgress(inUse)
 	return gone
 }
 
@@ -597,7 +646,14 @@ func (n *nerdctl) Attach(spec ExecSpec) (int, error) {
 	return attachHandover(argv, env)
 }
 
-func (n *nerdctl) Stop(name string) error { return n.quiet("stop", name) }
+// Stop takes the sandbox's egress resolver and rules with it, once the
+// sandbox is confirmed stopped. The next boot installs them again from the
+// policy as it stands then.
+func (n *nerdctl) Stop(name string) error {
+	err := n.quiet("stop", name)
+	n.dropEgress(name)
+	return err
+}
 
 // Remove takes the sandbox's own network with it when there is one. Stop does
 // not: a stopped sandbox is started again, and it wants the network it had.
@@ -609,6 +665,7 @@ func (n *nerdctl) Stop(name string) error { return n.quiet("stop", name) }
 // disagree with the runtime.
 func (n *nerdctl) Remove(name string) error {
 	err := n.quiet("rm", name)
+	n.dropEgress(name)
 	n.removeSandboxNetwork(name)
 	return err
 }

@@ -32,6 +32,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/brigsock"
 	"github.com/brig-sh/brig/internal/buildinfo"
+	"github.com/brig-sh/brig/internal/egress"
 	"github.com/brig-sh/brig/internal/exitcode"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -153,6 +154,11 @@ type Session struct {
 }
 
 func main() {
+	// brigd boots sandboxes through the same runtime code as brig, and that
+	// code starts the egress resolver from the running executable.
+	if len(os.Args) > 1 && os.Args[1] == egress.Verb {
+		os.Exit(egress.Main(os.Args[2:], os.Stderr))
+	}
 	flagSocket := flag.String("socket", "",
 		"unix socket to listen on (default $XDG_RUNTIME_DIR/brigd.sock, or ~/.brig/brigd.sock)")
 	flag.Parse()

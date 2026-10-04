@@ -3,11 +3,14 @@
 A sandbox runs under one of three network postures. You can bind an
 egress policy to a profile, or to one session, on top of that.
 
-An egress policy is enforced only on hull's `hvi` backend, which needs macOS
-15 or newer and a hull newer than 0.1.0-rc21. Every other runtime, including
-every Linux runtime, refuses to boot a policy it cannot enforce. The one
-exception is `--network offline`: it reaches no network at all, so it
-satisfies any egress rule and is never refused. See
+An egress policy is enforced on two run paths. On macOS it is hull's `hvi`
+backend, which needs macOS 15 or newer and a hull newer than 0.1.0-rc21. On
+Linux it is nerdctl, which needs `nft` and `nsenter` on the host. It is
+measured on rootless nerdctl. Brig treats nerdctl as rootful when Brig itself
+runs as root, and that is not measured yet. Every other runtime, including
+docker, refuses to boot a policy it
+cannot enforce. The one exception is `--network offline`: it reaches no
+network at all, so it satisfies any egress rule and is never refused. See
 [Where a policy is enforced, and where it is not](#where-a-policy-is-enforced-and-where-it-is-not).
 
 ## Network postures
@@ -315,10 +318,10 @@ three cases:
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down claude-code -n refactor
 attached locked-down to claude-code -n refactor
-note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down ubuntu
 brig: cannot attach locked-down to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
@@ -347,7 +350,7 @@ sessions. It lists what applies, and runs the same `CheckCoverage` refusal
 ```console
 $ brig policy check claude-code
 locked-down
-note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig policy check ubuntu
 no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
@@ -470,7 +473,7 @@ brig: no-net is recorded under "My Work", which no run reaches
   ↳ a session named "My Work" starts "my-work"
   → to remove it:  brig policy detach no-net claude-code -n "My Work"
 no-net
-note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 One gap remains. `attach -n` refuses a name that any reserved profile ends in,
@@ -560,7 +563,14 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `x is already declared inline in y's policy: list, which binds every run already. Nothing was written` | `attach` naming a policy the profile's own `policy:` list already declares |
 | `x is declared inline in y's policy: list, not attached; edit the profile directly to remove it` | `detach` naming a policy the profile's own `policy:` list declares, without `-n` |
 | `x is bound to y. Detach it first, or pass --force to remove it anyway` | `rm` on a policy attached to a profile or a session (a policy declared only inline says "edit the profile's policy: list" instead) |
-| `a policy applies to this sandbox, and hull on vz cannot enforce the egress policy: …` | a policy on a run path whose answer is `cannot enforce`: hull's `vz` or `qemu` backend, nerdctl or docker. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
+| `a policy applies to this sandbox, and hull on vz cannot enforce the egress policy: …` | a policy on a run path whose answer is `cannot enforce`: hull's `vz` or `qemu` backend, or docker. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
+| `a policy applies to this sandbox, and whether nerdctl on <shim> enforces the egress policy is unknown: brig cannot find the network namespace of the container network: …` | rootless containerd is not running, `XDG_RUNTIME_DIR` is not set, or `nsenter` is not installed |
+| `… is unknown: brig enforces a policy here with nftables: nft is not installed` | `nft` is not installed |
+| ``… is unknown: the probe `<nsenter …> /usr/sbin/nft list tables` failed: …`` | nft ran in the namespace and failed, for instance on a kernel without nftables |
+| `… is unknown: brig could not start the egress resolver: …` | the resolver could not install the table or bind the bridge address. The error quotes its log |
+| `… is unknown: the sandbox's bridge is not where brig put the rules: …` | `BRIG_RUNTIME_BIN` reaches a containerd other than the rootless one Brig found. Brig removes the container |
+| `<sandbox> is already running, so brig leaves its egress rules alone` | another `brig` booted the sandbox between this one's check and its boot. Run the command again |
+| `a policy applies to this sandbox, and nerdctl on <shim> cannot enforce the egress policy: its rules need a network of its own, and the run asks for the shared network` | a run reached nerdctl with a policy and the `shared` posture. A policy normally narrows the posture to `isolated`, so this is a mismatch between the two. Run it with `--network isolated`. It exits `7` |
 | `a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of <bin> has no --egress-default. Upgrade the runtime, or detach the policy` | the runtime is older than the hull that added the `--egress-*` gateway flags |
 | ``a policy applies to this sandbox, and whether hull on hvi enforces the egress policy is unknown: the probe `<bin> network-gateway --help` failed: …`` | the probe of the runtime did not run, exited non-zero, or gave no answer within 30 seconds |
 | `a policy applies to this sandbox, and whether hull on krun enforces the egress policy is unknown: brig holds no answer for this run path. Run it on hull's hvi backend (BRIG_HYPERVISOR=hvi), or detach the policy` | `BRIG_HYPERVISOR` names a backend brig holds no record for, such as `krun`. Brig refuses the run instead of guessing |
@@ -586,22 +596,24 @@ sandbox with no way out.
 
 ## Where a policy is enforced, and where it is not
 
-Exactly one backend can enforce an egress policy: hull's `hvi` backend, at
-the user-mode network gateway Brig gives that sandbox. `vz` and `qemu` take
-their network from vmnet, and every Linux runtime takes its network from
-the container network. Neither of those is something Brig filters.
+Two run paths enforce an egress policy. On macOS it is hull's `hvi`
+backend, at the user-mode network gateway Brig gives that sandbox. On Linux
+it is nerdctl, at the bridge of the sandbox's own network. `vz` and `qemu`
+take their network from vmnet, and docker manages its own bridges. Brig
+filters neither.
 
 Brig holds one answer for each run path, a runtime with one backend. The
 answer is `enforced`, `cannot enforce` or `unknown`, and it comes from one
-table in `internal/runtime/capability.go`. On `hvi` the gateway probe
-confirms the table's answer or overturns it:
+table in `internal/runtime/capability.go`. On `hvi` and on nerdctl a probe
+at boot confirms the table's answer or overturns it:
 
 | Run path | Egress policy | Why |
 |---|---|---|
 | hull on `hvi` | `enforced` | the rules go on the gateway that is the sandbox's only way out. The gateway probe confirms it before Brig starts that gateway |
+| nerdctl, on any shim | `enforced` | the rules go in nftables on the sandbox's own bridge, and Brig answers its DNS. An nft probe in the bridges' network namespace confirms it before the sandbox boots |
 | hull on `vz` | `cannot enforce` | vmnet, which Brig does not filter |
 | hull on `qemu` | `cannot enforce` | vmnet, which Brig does not filter |
-| nerdctl or docker, on any shim | `cannot enforce` | nothing reads the rules into the run, and the container network is not filtered |
+| docker, on any shim | `cannot enforce` | docker's own bridges and firewall, which Brig does not filter |
 | hull on any other backend | `unknown` | Brig holds no answer for it |
 
 Brig boots a policy-bound run only on `enforced`. On `cannot enforce` or
@@ -617,9 +629,14 @@ Measured in a real guest in
 allowed name reaches, a denied name does not resolve, and an address
 dialled directly does not connect.
 
+On Linux with nerdctl, the same rules are enforced in two halves. See
+[How nerdctl enforces a policy](#how-nerdctl-enforces-a-policy) below.
+[docs/manual-tests/egress-policy-linux.md](manual-tests/egress-policy-linux.md)
+measures it in a urunc guest on rootless nerdctl.
+
 On every backend that cannot enforce a policy, Brig refuses the boot rather
-than running unenforced. `vz`, `qemu` and every Linux runtime refuse a
-filtered run outright, naming the backend that does enforce. Refusing it
+than running unenforced. `vz`, `qemu` and docker refuse a filtered run
+outright, naming the backend that does enforce. Refusing it
 beats booting a sandbox that reports a policy and filters nothing. There is
 one exception: a policy-carrying run whose posture is `offline` is not
 refused on any backend. A sandbox with no route out satisfies every rule
@@ -640,7 +657,7 @@ is refused by name once a policy applies to the run:
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend, which gives the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 $ brig run claude
 brig: a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of /opt/homebrew/bin/hull has no --egress-default. Upgrade the runtime, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```
@@ -650,6 +667,98 @@ too. That covers a binary that does not run, a non-zero exit, and no answer
 within 30 seconds. A non-zero exit refuses even when the help text lists
 `--egress-default`. The refusal names the binary, the probe command and its
 error.
+
+### How nerdctl enforces a policy
+
+Brig enforces a policy itself on nerdctl because hull's gateway cannot serve
+a Linux guest yet. Once it can, the gateway is where these rules belong, and
+the resolver and table below are the interim.
+
+A sandbox under a policy on nerdctl always has a network of its own, and
+its traffic leaves through that network's bridge. Before the sandbox boots,
+Brig puts two things on that bridge:
+
+- **A resolver**, a `brig` process listening on the bridge address. The
+  sandbox boots with that address as its DNS server. Under `default: deny`
+  it answers only names an `allow` glob covers, and puts the addresses it
+  hands out in the table's allow set for two minutes. Under `default:
+  allow` it answers every name, and puts the addresses of a name a `deny`
+  glob covers in the deny set. It re-resolves every `host` rule that names
+  exactly one host every 30 seconds, and keeps what that returns for 90
+  seconds.
+- **An nftables table**, `brig_egress_<sandbox>`, in the network namespace
+  that holds the bridge. It refuses a connection to an address no rule
+  allows: TCP gets a reset, and anything else is dropped. It carries TCP,
+  UDP and ping, and refuses every other protocol. It also refuses IPv6,
+  `169.254.0.0/16`, and a packet whose source is outside the sandbox's
+  network. Rootless nerdctl writes slirp4netns's resolver into the guest's
+  `resolv.conf` ahead of Brig's, and the table sends DNS for that address
+  to Brig's resolver too. DNS for any other server is ordinary traffic
+  under the policy, as it is on `hvi`.
+
+The guest reaches the addresses of that namespace itself for DNS and ping
+to the bridge address, and for nothing else. With rootless nerdctl the
+namespace is rootlesskit's. The host's own addresses are reached through
+slirp4netns there, and the rules treat them like any other address. With
+rootful nerdctl the namespace is the host's, so every address of the host
+is refused under either default.
+
+The rules mean what they mean on `hvi`. A `host` rule is a glob on the name
+the guest asks for, `*` spans dots, and a glob does not cover the bare
+domain. Deny beats allow, and allow beats the default. With a `host` rule in
+the policy, the lifetimes are the ones hull's gateway uses, and so are the
+record types answered. A few details differ, because the gateway answers for
+the guest and the resolver passes upstream's answer on:
+
+- The guest gets upstream's answer, with its CNAME chain and any DNSSEC
+  records, but with no additional records. The gateway answers with A
+  records alone. Either way only the A records of the answer are pinned,
+  and the address of an MX or SRV target is learned with an A query, which
+  the rules judge.
+- An upstream that fails gives `SERVFAIL`. The gateway answers `NXDOMAIN`.
+- With no `host` rule in the policy, the TTL is upstream's. The gateway
+  answers with a TTL of 0.
+- Ping reaches an address the rules allow, and no other. The gateway
+  answers every ping itself.
+- A refused connection is not logged. A refused name is.
+
+Rootless nerdctl keeps its bridges in rootlesskit's network namespace.
+Brig enters it with `nsenter`, as nerdctl does, and needs no privilege for
+it. A rootful nerdctl keeps them in the host's namespace. Either way the
+host needs `nft` (the nftables package) and `nsenter` (util-linux). Brig
+probes for both with `nft list tables` in that namespace before every
+filtered boot, and refuses the boot with exit code `7` when the probe
+fails.
+
+While the sandbox runs, the table is all that filters it. So `brig stop`
+and `brig rm` remove the table and stop the resolver only once the sandbox
+is confirmed stopped, and a stop that failed leaves both in place. Each boot
+tags the connections it admits, and a connection the kernel still tracks
+from an earlier boot is judged again under the new rules.
+
+The resolver keeps the table in place. It installs the table, pins the
+addresses of every `host` rule that names one host, and only then starts a
+heartbeat in the table, which it renews every 5 seconds. Until the
+heartbeat starts, the table refuses every new connection, and Brig boots
+the sandbox only after it has. If something removes the table, such as a
+`flush ruleset` on a rootful host, the resolver installs it again the same
+way within those 5 seconds, and the sandbox is not filtered until it does.
+The table installed again holds none of the addresses the guest looked up,
+and under `default: deny` those are refused until the guest asks for them
+again, within the minute its answers last. If the resolver dies, the
+heartbeat lapses within 15 seconds, and from then on the table refuses
+every new connection under either default. Connections already open stay
+open. The next `brig run` or `brig sh` reboots a sandbox whose resolver
+died, as on any other change of rules. A sandbox whose resolver and table
+are both gone is not filtered until that boot.
+
+The resolver logs to `~/.brig/egress/<sandbox>.log`, or under
+`BRIG_GATEWAY_DIR` when that is set. It logs a refused name once every 30
+seconds, at most 20 such lines every 30 seconds, and at most 4 MiB of them
+in all. The log starts afresh at each boot and goes with `brig stop`.
+Measured in a real guest in
+[docs/manual-tests/egress-policy-linux.md](manual-tests/egress-policy-linux.md),
+against the cases of the network conformance suite.
 
 Binding a policy has these properties:
 
@@ -680,26 +789,35 @@ inspects the rules a policy contains. Neither can tell you that an `allow`
 glob matches nothing you meant. They can only tell you that the document
 parses.
 
-Deny-over-allow-over-default ordering, and the host-rule behavior below,
-are the enforcing gateway's documented behavior, not something Brig
-verifies itself. Brig's own merge applies no priority. It concatenates the
-`allow` and `deny` lists from every bound policy. Each rule reaches the
-gateway as an `--egress-allow` or `--egress-deny` flag on its command
-line.
+Brig's own merge applies no priority. It concatenates the `allow` and
+`deny` lists from every bound policy. On `hvi`, deny-over-allow-over-default
+ordering and the host-rule behavior below are the enforcing gateway's
+documented behavior. Each rule reaches the gateway as an `--egress-allow`
+or `--egress-deny` flag on its command line. On nerdctl, the ordering is
+Brig's own: it is the order of the rules in the table. `internal/egress`
+tests the rules it generates, and the manual test below measures them in a
+kernel.
 
-The one measurement in this repository,
-[docs/manual-tests/egress-policy.md](manual-tests/egress-policy.md), covers
-a `default: deny` policy with one `host` allow. The allowed name reaches, a
-denied name fails to resolve, and an address dialled directly fails to
-connect. It does not exercise a `deny` rule overriding an `allow` rule, and
-it does not exercise a `default: allow` policy. Treat deny-over-allow
-ordering as hull's documented gateway behavior, evidenced historically by
-that one measurement, and not as something Brig's own tests confirm.
+[docs/manual-tests/egress-policy.md](manual-tests/egress-policy.md) holds
+the measurement on `hvi`. It covers a `default: deny` policy with one
+`host` allow: the allowed name reaches, a denied name fails to resolve, and
+an address dialed directly fails to connect. It does not exercise a `deny`
+rule overriding an `allow` rule, or a `default: allow` policy.
+[docs/manual-tests/egress-policy-linux.md](manual-tests/egress-policy-linux.md)
+holds the measurement on nerdctl. It runs the conformance suite's cases
+under both defaults, including a `deny` glob inside an `allow` glob and a
+`deny` cidr inside an `allow` cidr.
 
-A `host` rule is enforced through the gateway's own resolver, so what it
+A `host` rule is enforced through the resolver Brig puts in front of the
+sandbox, the gateway's on `hvi` and Brig's own on nerdctl, so what it
 covers depends on the default. Under `default: deny`, the resolver answers
 only names an `allow` glob covers, and the guest reaches nothing it did not
 resolve there. That is also why traffic sent straight to an address, DNS
 over HTTPS and DNS over TLS do not get out. Under `default: allow`, a
 `host` deny is best effort, because traffic sent straight to an address
 never asks for a name. A `cidr` rule is matched on the address either way.
+
+A `host` rule decides an address, not a name. Neither enforcer reads TLS
+SNI or an HTTP `Host` header. Two names served from one address, as on a
+CDN, get the same verdict: an `allow` for one lets the guest reach the
+other, and a `deny` for one refuses the other.
