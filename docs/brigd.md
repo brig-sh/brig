@@ -1,58 +1,66 @@
 # brigd
 
-`brigd` keeps the session inventory and owns boot and teardown when several
-callers want the same sandbox. It runs the same `internal/wrap` library the
-CLI does, so both build a sandbox the same way.
+`brigd` is an optional daemon that gives other programs one socket to drive
+Brig through. It keeps the session inventory, and it owns boot and teardown
+when several callers want the same sandbox. It uses the same `internal/wrap`
+library as the CLI, so both build a sandbox the same way.
 
-brigd is optional. Every `brig` command talks to the runtime directly,
-whether brigd is running or not. Only `brig doctor` talks to brigd, to ask a
-running one for its build. With no brigd, `brig doctor` prints `--`, the
-mark for something absent that is not a problem:
+## When to run it
 
-```
-  --  brigd     not running (no socket at /Users/me/.brig/brigd.sock)
-```
+Run brigd when another program needs one socket to drive Brig through:
 
-The line reads `!!` when the socket's mode is not `0600`, or when the
-running brigd is a different build from `brig`.
+- a tool that drives several sandboxes from one process
+- a client that needs boots of one sandbox serialized across several callers
 
-Run brigd when another program needs one socket to drive Brig through: a
-tool that drives several sandboxes from one process, or a client that needs
-boots of one sandbox serialized across several callers. Most people never
-run it.
+Most people never run it. Every `brig` command talks to the runtime
+directly, whether brigd runs or not.
 
-## What it does not do
+brigd does not proxy exec. It owns the lifecycle of a sandbox, and the CLI
+owns the terminal. To hand your terminal to a process inside the guest, use
+`brig sh`, which passes the file descriptors when it replaces itself with
+the runtime.
 
-It does not proxy exec. Handing your terminal to a process inside the guest
-means passing file descriptors, and `brig sh` already does that by replacing
-itself with the runtime. The daemon owns lifecycle, and the CLI owns the
-terminal.
-
-## Running it
+## Run it
 
 ```bash
 brigd                                  # $XDG_RUNTIME_DIR/brigd.sock if set, else ~/.brig/brigd.sock
 brigd --socket /tmp/brigd.sock
 ```
 
-The socket is created 0600. It carries lifecycle control over sandboxes
-holding live credentials, so it belongs to the invoking user alone.
+brigd creates the socket with mode 0600. The socket carries lifecycle
+control over sandboxes that hold live credentials, so it belongs to the
+invoking user alone.
 
-A unix socket path has a length limit the kernel enforces: 103 bytes on
-macOS, 107 on Linux. A path over it is refused before the bind, naming the
-limit, the length, and where the path came from. The kernel's own answer to
-an over-long path is `bind: invalid argument`, which names none of those.
+One daemon serves one socket path. A second daemon started on a served path
+exits non-zero and names the process that holds the path. It does not take
+the path over. The lock is a `brigd.sock.lock` file beside the socket. The
+daemon holds the lock while it runs, and the kernel releases the lock if
+the daemon dies.
 
-One daemon serves one socket path. A second daemon started on a path that is
-already served exits non-zero and names the process holding it. It does not
-take the path over, because two daemons on one socket would each hold part
-of the inventory. The lock is a `brigd.sock.lock` file beside the
-socket, held for as long as the daemon runs and released by the kernel if it
-dies.
+The kernel limits the length of a unix socket path: 103 bytes on macOS and
+107 bytes on Linux. brigd refuses a longer path before the bind. The refusal
+names the limit, the length, and where the path came from. The kernel's own
+error for a path that is too long is `bind: invalid argument`, which names
+none of those.
+
+### Check it with `brig doctor`
+
+`brig doctor` is the only `brig` command that talks to brigd. It asks a
+running brigd for its build.
+
+| Mark | Meaning |
+| --- | --- |
+| `--` | brigd is not running. This mark means that something is absent and that it is not a problem |
+| `!!` | the mode of the socket is not `0600`, or the running brigd is a different build from `brig` |
+
+```
+  --  brigd     not running (no socket at /Users/me/.brig/brigd.sock)
+```
 
 ## Protocol
 
-Line-delimited JSON, one request per line, one response per line.
+The protocol is line-delimited JSON: one request per line, one response per
+line.
 
 ```json
 {"v":1,"op":"ensure","agent":"claude-code","name":"refactor"}
@@ -72,11 +80,11 @@ A response looks like:
   "running":true}]}
 ```
 
-An error comes back as `{"v":1,"ok":false,"code":...,"error":"..."}`, not as
-a closed connection.
+brigd reports an error as `{"v":1,"ok":false,"code":...,"error":"..."}`, and
+not as a closed connection.
 
-`version` answers with the build the daemon came from, the same fields
-`brig version --json` prints for the CLI:
+`version` answers with the build the daemon came from. The fields are the
+same ones that `brig version --json` prints for the CLI:
 
 ```json
 {"v":1,"ok":true,"code":0,"version":"v0.2.0",
@@ -85,23 +93,32 @@ a closed connection.
 ```
 
 `commit` and `commitTime` are absent when the build carried no git history.
-`modified` is always present, and `true` when the tree had uncommitted changes.
+`modified` is always present, and it is `true` when the tree had uncommitted
+changes.
+
+An example with `socat`:
+
+```bash
+echo '{"op":"ensure","agent":"claude"}' | socat - UNIX-CONNECT:$HOME/.brig/brigd.sock
+```
 
 ### Protocol version
 
 Every request and every response carries `v`, the protocol version. It is `1`
-today.
+today. The response always carries `v`, so a client can tell what it talks
+to from the answer.
 
-A request with no `v` is read as version 1. A request carrying a `v` brigd
-does not know is refused with `code` 2 and an error naming the versions it
-does speak. The response always carries `v`, so a client can tell what it is
-talking to from the answer.
+| Request | What brigd does |
+| --- | --- |
+| no `v` | reads the request as version 1 |
+| a `v` that brigd does not know | refuses with `code` 2 and an error that names the versions it speaks |
 
 ### Request id
 
-A request can carry `id`, any string, and the response echoes it back
-unchanged. A client pipelining several requests on one connection can match
-each answer to its question. Absent in, absent out:
+A request can carry `id`, which is any string. The response returns the same
+`id` unchanged, so a client that pipelines several requests on one
+connection can match each answer to its question. A request without `id`
+gets a response without `id`.
 
 ```json
 {"v":1,"id":"boot-42","op":"ensure","agent":"claude-code"}
@@ -110,10 +127,9 @@ each answer to its question. Absent in, absent out:
 
 ### Exit code
 
-Beside `error`, a response carries `code`. brigd uses the same codes and
-the same causes as `brig` itself, listed at
-[docs/cli.md#exit-codes](cli.md#exit-codes). A script driving brigd
-branches the way one driving `brig` does.
+Beside `error`, a response carries `code`. brigd uses the same codes and the
+same causes as `brig`, so a script can branch on them the same way. See
+[Exit codes](cli.md#exit-codes).
 
 ```json
 {"v":1,"op":"ensure","agent":"no-such-profile"}
@@ -122,102 +138,103 @@ branches the way one driving `brig` does.
 
 ### Who can connect
 
-The socket is `0600` and the invoking user's alone. brigd also checks each
-accepted connection: it reads the peer's uid from the kernel, which the peer
-cannot forge (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS). It refuses
-a uid other than its own, with one line and a closed connection:
+Only the user who started brigd can connect. The socket is `0600`, and brigd
+also checks each accepted connection. It reads the uid of the peer from the
+kernel (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS), which the peer
+cannot forge. It refuses a uid other than its own with one line, and then it
+closes the connection:
 
 ```json
 {"v":1,"ok":false,"code":1,"error":"connection from uid 1001 refused: this socket serves only its owner, uid 1000"}
 ```
 
-`running` is read from the runtime on every report, not from the inventory,
-so a sandbox stopped by something else is reported as stopped. Sometimes
-the runtime cannot be asked at all: its binary is gone, a permission error
-came back, or containerd is down. Then the session carries `runningError`,
-and `running` means nothing:
+### Running state
+
+brigd reads `running` from the runtime on every report, because anything can
+stop a sandbox, including a `brig stop` that did not go through the daemon.
+A sandbox that something else stopped is reported as stopped.
+
+If brigd cannot ask the runtime, the session carries `runningError`, and
+`running` means nothing. This occurs when the binary of the runtime is gone,
+when a permission error came back, or when containerd is down.
 
 ```json
 {"agent":"claude-code","sandbox":"brig-claude-code","workspace":"/Users/me/.brig/homes/brig-claude-code",
   "running":false,"runningError":"nerdctl ps: exit status 1: cannot connect to containerd"}
 ```
 
-A client should show that as "cannot tell", not as a stopped sandbox.
+In a client, show this session as "cannot tell". Do not show it as a stopped
+sandbox.
 
-What the run warns about comes back in the response as `warnings`, one line
-each: a credential that was not forwarded and why, a secret about to
-expire, an image that did not verify. The CLI prints these on your
-terminal. The daemon has no such terminal, so they go to the client that
-asked.
+### Warnings
 
-`warnings` holds only things to act on. Progress lines, such as the one
-saying a boot has started, go to brigd's stderr. An `ensure` with nothing to
-report comes back with no `warnings`.
+The response carries what the run warns about as `warnings`, one line each.
+The CLI prints the same lines on your terminal. Examples:
 
-A connection that sends nothing for five minutes is closed. The deadline is
-reset on every read, so it limits silence, not work. An `ensure` that spends
-a minute booting is unaffected, and so is a request that arrives in pieces.
+- a credential that was not forwarded, and why
+- a secret about to expire
+- an image that did not verify
 
-A response has thirty seconds to be delivered. A response is a line of JSON
-and fits the socket buffer, so a client that reads its answers never reaches
-that limit. A client that asks and then stops reading would hold a goroutine
-and a descriptor open once the buffer fills, so brigd closes its connection.
+`warnings` holds only things to act on. Progress lines, such as the line
+that says a boot started, go to the stderr of brigd. An `ensure` with
+nothing to report comes back with no `warnings`.
 
-A request line is at most 1 MiB, newline excluded. The limit stops a client
-that never sends a newline from making the daemon buffer without bound. A
-longer request gets an error, and brigd then closes the connection, because
-it cannot tell what follows from the rest of that request.
+### Limits
 
-That error goes out the moment the limit is reached, while the client is
-usually still writing. A client that reads as it writes sees the error. A
-client that does not read until its write returns sees a broken pipe.
+| Limit | Value | What brigd does at the limit |
+| --- | --- | --- |
+| Silence on a connection | five minutes | closes the connection |
+| Delivery of a response | thirty seconds | closes the connection |
+| Length of a request line | 1 MiB, newline excluded | sends an error, then closes the connection |
 
-An example with `socat`:
+The silence deadline resets on every read, so it limits silence and does not
+limit work. An `ensure` that boots for a minute is unaffected. A request
+that arrives in pieces is also unaffected.
 
-```bash
-echo '{"op":"ensure","agent":"claude"}' | socat - UNIX-CONNECT:$HOME/.brig/brigd.sock
-```
+A response is one line of JSON and fits the socket buffer. A client that
+reads its answers never reaches the delivery limit. The limit applies to a
+client that asks and then stops reading.
+
+The length limit applies to a client that never sends a newline. brigd sends
+the error the moment the limit is reached, while the client is usually still
+writing. A client that reads as it writes sees the error. A client that does
+not read until its write returns sees a broken pipe.
 
 ## How brigd behaves
 
-`ensure` takes exactly the CLI's path: it prepares the guest home, resolves
-credentials, verifies the image and checks the share, then boots only if
-needed. Work on one sandbox is serialised, so two clients asking for the same
-one at the same moment get one boot rather than two.
+`ensure` takes the same path as the CLI. It prepares the guest home, resolves
+credentials, verifies the image and checks the share. Then it boots the
+sandbox only if a boot is necessary. brigd serializes work on one sandbox,
+so two clients that ask for the same sandbox at the same moment get one
+boot.
 
-The daemon never asks a question. The CLI stops to ask when an image under
-Brig's own registry fails to verify. Nobody is at brigd's terminal to
-answer, and the sandbox's lock would stay held across the wait. So brigd
-refuses a request that needs a prompt, with the reason and the setting that
-overrides it in `error`. Fix the image, or set `BRIG_VERIFY=off`, to let
-such a request through.
+brigd resolves the runtime for each request, from the profile that the
+request names. A profile that carries `runtimeBin` drives the same binary
+through the daemon as through the CLI. A profile that names a missing binary
+fails that request and no other.
 
-The runtime is resolved per request, from the profile the request names. A
-profile carrying `runtimeBin` drives the same binary through the daemon as it
-does through the CLI. A profile naming a binary that is not there fails that
-request and no other.
+brigd never asks a question. The CLI stops to ask when an image under Brig's
+own registry fails to verify. brigd refuses a request that needs that
+prompt, and `error` carries the reason and the setting that overrides it. To
+let such a request through, fix the image or set `BRIG_VERIFY=off`.
 
-`status` reads liveness from the runtime on every report, because anything
-can stop a sandbox, including a `brig stop` that never went through the
-daemon.
+## After a restart
 
-## What a restart reconciles
+brigd reconciles nothing on a restart. The inventory lives in memory and
+holds only what this process did. On start, brigd loads the profile registry
+and begins to listen. It does not ask the runtime which sandboxes it started
+before.
 
-Nothing. The inventory lives in memory and holds only what this process has
-done. On start brigd loads the profile registry and begins listening. It
-does not ask the runtime which sandboxes it had started. The runtime is the
-source of truth, so `stop` acts on a running sandbox the inventory does not
-hold.
-
-A restarted daemon has an empty inventory while its sandboxes are still up.
-`status` shows none until something asks for them again. `brig ls`, which
-reads the runtime directly, shows them throughout.
+| After a restart | Result |
+| --- | --- |
+| `status` | shows no sandbox until something asks for it again, although the sandboxes are still up |
+| `stop` | acts on a running sandbox that the inventory does not hold, because the runtime is the source of truth |
+| `brig ls` | shows the sandboxes throughout, because it reads the runtime directly |
 
 ## Stability
 
-The protocol is versioned so a client can tell what it is talking to, and
-[stability.md](stability.md#stable-enough-to-script-against) lists it as
-stable: within a version a field can be added, but none is renamed or
-removed. A client that ignores unknown fields keeps working. A change that
-breaks such a client becomes a new version (`v: 2`), the same rule
-[docs/cli.md#--json-output](cli.md#--json-output) sets for `--json` output.
+[Stability](stability.md#stable-enough-to-script-against) lists the protocol
+as stable. Within a version, a field can be added, but no field is renamed
+or removed. A client that ignores unknown fields continues to work. A change
+that breaks such a client becomes a new version (`v: 2`). The
+[`--json` output](cli.md#--json-output) follows the same rule.
