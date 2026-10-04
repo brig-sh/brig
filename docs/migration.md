@@ -1,9 +1,8 @@
 # Moving off the retired spellings
 
-Brig renamed most of its commands while it was still a prerelease. Every old
-spelling on this page still works today, except the ones marked removed.
-Each retired command and flag prints a notice on stderr that names its
-replacement and the release that removes it, in this form:
+Every retired Brig spelling still works today, except the ones marked
+removed. Each retired command and flag prints a notice on stderr. The notice names the
+replacement and the release that removes the old spelling:
 
 ```
 brig: `brig profiles` is now `brig agent ls`
@@ -12,22 +11,24 @@ brig: `brig profiles` is now `brig agent ls`
 
 When stderr is not a terminal, both lines start with `brig:`.
 
-The old spellings are removed in v0.4.0. `brig exec` is the exception: it
-stays until `brig sh` can pipe a command's output, and its notice says that
-instead of a release. `brig run` is never removed.
-[stability.md](stability.md#retired-spellings) has the rule.
-
-This page lists everything to change in a script written against an older
-spelling. Three changes are not spellings. A word on the `brig run` line
-[changed meaning](#one-word-whose-meaning-changed) and prints no notice. New
-sandboxes use a different [network default](#network-defaults). `brig sh`
-now passes its words to the guest command as arguments, so a script typed
-as one quoted word no longer runs. See
-[A quoted script on `brig sh`](#a-quoted-script-on-brig-sh).
+Brig removes the old spellings in v0.4.0, with one exception. `brig exec`
+stays until `brig sh` can pipe the output of a command, and its notice says
+that instead of a release. `brig run` is never removed.
+[Stability](stability.md#retired-spellings) has the rule.
 
 To find retired spellings in a script, run
 [`script/check-retired-spellings.sh`](../script/check-retired-spellings.sh)
 over it, or watch stderr for the notice.
+
+Three changes are not spellings:
+
+- A word on the `brig run` line
+  [changed meaning](#one-word-whose-meaning-changed), and Brig prints no
+  notice.
+- New sandboxes use a different [network default](#network-defaults).
+- `brig sh` passes its words to the guest command as arguments, so a script
+  typed as one quoted word does not run. See
+  [A quoted script on `brig sh`](#a-quoted-script-on-brig-sh).
 
 ## Verbs
 
@@ -44,23 +45,22 @@ over it, or watch stderr for the notice.
 | `brig env <ref>` | `brig info <ref>` |
 | `brig reset` | `brig rm --all` |
 
-`brig rm --all` asks before it removes anything, and so does `brig reset`.
-Without a terminal to answer on, both refuse unless you pass `-y`, so a
-script that ran `brig reset` unattended needs `brig rm --all -y`.
+`brig rm --all` and `brig reset` both ask before they remove anything.
+Without a terminal to answer on, both refuse unless you pass `-y`. A script
+that ran `brig reset` unattended needs `brig rm --all -y`.
 
-`brig exec` runs its command without a guest pty, and `brig sh` does not
-yet. Until [#335](https://github.com/brig-sh/brig/issues/335) lands, `brig
-exec` is the way to pipe a command's output cleanly, so it has no removal
-release yet.
+`brig exec` runs its command without a guest pty, and `brig sh` does not yet
+([#335](https://github.com/brig-sh/brig/issues/335)). Until it does, use
+`brig exec` to pipe the output of a command cleanly.
 
-There is no `brig template edit`. The retired group kept only the verbs it
-already had, so that line prints the notice and then fails, naming
-`brig agent edit`.
+`brig template edit` does not exist. The retired group has only the verbs
+that it had before. That line prints the notice and then fails, and the
+failure names `brig agent edit`.
 
 ### Removed
 
-These no longer run. Each is refused as a usage error, exit code 2, that
-names its replacement:
+Brig refuses each removed spelling as a usage error, with exit code 2. The
+refusal names the replacement:
 
 ```
 brig: `brig shell` was removed; use `brig sh <ref> [command...]`
@@ -90,12 +90,13 @@ brig: `brig shell` was removed; use `brig sh <ref> [command...]`
 | `-n NAME`, `--name NAME` | `<agent>@<label>` |
 | `-w PATH`, `--workspace PATH` | `--home PATH` |
 
-Each still writes the same value, and the inline form (`-t=myimage:1`) warns
-too. A value that looks like a retired flag is left alone, so
-`brig run claude --name -t` warns about `--name` and not about `-t`.
+Each retired flag still sets the same value. The inline form
+(`-t=myimage:1`) also prints the notice. Brig leaves alone a value that looks
+like a retired flag. For example, `brig run claude --name -t` warns about
+`--name` and not about `-t`.
 
-`--memory` is a current spelling of `--mem`. It is not retired, but the help
-text does not teach it and completion does not offer it.
+`--memory` is a current spelling of `--mem`. The help text does not show it,
+and completion does not offer it.
 
 ## One flag whose position changed
 
@@ -117,65 +118,59 @@ brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`
 
 ## One word whose meaning changed
 
-Up to 0.1.0-rc17, the second bare word on a `brig run` line went to the
-agent. From 0.1.0-rc18 it is the project directory Brig mounts, and the
-agent starts in it:
+The second bare word on a `brig run` line is the project directory that Brig
+mounts, and the agent starts in it. Older prereleases of 0.1.0 passed that
+word to the agent.
 
 ```bash
 brig run claude ~/code/demo   # mounts ~/code/demo at /work/demo
 brig run claude -- src        # passes src to the agent
 ```
 
-The old meaning is gone, and Brig prints no notice. For a line written
-against rc17, such as `brig run claude src`:
+To keep the old meaning, put the word after `--`. `--` ends Brig's parsing,
+so anything after it reaches the agent untouched.
 
-- If `src` is a directory, Brig mounts it read-write at `/work/src` and
-  starts the agent there. At the default verbosity nothing is printed
-  about it. `brig info claude` shows the mounted project without running
-  anything, and `brig --verbose run` prints it before the boot.
-- If it is not, Brig refuses the run and says to put it after `--`.
+Brig prints no notice for a line that has the old meaning, such as
+`brig run claude src`:
 
-`--` ends Brig's parsing, so anything after it reaches the agent untouched.
-Use it to keep the old meaning.
+| `src` | What Brig does |
+| --- | --- |
+| is a directory | mounts it read-write at `/work/src` and starts the agent there. At the default verbosity, Brig prints nothing about the mount |
+| is not a directory | refuses the run and says to put `src` after `--` |
 
-0.1.0-rc18 and 0.2.0 printed a notice about this on every run that named a
-project. That notice is gone. `script/check-retired-spellings.sh` cannot
-find these lines either, because the line is still valid. Look for
-`brig run` lines with a second bare word after the agent.
+`brig info claude` shows the mounted project and runs nothing.
+`brig --verbose run` prints the project before the boot.
+
+`script/check-retired-spellings.sh` cannot find these lines, because each
+line is still valid. Look for `brig run` lines with a second bare word after
+the agent. The later prereleases of 0.1.0, and Brig 0.2.0, printed a notice
+about this change on every run that named a project. Current releases print
+no notice.
 
 ## A quoted script on `brig sh`
 
-`brig sh <ref> <command...>` used to join its trailing words with spaces and
-hand the result to `bash -lc` as a script. That threw away every argument
-boundary, so `brig sh ubuntu sh -c 'echo FIRST; echo SECOND'` printed a blank
-line and `SECOND`. Each word now reaches the guest as one argument, the way
-`brig exec <ref> -- <cmd>` passed them. Two differences are left between the
-two. `sh` runs the command under a login shell and `exec` does not. `sh` also
-always asks for a terminal in the guest, where `exec` asked for one only when
-brig's own stdin was a terminal. On hull, output piped or redirected from `sh`
-therefore comes through that terminal: lines end in CRLF, and stderr is mixed
-into stdout. On Linux the runtime can refuse the terminal, and then the
-command does not run at all. docker refuses it when brig's stdin is not a
-terminal. nerdctl refuses it when none of brig's stdin, stdout and stderr is
-one.
+`brig sh <ref> <command...>` passes each word to the guest as one argument,
+as `brig exec <ref> -- <cmd>` does. Older releases joined the trailing words
+with spaces and gave the result to `bash -lc` as a script. The join lost
+every argument boundary, so `brig sh ubuntu sh -c 'echo FIRST; echo SECOND'`
+printed a blank line and `SECOND`.
 
-`brig run` on a `kind: shell` profile such as `ubuntu` runs its trailing words
-the same way `sh` does, and changed with it.
+`brig run` on a `kind: shell` profile such as `ubuntu` runs its trailing
+words as `sh` does, and changed with it.
 
-A line that relied on the join, passing shell syntax as a single quoted word,
-now fails in the guest instead of running it, and brig prints a hint naming
-`-c` first. Put `-c` in front of the script, which runs it under the login
-shell the way the join did:
+A line that passed shell syntax as a single quoted word now fails in the
+guest. Brig prints a hint that names `-c` first. Put `-c` in front of the script. `-c` runs the script under the login
+shell, as the join did:
 
 ```bash
 brig sh claude 'ls /work | wc -l'      # no longer runs
 brig sh claude -c 'ls /work | wc -l'   # runs it as a script
 ```
 
-A variable assignment in front of the command is shell syntax too, even
-unquoted. `brig sh claude FOO=bar npm test` now looks for a command named
-`FOO=bar` and exits 127. Pass the variable through `env`, which keeps the
-words as they are, or write the line as a script:
+A variable assignment in front of the command is also shell syntax, even
+unquoted. `brig sh claude FOO=bar npm test` now looks for
+a command named `FOO=bar` and exits 127. Pass the variable through `env`,
+which keeps the words as they are, or write the line as a script:
 
 ```bash
 brig sh claude FOO=bar npm test          # no longer runs
@@ -183,27 +178,44 @@ brig sh claude env FOO=bar npm test      # runs npm test with FOO set
 brig sh claude -c 'FOO=bar npm test'     # the same, as a script
 ```
 
-The command still runs under a login shell, so its environment is unchanged,
-and a shell builtin such as `ulimit` or a function the login profile defines,
-such as `nvm`, still works as the first word. A first word that starts with
-`-` is a command name, not an option, and exits 127 when no such command
-exists. The exception is `-c`, alone or combined as in `-ec`, which runs the
-next word as a script.
+The command still runs under a login shell, so its environment is unchanged.
+A shell builtin such as `ulimit` still works as the first word. So does a
+function that the login profile defines, such as `nvm`.
 
-When the first word is a profile function, or the login profile sets a trap,
-bash stays running as the command's parent. A `SIGTERM` sent to the session
-then ends bash and leaves the command running until the sandbox stops.
+A first word that starts with `-` is a command name, and the line exits 127
+when no such command exists. The exception is `-c`, alone or combined as in
+`-ec`. It runs the next word as a script.
 
-The words are now positional parameters, so a login profile that runs a
-top-level `shift` or `set --` rewrites them and so the command. This applies
+Two differences from `brig exec` remain. `sh` runs the command under a login
+shell, and `exec` does not. `sh` always asks for a terminal in the guest, and
+`exec` asks for one only when Brig's own stdin is a terminal. As a result,
+output piped or redirected from `sh` depends on the runtime:
+
+| Runtime | Effect |
+| --- | --- |
+| hull | the output comes through that terminal: lines end in CRLF, and stderr is mixed into stdout |
+| docker | refuses the terminal when Brig's stdin is not a terminal. The command then does not run |
+| nerdctl | refuses the terminal when none of Brig's stdin, stdout and stderr is a terminal. The command then does not run |
+
+<details><summary>Login profiles that change the command</summary>
+
+Bash stays running as the parent of the command in two cases: the first word
+is a profile function, or the login profile sets a trap. A `SIGTERM` sent to
+the session then ends bash and leaves the command running until the sandbox
+stops.
+
+The words are positional parameters. A login profile that runs a top-level
+`shift` or `set --` rewrites them, and so rewrites the command. This applies
 to `/etc/profile` in the image. It also applies to a `.bash_profile` in your
 guest home when the profile mounts that home at the guest user's `$HOME`.
-Move either into a function, where bash scopes it to the call. See
-[guest-image.md](guest-image.md).
+Move the `shift` or `set --` into a function, where bash scopes it to the
+call. See [Guest image](guest-image.md).
+
+</details>
 
 ## Session names
 
-A session is now part of the ref, which replaces `--name`:
+A session is part of the ref, which replaces `--name`:
 
 ```bash
 brig run claude@refactor          # current
@@ -212,8 +224,8 @@ brig run claude --name refactor   # still works, prints a notice
 
 `brig run claude` is the default session of the `claude-code` agent.
 `claude@refactor` is a second session, with its own sandbox and its own
-guest home. [docs/sessions.md](sessions.md) explains what each session
-keeps separate.
+guest home. [Sessions](sessions.md) explains what each session keeps
+separate.
 
 `--name` is also Claude Code's own flag. Until v0.4.0, Brig still reads a
 `--name` that stands before the agent's own arguments. To pass it to the
@@ -223,10 +235,10 @@ Claude Code.
 ## Profile keys
 
 `shell:`, `gui:`, `forward:` and `statePaths:` still parse in a profile file
-until v0.4.0, and print no notice at run time. `hostCredential:` was removed
-in 0.3.0. Brig refuses a profile that still has it, as it refuses any field
-it does not know. `brig agent export claude-code` prints a current profile,
-and its header comment documents every field.
+until v0.4.0, and print no notice at run time. Brig refuses a profile that
+still has `hostCredential:`, as it refuses any field that it does not know.
+`brig agent export claude-code` prints a current profile, and its header
+comment documents every field.
 
 | Retired key | Current |
 | --- | --- |
@@ -235,61 +247,75 @@ and its header comment documents every field.
 | `forward:` | `env:`, with `ref: env.<name>` |
 | `statePaths:` | `volumes:` |
 
-Declaring a retired key beside its replacement is an error. `kind:` beside
-`shell:` or `gui:` is refused only when the two disagree. `forward:` beside
-an `env:` entry of the same name, and `statePaths:` beside `volumes:`, are
-refused whatever their values.
+A retired key beside its replacement is an error:
+
+| Keys | Refused |
+| --- | --- |
+| `kind:` beside `shell:` or `gui:` | only when the two disagree |
+| `forward:` beside an `env:` entry of the same name | whatever their values |
+| `statePaths:` beside `volumes:` | whatever their values |
 
 ## Network defaults
 
-New sandboxes on `hvi` and Linux now default to `isolated`, a network of
-their own. They still reach the internet. This change separates sandbox
-networks; it adds no egress policy and makes no new claim about access to
+A new sandbox on `hvi` or Linux defaults to `isolated`, which is its own
+network. It still reaches the internet. This change separates sandbox
+networks. It adds no egress policy and makes no new claim about access to
 host services.
 
-Existing sandboxes keep the posture recorded when they started. For an
-older session with no posture record, Brig inspects its sandbox's runtime
-configuration to recover `shared`, `isolated` or `offline` when possible.
-An unrecorded Hull gateway named `sandbox-*.sock` recovers as isolated when
-a readable, nonempty `.spec` remains beside its recorded socket path. Without
-that evidence it stays unknown: `brig stop` removes the spec, so its absence
-does not mean shared. Restore its posture record or choose `--network`
-explicitly; see the [recovery limits](policies.md#network-postures), including
-the ambiguity of stale specs left beside old shared overrides.
-Upgrading does not restart it to apply the new profile default.
-A sandbox the runtime confirms is absent gets the default for a new sandbox.
+| Sandbox | Posture |
+| --- | --- |
+| existing | the posture recorded when it started. An upgrade does not restart it to apply the new profile default |
+| one that the runtime confirms is absent | the default for a new sandbox |
+| existing, when the runtime cannot establish its posture | Brig refuses a run that names no posture. Name the one you want with `--network` or `BRIG_NETWORK`, and Brig recreates the sandbox with it |
 
-If the runtime cannot establish an existing sandbox's posture, Brig
-refuses a run that names no posture instead of guessing. Name the one you
-want with `--network` or `BRIG_NETWORK`, and Brig recreates the sandbox with
-it. To move a sandbox to another posture, run:
+To move a sandbox to another posture, run:
 
 ```bash
 brig run claude --network isolated
 ```
 
-That restarts the sandbox and disconnects any session using it. If one
-sandbox needs to reach another, start both with `--network shared`, set
+That command restarts the sandbox and disconnects any session that uses it.
+If one sandbox must reach another, start both with `--network shared`, set
 `BRIG_NETWORK=shared`, or put `network: shared` in their profiles.
 
-The six `hvi` profiles explicitly use `isolated`; the graphical
-`claude-desktop` profile uses `shared` for `vz`. The unpublished `cursor`
-profile leaves its posture unset: it isolates on Linux and `hvi`, and takes
-the shared fallback on `vz` or `qemu`. Any profile without a network choice
-falls back to `shared` on `vz` or `qemu`, and `brig info` reports why. An
-explicit `isolated` is still refused on `vz` and `qemu`.
+The shipped profiles name these postures:
 
-If you override an `hvi` profile to `vz` or `qemu`, also override its
-explicit isolated posture. For example, on macOS 14:
+| Profile | Posture |
+| --- | --- |
+| the six `hvi` profiles | `isolated`, named explicitly |
+| the graphical `claude-desktop` profile | `shared`, for `vz` |
+| the unpublished `cursor` profile | unset. It isolates on Linux and `hvi`, and takes the shared fallback on `vz` or `qemu` |
+| any profile without a network choice | falls back to `shared` on `vz` or `qemu`, and `brig info` reports why |
+
+Brig still refuses an explicit `isolated` on `vz` and `qemu`. If you override
+an `hvi` profile to `vz` or `qemu`, also override its explicit isolated
+posture. For example, on macOS 14:
 
 ```bash
 BRIG_HYPERVISOR=vz brig run claude --network shared
 ```
 
-An exported profile is a copy: it keeps whatever `network:` it names.
-Add that field if you want a custom profile to keep a particular posture
-for new sessions. [Network postures](policies.md#network-postures) covers
-the precedence, backend exceptions and resource costs.
+An exported profile is a copy, and it keeps the `network:` that it names. To
+make a custom profile keep a posture for new sessions, add that field.
+[Network postures](policies.md#network-postures) covers the precedence,
+backend exceptions and resource costs.
+
+<details><summary>Older sessions with no posture record</summary>
+
+For an older session with no posture record, Brig inspects the runtime
+configuration of its sandbox. It recovers `shared`, `isolated` or `offline`
+when possible.
+
+An unrecorded Hull gateway named `sandbox-*.sock` recovers as isolated when
+a readable, nonempty `.spec` remains beside its recorded socket path. Without
+that evidence, the posture stays unknown. `brig stop` removes the spec, so a
+missing spec does not mean shared.
+
+For an unknown posture, restore the posture record or name a posture with
+`--network`. See the [recovery limits](policies.md#network-postures),
+including the ambiguity of stale specs left beside old shared overrides.
+
+</details>
 
 ## Settings
 
@@ -299,19 +325,19 @@ the precedence, backend exceptions and resource costs.
 | `BRIG_CREDENTIALS_CMD` | removed: declare the credential under `secrets:`, then run `brig secret import <agent> <name> --from-command '<command>'` |
 
 `BRIG_TEMPLATE_DIR` still works until v0.4.0, and prints no notice.
-`BRIG_PROFILE_DIR` wins when both are set. A run that still sets
-`BRIG_CREDENTIALS_CMD` is refused.
+`BRIG_PROFILE_DIR` wins when both are set. Brig refuses a run that still sets
+`BRIG_CREDENTIALS_CMD`.
 
 ## The words `agent` and `profile`
 
-Both are current, and they name different things. Only the commands were
-renamed:
+Both words are current, and they name different things. Only the commands
+have new names:
 
-- **agent** is the CLI noun. `brig agent ls`, `brig agent edit`, and the `<ref>`
-  every verb takes.
+- **agent** is the CLI noun: `brig agent ls`, `brig agent edit`, and the
+  `<ref>` that every verb takes.
 - **profile** is the file format, the directory and the environment variable.
   A profile is a YAML file in `$XDG_CONFIG_HOME/brig`, or in the directory
-  `BRIG_PROFILE_DIR` names.
+  that `BRIG_PROFILE_DIR` names.
 
-So you edit a profile file to change an agent. [docs/profiles.md](profiles.md)
-is the reference for the file format.
+To change an agent, edit its profile file. [Profiles](profiles.md) is the
+reference for the file format.
