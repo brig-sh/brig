@@ -1,14 +1,14 @@
 # Shell completion
 
-`brig completion bash|zsh|fish` prints a completion script to stdout. Brig
-installs nothing: where a script belongs differs per shell and per host, and
-Brig does not write to your startup files.
+`brig completion bash|zsh|fish` prints a completion script to stdout.
 
-A Homebrew cask install already has completion: the cask installs all
-three scripts where each shell reads them from. The lines below are for
-anyone who installed the binary another way.
+A Homebrew cask install already has completion. The cask installs all three
+scripts where each shell reads them. With any other install, add the script
+yourself. `brig completion` installs nothing and does not write to your
+startup files, because the location of a script differs per shell and per
+host.
 
-## Installing it
+## Install the script
 
 ```bash
 # bash
@@ -28,9 +28,9 @@ compinit
 brig completion fish > ~/.config/fish/completions/brig.fish
 ```
 
-The script asks the `brig` on your `PATH` what to offer, so it does not go
-stale when Brig gains a verb or a flag. Reinstall it only when the script
-itself changes.
+The script asks the `brig` on your `PATH` what to offer, so it stays current
+when Brig gains a verb or a flag. Reinstall it only when the script itself
+changes.
 
 ## What completes where
 
@@ -44,45 +44,64 @@ A `brig` line has three positions, and completion follows them.
 | `brig run <ref> …` or `brig plan <ref> …` | the project directory, for the first word only |
 | once the agent's arguments have begun | nothing |
 
-`--verbose` and `-q`/`--quiet` complete only before the verb, and `-q` also
-after `ls`, which has a `-q` of its own. `-q` after any other verb still
-works, but that position is retiring, so completion does not offer it.
-`--json` completes before the verb, and after every verb that accepts it
-except `ls`, `agent ls` and `secret ls`.
+### Global flags
+
+| Flag | Where it completes |
+| --- | --- |
+| `--verbose` | Before the verb |
+| `-q`/`--quiet` | Before the verb. `-q` also completes after `ls`, which has its own `-q`. |
+| `--json` | Before the verb, and after every verb that accepts it except `ls`, `agent ls` and `secret ls` |
+
+`-q` after any other verb still works. That position is retiring, so
+completion does not offer it.
+
+### Run-line flags
 
 Completion offers a flag wherever Brig reads it, whether or not the verb
-uses the value. Brig reads `brig run claude --mem 4096`, so `--mem`
-completes after the ref as well as before it, on every verb that reads
-run-line flags. Past the first word or flag Brig does not own, completion
-offers nothing, because the rest of the line belongs to the agent.
+uses the value. For example, Brig reads `brig run claude --mem 4096`. As a
+result, `--mem` completes after the ref and before it, on every verb that
+reads run-line flags.
 
-`stop` and `rm` act on a sandbox that exists, so they offer only the
-sessions that exist. `run`, `sh`, `info` and `plan` accept an agent that has
-never run, so they offer every agent. `brig rm --all` names no session, so a
-line carrying it offers no ref. It offers only the flags that go with it,
-`--dry-run` and `-y`/`--yes`.
+After the first word or flag that Brig does not own, completion offers
+nothing. The rest of the line belongs to the agent.
+
+### Refs
+
+| Verb | Refs that completion offers | Reason |
+| --- | --- | --- |
+| `run`, `sh`, `info`, `plan` | Every agent | These verbs accept an agent that has never run |
+| `stop`, `rm` | Only the sessions that exist | These verbs act on a sandbox that exists |
+| `brig rm --all` | None. Completion offers only the flags that go with it, `--dry-run` and `-y`/`--yes`. | The line names no session |
+
+### Noun commands
 
 Under the noun commands (`agent`, `policy`, `secret`, `telemetry`), the
-subcommands complete, and so do the names they take. Agents complete for
-`agent show`, policies for `policy attach`, and the agents with a file of
-their own complete for `agent edit` and `agent rm`. `--network` completes
-its three postures. `--home` completes directories.
+subcommands complete, and so do the names they take.
 
-Two things are never offered:
+| After | Completion offers |
+| --- | --- |
+| `agent show` | Agents |
+| `policy attach` | Policies |
+| `agent edit`, `agent rm` | The agents that have their own file |
+| `--network` | Its three postures |
+| `--home` | Directories |
 
-- **Secret names.** Listing them opens your keyring: on macOS that means
-  `security dump-keychain`, and a Linux secret-service backend can raise
-  an unlock prompt. Completion must not trigger either. `brig secret ls`
-  lists them.
-- **Retired spellings.** Each one still works and prints a notice naming
-  its replacement. Completion offers only the current spelling. See
-  [migration.md](migration.md) for the full old-to-new list.
+### Never offered
+
+- **Secret names.** `brig secret ls` lists them. Completion does not, because
+  a list of secret names opens your keyring. On macOS, that means
+  `security dump-keychain`. On Linux, a secret-service backend can raise an
+  unlock prompt.
+- **Retired spellings.** Completion offers only the current spelling. Each
+  retired spelling still works and prints a notice that names its
+  replacement. See [migration.md](migration.md) for the full old-to-new list.
 
 ## Session names can be stale
 
-The labels come from Brig's session index, which is a file. Completion
-does not ask the runtime, because it has to answer in milliseconds and has
-to work on a host with no runtime installed. A sandbox removed outside Brig
-(with `nerdctl rm`, for example) stays on offer until the next `brig ls`
-prunes it or `brig rm <ref>` forgets it. A command given the stale name
-reports that the sandbox is gone.
+The labels come from the session index of Brig, which is a file. Completion
+does not ask the runtime, because it must answer in milliseconds and must
+work on a host with no runtime installed.
+
+A sandbox removed outside Brig (with `nerdctl rm`, for example) stays on
+offer until the next `brig ls` prunes it or `brig rm <ref>` forgets it. A
+command given the stale name reports that the sandbox is gone.

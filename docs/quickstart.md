@@ -1,29 +1,31 @@
 # Quickstart
 
-This page starts Claude Code inside a sandbox on a throwaway project, shows
-what each step prints, and removes the sandbox at the end. The examples are
-from macOS. The same commands work on Linux, where the paths and the
-runtime named in the output differ. After a node-wide Linux install, run
-each command as root (`sudo brig ...`).
+Start Claude Code inside a sandbox on a throwaway project, see what each step
+prints, and remove the sandbox at the end.
+
+The examples are from macOS. The same commands work on Linux, where the
+paths and the runtime named in the output differ. After a node-wide Linux
+install, run each command as root (`sudo brig ...`).
+
+<p align="center">
+  <img alt="What brig run does, in four steps. You name an agent and a project. Brig checks the image signature. A microVM boots with its own kernel. The agent starts in your project, at /work/demo." src="../assets/brig-run-steps.svg" width="820">
+</p>
 
 ## Prerequisites
 
-- Brig, installed. [install.md](install.md) covers every platform.
-- On macOS: a Mac with Apple silicon and macOS 15 or newer. The default
-  profiles, including `claude-code`, use hull's `hvi` hypervisor backend,
-  which needs macOS 15. On macOS 14, set `BRIG_HYPERVISOR=vz` and
-  `BRIG_NETWORK=shared` before you run an agent. A `shared` network does not
-  separate sandboxes from each other.
-- On Linux: `nerdctl`, containerd and a `urunc` shim that reads Brig's boot
-  annotations. `install.sh` installs all three.
-- An Anthropic account, to log Claude Code in. To follow this page without
-  one, use `ubuntu` wherever it says `claude`. That agent is a plain root
-  shell and needs no login. Its image is not published by brig-sh, so Brig
-  prints a note that there is no signature to check, and the summary line
-  reads `brig: boot assets verified`.
+- Brig, installed on a supported host. See [Install Brig](install.md) and
+  [Platform support](install.md#platform-support).
+- An Anthropic account, to log Claude Code in.
 
-[install.md#platform-support](install.md#platform-support) has the full
-platform matrix.
+On macOS 14, set the two variables in
+[Platform support](install.md#platform-support) before you run an agent.
+
+> [!TIP]
+> To follow the steps without an Anthropic account, use `ubuntu` wherever a
+> step says `claude`. That agent is a plain root shell and needs no login.
+> brig-sh does not publish its image, so Brig prints a note that there is no
+> signature to check. The summary line then reads
+> `brig: boot assets verified`.
 
 ## Check what Brig found
 
@@ -31,13 +33,13 @@ platform matrix.
 brig doctor
 ```
 
-Brig prints one line per fact, in this shape:
+Brig prints one line per check, in this shape:
 
 ```
   ok  brig      v0.3.0 (91b0c7b, 2026-09-26, go1.26.1, darwin/arm64)
   ok  host      macOS 26.5 on arm64
   ok  virtual   Hypervisor.framework available
-  ok  runtime   hull 0.1.0-rc29 at /opt/homebrew/bin/hull
+  ok  runtime   hull <version> at /opt/homebrew/bin/hull
   !!  boot      assets missing at /Users/you/.hull/store/assets
           run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
   ok  verify    cosign at /opt/homebrew/bin/cosign, BRIG_VERIFY=warn
@@ -47,15 +49,18 @@ Brig prints one line per fact, in this shape:
   --  image     pass an agent to check its image: brig doctor claude
 ```
 
-- `ok` means Brig found what that line checks.
-- `!!` means a check failed, and the fix is printed under it. The `boot`
-  line above does not stop you: Brig fetches missing boot assets the first
-  time an agent needs them.
-- `--` means there is nothing to report. It is not a failure.
+| Mark | Meaning |
+| --- | --- |
+| `ok` | Brig found what that line checks. |
+| `!!` | A check failed, and the fix is printed under it. |
+| `--` | There is nothing to report. It is not a failure. |
 
-`virtual` reports whether this Mac can host a microVM at all. It does not
-say which backend a run uses. `brigd` is an optional daemon that this page
-does not need.
+The `boot` line in the example does not stop you. Brig fetches missing boot
+assets the first time an agent needs them.
+
+`virtual` reports whether this Mac can host a microVM. It does not say which
+backend a run uses. `brigd` is an optional daemon that the steps here do not
+need.
 
 ## Run it
 
@@ -68,19 +73,21 @@ brig run claude ~/code/demo
 is the project this run mounts.
 
 The first run downloads two things: the guest image, and the boot assets
-(the kernel and the initrd). Both are cached, so later runs start faster.
+(the kernel and the initrd). Brig caches both, so later runs start faster.
 
-On a terminal, each download shows a spinner. With stderr redirected, with
-the run in the background, or with `TERM=dumb`, Brig prints a line when each
-download starts and another when it completes. A download that fails prints
-the error. With nerdctl on Linux, Brig announces only the boot assets,
-because nerdctl pulls the image itself.
+| Where the run prints | What each download shows |
+| --- | --- |
+| A terminal | A spinner |
+| Redirected stderr, a background run, or `TERM=dumb` | One line when the download starts and another when it completes |
 
-Brig then prints what you may need to act on. On a first run that is a note
+A download that fails prints the error. With nerdctl on Linux, Brig announces
+only the boot assets, because nerdctl pulls the image itself.
+
+Brig then prints the notes that you can act on. On a first run, a note says
 that the guest home is temporary. On macOS, Brig also lists each secret the
 agent runs without. Neither stops the run.
 
-Once Brig has verified the image and the boot assets, it prints one line and
+After Brig verifies the image and the boot assets, it prints one line and
 starts the sandbox:
 
 ```
@@ -88,16 +95,15 @@ brig: image and boot assets verified
 ```
 
 On macOS, hull can ask one question about telemetry before the agent
-appears. See [telemetry.md](telemetry.md) for what it counts and how to
-turn it off.
+appears. See [Telemetry](telemetry.md) for what it counts and how to turn it
+off.
 
-Then Claude Code asks you to log in, because the sandbox holds no login
-for it. The login happens inside the sandbox. On `claude-code` it is
-stored on a memory-backed mount, so `brig stop` discards it and the next
-run asks again. Other agents keep their login on disk:
-[sessions.md#what-survives](sessions.md#what-survives) says which.
-[authentication.md](authentication.md) shows how to reuse a login from the
-host.
+Claude Code then asks you to log in, because the sandbox holds no login for
+it. The login happens inside the sandbox. `claude-code` stores it on a
+memory-backed mount, so `brig stop` discards it and the next run asks again.
+Other agents keep their login on disk. See
+[What survives](sessions.md#what-survives) for which ones. To reuse a login
+from the host, see [Authentication](authentication.md).
 
 ## Check that it worked
 
@@ -110,14 +116,13 @@ REF         SANDBOX          STATE      WORKSPACE
 claude-code brig-claude-code running    /Users/you/.brig/homes/brig-claude-code
 ```
 
-On Linux, `STATE` is nerdctl's own wording, such as `Up`.
+On Linux, `STATE` is the wording of nerdctl, such as `Up`.
 
 ## See what a run was given
 
 The execution envelope is the summary of what a sandbox gets: its image, its
 mounts, its network and its credentials. `brig info claude` prints it
-without booting anything, and `brig --verbose run` prints it before the
-boot:
+without booting anything. `brig --verbose run` prints it before the boot:
 
 ```
 PROFILE      claude-code
@@ -130,36 +135,34 @@ CREDENTIALS  IS_SANDBOX
 NETWORK      isolated (a network of this sandbox's own)
 ```
 
-That is the envelope on a host with no `GH_TOKEN` exported and no stored
-secret. With either, the `CREDENTIALS` row names it too.
+| Row | What it tells you |
+| --- | --- |
+| `ISOLATION` | Names the `hvi` backend because `claude-code` asks for it. `hvi` drives Apple's Hypervisor.framework directly. |
+| `WORKSPACE` | The CLI's label for the guest home. |
+| `CREDENTIALS` | Every variable and secret the run forwards, by name. `IS_SANDBOX` is a plain marker the profile sets, with no secret in it. |
+| `NETWORK` | `isolated` for a new sandbox. The sandbox is kept off the networks of other sandboxes and can still reach the internet. |
 
-- `ISOLATION` names the `hvi` backend because `claude-code` asks for it.
-  `hvi` drives Apple's Hypervisor.framework directly.
-- `WORKSPACE` is the CLI's label for the guest home.
-- `CREDENTIALS` lists every variable and secret the run forwards, by name.
-  `IS_SANDBOX` is a plain marker the profile sets, with no secret in it.
-- `NETWORK` is `isolated` for a new sandbox: it is kept off other
-  sandboxes' networks and can still reach the internet. A session created
-  by an older release can report `shared`, because an existing session
-  keeps the network it already has.
+The example is from a host with no `GH_TOKEN` exported and no stored secret.
+With either one, the `CREDENTIALS` row names it too.
+
+A session created by an older release can report `shared` in the `NETWORK`
+row, because an existing session keeps the network it already has.
 
 ## Where the agent's files live
 
-Two host directories are reachable from inside the sandbox, and nothing
-else is:
+The sandbox can reach two host directories, and nothing else on the host:
 
 - The **guest home**, `~/.brig/homes/brig-claude-code`, mounted as the
-  agent's home. Its settings and its history live there. Brig created it, so
-  it survives `brig stop` and goes with `brig rm`. Pass `--home <dir>` to
-  keep a guest home of your own instead.
-- The **project**, `~/code/demo` in the run above, mounted read-write at
+  agent's home. The agent's settings and history live there.
+- The **project**, `~/code/demo` in this run, mounted read-write at
   `/work/demo`. The agent starts there.
 
-The agent can change anything under `/work/demo`, because that mount is
-read-write and those are your real files. It cannot reach your keychain,
-your SSH agent, or any host directory you did not name.
-[sessions.md](sessions.md) explains the full model: what a session is,
-what each mount keeps separate, and what survives which command.
+The agent works on your real files in the project, so it can change anything
+under `/work/demo`. It cannot reach your keychain, your SSH agent, or any
+host directory you did not name.
+
+[Sessions, homes and projects](sessions.md) explains what a session is, what
+each mount keeps separate, and how to keep a guest home.
 
 ## Stop it and clean up
 
@@ -168,20 +171,18 @@ brig stop claude   # stop the sandbox, keep the session
 brig rm claude     # stop the sandbox and remove the session
 ```
 
-`brig stop` stops the sandbox. It keeps the sandbox's name, its row in
-`brig ls`, and what Brig recorded about the session.
-
-`brig rm` stops the sandbox, removes all of that, and deletes
-`~/.brig/homes/brig-claude-code`.
-
+`brig rm` also deletes the guest home, `~/.brig/homes/brig-claude-code`.
 Neither command touches `~/code/demo`. Delete it yourself if you no longer
 want it.
 
+[What survives](sessions.md#what-survives) lists what each command keeps.
+
 ## Next steps
 
-- [authentication.md](authentication.md): log an agent in, or give it Git
+- [Authentication](authentication.md): log an agent in, or give it Git
   access.
-- [sessions.md](sessions.md): run several sessions, and keep a guest home.
-- [policies.md](policies.md): restrict what the guest can reach.
-- [troubleshooting.md](troubleshooting.md): organized by what you saw on the
+- [Sessions, homes and projects](sessions.md): run several sessions, and keep
+  a guest home.
+- [Policies](policies.md): restrict what the guest can reach.
+- [Troubleshooting](troubleshooting.md): organized by what you saw on the
   terminal.
