@@ -207,9 +207,12 @@ setup() {
 
   # The installer stops, and prints commands for root, when newuidmap,
   # setfacl or a subuid range is missing. It installs none of them itself.
+  # A run under a policy refuses to boot without nft, so the egress checks
+  # need it too.
   local pkgs=()
   command -v newuidmap > /dev/null || pkgs+=(uidmap)
   command -v setfacl > /dev/null || pkgs+=(acl)
+  command -v nft > /dev/null || [ -x /usr/sbin/nft ] || pkgs+=(nftables)
   if [ "${#pkgs[@]}" -gt 0 ]; then
     run 300 sudo apt-get update -qq
     run 600 sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}"
@@ -1085,23 +1088,214 @@ check_agent_rm() {
   [ -z "$f" ] || rm -f "$f"
 }
 
-check_policy_refused() {
-  local out rc=0 left
-  env -u VISUAL EDITOR=true timeout 60 brig policy create e2e-deny --force < /dev/null
-  run 60 brig policy attach e2e-deny claude-code -n pol
-  out="$(timeout --kill-after=10 300 brig run -d claude-code@pol 2>&1 < /dev/null)" || rc=$?
-  echo "brig run claude-code@pol: exit $rc: $out"
-  left="$(rk ps -a --format '{{.Names}}' 2>&1 | grep 'brig-claude-code-pol' || true)"
-  if [ "$rc" != 0 ] && echo "$out" | grep -q 'cannot enforce the egress policy' &&
-     echo "$out" | grep -q 'will not boot a sandbox under a policy nothing enforces' && [ -z "$left" ]; then
-    res check Policy "A policy this runtime cannot enforce is refused before boot (#237)" pass \
-      "exit $rc, no container: $(echo "$out" | one_line 200)"
-  else
-    res check Policy "A policy this runtime cannot enforce is refused before boot (#237)" fail \
-      "exit $rc; containers: [$left]; $(echo "$out" | one_line 300)"
+# EG_PROBE prints, from the guest, the first IPv4 address each name resolves
+# to (DNS_<name>, NONE when it does not resolve) and whether a TCP connection
+# to port 443 opens (TCP_<target>, OPEN or CLOSED). bash alone, as EGRESS.
+EG_PROBE='for n in example.com example.net; do a=$(getent ahostsv4 $n 2> /dev/null | awk "NR == 1 { print \$1 }"); echo "DNS_$n=${a:-NONE}"; done; for t in example.com 9.9.9.9; do if timeout 8 bash -c "exec 3<>/dev/tcp/$t/443" 2> /dev/null; then echo "TCP_$t=OPEN"; else echo "TCP_$t=CLOSED"; fi; done'
+
+# eg FIELD TEXT: one field of EG_PROBE's output.
+eg() { echo "$2" | sed -n "s/^$1=//p" | head -n 1 | tr -d ' '; }
+
+# eg_tables: the brig egress tables in the namespace that holds the rootless
+# nerdctl bridges, entered the way brig enters it.
+eg_tables() {
+  local dir="$XDG_RUNTIME_DIR/containerd-rootless" pid ns=-n nft
+  pid="$(cat "$dir/child_pid" 2> /dev/null)" || { echo "(no rootless containerd)"; return 0; }
+  [ ! -e "$dir/netns" ] || ns="--net=/proc/$pid/root$dir/netns"
+  nft="$(command -v nft || echo /usr/sbin/nft)"
+  timeout 30 nsenter -U --preserve-credentials -t "$pid" "$ns" -- "$nft" list tables 2>&1 |
+    awk '$3 ~ /^brig_egress_/ { print $3 }'
+}
+
+# eg_resolvers: the egress resolvers still running.
+eg_resolvers() { pgrep -a -f -- '__egress-resolver' || true; }
+
+# eg_records SANDBOX: the resolver records brig keeps for SANDBOX.
+eg_records() { ls "$HOME/.brig/egress/$1".{pid,spec} 2> /dev/null || true; }
+
+# eg_tcp SANDBOX IP: whether IP:443 opens from SANDBOX, through nerdctl exec,
+# since brig sh would restart a sandbox whose resolver is gone.
+eg_tcp() {
+  RK_TIMEOUT=30 rk exec "$1" bash -c "timeout 5 bash -c 'exec 3<>/dev/tcp/$2/443' 2> /dev/null && echo OPEN || echo CLOSED" 2>&1 |
+    tr -d '\r' | tail -n 1
+}
+
+# write_policy NAME LINES...: a policy whose egress section is LINES.
+write_policy() {
+  local name=$1
+  shift
+  env -u VISUAL EDITOR=true timeout 60 brig policy create "$name" --force < /dev/null
+  {
+    echo 'apiVersion: brig.sh/v1alpha1'
+    echo "name: $name"
+    echo 'egress:'
+    printf '  %s\n' "$@"
+  } > "${XDG_CONFIG_HOME:-$HOME/.config}/brig/policies/$name.yaml"
+  timeout 60 brig policy show "$name"
+}
+
+# check_files_mode: a files: binding's mode must be quoted (#453). YAML reads
+# an unquoted 0640 as the number 416, and brig created the file 0o640 read as
+# decimal digits. Now the profile is refused and the message says to quote
+# it. A file that overrides a built-in is ignored the same way, and the
+# built-in runs.
+check_files_mode() {
+  local w f o out rc=0 ls ok rc2=0 out2 said
+  w="$(timeout 60 brig agent export ubuntu e2e-mode --force < /dev/null 2>&1)"
+  echo "$w"
+  f="$(echo "$w" | sed -n 's/^wrote .* -> //p' | head -n 1)"
+  if [ -z "$f" ] || [ ! -f "$f" ]; then
+    res check Profile "An unquoted files: mode is refused, and a quoted one parses (#453)" fail "agent export wrote no file: $(echo "$w" | one_line 200)"
+    return 0
   fi
-  run 60 brig policy detach e2e-deny claude-code -n pol || true
-  timeout 60 brig rm claude-code@pol > /dev/null 2>&1 || true
+  printf '%s\n' 'secrets:' '  - name: e2e-mode' '    required: false' \
+    'volumes:' '  - kind: tmpfs' '    path: .e2e' 'files:' \
+    '  - ref: secrets.e2e-mode' '    path: .e2e/token' '    mode: "0640"' >> "$f"
+  ls="$(timeout 60 brig agent ls < /dev/null 2>&1)" || true
+  echo "agent ls with mode \"0640\": $ls"
+  sed -i.bak 's/^    mode: "0640"$/    mode: 0640/' "$f" && rm -f "$f.bak"
+  grep -n 'mode:' "$f"
+  out="$(timeout 300 brig run -d e2e-mode < /dev/null 2>&1)" || rc=$?
+  echo "brig run e2e-mode with mode 0640: exit $rc: $out"
+  if echo "$ls" | grep -qw e2e-mode && ! echo "$ls" | grep -q unusable &&
+     [ "$rc" != 0 ] && echo "$out" | grep -q 'mode must be a quoted string' && echo "$out" | grep -qF "$(basename "$f")" &&
+     ! timeout 60 brig ls -q < /dev/null 2> /dev/null | grep -q '^e2e-mode'; then
+    res check Profile "An unquoted files: mode is refused, and a quoted one parses (#453)" pass \
+      "\"0640\" listed; 0640: exit $rc, no sandbox: $(echo "$out" | grep 'quoted' | one_line 200)"
+  else
+    res check Profile "An unquoted files: mode is refused, and a quoted one parses (#453)" fail \
+      "agent ls with \"0640\": $(echo "$ls" | one_line 160); with 0640: exit $rc: $(echo "$out" | one_line 240)"
+  fi
+
+  o="$(dirname "$f")/e2e-ubuntu-override.yaml"
+  sed 's/^name: .*/name: ubuntu/' "$f" > "$o"
+  rm -f "$f"
+  out2="$(timeout 900 brig run -d ubuntu@mode < /dev/null 2>&1)" || rc2=$?
+  echo "brig run ubuntu@mode with an override that has mode 0640: exit $rc2: $out2"
+  ok="$(gsh ubuntu@mode 'echo mode-ok')" || true
+  said="$(echo "$out2" | grep -E 'unusable|quoted' | one_line 240)"
+  if [ "$rc2" = 0 ] && echo "$out2" | grep -q 'mode must be a quoted string' && echo "$out2" | grep -qF "$(basename "$o")" &&
+     echo "$ok" | grep -qx mode-ok; then
+    res check Profile "An override with an unquoted mode is ignored, and the built-in runs (#453)" pass \
+      "exit 0, the built-in ubuntu answered: $said"
+  else
+    res check Profile "An override with an unquoted mode is ignored, and the built-in runs (#453)" fail \
+      "exit $rc2: $(echo "$out2" | one_line 240); brig sh: [$(echo "$ok" | one_line 80)]"
+  fi
+  rm -f "$o"
+  run 300 brig rm ubuntu@mode || true
+}
+
+# check_policy_enforced runs docs/manual-tests/egress-policy-linux.md: nerdctl
+# enforces a policy with brig's resolver and an nftables table on the
+# sandbox's own bridge. A sandbox with no policy is the control, so a denied
+# target is shown to be reachable from this runner without one. A policy
+# attaches to an agent profile only, so every sandbox here is claude-code's.
+check_policy_enforced() {
+  local free deny allow ip pid1 pid2 before after waited=0 m1 p tables recs procs left
+  run 900 brig run -d claude-code@egn
+  free="$(gsh claude-code@egn "$EG_PROBE")" || true
+
+  write_policy e2e-egdeny 'default: deny' 'allow:' '  - host: example.com'
+  run 60 brig policy attach e2e-egdeny claude-code -n egd
+  run 900 brig run -d claude-code@egd
+  m1="$(gsh claude-code@egd "$MARK")" || true
+  deny="$(gsh claude-code@egd "$EG_PROBE")" || true
+  tables="$(eg_tables)"
+  echo "tables: $tables"
+  if [ "$(eg TCP_9.9.9.9 "$free")" = OPEN ] && [ "$(eg DNS_example.net "$free")" != NONE ] &&
+     [ "$(eg TCP_example.com "$deny")" = OPEN ] && [ "$(eg DNS_example.net "$deny")" = NONE ] &&
+     [ "$(eg TCP_9.9.9.9 "$deny")" = CLOSED ] && echo "$tables" | grep -qx 'brig_egress_claude-code-egd'; then
+    res check Policy "nerdctl enforces default: deny, and the allowed name still reaches (#266)" pass \
+      "under the policy: $(echo "$deny" | one_line 160). With no policy: $(echo "$free" | one_line 160). Table brig_egress_claude-code-egd"
+  else
+    res check Policy "nerdctl enforces default: deny, and the allowed name still reaches (#266)" fail \
+      "under the policy: $(echo "$deny" | one_line 160); with no policy: $(echo "$free" | one_line 160); tables: [$(echo "$tables" | one_line 120)]"
+  fi
+
+  write_policy e2e-egallow 'default: allow' 'deny:' '  - host: example.com'
+  run 60 brig policy attach e2e-egallow claude-code -n ega
+  run 900 brig run -d claude-code@ega
+  allow="$(gsh claude-code@ega "$EG_PROBE")" || true
+  if [ "$(eg TCP_example.com "$free")" = OPEN ] &&
+     [ "$(eg TCP_example.com "$allow")" = CLOSED ] && [ "$(eg TCP_9.9.9.9 "$allow")" = OPEN ]; then
+    res check Policy "nerdctl enforces default: allow, and refuses the denied name (#266)" pass \
+      "under the policy: $(echo "$allow" | one_line 160)"
+  else
+    res check Policy "nerdctl enforces default: allow, and refuses the denied name (#266)" fail \
+      "under the policy: $(echo "$allow" | one_line 160); with no policy: $(echo "$free" | one_line 160)"
+  fi
+  run 300 brig rm claude-code@ega || true
+  run 60 brig policy detach e2e-egallow claude-code -n ega || true
+
+  # The table outlives its resolver and refuses new connections once the
+  # resolver's heartbeat lapses, 15 s after the last beat. The address
+  # example.com resolved to stays in the allow set for two minutes, so only
+  # the heartbeat can close it.
+  ip="$(eg DNS_example.com "$deny")"
+  pid1="$(cat "$HOME/.brig/egress/brig-claude-code-egd.pid" 2> /dev/null || true)"
+  before="no address"
+  if [ -n "$ip" ] && [ "$ip" != NONE ]; then
+    before="$(eg_tcp brig-claude-code-egd "$ip")"
+  fi
+  echo "resolver pid [$pid1]; $ip:443 before the kill: $before"
+  after=""
+  if [ -n "$pid1" ] && [ "$before" = OPEN ]; then
+    kill -KILL "$pid1" || true
+    while [ "$waited" -lt 60 ]; do
+      after="$(eg_tcp brig-claude-code-egd "$ip")"
+      [ "$after" != CLOSED ] || break
+      sleep 3
+      waited=$((waited + 3))
+    done
+  fi
+  if [ "$before" = OPEN ] && [ "$after" = CLOSED ]; then
+    res check Policy "A dead resolver fails closed (#266)" pass \
+      "$ip:443 (example.com, allowed) opened; after a kill -9 of resolver $pid1 it was refused within $waited s"
+  else
+    res check Policy "A dead resolver fails closed (#266)" fail \
+      "resolver [$pid1]; $ip:443 before the kill: [$before], after $waited s: [$after]"
+  fi
+
+  # NetworkStale: the next brig sh boots the sandbox again under a new
+  # resolver.
+  p="$(gsh claude-code@egd "$READ_MARK; $EG_PROBE")" || true
+  pid2="$(cat "$HOME/.brig/egress/brig-claude-code-egd.pid" 2> /dev/null || true)"
+  if [ -n "$m1" ] && echo "$p" | grep -qx NONE && [ -n "$pid2" ] && [ "$pid2" != "$pid1" ] &&
+     kill -0 "$pid2" 2> /dev/null && [ "$(eg TCP_example.com "$p")" = OPEN ] && [ "$(eg TCP_9.9.9.9 "$p")" = CLOSED ]; then
+    res check Policy "brig sh boots a sandbox whose resolver died again, under a new one (#266)" pass \
+      "new guest (no marker), resolver $pid1 -> $pid2: $(echo "$p" | one_line 160)"
+  else
+    res check Policy "brig sh boots a sandbox whose resolver died again, under a new one (#266)" fail \
+      "marker [$m1]; resolver [$pid1] -> [$pid2]; $(echo "$p" | one_line 200)"
+  fi
+
+  run 60 brig policy detach e2e-egdeny claude-code -n egd
+  p="$(gsh claude-code@egd "$EG_PROBE")" || true
+  tables="$(eg_tables)"
+  recs="$(eg_records brig-claude-code-egd)"
+  if [ "$(eg TCP_9.9.9.9 "$p")" = OPEN ] && [ "$(eg DNS_example.net "$p")" != NONE ] &&
+     ! echo "$tables" | grep -qx 'brig_egress_claude-code-egd' && [ -z "$recs" ]; then
+    res check Policy "Detaching the policy boots the sandbox without a table or resolver (#266)" pass \
+      "$(echo "$p" | one_line 160)"
+  else
+    res check Policy "Detaching the policy boots the sandbox without a table or resolver (#266)" fail \
+      "$(echo "$p" | one_line 160); tables: [$(echo "$tables" | one_line 120)]; records: [$recs]"
+  fi
+
+  run 300 brig rm claude-code@egd || true
+  run 300 brig rm claude-code@egn || true
+  tables="$(eg_tables)"
+  procs="$(eg_resolvers)"
+  # The lock file of each sandbox stays by design. Its records go.
+  left="$(find "$HOME/.brig/egress" -maxdepth 1 \( -name '*.pid' -o -name '*.spec' -o -name '*.log' \) 2> /dev/null || true)"
+  if [ -z "$tables" ] && [ -z "$procs" ] && [ -z "$left" ]; then
+    res check Policy "No egress table, resolver or record is left after rm (#266)" pass \
+      "nft list tables names no brig_egress_ table, and no resolver runs"
+  else
+    res check Policy "No egress table, resolver or record is left after rm (#266)" fail \
+      "tables: [$(echo "$tables" | one_line 120)]; resolvers: [$(echo "$procs" | one_line 160)]; files: [$(echo "$left" | one_line 120)]"
+  fi
 }
 
 # check_cosign_hang points DOCKER_CONFIG at a credsStore helper that never
@@ -1318,7 +1512,8 @@ if [ -f "$OUT/setup.ok" ]; then
   block brigd-lock check_brigd_lock
   block creds check_creds
   block agent-rm check_agent_rm
-  block policy check_policy_refused
+  block files-mode check_files_mode
+  block policy check_policy_enforced
   block cosign check_cosign_hang
   block record check_record_refusals
   block fallback check_docker_fallback

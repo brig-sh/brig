@@ -714,6 +714,58 @@ check_agent_rm() {
   [ -z "$f" ] || rm -f "$f"
 }
 
+# check_files_mode: a files: binding's mode must be quoted (#453). YAML reads
+# an unquoted 0640 as the number 416, and brig created the file 0o640 read as
+# decimal digits. Now the profile is refused and the message says to quote
+# it. A file that overrides a built-in is ignored the same way, and the
+# built-in runs.
+check_files_mode() {
+  local w f o out rc=0 ls ok rc2=0 out2 said
+  w="$(tmo 60 brig agent export ubuntu e2e-mode --force < /dev/null 2>&1)"
+  echo "$w"
+  f="$(echo "$w" | sed -n 's/^wrote .* -> //p' | head -n 1)"
+  if [ -z "$f" ] || [ ! -f "$f" ]; then
+    res check Profile "An unquoted files: mode is refused, and a quoted one parses (#453)" fail "agent export wrote no file: $(echo "$w" | one_line 200)"
+    return 0
+  fi
+  printf '%s\n' 'secrets:' '  - name: e2e-mode' '    required: false' \
+    'volumes:' '  - kind: tmpfs' '    path: .e2e' 'files:' \
+    '  - ref: secrets.e2e-mode' '    path: .e2e/token' '    mode: "0640"' >> "$f"
+  ls="$(tmo 60 brig agent ls < /dev/null 2>&1)" || true
+  echo "agent ls with mode \"0640\": $ls"
+  sed -i.bak 's/^    mode: "0640"$/    mode: 0640/' "$f" && rm -f "$f.bak"
+  grep -n 'mode:' "$f"
+  out="$(tmo 300 brig run -d e2e-mode < /dev/null 2>&1)" || rc=$?
+  echo "brig run e2e-mode with mode 0640: exit $rc: $out"
+  if echo "$ls" | grep -qw e2e-mode && ! echo "$ls" | grep -q unusable &&
+     [ "$rc" != 0 ] && echo "$out" | grep -q 'mode must be a quoted string' && echo "$out" | grep -qF "$(basename "$f")" &&
+     ! tmo 60 brig ls -q < /dev/null 2> /dev/null | grep -q '^e2e-mode'; then
+    res check Profile "An unquoted files: mode is refused, and a quoted one parses (#453)" pass \
+      "\"0640\" listed; 0640: exit $rc, no sandbox: $(echo "$out" | grep 'quoted' | one_line 200)"
+  else
+    res check Profile "An unquoted files: mode is refused, and a quoted one parses (#453)" fail \
+      "agent ls with \"0640\": $(echo "$ls" | one_line 160); with 0640: exit $rc: $(echo "$out" | one_line 240)"
+  fi
+
+  o="$(dirname "$f")/e2e-ubuntu-override.yaml"
+  sed 's/^name: .*/name: ubuntu/' "$f" > "$o"
+  rm -f "$f"
+  out2="$(tmo 900 brig run -d ubuntu@mode < /dev/null 2>&1)" || rc2=$?
+  echo "brig run ubuntu@mode with an override that has mode 0640: exit $rc2: $out2"
+  ok="$(gsh ubuntu@mode 'echo mode-ok')" || true
+  said="$(echo "$out2" | grep -E 'unusable|quoted' | one_line 240)"
+  if [ "$rc2" = 0 ] && echo "$out2" | grep -q 'mode must be a quoted string' && echo "$out2" | grep -qF "$(basename "$o")" &&
+     echo "$ok" | grep -qx mode-ok; then
+    res check Profile "An override with an unquoted mode is ignored, and the built-in runs (#453)" pass \
+      "exit 0, the built-in ubuntu answered: $said"
+  else
+    res check Profile "An override with an unquoted mode is ignored, and the built-in runs (#453)" fail \
+      "exit $rc2: $(echo "$out2" | one_line 240); brig sh: [$(echo "$ok" | one_line 80)]"
+  fi
+  rm -f "$o"
+  run 300 brig rm ubuntu@mode || true
+}
+
 new_policy() { tmo 60 env -u VISUAL EDITOR=true brig policy create e2e-deny --force < /dev/null; }
 
 check_policy_refusals() {
@@ -1065,6 +1117,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block brigd-lock check_brigd_lock
   block creds check_creds
   block agent-rm check_agent_rm
+  block files-mode check_files_mode
   block policy check_policy_refusals
   block posture-info check_posture_info
   block gateway check_shared_gateway
