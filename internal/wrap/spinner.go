@@ -41,6 +41,13 @@ var (
 // pseudo-terminal that is not the test binary's controlling terminal.
 var inForeground = foreground
 
+// InForeground reports whether brig is in the foreground process group of the
+// terminal f is. A job in the background that reads from the terminal is
+// stopped, so it must not ask anything there.
+func InForeground(f *os.File) bool {
+	return inForeground(f.Fd())
+}
+
 // canSpin returns whether a spinner may draw on f: a readable terminal (see
 // readable), with brig in its foreground process group. A job in the
 // background would redraw over the line the user is typing on.

@@ -904,27 +904,34 @@ built it.
 ## Telemetry
 
 `brig telemetry off` (or `DO_NOT_TRACK=1`) turns telemetry off everywhere it
-runs. The runtime Brig drives sends usage events to NOFire AI, on macOS only.
-Nothing is sent on Linux. [Telemetry](telemetry.md) shows how to check the
-current state, and lists what an event carries field by field.
+runs. Brig sends anonymous usage events and crash reports to NOFire AI, on
+macOS and Linux. On macOS, hull also reports the boot, lifetime and resource
+use of the sandboxes Brig runs. [Telemetry](telemetry.md) shows how to check
+the current state, and lists what an event carries field by field.
 
-Telemetry must not cross the boundary that Brig protects. The field list is
+Telemetry must not cross the boundary that Brig protects. Brig's own events
+carry the fields [Telemetry](telemetry.md) lists, and the events hull sends
+follow
 [hull's stated commitment](https://github.com/brig-sh/hull/blob/main/docs/telemetry.md),
-and this repository does not verify it. The commitment:
+which this repository does not verify. Together they:
 
-- excludes host paths, repository names, command arguments and agent prompts
-- excludes secret names and values, image references, network destinations
+- exclude host paths, repository names, command arguments and agent prompts
+- exclude secret names and values, image references, network destinations
   and file metadata
-- drops IP addresses at ingestion and keeps raw events for a year
+- send the name of an agent profile of your own only as a salted hash, which
+  anyone who guesses the name can compute too
+- drop IP addresses at ingestion and keep raw events for a year
 
-To check that commitment yourself, use these hull behaviors:
+To check that yourself:
 
-- `HULL_TELEMETRY_DEBUG=1` prints payloads to stderr and does not send them.
-  You can then read what an event carries.
-- The install identifier is a random value hull stores in
+- `HULL_TELEMETRY_DEBUG=1` prints payloads to stderr and does not send them,
+  for Brig's events and hull's alike. You can then read what an event
+  carries.
+- The install identifier is a random value stored in
   `~/.hull/telemetry.json`. Delete the file to rotate the identifier.
-- Crash reports queue in `~/.hull/crashes/`. You can read or delete a report
-  there before it is uploaded.
+- Crash reports queue in `~/.hull/crashes/`, and events not yet sent in
+  `~/.hull/outbox/`. You can read or delete them there before they are
+  uploaded.
 
 If you find an excluded item in a payload, that is a bug. Report it as
 [SECURITY.md](../SECURITY.md) describes.

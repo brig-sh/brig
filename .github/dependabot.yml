@@ -2,7 +2,7 @@
 # run regardless of this file; this adds the routine version bumps.
 #
 # Weekly on Monday, minor and patch bumps grouped into one pull request per
-# ecosystem. brig has three direct Go dependencies and a handful of actions,
+# ecosystem. brig has four direct Go dependencies and a handful of actions,
 # so the grouped bumps are at most two pull requests a week. A major bump is
 # left out of the group so it arrives alone and is reviewed on its own.
 #

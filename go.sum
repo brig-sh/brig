@@ -1,3 +1,5 @@
+github.com/brig-sh/hull/pkg/telemetry v0.0.0-20261005010135-3e1cd5a92031 h1:dy4J2bWTD+Me3YxQ2V3vIGPGuKC8RH0Dz1NVcwGuyUc=
+github.com/brig-sh/hull/pkg/telemetry v0.0.0-20261005010135-3e1cd5a92031/go.mod h1:BujGpT3n3wyihZuvHuG+QY/RtCNVIFpZ5pZI0TJGlR4=
 github.com/godbus/dbus/v5 v5.2.2 h1:TUR3TgtSVDmjiXOgAAyaZbYmIeP3DPkld3jgKGV8mXQ=
 github.com/godbus/dbus/v5 v5.2.2/go.mod h1:3AAv2+hPq5rdnr5txxxRwiGjPXamgoIHgz9FPBfOp3c=
 github.com/google/go-cmp v0.5.9 h1:O2Tfq5qg4qc4AmwVlvv0oLiVAGB7enBSJ2x2DqQFi38=

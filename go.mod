@@ -7,6 +7,7 @@ module github.com/brig-sh/brig
 go 1.26.0
 
 require (
+	github.com/brig-sh/hull/pkg/telemetry v0.0.0-20261005010135-3e1cd5a92031
 	github.com/godbus/dbus/v5 v5.2.2
 	golang.org/x/sys v0.48.0
 	sigs.k8s.io/yaml v1.6.0

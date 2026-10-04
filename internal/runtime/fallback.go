@@ -9,8 +9,8 @@ package runtime
 // (#30). The CLI type-asserts for this after it detects a runtime and prints
 // the note at default verbosity.
 //
-// Optional on the same terms as TelemetryReporter. A runtime with nothing to
-// fall back to needs no stub to say so.
+// Optional on the same terms as NetworkPruner. A runtime with nothing to fall
+// back to needs no stub to say so.
 type FallbackReporter interface {
 	// Fallback is the one line to print, or "" when the binary is the first
 	// choice or a setting named it.

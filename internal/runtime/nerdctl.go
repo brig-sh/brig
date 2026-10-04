@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/brig-sh/brig/internal/telemetry"
 )
 
 // nerdctl drives the Linux path. It is the same product logic over
@@ -429,7 +431,7 @@ func prunableNetworks(all, inUse []string) []string {
 // PruneNetworks removes the networks brig made that no sandbox is on, and
 // reports how many went.
 //
-// Optional on the same terms as TelemetryReporter: it is not part of running a
+// Optional on the same terms as NetworkPruner: it is not part of running a
 // sandbox, and a backend that makes no networks should not grow a stub to say
 // so. reset type-asserts for it.
 func (n *nerdctl) PruneNetworks(inUse []string) int {
@@ -632,7 +634,14 @@ func (n *nerdctl) Replace(spec ExecSpec) error {
 	if err != nil {
 		return err
 	}
-	return execHandover(n.bin, argv, env)
+	// brig's process ends at the exec: its command event is queued, and
+	// a process of its own uploads it.
+	telemetry.Handover()
+	if err := execHandover(n.bin, argv, env); err != nil {
+		telemetry.HandoverFailed()
+		return err
+	}
+	return nil
 }
 
 // Attach runs the same handover as a child instead of replacing brig, for the

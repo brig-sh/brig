@@ -699,8 +699,8 @@ and the sources that a profile can declare.
 brig telemetry status
 ```
 
-`brig telemetry status` reports whether Brig sends usage data, and what
-decided the answer.
+`brig telemetry status` reports whether Brig sends usage data, what decided
+the answer, and the install identifier the events of this machine carry.
 
 ```bash
 brig telemetry off

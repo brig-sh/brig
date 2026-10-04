@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/brig-sh/brig/internal/telemetry"
 )
 
 // hull drives the macOS microVM runtime.
@@ -23,13 +25,33 @@ type hull struct {
 	// while brig is running.
 	pinsOnce sync.Once
 	pins     bool
-	// consent caches whether hull has an answer on file about telemetry, which
-	// decides whether an operation the user asked for may be counted. See
-	// consentRecorded.
-	consent struct {
-		once sync.Once
-		on   bool
-	}
+	// versionOnce caches `hull --version`, which PinsDigest and the
+	// telemetry gate both read.
+	versionOnce sync.Once
+	versionOut  string
+}
+
+// version returns what `hull --version` printed, asked once per process.
+func (h *hull) version() string {
+	h.versionOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, h.bin, "--version")
+		cmd.Env = mergeEnv(telemetryEnv(false))
+		out, _ := cmd.Output()
+		h.versionOut = string(out)
+	})
+	return h.versionOut
+}
+
+// countedEnv is telemetryEnv for a call to this hull. An operation the user
+// asked for is counted only when the hull can be told to leave the command
+// event to brig: a hull before 0.1.0-rc31 reads any suppress value but "1"
+// as none, and would count the command a second time. A hull whose version
+// does not read as one, a build from source, is not counted, because it may
+// be such a hull.
+func (h *hull) countedEnv(counted bool) []string {
+	return telemetryEnv(counted && telemetry.Counting() && hullVersionAtLeast(h.version(), 31, false))
 }
 
 func newHull(bin string) (Runtime, error) {
@@ -77,12 +99,7 @@ func (h *hull) Isolation(hv string) Isolation {
 // until the image is pulled again.
 func (h *hull) PinsDigest() bool {
 	h.pinsOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, h.bin, "--version")
-		cmd.Env = mergeEnv(telemetryEnv(false))
-		out, _ := cmd.Output()
-		h.pins = hullVersionPinsDigest(string(out))
+		h.pins = hullVersionPinsDigest(h.version())
 	})
 	return h.pins
 }
@@ -109,27 +126,36 @@ func (h *hull) LocalDigest(string) (string, error) { return "", nil }
 // parses the reference and answers a digest, the index digest included, so a
 // pinned boot finds its bytes.
 //
-// Anything that does not read as a version is a build from source, and it
-// pins. A wrong guess in that direction costs a re-pull, never a weaker check:
+// A channel build, rc22-main.<date>, compares by the release it was cut
+// after. Anything that does not read as a version is a build from source, and
+// it pins. A wrong guess in that direction costs a re-pull, never a weaker check:
 // a digest the store cannot answer is fetched from the registry, and that is
 // the verified bytes either way. A wrong guess the other way would silently
 // leave a capable hull on the tag, which is the outcome this function exists
 // to avoid.
 func hullVersionPinsDigest(out string) bool {
+	return hullVersionAtLeast(out, 23, true)
+}
+
+// hullVersionAtLeast reads `hull --version` and reports whether that hull is
+// 0.1.0-rc<rc> or later. Anything that does not read as a version is a build
+// from source, and gets unknown: each caller knows which wrong guess costs
+// less.
+func hullVersionAtLeast(out string, rc int, unknown bool) bool {
 	word := VersionToken(out)
 	if word == "" {
-		return true
+		return unknown
 	}
 	base, pre, _ := strings.Cut(word, "-")
 	parts := strings.Split(base, ".")
 	if len(parts) != 3 {
-		return true
+		return unknown
 	}
 	var v [3]int
 	for i, p := range parts {
 		n, err := strconv.Atoi(p)
 		if err != nil {
-			return true
+			return unknown
 		}
 		v[i] = n
 	}
@@ -140,14 +166,28 @@ func hullVersionPinsDigest(out string) bool {
 		if pre == "" {
 			return true // 0.1.0 final
 		}
-		rc, ok := strings.CutPrefix(pre, "rc")
+		n, ok := strings.CutPrefix(pre, "rc")
 		if !ok {
-			return true
+			return unknown
 		}
-		n, err := strconv.Atoi(rc)
-		return err != nil || n >= 23
+		// A channel build reads as rc29-main.<date>: that release's code,
+		// plus what main had on the date. Compare the release it was cut
+		// after. Anything else after the digits -- rc22.0.<date>-<commit>,
+		// rc29+dirty -- is a build from source.
+		end := 0
+		for end < len(n) && n[end] >= '0' && n[end] <= '9' {
+			end++
+		}
+		if end < len(n) && n[end] != '-' {
+			return unknown
+		}
+		got, err := strconv.Atoi(n[:end])
+		if err != nil {
+			return unknown
+		}
+		return got >= rc
 	default:
-		return false // 0.0.x, which never shipped a digest-aware store
+		return false // 0.0.x
 	}
 }
 
@@ -452,9 +492,7 @@ func (h *hull) Run(spec RunSpec) error {
 	}
 
 	cmd := exec.Command(h.bin, args...)
-	// The boot gets no terminal, so hull cannot ask anyone anything here: it
-	// is counted only once an answer is already on file. See telemetryEnvFor.
-	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
+	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	cmd.Stdout = nil // the instance id is not interesting; failures explain themselves
 	// Held rather than passed through. What hull says on its way up is a pull
 	// progress bar and a boot message, which is noise on a boot that works and
@@ -722,7 +760,7 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 		return "", err
 	}
 	defer cancel()
-	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
+	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -742,7 +780,7 @@ func (h *hull) Feed(spec ExecSpec) error {
 		return err
 	}
 	defer cancel()
-	cmd.Env = mergeEnv(h.telemetryEnvFor(spec.Counted, false), envVals)
+	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	cmd.Stdin = spec.Stdin
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -772,7 +810,14 @@ func (h *hull) Replace(spec ExecSpec) error {
 	if err != nil {
 		return err
 	}
-	return execHandover(h.bin, argv, env)
+	// brig's process ends at the exec: its command event is queued, and
+	// a process of its own uploads it.
+	telemetry.Handover()
+	if err := execHandover(h.bin, argv, env); err != nil {
+		telemetry.HandoverFailed()
+		return err
+	}
+	return nil
 }
 
 // Attach runs the same handover as a child instead of replacing brig, for the
@@ -788,25 +833,16 @@ func (h *hull) Attach(spec ExecSpec) (int, error) {
 }
 
 // replaceCmd builds the handover argv and environment in one place, so a test
-// can assert both what a shell handover runs (`-t` for the guest pty) and
-// whether the boot gate lets it be counted, neither of which survives the
-// syscall.Exec in Replace itself.
-//
-// canAsk is spec.CanAsk, not spec.TTY. This is the one invocation that inherits
-// the user's terminal, but only a real terminal on brig's own stdin means there
-// is anyone to answer hull's consent question. A login shell wants a pty even
-// when brig is driven from a script, so TTY is true there while CanAsk is not;
-// reading TTY for both left a scripted `brig sh` looking askable and let
-// hull's on-by-default send the first-boot event. When CanAsk is false and no
-// answer is on file the boot rule applies and the exec is suppressed. See
-// telemetryEnvFor.
+// can assert both what a shell handover runs (`-t` for the guest pty) and what
+// hull's telemetry is told, neither of which survives the syscall.Exec in
+// Replace itself.
 func (h *hull) replaceCmd(spec ExecSpec) (argv, env []string, err error) {
 	args, envVals, err := h.execArgs(spec)
 	if err != nil {
 		return nil, nil, err
 	}
 	argv = append([]string{h.bin}, args...)
-	env = mergeEnv(h.telemetryEnvFor(spec.Counted, spec.CanAsk), envVals)
+	env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	return argv, env, nil
 }
 
@@ -1022,7 +1058,7 @@ func (h *hull) NetworkStale(name, hypervisor, net string, e Egress) bool {
 // it. This is what catches the gateway of a sandbox that died without a `brig
 // stop` -- Stop and Remove clear their own, and nothing else would.
 //
-// Optional on the same terms as TelemetryReporter, and asserted for by reset.
+// Optional on the same terms as NetworkPruner, and asserted for by reset.
 func (h *hull) PruneNetworks(inUse []string) int {
 	dir, err := gatewayDir()
 	if err != nil {
@@ -1166,9 +1202,7 @@ func withdrawPublications(name string) {
 // failed `brig stop` will look.
 func (h *hull) quiet(verb, name string, counted bool) error {
 	cmd := exec.Command(h.bin, verb, name)
-	// Counted like the boot, and gated like it for the same reason: this runs
-	// with no terminal, so nothing can be asked here either.
-	cmd.Env = mergeEnv(h.telemetryEnvFor(counted, false))
+	cmd.Env = mergeEnv(h.countedEnv(counted))
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {

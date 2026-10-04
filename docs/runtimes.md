@@ -117,12 +117,15 @@ The runtime decides the mechanical parts:
 - what a stopped instance means
 
 Brig links no runtime code. Every interaction with a runtime is a subprocess.
-The same rule applies to `cosign` and `oras`. Brig has three direct Go
+The same rule applies to `cosign` and `oras`. Brig has four direct Go
 dependencies:
 
 - `sigs.k8s.io/yaml` for the profiles
 - `golang.org/x/sys` for the terminal and process calls
 - `github.com/godbus/dbus/v5` for the Linux secret store
+- `github.com/brig-sh/hull/pkg/telemetry` for telemetry: the client hull
+  sends through, so the two share one answer. It is a module of its own,
+  apart from hull's runtime code, and depends on `golang.org/x/sys` alone
 
 ## Every command Brig runs
 
@@ -220,16 +223,21 @@ cosign verify-blob --certificate <cert> --signature <sig>
 ### Telemetry variables
 
 Every runtime command carries `HULL_TELEMETRY_PRODUCT=brig` and
-`HULL_TELEMETRY_SUPPRESS=1` in its environment. Brig lifts the suppression
-only for the operations that it marks as counted: a boot, the terminal
-handover and a stop. Each counted operation counts separately, and one Brig
-command can run more than one of them:
+`HULL_TELEMETRY_SUPPRESS=1` in its environment. Brig sends its own command
+event, so hull never sends one for a call Brig makes.
 
-- A run that boots counts the boot and the handover.
-- `brig rm` counts the stop of each sandbox that it removes.
+For the operations that Brig marks as counted -- a boot, the terminal
+handover and a stop -- and only once someone has answered yes, Brig sets
+`HULL_TELEMETRY_SUPPRESS=command` instead. It does so only for a hull at
+0.1.0-rc31 or later: an older hull reads that value as no suppression, and
+counts the command a second time. A hull built from source gets
+`HULL_TELEMETRY_SUPPRESS=1`, because its version does not say which it is. hull then sends the start, the
+lifetime and the resource use of the sandbox, and nothing else. Brig also
+sets `HULL_TELEMETRY_VERSION` to its own version, which those events report.
+hull never asks the consent question under Brig.
 
 `DO_NOT_TRACK` and `HULL_TELEMETRY_DISABLED` pass through unchanged and win.
-[Telemetry](telemetry.md) describes what a counted operation sends.
+[Telemetry](telemetry.md) describes what each event carries.
 
 ### Forwarded values
 
@@ -459,8 +467,8 @@ The rest of what Brig asks of a runtime is in optional interfaces in
   that went stale, and networks left behind.
 - `Publisher`: ports opened on a running sandbox.
 - `BootResolver`: the boot assets, fetched before the boot.
-- `FeedLimiter`, `FallbackReporter` and `TelemetryReporter`: a size limit on
-  stdin, a stand-in binary such as docker, and the telemetry of the runtime.
+- `FeedLimiter` and `FallbackReporter`: a size limit on stdin, and a
+  stand-in binary such as docker.
 
 ### Shared and Brig-only parts
 

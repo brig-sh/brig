@@ -17,6 +17,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/brig-sh/brig/internal/telemetry"
 )
 
 // ErrNoRuntime is the one DetectFor failure that means "nothing is installed"
@@ -134,9 +136,8 @@ type RunSpec struct {
 	// publication is part of a sandbox's configuration and outlives one run.
 	// See publish.go.
 	Publish []Publication
-	// Counted marks a user action, which hull's telemetry counts, rather than
-	// brig's own plumbing. One brig command can run more than one counted
-	// operation. See telemetryEnv.
+	// Counted marks a user action, whose boot and lifetime hull's telemetry
+	// reports, rather than brig's own plumbing. See telemetryEnv.
 	Counted bool
 	// Progress is where the runtime's own output goes: the image pull, the
 	// boot messages, whatever the binary underneath writes on its way up.
@@ -168,14 +169,6 @@ type ExecSpec struct {
 	TTY     bool
 	Env     []Var
 	Counted bool
-	// CanAsk reports whether brig's own stdin is a terminal, so hull can put
-	// its consent question to a person before anything is sent. Kept apart from
-	// TTY on purpose: TTY gives the guest a pseudo-terminal, which a login shell
-	// wants even when brig is driven from a script, whereas the question can
-	// only be answered on a real terminal. Reading TTY for both jobs counted a
-	// scripted `brig sh` as askable and let hull's on-by-default send the
-	// first-boot event. Only Replace reads it; see telemetryEnvFor.
-	CanAsk bool
 	// Stdin, when set, is fed to the command inside the guest. It is how a
 	// credential reaches the guest without appearing in argv: hull durably
 	// logs every exec's argv to a host file, so a value there outlives the
@@ -409,14 +402,21 @@ func DetectFor(pref Preference) (Runtime, error) {
 		}
 		bin = resolved
 	}
+	var rt Runtime
+	var err error
 	switch kind {
 	case "hull":
-		return newHull(bin)
+		rt, err = newHull(bin)
 	case "nerdctl":
-		return newNerdctl(bin)
+		rt, err = newNerdctl(bin)
 	default:
 		return nil, fmt.Errorf("%w: unknown BRIG_RUNTIME %q (want hull or nerdctl)", ErrBadRuntime, kind)
 	}
+	if err != nil {
+		return nil, err
+	}
+	telemetry.SetRuntime(rt.Kind())
+	return rt, nil
 }
 
 // runtimeBinFromProfile resolves the path a profile named.
@@ -600,28 +600,28 @@ func withDigest(image, digest string) string {
 	return image + "@" + digest
 }
 
-// telemetryEnv attributes events to brig and suppresses the wrapper's own
-// plumbing -- reachability probes, ps lookups, cleanup -- so none of those
-// steps is counted. Only the operations a user asked for are counted, and each
-// counted operation counts on its own. One brig command can run more than one:
-// a run that boots counts the boot and the handover, and `brig rm` counts the
-// stop of each sandbox it removes. DO_NOT_TRACK and the runtime's own opt-out
-// pass through untouched and always win.
+// telemetryEnv is the telemetry environment of one hull call.
 //
-// Being an operation the user asked for is necessary but not sufficient: an
-// operation that runs with no terminal is also not counted until an answer
-// about telemetry is on file, because a question nobody can be asked is not a
-// question anyone has answered. That second rule is telemetryEnvFor, in
-// telemetry.go, and every counted hull call goes through it.
+// brig sends its own command event, so hull never sends one for a call brig
+// makes. An operation the user asked for -- the boot, the handover, a stop --
+// still reports what only hull sees: the start, the VM's lifetime and its
+// resource use. Those events carry brig's product and version, and hull's own
+// version as runtime_version. Everything else brig runs is plumbing, and hull
+// sends nothing for it.
+//
+// hull follows the answer brig read at startup. When brig is not counting,
+// because nobody has answered or the answer is no, every call is suppressed.
+// hull never asks the question under brig: a non-empty suppress list tells it
+// the caller owns it. DO_NOT_TRACK and the runtime's own opt-out pass through
+// untouched and always win.
 func telemetryEnv(counted bool) []string {
-	suppress := "1"
-	if counted {
-		suppress = ""
+	env := []string{"HULL_TELEMETRY_PRODUCT=" + telemetry.Product}
+	if counted && telemetry.Counting() {
+		return append(env,
+			"HULL_TELEMETRY_SUPPRESS=command",
+			"HULL_TELEMETRY_VERSION="+telemetry.Version())
 	}
-	return []string{
-		"HULL_TELEMETRY_PRODUCT=brig",
-		"HULL_TELEMETRY_SUPPRESS=" + suppress,
-	}
+	return append(env, "HULL_TELEMETRY_SUPPRESS=1")
 }
 
 // mergeEnv layers additions onto the current environment, last one winning.
@@ -708,9 +708,9 @@ type NetworkChecker interface {
 // NetworkPruner is a runtime that makes a network per sandbox and can tidy the
 // ones nothing is on any more.
 //
-// Optional for the same reason TelemetryReporter is: a backend that makes no
-// networks should not have to grow a stub method to say so. reset asserts for
-// it and skips a runtime that does not implement it.
+// Optional because it is not part of running a sandbox: a backend that makes
+// no networks should not have to grow a stub method to say so. reset asserts
+// for it and skips a runtime that does not implement it.
 type NetworkPruner interface {
 	// PruneNetworks removes the networks brig made that none of inUse is on,
 	// and reports how many went.

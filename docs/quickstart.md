@@ -94,9 +94,8 @@ starts the sandbox:
 brig: image and boot assets verified
 ```
 
-On macOS, hull can ask one question about telemetry before the agent
-appears. See [Telemetry](telemetry.md) for what it counts and how to turn it
-off.
+Brig can ask one question about telemetry before the sandbox boots. See
+[Telemetry](telemetry.md) for what it counts and how to turn it off.
 
 Claude Code then asks you to log in, because the sandbox holds no login for
 it. The login happens inside the sandbox. `claude-code` stores it on a

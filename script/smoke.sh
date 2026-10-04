@@ -23,6 +23,9 @@ exec < /dev/null
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# brig runs with the caller's HOME here, which one assertion below depends on.
+# Telemetry would read and write that home's ~/.hull, so it is off.
+export HULL_TELEMETRY_DISABLED=1
 export STUB_LOG="$WORK/argv.log"
 export STUB_STATE="$WORK/instance"
 WS="$WORK/ws"
