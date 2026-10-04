@@ -1,230 +1,271 @@
 # What Brig will not do
 
 Brig delegates every mechanical operation to a runtime it does not own. It
-keeps its dependencies to three, needs no account, and adds only the things
-the layer underneath has no concept of. This page records those limits, so
-a proposal to cross one starts from a written decision.
+keeps its dependencies to three and needs no account. It adds only the
+things that the runtime has no concept of. The limits below are written
+decisions, so a proposal to cross one has a place to start.
 
-Each item below is a decision for the next twelve months, through August
-2027. Each one names the change in circumstances that reopens it. If you
-think a trigger here has been met, say which one in an issue. The
-discussion then starts from there instead of from first principles.
-
-Most of these items are good software somewhere else.
+Each item is a decision for the next twelve months, through August 2027.
+Each item names the change in circumstances that reopens it. If you think
+that a trigger is met, say which one in an issue.
 
 ## A container runtime, or a VMM
 
-Brig boots nothing itself. See [runtimes.md](runtimes.md) for what does,
-and for the boundary between what Brig decides and what the runtime
-decides.
+Brig boots nothing itself. [Runtimes](runtimes.md) says what does, and
+where the decisions of Brig end and the decisions of the runtime start.
 
-Owning the boot path means owning Virtualization.framework, a kernel
-command line, an image store, a snapshotter, and the vulnerability
-surface of all of it. Brig's reason to exist is that it handles your
-credentials carefully, with three direct dependencies. The README's "How
-it works" lists the four things Brig adds on top: the guest home and
-project mounts, credentials forwarded by name, a billing denylist, and
-image verification. A runtime has no concept of any of them. Everything
-else in the boot path already works.
+To own the boot path is to own Virtualization.framework, a kernel command
+line, an image store, a snapshotter, and the vulnerability surface of all of
+them. Brig exists to handle your credentials carefully, with three direct
+dependencies. The README section "How it works" lists the four things that
+Brig adds on top:
 
-**Reopens when** a runtime Brig can drive refuses upstream to expose
-something the guest home or credential promise needs. Shelling out cannot
-get it either. Even then the first move is a patch to that runtime, not a
-runtime of our own.
+- the guest home and project mounts
+- credentials forwarded by name
+- a billing denylist
+- image verification
 
-## A policy engine with its own rules language
+A runtime has no concept of any of them. Everything else in the boot path
+already works.
 
-A profile field the runtime enforces is fine: `network: offline`
-translated into the runtime's own flag is data. Brig's job ends at the
-translation, and the guarantee is the runtime's to make. An egress policy
-is the same shape one step up: a document of `allow` and `deny` rules
-handed to the gateway that enforces them. It is refused where nothing can
-enforce it ([policies.md](policies.md)). A missing field of that kind is
-in scope.
+**Reopens when** a runtime that Brig can drive refuses upstream to expose
+something that the guest home promise or the credential promise needs. A
+subprocess must also be unable to get it. Even then, the first move is a patch to
+that runtime, not a new runtime.
 
-What is out of scope is a language: conditions, matchers, precedence
-rules, and an evaluator that lives in Brig. A decision Brig evaluates is
-one people will believe is enforced. In fact, enforcement sits one layer
-down, and Brig can only ask for it.
+## A rules language for policy
+
+A profile field that the runtime enforces is in scope. For example,
+`network: offline` is data: Brig translates it into the flag of the runtime.
+The job of Brig ends at the translation, and the runtime makes the
+guarantee.
+
+An egress policy has the same shape, one step up. It is a document of
+`allow` and `deny` rules that Brig hands to the gateway that enforces them.
+Brig refuses the policy where nothing can enforce it
+([Policies](policies.md)). A missing field of that kind is in scope.
+
+A language is out of scope: conditions, matchers, precedence rules, and an
+evaluator that lives in Brig. People will believe that a decision Brig
+evaluates is enforced. Enforcement sits one layer down, and Brig can only
+ask for it.
 
 **Reopens when** profile settings need to combine conditionally in a way
-plain fields cannot express. Every condition in the language must also
-have an enforcement point in the runtime underneath it. A rule with no
-enforcement point stays out, no matter how much it is wanted.
+that plain fields cannot express. Every condition in the language must also
+have an enforcement point in the runtime. A rule with no enforcement point
+stays out, however much people want it.
 
-## A host-side proxy that terminates TLS
+## A TLS-terminating host proxy
 
-Docker's sandboxes keep credentials out of the guest by rewriting auth
-headers in a host-side proxy. Brig forwards the credential instead.
-[security.md](security.md#what-is-still-exposed) states what that costs.
-The reason is that a proxy only covers proxied HTTP. It does nothing for
-`git push`, for a vendor CLI refreshing its own token, or for an MCP
-server holding its own connection. Those are the operations an agent
-actually performs.
+The sandboxes of Docker keep credentials out of the guest: a host-side
+proxy rewrites the auth headers. Brig forwards the credential instead.
+[What is still exposed](security.md#what-is-still-exposed) states what that
+costs.
 
-The proxy is not free on the host side either. A process that terminates
-TLS for the guest holds every credential in cleartext, on the host, for
-the life of the sandbox. It also needs a CA the guest is made to trust.
-That is a new and attractive target. In exchange, it narrows an exposure
-Brig already answers a different way, with a narrow blast radius: one
-guest home, one fine-grained token.
+A proxy covers only proxied HTTP. It does nothing for these operations,
+which are the ones an agent performs:
 
-**Reopens when** the agents people run under Brig have a credential
-surface that is entirely HTTP a proxy can see. It also reopens when a
-runtime offers a credential broker with a per-request hook, so the
-plaintext lives somewhere other than a Brig process.
+- `git push`
+- a vendor CLI that refreshes its token
+- an MCP server that holds its own connection
+
+The proxy also has a cost on the host. A process that terminates TLS for the
+guest holds every credential in cleartext, on the host, for the life of the
+sandbox. It also needs a CA that the guest is made to trust. That process is
+a new and attractive target. In exchange, it narrows an exposure that Brig
+already limits to a narrow blast radius: one guest home, one fine-grained
+token.
+
+**Reopens when** one of these is true:
+
+- The agents that people run under Brig have a credential surface that is
+  entirely HTTP a proxy can see.
+- A runtime offers a credential broker with a per-request hook, so the
+  plaintext lives somewhere other than a Brig process.
 
 ## Remote or Kubernetes operation
 
-Brig runs on the machine in front of you, and three of its properties
-depend on that. The guest home is a live host directory, not a copy,
-which is why there is no `cp` verb. Credentials are resolved from your
-own keychain per invocation. On the two profiles that declare a tmpfs,
-`claude-code` and `claude-desktop`, an in-sandbox login lives in guest
-memory and dies with `brig stop`. On the rest it is already on the
-persisted guest home, like everything else there.
+Brig runs on the machine in front of you. Three of its properties depend on
+that:
 
-Point Brig at a remote host, and the guest home becomes a synchronisation
-problem. The credential path also becomes a transport with its own
-threat model. A login that was meant to stay in memory now sits on a machine
-you are not in front of. Kubernetes adds a controller, a custom resource,
-an image pull secret story, and a scheduler on top of all that. What
-works today for remote use is to `ssh` to the host and run Brig there.
+- The guest home is a live host directory, not a copy. That is why Brig has
+  no `cp` verb.
+- Brig resolves credentials from your own keychain per invocation.
+- On the two profiles that declare a tmpfs, `claude-code` and
+  `claude-desktop`, an in-sandbox login lives in guest memory and ends with
+  `brig stop`. On the other profiles, the login is on the persisted guest
+  home, like everything else there.
 
-**Reopens when** running the agent on a different machine from the one
-you edit on becomes the common case. It also needs a design that keeps
-the credential on the operator's machine, rather than copying it to the
+On a remote host, each property becomes a problem:
+
+- The guest home becomes a synchronisation problem.
+- The credential path becomes a transport with its own threat model.
+- A login meant to stay in memory sits on a machine that you are not in
+  front of.
+
+Kubernetes adds a controller, a custom resource, an image pull secret story,
+and a scheduler on top. For remote use today, `ssh` to the host and run Brig
+there.
+
+**Reopens when** it becomes the common case to run the agent on a different
+machine from the one you edit on. It also needs a design that keeps the
+credential on the machine of the operator and does not copy it to the
 remote host.
 
-## A hosted control plane, or any account
+## A hosted control plane or account
 
 There is nothing to sign in to. Every piece of state is on your disk:
-profiles in `~/.config/brig`, secrets in your login keychain or keyring,
-guest homes in `~/.brig/homes`, sessions in `brigd`'s inventory. Brig
-registers nowhere and sends no usage data itself. The usage events the
-macOS runtime sends are in [telemetry.md](telemetry.md). Nothing we run can be
-down while you are trying to boot a sandbox. An account also widens the
-security page. Brig's threat model then has to include our servers, our
-operators and our outages, none of which it has to mention today.
 
-**Reopens when** a feature people want turns out to be impossible without
-a shared service. Even then it ships as a separate opt-in service rather
-than as a requirement. Brig without an account keeps doing everything it
-does today, permanently.
+| State | Location |
+| --- | --- |
+| Profiles | `~/.config/brig` |
+| Secrets | Your login keychain or keyring |
+| Guest homes | `~/.brig/homes` |
+| Sessions | The inventory of `brigd` |
+
+Brig registers nowhere and sends no usage data itself.
+[Telemetry](telemetry.md) lists the usage events that the macOS runtime
+sends.
+
+Nothing we run can be down while you try to boot a sandbox. An account also
+widens the security page. The threat model of Brig then has to include our
+servers, our operators and our outages. Today it has to mention none of
+them.
+
+**Reopens when** a feature that people want is impossible without a shared
+service. Even then, it ships as a separate opt-in service and not as a
+requirement. Brig without an account keeps doing everything it does today,
+permanently.
 
 ## SDKs in several languages
 
-A library per language is a release train per language, a dependency set
-per language, and a chance per language to drift behind the CLI. All of
-that wraps a process the caller can spawn directly. The short
-dependency list in `CONTRIBUTING.md` exists for the tool itself. The same
-reasoning applies to what we ask users to link into their own programs.
+Each language library adds a release train, a dependency set, and a chance
+to drift behind the CLI. All of that wraps a process that the caller can spawn directly. The short dependency
+list in `CONTRIBUTING.md` exists for the tool. The same reasoning applies to
+what we ask users to link into their own programs.
 
-The commitment instead is a CLI disciplined enough not to need wrapping.
-It gives stable verbs, exit codes, and human output on stdout with
-diagnostics on stderr. A `--json` mode covers it wherever a program is
-the reader rather than a person. Today that mode covers the read verbs:
-`ls`, `info`, `plan`, `agent ls`, `agent show`, `agent export`,
-`agent new`, `policy show`, `secret ls`, `doctor`, `version` and the
-`network` verbs.
-It also covers `run` and `sh`, which under `--json` report the agent's
-exit status on one line. `env`, the deprecated spelling of `info`, takes
-it too. More verbs get it as callers need them: open an issue to ask for
-one.
+The commitment is a CLI that does not need a wrapper. It gives stable verbs,
+exit codes, and human output on stdout with diagnostics on stderr. A
+`--json` mode serves a program that reads the output. Today that mode
+covers:
 
-For lifecycle control there is already an interface with no library
-attached: `brigd` speaks line-delimited JSON over a unix socket and is
-documented in [brigd.md](brigd.md).
+- The read verbs: `ls`, `info`, `plan`, `agent ls`, `agent show`,
+  `agent export`, `agent new`, `policy show`, `secret ls`, `doctor`,
+  `version` and the `network` verbs.
+- `run` and `sh`, which under `--json` report the exit status of the agent
+  on one line.
+- `env`, the deprecated spelling of `info`.
 
-**Reopens when** callers are reimplementing the same non-trivial logic in
-several languages against Brig's output, and the cause is something a
-`--json` mode cannot fix. An example is a protocol that needs a
-handshake a shell caller cannot perform.
+More verbs get `--json` as callers need them. Open an issue to ask for one.
 
-## A dashboard or a TUI ahead of the CLI
+For lifecycle control, there is an interface with no library attached.
+`brigd` speaks line-delimited JSON over a unix socket. See
+[brigd](brigd.md).
 
-The non-goal is the ordering. `brig ls`, `brig info` and `brig agent ls`
-are how you see what exists, what will be forwarded, and what each profile
-refuses. While any of that is missing from the CLI, a screen that displays
-it comes too early. A live interface also has to stay in the middle of
-something, and Brig deliberately does not. `brig sh` replaces itself with
-the runtime, so `^C` and the exit status are the agent's own, a cost
-[docs/security.md](security.md) explains and accepts.
+**Reopens when** callers reimplement the same non-trivial logic in several
+languages against the output of Brig. The cause must be something that a
+`--json` mode cannot fix. An example is a protocol that needs a handshake that a
+shell caller cannot perform.
 
-**Reopens when** the CLI covers the whole surface and someone shows a
-task that is genuinely hard to read as text. An example is watching
-several sandboxes at once. Such a thing must then be a client of
-`brigd`'s protocol, so that nothing becomes reachable only through a
-screen.
+## Dashboard or TUI before CLI
 
-## Nested containers, or a Docker daemon inside the guest
+The non-goal is the order. `brig ls`, `brig info` and `brig agent ls` show
+what exists, what Brig will forward, and what each profile refuses. While
+any of that is missing from the CLI, a screen that shows it comes too
+early.
 
-This one is refused for want of demand rather than on principle. Running
-containers inside the guest needs either nested virtualization or a
-privileged guest. It also needs a second image store living on host
-disk inside the guest home. That complicates the model the whole tool
-is built around: a small, named set of host directories is what the
-agent can reach. That is a real cost, and nobody has yet shown it is
-worth paying.
+A live interface must also stay in the middle of a session, and Brig does
+not. `brig sh` replaces itself with the runtime, so `^C` and the exit status
+belong to the agent. [docs/security.md](security.md) explains that cost and
+accepts it.
 
-**Reopens when** people report the workflows that need it, concretely.
-Examples are a repo whose tests bring up containers, or a compose file
-the agent is meant to run. Once those exist, and a runtime under Brig
-supports them without a privileged guest, this becomes an ordinary
-feature discussion.
+**Reopens when** the CLI covers the whole surface and someone shows a task
+that is hard to read as text. An example is watching several sandboxes at
+once. That interface must then be a client of the `brigd` protocol, so that
+nothing becomes reachable only through a screen.
+
+## Containers inside the guest
+
+Brig refuses nested containers, and a Docker daemon inside the guest, for
+lack of demand and not on principle.
+
+Containers inside the guest need either nested virtualization or a
+privileged guest. They also need a second image store on host disk, inside
+the guest home. That complicates the model the tool is built around: the
+agent can reach a small, named set of host directories. Nobody has yet
+shown that the cost is worth paying.
+
+**Reopens when** people report concrete workflows that need it. Examples are
+a repo whose tests bring up containers, and a compose file that the agent is
+meant to run. When those workflows exist, and a runtime under Brig supports
+them without a privileged guest, this becomes an ordinary feature
+discussion.
 
 ## GPU scheduling
 
-Passing a device into a microVM is specific to each hypervisor and each
-driver. Dividing a small number of devices between sandboxes means Brig
-arbitrating a resource it does not own. That is the exact category of
-work it delegates. It is also aimed at the wrong place. The agents Brig
-runs are CLIs that call a model over the network, so the accelerator that
-matters is not in your machine.
+The method to pass a device into a microVM is specific to each hypervisor
+and each driver. To divide a small number of devices between sandboxes,
+Brig must arbitrate a resource that it does not own. Brig delegates that
+category of work.
 
-**Reopens when** an agent people run under Brig does local inference as
-its normal mode. Even then the answer is a profile field naming a device,
-handed to the runtime the way `mem` and `cpus` are. Scheduling across
-sandboxes stays out.
+GPU scheduling is also aimed at the wrong place. The agents that Brig runs
+are CLIs that call a model over the network, so the accelerator that matters
+is not in your machine.
+
+**Reopens when** an agent that people run under Brig does local inference as
+its normal mode. Even then, the answer is a profile field that names a
+device, handed to the runtime the way `mem` and `cpus` are. Scheduling
+across sandboxes stays out.
 
 ## Windows
 
-The guest is Linux either way. This is about the host. A Windows host is
-three new things at once. It has a runtime path Brig does not drive
-today. It has a secret backend with no relationship to the keychain
-behaviour `docs/security.md` documents in detail. And it has a filesystem
-whose case and symlink semantics differ from the ones the guest home
-safety code was written and tested against. That code refuses a planted
-symlink through an `os.Root`. It is one of the two promises, so it does
-not get ported on the assumption it still holds. The route that exists is
-to run Brig on Linux. That includes a Linux environment hosted on a
-Windows machine, where the microVM path needs nested virtualization to be
-available.
+The guest is Linux on every host. This non-goal is about the host. A Windows
+host is three new things at once:
 
-**Reopens when** there is a Windows-native runtime Brig can drive. It
-also needs someone willing to own the secret backend and the guest home
-path tests on that platform, and to keep owning them as they change.
+- A runtime path that Brig does not drive today.
+- A secret backend with no relationship to the keychain behaviour that
+  `docs/security.md` documents in detail.
+- A filesystem whose case and symlink semantics differ from the ones the
+  guest home safety code was written and tested against.
+
+That safety code refuses a planted symlink through an `os.Root`. It is one
+of the two promises, so nobody ports it on the assumption that it still
+holds.
+
+The route that exists is to run Brig on Linux. That includes a Linux
+environment hosted on a Windows machine, where the microVM path needs nested
+virtualization to be available.
+
+**Reopens when** there is a Windows-native runtime that Brig can drive. It
+also needs someone willing to own the secret backend and the guest home path
+tests on that platform. That person must keep owning them as they change.
 
 ## A plugin system
 
-Loading third-party code into the process that resolves your credentials
-is the thing the short dependency list exists to prevent. A plugin API
-also turns internal interfaces into a contract we then cannot change.
-Brig is already extensible three ways that do not require it. Profiles
-are data, so any Linux CLI in an OCI image runs under Brig with a YAML
-file and no code at all. Secrets come from any backend you like, since
-anything that can put a value into Brig's store or its environment is a
-usable source. And `brigd` speaks a documented protocol to whatever wants
-to drive sessions. Where Brig does use outside code, it does so as a
-subprocess with a defined interface: `cosign`, `oras`, `security`.
+The short dependency list exists to prevent third-party code in the process
+that resolves your credentials. A plugin system loads that code. A plugin
+API also turns internal interfaces into a contract that we then cannot
+change.
 
-**Reopens when** a kind of extension appears that is none of those three
-and keeps being asked for. The answer then is another subprocess with a
-defined protocol, in the shape of `cosign` and `oras`, rather than code
-loaded into Brig's address space.
+Brig is extensible in three ways without one:
+
+- **Profiles are data.** Any Linux CLI in an OCI image runs under Brig with
+  a YAML file and no code.
+- **Secrets come from any backend.** Anything that can put a value into the
+  store of Brig or its environment is a usable source.
+- **`brigd` speaks a documented protocol** to whatever wants to drive
+  sessions.
+
+Where Brig uses outside code, it runs it as a subprocess with a defined
+interface: `cosign`, `oras`, `security`.
+
+**Reopens when** a kind of extension appears that is none of those three and
+people keep asking for it. The answer then is another subprocess with a
+defined protocol, in the shape of `cosign` and `oras`. It is not code loaded
+into the address space of Brig.
 
 ## Proposing one of these anyway
 
-Open an issue with the `enhancement` label, name the item, and say which
-trigger you think has been met and what changed. If an item here is wrong,
-and not only early, open an issue for that too.
+Open an issue with the `enhancement` label. Name the item. Say which trigger
+you think is met, and what changed. If an item here is wrong, and not only
+early, open an issue for that too.

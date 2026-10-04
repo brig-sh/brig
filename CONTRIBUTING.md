@@ -2,93 +2,104 @@
 
 ## Build and test locally
 
-- `make build` builds `./brig` and `./brigd`.
-- `make test` runs `go test -race ./...`.
-- `make vet` runs `go vet ./...`.
-- `make all` runs vet, test and build, in that order.
+| Command | What it does |
+| --- | --- |
+| `make build` | Builds `./brig` and `./brigd`. |
+| `make test` | Runs `go test -race ./...`. |
+| `make vet` | Runs `go vet ./...`. |
+| `make all` | Runs vet, test and build, in that order. |
 
-`internal/secret`'s tests touch the real login keychain on macOS. They
+`script/smoke.sh` runs the real binary against a stub runtime, so it needs
+no VM. It cannot catch a change to how Brig invokes the real runtime: `hull`
+on macOS, `nerdctl` on Linux. If your pull request touches the run, exec or
+credential path, boot a real sandbox before you open it.
+
+On macOS, the tests of `internal/secret` use the real login keychain. They
 create and delete items under service names prefixed `sh.brig.secret.test.`
 (`internal/secret/keychain_darwin_test.go:21`).
 
-`script/smoke.sh` drives the real binary against a stub runtime, so it needs
-no VM. It cannot catch a change to how Brig invokes the real runtime: `hull`
-on macOS, `nerdctl` on Linux. Boot a real sandbox before you open a pull
-request that touches the run, exec or credential path.
-
 ## What CI checks
 
-CI does not call `make`. It runs its own steps
+CI does not call `make`. It runs these steps
 ([.github/workflows/ci.yml](.github/workflows/ci.yml)):
 
-- `gofmt -l .`, and fails the build if any file is not formatted.
+- `gofmt -l .`. The build fails if a file is not formatted.
 - `go vet ./...`.
-- `go test -race -covermode=atomic -coverprofile=coverage.out ./...`, with
-  coverage uploaded to Codecov on pushes to `main`.
+- `go test -race -covermode=atomic -coverprofile=coverage.out ./...`. On a
+  push to `main`, CI uploads the coverage to Codecov.
 - `script/smoke.sh`.
 - `script/check-claims.sh`, with its `--self-test` and the `--self-test` of
   `script/claims-vm.sh`. It checks the claims table in `docs/claims.md`.
-- `script/check-retired-spellings.sh`, which fails a doc that teaches a
-  command spelling scheduled for removal.
+- `script/check-retired-spellings.sh`. It fails a doc that teaches a command
+  spelling scheduled for removal.
 - `script/check-binaries.sh`, with its `--self-test`. It fails when a tracked
   file is a compiled executable or object file.
 - `sh -n` and `shellcheck` over `install.sh`, and `script/test-install.sh`,
   which runs its Linux path against a stub curl and fixture releases.
 - `bash -n`, `shellcheck` and `--self-test` for
-  `script/network-isolation-vm.sh`. The self-test checks the script's guards.
-  The comparison on a real VM is run by hand.
+  `script/network-isolation-vm.sh`. The self-test checks the guards of the
+  script. The comparison on a real VM is a manual run.
 - A cross-compile for `darwin/arm64` and one for `linux/amd64`.
-- A check that no test disappeared (`script/check-tests-kept.sh`). Label a
-  pull request that renames or deliberately removes a test `removes-tests`,
-  and say why in the description. `removes-tests` is the only label CI
-  reads.
-- `goreleaser check`, and a full snapshot build, so the release config is
-  run before a tag depends on it.
+- `script/check-tests-kept.sh`. It fails when a test disappears. If your
+  pull request renames a test, or removes one on purpose, label it
+  `removes-tests`. Give the reason in the description. `removes-tests` is
+  the only label that CI reads.
+- `goreleaser check` and a full snapshot build. They run the release config
+  before a tag depends on it.
 
-There is no linter: no `golangci-lint` configuration, and no lint target in
-the Makefile. `gofmt` and `go vet` are the only static checks.
+`gofmt` and `go vet` are the only static checks. The repository has no
+`golangci-lint` configuration and no lint target in the Makefile.
 
 ## Dependencies
 
-Brig has three direct dependencies: `sigs.k8s.io/yaml` for profiles,
-`golang.org/x/sys` for terminal and process calls, and
-`github.com/godbus/dbus/v5` for the Linux secret store. The list is kept
-short. Brig shells out to `cosign`, `oras` and `security` rather than
-linking them, which keeps the attack surface of a tool that handles
-credentials small. Do not add a dependency without saying in the pull
-request why shelling out or using the standard library will not do.
+Brig has three direct dependencies:
+
+| Module | Use |
+| --- | --- |
+| `sigs.k8s.io/yaml` | Profiles |
+| `golang.org/x/sys` | Terminal and process calls |
+| `github.com/godbus/dbus/v5` | The Linux secret store |
+
+The project keeps this list short. Brig runs `cosign`, `oras` and `security`
+as subprocesses and does not link them. That keeps the attack surface small
+for a tool that handles credentials. Do not add a dependency unless the pull
+request says why a subprocess or the standard library is not sufficient.
 
 ## The two promises
 
-Most of Brig is ordinary Go. Brig exists for two properties, and a change
-that weakens either is a bug even when every test passes:
+Brig exists for two properties. A change that weakens either one is a bug,
+even when every test passes.
 
-1. **The guest reaches only the host directories Brig names for it.** The
-   guest home is mounted as the sandbox's home. Name a project on the run
-   line and Brig mounts that project too, read-write, as a second host
-   directory at `/work/<name>`. The agent can change those real project
-   files. [docs/security.md](docs/security.md) names further limits,
-   including what a profile's own hostmount can add. Brig writes everything
-   into either directory from the host, as you, and handles those
-   attacker-controlled paths through an `os.Root` rather than by joining
-   strings.
+1. **The guest reaches only the host directories Brig names for it.** Brig
+   mounts the guest home as the home of the sandbox. If you name a project
+   on the run line, Brig also mounts that project read-write at
+   `/work/<name>`, as a second host directory. The agent can change those
+   real project files. [docs/security.md](docs/security.md) names further
+   limits, including what the hostmount of a profile can add. Brig writes
+   everything into either directory from the host, as you. It handles those
+   attacker-controlled paths through an `os.Root` and does not join strings
+   to build them.
 2. **The guest gets only the credentials you name for it.** Brig reads
    values from your environment per invocation and forwards them by name, so
    they never appear in `ps`. It never writes them into the guest home.
 
 [docs/security.md](docs/security.md) lists the limits of both promises. If
 a change moves either promise, say so in the pull request and update that
-page in the same change. People read it before they trust Brig with a
+page in the same change. People read that page before they trust Brig with a
 credential.
 
 For these two promises, a **negative** test is worth more than a positive
-one. "The denied variable was not forwarded" catches a regression. So does
-"the planted symlink was refused, and the file outside the guest home is
-untouched". "The sandbox booted" does not.
+test. These tests catch a regression:
+
+- "The denied variable was not forwarded."
+- "The planted symlink was refused, and the file outside the guest home is
+  untouched."
+
+"The sandbox booted" does not catch one.
 
 ## Commits
 
-Brig follows [Conventional Commits](https://www.conventionalcommits.org/):
+Brig uses [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 <type>[optional scope]: <description>
@@ -98,60 +109,64 @@ Brig follows [Conventional Commits](https://www.conventionalcommits.org/):
 [optional footer(s)/trailers]
 ```
 
-- Limit the header to 72 characters. Write the description in the imperative
-  mood ("add", not "added") and do not end it with a full stop.
+- Limit the header to 72 characters.
+- Write the description in the imperative mood ("add", not "added"). Do not
+  end it with a full stop.
 - `type` is one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`,
   `test`, `build`, `ci`, `chore` or `revert`. The release notes
   ([cliff.toml](cliff.toml)) group `feat`, `fix`, `refactor` and `docs`
-  commits, and leave out `test`, `chore`, `ci`, `build` and `style` commits.
+  commits. They leave out `test`, `chore`, `ci`, `build` and `style`
+  commits.
 - Use a scope when it adds clarity, for example `fix(secret): ...`.
-- The body says why the change exists, not what it does. Cover the problem,
-  the approach you chose, and any non-obvious consequence.
-- Reference an issue with a trailer: `Fixes: #<number>` when the commit
-  resolves it, `Refs: #<number>` when it does not.
+- In the body, say why the change exists, not what it does. Cover the
+  problem, the approach you chose, and any consequence that is not obvious.
+- Reference an issue with a trailer. Use `Fixes: #<number>` when the commit
+  resolves the issue, and `Refs: #<number>` when it does not.
 - Sign off every commit: `git commit -s`. This adds the `Signed-off-by`
   trailer, which a CI check requires.
 
 ## Pull requests and review
 
-- One logical change per pull request. Put an unrelated fix in its own.
+- Put one logical change in each pull request. Put an unrelated fix in a
+  separate pull request.
 - Fill in the pull request template.
-- Open the pull request as a draft, and mark it ready for review only once
-  CI is green.
-- Merging needs at least one approval.
+- Open the pull request as a draft. Mark it ready for review only when CI is
+  green.
+- A merge needs at least one approval.
 - At merge, add the `Reviewed-by` trailer to the commits. A rebase-and-merge
-  will not add it for you.
-- Rebase-and-merge is preferred, to keep the commits as distinct units in
-  `main`'s history.
+  does not add it.
+- Rebase-and-merge is the preferred merge method. It keeps the commits as
+  distinct units in the history of `main`.
 
 ## Docs
 
-Run `script/check-retired-spellings.sh` before you open a documentation pull
-request. It fails a doc that teaches a command spelling scheduled for
-removal. [docs/README.md](docs/README.md) is the map of the documentation.
+Before you open a documentation pull request, run
+`script/check-retired-spellings.sh`. [docs/README.md](docs/README.md) is the
+map of the documentation.
 
-Brand assets (logos, marks, the architecture diagram) live under `assets/`.
-See [assets/README.md](assets/README.md) for the rules.
+Brand assets (logos, marks, the architecture diagram) are in `assets/`. See
+[assets/README.md](assets/README.md) for the rules.
 
 ## Releasing
 
-Cutting a release is maintainers-only work, covered in
-[docs/releasing.md](docs/releasing.md).
+Only maintainers cut a release. See [Releasing](docs/releasing.md).
 
 ## Issues
 
-Use issues to track bugs and feature requests. **A vulnerability is not a
-public issue.** Brig handles credentials, so a flaw in how it does that must
-reach the maintainers privately. Do not open an issue or a pull request for
-one. Follow [SECURITY.md](SECURITY.md), which sends it through GitHub's
-private vulnerability reporting.
+Use issues to track bugs and feature requests.
 
-For a bug report, fill in the issue template. Include the problem, steps to
-reproduce, the `brig version` and runtime version, your environment, and the
-full `brig doctor` output.
+**A vulnerability is not a public issue.** Brig handles credentials, so a
+flaw in that handling must reach the maintainers privately. Do not open an
+issue or a pull request for a vulnerability. Follow
+[SECURITY.md](SECURITY.md), which uses the private vulnerability reporting
+of GitHub.
 
-For a feature request, read [docs/non-goals.md](docs/non-goals.md) first. It
-lists what Brig will not do for now, and why.
+For a bug report, fill in the issue template. Include the problem, the steps
+to reproduce, the `brig version` and runtime version, your environment, and
+the full `brig doctor` output.
+
+For a feature request, first read [What Brig will not do](docs/non-goals.md).
+It lists what Brig will not do for now, and why.
 
 ## AI policy
 
