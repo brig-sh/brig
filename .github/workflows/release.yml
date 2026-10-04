@@ -107,6 +107,9 @@ jobs:
           MACOS_NOTARY_KEY: ${{ runner.temp }}/notary-key.p8
           MACOS_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          # Baked into brig by ldflags. Unset (a fork) leaves the telemetry
+          # client sending nothing.
+          TELEMETRY_ENDPOINT: ${{ vars.TELEMETRY_ENDPOINT }}
           # Absent until someone adds it; goreleaser then skips publishing the
           # formula rather than failing the release.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token || secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
