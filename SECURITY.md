@@ -1,56 +1,60 @@
 # Security policy
 
-Brig exists to hold a boundary. An agent gets the host directories and the
-credentials Brig names for it, and nothing else on the host. Anything that
-weakens that boundary, or that reaches something the agent was never given,
-belongs here rather than in a public issue.
+An agent gets the host directories and the credentials Brig names for it, and
+nothing else on the host. Report privately anything that weakens that
+boundary, or that reaches something the agent was never given. Do not open a
+public issue for it.
 
-Tell us privately first and we will fix it with you before it is public. If you
-are unsure whether something counts, report it and we will work that out with
-you.
+Tell us privately first and we will fix it with you before it is public. If
+you are not sure that something counts, report it and we will work that out
+with you.
 
 ## Supported versions
 
-The supported version is the latest release, and the version you are on is
-whatever `brig version` prints. Fixes land on `main` and go out in the next
-release. We do not backport, so a fix arrives as a newer release and not as a
-patch to the one you filed against. If you are reporting against an older
-version, check that the issue still reproduces on the latest one before you
-send it.
+The supported version is the latest release. `brig version` prints the
+version you run. Fixes land on `main` and go out in the next release. We do
+not backport, so a fix arrives as a newer release and not as a patch to the
+version in your report. If you report against an older version, first make
+sure that the problem still occurs on the latest release.
 
 ## Reporting a vulnerability
 
-Use GitHub's private vulnerability reporting. Open the advisory page and press
-**Report a vulnerability**:
+Use GitHub's private vulnerability reporting:
 
-https://github.com/brig-sh/brig/security/advisories
+1. Open the advisory page: https://github.com/brig-sh/brig/security/advisories
+2. Press **Report a vulnerability**.
 
-That opens a private thread visible only to you and the maintainers, so nothing
-is disclosed while we work on a fix. Please do not open a public issue for a
+That opens a private thread that only you and the maintainers can see, so
+nothing is disclosed while we work on a fix. Do not open a public issue for a
 security problem. Do not send a pull request that reveals the flaw before an
 advisory exists.
 
 To use email instead, write to **security@brig.sh**. Both reach the same
 people.
 
-Include what a fix needs: the version from `brig version`, the operating
-system, and the runtime. Name the runtime as hull on macOS, or nerdctl with the
-urunc shim on Linux. If `BRIG_CONTAINERD_RUNTIME` names another shim, say which.
-Also include what you did, what happened, and what you expected instead. A
-proof of concept helps, even a rough one.
+Include what a fix needs:
+
+- the version from `brig version`
+- the operating system
+- the runtime: hull on macOS, or nerdctl with the urunc shim on Linux. If
+  `BRIG_CONTAINERD_RUNTIME` names another shim, say which.
+- what you did, what happened, and what you expected instead
+- a proof of concept, if you have one. A rough one helps.
 
 ## What to expect
 
-- **First response within 3 working days.** That is an acknowledgement from a
-  human that the report arrived and is being looked at, not a fix.
-- **A disclosure window of 90 days.** We aim to have a fix released and an
-  advisory published within 90 days of the report. If it takes longer we will
-  say so in the thread and agree a new date with you rather than let it lapse
-  silently. If a fix ships sooner, the advisory goes out sooner. We are happy to
-  credit you in the advisory, or to leave you out of it, whichever you prefer.
+- **First response within 3 working days.** A person acknowledges that the
+  report arrived and that someone is looking at it. The response is not a
+  fix.
+- **A disclosure window of 90 days.** We aim to release a fix and publish an
+  advisory within 90 days of the report. If that takes longer, we say so in
+  the thread and agree a new date with you. If a fix ships sooner, the
+  advisory goes out sooner.
+- **Credit as you prefer.** We credit you in the advisory, or leave you out
+  of it.
 
-These are targets a small project can meet, not a contract. If you have not heard
-back inside the response window, send a reminder to security@brig.sh.
+These are targets a small project can meet, not a contract. If you get no
+answer inside the response window, send a reminder to security@brig.sh.
 
 ## Scope
 
@@ -63,24 +67,23 @@ In scope is anything that breaks a promise Brig makes:
 - image verification passing something it must reject
 - a tampered release verifying as genuine
 
-`CONTRIBUTING.md` calls the first two the two promises. `docs/security.md`
-is where the exact edges of all of them are written down.
+`CONTRIBUTING.md` calls the first two the two promises.
+[docs/security.md](docs/security.md) states the edges of all of them, and it
+is the authority on the boundary.
 
 Out of scope are the limitations Brig already declares. `docs/security.md`
 lists them under
 [Things brig does not claim](docs/security.md#things-brig-does-not-claim):
 
-- Brig does not sandbox the agent from the network by default
-- Brig does not isolate one sandbox from another when it uses the shared
-  network, including a retained older session or a `vz`/`qemu` backend fallback
-  (`isolated`, the default for new `hvi` and Linux sandboxes, and `offline`
-  are the postures that do)
-- Brig does not filter terminal escape sequences the agent writes
-- Brig does not stop an agent misusing a credential it was deliberately
-  handed
+- Brig does not sandbox the agent from the network by default.
+- Brig does not isolate one sandbox from another on the `shared` network.
+  That includes an older session that kept `shared`, and a `vz` or `qemu`
+  backend fallback. The postures that do isolate are `isolated` (the default
+  for new `hvi` and Linux sandboxes) and `offline`.
+- Brig does not filter terminal escape sequences the agent writes.
+- Brig does not stop an agent misusing a credential you delivered to it.
 
-A report that Brig does one of those is describing a known limitation, not a
-vulnerability. That page is the authority on the boundary, so this file
-points at it instead of restating it. If you think one of those limitations
-is worse than the page admits, or the page is wrong about where a line sits,
+A report that Brig does one of those describes a known limitation, not a
+vulnerability. If you think one of those limitations is worse than
+`docs/security.md` states, or that the page puts a line in the wrong place,
 report it.
