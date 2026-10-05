@@ -82,11 +82,11 @@ func TestMarkerWriteRefusesAPlantedSymlink(t *testing.T) {
 func TestOnboardingSeedRefusesADanglingSymlink(t *testing.T) {
 	ws, outside := t.TempDir(), t.TempDir()
 	victim := filepath.Join(outside, "created-by-brig.json")
-	plantLink(t, ws, ".claude.json", victim)
+	plantLink(t, ws, claudeState, victim)
 
 	c := testConfig(t, ws, ws)
 	err := c.seedOnboarding(mustRoot(t, c))
-	wantRefused(t, err, ".claude.json")
+	wantRefused(t, err, claudeState)
 
 	if _, serr := os.Lstat(victim); !os.IsNotExist(serr) {
 		t.Errorf("brig created a file outside the workspace: %v", serr)
@@ -105,11 +105,11 @@ func TestTrustGuestCwdRefusesToReadOutOfTheWorkspace(t *testing.T) {
 	if err := os.WriteFile(victim, []byte(secret), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	plantLink(t, ws, ".claude.json", victim)
+	plantLink(t, ws, claudeState, victim)
 
 	c := testConfig(t, ws, ws)
 	err := c.trustGuestCwd(mustRoot(t, c))
-	wantRefused(t, err, ".claude.json")
+	wantRefused(t, err, claudeState)
 
 	if blob, _ := os.ReadFile(victim); string(blob) != secret {
 		t.Errorf("the host file was rewritten: %s", blob)
@@ -303,7 +303,7 @@ func TestPrepareWorkspaceStillWorksWithoutAnAttack(t *testing.T) {
 	if !strings.Contains(string(marker), ws) {
 		t.Errorf("marker = %q", marker)
 	}
-	state, err := os.ReadFile(filepath.Join(ws, ".claude.json"))
+	state, err := os.ReadFile(filepath.Join(ws, claudeState))
 	if err != nil {
 		t.Fatalf("no onboarding seed was written: %v", err)
 	}

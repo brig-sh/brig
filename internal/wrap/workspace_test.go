@@ -67,6 +67,16 @@ func testConfig(t *testing.T, workspace, cwd string, override ...profile.Profile
 	}
 }
 
+// stateFile is where claude-code's global state sits in a workspace, with its
+// directory made so a test can write it directly.
+func stateFile(t *testing.T, ws string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(ws, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(ws, filepath.FromSlash(claudeState))
+}
+
 // mustRoot opens the workspace the way PrepareWorkspace does, for tests that
 // exercise one of its steps on its own.
 func mustRoot(t *testing.T, c *Config) *workspaceRoot {
@@ -88,7 +98,7 @@ func TestSeedOnboardingDoesNotOverwrite(t *testing.T) {
 	if err := c.seedOnboarding(mustRoot(t, c)); err != nil {
 		t.Fatal(err)
 	}
-	seeded, err := os.ReadFile(filepath.Join(ws, ".claude.json"))
+	seeded, err := os.ReadFile(stateFile(t, ws))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,13 +112,13 @@ func TestSeedOnboardingDoesNotOverwrite(t *testing.T) {
 	}
 
 	existing := `{"mine":true}`
-	if err := os.WriteFile(filepath.Join(ws, ".claude.json"), []byte(existing), 0o600); err != nil {
+	if err := os.WriteFile(stateFile(t, ws), []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.seedOnboarding(mustRoot(t, c)); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := os.ReadFile(filepath.Join(ws, ".claude.json"))
+	after, _ := os.ReadFile(stateFile(t, ws))
 	if string(after) != existing {
 		t.Errorf("an existing state file was rewritten: %s", after)
 	}
@@ -122,7 +132,7 @@ func TestTrustGuestCwdSetsOneKeyAndKeepsTheRest(t *testing.T) {
 	// A number big enough that decoding through float64 would rewrite it as
 	// 1.7e+12, quietly reformatting a file that is not ours.
 	original := `{"numAccounts":2,"lastCost":1700000000000,"projects":{"/home/claude":{"hasTrustDialogAccepted":true}}}`
-	path := filepath.Join(ws, ".claude.json")
+	path := stateFile(t, ws)
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +178,7 @@ func TestTrustGuestCwdSetsOneKeyAndKeepsTheRest(t *testing.T) {
 // and leave it alone rather than truncating someone's state.
 func TestTrustGuestCwdLeavesInvalidJSONAlone(t *testing.T) {
 	ws := t.TempDir()
-	path := filepath.Join(ws, ".claude.json")
+	path := stateFile(t, ws)
 	broken := "{not json"
 	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
 		t.Fatal(err)
@@ -188,7 +198,7 @@ func TestTrustGuestCwdLeavesInvalidJSONAlone(t *testing.T) {
 
 func TestTrustWorkspaceOffKeepsTheDialog(t *testing.T) {
 	ws := t.TempDir()
-	path := filepath.Join(ws, ".claude.json")
+	path := stateFile(t, ws)
 	original := `{"projects":{}}`
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)

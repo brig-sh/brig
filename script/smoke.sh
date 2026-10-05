@@ -397,14 +397,14 @@ grep -q '^SANDBOX ' "$WORK/quiet.err" \
   && bad "--quiet printed the envelope" || ok "--quiet prints no envelope"
 
 echo "== workspace =="
-[ -f "$WS/.claude.json" ] && ok "onboarding is seeded" || bad "onboarding is seeded"
-grep -q hasCompletedOnboarding "$WS/.claude.json" \
+[ -f "$WS/.claude/.claude.json" ] && ok "onboarding is seeded" || bad "onboarding is seeded"
+grep -q hasCompletedOnboarding "$WS/.claude/.claude.json" \
   && ok "the seed carries the onboarding flags" || bad "the seed carries the onboarding flags"
 # Every file in the guest home, for every value the runs above delivered.
 # grep exits 1 only when it read all of them and found none.
 leaked="$(grep -rlF -e env-token-secret -e gh-secret "$WS")"
 rc=$?
-if [ "$rc" = 1 ] && ! grep -qi 'token' "$WS/.claude.json"; then
+if [ "$rc" = 1 ] && ! grep -qi 'token' "$WS/.claude/.claude.json"; then
   ok "no credential is written into the workspace"
 else
   bad "a credential was written into the workspace (grep exit $rc): $leaked"
