@@ -165,6 +165,9 @@ func (c *Config) PrepareWorkspace() error {
 	if err := c.seedHostConfig(r); err != nil {
 		return err
 	}
+	if err := c.migrateClaudeState(r); err != nil {
+		return err
+	}
 	if err := c.seedOnboarding(r); err != nil {
 		return err
 	}
@@ -201,6 +204,13 @@ func (c *Config) seedOnboarding(r *workspaceRoot) error {
 	if ob == nil || ob.File == "" {
 		return nil
 	}
+	// A state file inside a directory needs the directory first, made through
+	// the same walk the volume targets take so a symlink on the way is refused.
+	if dir := slashDir(slashClean(ob.File)); dir != "." {
+		if err := ensureTarget(r, dir, false); err != nil {
+			return err
+		}
+	}
 	seeded, err := r.exists("seed", ob.File)
 	if err != nil {
 		return err
@@ -213,6 +223,40 @@ func (c *Config) seedOnboarding(r *workspaceRoot) error {
 		return err
 	}
 	return r.writeFile(ob.File, append(blob, '\n'), 0o600)
+}
+
+// Where Claude Code kept its global state before and after it was pointed at
+// its config directory with CLAUDE_CONFIG_DIR.
+const (
+	legacyClaudeState = ".claude.json"
+	claudeState       = ".claude/.claude.json"
+)
+
+// migrateClaudeState moves a workspace's .claude.json into .claude, once.
+//
+// With CLAUDE_CONFIG_DIR set the agent reads its global state from inside its
+// config directory, so an existing workspace would otherwise start over:
+// onboarding, trust and per-project settings all live in that file. Only for
+// a profile whose onboarding file is the new path, only when the old file is
+// there and the new one is not, and through the root, so a symlink at either
+// end or at .claude is refused rather than followed.
+func (c *Config) migrateClaudeState(r *workspaceRoot) error {
+	ob := c.Profile.Onboarding
+	if ob == nil || ob.File != claudeState {
+		return nil
+	}
+	old, err := r.exists("move", legacyClaudeState)
+	if err != nil || !old {
+		return err
+	}
+	if err := ensureTarget(r, slashDir(claudeState), false); err != nil {
+		return err
+	}
+	moved, err := r.exists("move", claudeState)
+	if err != nil || moved {
+		return err
+	}
+	return r.rename(legacyClaudeState, claudeState)
 }
 
 // warnStaleCredentials points out a credential an older wrapper wrote into
