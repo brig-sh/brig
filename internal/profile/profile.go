@@ -117,7 +117,8 @@ type Profile struct {
 	// one is a validation error rather than a warning, because an
 	// uncovered target writes a credential into the workspace.
 	Files []FileBinding `json:"files,omitempty"`
-	// Volumes is what is mounted inside GuestHome, and it is the list that
+	// Volumes is what is mounted inside GuestHome, or at a tmpfs's at:, and
+	// it is the list that
 	// decides what reaches host disk: a tmpfs covers a directory so nothing
 	// written there can, and a hostmount names an exception worth keeping
 	// across boots. See Volume.

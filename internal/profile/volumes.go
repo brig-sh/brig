@@ -60,7 +60,8 @@ func (v Volume) TmpfsOptions() string {
 	return "size=" + size + ",mode=0700,nodev,nosuid"
 }
 
-// Volume is one mount brig makes inside the guest, under GuestHome.
+// Volume is one mount brig makes inside the guest, under GuestHome unless a
+// tmpfs names another place with at:.
 //
 // The list is flat and the order in the file is taste: brig mounts parents
 // before children by path depth. Declaration order would be a trap -- a
@@ -88,6 +89,52 @@ type Volume struct {
 	// path that does not exist yet -- guessing from an extension would be a
 	// heuristic with a silent failure on the other side of it.
 	File bool `json:"file,omitempty"`
+	// At is an absolute guest path a tmpfs is mounted at instead of at
+	// GuestHome/Path, for example "/brig/claude". Only kind: tmpfs takes it.
+	//
+	// It exists because GuestHome is a share from the host. A mount whose
+	// mount point is a directory on that share can be dropped by the guest
+	// kernel when the host renames or replaces the directory under it, and
+	// the path then leads back to host disk. A tmpfs at a guest-local path
+	// has no host directory under it to lose. The agent is pointed at At by
+	// the profile's own env:, and Path stays the workspace-relative name the
+	// hostmounts under it and the files: bindings are written against.
+	At string `json:"at,omitempty"`
+}
+
+// systemTrees are the guest directories an at: may not sit in or cover. A
+// tmpfs over any of them hides what the guest needs to run, and /work is where
+// a project is mounted.
+var systemTrees = []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/etc", "/usr",
+	"/bin", "/sbin", "/boot", "/var", "/work"}
+
+// tmpfsAt checks an at: path. home is the profile's GuestHome, which may be
+// empty when only the volume list is being checked.
+func tmpfsAt(what, at, home string) error {
+	if !strings.HasPrefix(at, "/") {
+		return fmt.Errorf("%s has at: %q, which is not absolute; at: is a guest path, "+
+			"for example /brig/claude", what, at)
+	}
+	if slices.Contains(strings.Split(at, "/"), "..") {
+		return fmt.Errorf("%s has at: %q, which contains a .. component", what, at)
+	}
+	if clean := path.Clean(at); clean != at {
+		return fmt.Errorf("%s has at: %q, which is not in its simplest form; write it as %q",
+			what, at, clean)
+	}
+	if at == "/" {
+		return fmt.Errorf("%s has at: /, which would cover the whole guest", what)
+	}
+	if home != "" && (at == home || Under(at, home) || Under(home, at)) {
+		return fmt.Errorf("%s has at: %q, which is guestHome or overlaps it; at: exists to "+
+			"keep the mount off the home share, so name a path outside %s", what, at, home)
+	}
+	first := "/" + strings.Split(at, "/")[1]
+	if slices.Contains(systemTrees, first) || strings.HasPrefix(first, "/lib") {
+		return fmt.Errorf("%s has at: %q, which is in %s; a tmpfs there hides what the "+
+			"guest needs, so use a path of brig's own such as /brig/<name>", what, at, first)
+	}
+	return nil
 }
 
 // MountOrder is the volumes sorted the way they must be mounted: parents

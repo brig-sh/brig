@@ -34,6 +34,18 @@ func TestVolumesParse(t *testing.T) {
 	}
 }
 
+// at: is read from YAML onto the tmpfs it belongs to.
+func TestVolumeAtParses(t *testing.T) {
+	var p Profile
+	body := "volumes:\n  - kind: tmpfs\n    path: .claude\n    at: /brig/claude\n"
+	if err := yaml.UnmarshalStrict([]byte(body), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(p.Volumes) != 1 || p.Volumes[0].At != "/brig/claude" {
+		t.Errorf("volumes = %+v", p.Volumes)
+	}
+}
+
 // Mount order is derived, NEVER declaration order. A profile listing
 // .claude/sessions above .claude would otherwise mount the tmpfs over the
 // hostmount it had just made, and silently lose the state -- a failure with no
@@ -151,6 +163,38 @@ func TestVolumeAndFileValidation(t *testing.T) {
 			Volumes: []Volume{tmpfs}, StatePaths: []string{".claude"}}, "statePaths"},
 		{"the reference shape is accepted", Profile{Volumes: []Volume{
 			{Kind: VolumeHostMount, Path: ".claude/sessions"}, tmpfs}}, ""},
+
+		{"at: on a tmpfs is accepted", Profile{GuestHome: "/root", Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/brig/claude"},
+			{Kind: VolumeHostMount, Path: ".claude/sessions"}}}, ""},
+		{"at: on a hostmount", Profile{Volumes: []Volume{tmpfs,
+			{Kind: VolumeHostMount, Path: ".claude/sessions", At: "/brig/sessions"}}}, "only tmpfs"},
+		{"relative at:", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "brig/claude"}}}, "not absolute"},
+		{"at: with ..", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/brig/../etc"}}}, ".."},
+		{"unclean at:", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/brig//claude/"}}}, "simplest form"},
+		{"at: /", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/"}}}, "whole guest"},
+		{"at: under guestHome", Profile{GuestHome: "/root", Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/root/state"}}}, "guestHome"},
+		{"at: is guestHome", Profile{GuestHome: "/root", Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/root"}}}, "guestHome"},
+		// Above the home is worse than in it: the tmpfs would hide the share.
+		{"at: above guestHome", Profile{GuestHome: "/home/claude", Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/home"}}}, "guestHome"},
+		{"at: in a system tree", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/etc/claude"}}}, "/etc"},
+		{"at: on /run", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/run"}}}, "/run"},
+		{"at: in a lib directory", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/lib64/x"}}}, "/lib64"},
+		{"at: over the project mount", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/work"}}}, "/work"},
+		{"two tmpfs at nested at: paths", Profile{Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/brig/claude"},
+			{Kind: VolumeTmpfs, Path: ".codex", At: "/brig/claude/codex"}}}, "cover the other"},
 
 		{"file with no volumes at all", Profile{Secrets: secrets, Files: []FileBinding{
 			{Ref: "secrets.cred", Path: ".claude/.credentials.json"}}}, "host disk"},

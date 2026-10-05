@@ -90,6 +90,25 @@ func (p Profile) validateVolumes() error {
 					v.Path, v.Size)
 			}
 		}
+		if v.At != "" {
+			if v.Kind != VolumeTmpfs {
+				return fmt.Errorf("volume %q is kind: %s and sets at:, which only %s takes; "+
+					"a %s is bound back in under the tmpfs above it, wherever that is mounted",
+					v.Path, v.Kind, VolumeTmpfs, VolumeHostMount)
+			}
+			if err := tmpfsAt(fmt.Sprintf("volume %q", v.Path), v.At, p.GuestHome); err != nil {
+				return err
+			}
+			// Two tmpfs at one guest path, or one inside the other, would
+			// cover each other. Which one the agent saw would depend on mount
+			// order, which is not something a profile should have to reason about.
+			for _, t := range tmpfs {
+				if t.At != "" && (t.At == v.At || Under(t.At, v.At) || Under(v.At, t.At)) {
+					return fmt.Errorf("volumes %q and %q both mount at or under %s; "+
+						"one would cover the other", t.Path, v.Path, v.At)
+				}
+			}
+		}
 		if v.Kind == VolumeTmpfs {
 			tmpfs = append(tmpfs, v)
 		}
