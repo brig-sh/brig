@@ -271,23 +271,25 @@ boundary. See [What is still exposed](#what-is-still-exposed).
 
 ### What reaches host disk
 
-The credential file does not reach host disk. It lands on a `tmpfs` mount
-that covers `~/.claude`. Brig checks that the mount is `tmpfs` with no swap
-before it writes anything. So `~/.claude/.credentials.json`, and the temp file
-the agent renames onto it, never touch your disk. `brig stop` removes that
+The credential file does not reach host disk. It lands on a `tmpfs` mount at
+`/brig/claude`, which is not on the home share, and `CLAUDE_CONFIG_DIR` points
+the agent there. Brig checks that the mount is `tmpfs` with no swap before it
+writes anything. So `.credentials.json`, and the temp file the agent renames
+onto it, never touch your disk. `brig stop` removes that
 mount with the sandbox, so an in-sandbox login on this profile does not
 outlive a stop.
 
-Seven paths under `~/.claude` are hostmounted. They are in the guest home on
-host disk, and they persist across boots:
+Eight paths are hostmounted from `~/.claude` in the guest home into
+`/brig/claude`. They are on host disk, and they persist across boots:
 
 | Paths | Contents |
 | --- | --- |
 | `settings.json`, `CLAUDE.md` | Your permission allowlist and your user-level memory, written by hand or by the agent on your instruction |
 | `sessions`, `projects`, `history.jsonl` | The conversation |
 | `plugins`, `skills` | Plugins and skills. `--skills` copies your own here, so that flag does nothing if a profile leaves either off |
+| `.claude.json` | The agent's global state: onboarding, trust and per-project settings |
 
-Anything else under `~/.claude` is ephemeral. That includes anything a future
+Anything else under `/brig/claude` is ephemeral. That includes anything a future
 Claude Code version starts to write there. The source of this list is the
 `volumes:` block of the `claude-code` profile.
 
@@ -455,13 +457,13 @@ A refusal looks like this:
 
 ```console
 $ brig run claude
-brig: refusing to write /Users/alex/.brig/homes/brig-claude-code/.claude.json:
+brig: refusing to write /Users/alex/.brig/homes/brig-claude-code/.claude/.claude.json:
 it is a symlink to "/Users/alex/.ssh/authorized_keys", and brig writes only
 regular files inside the workspace. The workspace is mounted read-write as the
 sandbox's home, so that link was put there from inside the sandbox, to have
 brig -- which runs as you, on the host -- reach a file the sandbox cannot.
 Nothing was written; inspect
-/Users/alex/.brig/homes/brig-claude-code/.claude.json and remove it before
+/Users/alex/.brig/homes/brig-claude-code/.claude/.claude.json and remove it before
 running brig again: a symlink leads out of a directory brig is checking
 ```
 

@@ -237,18 +237,21 @@ Two consequences for the image itself:
 ## The tmpfs mounts Brig creates
 
 Brig creates one tmpfs per `kind: tmpfs` entry in the profile's `volumes:`. It
-mounts each at `guestHome` plus the entry's path, with options
-`size=<size>,mode=0700,nodev,nosuid` and a default size of `64m`.
+mounts each at `guestHome` plus the entry's path, or at the entry's `at:` when
+it names one, with options `size=<size>,mode=0700,nodev,nosuid` and a default
+size of `64m`. `claude-code` mounts its tmpfs at `/brig/claude`.
 
 These mounts keep a credential off host disk. The guest home is a host
 directory, and a tmpfs over part of it is a region with no path to the host.
+A tmpfs with `at:` is not on the home share at all, so a host-side change to
+the home cannot drop it. See [`at:`](profiles.md#volumes).
 
 The image needs nothing extra for either runtime. The runtime decides how Brig
 mounts them, which explains what you see inside the guest:
 
 | runtime | how the mounts are made |
 | --- | --- |
-| hull | hull has no create-time tmpfs, so Brig mounts them with a privileged exec, in three phases. It pins every hostmount that sits under a directory about to be covered. It mounts the tmpfs. Then it binds the pins back in through it. Any other order loses the state that the hostmount keeps |
+| hull | hull has no create-time tmpfs, so Brig mounts them with a privileged exec, in three phases. It pins every hostmount that sits under a directory about to be covered. It mounts the tmpfs. Then it binds the pins back in through it. Any other order loses the state that the hostmount keeps. A tmpfs with `at:` covers nothing in the home, so there is no pin: Brig creates the mount point, mounts the tmpfs, and binds each hostmount from the home to the same relative path under `at:` |
 | nerdctl | nerdctl gets them in the create request, as `--tmpfs` and `-v`. A container runtime has no privileged exec to mount with (`createTimeVolumes` in `internal/wrap/secretfiles.go`) |
 
 On both runtimes, Brig verifies the result from inside the guest:

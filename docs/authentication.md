@@ -36,8 +36,9 @@ The profile decides where the login is stored:
 | `claude-code`, `claude-desktop` | a memory-backed mount | `brig stop claude` discards the mount, so the next `brig run claude` prompts again |
 | `codex`, `cursor`, `gemini`, `grok`, `opencode` | the guest home, which these profiles keep on host disk | the login survives |
 
-For `claude-code`, the login file is `~/.claude/.credentials.json`. The
-memory-backed mount keeps the credential off host disk.
+For `claude-code`, the login file in the guest is
+`/brig/claude/.credentials.json`, and `CLAUDE_CONFIG_DIR` points the agent at
+that directory. The memory-backed mount keeps the credential off host disk.
 
 `claude-code` declares two secrets, `claude-credentials` and `gh-token`. Both
 are optional, so the sandbox boots without them. `brig info claude` prints
