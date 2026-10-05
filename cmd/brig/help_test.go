@@ -9,7 +9,7 @@ import (
 
 // The top-level verbs the issue lists. Before this change, each refused --help
 // and -h with a usage error and printed nothing to stdout.
-var topLevelVerbs = []string{"run", "sh", "info", "rm", "stop", "ls", "logs", "doctor", "version"}
+var topLevelVerbs = []string{"run", "sh", "info", "plan", "rm", "stop", "ls", "logs", "doctor", "version"}
 
 // Asking a verb for help is a question, not a mistake: it is answered with that
 // verb's usage, on stdout, and the exit status is 0.
