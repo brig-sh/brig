@@ -75,7 +75,7 @@ func (c *Config) deliverSecretFiles() error {
 func (c *Config) releaseTmpfs() error {
 	var roots []string
 	for _, t := range c.Profile.Tmpfs() {
-		roots = append(roots, c.guestPath(t.Path))
+		roots = append(roots, c.mountTarget(t.Path))
 	}
 	return c.chownGuest(roots, c.Profile.GuestUser())
 }
@@ -193,6 +193,10 @@ func kindWord(file bool) string {
 // so brig pins every hostmount first -- binding it to a path outside the
 // directory about to be covered -- and bound back in afterwards. Proven in a
 // guest in this order; any other loses the state it was meant to keep.
+//
+// A tmpfs with at: covers nothing in the home, so it needs no pin: its
+// hostmounts are bound straight from their path in the home share to the same
+// relative path under at:.
 func (c *Config) mountVolumes() error {
 	mounted, err := c.guestMountpoints()
 	if err != nil {
@@ -204,19 +208,35 @@ func (c *Config) mountVolumes() error {
 	// runtime that took it at create time. Either way the host copies below it
 	// are already gone, so pinning is not something to retry -- it is
 	// something that had to happen before this moment.
+	//
+	// The same holds for a relocated one, for a different reason: once it is
+	// handed to the guest user, a bind under it would be root following
+	// whatever the agent left at the target. So hostmounts are bound only
+	// under a tmpfs this pass mounted, while root still owns it.
 	var cover []profile.Volume
 	for _, v := range p.Tmpfs() {
-		if !mounted[c.guestPath(v.Path)] {
+		if !mounted[c.mountTarget(v.Path)] {
 			cover = append(cover, v)
 		}
 	}
-	pinning := func(h profile.Volume) bool {
+	// coveredBy is the tmpfs this pass mounts above a hostmount, if any.
+	coveredBy := func(h profile.Volume) (profile.Volume, bool) {
+		var found profile.Volume
+		ok := false
 		for _, t := range cover {
-			if profile.Under(h.Path, t.Path) {
-				return true
+			if profile.Under(h.Path, t.Path) && (!ok || profile.Under(t.Path, found.Path)) {
+				found, ok = t, true
 			}
 		}
-		return false
+		return found, ok
+	}
+	pinning := func(h profile.Volume) bool {
+		t, ok := coveredBy(h)
+		return ok && t.At == ""
+	}
+	relocating := func(h profile.Volume) bool {
+		t, ok := coveredBy(h)
+		return ok && t.At != ""
 	}
 
 	if len(cover) > 0 {
@@ -238,13 +258,31 @@ func (c *Config) mountVolumes() error {
 		// credential's path between brig's check and brig's write. The shipped
 		// profiles run the guest as root, so this covers a custom profile.
 		for _, t := range cover {
+			// A relocated mount point is not in the home, so nothing has
+			// made it yet on a runtime that did not create it at boot.
+			if t.At != "" {
+				if err := c.guestRoot("mkdir", "-p", t.At); err != nil {
+					return fmt.Errorf("could not create %s for %s: %w", t.At, t.Path, err)
+				}
+			}
 			if err := c.guestRoot("mount", "-t", "tmpfs", "-o", t.TmpfsOptions(),
-				"tmpfs", c.guestPath(t.Path)); err != nil {
+				"tmpfs", c.mountTarget(t.Path)); err != nil {
 				return fmt.Errorf("could not make %s ephemeral: %w", t.Path, err)
 			}
 		}
-		// Phase 3: bind the pinned paths back in.
+		// Phase 3: bind the pinned paths back in, and the hostmounts under a
+		// relocated tmpfs in from the home share.
 		for _, h := range p.HostMounts() {
+			if relocating(h) {
+				target := c.mountTarget(h.Path)
+				if err := c.createGuestTarget(target, h.File); err != nil {
+					return err
+				}
+				if err := c.guestRoot("mount", "--bind", c.guestPath(h.Path), target); err != nil {
+					return fmt.Errorf("could not bind %s into %s: %w", h.Path, target, err)
+				}
+				continue
+			}
 			if !pinning(h) {
 				continue
 			}
@@ -265,7 +303,7 @@ func (c *Config) mountVolumes() error {
 	// persists, under a tmpfs that throws it away at shutdown -- silent, and
 	// only noticed when someone goes looking for last week's sessions.
 	for _, h := range p.HostMounts() {
-		if !mounted[c.guestPath(h.Path)] {
+		if !mounted[c.mountTarget(h.Path)] {
 			return fmt.Errorf("%s is not mounted and the ephemeral directory above it "+
 				"already is, so what the sandbox writes there would be lost at shutdown. "+
 				"Stop the sandbox and run again: brig rm %s", h.Path, c.VMName)
@@ -283,7 +321,7 @@ func (c *Config) mountVolumes() error {
 // not happen looks exactly like one that did.
 func (c *Config) verifyVolumes() error {
 	for _, v := range c.Profile.Tmpfs() {
-		fstype, err := c.guestFstype(c.guestPath(v.Path))
+		fstype, err := c.guestFstype(c.mountTarget(v.Path))
 		if err != nil {
 			return err
 		}
@@ -294,7 +332,7 @@ func (c *Config) verifyVolumes() error {
 		}
 	}
 	for _, v := range c.Profile.HostMounts() {
-		fstype, err := c.guestFstype(c.guestPath(v.Path))
+		fstype, err := c.guestFstype(c.mountTarget(v.Path))
 		if err != nil {
 			return err
 		}
@@ -388,7 +426,7 @@ func (c *Config) writeSecretFile(b profile.FileBinding) error {
 	if err != nil {
 		return fmt.Errorf("file %s: %w", b.Path, err)
 	}
-	target := c.guestPath(b.Path)
+	target := c.mountTarget(b.Path)
 	user := c.Profile.GuestUser()
 	value := c.secrets.Values[r.Name]
 	// Refused before the file exists. An empty file at a credential path is
@@ -485,13 +523,13 @@ func (c *Config) verifySecretFile(b profile.FileBinding, target, user string, mo
 func (c *Config) credentialDirs(files []profile.FileBinding) []string {
 	var out []string
 	for _, t := range c.Profile.Tmpfs() {
-		out = append(out, c.guestPath(t.Path))
+		out = append(out, c.mountTarget(t.Path))
 		for _, b := range files {
 			if !profile.Under(b.Path, t.Path) {
 				continue
 			}
 			for dir := slashDir(b.Path); profile.Under(dir, t.Path); dir = slashDir(dir) {
-				if guest := c.guestPath(dir); !slices.Contains(out, guest) {
+				if guest := c.mountTarget(dir); !slices.Contains(out, guest) {
 					out = append(out, guest)
 				}
 			}
@@ -564,6 +602,33 @@ func (c *Config) guestFstype(target string) (string, error) {
 // the profile's relative path, always slash-separated.
 func (c *Config) guestPath(rel string) string { return path(c.Profile.GuestHome, rel) }
 
+// mountTarget is where the guest sees a volume or file path once the volumes
+// are mounted: under a tmpfs's at: when one covers it, else guestPath.
+//
+// guestPath stays the answer for where the workspace copy is, which is what a
+// hostmount under a relocated tmpfs is bound FROM. Everything that mounts,
+// checks or writes the covered side goes through here, so a profile's
+// relative paths mean the same thing wherever its tmpfs lives. The deepest
+// relocated tmpfs wins, so a path is translated by the mount it really sits on.
+func (c *Config) mountTarget(rel string) string {
+	var best profile.Volume
+	for _, t := range c.Profile.Tmpfs() {
+		if t.At == "" || (rel != t.Path && !profile.Under(rel, t.Path)) {
+			continue
+		}
+		if best.At == "" || profile.Under(t.Path, best.Path) {
+			best = t
+		}
+	}
+	if best.At == "" {
+		return c.guestPath(rel)
+	}
+	if rel == best.Path {
+		return best.At
+	}
+	return best.At + strings.TrimPrefix(slashClean(rel), slashClean(best.Path))
+}
+
 // slashClean and slashDir are the two path helpers this file needs, spelled
 // out because the package already has its own `path` function and importing
 // the standard one would shadow it.
@@ -626,11 +691,11 @@ func (c *Config) createTimeVolumes(home string) (tmpfs []string, shares []runtim
 	for _, v := range profile.MountOrder(c.Profile.Volumes) {
 		switch v.Kind {
 		case profile.VolumeTmpfs:
-			tmpfs = append(tmpfs, c.guestPath(v.Path)+":"+v.TmpfsOptions())
+			tmpfs = append(tmpfs, c.mountTarget(v.Path)+":"+v.TmpfsOptions())
 		case profile.VolumeHostMount:
 			shares = append(shares, runtime.Share{
 				Host:  filepath.Join(home, filepath.FromSlash(v.Path)),
-				Guest: c.guestPath(v.Path),
+				Guest: c.mountTarget(v.Path),
 			})
 		}
 	}
