@@ -177,3 +177,22 @@ func TestCreateTimeVolumesForTheShippedClaudeCodeProfile(t *testing.T) {
 		}
 	}
 }
+
+// A sandbox still running from before the move has its tmpfs in the home.
+// Binding the hostmounts from there would bind memory, not the share, so the
+// run stops and says to recreate the sandbox instead.
+func TestARunningSandboxWithTheOldCoverIsRefused(t *testing.T) {
+	g := newGuestFake()
+	c := relocatedConfig(t, g)
+	g.mounts["/home/x/.claude"] = true
+	g.fstype["/home/x/.claude"] = "tmpfs"
+	err := c.deliverSecretFiles()
+	if err == nil || !strings.Contains(err.Error(), "brig rm") {
+		t.Fatalf("err = %v, want a refusal naming brig rm", err)
+	}
+	for _, line := range g.log {
+		if strings.HasPrefix(line, "mount") || strings.HasPrefix(line, "mkdir") {
+			t.Errorf("something was mounted before the refusal: %q", line)
+		}
+	}
+}
