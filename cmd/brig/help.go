@@ -127,6 +127,33 @@ flags:
 brig help lists every command, every flag and every setting.
 `
 
+const planUsage = `brig plan -- print the permissions a run would get
+
+usage:
+  brig plan <ref> [project]
+
+Prints the mounts, the network, the policies, the limits, the image, the
+runtime and the credentials of a run, by name. It boots nothing and opens no
+secret: a missing secret is marked unresolved. plan reads the run line as
+brig run does, so brig plan claude ~/src/demo previews that first run, and a
+run brig would refuse opens the plan with a REFUSED row while plan still
+exits 0.
+
+flags:
+      --image IMAGE   guest image to boot
+      --home PATH     host directory to mount as the guest home
+      --no-project    plan with no project, even one the session ran with last
+      --mem MB        guest memory
+      --cpus N        guest vCPUs
+      --skills        copy your ~/.claude skills and plugins into the guest home
+      --network MODE  shared, isolated or offline (or BRIG_NETWORK)
+      --offline       shorthand for --network offline
+      --publish PORT  open a guest port on the host; repeatable
+      --json          print the plan as JSON
+
+brig help lists every command, every flag and every setting.
+`
+
 const lsUsage = `brig ls -- list sandboxes
 
 usage:
@@ -180,6 +207,7 @@ var verbUsages = map[string]string{
 	"rm":         rmUsage,
 	"logs":       logsUsage,
 	"info":       infoUsage,
+	"plan":       planUsage,
 	"ls":         lsUsage,
 	"doctor":     doctorUsage,
 	"version":    versionUsage,
