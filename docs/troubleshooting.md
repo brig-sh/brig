@@ -1042,12 +1042,12 @@ The command runs, and you can continue the install.
 ## Symlinked guest home refused
 
 ```
-brig: refusing to write /Users/alex/.brig/homes/brig-claude-code/.claude.json:
+brig: refusing to write /Users/alex/.brig/homes/brig-claude-code/.claude/.claude.json:
 it is a symlink to "/Users/alex/.ssh/authorized_keys", and brig writes only
 regular files inside the workspace. The workspace is mounted read-write as the
 sandbox's home, so that link was put there from inside the sandbox, to have brig
 -- which runs as you, on the host -- reach a file the sandbox cannot. Nothing
-was written; inspect /Users/alex/.brig/homes/brig-claude-code/.claude.json and
+was written; inspect /Users/alex/.brig/homes/brig-claude-code/.claude/.claude.json and
 remove it before running brig again: a symlink leads out of a directory brig is
 checking
 ```

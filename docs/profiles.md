@@ -354,7 +354,7 @@ one, import a profile of the same name.
 | `env` | no | The variables the guest sees, and where the value of each comes from: a literal, a stored secret, or Brig's own environment. See [`secrets` and `env`](#secrets-and-env-for-a-credential-brig-resolves-itself) |
 | `forward` | no | Deprecated. It still works, and Brig folds it into an equivalent `env` binding when it reads the file. See [migration.md](migration.md#profile-keys) |
 | `files` | no | Credential files the guest sees: which stored secret fills each one, and where under `guestHome` it is written. See [`files`](#files) |
-| `volumes` | no | What is mounted inside `guestHome`: a `tmpfs` whose contents never reach host disk, how big it can grow, and the `hostmount` exceptions kept across boots. See [`volumes`](#volumes) |
+| `volumes` | no | What is mounted inside `guestHome`, or at a fixed guest path with `at:`: a `tmpfs` whose contents never reach host disk, how big it can grow, and the `hostmount` exceptions kept across boots. See [`volumes`](#volumes) |
 | `deny` | no | Variables Brig does not forward unless `BRIG_ALLOW_DENIED=1` is set. Brig refuses a profile that also binds one in `env` or `forward`. See [`deny`](#deny-is-the-billing-guard) |
 | `statePaths` | no | Deprecated, superseded by `volumes:`. It still parses. If you declare it alongside `volumes:`, Brig reports an error and does not merge them. See [migration.md](migration.md#profile-keys) |
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. Brig never does. It warns when it finds one and does not delete it |
@@ -647,12 +647,14 @@ Other limits:
 
 ## `volumes`
 
-`volumes:` lists what Brig mounts inside `guestHome`, one primitive per entry:
+`volumes:` lists what Brig mounts inside `guestHome`, one primitive per entry.
+A `tmpfs` can instead be mounted at a fixed guest path with `at:`:
 
 ```yaml
 volumes:
   - kind: tmpfs
     path: .claude               # memory-only: nothing written here reaches the host
+    at: /brig/claude            # optional: mount it here, off the home share
     size: 512m                  # optional, default 64m
   - kind: hostmount
     path: .claude/sessions      # ... except these, kept across boots
@@ -681,14 +683,43 @@ path from the credential to the host.
 - Brig refuses, at parse time, a `size:` that is not a number optionally
   followed by `k`, `m` or `g`.
 
+**`at:`** mounts a `tmpfs` at an absolute guest path instead of at
+`guestHome/path`. The guest home is a share from the host. A mount whose mount
+point is a directory on that share can be dropped by the guest kernel when the
+host renames or replaces that directory, for example with `git clean -fdx`.
+The path then leads back to host disk, and the next credential the agent
+writes lands there. Memory-only state belongs off the share, so put it at a
+path of Brig's own, such as `/brig/<name>`, and point the agent there with
+`env:`.
+
+- `path:` stays the name everything else uses. A `hostmount` under it, a
+  `files:` binding and the checks Brig runs are all written relative to
+  `guestHome`, and Brig translates them to the same relative path under
+  `at:`.
+- A `hostmount` under a relocated `tmpfs` is bound from its path in the guest
+  home to the same relative path under `at:`. Its mount point is on the
+  `tmpfs`, not on a share, so a host-side rename of the home cannot move it
+  either.
+- On hull's `hvi` backend, `/brig` sits on hull's own per-instance root,
+  which only hull and the host user write.
+- Only `kind: tmpfs` takes `at:`. Brig refuses, at parse time, an `at:` that
+  is not absolute and clean, that is `/`, that is `guestHome` or overlaps it,
+  that sits in a system directory (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`,
+  `/etc`, `/usr`, `/bin`, `/sbin`, `/lib*`, `/boot`, `/var`) or in `/work`,
+  where a project is mounted, or that overlaps another `tmpfs`'s `at:`.
+- `claude-code` mounts its `.claude` `tmpfs` at `/brig/claude` and sets
+  `CLAUDE_CONFIG_DIR` to it. `claude-desktop` still covers `.claude` inside
+  the guest home, because its bundled binary has not been checked for
+  `CLAUDE_CONFIG_DIR`.
+
 **`kind: hostmount`** names an exception: one path bound back out to the same
 path in the guest home, where that state already lives.
 
 - Its source is implicit, so Brig refuses `source:` on it.
 - A `hostmount` that is not nested under a `tmpfs` is a parse error. The guest
   home is already `guestHome`, so such an entry mounts a path onto itself.
-- It takes no `size:`. A `hostmount` is as large as the guest home that it
-  comes from.
+- It takes no `size:` and no `at:`. A `hostmount` is as large as the guest
+  home that it comes from, and it goes wherever the `tmpfs` above it goes.
 
 **`kind: volume`** is reserved for a named volume that several sandboxes
 share. Brig parses it and refuses it as not yet supported.
@@ -709,7 +740,7 @@ profile:
 
 | profile | hostmounts under the `.claude` tmpfs | effect |
 | --- | --- | --- |
-| `claude-code` | Include `.claude/skills` and `.claude/plugins` | A `--skills` copy there survives a stop |
+| `claude-code` | Include `.claude/skills`, `.claude/plugins` and `.claude/.claude.json` | A `--skills` copy there survives a stop, and so does the agent's global state |
 | `claude-desktop` | Stop at `settings.json`, `CLAUDE.md`, `sessions`, `projects`, `plugins` and `history.jsonl` | `.claude/skills` is not among them, so anything the bundled desktop app writes there is lost at shutdown |
 
 ## `onboarding`
@@ -719,7 +750,7 @@ agent does not stop on a first-run screen:
 
 ```yaml
 onboarding:
-  file: .claude.json
+  file: .claude/.claude.json
   seed:
     hasCompletedOnboarding: true
     hasTrustDialogAccepted: true
@@ -737,6 +768,10 @@ browser, and the microVM has none.
 - Brig sets `trustKey` for the directory that each run starts in, resolved to
   the git repository root as the guest sees it.
 - Brig never seeds anything that contains a credential.
+- `claude-code` keeps this file at `.claude/.claude.json`, where
+  `CLAUDE_CONFIG_DIR` has the agent read it. A workspace made before that
+  still has `.claude.json` at its root. Brig moves it into `.claude` once,
+  before boot, and never over a file already there.
 
 ## A worked example
 
