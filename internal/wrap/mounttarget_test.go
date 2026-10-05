@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,5 +132,48 @@ func TestARelocatedTmpfsIsVerifiedAtItsOwnPath(t *testing.T) {
 	err := c.deliverSecretFiles()
 	if err == nil || !strings.Contains(err.Error(), "ephemeral") {
 		t.Fatalf("err = %v, want the tmpfs check to fail\n%s", err, strings.Join(g.log, "\n"))
+	}
+}
+
+// A runtime that takes its mounts at create time is handed the relocated
+// paths, never the home ones.
+func TestCreateTimeVolumesForTheShippedClaudeCodeProfile(t *testing.T) {
+	ws := t.TempDir()
+	c := testConfig(t, ws, ws)
+	g := newGuestFake()
+	g.kind = "nerdctl"
+	c.Runtime = g
+	tmpfs, shares := c.createTimeVolumes(ws)
+	if len(tmpfs) != 1 || !strings.HasPrefix(tmpfs[0], "/brig/claude:size=512m,") {
+		t.Errorf("tmpfs = %v", tmpfs)
+	}
+	if len(shares) == 0 {
+		t.Fatal("no hostmount shares")
+	}
+	sawState := false
+	for _, s := range shares {
+		if !strings.HasPrefix(s.Guest, "/brig/claude/") {
+			t.Errorf("share guest %q is not under /brig/claude", s.Guest)
+		}
+		rel := strings.TrimPrefix(s.Guest, "/brig/claude/")
+		if want := filepath.Join(ws, ".claude", filepath.FromSlash(rel)); s.Host != want {
+			t.Errorf("share host = %q, want %q", s.Host, want)
+		}
+		if s.Guest == "/brig/claude/.claude.json" {
+			sawState = true
+		}
+	}
+	if !sawState {
+		t.Errorf("no share for the agent's global state: %+v", shares)
+	}
+	for _, v := range append(tmpfs, func() (g []string) {
+		for _, s := range shares {
+			g = append(g, s.Guest)
+		}
+		return g
+	}()...) {
+		if strings.HasPrefix(v, "/root/") {
+			t.Errorf("a home path reached the runtime: %q", v)
+		}
 	}
 }

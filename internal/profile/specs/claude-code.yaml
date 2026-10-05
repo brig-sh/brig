@@ -121,12 +121,16 @@ files:
 # where --skills copies your own, so leaving either off would make that flag
 # silently do nothing.
 #
+# .claude.json is the agent's global state: onboarding, trust and
+# per-project settings. With CLAUDE_CONFIG_DIR set (see env: below) it lives
+# inside the config directory rather than beside it, so it gets a hostmount
+# like the conversation does. brig moves an older workspace's .claude.json
+# into .claude once, before boot.
+#
 # What a live workspace also held and does NOT get one, so these are decisions
 # rather than omissions: cache/, .last-update-result.json, policy-limits.json
 # and remote-settings.json are all re-fetched, and backups/ holds snapshots of
-# .claude.json -- which sits BESIDE .claude rather than inside it, so it
-# persists on its own and the snapshots are derived from something that
-# survives.
+# .claude.json, which are derived from a file that already survives.
 #
 # settings.json and CLAUDE.md are the user's own configuration -- the
 # permission allowlist and the user-level memory -- written by hand or by the
@@ -143,12 +147,27 @@ files:
 # lands here too, and exhausting it surfaces as ENOSPC from the agent's own
 # tools with nothing on the host watching.
 #
+# at: mounts the tmpfs at /brig/claude rather than at .claude in the home.
+# The home is a share from the host, and a tmpfs whose mount point is a
+# directory on that share can be dropped by the guest kernel when the host
+# renames or replaces the directory under it (git clean -fdx on the host is
+# enough). The path then leads back to host disk, and the next token refresh
+# writes .credentials.json there. /brig/claude is on no share, so there is
+# nothing on the host to lose. The paths below stay relative to the home:
+# each hostmount is bound from .claude/<name> in the workspace to
+# /brig/claude/<name>, and the credential is written to
+# /brig/claude/.credentials.json.
+#
 # Order here is taste: brig mounts parents before children by path depth, so a
 # hostmount listed above its tmpfs cannot silently lose the state it names.
 volumes:
   - kind: tmpfs
     path: .claude
+    at: /brig/claude
     size: 512m
+  - kind: hostmount
+    path: .claude/.claude.json
+    file: true
   - kind: hostmount
     path: .claude/settings.json
     file: true
@@ -185,9 +204,16 @@ volumes:
 # "cannot be used with root/sudo privileges for security reasons" -- and this
 # is what says the boundary is the VM rather than the account. Measured: with
 # it unset the flag is refused, with it set the run proceeds.
+#
+# CLAUDE_CONFIG_DIR points the agent at the tmpfs volumes: mounts at
+# /brig/claude. Claude Code reads both ~/.claude and ~/.claude.json from it
+# when set, so nothing it writes lands in the home share. brig hands it to
+# every process it starts in the sandbox, run, sh and exec alike.
 env:
   - name: IS_SANDBOX
     value: "1"
+  - name: CLAUDE_CONFIG_DIR
+    value: /brig/claude
   - name: GH_TOKEN
     refs: [env.GH_TOKEN, secrets.gh-token]
 
@@ -210,9 +236,7 @@ staleCredentialFiles: [.claude/.credentials.json]
 
 # statePaths is gone: volumes: above is the same list made load-bearing, and
 # two lists that can disagree about what persists is the failure worth
-# removing. .claude.json is not in it because it sits beside .claude rather
-# than inside it, so no tmpfs covers it and the workspace keeps it as it always
-# did.
+# removing.
 
 headless: true
 mem: 4096
@@ -221,8 +245,11 @@ cpus: 4
 # Not authentication: a first-run screen the guest cannot complete, because
 # choosing a login method there opens a browser the microVM does not have.
 # Never a credential -- those go through files: and env: above.
+#
+# Seeded in the workspace, at the path the hostmount above binds into
+# /brig/claude, which is where CLAUDE_CONFIG_DIR has the agent read it.
 onboarding:
-  file: .claude.json
+  file: .claude/.claude.json
   seed:
     hasCompletedOnboarding: true
     hasTrustDialogAccepted: true
