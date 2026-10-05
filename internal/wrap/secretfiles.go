@@ -215,9 +215,19 @@ func (c *Config) mountVolumes() error {
 	// under a tmpfs this pass mounted, while root still owns it.
 	var cover []profile.Volume
 	for _, v := range p.Tmpfs() {
-		if !mounted[c.mountTarget(v.Path)] {
-			cover = append(cover, v)
+		if mounted[c.mountTarget(v.Path)] {
+			continue
 		}
+		// A sandbox booted before the profile named at: still has the tmpfs
+		// in the home, over the very paths the hostmounts would be bound
+		// from. Binding from there would hand the agent memory it believes
+		// persists, so the sandbox has to be made again.
+		if v.At != "" && mounted[c.guestPath(v.Path)] {
+			return fmt.Errorf("%s is mounted in the guest home by an older version of this "+
+				"profile, which now mounts it at %s, and a running sandbox cannot move it. "+
+				"Stop the sandbox and run again: brig rm %s", v.Path, v.At, c.VMName)
+		}
+		cover = append(cover, v)
 	}
 	// coveredBy is the tmpfs this pass mounts above a hostmount, if any.
 	coveredBy := func(h profile.Volume) (profile.Volume, bool) {
