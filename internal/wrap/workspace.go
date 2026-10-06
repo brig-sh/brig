@@ -240,10 +240,19 @@ const (
 // a profile whose onboarding file is the new path, only when the old file is
 // there and the new one is not, and through the root, so a symlink at either
 // end or at .claude is refused rather than followed.
+//
+// Only in a home brig prepared before, which carries its marker. The file in
+// any other directory belongs to whoever put it there. Never in the user's
+// own home either: there .claude.json is the host agent's state, and moving
+// it would reset the host agent.
 func (c *Config) migrateClaudeState(r *workspaceRoot) error {
 	ob := c.Profile.Onboarding
-	if ob == nil || ob.File != claudeState {
+	if ob == nil || ob.File != claudeState || isUserHome(c.Workspace) {
 		return nil
+	}
+	prepared, err := r.exists("move", markerFile)
+	if err != nil || !prepared {
+		return err
 	}
 	old, err := r.exists("move", legacyClaudeState)
 	if err != nil || !old {
@@ -257,6 +266,22 @@ func (c *Config) migrateClaudeState(r *workspaceRoot) error {
 		return err
 	}
 	return r.rename(legacyClaudeState, claudeState)
+}
+
+// isUserHome returns whether dir is the user's home directory. It returns
+// true when either cannot be read, so a caller about to change files there
+// leaves them alone.
+func isUserHome(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return true
+	}
+	a, errA := os.Stat(home)
+	b, errB := os.Stat(dir)
+	if errA != nil || errB != nil {
+		return true
+	}
+	return os.SameFile(a, b)
 }
 
 // warnStaleCredentials points out a credential an older wrapper wrote into
