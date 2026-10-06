@@ -271,13 +271,14 @@ boundary. See [What is still exposed](#what-is-still-exposed).
 
 ### What reaches host disk
 
-The credential file does not reach host disk. It lands on a `tmpfs` mount at
-`/brig/claude`, which is not on the home share, and `CLAUDE_CONFIG_DIR` points
-the agent there. Brig checks that the mount is `tmpfs` with no swap before it
-writes anything. So `.credentials.json`, and the temp file the agent renames
-onto it, never touch your disk. `brig stop` removes that
-mount with the sandbox, so an in-sandbox login on this profile does not
-outlive a stop.
+The credential file does not reach host disk while the agent runs with
+`CLAUDE_CONFIG_DIR`. It lands on a `tmpfs` mount at `/brig/claude`, which is
+not on the home share, and `CLAUDE_CONFIG_DIR` points the agent there. Brig
+checks that the mount is `tmpfs` with no swap before it writes anything. So
+`.credentials.json`, and the temp file the agent renames onto it, never touch
+your disk. `brig stop` removes that mount with the sandbox, so an in-sandbox
+login on this profile does not outlive a stop. The limits of this are under
+[What is still exposed](#what-is-still-exposed).
 
 Eight paths are hostmounted from `~/.claude` in the guest home into
 `/brig/claude`. They are on host disk, and they persist across boots:
@@ -325,6 +326,19 @@ credential. The sandbox cannot use a credential it cannot see. Brig forwards
 the credential and limits the blast radius. It does not use a sentinel value
 or a host-side proxy (see
 [A TLS-terminating host proxy](non-goals.md#a-tls-terminating-host-proxy)).
+
+The `claude-code` credential stays off host disk only while the agent has
+`CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
+A `claude` started without it, under `sudo -i`, `su -` or `env -i` for
+example, writes `.credentials.json` to `~/.claude` in the guest home. That
+directory is on the home share, so the file is on host disk.
+
+On hull with the `hvi` backend, the guest root is itself a share of the
+sandbox's directory in hull's store. If something on the host renames or
+replaces the directory under `/brig/claude` there while the sandbox runs, the
+guest drops the `tmpfs`. A credential the agent writes before Brig's next
+command then lands in hull's store, and stays there until `brig rm`. Brig's
+next command mounts the `tmpfs` again.
 
 ## The secret store
 
