@@ -382,11 +382,17 @@ func under(cwd, workspace string) bool {
 // sees only the workspace, so choosing to mount it already answers the
 // dialog's question. BRIG_TRUST_WORKSPACE=0 keeps the dialog.
 //
-// This writes one key, only when it needs to, through a temporary file in the
-// same directory, so a partial write leaves the agent's state intact. It runs
-// before the agent starts and stops once the key is set. That narrows the
-// window against a session already writing the same file rather than closing
-// it.
+// This writes one key, only when it needs to, through a temporary file at the
+// workspace root renamed over the state file, so a partial write leaves the
+// agent's state intact. It runs before the agent starts and stops once the key
+// is set. That narrows the window against a session already writing the same
+// file rather than closing it.
+//
+// A state file the profile hostmounts is written in place instead. The guest
+// holds that file through a bind, and a virtio-fs server that tracks files by
+// handle, as virtiofsd does, keeps the bind on the old file after a rename:
+// the key would never reach the agent, and what the agent wrote next would go
+// to a file with no name on the host, lost at shutdown.
 //
 // The read matters as much as the write, and is the less obvious of the two.
 // A rename cannot be made to land outside the workspace, which makes this look
@@ -445,6 +451,9 @@ func (c *Config) trustGuestCwd(r *workspaceRoot) error {
 	if err != nil {
 		return nil
 	}
+	if c.fileHostMount(ob.File) {
+		return r.writeFile(ob.File, out, 0o600)
+	}
 	tmp, name, err := r.createTemp(".brig-trust-")
 	if err != nil {
 		return err
@@ -462,6 +471,16 @@ func (c *Config) trustGuestCwd(r *workspaceRoot) error {
 		return err
 	}
 	return r.rename(name, ob.File)
+}
+
+// fileHostMount returns whether rel is a file the profile hostmounts.
+func (c *Config) fileHostMount(rel string) bool {
+	for _, h := range c.Profile.HostMounts() {
+		if h.File && slashClean(h.Path) == slashClean(rel) {
+			return true
+		}
+	}
+	return false
 }
 
 // seedHostConfig copies the host's own agent configuration into the workspace.

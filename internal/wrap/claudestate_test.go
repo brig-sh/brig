@@ -163,3 +163,35 @@ func TestClaudeStateStaysInTheUsersHome(t *testing.T) {
 		t.Errorf("the host agent's state was moved or changed: %q, %v", old, err)
 	}
 }
+
+// The guest holds a hostmounted state file through a bind. Trusting the
+// directory must keep the file's inode: a virtio-fs server that tracks files
+// by handle would leave the bind on the old file after a rename.
+func TestTrustKeepsAHostmountedStateFileInPlace(t *testing.T) {
+	ws := t.TempDir()
+	c := testConfig(t, ws, ws)
+	if c.Profile.Onboarding == nil || c.Profile.Onboarding.File != claudeState ||
+		!c.fileHostMount(claudeState) {
+		t.Fatalf("claude-code no longer hostmounts %s as its state file", claudeState)
+	}
+	writeWorkspaceFile(t, ws, claudeState, `{"numStartups":5}`)
+	before, err := os.Stat(filepath.Join(ws, filepath.FromSlash(claudeState)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.trustGuestCwd(mustRoot(t, c)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(ws, filepath.FromSlash(claudeState))
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Errorf("%s was replaced, so a guest bound to it keeps the old file", claudeState)
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "hasTrustDialogAccepted") || !strings.Contains(string(got), `"numStartups":5`) {
+		t.Errorf("state after trust = %s", got)
+	}
+}
