@@ -1119,6 +1119,124 @@ EOF
   fi
 }
 
+# check_telemetry: with a recorded yes, brig sends one command event per
+# command it counts, and on macOS a hull of rc31 or newer adds the sandbox's
+# own events (#459). The run points every event at a local capture server
+# through HULL_TELEMETRY_ENDPOINT, so nothing leaves the runner, and records a
+# no at the end. Outside this block the canary runs with DO_NOT_TRACK=1.
+check_telemetry() {
+  local cap="$OUT/telemetry" pid port id i n out hullrc hullver=none expect_hull dnt
+  rm -rf "$cap"
+  mkdir -p "$cap/events"
+  cat > "$cap/server.py" << 'EOF'
+import http.server, json, os, sys, time
+d = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        with open(os.path.join(d, "events", "%.6f.json" % time.time()), "wb") as f:
+            f.write(self.rfile.read(n))
+        self.send_response(204)
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+with open(os.path.join(d, "port"), "w") as f:
+    f.write(str(s.server_address[1]))
+s.serve_forever()
+EOF
+  python3 "$cap/server.py" "$cap" > /dev/null 2>&1 &
+  pid=$!
+  for i in $(seq 1 50); do
+    [ -s "$cap/port" ] && break
+    sleep 0.1
+  done
+  port="$(cat "$cap/port" 2> /dev/null || true)"
+  if [ -z "$port" ]; then
+    kill "$pid" 2> /dev/null || true
+    res check Telemetry "brig sends one event per command, and only to the endpoint it is given (#459)" fail "the capture server did not start"
+    return 0
+  fi
+
+  # Linux has no hull, and a failed lookup must not end the block. brig
+  # counts hull's own events from a release, vX-rcN, or a channel build that
+  # names one, rcN-main.<date>. It reads anything else, such as the Go
+  # pseudo-version rcN.0.<date>-<commit>, as a source build and suppresses
+  # them, as internal/runtime/hull.go's hullVersionAtLeast does.
+  hullrc=""
+  if command -v hull > /dev/null 2>&1; then
+    hullver="$(hull --version 2> /dev/null | awk '{ print $2 }' || true)"
+    hullrc="$(hull --version 2> /dev/null | awk '{ print $2 }' |
+      sed -n -e 's/^v0\.1\.0-rc\([0-9][0-9]*\)$/\1/p' -e 's/^v0\.1\.0-rc\([0-9][0-9]*\)-main\..*/\1/p' | head -n 1 || true)"
+  fi
+  expect_hull=no
+  if [ "$(uname -s)" = Darwin ] && [ "${hullrc:-0}" -ge 31 ]; then
+    expect_hull=yes
+  fi
+
+  # block runs each check in a subshell, so these exports end with it.
+  export HULL_TELEMETRY_ENDPOINT="http://127.0.0.1:$port/v1/events"
+  unset DO_NOT_TRACK
+  run 60 brig telemetry on || true
+  run 60 brig ls || true
+  gsh ubuntu@tm "echo telemetry-ok" || true
+  run 300 brig rm ubuntu@tm || true
+  run 60 brig telemetry status > "$cap/status" 2>&1 || true
+  # Each command queues its event and starts a detached flush.
+  for i in $(seq 1 60); do
+    pgrep -f 'telemetry flush' > /dev/null 2>&1 || break
+    sleep 0.5
+  done
+  id="$(sed -n 's/.*install id: *//p' "$cap/status" | head -n 1)"
+  n="$(find "$cap/events" -type f | wc -l | tr -d ' ')"
+
+  # DO_NOT_TRACK=1 beats the recorded yes.
+  export DO_NOT_TRACK=1
+  run 60 brig ls || true
+  sleep 3
+  dnt="$(( $(find "$cap/events" -type f | wc -l | tr -d ' ') - n ))"
+
+  unset DO_NOT_TRACK
+  run 60 brig telemetry off || true
+  export DO_NOT_TRACK=1
+  kill "$pid" 2> /dev/null || true
+  local left
+  left="$(find "$HOME/.hull/outbox" "$HOME/.hull/crash" -type f 2> /dev/null | head -n 3 || true)"
+
+  out="$(python3 - "$cap/events" "$id" "$expect_hull" << 'EOF'
+import json, os, sys
+d, want_id, expect_hull = sys.argv[1], sys.argv[2], sys.argv[3] == "yes"
+cmds, others, bad = [], [], []
+for f in sorted(os.listdir(d)):
+    body = json.load(open(os.path.join(d, f)))
+    for e in body if isinstance(body, list) else body.get("events", [body]):
+        if e.get("product") != "brig":
+            bad.append("product=%s" % e.get("product"))
+        if want_id and e.get("install_id") != want_id:
+            bad.append("install_id=%s" % e.get("install_id"))
+        if e.get("event") == "command":
+            cmds.append("%s:%s" % (e.get("command"), e.get("outcome")))
+        else:
+            others.append(e.get("event"))
+ok = sorted(cmds) == ["ls:ok", "rm:ok", "sh:ok"] and not bad and (bool(others) == expect_hull)
+print("OK=%s" % ("yes" if ok else "no"))
+print("NOTE=commands %s; sandbox events %s; %s" % (
+    ",".join(sorted(cmds)) or "none", ",".join(sorted(set(others))) or "none",
+    "; ".join(sorted(set(bad))) or "every event names brig and the install id"))
+EOF
+)" || true
+  echo "$out"
+  local note
+  note="$(echo "$out" | sed -n 's/^NOTE=//p')"
+  if [ "$(echo "$out" | sed -n 's/^OK=//p')" = yes ] && [ "$dnt" = 0 ] && [ -z "$left" ]; then
+    res check Telemetry "brig sends one event per command, and only to the endpoint it is given (#459)" pass \
+      "$note. hull ${hullver:-none}: sandbox events expected: $expect_hull. DO_NOT_TRACK=1: no event. Nothing left queued"
+  else
+    res check Telemetry "brig sends one event per command, and only to the endpoint it is given (#459)" fail \
+      "$note. hull ${hullver:-none}: sandbox events expected: $expect_hull. DO_NOT_TRACK=1: $dnt events. Left queued: [$(echo "$left" | one_line 120)]"
+  fi
+}
+
 # check_creds boots claude-code with three variables in the shell: one named
 # in BRIG_FORWARD_ENV, one named nowhere, and ANTHROPIC_API_KEY, which is
 # named but on the claude-code denylist. Only the first may reach the guest.
@@ -1591,6 +1709,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block brigd-lock check_brigd_lock
   block claude-tmpfs check_claude_tmpfs
   block creds check_creds
+  block telemetry check_telemetry
   block agent-rm check_agent_rm
   block files-mode check_files_mode
   block policy check_policy_enforced
