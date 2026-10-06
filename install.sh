@@ -61,13 +61,13 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 #
 # v0.1.0-rc7 is the floor: it is the first release carrying the rootless
 # bundle, so BRIG_INSTALL_ROOTLESS against anything older fails naming the
-# asset it wanted. rc14 is the pin. It records the sha256 of its kernel and
+# asset it wanted. rc15 is the pin. It records the sha256 of its kernel and
 # initrd, and keeps that record with the release's signed checksums.txt where
-# brig checks it before a boot. Its guest kernel is the 6.18 LTS, its amd64
-# kernel brings up every vCPU --cpus asks for, and its urunc boots arm64
-# guests under cloud-hypervisor.
+# brig checks it before a boot. Its guest kernel is the 6.18 LTS with Landlock,
+# its amd64 kernel brings up every vCPU --cpus asks for, and its urunc boots
+# arm64 guests under cloud-hypervisor.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc14
+RUNTIME_VERSION=v0.1.0-rc15
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 
