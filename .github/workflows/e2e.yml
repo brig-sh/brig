@@ -17,13 +17,13 @@ name: e2e
 # Each host job uploads its own results, and the report job merges them. A
 # host whose job crashed shows as missing in the report, never as green.
 #
-# A runtime bundle can be tried before install.sh pins it. The Linux job then
-# runs a second leg that installs it in place of the pin:
+# The Linux job runs one leg per runtime bundle: the one install.sh pins, and
+# the newest published release when install.sh does not pin it yet. A bundle
+# can also be tried by hand, as a further leg:
 #
 #   gh workflow run e2e.yml -f runtime_version=v0.1.0-rc15
 #
-# A pull request and a scheduled run test the pin alone. A runtime_version
-# that equals the pin adds no second leg, since the pinned leg installs it.
+# A version that another leg already installs adds no leg.
 
 on:
   schedule:
@@ -36,7 +36,7 @@ on:
         options: [canary, nightly]
         default: canary
       runtime_version:
-        description: "a brig-standalone-linux tag, such as v0.1.0-rc15, for a second Linux leg. Empty: the install.sh pin alone"
+        description: "a brig-standalone-linux tag, such as v0.1.0-rc15, for one more Linux leg. Empty: the install.sh pin and the newest release"
         type: string
         default: ""
   # A change to the checks, or to the installer they drive, proves itself on
@@ -60,10 +60,10 @@ env:
   LEVEL: ${{ github.event_name == 'schedule' && 'nightly' || inputs.level || 'canary' }}
 
 jobs:
-  # Checks the runtime_version input before any host starts, and turns it
-  # into the Linux legs. A version equal to install.sh's pin adds no leg.
-  # The input reaches the shell through the environment, never through
-  # ${{ }}, so a quote in it cannot become shell.
+  # Turns install.sh's pin, the newest bundle release and the runtime_version
+  # input into the Linux legs, one per distinct version. The input reaches
+  # the shell through the environment, never through ${{ }}, so a quote in it
+  # cannot become shell.
   plan:
     name: plan
     runs-on: ubuntu-latest
@@ -84,12 +84,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          shape='^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'
+          pin="$(sed -n 's/^RUNTIME_VERSION=//p' install.sh)"
+          # The release GitHub marks Latest, the one a direct bundle install
+          # takes.
+          latest="$(gh release view -R NOFireAI/brig-standalone-linux --json tagName -q .tagName)"
+          if ! printf '%s\n' "$latest" | grep -Eq "$shape"; then
+            echo "::error::the newest NOFireAI/brig-standalone-linux release is \"$latest\", not a version"
+            exit 1
+          fi
           override=""
           case "$EVENT" in
             workflow_dispatch) override="$RUNTIME_VERSION" ;;
           esac
           if [ -n "$override" ]; then
-            if ! printf '%s\n' "$override" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'; then
+            if ! printf '%s\n' "$override" | grep -Eq "$shape"; then
               echo "::error::runtime_version must look like v0.1.0 or v0.1.0-rc10, not \"$override\""
               exit 1
             fi
@@ -97,22 +106,22 @@ jobs:
               echo "::error::NOFireAI/brig-standalone-linux has no release $override"
               exit 1
             fi
-            pin="$(sed -n 's/^RUNTIME_VERSION=//p' install.sh)"
-            if [ "$override" = "$pin" ]; then
-              echo "::notice::$override is the bundle install.sh pins, so the pinned leg tests it"
-              override=""
-            fi
           fi
+          echo "install.sh pins $pin; the newest bundle is $latest; runtime_version: ${override:-none}"
           python3 -c '
           import json, re, sys
-          v = sys.argv[1]
+          pin, extra = sys.argv[1], sys.argv[2:]
           legs = [{"host": "linux", "runtime": ""}]
-          if v:
+          seen = {pin}
+          for v in extra:
+              if not v or v in seen:
+                  continue
+              seen.add(v)
               m = re.match(r"^v[0-9.]+-(rc[0-9]+)$", v)
               legs.append({"host": "linux-" + (m.group(1) if m else v), "runtime": v})
           print("linux=" + json.dumps({"include": legs}))
           print("linux_hosts=" + ",".join(leg["host"] for leg in legs))
-          ' "$override" >> "$GITHUB_OUTPUT"
+          ' "$pin" "$latest" "$override" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
   linux:
