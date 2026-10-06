@@ -23,6 +23,13 @@ func stateConfig(t *testing.T) (*Config, string) {
 	return testConfig(t, ws, ws, testProfile(t, stateProfile)), ws
 }
 
+// preparedBefore leaves the marker an earlier run of brig writes, so the
+// workspace reads as one brig prepared.
+func preparedBefore(t *testing.T, ws string) {
+	t.Helper()
+	writeWorkspaceFile(t, ws, markerFile, "brig\n")
+}
+
 func writeWorkspaceFile(t *testing.T, ws, rel, body string) {
 	t.Helper()
 	p := filepath.Join(ws, filepath.FromSlash(rel))
@@ -38,6 +45,7 @@ func writeWorkspaceFile(t *testing.T, ws, rel, body string) {
 // now reads it, and nothing is left behind at the old path.
 func TestClaudeStateMovesIntoTheConfigDir(t *testing.T) {
 	c, ws := stateConfig(t)
+	preparedBefore(t, ws)
 	writeWorkspaceFile(t, ws, ".claude.json", `{"numStartups":42}`)
 	if err := c.migrateClaudeState(mustRoot(t, c)); err != nil {
 		t.Fatal(err)
@@ -54,6 +62,7 @@ func TestClaudeStateMovesIntoTheConfigDir(t *testing.T) {
 // What is already at the new path is the agent's, and wins.
 func TestClaudeStateMoveDoesNotOverwrite(t *testing.T) {
 	c, ws := stateConfig(t)
+	preparedBefore(t, ws)
 	writeWorkspaceFile(t, ws, ".claude.json", `{"old":true}`)
 	writeWorkspaceFile(t, ws, ".claude/.claude.json", `{"new":true}`)
 	if err := c.migrateClaudeState(mustRoot(t, c)); err != nil {
@@ -71,6 +80,7 @@ func TestClaudeStateMoveDoesNotOverwrite(t *testing.T) {
 func TestClaudeStateMoveRefusesASymlink(t *testing.T) {
 	t.Run("at the old file", func(t *testing.T) {
 		c, ws := stateConfig(t)
+		preparedBefore(t, ws)
 		victim := filepath.Join(t.TempDir(), "config.json")
 		if err := os.WriteFile(victim, []byte(`{"auths":{}}`), 0o600); err != nil {
 			t.Fatal(err)
@@ -83,6 +93,7 @@ func TestClaudeStateMoveRefusesASymlink(t *testing.T) {
 	})
 	t.Run("at the config dir", func(t *testing.T) {
 		c, ws := stateConfig(t)
+		preparedBefore(t, ws)
 		outside := t.TempDir()
 		writeWorkspaceFile(t, ws, ".claude.json", `{}`)
 		plantLink(t, ws, ".claude", outside)
@@ -97,6 +108,7 @@ func TestClaudeStateMoveRefusesASymlink(t *testing.T) {
 func TestClaudeStateMoveIsOnlyForTheNewLayout(t *testing.T) {
 	ws := t.TempDir()
 	c := testConfig(t, ws, ws, testProfile(t, "onboarding:\n  file: .claude.json\n"))
+	preparedBefore(t, ws)
 	writeWorkspaceFile(t, ws, ".claude.json", `{}`)
 	if err := c.migrateClaudeState(mustRoot(t, c)); err != nil {
 		t.Fatal(err)
@@ -121,5 +133,33 @@ func TestPrepareWorkspaceSeedsStateInsideTheConfigDir(t *testing.T) {
 	if !strings.Contains(string(got), "hasCompletedOnboarding") ||
 		!strings.Contains(string(got), "hasTrustDialogAccepted") {
 		t.Errorf("seed = %s", got)
+	}
+}
+
+// A directory brig never prepared keeps its file: it belongs to whoever put
+// it there.
+func TestClaudeStateStaysInAHomeBrigNeverPrepared(t *testing.T) {
+	c, ws := stateConfig(t)
+	writeWorkspaceFile(t, ws, ".claude.json", `{"numStartups":7}`)
+	if err := c.PrepareWorkspace(); err != nil {
+		t.Fatal(err)
+	}
+	if old, err := os.ReadFile(filepath.Join(ws, ".claude.json")); err != nil || string(old) != `{"numStartups":7}` {
+		t.Errorf("the file was moved or changed: %q, %v", old, err)
+	}
+}
+
+// The user's own home keeps the host agent's state where the host agent
+// reads it, even after brig ran there before.
+func TestClaudeStateStaysInTheUsersHome(t *testing.T) {
+	c, ws := stateConfig(t)
+	t.Setenv("HOME", ws)
+	preparedBefore(t, ws)
+	writeWorkspaceFile(t, ws, ".claude.json", `{"mcpServers":{"x":{}}}`)
+	if err := c.PrepareWorkspace(); err != nil {
+		t.Fatal(err)
+	}
+	if old, err := os.ReadFile(filepath.Join(ws, ".claude.json")); err != nil || string(old) != `{"mcpServers":{"x":{}}}` {
+		t.Errorf("the host agent's state was moved or changed: %q, %v", old, err)
 	}
 }
