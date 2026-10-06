@@ -494,6 +494,13 @@ With an agent, `doctor` adds the image check. When the profile of the agent
 names a `runtimeBin`, the runtime and boot lines report on that binary and
 not on the one on `PATH`. An unknown agent exits `3`.
 
+Doctor checks the image against the trust policy a run of that agent uses,
+with `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
+applied, per-agent spelling first. The verify line reads `BRIG_VERIFY` the
+same way and names the variable its mode came from. When any of the three
+replaces the shipped policy, a `trust` line names the registry, identity and
+issuer in use. With no agent named, only the global variables count.
+
 ```bash
 brig doctor --json
 ```
