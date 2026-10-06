@@ -113,6 +113,19 @@ func (p Profile) validateVolumes() error {
 			tmpfs = append(tmpfs, v)
 		}
 	}
+	// A tmpfs nested in another, when either sets at:. One of the pair is
+	// mounted in the home and the other at its at:, so the paths under them
+	// stop agreeing: a hostmount under the inner one is bound in one place
+	// and checked for in another.
+	for i, a := range tmpfs {
+		for _, b := range tmpfs[i+1:] {
+			if (a.At != "" || b.At != "") && (Under(a.Path, b.Path) || Under(b.Path, a.Path)) {
+				return fmt.Errorf("volumes %q and %q are a tmpfs inside another and one of "+
+					"them sets at:; mount them side by side, or drop the inner one",
+					a.Path, b.Path)
+			}
+		}
+	}
 	for _, v := range p.Volumes {
 		if v.Kind != VolumeHostMount {
 			continue

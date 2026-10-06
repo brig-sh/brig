@@ -195,6 +195,13 @@ func TestVolumeAndFileValidation(t *testing.T) {
 		{"two tmpfs at nested at: paths", Profile{Volumes: []Volume{
 			{Kind: VolumeTmpfs, Path: ".claude", At: "/brig/claude"},
 			{Kind: VolumeTmpfs, Path: ".codex", At: "/brig/claude/codex"}}}, "cover the other"},
+		{"a tmpfs inside a relocated one", Profile{GuestHome: "/root", Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude", At: "/brig/claude"},
+			{Kind: VolumeTmpfs, Path: ".claude/sub"},
+			{Kind: VolumeHostMount, Path: ".claude/sub/x"}}}, "inside another"},
+		{"a relocated tmpfs inside a home one", Profile{GuestHome: "/root", Volumes: []Volume{
+			{Kind: VolumeTmpfs, Path: ".claude"},
+			{Kind: VolumeTmpfs, Path: ".claude/sub", At: "/brig/sub"}}}, "inside another"},
 
 		{"file with no volumes at all", Profile{Secrets: secrets, Files: []FileBinding{
 			{Ref: "secrets.cred", Path: ".claude/.credentials.json"}}}, "host disk"},
