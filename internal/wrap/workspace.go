@@ -250,13 +250,24 @@ func (c *Config) migrateClaudeState(r *workspaceRoot) error {
 	if ob == nil || ob.File != claudeState || isUserHome(c.Workspace) {
 		return nil
 	}
-	prepared, err := r.exists("move", markerFile)
-	if err != nil || !prepared {
-		return err
-	}
 	old, err := r.exists("move", legacyClaudeState)
 	if err != nil || !old {
 		return err
+	}
+	prepared, err := r.exists("move", markerFile)
+	if err != nil {
+		return err
+	}
+	if !prepared {
+		// Said once: the seed below makes the new file, and from then on
+		// the agent reads that one.
+		if fresh, err := r.exists("move", claudeState); err == nil && !fresh {
+			c.warnf("%s", notice.New(r.path(legacyClaudeState)+" stays where it is").
+				Note("brig did not prepare this home, so it moves nothing in it; %s now reads its state from %s",
+					c.Profile.Binary, claudeState).
+				Do("to keep using it", "mv "+r.path(legacyClaudeState)+" "+r.path(claudeState)))
+		}
+		return nil
 	}
 	if err := ensureTarget(r, slashDir(claudeState), false); err != nil {
 		return err

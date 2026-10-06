@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,6 +148,17 @@ func TestClaudeStateStaysInAHomeBrigNeverPrepared(t *testing.T) {
 	if old, err := os.ReadFile(filepath.Join(ws, ".claude.json")); err != nil || string(old) != `{"numStartups":7}` {
 		t.Errorf("the file was moved or changed: %q, %v", old, err)
 	}
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, ".claude.json stays where it is") {
+		t.Errorf("nothing said the old state is no longer read: %q", said)
+	}
+	// Once: the seed made the new file, and the next run reads that one.
+	again := testConfig(t, ws, ws, c.Profile)
+	if err := again.PrepareWorkspace(); err != nil {
+		t.Fatal(err)
+	}
+	if said := again.Err.(*bytes.Buffer).String(); strings.Contains(said, "stays where it is") {
+		t.Errorf("the notice repeats on every run: %q", said)
+	}
 }
 
 // The user's own home keeps the host agent's state where the host agent
@@ -161,6 +173,9 @@ func TestClaudeStateStaysInTheUsersHome(t *testing.T) {
 	}
 	if old, err := os.ReadFile(filepath.Join(ws, ".claude.json")); err != nil || string(old) != `{"mcpServers":{"x":{}}}` {
 		t.Errorf("the host agent's state was moved or changed: %q, %v", old, err)
+	}
+	if said := c.Err.(*bytes.Buffer).String(); strings.Contains(said, "stays where it is") {
+		t.Errorf("the host agent's own state was reported as left behind: %q", said)
 	}
 }
 
