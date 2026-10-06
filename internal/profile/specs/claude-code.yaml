@@ -228,10 +228,11 @@ env:
 # explicit binding written by the profile author.
 deny: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN]
 
-# Kept, and it now means what it always said. brig never writes to this host
-# path -- the credential lives in the tmpfs above -- so a .credentials.json
-# found in the workspace is a real token left on disk by an older brig or an
-# older workspace. It is the warning this migration most needs.
+# brig never writes to this host path -- the credential lives in the tmpfs
+# above -- so a .credentials.json found in the workspace is a real token on
+# disk. An older brig or an older workspace may have left it. Or a claude in
+# the sandbox wrote it without CLAUDE_CONFIG_DIR, under sudo -i or su - for
+# example: ~/.claude in the guest home is on the share now, not on a tmpfs.
 staleCredentialFiles: [.claude/.credentials.json]
 
 # statePaths is gone: volumes: above is the same list made load-bearing, and
