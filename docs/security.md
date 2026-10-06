@@ -1068,28 +1068,50 @@ property of Brig.
 
 ### Terminal output
 
-If terminal output matters for your threat model, run Brig inside a terminal
-you are willing to lose, or through `hull exec`.
+What the agent writes to your terminal can do more than draw. A few escape
+sequences make the terminal answer, and the answer lands on standard input.
+An agent that read a hostile README can try any of these:
 
-Brig does not filter what the agent writes to your terminal. `brig` hands the
-tty over with `syscall.Exec` and is gone before the agent produces a byte.
-That gives correct `^C` handling and a truthful exit status. Every byte the
-agent emits reaches your terminal emulator unexamined.
-
-That is a real surface. An agent that read a hostile README can do any of
-these:
-
-- OSC 52 writes to, and reads from, the system clipboard.
+- An OSC 52 query reads the system clipboard. An OSC 52 write sets it.
 - `tmux` and `screen` forward DCS sequences verbatim to the *outer* terminal.
 - A cursor-position query makes the terminal type its reply onto your shell's
   standard input.
 
+Brig itself filters nothing. `brig` hands the tty over with `syscall.Exec`
+and is gone before the agent produces a byte. That gives correct `^C`
+handling and a truthful exit status. Whether the bytes are filtered depends
+on the runtime that Brig hands the tty to.
+
 | Command | Filters control sequences? |
 | --- | --- |
-| `brig run` | No |
-| `brig run` with `--json` | No. `brig` stays alive as the agent's parent, so that it can print one status line after the agent exits. The tty is still the agent's. `brig` reads nothing the agent prints and writes nothing to it, and the exit status is still the agent's own |
+| `brig run`, `brig sh` on macOS | Yes. Brig hands the tty to `hull exec -t`, and hull filters what reaches your terminal |
+| `brig run`, `brig sh` on Linux | No. nerdctl and docker pass every byte the agent emits to your terminal emulator unexamined |
+| `brig run` with `--json` | As without it. `brig` stays alive as the agent's parent, so that it can print one status line after the agent exits. It runs the same command, reads nothing the agent prints and writes nothing to it, and the exit status is still the agent's own |
 | `hull exec`, `hull logs` | Yes. hull stays in the middle of that stream |
 | `brig logs` | Yes, by default. It reads a log back and does not drive a terminal. `--raw` turns the filter off and hands you the bytes with that surface intact |
+
+hull's filter keeps a terminal agent working. Color, cursor movement, mouse
+tracking, bracketed paste and the alternate screen pass through. It drops
+the sequences that ask the terminal for a reply or reach past the display:
+OSC 52 queries, OSC 1337, palette queries, device and status reports,
+window reports, and DCS, SOS, PM and APC strings. It filters only when the
+output is a terminal; a pipe or a file gets the bytes as they are.
+
+Two things still pass on macOS:
+
+- **OSC 52 writes.** That is how vim, tmux and agents copy, and blocking it
+  broke copy and paste. A guest can set your clipboard, and what it set
+  reaches whatever you paste into next.
+- **C1 controls spelled as UTF-8.** hull drops them as raw bytes, but not
+  yet in their two-byte UTF-8 form
+  ([brig-sh/hull#17](https://github.com/brig-sh/hull/issues/17)).
+
+`HULL_TERMINAL_FILTER=off` turns hull's filter off and gives the guest your
+terminal. It is there for when the filter gets in the way, and it is the
+wrong thing to leave set.
+
+On Linux, or with the filter off, run Brig inside a terminal you are willing
+to lose if terminal output matters for your threat model.
 
 ### The guest home
 
