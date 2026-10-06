@@ -423,8 +423,9 @@ gate_exec() {
   fi
 }
 
-# Phrases from brig's checks of the claude-code guest's .claude mounts
-# (internal/wrap/secretfiles.go), each printed with the path it checked.
+# Phrases from brig's checks of the claude-code guest's credential mounts
+# (internal/wrap/secretfiles.go), each printed with the path it checked:
+# /brig/claude and the files bound into it since #462.
 REFUSAL='should be ephemeral|is not mounted|should be kept on the host|rather than an ephemeral mount|could not check what'
 
 gate_claude() {
@@ -436,12 +437,12 @@ gate_claude() {
     t0="$(now)"
     ro="$(timeout --kill-after=10 600 brig run -d claude 2>&1)" || rc_run=$?
     t1="$(now)"
-    so="$(gsh claude "echo ok-$i; stat -f -c %T /root/.claude")" || rc_sh=$?
+    so="$(gsh claude "echo ok-$i; stat -f -c %T /brig/claude")" || rc_sh=$?
     timeout --kill-after=10 300 brig rm claude || rc_rm=$?
     fs="$(echo "$so" | grep -v "^ok-$i\$" | tail -n 1)"
     echo "$fs" >> "$OUT/claude-fs.txt"
-    echo "boot $i: run exit $rc_run in $(dt "$t0" "$t1") s, sh exit $rc_sh, rm exit $rc_rm, /root/.claude on [$fs]"
-    if printf '%s\n%s\n' "$ro" "$so" | grep -E "$REFUSAL" | grep -q '\.claude'; then
+    echo "boot $i: run exit $rc_run in $(dt "$t0" "$t1") s, sh exit $rc_sh, rm exit $rc_rm, /brig/claude on [$fs]"
+    if printf '%s\n%s\n' "$ro" "$so" | grep -E "$REFUSAL" | grep -q 'claude'; then
       refusals=$((refusals + 1))
       printf '%s\n%s\n' "$ro" "$so" | grep -E "$REFUSAL" | sed 's/^/  refusal: /'
     elif [ "$rc_run" != 0 ] || [ "$rc_sh" != 0 ] || ! echo "$so" | grep -q "^ok-$i\$"; then
@@ -454,7 +455,7 @@ gate_claude() {
   res note "claude-code boot" "median of $CLAUDE_N runs of brig run -d claude, image already pulled"
   local seen
   seen="$(sort "$OUT/claude-fs.txt" | uniq -c | awk '{ $1 = $1; print }' | paste -s -d, - | sed 's/,/, /g')"
-  local note="$refusals refusals naming .claude and $failures other failures in $CLAUDE_N boots. /root/.claude: $seen."
+  local note="$refusals refusals naming a claude mount and $failures other failures in $CLAUDE_N boots. /brig/claude: $seen."
   if [ "$refusals" = 0 ] && [ "$failures" = 0 ]; then
     res gate claude pass "$note"
   else
@@ -1045,6 +1046,79 @@ ENVCHK='for v in E2E_FWD E2E_SNEAKY ANTHROPIC_API_KEY; do echo "$v=${!v:-UNSET}"
 # env_field TEXT NAME: the value ENVCHK printed for NAME.
 env_field() { echo "$1" | sed -n "s/^$2=//p" | head -n 1 | tr -d ' '; }
 
+# Where a file from the guest's /brig/claude would land if it reached the
+# host: brig's homes and the runtime's own store.
+CLAUDE_LEAK_ROOTS=("$HOME/.brig" "$HOME/.local/share")
+
+# check_claude_tmpfs: claude-code keeps its credential directory on a tmpfs at
+# /brig/claude, off the home share, and CLAUDE_CONFIG_DIR points there (#462).
+# Its state files reach the guest as hostmounts inside that tmpfs. Three
+# checks on one sandbox:
+#   - a file the guest writes in /brig/claude reaches no host directory;
+#   - brig rewrites a hostmounted .claude.json in place, so the guest's bind
+#     still sees it. A rename leaves a virtiofsd bind on the old file;
+#   - a host rename of the home's .claude, as git clean -fdx makes, leaves
+#     the tmpfs in place, and what the guest writes next stays off the host.
+# The probe files carry a name no host file has, so find is the leak check.
+check_claude_tmpfs() {
+  local ref=claude-code@cct home tok rc=0 out ccd cfs leak1 leak2 f ino0 ino1 keys moved=no
+  home="$HOME/.brig/homes/brig-claude-code-cct"
+  tok="e2e-cc-$RANDOM$RANDOM"
+  run 900 brig run -d "$ref" --mem 2048 || rc=$?
+
+  out="$(gsh "$ref" "echo CCD=\$CLAUDE_CONFIG_DIR; echo CFS=\$(stat -f -c %T /brig/claude); echo $tok > /brig/claude/.$tok-1")" || true
+  ccd="$(env_field "$out" CCD)"
+  cfs="$(env_field "$out" CFS)"
+  leak1="$(find "${CLAUDE_LEAK_ROOTS[@]}" -name ".$tok-*" -print 2> /dev/null | head -n 3 || true)"
+  if [ "$rc" = 0 ] && [ "$ccd" = /brig/claude ] && [ "$cfs" = tmpfs ] && [ -z "$leak1" ]; then
+    res check Credentials "claude-code's credential directory is a tmpfs off the home share (#462)" pass \
+      "CLAUDE_CONFIG_DIR=$ccd on $cfs; a file the guest wrote there is in none of: ${CLAUDE_LEAK_ROOTS[*]}"
+  else
+    res check Credentials "claude-code's credential directory is a tmpfs off the home share (#462)" fail \
+      "run exit $rc; CLAUDE_CONFIG_DIR=[$ccd], /brig/claude on [$cfs]; on the host: [$(echo "$leak1" | one_line 200)]"
+  fi
+
+  # The trust key brig writes for the guest's working directory. Drop it on
+  # the host without replacing the file, so the next brig sh writes it again.
+  f="$home/.claude/.claude.json"
+  ino0="$(python3 -c 'import os, sys; print(os.stat(sys.argv[1]).st_ino)' "$f" 2> /dev/null || true)"
+  python3 - "$f" << 'EOF' || true
+import json, sys
+with open(sys.argv[1], "r+") as fh:
+    d = json.load(fh)
+    d.pop("projects", None)
+    fh.seek(0)
+    fh.write(json.dumps(d))
+    fh.truncate()
+EOF
+  out="$(gsh "$ref" "echo KEYS=\$(grep -c '\"projects\"' /brig/claude/.claude.json)")" || true
+  keys="$(env_field "$out" KEYS)"
+  ino1="$(python3 -c 'import os, sys; print(os.stat(sys.argv[1]).st_ino)' "$f" 2> /dev/null || true)"
+  if [ -n "$ino0" ] && [ "$ino0" = "$ino1" ] && [ "${keys:-0}" -ge 1 ] 2> /dev/null && grep -q '"projects"' "$f"; then
+    res check Credentials "brig rewrites a hostmounted .claude.json in place, and the guest sees it" pass \
+      "inode $ino0 before and after brig sh wrote the trust key again; the guest's bind reads it"
+  else
+    res check Credentials "brig rewrites a hostmounted .claude.json in place, and the guest sees it" fail \
+      "inode [$ino0] -> [$ino1]; projects in the guest's copy: [$keys]; on the host: $(grep -c '"projects"' "$f" 2> /dev/null || echo none)"
+  fi
+
+  if [ -d "$home/.claude" ] && mv "$home/.claude" "$home/.claude.e2e-moved"; then
+    moved=yes
+  fi
+  out="$(gsh "$ref" "echo CFS=\$(stat -f -c %T /brig/claude); echo P1=\$(cat /brig/claude/.$tok-1); echo $tok > /brig/claude/.$tok-2 && echo W2=ok")" || true
+  leak2="$(find "${CLAUDE_LEAK_ROOTS[@]}" -name ".$tok-*" -print 2> /dev/null | head -n 3 || true)"
+  run 300 brig rm "$ref" || true
+  rm -rf "$home/.claude.e2e-moved"
+  if [ "$moved" = yes ] && [ "$(env_field "$out" CFS)" = tmpfs ] && [ "$(env_field "$out" P1)" = "$tok" ] &&
+     [ "$(env_field "$out" W2)" = ok ] && [ -z "$leak2" ]; then
+    res check Credentials "A host rename of the home's .claude leaves the credential tmpfs in place (#462)" pass \
+      "after mv .claude on the host: /brig/claude still tmpfs, the first file still there, a second written, neither on the host"
+  else
+    res check Credentials "A host rename of the home's .claude leaves the credential tmpfs in place (#462)" fail \
+      "moved: $moved; guest: $(echo "$out" | grep -E '^(CFS|P1|W2)=' | one_line 200); on the host: [$(echo "$leak2" | one_line 200)]"
+  fi
+}
+
 # check_creds boots claude-code with three variables in the shell: one named
 # in BRIG_FORWARD_ENV, one named nowhere, and ANTHROPIC_API_KEY, which is
 # named but on the claude-code denylist. Only the first may reach the guest.
@@ -1515,6 +1589,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block symlink check_symlink
   block hostmount-symlink check_hostmount_symlink
   block brigd-lock check_brigd_lock
+  block claude-tmpfs check_claude_tmpfs
   block creds check_creds
   block agent-rm check_agent_rm
   block files-mode check_files_mode
