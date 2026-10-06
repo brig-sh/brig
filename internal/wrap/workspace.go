@@ -284,24 +284,26 @@ func isUserHome(dir string) bool {
 	return os.SameFile(a, b)
 }
 
-// warnStaleCredentials points out a credential an older wrapper wrote into
-// the workspace. brig never writes to a host path: a credential it delivers as
-// a file goes into a tmpfs the profile declares, which the workspace cannot
-// see. So such a file is a real token sitting on disk that nothing reads any
-// more -- and adopting a Homebrew-era workspace is exactly how one gets here.
-// Say so rather than deleting somebody's file.
+// warnStaleCredentials points out a credential file in the workspace. brig
+// never writes to a host path: a credential it delivers as a file goes into a
+// tmpfs the profile declares, which the workspace cannot see. So such a file
+// is a real token sitting on disk. An older wrapper may have left it, which
+// is how adopting a Homebrew-era workspace gets here. Or a process in the
+// sandbox wrote it outside the tmpfs: with claude-code's tmpfs at
+// /brig/claude, a claude started without CLAUDE_CONFIG_DIR writes it to the
+// home share. Say so rather than deleting somebody's file.
 //
-// The lstat is against the WORKSPACE, not against the guest, which is what
-// keeps this honest now that claude-code binds a credential at the same
-// relative path: the guest sees that path on a tmpfs, and nothing brig writes
-// there ever reaches the directory this reads.
+// The lstat is against the WORKSPACE, not against the guest. brig writes the
+// credential to mountTarget, under the tmpfs, so nothing brig writes reaches
+// the directory this reads.
 func (c *Config) warnStaleCredentials(r *workspaceRoot) {
 	for _, rel := range c.Profile.StaleCredentialFiles {
 		rel = filepath.FromSlash(rel)
 		path := r.path(rel)
 		if _, err := r.lstat(rel); err == nil {
-			c.warnf("%s", notice.New(path+" holds a token on disk and is no longer used").
-				Note("brig keeps credentials in its own store and hands them to the sandbox in memory").
+			c.warnf("%s", notice.New(path+" holds a token on disk").
+				Note("brig hands credentials to the sandbox in memory and never writes one there, "+
+					"so an older wrapper left it or a process in the sandbox wrote it outside brig's tmpfs").
 				Do("to delete it", "rm "+path))
 		}
 	}

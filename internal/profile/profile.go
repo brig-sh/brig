@@ -188,9 +188,9 @@ type Profile struct {
 	// operating systems support this: the artifacts travel as OCI annotations
 	// either way, on hull's command line or through nerdctl to urunc.
 	GenericBoot bool `json:"genericBoot,omitempty"`
-	// StaleCredentialFiles are paths under GuestHome that an older wrapper
-	// used to write a credential into. brig never does, so finding one means
-	// a real token is sitting on disk that nothing needs any more.
+	// StaleCredentialFiles are paths under GuestHome where a credential file
+	// means a token on disk. brig never writes one there. An older wrapper
+	// did, and so does an agent that bypasses the profile's tmpfs.
 	StaleCredentialFiles []string `json:"staleCredentialFiles,omitempty"`
 	// Onboarding is the first-run state file, if the agent has one.
 	Onboarding *Onboarding `json:"onboarding,omitempty"`
