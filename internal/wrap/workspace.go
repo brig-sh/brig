@@ -259,12 +259,12 @@ func (c *Config) migrateClaudeState(r *workspaceRoot) error {
 		return err
 	}
 	if !prepared {
-		// Said once: the seed below makes the new file, and from then on
-		// the agent reads that one.
+		// Said once. This run writes the marker and seeds the new file, and
+		// from the next run on the seeded file wins, so nothing repeats it.
 		if fresh, err := r.exists("move", claudeState); err == nil && !fresh {
 			c.warnf("%s", notice.New(r.path(legacyClaudeState)+" stays where it is").
-				Note("brig did not prepare this home, so it moves nothing in it; %s now reads its state from %s",
-					c.Profile.Binary, claudeState).
+				Note("brig did not prepare this home, so it moves nothing in it, and says so only this once; "+
+					"%s now reads its state from %s", c.Profile.Binary, claudeState).
 				Do("to keep using it", "mv "+r.path(legacyClaudeState)+" "+r.path(claudeState)))
 		}
 		return nil
@@ -405,7 +405,10 @@ func under(cwd, workspace string) bool {
 // holds that file through a bind, and a virtio-fs server that tracks files by
 // handle, as virtiofsd does, keeps the bind on the old file after a rename:
 // the key would never reach the agent, and what the agent wrote next would go
-// to a file with no name on the host, lost at shutdown.
+// to a file with no name on the host, lost at shutdown. The in-place write
+// gives up the guarantee above: brig stopped between the truncate and the
+// write leaves the state file short. No atomic in-place write exists, and
+// claude-code, the only shipped profile with onboarding:, takes this path.
 //
 // The read matters as much as the write, and is the less obvious of the two.
 // A rename cannot be made to land outside the workspace, which makes this look

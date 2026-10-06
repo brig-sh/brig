@@ -706,7 +706,9 @@ path of Brig's own, such as `/brig/<name>`, and point the agent there with
   is not absolute and clean, that is `/`, that is `guestHome` or overlaps it,
   that sits in a system directory (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`,
   `/etc`, `/usr`, `/bin`, `/sbin`, `/lib*`, `/boot`, `/var`) or in `/work`,
-  where a project is mounted, or that overlaps another `tmpfs`'s `at:`.
+  where a project is mounted, or that overlaps another `tmpfs`'s `at:`. It
+  also refuses two `tmpfs` volumes whose `path:` values nest when either one
+  sets `at:`.
 - `claude-code` mounts its `.claude` `tmpfs` at `/brig/claude` and sets
   `CLAUDE_CONFIG_DIR` to it. `claude-desktop` still covers `.claude` inside
   the guest home, because its bundled binary has not been checked for
