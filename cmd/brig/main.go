@@ -96,7 +96,7 @@ global flags (left of the command, as in: brig -q run claude):
                          brig's warnings; with ls it prints the refs, one per
                          line. A verification that did not hold is printed
                          even here
-                         (-q after the verb works until v0.4.0)
+                         (-q after the verb works until v0.5.0)
       --json             machine-readable output, for the read verbs: ls, info,
                          plan, agent ls, secret ls, doctor, version and the
                          network verbs. Also accepted after the verb (brig ls
@@ -162,7 +162,7 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off: guest image signature
   BRIG_PROFILE_DIR     where your own profiles live
-                       (BRIG_TEMPLATE_DIR works until v0.4.0)
+                       (BRIG_TEMPLATE_DIR works until v0.5.0)
   BRIG_RUNTIME         hull | nerdctl
 `
 
@@ -3598,10 +3598,10 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) (asked
 
 // retiredGoesIn is the release that removes the retired spellings. Every
 // notice names it, so a script's author plans for a version number rather than
-// for "the next release". The date was v0.3 until v0.3.0 shipped with the
-// spellings still in, which is why it lives in one place and
+// for "the next release". The date was v0.3, then v0.4, and both releases
+// shipped with the spellings still in, which is why it lives in one place and
 // TestDocsNameTheRemovalRelease holds the docs to it.
-const retiredGoesIn = "v0.4.0"
+const retiredGoesIn = "v0.5.0"
 
 // deprecated notes an old spelling once, on stderr so it never lands in
 // something being piped, and names the release that removes it.

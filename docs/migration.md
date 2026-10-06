@@ -6,12 +6,12 @@ replacement and the release that removes the old spelling:
 
 ```
 brig: `brig profiles` is now `brig agent ls`
-  ↳ the old spelling is removed in v0.4.0
+  ↳ the old spelling is removed in v0.5.0
 ```
 
 When stderr is not a terminal, both lines start with `brig:`.
 
-Brig removes the old spellings in v0.4.0, with one exception. `brig exec`
+Brig removes the old spellings in v0.5.0, with one exception. `brig exec`
 stays until `brig sh` can pipe the output of a command, and its notice says
 that instead of a release. `brig run` is never removed.
 [Stability](stability.md#retired-spellings) has the rule.
@@ -111,7 +111,7 @@ The notice names the move:
 
 ```
 brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`
-  ↳ the old spelling is removed in v0.4.0
+  ↳ the old spelling is removed in v0.5.0
 ```
 
 `--json` is accepted on both sides of the verb and prints no notice.
@@ -227,7 +227,7 @@ brig run claude --name refactor   # still works, prints a notice
 guest home. [Sessions](sessions.md) explains what each session keeps
 separate.
 
-`--name` is also Claude Code's own flag. Until v0.4.0, Brig still reads a
+`--name` is also Claude Code's own flag. Until v0.5.0, Brig still reads a
 `--name` that stands before the agent's own arguments. To pass it to the
 agent, put it after `--`: `brig run claude -- --name x` sends `--name x` to
 Claude Code.
@@ -235,7 +235,7 @@ Claude Code.
 ## Profile keys
 
 `shell:`, `gui:`, `forward:` and `statePaths:` still parse in a profile file
-until v0.4.0, and print no notice at run time. Brig refuses a profile that
+until v0.5.0, and print no notice at run time. Brig refuses a profile that
 still has `hostCredential:`, as it refuses any field that it does not know.
 `brig agent export claude-code` prints a current profile, and its header
 comment documents every field.
@@ -324,7 +324,7 @@ including the ambiguity of stale specs left beside old shared overrides.
 | `BRIG_TEMPLATE_DIR` | `BRIG_PROFILE_DIR` |
 | `BRIG_CREDENTIALS_CMD` | removed: declare the credential under `secrets:`, then run `brig secret import <agent> <name> --from-command '<command>'` |
 
-`BRIG_TEMPLATE_DIR` still works until v0.4.0, and prints no notice.
+`BRIG_TEMPLATE_DIR` still works until v0.5.0, and prints no notice.
 `BRIG_PROFILE_DIR` wins when both are set. Brig refuses a run that still sets
 `BRIG_CREDENTIALS_CMD`.
 

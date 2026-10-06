@@ -89,8 +89,9 @@ spelling with its replacement.
 A spelling is removed only in a minor release, and at least one release after
 its first notice. `brig run` is never removed.
 
-The retired spellings that still work today are removed in v0.4.0. v0.3.0
-removed only `brig shell` and the `hostCredential:` profile key.
+The retired spellings that still work today are removed in v0.5.0. v0.3.0
+removed only `brig shell` and the `hostCredential:` profile key, and v0.4.0
+removed none.
 
 Two exceptions:
 
@@ -100,7 +101,7 @@ Two exceptions:
   ahead.
 - The profile keys `forward:`, `statePaths:`, `shell:` and `gui:`, and the
   `BRIG_TEMPLATE_DIR` setting, print no notice at run time. They are also
-  removed in v0.4.0, and [migration.md](migration.md) says so for each.
+  removed in v0.5.0, and [migration.md](migration.md) says so for each.
 
 ## Breaking changes
 
