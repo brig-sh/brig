@@ -308,6 +308,11 @@ setup() {
   res fact "brig version" "$version"
   res fact "runtime bundle ($short)" "$bundle ($source)" "https://github.com/NOFireAI/brig-standalone-linux/releases/tag/$bundle"
   res fact "urunc ($short)" "${urunc:0:7}" "https://github.com/urunc-dev/urunc/commit/$urunc"
+  local assets monitors
+  assets="$(awk -F= '$1 == "ASSETS_VERSION" { print $2 }' "$BUNDLE_DIR/pins.env")"
+  monitors="$(awk -F= '$1 == "MONITORS_VERSION" { print $2 }' "$BUNDLE_DIR/pins.env")"
+  res fact "boot assets ($short)" "hull-assets ${assets:-unknown}"
+  res fact "VMMs ($short)" "${monitors:-unknown}"
   res meta host_detail "$(nproc) vCPUs, $(free -g | awk '/^Mem:/ { print $2 }') GB, kernel $(uname -r), nested KVM. A rootless user install from install.sh at ${head:0:7}, with runtime bundle $bundle ($source)."
 
   if [ "$commit" != "$head" ]; then

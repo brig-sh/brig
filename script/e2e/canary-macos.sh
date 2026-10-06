@@ -245,11 +245,53 @@ setup() {
   res fact "brig version" "$version"
   res fact hull "$hull_version" "https://github.com/brig-sh/hull/releases/tag/$tag"
   res meta host_detail "$(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, macOS $(sw_vers -productVersion), SIP enabled. A scratch HOME, and hull from the hull@main channel on PATH."
+  check_backends "${tag##*.}"
   if [ "$commit" != "$head" ]; then
     res check Install "brig version names this commit" fail "$version; commit $commit, checkout $head"
     return 1
   fi
   touch "$OUT/setup.ok"
+}
+
+# check_backends HULL_COMMIT records the hvi the hull build carries, and
+# checks the build is the one for hull's main. A channel build bundles the hvi
+# its commit pins as the hvi-vmm submodule. hvi --version names no commit.
+check_backends() {
+  local hc=$1 hvi hvi_main hull_main note
+  hvi="$(api "repos/brig-sh/hull/contents/hvi-vmm?ref=$hc" | field sha || true)"
+  hvi_main="$(api "repos/brig-sh/hvi-vmm/commits/main" | field sha || true)"
+  hull_main="$(api "repos/brig-sh/hull/commits/main" | field sha || true)"
+  echo "hull build $hc, hull main ${hull_main:0:7}, hvi ${hvi:0:7}, hvi-vmm main ${hvi_main:0:7}"
+  if [ -n "$hvi" ]; then
+    note="pinned by hull $hc"
+    if [ -n "$hvi_main" ] && [ "$hvi" != "$hvi_main" ]; then
+      note="$note; hvi-vmm main is ${hvi_main:0:7}"
+    fi
+    res fact hvi "${hvi:0:7} ($note)" "https://github.com/brig-sh/hvi-vmm/commit/$hvi"
+  else
+    res fact hvi "unknown: the API did not name hull $hc's hvi-vmm commit"
+  fi
+  if [ -z "$hull_main" ]; then
+    res check Install "hull is the newest hull@main build" skip "the API did not name hull's main"
+  elif [ "${hull_main:0:${#hc}}" = "$hc" ]; then
+    res check Install "hull is the newest hull@main build" pass "hull $hc is main, with hvi ${hvi:0:7}"
+  else
+    res check Install "hull is the newest hull@main build" skip \
+      "hull main is ${hull_main:0:7} and its channel build is not published yet; this run has $hc"
+  fi
+}
+
+# record_boot_assets records the boot assets brig fetched into hull's store
+# for this run, from the bundle record hull keeps beside them.
+record_boot_assets() {
+  local b
+  b="$(tmo 30 hull assets dir < /dev/null)/bundle.json"
+  if [ ! -f "$b" ]; then
+    res fact "boot assets" "none in hull's store"
+    return 0
+  fi
+  cat "$b"
+  res fact "boot assets" "$(field version < "$b"), kernel $(field kernel.version < "$b"), urunc $(field sources.urunc.ref < "$b" | cut -c1-7)"
 }
 
 check_version() {
@@ -1108,6 +1150,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block profiles check_profiles
   block doctor check_doctor
   block cycles check_cycles
+  block assets record_boot_assets
   block homes check_rm_home
   block failed-boot check_failed_boot
   block shell check_shell_removed
