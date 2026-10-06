@@ -2,7 +2,7 @@
 
 For a walkthrough of a first run, see [Quickstart](quickstart.md).
 
-Most retired spellings still work until v0.4.0.
+Most retired spellings still work until v0.5.0.
 [Retired spellings](migration.md) has the old-to-new table and the
 exceptions. [Stability](stability.md) lists what you can write a script
 against.
@@ -791,7 +791,7 @@ Both positions accept two flags:
 
 | Flag | After the verb, on the run line |
 | --- | --- |
-| `-q`/`--quiet` | still works until v0.4.0, and prints one deprecation notice moving it left. See [Retired spellings](migration.md) |
+| `-q`/`--quiet` | still works until v0.5.0, and prints one deprecation notice moving it left. See [Retired spellings](migration.md) |
 | `--json` | a permanent peer spelling. No notice, either position |
 
 ```bash
@@ -1043,7 +1043,7 @@ one "global only".
 | --- | --- | --- |
 | `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set. A sandbox that a release before 0.3.0 started on `~/brig/<agent>` keeps that home, and Brig does not delete it |
 | `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A named session appends `-<slug>` |
-| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. `BRIG_TEMPLATE_DIR` still works until v0.4.0 |
+| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. `BRIG_TEMPLATE_DIR` still works until v0.5.0 |
 | `BRIG_POLICY_DIR` (global only) | `$XDG_CONFIG_HOME/brig/policies` | where policy files live |
 | `BRIG_STATE_DIR` (global only) | `~/.brig` | where Brig keeps what has to outlive one command, including the project each sandbox last ran with |
 

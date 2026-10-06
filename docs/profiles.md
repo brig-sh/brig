@@ -90,7 +90,7 @@ be named after the profile inside it. Two files with one name is a mistake:
 <details>
 <summary>Locations from older versions</summary>
 
-- The older `BRIG_TEMPLATE_DIR` works until v0.4.0.
+- The older `BRIG_TEMPLATE_DIR` works until v0.5.0.
 - Brig does not read the old `~/.config/brig/templates` default, and it
   migrates nothing. If files remain there, Brig says so on every invocation.
   Move them across with `brig agent import`.

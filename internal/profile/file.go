@@ -61,7 +61,7 @@ const BringYourOwnImageDoc = "https://github.com/brig-sh/community-images/blob/m
 // BRIG_PROFILE_DIR is brig's own variable rather than an XDG one, so it is
 // taken as given: an explicit override is a deliberate act and does not get
 // second-guessed for absoluteness. BRIG_TEMPLATE_DIR is the older spelling,
-// honoured until v0.4.0.
+// honoured until v0.5.0.
 func Dir() string {
 	if dir := os.Getenv("BRIG_PROFILE_DIR"); dir != "" {
 		return dir
@@ -307,13 +307,13 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this 
 #              mount before children by path depth, so the order you write
 #              them in is taste
 #   forward    deprecated: forward: [X] now means env: [{name: X, ref: env.X}],
-#              which says the same thing. Still read until v0.4.0
+#              which says the same thing. Still read until v0.5.0
 #   deny       variables never bound, whatever env or forward says. This is the
 #              billing guard: a metered API key that outranks a subscription
 #              token belongs here
 #   statePaths deprecated: volumes: above says the same thing and is acted on.
 #              A profile may declare one or the other, never both. Still
-#              read until v0.4.0
+#              read until v0.5.0
 #   hypervisor macOS backend to boot on: vz (the default, the one with a
 #              graphical console), hvi or qemu. BRIG_HYPERVISOR wins over it
 #   runtimeBin the runtime binary to drive instead of the one on PATH. About
