@@ -83,35 +83,6 @@ token.
 - A runtime offers a credential broker with a per-request hook, so the
   plaintext lives somewhere other than a Brig process.
 
-## Remote or Kubernetes operation
-
-Brig runs on the machine in front of you. Three of its properties depend on
-that:
-
-- The guest home is a live host directory, not a copy. That is why Brig has
-  no `cp` verb.
-- Brig resolves credentials from your own keychain per invocation.
-- On the two profiles that declare a tmpfs, `claude-code` and
-  `claude-desktop`, an in-sandbox login lives in guest memory and ends with
-  `brig stop`. On the other profiles, the login is on the persisted guest
-  home, like everything else there.
-
-On a remote host, each property becomes a problem:
-
-- The guest home becomes a synchronisation problem.
-- The credential path becomes a transport with its own threat model.
-- A login meant to stay in memory sits on a machine that you are not in
-  front of.
-
-Kubernetes adds a controller, a custom resource, an image pull secret story,
-and a scheduler on top. For remote use today, `ssh` to the host and run Brig
-there.
-
-**Reopens when** it becomes the common case to run the agent on a different
-machine from the one you edit on. It also needs a design that keeps the
-credential on the machine of the operator and does not copy it to the
-remote host.
-
 ## A hosted control plane or account
 
 There is nothing to sign in to. Every piece of state is on your disk:
@@ -262,6 +233,25 @@ interface: `cosign`, `oras`, `security`.
 people keep asking for it. The answer then is another subprocess with a
 defined protocol, in the shape of `cosign` and `oras`. It is not code loaded
 into the address space of Brig.
+
+## Reopened
+
+These items were decisions on this page, and work on them is now in
+progress. Each issue carries the design and the constraints that the item
+named.
+
+| Item | Issue |
+| --- | --- |
+| Remote operation | [#482](https://github.com/brig-sh/brig/issues/482) |
+| Kubernetes operation | [#483](https://github.com/brig-sh/brig/issues/483) |
+
+Two related pieces of work are in progress too: an OpenShell compute driver
+that boots Brig sandboxes
+([#484](https://github.com/brig-sh/brig/issues/484)), and a compose stack
+run as a set of sandboxes
+([#485](https://github.com/brig-sh/brig/issues/485)).
+
+Until remote operation ships, `ssh` to the host and run Brig there.
 
 ## Proposing one of these anyway
 
