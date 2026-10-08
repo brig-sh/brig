@@ -628,6 +628,40 @@ run names `~/monorepo/frontend`. The guest home has the same gap, and so does
 a hostmount volume source. To close the gap, the runtime must accept a
 directory handle and not a path.
 
+### What the host runs from the project
+
+Brig mounts the whole project, `.git` included. Git on the host runs
+programs that the repository names, so a file the agent writes into `.git`
+runs on the host, as you, at your next git command in that directory:
+
+- a hook in `.git/hooks`, for example `post-checkout` at `git checkout .`
+- a program that `.git/config` names, for example `core.fsmonitor` at
+  `git status` and `git diff`. `core.hooksPath`, `core.pager`, filter, diff
+  and merge drivers, and aliases that start with `!` work the same way.
+
+`core.fsmonitor` runs before you have read anything: at the first
+`git diff`, or when an editor or a shell prompt runs `git status` in that
+directory.
+
+Reading the diff does not catch either one. `.git` is not part of the working
+tree, so neither `git diff` nor `git status` shows a new hook or a changed
+config. Git's `safe.directory` check does not apply, because you still own
+the repository. A setting in your global git config does not help, because
+the repository's config overrides it.
+
+Files in the working tree can run on the host later too: CI workflows,
+editor task files and package scripts. Those do show in the diff, but they
+run when a tool runs them, not when you read them.
+
+After a run, before any other git command in the project on the host, do
+one of these:
+
+- Read the repository's config and hooks with commands that run nothing:
+  `git config --local --list` and `ls -la .git/hooks`.
+- Continue from a fresh clone, and leave the directory the agent worked in.
+
+Brig does not record these files or warn when they change.
+
 ## Guest images
 
 Brig checks where an image came from before it boots the image, because an
@@ -1112,6 +1146,14 @@ wrong thing to leave set.
 
 On Linux, or with the filter off, run Brig inside a terminal you are willing
 to lose if terminal output matters for your threat model.
+
+### Files the host runs later
+
+Brig does not stop the agent from writing a file that the host runs later,
+and it does not warn when one changes. The project is mounted read-write,
+`.git` included, so a hook or a program named in `.git/config` runs on the
+host at your next git command there. See
+[What the host runs from the project](#what-the-host-runs-from-the-project).
 
 ### The guest home
 

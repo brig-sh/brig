@@ -64,7 +64,10 @@ of each.
 
 - **The files.** The project you name is mounted read-write at `/work/<name>`,
   and those are your real files. The agent can change or delete anything
-  under it.
+  under it, `.git` included, and git on the host runs the hooks and programs
+  named there. Check them before your next git command, as
+  [What the host runs from the project](docs/security.md#what-the-host-runs-from-the-project)
+  describes.
 - **The credentials.** Brig forwards only what the agent's profile names.
   With nothing exported or stored, the agent starts logged out.
   `brig info <ref>` lists what a run forwards, by name.
