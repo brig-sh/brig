@@ -57,9 +57,10 @@ func TestSplitEnvArgvEscapeHatch(t *testing.T) {
 	}
 }
 
-// A store secret must stay out of argv even under the escape hatch: hull
-// durably logs every exec's argv to a host file, and that is a change in
-// severity class from the ambient shell values the hatch was built for.
+// A store secret must stay out of argv even under the escape hatch: the guest
+// agent prints every exec's argv to the guest console, which on some backends
+// is a host file, and that is a change in severity class from the ambient
+// shell values the hatch was built for.
 func TestSplitEnvArgvEscapeHatchNeverExposesSecrets(t *testing.T) {
 	t.Setenv("BRIG_ENV_ARGV", "1")
 	args, env := mustSplitEnv(t, "-e", []Var{

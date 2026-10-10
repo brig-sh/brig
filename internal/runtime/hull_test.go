@@ -151,8 +151,9 @@ func TestSupportsRefusesGUIOffVz(t *testing.T) {
 	}
 }
 
-// The value goes on stdin and never in argv, because hull durably logs every
-// exec's argv to a host file that outlives the sandbox. This is the same rule
+// The value goes on stdin and never in argv, because the guest agent prints
+// every exec's argv to the guest console, which on some backends is a host
+// file that outlives the sandbox. This is the same rule
 // Var.Secret already enforces for the environment channel, applied to the
 // channel that is about to carry the same credentials.
 func TestFeedKeepsTheValueOutOfArgv(t *testing.T) {

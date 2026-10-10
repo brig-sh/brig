@@ -64,10 +64,10 @@ type Var struct {
 	Value string
 	// Secret marks a value brig resolved on the user's behalf from the store
 	// it owns, so that BRIG_ENV_ARGV never puts it in argv whatever it says:
-	// hull durably logs every exec's argv to a host file, and an ambient shell
-	// value put there deliberately is one thing, but a stored credential
-	// outliving the sandbox in a file the user never sees is a different
-	// severity of leak.
+	// the guest agent prints every exec's argv to the guest console, which on
+	// some backends is a host file that outlives the sandbox. An ambient shell
+	// value put there deliberately is one thing, but a stored credential in a
+	// file the user never sees is a different severity of leak.
 	Secret bool
 }
 
@@ -170,9 +170,9 @@ type ExecSpec struct {
 	Env     []Var
 	Counted bool
 	// Stdin, when set, is fed to the command inside the guest. It is how a
-	// credential reaches the guest without appearing in argv: hull durably
-	// logs every exec's argv to a host file, so a value there outlives the
-	// sandbox in a file the user never sees. Only Feed reads it.
+	// credential reaches the guest without appearing in argv: the guest agent
+	// prints every exec's argv to the guest console, which on some backends is
+	// a host file that outlives the sandbox. Only Feed reads it.
 	Stdin io.Reader
 	// User runs the command as a guest user other than the image's own --
 	// "root", for the one privileged exec that mounts the tmpfs. Empty leaves
@@ -557,8 +557,9 @@ func ArgvExposed(vars []Var) []string {
 // environment that carry them. See inArgv for which values go in argv.
 //
 // A Var marked Secret with a name the runtime reads for itself is refused. It
-// cannot go in argv, where the host durably logs it, and it cannot go in the
-// runtime's environment, where it would redirect the runtime.
+// cannot go in argv, which the guest agent prints to the guest console, and
+// it cannot go in the runtime's environment, where it would redirect the
+// runtime.
 func splitEnv(flag string, vars []Var) (args []string, env []string, err error) {
 	for _, v := range vars {
 		if v.Secret && runtimeReads(v.Name) {

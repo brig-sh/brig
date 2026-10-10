@@ -312,8 +312,9 @@ of these names. The `BRIG_ENV_ARGV` warning does not list them.
 runtime build that does not accept a bare `--env KEY`. A value read from the
 environment then loses this guarantee. A value Brig resolved from its own
 secret store stays off the command line with or without `BRIG_ENV_ARGV`. The
-host durably logs the argv of every exec, so a value on the command line
-stays in that log.
+guest agent prints the argv of every exec to the guest console. On some
+backends that console is a file on host disk, and a value on the command
+line stays in it after the exec ends.
 
 ### What is still exposed
 

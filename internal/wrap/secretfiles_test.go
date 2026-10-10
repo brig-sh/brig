@@ -315,8 +315,8 @@ func TestDeliveryWritesTheCredentialIntoTheTmpfs(t *testing.T) {
 	}
 }
 
-// Never in argv: hull durably logs every exec's argv to a host file, so a
-// value there outlives the sandbox in a file the user never sees.
+// Never in argv: the guest agent prints every exec's argv to the guest
+// console, which on some backends is a host file that outlives the sandbox.
 func TestDeliveryNeverPutsAValueInArgv(t *testing.T) {
 	g := newGuestFake()
 	c := deliveryConfig(t, g)
