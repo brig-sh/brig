@@ -376,8 +376,9 @@ func (c *Config) verifyVolumes() error {
 // writeSecretFiles puts each resolved secret where its binding says.
 //
 // An ordinary file, owned by the guest user, with the binding's mode, and the
-// value on stdin -- never in argv, because hull durably logs every exec's argv
-// to a host file that outlives the sandbox.
+// value on stdin -- never in argv, because the guest agent logs every exec's
+// argv, and on some backends that log is a host file that outlives the
+// sandbox.
 func (c *Config) writeSecretFiles() (err error) {
 	var pending []profile.FileBinding
 	for _, b := range c.Profile.Files {
