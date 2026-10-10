@@ -126,9 +126,10 @@ func Bind(
 			continue
 		}
 		// A secret travels through AddSecret rather than Add so that
-		// BRIG_ENV_ARGV can never put it in argv: the host durably logs every
-		// exec's argv, and that turns an opt-in debugging escape hatch into a
-		// keychain leak the moment this feature lands.
+		// BRIG_ENV_ARGV can never put it in argv: the guest agent prints every
+		// exec's argv to the guest console, which on some backends is a host
+		// file, and that turns an opt-in debugging escape hatch into a keychain
+		// leak the moment this feature lands.
 		if fromSecret {
 			s.AddSecret(b.Name, value, b.Name+annotation)
 			continue

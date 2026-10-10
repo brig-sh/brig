@@ -238,9 +238,9 @@ brig: guest git over HTTPS: off (BRIG_GIT_CONFIG=1 to enable)
 `BRIG_ENV_ARGV=1` still puts an ordinary forwarded variable on the runtime's
 own command line. It is for a runtime build that does not take a bare
 `--env KEY`. It has no effect on a value bound from the secret store, because
-the host durably logs the argv of every exec. On a runtime build that needs
-`BRIG_ENV_ARGV=1`, such a credential does not arrive at all, so it never
-reaches the log.
+the guest agent prints the argv of every exec to the guest console, which on
+some backends is a file on host disk. On a runtime build that needs
+`BRIG_ENV_ARGV=1`, such a credential does not arrive at all.
 
 ## `reserved`
 
