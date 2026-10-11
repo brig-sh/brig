@@ -1466,6 +1466,13 @@ func agentTail(verb string, tail []string) []string {
 	if !forwardsTail(verb) {
 		return tail
 	}
+	// On sh the first bare word starts the guest command, and every word from
+	// there on is the guest's own: `ulimit -n` and `curl -m 5` are not brig's
+	// flags in disguise. brig's own flags stand left of that word, where brig
+	// reads them, so there is nothing here to point out (#475).
+	if verb == "sh" {
+		return tail
+	}
 	for _, a := range tail {
 		mine, _, found := oursAt(a, posAny)
 		if !mine {
