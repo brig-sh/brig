@@ -65,38 +65,26 @@ func TestRunWarnsAboutQuietInTailNamingTheRunLine(t *testing.T) {
 	}
 }
 
-// -q shapes nothing on sh -- it is documented for run and create -- so the
-// run-line position it names on run would be refused on sh. Its home is the
-// global position, which does drop sh's warnings, so that is where sh sends the
-// reader.
-func TestShSendsQuietToTheGlobalPosition(t *testing.T) {
-	warning := captureStderr(t, func() {
-		_, _, _, _ = parse("sh", []string{"claude", "ls", "-q"})
-	})
-	if !strings.Contains(warning, "-q") {
-		t.Fatalf("sh said nothing about -q:\n%s", warning)
-	}
-	if !strings.Contains(warning, "before the command") {
-		t.Errorf("sh advice for -q is not the global position:\n%s", warning)
-	}
-	if strings.Contains(warning, "before the profile") {
-		t.Errorf("sh sent -q to a run-line position it does not read there:\n%s", warning)
-	}
-}
-
-// A flag a verb reads in no position gets no position to move to. --no-project
-// is run's alone, and it is not global, so on sh there is nowhere it would be
-// read -- the honest message says so rather than sending the reader to a
-// position that would refuse it too.
-func TestShSaysAFlagItCannotReadHasNowhereToGo(t *testing.T) {
-	warning := captureStderr(t, func() {
-		_, _, _, _ = parse("sh", []string{"claude", "ls", "--no-project"})
-	})
-	if !strings.Contains(warning, "--no-project") {
-		t.Fatalf("sh said nothing about --no-project:\n%s", warning)
-	}
-	if strings.Contains(warning, "before the profile") || strings.Contains(warning, "before the command") {
-		t.Errorf("sh sent --no-project to a position it cannot read it in:\n%s", warning)
+// #475: on sh the first bare word starts the guest command and brig reads
+// nothing after it, so a flag-shaped word there is the guest's own. `brig sh
+// ubuntu ulimit -n` and `curl -m 5 -w ...` printed a notice on every call.
+func TestShSaysNothingAboutAFlagInTheGuestCommand(t *testing.T) {
+	for _, command := range [][]string{
+		{"ulimit", "-n"},
+		{"curl", "-m", "5", "-w", "%{http_code}"},
+		{"ls", "-q"},
+		{"ls", "--no-project"},
+	} {
+		var tail []string
+		warning := captureStderr(t, func() {
+			_, _, tail, _ = parse("sh", append([]string{"claude"}, command...))
+		})
+		if warning != "" {
+			t.Errorf("sh %q printed a notice for the guest's own flag:\n%s", command, warning)
+		}
+		if strings.Join(tail, "\x00") != strings.Join(command, "\x00") {
+			t.Errorf("sh %q: tail = %q, want it forwarded untouched", command, tail)
+		}
 	}
 }
 
