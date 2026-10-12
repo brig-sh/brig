@@ -33,28 +33,6 @@ something that the guest home promise or the credential promise needs. A
 subprocess must also be unable to get it. Even then, the first move is a patch to
 that runtime, not a new runtime.
 
-## A rules language for policy
-
-A profile field that the runtime enforces is in scope. For example,
-`network: offline` is data: Brig translates it into the flag of the runtime.
-The job of Brig ends at the translation, and the runtime makes the
-guarantee.
-
-An egress policy has the same shape, one step up. It is a document of
-`allow` and `deny` rules that Brig hands to the gateway that enforces them.
-Brig refuses the policy where nothing can enforce it
-([Policies](policies.md)). A missing field of that kind is in scope.
-
-A language is out of scope: conditions, matchers, precedence rules, and an
-evaluator that lives in Brig. People will believe that a decision Brig
-evaluates is enforced. Enforcement sits one layer down, and Brig can only
-ask for it.
-
-**Reopens when** profile settings need to combine conditionally in a way
-that plain fields cannot express. Every condition in the language must also
-have an enforcement point in the runtime. A rule with no enforcement point
-stays out, however much people want it.
-
 ## A TLS-terminating host proxy
 
 The sandboxes of Docker keep credentials out of the guest: a host-side
@@ -259,6 +237,17 @@ run as a set of sandboxes
 ([#485](https://github.com/brig-sh/brig/issues/485)).
 
 Until remote operation ships, `ssh` to the host and run Brig there.
+
+A rules language for policy is reopened too. A policy over a sequence of
+agent actions needs conditions that plain fields cannot express. Examples
+are an approval before a credential is delivered, and a limit on how often
+that happens. The design is in review. Two rules apply:
+
+- Every condition in a policy names an enforcement point outside the guest,
+  where the action is stopped before it takes effect. A rule with no
+  enforcement point stays out.
+- Brig refuses a policy on a run path that cannot enforce it, as it does for
+  an egress policy today ([Policies](policies.md)).
 
 ## Proposing one of these anyway
 
