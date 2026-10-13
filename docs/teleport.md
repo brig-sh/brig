@@ -100,7 +100,15 @@ entry as teleportable from its empty guest home.
 | A project, `--home` or `BRIG_WORKSPACE` for a session that is teleportable from its profile or its record | `1` |
 | `--skills`, `BRIG_SKILLS`, `BRIG_GIT_CONFIG` or a `BRIG_ROOTFS_TYPE` other than `block` | `1` |
 | `--teleportable` for a session that already has a host home | `1` |
+| A run that would recreate a sandbox Brig has no record of, when hull's record of its boot shows a `block` root and no share | `1` |
 | A run path other than hull on `hvi` | `7` |
 
 Each refusal names the setting to drop, or `brig rm <ref>` when the session
 has to start over.
+
+The record Brig keeps can be lost, for example when the session index file
+is deleted. Brig then asks hull how the sandbox was booted before it
+recreates it. hull keeps that record on the host, so the guest cannot change
+the answer. A sandbox booted on a `block` root with no host directory shared
+in is a teleportable session, and Brig refuses to recreate it, running or
+stopped. A running one can be used again with `--teleportable`.
