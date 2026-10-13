@@ -449,7 +449,7 @@ func TestEnsureRunningRefusesATeleportableSessionOffHvi(t *testing.T) {
 // not recreate it, running or stopped: that deletes the disk the agent's
 // state is on. A sandbox whose record shows a share, or that hull cannot
 // describe, is recreated as it always was.
-func TestEnsureRunningDoesNotRecreateAnUnrecordedSandboxThatOwnsItsDisk(t *testing.T) {
+func TestEnsureRunningDoesNotRecreateASandboxWhoseHomeIsItsDisk(t *testing.T) {
 	tp := ordinaryProfile(t)
 	for _, c := range []struct {
 		what       string
