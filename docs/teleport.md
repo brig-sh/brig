@@ -35,8 +35,8 @@ its ref do not need the flag. Brig records the property in its session index.
 | Onboarding seed | written into the host home | written into the guest home, inside the guest |
 | `--skills`, `BRIG_GIT_CONFIG` | copy files into the host home | refused: there is no host home |
 
-`brig info` and `brig plan` print a `TELEPORTABLE` row. `brig ls` prints a
-`TELEPORTABLE` column, and `(in the sandbox disk)` in place of a workspace.
+`brig info` and `brig plan` print a `TELEPORTABLE` row. `brig ls` prints
+`(in the sandbox disk)` in place of a workspace.
 The `--json` documents of `ls`, `info` and `plan` carry `"teleportable": true`.
 
 ## What you lose

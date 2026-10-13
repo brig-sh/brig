@@ -61,7 +61,8 @@ func TestTeleportableWithAHostDirectoryIsAUsageError(t *testing.T) {
 
 // `brig ls` says which sandboxes are teleportable, and for those it names no
 // host directory: deriving one from the sandbox name would report a home the
-// session never had. The JSON carries the same fact as an added field.
+// session never had. The table says it in the WORKSPACE cell and keeps its
+// columns; the JSON carries the same fact as an added field.
 func TestListingMarksATeleportableSession(t *testing.T) {
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
 	dir := t.TempDir()
@@ -81,17 +82,17 @@ func TestListingMarksATeleportableSession(t *testing.T) {
 	var table bytes.Buffer
 	printSandboxes(&table, rows)
 	lines := strings.Split(strings.TrimSpace(table.String()), "\n")
-	if !strings.Contains(lines[0], "TELEPORTABLE") {
-		t.Errorf("the listing has no TELEPORTABLE column:\n%s", table.String())
+	if got := strings.Fields(lines[0]); strings.Join(got, " ") != "REF SANDBOX STATE WORKSPACE" {
+		t.Errorf("the listing's columns changed: %q", lines[0])
 	}
 	for _, line := range lines[1:] {
 		switch {
 		case strings.HasPrefix(line, "claude-code@far "):
-			if !strings.Contains(line, " yes ") || !strings.Contains(line, "(in the sandbox disk)") {
+			if !strings.HasSuffix(line, " (in the sandbox disk)") {
 				t.Errorf("the teleportable row reads %q", line)
 			}
 		case strings.HasPrefix(line, "claude-code "):
-			if !strings.Contains(line, " no ") || !strings.Contains(line, "/ws/default") {
+			if !strings.HasSuffix(line, " /ws/default") {
 				t.Errorf("the ordinary row reads %q", line)
 			}
 		}
