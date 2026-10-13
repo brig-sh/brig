@@ -168,11 +168,24 @@ func (c *Config) teleportNotice(known bool) {
 //     ensureTarget; here they are directories of the block disk, and
 //     mountVolumes binds from them.
 //
-// This runs as root in the guest and the home is the agent's, so a path in
-// it can be a link the agent planted. That reaches only the guest's own
-// filesystem: no host directory is shared in, which is the property the
-// session exists for. Each step still leaves an existing path alone, a link
-// included, rather than writing through it.
+// This runs as root in the guest on every run, reuse included, and the home
+// is the agent's by then, so any path under it can be a link the agent
+// planted. Following one as root is what a custom profile whose agent is not
+// root has to be protected from: the seed, an empty target file or a chown
+// landing wherever the link points, and mountVolumes then binding a
+// root-owned path into the home. So every path under the home goes through
+// guestPathScript, which walks it one component at a time, refuses a link at
+// any of them, creates what is missing one directory at a time, and refuses a
+// path whose last component is not the kind the profile declared. The walk
+// is also the check mountVolumes needs before it binds from a hostmount's
+// source as root: it runs just before delivery, on both paths that reach it.
+//
+// What it does not close is a race: an agent swapping a checked directory
+// for a link between the check and the write. The file it creates is opened
+// with noclobber, so a link at the last component fails the write instead of
+// being followed. The shipped profiles run the agent as root, for which none
+// of this widens anything: it already owns the whole guest, and nothing from
+// the host is shared in.
 func (c *Config) prepareGuestHome() error {
 	home := c.Profile.GuestHome
 	user := c.Profile.GuestUser()
@@ -184,11 +197,10 @@ func (c *Config) prepareGuestHome() error {
 		if err != nil {
 			return err
 		}
-		target := c.guestPath(ob.File)
 		if err := c.Runtime.Feed(runtime.ExecSpec{
 			Name:  c.VMName,
 			User:  guestRootUser,
-			Cmd:   []string{"sh", "-c", onboardingSeedScript, "sh", target, user},
+			Cmd:   []string{"sh", "-c", guestPathScript, "sh", home, ob.File, "seed", user},
 			Stdin: strings.NewReader(string(append(blob, '\n'))),
 		}); err != nil {
 			return fmt.Errorf("could not seed %s in the sandbox: %w", ob.File, err)
@@ -202,7 +214,7 @@ func (c *Config) prepareGuestHome() error {
 		if h.File {
 			kind = "file"
 		}
-		if err := c.guestRoot("sh", "-c", guestTargetScript, "sh", c.guestPath(h.Path), user, kind); err != nil {
+		if err := c.guestRoot("sh", "-c", guestPathScript, "sh", home, h.Path, kind, user); err != nil {
 			return fmt.Errorf("could not make %s in the guest home: %w", h.Path, err)
 		}
 	}
@@ -215,15 +227,41 @@ func (c *Config) prepareGuestHome() error {
 // home's last element, and on a profile whose home is not an account's
 // (ubuntu's /root/work) there is nobody to hand it to.
 const (
+	// The home itself, made by root above the agent's reach: the
+	// components over it are the image's, not the agent's.
 	guestHomeScript = `set -e; if [ -e "$1" ] || [ -L "$1" ]; then exit 0; fi; mkdir -p -- "$1"; ` +
 		`if [ "$2" != root ] && id -u "$2" >/dev/null 2>&1; then chown "$2" "$1"; fi`
-	// The seed arrives on stdin, so it is drained even when the file is
-	// already there: an exec whose stdin is never read can fail the Feed.
-	onboardingSeedScript = `set -e; if [ -e "$1" ] || [ -L "$1" ]; then cat > /dev/null; exit 0; fi; ` +
-		`mkdir -p -- "$(dirname -- "$1")"; umask 077; cat > "$1"; ` +
-		`if [ "$2" != root ] && id -u "$2" >/dev/null 2>&1; then chown "$2" "$1"; fi`
-	guestTargetScript = `set -e; if [ -e "$1" ] || [ -L "$1" ]; then exit 0; fi; ` +
-		`if [ "$3" = file ]; then mkdir -p -- "$(dirname -- "$1")"; : > "$1"; chmod 600 "$1"; ` +
-		`else mkdir -p -- "$1"; fi; ` +
-		`if [ "$2" != root ] && id -u "$2" >/dev/null 2>&1; then chown "$2" "$1"; fi`
+
+	// guestPathScript HOME REL KIND USER makes or checks HOME/REL. KIND is
+	// dir, file, or seed (a file whose content arrives on stdin). An empty,
+	// "." or ".." component is refused with the rest: a profile path is
+	// relative to the home and stays inside it. The seed is drained even when
+	// the file is already there, because an exec whose stdin is never read
+	// can fail the Feed.
+	guestPathScript = `set -e; home=$1; rel=$2; kind=$3; user=$4
+[ "$kind" = seed ] && trap 'cat > /dev/null' EXIT
+no() { echo "brig: $*" >&2; exit 1; }
+own() { if [ "$user" != root ] && id -u "$user" >/dev/null 2>&1; then chown "$user" "$1"; fi; }
+[ -L "$home" ] && no "the guest home $home is a symlink"
+[ -d "$home" ] || no "the guest home $home is not a directory"
+p=$home; rest=$rel
+while :; do
+  case $rest in */*) part=${rest%%/*}; rest=${rest#*/} ;; *) part=$rest; rest= ;; esac
+  case $part in ''|.|..) no "$rel is not a plain path under the guest home" ;; esac
+  p=$p/$part
+  [ -L "$p" ] && no "$p is a symlink; brig will not write through it"
+  [ -z "$rest" ] && break
+  if [ ! -e "$p" ]; then mkdir -- "$p"; own "$p"; elif [ ! -d "$p" ]; then no "$p is not a directory"; fi
+done
+case $kind in
+  dir)
+    if [ -e "$p" ]; then [ -d "$p" ] || no "$p is not a directory"; else mkdir -- "$p"; own "$p"; fi ;;
+  file)
+    if [ -e "$p" ]; then [ -f "$p" ] || no "$p is not a regular file"
+    else (umask 077; set -C; : > "$p"); own "$p"; fi ;;
+  seed)
+    if [ -e "$p" ]; then [ -f "$p" ] || no "$p is not a regular file"
+    else trap - EXIT; (umask 077; set -C; cat > "$p"); own "$p"; fi ;;
+  *) no "unknown kind $kind" ;;
+esac`
 )
