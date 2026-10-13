@@ -262,6 +262,24 @@ type Exister interface {
 	Exists(name string) (bool, error)
 }
 
+// StorageInspector reads how an existing sandbox's storage was attached when
+// it booted, running or stopped, from the runtime's own record of the boot.
+//
+// The record is the host's, not the guest's. A guest whose agent runs as root
+// can unmount its home share or answer a cat of its mount table with anything
+// it likes, so a check that asked the guest could be made to refuse any
+// recreate, including the one that applies a tightened egress policy.
+// Optional: a runtime without it cannot hold a teleportable sandbox anyway.
+type StorageInspector interface {
+	// OwnsItsDisk reports whether the sandbox booted on a block root with no
+	// host directory shared in, which is what a teleportable session is and
+	// an ordinary one never is: an ordinary session always shares its home.
+	// False with a nil error means the record says otherwise or the sandbox
+	// is not there. An error means the record could not be read or did not
+	// parse, which says nothing either way.
+	OwnsItsDisk(name string) (bool, error)
+}
+
 // NetworkInspector reads the network an existing sandbox was booted with,
 // including a stopped sandbox. It lets sessions from before posture records
 // keep an explicitly isolated or offline network without guessing from the

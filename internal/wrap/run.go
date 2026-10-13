@@ -195,7 +195,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// No host home to reap, create, seed or check: everything those
 		// steps do lands in prepareGuestHome, inside the guest, after the
 		// boot. See teleport.go.
-		c.teleportNotice(c.teleportKnown)
+		c.teleportNotice(c.indexed)
 	} else {
 		// Before PrepareWorkspace creates the home, which is how the notice
 		// tells a new session from a later run of one.
@@ -311,27 +311,26 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			return c.deliverSecretFiles()
 		}
 		// Every case that reaches here recreates the sandbox, which costs an
-		// ordinary session a boot because its home is a share. One whose
-		// home is not a share at all is a teleportable session whose record
-		// was lost, and recreating it would delete its disk with the agent's
-		// state on it. Refuse that rather than read it as a stale share or a
-		// changed posture.
-		if c.guestHomeOnDisk() {
-			return fmt.Errorf("the running sandbox %s has no guest home shared from the host: its "+
-				"home is inside its own disk, which is a teleportable session. brig will not recreate "+
-				"it, which would delete that disk. Run it with --teleportable, or remove it with "+
-				"`brig rm %s`", c.VMName, sessionKey(c.Profile.Name, c.Slug))
+		// ordinary session a boot because its home is a share. A sandbox
+		// the index has no entry for may be a teleportable session whose
+		// record was lost, and recreating it would delete its disk with the
+		// agent's state on it.
+		if err := c.refuseUnrecordedTeleportable("running"); err != nil {
+			return err
 		}
 		_ = c.Runtime.Stop(c.VMName)
 		_ = c.Runtime.Remove(c.VMName)
 	}
 	// A stopped teleportable sandbox still holds its disk, and the line below
 	// would delete it: hull has no verb that starts a stopped sandbox again,
-	// so brig clears the name and boots a new one. Refused instead.
+	// so brig clears the name and boots a new one. Refused instead, whether
+	// the session says it is teleportable or hull's record of the boot does.
 	if c.Teleportable {
 		if err := c.refuseStoppedTeleportable(); err != nil {
 			return err
 		}
+	} else if err := c.refuseUnrecordedTeleportable("stopped"); err != nil {
+		return err
 	}
 	// Clear a stale stopped instance holding the name.
 	_ = c.Runtime.Remove(c.VMName)
@@ -680,12 +679,14 @@ func (c *Config) guestMountsWorkspace() bool {
 // teleportable session's disk. A runtime that cannot say whether one is there
 // is refused too: booting on that silence is the direction that deletes.
 func (c *Config) refuseStoppedTeleportable() error {
+	ref := sessionKey(c.Profile.Name, c.Slug)
 	exister, ok := c.Runtime.(runtime.Exister)
 	if !ok {
-		return nil
+		return fmt.Errorf("cannot tell whether a stopped sandbox %s still holds the disk of teleportable "+
+			"session %s: the %s runtime cannot say whether a sandbox exists, and booting a new one "+
+			"would delete it", c.VMName, ref, c.Runtime.Kind())
 	}
 	exists, err := exister.Exists(c.VMName)
-	ref := sessionKey(c.Profile.Name, c.Slug)
 	if err != nil {
 		return fmt.Errorf("cannot tell whether the stopped sandbox %s still holds the disk of teleportable "+
 			"session %s, and booting a new one would delete it: %w", c.VMName, ref, err)
@@ -698,33 +699,47 @@ func (c *Config) refuseStoppedTeleportable() error {
 		"disk. brig will not. Remove it with `brig rm %s` to start the session over", c.VMName, ref)
 }
 
-// guestHomeOnDisk reports whether the guest's own mount table shows that its
-// home is not a mount point, which is what a teleportable session's home
-// looks like: a directory of the root disk.
+// refuseUnrecordedTeleportable refuses to delete a sandbox, running or
+// stopped, that the session index has no entry for and that the runtime's
+// record says owns its disk. That is a teleportable session whose record was
+// lost: `brig ls` prunes an entry its listing left out, and a listing from
+// plain `hull ps` leaves out every stopped sandbox. An ordinary run would
+// read the missing share as a stale one and recreate it, disk and all.
 //
-// Only a table that reads as one counts, and a real kernel's always lists the
-// root. A guest that cannot be asked, or an answer with no root in it, says
-// nothing, and the recreate goes on as it always has: refusing on silence
-// would strand every ordinary session whose guest is slow to answer.
-func (c *Config) guestHomeOnDisk() bool {
-	out, err := c.guestOutput("cat", "/proc/self/mountinfo")
-	if err != nil {
-		return false
+// Only when there is no entry. An entry for this ref and sandbox already
+// says what the session is, and an ordinary entry keeps the recreate it has
+// always had: a posture change on it applies the new rules rather than
+// leaving the sandbox up under the old ones.
+//
+// The answer is hull's record of the boot, never the guest's: see
+// runtime.StorageInspector. A record that cannot be read says nothing, and
+// the recreate goes on as it did before this check, because refusing on
+// that would strand every unrecorded ordinary sandbox on a hull whose
+// inspect output this version does not recognise.
+func (c *Config) refuseUnrecordedTeleportable(state string) error {
+	if c.Teleportable || c.indexed {
+		return nil
 	}
-	root, home := false, false
-	for _, line := range nonEmptyLines(out) {
-		fields := strings.Fields(line)
-		if len(fields) <= 4 {
-			continue
-		}
-		switch fields[4] {
-		case "/":
-			root = true
-		case c.Profile.GuestHome:
-			home = true
-		}
+	inspector, ok := c.Runtime.(runtime.StorageInspector)
+	if !ok {
+		return nil
 	}
-	return root && !home
+	owns, err := inspector.OwnsItsDisk(c.VMName)
+	if err != nil || !owns {
+		return nil
+	}
+	ref := sessionKey(c.Profile.Name, c.Slug)
+	// A running one can be picked up again by naming what it is. A stopped
+	// one cannot be started without a new disk either way.
+	way := fmt.Sprintf("Run it with --teleportable to use it again, or remove it with `brig rm %s`", ref)
+	if state == "stopped" {
+		way = fmt.Sprintf("Its disk stays in hull's store until it is removed: copy out what you need "+
+			"from there, then remove it with `brig rm %s`", ref)
+	}
+	return fmt.Errorf("the %s sandbox %s was booted with no host directory shared in, so its guest home is "+
+		"inside its own disk: it is a teleportable session brig has lost the record of. brig will not "+
+		"recreate it, which would delete that disk. %s; rm deletes the disk and everything in it",
+		state, c.VMName, way)
 }
 
 // shares is the mount set this run hands the runtime: the guest home, the

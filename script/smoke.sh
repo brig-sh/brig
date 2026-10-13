@@ -92,13 +92,16 @@ case "$verb" in
     # Each share is also a mount point in the guest's table, under the root a
     # real kernel always lists, so brig reading /proc/self/mountinfo sees the
     # home a share is -- and a teleportable boot, which shares nothing, sees a
-    # home that is only a directory of its disk.
+    # home that is only a directory of its disk. The root type is kept too,
+    # for the hvi argv inspect reports below.
     name=""; share=""
     : > "$STUB_STATE.shares"
+    : > "$STUB_STATE.rootfs"
     printf '1 0 254:1 / / rw - ext4\n' > "$STUB_STATE.mounts"
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
+        --rootfs-type) printf '%s' "$2" > "$STUB_STATE.rootfs"; shift 2 ;;
         --shared-dir)
           printf '%s\n' "$2" >> "$STUB_STATE.shares"
           [ -z "$share" ] && share="$2"
@@ -235,9 +238,24 @@ case "$verb" in
   inspect)
     # An instance holds its name while it runs and once it stops. Any other
     # name is not there, in the words brig reads for that.
+    #
+    # STUB_INSPECT_ARGV makes the record the one hull prints for an hvi boot:
+    # its id and the VMM argv, a --disk for a block root and a --share-rw for
+    # each shared directory. Off by default, because the same record answers
+    # SandboxNetwork, and the cases that do not ask for it are written
+    # against a hull whose posture cannot be read back.
     if [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] ||
        [ "$1" = "$(cat "$STUB_STATE.stopped" 2>/dev/null)" ]; then
-      printf '{"name": "%s"}\n' "$1"
+      if [ -n "${STUB_INSPECT_ARGV:-}" ]; then
+        argv='"hvi", "boot", "--kernel", "/k"'
+        [ "$(cat "$STUB_STATE.rootfs" 2>/dev/null)" = block ] && argv="$argv, \"--disk\", \"/s/rootfs.ext4\""
+        while IFS= read -r dir; do
+          [ -n "$dir" ] && argv="$argv, \"--share-rw\", \"${dir%%:*}\", \"share\""
+        done < "$STUB_STATE.shares"
+        printf '{"id": "%s", "backend": "hvi", "cmdLine": [%s]}\n' "$1" "$argv"
+      else
+        printf '{"name": "%s"}\n' "$1"
+      fi
     else
       printf 'error: instance not found: %s\n' "$1" >&2
       exit 1
@@ -1981,15 +1999,17 @@ grep -q '^argv: \(run\|rm\|stop\) ' "$STUB_LOG" \
   || ok "a refused teleportable run leaves the sandbox alone"
 
 # A record lost (the index is not an inventory) must not turn into a
-# recreate: the running sandbox's home is not a share, and recreating it would
-# delete the disk the agent's state is on.
+# recreate: hull's record of the boot shows a block root and no share, and
+# recreating the sandbox would delete the disk the agent's state is on. The
+# guest is not asked; its mount table still lists no home share, and that is
+# not what decides.
 cp "$BRIG_STATE_DIR/sessions.json" "$WORK/tp-sessions.json"
 rm -f "$BRIG_STATE_DIR/sessions.json"
 : > "$STUB_LOG"
-out="$("$WORK/brig" run claude -d 2>&1)"; rc=$?
+out="$(STUB_INSPECT_ARGV=1 "$WORK/brig" run claude -d 2>&1)"; rc=$?
 case "$rc:$out" in
-  1:*"--teleportable"*) ok "an ordinary run refuses a sandbox whose home is its disk" ;;
-  *) bad "an ordinary run refuses a sandbox whose home is its disk -- got $rc: $out" ;;
+  1:*"lost the record"*"--teleportable"*) ok "an ordinary run refuses an unrecorded sandbox that owns its disk" ;;
+  *) bad "an ordinary run refuses an unrecorded sandbox that owns its disk -- got $rc: $out" ;;
 esac
 grep -q '^argv: \(run\|rm\|stop\) ' "$STUB_LOG" \
   && bad "an ordinary run tore down a teleportable sandbox" \
@@ -2013,6 +2033,21 @@ esac
 grep -q '^argv: \(run\|rm\) ' "$STUB_LOG" \
   && bad "a run cleared a stopped teleportable sandbox" \
   || ok "a stopped teleportable sandbox keeps its disk"
+# The same with the record lost, which is what a `brig ls` on a hull whose
+# `ps -a` fails used to cause: an ordinary run clears a stopped instance
+# before it boots, and hull's record is what stops it here.
+cp "$BRIG_STATE_DIR/sessions.json" "$WORK/tp-sessions.json"
+rm -f "$BRIG_STATE_DIR/sessions.json"
+: > "$STUB_LOG"
+out="$(STUB_INSPECT_ARGV=1 "$WORK/brig" run claude -d 2>&1)"; rc=$?
+case "$rc:$out" in
+  1:*"stopped sandbox"*"lost the record"*"brig rm claude-code"*) ok "an ordinary run refuses to clear an unrecorded stopped sandbox that owns its disk" ;;
+  *) bad "an ordinary run refuses to clear an unrecorded stopped sandbox that owns its disk -- got $rc: $out" ;;
+esac
+grep -q '^argv: \(run\|rm\) ' "$STUB_LOG" \
+  && bad "an ordinary run cleared an unrecorded stopped teleportable sandbox" \
+  || ok "an unrecorded stopped teleportable sandbox keeps its disk"
+cp "$WORK/tp-sessions.json" "$BRIG_STATE_DIR/sessions.json"
 
 # rm takes the disk, says the guest home goes with it, and names no host home
 # it leaves behind. The preview says the same and removes nothing.
