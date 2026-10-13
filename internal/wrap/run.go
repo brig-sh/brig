@@ -251,6 +251,16 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 				return fmt.Errorf("cannot reuse the recovered network of sandbox %s with the current gateway configuration; "+
 					"restore its gateway settings or name --network explicitly to recreate it", c.VMName)
 			}
+			// The restart below costs an ordinary session a boot. A
+			// teleportable one would lose its disk, with the guest home on
+			// it, so the change is refused instead of applied.
+			if c.Teleportable {
+				change, _ := c.postureChange()
+				return fmt.Errorf("%s, and applying that means recreating the teleportable sandbox %s, which "+
+					"deletes its disk and the guest home on it. brig will not: run it with the network and "+
+					"policy it was started with, or remove it with `brig rm %s` and run it again",
+					change, c.VMName, sessionKey(c.Profile.Name, c.Slug))
+			}
 			// A third thing that cannot change on a live guest, answered the
 			// same way for the same reason. Its network and its egress rules
 			// were fixed when it booted, so a policy attached since is not in
@@ -258,17 +268,6 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// row for rules nothing is applying.
 			c.warnf("%s", c.networkRestart())
 		case !c.Teleportable && !c.guestMountsWorkspace():
-			// The guest home of a sandbox brig would recreate here is a
-			// share, so recreating it costs a boot. One whose home is not a
-			// share at all is a teleportable session whose record was lost,
-			// and recreating it would delete its disk with the agent's state
-			// on it. Refuse that rather than read it as a stale share.
-			if c.guestHomeOnDisk() {
-				return fmt.Errorf("the running sandbox %s has no guest home shared from the host: its "+
-					"home is inside its own disk, which is a teleportable session. brig will not recreate "+
-					"it, which would delete that disk. Run it with --teleportable, or remove it with "+
-					"`brig rm %s`", c.VMName, sessionKey(c.Profile.Name, c.Slug))
-			}
 			c.warnf("%s", notice.New("the running sandbox is not mounting "+c.Workspace+": its share went stale").
 				Note("the directory was renamed or replaced, or the workspace changed").
 				Note("brig restarts it, and %s", disconnects))
@@ -311,8 +310,28 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// credential reaches a live session.
 			return c.deliverSecretFiles()
 		}
+		// Every case that reaches here recreates the sandbox, which costs an
+		// ordinary session a boot because its home is a share. One whose
+		// home is not a share at all is a teleportable session whose record
+		// was lost, and recreating it would delete its disk with the agent's
+		// state on it. Refuse that rather than read it as a stale share or a
+		// changed posture.
+		if c.guestHomeOnDisk() {
+			return fmt.Errorf("the running sandbox %s has no guest home shared from the host: its "+
+				"home is inside its own disk, which is a teleportable session. brig will not recreate "+
+				"it, which would delete that disk. Run it with --teleportable, or remove it with "+
+				"`brig rm %s`", c.VMName, sessionKey(c.Profile.Name, c.Slug))
+		}
 		_ = c.Runtime.Stop(c.VMName)
 		_ = c.Runtime.Remove(c.VMName)
+	}
+	// A stopped teleportable sandbox still holds its disk, and the line below
+	// would delete it: hull has no verb that starts a stopped sandbox again,
+	// so brig clears the name and boots a new one. Refused instead.
+	if c.Teleportable {
+		if err := c.refuseStoppedTeleportable(); err != nil {
+			return err
+		}
 	}
 	// Clear a stale stopped instance holding the name.
 	_ = c.Runtime.Remove(c.VMName)
@@ -657,29 +676,55 @@ func (c *Config) guestMountsWorkspace() bool {
 	return strings.TrimSpace(seen) == strings.TrimSpace(string(want))
 }
 
+// refuseStoppedTeleportable refuses to clear a stopped instance that holds a
+// teleportable session's disk. A runtime that cannot say whether one is there
+// is refused too: booting on that silence is the direction that deletes.
+func (c *Config) refuseStoppedTeleportable() error {
+	exister, ok := c.Runtime.(runtime.Exister)
+	if !ok {
+		return nil
+	}
+	exists, err := exister.Exists(c.VMName)
+	ref := sessionKey(c.Profile.Name, c.Slug)
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the stopped sandbox %s still holds the disk of teleportable "+
+			"session %s, and booting a new one would delete it: %w", c.VMName, ref, err)
+	}
+	if !exists {
+		return nil
+	}
+	return fmt.Errorf("the teleportable sandbox %s is stopped. Its guest home is inside its disk, and "+
+		"the runtime cannot start a stopped sandbox again without recreating it, which deletes that "+
+		"disk. brig will not. Remove it with `brig rm %s` to start the session over", c.VMName, ref)
+}
+
 // guestHomeOnDisk reports whether the guest's own mount table shows that its
 // home is not a mount point, which is what a teleportable session's home
 // looks like: a directory of the root disk.
 //
-// Only a table that reads at all counts. A guest that cannot be asked, or a
-// table with no lines -- a real kernel always lists the root -- says nothing,
-// and the stale-share path then goes on as it always has.
+// Only a table that reads as one counts, and a real kernel's always lists the
+// root. A guest that cannot be asked, or an answer with no root in it, says
+// nothing, and the recreate goes on as it always has: refusing on silence
+// would strand every ordinary session whose guest is slow to answer.
 func (c *Config) guestHomeOnDisk() bool {
 	out, err := c.guestOutput("cat", "/proc/self/mountinfo")
 	if err != nil {
 		return false
 	}
-	lines := nonEmptyLines(out)
-	if len(lines) == 0 {
-		return false
-	}
-	for _, line := range lines {
+	root, home := false, false
+	for _, line := range nonEmptyLines(out) {
 		fields := strings.Fields(line)
-		if len(fields) > 4 && fields[4] == c.Profile.GuestHome {
-			return false
+		if len(fields) <= 4 {
+			continue
+		}
+		switch fields[4] {
+		case "/":
+			root = true
+		case c.Profile.GuestHome:
+			home = true
 		}
 	}
-	return true
+	return root && !home
 }
 
 // shares is the mount set this run hands the runtime: the guest home, the
@@ -773,6 +818,14 @@ func (c *Config) projectShareStale() string {
 // "gone anyway" puts the swallow back: the user is told a VM holding a
 // forwarded credential is down when nothing checked.
 func (c *Config) Stop() error {
+	// Said before the stop rather than after: it is the last moment the
+	// session can still be used, and the next run will refuse it.
+	if c.Teleportable {
+		c.warnf("%s", notice.New("stopping a teleportable session ends it").
+			Note("its guest home is inside its disk, and a stopped sandbox cannot be started again "+
+				"without recreating it").
+			Note("the next run refuses until `brig rm %s`", sessionKey(c.Profile.Name, c.Slug)))
+	}
 	err := c.Runtime.Stop(c.VMName)
 	if err == nil {
 		return nil
