@@ -22,6 +22,11 @@ import (
 // it.
 var errPlantedSymlink = errors.New("a symlink leads out of a directory brig is checking")
 
+// errNoHostHome is openWorkspace refusing a session that has no guest home on
+// the host. Nothing should ask: every host-side step is skipped for a
+// teleportable session. It is here so one that does fails instead of writing.
+var errNoHostHome = errors.New("this session has no guest home on the host to open")
+
 // afterWorkspaceCheck runs after the workspace has been opened and before the
 // root is handed back. It does nothing outside tests; see openWorkspace.
 var afterWorkspaceCheck = func() {}
@@ -143,6 +148,13 @@ func openHeldDir(dir string, subj pathSubject) (*heldDir, error) {
 // openWorkspace creates the workspace if it is not there yet and opens it as a
 // root.
 func (c *Config) openWorkspace() (*workspaceRoot, error) {
+	// A teleportable session has no workspace, and an empty path cleans to
+	// ".": opening that would make the directory brig was run from the guest
+	// home every host-side step writes into. Refused here, under every
+	// caller, rather than trusted to each of them.
+	if c.Workspace == "" || c.Teleportable {
+		return nil, errNoHostHome
+	}
 	// Cleaning first because the walk cleans and the callers did not, so
 	// `<tmp>/link/../real` was checked as `<tmp>/real` -- skipping `link`
 	// entirely -- and then opened as written, through the link.

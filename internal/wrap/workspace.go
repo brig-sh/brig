@@ -153,6 +153,12 @@ func Marker(dir string) (string, error) {
 // [workspaceRoot] rather than through paths joined onto c.Workspace. See
 // rootio.go for what that buys.
 func (c *Config) PrepareWorkspace() error {
+	// Nothing on the host to prepare. EnsureRunning does not call this for a
+	// teleportable session; a caller that does gets nothing written rather
+	// than a refusal, since there is no home it could have meant.
+	if c.Teleportable {
+		return nil
+	}
 	if strings.ContainsAny(c.Workspace, " \t") {
 		return fmt.Errorf("workspace path must not contain spaces: %s", c.Workspace)
 	}

@@ -88,14 +88,22 @@ case "$verb" in
     # Every share is logged, and the FIRST one is the home: brig puts the
     # workspace first and a project after it, and it is the home the marker is
     # read back out of below.
+    #
+    # Each share is also a mount point in the guest's table, under the root a
+    # real kernel always lists, so brig reading /proc/self/mountinfo sees the
+    # home a share is -- and a teleportable boot, which shares nothing, sees a
+    # home that is only a directory of its disk.
     name=""; share=""
     : > "$STUB_STATE.shares"
+    printf '1 0 254:1 / / rw - ext4\n' > "$STUB_STATE.mounts"
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
         --shared-dir)
           printf '%s\n' "$2" >> "$STUB_STATE.shares"
           [ -z "$share" ] && share="$2"
+          guest="${2#*:}"; guest="${guest%%:*}"
+          printf '1 1 0:3 / %s rw - virtiofs\n' "$guest" >> "$STUB_STATE.mounts"
           shift 2 ;;
         *) shift ;;
       esac
