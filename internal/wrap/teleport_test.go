@@ -422,3 +422,74 @@ func TestOpenWorkspaceRefusesASessionWithNoHostHome(t *testing.T) {
 		t.Error("a workspace marker was written where brig ran")
 	}
 }
+
+// existingRuntime is guestRuntime that can also say whether an instance holds
+// the name, stopped or running: the question the boot asks before it clears a
+// stopped instance.
+type existingRuntime struct {
+	*guestRuntime
+	exists bool
+}
+
+func (r *existingRuntime) Exists(string) (bool, error) { return r.exists, nil }
+
+// A stopped teleportable sandbox still holds its disk, and an ordinary boot
+// clears a stopped instance before it starts a new one. For this session that
+// deletes the guest home, so the run refuses instead and names rm; once the
+// instance is gone the session starts over.
+func TestEnsureRunningRefusesToClearAStoppedTeleportableSandbox(t *testing.T) {
+	teleportState(t)
+	rt := &guestRuntime{}
+	first := loadTeleport(t, teleportProfile(t), Options{}, rt)
+	if err := first.EnsureRunning(creds.Set{}); err != nil {
+		t.Fatalf("the first boot was refused: %v", err)
+	}
+	stop := &bytes.Buffer{}
+	first.Err = stop
+	if err := first.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stop.String(), "stopping a teleportable session ends it") {
+		t.Errorf("stop did not say it ends the session:\n%s", stop.String())
+	}
+
+	stopped := &existingRuntime{guestRuntime: rt, exists: true}
+	boots, removes := rt.boots, rt.removes
+	again := loadTeleport(t, teleportProfile(t), Options{}, stopped)
+	err := again.EnsureRunning(creds.Set{})
+	if err == nil || !strings.Contains(err.Error(), "is stopped") || !strings.Contains(err.Error(), "brig rm tp") {
+		t.Fatalf("a stopped teleportable sandbox was not refused with the way out: %v", err)
+	}
+	if rt.boots != boots || rt.removes != removes {
+		t.Errorf("the stopped sandbox was cleared anyway: %d boots, %d removes", rt.boots-boots, rt.removes-removes)
+	}
+
+	gone := &existingRuntime{guestRuntime: rt, exists: false}
+	if err := loadTeleport(t, teleportProfile(t), Options{}, gone).EnsureRunning(creds.Set{}); err != nil {
+		t.Fatalf("a session whose sandbox is gone did not start over: %v", err)
+	}
+}
+
+// A changed posture recreates an ordinary sandbox, which costs a boot. On a
+// teleportable one it would delete the disk, so it is refused and the
+// sandbox is left as it is.
+func TestATeleportableSandboxIsNotRecreatedForAPostureChange(t *testing.T) {
+	teleportState(t)
+	rt := &guestRuntime{}
+	if err := loadTeleport(t, teleportProfile(t), Options{}, rt).EnsureRunning(creds.Set{}); err != nil {
+		t.Fatalf("the first boot was refused: %v", err)
+	}
+	// The first boot clears the name before it starts, which is not what
+	// this case is about.
+	rt.running = true
+	rt.boots, rt.stops, rt.removes = 0, 0, 0
+	boots := rt.boots
+	c := loadTeleport(t, teleportProfile(t), Options{Network: "offline"}, rt)
+	err := c.EnsureRunning(creds.Set{})
+	if err == nil || !strings.Contains(err.Error(), "deletes its disk") {
+		t.Fatalf("a posture change on a teleportable sandbox was not refused: %v", err)
+	}
+	if rt.stops != 0 || rt.removes != 0 || rt.boots != boots {
+		t.Errorf("it was recreated anyway: %d stops, %d removes, %d boots", rt.stops, rt.removes, rt.boots-boots)
+	}
+}
