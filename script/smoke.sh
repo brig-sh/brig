@@ -1969,7 +1969,7 @@ grep -q hasCompletedOnboarding "$seed" 2>/dev/null && ! grep -q 'tp-token-secret
 
 # ls and info say so.
 tp "$WORK/brig" ls > "$WORK/tp-ls.out" 2>&1
-grep -q '^claude-code .* yes .*(in the sandbox disk)' "$WORK/tp-ls.out" \
+grep -q '^claude-code .*(in the sandbox disk)$' "$WORK/tp-ls.out" && grep -q '^REF  *SANDBOX  *STATE  *WORKSPACE$' "$WORK/tp-ls.out" \
   && ok "ls marks the session teleportable" || bad "ls marks the session teleportable -- got: $(cat "$WORK/tp-ls.out")"
 tp "$WORK/brig" info claude > "$WORK/tp-info.out" 2>&1
 grep -q '^TELEPORTABLE ' "$WORK/tp-info.out" && grep -q '^WORKSPACE .*none on the host' "$WORK/tp-info.out" \

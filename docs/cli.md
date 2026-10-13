@@ -209,10 +209,9 @@ brig ls
 ```
 
 `brig ls` lists every sandbox that Brig knows, one row each. The columns are
-`REF`, `SANDBOX` (the runtime's name for the sandbox), `STATE`,
-`TELEPORTABLE` (`yes` or `no`, see [teleport.md](teleport.md)) and
-`WORKSPACE` (the guest home). A teleportable session has no guest home on
-the host, so its `WORKSPACE` reads `(in the sandbox disk)`.
+`REF`, `SANDBOX` (the runtime's name for the sandbox), `STATE` and
+`WORKSPACE` (the guest home). A [teleportable session](teleport.md) has no
+guest home on the host, so its `WORKSPACE` reads `(in the sandbox disk)`.
 
 ```bash
 brig ls -q

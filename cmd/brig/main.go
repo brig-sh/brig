@@ -2122,27 +2122,19 @@ func printSandboxes(w io.Writer, rows []sandboxRow) {
 			name = len(r.name)
 		}
 	}
-	// TELEPORTABLE sits before WORKSPACE, which stays last because it is the
-	// one column with no width to keep: a path is as long as it is. The
-	// heading is the widest cell the column holds, so it needs no measuring.
-	fmt.Fprintf(w, "%-*s %-*s %-10s %-12s %s\n", ref, "REF", name, "SANDBOX", "STATE", "TELEPORTABLE", "WORKSPACE")
+	fmt.Fprintf(w, "%-*s %-*s %-10s %s\n", ref, "REF", name, "SANDBOX", "STATE", "WORKSPACE")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%-*s %-*s %-10s %-12s %s\n",
-			ref, refCell(r.ref), name, r.name, r.state, teleportCell(r.teleportable), workspaceCell(r))
+		fmt.Fprintf(w, "%-*s %-*s %-10s %s\n",
+			ref, refCell(r.ref), name, r.name, r.state, workspaceCell(r))
 	}
-}
-
-// teleportCell is the TELEPORTABLE column: yes or no, never blank, for the
-// reason noRef is a dash.
-func teleportCell(teleportable bool) string {
-	if teleportable {
-		return "yes"
-	}
-	return "no"
 }
 
 // workspaceCell is the WORKSPACE column. A teleportable session has no host
-// directory, so it reads as one rather than as a blank brig lost.
+// directory, so it reads as one rather than as a blank brig lost. That cell
+// is the whole of how the table marks such a session: a TELEPORTABLE column
+// reads no on every ordinary row, which is a column people learn to skip,
+// and it changes the shape of every user's listing for the few who have one.
+// The JSON carries the field.
 func workspaceCell(r sandboxRow) string {
 	if r.teleportable {
 		return "(in the sandbox disk)"
