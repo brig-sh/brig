@@ -176,6 +176,24 @@ func (p Profile) Validate() error {
 	default:
 		return fmt.Errorf("rootfsType %q is not one of block, virtiofs or 9pfs", p.RootfsType)
 	}
+	// A teleportable session keeps everything inside its own block disk, and
+	// the hvi backend is the one that can capture it. Checked here so a
+	// profile that contradicts itself is refused against the file that says
+	// so, not at a boot several layers down. An empty hypervisor is vz, the
+	// runtime's default, so the profile has to name hvi.
+	if p.Teleportable {
+		if p.Hypervisor != "hvi" {
+			return fmt.Errorf("teleportable: true needs hypervisor: hvi (this profile %s); "+
+				"hvi is the backend that keeps a session's whole state in its own disk", namesHypervisor(p.Hypervisor))
+		}
+		if p.RootfsType != "" && p.RootfsType != "block" {
+			return fmt.Errorf("teleportable: true boots a block root, and this profile asks for rootfsType: %s; "+
+				"drop rootfsType or set it to block", p.RootfsType)
+		}
+		if p.IsGUI() {
+			return fmt.Errorf("teleportable: true needs the hvi backend, and kind: gui needs vz for its window")
+		}
+	}
 	// A policy name ends up in a file path wherever it is resolved, so it
 	// has to be safe there.
 	for _, name := range p.Policy {
@@ -326,6 +344,11 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this 
 #              the image was never built to be a guest -- a plain OCI image
 #              with no kernel in it. The runtime supplies the kernel and
 #              initrd and boots it unmodified
+#   teleportable
+#              every session of this profile owns its storage: a block root
+#              with the guest home inside it, and no host directory shared
+#              in. Needs hypervisor: hvi. brig run --teleportable asks for the
+#              same on one session
 #   reserved   marks a profile that owns the workspace a session name could
 #              otherwise slug onto. The trailing word is reserved too, so
 #              claude-desktop reserves "desktop" as well as its own name
@@ -336,6 +359,16 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this 
 # Building an image for a profile:
 # ` + BringYourOwnImageDoc + `
 `
+
+// namesHypervisor is what a profile's hypervisor: says, for a refusal: an
+// empty field is the runtime's default, vz, and the message has to say that
+// rather than quote an empty string.
+func namesHypervisor(hv string) string {
+	if hv == "" {
+		return "names none, which is vz"
+	}
+	return "says " + hv
+}
 
 // SourceBytes returns the bytes a profile was read from, which is what export
 // hands back: a profile is a file someone wrote, and re-serialising it from
