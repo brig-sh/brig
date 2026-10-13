@@ -209,8 +209,10 @@ brig ls
 ```
 
 `brig ls` lists every sandbox that Brig knows, one row each. The columns are
-`REF`, `SANDBOX` (the runtime's name for the sandbox), `STATE` and
-`WORKSPACE` (the guest home).
+`REF`, `SANDBOX` (the runtime's name for the sandbox), `STATE`,
+`TELEPORTABLE` (`yes` or `no`, see [teleport.md](teleport.md)) and
+`WORKSPACE` (the guest home). A teleportable session has no guest home on
+the host, so its `WORKSPACE` reads `(in the sandbox disk)`.
 
 ```bash
 brig ls -q
@@ -390,6 +392,7 @@ fields, in order:
 | `runtime` | object | `kind`, `bin` and `available`, as in `brig info --json`, and `backend`: the hypervisor the profile or `BRIG_HYPERVISOR` names, omitted for the runtime's own default |
 | `isolation` | string | what the sandbox stands on, as a sentence |
 | `home` | mount | the guest home |
+| `teleportable` | bool, omitted when false | `true` for a [teleportable session](teleport.md). `home` then has an empty `host` and the mode `disk` |
 | `project` | mount, omitted when the run has none | the project |
 | `projectRefused` | string, omitted when nothing was refused | why the project this session remembers is not mounted. `refused` carries the same reason |
 | `skills` | list of mounts | the host directories `--skills` copies into the guest home |
@@ -407,7 +410,8 @@ fields, in order:
 | `digest` | string | `sha256:` and 64 hex digits |
 
 A mount has `host`, `guest` and `mode`. `mode` is `read-write` for the home
-and the project, and `copy` for a skills directory. Each credential has these
+and the project, `copy` for a skills directory, and `disk` for the home of a
+teleportable session, which is on the sandbox's own disk and has no `host`. Each credential has these
 fields:
 
 | Field | Values |
@@ -776,7 +780,7 @@ the agent.
 | Position | Flags |
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
-| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish`, `-q`/`--quiet` and `--json` |
+| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--teleportable`, `--network`, `--offline`, `--publish`, `-q`/`--quiet` and `--json` |
 
 The global position takes only those three flags. Brig refuses any other
 flag there by name:
@@ -832,6 +836,7 @@ is a Brig flag and that here it goes to the agent.
 | `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run` and `plan`, refused by name as a usage error |
 | `-d`, `--detach` | (none) | off | start the sandbox, print its name and exit, without attaching. Only `run` acts on it. `sh`, `stop`, `rm`, `info` and `plan` accept it and ignore it |
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
+| `--teleportable` | (none) | off, or the profile's `teleportable:` | start a session that owns its storage: a `block` root with the guest home inside it, and no host directory shared in. The session keeps the property, so later lines need not repeat it. Needs hull's `hvi` backend, and refuses a project or `--home` on the same line as a usage error. See [teleport.md](teleport.md) |
 | `--network MODE` | `shared`, `isolated` or `offline` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture) | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. If Brig cannot establish the posture of an existing sandbox, name one with this flag or `BRIG_NETWORK`. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox. Refused together with a different `--network` value |
 | `--publish PORT` | `3000`, `8080:80`, `127.0.0.1:8080:80`, `5353:53/udp` | nothing published | open a guest port on the host. Repeatable. Binds to `127.0.0.1` unless the address says otherwise. There is no `-p`, which stays the agent's flag. See [`brig network`](#brig-network) |
@@ -969,8 +974,9 @@ agent's, and anything else means that it is one of the classes in the table.
 
 ### Exit 7 cases
 
-The one such property today is an egress policy. `brig run`, `brig sh` and
-the retired spellings that stand for them refuse a policy with `7`:
+There are two such properties: an egress policy and a teleportable session.
+`brig run`, `brig sh` and the retired spellings that stand for them refuse a
+policy with `7`:
 
 - on hull's `vz` or `qemu`
 - on docker
@@ -984,6 +990,11 @@ chose the posture.
 `brig network publish` refuses with `7` on `vz`, `qemu`, docker and a
 backend that Brig holds no answer for. It runs no gateway probe. On `hvi` it
 records the port, and a failed probe refuses the next run with `7`.
+
+They refuse a [teleportable session](teleport.md) with `7` on every run path
+but hull's `hvi`: on `vz`, on `qemu`, on hull with no hypervisor named (which
+is `vz`), and on nerdctl and docker. The refusal says `cannot run a
+teleportable session` and names the run path.
 
 Two refusals exit `1`. With no policy bound, the refusal of an isolated
 network on `vz` or `qemu` is a different refusal. A refusal that Brig reaches
@@ -1115,7 +1126,7 @@ does and does not catch.
 | `BRIG_RUNTIME` (global only) | `hull` on macOS, `nerdctl` on Linux | which runtime to drive |
 | `BRIG_RUNTIME_BIN` (global only) | `hull` on the `hull` runtime, `nerdctl` then `docker` on the `nerdctl` runtime, each found on `PATH` | path to that binary. `BRIG_RUNTIME` picks the runtime first, and this only overrides its executable |
 | `BRIG_HYPERVISOR` | the agent's own `hypervisor:` field, else `vz` | macOS only: `vz`, `hvi` or `qemu`. Wins over the agent's own field when set |
-| `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` ignores it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked |
+| `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` ignores it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked. A [teleportable session](teleport.md) always boots `block` and refuses any other value here |
 | `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. Another microVM shim is accepted. A shim Brig knows shares the host kernel (`runc` or `crun`, by name or by path, or a shim name containerd resolves to the runc shim, such as `io.containerd.runc.v2`) is refused |
 
 On macOS, `hvi` is the only backend that enforces an attached egress policy

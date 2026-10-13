@@ -39,6 +39,11 @@ The guest cannot reach:
 
 The guest gets only the credentials you deliver to it.
 
+A teleportable session reaches fewer host directories, not more. Brig shares
+neither a guest home nor a project into it, so no host directory is mounted at
+all. Its guest home is a directory on the sandbox's own disk. See
+[teleport.md](teleport.md).
+
 The host can reach the guest only on a port you publish. See
 [Published ports](#published-ports).
 

@@ -20,6 +20,7 @@ other pages follow, in the order a new reader needs them.
 | Page | What it gives you |
 | --- | --- |
 | [sessions.md](sessions.md) | Guest homes, projects, named sessions, and what survives which command |
+| [teleport.md](teleport.md) | Teleportable sessions, which keep the guest home inside the sandbox's own disk |
 | [security.md](security.md) | What the sandbox isolates, and what an agent can still do |
 | [claims.md](claims.md) | The tests behind each claim on the security page |
 | [non-goals.md](non-goals.md) | What Brig does not try to be |
