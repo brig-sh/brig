@@ -69,6 +69,17 @@ type Var struct {
 	// outliving the sandbox in a file the user never sees is a different
 	// severity of leak.
 	Secret bool
+	// Credential marks a value brig resolved through a ref on this run, out
+	// of the caller's environment or out of its own store, as opposed to a
+	// literal the profile wrote or brig's own plumbing. Every Secret is one,
+	// and so is a GH_TOKEN read from the shell, which is not a Secret: see
+	// creds.Set.Add for why the two flags differ.
+	//
+	// A teleportable boot leaves every such Var off the run, except one with
+	// a name the runtime reads for itself (see bootVars). hull writes the
+	// boot environment, values included, into a file of the sandbox (see
+	// RunSpec.Teleportable), and that sandbox's disk is the session.
+	Credential bool
 }
 
 // RunSpec is a request to boot a sandbox.
@@ -136,6 +147,18 @@ type RunSpec struct {
 	// publication is part of a sandbox's configuration and outlives one run.
 	// See publish.go.
 	Publish []Publication
+	// Teleportable marks a session that owns its storage and that a later
+	// release moves to another host with its disk. Run then leaves every Var
+	// marked Credential or Secret out of the boot: hull writes the boot
+	// environment, values included, into /urunit.conf on the root disk or
+	// /urunc-env in the boot initrd, and on this session the first is the
+	// storage that moves and the second sits in the instance directory. A
+	// value there would outlive a rotation and travel with the session.
+	// Nothing is lost by it: every exec hands the credentials again, by name,
+	// and the agent is an exec. The names the runtime reads for itself, even
+	// when a ref bound them, the literals a profile writes and brig's
+	// plumbing still go on the run.
+	Teleportable bool
 	// Counted marks a user action, whose boot and lifetime hull's telemetry
 	// reports, rather than brig's own plumbing. See telemetryEnv.
 	Counted bool

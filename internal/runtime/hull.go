@@ -493,6 +493,24 @@ func (h *hull) Run(spec RunSpec) error {
 
 	cmd := exec.Command(h.bin, args...)
 	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
+	// mergeEnv starts from brig's own environment, which holds a credential
+	// forwarded from the shell under its own name. hull resolves only the
+	// names on its --env list, so this is not what keeps the value off the
+	// disk. It takes out exactly the names bootVars left off the run, so a
+	// value brig withheld from the guest is not also handed to the process
+	// that writes the guest's boot files. It does not clean brig's ambient
+	// environment: a credential no profile binds still reaches hull, as it
+	// does on every boot.
+	//
+	// What hull reads to pull stays; see hullPullReads. bootVars never
+	// withholds a name hull reads for itself, such as PATH or HOME.
+	_, withheld := bootVars(spec)
+	for _, name := range withheld {
+		if hullPullReads(name) {
+			continue
+		}
+		cmd.Env = withoutEnv(cmd.Env, name)
+	}
 	cmd.Stdout = nil // the instance id is not interesting; failures explain themselves
 	// Held rather than passed through. What hull says on its way up is a pull
 	// progress bar and a boot message, which is noise on a boot that works and
@@ -666,7 +684,8 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 			args = append(args, "--gui-title", spec.GUITitle)
 		}
 	}
-	envArgs, envVals, err := splitEnv("--env", spec.Env)
+	vars, _ := bootVars(spec)
+	envArgs, envVals, err := splitEnv("--env", vars)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -675,6 +694,55 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	// bytes cosign checked; hull resolves it against its store from rc23.
 	args = append(args, withDigest(spec.Image, spec.Digest))
 	return args, envVals, nil
+}
+
+// hullPullReads reports whether hull reads a variable of this name to pull an
+// image: its own HULL_ settings, HULL_REGISTRY_TOKEN among them, and the
+// proxy settings Go's HTTP client takes from the environment. A profile that
+// also forwards one of these to the guest withholds it from a teleportable
+// run, and taking it from hull's environment too would leave a pull behind a
+// proxy, or from a private registry, failing for a reason the boot does not
+// name.
+func hullPullReads(name string) bool {
+	if strings.HasPrefix(name, "HULL_") {
+		return true
+	}
+	switch strings.ToUpper(name) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY":
+		return true
+	}
+	return false
+}
+
+// bootVars is the part of spec.Env that goes on the run, and the names of the
+// Vars it leaves off.
+//
+// All of it on an ordinary boot. On a teleportable one, nothing marked
+// Credential or Secret: hull writes every --env it is given, value included,
+// into a file of the sandbox (/urunit.conf on the root disk, /urunc-env in
+// the boot initrd), and that disk is the session a later release moves.
+// Dropped here, in the function that builds the command line, rather than by
+// the caller, so the argv a test reads is the argv that boots.
+//
+// A name the runtime reads for itself is kept whatever its marks, even when
+// a ref bound it, as BRIG_FORWARD_ENV=PATH does. It carries no credential
+// (see runtimeReads), it goes in argv as NAME=value, and withholding it would
+// also take it out of hull's own environment below, which leaves hull with no
+// PATH to find hvi on or no HOME to keep its store under. A Secret one is
+// kept too, so splitEnv refuses it here as it does on any other boot, rather
+// than the boot working and the first exec failing.
+func bootVars(spec RunSpec) (kept []Var, withheld []string) {
+	if !spec.Teleportable {
+		return spec.Env, nil
+	}
+	for _, v := range spec.Env {
+		if (v.Credential || v.Secret) && !runtimeReads(v.Name) {
+			withheld = append(withheld, v.Name)
+			continue
+		}
+		kept = append(kept, v)
+	}
+	return kept, withheld
 }
 
 // execArgs is the one place the exec command line is built, so the probe, the

@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -222,6 +225,145 @@ func TestRunArgsForATeleportableSessionShareNothing(t *testing.T) {
 	for _, want := range []string{"--rootfs-type block", "--hypervisor hvi", "--env HOME=/root"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("a teleportable boot lacks %q: %s", want, got)
+		}
+	}
+}
+
+// hull writes every --env it is given, value included, into the sandbox's
+// own files: /urunit.conf on the root disk, or /urunc-env in the boot initrd.
+// On a teleportable session that disk is the session, kept for its life and
+// moved with it, so no credential brig resolved may be on its run line: not
+// one from the store, and not one read from the shell, which is not Secret
+// and which BRIG_ENV_ARGV would otherwise put on the line with its value.
+// The names hull reads for itself, the literals a profile writes and brig's
+// plumbing still go. Every exec hands the credentials again, by name.
+func TestRunArgsForATeleportableSessionCarryNoCredential(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	env := []Var{
+		{Name: "HOME", Value: "/root"},
+		{Name: "IS_SANDBOX", Value: "1"},
+		{Name: "GIT_TERMINAL_PROMPT", Value: "0"},
+		{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true},
+		{Name: "CLAUDE_TOKEN", Value: "from-store", Secret: true, Credential: true},
+		// A Var marked Secret alone is still a credential: the older of the
+		// two marks must not be the one that leaks.
+		{Name: "OLD_SECRET", Value: "secret-only", Secret: true},
+		// A name hull reads for itself, bound by a ref as BRIG_FORWARD_ENV
+		// does. It is no credential and stays on the run as NAME=value.
+		{Name: "PATH", Value: "/guest/bin", Credential: true},
+	}
+	spec := RunSpec{Name: "brig-claude-code", Image: "img", Mem: 4096, CPUs: 4,
+		RootfsType: "block", Teleportable: true, Env: env}
+	args, vals, err := runArgs(spec, "hvi", "none", "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("runArgs: %v", err)
+	}
+	for i, a := range args {
+		if a != "--env" || i+1 == len(args) {
+			continue
+		}
+		name, _, _ := strings.Cut(args[i+1], "=")
+		switch name {
+		case "GH_TOKEN", "CLAUDE_TOKEN", "OLD_SECRET":
+			t.Errorf("a teleportable run line carries the credential %s: %q", name, args)
+		}
+	}
+	for _, kv := range vals {
+		for _, value := range []string{"gh-from-shell", "from-store", "secret-only"} {
+			if strings.Contains(kv, value) {
+				t.Errorf("a teleportable run hands hull the credential value %q", kv)
+			}
+		}
+	}
+	got := strings.Join(args, " ")
+	for _, want := range []string{"--env HOME=/root", "--env IS_SANDBOX=1", "--env GIT_TERMINAL_PROMPT=0",
+		"--env PATH=/guest/bin"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a teleportable run line lacks %q: %s", want, got)
+		}
+	}
+
+	// The same Vars on an ordinary boot all go, so the drop is the
+	// session's and not a rule that lost a credential everywhere.
+	spec.Teleportable = false
+	got = argv(t, spec, "hvi", "none", "", "")
+	for _, want := range []string{"--env GH_TOKEN", "--env CLAUDE_TOKEN", "--env OLD_SECRET"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("an ordinary run line lacks %q: %s", want, got)
+		}
+	}
+}
+
+// A teleportable boot takes the credentials it withheld out of hull's own
+// environment, and nothing else. hull finds hvi on PATH, keeps its store
+// under HOME and pulls with HULL_REGISTRY_TOKEN through HTTPS_PROXY, so a
+// guest binding for any of those, ref-bound or not, must leave hull's own
+// value where it is: taking PATH out left hull with none, and the boot could
+// not find hvi.
+func TestATeleportableBootLeavesHullItsOwnEnvironment(t *testing.T) {
+	scratchHome(t)
+	home := os.Getenv("HOME")
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "sentinel-bin")
+	t.Setenv("PATH", sentinel+":/usr/bin:/bin")
+	t.Setenv("HULL_REGISTRY_TOKEN", "hull-pulls-with-this")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example:3128")
+	t.Setenv("GH_TOKEN", "gh-from-shell")
+	t.Setenv("BRIG_ENV_ARGV", "")
+	envOut, argsOut := filepath.Join(dir, "env"), filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "hull")
+	script := "#!/bin/sh\n/usr/bin/env > '" + envOut + "'\nprintf '%s\\n' \"$@\" > '" + argsOut + "'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := RunSpec{Name: "brig-claude-code", Image: "img", Hypervisor: "hvi", Net: "none",
+		RootfsType: "block", Teleportable: true, Env: []Var{
+			{Name: "PATH", Value: "/guest/bin", Credential: true},
+			{Name: "HOME", Value: "/root", Credential: true},
+			{Name: "HULL_REGISTRY_TOKEN", Value: "hull-pulls-with-this", Credential: true},
+			{Name: "HTTPS_PROXY", Value: "http://proxy.example:3128", Credential: true},
+			{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true},
+		}}
+	if err := (&hull{bin: bin}).Run(spec); err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	raw, err := os.ReadFile(envOut)
+	if err != nil {
+		t.Fatalf("the fake hull did not record its environment: %v", err)
+	}
+	env := map[string]string{}
+	for _, kv := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
+	if !strings.HasPrefix(env["PATH"], sentinel+":") {
+		t.Errorf("hull's own PATH is gone or replaced: %q", env["PATH"])
+	}
+	if env["HOME"] != home {
+		t.Errorf("hull's own HOME is %q, want %q", env["HOME"], home)
+	}
+	if env["HULL_REGISTRY_TOKEN"] != "hull-pulls-with-this" {
+		t.Errorf("hull lost its registry token: %q", env["HULL_REGISTRY_TOKEN"])
+	}
+	if env["HTTPS_PROXY"] != "http://proxy.example:3128" {
+		t.Errorf("hull lost the proxy it pulls through: %q", env["HTTPS_PROXY"])
+	}
+	if v, ok := env["GH_TOKEN"]; ok {
+		t.Errorf("hull was handed the credential it was told nothing about: GH_TOKEN=%q", v)
+	}
+	args, err := os.ReadFile(argsOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Fields(string(args))
+	for _, want := range []string{"PATH=/guest/bin", "HOME=/root"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("the run line lacks --env %s: %q", want, got)
+		}
+	}
+	for _, a := range got {
+		if strings.HasPrefix(a, "GH_TOKEN") || strings.HasPrefix(a, "HULL_REGISTRY_TOKEN") {
+			t.Errorf("the run line names the credential %s: %q", a, got)
 		}
 	}
 }

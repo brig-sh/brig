@@ -208,6 +208,7 @@ case "$verb" in
         ;;
       *)
         printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG"
+        printf 'env-gh:%s\n' "${GH_TOKEN:-<unset>}" >> "$STUB_LOG"
         printf 'env-home:%s\n' "${HOME:-<unset>}" >> "$STUB_LOG"
         # The agent (or login shell) exec. STUB_EXEC_EXIT makes it exit non-zero,
         # which is how the --json case drives the child path: brig runs this as a
@@ -1960,6 +1961,26 @@ grep -q '^argv: exec -u root .* mount -t tmpfs .* /brig/claude' "$STUB_LOG" \
 grep '^argv:' "$STUB_LOG" | grep -q 'tp-token-secret\|tp-gh-secret' \
   && bad "a credential value reached argv on a teleportable run" \
   || ok "no credential value reaches argv on a teleportable run"
+# Not on the run at all, by name either. hull writes every --env of a run,
+# value included, into the sandbox's own files (/urunit.conf on the root disk,
+# /urunc-env in the boot initrd), and this disk is the session: kept for its
+# life and moved with it. The run's environment loses the value too, so the
+# stub reads it unset. The agent is an exec, and the exec hands it in.
+run_words="$(grep '^words:\[run\]' "$STUB_LOG")"
+run_gh="$(awk '/^argv: run /{r=1} r && /^env-gh:/{print; exit}' "$STUB_LOG")"
+case "$run_words|$run_gh" in
+  *"[--env][GH_TOKEN"*|*tp-gh-secret*|"|"*|*"|")
+    bad "a teleportable run line names no credential and hands hull none -- got: $run_words $run_gh" ;;
+  *"|env-gh:<unset>") ok "a teleportable run line names no credential and hands hull none" ;;
+  *) bad "a teleportable run line names no credential and hands hull none -- got: $run_words $run_gh" ;;
+esac
+GH_TOKEN=tp-gh-secret tp "$WORK/brig" run claude -p hi > "$WORK/tp-exec.out" 2>&1; rc=$?
+exec_line="$(grep '^argv: exec .* -- claude -p hi' "$STUB_LOG" | tail -1)"
+exec_gh="$(awk '/^argv: exec .* -- claude -p hi/{r=1} r && /^env-gh:/{v=$0; r=0} END{print v}' "$STUB_LOG")"
+case "$rc|$exec_line|$exec_gh" in
+  "0|"*"--env GH_TOKEN "*"|env-gh:tp-gh-secret") ok "the agent's exec on a teleportable session carries GH_TOKEN" ;;
+  *) bad "the agent's exec on a teleportable session carries GH_TOKEN -- got $rc: $exec_line $exec_gh $(cat "$WORK/tp-exec.out")" ;;
+esac
 # The onboarding seed a host home would have carried is fed into the guest
 # home on the disk instead, and it is the seed and nothing else.
 seed="$STUB_STATE.fed.$(printf '%s' "$GUEST_HOME/.claude/.claude.json" | tr / _)"
@@ -2089,6 +2110,18 @@ esac
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "a teleportable run refused with exit 7 reached the runtime" \
   || ok "a teleportable run refused with exit 7 reached no runtime"
+# A gui profile's window is the boot process and reads its credentials from
+# the boot environment, which a teleportable boot keeps them out of. Refused
+# for that reason, ahead of the backend, and nothing boots.
+: > "$STUB_LOG"
+out="$(tp "$WORK/brig" run --teleportable claude-desktop 2>&1)"; rc=$?
+case "$rc:$out" in
+  1:*--teleportable*"reads its credentials at boot"*) ok "--teleportable on a profile that reads credentials at boot is refused, saying why" ;;
+  *) bad "--teleportable on a profile that reads credentials at boot is refused, saying why -- got $rc: $out" ;;
+esac
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "a teleportable gui run reached the runtime" \
+  || ok "a teleportable gui run reached no runtime"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== flags =="

@@ -133,6 +133,10 @@ func Bind(
 			s.AddSecret(b.Name, value, b.Name+annotation)
 			continue
 		}
+		if fromEnv {
+			s.addFromEnv(b.Name, value, b.Name+annotation)
+			continue
+		}
 		s.Add(b.Name, value, b.Name+annotation)
 	}
 	return s

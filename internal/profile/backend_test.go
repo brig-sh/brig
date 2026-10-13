@@ -116,7 +116,9 @@ func TestValidateRefusesATeleportableProfileItCannotKeep(t *testing.T) {
 		{"vz", func(p *Profile) { p.Hypervisor = "vz" }, "says vz"},
 		{"qemu", func(p *Profile) { p.Hypervisor = "qemu" }, "says qemu"},
 		{"a shared root", func(p *Profile) { p.RootfsType = "virtiofs" }, "rootfsType: virtiofs"},
-		{"a gui", func(p *Profile) { p.Kind = KindGUI; p.Binary = "" }, "kind: gui"},
+		{"a gui", func(p *Profile) { p.Kind = KindGUI; p.Binary = "" }, "kind: gui reads its credentials at boot"},
+		// The credential reason comes first: it is the one no backend fixes.
+		{"a gui on vz", func(p *Profile) { p.Kind = KindGUI; p.Binary = ""; p.Hypervisor = "vz" }, "reads its credentials at boot"},
 	} {
 		p := backendBase()
 		p.Teleportable, p.Hypervisor = true, "hvi"

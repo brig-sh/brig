@@ -469,6 +469,16 @@ The rest of what Brig asks of a runtime is in optional interfaces in
 - `BootResolver`: the boot assets, fetched before the boot.
 - `FeedLimiter` and `FallbackReporter`: a size limit on stdin, and a
   stand-in binary such as docker.
+- `StorageInspector`: whether a sandbox booted on a block root with no host
+  directory shared in, which is what a teleportable session is.
+- `Pauser`, `Checkpointer`, `Restorer` and `MigrationInspector`: pause and
+  resume a guest in place, write it to a checkpoint that can continue or
+  fence it, restore it from that checkpoint paused, and read where the
+  runtime's record says a checkpoint or a move left it. These are the seam
+  a [teleport](teleport.md#what-teleport-will-do) is built on. hull
+  implements them with its `pause`, `resume`, `checkpoint` and `restore`
+  verbs for `hvi`. No Brig verb calls them yet except `brig info`, which
+  reads the migration record.
 
 ### Shared and Brig-only parts
 

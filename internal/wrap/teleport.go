@@ -16,16 +16,19 @@ import (
 // move the running sandbox to another host as a whole, because there is
 // nothing left behind on this one for it to point at.
 //
-// Everything else is the same session. The network, the policy and the
-// credentials are decided and delivered exactly as for any other: a files:
-// credential is fed through hull exec into a tmpfs the profile declares, and
-// the tmpfs now sits over a directory of the block disk rather than of a
-// share. An environment credential goes to hull run with the rest of the
-// boot environment, and hull writes that into /urunit.conf on the root disk.
-// On an ordinary session that disk goes with the sandbox; here it is the
-// session, so the value outlives a rotation and travels with a move.
-// docs/teleport.md says so, and keeping it off the disk is a precondition of
-// moving one.
+// Everything else is the same session, credentials included, with one
+// difference in when they arrive. A files: credential is fed through hull
+// exec into a tmpfs the profile declares, as on any session; the tmpfs now
+// sits over a directory of the block disk rather than of a share. An
+// environment credential is not handed to hull run. hull writes the boot
+// environment, values included, into /urunit.conf on the root disk or
+// /urunc-env in the boot initrd, and here the disk is the session: a value
+// there would outlive a rotation and travel with a move. So the boot carries
+// only the names hull reads for itself, the profile's literals and brig's
+// plumbing (runtime.RunSpec.Teleportable), and every exec, the agent's
+// included, hands the credentials in by name as it always has. A profile
+// whose workload reads credentials at boot cannot be teleportable, and
+// resolveTeleportable refuses it.
 //
 // What changes is only where the guest home is, and so which of brig's
 // host-side steps have anything to act on. Each one that writes into the host
@@ -69,6 +72,17 @@ func resolveTeleportable(t profile.Profile, o Options, env Env, ref, vmName stri
 	case recorded:
 		tp.on, tp.source = true, "this session, which was started teleportable"
 	default:
+		return tp
+	}
+	// A workload that reads its credentials at boot can only get them from
+	// the boot environment, and a teleportable boot carries none: hull would
+	// write them into the disk. Refused before the backend is asked, because
+	// no backend changes it. A profile that says teleportable: true is
+	// refused for the same reason when it loads; this is --teleportable on a
+	// profile that does not.
+	if t.CredentialsAtBoot() {
+		tp.refusal = fmt.Errorf("%s asks for a teleportable session, and %s cannot be one. %s. "+
+			"Run it as an ordinary session", tp.source, t.Name, profile.TeleportableBootCredentials)
 		return tp
 	}
 	// A session brig already knows, started with a host home. One sandbox

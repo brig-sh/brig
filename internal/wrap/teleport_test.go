@@ -408,6 +408,43 @@ func TestEnsureRunningBootsATeleportableSessionWithNoShare(t *testing.T) {
 	}
 }
 
+// The boot of a teleportable session tells the runtime so, and still hands
+// it every credential with its marks. The runtime adapter is where the
+// credentials come off `hull run` (see runtime.bootVars), so a boot that
+// dropped the mark, or a mark, would boot with them on the disk, and a boot
+// that dropped the credentials here would leave the adapter nothing to judge
+// and a later change free to lose them for the exec too. The exec that runs
+// the agent is checked end to end in smoke.
+func TestATeleportableBootHandsTheRuntimeItsCredentialsMarked(t *testing.T) {
+	teleportState(t)
+	t.Chdir(t.TempDir())
+	rt := &guestRuntime{}
+	c := loadTeleport(t, teleportProfile(t), Options{}, rt)
+	var set creds.Set
+	set.Add("IS_SANDBOX", "1", "")
+	set.AddSecret("CLAUDE_TOKEN", "from-store", "")
+	set.Vars = append(set.Vars, runtime.Var{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true})
+
+	if err := c.EnsureRunning(set); err != nil {
+		t.Fatalf("a teleportable boot was refused: %v", err)
+	}
+	if !rt.spec.Teleportable {
+		t.Fatalf("a teleportable boot did not tell the runtime so: %+v", rt.spec)
+	}
+	got := map[string]runtime.Var{}
+	for _, v := range rt.spec.Env {
+		got[v.Name] = v
+	}
+	for _, want := range []runtime.Var{
+		{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true},
+		{Name: "CLAUDE_TOKEN", Value: "from-store", Secret: true, Credential: true},
+	} {
+		if v := got[want.Name]; v != want {
+			t.Errorf("the runtime was handed %s as %+v, want %+v", want.Name, v, want)
+		}
+	}
+}
+
 // Every run path but hull's hvi refuses a teleportable session before
 // anything boots, as a capability, so the CLI exits 7 for it.
 func TestEnsureRunningRefusesATeleportableSessionOffHvi(t *testing.T) {
@@ -441,6 +478,31 @@ func TestEnsureRunningRefusesATeleportableSessionOffHvi(t *testing.T) {
 				t.Errorf("the plan did not carry the refusal: %+v", d.Refused)
 			}
 		})
+	}
+}
+
+// A gui profile's window reads its credentials from the boot environment,
+// and a teleportable boot carries none. --teleportable on one is refused for
+// that reason, before any backend is asked, and the plan says the same.
+func TestTeleportableRefusesAProfileThatReadsCredentialsAtBoot(t *testing.T) {
+	teleportState(t)
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	desktop, ok := profile.Lookup("claude-desktop")
+	if !ok || !desktop.CredentialsAtBoot() {
+		t.Fatalf("claude-desktop is no longer a profile that reads credentials at boot: %+v", desktop)
+	}
+	rt := &guestRuntime{}
+	cfg := loadTeleport(t, desktop, Options{Teleportable: true}, rt)
+	err := cfg.EnsureRunning(creds.Set{})
+	if err == nil || !strings.Contains(err.Error(), "reads its credentials at boot") ||
+		!strings.Contains(err.Error(), "--teleportable") {
+		t.Fatalf("want the boot-credential refusal naming --teleportable, got %v", err)
+	}
+	if rt.boots != 0 {
+		t.Errorf("booted %d sandboxes for a refused teleportable gui session", rt.boots)
+	}
+	if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "reads its credentials at boot") {
+		t.Errorf("the plan did not carry the refusal: %+v", d.Refused)
 	}
 }
 
