@@ -27,6 +27,8 @@ flags:
       --cpus N        guest vCPUs
   -d, --detach        start the sandbox and exit, without attaching
       --skills        copy your ~/.claude skills and plugins into the guest home
+      --teleportable  keep the guest home inside the sandbox's own disk, with
+                      no host directory shared in (hvi only)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable
@@ -50,6 +52,8 @@ flags:
       --mem MB        guest memory
       --cpus N        guest vCPUs
       --skills        copy your ~/.claude skills and plugins into the guest home
+      --teleportable  keep the guest home inside the sandbox's own disk, with
+                      no host directory shared in (hvi only)
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable
@@ -146,6 +150,7 @@ flags:
       --mem MB        guest memory
       --cpus N        guest vCPUs
       --skills        copy your ~/.claude skills and plugins into the guest home
+      --teleportable  plan a session that keeps its guest home in its own disk
       --network MODE  shared, isolated or offline (or BRIG_NETWORK)
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable
