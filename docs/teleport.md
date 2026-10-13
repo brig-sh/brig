@@ -78,7 +78,9 @@ ways:
 - A later release that moves the session to another host moves the disk, and
   the file with it.
 
-To keep a credential off the disk, deliver it as a `files:` binding.
+Brig does not yet keep environment credentials off the disk. It has to
+before it can move a session, and until then the file is there for the
+life of the session.
 
 ## Older Brig releases
 
