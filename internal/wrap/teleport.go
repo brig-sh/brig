@@ -191,7 +191,8 @@ func (c *Config) teleportNotice(known bool) {
 // What it does not close is a race: an agent swapping a checked directory
 // for a link between the check and the write. The file it creates is opened
 // with noclobber, so a link at the last component fails the write instead of
-// being followed. The shipped profiles run the agent as root, for which none
+// being followed, and the chown that hands a new path over is -h, so a link
+// swapped in after the create is changed itself rather than its target. The shipped profiles run the agent as root, for which none
 // of this widens anything: it already owns the whole guest, and nothing from
 // the host is shared in.
 func (c *Config) prepareGuestHome() error {
@@ -249,7 +250,7 @@ const (
 	guestPathScript = `set -e; home=$1; rel=$2; kind=$3; user=$4
 [ "$kind" = seed ] && trap 'cat > /dev/null' EXIT
 no() { echo "brig: $*" >&2; exit 1; }
-own() { if [ "$user" != root ] && id -u "$user" >/dev/null 2>&1; then chown "$user" "$1"; fi; }
+own() { if [ "$user" != root ] && id -u "$user" >/dev/null 2>&1; then chown -h "$user" "$1"; fi; }
 [ -L "$home" ] && no "the guest home $home is a symlink"
 [ -d "$home" ] || no "the guest home $home is not a directory"
 p=$home; rest=$rel

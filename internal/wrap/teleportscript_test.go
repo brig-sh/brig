@@ -143,3 +143,25 @@ func mkdir(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 }
+
+// The hand-over to the guest user runs when the account exists. The host's
+// own user stands in for it here: chown -h to yourself needs no privilege.
+func TestGuestPathScriptHandsWhatItMakesToAnExistingUser(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh to run the guest script with")
+	}
+	who, err := exec.Command("id", "-un").Output()
+	if err != nil {
+		t.Skip("no id to name the current user with")
+	}
+	home := t.TempDir()
+	cmd := exec.Command(sh, "-c", guestPathScript, "sh", home, "a/f.json", "seed", strings.TrimSpace(string(who)))
+	cmd.Stdin = strings.NewReader("{}\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the seed with a real user failed: %v: %s", err, out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "a/f.json")); string(b) != "{}\n" {
+		t.Errorf("seed wrote %q", b)
+	}
+}
