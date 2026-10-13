@@ -259,13 +259,16 @@ type Config struct {
 	// is empty then: the guest home is a directory of the sandbox's own block
 	// disk, and nothing on the host stands for it. teleportSource is what made
 	// it so, and teleportRefused is why this invocation cannot run it, held
-	// for sessionRefusal like projectRefused. teleportKnown records that the
-	// index already had the session, which is how the one-time notice tells a
-	// new session from a later run of one. See teleport.go.
+	// for sessionRefusal like projectRefused. See teleport.go.
 	Teleportable    bool
 	teleportSource  string
 	teleportRefused error
-	teleportKnown   bool
+	// indexed records that the session index has an entry for this ref and
+	// sandbox. The one-time teleportable notice reads it to tell a new
+	// session from a later run of one, and EnsureRunning reads it to know
+	// when it has to ask the runtime what an unrecorded sandbox is before
+	// it deletes one. See refuseUnrecordedTeleportable.
+	indexed bool
 
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
@@ -683,8 +686,8 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			}
 			c.teleportRefused = c.teleportSettingsRefusal(skills, from)
 		}
-		_, c.teleportKnown = rememberedTeleportable(sessionKey(t.Name, slug), vmName)
 	}
+	_, c.indexed = rememberedTeleportable(sessionKey(t.Name, slug), vmName)
 	// And then the project, which replaces that derivation: it is a directory
 	// of its own, mounted beside the home, so the cwd-under-home rule has
 	// nothing to say about it. Resolved after the Config exists because it

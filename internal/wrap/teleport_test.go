@@ -23,15 +23,41 @@ type guestRuntime struct {
 	runtime.Runtime
 	kind    string
 	running bool
-	// mountinfo is what the guest answers for its own mount table.
-	mountinfo string
-	spec      runtime.RunSpec
-	boots     int
-	stops     int
-	removes   int
-	execs     [][]string
-	feeds     []fed
+	// exists is what Exists answers: whether an instance holds the name,
+	// stopped or running. The boot asks before it clears a stopped one.
+	exists bool
+	// ownsDisk and inspectErr are what hull's record of the boot says, the
+	// question asked of a sandbox the session index has no entry for.
+	ownsDisk   bool
+	inspectErr error
+	spec       runtime.RunSpec
+	boots      int
+	stops      int
+	removes    int
+	execs      [][]string
+	feeds      []fed
 }
+
+func (r *guestRuntime) Exists(string) (bool, error) { return r.exists, nil }
+
+// SandboxNetwork answers for an instance that exists the way hull does for a
+// sandbox booted on its own network, which is what every profile here asks
+// for. Without it an Exister that finds an unrecorded sandbox leaves its
+// posture unknown, and the run stops on that before any storage question.
+func (r *guestRuntime) SandboxNetwork(string) (string, error) {
+	if !r.exists {
+		return "", nil
+	}
+	return "isolated", nil
+}
+func (r *guestRuntime) OwnsItsDisk(string) (bool, error) {
+	return r.ownsDisk, r.inspectErr
+}
+
+// unaskableRuntime is a runtime that can say nothing about a stopped instance:
+// only the Runtime methods of the one it wraps reach the caller, so it is
+// neither an Exister nor a StorageInspector.
+type unaskableRuntime struct{ runtime.Runtime }
 
 type fed struct {
 	cmd   []string
@@ -60,9 +86,6 @@ func (r *guestRuntime) Isolation(hv string) runtime.Isolation {
 func (r *guestRuntime) LogsHint(name string) string { return "hull logs " + name }
 func (r *guestRuntime) Output(spec runtime.ExecSpec) (string, error) {
 	r.execs = append(r.execs, spec.Cmd)
-	if len(spec.Cmd) == 2 && spec.Cmd[0] == "cat" && spec.Cmd[1] == "/proc/self/mountinfo" {
-		return r.mountinfo, nil
-	}
 	return "", nil
 }
 func (r *guestRuntime) Feed(spec runtime.ExecSpec) error {
@@ -90,6 +113,26 @@ onboarding:
   file: .tp/state.json
   seed:
     hasCompletedOnboarding: true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// ordinaryProfile is teleportProfile without the field: the same agent on
+// the same backend, with its guest home shared in from the host. It mounts
+// no volumes, so a boot needs nothing from the guest's mount table.
+func ordinaryProfile(t *testing.T) profile.Profile {
+	t.Helper()
+	p, err := profile.Parse([]byte(`name: tp
+image: img
+guestHome: /home/tp
+binary: tp
+mem: 1
+cpus: 1
+hypervisor: hvi
+network: isolated
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -401,30 +444,72 @@ func TestEnsureRunningRefusesATeleportableSessionOffHvi(t *testing.T) {
 	}
 }
 
-// A running sandbox whose guest home is not a share is what a teleportable
-// session looks like after its record is lost. An ordinary run must not read
-// it as a stale share and recreate it: that deletes the disk the agent's
-// state is on. A home that is a share, but the wrong one, is still recreated.
-func TestEnsureRunningDoesNotRecreateASandboxWhoseHomeIsItsDisk(t *testing.T) {
+// A sandbox the index has no entry for, and that hull's record says owns its
+// disk, is a teleportable session whose record was lost. An ordinary run must
+// not recreate it, running or stopped: that deletes the disk the agent's
+// state is on. A sandbox whose record shows a share, or that hull cannot
+// describe, is recreated as it always was.
+func TestEnsureRunningDoesNotRecreateAnUnrecordedSandboxThatOwnsItsDisk(t *testing.T) {
+	tp := ordinaryProfile(t)
+	for _, c := range []struct {
+		what       string
+		running    bool
+		ownsDisk   bool
+		inspectErr error
+		refused    string
+	}{
+		{"running, owning its disk", true, true, nil, "--teleportable"},
+		{"stopped, owning its disk", false, true, nil, "hull's store"},
+		{"running, with a share", true, false, nil, ""},
+		{"stopped, with a share", false, false, nil, ""},
+		{"running, hull cannot say", true, true, errors.New("inspect failed"), ""},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			teleportState(t)
+			rt := &guestRuntime{running: c.running, exists: true, ownsDisk: c.ownsDisk, inspectErr: c.inspectErr}
+			cfg := loadTeleport(t, tp, Options{Workspace: t.TempDir()}, rt)
+			err := cfg.EnsureRunning(creds.Set{})
+			if c.refused == "" {
+				if err != nil || rt.removes == 0 || rt.boots != 1 {
+					t.Errorf("an ordinary sandbox was not recreated: %d removes, %d boots (%v)", rt.removes, rt.boots, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.refused) || !strings.Contains(err.Error(), "brig rm tp") {
+				t.Fatalf("an unrecorded sandbox that owns its disk was not refused with the way out: %v", err)
+			}
+			if rt.stops != 0 || rt.removes != 0 || rt.boots != 0 {
+				t.Errorf("it was torn down anyway: %d stops, %d removes, %d boots", rt.stops, rt.removes, rt.boots)
+			}
+		})
+	}
+}
+
+// An intact ordinary entry already says what the session is, so the runtime
+// is not asked and a posture change still recreates the sandbox. Refusing it
+// would leave the sandbox running under the rules the change was tightening.
+func TestAnOrdinaryEntryKeepsItsPostureRecreate(t *testing.T) {
 	teleportState(t)
-	claude, _ := profile.Lookup("claude-code")
-
-	rt := &guestRuntime{running: true, mountinfo: "22 1 254:1 / / rw - ext4 /dev/vda rw\n"}
-	c := loadTeleport(t, claude, Options{Workspace: t.TempDir()}, rt)
-	err := c.EnsureRunning(creds.Set{})
-	if err == nil || !strings.Contains(err.Error(), "--teleportable") {
-		t.Fatalf("a sandbox whose home is its disk was not refused: %v", err)
+	tp := ordinaryProfile(t)
+	home := t.TempDir()
+	rt := &guestRuntime{}
+	if err := loadTeleport(t, tp, Options{Workspace: home}, rt).EnsureRunning(creds.Set{}); err != nil {
+		t.Fatalf("the first boot was refused: %v", err)
 	}
-	if rt.stops != 0 || rt.removes != 0 || rt.boots != 0 {
-		t.Errorf("it was torn down anyway: %d stops, %d removes, %d boots", rt.stops, rt.removes, rt.boots)
+	if entry := readSessionIndex()["tp"]; entry.Home != home || entry.isTeleportable() {
+		t.Fatalf("the first boot did not record an ordinary session: %+v", entry)
 	}
-
-	shared := &guestRuntime{running: true, mountinfo: "22 1 254:1 / / rw - ext4 /dev/vda rw\n" +
-		"30 22 0:40 / " + claude.GuestHome + " rw - virtiofs home rw\n"}
-	c = loadTeleport(t, claude, Options{Workspace: t.TempDir()}, shared)
-	_ = c.EnsureRunning(creds.Set{})
-	if shared.removes == 0 || shared.boots != 1 {
-		t.Errorf("a stale share was not recreated: %d removes, %d boots", shared.removes, shared.boots)
+	// hull's record contradicting the entry is the case the old guest check
+	// could be steered into by a guest that hid its home share.
+	rt.running, rt.exists, rt.ownsDisk = true, true, true
+	rt.boots, rt.stops, rt.removes = 0, 0, 0
+	c := loadTeleport(t, tp, Options{Workspace: home, Network: "offline"}, rt)
+	if err := c.EnsureRunning(creds.Set{}); err != nil {
+		t.Fatalf("the posture change on an ordinary session was refused: %v", err)
+	}
+	if rt.stops == 0 || rt.removes == 0 || rt.boots != 1 {
+		t.Errorf("the posture change did not recreate the sandbox: %d stops, %d removes, %d boots",
+			rt.stops, rt.removes, rt.boots)
 	}
 }
 
@@ -473,16 +558,6 @@ func TestOpenWorkspaceRefusesASessionWithNoHostHome(t *testing.T) {
 	}
 }
 
-// existingRuntime is guestRuntime that can also say whether an instance holds
-// the name, stopped or running: the question the boot asks before it clears a
-// stopped instance.
-type existingRuntime struct {
-	*guestRuntime
-	exists bool
-}
-
-func (r *existingRuntime) Exists(string) (bool, error) { return r.exists, nil }
-
 // A stopped teleportable sandbox still holds its disk, and an ordinary boot
 // clears a stopped instance before it starts a new one. For this session that
 // deletes the guest home, so the run refuses instead and names rm; once the
@@ -503,9 +578,9 @@ func TestEnsureRunningRefusesToClearAStoppedTeleportableSandbox(t *testing.T) {
 		t.Errorf("stop did not say it ends the session:\n%s", stop.String())
 	}
 
-	stopped := &existingRuntime{guestRuntime: rt, exists: true}
+	rt.exists = true
 	boots, removes := rt.boots, rt.removes
-	again := loadTeleport(t, teleportProfile(t), Options{}, stopped)
+	again := loadTeleport(t, teleportProfile(t), Options{}, rt)
 	err := again.EnsureRunning(creds.Set{})
 	if err == nil || !strings.Contains(err.Error(), "is stopped") || !strings.Contains(err.Error(), "brig rm tp") {
 		t.Fatalf("a stopped teleportable sandbox was not refused with the way out: %v", err)
@@ -514,9 +589,25 @@ func TestEnsureRunningRefusesToClearAStoppedTeleportableSandbox(t *testing.T) {
 		t.Errorf("the stopped sandbox was cleared anyway: %d boots, %d removes", rt.boots-boots, rt.removes-removes)
 	}
 
-	gone := &existingRuntime{guestRuntime: rt, exists: false}
-	if err := loadTeleport(t, teleportProfile(t), Options{}, gone).EnsureRunning(creds.Set{}); err != nil {
+	rt.exists = false
+	if err := loadTeleport(t, teleportProfile(t), Options{}, rt).EnsureRunning(creds.Set{}); err != nil {
 		t.Fatalf("a session whose sandbox is gone did not start over: %v", err)
+	}
+}
+
+// A runtime that cannot say whether a stopped instance holds the name is
+// refused, not trusted: clearing the name on that silence is the direction
+// that deletes the disk.
+func TestATeleportableBootRefusesARuntimeThatCannotSayWhatExists(t *testing.T) {
+	teleportState(t)
+	rt := &guestRuntime{}
+	c := loadTeleport(t, teleportProfile(t), Options{}, unaskableRuntime{rt})
+	err := c.EnsureRunning(creds.Set{})
+	if err == nil || !strings.Contains(err.Error(), "cannot say whether a sandbox exists") {
+		t.Fatalf("a runtime that cannot say what exists was trusted: %v", err)
+	}
+	if rt.removes != 0 || rt.boots != 0 {
+		t.Errorf("the name was cleared anyway: %d removes, %d boots", rt.removes, rt.boots)
 	}
 }
 
