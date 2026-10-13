@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -409,13 +410,69 @@ func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
 	pruneSessionIndex([]runtime.Instance{
 		{Name: "brig-claude-code-kept", State: "stopped"},
 		{Name: "some-other-container", State: "running"},
-	})
+	}, nil)
 
 	if got := wrap.WorkspaceOfSandbox("brig-claude-code-kept"); got != "/ws/kept" {
 		t.Errorf("ls pruned a session whose sandbox it just listed: %q", got)
 	}
 	if got := wrap.WorkspaceOfSandbox("brig-claude-code-gone"); got != "" {
 		t.Errorf("ls kept %q for a sandbox the runtime does not have", got)
+	}
+}
+
+// namedExistsRuntime answers Exists per sandbox name, the way hull inspect
+// answers for one instance whatever `ps` listed.
+type namedExistsRuntime struct {
+	runtime.Runtime
+	exists map[string]bool
+	errs   map[string]error
+}
+
+func (r *namedExistsRuntime) Exists(name string) (bool, error) {
+	return r.exists[name], r.errs[name]
+}
+
+// A listing from plain `hull ps` leaves out every stopped sandbox. An entry
+// whose sandbox the runtime still has by name, or cannot answer for, stays:
+// dropping a teleportable session's entry leaves nothing telling the next
+// run that the stopped instance it clears holds the session's disk. Only a
+// sandbox the runtime says is gone loses its entry, and its posture record
+// with it.
+func TestListingKeepsTheSessionsTheRuntimeStillHasByName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", dir)
+	body := `{` +
+		`"claude-code@stopped": {"home": "", "sandbox": "brig-claude-code-stopped", "teleportable": true},` +
+		`"claude-code@unknown": {"home": "/ws/unknown", "sandbox": "brig-claude-code-unknown"},` +
+		`"claude-code@gone": {"home": "/ws/gone", "sandbox": "brig-claude-code-gone"}}`
+	if err := os.WriteFile(filepath.Join(dir, "sessions.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"brig-claude-code-stopped", "brig-claude-code-gone"} {
+		if err := runtime.RecordBootedNet(name, "isolated"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rt := &namedExistsRuntime{
+		exists: map[string]bool{"brig-claude-code-stopped": true},
+		errs:   map[string]error{"brig-claude-code-unknown": errors.New("inspect failed")},
+	}
+	pruneSessionIndex(nil, rt)
+
+	if !wrap.TeleportableSandbox("brig-claude-code-stopped") {
+		t.Error("ls pruned the entry of a stopped sandbox its listing left out")
+	}
+	if got, _ := runtime.BootedNet("brig-claude-code-stopped"); got != "isolated" {
+		t.Errorf("ls pruned the posture of a stopped sandbox its listing left out: %q", got)
+	}
+	if got := wrap.WorkspaceOfSandbox("brig-claude-code-unknown"); got != "/ws/unknown" {
+		t.Errorf("ls pruned an entry the runtime could not answer for: %q", got)
+	}
+	if got := wrap.WorkspaceOfSandbox("brig-claude-code-gone"); got != "" {
+		t.Errorf("ls kept %q for a sandbox the runtime says is gone", got)
+	}
+	if got, _ := runtime.BootedNet("brig-claude-code-gone"); got != "" {
+		t.Errorf("ls kept the posture %q of a sandbox the runtime says is gone", got)
 	}
 }
 
