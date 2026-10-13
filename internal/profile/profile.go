@@ -188,6 +188,17 @@ type Profile struct {
 	// operating systems support this: the artifacts travel as OCI annotations
 	// either way, on hull's command line or through nerdctl to urunc.
 	GenericBoot bool `json:"genericBoot,omitempty"`
+	// Teleportable marks a profile whose sessions own all their storage: the
+	// guest root is a block disk, the guest home lives inside it, and no host
+	// directory is shared in. `brig run --teleportable` asks for the same thing
+	// on one session. It exists so a running sandbox can later be moved to
+	// another host as a whole: a host share is a path on this machine, and a
+	// sandbox holding one cannot leave it behind.
+	//
+	// Validate holds it to the backend it needs (hvi) and the root it implies
+	// (block), so a profile that asks for both and cannot have them is refused
+	// when it loads rather than at a boot.
+	Teleportable bool `json:"teleportable,omitempty"`
 	// StaleCredentialFiles are paths under GuestHome where a credential file
 	// means a token on disk. brig never writes one there. An older wrapper
 	// did, and so does an agent that bypasses the profile's tmpfs.

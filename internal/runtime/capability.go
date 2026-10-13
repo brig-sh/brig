@@ -24,6 +24,12 @@ type Property string
 // EgressPolicy is the egress rule set a policy puts on a sandbox.
 const EgressPolicy Property = "egress policy"
 
+// Teleportable is a session that owns all of its storage: a block root with
+// the guest home inside it and no host share. Only a run path that can keep
+// the whole session in its own disk can run one, so it is a property asked
+// of the run path like a policy is, and refused the same way, with exit 7.
+const Teleportable Property = "teleportable session"
+
 // RunPath is one runtime with one backend: hull with vz, hvi or qemu, or
 // nerdctl or docker with its containerd shim. A property is enforced or not
 // by the pair, and hull alone says nothing: the same binary enforces a
@@ -87,10 +93,37 @@ var records = []Record{
 
 const dockerWhy = "brig enforces a policy on nerdctl's container network, and does not filter docker's"
 
+// teleportRecords answer whether a run path can run a teleportable session.
+// A separate table from records because the reasons are not about networks,
+// and a caller printing the egress table must not grow rows about disks.
+//
+// hvi is the only backend that boots the guest from a block disk of its own
+// and is driven by the checkpoint work that moving a session needs. vz and
+// qemu could boot a block root, but nothing brig drives captures them, and a
+// session marked movable on a backend that cannot move it is the same false
+// promise as a policy nothing enforces.
+var teleportRecords = []Record{
+	{Teleportable, RunPath{"hull", "hvi"}, Enforced,
+		"hvi boots the guest from a block disk of its own, with no host directory shared in",
+		""},
+	{Teleportable, RunPath{"hull", "vz"}, CannotEnforce, teleportBackendWhy, teleportBackendRemedy},
+	{Teleportable, RunPath{"hull", "qemu"}, CannotEnforce, teleportBackendWhy, teleportBackendRemedy},
+	{Teleportable, RunPath{"nerdctl", anyBackend}, CannotEnforce, teleportContainerWhy, teleportContainerRemedy},
+	{Teleportable, RunPath{"docker", anyBackend}, CannotEnforce, teleportContainerWhy, teleportContainerRemedy},
+}
+
+const (
+	teleportBackendWhy = "brig keeps a teleportable session in a disk that only the hvi backend " +
+		"can capture"
+	teleportBackendRemedy   = "Run it on hvi (BRIG_HYPERVISOR=hvi), or run the session without --teleportable"
+	teleportContainerWhy    = "a container runtime keeps the guest root in its own snapshotter, not in a disk brig can move"
+	teleportContainerRemedy = "Run it on macOS under hull's hvi backend, or run the session without --teleportable"
+)
+
 // Records returns every answer brig holds for a property.
 func Records(p Property) []Record {
 	var out []Record
-	for _, r := range records {
+	for _, r := range table(p) {
 		if r.Property == p {
 			out = append(out, r)
 		}
@@ -103,7 +136,7 @@ func Records(p Property) []Record {
 // refused.
 func Answer(p Property, path RunPath) Record {
 	for _, exact := range []bool{true, false} {
-		for _, r := range records {
+		for _, r := range table(p) {
 			if r.Property != p || r.Path.Runtime != path.Runtime {
 				continue
 			}
@@ -114,9 +147,21 @@ func Answer(p Property, path RunPath) Record {
 			}
 		}
 	}
+	remedy := "Run it on hull's hvi backend (BRIG_HYPERVISOR=hvi), or detach the policy"
+	if p == Teleportable {
+		remedy = teleportBackendRemedy
+	}
 	return Record{Property: p, Path: path, State: Unknown,
 		Why:    "brig holds no answer for this run path",
-		Remedy: "Run it on hull's hvi backend (BRIG_HYPERVISOR=hvi), or detach the policy"}
+		Remedy: remedy}
+}
+
+// table is the rows that answer one property.
+func table(p Property) []Record {
+	if p == Teleportable {
+		return teleportRecords
+	}
+	return records
 }
 
 // CapabilityError refuses a run because its run path does not enforce a
@@ -137,6 +182,9 @@ type CapabilityError struct {
 }
 
 func (e *CapabilityError) Error() string {
+	if e.Property == Teleportable {
+		return e.teleportError()
+	}
 	var head string
 	if e.State == CannotEnforce {
 		head = fmt.Sprintf("a policy applies to this sandbox, and %s cannot enforce the %s",
@@ -154,6 +202,41 @@ func (e *CapabilityError) Error() string {
 }
 
 func (e *CapabilityError) Unwrap() error { return e.Err }
+
+// teleportError is Error for a teleportable session. Worded apart from the
+// policy refusal because it is not one: no policy applies, and a message
+// saying so would send the reader to `brig policy` for a disk question.
+func (e *CapabilityError) teleportError() string {
+	var head string
+	if e.State == CannotEnforce {
+		head = fmt.Sprintf("this session is teleportable, and %s cannot run a teleportable session", e.Path)
+	} else {
+		head = fmt.Sprintf("this session is teleportable, and whether %s can run one is %s", e.Path, Unknown)
+	}
+	msg := head + ": " + e.Why
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg + ". " + e.Remedy
+}
+
+// RequireTeleportable refuses a teleportable session on a run path that
+// cannot keep it whole. kind is the runtime's Kind and hv the hypervisor the
+// run asked for, empty for the runtime's default. On hull the default is
+// resolved here, so an unset hypervisor is refused as the vz it boots rather
+// than as a backend with no name.
+func RequireTeleportable(kind, hv string) error {
+	path := RunPath{Runtime: kind, Backend: hv}
+	if kind == "hull" {
+		path.Backend = hypervisorOrDefault(hv)
+	}
+	r := Answer(Teleportable, path)
+	if r.State == Enforced {
+		return nil
+	}
+	return &CapabilityError{Property: Teleportable, Path: r.Path, State: r.State,
+		Why: r.Why, Remedy: r.Remedy}
+}
 
 // requireEgress refuses a run whose path does not enforce the policy it
 // carries. A run with no policy asks nothing. An offline run asks nothing

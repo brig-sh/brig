@@ -376,3 +376,59 @@ func (d *hullDouble) calls() string {
 }
 
 func (d *hullDouble) called(s string) bool { return strings.Contains(d.calls(), s) }
+
+// A teleportable session runs only where a session can be kept whole in its
+// own disk. Every other run path brig drives refuses it as a capability, so a
+// script reads exit 7 for it the way it does for a policy nothing enforces.
+func TestTeleportableAnswersEveryRunPath(t *testing.T) {
+	for _, tt := range []struct {
+		kind, hv string
+		want     Capability
+		path     string
+	}{
+		{"hull", "hvi", Enforced, "hull on hvi"},
+		// No hypervisor is hull's default, vz, and is refused as that.
+		{"hull", "", CannotEnforce, "hull on vz"},
+		{"hull", "vz", CannotEnforce, "hull on vz"},
+		{"hull", "qemu", CannotEnforce, "hull on qemu"},
+		{"nerdctl", "hvi", CannotEnforce, "nerdctl on hvi"},
+		{"docker", "", CannotEnforce, "docker"},
+		{"hull", "krun", Unknown, "hull on krun"},
+	} {
+		err := RequireTeleportable(tt.kind, tt.hv)
+		if tt.want == Enforced {
+			if err != nil {
+				t.Errorf("%s/%q refused a teleportable session: %v", tt.kind, tt.hv, err)
+			}
+			continue
+		}
+		var ce *CapabilityError
+		if !errors.As(err, &ce) {
+			t.Errorf("%s/%q: want a CapabilityError, got %v", tt.kind, tt.hv, err)
+			continue
+		}
+		if ce.State != tt.want || ce.Property != Teleportable {
+			t.Errorf("%s/%q answers %q for %q, want %q", tt.kind, tt.hv, ce.State, ce.Property, tt.want)
+		}
+		msg := err.Error()
+		// It names the run path, says why and says what to do, and it does
+		// not claim a policy applies: none does.
+		if !strings.Contains(msg, tt.path) || ce.Why == "" || ce.Remedy == "" {
+			t.Errorf("%s/%q: refusal does not name %q, or has no reason or remedy: %s",
+				tt.kind, tt.hv, tt.path, msg)
+		}
+		if strings.Contains(msg, "policy") {
+			t.Errorf("%s/%q: a teleportable refusal speaks of a policy: %s", tt.kind, tt.hv, msg)
+		}
+		if !strings.Contains(msg, "without --teleportable") {
+			t.Errorf("%s/%q: refusal does not name the way past it: %s", tt.kind, tt.hv, msg)
+		}
+	}
+	// The egress table is untouched by the teleport rows: a caller printing
+	// it must not grow lines about disks.
+	for _, r := range Records(EgressPolicy) {
+		if r.Property != EgressPolicy {
+			t.Errorf("the egress records carry a %q row", r.Property)
+		}
+	}
+}

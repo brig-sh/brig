@@ -110,14 +110,41 @@ const (
 // it keeps its home, which covers every session recorded by an older release.
 // See DropEphemeralHome.
 //
+// Teleportable is set when the session owns all its storage: no host home,
+// no project, the guest home inside the sandbox's own disk. It is recorded
+// because a later verb on the ref names neither --teleportable nor anything
+// else about it, and reading that silence as "an ordinary session" would boot
+// a host home over a sandbox whose home is its disk. Home is empty on such an
+// entry, since there is no directory on the host to name. See Load.
+//
 // The network posture is not here, although it is the same kind of fact. An
 // older release rewrites this file with the fields it knows, so a posture kept
-// here is lost the first time one runs. See rememberedNetwork.
+// here is lost the first time one runs. See rememberedNetwork. Teleportable
+// has the same exposure and is kept here anyway, because the rewrite cannot
+// take all of it: the empty Home stays, and an ordinary session never records
+// one. See isTeleportable. An entry lost outright is caught in EnsureRunning,
+// which asks the runtime how a sandbox with no entry was booted before it
+// recreates it. What none of this protects against is an older release
+// itself: it resolves the same sandbox name, reads the missing share as a
+// stale one, and recreates the sandbox, disk and all. docs/teleport.md says
+// so.
 type sessionEntry struct {
-	Home      string `json:"home"`
-	Sandbox   string `json:"sandbox"`
-	Project   string `json:"project,omitempty"`
-	Ephemeral bool   `json:"ephemeral,omitempty"`
+	Home         string `json:"home"`
+	Sandbox      string `json:"sandbox"`
+	Project      string `json:"project,omitempty"`
+	Ephemeral    bool   `json:"ephemeral,omitempty"`
+	Teleportable bool   `json:"teleportable,omitempty"`
+}
+
+// isTeleportable reports whether the entry is a teleportable session's. The
+// field says so, and so does an empty Home: rememberSession writes the
+// resolved workspace of every ordinary session, which is never empty, so the
+// only entry without one is a teleportable entry an older release rewrote and
+// stripped of the field. Reading that entry as ordinary would refuse
+// --teleportable as a switch and send the user to `brig rm`, which deletes
+// the disk the session lives on.
+func (e sessionEntry) isTeleportable() bool {
+	return e.Teleportable || e.Home == ""
 }
 
 // stateDir is where brig keeps what has to outlive a single invocation.
@@ -278,6 +305,32 @@ func rememberedProject(ref, vmName string) string {
 	return entry.Project
 }
 
+// rememberedTeleportable reports whether the sandbox of this session was
+// recorded as teleportable, and whether there is a usable entry for it at all.
+// The second answer is what tells a session that was started with a host
+// home from one that has never run: only the first is a switch to refuse.
+//
+// The sandbox has to agree, for the reason rememberedWorkspace gives.
+func rememberedTeleportable(ref, vmName string) (teleportable, known bool) {
+	entry, ok := readSessionIndex()[ref]
+	if !ok || entry.Sandbox != vmName {
+		return false, false
+	}
+	return entry.isTeleportable(), true
+}
+
+// TeleportableSandbox reports whether the session carrying vmName was
+// recorded as teleportable. `brig ls` reads it, having a sandbox name and no
+// ref, on the same terms as WorkspaceOfSandbox.
+func TeleportableSandbox(vmName string) bool {
+	for _, entry := range readSessionIndex() {
+		if entry.Sandbox == vmName {
+			return entry.isTeleportable()
+		}
+	}
+	return false
+}
+
 // rememberedNetwork is the posture the sandbox of this session was last booted
 // with, or "" when none is recorded: a sandbox an older release booted, one
 // never booted, or one whose session entry names a different sandbox. The
@@ -429,10 +482,11 @@ func (c *Config) rememberSession() {
 	dropLegacyWorkspaceIndex()
 	key := sessionKey(c.Profile.Name, c.Slug)
 	entry := sessionEntry{
-		Home:      c.Workspace,
-		Sandbox:   c.VMName,
-		Project:   c.Project,
-		Ephemeral: c.EphemeralHome,
+		Home:         c.Workspace,
+		Sandbox:      c.VMName,
+		Project:      c.Project,
+		Ephemeral:    c.EphemeralHome,
+		Teleportable: c.Teleportable,
 	}
 	index := readSessionIndex()
 	if index[key] == entry {
@@ -440,6 +494,14 @@ func (c *Config) rememberSession() {
 	}
 	index[key] = entry
 	if err := writeSessionIndex(index); err != nil {
+		if c.Teleportable {
+			// The record is the only thing that says so: a later verb that
+			// does not repeat --teleportable reads its absence as an ordinary
+			// session, and the share check then refuses to run it.
+			c.warnf("%s", notice.Newf("could not record %s as teleportable: %v", c.VMName, err).
+				Note("a later command on it has to name --teleportable again"))
+			return
+		}
 		c.warnf("%s", notice.Newf("could not record %s as the workspace of %s: %v", c.Workspace, c.VMName, err).
 			Note("a later command that names no workspace falls back to the default one "+
 				"and restarts the sandbox"))

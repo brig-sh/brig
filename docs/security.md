@@ -39,6 +39,15 @@ The guest cannot reach:
 
 The guest gets only the credentials you deliver to it.
 
+A teleportable session reaches fewer host directories, not more. Brig shares
+neither a guest home nor a project into it, so no host directory is mounted at
+all. Its guest home is a directory on the sandbox's own disk. A credential
+bound as an environment variable is on that disk too: hull writes the boot
+environment into `/urunit.conf` on the root disk, so the value the sandbox
+booted with stays there for the life of the session. A `files:` binding is
+not written to the disk. See
+[teleport.md](teleport.md#credentials-on-the-disk).
+
 The host can reach the guest only on a port you publish. See
 [Published ports](#published-ports).
 

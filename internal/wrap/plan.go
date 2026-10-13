@@ -46,10 +46,13 @@ func (c *Config) Plan() PlanDocument {
 			Backend:     c.hypervisor(),
 		},
 		Isolation: c.isolationLine(),
-		Home:      PlanMount{Host: c.Workspace, Guest: c.Profile.GuestHome, Mode: "read-write"},
-		Skills:    c.planSkills(),
-		Image:     InfoImage{Ref: c.Image, Pull: c.Pull},
-		Verify:    c.infoVerify(),
+		Home:      c.planHome(),
+		// Beside the home, which it changes. Omitted when false, so a plan
+		// of an ordinary run is the document it was before this field.
+		Teleportable: c.Teleportable,
+		Skills:       c.planSkills(),
+		Image:        InfoImage{Ref: c.Image, Pull: c.Pull},
+		Verify:       c.infoVerify(),
 		// The Info payload's own line, so the two agree on what the running
 		// sandbox has, what its next boot gets, and why a backend refuses it.
 		Network:  c.networkLine(),
@@ -107,6 +110,16 @@ func (c *Config) Plan() PlanDocument {
 	d.ArgvExposed = c.planArgvExposed(d.Credentials)
 	d.Digest = planDigest(d)
 	return d
+}
+
+// planHome is the guest home as the plan reports it: the host directory and
+// how it is shared in, or, for a teleportable session, no host directory and
+// the mode "disk", because the home is a directory of the sandbox's own root.
+func (c *Config) planHome() PlanMount {
+	if c.Teleportable {
+		return PlanMount{Guest: c.Profile.GuestHome, Mode: "disk"}
+	}
+	return PlanMount{Host: c.Workspace, Guest: c.Profile.GuestHome, Mode: "read-write"}
 }
 
 // planSkills is every host directory --skills or BRIG_SKILLS copies into the
@@ -181,7 +194,10 @@ type PlanDocument struct {
 	Runtime   PlanRuntime  `json:"runtime"`
 	Isolation string       `json:"isolation"`
 	Home      PlanMount    `json:"home"`
-	Project   *PlanMount   `json:"project,omitempty"`
+	// Teleportable is set when the session owns all its storage, and Home
+	// then has no host path and the mode "disk". See Config.Teleportable.
+	Teleportable bool       `json:"teleportable,omitempty"`
+	Project      *PlanMount `json:"project,omitempty"`
 	// ProjectRefused is why the project this session remembers is not
 	// mounted, as in the Info payload. Refused carries the same reason,
 	// because the run stops on it.
@@ -318,8 +334,11 @@ func (c *Config) PrintPlan(d PlanDocument) {
 		envelopeRow{"SANDBOX", d.Sandbox},
 		envelopeRow{"RUNTIME", runtimeLine},
 		envelopeRow{"ISOLATION", d.Isolation},
-		envelopeRow{"HOME", fmt.Sprintf("%s (%s, mounted at %s)", d.Home.Host, d.Home.Mode, d.Home.Guest)},
+		envelopeRow{"HOME", planHomeLine(d)},
 	)
+	if d.Teleportable {
+		rows = append(rows, envelopeRow{"TELEPORTABLE", teleportableLine})
+	}
 	if d.Project != nil {
 		rows = append(rows, envelopeRow{"PROJECT",
 			fmt.Sprintf("%s (%s, mounted at %s)", d.Project.Host, d.Project.Mode, d.Project.Guest)})
@@ -376,6 +395,14 @@ func (c *Config) PrintPlan(d PlanDocument) {
 		envelopeRow{"DIGEST", d.Digest},
 	)
 	writeRows(c.Out, rows)
+}
+
+// planHomeLine is the HOME row of a plan.
+func planHomeLine(d PlanDocument) string {
+	if d.Teleportable {
+		return fmt.Sprintf("none on the host (%s is inside the sandbox's own disk)", d.Home.Guest)
+	}
+	return fmt.Sprintf("%s (%s, mounted at %s)", d.Home.Host, d.Home.Mode, d.Home.Guest)
 }
 
 // labelOnce is the label on the first row of a group and blank on the rest,

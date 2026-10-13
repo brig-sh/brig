@@ -13,9 +13,14 @@ import (
 // value. It is the answer to "is the sandbox going to be authenticated, and
 // as whom", asked without starting anything.
 func (c *Config) Status(set creds.Set) {
-	if c.RawName != "" {
+	switch {
+	case c.Teleportable && c.RawName != "":
+		c.sayf("session %q -> guest home inside the sandbox's own disk (sandbox %s)", c.RawName, c.VMName)
+	case c.Teleportable:
+		c.sayf("guest home inside the sandbox's own disk (sandbox %s)", c.VMName)
+	case c.RawName != "":
 		c.sayf("session %q -> %s (sandbox %s)", c.RawName, c.Workspace, c.VMName)
-	} else {
+	default:
 		c.sayf("workspace %s (sandbox %s)", c.Workspace, c.VMName)
 	}
 	// The runtime is the one line here that needs a runtime. When none is on

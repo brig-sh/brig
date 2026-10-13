@@ -197,7 +197,10 @@ func openHostFile(path string) (*os.File, error) {
 // takes effect, and are wired in by an [include] appended once to .gitconfig
 // -- your own .gitconfig is never rewritten.
 func (c *Config) SetupGit(set *creds.Set) error {
-	if !c.GitConfig {
+	// A teleportable session has no host home to write the helper into, and
+	// asking for it is refused at the boot (see teleportSettingsRefusal).
+	// BuildEnv calls this first, for every verb, so it has to write nothing.
+	if !c.GitConfig || c.Teleportable {
 		return nil
 	}
 	r, err := c.openWorkspace()

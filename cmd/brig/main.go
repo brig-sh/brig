@@ -120,6 +120,9 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --skills           copy your own ~/.claude skills and plugins into the
                          guest home; the host copy is never written
                          (or BRIG_SKILLS=1)
+      --teleportable     a session that owns its storage: a block root with
+                         the guest home inside it, no host directory shared in.
+                         Kept by the session; needs hull's hvi backend
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
@@ -579,6 +582,19 @@ func dispatch(args []string) error {
 		return usagef("--no-project and the project %q ask for different things; "+
 			"drop one", opts.load.Project)
 	}
+	// The same contradiction for a teleportable session, which shares no host
+	// directory in. Both halves are on this line, so it is the line that is
+	// wrong and the code is a usage error. A project or a home that meets a
+	// teleportable profile or session is refused at the boot instead, by
+	// wrap, because one half of it is not on the line.
+	if opts.load.Teleportable && opts.load.Project != "" {
+		return usagef("--teleportable and the project %q ask for different things: a teleportable "+
+			"session shares no host directory in; drop one", opts.load.Project)
+	}
+	if opts.load.Teleportable && opts.load.Workspace != "" {
+		return usagef("--teleportable and --home ask for different things: a teleportable session " +
+			"keeps its guest home inside its own disk; drop one")
+	}
 	// --all is read on every network line, but only unpublish acts on it.
 	if opts.all && verb != "network unpublish" {
 		return usagef("--all goes with `brig network unpublish`, not `brig %s`", verb)
@@ -664,7 +680,11 @@ func dispatch(args []string) error {
 	// whenever the two differ. A name that sanitises onto another session's
 	// sandbox is refused later, at EnsureRunning; this only names the directory.
 	if cfg.RawName != "" && cfg.RawName != cfg.Slug {
-		warnf("session %q uses %s (sandbox %s)", cfg.RawName, cfg.Workspace, cfg.VMName)
+		if cfg.Teleportable {
+			warnf("session %q is sandbox %s", cfg.RawName, cfg.VMName)
+		} else {
+			warnf("session %q uses %s (sandbox %s)", cfg.RawName, cfg.Workspace, cfg.VMName)
+		}
 	}
 	// The sandbox name for the Run object, now that Load has resolved it. A
 	// refusal before this point (an unknown agent) prints the object with the
@@ -990,6 +1010,11 @@ var brigFlags = []struct {
 	{long: "no-project", position: posRun, runOnly: true},
 	{long: "detach", short: "d", position: posRun, runOnly: true},
 	{long: "skills", position: posRun},
+	// --teleportable asks for a session that owns all its storage. Not
+	// runOnly: sh starts a sandbox that is not running too, and info and plan
+	// preview the run it shapes. A session that already has the property
+	// keeps it without the flag, so a later line need not repeat it.
+	{long: "teleportable", position: posRun},
 	{long: "network", value: true, position: posRun},
 	{long: "offline", position: posRun},
 	// --publish opens a guest port on the host. Repeatable.
@@ -1623,6 +1648,9 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// Opt-in, and only ever opt-in: this hands the guest the user's real
 		// skills and plugins, read-only.
 		{"skills", "", func(n string) { fs.BoolVar(&o.load.Skills, n, false, "") }},
+		// A session that owns its storage: block root, guest home inside it,
+		// no host directory shared in. See wrap.Options.Teleportable.
+		{"teleportable", "", func(n string) { fs.BoolVar(&o.load.Teleportable, n, false, "") }},
 		// Run this session with no project, whatever it ran with last.
 		{"no-project", "", func(n string) { fs.BoolVar(&o.load.NoProject, n, false, "") }},
 		// The posture this run takes: shared or offline. Refused by name later
@@ -1909,12 +1937,18 @@ func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 		if !strings.HasPrefix(inst.Name, sandboxPrefix) {
 			continue
 		}
-		rows = append(rows, sandboxRow{
-			ref:       refOf(inst.Name),
-			name:      inst.Name,
-			state:     inst.State,
-			workspace: workspaceOf(inst.Name, rt),
-		})
+		row := sandboxRow{
+			ref:          refOf(inst.Name),
+			name:         inst.Name,
+			state:        inst.State,
+			teleportable: wrap.TeleportableSandbox(inst.Name),
+		}
+		// A teleportable session has no host directory, and deriving one
+		// would name a home it never had.
+		if !row.teleportable {
+			row.workspace = workspaceOf(inst.Name, rt)
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -1948,6 +1982,9 @@ type sandboxRow struct {
 	name      string
 	state     string
 	workspace string
+	// teleportable is the session's record, read from the index. A sandbox
+	// with no entry reads false, which is what it is to every verb too.
+	teleportable bool
 }
 
 // sandboxListJSON is `brig ls` as data, the SandboxList payload. The runtime
@@ -1980,6 +2017,9 @@ type sandboxJSON struct {
 	Sandbox   string `json:"sandbox"`
 	State     string `json:"state"`
 	Workspace string `json:"workspace,omitempty"`
+	// Teleportable is added within the apiVersion, and omitted when false so
+	// a listing of ordinary sandboxes is the document it was before.
+	Teleportable bool `json:"teleportable,omitempty"`
 }
 
 // sandboxListData turns the rows the table prints into the SandboxList payload.
@@ -1992,7 +2032,7 @@ func sandboxListData(rows []sandboxRow, rt runtime.Runtime) sandboxListJSON {
 		out.Runtime = sandboxRuntimeJSON{Kind: rt.Kind(), Bin: rt.Bin(), Available: true}
 	}
 	for _, r := range rows {
-		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace}
+		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace, Teleportable: r.teleportable}
 		// A ref brig has for the sandbox carries its agent and label, split here so
 		// the consumer does not. A row with none is included ref-less: the sandbox
 		// is real, and the table shows it too.
@@ -2051,8 +2091,21 @@ func printSandboxes(w io.Writer, rows []sandboxRow) {
 	fmt.Fprintf(w, "%-*s %-*s %-10s %s\n", ref, "REF", name, "SANDBOX", "STATE", "WORKSPACE")
 	for _, r := range rows {
 		fmt.Fprintf(w, "%-*s %-*s %-10s %s\n",
-			ref, refCell(r.ref), name, r.name, r.state, r.workspace)
+			ref, refCell(r.ref), name, r.name, r.state, workspaceCell(r))
 	}
+}
+
+// workspaceCell is the WORKSPACE column. A teleportable session has no host
+// directory, so it reads as one rather than as a blank brig lost. That cell
+// is the whole of how the table marks such a session: a TELEPORTABLE column
+// reads no on every ordinary row, which is a column people learn to skip,
+// and it changes the shape of every user's listing for the few who have one.
+// The JSON carries the field.
+func workspaceCell(r sandboxRow) string {
+	if r.teleportable {
+		return "(in the sandbox disk)"
+	}
+	return r.workspace
 }
 
 // printRefs writes the refs and nothing else, one to a line: `brig ls -q`, the
@@ -2301,6 +2354,14 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		// The preview is the command's output and goes where output goes; the
 		// workspace sentence is a notice, on stderr like the one the real
 		// removal prints, so -q and a redirect treat both paths the same.
+		//
+		// A teleportable session's guest home is not on the host to name, and
+		// it goes with the disk all the same, so the preview says so in the
+		// words an ordinary session's names its home in.
+		if cfg.Teleportable {
+			fmt.Printf("would remove %s (sandbox %s) and %s\n", ref, cfg.VMName, teleportHomeWords)
+			return nil
+		}
 		if home := wrap.EphemeralHomeOf(cfg.VMName); home != "" {
 			fmt.Printf("would remove %s (sandbox %s) and its guest home %s\n",
 				ref, cfg.VMName, home)
@@ -2329,11 +2390,18 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 			ref, cfg.HomeErr, ref)
 	case cfg.RemovedHome != "":
 		warnf("%s", notes(notice.New("removed "+ref+" and its guest home "+cfg.RemovedHome), kept(cfg, false)))
+	case cfg.Teleportable:
+		warnf("%s", notice.New("removed "+ref+" and "+teleportHomeWords))
 	default:
 		warnf("%s", notes(notice.New("removed "+ref), kept(cfg, true)))
 	}
 	return nil
 }
+
+// teleportHomeWords is what rm says goes with a teleportable session, in
+// place of the host path an ordinary session's removal names: the agent's
+// files were on the disk the runtime removed, and nothing says so otherwise.
+const teleportHomeWords = "its guest home inside the sandbox disk"
 
 // kept is what rm leaves on the host, as notes: the guest home, when home
 // asks and there is one, and the project. An ephemeral home that was never
@@ -2345,6 +2413,12 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 // stdout and these on stderr, and an rm that fails has an error instead.
 func kept(cfg *wrap.Config, home bool) []string {
 	var out []string
+	// A teleportable session's home was inside the disk the runtime just
+	// removed, so there is nothing on the host to say stays. The project
+	// below cannot be set either: such a session mounts none.
+	if cfg.Teleportable {
+		return out
+	}
 	if home {
 		if _, err := os.Stat(cfg.Workspace); err == nil || !cfg.EphemeralHome {
 			out = append(out, "the guest home "+cfg.Workspace+" stays on the host")

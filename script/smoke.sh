@@ -88,14 +88,22 @@ case "$verb" in
     # Every share is logged, and the FIRST one is the home: brig puts the
     # workspace first and a project after it, and it is the home the marker is
     # read back out of below.
+    #
+    # Each share is also a mount point in the guest's table, under the root a
+    # real kernel always lists, so brig reading /proc/self/mountinfo sees the
+    # home a share is -- and a teleportable boot, which shares nothing, sees a
+    # home that is only a directory of its disk.
     name=""; share=""
     : > "$STUB_STATE.shares"
+    printf '1 0 254:1 / / rw - ext4\n' > "$STUB_STATE.mounts"
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
         --shared-dir)
           printf '%s\n' "$2" >> "$STUB_STATE.shares"
           [ -z "$share" ] && share="$2"
+          guest="${2#*:}"; guest="${guest%%:*}"
+          printf '1 1 0:3 / %s rw - virtiofs\n' "$guest" >> "$STUB_STATE.mounts"
           shift 2 ;;
         *) shift ;;
       esac
@@ -1890,6 +1898,153 @@ case "$rc:$out" in
   '1:'*'sets network: isolated'*) ok "an isolated network vz cannot give, with no policy, exits 1" ;;
   *) bad "an isolated network vz cannot give, with no policy, exits 1 -- got $rc: $(printf '%s\n' "$out" | tail -n 1)" ;;
 esac
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
+echo "== teleportable =="
+# A teleportable session owns its storage: the stub must see a block root on
+# hvi and no --shared-dir at all, and nothing may appear on the host where an
+# ordinary session keeps its home. BRIG_WORKSPACE is the script's own setting
+# for every other case, and it names a host home, so these runs drop it.
+# Offline keeps the stub from needing a gateway; the network is not what is
+# under test here.
+tp() { env -u BRIG_WORKSPACE BRIG_HYPERVISOR=hvi BRIG_NETWORK=offline "$@"; }
+mkdir -p "$WORK/tp-project"
+: > "$STUB_LOG"
+CLAUDE_CODE_OAUTH_TOKEN=tp-token-secret GH_TOKEN=tp-gh-secret \
+  tp "$WORK/brig" run --teleportable claude -d > "$WORK/tp.out" 2>&1; rc=$?
+[ "$rc" = 0 ] && ok "run --teleportable exits 0" || bad "run --teleportable exits 0 -- got $rc: $(cat "$WORK/tp.out")"
+run_line="$(grep '^argv: run ' "$STUB_LOG")"
+case "$run_line" in
+  *--shared-dir*) bad "a teleportable boot shared a host directory in -- got: $run_line" ;;
+  *) ok "a teleportable boot passes no --shared-dir" ;;
+esac
+case "$run_line" in
+  *"--hypervisor hvi"*"--rootfs-type block"*) ok "a teleportable boot asks hvi for a block root" ;;
+  *) bad "a teleportable boot asks hvi for a block root -- got: $run_line" ;;
+esac
+[ -e "$BRIG_STATE_DIR/homes/brig-claude-code" ] \
+  && bad "a teleportable run made a guest home on the host" \
+  || ok "a teleportable run makes no guest home on the host"
+# Credentials go in exactly as on an ordinary run: a tmpfs mounted by an exec
+# as root, values on stdin, never in argv.
+grep -q '^argv: exec -u root .* mount -t tmpfs .* /brig/claude' "$STUB_LOG" \
+  && ok "a teleportable session still mounts its credential tmpfs in the guest" \
+  || bad "a teleportable session still mounts its credential tmpfs in the guest"
+grep '^argv:' "$STUB_LOG" | grep -q 'tp-token-secret\|tp-gh-secret' \
+  && bad "a credential value reached argv on a teleportable run" \
+  || ok "no credential value reaches argv on a teleportable run"
+# The onboarding seed a host home would have carried is fed into the guest
+# home on the disk instead, and it is the seed and nothing else.
+seed="$STUB_STATE.fed.$(printf '%s' "$GUEST_HOME/.claude/.claude.json" | tr / _)"
+grep -q hasCompletedOnboarding "$seed" 2>/dev/null && ! grep -q 'tp-token-secret\|tp-gh-secret' "$seed" \
+  && ok "the onboarding seed is written inside the guest home" \
+  || bad "the onboarding seed is written inside the guest home -- got: $(cat "$seed" 2>&1)"
+
+# ls and info say so.
+tp "$WORK/brig" ls > "$WORK/tp-ls.out" 2>&1
+grep -q '^claude-code .*(in the sandbox disk)$' "$WORK/tp-ls.out" && grep -q '^REF  *SANDBOX  *STATE  *WORKSPACE$' "$WORK/tp-ls.out" \
+  && ok "ls marks the session teleportable" || bad "ls marks the session teleportable -- got: $(cat "$WORK/tp-ls.out")"
+tp "$WORK/brig" info claude > "$WORK/tp-info.out" 2>&1
+grep -q '^TELEPORTABLE ' "$WORK/tp-info.out" && grep -q '^WORKSPACE .*none on the host' "$WORK/tp-info.out" \
+  && ok "info names a teleportable session and no host home" \
+  || bad "info names a teleportable session and no host home -- got: $(cat "$WORK/tp-info.out")"
+
+# The session keeps the property: a flagless run reuses the sandbox rather
+# than taking it for a stale share and recreating it over its own disk.
+: > "$STUB_LOG"
+tp "$WORK/brig" run claude -d > "$WORK/tp-again.out" 2>&1; rc=$?
+[ "$rc" = 0 ] && ! grep -q '^argv: \(run\|rm\|stop\) ' "$STUB_LOG" \
+  && ok "a flagless run reuses the teleportable sandbox" \
+  || bad "a flagless run reuses the teleportable sandbox -- got $rc: $(grep '^argv:' "$STUB_LOG" | head -3)"
+
+# A project on the line that asks for a teleportable session contradicts
+# itself: usage, 2. A project handed to a session that is teleportable from
+# its record is refused at the boot: 1, naming rm as the way back.
+: > "$STUB_LOG"
+out="$(tp "$WORK/brig" run --teleportable claude "$WORK/tp-project" 2>&1)"; rc=$?
+case "$rc:$out" in
+  2:*--teleportable*"$WORK/tp-project"*) ok "--teleportable with a project is a usage error, exit 2" ;;
+  *) bad "--teleportable with a project is a usage error, exit 2 -- got $rc: $out" ;;
+esac
+out="$(tp "$WORK/brig" run claude "$WORK/tp-project" -d 2>&1)"; rc=$?
+case "$rc:$out" in
+  1:*"mounts no project"*"brig rm claude-code"*) ok "a project on a teleportable session is refused, exit 1, naming rm" ;;
+  *) bad "a project on a teleportable session is refused, exit 1, naming rm -- got $rc: $out" ;;
+esac
+out="$(env -u BRIG_NETWORK BRIG_HYPERVISOR=hvi BRIG_NETWORK=offline "$WORK/brig" run claude -d 2>&1)"; rc=$?
+case "$rc:$out" in
+  1:*BRIG_WORKSPACE*) ok "BRIG_WORKSPACE on a teleportable session is refused by name" ;;
+  *) bad "BRIG_WORKSPACE on a teleportable session is refused by name -- got $rc: $out" ;;
+esac
+grep -q '^argv: \(run\|rm\|stop\) ' "$STUB_LOG" \
+  && bad "a refused teleportable run touched the sandbox" \
+  || ok "a refused teleportable run leaves the sandbox alone"
+
+# A record lost (the index is not an inventory) must not turn into a
+# recreate: the running sandbox's home is not a share, and recreating it would
+# delete the disk the agent's state is on.
+cp "$BRIG_STATE_DIR/sessions.json" "$WORK/tp-sessions.json"
+rm -f "$BRIG_STATE_DIR/sessions.json"
+: > "$STUB_LOG"
+out="$("$WORK/brig" run claude -d 2>&1)"; rc=$?
+case "$rc:$out" in
+  1:*"--teleportable"*) ok "an ordinary run refuses a sandbox whose home is its disk" ;;
+  *) bad "an ordinary run refuses a sandbox whose home is its disk -- got $rc: $out" ;;
+esac
+grep -q '^argv: \(run\|rm\|stop\) ' "$STUB_LOG" \
+  && bad "an ordinary run tore down a teleportable sandbox" \
+  || ok "an ordinary run leaves a teleportable sandbox's disk alone"
+cp "$WORK/tp-sessions.json" "$BRIG_STATE_DIR/sessions.json"
+
+# hull cannot start a stopped sandbox again without recreating it, and for
+# this session that deletes the disk. stop says so, and the next run refuses
+# instead of clearing the stopped instance.
+out="$(tp "$WORK/brig" stop claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  0:*"stopping a teleportable session ends it"*) ok "stop says it ends a teleportable session" ;;
+  *) bad "stop says it ends a teleportable session -- got $rc: $out" ;;
+esac
+: > "$STUB_LOG"
+out="$(tp "$WORK/brig" run claude -d 2>&1)"; rc=$?
+case "$rc:$out" in
+  1:*"is stopped"*"brig rm claude-code"*) ok "a run refuses to clear a stopped teleportable sandbox" ;;
+  *) bad "a run refuses to clear a stopped teleportable sandbox -- got $rc: $out" ;;
+esac
+grep -q '^argv: \(run\|rm\) ' "$STUB_LOG" \
+  && bad "a run cleared a stopped teleportable sandbox" \
+  || ok "a stopped teleportable sandbox keeps its disk"
+
+# rm takes the disk, says the guest home goes with it, and names no host home
+# it leaves behind. The preview says the same and removes nothing.
+: > "$STUB_LOG"
+out="$(tp "$WORK/brig" rm --dry-run claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  0:"would remove claude (sandbox brig-claude-code) and its guest home inside the sandbox disk")
+    ok "rm --dry-run of a teleportable session says its guest home goes with the disk" ;;
+  *) bad "rm --dry-run of a teleportable session says its guest home goes with the disk -- got $rc: $out" ;;
+esac
+grep -q '^argv: \(rm\|stop\) ' "$STUB_LOG" \
+  && bad "rm --dry-run of a teleportable session removed it" \
+  || ok "rm --dry-run of a teleportable session removes nothing"
+out="$(tp "$WORK/brig" rm claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  0:*"stays on the host"*) bad "rm of a teleportable session names a host home -- got: $out" ;;
+  0:*"removed claude and its guest home inside the sandbox disk"*)
+    ok "rm of a teleportable session says its guest home went with the disk" ;;
+  *) bad "rm of a teleportable session says its guest home went with the disk -- got $rc: $out" ;;
+esac
+
+# A backend that cannot keep the session whole is a capability refusal, 7,
+# before anything boots.
+: > "$STUB_LOG"
+out="$(env -u BRIG_WORKSPACE BRIG_HYPERVISOR=vz "$WORK/brig" run --teleportable claude -d 2>&1)"; rc=$?
+case "$rc:$out" in
+  7:*"hull on vz cannot run a teleportable session"*) ok "a teleportable session on vz exits 7 and says why" ;;
+  *) bad "a teleportable session on vz exits 7 and says why -- got $rc: $out" ;;
+esac
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "a teleportable run refused with exit 7 reached the runtime" \
+  || ok "a teleportable run refused with exit 7 reached no runtime"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== flags =="

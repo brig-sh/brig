@@ -207,3 +207,21 @@ func TestGatewaySocketHonoursOverride(t *testing.T) {
 		t.Errorf("gatewaySocket = %q, want the override", got)
 	}
 }
+
+// The spec a teleportable session boots with: a block root and no share of
+// any kind. Nothing on the command line may name a host directory, since the
+// session exists to have none, and the guest HOME still travels as a
+// variable so the agent finds its home inside the disk.
+func TestRunArgsForATeleportableSessionShareNothing(t *testing.T) {
+	spec := RunSpec{Name: "brig-claude-code", Image: "img", Mem: 4096, CPUs: 4,
+		RootfsType: "block", Env: []Var{{Name: "HOME", Value: "/root"}}}
+	got := argv(t, spec, "hvi", "none", "", "")
+	if strings.Contains(got, "--shared-dir") {
+		t.Errorf("a teleportable boot shares a host directory in: %s", got)
+	}
+	for _, want := range []string{"--rootfs-type block", "--hypervisor hvi", "--env HOME=/root"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a teleportable boot lacks %q: %s", want, got)
+		}
+	}
+}

@@ -114,6 +114,11 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 //
 // Read-only, because Plan calls it: both answers were settled in Load.
 func (c *Config) sessionRefusal() error {
+	// A teleportable session asked for something only a host home could give
+	// it. Settled in Load, held for the same reason projectRefused is.
+	if c.teleportRefused != nil {
+		return c.teleportRefused
+	}
 	// The session has no project this run, and every check after this one
 	// that compares the sandbox with this run would read that as a project to
 	// drop, and recreate the sandbox without it. See Load.
@@ -145,6 +150,12 @@ func (c *Config) backendRefusal(hypervisor string) error {
 	// way past it rather than as the runtime dying at boot with no name. See
 	// preflightHypervisor.
 	if err := c.preflightHypervisor(hypervisor); err != nil {
+		return err
+	}
+	// A teleportable session on a backend that cannot keep it whole, refused
+	// as a capability before anything else about the backend is asked: it is
+	// the run path that is wrong, not one setting on it.
+	if err := c.teleportBackendRefusal(hypervisor); err != nil {
 		return err
 	}
 	// What this backend cannot honour about the run, refused here rather than
@@ -180,28 +191,36 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// line. The set is the whole of what the runtime will be handed: the git
 	// plumbing and SetupGit have both added to it.
 	c.warnArgvExposure(set)
-	// Before PrepareWorkspace creates the home, which is how the notice tells
-	// a new session from a later run of one.
-	c.reapOrphanHome()
-	c.ephemeralNotice()
-	// A home this run creates belongs to no session until the boot records
-	// one, so a failed boot deletes it. See dropUnbootedHome.
-	if c.createsEphemeralHome() {
-		defer func() {
-			if err != nil {
-				c.dropUnbootedHome()
-			}
-		}()
-	}
-	if err := c.PrepareWorkspace(); err != nil {
-		return err
-	}
-	// Before the sandbox exists, not only before delivery: a container runtime
-	// takes its mounts at create time, so a hostmount whose host path is not
-	// there yet is a boot that fails or a directory the runtime invents
-	// somewhere brig never looked. Symlink-safe, through the workspace root.
-	if err := c.prepareVolumeTargets(); err != nil {
-		return err
+	if c.Teleportable {
+		// No host home to reap, create, seed or check: everything those
+		// steps do lands in prepareGuestHome, inside the guest, after the
+		// boot. See teleport.go.
+		c.teleportNotice(c.teleportKnown)
+	} else {
+		// Before PrepareWorkspace creates the home, which is how the notice
+		// tells a new session from a later run of one.
+		c.reapOrphanHome()
+		c.ephemeralNotice()
+		// A home this run creates belongs to no session until the boot
+		// records one, so a failed boot deletes it. See dropUnbootedHome.
+		if c.createsEphemeralHome() {
+			defer func() {
+				if err != nil {
+					c.dropUnbootedHome()
+				}
+			}()
+		}
+		if err := c.PrepareWorkspace(); err != nil {
+			return err
+		}
+		// Before the sandbox exists, not only before delivery: a container
+		// runtime takes its mounts at create time, so a hostmount whose host
+		// path is not there yet is a boot that fails or a directory the
+		// runtime invents somewhere brig never looked. Symlink-safe, through
+		// the workspace root.
+		if err := c.prepareVolumeTargets(); err != nil {
+			return err
+		}
 	}
 
 	// Three answers, and the third one refuses. A runtime that could not be
@@ -232,13 +251,23 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 				return fmt.Errorf("cannot reuse the recovered network of sandbox %s with the current gateway configuration; "+
 					"restore its gateway settings or name --network explicitly to recreate it", c.VMName)
 			}
+			// The restart below costs an ordinary session a boot. A
+			// teleportable one would lose its disk, with the guest home on
+			// it, so the change is refused instead of applied.
+			if c.Teleportable {
+				change, _ := c.postureChange()
+				return fmt.Errorf("%s, and applying that means recreating the teleportable sandbox %s, which "+
+					"deletes its disk and the guest home on it. brig will not: run it with the network and "+
+					"policy it was started with, or remove it with `brig rm %s` and run it again",
+					change, c.VMName, sessionKey(c.Profile.Name, c.Slug))
+			}
 			// A third thing that cannot change on a live guest, answered the
 			// same way for the same reason. Its network and its egress rules
 			// were fixed when it booted, so a policy attached since is not in
 			// force on this sandbox -- and returning here would print a POLICY
 			// row for rules nothing is applying.
 			c.warnf("%s", c.networkRestart())
-		case !c.guestMountsWorkspace():
+		case !c.Teleportable && !c.guestMountsWorkspace():
 			c.warnf("%s", notice.New("the running sandbox is not mounting "+c.Workspace+": its share went stale").
 				Note("the directory was renamed or replaced, or the workspace changed").
 				Note("brig restarts it, and %s", disconnects))
@@ -268,14 +297,41 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			if err := c.publishLive(); err != nil {
 				return err
 			}
+			// Idempotent, and here for a sandbox an earlier run booted and
+			// stopped before it got this far.
+			if c.Teleportable {
+				if err := c.prepareGuestHome(); err != nil {
+					return err
+				}
+			}
 			// Delivered on this path too: the tmpfs dies with the sandbox but
 			// a running one may have been booted before the secret existed,
 			// and rewriting a file the agent already read is how a rotated
 			// credential reaches a live session.
 			return c.deliverSecretFiles()
 		}
+		// Every case that reaches here recreates the sandbox, which costs an
+		// ordinary session a boot because its home is a share. One whose
+		// home is not a share at all is a teleportable session whose record
+		// was lost, and recreating it would delete its disk with the agent's
+		// state on it. Refuse that rather than read it as a stale share or a
+		// changed posture.
+		if c.guestHomeOnDisk() {
+			return fmt.Errorf("the running sandbox %s has no guest home shared from the host: its "+
+				"home is inside its own disk, which is a teleportable session. brig will not recreate "+
+				"it, which would delete that disk. Run it with --teleportable, or remove it with "+
+				"`brig rm %s`", c.VMName, sessionKey(c.Profile.Name, c.Slug))
+		}
 		_ = c.Runtime.Stop(c.VMName)
 		_ = c.Runtime.Remove(c.VMName)
+	}
+	// A stopped teleportable sandbox still holds its disk, and the line below
+	// would delete it: hull has no verb that starts a stopped sandbox again,
+	// so brig clears the name and boots a new one. Refused instead.
+	if c.Teleportable {
+		if err := c.refuseStoppedTeleportable(); err != nil {
+			return err
+		}
 	}
 	// Clear a stale stopped instance holding the name.
 	_ = c.Runtime.Remove(c.VMName)
@@ -325,13 +381,20 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// later. What it buys is that brig refuses to hand over a path that has
 	// already stopped meaning what it checked. Closing the rest needs the
 	// runtime to accept a descriptor rather than a path. See verifyStillOurs.
-	ws, err := c.openWorkspace()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = ws.Close() }()
-	if err := ws.verifyStillOurs(); err != nil {
-		return err
+	//
+	// A teleportable session hands over no host path at all, so there is
+	// nothing to hold.
+	var ws *workspaceRoot
+	home := ""
+	if !c.Teleportable {
+		if ws, err = c.openWorkspace(); err != nil {
+			return err
+		}
+		defer func() { _ = ws.Close() }()
+		if err := ws.verifyStillOurs(); err != nil {
+			return err
+		}
+		home = ws.dir
 	}
 
 	// The project is mounted read-write like the home, so the components at and
@@ -362,15 +425,17 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// is refused rather than handed to the runtime, which would follow it
 	// host-side and bind its target read-write into the next boot. The handover
 	// stays a path, so the runtime-side window is the same as theirs.
-	if err := c.ensureVolumeTargets(ws); err != nil {
-		return err
+	if ws != nil {
+		if err := c.ensureVolumeTargets(ws); err != nil {
+			return err
+		}
 	}
 
 	c.progressf("starting sandbox %s...", c.VMName)
 	// What a runtime that cannot mount after boot needs handed to it now
 	// instead. Empty for hull, which execs as root and does the three-phase
 	// mount itself; see createTimeVolumes.
-	tmpfs, volumeShares := c.createTimeVolumes(ws.dir)
+	tmpfs, volumeShares := c.createTimeVolumes(home)
 	// The fields a backend can refuse the run over, taken from the one place
 	// that derives them, so the spec that boots and the spec that was checked
 	// before the boot cannot disagree about any of them.
@@ -401,7 +466,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// into the workspace rather than mounted, so it needs no share of its
 		// own -- see seedHostConfig. volumeShares is empty on hull and carries
 		// the profile's hostmounts on a container runtime.
-		Shares:   c.shares(ws.dir, project, volumeShares),
+		Shares:   c.shares(home, project, volumeShares),
 		Tmpfs:    tmpfs,
 		Env:      c.guestEnv(set),
 		GUI:      check.GUI,
@@ -409,7 +474,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.
-		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
+		RootfsType:  c.rootfsType(),
 		GenericBoot: c.Profile.GenericBoot,
 		BootAssets:  bootAssets,
 		// Resolved once at the top of EnsureRunning, where the preflight also
@@ -449,7 +514,24 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if c.Profile.IsGUI() {
 		focusWindow()
 	}
+	// Before delivery, which binds from the hostmount paths this creates.
+	if c.Teleportable {
+		if err := c.prepareGuestHome(); err != nil {
+			return err
+		}
+	}
 	return c.deliverSecretFiles()
+}
+
+// rootfsType is how the guest root reaches the VM. A teleportable session is
+// always block: the root is where its guest home lives, so it is not a
+// choice left to the runtime's default. Load has already refused a
+// BRIG_ROOTFS_TYPE that says otherwise.
+func (c *Config) rootfsType() string {
+	if c.Teleportable {
+		return "block"
+	}
+	return c.env.String("ROOTFS_TYPE", c.Profile.RootfsType)
 }
 
 // hypervisor is the macOS backend this run wants: BRIG_HYPERVISOR (or
@@ -594,6 +676,57 @@ func (c *Config) guestMountsWorkspace() bool {
 	return strings.TrimSpace(seen) == strings.TrimSpace(string(want))
 }
 
+// refuseStoppedTeleportable refuses to clear a stopped instance that holds a
+// teleportable session's disk. A runtime that cannot say whether one is there
+// is refused too: booting on that silence is the direction that deletes.
+func (c *Config) refuseStoppedTeleportable() error {
+	exister, ok := c.Runtime.(runtime.Exister)
+	if !ok {
+		return nil
+	}
+	exists, err := exister.Exists(c.VMName)
+	ref := sessionKey(c.Profile.Name, c.Slug)
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the stopped sandbox %s still holds the disk of teleportable "+
+			"session %s, and booting a new one would delete it: %w", c.VMName, ref, err)
+	}
+	if !exists {
+		return nil
+	}
+	return fmt.Errorf("the teleportable sandbox %s is stopped. Its guest home is inside its disk, and "+
+		"the runtime cannot start a stopped sandbox again without recreating it, which deletes that "+
+		"disk. brig will not. Remove it with `brig rm %s` to start the session over", c.VMName, ref)
+}
+
+// guestHomeOnDisk reports whether the guest's own mount table shows that its
+// home is not a mount point, which is what a teleportable session's home
+// looks like: a directory of the root disk.
+//
+// Only a table that reads as one counts, and a real kernel's always lists the
+// root. A guest that cannot be asked, or an answer with no root in it, says
+// nothing, and the recreate goes on as it always has: refusing on silence
+// would strand every ordinary session whose guest is slow to answer.
+func (c *Config) guestHomeOnDisk() bool {
+	out, err := c.guestOutput("cat", "/proc/self/mountinfo")
+	if err != nil {
+		return false
+	}
+	root, home := false, false
+	for _, line := range nonEmptyLines(out) {
+		fields := strings.Fields(line)
+		if len(fields) <= 4 {
+			continue
+		}
+		switch fields[4] {
+		case "/":
+			root = true
+		case c.Profile.GuestHome:
+			home = true
+		}
+	}
+	return root && !home
+}
+
 // shares is the mount set this run hands the runtime: the guest home, the
 // project when there is one, then whatever the profile's volumes need on a
 // runtime that cannot mount after boot.
@@ -611,6 +744,12 @@ func (c *Config) guestMountsWorkspace() bool {
 // read-write for as long as the sandbox is up, so it can swap a component and
 // redirect the next run that names a path through it.
 func (c *Config) shares(home, project string, volumes []runtime.Share) []runtime.Share {
+	// None at all for a teleportable session, which is the whole of what
+	// makes it one. Said here rather than left to the empty arguments, so a
+	// change upstream that hands this a path cannot share it in.
+	if c.Teleportable {
+		return nil
+	}
 	shares := []runtime.Share{{Host: home, Guest: c.Profile.GuestHome}}
 	if project != "" {
 		shares = append(shares, runtime.Share{Host: project, Guest: c.GuestProject})
@@ -679,6 +818,14 @@ func (c *Config) projectShareStale() string {
 // "gone anyway" puts the swallow back: the user is told a VM holding a
 // forwarded credential is down when nothing checked.
 func (c *Config) Stop() error {
+	// Said before the stop rather than after: it is the last moment the
+	// session can still be used, and the next run will refuse it.
+	if c.Teleportable {
+		c.warnf("%s", notice.New("stopping a teleportable session ends it").
+			Note("its guest home is inside its disk, and a stopped sandbox cannot be started again "+
+				"without recreating it").
+			Note("the next run refuses until `brig rm %s`", sessionKey(c.Profile.Name, c.Slug)))
+	}
 	err := c.Runtime.Stop(c.VMName)
 	if err == nil {
 		return nil
