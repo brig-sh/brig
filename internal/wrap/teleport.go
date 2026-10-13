@@ -17,10 +17,17 @@ import (
 // nothing left behind on this one for it to point at.
 //
 // Everything else is the same session. The network, the policy and the
-// credentials are decided and delivered exactly as for any other: a
+// credentials are decided and delivered exactly as for any other: a files:
 // credential is fed through hull exec into a tmpfs the profile declares, and
 // the tmpfs now sits over a directory of the block disk rather than of a
-// share. What changes is only where the guest home is, and so which of brig's
+// share. An environment credential goes to hull run with the rest of the
+// boot environment, and hull writes that into /urunit.conf on the root disk.
+// On an ordinary session that disk goes with the sandbox; here it is the
+// session, so the value outlives a rotation and travels with a move.
+// docs/teleport.md says so, and keeping it off the disk is a precondition of
+// moving one.
+//
+// What changes is only where the guest home is, and so which of brig's
 // host-side steps have anything to act on. Each one that writes into the host
 // home is skipped, and each one a user can ask for by name is refused, so a
 // request that would do nothing says so instead.
@@ -147,7 +154,8 @@ func (c *Config) teleportNotice(known bool) {
 	}
 	ref := sessionKey(c.Profile.Name, c.Slug)
 	c.warnf("%s", notice.New("the guest home of "+ref+" is inside its own disk, not on the host").
-		Note("nothing from the host is shared in, and nothing in it is visible from the host").
+		Note("nothing from the host is shared in; the home lives in the sandbox's disk image, "+
+			"not in a host directory").
 		Note("`brig rm %s` deletes the disk and every file in it", ref))
 }
 
