@@ -134,6 +134,20 @@ home.
 
 `brig stop` and `brig rm` do not touch a project.
 
+A [teleportable session](teleport.md) has no guest home on host disk. Its
+guest home is a directory on the sandbox's own disk, so it lives and dies
+with the sandbox:
+
+| Event | Guest home of a teleportable session |
+| --- | --- |
+| The agent exits | kept, the sandbox is still up |
+| `brig stop` | kept on the stopped sandbox's disk, but the session ends: the next run refuses until `brig rm` |
+| `brig rm`, `brig rm --all` | deleted with the disk |
+| A host reboot | as `brig stop` |
+
+You cannot read a teleportable session's guest home from the host. Reach it
+with `brig sh <ref>`.
+
 When the runtime reports no sandbox for the ref, `brig rm` forgets the
 session and names the guest home that it leaves.
 
