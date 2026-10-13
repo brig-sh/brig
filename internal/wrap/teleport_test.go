@@ -399,7 +399,7 @@ func TestEnsureRunningBootsATeleportableSessionWithNoShare(t *testing.T) {
 	if !made {
 		t.Errorf("the guest home was not made inside the guest: %q", rt.execs)
 	}
-	if len(rt.feeds) != 1 || rt.feeds[0].cmd[4] != "/home/tp/.tp/state.json" ||
+	if len(rt.feeds) != 1 || rt.feeds[0].cmd[4] != "/home/tp" || rt.feeds[0].cmd[5] != ".tp/state.json" ||
 		!strings.Contains(rt.feeds[0].stdin, "hasCompletedOnboarding") {
 		t.Errorf("the onboarding seed was not fed into the guest home: %+v", rt.feeds)
 	}

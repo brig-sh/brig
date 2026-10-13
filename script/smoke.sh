@@ -131,6 +131,15 @@ case "$verb" in
     # stub has to remember what it was told to mount.
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
     shift
+    # A teleportable session's guest-home walk takes the home and a path
+    # relative to it. Only the seed carries content, kept under the joined
+    # path like a fed credential; the rest makes nothing the cases read.
+    if [ "$1" = sh ] && case "${3:-}" in *'kind=$3'*) true ;; *) false ;; esac; then
+      if [ "${7:-}" = seed ]; then
+        cat > "$STUB_STATE.fed.$(printf '%s/%s' "${5:-}" "${6:-}" | tr / _)"
+      fi
+      exit 0
+    fi
     # Credential delivery feeds the value on stdin to `sh -c 'cat >> "$1"'`,
     # in pieces, and then asks stat for the file's size to check the whole
     # of it landed. Keep what was fed, per target, so stat can answer with
