@@ -397,8 +397,6 @@ func (c *Config) PrintPlan(d PlanDocument) {
 	writeRows(c.Out, rows)
 }
 
-// labelOnce is the label on the first row of a group and blank on the rest,
-// the way the PORTS rows of the envelope read.
 // planHomeLine is the HOME row of a plan.
 func planHomeLine(d PlanDocument) string {
 	if d.Teleportable {
@@ -407,6 +405,8 @@ func planHomeLine(d PlanDocument) string {
 	return fmt.Sprintf("%s (%s, mounted at %s)", d.Home.Host, d.Home.Mode, d.Home.Guest)
 }
 
+// labelOnce is the label on the first row of a group and blank on the rest,
+// the way the PORTS rows of the envelope read.
 func labelOnce(i int, label string) string {
 	if i == 0 {
 		return label
