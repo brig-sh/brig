@@ -263,6 +263,56 @@ func TestAnOrdinarySessionCannotBecomeTeleportable(t *testing.T) {
 	}
 }
 
+// An older brig rewrites sessions.json with the fields it knows, which
+// strips Teleportable and leaves the empty home. That entry is still a
+// teleportable session's: --teleportable must not be refused as a switch from
+// a host home that does not exist, and a flagless verb must not read it as
+// ordinary. Either would send the user to `brig rm`, which deletes the disk.
+func TestATeleportableEntryAnOlderBrigRewroteStaysTeleportable(t *testing.T) {
+	teleportState(t)
+	path, err := indexPath(sessionIndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stripped := `{"claude-code@x": {"home": "", "sandbox": "brig-claude-code-x"}}`
+	if err := os.WriteFile(path, []byte(stripped), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The posture is kept in a file no older release rewrites, so it
+	// survives the rewrite that stripped the field.
+	if err := runtime.RecordBootedNet("brig-claude-code-x", "isolated"); err != nil {
+		t.Fatal(err)
+	}
+	claude, _ := profile.Lookup("claude-code")
+
+	asked := loadTeleport(t, claude, Options{Name: "x", Teleportable: true}, nil)
+	if !asked.Teleportable {
+		t.Fatal("--teleportable on the stripped entry is not teleportable")
+	}
+	if err := asked.sessionRefusal(); err != nil {
+		t.Errorf("--teleportable on the stripped entry was refused: %v", err)
+	}
+	flagless := loadTeleport(t, claude, Options{Name: "x"}, nil)
+	if !flagless.Teleportable || flagless.Workspace != "" {
+		t.Errorf("a flagless verb read the stripped entry as ordinary: teleportable %v, home %q",
+			flagless.Teleportable, flagless.Workspace)
+	}
+	if err := flagless.sessionRefusal(); err != nil {
+		t.Errorf("a flagless verb on the stripped entry was refused: %v", err)
+	}
+	if !TeleportableSandbox("brig-claude-code-x") {
+		t.Error("ls reads the stripped entry as an ordinary sandbox")
+	}
+	// The next run that records the session puts the field back.
+	flagless.rememberSession()
+	if entry := readSessionIndex()["claude-code@x"]; !entry.Teleportable {
+		t.Errorf("the rewrite did not restore the field: %+v", entry)
+	}
+}
+
 // The boot itself: block root, hvi, no share of any kind, and nothing made
 // on the host -- no home under the state directory, no marker in the
 // directory brig ran from. The guest home is prepared inside the guest, and
