@@ -436,9 +436,12 @@ func ForgetSandbox(vmName string) (bool, error) {
 // `brig ls` is where this runs, because it is the one verb that asks the
 // runtime what exists and so the one place brig learns that a sandbox went
 // away without going through Remove -- removed with the runtime's own CLI, or
-// lost with a runtime that was reinstalled. The cost of being wrong is small
-// in the direction that matters: a list that came back short prunes an entry
-// that was still good, and the session pays one restart for it.
+// lost with a runtime that was reinstalled. A list that came back short
+// prunes an entry that was still good. For an ordinary session that costs one
+// restart. For a teleportable one it costs the record that says so, and a
+// listing from plain `hull ps` leaves out every stopped sandbox, so the
+// caller adds back each indexed sandbox the runtime cannot confirm is gone.
+// See IndexedSandboxes.
 //
 // Called with every instance the runtime lists rather than only brig's own, so
 // that a sandbox brig would not recognise still counts as present.
@@ -463,6 +466,21 @@ func PruneSessions(live []string) {
 		return
 	}
 	_ = writeSessionIndex(index)
+}
+
+// IndexedSandboxes returns the sandbox of every session the index holds,
+// sorted. `brig ls` asks the runtime about each one its listing left out
+// before it prunes, because the listing does not promise stopped sandboxes.
+func IndexedSandboxes() []string {
+	index := readSessionIndex()
+	names := make([]string, 0, len(index))
+	for _, entry := range index {
+		if entry.Sandbox != "" {
+			names = append(names, entry.Sandbox)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // rememberSession records what this run has just started: the ref it is filed

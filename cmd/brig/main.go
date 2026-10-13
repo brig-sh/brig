@@ -1905,7 +1905,7 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 	// The one verb that knows what the runtime actually has, so the one place
 	// an entry for a sandbox that went away without going through `brig rm`
 	// can be dropped. See wrap.PruneSessions.
-	pruneSessionIndex(list)
+	pruneSessionIndex(list, rt)
 	rows := sandboxRows(list, rt)
 	// --json before either text form, so `brig -q --json ls` is JSON and not the
 	// -q refs: the two answer different readers, and asking for both asks for the
@@ -1960,13 +1960,47 @@ func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 // Every instance and not only brig's own: a sandbox brig would not recognise
 // still exists, and the question the index is asking is whether the sandbox is
 // there at all.
-func pruneSessionIndex(list []runtime.Instance) {
+//
+// The listing is not the whole answer. hull's List falls back to plain `ps`
+// when `ps -a` fails, and that leaves out every stopped sandbox. Pruning on
+// it dropped the entry of a stopped teleportable session, and the next
+// ordinary run then had nothing telling it the instance it cleared held the
+// session's disk. So each indexed sandbox the listing left out is asked
+// about by name, and kept unless the runtime says it is gone.
+func pruneSessionIndex(list []runtime.Instance, rt runtime.Runtime) {
 	live := make([]string, 0, len(list))
 	for _, inst := range list {
 		live = append(live, inst.Name)
 	}
+	live = append(live, unlistedButNotGone(live, rt)...)
 	wrap.PruneSessions(live)
 	runtime.PruneBootedNets(live)
+}
+
+// unlistedButNotGone is every sandbox the session index names that live
+// leaves out and rt does not report gone. An error keeps the entry: it says
+// nothing about the sandbox, and a kept entry costs a stale row where a
+// dropped one can cost a disk. A runtime that cannot be asked keeps the
+// listing's answer, which is all there was before.
+func unlistedButNotGone(live []string, rt runtime.Runtime) []string {
+	exister, ok := rt.(runtime.Exister)
+	if !ok {
+		return nil
+	}
+	listed := make(map[string]bool, len(live))
+	for _, name := range live {
+		listed[name] = true
+	}
+	var keep []string
+	for _, name := range wrap.IndexedSandboxes() {
+		if listed[name] {
+			continue
+		}
+		if exists, err := exister.Exists(name); err != nil || exists {
+			keep = append(keep, name)
+		}
+	}
+	return keep
 }
 
 // sandboxRow is one line of the listing, gathered before anything is printed
