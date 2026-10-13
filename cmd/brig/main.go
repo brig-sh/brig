@@ -2396,6 +2396,14 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		// The preview is the command's output and goes where output goes; the
 		// workspace sentence is a notice, on stderr like the one the real
 		// removal prints, so -q and a redirect treat both paths the same.
+		//
+		// A teleportable session's guest home is not on the host to name, and
+		// it goes with the disk all the same, so the preview says so in the
+		// words an ordinary session's names its home in.
+		if cfg.Teleportable {
+			fmt.Printf("would remove %s (sandbox %s) and %s\n", ref, cfg.VMName, teleportHomeWords)
+			return nil
+		}
 		if home := wrap.EphemeralHomeOf(cfg.VMName); home != "" {
 			fmt.Printf("would remove %s (sandbox %s) and its guest home %s\n",
 				ref, cfg.VMName, home)
@@ -2424,11 +2432,18 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 			ref, cfg.HomeErr, ref)
 	case cfg.RemovedHome != "":
 		warnf("%s", notes(notice.New("removed "+ref+" and its guest home "+cfg.RemovedHome), kept(cfg, false)))
+	case cfg.Teleportable:
+		warnf("%s", notice.New("removed "+ref+" and "+teleportHomeWords))
 	default:
 		warnf("%s", notes(notice.New("removed "+ref), kept(cfg, true)))
 	}
 	return nil
 }
+
+// teleportHomeWords is what rm says goes with a teleportable session, in
+// place of the host path an ordinary session's removal names: the agent's
+// files were on the disk the runtime removed, and nothing says so otherwise.
+const teleportHomeWords = "its guest home inside the sandbox disk"
 
 // kept is what rm leaves on the host, as notes: the guest home, when home
 // asks and there is one, and the project. An ephemeral home that was never

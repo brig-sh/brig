@@ -2058,12 +2058,24 @@ grep -q '^argv: \(run\|rm\) ' "$STUB_LOG" \
   || ok "an unrecorded stopped teleportable sandbox keeps its disk"
 cp "$WORK/tp-sessions.json" "$BRIG_STATE_DIR/sessions.json"
 
-# rm takes the disk and names no host home it leaves behind.
+# rm takes the disk, says the guest home goes with it, and names no host home
+# it leaves behind. The preview says the same and removes nothing.
+: > "$STUB_LOG"
+out="$(tp "$WORK/brig" rm --dry-run claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  0:"would remove claude (sandbox brig-claude-code) and its guest home inside the sandbox disk")
+    ok "rm --dry-run of a teleportable session says its guest home goes with the disk" ;;
+  *) bad "rm --dry-run of a teleportable session says its guest home goes with the disk -- got $rc: $out" ;;
+esac
+grep -q '^argv: \(rm\|stop\) ' "$STUB_LOG" \
+  && bad "rm --dry-run of a teleportable session removed it" \
+  || ok "rm --dry-run of a teleportable session removes nothing"
 out="$(tp "$WORK/brig" rm claude 2>&1)"; rc=$?
 case "$rc:$out" in
   0:*"stays on the host"*) bad "rm of a teleportable session names a host home -- got: $out" ;;
-  0:*) ok "rm of a teleportable session leaves no host home to mention" ;;
-  *) bad "rm of a teleportable session exits 0 -- got $rc: $out" ;;
+  0:*"removed claude and its guest home inside the sandbox disk"*)
+    ok "rm of a teleportable session says its guest home went with the disk" ;;
+  *) bad "rm of a teleportable session says its guest home went with the disk -- got $rc: $out" ;;
 esac
 
 # A backend that cannot keep the session whole is a capability refusal, 7,
