@@ -120,16 +120,31 @@ const (
 // The network posture is not here, although it is the same kind of fact. An
 // older release rewrites this file with the fields it knows, so a posture kept
 // here is lost the first time one runs. See rememberedNetwork. Teleportable
-// has the same exposure and is kept here anyway: an older release cannot run
-// a teleportable session at all, and the share check in EnsureRunning refuses
-// to recreate a running sandbox whose guest home is not a share, so a lost
-// record costs a refusal rather than the disk.
+// has the same exposure and is kept here anyway, because the rewrite cannot
+// take all of it: the empty Home stays, and an ordinary session never records
+// one. See isTeleportable. An entry lost outright is caught in EnsureRunning,
+// which asks the runtime how a sandbox with no entry was booted before it
+// recreates it. What none of this protects against is an older release
+// itself: it resolves the same sandbox name, reads the missing share as a
+// stale one, and recreates the sandbox, disk and all. docs/teleport.md says
+// so.
 type sessionEntry struct {
 	Home         string `json:"home"`
 	Sandbox      string `json:"sandbox"`
 	Project      string `json:"project,omitempty"`
 	Ephemeral    bool   `json:"ephemeral,omitempty"`
 	Teleportable bool   `json:"teleportable,omitempty"`
+}
+
+// isTeleportable reports whether the entry is a teleportable session's. The
+// field says so, and so does an empty Home: rememberSession writes the
+// resolved workspace of every ordinary session, which is never empty, so the
+// only entry without one is a teleportable entry an older release rewrote and
+// stripped of the field. Reading that entry as ordinary would refuse
+// --teleportable as a switch and send the user to `brig rm`, which deletes
+// the disk the session lives on.
+func (e sessionEntry) isTeleportable() bool {
+	return e.Teleportable || e.Home == ""
 }
 
 // stateDir is where brig keeps what has to outlive a single invocation.
@@ -301,7 +316,7 @@ func rememberedTeleportable(ref, vmName string) (teleportable, known bool) {
 	if !ok || entry.Sandbox != vmName {
 		return false, false
 	}
-	return entry.Teleportable, true
+	return entry.isTeleportable(), true
 }
 
 // TeleportableSandbox reports whether the session carrying vmName was
@@ -310,7 +325,7 @@ func rememberedTeleportable(ref, vmName string) (teleportable, known bool) {
 func TeleportableSandbox(vmName string) bool {
 	for _, entry := range readSessionIndex() {
 		if entry.Sandbox == vmName {
-			return entry.Teleportable
+			return entry.isTeleportable()
 		}
 	}
 	return false
