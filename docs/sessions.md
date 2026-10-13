@@ -145,8 +145,9 @@ with the sandbox:
 | `brig rm`, `brig rm --all` | deleted with the disk |
 | A host reboot | as `brig stop` |
 
-You cannot read a teleportable session's guest home from the host. Reach it
-with `brig sh <ref>`.
+Nothing from the host is shared into a teleportable session. Its guest home
+lives in the sandbox's disk image, not in a host directory. Reach it with
+`brig sh <ref>`.
 
 When the runtime reports no sandbox for the ref, `brig rm` forgets the
 session and names the guest home that it leaves.

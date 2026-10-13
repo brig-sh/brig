@@ -31,7 +31,7 @@ its ref do not need the flag. Brig records the property in its session index.
 | Project | optional, shared in at `/work/<name>` | none |
 | Backend | any | hull's `hvi` only |
 | Network, policy, published ports | as configured | the same |
-| Credentials | delivered into a tmpfs by `hull exec` | the same |
+| Credentials | a `files:` binding is delivered into a tmpfs by `hull exec`; an environment variable is handed to `hull run` | the same, and an environment variable stays on the disk. See [Credentials on the disk](#credentials-on-the-disk) |
 | Onboarding seed | written into the host home | written into the guest home, inside the guest |
 | `--skills`, `BRIG_GIT_CONFIG` | copy files into the host home | refused: there is no host home |
 
@@ -41,8 +41,11 @@ The `--json` documents of `ls`, `info` and `plan` carry `"teleportable": true`.
 
 ## What you lose
 
-- **A host-visible home.** You cannot open the agent's files from the host.
-  Use `brig sh <ref>` to reach them.
+- **A host-visible home.** Nothing from the host is shared in. The guest
+  home lives in the sandbox's disk image, not in a host directory, so there
+  is no folder on the host to open. Use `brig sh <ref>` to reach the agent's
+  files. The disk image is a file in hull's store, owned by your user, so a
+  process running as you can still read it.
 - **A project mount.** Copy the work in from inside the sandbox, for example
   with `git clone`.
 - **`brig stop`.** hull cannot start a stopped sandbox again without making
@@ -54,6 +57,40 @@ The `--json` documents of `ls`, `info` and `plan` carry `"teleportable": true`.
   refuses instead, because the restart deletes its disk.
 
 `brig rm` deletes the disk and everything in it.
+
+## Credentials on the disk
+
+A credential bound as an environment variable, such as the `GH_TOKEN` that
+`claude-code` forwards, is handed to `hull run` as part of the sandbox's
+environment. When the image boots through urunit, hull writes that
+environment, values included, into `/urunit.conf` on the root disk, with mode
+`0600`. A `files:` binding is not written there. It goes into a tmpfs after
+the boot, and it is gone when the sandbox stops.
+
+An ordinary session on a `block` root has the same file in its own disk, and
+`brig rm` deletes it with the sandbox. A teleportable session differs in two
+ways:
+
+- The disk is the session's storage and lives as long as the session. The
+  file keeps the value the sandbox booted with after you rotate the
+  credential. Each later command hands the agent the current value, but the
+  file is not rewritten.
+- A later release that moves the session to another host moves the disk, and
+  the file with it.
+
+To keep a credential off the disk, deliver it as a `files:` binding.
+
+## Older Brig releases
+
+Do not run a Brig release from before teleportable sessions on the ref of a
+teleportable session. That release resolves the same sandbox name, finds no
+guest home shared in, reads that as a stale share, and recreates the sandbox.
+That deletes the disk and the guest home on it. This release refuses each of
+those recreates, and an older one does not know to.
+
+An older release that only rewrites Brig's session index does no harm. It
+drops the field that records the property, and this release still reads the
+entry as teleportable from its empty guest home.
 
 ## What Brig refuses
 
