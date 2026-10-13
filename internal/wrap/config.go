@@ -255,6 +255,18 @@ type Config struct {
 	// KeptProject.
 	refusedProject string
 
+	// Teleportable is set when this session owns all its storage. Workspace
+	// is empty then: the guest home is a directory of the sandbox's own block
+	// disk, and nothing on the host stands for it. teleportSource is what made
+	// it so, and teleportRefused is why this invocation cannot run it, held
+	// for sessionRefusal like projectRefused. teleportKnown records that the
+	// index already had the session, which is how the one-time notice tells a
+	// new session from a later run of one. See teleport.go.
+	Teleportable    bool
+	teleportSource  string
+	teleportRefused error
+	teleportKnown   bool
+
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
 	// from a shell its stdin is a terminal, but it is the daemon's terminal and
@@ -315,6 +327,11 @@ type Options struct {
 	// Publish are the --publish values on the command line, unparsed. Each opens
 	// a guest port on the host; see runtime.ParsePublication for the grammar.
 	Publish []string
+	// Teleportable asks for a session that owns all its storage: a block
+	// root with the guest home inside it, and no host directory shared in.
+	// The profile's teleportable: asks the same of every session, and a
+	// session recorded as teleportable stays so. See resolveTeleportable.
+	Teleportable bool
 	// Verbosity is how much this invocation was asked to say: --verbose and
 	// -q, which are read left of the verb. The zero value is the default
 	// level, so a caller with no opinion -- brigd, and every test that builds
@@ -392,69 +409,74 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if o.Workspace != "" {
 		base, given = o.Workspace, true
 	}
-	var workspace string
-	if given {
-		// Made absolute whichever of the two supplied it. A relative
-		// --workspace was already resolved here and a relative BRIG_WORKSPACE
-		// was not, which meant one exported variable named a different host
-		// directory from every directory you ran brig in: same sandbox name,
-		// same profile, and a workspace that moved with your shell. The
-		// sandbox's home is a host path, so it is resolved once, here, against
-		// the directory the command was actually invoked from.
-		abs, err := filepath.Abs(base)
-		if err != nil {
-			return nil, err
+	// Whether this session owns its storage, settled before the home is
+	// resolved: a teleportable session has no home on the host, so none of the
+	// resolution below applies to it. See resolveTeleportable.
+	tp := resolveTeleportable(t, o, env, sessionKey(t.Name, slug), vmName, given)
+	var workspace, legacyHome string
+	ephemeral, remembered := false, false
+	if !tp.on {
+		if given {
+			// Made absolute whichever of the two supplied it. A relative
+			// --workspace was already resolved here and a relative BRIG_WORKSPACE
+			// was not, which meant one exported variable named a different host
+			// directory from every directory you ran brig in: same sandbox name,
+			// same profile, and a workspace that moved with your shell. The
+			// sandbox's home is a host path, so it is resolved once, here, against
+			// the directory the command was actually invoked from.
+			abs, err := filepath.Abs(base)
+			if err != nil {
+				return nil, err
+			}
+			base = abs
+			// A named session suffixes the slug onto whatever the base already
+			// is, so an exported BRIG_WORKSPACE keeps working alongside --name
+			// instead of fighting it. An unnamed run adds nothing.
+			workspace = base
+			if slug != "" {
+				workspace += "-" + slug
+			}
+		} else {
+			// Named after the sandbox, which already carries the slug, so two
+			// sandboxes never share a home brig will delete with one of them.
+			if workspace, err = defaultWorkspace(vmName); err != nil {
+				return nil, err
+			}
 		}
-		base = abs
-		// A named session suffixes the slug onto whatever the base already
-		// is, so an exported BRIG_WORKSPACE keeps working alongside --name
-		// instead of fighting it. An unnamed run adds nothing.
-		workspace = base
-		if slug != "" {
-			workspace += "-" + slug
+		// Nothing on this invocation named a directory, so the one the sandbox was
+		// started with beats the default just computed. Without this, a session
+		// created with --workspace matches its own default on no later command, and
+		// every flagless verb takes that for a stale share and restarts it -- see
+		// index.go. The suffix is not reapplied: what was recorded is the workspace
+		// as it was finally resolved, slug and all.
+		//
+		// Looked up by ref, which is the profile as it resolved and the slug, so
+		// the entry a run under one spelling of the profile wrote is the entry a
+		// run under its alias reads. Both halves of the key are in hand here.
+		//
+		// A home brig chose goes with the sandbox on `brig rm`. A home the run
+		// named never does, wherever it is. A remembered home keeps what was
+		// recorded with it, so a session an older release started under ~/brig
+		// keeps its home.
+		ephemeral = !given
+		if !given {
+			if home, eph := rememberedWorkspace(sessionKey(t.Name, slug), vmName); home != "" {
+				workspace, ephemeral, remembered = home, eph, true
+			}
 		}
-	} else {
-		// Named after the sandbox, which already carries the slug, so two
-		// sandboxes never share a home brig will delete with one of them.
-		if workspace, err = defaultWorkspace(vmName); err != nil {
-			return nil, err
-		}
-	}
-	// Nothing on this invocation named a directory, so the one the sandbox was
-	// started with beats the default just computed. Without this, a session
-	// created with --workspace matches its own default on no later command, and
-	// every flagless verb takes that for a stale share and restarts it -- see
-	// index.go. The suffix is not reapplied: what was recorded is the workspace
-	// as it was finally resolved, slug and all.
-	//
-	// Looked up by ref, which is the profile as it resolved and the slug, so
-	// the entry a run under one spelling of the profile wrote is the entry a
-	// run under its alias reads. Both halves of the key are in hand here.
-	//
-	// A home brig chose goes with the sandbox on `brig rm`. A home the run
-	// named never does, wherever it is. A remembered home keeps what was
-	// recorded with it, so a session an older release started under ~/brig
-	// keeps its home.
-	ephemeral := !given
-	remembered := false
-	if !given {
-		if home, eph := rememberedWorkspace(sessionKey(t.Name, slug), vmName); home != "" {
-			workspace, ephemeral, remembered = home, eph, true
-		}
-	}
-	// The directory an older release would have given this session, when it is
-	// still there. A sandbox that release booted on it keeps it: resolving the
-	// new default would read as a stale share and restart the sandbox onto an
-	// empty home. Otherwise the first run on a new ephemeral home names it, so
-	// work kept there is not taken for lost. See ephemeralNotice.
-	legacyHome := ""
-	if !given && !remembered {
-		dir := legacyDefaultWorkspace(t, slug)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			if exists, err := sandboxExists(rt, vmName); err == nil && exists {
-				workspace, ephemeral = dir, false
-			} else {
-				legacyHome = dir
+		// The directory an older release would have given this session, when it is
+		// still there. A sandbox that release booted on it keeps it: resolving the
+		// new default would read as a stale share and restart the sandbox onto an
+		// empty home. Otherwise the first run on a new ephemeral home names it, so
+		// work kept there is not taken for lost. See ephemeralNotice.
+		if !given && !remembered {
+			dir := legacyDefaultWorkspace(t, slug)
+			if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+				if exists, err := sandboxExists(rt, vmName); err == nil && exists {
+					workspace, ephemeral = dir, false
+				} else {
+					legacyHome = dir
+				}
 			}
 		}
 	}
@@ -589,6 +611,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		network = NetIsolated
 	}
 
+	// Read once, so the refusal and the projection below agree on whether
+	// it was asked for.
+	skills := o.Skills || strict("SKILLS", false)
 	c := &Config{
 		Profile:        t,
 		Runtime:        rt,
@@ -610,7 +635,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		OpenStore:      openStore,
 		MacOSVersion:   macOSVersion,
 		GitConfig:      strict("GIT_CONFIG", false),
-		HostConfig:     hostProjections(t, o.Skills || strict("SKILLS", false)),
+		HostConfig:     hostProjections(t, skills && !tp.on),
 		GitHosts:       env.Fields("GIT_HOSTS", []string{"github.com"}),
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
@@ -637,12 +662,29 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Err:            os.Stderr,
 		Progress:       os.Stderr,
 		Verbosity:      o.Verbosity,
+		Teleportable:   tp.on,
+		teleportSource: tp.source,
 		env:            env,
 	}
 	if strictErr != nil {
 		return nil, strictErr
 	}
 	c.GuestCwd = GuestCwd(cwd, c.Workspace, t.GuestHome)
+	if tp.on {
+		// No host directory maps onto the guest, so the cwd has nothing to
+		// land under: the agent starts in its home, as it does from a
+		// directory outside an ordinary session's workspace.
+		c.GuestCwd = t.GuestHome
+		c.teleportRefused = tp.refusal
+		if c.teleportRefused == nil {
+			from := "--skills"
+			if !o.Skills {
+				from = env.SettingName("SKILLS")
+			}
+			c.teleportRefused = c.teleportSettingsRefusal(skills, from)
+		}
+		_, c.teleportKnown = rememberedTeleportable(sessionKey(t.Name, slug), vmName)
+	}
 	// And then the project, which replaces that derivation: it is a directory
 	// of its own, mounted beside the home, so the cwd-under-home rule has
 	// nothing to say about it. Resolved after the Config exists because it
@@ -663,6 +705,10 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// empty Project, because empty is what an invocation that said nothing
 	// looks like and those two have to stay apart.
 	switch {
+	case tp.on:
+		// A teleportable session shares no host directory in, so there is
+		// nothing to mount and nothing remembered to consult. A project named
+		// on this line is already refused; see resolveTeleportable.
 	case o.NoProject:
 		// Nothing to mount, and nothing remembered is consulted. The sandbox
 		// recreates without the share, which is projectShareStale's
@@ -706,7 +752,10 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if !given {
 		noticeBase = legacyDefaultWorkspace(t, "")
 	}
-	c.slugMigration = c.slugMigrationNotice(noticeBase, vmBase)
+	// A teleportable session has no home on the host to have moved.
+	if !tp.on {
+		c.slugMigration = c.slugMigrationNotice(noticeBase, vmBase)
+	}
 	if err := c.resolveGitIdentity(); err != nil {
 		return nil, err
 	}

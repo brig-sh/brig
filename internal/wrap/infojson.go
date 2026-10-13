@@ -26,18 +26,19 @@ import (
 // already do.
 func (c *Config) InfoData(set creds.Set) InfoDocument {
 	d := InfoDocument{
-		Session:     c.RawName,
-		Profile:     c.Profile.Name,
-		Sandbox:     c.VMName,
-		Runtime:     c.infoRuntime(),
-		Isolation:   c.isolationLine(),
-		Workspace:   c.Workspace,
-		Image:       InfoImage{Ref: c.Image, Pull: c.Pull},
-		Verify:      c.infoVerify(),
-		Network:     c.networkLine(),
-		Credentials: c.infoCredentials(set),
-		Git:         c.infoGit(),
-		ArgvExposed: runtime.ArgvExposed(set.Vars),
+		Session:      c.RawName,
+		Profile:      c.Profile.Name,
+		Sandbox:      c.VMName,
+		Runtime:      c.infoRuntime(),
+		Isolation:    c.isolationLine(),
+		Workspace:    c.Workspace,
+		Teleportable: c.Teleportable,
+		Image:        InfoImage{Ref: c.Image, Pull: c.Pull},
+		Verify:       c.infoVerify(),
+		Network:      c.networkLine(),
+		Credentials:  c.infoCredentials(set),
+		Git:          c.infoGit(),
+		ArgvExposed:  runtime.ArgvExposed(set.Vars),
 	}
 	if c.Project != "" {
 		d.Project = &InfoProject{Host: c.Project, Guest: c.GuestProject}
@@ -58,19 +59,24 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 // InfoDocument is the Info payload. Every field is a fact the text report
 // already prints; none carries a credential value.
 type InfoDocument struct {
-	Session     string           `json:"session,omitempty"`
-	Profile     string           `json:"profile"`
-	Sandbox     string           `json:"sandbox"`
-	Runtime     InfoRuntime      `json:"runtime"`
-	Isolation   string           `json:"isolation"`
-	Workspace   string           `json:"workspace"`
-	Project     *InfoProject     `json:"project,omitempty"`
-	Image       InfoImage        `json:"image"`
-	Verify      InfoVerify       `json:"verify"`
-	Network     string           `json:"network"`
-	Credentials []InfoCredential `json:"credentials"`
-	Deny        *InfoDeny        `json:"deny,omitempty"`
-	Git         InfoGit          `json:"git"`
+	Session   string      `json:"session,omitempty"`
+	Profile   string      `json:"profile"`
+	Sandbox   string      `json:"sandbox"`
+	Runtime   InfoRuntime `json:"runtime"`
+	Isolation string      `json:"isolation"`
+	// Workspace is the host directory mounted as the guest home, and empty
+	// for a teleportable session, which has none: Teleportable is then true.
+	// Added within the apiVersion, so it is omitted when false and a reader
+	// written before it parses every document unchanged.
+	Workspace    string           `json:"workspace"`
+	Teleportable bool             `json:"teleportable,omitempty"`
+	Project      *InfoProject     `json:"project,omitempty"`
+	Image        InfoImage        `json:"image"`
+	Verify       InfoVerify       `json:"verify"`
+	Network      string           `json:"network"`
+	Credentials  []InfoCredential `json:"credentials"`
+	Deny         *InfoDeny        `json:"deny,omitempty"`
+	Git          InfoGit          `json:"git"`
 	// ArgvExposed is the values BRIG_ENV_ARGV would put on the runtime's command
 	// line, by name. Empty -- and omitted -- when the hatch is off, which is the
 	// default. The names are variable names, never values.

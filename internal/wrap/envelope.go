@@ -65,8 +65,15 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		// annotation is here rather than implied so a later read-only mount has
 		// a place to say so in the row it already has, instead of needing a new
 		// one.
-		envelopeRow{"WORKSPACE", fmt.Sprintf("%s (read-write)", c.Workspace)},
+		envelopeRow{"WORKSPACE", c.workspaceLine()},
 	)
+	// Under the home, because it is the answer to where the home went. Only
+	// on a teleportable session: a row reading "no" on every ordinary run is
+	// a row people learn to skip, and the WORKSPACE row already names the
+	// host directory an ordinary session has.
+	if c.Teleportable {
+		rows = append(rows, envelopeRow{"TELEPORTABLE", teleportableLine})
+	}
 	// Directly under the home, because it is the same subject read twice: two
 	// host directories this run is about to hand a sandbox read-write. Only
 	// when there is one -- a run that named no project has no second mount to
@@ -114,6 +121,22 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		rows = append(rows, envelopeRow{"POLICY", line})
 	}
 	return rows
+}
+
+// teleportableLine is the TELEPORTABLE row, the same for every teleportable
+// session: what the property is, in the terms a reader can check against the
+// rows around it.
+const teleportableLine = "yes (block root, guest home inside it, no host directory shared in)"
+
+// workspaceLine is the WORKSPACE row: the host directory mounted as the guest
+// home, or, for a teleportable session, the absence of one said out loud. An
+// empty row would read as brig having lost the value.
+func (c *Config) workspaceLine() string {
+	if c.Teleportable {
+		return fmt.Sprintf("none on the host (the guest home %s is inside the sandbox's own disk)",
+			c.Profile.GuestHome)
+	}
+	return fmt.Sprintf("%s (read-write)", c.Workspace)
 }
 
 // policyLine is the POLICY row: which policies this run answers to.
@@ -272,6 +295,10 @@ func (c *Config) Info(set creds.Set) {
 	// The report has no PROJECT row for a refused project, so say why.
 	if c.projectRefused != nil {
 		c.warnf("%v", c.projectRefused)
+	}
+	// Nor a row for what a teleportable session refuses, for the same reason.
+	if c.teleportRefused != nil {
+		c.warnf("%v", c.teleportRefused)
 	}
 	c.renderEnvelope(c.Out, set)
 	c.Status(set)
