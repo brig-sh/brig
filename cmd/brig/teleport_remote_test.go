@@ -226,7 +226,8 @@ func probeFor() probeReport {
 	return probeReport{Format: probeFormat, Runtime: probeRuntime{Kind: "hull", Bin: "/opt/hull"},
 		Hvi: probeTool{Path: "/opt/hvi"}, Egress: probeEgress{Enforced: true},
 		Store: probeStore{Dir: "/st", FreeBytes: 1 << 40}, Agent: &probeAgent{Name: "claude-code", Known: true},
-		Sandbox: &probeSandbox{Name: "brig-claude-code"}, Network: &probeNetwork{Net: "isolated", Slot: 3}}
+		Sandbox: &probeSandbox{Name: "brig-claude-code"}, Network: &probeNetwork{Net: "isolated", Slot: 3},
+		Policy: &probePolicy{}}
 }
 
 // Every reason a destination cannot take the session is a refusal before
@@ -253,6 +254,14 @@ func TestCheckProbeRefusesEachReason(t *testing.T) {
 		{"another move arriving", func(r *probeReport) { r.Sandbox.Arriving = "other" }, ruled, exitFailure, "arriving"},
 		{"the address taken", func(r *probeReport) { r.Network.Holder = "brig-other" }, ruled, exitFailure, "brig-other"},
 		{"no room", func(r *probeReport) { r.Store.FreeBytes = 0 }, wrap.MoveNetwork{Net: "none"}, exitFailure, "MiB free"},
+		{"no word on its policy", func(r *probeReport) { r.Policy = nil }, ruled, exitFailure, "which policy"},
+		{"its policy unread", func(r *probeReport) { r.Policy.Error = "a policy file does not parse" }, ruled, exitFailure, "does not parse"},
+		{"other rules bound there", func(r *probeReport) {
+			r.Policy = &probePolicy{Egress: policy.Egress{Default: "allow"}, Policies: []string{"open"}}
+		}, ruled, exitFailure, "binds open to claude-code"},
+		{"rules bound there, none here", func(r *probeReport) {
+			r.Policy = &probePolicy{Egress: policy.Egress{Default: "deny"}, Policies: []string{"shut"}}
+		}, wrap.MoveNetwork{Net: "isolated", Slot: 3}, exitFailure, "changed policy"},
 	} {
 		r := probeFor()
 		c.spoil(&r)
@@ -272,11 +281,52 @@ func TestCheckProbeRefusesEachReason(t *testing.T) {
 	if err := checkProbe(cfg, r, "me@box", "claude-code", "tx", wrap.MoveNetwork{Net: "isolated", Slot: 3}); err != nil {
 		t.Errorf("no policy, and the destination's gateway was asked for one: %v", err)
 	}
+	// The same rules bound there, in another order, are the rules it runs
+	// under: the carried ones stand in for nothing, and the brig there reads
+	// no change.
+	two := wrap.MoveNetwork{Net: "isolated", Slot: 3, Egress: policy.Egress{Default: "deny",
+		Allow: []policy.Rule{{Host: "a.example"}, {Host: "b.example"}}}}
+	r = probeFor()
+	r.Policy = &probePolicy{Egress: policy.Egress{Default: "deny",
+		Allow: []policy.Rule{{Host: "b.example"}, {Host: "a.example"}}}, Policies: []string{"same"}}
+	if err := checkProbe(cfg, r, "me@box", "claude-code", "tx", two); err != nil {
+		t.Errorf("the same rules bound there: %v", err)
+	}
 	// The sandbox there is this move's own, asked again.
 	r = probeFor()
 	r.Sandbox.Exists, r.Sandbox.Arriving = true, "tx"
 	if err := checkProbe(cfg, r, "me@box", "claude-code", "tx", ruled); err != nil {
 		t.Errorf("this move's own arrival: %v", err)
+	}
+}
+
+// The probe reports what the destination's own policy files bind to the
+// session it is asked about, and the probe of a session with no binding
+// reports none.
+func TestTheProbeReportsThePolicyBoundThere(t *testing.T) {
+	scratchHost(t)
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	writePolicyFile(t, dir, "no-net", noNetBody)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"no-net", "claude-code", "-n", "mv"}); err != nil {
+		t.Fatal(err)
+	}
+	for ref, want := range map[string]string{"claude-code@mv": "deny", "claude-code": ""} {
+		var b bytes.Buffer
+		if err := teleportProbeCmd(&b, []string{"--json", "--agent", "claude-code", "--ref", ref}); err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Data probeReport `json:"data"`
+		}
+		if err := json.Unmarshal(b.Bytes(), &doc); err != nil {
+			t.Fatal(err)
+		}
+		p := doc.Data.Policy
+		if p == nil || p.Error != "" || p.Egress.Default != want || (want != "" && len(p.Policies) != 1) {
+			t.Errorf("%s: the probe reported %+v", ref, p)
+		}
 	}
 }
 
