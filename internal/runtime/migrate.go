@@ -75,6 +75,10 @@ type MigrateSpec struct {
 // MoveStatus is hull's move record of a sandbox on this host, as `hull
 // migrate --status` reports it. State is "" when hull has no move on record.
 type MoveStatus struct {
+	// Read reports whether hull's record was read at all. The zero status
+	// is a record that was not: a caller decides nothing on it, and only a
+	// read that found no record says hull has none.
+	Read  bool
 	TxID  string
 	State string
 	Peer  string
@@ -107,7 +111,9 @@ var moveTransports = []string{"HULL_MIGRATE_SSH"}
 
 // Migrate runs `hull migrate`, then reads the move record back, after a move
 // that failed too: one that failed after the fence leaves a source that
-// cannot run, and that is what a caller decides on.
+// cannot run, and that is what a caller decides on. A record that did not
+// read comes back unread, with its error beside the move's, so a caller
+// never takes a failed read for a record that says the move did not begin.
 func (h *hull) Migrate(name, to string, spec MigrateSpec) (MoveStatus, error) {
 	args, err := migrateArgs(name, to, spec)
 	if err != nil {
@@ -118,20 +124,29 @@ func (h *hull) Migrate(name, to string, spec MigrateSpec) (MoveStatus, error) {
 		return MoveStatus{}, callErr
 	}
 	st, readErr := h.MigrateStatus(name)
-	if callErr != nil {
-		return st, callErr
+	return st, withReadErr(callErr, readErr)
+}
+
+// withReadErr is a call's error with the error of the record read after it,
+// on one line. Either may be nil.
+func withReadErr(callErr, readErr error) error {
+	switch {
+	case readErr == nil:
+		return callErr
+	case callErr == nil:
+		return fmt.Errorf("hull's move record did not read: %w", readErr)
 	}
-	return st, readErr
+	return fmt.Errorf("%w; and hull's move record did not read: %v", callErr, readErr)
 }
 
 // MigrateStatus runs `hull migrate --status` and reads its first line, which
 // names the move, its state and the other host. A sandbox with no move on
-// record is the zero status, not an error.
+// record is a read status with no move in it, not an error.
 func (h *hull) MigrateStatus(name string) (MoveStatus, error) {
 	out, err := h.call([]string{"migrate", "--status", name})
 	if err != nil {
 		if strings.Contains(err.Error(), "has no move on record") {
-			return MoveStatus{}, nil
+			return MoveStatus{Read: true}, nil
 		}
 		return MoveStatus{}, err
 	}
@@ -150,10 +165,7 @@ func (h *hull) MigrateAbort(name, txid string) (MoveStatus, error) {
 	if st.Said == "" {
 		st.Said = strings.TrimSpace(out)
 	}
-	if err != nil {
-		return st, err
-	}
-	return st, readErr
+	return st, withReadErr(err, readErr)
 }
 
 // moveStatusLine is the first line `hull migrate --status` prints.
@@ -169,7 +181,7 @@ func moveStatusOf(name, out string) (MoveStatus, error) {
 	if m[2] != name {
 		return MoveStatus{}, fmt.Errorf("hull answered the move status of %s for %s", name, m[2])
 	}
-	return MoveStatus{TxID: m[1], State: m[3], Peer: m[4], Said: strings.TrimSpace(out)}, nil
+	return MoveStatus{Read: true, TxID: m[1], State: m[3], Peer: m[4], Said: strings.TrimSpace(out)}, nil
 }
 
 // migrateArgs is the one place the move's command line is built. The host
