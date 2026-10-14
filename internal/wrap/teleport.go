@@ -71,6 +71,17 @@ func resolveTeleportable(t profile.Profile, o Options, env Env, ref, vmName stri
 	default:
 		return tp
 	}
+	// A workload that reads its credentials at boot can only get them from
+	// the boot environment, and a teleportable boot carries none: hull would
+	// write them into the disk. Refused before the backend is asked, because
+	// no backend changes it. A profile that says teleportable: true is
+	// refused for the same reason when it loads; this is --teleportable on a
+	// profile that does not.
+	if t.CredentialsAtBoot() {
+		tp.refusal = fmt.Errorf("%s asks for a teleportable session, and %s cannot be one. %s. "+
+			"Run it as an ordinary session", tp.source, t.Name, profile.TeleportableBootCredentials)
+		return tp
+	}
 	// A session brig already knows, started with a host home. One sandbox
 	// cannot be both, and either answer here would lose a home: booting it
 	// teleportable leaves the host home behind, and keeping it ordinary

@@ -2110,6 +2110,18 @@ esac
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "a teleportable run refused with exit 7 reached the runtime" \
   || ok "a teleportable run refused with exit 7 reached no runtime"
+# A gui profile's window is the boot process and reads its credentials from
+# the boot environment, which a teleportable boot keeps them out of. Refused
+# for that reason, ahead of the backend, and nothing boots.
+: > "$STUB_LOG"
+out="$(tp "$WORK/brig" run --teleportable claude-desktop 2>&1)"; rc=$?
+case "$rc:$out" in
+  1:*--teleportable*"reads its credentials at boot"*) ok "--teleportable on a profile that reads credentials at boot is refused, saying why" ;;
+  *) bad "--teleportable on a profile that reads credentials at boot is refused, saying why -- got $rc: $out" ;;
+esac
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "a teleportable gui run reached the runtime" \
+  || ok "a teleportable gui run reached no runtime"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== flags =="

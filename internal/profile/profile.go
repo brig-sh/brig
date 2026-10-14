@@ -315,6 +315,26 @@ func (p Profile) GuestUser() string {
 func (p Profile) IsShell() bool { return p.kind() == KindShell }
 func (p Profile) IsGUI() bool   { return p.kind() == KindGUI }
 
+// CredentialsAtBoot reports whether this profile's workload reads its
+// credentials when the sandbox boots rather than when brig execs it.
+//
+// A gui profile's window is the boot process, and nothing is exec'd after
+// it, so the boot environment is the only way a credential reaches it. hull
+// writes that environment, values included, into the sandbox's own files.
+// Every other kind runs its workload through an exec, which carries the
+// credentials by name and writes nothing. A teleportable session keeps every
+// credential off its disk, so a profile that answers true cannot be one.
+func (p Profile) CredentialsAtBoot() bool { return p.IsGUI() }
+
+// TeleportableBootCredentials is why a profile whose CredentialsAtBoot is
+// true cannot be teleportable, said once for the profile check and for the
+// refusal of --teleportable, so the two cannot come to give different
+// reasons.
+const TeleportableBootCredentials = "kind: gui reads its credentials at boot: its window is the boot " +
+	"process and nothing is exec'd after it, so a credential reaches it only through the boot " +
+	"environment, which hull writes, values included, into the sandbox's disk. A teleportable " +
+	"session keeps every credential off its disk, so a gui profile cannot be one"
+
 // kind is Kind with the default applied. Parse normalises, so a profile read
 // from a file always carries a concrete kind; this covers the one that was
 // built in Go without going through it.
