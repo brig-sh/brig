@@ -30,6 +30,13 @@ const EgressPolicy Property = "egress policy"
 // of the run path like a policy is, and refused the same way, with exit 7.
 const Teleportable Property = "teleportable session"
 
+// Teleport is moving a running session to another host. A session that is
+// not teleportable, and a destination that cannot keep a promise the session
+// is under, such as its egress policy, are refused as capabilities, with exit
+// 7, before anything is paused: the move would otherwise carry the session
+// somewhere it is not what it says it is.
+const Teleport Property = "teleport"
+
 // RunPath is one runtime with one backend: hull with vz, hvi or qemu, or
 // nerdctl or docker with its containerd shim. A property is enforced or not
 // by the pair, and hull alone says nothing: the same binary enforces a
@@ -185,6 +192,9 @@ func (e *CapabilityError) Error() string {
 	if e.Property == Teleportable {
 		return e.teleportError()
 	}
+	if e.Property == Teleport {
+		return e.moveError()
+	}
 	var head string
 	if e.State == CannotEnforce {
 		head = fmt.Sprintf("a policy applies to this sandbox, and %s cannot enforce the %s",
@@ -252,4 +262,17 @@ func requireEgress(spec RunSpec, path RunPath) error {
 	}
 	return &CapabilityError{Property: EgressPolicy, Path: path, State: r.State,
 		Why: r.Why, Remedy: r.Remedy}
+}
+
+// moveError is Error for a refused move. Its Why names what cannot be kept
+// and where, so there is no run path to name in front of it.
+func (e *CapabilityError) moveError() string {
+	msg := "brig will not teleport this session: " + e.Why
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	if e.Remedy != "" {
+		msg += ". " + e.Remedy
+	}
+	return msg + ". Nothing was paused"
 }
