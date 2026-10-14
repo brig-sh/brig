@@ -250,3 +250,80 @@ func TestRunArgsRefusesAMachineWithNoBootAssets(t *testing.T) {
 		t.Fatalf("a machine with no boot assets got a run line: %v", err)
 	}
 }
+
+// What `hull run --help` prints around --profile, cut from a hull with
+// machine profiles and from v0.1.0-rc29, which has none.
+const (
+	hullHelpWithProfile = "OPTIONS:\n" +
+		"   --profile hull assets pull --profile   hvi machine profile: 'native' (default) or 'portable-arm64-v1'\n" +
+		"   --rootfs-type string                   rootfs sharing mode\n"
+	hullHelpWithoutProfile = "OPTIONS:\n" +
+		"   --qemu-path string                     path to qemu-system-aarch64 binary\n" +
+		"   --rootfs-type string                   rootfs sharing mode\n" +
+		"   --profiles-dir string                  a flag that only starts with the name\n"
+)
+
+// brig asks hull for the machine with --profile, which an older hull does
+// not take. The probe tells the two apart from the help text, refuses the
+// older one as unable to run a teleportable session, and refuses a probe
+// that failed as unknown.
+func TestHullTakesProfileReadsRunHelp(t *testing.T) {
+	current := &hull{bin: scriptHull(t, "[ \"$1 $2\" = 'run --help' ] || exit 9\ncat <<'EOF'\n"+hullHelpWithProfile+"EOF\n")}
+	if err := current.takesProfile("hvi", MachinePortableArm64V1); err != nil {
+		t.Errorf("a hull that lists --profile was refused: %v", err)
+	}
+
+	old := &hull{bin: scriptHull(t, "case \"$1\" in --version) echo 'hull v0.1.0-rc29 (e54923f)';; "+
+		"run) cat <<'EOF'\n"+hullHelpWithoutProfile+"EOF\n;; esac\n")}
+	err := old.takesProfile("hvi", MachinePortableArm64V1)
+	var ce *CapabilityError
+	if !errors.As(err, &ce) || ce.Property != Teleportable || ce.State != CannotEnforce {
+		t.Fatalf("a hull with no --profile: want a teleportable CapabilityError it cannot enforce, got %v", err)
+	}
+	for _, want := range []string{"0.1.0-rc29", "--profile", MachinePortableArm64V1, "Upgrade hull"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+
+	missing := &hull{bin: filepath.Join(t.TempDir(), "not-a-hull")}
+	err = missing.takesProfile("hvi", MachinePortableArm64V1)
+	if !errors.As(err, &ce) || ce.State != Unknown || !strings.Contains(err.Error(), "run --help") {
+		t.Fatalf("a probe that could not run: want an unknown CapabilityError naming the probe, got %v", err)
+	}
+}
+
+// A run that names a machine on a hull without --profile stops at the probe:
+// no gateway, no run. A run that names none never pays for the probe.
+func TestARunNamingAMachineStopsOnAHullWithoutTheFlag(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "calls")
+	bin := scriptHull(t, "echo \"$*\" >> '"+log+"'\n"+
+		"[ \"$1 $2\" = 'run --help' ] && { cat <<'EOF'\n"+hullHelpWithoutProfile+"EOF\nexit 0; }\nexit 3\n")
+	h := &hull{bin: bin}
+	spec := RunSpec{Name: "s", Image: "img", Hypervisor: "hvi", Net: "none", GenericBoot: true,
+		Profile:    MachinePortableArm64V1,
+		BootAssets: BootAssets{Kernel: "/a/Image", Initrd: "/a/initrd", Machine: MachinePortableArm64V1}}
+
+	err := h.Run(spec)
+
+	var ce *CapabilityError
+	if !errors.As(err, &ce) || ce.Property != Teleportable {
+		t.Fatalf("want a teleportable CapabilityError, got %v", err)
+	}
+	calls, _ := os.ReadFile(log)
+	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		if strings.HasPrefix(line, "run ") && line != "run --help" {
+			t.Errorf("hull was asked to run after the probe refused: %q", line)
+		}
+	}
+
+	if err := os.WriteFile(log, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec.Profile, spec.BootAssets.Machine = "", ""
+	_ = h.Run(spec)
+	calls, _ = os.ReadFile(log)
+	if strings.Contains(string(calls), "run --help") {
+		t.Errorf("a run that names no machine probed hull: %s", calls)
+	}
+}
