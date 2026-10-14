@@ -49,9 +49,17 @@ type CheckpointSpec struct {
 type CheckpointResult struct {
 	// Migration is the runtime's record after the checkpoint: the bundle
 	// directory, the id it gave this checkpoint, and the state it left the
-	// sandbox in. Zero when the record could not be read back, which leaves
-	// the checkpoint itself standing.
+	// sandbox in. It is the record only when RecordErr is nil and State is
+	// set. With no Dir it is the only place the bundle's location exists, so
+	// a caller that finds it unread must not act on an empty BundleDir.
 	Migration Migration
+	// RecordErr is why the record could not be read back after a checkpoint
+	// that worked. It is not the Checkpoint's error: the bundle is written
+	// and, under CheckpointFence, the guest is fenced, and a caller that
+	// took a failed read for a failed checkpoint could resume or restore a
+	// source a destination may already be running. Read the record again
+	// with Migration rather than checkpoint again.
+	RecordErr error
 	// Summary is the runtime's own line about the checkpoint, for a person.
 	Summary string
 }
@@ -137,9 +145,12 @@ func (h *hull) Checkpoint(name string, spec CheckpointSpec) (CheckpointResult, e
 	}
 	res := CheckpointResult{Summary: strings.TrimSpace(out)}
 	// The checkpoint has happened by now, and the bundle is on disk whether
-	// or not this read works, so a failure here is not the checkpoint's.
-	if m, err := h.Migration(name); err == nil {
-		res.Migration = m
+	// or not this read works, so a failure here is not the checkpoint's. It
+	// is said on the result rather than dropped, because an empty BundleDir
+	// that reads as "no record" is one a caller would act on.
+	res.Migration, res.RecordErr = h.Migration(name)
+	if res.RecordErr == nil && res.Migration.State == "" {
+		res.RecordErr = fmt.Errorf("hull recorded no checkpoint for %s after it said it wrote one", name)
 	}
 	return res, nil
 }
