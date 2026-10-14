@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -198,6 +199,26 @@ func arrivalOf(ref, vmName string) *Arrival {
 	}
 	return &a
 }
+
+// ArrivingSandboxes is every sandbox a move is bringing here and has not
+// finished. `brig ls` keeps them out of its prune: hull here may not list a
+// reserved or incoming instance yet, and pruning the session and the posture
+// a receive filed would leave the guest, once it runs, with no record brig
+// can reach it by.
+func ArrivingSandboxes() []string {
+	var out []string
+	for name, a := range readArrivals() {
+		if a.State != arrivalCommitted {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ForgetArrival is forgetArrival for `brig rm --all`, which removes
+// sandboxes without a Config.
+func ForgetArrival(vmName string) { forgetArrival(vmName) }
 
 // forgetArrival drops the arrival of a removed sandbox, with the rest of its
 // bookkeeping.
