@@ -225,8 +225,11 @@ case "$verb" in
     # carrying a policy gets past the boot and the rules it passed can be read
     # out of the log above. Nothing here filters anything: what is under test
     # is whether the rules travel, and hull tests the filter itself.
+    # STUB_NO_EGRESS is a hull whose gateway predates the rules, the
+    # destination a teleport must refuse for a session under a policy.
     case " $* " in
       *" --help "*)
+        [ -n "${STUB_NO_EGRESS:-}" ] && { printf -- '   --subnet string\n'; exit 0; }
         printf -- '   --egress-default string  verdict for a connection no egress rule matches\n'
         exit 0
         ;;
@@ -311,11 +314,63 @@ case "$verb" in
     state=restored; [ -n "${paused:-}" ] && state=restored-paused
     printf '{"state": "%s", "bundleDir": "%s.bundle", "txid": "t1"}' "$state" "$STUB_STATE" > "$STUB_STATE.migration"
     ;;
+  migrate)
+    # `hull migrate --to H [--remote-store D] [--remote-hull B]
+    # [--remote-gateway-sock S] [--txid X] [--dry-run] NAME`, and
+    # `hull migrate --status NAME` and `hull migrate --abort TXID`. The move
+    # record is "txid state peer" in $STUB_STATE.move, and --status prints
+    # it the way hull does. A move hands the instance to the destination's
+    # stub, whose state STUB_REMOTE_STATE names: hull's own migrate-receive
+    # and migrate-commit over ssh, folded into one step. The source is left
+    # fenced, as hull leaves it. STUB_MIGRATE_LOSE stops the move at
+    # committing and fails, a move whose end the caller did not see.
+    mode=move; to=""; txid=""; gw=""
+    while [ $# -gt 1 ]; do
+      case "$1" in
+        --status) mode=status; shift ;;
+        --abort) mode=abort; shift ;;
+        --dry-run) mode=dry; shift ;;
+        --to) to="$2"; shift 2 ;;
+        --txid) txid="$2"; shift 2 ;;
+        --remote-gateway-sock) gw="$2"; shift 2 ;;
+        *) shift 2 ;;
+      esac
+    done
+    case "$mode" in
+      status)
+        [ -f "$STUB_STATE.move" ] || { printf 'error: instance %s has no move on record\n' "$1" >&2; exit 1; }
+        read -r mtx mstate mpeer < "$STUB_STATE.move"
+        printf 'Move %s of %s: %s, to %s, epoch 1\n' "$mtx" "$1" "$mstate" "$mpeer"
+        ;;
+      abort)
+        read -r mtx mstate mpeer < "$STUB_STATE.move"
+        printf '%s aborted %s\n' "$mtx" "$mpeer" > "$STUB_STATE.move"
+        rm -f "$STUB_STATE.migration"
+        ;;
+      dry) ;;
+      move)
+        [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] || { printf 'error: instance not found: %s\n' "$1" >&2; exit 1; }
+        printf '{"state": "migrating", "moveTxid": "%s", "peer": "%s"}' "$txid" "$to" > "$STUB_STATE.migration"
+        if [ -n "${STUB_MIGRATE_LOSE:-}" ]; then
+          printf '%s committing %s\n' "$txid" "$to" > "$STUB_STATE.move"
+          printf 'error: ssh: connection reset by peer\n' >&2; exit 1
+        fi
+        printf '%s' "$1" > "$STUB_REMOTE_STATE"
+        printf 'block' > "$STUB_REMOTE_STATE.rootfs"
+        : > "$STUB_REMOTE_STATE.shares"
+        printf '1 0 254:1 / / rw - ext4\n' > "$STUB_REMOTE_STATE.mounts"
+        printf '%s' "$gw" > "$STUB_REMOTE_STATE.gw"
+        printf '{"state": "restored", "txid": "%s", "moveTxid": "%s", "peer": "source"}' "$txid" "$txid" > "$STUB_REMOTE_STATE.migration"
+        printf '{"state": "migrated", "moveTxid": "%s", "peer": "%s"}' "$txid" "$to" > "$STUB_STATE.migration"
+        printf '%s committed %s\n' "$txid" "$to" > "$STUB_STATE.move"
+        ;;
+    esac
+    ;;
   stop)
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
   rm)
-    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts" "$STUB_STATE.migration"
+    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts" "$STUB_STATE.migration" "$STUB_STATE.move"
     ;;
 esac
 exit 0
@@ -2190,6 +2245,170 @@ esac
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "a teleportable gui run reached the runtime" \
   || ok "a teleportable gui run reached no runtime"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
+echo "== teleport =="
+# A teleport against the stub: the destination is this machine under a second
+# state directory, gateway directory and stub instance, reached through a fake
+# ssh that runs the remote command the way sshd hands it to a shell. It drops
+# ssh's own options and the host and gives the one command string to sh, so a
+# word brig failed to quote fails here as it would over a real ssh. A host it
+# was not told about is refused the way ssh refuses an unknown one.
+RSTATE="$WORK/remote-state"; RGW="$WORK/remote-gw"
+export STUB_REMOTE_STATE="$WORK/remote-instance"
+export SSH_LOG="$WORK/ssh.log" REMOTE_LOG="$WORK/remote-argv.log"
+: > "$SSH_LOG"; : > "$REMOTE_LOG"
+cat > "$WORK/ssh" <<SSH
+#!/bin/bash
+{ printf 'ssh:'; printf '[%s]' "\$@"; printf '\n'; } >> "\$SSH_LOG"
+while [ \$# -gt 0 ] && [ "\$1" != -- ]; do shift; done
+shift; host="\$1"; shift
+[ "\$host" = me@box ] || { echo "ssh: Could not resolve hostname \$host" >&2; exit 255; }
+exec env BRIG_STATE_DIR="$RSTATE" BRIG_GATEWAY_DIR="$RGW" STUB_STATE="$STUB_REMOTE_STATE" \
+  STUB_LOG="\$REMOTE_LOG" STUB_NO_EGRESS="\${REMOTE_NO_EGRESS:-}" sh -c "\$*"
+SSH
+chmod +x "$WORK/ssh"
+# hull's hvi sits beside it; the probe looks there.
+printf '#!/bin/sh\necho "hvi 0.0.0-stub"\n' > "$WORK/hvi"; chmod +x "$WORK/hvi"
+tpr() { env -u BRIG_WORKSPACE BRIG_HYPERVISOR=hvi BRIG_NETWORK="${TP_NET:-offline}" STUB_INSPECT_ARGV=1 \
+  BRIG_TELEPORT_SSH="$WORK/ssh" BRIG_TELEPORT_REMOTE_BRIG="$WORK/brig" "$@"; }
+
+GH_TOKEN=tp-gh-secret tpr "$WORK/brig" run --teleportable claude -d > "$WORK/tpm.out" 2>&1 \
+  || bad "a teleportable session for the move boots -- got: $(cat "$WORK/tpm.out")"
+: > "$STUB_LOG"; : > "$SSH_LOG"
+GH_TOKEN=tp-gh-secret tpr "$WORK/brig" teleport claude --to me@box > "$WORK/tpm.out" 2> "$WORK/tpm.err"; rc=$?
+case "$rc:$(cat "$WORK/tpm.out")" in
+  "0:teleported claude-code to me@box (move "*")") ok "teleport moves the session and says where to" ;;
+  *) bad "teleport moves the session and says where to -- got $rc: $(cat "$WORK/tpm.out" "$WORK/tpm.err")" ;;
+esac
+# hull is asked for a dry run first and then the move, named by a txid of
+# hull's shape, with the destination's hull, and the sandbox last.
+grep -qE '^argv: migrate --to me@box --remote-hull [^ ]*/hull --dry-run brig-claude-code$' "$STUB_LOG" \
+  && grep -qE '^argv: migrate --to me@box --remote-hull [^ ]*/hull --txid [0-9a-f]{32} brig-claude-code$' "$STUB_LOG" \
+  && ok "hull is asked for a dry run and then the move, under a txid" \
+  || bad "hull is asked for a dry run and then the move, under a txid -- got: $(grep '^argv: migrate' "$STUB_LOG")"
+# The claim: what leaves the host goes over ssh to the host named, and to no
+# other. Every ssh line names that host, right after --, and the move hull
+# makes names it on --to.
+others="$(grep -v '^ssh:\(\[-o\]\[BatchMode=yes\]\)\?\[--\]\[me@box\]\[' "$SSH_LOG")"
+[ -s "$SSH_LOG" ] && [ -z "$others" ] && ! grep '^argv: migrate .*--to ' "$STUB_LOG" | grep -v -- '--to me@box ' | grep -q . \
+  && ok "the move goes over ssh to the named host and no other" \
+  || bad "the move goes over ssh to the named host and no other -- got: $others $(grep '^argv: migrate' "$STUB_LOG")"
+grep -q 'tp-gh-secret' "$SSH_LOG" \
+  && bad "a credential value reached an ssh line" \
+  || ok "no credential value reaches an ssh line"
+# The destination asked first, took the network before hull moved anything,
+# and filed the session as its own.
+grep -o 'brig teleport-[a-z]*\( --json --[a-z]*\)\?' "$SSH_LOG" | tr '\n' ',' > "$WORK/tpm.verbs"
+case "$(cat "$WORK/tpm.verbs")" in
+  *"teleport-probe --json --agent,"*"teleport-receive --json --ref,"*"teleport-receive --json --commit,") ok "the destination is probed, then takes the network, then is told the move finished" ;;
+  *) bad "the destination is probed, then takes the network, then is told the move finished -- got: $(cat "$WORK/tpm.verbs")" ;;
+esac
+python3 - "$BRIG_STATE_DIR/sessions.json" "$RSTATE/sessions.json" "$RSTATE/arrivals.json" "$RGW/networks.json" <<'PY' \
+  && ok "both hosts record where the session is" || bad "both hosts record where the session is"
+import json, sys
+here, there, arr, nets = (json.load(open(p)) for p in sys.argv[1:])
+assert here["claude-code"]["host"] == "me@box" and not here["claude-code"].get("pendingHost"), here
+assert there["claude-code"]["sandbox"] == "brig-claude-code" and there["claude-code"]["teleportable"], there
+assert arr["brig-claude-code"]["state"] == "committed", arr
+assert nets["brig-claude-code"] == "none", nets
+PY
+
+tpr "$WORK/brig" ls > "$WORK/tpm-ls.out" 2>&1
+grep -q '^claude-code  *brig-claude-code  *moved  *(in the sandbox disk on me@box)$' "$WORK/tpm-ls.out" \
+  && ok "ls names the host a teleported session runs on" \
+  || bad "ls names the host a teleported session runs on -- got: $(cat "$WORK/tpm-ls.out")"
+
+# sh on the teleported ref is the same verb on its host: ssh with the line as
+# typed, quoted for the shell there, and the brig there runs it in its own
+# sandbox. This host's runtime runs nothing.
+: > "$STUB_LOG"; : > "$SSH_LOG"; : > "$REMOTE_LOG"
+GH_TOKEN=tp-gh-secret tpr "$WORK/brig" sh claude -c 'echo "a b" | wc -w' > "$WORK/tpm-sh.out" 2> "$WORK/tpm-sh.err"; rc=$?
+grep -qF -- "ssh:[--][me@box][$WORK/brig sh claude -c 'echo \"a b\" | wc -w']" "$SSH_LOG" \
+  && ok "sh on a teleported session execs ssh to its host with the line as typed" \
+  || bad "sh on a teleported session execs ssh to its host with the line as typed -- got $rc: $(cat "$SSH_LOG" "$WORK/tpm-sh.err")"
+grep -qF -- '[--][bash][-lc][echo "a b" | wc -w]' "$REMOTE_LOG" \
+  && ok "the brig there runs the script in its sandbox, one word, as typed" \
+  || bad "the brig there runs the script in its sandbox, one word, as typed -- got: $(grep '^words: \?\[exec' "$REMOTE_LOG" | tail -2)"
+grep -q '^argv: \(exec\|run\|ps\|inspect\) ' "$STUB_LOG" \
+  && bad "sh on a teleported session asked this host's runtime -- got: $(head -3 "$STUB_LOG")" \
+  || ok "sh on a teleported session asks this host's runtime nothing"
+grep -q 'tp-gh-secret' "$SSH_LOG" \
+  && bad "sh handed a credential value from this host to ssh" \
+  || ok "sh hands no credential from this host to ssh"
+tpr "$WORK/brig" info claude > "$WORK/tpm-info.out" 2> "$WORK/tpm-info.err"
+grep -q '^TELEPORT .*arrived from ' "$WORK/tpm-info.out" && grep -q 'runs on me@box' "$WORK/tpm-info.err" \
+  && ok "info on a teleported session is the brig there's, and says so" \
+  || bad "info on a teleported session is the brig there's, and says so -- got: $(cat "$WORK/tpm-info.out" "$WORK/tpm-info.err")"
+
+# rm removes the fenced copy left here, once the brig there says the session
+# runs, and keeps the record that reaches it. It asks nothing.
+: > "$STUB_LOG"
+out="$(tpr "$WORK/brig" rm claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:removed the copy of claude left on this host; it runs on me@box") ok "rm removes the fenced copy left on this host" ;;
+  *) bad "rm removes the fenced copy left on this host -- got $rc: $out" ;;
+esac
+grep -q '^argv: rm brig-claude-code$' "$STUB_LOG" && [ ! -f "$STUB_STATE" ] && [ -f "$STUB_REMOTE_STATE" ] \
+  && ok "rm took the local instance and left the one there" \
+  || bad "rm took the local instance and left the one there -- got: $(grep '^argv:' "$STUB_LOG")"
+tpr "$WORK/brig" ls > "$WORK/tpm-ls.out" 2>&1
+grep -q '^claude-code  *brig-claude-code  *moved ' "$WORK/tpm-ls.out" \
+  && ok "the session is still listed, on its host" \
+  || bad "the session is still listed, on its host -- got: $(cat "$WORK/tpm-ls.out")"
+# With no copy left here, rm forgets the session on this host and leaves the
+# one there alone.
+: > "$SSH_LOG"
+out="$(tpr "$WORK/brig" rm claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:forgot claude on this host; it runs on me@box, untouched there"*)
+    [ -f "$STUB_REMOTE_STATE" ] && [ ! -s "$SSH_LOG" ] \
+      && ok "a second rm forgets the session here and touches nothing there" \
+      || bad "a second rm forgets the session here and touches nothing there -- got: $(cat "$SSH_LOG")" ;;
+  *) bad "a second rm forgets the session here and touches nothing there -- got $rc: $out" ;;
+esac
+
+# The refusals come before anything is paused: no pause, no checkpoint, no
+# move, and the destination is asked to take nothing. A session under a
+# policy the destination's gateway cannot enforce is a capability, 7.
+mkdir -p "$WORK/tp-policies"
+cat > "$WORK/tp-policies/no-net.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: no-net
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+export BRIG_POLICY_DIR="$WORK/tp-policies"
+"$WORK/brig" policy attach no-net claude-code -n pol > /dev/null 2>&1 \
+  || bad "a policy attaches to the session that cannot move"
+TP_NET=isolated tpr "$WORK/brig" run --teleportable claude@pol -d > "$WORK/tpp.out" 2>&1 \
+  || bad "a teleportable session under a policy boots -- got: $(cat "$WORK/tpp.out")"
+: > "$STUB_LOG"; : > "$SSH_LOG"
+out="$(REMOTE_NO_EGRESS=1 TP_NET=isolated tpr "$WORK/brig" teleport claude@pol --to me@box 2>&1)"; rc=$?
+case "$rc:$out" in
+  7:*"egress policy"*"cannot enforce"*"Nothing was paused"*) ok "a policy the destination cannot enforce is refused with exit 7" ;;
+  *) bad "a policy the destination cannot enforce is refused with exit 7 -- got $rc: $out" ;;
+esac
+grep -q '^argv: \(migrate\|pause\|checkpoint\|stop\|rm\) ' "$STUB_LOG" || grep -q 'teleport-receive' "$SSH_LOG" \
+  && bad "a refused move paused, moved or reserved something -- got: $(grep '^argv:' "$STUB_LOG" | head -3)" \
+  || ok "the refused move paused nothing and reserved nothing there"
+"$WORK/brig" policy detach no-net claude-code -n pol > /dev/null 2>&1
+unset BRIG_POLICY_DIR
+tpr "$WORK/brig" rm claude@pol > /dev/null 2>&1
+# An ordinary session owns no disk of its own to move: 7, the same class.
+"$WORK/brig" run claude -d > /dev/null 2>&1
+: > "$STUB_LOG"; : > "$SSH_LOG"
+out="$(BRIG_TELEPORT_SSH="$WORK/ssh" "$WORK/brig" teleport claude --to me@box 2>&1)"; rc=$?
+case "$rc:$out" in
+  7:*"not a teleportable session"*) ok "a session that is not teleportable is refused with exit 7" ;;
+  *) bad "a session that is not teleportable is refused with exit 7 -- got $rc: $out" ;;
+esac
+[ -s "$SSH_LOG" ] || grep -q '^argv: migrate' "$STUB_LOG" \
+  && bad "a move refused as not teleportable reached ssh or hull" \
+  || ok "a move refused as not teleportable reaches neither ssh nor hull"
+"$WORK/brig" rm claude > /dev/null 2>&1 || true
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== flags =="
