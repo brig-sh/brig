@@ -412,7 +412,7 @@ func (c *Config) verifyBootAssets() error {
 				"Set BRIG_VERIFY=warn to boot them unchecked", ref)
 		}
 		c.alertf("%s", notice.New("boot assets "+ref+" are not published by brig").
-			Note("nothing was checked about the kernel this sandbox boots"))
+			Note("%s", c.bundleUncheckedNote()))
 		return nil
 
 	case verify.NoTooling, verify.Unresolved:
@@ -435,7 +435,7 @@ func (c *Config) verifyBootAssets() error {
 				"them unchecked", ref, cause)
 		}
 		c.alertf("%s", notice.Newf("the boot assets at %s could not be verified: %s", ref, cause).
-			Note("nothing was checked about the kernel this sandbox boots"))
+			Note("%s", c.bundleUncheckedNote()))
 		return nil
 
 	default:
@@ -452,6 +452,18 @@ func (c *Config) verifyBootAssets() error {
 		return fmt.Errorf("refusing to boot: the boot assets at %s failed verification (%s). "+
 			"Set BRIG_VERIFY=off to boot them regardless", ref, res.Detail)
 	}
+}
+
+// bundleUncheckedNote is what a boot bundle brig could not check leaves
+// unchecked. A teleportable session on the portable machine boots the
+// bundle's initrd only, and checkPortableKernel compares its kernel with the
+// pin, so the note does not say the kernel went unchecked there.
+func (c *Config) bundleUncheckedNote() string {
+	if c.machine() != "" {
+		return "nothing was checked about the initrd this sandbox boots; its portable kernel " +
+			"is compared with the digest brig pins"
+	}
+	return "nothing was checked about the kernel this sandbox boots"
 }
 
 // registryDigests reads a bundle's per-file digests from its registry
