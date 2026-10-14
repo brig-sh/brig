@@ -27,13 +27,25 @@ type MoveReport struct {
 	StepsMs map[string]int64 `json:"stepsMs,omitempty"`
 }
 
-// MoveRound is one round of a move's copy.
+// MoveRound is one round of a move's copy: of the guest's memory, of its
+// disk, or of a copy hull did not say which.
 type MoveRound struct {
-	Round            int     `json:"round"`
-	Bytes            int64   `json:"bytes,omitempty"`
-	Seconds          float64 `json:"seconds,omitempty"`
-	MiBPerSec        float64 `json:"mibPerSec,omitempty"`
-	DirtyPagesPerSec float64 `json:"dirtyPagesPerSec,omitempty"`
+	// Name is hull's name for the round: "disk round 1", "ram-round-0".
+	Name  string `json:"name"`
+	Kind  string `json:"kind,omitempty"`
+	Round int    `json:"round"`
+	// Final is the round taken while the guest was paused.
+	Final bool `json:"final,omitempty"`
+	// Size is what hull says the round carried, as hull wrote it, and
+	// Bytes the same when hull gave it as a count of bytes.
+	Size    string  `json:"size,omitempty"`
+	Bytes   int64   `json:"bytes,omitempty"`
+	Seconds float64 `json:"seconds,omitempty"`
+	// MiBPerSec is the round's rate, and the dirty rates how fast the
+	// guest wrote memory pages or disk blocks during it.
+	MiBPerSec         float64 `json:"mibPerSec,omitempty"`
+	DirtyPagesPerSec  float64 `json:"dirtyPagesPerSec,omitempty"`
+	DirtyBlocksPerSec float64 `json:"dirtyBlocksPerSec,omitempty"`
 }
 
 // The parts of hull's lines a report reads. Each is matched on its own, so
@@ -41,13 +53,20 @@ type MoveRound struct {
 // without them changes nothing. Bytes are read only where hull prints a
 // count of bytes: its 1.7 GiB is rounded, and a count made from it would
 // claim a precision hull did not give.
+//
+// hull prints a streamed move's rounds after "move: ", as
+// "disk round 1: 12 blocks, 768.0 KiB (301.2 KiB on the wire) in 0.20 s,
+// 1.5 MiB/s, guest wrote 60 blocks/s" and "ram-round-0: 90.7 MiB in 2.10 s,
+// 43.2 MiB/s", and the downtime as "downtime about 1450 ms".
 var (
-	lineRound    = regexp.MustCompile(`(?i)^round (\d+)\b`)
-	lineBytes    = regexp.MustCompile(`\b(\d+) bytes\b`)
+	lineRound    = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+))?\b[^:]*:\s*(.*)$`)
+	lineSize     = regexp.MustCompile(`^(?:\d+ blocks, )?(\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB))\b`)
+	lineBytes    = regexp.MustCompile(`\b(\d+) bytes(?:[^/]|$)`)
 	lineSeconds  = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?s\b`)
-	lineRate     = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(KiB|MiB|GiB)/s\b`)
+	lineRate     = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(bytes|KiB|MiB|GiB)/s\b`)
 	lineDirty    = regexp.MustCompile(`\b(\d+(?:\.\d+)?) pages/s\b`)
-	lineDowntime = regexp.MustCompile(`(?i)\bdowntime:? (\d+(?:\.\d+)?) ?(ms|s)\b`)
+	lineBlocks   = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
+	lineDowntime = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
 	lineSent     = regexp.MustCompile(`^Sent\b`)
 	lineTimings  = regexp.MustCompile(`^Timings \(ms\): (.+)$`)
 	lineStep     = regexp.MustCompile(`^([a-z][a-z ]*?) (\d+)$`)
@@ -60,12 +79,25 @@ func (r *MoveReport) Add(line string) {
 		r.DowntimeSeconds = lineDuration(m[1], m[2])
 	}
 	if m := lineRound.FindStringSubmatch(line); m != nil {
-		n, err := strconv.Atoi(m[1])
-		if err != nil {
-			return
+		name, _, _ := strings.Cut(strings.TrimPrefix(line, "move: "), ":")
+		rest := m[4]
+		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" ||
+			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest), Seconds: lineFloat(lineSeconds, rest),
+			MiBPerSec: lineMiBPerSec(rest), DirtyPagesPerSec: lineFloat(lineDirty, rest),
+			DirtyBlocksPerSec: lineFloat(lineBlocks, rest)}
+		if m[3] != "" {
+			round.Round, _ = strconv.Atoi(m[3])
+		} else if n := len(r.Rounds); n > 0 && round.Final {
+			// "disk final round" follows the numbered ones.
+			for _, prev := range r.Rounds {
+				if prev.Kind == round.Kind && prev.Round >= round.Round {
+					round.Round = prev.Round + 1
+				}
+			}
 		}
-		round := MoveRound{Round: n, Bytes: lineByteCount(line), Seconds: lineFloat(lineSeconds, line),
-			MiBPerSec: lineMiBPerSec(line), DirtyPagesPerSec: lineFloat(lineDirty, line)}
+		if sm := lineSize.FindStringSubmatch(rest); sm != nil {
+			round.Size = sm[1]
+		}
 		r.Rounds = append(r.Rounds, round)
 		return
 	}
@@ -123,6 +155,8 @@ func lineMiBPerSec(line string) float64 {
 	}
 	f, _ := strconv.ParseFloat(m[1], 64)
 	switch m[2] {
+	case "bytes":
+		return f / (1 << 20)
 	case "KiB":
 		return f / 1024
 	case "GiB":

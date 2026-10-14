@@ -400,10 +400,12 @@ case "$verb" in
           printf '%s committing %s\n' "$txid" "$to" > "$STUB_STATE.move"
           printf 'error: ssh: connection reset by peer\n' >&2; exit 1
         fi
-        # How the copy went, on stderr as hull prints it.
+        # How the copy went, on stderr in the words hull's streamed move
+        # uses.
         printf 'Move %s of %s to %s, epoch 1\n' "$txid" "$1" "$to" >&2
-        printf 'round 0: 1048576 bytes in 0.5 s (2.0 MiB/s), dirty 120 pages/s\n' >&2
-        printf 'round 1: 65536 bytes in 0.1 s (0.6 MiB/s), dirty 40 pages/s\n' >&2
+        printf 'move: disk round 0: 16 blocks, 1.0 MiB (512.0 KiB on the wire) in 0.50 s, 1.0 MiB/s\n' >&2
+        printf 'move: ram-round-0: 1.5 MiB in 0.10 s, 15.0 MiB/s\n' >&2
+        printf 'move: 2.0 MiB in 0.7 s; disk 512.0 KiB, RAM 1.5 MiB, state 4.0 KiB; downtime about 140 ms\n' >&2
         printf '%s' "$1" > "$STUB_REMOTE_STATE"
         printf 'block' > "$STUB_REMOTE_STATE.rootfs"
         : > "$STUB_REMOTE_STATE.shares"
@@ -2495,8 +2497,8 @@ esac
 # hull's lines about the copy reach stderr as hull prints them, the move
 # says the host was prepared, and the outcome ends with the numbers.
 grep -q '^brig: me@box was prepared for claude-code at ' "$WORK/tpm.err" \
-  && grep -q '^brig: hull: round 1: 65536 bytes in 0.1 s (0.6 MiB/s), dirty 40 pages/s$' "$WORK/tpm.err" \
-  && grep -q "hull's move took [0-9.]* s" "$WORK/tpm.out" \
+  && grep -q '^brig: hull: move: ram-round-0: 1.5 MiB in 0.10 s, 15.0 MiB/s$' "$WORK/tpm.err" \
+  && grep -q "hull's move took [0-9.]* s, the guest was paused 0.14 s, 2 rounds" "$WORK/tpm.out" \
   && ok "a move passes hull's lines on and ends with its numbers" \
   || bad "a move passes hull's lines on and ends with its numbers -- got: $(cat "$WORK/tpm.out" "$WORK/tpm.err")"
 # hull is asked for a dry run first and then the move, named by a txid of
