@@ -653,7 +653,7 @@ KVM). It is the profile as shipped: the image
 `ghcr.io/brig-sh/claude-code-stock:root`, hvi, an `isolated` network,
 `genericBoot`, 4 vCPUs and 4096 MB. The move committed every time. As built,
 hvi on the Pi then died on the first exec into the moved guest. hvi
-`9274685` fixes that; see Known issues. With hvi's allocator capped, as a
+`ebc1116` fixes that; see Known issues. With hvi's allocator capped, as a
 stand-in for the fix, the guest carried on and the terminal reattached from
 the Mac. The Claude Code task
 itself did not run, because the login brig held had expired.
@@ -824,16 +824,17 @@ as it needs a login that has not expired.
 - The refusal of a session that is not teleportable says its guest home is a
   host directory shared in, even for a sandbox Brig has no record of, whose
   hull record shows no share.
-- Fixed in hvi `9274685`: hvi `8697de0` on Linux died of SIGSYS on the
-  first exec into a 4-vCPU guest that moved from a Mac, and printed
-  nothing. The vsock bridge starts a thread for each agent connection. That
+- Fixed in hvi `ebc1116`, with `fc10511`: hvi `8697de0` on Linux died of
+  SIGSYS on the first exec into a 4-vCPU guest that moved from a Mac, and
+  printed nothing. The vsock bridge starts a thread for each agent connection. That
   thread's first `free()` went through glibc's `tcache_init` and
   `arena_get2` to `__get_nprocs`, which opens
   `/sys/devices/system/cpu/online`, and hvi's seccomp filter does not allow
   `openat`. hvi's commit says that read happens only once more than eight
   arenas exist, which takes many threads allocating at once. That is
   likely why the 1-vCPU moves above did not hit it; it was not tested. hvi
-  `9274685` calls `mallopt(M_ARENA_MAX, 1)` first in `main`, so glibc never
+  now calls `mallopt(M_ARENA_MAX, 1)` for a confined boot or restore, after
+  it parses its arguments and before it starts any thread, so glibc never
   counts the CPUs and has no other heap to shrink. With that hvi, the
   destination's hull needs no wrapper.
 
@@ -843,7 +844,7 @@ as it needs a login that has not expired.
   case: hvi's commit records that a 60 s agent stress test with it still
   died of SIGSYS, when glibc read `/proc/sys/vm/overcommit_memory` the
   first time the heap of another arena shrank. The moves above have not
-  been run again with hvi `9274685`.
+  been run again with hvi `ebc1116` or later.
 
 #### Running it on two hosts
 
