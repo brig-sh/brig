@@ -487,8 +487,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// boot environment into it, so the runtime leaves every credential
 		// off this boot. The execs below and every later one hand them in.
 		Teleportable: c.Teleportable,
-		GUI:          check.GUI,
-		GUITitle:     c.env.String("TITLE", c.Profile.GUITitle),
+		// And it boots the portable machine, whose checkpoint restores on
+		// a Mac and on a Linux host alike. See machine.
+		Profile:  c.machine(),
+		GUI:      check.GUI,
+		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.
@@ -1186,5 +1189,6 @@ func (c *Config) resolveBootAssets() (runtime.BootAssets, error) {
 	if !ok {
 		return runtime.BootAssets{}, nil
 	}
-	return r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef()}, c.runtimeNotice(), c.runtimeOutput())
+	return r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef(), Machine: c.machine()},
+		c.runtimeNotice(), c.runtimeOutput())
 }

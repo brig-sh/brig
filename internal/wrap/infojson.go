@@ -34,6 +34,7 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 		Isolation:    c.isolationLine(),
 		Workspace:    c.Workspace,
 		Teleportable: c.Teleportable,
+		Machine:      c.infoMachine(),
 		Image:        InfoImage{Ref: c.Image, Pull: c.Pull},
 		Verify:       c.infoVerify(),
 		Network:      c.networkLine(),
@@ -80,6 +81,10 @@ type InfoDocument struct {
 	// written before it parses every document unchanged.
 	Workspace    string `json:"workspace"`
 	Teleportable bool   `json:"teleportable,omitempty"`
+	// Machine is the machine profile hvi runs a teleportable session on,
+	// "portable-arm64-v1" or "native", as hull's record says, or as a boot
+	// asks for when the record does not say. Omitted on every other session.
+	Machine string `json:"machine,omitempty"`
 	// Teleport is the migration record hull keeps for a teleportable
 	// session: the state a checkpoint, restore or move left it in. Absent
 	// until there is one, and on every other session.

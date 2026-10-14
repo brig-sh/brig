@@ -72,7 +72,10 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 	// a row people learn to skip, and the WORKSPACE row already names the
 	// host directory an ordinary session has.
 	if c.Teleportable {
-		rows = append(rows, envelopeRow{"TELEPORTABLE", teleportableLine})
+		rows = append(rows, envelopeRow{"TELEPORTABLE", teleportableLine},
+			// The machine hvi boots, under the property it serves. PROFILE
+			// above is brig's profile, a different thing of the same name.
+			envelopeRow{"MACHINE", c.machineLine()})
 	}
 	// Where a checkpoint or a move left the session, as hull records it, and
 	// only once there is a record: a session that was never checkpointed has

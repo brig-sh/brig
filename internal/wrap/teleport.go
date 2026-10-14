@@ -301,8 +301,14 @@ esac`
 // and the row it would print is the one fact it could not establish.
 func (c *Config) readTeleportState() {
 	c.teleportState = runtime.Migration{}
+	c.machineSeen = ""
 	if !c.Teleportable || c.Runtime == nil {
 		return
+	}
+	if mi, ok := c.Runtime.(runtime.MachineInspector); ok {
+		if m, err := mi.Machine(c.VMName); err == nil {
+			c.machineSeen = m
+		}
 	}
 	mi, ok := c.Runtime.(runtime.MigrationInspector)
 	if !ok {
@@ -311,6 +317,53 @@ func (c *Config) readTeleportState() {
 	if m, err := mi.Migration(c.VMName); err == nil {
 		c.teleportState = m
 	}
+}
+
+// machine is the machine profile a boot of this session asks hvi for: the
+// portable one for a teleportable session on an arm64 host, so its
+// checkpoint restores on a Mac and on a Linux host alike, and "" for hvi's
+// native machine otherwise. One function, so the run, the plan, info and the
+// boot asset resolve cannot come to disagree.
+func (c *Config) machine() string {
+	if !c.Teleportable {
+		return ""
+	}
+	return runtime.TeleportableMachine()
+}
+
+// machineName is machine as a row names it.
+func (c *Config) machineName() string {
+	if m := c.machine(); m != "" {
+		return m
+	}
+	return runtime.MachineNative
+}
+
+// machineLine is the MACHINE row of a teleportable session: the machine it
+// boots, and for info the machine hull's record says it runs when that
+// differs, which is a session booted before brig chose the portable one.
+func (c *Config) machineLine() string {
+	want := c.machineName()
+	note := "the same machine on a Mac and on a Linux arm64 host"
+	if want == runtime.MachineNative {
+		note = "this host's own; there is no portable machine on " + runtime.GuestArch()
+	}
+	if seen := c.machineSeen; seen != "" && seen != want {
+		return fmt.Sprintf("%s, as hull records the boot (a teleportable session boots %s now)", seen, want)
+	}
+	return fmt.Sprintf("%s (%s)", want, note)
+}
+
+// infoMachine is the MACHINE row as data: what hull's record says when it
+// says, and what a boot asks for otherwise.
+func (c *Config) infoMachine() string {
+	if !c.Teleportable {
+		return ""
+	}
+	if c.machineSeen != "" {
+		return c.machineSeen
+	}
+	return c.machineName()
 }
 
 // teleportLine is the TELEPORT row: hull's state and the bundle it names, or
