@@ -266,20 +266,34 @@ func seconds(d time.Duration) string {
 // error is folded into the error, as quiet does, so a refusal reaches the
 // caller in hull's words.
 func (h *hull) call(args []string, drop ...string) (string, error) {
+	cmd := h.command(args, drop)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := h.failed(args, cmd.Run(), errb.String())
+	return out.String(), err
+}
+
+// command is the hull command line args runs, without the settings drop
+// names.
+func (h *hull) command(args, drop []string) *exec.Cmd {
 	cmd := exec.Command(h.bin, hullArgs(args...)...)
 	cmd.Env = mergeEnv(h.countedEnv(false))
 	for _, name := range drop {
 		cmd.Env = withoutEnv(cmd.Env, name)
 	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		if said := strings.TrimSpace(errb.String()); said != "" {
-			return out.String(), fmt.Errorf("%s %s: %w: %s", h.bin, strings.Join(args, " "), err, hullReason(said))
-		}
-		return out.String(), fmt.Errorf("%s %s: %w", h.bin, strings.Join(args, " "), err)
+	return cmd
+}
+
+// failed is the error of a hull call that ended with err, having said said
+// on stderr: nil for a call that did not fail.
+func (h *hull) failed(args []string, err error, said string) error {
+	if err == nil {
+		return nil
 	}
-	return out.String(), nil
+	if said := strings.TrimSpace(said); said != "" {
+		return fmt.Errorf("%s %s: %w: %s", h.bin, strings.Join(args, " "), err, hullReason(said))
+	}
+	return fmt.Errorf("%s %s: %w", h.bin, strings.Join(args, " "), err)
 }
 
 // hullReason is what a failed hull call said, kept to an error message: its
