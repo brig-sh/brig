@@ -3919,8 +3919,8 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
 		"ls, info, plan, agent ls, secret ls, doctor, version and the network verbs "+
-		"(env takes it too, but env is deprecated; prefer info), and for run "+
-		"and sh", verb)
+		"(env takes it too, but env is deprecated; prefer info), for run "+
+		"and sh, and for teleport", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run
