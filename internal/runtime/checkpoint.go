@@ -98,9 +98,11 @@ type Migration struct {
 	BundleDir string
 	// TxID names that checkpoint, or the move it belongs to.
 	TxID string
-	// Peer is the other host of a move, as hull recorded it: the destination
-	// on the source, the source on the destination. Empty outside a move.
-	Peer string
+	// MoveTxID names the move the checkpoint belongs to, when a move took
+	// it over, and Peer is that move's other host, as hull recorded it: the
+	// destination on the source, the source on the destination.
+	MoveTxID string
+	Peer     string
 }
 
 // Pauser stops and restarts a running sandbox's guest in place: its vCPUs and
@@ -198,6 +200,7 @@ func migrationOf(name string, record []byte) (Migration, error) {
 			State     string `json:"state"`
 			BundleDir string `json:"bundleDir"`
 			TxID      string `json:"txid"`
+			MoveTxID  string `json:"moveTxid"`
 			Peer      string `json:"peer"`
 		} `json:"migration"`
 	}
@@ -211,7 +214,7 @@ func migrationOf(name string, record []byte) (Migration, error) {
 		return Migration{}, nil
 	}
 	return Migration{State: state.Migration.State, BundleDir: state.Migration.BundleDir,
-		TxID: state.Migration.TxID, Peer: state.Migration.Peer}, nil
+		TxID: state.Migration.TxID, MoveTxID: state.Migration.MoveTxID, Peer: state.Migration.Peer}, nil
 }
 
 // checkpointArgs is the one place the checkpoint command line is built.

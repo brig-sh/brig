@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -17,129 +18,151 @@ import (
 // session has nothing to move, and a caller asks for the interface before it
 // relies on one.
 
-// The states of hull's migration record a move leaves on the source. hull's
-// migrate verbs write them; brig reads them back through MigrationInspector
-// rather than parse what hull prints, so a change in hull's wording does not
-// change what brig decides.
-//
-// MigrationMigrating is a move under way, or one whose end nobody saw: the
-// source may already be fenced, and the destination may or may not run.
-// MigrationMigrated is a move the destination committed: the guest runs
-// there, and the source is fenced for good. MigrationAborted is a move hull
-// called off and confirmed the destination will not run.
+// MigrationMigrating and MigrationMigrated are the states hull's instance
+// record (`hull inspect`, the migration object) takes for a move on the
+// source: a fenced checkpoint a move has taken over, and a source whose move
+// committed. Neither guest may run here.
 const (
 	MigrationMigrating = "migrating"
 	MigrationMigrated  = "migrated"
-	MigrationAborted   = "aborted"
 )
+
+// The states of hull's move record on the source, which `hull migrate
+// --status` reports. A move passes preflight, reserved, fenced, transferring,
+// transferred, committing and committed, or ends aborted. Up to reserved the
+// guest still runs here and nothing was fenced; from fenced on it never runs
+// here again unless the move is aborted; committed means it runs on the
+// destination. brig decides on these words, read back from hull, never on
+// what a call it made returned.
+const (
+	MovePreflight = "preflight"
+	MoveReserved  = "reserved"
+	MoveCommitted = "committed"
+	MoveAborted   = "aborted"
+)
+
+// MoveFenced reports whether a move in state has fenced the source: whether
+// the guest has stopped here for good unless the move is aborted.
+func MoveFenced(state string) bool {
+	switch state {
+	case "", MovePreflight, MoveReserved, MoveAborted:
+		return false
+	}
+	return true
+}
 
 // MigrateSpec is a request to move a running sandbox.
 type MigrateSpec struct {
 	// RemoteStore is the hull store on the destination, as the brig there
 	// drives it. Empty leaves hull's own default there.
 	RemoteStore string
-	// TxID names the move. brig makes it and records it before it asks, so a
-	// move whose end it did not see can still be asked about by name.
+	// RemoteHull is the hull the brig on the destination drives, so the
+	// move lands where that brig looks. Empty is the hull on its PATH.
+	RemoteHull string
+	// GatewaySock is the network gateway brig started on the destination
+	// for the moved guest, with the network and the rules it had here.
+	// Empty for a guest with no network.
+	GatewaySock string
+	// TxID names the move: 32 lower-case hex digits. brig makes it and
+	// records it before it asks, so a move whose end it did not see can
+	// still be asked about by name.
 	TxID string
-	// DryRun asks hull to check the move, the destination's machine against
-	// this one included, and to pause nothing.
+	// DryRun asks hull to check both hosts, the destination's machine
+	// against this one included, and to change nothing on either.
 	DryRun bool
 }
 
-// MigrateResult is what a move left behind, read back from the runtime's
-// record once the move returned, for the reason CheckpointResult is.
-type MigrateResult struct {
-	// Migration is the source's record after the move. It is the record only
-	// when RecordErr is nil.
-	Migration Migration
-	// RecordErr is why the record could not be read back after a move hull
-	// reported as done. A caller must not take it for a failed move: the
-	// guest may already run on the destination.
-	RecordErr error
-	// Summary is the runtime's own line about the move, for a person.
-	Summary string
-}
-
-// MigrateStatus is where a move stands: the source's record, and what hull's
-// own status verb said about it, for a person.
-type MigrateStatus struct {
-	Migration Migration
-	Said      string
+// MoveStatus is hull's move record of a sandbox on this host, as `hull
+// migrate --status` reports it. State is "" when hull has no move on record.
+type MoveStatus struct {
+	TxID  string
+	State string
+	Peer  string
+	// Said is hull's own account, for a person.
+	Said string
 }
 
 // Migrator moves a running sandbox to another host over ssh.
 type Migrator interface {
-	// Migrate moves the sandbox to the host named as USER@HOST.
-	Migrate(name, to string, spec MigrateSpec) (MigrateResult, error)
-	// MigrateStatus reports where a move of the sandbox stands.
-	MigrateStatus(name string) (MigrateStatus, error)
-	// MigrateAbort calls off the move txid names. It returns the record
-	// after the abort, and hull's state there says whether the destination
-	// can still run the guest: only MigrationAborted says it cannot.
-	MigrateAbort(name, txid string) (MigrateStatus, error)
+	// Migrate moves the sandbox to the host named as USER@HOST, then reads
+	// hull's move record back. A dry run reads nothing back.
+	Migrate(name, to string, spec MigrateSpec) (MoveStatus, error)
+	// MigrateStatus reads hull's move record of the sandbox.
+	MigrateStatus(name string) (MoveStatus, error)
+	// MigrateAbort calls off the move txid names, then reads the record.
+	// hull aborts only a move that has not committed, and only with the
+	// destination's word that it is not running the guest; it then runs the
+	// guest here again itself. Only MoveAborted in the record says it did.
+	MigrateAbort(name, txid string) (MoveStatus, error)
 }
 
 var _ Migrator = (*hull)(nil)
 
-// Migrate runs `hull migrate`, then reads hull's record back.
-func (h *hull) Migrate(name, to string, spec MigrateSpec) (MigrateResult, error) {
+// Migrate runs `hull migrate`, then reads the move record back, after a move
+// that failed too: one that failed after the fence leaves a source that
+// cannot run, and that is what a caller decides on.
+func (h *hull) Migrate(name, to string, spec MigrateSpec) (MoveStatus, error) {
 	args, err := migrateArgs(name, to, spec)
 	if err != nil {
-		return MigrateResult{}, err
+		return MoveStatus{}, err
 	}
-	out, err := h.call(args)
-	res := MigrateResult{Summary: strings.TrimSpace(out)}
-	if err != nil {
-		// Read back on a failure too: a move that failed after the fence
-		// left a record that says so, and that is what a caller decides on.
-		res.Migration, res.RecordErr = h.Migration(name)
-		return res, err
-	}
+	_, callErr := h.call(args)
 	if spec.DryRun {
-		return res, nil
+		return MoveStatus{}, callErr
 	}
-	res.Migration, res.RecordErr = h.Migration(name)
-	if res.RecordErr == nil && res.Migration.TxID != spec.TxID {
-		res.RecordErr = fmt.Errorf("hull recorded move %q for %s after it said it finished move %q",
-			res.Migration.TxID, name, spec.TxID)
+	st, readErr := h.MigrateStatus(name)
+	if callErr != nil {
+		return st, callErr
 	}
-	return res, nil
+	return st, readErr
 }
 
-// MigrateStatus runs `hull migrate-status` for its words, and reads the
-// record for the state. A status verb that fails still leaves the record to
-// read, and the record is what a caller decides on.
-func (h *hull) MigrateStatus(name string) (MigrateStatus, error) {
-	out, callErr := h.call([]string{"migrate-status", name})
-	st := MigrateStatus{Said: strings.TrimSpace(out)}
-	m, err := h.Migration(name)
+// MigrateStatus runs `hull migrate --status` and reads its first line, which
+// names the move, its state and the other host. A sandbox with no move on
+// record is the zero status, not an error.
+func (h *hull) MigrateStatus(name string) (MoveStatus, error) {
+	out, err := h.call([]string{"migrate", "--status", name})
 	if err != nil {
-		if callErr != nil {
-			return st, fmt.Errorf("%w; and %w", callErr, err)
+		if strings.Contains(err.Error(), "has no move on record") {
+			return MoveStatus{}, nil
 		}
-		return st, err
+		return MoveStatus{}, err
 	}
-	st.Migration = m
-	if callErr != nil && st.Said == "" {
-		st.Said = callErr.Error()
-	}
-	return st, nil
+	return moveStatusOf(name, out)
 }
 
-// MigrateAbort runs `hull migrate-abort` for one move, then reads the record.
-func (h *hull) MigrateAbort(name, txid string) (MigrateStatus, error) {
-	args, err := migrateAbortArgs(name, txid)
-	if err != nil {
-		return MigrateStatus{}, err
+// MigrateAbort runs `hull migrate --abort TXID`. The txid, not the name:
+// an abort that took whatever move was current could call off a later one
+// than the caller meant.
+func (h *hull) MigrateAbort(name, txid string) (MoveStatus, error) {
+	if err := checkMoveTxID(txid); err != nil {
+		return MoveStatus{}, err
 	}
-	out, err := h.call(args)
-	st := MigrateStatus{Said: strings.TrimSpace(out)}
-	m, readErr := h.Migration(name)
-	st.Migration = m
+	out, err := h.call([]string{"migrate", "--abort", txid})
+	st, readErr := h.MigrateStatus(name)
+	if st.Said == "" {
+		st.Said = strings.TrimSpace(out)
+	}
 	if err != nil {
 		return st, err
 	}
 	return st, readErr
+}
+
+// moveStatusLine is the first line `hull migrate --status` prints.
+var moveStatusLine = regexp.MustCompile(`^Move ([0-9a-f]{32}) of (\S+): ([a-z-]+), (?:to|from) (\S+), epoch \d+$`)
+
+// moveStatusOf reads hull's status report of one sandbox's move.
+func moveStatusOf(name, out string) (MoveStatus, error) {
+	first, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	m := moveStatusLine.FindStringSubmatch(strings.TrimSpace(first))
+	if m == nil {
+		return MoveStatus{}, fmt.Errorf("hull's move status of %s did not read: %q", name, first)
+	}
+	if m[2] != name {
+		return MoveStatus{}, fmt.Errorf("hull answered the move status of %s for %s", name, m[2])
+	}
+	return MoveStatus{TxID: m[1], State: m[3], Peer: m[4], Said: strings.TrimSpace(out)}, nil
 }
 
 // migrateArgs is the one place the move's command line is built. The host
@@ -152,12 +175,21 @@ func migrateArgs(name, to string, spec MigrateSpec) ([]string, error) {
 	if spec.TxID == "" && !spec.DryRun {
 		return nil, fmt.Errorf("a move of %s needs a txid, so it can be asked about by name", name)
 	}
-	args := []string{"migrate", "--to", to}
-	if spec.RemoteStore != "" {
-		args = append(args, "--remote-store", spec.RemoteStore)
-	}
 	if spec.TxID != "" {
-		args = append(args, "--txid", spec.TxID)
+		if err := checkMoveTxID(spec.TxID); err != nil {
+			return nil, err
+		}
+	}
+	args := []string{"migrate", "--to", to}
+	for _, f := range []struct{ flag, value string }{
+		{"--remote-store", spec.RemoteStore},
+		{"--remote-hull", spec.RemoteHull},
+		{"--remote-gateway-sock", spec.GatewaySock},
+		{"--txid", spec.TxID},
+	} {
+		if f.value != "" {
+			args = append(args, f.flag, f.value)
+		}
 	}
 	if spec.DryRun {
 		args = append(args, "--dry-run")
@@ -165,14 +197,14 @@ func migrateArgs(name, to string, spec MigrateSpec) ([]string, error) {
 	return append(args, name), nil
 }
 
-// migrateAbortArgs is the abort's command line. An abort always names the
-// move it calls off: an abort that took whatever move was current could call
-// off a later one than the user meant.
-func migrateAbortArgs(name, txid string) ([]string, error) {
-	if txid == "" {
-		return nil, fmt.Errorf("an abort of a move of %s needs the move's txid", name)
+// moveTxID is hull's shape of a move's txid.
+var moveTxID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func checkMoveTxID(txid string) error {
+	if !moveTxID.MatchString(txid) {
+		return fmt.Errorf("%q is not a move's txid (32 lower-case hex digits)", txid)
 	}
-	return []string{"migrate-abort", "--txid", txid, name}, nil
+	return nil
 }
 
 // CheckRemote refuses a destination that is not USER@HOST, or that ssh could
