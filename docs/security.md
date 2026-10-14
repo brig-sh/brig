@@ -871,6 +871,30 @@ says so. A `BRIG_BOOT_ASSETS_REF` under `ghcr.io/nofireai/` is checked the
 same way against its own digest. Any other reference has no signature of ours,
 so there is no digest to bind.
 
+#### The portable kernel
+
+A [teleportable session](teleport.md#the-machine-it-boots) on an arm64 host
+boots hvi's `portable-arm64-v1` machine, with a kernel that no boot bundle
+lists. Brig compares the portable kernel with the sha256 that Brig pins for it before the boot.
+The boot bundle's check then compares the initrd alone. A `sha256` file
+beside the kernel is not read: anything that can rewrite the kernel there
+can rewrite that file too.
+
+The same rules decide a difference:
+
+- At the place Brig looks by default, `portable-arm64-v1/Image` in a boot
+  asset directory that Brig chose, a kernel that differs refuses the run
+  under `warn` and `require`.
+- A kernel named in `BRIG_PORTABLE_KERNEL`, or in a directory named in
+  `BRIG_BOOT_ASSETS`, is someone's build. `warn` states the difference and
+  boots it, and `require` refuses.
+- A kernel Brig cannot read is "cannot check": `warn` states it and boots,
+  and `require` refuses.
+- `BRIG_VERIFY=off` skips the comparison.
+
+A kernel that matches the pin adds `portable kernel` to the line that says
+what verified.
+
 #### The Linux runtime bundle
 
 The Linux runtime bundle's kernel and initrd are its own, and the boot
