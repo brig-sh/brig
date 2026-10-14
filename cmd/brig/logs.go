@@ -73,6 +73,18 @@ func logsCmd(args []string) error {
 		}
 	}
 
+	// A session moved to another host keeps its log and its gateway there,
+	// and the brig there reads both. The line goes as it was typed.
+	if ref != "" {
+		if r, err := session.ParseRef(ref); err == nil {
+			if t, ok := profile.Lookup(r.Agent); ok {
+				if loc, filed, err := wrap.SessionLocation(t, r.Label); err == nil && filed && loc.Away() {
+					return remoteLogs(args, loc)
+				}
+			}
+		}
+	}
+
 	// Which gateway is asked for is the ref: bare --gateway is the shared one,
 	// which serves the host and is named by no session, and a ref is that
 	// sandbox's own. An isolated sandbox has a gateway to itself, so the ref is
