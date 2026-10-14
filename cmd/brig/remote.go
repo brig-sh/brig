@@ -261,7 +261,9 @@ func remoteOutput(host, store string, args ...string) ([]byte, error) {
 // removeMovedCopy is `brig rm` on a session that runs on another host. What
 // is here is the copy the move left: a guest fenced by its checkpoint, which
 // can never run again. rm removes it once the brig on the other host says
-// the session runs there, and asks nothing else: it is not the session. With
+// the session runs there, or once hull's own record here says the move
+// committed (see staleByHullsRecord), and asks nothing else: it is not the
+// session. With
 // no copy left here, rm forgets the session on this host and leaves the one
 // there alone.
 func removeMovedCopy(cfg *wrap.Config, t profile.Profile, ref string, loc wrap.Location, dryRun bool) error {
@@ -286,8 +288,10 @@ func removeMovedCopy(cfg *wrap.Config, t profile.Profile, ref string, loc wrap.L
 		warnf("%s", notice.Newf("ssh %s brig rm %s removes it there", loc.Host, ref))
 		return nil
 	}
-	if err := confirmRunsThere(loc, t.Name, vm); err != nil {
-		return fmt.Errorf("the copy of %s here is kept: %w", ref, err)
+	if !staleByHullsRecord(cfg.Runtime, vm, loc.TxID) {
+		if err := confirmRunsThere(loc, t.Name, vm); err != nil {
+			return fmt.Errorf("the copy of %s here is kept: %w", ref, err)
+		}
 	}
 	if dryRun {
 		fmt.Printf("would remove the copy of %s left on this host (sandbox %s); it runs on %s\n", ref, vm, loc.Host)
@@ -298,6 +302,23 @@ func removeMovedCopy(cfg *wrap.Config, t profile.Profile, ref string, loc wrap.L
 	}
 	fmt.Printf("removed the copy of %s left on this host; it runs on %s\n", ref, loc.Host)
 	return nil
+}
+
+// staleByHullsRecord reports whether hull's own record of the copy here says
+// the move txid committed away from this host: the checkpoint is migrated,
+// and hull refuses to restore, resume or move it, so it can never run again.
+// hull writes that record only after the destination answered the commit, so
+// it is proof the copy is not the only one, and rm needs no word from the
+// destination. That word cannot always be had: the session may since have
+// been removed there, or moved on, or that host may be gone. A record that
+// does not read, or says anything else, proves nothing, and rm asks.
+func staleByHullsRecord(rt runtime.Runtime, vm, txid string) bool {
+	mi, ok := rt.(runtime.MigrationInspector)
+	if !ok || txid == "" {
+		return false
+	}
+	m, err := mi.Migration(vm)
+	return err == nil && m.State == runtime.MigrationMigrated && m.MoveTxID == txid
 }
 
 // confirmRunsThere asks the brig on the session's host whether its sandbox
