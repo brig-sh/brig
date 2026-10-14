@@ -91,11 +91,49 @@ func TestMoveReportReadsAStreamedMove(t *testing.T) {
 	}
 }
 
+// The lines brig passed on during a streamed move from rp1 to rp2 through
+// brig teleport, with hull 1ecb5c8 and hvi ef8833a, as printed: a round is
+// counted once, at its end, and the state's 53259 bytes on the Sent line are
+// not the total, which hull gave only rounded.
+func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
+	var r MoveReport
+	for _, line := range []string{
+		"Transport: streamed (pre-copy rounds; the disk blocks that differ from base 13fd46b9d871)",
+		"move: disk round 0: 3593 blocks so far, 17.1 MiB/s (81% of 4393)",
+		"move: disk round 0: 4393 blocks, 274.6 MiB (34.4 MiB on the wire) in 2.26 s, 15.2 MiB/s",
+		"move: disk round 1: 2 blocks, 131072 bytes (797 bytes on the wire) in 0.00 s, 383648 bytes/s, guest wrote 1 blocks/s",
+		"move: ram-round-0: 48.7 MiB so far, 24.2 MiB/s",
+		"move: ram-round-0: 74.0 MiB in 2.88 s, 25.7 MiB/s",
+		"move: ram-round-1: 1.0 MiB in 0.03 s, 34.4 MiB/s",
+		"move: disk round 2 (final): 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 1.5 MiB/s",
+		"move: hvi sealed the stream and fenced brig-ubuntu (39 ms after the last RAM round began)",
+		"Sent 109.5 MiB in 5.4 s (20.3 MiB/s): disk 274.9 MiB as 34.4 MiB, RAM 75.0 MiB, state 53259 bytes; " +
+			"destination: stream: 80 hvi components and 4399 disk blocks in 288 batches checked; hvi restored the guest paused",
+		"Timings (ms): fence 0, transfer 5394, restore paused 0, commit 91",
+		"move: 109.5 MiB in 5.4 s; disk 34.4 MiB, RAM 75.0 MiB, state 53259 bytes; sealed 39 ms after the last RAM " +
+			"round began, last disk round 3 ms; downtime about 358 ms",
+	} {
+		r.Add(line)
+	}
+	var names []string
+	for _, rd := range r.Rounds {
+		names = append(names, fmt.Sprintf("%s/%s/%v", rd.Name, rd.Size, rd.Final))
+	}
+	want := "disk round 0/274.6 MiB/false|disk round 1/131072 bytes/false|ram-round-0/74.0 MiB/false|" +
+		"ram-round-1/1.0 MiB/false|disk round 2 (final)/262144 bytes/true"
+	if strings.Join(names, "|") != want {
+		t.Errorf("rounds %s\nwant   %s", strings.Join(names, "|"), want)
+	}
+	if r.Bytes != 0 || r.DowntimeSeconds != 0.358 || r.MiBPerSec != 20.3 || r.StepsMs["transfer"] != 5394 {
+		t.Errorf("report %+v", r)
+	}
+}
+
 // A fake hull printing its lines while it moves: they reach a MoveReport
 // through the move's Progress, as brig teleport wires them.
 func TestAMoveReportIsFedAsTheMoveRuns(t *testing.T) {
 	h, _ := migrateHull(t, "printf 'round 0: 4096 bytes in 0.1 s (0.1 MiB/s), dirty 9 pages/s\\n"+
-		"Sent 1048576 bytes in 0.2 s (5.0 MiB/s)\\ndowntime: 0.8 s\\n' >&2; echo committed > RECORD")
+		"Sent 1048576 bytes in 0.2 s (5.0 MiB/s); state 4096 bytes\\ndowntime: 0.8 s\\n' >&2; echo committed > RECORD")
 	var r MoveReport
 	if _, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1, Progress: r.Add}); err != nil {
 		t.Fatal(err)
