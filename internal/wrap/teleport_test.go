@@ -408,6 +408,37 @@ func TestEnsureRunningBootsATeleportableSessionWithNoShare(t *testing.T) {
 	}
 }
 
+// The boot of a teleportable session tells the runtime so, which is what
+// keeps every credential off `hull run` (see runArgs), and the exec that runs
+// the agent still carries them. Asked of the spec the runtime receives, so a
+// boot that forgot the mark fails here and not only on the argv test.
+func TestATeleportableBootLeavesItsCredentialsToTheExec(t *testing.T) {
+	teleportState(t)
+	t.Chdir(t.TempDir())
+	rt := &guestRuntime{}
+	c := loadTeleport(t, teleportProfile(t), Options{}, rt)
+	var set creds.Set
+	set.Add("IS_SANDBOX", "1", "")
+	set.AddSecret("CLAUDE_TOKEN", "from-store", "")
+	set.Vars = append(set.Vars, runtime.Var{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true})
+
+	if err := c.EnsureRunning(set); err != nil {
+		t.Fatalf("a teleportable boot was refused: %v", err)
+	}
+	if !rt.spec.Teleportable {
+		t.Fatalf("a teleportable boot did not tell the runtime so: %+v", rt.spec)
+	}
+	exec := map[string]runtime.Var{}
+	for _, v := range c.execSpec(set, []string{"tp"}, false).Env {
+		exec[v.Name] = v
+	}
+	for _, name := range []string{"GH_TOKEN", "CLAUDE_TOKEN", "IS_SANDBOX"} {
+		if _, ok := exec[name]; !ok {
+			t.Errorf("the agent's exec does not carry %s: %+v", name, exec)
+		}
+	}
+}
+
 // Every run path but hull's hvi refuses a teleportable session before
 // anything boots, as a capability, so the CLI exits 7 for it.
 func TestEnsureRunningRefusesATeleportableSessionOffHvi(t *testing.T) {

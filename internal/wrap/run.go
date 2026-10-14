@@ -465,11 +465,15 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// into the workspace rather than mounted, so it needs no share of its
 		// own -- see seedHostConfig. volumeShares is empty on hull and carries
 		// the profile's hostmounts on a container runtime.
-		Shares:   c.shares(home, project, volumeShares),
-		Tmpfs:    tmpfs,
-		Env:      c.guestEnv(set),
-		GUI:      check.GUI,
-		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
+		Shares: c.shares(home, project, volumeShares),
+		Tmpfs:  tmpfs,
+		Env:    c.guestEnv(set),
+		// A teleportable session's disk is the session, and hull writes the
+		// boot environment into it, so the runtime leaves every credential
+		// off this boot. The execs below and every later one hand them in.
+		Teleportable: c.Teleportable,
+		GUI:          check.GUI,
+		GUITitle:     c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.
