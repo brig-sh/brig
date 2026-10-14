@@ -95,6 +95,17 @@ func teleportCmd(cfg *wrap.Config, t profile.Profile, ref string, o teleportOpti
 	// The ref the index files the session under, the resolved profile and
 	// the slug, which is also how the destination's brig files it.
 	ref = cfg.Location().Ref
+	// One teleport of a session at a time on this host, the move and the
+	// two questions alike. Taken before the record is read, so what each
+	// one decides on is not changing under it.
+	unlock, err := wrap.LockMove(cfg.VMName)
+	if errors.Is(err, wrap.ErrMoveBusy) {
+		return fmt.Errorf("a `brig teleport` of %s is running on this host. Let it finish, then run this again", ref)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot take the move lock of %s: %w", ref, err)
+	}
+	defer unlock()
 	switch {
 	case o.status:
 		return teleportStatus(cfg, ref, wantJSON)
@@ -258,6 +269,13 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 
 	warnf("moving %s to %s (move %s): the guest pauses here and resumes there", ref, host, txid)
 	st, moveErr := mover.Migrate(vm, host, spec)
+	// hull's record, read back, says the move never fenced the guest, or
+	// names no part of this move. A record that did not read says neither.
+	undo := moveErr != nil && st.Read && (st.TxID != txid || !runtime.MoveFenced(st.State)) &&
+		st.State != runtime.MoveCommitted
+	if undo && st.TxID == "" {
+		undo, _ = noMoveBegan(cfg.Runtime, vm)
+	}
 	switch {
 	case st.TxID == txid && st.State == runtime.MoveCommitted:
 		if moveErr != nil {
@@ -265,15 +283,15 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 				Note("its record says the guest runs on %s, and that is what brig records", host))
 		}
 		return finishMove(ref, vm, host, spec.RemoteStore, txid, st.State, wantJSON)
-	case moveErr != nil && st.Read && (st.TxID != txid || !runtime.MoveFenced(st.State)) &&
-		st.State != runtime.MoveCommitted:
-		// hull's record, read back, says the move never fenced the guest,
-		// or names no part of this move: the guest still runs here, and
-		// brig undoes its own half. A record hull aborted is the same: hull
-		// has run the guest here again. A record hull left at preflight or
-		// reserved is ended too, which is safe with nothing fenced, or the
-		// next move of the session would find it in hull's way. A record
-		// that did not read says none of this, and is the case below.
+	case undo:
+		// hull's record says the move never fenced the guest, or names no
+		// part of this move: the guest still runs here, and brig undoes
+		// its own half. A record hull aborted is the same: hull has run the
+		// guest here again. A record hull left at preflight or reserved is
+		// ended too, which is safe with nothing fenced, or the next move of
+		// the session would find it in hull's way. No record at all counts
+		// only while the sandbox is here to hold one, and a record that did
+		// not read says none of this: both are the case below.
 		if st.TxID == txid && st.State != runtime.MoveAborted {
 			if _, err := mover.MigrateAbort(vm, txid); err != nil {
 				warnf("%s", notice.Newf("could not end hull's record of move %s: %v", txid, err).
@@ -368,6 +386,22 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 			"says where it stands", ref, loc.TxID, err, vm)
 	}
 	d.Hull = st.State
+	if st.TxID == "" {
+		// No record at all says the move never began only while the
+		// sandbox is here to hold one: `hull rm` of a source whose move
+		// committed takes the record with it.
+		never, err := noMoveBegan(cfg.Runtime, vm)
+		if !never {
+			cause := "This host has no sandbox " + vm + " either, and the record may have gone with it"
+			if err != nil {
+				cause = "brig cannot tell whether the sandbox is still here: " + err.Error()
+			}
+			return fmt.Errorf("hull has no record of the move of %s to %s (%s). %s. The move may have "+
+				"committed, so brig keeps it recorded and resumes nothing. `ssh %s %s` says whether the "+
+				"guest arrived there", ref, loc.PendingHost, loc.TxID, cause, loc.PendingHost,
+				remoteHullStatus(loc.RemoteStore, vm))
+		}
+	}
 	switch {
 	case st.TxID == loc.TxID && st.State == runtime.MoveCommitted:
 		return finishMove(ref, vm, loc.PendingHost, loc.RemoteStore, loc.TxID, st.State, wantJSON)
@@ -400,6 +434,27 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 		"`hull migrate %s --txid %s` takes it on from where it stopped, `hull migrate --status %s` has "+
 		"hull's account, and `brig teleport %s --abort` calls it off", ref, loc.PendingHost, loc.TxID,
 		said, vm, loc.TxID, vm, ref))
+}
+
+// noMoveBegan reports whether hull's having no move on record of the sandbox
+// means no move of it began: only while the sandbox is here. hull allows
+// `hull rm` of a source once its move committed away, and the record goes
+// with the instance, so a sandbox that is gone, or that brig cannot find,
+// says nothing about where the guest runs.
+func noMoveBegan(rt runtime.Runtime, vm string) (bool, error) {
+	if rt == nil {
+		return false, errors.New("no runtime")
+	}
+	return sandboxPresent(rt, vm)
+}
+
+// remoteHullStatus is the hull line that asks the destination's record of a
+// move into store there.
+func remoteHullStatus(store, vm string) string {
+	if store == "" {
+		return "hull migrate --status " + vm
+	}
+	return "hull --store-dir " + shellJoin([]string{store}) + " migrate --status " + vm
 }
 
 func orNone(s string) string {
