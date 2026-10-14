@@ -137,6 +137,7 @@ entry as teleportable from its empty guest home.
 | `--teleportable` for a profile whose workload reads its credentials at boot (`kind: gui`) | `1` |
 | A run on a sandbox whose guest hull's record shows `fenced` by a checkpoint or still `restoring` | `1` |
 | A run path other than hull on `hvi` | `7` |
+| `brig teleport` of a ref with no sandbox | `3` |
 | `brig teleport` of a session that is not teleportable, or not on hull's `hvi` | `7` |
 | `brig teleport` of a session under an egress policy, to a host whose gateway cannot enforce one | `7` |
 | `brig teleport` that the destination cannot take: no brig, hull or hvi there, no such agent, the sandbox name or the guest's address taken, too little room | `1` |
