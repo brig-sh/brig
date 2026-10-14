@@ -125,10 +125,18 @@ entry as teleportable from its empty guest home.
 | `--teleportable` for a session that already has a host home | `1` |
 | A run that would recreate a sandbox Brig has no record of, when hull's record of its boot shows a `block` root and no share | `1` |
 | `--teleportable` for a profile whose workload reads its credentials at boot (`kind: gui`) | `1` |
+| A run on a sandbox whose guest hull's record shows `fenced` by a checkpoint or still `restoring` | `1` |
 | A run path other than hull on `hvi` | `7` |
 
 Each refusal names the setting to drop, or `brig rm <ref>` when the session
 has to start over.
+
+A fenced guest, and one a restore has not brought back, still has its VMM
+running, so the sandbox reads as up. Brig refuses to use it again rather
+than run the agent in a guest whose vCPUs are stopped. The refusal names
+`hull restore` and `brig rm`. A guest that hull's record shows as
+`restored-paused` is not refused, because hull keeps that state on its
+record after `hull resume`.
 
 The record Brig keeps can be lost, for example when the session index file
 is deleted. Brig then asks hull how the sandbox was booted before it

@@ -290,9 +290,10 @@ esac`
 )
 
 // readTeleportState fills teleportState from the runtime's migration record,
-// for brig info. Only info asks: it is the report whose whole job is to say
-// where a session stands, and a run's block has no use for a second call to
-// hull before every boot.
+// for brig info. The run envelope does not ask: it has no use for a second
+// call to hull before every boot. A run that reuses a running sandbox reads
+// the record for itself, to refuse a parked guest; see
+// refuseParkedTeleportable.
 //
 // Read on a teleportable session only, since no other can be checkpointed.
 // Every failure leaves it empty: info answers when the runtime is broken,
