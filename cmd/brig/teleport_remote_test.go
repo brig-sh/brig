@@ -614,6 +614,36 @@ func TestALostAcknowledgementIsSettledFromHullsRecord(t *testing.T) {
 	}
 }
 
+// The hull lines a move's messages name are ones that work when copied: with
+// BRIG_HULL_STORE_DIR set, each names that store, as every call brig makes
+// does. Without it hull looks in its default store and finds no sandbox. The
+// lines are hull's own verbs for the source, `hull migrate --status NAME` and
+// `hull migrate NAME --txid T`, not the destination's `migrate-status`.
+func TestTeleportRemediesNameTheHullStore(t *testing.T) {
+	rt := &moveRuntime{running: true, state: "committing", moveErr: errors.New("ssh: connection reset")}
+	moveHost(t, rt, noNetProbe())
+	t.Setenv(runtime.HullStoreDir, "/st/a")
+	_, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+	if err == nil || !strings.Contains(err.Error(), "`hull --store-dir /st/a migrate --status brig-claude-code`") {
+		t.Errorf("a lost acknowledgement names: %v", err)
+	}
+	out, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status"}) })
+	want := "`hull --store-dir /st/a migrate brig-claude-code --txid " + rt.txid + "`"
+	if err != nil || !strings.Contains(out, want) ||
+		!strings.Contains(out, "`hull --store-dir /st/a migrate --status brig-claude-code`") {
+		t.Errorf("--status names: %q, %v", out, err)
+	}
+
+	rt = &moveRuntime{running: true, inspect: runtime.Migration{State: "fenced", TxID: "t1"}}
+	moveHost(t, rt, noNetProbe())
+	t.Setenv(runtime.HullStoreDir, "/st/a")
+	_, err = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+	if err == nil || !strings.Contains(err.Error(), "`hull --store-dir /st/a migrate --status brig-claude-code`") ||
+		strings.Contains(err.Error(), "migrate-status") {
+		t.Errorf("a parked guest names: %v", err)
+	}
+}
+
 // A move after which hull's record did not read is one whose end brig did
 // not see, whether the call failed or hull said it succeeded: the record
 // stays unfinished, hull is asked to abort nothing, and the destination

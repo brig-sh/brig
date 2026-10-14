@@ -155,8 +155,15 @@ func (e *PortableKernelMissingError) Error() string {
 	}
 	return fmt.Sprintf("a teleportable session boots the %s machine, which needs the portable kernel "+
 		"at %s, and it is not there. Set BRIG_PORTABLE_KERNEL to the portable kernel's path, or install it "+
-		"there with `HULL_PORTABLE_KERNEL=PATH hull assets pull --profile %s`",
-		MachinePortableArm64V1, e.Path, MachinePortableArm64V1)
+		"there with `%s`", MachinePortableArm64V1, e.Path, PortableKernelPullLine(MachinePortableArm64V1))
+}
+
+// PortableKernelPullLine is the hull line that installs a local portable
+// kernel for machine in the store brig drives, and records it there: hull
+// boots the profile only with that record. Nothing publishes the kernel, so
+// hull needs the file named in HULL_PORTABLE_KERNEL.
+func PortableKernelPullLine(machine string) string {
+	return "HULL_PORTABLE_KERNEL=PATH " + HullLine("assets", "pull", "--profile", machine)
 }
 
 // MachineInspector reads which machine a sandbox runs, from the runtime's

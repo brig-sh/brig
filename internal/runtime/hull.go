@@ -82,6 +82,31 @@ func hullArgs(args ...string) []string {
 	return append([]string{"--store-dir", dir}, args...)
 }
 
+// HullLine is a hull command for a person to run, as a remedy in a message:
+// the store brig drives is named on it, the way every call brig makes names
+// it. A line without it runs against hull's default store, which does not
+// hold the sandbox, and hull answers "instance not found". Each word is
+// quoted for a POSIX shell.
+func HullLine(args ...string) string {
+	words := append([]string{"hull"}, hullArgs(args...)...)
+	for i, w := range words {
+		words[i] = lineWord(w)
+	}
+	return strings.Join(words, " ")
+}
+
+// plainWord is what a POSIX shell reads as itself, unquoted.
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// lineWord is one word of a HullLine: bare when nothing in it is special,
+// single-quoted otherwise.
+func lineWord(w string) string {
+	if plainWord.MatchString(w) {
+		return w
+	}
+	return "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+}
+
 func newHull(bin string) (Runtime, error) {
 	if bin != "" {
 		return &hull{bin: bin}, nil
