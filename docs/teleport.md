@@ -284,6 +284,88 @@ A move holds a lock on the session on this host from step 1 to the end.
 Another `brig teleport` of the same session, including `--status` and
 `--abort`, refuses while it is held.
 
+### How long it takes
+
+The guest is paused from hull's fence until it runs on the destination.
+That pause is the downtime. The guest's processes see it as a gap: a timer
+that was due fires late, and a connection to the outside may reset.
+
+hull `0021196` with hvi `8697de0` fences the guest first, and then sends
+all of it: the guest's memory, and every block of its disk that holds data.
+Most of that disk is the image, which the destination could have had
+before the move began. The downtime grows with the guest's memory and its
+disk. The `claude-code` move from a Mac to a Pi in
+[Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi) sent
+1.8 GB while the guest was paused, for 50 to 57 s of downtime.
+
+The streamed move (H7 in hvi and hull, being built on `feat/teleport` when
+this was written) sends most of it while the guest runs. When hull boots a
+teleportable sandbox, it keeps a read-only copy of the disk as built, its
+base, named by its digest. `brig teleport <ref> --to <user>@<host>
+--prepare` has hull put that base on the destination, with the image and
+the portable kernel. A move to a host that was not prepared does this step
+first, before the pause. The move then copies in rounds while the guest
+runs. hvi records which pages of memory and which 64 KiB disk blocks the
+guest writes. Round 0 sends the memory that is not zero and the disk blocks
+that differ from the base. Each later round sends what the guest changed
+during the round before. hull pauses the guest when a round is at most
+8 MiB, or 2% of the guest's memory if that is more, or after 5 rounds, or
+after 60 s. It then sends the last changes, the CPU state and the device
+state, and the destination resumes the guest. Only that last round is
+downtime. A guest that writes faster than the link can carry never gets a
+small round. The cap still ends the copy, and the last round is then
+larger. What a move keeps true does not change: the source is fenced before
+the destination may resume, the last memory and disk changes are taken in
+the same pause, and the destination checks every part against its sha256
+before it runs anything.
+
+`brig teleport` prints hull's lines on stderr as they arrive, after
+`brig: hull:`: each round, the bytes it sent, the rate, and how fast the
+guest dirtied pages. When the move commits, it prints how long hull's move
+took, how long the guest was paused, and the bytes sent, as far as hull
+reported them. `--json` carries the same in its `move` object.
+
+| | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: streamed move, Mac to Pi |
+| --- | --- | --- | --- |
+| Sent while the guest runs | nothing | the base once (`--prepare`), then the rounds | pending |
+| Sent while the guest is paused | 1.80 GB in 46.3 to 53.7 s, at 32.0 to 37.1 MiB/s | the last round | pending |
+| hull's fence, with the capture | 1.63 to 2.08 s | | pending |
+| Restore paused, then commit | 1.23 to 1.38 s, then 0.22 to 0.25 s | | pending |
+| Downtime: the source pauses, to `running` on the destination | 49.95 to 57.43 s | 1 to 2 s | pending |
+| `brig teleport`, start to end | 52.18 to 59.52 s | under 10 s | pending |
+
+The before column is the four moves to `rp1` in
+[Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi). No
+streamed move had run when this was written, so the after column is
+pending.
+
+#### Prepare the destination
+
+```bash
+brig teleport <ref> --to <user>@<host> --prepare
+```
+
+`--prepare` runs the checks of steps 1 and 2 above, and then
+`hull migrate-prepare --to <user>@<host> --json <sandbox>`, with the hull
+store and the hull that the destination's brig drives. hull puts the
+image, the portable kernel and the sandbox's base on the destination,
+each only if it is not there yet. Brig passes hull's lines on as they
+arrive, then prints what hull did for each part (`held`, `sent`,
+`skipped` or `failed`) and the digest of the base the destination holds.
+A prepare pauses nothing, and the guest keeps running here.
+
+Brig records the host in its session index only when hull says that a move
+there will send only what the guest changed. `brig teleport --status` and
+`--json` then name it, and a move to that host says it was prepared. A
+committed move clears the record, because the next move starts from the
+destination. When hull says a move there would still send everything, for
+example because the hull or hvi there predates the streamed move, Brig says
+why and records nothing. The prepare does not fail.
+
+A prepare takes no network on the destination. The session's gateway, with
+its egress rules, is still started by the move (step 4). You can run it
+again at any time: a host that holds everything is sent nothing.
+
 ### After a move
 
 `brig sh`, `brig run`, `brig stop`, `brig info` and `brig logs` on the ref

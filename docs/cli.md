@@ -454,6 +454,7 @@ fields:
 
 ```bash
 brig teleport claude --to me@build-box
+brig teleport claude --to me@build-box --prepare
 brig teleport claude --status
 brig teleport claude --abort
 ```
@@ -471,9 +472,23 @@ and `brig logs` on the ref run on the destination, through
 | `--to USER@HOST` | move the session to that host. It must be `USER@HOST`, with no part that ssh could read as an option |
 | `--status` | where the move stands, from hull's record. A move that committed or that hull aborted is recorded as such |
 | `--abort` | call off a move that has not committed. hull restores the session here once the destination confirms |
+| `--prepare` | with `--to`, make the host ready for a move and move nothing: hull puts the image, the kernel and the sandbox's base disk there, each only if it is missing. The guest keeps running here, and Brig records the host when a move there will stream. See [Prepare the destination](teleport.md#prepare-the-destination) |
 | `--json` | print the outcome as a `Teleport` document |
 
-The line takes one of `--to`, `--status` and `--abort`. A move whose end Brig
+During a move or a prepare, Brig prints hull's lines on stderr as they
+arrive, after `brig: hull:`. When a move commits, it prints how long hull's
+move took, how long the guest was paused and the bytes sent, as far as hull
+reported them. `-q` drops hull's lines with Brig's other notices. Besides
+`ref`, `sandbox`, `state`, `host`, `pendingHost`, `remoteStore`, `txid` and
+`hull`, the `Teleport` document carries:
+
+| Field | When | Meaning |
+| --- | --- | --- |
+| `prepared` | after `--prepare`, and from `--status` while a prepared host is recorded | `host`, `at` (RFC 3339), `stream` (whether a move there sends only what the guest changed) and `why` when it does not, `base` (the digest of the base the host holds), and after `--prepare` also hull's `steps` (each with `what`, `result`, `detail`, `bytes` and `seconds`) and the `kernels` the host holds, by profile |
+| `move` | after a move this run saw commit | `seconds`, how long `hull migrate` took as Brig timed it, and what hull reported: `downtimeSeconds`, `bytes`, `mibPerSec` and `rounds`, each round with `round`, `bytes`, `seconds`, `mibPerSec` and `dirtyPagesPerSec`. A number hull did not report is left out |
+
+The line takes one of `--to`, `--status` and `--abort`, and `--prepare` only
+with `--to`. A move whose end Brig
 did not see stays recorded as unfinished, and every other verb on the ref
 refuses until `--status` or `--abort` settles it. One `brig teleport` of a
 session runs at a time on a host, and a second one refuses while it does. See
@@ -844,7 +859,7 @@ the agent.
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
 | Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--teleportable`, `--network`, `--offline`, `--publish`, `-q`/`--quiet` and `--json` |
-| Teleport line | `--to`, `--status`, `--abort` and `--json`, on `brig teleport` only. On the run line these are the agent's |
+| Teleport line | `--to`, `--status`, `--abort`, `--prepare` and `--json`, on `brig teleport` only. On the run line these are the agent's |
 
 The global position takes only those three flags. Brig refuses any other
 flag there by name:
