@@ -393,6 +393,26 @@ func TestDoctorRuntimeFixNamesTheProfilesRuntimeBin(t *testing.T) {
 // pinned is ok, absent is informational, since most hosts never boot it, and
 // there but not the pinned build fails, since a teleportable run refuses it
 // or boots it unvouched for. A host with no portable machine says so.
+// The portable row's install line is the one that works: the kernel file in
+// HULL_PORTABLE_KERNEL, pulled into the store brig drives, where hull keeps
+// the record it boots the profile by.
+func TestDoctorPortableRowInstallsIntoTheStore(t *testing.T) {
+	healthyHost(t)
+	if runtime.TeleportableMachine() == "" {
+		t.Skipf("no portable machine on %s", runtime.GuestArch())
+	}
+	t.Setenv("BRIG_BOOT_ASSETS", t.TempDir())
+	t.Setenv("BRIG_PORTABLE_KERNEL", "")
+	t.Setenv(runtime.HullStoreDir, "/st/b4")
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: "/bin/sh"}, nil })
+	row := findCheck(t, runDoctor(nil, nil), "portable")
+	want := "`HULL_PORTABLE_KERNEL=PATH hull --store-dir /st/b4 assets pull --profile " +
+		runtime.TeleportableMachine() + "`"
+	if row.State != stateInfo || !strings.Contains(row.Finding, want) {
+		t.Errorf("with no portable kernel the row is %q %q, want it to name %s", row.State, row.Finding, want)
+	}
+}
+
 func TestDoctorPortableKernelRow(t *testing.T) {
 	healthyHost(t)
 	dir := t.TempDir()

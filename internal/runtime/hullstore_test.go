@@ -54,3 +54,19 @@ func TestHullLineNamesTheStore(t *testing.T) {
 		t.Errorf("set: %q", got)
 	}
 }
+
+// The remedy for a missing portable kernel installs it, with hull's record of
+// it, in the store brig drives: hull boots the profile only with that record,
+// and a kernel pulled into hull's default store leaves the next run refused
+// the same way. hull needs the local file, as nothing publishes the kernel.
+func TestPortableKernelRemedyNamesTheStore(t *testing.T) {
+	t.Setenv(HullStoreDir, "/st/b4 store")
+	want := "HULL_PORTABLE_KERNEL=PATH hull --store-dir '/st/b4 store' assets pull --profile " + MachinePortableArm64V1
+	if got := PortableKernelPullLine(MachinePortableArm64V1); got != want {
+		t.Errorf("the pull line is %q, want %q", got, want)
+	}
+	err := &PortableKernelMissingError{Path: "/a/portable-arm64-v1/Image"}
+	if !strings.Contains(err.Error(), "`"+want+"`") {
+		t.Errorf("the missing-kernel refusal names no install into the store: %v", err)
+	}
+}
