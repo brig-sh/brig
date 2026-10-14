@@ -54,9 +54,23 @@ type Set struct {
 // chose to expose anywhere -- is never on the command line, whatever the hatch
 // says; see AddSecret.
 func (s *Set) Add(name, value, reportAs string) {
-	s.Vars = append(s.Vars, runtime.Var{Name: name, Value: value})
+	s.add(runtime.Var{Name: name, Value: value}, reportAs)
+}
+
+// addFromEnv is Add for a value Bind read out of the caller's environment
+// through a ref: a credential, though not a Secret. The mark is what a
+// teleportable boot reads to leave it off the run, where hull would write it
+// into the sandbox's disk; see runtime.Var.Credential. A literal the profile
+// wrote goes through Add and is not marked: it is configuration, already on
+// the host in the profile file.
+func (s *Set) addFromEnv(name, value, reportAs string) {
+	s.add(runtime.Var{Name: name, Value: value, Credential: true}, reportAs)
+}
+
+func (s *Set) add(v runtime.Var, reportAs string) {
+	s.Vars = append(s.Vars, v)
 	if reportAs == "" {
-		reportAs = name
+		reportAs = v.Name
 	}
 	s.Names = append(s.Names, reportAs)
 }
@@ -66,11 +80,7 @@ func (s *Set) Add(name, value, reportAs string) {
 // never travels in argv: the host durably logs every exec's argv, so such a
 // value there would outlive the sandbox in a file the user never sees.
 func (s *Set) AddSecret(name, value, reportAs string) {
-	s.Vars = append(s.Vars, runtime.Var{Name: name, Value: value, Secret: true})
-	if reportAs == "" {
-		reportAs = name
-	}
-	s.Names = append(s.Names, reportAs)
+	s.add(runtime.Var{Name: name, Value: value, Secret: true, Credential: true}, reportAs)
 }
 
 // AddPlumbing appends a variable that is not a credential, so it does not get

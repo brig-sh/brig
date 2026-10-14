@@ -169,6 +169,31 @@ func TestBindMarksOnlySecretsSourcedVarsSecret(t *testing.T) {
 	}
 }
 
+// Every value a ref resolved is a credential, wherever the ref pointed; a
+// literal the profile wrote is not. A teleportable boot keeps the first kind
+// off `hull run`, which writes the boot environment into the sandbox's disk,
+// so a value read from the shell that went unmarked would land there.
+func TestBindMarksEveryRefResolvedVarACredential(t *testing.T) {
+	p := profileWith(t, "secrets:\n  - gh\nenv:\n"+
+		"  - name: GH_TOKEN\n    ref: secrets.gh\n"+
+		"  - name: CI\n    ref: env.CI\n"+
+		"  - name: TOKEN\n    refs: [env.TOKEN, secrets.gh]\n"+
+		"  - name: MODE\n    value: fast\n")
+	set := Bind(p, p.Env, map[string]string{"gh": "ghp_x"},
+		lookupFrom(map[string]string{"CI": "true", "TOKEN": "from-shell"}), Options{})
+	set.AddPlumbing("GIT_TERMINAL_PROMPT", "0")
+
+	want := map[string]bool{"GH_TOKEN": true, "CI": true, "TOKEN": true, "MODE": false, "GIT_TERMINAL_PROMPT": false}
+	if len(set.Vars) != len(want) {
+		t.Fatalf("bound %+v, want %d vars", set.Vars, len(want))
+	}
+	for _, v := range set.Vars {
+		if v.Credential != want[v.Name] {
+			t.Errorf("%s: Credential = %v, want %v", v.Name, v.Credential, want[v.Name])
+		}
+	}
+}
+
 // A chain takes the first element that yields a value, which is what lets one
 // variable keep a shell override and gain a store fallback at the same time.
 func TestBindWalksAChainInOrder(t *testing.T) {
