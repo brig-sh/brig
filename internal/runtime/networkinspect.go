@@ -15,7 +15,7 @@ import (
 // cannot stand in for it: an offline guest and an isolated guest whose gateway
 // died both have no listening socket, and neither is a shared-network guest.
 func (h *hull) SandboxNetwork(name string) (string, error) {
-	out, stderr, err := inspectNetwork(h.bin, "inspect", name)
+	out, stderr, err := inspectNetwork(h.bin, hullArgs("inspect", name)...)
 	if err != nil {
 		// hull rc29 also says "instance not found" for unreadable or corrupt
 		// metadata, and ps silently omits those records. Neither proves

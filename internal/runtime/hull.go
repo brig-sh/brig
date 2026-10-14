@@ -54,6 +54,33 @@ func (h *hull) countedEnv(counted bool) []string {
 	return telemetryEnv(counted && telemetry.Counting() && hullVersionAtLeast(h.version(), 31, false))
 }
 
+// HullStoreDir is the setting that names the hull store brig drives, and
+// StoreDir reads it. Unset leaves hull on its own default, ~/.hull/store.
+//
+// A teleported session needs it. hull keeps every instance in one store, and
+// `hull migrate --remote-store` puts the moved one in the store the
+// destination's brig drives, so the brig that later answers `brig sh` over
+// ssh has to name that store on every hull call or it finds nothing there.
+// It also lets two brigs on one host drive two stores, which is how a move is
+// tried out on one machine.
+const HullStoreDir = "BRIG_HULL_STORE_DIR"
+
+// StoreDir is the store BRIG_HULL_STORE_DIR names, or "" for hull's own
+// default.
+func StoreDir() string { return os.Getenv(HullStoreDir) }
+
+// hullArgs is a hull command line with the store brig was told to drive in
+// front of it. hull reads --store-dir as a global flag, so it goes before the
+// verb. Every call that opens the store goes through here; `hull --version`
+// and the network gateway open none.
+func hullArgs(args ...string) []string {
+	dir := StoreDir()
+	if dir == "" {
+		return args
+	}
+	return append([]string{"--store-dir", dir}, args...)
+}
+
 func newHull(bin string) (Runtime, error) {
 	if bin != "" {
 		return &hull{bin: bin}, nil
@@ -233,7 +260,7 @@ func (h *hull) fetchAssets(dir string, fetch BootFetch, notice, progress io.Writ
 	if fetch.Replace {
 		args = append(args, "--force")
 	}
-	cmd := exec.Command(h.bin, args...)
+	cmd := exec.Command(h.bin, hullArgs(args...)...)
 	// Pin hull to the directory brig resolved. That directory came from hull
 	// itself via assetDir, so this is not brig overriding a choice -- it is
 	// brig making sure the place it checked and the place hull writes are the
@@ -314,7 +341,7 @@ func (h *hull) assetDirWithin(d time.Duration) (string, error) {
 }
 
 func (h *hull) askAssetDir(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, h.bin, "assets", "dir")
+	cmd := exec.CommandContext(ctx, h.bin, hullArgs("assets", "dir")...)
 	cmd.WaitDelay = agentCallWaitDelay
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	var out bytes.Buffer
@@ -338,7 +365,7 @@ func (h *hull) askAssetDir(ctx context.Context) (string, error) {
 // Runtime.Running. hull's own explanation is captured and carried along,
 // because "exit status 1" on its own tells nobody which of the two it was.
 func (h *hull) Running(name string) (bool, error) {
-	cmd := exec.Command(h.bin, "ps")
+	cmd := exec.Command(h.bin, hullArgs("ps")...)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -378,7 +405,7 @@ func (h *hull) Exists(name string) (bool, error) {
 }
 
 func (h *hull) exists(ctx context.Context, name string) (bool, error) {
-	cmd := exec.CommandContext(ctx, h.bin, "inspect", name)
+	cmd := exec.CommandContext(ctx, h.bin, hullArgs("inspect", name)...)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -400,14 +427,14 @@ func (h *hull) exists(ctx context.Context, name string) (bool, error) {
 // name, so it belongs in the listing -- that is exactly the thing a user
 // needs to see before wondering why a name is taken.
 func (h *hull) List() ([]Instance, error) {
-	cmd := exec.Command(h.bin, "ps", "-a")
+	cmd := exec.Command(h.bin, hullArgs("ps", "-a")...)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		// -a is not universal across runtime versions; fall back to the plain
 		// listing rather than reporting no sandboxes at all.
-		cmd = exec.Command(h.bin, "ps")
+		cmd = exec.Command(h.bin, hullArgs("ps")...)
 		cmd.Env = mergeEnv(telemetryEnv(false))
 		out.Reset()
 		cmd.Stdout = &out
@@ -491,7 +518,7 @@ func (h *hull) Run(spec RunSpec) error {
 		return err
 	}
 
-	cmd := exec.Command(h.bin, args...)
+	cmd := exec.Command(h.bin, hullArgs(args...)...)
 	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	// mergeEnv starts from brig's own environment, which holds a credential
 	// forwarded from the shell under its own name. hull resolves only the
@@ -804,7 +831,7 @@ func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string
 		return nil, nil, nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
-	cmd := exec.CommandContext(ctx, h.bin, args...)
+	cmd := exec.CommandContext(ctx, h.bin, hullArgs(args...)...)
 	cmd.WaitDelay = agentCallWaitDelay
 	return cmd, cancel, envVals, nil
 }
@@ -909,7 +936,7 @@ func (h *hull) replaceCmd(spec ExecSpec) (argv, env []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	argv = append([]string{h.bin}, args...)
+	argv = append([]string{h.bin}, hullArgs(args...)...)
 	env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	return argv, env, nil
 }
@@ -1269,7 +1296,7 @@ func withdrawPublications(name string) {
 // captured and folded into the error instead, which is where anyone reading a
 // failed `brig stop` will look.
 func (h *hull) quiet(verb, name string, counted bool) error {
-	cmd := exec.Command(h.bin, verb, name)
+	cmd := exec.Command(h.bin, hullArgs(verb, name)...)
 	cmd.Env = mergeEnv(h.countedEnv(counted))
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -1305,7 +1332,7 @@ func (h *hull) Logs(spec LogsSpec) error {
 	}
 	// hull's own default is -1 (all), so spec.Tail passes straight through.
 	args = append(args, "--tail", strconv.Itoa(spec.Tail), spec.Name)
-	cmd := exec.Command(h.bin, args...)
+	cmd := exec.Command(h.bin, hullArgs(args...)...)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	cmd.Stdout = spec.Out
 	cmd.Stderr = spec.Err
