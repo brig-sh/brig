@@ -134,7 +134,7 @@ func TestHullCheckpointSeam(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Migration{State: "fenced", BundleDir: "/b/t1", TxID: "t1"}
-	if res.Migration != want || res.Summary != "Checkpoint of s written to /b/t1" {
+	if res.Migration != want || res.Summary != "Checkpoint of s written to /b/t1" || res.RecordErr != nil {
 		t.Errorf("checkpoint result %+v, want %+v and hull's line", res, want)
 	}
 	if err := h.Resume("s"); err == nil || !strings.Contains(err.Error(), "fenced") {
@@ -150,5 +150,42 @@ func TestHullCheckpointSeam(t *testing.T) {
 	wantLog := "inspect s\npause s\ncheckpoint --then fence s\ninspect s\nresume s\nrestore --detach --paused s\n"
 	if string(got) != wantLog {
 		t.Errorf("hull was asked:\n%s\nwant:\n%s", got, wantLog)
+	}
+}
+
+// A checkpoint that worked, followed by a read of hull's record that did not,
+// is a checkpoint that worked: the bundle is written and the guest fenced.
+// The failed read comes back on the result, so a caller knows BundleDir was
+// never read rather than finding it empty, and the call itself does not fail,
+// so nobody resumes a source a destination may already be running.
+func TestACheckpointWhoseRecordCannotBeReadSaysSo(t *testing.T) {
+	for _, c := range []struct {
+		what    string
+		inspect string
+		want    string
+	}{
+		{"inspect fails", "echo 'store is locked' >&2; exit 1", "store is locked"},
+		{"no record after the checkpoint", `echo '{"id":"s"}'`, "recorded no checkpoint"},
+	} {
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "hull")
+		script := "#!/bin/sh\ncase \"$1\" in\n" +
+			"  checkpoint) echo 'Checkpoint of s written' ;;\n" +
+			"  inspect) " + c.inspect + " ;;\n" +
+			"esac\n"
+		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		res, err := (&hull{bin: bin}).Checkpoint("s", CheckpointSpec{Then: CheckpointFence})
+		if err != nil {
+			t.Errorf("%s: a checkpoint hull wrote came back failed: %v", c.what, err)
+			continue
+		}
+		if res.RecordErr == nil || !strings.Contains(res.RecordErr.Error(), c.want) {
+			t.Errorf("%s: RecordErr = %v, want one saying %q", c.what, res.RecordErr, c.want)
+		}
+		if res.Migration.BundleDir != "" {
+			t.Errorf("%s: a bundle directory nobody read: %+v", c.what, res.Migration)
+		}
 	}
 }
