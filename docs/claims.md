@@ -61,11 +61,15 @@ destination carries only the credentials that host's own store and
 environment hold.", are defended by tests against a stub hull and a fake
 ssh.
 Those tests check every command line a move runs and every record it keeps.
-They do not show what a real ssh and a real hull do with those lines. Brig's
-move has not yet committed on real hardware: see
-[On real hardware](teleport.md#on-real-hardware).
-Until it has, read those rows as true of the command lines, not yet of a
-real move.
+They do not show what a real ssh and a real hull do with those lines, and CI
+runs no move. On 2026-10-14 moves committed between two Raspberry Pi 5 hosts,
+there and back, over real ssh, by hand and with `script/teleport-demo.sh`:
+see [On real hardware](teleport.md#on-real-hardware). Those runs saw the
+policy row's refusal (exit 7, nothing paused), and an offline session, with
+no policy, move with no gateway on either host. They checked no credential:
+the sessions had none. The
+rows are still defended only at the command line; the runs are not repeated
+by any check here.
 
 ## The table
 
