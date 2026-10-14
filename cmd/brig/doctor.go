@@ -181,6 +181,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		virtualCheck(),
 		rtCheck,
 		bootCheck(rt),
+		portableCheck(rt),
 		verifyCheck(),
 		profilesCheck(loadErr),
 		secretsCheck(),
@@ -333,6 +334,58 @@ func bootCheck(rt runtime.Runtime) check {
 	}
 	return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
 		Fix: "run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them"}
+}
+
+// portablePin is runtime.PortableKernelDigest, a variable so a test can pin
+// a kernel it wrote.
+var portablePin = runtime.PortableKernelDigest
+
+// portableCheck reports whether the kernel a teleportable session boots is
+// on this host, and whether it is the build brig pins. Only a teleportable
+// session boots it, so a missing one is informational and never fails the
+// report: most hosts never ask for it. A file that is there and differs is a
+// failure, since a teleportable run refuses it or boots it unvouched for.
+//
+// The file is the one a run would boot: runtime.PortableKernelOf asks the
+// same question of rt the boot path asks.
+func portableCheck(rt runtime.Runtime) check {
+	if rt == nil {
+		return notReached("portable")
+	}
+	machine := runtime.TeleportableMachine()
+	if machine == "" {
+		return check{Name: "portable", State: stateInfo, Finding: fmt.Sprintf("no portable machine on %s; "+
+			"a teleportable session boots hvi's native machine", runtime.GuestArch())}
+	}
+	pk, err := runtime.PortableKernelOf(rt)
+	if err != nil {
+		return check{Name: "portable", State: stateFail, Finding: "cannot locate the portable kernel: " + err.Error(),
+			Fix: "set BRIG_PORTABLE_KERNEL to the portable kernel's path"}
+	}
+	if !pk.Present {
+		return check{Name: "portable", State: stateInfo, Finding: fmt.Sprintf("no %s kernel at %s; "+
+			"only a teleportable session needs it (set BRIG_PORTABLE_KERNEL to it, or install it with "+
+			"`hull assets pull --profile %s`)", machine, pk.Path, machine)}
+	}
+	got, err := verify.FileDigest(pk.Path)
+	if err != nil {
+		return check{Name: "portable", State: stateFail, Finding: "cannot read the portable kernel: " + err.Error(),
+			Fix: "check the permissions on " + pk.Path}
+	}
+	if got != portablePin {
+		fix := "a teleportable run refuses it: put the pinned build there, or set BRIG_PORTABLE_KERNEL " +
+			"to it if it is your own build"
+		if pk.Named {
+			fix = "a teleportable run boots it only under BRIG_VERIFY=warn or off; point BRIG_PORTABLE_KERNEL " +
+				"at the pinned build"
+		}
+		return check{Name: "portable", State: stateFail,
+			Finding: fmt.Sprintf("the %s kernel at %s is %s, not the %s brig pins", machine, pk.Path, got,
+				portablePin),
+			Fix: fix}
+	}
+	return check{Name: "portable", State: statePass,
+		Finding: fmt.Sprintf("%s kernel present at %s, the build brig pins", machine, pk.Path)}
 }
 
 // verifyCheck names the signature tooling and the mode it runs under. It reads

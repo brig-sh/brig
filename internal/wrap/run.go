@@ -372,9 +372,20 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
 	}
+	// The machine the run line names and the kernel it boots come from one
+	// resolve. resolveTeleportable refuses the profile that would leave the
+	// kernel unresolved; this holds for a runtime that resolves none, and
+	// for BRIG_VERIFY=off, which skips the comparison and not the kernel.
+	if err := c.machineKernelRefusal(bootAssets); err != nil {
+		return err
+	}
 	// The files just resolved are the ones the runtime boots, so they are
 	// the ones compared with the bundle whose signature verified above.
 	if err := c.checkBootDigests(bootAssets); err != nil {
+		return &VerifyRefusedError{Err: err}
+	}
+	// The portable kernel no bundle lists, against the digest brig pins.
+	if err := c.checkPortableKernel(bootAssets); err != nil {
 		return &VerifyRefusedError{Err: err}
 	}
 	// Both checks are in, so the run can state the outcome in one line. Here
@@ -487,8 +498,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// boot environment into it, so the runtime leaves every credential
 		// off this boot. The execs below and every later one hand them in.
 		Teleportable: c.Teleportable,
-		GUI:          check.GUI,
-		GUITitle:     c.env.String("TITLE", c.Profile.GUITitle),
+		// And it boots the portable machine, whose checkpoint restores on
+		// a Mac and on a Linux host alike. See machine.
+		Profile:  c.machine(),
+		GUI:      check.GUI,
+		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.
@@ -1186,5 +1200,6 @@ func (c *Config) resolveBootAssets() (runtime.BootAssets, error) {
 	if !ok {
 		return runtime.BootAssets{}, nil
 	}
-	return r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef()}, c.runtimeNotice(), c.runtimeOutput())
+	return r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef(), Machine: c.machine()},
+		c.runtimeNotice(), c.runtimeOutput())
 }

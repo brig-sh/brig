@@ -30,20 +30,78 @@ its ref do not need the flag. Brig records the property in its session index.
 | Guest home | a host directory, shared in read-write | a directory on the sandbox's own disk |
 | Project | optional, shared in at `/work/<name>` | none |
 | Backend | any | hull's `hvi` only |
+| Machine | hvi's native machine | `portable-arm64-v1` on an arm64 host. See [The machine it boots](#the-machine-it-boots) |
 | Network, policy, published ports | as configured | the same |
 | Credentials | a `files:` binding is delivered into a tmpfs by `hull exec`; an environment variable is handed to `hull run` and to each `hull exec` | a `files:` binding the same; an environment variable is handed to each `hull exec` only, never to `hull run`. See [Credentials stay off the disk](#credentials-stay-off-the-disk) |
 | Onboarding seed | written into the host home | written into the guest home, inside the guest |
 | `--skills`, `BRIG_GIT_CONFIG` | copy files into the host home | refused: there is no host home |
 
-`brig info` and `brig plan` print a `TELEPORTABLE` row. `brig ls` prints
-`(in the sandbox disk)` in place of a workspace.
-The `--json` documents of `ls`, `info` and `plan` carry `"teleportable": true`.
+`brig info` and `brig plan` print a `TELEPORTABLE` row and a `MACHINE` row.
+`brig ls` prints `(in the sandbox disk)` in place of a workspace.
+The `--json` documents of `ls`, `info` and `plan` carry `"teleportable": true`,
+and those of `info` and `plan` carry the machine as `machine`.
 
 Once hull has checkpointed the sandbox, `brig info` also prints a `TELEPORT`
 row with hull's record of it: the state (`checkpointed`, `fenced`,
 `restoring`, `restored-paused` or `restored`) and the checkpoint it refers
 to. `brig info --json` carries the same record as a `teleport` object. Both
 are absent until hull has a record, and absent when hull cannot be read.
+
+## The machine it boots
+
+On an arm64 host, a teleportable session boots hvi's `portable-arm64-v1`
+machine. The guest sees the same machine on a Mac and on a Linux arm64 host:
+a GICv2, a Cortex-A76 identity with a reduced feature set, and an `hvi-time`
+device for its clocks and timers. A checkpoint of it restores on either kind
+of host. An ordinary session boots hvi's native machine, which is the host's
+own. A guest of the native machine has cached its host's counter rate, GIC
+and CPU features, so its checkpoint restores only on the same kind of host.
+hvi's `docs/portable-profile.md` describes the portable machine and what the
+guest loses on it.
+
+Brig hands `hull run` the flag `--profile portable-arm64-v1`, after
+`--rootfs-type block`. The kernel is the only other change to the run line.
+Before the run, Brig asks `hull run --help` whether this hull takes
+`--profile`. A hull from before machine profiles does not, and the run is
+refused with exit `7` and hull's version.
+
+Brig hands hull the portable kernel with the boot assets, and only a profile
+with `genericBoot: true` has boot assets. On an arm64 host, Brig refuses a
+teleportable session of any other profile before the runtime is asked, and
+`brig plan` shows the refusal. Such a profile boots its image's own kernel or
+one hull picks, Brig checks neither, and a kernel without the `hvi-time`
+driver has no clock on the portable machine. Of the built-in profiles,
+`cursor` has no `genericBoot`. `claude-desktop` is refused for a reason of its
+own: it reads its credentials at boot. A session of such a profile that
+already started teleportable can still be stopped, inspected and removed, but
+`brig run` and `brig sh` refuse it, and the message names `brig rm`.
+
+The portable machine needs a kernel of its own, built with the `hvi-time`
+clock driver. The boot bundle's kernel does not have that driver. Brig boots
+the portable kernel with the boot bundle's initrd, and looks for the kernel
+here, in this order:
+
+1. `BRIG_PORTABLE_KERNEL`, the path of a kernel `Image`.
+2. `portable-arm64-v1/Image` in the boot asset directory. This is where
+   `hull assets pull --profile portable-arm64-v1` installs it, for example
+   from a local file named in `HULL_PORTABLE_KERNEL`.
+
+Nothing publishes the portable kernel yet, so Brig never downloads it. A
+teleportable run with no portable kernel is refused before the boot, and the
+message names `BRIG_PORTABLE_KERNEL`. Brig compares the kernel with a sha256
+that Brig pins, before the boot, as described in
+[The portable kernel](security.md#the-portable-kernel). The `portable` row of
+`brig doctor` says whether the kernel is there and whether it is the pinned
+build.
+
+`brig info` reads the `MACHINE` row from hull's record of the sandbox. A
+teleportable session that started before Brig chose the portable machine
+shows `native, as hull records the boot`. That session cannot move to a host
+of another kind. To move it, `brig rm` it and run it again.
+
+On an amd64 host there is no portable machine. A teleportable session there
+boots hvi's native machine, the run line names no profile, and the session
+moves only to a host of the same kind.
 
 ## What you lose
 
@@ -332,15 +390,76 @@ there decide who can receive the guest. Brig does not hand hull
 place of ssh, for the move or for its status or its abort, each of which
 reaches the destination too.
 
-### Not yet run on real hardware
+### On real hardware
 
 Every step above runs in `script/smoke.sh` against a stub hull, with a fake
-ssh that runs the destination on the same machine. Brig's move has not yet
-run against a real hull and hvi. hull's own `hull migrate` has committed a
-move between two stores on one Mac (see hull's `docs/migration.md`). Brig's
-move needs real ssh from the source to the destination, logging in with a
-key, because Brig hands hull no other transport. On one Mac with Remote
-Login on, a move between two stores goes like this:
+ssh that runs the destination on the same machine. hull's own `hull migrate`
+has committed a move between two stores on one Mac (see hull's
+`docs/migration.md`). Brig's move needs real ssh from the source to the
+destination, logging in with a key, because Brig hands hull no other
+transport.
+
+#### The Linux pair
+
+On 2026-10-14 Brig ran on two Raspberry Pi 5 hosts, `rp1` and `rp2` (Linux
+6.12, KVM with a vGICv2), with `BRIG_RUNTIME=hull`, a state directory and a
+hull store of its own on each, and real ssh from `rp1` to `rp2` with a key.
+Both hosts ran the same brig, hull and hvi builds. The profile was a copy of
+`ubuntu` with `teleportable: true`, `network: offline`, 1 vCPU and 1 GiB.
+
+What ran:
+
+- `brig doctor` on `rp1` reported the portable kernel present and the
+  pinned build.
+- `brig run --teleportable ubuntu -d` booted the `portable-arm64-v1` machine
+  on KVM: hull recorded the profile, the hvi command line carried
+  `--profile portable-arm64-v1`, and the guest ran the portable kernel with
+  `hvi-time` as its clocksource. `brig info` printed
+  `MACHINE portable-arm64-v1`.
+- `brig sh ubuntu` started a counter loop in the guest and read it back.
+- `brig teleport-probe` ran on `rp2` over ssh and reported hull, hvi, the
+  store and a gateway that enforces egress.
+- `brig teleport ubuntu --to pmoust@rp2` ran its checks, the probe, the
+  receive on `rp2`, hull's dry run, and the move up to the fence. hull
+  reserved the name on `rp2` and asked hvi for the checkpoint, and hvi
+  refused it: `the guest has the portable-arm64-v1 machine profile, which
+  no backend checkpoints yet`. hull aborted the move before anything was
+  paused. Brig gave `rp2` its network and index back and said why, the
+  counter kept counting on `rp1` with no reboot in the guest, and
+  `--status` reported no move.
+- A copy of that profile without `genericBoot: true`, run with
+  `--teleportable` and `BRIG_PORTABLE_KERNEL` set to a missing file, was
+  refused by `brig run` (exit 1) and shown as refused by `brig plan`. hull
+  was not asked to run anything.
+- An older hull build whose `hull run --help` has no `--profile` was refused
+  with exit `7` before `hull run` was called.
+
+What is still to run: the move itself, from the fence on. It needs an hvi
+that checkpoints the portable machine and restores it on KVM, which the hvi
+on `feat/teleport` (`f4594f0`) did not do yet. Until a move has committed on
+real hardware, read the move rows of
+[claims.md](claims.md#rows-checked-at-the-command-line-only) as true of the
+command lines only.
+
+To run the move on such a pair, give the destination's brig its settings,
+then run the same commands:
+
+```bash
+B3=/home/me/b3   # the same layout on both hosts
+export BRIG_TELEPORT_REMOTE_BRIG=$B3/bin/brig
+export BRIG_TELEPORT_REMOTE_ENV="PATH=$B3/bin:/usr/bin:/bin BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B3/bin/hull BRIG_STATE_DIR=$B3/state BRIG_HULL_STORE_DIR=$B3/store BRIG_PROFILE_DIR=$B3/profiles BRIG_BOOT_ASSETS=$B3/assets"
+brig run --teleportable ubuntu -d
+brig sh ubuntu -c 'nohup setsid sh -c "i=0; while :; do i=\$((i+1)); echo \$i > /tmp/count; sleep 0.2; done" >/dev/null 2>&1 </dev/null &'
+brig teleport ubuntu --to me@rp2
+brig sh ubuntu -c 'cat /tmp/count'   # runs on rp2, over ssh
+brig ls
+brig teleport ubuntu --status
+brig rm ubuntu                       # removes the fenced copy left here
+```
+
+#### One Mac
+
+On one Mac with Remote Login on, a move between two stores goes like this:
 
 ```bash
 # The destination's brig: its own state, gateway directory and hull store.

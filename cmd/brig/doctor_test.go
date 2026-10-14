@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -384,5 +386,56 @@ func TestDoctorRuntimeFixNamesTheProfilesRuntimeBin(t *testing.T) {
 	}
 	if strings.Contains(rt.Fix, "BRIG_RUNTIME_BIN") || !strings.Contains(rt.Fix, "runtimeBin") {
 		t.Errorf("the fix %q should name the profile's runtimeBin, not BRIG_RUNTIME_BIN", rt.Fix)
+	}
+}
+
+// The portable row names the kernel a teleportable session boots: there and
+// pinned is ok, absent is informational, since most hosts never boot it, and
+// there but not the pinned build fails, since a teleportable run refuses it
+// or boots it unvouched for. A host with no portable machine says so.
+func TestDoctorPortableKernelRow(t *testing.T) {
+	healthyHost(t)
+	dir := t.TempDir()
+	t.Setenv("BRIG_BOOT_ASSETS", dir)
+	t.Setenv("BRIG_PORTABLE_KERNEL", "")
+	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: "/bin/sh"}, nil })
+	kernel := filepath.Join(dir, "portable-arm64-v1", "Image")
+	content := []byte("a portable kernel")
+	sum := sha256.Sum256(content)
+	swap(t, &portablePin, "sha256:"+hex.EncodeToString(sum[:]))
+
+	row := findCheck(t, runDoctor(nil, nil), "portable")
+	if runtime.TeleportableMachine() == "" {
+		if row.State != stateInfo || !strings.Contains(row.Finding, "no portable machine") {
+			t.Errorf("on %s the portable row is %q %q, want -- saying there is no portable machine",
+				runtime.GuestArch(), row.State, row.Finding)
+		}
+		return
+	}
+	if row.State != stateInfo || !strings.Contains(row.Finding, kernel) || !strings.Contains(row.Finding, "BRIG_PORTABLE_KERNEL") {
+		t.Errorf("with no portable kernel the row is %q %q, want -- naming %s and BRIG_PORTABLE_KERNEL",
+			row.State, row.Finding, kernel)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(kernel), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kernel, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if row := findCheck(t, runDoctor(nil, nil), "portable"); row.State != statePass || !strings.Contains(row.Finding, kernel) {
+		t.Errorf("with the pinned kernel the row is %q %q, want ok at %s", row.State, row.Finding, kernel)
+	}
+
+	if err := os.WriteFile(kernel, append(content, '!'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	row = findCheck(t, runDoctor(nil, nil), "portable")
+	if row.State != stateFail || !strings.Contains(row.Finding, portablePin) || row.Fix == "" {
+		t.Errorf("with another build the row is %q %q (fix %q), want !! naming the pin and a fix",
+			row.State, row.Finding, row.Fix)
+	}
+	if code := doctorExit(runDoctor(nil, nil)); code != nil {
+		t.Errorf("a portable kernel that differs failed the report's status: %v", code)
 	}
 }

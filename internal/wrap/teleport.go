@@ -86,6 +86,29 @@ func resolveTeleportable(t profile.Profile, o Options, env Env, ref, vmName stri
 			"Run it as an ordinary session", tp.source, t.Name, profile.TeleportableBootCredentials)
 		return tp
 	}
+	// On a host with a portable machine, the session boots that machine,
+	// and the machine needs the portable kernel: the one with the hvi-time
+	// clock driver, compared with the digest brig pins. brig hands hull that
+	// kernel through the boot assets, and only a genericBoot profile has
+	// boot assets. Any other profile boots its image's own kernel or one hull
+	// picks, neither of which brig checks, and a kernel without the driver
+	// boots a guest that has no clock on that machine. Refused here, like
+	// the credentials, because it is the profile that cannot be teleportable.
+	if m := teleportableMachine(); m != "" && !t.GenericBoot {
+		// A session the index records as teleportable stays so, and an
+		// ordinary run of it is refused below, so the way out is rm.
+		instead := "Run it as an ordinary session"
+		if recorded {
+			instead = fmt.Sprintf("This session was started teleportable and cannot be switched to an "+
+				"ordinary one: remove it with `brig rm %s`, then run it as an ordinary session", ref)
+		}
+		tp.refusal = fmt.Errorf("%s asks for a teleportable session, and %s cannot be one on this host. "+
+			"A teleportable session here boots the %s machine, which boots the portable kernel, and brig "+
+			"supplies that kernel only to a profile with genericBoot: true. %s boots a kernel of its own "+
+			"image or one the runtime picks, and brig checks neither. %s",
+			tp.source, t.Name, m, t.Name, instead)
+		return tp
+	}
 	// A session brig already knows, started with a host home. One sandbox
 	// cannot be both, and either answer here would lose a home: booting it
 	// teleportable leaves the host home behind, and keeping it ordinary
@@ -301,8 +324,14 @@ esac`
 // and the row it would print is the one fact it could not establish.
 func (c *Config) readTeleportState() {
 	c.teleportState = runtime.Migration{}
+	c.machineSeen = ""
 	if !c.Teleportable || c.Runtime == nil {
 		return
+	}
+	if mi, ok := c.Runtime.(runtime.MachineInspector); ok {
+		if m, err := mi.Machine(c.VMName); err == nil {
+			c.machineSeen = m
+		}
 	}
 	mi, ok := c.Runtime.(runtime.MigrationInspector)
 	if !ok {
@@ -311,6 +340,72 @@ func (c *Config) readTeleportState() {
 	if m, err := mi.Migration(c.VMName); err == nil {
 		c.teleportState = m
 	}
+}
+
+// machine is the machine profile a boot of this session asks hvi for: the
+// portable one for a teleportable session on an arm64 host, so its
+// checkpoint restores on a Mac and on a Linux host alike, and "" for hvi's
+// native machine otherwise. One function, so the run, the plan, info and the
+// boot asset resolve cannot come to disagree.
+func (c *Config) machine() string {
+	if !c.Teleportable {
+		return ""
+	}
+	return teleportableMachine()
+}
+
+// teleportableMachine is runtime.TeleportableMachine, a variable so a test on
+// an amd64 host can ask what an arm64 host decides.
+var teleportableMachine = runtime.TeleportableMachine
+
+// machineKernelRefusal refuses a boot that would ask hull for a machine
+// whose kernel was not resolved for it. hull would then boot the image's own
+// kernel, or look up a copy of its own, on a machine that needs the portable
+// kernel, and brig would have checked neither.
+func (c *Config) machineKernelRefusal(assets runtime.BootAssets) error {
+	m := c.machine()
+	if m == "" || assets.Machine == m {
+		return nil
+	}
+	return fmt.Errorf("refusing to boot: this teleportable session boots the %s machine, and no portable "+
+		"kernel was resolved for it, so brig cannot hand the runtime the kernel that machine boots or "+
+		"compare it with the digest brig pins. A teleportable session needs a profile with genericBoot: "+
+		"true and a runtime that resolves boot assets (hull)", m)
+}
+
+// machineName is machine as a row names it.
+func (c *Config) machineName() string {
+	if m := c.machine(); m != "" {
+		return m
+	}
+	return runtime.MachineNative
+}
+
+// machineLine is the MACHINE row of a teleportable session: the machine it
+// boots, and for info the machine hull's record says it runs when that
+// differs, which is a session booted before brig chose the portable one.
+func (c *Config) machineLine() string {
+	want := c.machineName()
+	note := "the same machine on a Mac and on a Linux arm64 host"
+	if want == runtime.MachineNative {
+		note = "this host's own; there is no portable machine on " + runtime.GuestArch()
+	}
+	if seen := c.machineSeen; seen != "" && seen != want {
+		return fmt.Sprintf("%s, as hull records the boot (a teleportable session boots %s now)", seen, want)
+	}
+	return fmt.Sprintf("%s (%s)", want, note)
+}
+
+// infoMachine is the MACHINE row as data: what hull's record says when it
+// says, and what a boot asks for otherwise.
+func (c *Config) infoMachine() string {
+	if !c.Teleportable {
+		return ""
+	}
+	if c.machineSeen != "" {
+		return c.machineSeen
+	}
+	return c.machineName()
 }
 
 // teleportLine is the TELEPORT row: hull's state and the bundle it names, or
