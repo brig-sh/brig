@@ -292,6 +292,14 @@ func TestCheckProbeRefusesEachReason(t *testing.T) {
 	if err := checkProbe(cfg, r, "me@box", "claude-code", "tx", two); err != nil {
 		t.Errorf("the same rules bound there: %v", err)
 	}
+	// An offline guest under a policy has no gateway on either host, so a
+	// destination that cannot enforce rules can still take it.
+	r = probeFor()
+	r.Egress, r.Network = probeEgress{Why: "no --egress-default"}, nil
+	if err := checkProbe(cfg, r, "me@box", "claude-code", "tx",
+		wrap.MoveNetwork{Net: "none", Egress: policy.Egress{Default: "deny"}}); err != nil {
+		t.Errorf("an offline guest under a policy: %v", err)
+	}
 	// The sandbox there is this move's own, asked again.
 	r = probeFor()
 	r.Sandbox.Exists, r.Sandbox.Arriving = true, "tx"
