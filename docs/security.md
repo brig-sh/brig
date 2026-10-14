@@ -56,9 +56,11 @@ the sandbox stops, until `brig rm` removes the sandbox. See
 goes with it, credential values included. RAM with credentials leaves the host
 only through ssh to the host you named. Brig hands that host to `hull migrate`
 as `--to`, and puts it on each of its own ssh lines right after `--`. It hands
-hull no program to run in place of ssh. A session under an egress policy is
-moved only to a host whose gateway can enforce one, and is refused before
-anything is paused otherwise. After a move, an exec on the destination
+hull no program to run in place of ssh. A session on a network and under an
+egress policy is moved only to a host whose gateway can enforce one, and is
+refused before anything is paused otherwise. An offline session has no
+gateway on either host, and its rules move with it as its recorded policy.
+After a move, an exec on the destination
 carries only the credentials that host's own store and environment hold. Brig
 asks no other host for a credential. The limits of this are under
 [Moving a session](#moving-a-session).
