@@ -159,6 +159,13 @@ type RunSpec struct {
 	// when a ref bound them, the literals a profile writes and brig's
 	// plumbing still go on the run.
 	Teleportable bool
+	// Profile is the machine hvi boots: "" for its native machine, or
+	// MachinePortableArm64V1, which a teleportable session on an arm64 host
+	// boots so that its checkpoint restores on a Mac and on a Linux host
+	// alike. hull takes it as --profile. The portable machine boots the
+	// portable kernel, so BootAssets must have been resolved for it. See
+	// TeleportableMachine.
+	Profile string
 	// Counted marks a user action, whose boot and lifetime hull's telemetry
 	// reports, rather than brig's own plumbing. See telemetryEnv.
 	Counted bool

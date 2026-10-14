@@ -199,6 +199,23 @@ type BootAssets struct {
 	// someone named is their build, and wrap weighs a digest that differs
 	// from the verified bundle differently there (#234).
 	Named bool
+	// Machine is the machine profile the kernel is for: "" for the boot
+	// bundle's own kernel, MachinePortableArm64V1 for the portable kernel,
+	// which is not a file of the bundle. The initrd is the bundle's either
+	// way. See forMachine.
+	Machine string
+	// KernelNamed reports that BRIG_PORTABLE_KERNEL or BRIG_BOOT_ASSETS chose
+	// the portable kernel, which wrap weighs as it weighs Named.
+	KernelNamed bool
+}
+
+// machineName is a machine profile as a message names it: "" is the native
+// machine.
+func machineName(machine string) string {
+	if machine == "" {
+		return MachineNative
+	}
+	return machine
 }
 
 // given reports whether both paths are set. One path alone is not a resolve,
@@ -212,6 +229,10 @@ type BootFetch struct {
 	// moved after the check deliver a bundle nobody checked. Empty fetches the
 	// tag BootAssetsRef names, for a bundle brig had no signature to check.
 	Ref string
+	// Machine is RunSpec.Profile: the machine the kernel must be for. The
+	// portable machine takes the portable kernel in place of the bundle's.
+	// Nothing fetches that one; see forMachine.
+	Machine string
 	// Replace fetches even when both files are there, over them. wrap asks for
 	// it when the files are an older bundle's, in a directory brig chose.
 	Replace bool
@@ -253,6 +274,17 @@ func resolveBootAssets(locate assetLocator, fetch assetFetcher, replace bool) (B
 	return BootAssets{Kernel: kernel, Initrd: initrd, Named: os.Getenv("BRIG_BOOT_ASSETS") != ""}, nil
 }
 
+// resolveMachineAssets is resolveBootAssets for the machine fetch names: the
+// bundle's pair, with the portable kernel in place of its kernel for the
+// portable machine.
+func resolveMachineAssets(locate assetLocator, fetch assetFetcher, f BootFetch) (BootAssets, error) {
+	assets, err := resolveBootAssets(locate, fetch, f.Replace)
+	if err != nil {
+		return BootAssets{}, err
+	}
+	return forMachine(assets, f.Machine, locate)
+}
+
 // bootAnnotations are the annotations that carry those artifacts, in the form
 // both runtimes take them.
 //
@@ -260,13 +292,26 @@ func resolveBootAssets(locate assetLocator, fetch assetFetcher, replace bool) (B
 // the ones that boot, and locate and fetch are not called. A second locate
 // costs every run another `hull assets dir`. Otherwise the adapter resolves
 // here, as it did before wrap resolved early.
-func bootAnnotations(given BootAssets, locate assetLocator, fetch assetFetcher) (kv []string, err error) {
+//
+// machine is RunSpec.Profile. Given paths are for the machine the caller
+// resolved them for, and are refused when that is not this one, so a
+// teleportable boot never takes the bundle's kernel by way of a resolve made
+// for another. A resolve here swaps in the portable kernel itself.
+func bootAnnotations(given BootAssets, machine string, locate assetLocator, fetch assetFetcher) (kv []string, err error) {
 	kernel, initrd := given.Kernel, given.Initrd
 	if !given.given() {
 		kernel, initrd, err = bootArtifacts(locate, fetch)
 		if err != nil {
 			return nil, err
 		}
+		resolved, err := forMachine(BootAssets{Kernel: kernel, Initrd: initrd}, machine, locate)
+		if err != nil {
+			return nil, err
+		}
+		kernel = resolved.Kernel
+	} else if given.Machine != machine {
+		return nil, fmt.Errorf("the boot assets were resolved for the %s machine, and this run boots the %s one",
+			machineName(given.Machine), machineName(machine))
 	}
 	return []string{
 		annotationBootKernel + "=" + kernel,

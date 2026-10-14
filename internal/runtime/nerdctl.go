@@ -266,9 +266,21 @@ func (n *nerdctl) ResolveBootAssets(fetch BootFetch, notice, progress io.Writer)
 	if err := n.refuseGenericBootOnDocker(); err != nil {
 		return BootAssets{}, err
 	}
+	if fetch.Machine != "" {
+		return BootAssets{}, n.refuseMachine(fetch.Machine)
+	}
 	return resolveBootAssets(nil, func(dir string) error {
 		return orasPull(dir, fetch, notice, progress)
 	}, fetch.Replace)
+}
+
+// refuseMachine refuses a machine profile, which only hvi boots. Only a
+// teleportable session names one, and wrap refuses that session on any
+// runtime but hull before it gets here. This keeps a boot that skipped the
+// check from booting a machine other than the one it asked for.
+func (n *nerdctl) refuseMachine(machine string) error {
+	return fmt.Errorf("%s boots no %s machine: only hull's hvi does, and a teleportable session runs on hull",
+		n.Kind(), machine)
 }
 
 // RootfsType is ignored here, deliberately: it selects how a VM reaches its
@@ -470,6 +482,9 @@ func (n *nerdctl) removeSandboxNetwork(name string) {
 }
 
 func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
+	if spec.Profile != "" {
+		return nil, nil, n.refuseMachine(spec.Profile)
+	}
 	args = []string{"run", "--detach", "--name", spec.Name,
 		"--runtime", containerdRuntime(),
 		"--memory", strconv.Itoa(spec.Mem) + "m",
@@ -512,7 +527,7 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		}
 		// oras rather than hull: hull does not build on Linux, so there is
 		// nothing to ask. See bootfetch.go.
-		annotations, err := bootAnnotations(spec.BootAssets, nil, orasFetcher(spec))
+		annotations, err := bootAnnotations(spec.BootAssets, spec.Profile, nil, orasFetcher(spec))
 		if err != nil {
 			return nil, nil, err
 		}
