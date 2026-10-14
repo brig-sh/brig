@@ -674,6 +674,36 @@ func TestAnAbortWhoseRestoreFailedSaysSo(t *testing.T) {
 	}
 }
 
+// A receive whose answer was lost may still have taken the network on the
+// destination: the move asks for it back before it drops its record, and
+// hull is never asked to move.
+func TestALostReceiveAnswerGivesTheNetworkBack(t *testing.T) {
+	rt := &moveRuntime{running: true, state: runtime.MoveCommitted}
+	calls := moveHost(t, rt, noNetProbe())
+	ok := outputRemote
+	outputRemote = func(argv []string) ([]byte, error) {
+		out, err := ok(argv)
+		if line := argv[len(argv)-1]; strings.Contains(line, receiveVerb) && !strings.Contains(line, "--abort") {
+			return nil, errors.New("ssh: connection reset")
+		}
+		return out, err
+	}
+	_, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+	if err == nil || !strings.Contains(err.Error(), "nothing was paused") {
+		t.Fatalf("a lost receive answer: %v", err)
+	}
+	last := (*calls)[len(*calls)-1]
+	if !strings.Contains(last[len(last)-1], receiveVerb+" --json --abort") {
+		t.Errorf("the destination was not asked to give the network back: %q", *calls)
+	}
+	if len(rt.asked) != 0 {
+		t.Errorf("hull was asked %v", rt.asked)
+	}
+	if e := entryOf(t); e["pendingHost"] != nil || e["txid"] != nil {
+		t.Errorf("the move was kept: %v", e)
+	}
+}
+
 // A move hull refused before it fenced anything is undone on both sides:
 // the destination's network is given back and the record cleared.
 func TestAMoveHullDidNotBeginIsUndone(t *testing.T) {

@@ -255,6 +255,9 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 	}
 	sock, err := receiveRemote(host, spec.RemoteStore, ref, vm, txid, net)
 	if err != nil {
+		// The destination may have taken the network and only the answer
+		// was lost. Giving it back is harmless when it took nothing.
+		abortReceive(host, spec.RemoteStore, ref, vm, txid)
 		_ = wrap.ClearMove(ref, vm, txid)
 		return fmt.Errorf("the brig on %s could not take %s's network, and nothing was paused: %w", host, ref, err)
 	}
