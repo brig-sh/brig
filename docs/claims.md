@@ -62,8 +62,8 @@ environment hold.", are defended by tests against a stub hull and a fake
 ssh.
 Those tests check every command line a move runs and every record it keeps.
 They do not show what a real ssh and a real hull do with those lines. Brig's
-move has not yet run against real hardware: see
-[Not yet run on real hardware](teleport.md#not-yet-run-on-real-hardware).
+move has not yet committed on real hardware: see
+[On real hardware](teleport.md#on-real-hardware).
 Until it has, read those rows as true of the command lines, not yet of a
 real move.
 

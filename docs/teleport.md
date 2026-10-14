@@ -376,15 +376,67 @@ there decide who can receive the guest. Brig does not hand hull
 place of ssh, for the move or for its status or its abort, each of which
 reaches the destination too.
 
-### Not yet run on real hardware
+### On real hardware
 
 Every step above runs in `script/smoke.sh` against a stub hull, with a fake
-ssh that runs the destination on the same machine. Brig's move has not yet
-run against a real hull and hvi. hull's own `hull migrate` has committed a
-move between two stores on one Mac (see hull's `docs/migration.md`). Brig's
-move needs real ssh from the source to the destination, logging in with a
-key, because Brig hands hull no other transport. On one Mac with Remote
-Login on, a move between two stores goes like this:
+ssh that runs the destination on the same machine. hull's own `hull migrate`
+has committed a move between two stores on one Mac (see hull's
+`docs/migration.md`). Brig's move needs real ssh from the source to the
+destination, logging in with a key, because Brig hands hull no other
+transport.
+
+#### The Linux pair
+
+On 2026-10-14 Brig ran on two Raspberry Pi 5 hosts, `rp1` and `rp2` (Linux
+6.12, KVM with a vGICv2), with `BRIG_RUNTIME=hull`, a state directory and a
+hull store of its own on each, and real ssh from `rp1` to `rp2` with a key.
+Both hosts ran the same brig, hull and hvi builds. The profile was a copy of
+`ubuntu` with `teleportable: true`, `network: offline`, 1 vCPU and 1 GiB.
+
+What ran:
+
+- `brig doctor` on `rp1` reported the portable kernel present and the
+  pinned build.
+- `brig run --teleportable ubuntu -d` booted the `portable-arm64-v1` machine
+  on KVM: hull recorded the profile, the hvi command line carried
+  `--profile portable-arm64-v1`, and the guest ran the portable kernel with
+  `hvi-time` as its clocksource. `brig info` printed
+  `MACHINE portable-arm64-v1`.
+- `brig sh ubuntu` started a counter loop in the guest and read it back.
+- `brig teleport-probe` ran on `rp2` over ssh and reported hull, hvi, the
+  store and a gateway that enforces egress.
+- `brig teleport ubuntu --to pmoust@rp2` ran its checks, the probe, the
+  receive on `rp2` and hull's dry run. The dry run refused: the hvi that
+  could boot the portable machine took no control socket. Brig gave `rp2`
+  its network and index back, the counter kept counting on `rp1`, and
+  `--status` reported no move.
+
+What is still to run: the move itself, which needs an hvi that boots the
+portable machine, checkpoints it and restores it on KVM. The hvi on
+`feat/teleport` had none of the three at the time. Until a move has
+committed on real hardware, read the move rows of
+[claims.md](claims.md#rows-checked-at-the-command-line-only) as true of the
+command lines only.
+
+To run the move on such a pair, give the destination's brig its settings,
+then run the same commands:
+
+```bash
+B3=/home/me/b3   # the same layout on both hosts
+export BRIG_TELEPORT_REMOTE_BRIG=$B3/bin/brig
+export BRIG_TELEPORT_REMOTE_ENV="PATH=$B3/bin:/usr/bin:/bin BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B3/bin/hull BRIG_STATE_DIR=$B3/state BRIG_HULL_STORE_DIR=$B3/store BRIG_PROFILE_DIR=$B3/profiles BRIG_BOOT_ASSETS=$B3/assets"
+brig run --teleportable ubuntu -d
+brig sh ubuntu -c 'nohup setsid sh -c "i=0; while :; do i=\$((i+1)); echo \$i > /tmp/count; sleep 0.2; done" >/dev/null 2>&1 </dev/null &'
+brig teleport ubuntu --to me@rp2
+brig sh ubuntu -c 'cat /tmp/count'   # runs on rp2, over ssh
+brig ls
+brig teleport ubuntu --status
+brig rm ubuntu                       # removes the fenced copy left here
+```
+
+#### One Mac
+
+On one Mac with Remote Login on, a move between two stores goes like this:
 
 ```bash
 # The destination's brig: its own state, gateway directory and hull store.
