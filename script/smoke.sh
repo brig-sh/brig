@@ -97,11 +97,13 @@ case "$verb" in
     name=""; share=""
     : > "$STUB_STATE.shares"
     : > "$STUB_STATE.rootfs"
+    : > "$STUB_STATE.profile"
     printf '1 0 254:1 / / rw - ext4\n' > "$STUB_STATE.mounts"
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
         --rootfs-type) printf '%s' "$2" > "$STUB_STATE.rootfs"; shift 2 ;;
+        --profile) printf '%s' "$2" > "$STUB_STATE.profile"; shift 2 ;;
         --shared-dir)
           printf '%s\n' "$2" >> "$STUB_STATE.shares"
           [ -z "$share" ] && share="$2"
@@ -265,10 +267,17 @@ case "$verb" in
       if [ -n "${STUB_INSPECT_ARGV:-}" ]; then
         argv='"hvi", "boot", "--kernel", "/k"'
         [ "$(cat "$STUB_STATE.rootfs" 2>/dev/null)" = block ] && argv="$argv, \"--disk\", \"/s/rootfs.ext4\""
+        # hull hands hvi the machine it was given, under the same flag, and
+        # records it beside the argv.
+        profile=""
+        if [ -s "$STUB_STATE.profile" ]; then
+          argv="$argv, \"--profile\", \"$(cat "$STUB_STATE.profile")\""
+          profile=", \"profile\": \"$(cat "$STUB_STATE.profile")\""
+        fi
         while IFS= read -r dir; do
           [ -n "$dir" ] && argv="$argv, \"--share-rw\", \"${dir%%:*}\", \"share\""
         done < "$STUB_STATE.shares"
-        printf '{"id": "%s", "backend": "hvi", "cmdLine": [%s]%s}\n' "$1" "$argv" "$migration"
+        printf '{"id": "%s", "backend": "hvi", "cmdLine": [%s]%s%s}\n' "$1" "$argv" "$profile" "$migration"
       else
         printf '{"name": "%s"%s}\n' "$1" "$migration"
       fi
@@ -421,6 +430,18 @@ printf 'stand-in\n' > "$WORK/assets/Image"
 printf 'stand-in\n' > "$WORK/assets/bzImage"
 printf 'stand-in\n' > "$WORK/assets/container-initrd"
 export BRIG_BOOT_ASSETS="$WORK/assets"
+# A teleportable session on an arm64 host boots the portable machine, whose
+# kernel is a file of its own beside the bundle's pair. A stand-in as well.
+mkdir -p "$WORK/assets/portable-arm64-v1"
+printf 'stand-in portable\n' > "$WORK/assets/portable-arm64-v1/Image"
+# The machine a teleportable session boots, and its kernel: the portable one on
+# an arm64 host, hvi's native machine with the bundle's kernel on any other.
+# CI runs on amd64, so there the second branch is what is checked.
+case "$(uname -m)" in
+  arm64|aarch64) TP_MACHINE='[--profile][portable-arm64-v1]'; TP_KERNEL="$WORK/assets/portable-arm64-v1/Image" ;;
+  x86_64|amd64) TP_MACHINE=''; TP_KERNEL="$WORK/assets/bzImage" ;;
+  *) TP_MACHINE=''; TP_KERNEL="$WORK/assets/Image" ;;
+esac
 # The built-in profiles ask for hvi, and brig starts a network gateway for it
 # before booting anything. Most cases here are about what reaches argv and have
 # no use for one, so those fixtures explicitly select vz and shared. The
@@ -2047,6 +2068,20 @@ case "$run_line" in
   *"--hypervisor hvi"*"--rootfs-type block"*) ok "a teleportable boot asks hvi for a block root" ;;
   *) bad "a teleportable boot asks hvi for a block root -- got: $run_line" ;;
 esac
+# On arm64 it asks for the portable machine and boots the portable kernel,
+# with the bundle's initrd, and the flag sits after the root type and before
+# the boot annotations: nothing else on the line moves. On amd64 there is no
+# portable machine, and the line names none.
+tp_words="$(grep '^words:\[run\]' "$STUB_LOG")"
+want="[--rootfs-type][block]$TP_MACHINE[--annotation][com.urunc.unikernel.bootKernel=$TP_KERNEL]"
+want="$want[--annotation][com.urunc.unikernel.bootInitrd=$WORK/assets/container-initrd]"
+case "$tp_words" in
+  *"$want"*) ok "a teleportable boot names the machine it boots, with its kernel, and nothing else ($(uname -m))" ;;
+  *) bad "a teleportable boot names the machine it boots, with its kernel -- want $want in: $tp_words" ;;
+esac
+[ "$(grep -o -- '--profile' <<< "$tp_words" | wc -l | tr -d ' ')" = "$([ -n "$TP_MACHINE" ] && echo 1 || echo 0)" ] \
+  && ok "a teleportable boot names a machine profile once on arm64 and never elsewhere" \
+  || bad "a teleportable boot names a machine profile once on arm64 and never elsewhere -- got: $tp_words"
 [ -e "$BRIG_STATE_DIR/homes/brig-claude-code" ] \
   && bad "a teleportable run made a guest home on the host" \
   || ok "a teleportable run makes no guest home on the host"
@@ -2093,6 +2128,29 @@ tp "$WORK/brig" info claude > "$WORK/tp-info.out" 2>&1
 grep -q '^TELEPORTABLE ' "$WORK/tp-info.out" && grep -q '^WORKSPACE .*none on the host' "$WORK/tp-info.out" \
   && ok "info names a teleportable session and no host home" \
   || bad "info names a teleportable session and no host home -- got: $(cat "$WORK/tp-info.out")"
+# The machine, read back from hull's record of the boot: the stub's record
+# carries the --profile the run was handed, as hull's carries hvi's argv.
+case "$TP_MACHINE" in
+  "") tp_machine=native ;;
+  *) tp_machine=portable-arm64-v1 ;;
+esac
+STUB_INSPECT_ARGV=1 tp "$WORK/brig" info claude > "$WORK/tp-info-m.out" 2>&1
+STUB_INSPECT_ARGV=1 tp "$WORK/brig" info --json claude > "$WORK/tp-info-m.json" 2> /dev/null
+grep -q "^MACHINE  *$tp_machine (" "$WORK/tp-info-m.out" \
+  && python3 -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["data"]["machine"] != sys.argv[2])' "$WORK/tp-info-m.json" "$tp_machine" \
+  && ok "info names the machine a teleportable session runs, in text and JSON" \
+  || bad "info names the machine a teleportable session runs -- want $tp_machine, got: $(cat "$WORK/tp-info-m.out" "$WORK/tp-info-m.json")"
+# A record of a boot that named no machine is hvi's native one, and info says
+# so rather than what a boot would ask for now: that is a session booted
+# before brig chose the portable machine, and it would not move.
+if [ -n "$TP_MACHINE" ]; then
+  cp "$STUB_STATE.profile" "$WORK/tp-profile.keep"; : > "$STUB_STATE.profile"
+  STUB_INSPECT_ARGV=1 tp "$WORK/brig" info claude > "$WORK/tp-info-m.out" 2>&1
+  grep -q '^MACHINE  *native, as hull records the boot (a teleportable session boots portable-arm64-v1 now)$' "$WORK/tp-info-m.out" \
+    && ok "info reports the native machine hull's record shows, not the one a boot asks for" \
+    || bad "info reports the native machine hull's record shows -- got: $(cat "$WORK/tp-info-m.out")"
+  cp "$WORK/tp-profile.keep" "$STUB_STATE.profile"
+fi
 # Where a checkpoint left the session, in hull's words, once hull has a
 # record and not before. The checkpoint is the stub's, asked of it directly:
 # no brig verb takes one yet.
@@ -2247,6 +2305,33 @@ esac
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "a teleportable gui run reached the runtime" \
   || ok "a teleportable gui run reached no runtime"
+# No portable kernel, no teleportable boot on arm64: refused before the boot,
+# naming the variable that points at it, so a session that could never move
+# is not started.
+if [ -n "$TP_MACHINE" ]; then
+  : > "$STUB_LOG"
+  out="$(BRIG_PORTABLE_KERNEL="$WORK/no-such-kernel" tp "$WORK/brig" run --teleportable claude -d 2>&1)"; rc=$?
+  case "$rc:$out" in
+    1:*portable-arm64-v1*"$WORK/no-such-kernel"*BRIG_PORTABLE_KERNEL*) ok "a teleportable run with no portable kernel is refused, naming BRIG_PORTABLE_KERNEL" ;;
+    *) bad "a teleportable run with no portable kernel is refused, naming BRIG_PORTABLE_KERNEL -- got $rc: $out" ;;
+  esac
+  grep -q '^argv: run ' "$STUB_LOG" \
+    && bad "a teleportable run with no portable kernel reached the runtime" \
+    || ok "a teleportable run with no portable kernel reached no runtime"
+fi
+# An ordinary run on hvi is the line it was: no machine profile, and the
+# bundle's kernel.
+: > "$STUB_LOG"
+env -u BRIG_NETWORK BRIG_HYPERVISOR=hvi BRIG_NETWORK=offline "$WORK/brig" run claude -d > "$WORK/tp-plain.out" 2>&1; rc=$?
+plain_words="$(grep '^words:\[run\]' "$STUB_LOG")"
+plain_kernel="$WORK/assets/Image"
+[ "$(uname -m)" = x86_64 ] && plain_kernel="$WORK/assets/bzImage"
+case "$rc|$plain_words" in
+  *--profile*) bad "an ordinary hvi run names a machine profile -- got: $plain_words" ;;
+  "0|"*"[com.urunc.unikernel.bootKernel=$plain_kernel]"*)
+    ok "an ordinary hvi run names no machine profile and boots the bundle's kernel" ;;
+  *) bad "an ordinary hvi run names no machine profile and boots the bundle's kernel -- got $rc: $plain_words $(cat "$WORK/tp-plain.out")" ;;
+esac
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== teleport =="
