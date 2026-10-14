@@ -298,8 +298,11 @@ disk. The `claude-code` move from a Mac to a Pi in
 [Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi) sent
 1.8 GB while the guest was paused, for 50 to 57 s of downtime.
 
-The streamed move (H7 in hvi and hull, being built on `feat/teleport` when
-this was written) sends most of it while the guest runs. When hull boots a
+The streamed move sends most of it while the guest runs. When this was
+written it was in hull `81e118b` on `feat/teleport`, and in hvi only on
+hvi's `feat/teleport-fast` and `feat/teleport-fast-disk` branches, not yet
+on hvi's `feat/teleport`. hull falls back to the whole-bundle move, and
+says why, when either host lacks it. When hull boots a
 teleportable sandbox, it keeps a read-only copy of the disk as built, its
 base, named by its digest. `brig teleport <ref> --to <user>@<host>
 --prepare` has hull put that base on the destination, with the image and
@@ -308,9 +311,10 @@ first, before the pause. The move then copies in rounds while the guest
 runs. hvi records which pages of memory and which 64 KiB disk blocks the
 guest writes. Round 0 sends the memory that is not zero and the disk blocks
 that differ from the base. Each later round sends what the guest changed
-during the round before. hull pauses the guest when a round is at most
-8 MiB, or 2% of the guest's memory if that is more, or after 5 rounds, or
-after 60 s. It then sends the last changes, the CPU state and the device
+during the round before. hvi pauses the guest when the pages written during
+a round come to at most 8 MiB, or 2% of the guest's memory that is not zero
+if that is more, or after 5 rounds, or after 60 s, whichever comes first.
+These are hvi's defaults. It then sends the last changes, the CPU state and the device
 state, and the destination resumes the guest. Only that last round is
 downtime. A guest that writes faster than the link can carry never gets a
 small round. The cap still ends the copy, and the last round is then
@@ -320,14 +324,65 @@ the same pause, and the destination checks every part against its sha256
 before it runs anything.
 
 `brig teleport` prints hull's lines on stderr as they arrive, after
-`brig: hull:`: each round, the bytes it sent, the rate, and how fast the
-guest dirtied pages. When the move commits, it prints how long hull's move
-took, how long the guest was paused, and the bytes sent, as far as hull
-reported them. `--json` carries the same in its `move` object.
+`brig: hull:`: how hull moves the guest, each round, the bytes it sent and
+the rate, and for a disk round after the first, how many blocks a second
+the guest wrote. hull prints no such rate for memory. When the move
+commits, it prints how long hull's move took, whether hull streamed it,
+hull's estimate of how long the guest was paused, and the bytes sent, as
+far as hull reported them. hull's `downtime about` is an estimate: it is
+the time the destination resumed the guest less the time the last memory
+round began to arrive here, read on two hosts' clocks. `--json` carries the same in its
+`move` object. Brig prints hull's lines from a queue of its own, so hull
+never waits on Brig's stderr, which hull writes to while the guest is
+paused. When that stderr falls a few thousand lines behind, Brig drops
+lines and then says how many. A stderr whose reader has gone does not
+stop the move.
 
-| | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: streamed move, Mac to Pi |
+hull measured both paths on the Linux pair, with the 1 GiB `ubuntu` guest
+under a writing workload, over real ssh. The numbers below are from hull's
+`docs/migration.md` at `6bfc09f`. hull was built at `1ecb5c8` (the same
+tree as `81e118b`), and hvi at `ef8833a`, a merge of hvi's two
+`feat/teleport-fast` branches. These moves ran `hull migrate` directly, not
+through `brig teleport`. "Guest stopped" is what the guest's own `hvi-time`
+driver logged:
+
+| `rp1` to `rp2` | Before: whole bundle | After: streamed |
+| --- | --- | --- |
+| `hull migrate`, start to end | 8.2 s | 5.4 s (5.7 s for `rp2` to `rp1`) |
+| Guest stopped | 7.43 s | 279 ms (340 ms for `rp2` to `rp1`) |
+| Sent | 288.2 MiB in 5.1 s | 109.5 MiB: disk 287 MiB, sent as 34.6 MiB, and 74.9 MiB of memory in 3 rounds |
+
+The same streamed move through `brig teleport`, on the same pair with the
+same hull and hvi, brig `e1a9c2d` there and `e38f18d` back, and the same
+guest writing a counter to its disk five times a second. `--prepare` first
+sent the 110.8 MiB base as 49.2 MiB in 1.1 s (3.0 s in all), and found
+everything held on the way back. After each move the counter went on, and
+the guest's `boot_id` and the sha256 of a 32 MiB file it wrote were the
+same:
+
+| | `rp1` to `rp2` | `rp2` to `rp1`, `rp2` busy with another project's builds |
+| --- | --- | --- |
+| `brig teleport`, start to end | 7.6 s | 11.9 s |
+| `hull migrate`, as Brig timed it | 6.0 s | 10.6 s |
+| Guest stopped, hull's `downtime about` | 358 ms | 4842 ms |
+| Guest stopped, the change in the guest's `hvi-time` `downtime total` | 346 ms | 4837 ms |
+| Sent | 109.5 MiB in 5.4 s: disk 274.9 MiB as 34.4 MiB, memory 75.0 MiB | 109.6 MiB in 10.3 s |
+
+On the move back, hvi on `rp2` sealed its stream 1163 ms after the last
+memory round began, and the last disk round took 717 ms. The guest's own
+figure agrees with hull's in both directions. The guest's `hvi-time`
+driver logs `downtime total` at each restore, a total since boot, so the
+downtime of one move is the change from the restore before it: 346 ms at
+generation 4, after the move to `rp2`, and 5183.6 less 346.2, 4837 ms, at
+generation 6, after the move back. The same line's `wall clock moved` does
+not measure the downtime: after the first move it read 10.34 s, against
+346 ms. After the move back it read 4.84 s.
+
+The `claude-code` guest from a Mac to a Pi:
+
+| | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: streamed move |
 | --- | --- | --- | --- |
-| Sent while the guest runs | nothing | the base once (`--prepare`), then the rounds | pending |
+| Sent while the guest runs | nothing | the base once per image and host (`--prepare`), then the rounds | pending |
 | Sent while the guest is paused | 1.80 GB in 46.3 to 53.7 s, at 32.0 to 37.1 MiB/s | the last round | pending |
 | hull's fence, with the capture | 1.63 to 2.08 s | | pending |
 | Restore paused, then commit | 1.23 to 1.38 s, then 0.22 to 0.25 s | | pending |
@@ -336,8 +391,8 @@ reported them. `--json` carries the same in its `move` object.
 
 The before column is the four moves to `rp1` in
 [Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi). No
-streamed move had run when this was written, so the after column is
-pending.
+streamed move from a Mac had run when this was written: the Mac's hvi
+needs the same streamed checkpoint. So that after column is pending.
 
 #### Prepare the destination
 
@@ -357,7 +412,12 @@ A prepare pauses nothing, and the guest keeps running here.
 Brig records the host in its session index once it holds the sandbox's
 base, with whether hull says a move there sends only what the guest
 changed. `brig teleport --status` and `--json` then name it, and a move to
-that host says it was prepared and whether it streams. A committed move
+that host says when it was prepared and what hull said then. That is a
+record of the prepare, not a check made at the move. hull decides again
+when the move starts, and says how on its `Transport:` line. When hull
+sends the whole checkpoint and disk to a host that the prepare said would
+stream, Brig says so, and the move's `--json` carries hull's word in
+`transport` and `transportWhy`. A committed move
 clears the record, because the next move starts from the destination. When
 hull says a move there would still send everything, for example because
 the hull or hvi there predates the streamed move, Brig says why. A host
@@ -366,7 +426,16 @@ fail in either case.
 
 A prepare takes no network on the destination. The session's gateway, with
 its egress rules, is still started by the move (step 4). You can run it
-again at any time: a host that holds everything is sent nothing.
+again at any time: a host that holds everything for this boot of the
+session is sent nothing.
+
+The base is not yet once per image and host. With hull `6bfc09f`, each
+boot of a sandbox gets a base of its own, with its own digest: three boots
+of the same `ubuntu` image gave three. So each new session needs its own
+prepare, and that prepare sends the whole base again: 110.8 MiB as
+49.2 MiB on the wire for `ubuntu`. For `claude-code` we estimate it at
+about 1.6 GiB a session, the size of its disk; that was not measured. Once
+per image and host is the target, not what hull does today.
 
 ### After a move
 

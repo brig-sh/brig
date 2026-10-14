@@ -93,7 +93,8 @@ func TestTeleportPrepareReadiesTheHostAndMovesNothing(t *testing.T) {
 			t.Errorf("move: %v", err)
 		}
 	})
-	if !strings.Contains(stderr, "me@box was prepared for claude-code at ") || !strings.Contains(stderr, "a move there streams") {
+	if !strings.Contains(stderr, "me@box was prepared for claude-code at ") ||
+		!strings.Contains(stderr, ", when hull said a move there would stream\n") {
 		t.Errorf("the move did not say the host was prepared: %q", stderr)
 	}
 	if e := entryOf(t); e["host"] != "me@box" || e["preparedHost"] != nil {
@@ -200,7 +201,7 @@ func TestAPrepareThatCannotStreamSaysSo(t *testing.T) {
 				t.Errorf("move: %v", err)
 			}
 		})
-		if !strings.Contains(stderr, "holds its base; hull said a move there still sends everything") {
+		if !strings.Contains(stderr, ", when hull said a move there would still send the whole checkpoint and disk\n") {
 			t.Errorf("%s: the move's note: %q", c.what, stderr)
 		}
 	}
@@ -255,8 +256,17 @@ func writeIndex(t *testing.T, index string) {
 // carries how it went: the text ends with the numbers, and --json has them
 // in its move object, rounds included. stdout stays the one document.
 func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
-	lines := []string{"round 0: 1048576 bytes in 0.5 s (2.0 MiB/s), dirty 120 pages/s",
-		"round 1: 65536 bytes in 0.1 s (0.6 MiB/s), dirty 40 pages/s", "downtime: 1.4 s"}
+	// hull 1ecb5c8's lines for a streamed move of the ubuntu guest.
+	lines := []string{"Transport: streamed (pre-copy rounds; the disk blocks that differ from base 13fd46b9d871)",
+		"move: disk round 0: 4393 blocks, 274.6 MiB (34.4 MiB on the wire) in 2.26 s, 15.2 MiB/s",
+		"move: disk round 1: 2 blocks, 131072 bytes (797 bytes on the wire) in 0.00 s, 383648 bytes/s, guest wrote 1 blocks/s",
+		"move: ram-round-0: 74.0 MiB in 2.88 s, 25.7 MiB/s",
+		"move: ram-round-1: 1.0 MiB in 0.03 s, 34.4 MiB/s",
+		"move: disk round 2 (final): 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 1.5 MiB/s",
+		"move: hvi sealed the stream and fenced brig-claude-code (39 ms after the last RAM round began)",
+		"Timings (ms): fence 0, transfer 5394, restore paused 0, commit 91",
+		"move: 109.5 MiB in 5.4 s; disk 34.4 MiB, RAM 75.0 MiB, state 53259 bytes; sealed 39 ms after the last RAM " +
+			"round began, last disk round 3 ms; downtime about 358 ms"}
 	for _, wantJSON := range []bool{false, true} {
 		rt := &moveRuntime{running: true, state: runtime.MoveCommitted, progress: lines}
 		moveHost(t, rt, noNetProbe())
@@ -277,7 +287,7 @@ func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
 			}
 		}
 		if !wantJSON {
-			if !strings.Contains(out, "\n  hull's move took ") || !strings.Contains(out, "the guest was paused 1.40 s, 2 rounds") {
+			if !strings.Contains(out, "\n  hull's move took ") || !strings.Contains(out, "hull estimates the guest was paused about 0.36 s, 5 rounds") {
 				t.Errorf("stdout %q", out)
 			}
 			continue
@@ -289,9 +299,55 @@ func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
 			t.Fatalf("--json is not one document: %q, %v", out, err)
 		}
 		m := doc.Data.Move
-		if m == nil || len(m.Rounds) != 2 || m.Rounds[1].DirtyPagesPerSec != 40 || m.DowntimeSeconds != 1.4 ||
+		if m == nil || len(m.Rounds) != 5 || m.Rounds[1].DirtyBlocksPerSec != 1 || m.DowntimeSeconds != 0.358 ||
 			doc.Data.State != "moved" {
 			t.Errorf("--json says %+v, move %+v", doc.Data, m)
 		}
+	}
+}
+
+// A prepare is a record of what hull said then. When hull's Transport line
+// says this move sends the whole checkpoint and disk to a host the prepare
+// said would stream, the move says so, and --json carries hull's word and
+// its reason, so a -q --json caller sees it too. hull's last Transport line
+// is the one that counts: it switches after a base it sends first fails.
+func TestAMoveSaysWhenHullDoesNotStreamToAPreparedHost(t *testing.T) {
+	rt := &moveRuntime{running: true, prepared: preparedReport(true)}
+	moveHost(t, rt, noNetProbe())
+	if _, err := captureStdout(t, func() error {
+		return run([]string{"teleport", "claude", "--to", "me@box", "--prepare"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rt.state = runtime.MoveCommitted
+	rt.progress = []string{"Transport: streamed (pre-copy rounds; the disk blocks that differ from base e85e4338aaaa)",
+		"Sending base e85e4338aaaa to me@box (once per base; `hull migrate-prepare` does it ahead of a move)",
+		"Transport: the whole checkpoint and disk, because sending the base failed: no space left on device"}
+	var out string
+	stderr := captureStderr(t, func() {
+		var err error
+		if out, err = captureStdout(t, func() error {
+			return run([]string{"teleport", "claude", "--to", "me@box", "--json"})
+		}); err != nil {
+			t.Errorf("move: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "brig: hull sends the whole checkpoint and disk of claude-code, with the guest "+
+		"paused, though the prepare at ") ||
+		!strings.Contains(stderr, "said a move to me@box would stream: sending the base failed: no space left on device") {
+		t.Errorf("the move did not say hull stopped streaming: %q", stderr)
+	}
+	if strings.Count(stderr, "the prepare at ") != 1 {
+		t.Errorf("the move said it more than once: %q", stderr)
+	}
+	var doc struct {
+		Data teleportData `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("--json: %q, %v", out, err)
+	}
+	if m := doc.Data.Move; m == nil || m.Transport != "bundle" ||
+		m.TransportWhy != "sending the base failed: no space left on device" {
+		t.Errorf("--json move %+v", doc.Data.Move)
 	}
 }

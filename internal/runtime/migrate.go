@@ -72,7 +72,10 @@ type MigrateSpec struct {
 	// against this one included, and to change nothing on either.
 	DryRun bool
 	// Progress, when set, is handed each line hull prints on stderr during
-	// the move, as hull prints it. A dry run hands it nothing.
+	// the move, as hull prints it. A dry run hands it nothing. It runs on
+	// the goroutine that reads hull's stderr and must not block, or hull
+	// waits on it, in the pause too: one that prints hands the line to an
+	// Echo.
 	Progress func(line string)
 }
 

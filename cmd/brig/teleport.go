@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -268,11 +269,9 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 			Note("publish them on %s once it runs there: ssh %s brig network publish %s PORT", host, host, ref))
 	}
 	spec := runtime.MigrateSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin, TxID: txid}
-	moved := &runtime.MoveReport{}
-	spec.Progress = func(line string) {
-		hullSaid(line)
-		moved.Add(line)
-	}
+	// A stderr that closes during the move must not kill brig between
+	// hull's commit and the record of it. See catchBrokenPipe.
+	defer catchBrokenPipe()()
 
 	// From here a record names the move, so whatever happens next can be
 	// asked about by name. The destination takes the guest's network first,
@@ -300,16 +299,35 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 	}
 
 	if loc.PreparedHost == host {
-		how := "a move there streams"
+		// What the prepare found then, not now: the base may have gone
+		// from there since, or the session booted again with a new one.
+		// hull's Transport line says how this move goes.
+		how := "a move there would stream"
 		if !loc.PreparedStream {
-			how = "hull said a move there still sends everything"
+			how = "a move there would still send the whole checkpoint and disk"
 		}
-		warnf("%s was prepared for %s at %s and holds its base; %s", host, ref, loc.PreparedAt, how)
+		warnf("%s was prepared for %s at %s, when hull said %s", host, ref, loc.PreparedAt, how)
 	}
 	warnf("moving %s to %s (move %s): the guest pauses here and resumes there", ref, host, txid)
+	// hull's lines are read into the report as they come, and printed
+	// from an Echo, which hull never waits on.
+	moved := &runtime.MoveReport{}
+	echo := runtime.NewEcho(func(s string) { warnf("%s", s) })
+	transport := ""
+	spec.Progress = func(line string) {
+		echo.Say(hullSaid(line))
+		moved.Add(line)
+		if moved.Transport != transport {
+			transport = moved.Transport
+			if n := transportSurprise(loc, host, ref, moved); n != nil {
+				echo.Say(n.String())
+			}
+		}
+	}
 	started := time.Now()
 	st, moveErr := mover.Migrate(vm, host, spec)
 	moved.Seconds = time.Since(started).Seconds()
+	echo.Stop()
 	// hull's record, read back, says the move never fenced the guest, or
 	// names no part of this move. A record that did not read says neither.
 	undo := moveErr != nil && st.Read && (st.TxID != txid || !runtime.MoveFenced(st.State)) &&
@@ -400,11 +418,48 @@ func finishMove(ref, vm, host, store, txid, hullState string, moved *runtime.Mov
 	return nil
 }
 
-// hullSaid passes on a line hull printed during a move or a prepare, as it
-// arrives. On stderr, with brig's notices: stdout carries the outcome, and
-// with --json only its document.
-func hullSaid(line string) {
-	warnf("hull: %s", line)
+// transportSurprise is a notice when hull's word on how it moves the guest
+// is not what the prepare recorded for host said, and nil otherwise. A
+// prepare is a record of then: a later boot of the session has another
+// base, which the host does not hold, and a whole-bundle move pauses the
+// guest for the length of the copy.
+func transportSurprise(loc wrap.Location, host, ref string, moved *runtime.MoveReport) *notice.Block {
+	if loc.PreparedHost != host || moved.Transport == "" {
+		return nil
+	}
+	switch {
+	case moved.Transport == "bundle" && loc.PreparedStream:
+		return notice.Newf("hull sends the whole checkpoint and disk of %s, with the guest paused, though "+
+			"the prepare at %s said a move to %s would stream: %s", ref, loc.PreparedAt, host,
+			orNone(moved.TransportWhy)).
+			Note("`brig teleport %s --to %s --prepare` puts the session's base there again for the next move",
+				ref, host)
+	case moved.Transport == "stream" && !loc.PreparedStream:
+		return notice.Newf("hull streams the move of %s, though the prepare at %s said a move to %s "+
+			"would send the whole checkpoint and disk", ref, loc.PreparedAt, host)
+	}
+	return nil
+}
+
+// hullSaid is a line hull printed during a move or a prepare, as brig
+// passes it on. On stderr, with brig's notices: stdout carries the outcome,
+// and with --json only its document.
+func hullSaid(line string) string {
+	return "hull: " + line
+}
+
+// catchBrokenPipe makes a write to a closed stderr or stdout fail with EPIPE
+// instead of killing brig, until the func it returns is called. Go exits on
+// SIGPIPE from a write to fd 1 or 2 unless the signal is asked for. brig
+// writes hull's lines to stderr during a move, and a reader of it that went
+// away would otherwise kill brig mid-move: after hull's commit, before brig
+// records where the session runs. The signal is caught, not ignored: an
+// ignored signal stays ignored in the hull and ssh brig starts, and a caught
+// one does not.
+func catchBrokenPipe() func() {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGPIPE)
+	return func() { signal.Stop(sigs) }
 }
 
 // preparedOfLocation is the prepared host the index records, or nil.
@@ -454,8 +509,12 @@ func teleportPrepare(cfg *wrap.Config, t profile.Profile, ref, host string, want
 		return err
 	}
 	warnf("preparing %s for %s: the guest keeps running here", host, ref)
-	spec := runtime.PrepareSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin, Progress: hullSaid}
+	defer catchBrokenPipe()()
+	echo := runtime.NewEcho(func(s string) { warnf("%s", s) })
+	spec := runtime.PrepareSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin,
+		Progress: func(line string) { echo.Say(hullSaid(line)) }}
 	p, err := preparer.MigratePrepare(vm, host, spec)
+	echo.Stop()
 	if err != nil {
 		return fmt.Errorf("hull did not prepare %s for %s, and nothing was paused: %w", host, ref, err)
 	}
