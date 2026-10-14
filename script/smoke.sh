@@ -51,6 +51,18 @@ bad() { printf '  FAIL %s\n' "$1"; fail=1; }
 # one ends and the next begins, which the space-joined argv: line cannot show.
 cat > "$WORK/hull" <<'STUB'
 #!/bin/bash
+# brig asks `run --help` whether this hull takes --profile before a run that
+# names a machine. Answered before the argv log, under a line of its own, so
+# the cases that read the run line find only the boot. STUB_HULL_NO_PROFILE
+# is a hull from before machine profiles.
+if [ "${1:-}" = run ] && [ "${2:-}" = --help ]; then
+  printf 'probe: run --help\n' >> "$STUB_LOG"
+  printf 'OPTIONS:\n'
+  [ -n "${STUB_HULL_NO_PROFILE:-}" ] || \
+    printf '   --profile hull assets pull --profile   hvi machine profile\n'
+  printf '   --rootfs-type string                   rootfs sharing mode\n'
+  exit 0
+fi
 { printf 'argv:'; printf ' %s' "$@"; printf '\n'; } >> "$STUB_LOG"
 { printf 'words:'; printf '[%s]' "$@"; printf '\n'; } >> "$STUB_LOG"
 verb="$1"; shift
@@ -2337,8 +2349,8 @@ YAML
     1:*--teleportable*portable-arm64-v1*"genericBoot: true"*) ok "a teleportable run of a profile that is not genericBoot is refused, saying why" ;;
     *) bad "a teleportable run of a profile that is not genericBoot is refused, saying why -- got $rc: $out" ;;
   esac
-  grep -q '^argv: run ' "$STUB_LOG" \
-    && bad "a teleportable run of a profile that is not genericBoot reached the runtime -- got: $(grep '^argv:' "$STUB_LOG" | head -3)" \
+  grep -q '^\(argv: run \|probe: \)' "$STUB_LOG" \
+    && bad "a teleportable run of a profile that is not genericBoot reached the runtime -- got: $(grep '^\(argv\|probe\):' "$STUB_LOG" | head -3)" \
     || ok "a teleportable run of a profile that is not genericBoot reached no runtime"
   out="$(BRIG_PORTABLE_KERNEL="$WORK/no-such-kernel" tp "$WORK/brig" plan --teleportable tp-ownkernel 2>&1)"
   case "$out" in
@@ -2346,6 +2358,18 @@ YAML
     *) bad "the plan of a teleportable profile that is not genericBoot carries the refusal -- got: $out" ;;
   esac
   rm -f "$BRIG_PROFILE_DIR/tp-ownkernel.yaml"
+  # A hull from before machine profiles has no --profile on run. brig asks
+  # it first and refuses as a runtime that cannot run a teleportable session,
+  # exit 7, rather than letting hull's flag parser answer.
+  : > "$STUB_LOG"
+  out="$(STUB_HULL_NO_PROFILE=1 tp "$WORK/brig" run --teleportable claude -d 2>&1)"; rc=$?
+  case "$rc:$out" in
+    7:*teleportable*portable-arm64-v1*"no --profile on run"*"Upgrade hull"*) ok "a hull with no --profile refuses a teleportable run, exit 7" ;;
+    *) bad "a hull with no --profile refuses a teleportable run, exit 7 -- got $rc: $out" ;;
+  esac
+  grep -q '^probe: run --help' "$STUB_LOG" && ! grep -q '^argv: run ' "$STUB_LOG" \
+    && ok "the probe ran and the run did not" \
+    || bad "the probe ran and the run did not -- got: $(grep '^\(argv\|probe\):' "$STUB_LOG" | head -5)"
   "$WORK/brig" rm --all -y > /dev/null 2>&1
 fi
 # An ordinary run on hvi is the line it was: no machine profile, and the

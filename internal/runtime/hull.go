@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -462,6 +463,13 @@ func (h *hull) Run(spec RunSpec) error {
 	if err := supports(spec, hv); err != nil {
 		return err
 	}
+	// Before the gateway and the publications, so a hull that cannot boot
+	// the machine leaves nothing behind.
+	if spec.Profile != "" {
+		if err := h.takesProfile(hv, spec.Profile); err != nil {
+			return err
+		}
+	}
 	net := orDefault(spec.Net, "shared")
 	// hvi has no egress without the gateway, so brig guarantees one rather
 	// than booting a sandbox whose network silently swallows every
@@ -659,6 +667,55 @@ func hullNet(net string) string {
 // own cannot be sharing a gateway with sandboxes that do not.
 func isolatedNet(net string, policy Egress) bool {
 	return net == "isolated" || policy.Filtered()
+}
+
+// profileFlag is how `hull run --help` lists --profile: at the start of a
+// line, after the indent, and followed by its value or a space, so a flag
+// whose name only starts with it does not count.
+var profileFlag = regexp.MustCompile(`(?m)^\s*--profile[\s=]`)
+
+// takesProfile checks that this hull takes --profile on run, and is called
+// only for a run that names a machine.
+//
+// The flag arrived with machine profiles, so a brig that asks for the
+// portable machine can meet a hull that has no such flag. That hull rejects
+// the unknown flag, and what the user sees is its flag parser rather than a
+// reason. Asked of the binary, as gatewayEnforces asks, because what matters
+// is whether this hull takes the flag, and a build from source has no
+// version to read.
+//
+// A probe that fails refuses the run: a binary that does not answer has not
+// said it takes the flag.
+func (h *hull) takesProfile(hv, machine string) error {
+	probe := h.bin + " run --help"
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.bin, "run", "--help")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	// See gatewayEnforces.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
+	}
+	path := RunPath{"hull", hv}
+	if err != nil {
+		return &CapabilityError{Property: Teleportable, Path: path, State: Unknown,
+			Why:    fmt.Sprintf("it boots the %s machine, and the probe `%s` failed", machine, probe),
+			Remedy: "Fix the runtime, or run an ordinary session",
+			Err:    err}
+	}
+	if profileFlag.Match(out) {
+		return nil
+	}
+	version := VersionToken(h.version())
+	if version == "" {
+		version = "of unknown version"
+	}
+	return &CapabilityError{Property: Teleportable, Path: path, State: CannotEnforce,
+		Why: fmt.Sprintf("it boots the %s machine, and %s (hull %s) has no --profile on run, "+
+			"which is how hull is told the machine", machine, h.bin, version),
+		Remedy: "Upgrade hull to one whose `hull run --help` lists --profile, or run an ordinary session"}
 }
 
 // runArgs is the one place the run command line is built, so that what a test
