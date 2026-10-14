@@ -240,3 +240,13 @@ func TestMachineOfReadsWhatHviRuns(t *testing.T) {
 		t.Error("a record that is not JSON read as a machine")
 	}
 }
+
+// A run that names a machine and has no boot assets would leave hull to pick
+// the kernel. runArgs refuses it, so no caller can build that line.
+func TestRunArgsRefusesAMachineWithNoBootAssets(t *testing.T) {
+	spec := RunSpec{Name: "s", Image: "img", Profile: MachinePortableArm64V1}
+	if _, _, err := runArgs(spec, "hvi", "none", "", "", nil, nil); err == nil ||
+		!strings.Contains(err.Error(), "genericBoot") {
+		t.Fatalf("a machine with no boot assets got a run line: %v", err)
+	}
+}

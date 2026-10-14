@@ -684,6 +684,13 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	// The machine hvi boots. Only a teleportable session names one, and the
 	// native machine is hull's default, so every other run line is as it was.
 	if spec.Profile != "" {
+		// The machine's kernel travels in the boot annotations, and only a
+		// genericBoot run has them. Without them hull would boot the image's
+		// own kernel, or one it picks, on a machine that needs its own.
+		if !spec.GenericBoot {
+			return nil, nil, fmt.Errorf("the %s machine boots a kernel brig hands hull with the "+
+				"boot assets, and this run is not genericBoot, so it has none to hand", spec.Profile)
+		}
 		args = append(args, "--profile", spec.Profile)
 	}
 	if spec.GenericBoot {
