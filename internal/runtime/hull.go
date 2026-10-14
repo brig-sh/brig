@@ -308,9 +308,9 @@ func (h *hull) assetFetcher(spec RunSpec) assetFetcher {
 // BootAssets, made ahead of Run. It asks hull where the assets live with no
 // deadline, as a run does. See BootResolver.
 func (h *hull) ResolveBootAssets(fetch BootFetch, notice, progress io.Writer) (BootAssets, error) {
-	return resolveBootAssets(h.assetDir, func(dir string) error {
+	return resolveMachineAssets(h.assetDir, func(dir string) error {
 		return h.fetchAssets(dir, fetch, notice, progress)
-	}, fetch.Replace)
+	}, fetch)
 }
 
 // assetDir asks hull where its boot assets live.
@@ -681,8 +681,13 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	if spec.RootfsType != "" {
 		args = append(args, "--rootfs-type", spec.RootfsType)
 	}
+	// The machine hvi boots. Only a teleportable session names one, and the
+	// native machine is hull's default, so every other run line is as it was.
+	if spec.Profile != "" {
+		args = append(args, "--profile", spec.Profile)
+	}
 	if spec.GenericBoot {
-		annotations, err := bootAnnotations(spec.BootAssets, locate, fetch)
+		annotations, err := bootAnnotations(spec.BootAssets, spec.Profile, locate, fetch)
 		if err != nil {
 			return nil, nil, err
 		}
