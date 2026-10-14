@@ -72,7 +72,9 @@ teleportable session of any other profile before the runtime is asked, and
 one hull picks, Brig checks neither, and a kernel without the `hvi-time`
 driver has no clock on the portable machine. Of the built-in profiles,
 `cursor` has no `genericBoot`. `claude-desktop` is refused for a reason of its
-own: it reads its credentials at boot.
+own: it reads its credentials at boot. A session of such a profile that
+already started teleportable can still be stopped, inspected and removed, but
+`brig run` and `brig sh` refuse it, and the message names `brig rm`.
 
 The portable machine needs a kernel of its own, built with the `hvi-time`
 clock driver. The boot bundle's kernel does not have that driver. Brig boots

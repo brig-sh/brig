@@ -95,11 +95,18 @@ func resolveTeleportable(t profile.Profile, o Options, env Env, ref, vmName stri
 	// boots a guest that has no clock on that machine. Refused here, like
 	// the credentials, because it is the profile that cannot be teleportable.
 	if m := teleportableMachine(); m != "" && !t.GenericBoot {
+		// A session the index records as teleportable stays so, and an
+		// ordinary run of it is refused below, so the way out is rm.
+		instead := "Run it as an ordinary session"
+		if recorded {
+			instead = fmt.Sprintf("This session was started teleportable and cannot be switched to an "+
+				"ordinary one: remove it with `brig rm %s`, then run it as an ordinary session", ref)
+		}
 		tp.refusal = fmt.Errorf("%s asks for a teleportable session, and %s cannot be one on this host. "+
 			"A teleportable session here boots the %s machine, which boots the portable kernel, and brig "+
 			"supplies that kernel only to a profile with genericBoot: true. %s boots a kernel of its own "+
-			"image or one the runtime picks, and brig checks neither. Run it as an ordinary session",
-			tp.source, t.Name, m, t.Name)
+			"image or one the runtime picks, and brig checks neither. %s",
+			tp.source, t.Name, m, t.Name, instead)
 		return tp
 	}
 	// A session brig already knows, started with a host home. One sandbox
