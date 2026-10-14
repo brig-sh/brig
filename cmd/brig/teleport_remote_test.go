@@ -284,6 +284,7 @@ func TestCheckProbeRefusesEachReason(t *testing.T) {
 // case says, recording what it was asked.
 type moveRuntime struct {
 	runtime.Runtime
+	gone            bool
 	notTeleportable bool
 	running         bool
 	inspect         runtime.Migration
@@ -306,6 +307,9 @@ func (r *moveRuntime) SandboxNetwork(string) (string, error)       { return "non
 func (r *moveRuntime) OwnsItsDisk(string) (bool, error)            { return !r.notTeleportable, nil }
 func (r *moveRuntime) Migration(string) (runtime.Migration, error) { return r.inspect, nil }
 func (r *moveRuntime) List() ([]runtime.Instance, error) {
+	if r.gone {
+		return nil, nil
+	}
 	return []runtime.Instance{{Name: "brig-claude-code", State: "running"}}, nil
 }
 func (r *moveRuntime) Stop(string) error   { return nil }
@@ -452,6 +456,7 @@ func TestATeleportRefusedBeforeAnythingIsPaused(t *testing.T) {
 		probe func(*probeReport)
 		code  int
 	}{
+		{"no sandbox for the ref", &moveRuntime{gone: true}, nil, exitNotFound},
 		{"not teleportable", &moveRuntime{running: true, notTeleportable: true}, nil, exitCapability},
 		{"not running", &moveRuntime{}, nil, exitFailure},
 		{"parked by a checkpoint", &moveRuntime{running: true, inspect: runtime.Migration{State: "fenced"}}, nil, exitFailure},

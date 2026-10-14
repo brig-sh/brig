@@ -125,6 +125,18 @@ func newTxID() (string, error) {
 // name is the one the destination will derive.
 func sourceChecks(cfg *wrap.Config, t profile.Profile, ref string) (runtime.Migrator, error) {
 	vm := cfg.VMName
+	// A ref with no sandbox is a not-found, 3, whatever kind of session it
+	// would be: there is nothing to move, and calling it a capability would
+	// send the reader to the wrong fix.
+	if cfg.Runtime != nil {
+		present, err := sandboxPresent(cfg.Runtime, vm)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			return nil, noSandboxf(ref)
+		}
+	}
 	if !cfg.Teleportable {
 		return nil, moveRefusal(fmt.Sprintf("%s is not a teleportable session: its guest home is a host "+
 			"directory shared in, and a move carries only what is inside the sandbox", ref),
