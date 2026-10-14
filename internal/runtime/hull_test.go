@@ -296,9 +296,10 @@ func TestRunArgsForATeleportableSessionCarryNoCredential(t *testing.T) {
 
 // A teleportable boot takes the credentials it withheld out of hull's own
 // environment, and nothing else. hull finds hvi on PATH, keeps its store
-// under HOME and pulls with HULL_REGISTRY_TOKEN, so a guest binding for any
-// of those, ref-bound or not, must leave hull's own value where it is: taking
-// PATH out left hull with none, and the boot could not find hvi.
+// under HOME and pulls with HULL_REGISTRY_TOKEN through HTTPS_PROXY, so a
+// guest binding for any of those, ref-bound or not, must leave hull's own
+// value where it is: taking PATH out left hull with none, and the boot could
+// not find hvi.
 func TestATeleportableBootLeavesHullItsOwnEnvironment(t *testing.T) {
 	scratchHome(t)
 	home := os.Getenv("HOME")
@@ -306,6 +307,7 @@ func TestATeleportableBootLeavesHullItsOwnEnvironment(t *testing.T) {
 	sentinel := filepath.Join(dir, "sentinel-bin")
 	t.Setenv("PATH", sentinel+":/usr/bin:/bin")
 	t.Setenv("HULL_REGISTRY_TOKEN", "hull-pulls-with-this")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example:3128")
 	t.Setenv("GH_TOKEN", "gh-from-shell")
 	t.Setenv("BRIG_ENV_ARGV", "")
 	envOut, argsOut := filepath.Join(dir, "env"), filepath.Join(dir, "args")
@@ -319,6 +321,7 @@ func TestATeleportableBootLeavesHullItsOwnEnvironment(t *testing.T) {
 			{Name: "PATH", Value: "/guest/bin", Credential: true},
 			{Name: "HOME", Value: "/root", Credential: true},
 			{Name: "HULL_REGISTRY_TOKEN", Value: "hull-pulls-with-this", Credential: true},
+			{Name: "HTTPS_PROXY", Value: "http://proxy.example:3128", Credential: true},
 			{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true},
 		}}
 	if err := (&hull{bin: bin}).Run(spec); err != nil {
@@ -341,6 +344,9 @@ func TestATeleportableBootLeavesHullItsOwnEnvironment(t *testing.T) {
 	}
 	if env["HULL_REGISTRY_TOKEN"] != "hull-pulls-with-this" {
 		t.Errorf("hull lost its registry token: %q", env["HULL_REGISTRY_TOKEN"])
+	}
+	if env["HTTPS_PROXY"] != "http://proxy.example:3128" {
+		t.Errorf("hull lost the proxy it pulls through: %q", env["HTTPS_PROXY"])
 	}
 	if v, ok := env["GH_TOKEN"]; ok {
 		t.Errorf("hull was handed the credential it was told nothing about: GH_TOKEN=%q", v)

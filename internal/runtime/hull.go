@@ -502,13 +502,11 @@ func (h *hull) Run(spec RunSpec) error {
 	// environment: a credential no profile binds still reaches hull, as it
 	// does on every boot.
 	//
-	// hull's own namespace stays. A HULL_ name is hull's configuration, and
-	// HULL_REGISTRY_TOKEN is how it pulls a private image, so a profile that
-	// also forwards it to the guest must not take it from hull. bootVars
-	// never withholds a name hull reads for itself, such as PATH or HOME.
+	// What hull reads to pull stays; see hullPullReads. bootVars never
+	// withholds a name hull reads for itself, such as PATH or HOME.
 	_, withheld := bootVars(spec)
 	for _, name := range withheld {
-		if strings.HasPrefix(name, "HULL_") {
+		if hullPullReads(name) {
 			continue
 		}
 		cmd.Env = withoutEnv(cmd.Env, name)
@@ -696,6 +694,24 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	// bytes cosign checked; hull resolves it against its store from rc23.
 	args = append(args, withDigest(spec.Image, spec.Digest))
 	return args, envVals, nil
+}
+
+// hullPullReads reports whether hull reads a variable of this name to pull an
+// image: its own HULL_ settings, HULL_REGISTRY_TOKEN among them, and the
+// proxy settings Go's HTTP client takes from the environment. A profile that
+// also forwards one of these to the guest withholds it from a teleportable
+// run, and taking it from hull's environment too would leave a pull behind a
+// proxy, or from a private registry, failing for a reason the boot does not
+// name.
+func hullPullReads(name string) bool {
+	if strings.HasPrefix(name, "HULL_") {
+		return true
+	}
+	switch strings.ToUpper(name) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY":
+		return true
+	}
+	return false
 }
 
 // bootVars is the part of spec.Env that goes on the run, and the names of the
