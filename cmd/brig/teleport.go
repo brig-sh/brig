@@ -783,7 +783,9 @@ func checkProbe(cfg *wrap.Config, r probeReport, host, ref, txid string, net wra
 		return fmt.Errorf("the brig on %s has no agent %s, so it could not reach %s afterwards. Add the "+
 			"agent there first. Nothing was paused", host, cfg.Profile.Name, ref)
 	}
-	if net.Egress.Default != "" && !r.Egress.Enforced {
+	// An offline guest has no gateway, here or there, so its rules need
+	// none to enforce them; they go with it as the record of its policy.
+	if net.Egress.Default != "" && net.Net != "none" && !r.Egress.Enforced {
 		return moveRefusal(fmt.Sprintf("%s is under an egress policy, and %s cannot enforce one: %s",
 			ref, host, orNone(r.Egress.Why)),
 			"Install a hull there whose network-gateway takes --egress-default, or detach the policy here")

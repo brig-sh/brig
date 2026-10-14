@@ -98,7 +98,9 @@ func PrepareArrival(t profile.Profile, name string, spec ArrivalSpec, rt runtime
 			return "", fmt.Errorf("the rules the session carries do not read as a policy: %w", err)
 		}
 	}
-	if spec.Egress.Default != "" && spec.Network != "isolated" {
+	// An offline guest's rules are kept with no gateway to hold them: it
+	// has no network for them to act on, here as on the source.
+	if spec.Egress.Default != "" && spec.Network != "isolated" && spec.Network != "none" {
 		return "", fmt.Errorf("the session carries egress rules on the %s network, and only an isolated "+
 			"network holds rules for one sandbox", spec.Network)
 	}

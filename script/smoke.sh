@@ -2430,6 +2430,40 @@ tpr "$WORK/brig" rm claude@mv > /dev/null 2>&1
 [ -n "$(tpr "$WORK/brig" ls -q 2>/dev/null)" ] \
   && bad "the moved sessions were not cleared from this host -- got: $(tpr "$WORK/brig" ls -q 2>&1)"
 
+# An offline session under a policy has no gateway on either host, so it
+# moves to a destination whose gateway could not enforce rules. Its rules go
+# with it, and the brig there resolves them and keeps it offline: sh there is
+# not refused as a changed policy.
+mkdir -p "$WORK/tp-policies"
+cat > "$WORK/tp-policies/shut.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: shut
+egress:
+  default: deny
+YAML
+export BRIG_POLICY_DIR="$WORK/tp-policies"
+"$WORK/brig" policy attach shut claude-code -n off > /dev/null 2>&1 \
+  || bad "a policy attaches to the offline session that moves under it"
+tpr "$WORK/brig" run --teleportable claude@off -d > "$WORK/tpo.out" 2>&1 \
+  || bad "an offline teleportable session under a policy boots -- got: $(cat "$WORK/tpo.out")"
+: > "$STUB_LOG"; : > "$SSH_LOG"; : > "$REMOTE_LOG"
+out="$(REMOTE_NO_EGRESS=1 tpr "$WORK/brig" teleport claude@off --to me@box 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q 'teleport-receive .*--network none .*"default":"deny"' "$SSH_LOG" \
+  && ! grep -q '^argv: network-gateway --socket' "$REMOTE_LOG" \
+  && ok "an offline session under a policy moves with no gateway there" \
+  || bad "an offline session under a policy moves with no gateway there -- got $rc: $out"
+out="$(tpr "$WORK/brig" sh claude@off -c true 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -qF -- '[--][bash][-lc][true]' "$REMOTE_LOG" \
+  && ok "the brig there runs the offline session under the rules it carries" \
+  || bad "the brig there runs the offline session under the rules it carries -- got $rc: $out"
+"$WORK/brig" policy detach shut claude-code -n off > /dev/null 2>&1
+unset BRIG_POLICY_DIR
+tpr "$WORK/brig" rm claude@off > /dev/null 2>&1
+tpr "$WORK/brig" rm claude@off > /dev/null 2>&1
+"$WORK/ssh" -- me@box "$WORK/brig rm claude@off" > /dev/null 2>&1
+[ -n "$(tpr "$WORK/brig" ls -q 2>/dev/null)" ] \
+  && bad "the moved offline session was not cleared from this host -- got: $(tpr "$WORK/brig" ls -q 2>&1)"
+
 # The refusals come before anything is paused: no pause, no checkpoint, no
 # move, and the destination is asked to take nothing. A session under a
 # policy the destination's gateway cannot enforce is a capability, 7.
