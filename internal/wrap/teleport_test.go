@@ -823,6 +823,16 @@ func TestARunRefusesATeleportableGuestACheckpointParked(t *testing.T) {
 			if strings.Contains(err.Error(), "hull resume") {
 				t.Errorf("the refusal names a resume hull refuses for this guest: %v", err)
 			}
+			// With a store named, the hull lines name it too, or they find
+			// no such sandbox when they are copied.
+			t.Setenv(runtime.HullStoreDir, "/st/b")
+			err = loadTeleport(t, teleportProfile(t), Options{}, rt).EnsureRunning(creds.Set{})
+			for _, says := range []string{"hull --store-dir /st/b stop brig-", "hull --store-dir /st/b restore brig-"} {
+				if err == nil || !strings.Contains(err.Error(), says) {
+					t.Errorf("with a store named, the refusal does not name %q: %v", says, err)
+				}
+			}
+			t.Setenv(runtime.HullStoreDir, "")
 			if rt.boots != 0 || rt.stops != 0 || rt.removes != 0 || len(rt.execs) != 0 || len(rt.feeds) != 0 {
 				t.Errorf("something was done to it anyway: %d stops, %d removes, %d boots, execs %q, feeds %d",
 					rt.stops, rt.removes, rt.boots, rt.execs, len(rt.feeds))

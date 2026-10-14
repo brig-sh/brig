@@ -196,7 +196,7 @@ func sourceChecks(cfg *wrap.Config, t profile.Profile, ref string) (runtime.Migr
 		switch m.State {
 		case runtime.MigrationFenced, runtime.MigrationRestoring, runtime.MigrationMigrating, runtime.MigrationMigrated:
 			return nil, fmt.Errorf("hull's record of %s says %s (%s), so its guest is not one a move "+
-				"may pause. `hull migrate-status %s` says more", vm, m.State, m.TxID, vm)
+				"may pause. `%s` says more", vm, m.State, m.TxID, runtime.HullLine("migrate", "--status", vm))
 		}
 	}
 	want := wrap.NamePrefix + t.Name
@@ -300,7 +300,7 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 		if st.TxID == txid && st.State != runtime.MoveAborted {
 			if _, err := mover.MigrateAbort(vm, txid); err != nil {
 				warnf("%s", notice.Newf("could not end hull's record of move %s: %v", txid, err).
-					Note("`hull migrate --abort %s` ends it; nothing was fenced", txid))
+					Note("`%s` ends it; nothing was fenced", runtime.HullLine("migrate", "--abort", txid)))
 			}
 		}
 		abortReceive(host, spec.RemoteStore, ref, vm, txid)
@@ -312,7 +312,7 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 				"itself; %s", vm, host, moveErr, restoreRemedy(vm))
 		}
 		return fmt.Errorf("hull did not move %s to %s, and its record says the guest was not paused for "+
-			"good: %w. `hull migrate --status %s` says more", vm, host, moveErr, vm)
+			"good: %w. `%s` says more", vm, host, moveErr, runtime.HullLine("migrate", "--status", vm))
 	}
 	// Anything else is a move whose end brig did not see: it may have
 	// committed, or not, whatever the call returned. Nothing is resumed and
@@ -325,9 +325,9 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 		why = "hull's record of it did not read"
 	}
 	return fmt.Errorf("the move of %s to %s (%s) did not report how it ended: %s. brig resumes the guest "+
-		"on neither host until hull's record says. `brig teleport %s --status` reads that record (`hull "+
-		"migrate --status %s`) and settles this one, and `brig teleport %s --abort` calls the move off if "+
-		"it has not committed", ref, host, txid, why, ref, vm, ref)
+		"on neither host until hull's record says. `brig teleport %s --status` reads that record (`%s`) "+
+		"and settles this one, and `brig teleport %s --abort` calls the move off if it has not committed",
+		ref, host, txid, why, ref, runtime.HullLine("migrate", "--status", vm), ref)
 }
 
 func errSuffix(err error) string {
@@ -386,12 +386,12 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 	mover, ok := cfg.Runtime.(runtime.Migrator)
 	if !ok || cfg.Runtime == nil {
 		return fmt.Errorf("a move of %s to %s (%s) is recorded, and this runtime cannot say where it "+
-			"stands. `hull migrate --status %s` does", ref, loc.PendingHost, loc.TxID, vm)
+			"stands. `%s` does", ref, loc.PendingHost, loc.TxID, runtime.HullLine("migrate", "--status", vm))
 	}
 	st, err := mover.MigrateStatus(vm)
 	if err != nil {
-		return fmt.Errorf("cannot read hull's record of the move of %s (%s): %w. `hull migrate --status %s` "+
-			"says where it stands", ref, loc.TxID, err, vm)
+		return fmt.Errorf("cannot read hull's record of the move of %s (%s): %w. `%s` "+
+			"says where it stands", ref, loc.TxID, err, runtime.HullLine("migrate", "--status", vm))
 	}
 	d.Hull = st.State
 	if st.TxID == "" {
@@ -439,9 +439,9 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 	}
 	return printTeleport(d, wantJSON, fmt.Sprintf("the move of %s to %s (%s) has not finished: %s\n"+
 		"brig resumes the guest on neither host until hull's record says how the move ended. "+
-		"`hull migrate %s --txid %s` takes it on from where it stopped, `hull migrate --status %s` has "+
-		"hull's account, and `brig teleport %s --abort` calls it off", ref, loc.PendingHost, loc.TxID,
-		said, vm, loc.TxID, vm, ref))
+		"`%s` takes it on from where it stopped, `%s` has hull's account, and `brig teleport %s --abort` "+
+		"calls it off", ref, loc.PendingHost, loc.TxID, said, runtime.HullLine("migrate", vm, "--txid", loc.TxID),
+		runtime.HullLine("migrate", "--status", vm), ref))
 }
 
 // noMoveBegan reports whether hull's having no move on record of the sandbox
@@ -467,7 +467,8 @@ func remoteHullStatus(store, vm string) string {
 
 // restoreRemedy is what brings back a guest an abort left stopped here.
 func restoreRemedy(vm string) string {
-	return fmt.Sprintf("if `brig sh` then refuses it, `hull restore %s` brings it back from its checkpoint", vm)
+	return fmt.Sprintf("if `brig sh` then refuses it, `%s` brings it back from its checkpoint",
+		runtime.HullLine("restore", vm))
 }
 
 func orNone(s string) string {
@@ -492,7 +493,7 @@ func teleportAbort(cfg *wrap.Config, ref string, wantJSON bool) error {
 	}
 	mover, ok := cfg.Runtime.(runtime.Migrator)
 	if !ok || cfg.Runtime == nil {
-		return fmt.Errorf("this runtime cannot call off a move; `hull migrate-abort --txid %s %s` does", loc.TxID, vm)
+		return fmt.Errorf("this runtime cannot call off a move; `%s` does", runtime.HullLine("migrate", "--abort", loc.TxID))
 	}
 	st, err := mover.MigrateAbort(vm, loc.TxID)
 	if st.TxID != loc.TxID || st.State != runtime.MoveAborted {
@@ -501,7 +502,7 @@ func teleportAbort(cfg *wrap.Config, ref string, wantJSON bool) error {
 			cause = err.Error()
 		}
 		return fmt.Errorf("hull did not confirm the move of %s (%s) is off: %s. The session stays as it "+
-			"is on both hosts; `hull migrate --status %s` says where it stands", ref, loc.TxID, cause, vm)
+			"is on both hosts; `%s` says where it stands", ref, loc.TxID, cause, runtime.HullLine("migrate", "--status", vm))
 	}
 	// hull aborts only with the destination's word that it does not run the
 	// guest and will refuse the commit, and then runs the guest here again
