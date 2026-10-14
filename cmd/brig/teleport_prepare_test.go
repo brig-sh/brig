@@ -58,7 +58,7 @@ func TestTeleportPrepareReadiesTheHostAndMovesNothing(t *testing.T) {
 		t.Errorf("hull's lines did not reach stderr: %q", stderr)
 	}
 	e := entryOf(t)
-	if e["preparedHost"] != "me@box" || e["preparedBase"] != preparedBase || e["preparedAt"] == nil ||
+	if e["preparedHost"] != "me@box" || e["preparedBase"] != preparedBase || e["preparedStream"] != true || e["preparedAt"] == nil ||
 		e["pendingHost"] != nil || e["host"] != nil || e["txid"] != nil {
 		t.Errorf("the record after a prepare: %v", e)
 	}
@@ -93,7 +93,7 @@ func TestTeleportPrepareReadiesTheHostAndMovesNothing(t *testing.T) {
 			t.Errorf("move: %v", err)
 		}
 	})
-	if !strings.Contains(stderr, "me@box was prepared for claude-code at ") {
+	if !strings.Contains(stderr, "me@box was prepared for claude-code at ") || !strings.Contains(stderr, "a move there streams") {
 		t.Errorf("the move did not say the host was prepared: %q", stderr)
 	}
 	if e := entryOf(t); e["host"] != "me@box" || e["preparedHost"] != nil {
@@ -150,28 +150,59 @@ func TestATeleportPrepareIsRefusedLikeAMove(t *testing.T) {
 }
 
 // A host hull could not make ready for a streamed move, an older hull or hvi
-// there, is not recorded as prepared: a move there sends everything, and
-// the record would say the opposite. brig says why, and the prepare itself
-// did not fail.
-func TestAPrepareThatCannotStreamIsNotRecorded(t *testing.T) {
-	rt := &moveRuntime{running: true, prepared: preparedReport(false)}
-	moveHost(t, rt, noNetProbe())
-	var out string
-	stderr := captureStderr(t, func() {
-		var err error
-		out, err = captureStdout(t, func() error {
-			return run([]string{"teleport", "claude", "--to", "me@box", "--prepare"})
-		})
-		if err != nil {
-			t.Errorf("prepare: %v", err)
+// there, is recorded as holding the base, with stream false, so --status and
+// the move do not claim a move there streams. brig says why, and the prepare
+// itself did not fail. A host that holds no base at all is not recorded.
+func TestAPrepareThatCannotStreamSaysSo(t *testing.T) {
+	for _, c := range []struct {
+		what     string
+		noBase   bool
+		wantOut  string
+		recorded bool
+	}{
+		{"the base held", false, "prepared me@box for claude-code; a move there still sends the whole checkpoint and disk\n", true},
+		{"no base", true, "me@box is not prepared for claude-code\n", false},
+	} {
+		p := preparedReport(false)
+		if c.noBase {
+			p.Base = ""
 		}
-	})
-	if !strings.HasPrefix(out, "me@box is not prepared for claude-code\n") ||
-		!strings.Contains(stderr, "still sends the whole checkpoint and disk: its hvi (0.1) cannot restore from a stream") {
-		t.Errorf("stdout %q, stderr %q", out, stderr)
-	}
-	if e := entryOf(t); e["preparedHost"] != nil {
-		t.Errorf("a host that cannot stream was recorded as prepared: %v", e)
+		rt := &moveRuntime{running: true, prepared: p}
+		moveHost(t, rt, noNetProbe())
+		var out string
+		stderr := captureStderr(t, func() {
+			var err error
+			out, err = captureStdout(t, func() error {
+				return run([]string{"teleport", "claude", "--to", "me@box", "--prepare"})
+			})
+			if err != nil {
+				t.Errorf("%s: prepare: %v", c.what, err)
+			}
+		})
+		if !strings.HasPrefix(out, c.wantOut) ||
+			!strings.Contains(stderr, "still sends the whole checkpoint and disk: its hvi (0.1) cannot restore from a stream") {
+			t.Errorf("%s: stdout %q, stderr %q", c.what, out, stderr)
+		}
+		e := entryOf(t)
+		if (e["preparedHost"] != nil) != c.recorded || e["preparedStream"] != nil {
+			t.Errorf("%s: the record %v", c.what, e)
+		}
+		if !c.recorded {
+			continue
+		}
+		out, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status", "--json"}) })
+		if err != nil || !strings.Contains(out, `"stream": false`) || !strings.Contains(out, `"base": "`+preparedBase+`"`) {
+			t.Errorf("%s: --status %q, %v", c.what, out, err)
+		}
+		rt.state = runtime.MoveCommitted
+		stderr = captureStderr(t, func() {
+			if _, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) }); err != nil {
+				t.Errorf("move: %v", err)
+			}
+		})
+		if !strings.Contains(stderr, "holds its base; hull said a move there still sends everything") {
+			t.Errorf("%s: the move's note: %q", c.what, stderr)
+		}
 	}
 }
 

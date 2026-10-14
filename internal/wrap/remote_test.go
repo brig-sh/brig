@@ -157,21 +157,21 @@ func TestAPrepareRecordsTheHostItMadeReady(t *testing.T) {
 		"claude-code@m": {"home": "", "sandbox": "brig-claude-code-m", "teleportable": true, "host": "me@box", "txid": "tx0"},
 	})
 	at := time.Date(2026, 10, 15, 1, 30, 0, 0, time.FixedZone("EEST", 3*3600))
-	if err := RecordPrepared("claude-code", "brig-other", "me@box", "ab12", at); err == nil {
+	if err := RecordPrepared("claude-code", "brig-other", "me@box", "ab12", true, at); err == nil {
 		t.Errorf("a prepare was recorded against another sandbox")
 	}
-	if err := RecordPrepared("claude-code@m", "brig-claude-code-m", "you@other", "ab12", at); err == nil {
+	if err := RecordPrepared("claude-code@m", "brig-claude-code-m", "you@other", "ab12", true, at); err == nil {
 		t.Errorf("a prepare was recorded for a session that runs on another host")
 	}
-	if err := RecordPrepared("claude-code", "brig-claude-code", "me@box", "ab12", at); err != nil {
+	if err := RecordPrepared("claude-code", "brig-claude-code", "me@box", "ab12", true, at); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordPrepared("claude-code", "brig-claude-code", "me@pi", "cd34", at); err != nil {
+	if err := RecordPrepared("claude-code", "brig-claude-code", "me@pi", "cd34", false, at); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := profile.Lookup("claude")
 	loc, ok, err := SessionLocation(p, "")
-	if err != nil || !ok || loc.PreparedHost != "me@pi" || loc.PreparedBase != "cd34" ||
+	if err != nil || !ok || loc.PreparedHost != "me@pi" || loc.PreparedBase != "cd34" || loc.PreparedStream ||
 		loc.PreparedAt != "2026-10-14T22:30:00Z" || loc.Away() {
 		t.Errorf("after two prepares: %+v, %v, %v", loc, ok, err)
 	}
@@ -195,13 +195,14 @@ func TestAPrepareRecordsTheHostItMadeReady(t *testing.T) {
 	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@pi", "/st", "tx2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordPrepared("claude-code", "brig-claude-code", "me@pi", "ef56", at); err == nil {
+	if err := RecordPrepared("claude-code", "brig-claude-code", "me@pi", "ef56", true, at); err == nil {
 		t.Errorf("a prepare was recorded while a move was under way")
 	}
 	if err := RecordMoved("claude-code", "brig-claude-code", "me@pi", "/st", "tx2"); err != nil {
 		t.Fatal(err)
 	}
-	if e := readSessionIndex()["claude-code"]; e.PreparedHost != "" || e.PreparedBase != "" || e.PreparedAt != "" {
+	if e := readSessionIndex()["claude-code"]; e.PreparedHost != "" || e.PreparedBase != "" || e.PreparedStream ||
+		e.PreparedAt != "" {
 		t.Errorf("a committed move kept the prepared host: %+v", e)
 	}
 }

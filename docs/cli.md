@@ -472,7 +472,7 @@ and `brig logs` on the ref run on the destination, through
 | `--to USER@HOST` | move the session to that host. It must be `USER@HOST`, with no part that ssh could read as an option |
 | `--status` | where the move stands, from hull's record. A move that committed or that hull aborted is recorded as such |
 | `--abort` | call off a move that has not committed. hull restores the session here once the destination confirms |
-| `--prepare` | with `--to`, make the host ready for a move and move nothing: hull puts the image, the kernel and the sandbox's base disk there, each only if it is missing. The guest keeps running here, and Brig records the host when a move there will stream. See [Prepare the destination](teleport.md#prepare-the-destination) |
+| `--prepare` | with `--to`, make the host ready for a move and move nothing: hull puts the image, the kernel and the sandbox's base disk there, each only if it is missing. The guest keeps running here, and Brig records the host once it holds the sandbox's base. See [Prepare the destination](teleport.md#prepare-the-destination) |
 | `--json` | print the outcome as a `Teleport` document |
 
 During a move or a prepare, Brig prints hull's lines on stderr as they

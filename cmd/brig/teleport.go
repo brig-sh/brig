@@ -300,7 +300,11 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 	}
 
 	if loc.PreparedHost == host {
-		warnf("%s was prepared for %s at %s, and holds the sandbox's base", host, ref, loc.PreparedAt)
+		how := "a move there streams"
+		if !loc.PreparedStream {
+			how = "hull said a move there still sends everything"
+		}
+		warnf("%s was prepared for %s at %s and holds its base; %s", host, ref, loc.PreparedAt, how)
 	}
 	warnf("moving %s to %s (move %s): the guest pauses here and resumes there", ref, host, txid)
 	started := time.Now()
@@ -408,9 +412,8 @@ func preparedOfLocation(loc wrap.Location) *preparedData {
 	if loc.PreparedHost == "" {
 		return nil
 	}
-	// The index records only a host hull said a move would stream to.
 	return &preparedData{Host: loc.PreparedHost, At: loc.PreparedAt,
-		Prepared: runtime.Prepared{Base: loc.PreparedBase, Stream: true}}
+		Prepared: runtime.Prepared{Base: loc.PreparedBase, Stream: loc.PreparedStream}}
 }
 
 // teleportPrepare is --prepare: make host ready to take the session, so a
@@ -456,28 +459,35 @@ func teleportPrepare(cfg *wrap.Config, t profile.Profile, ref, host string, want
 	if err != nil {
 		return fmt.Errorf("hull did not prepare %s for %s, and nothing was paused: %w", host, ref, err)
 	}
-	// Only a host a move would send just the guest's changes to is
-	// recorded as prepared: a move to any other sends everything, and a
-	// record would tell the move the opposite.
+	// A host that holds the sandbox's base is recorded, with whether hull
+	// said a move there streams: an older hvi there takes the base and
+	// still gets the whole checkpoint and disk, and the record says which.
+	// A host that holds no base is not prepared for anything a move uses.
 	at := time.Now()
-	if p.Stream {
-		if err := wrap.RecordPrepared(ref, vm, host, p.Base, at); err != nil {
-			return fmt.Errorf("%s is prepared for %s, and brig could not record that here: %w", host, ref, err)
+	if p.Base != "" {
+		if err := wrap.RecordPrepared(ref, vm, host, p.Base, p.Stream, at); err != nil {
+			return fmt.Errorf("%s holds the base of %s, and brig could not record that here: %w", host, ref, err)
 		}
 	}
 	d := teleportData{Ref: ref, Sandbox: vm, State: "here",
 		Prepared: &preparedData{Host: host, At: at.UTC().Format(time.RFC3339), Prepared: p}}
 	if !p.Stream {
-		warnf("%s", notice.Newf("%s holds what hull could put there, and a move of %s there still sends the "+
-			"whole checkpoint and disk: %s", host, ref, orNone(p.Why)).
-			Note("brig records no prepared host for %s", ref))
+		n := notice.Newf("%s holds what hull could put there, and a move of %s there still sends the "+
+			"whole checkpoint and disk: %s", host, ref, orNone(p.Why))
+		if p.Base == "" {
+			n = n.Note("it holds no base of %s, so brig records no prepared host", ref)
+		}
+		warnf("%s", n)
 	}
 	if wantJSON {
 		return writeJSONDocument(os.Stdout, "Teleport", d)
 	}
-	if p.Stream {
+	switch {
+	case p.Stream:
 		fmt.Printf("prepared %s for %s\n", host, ref)
-	} else {
+	case p.Base != "":
+		fmt.Printf("prepared %s for %s; a move there still sends the whole checkpoint and disk\n", host, ref)
+	default:
 		fmt.Printf("%s is not prepared for %s\n", host, ref)
 	}
 	for _, st := range p.Steps {

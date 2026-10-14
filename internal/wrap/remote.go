@@ -36,11 +36,13 @@ type Location struct {
 	RemoteStore string
 	TxID        string
 	// PreparedHost is the host `brig teleport --prepare` last made ready
-	// for the session, PreparedBase the sha256 of the base disk hull said
-	// is there, and PreparedAt when, in RFC 3339. "" when none was.
-	PreparedHost string
-	PreparedBase string
-	PreparedAt   string
+	// for the session, PreparedBase the digest of the base disk hull said
+	// is there, PreparedStream whether hull said a move there streams, and
+	// PreparedAt when, in RFC 3339. "" when none was.
+	PreparedHost   string
+	PreparedBase   string
+	PreparedStream bool
+	PreparedAt     string
 }
 
 // Away reports whether the session is not, or not certainly, on this host.
@@ -49,7 +51,7 @@ func (l Location) Away() bool { return l.Host != "" || l.PendingHost != "" }
 func (e sessionEntry) location(ref string) Location {
 	return Location{Ref: ref, Sandbox: e.Sandbox, Host: e.Host, PendingHost: e.PendingHost,
 		RemoteStore: e.RemoteStore, TxID: e.TxID, PreparedHost: e.PreparedHost, PreparedBase: e.PreparedBase,
-		PreparedAt: e.PreparedAt}
+		PreparedStream: e.PreparedStream, PreparedAt: e.PreparedAt}
 }
 
 // SessionLocation reads where the session of profile t and the label name
@@ -140,22 +142,22 @@ func RecordMoved(ref, sandbox, host, store, txid string) error {
 			return fmt.Errorf("the record of %s names move %s, not %s", ref, e.TxID, txid)
 		}
 		e.Host, e.RemoteStore, e.PendingHost = host, store, ""
-		e.PreparedHost, e.PreparedBase, e.PreparedAt = "", "", ""
+		e.PreparedHost, e.PreparedBase, e.PreparedStream, e.PreparedAt = "", "", false, ""
 		return nil
 	})
 }
 
 // RecordPrepared records that host was made ready to take the session:
-// hull holds the image, the kernel and the base disk whose sha256 is base
-// there, as of at. A later move to host carries only what changed since
-// the base. It replaces the record of any host prepared before, and is
-// refused for a session that is not here.
-func RecordPrepared(ref, sandbox, host, base string, at time.Time) error {
+// hull holds the base disk whose digest is base there, as of at, and stream
+// says whether hull said a move there sends only what the guest changed
+// since. It replaces the record of any host prepared before, and is refused
+// for a session that is not here.
+func RecordPrepared(ref, sandbox, host, base string, stream bool, at time.Time) error {
 	return updateEntry(ref, sandbox, func(e *sessionEntry) error {
 		if e.away() {
 			return fmt.Errorf("%s is not on this host, so a move of it does not start here", ref)
 		}
-		e.PreparedHost, e.PreparedBase, e.PreparedAt = host, base, at.UTC().Format(time.RFC3339)
+		e.PreparedHost, e.PreparedBase, e.PreparedStream, e.PreparedAt = host, base, stream, at.UTC().Format(time.RFC3339)
 		return nil
 	})
 }
