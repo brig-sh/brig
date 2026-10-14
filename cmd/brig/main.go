@@ -2667,9 +2667,10 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		return err
 	}
 	// The copy a move left here is not removed with everything else. While
-	// the move is unfinished it may be the session's only copy, and once it
-	// committed `brig rm <ref>` removes it after the other host says the
-	// session runs there; see removeMovedCopy.
+	// the move is unfinished it may be the session's only copy. Once it
+	// committed, `brig rm <ref>` removes it when hull's record here says
+	// migrated (staleByHullsRecord) or the other host says the session runs
+	// there; see removeMovedCopy.
 	moved := map[string]wrap.Location{}
 	for _, loc := range wrap.RemoteSessions() {
 		moved[loc.Sandbox] = loc
@@ -2685,7 +2686,8 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 				where = "is being moved to " + loc.PendingHost
 			}
 			warnf("%s", notice.Newf("kept %s: %s %s", inst.Name, loc.Ref, where).
-				Note("`brig rm %s` removes the copy here once that host says the session runs there", loc.Ref))
+				Note("`brig rm %s` removes the copy here once the move committed: hull's record of it "+
+					"says migrated, or that host says the session runs there", loc.Ref))
 			continue
 		}
 		mine = append(mine, inst)
