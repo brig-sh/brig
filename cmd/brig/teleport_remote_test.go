@@ -550,6 +550,9 @@ func TestAMoveHullDidNotBeginIsUndone(t *testing.T) {
 	if e := entryOf(t); e["pendingHost"] != nil {
 		t.Errorf("the record was kept: %v", e)
 	}
+	if got := rt.asked[len(rt.asked)-1]; got != "abort "+rt.txid {
+		t.Errorf("hull's unfenced record was not ended: %v", rt.asked)
+	}
 	last := (*calls)[len(*calls)-1]
 	if !strings.Contains(last[len(last)-1], receiveVerb+" --json --abort") {
 		t.Errorf("the destination's network was not given back: %q", last)

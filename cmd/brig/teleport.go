@@ -257,7 +257,15 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 		// hull's record says the move never fenced the guest, or names no
 		// part of this move: the guest still runs here, and brig undoes
 		// its own half. A record hull aborted is the same: hull has run
-		// the guest here again.
+		// the guest here again. A record hull left at preflight or
+		// reserved is ended too, which is safe with nothing fenced, or the
+		// next move of the session would find it in hull's way.
+		if st.TxID == txid && st.State != runtime.MoveAborted {
+			if _, err := mover.MigrateAbort(vm, txid); err != nil {
+				warnf("%s", notice.Newf("could not end hull's record of move %s: %v", txid, err).
+					Note("`hull migrate --abort %s` ends it; nothing was fenced", txid))
+			}
+		}
 		abortReceive(host, spec.RemoteStore, ref, vm, txid)
 		_ = wrap.ClearMove(ref, vm, txid)
 		if st.TxID == txid && st.State == runtime.MoveAborted {
