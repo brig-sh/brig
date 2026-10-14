@@ -515,8 +515,8 @@ func (c *Config) checkBootDigests(assets runtime.BootAssets) error {
 		return c.bootDigestsUnread(assets, bundle, recordOnly(fallback))
 	}
 	c.verified = append(c.verified, "boot assets")
-	c.progressf("boot assets: %s and %s match the digests %s lists for %s",
-		filepath.Base(assets.Kernel), filepath.Base(assets.Initrd), source, c.bundleDigest)
+	c.progressf("boot assets: %s %s the digests %s lists for %s",
+		bundleFileNames(assets), matchVerb(assets), source, c.bundleDigest)
 	return nil
 }
 
@@ -544,7 +544,7 @@ func compareBootDigests(ref, digest string, assets runtime.BootAssets) (differ, 
 		return "", "", nil, err
 	}
 	var lines []string
-	for _, path := range []string{assets.Kernel, assets.Initrd} {
+	for _, path := range bundleFiles(assets) {
 		name := filepath.Base(path)
 		want := expected[name]
 		if want == "" {
@@ -573,7 +573,7 @@ func (c *Config) staleBundle(assets runtime.BootAssets) bool {
 	if err != nil || recorded == c.bundleDigest {
 		return false
 	}
-	for _, path := range []string{assets.Kernel, assets.Initrd} {
+	for _, path := range bundleFiles(assets) {
 		want := files[filepath.Base(path)]
 		got, err := verify.FileDigest(path)
 		if want == "" || err != nil || got != want {
@@ -592,7 +592,7 @@ func (c *Config) refetchBootAssets(assets runtime.BootAssets) error {
 	}
 	c.progressf("boot assets in %s are an older bundle; fetching %s",
 		filepath.Dir(assets.Kernel), c.verifiedBootRef())
-	fresh, err := r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef(), Replace: true},
+	fresh, err := r.ResolveBootAssets(runtime.BootFetch{Ref: c.verifiedBootRef(), Replace: true, Machine: assets.Machine},
 		c.runtimeNotice(), c.runtimeOutput())
 	if err != nil {
 		return err
@@ -722,7 +722,7 @@ func (c *Config) checkBundleRecord(assets runtime.BootAssets) error {
 		return c.bundleRecordUnread(dir,
 			fmt.Errorf("this %s finds the kernel and initrd inside its own run", c.Runtime.Kind()))
 	}
-	for _, path := range []string{assets.Kernel, assets.Initrd} {
+	for _, path := range bundleFiles(assets) {
 		if filepath.Dir(path) != filepath.Clean(dir) {
 			return c.bundleRecordUnread(dir, fmt.Errorf("the runtime resolved %s, which is not beside the record", path))
 		}
@@ -733,7 +733,7 @@ func (c *Config) checkBundleRecord(assets runtime.BootAssets) error {
 		return c.bundleRecordUnread(dir, err)
 	}
 	var differ []string
-	for _, path := range []string{assets.Kernel, assets.Initrd} {
+	for _, path := range bundleFiles(assets) {
 		name := filepath.Base(path)
 		want := files[name]
 		if want == "" {
@@ -780,8 +780,90 @@ func (c *Config) checkBundleRecord(assets runtime.BootAssets) error {
 				"released from a fork needs BRIG_VERIFY_RUNTIME_IDENTITY set to its release workflow", res.Detail))
 	}
 	c.verified = append(c.verified, "boot assets")
-	c.progressf("boot assets: %s and %s match the runtime bundle's signed record, %s",
-		filepath.Base(assets.Kernel), filepath.Base(assets.Initrd), rec.Release)
+	c.progressf("boot assets: %s %s the runtime bundle's signed record, %s",
+		bundleFileNames(assets), matchVerb(assets), rec.Release)
+	return nil
+}
+
+// bundleFiles are the files of assets that the boot bundle lists: the kernel
+// and the initrd, or only the initrd when the kernel is the portable one,
+// which no bundle carries. checkPortableKernel checks that kernel instead.
+func bundleFiles(assets runtime.BootAssets) []string {
+	if assets.Machine != "" {
+		return []string{assets.Initrd}
+	}
+	return []string{assets.Kernel, assets.Initrd}
+}
+
+// bundleFileNames names bundleFiles for a progress line.
+func bundleFileNames(assets runtime.BootAssets) string {
+	if assets.Machine != "" {
+		return filepath.Base(assets.Initrd)
+	}
+	return filepath.Base(assets.Kernel) + " and " + filepath.Base(assets.Initrd)
+}
+
+func matchVerb(assets runtime.BootAssets) string {
+	if assets.Machine != "" {
+		return "matches"
+	}
+	return "match"
+}
+
+// portableKernelDigest is runtime.PortableKernelDigest, a variable so a test
+// can pin a kernel it wrote.
+var portableKernelDigest = runtime.PortableKernelDigest
+
+// checkPortableKernel compares the portable kernel a teleportable session
+// boots with the digest brig pins for it, before the boot.
+//
+// No bundle lists this kernel, so checkBootDigests leaves it out and this
+// check runs whatever state the bundle's check was in: no signature to bind,
+// a runtime bundle's record, or none at all. The trust root is the digest
+// compiled into brig, runtime.PortableKernelDigest.
+//
+// Who chose the file decides what a difference means, as for the bundle's
+// files. A kernel at the place brig looks by default has no innocent reading
+// when it differs, so it refuses in every mode but off. One that
+// BRIG_PORTABLE_KERNEL or BRIG_BOOT_ASSETS named is somebody's build: warn
+// states the difference and boots it, and require refuses. A kernel brig
+// cannot hash is "cannot check", said under warn and refused under require.
+func (c *Config) checkPortableKernel(assets runtime.BootAssets) error {
+	if c.Verify == verify.Off || assets.Machine == "" {
+		return nil
+	}
+	want := portableKernelDigest
+	got, err := verify.FileDigest(assets.Kernel)
+	if err != nil {
+		if c.Verify == verify.Require {
+			return fmt.Errorf("refusing to boot: cannot read the portable kernel %s to compare it with "+
+				"the digest brig pins for the %s machine, %s: %v (BRIG_VERIFY=require). Set "+
+				"BRIG_VERIFY=warn to boot it without the comparison", assets.Kernel, assets.Machine, want, err)
+		}
+		c.alertf("%s", notice.Newf("cannot read the portable kernel %s to compare it with the digest "+
+			"brig pins for it: %v", assets.Kernel, err).
+			Note("it boots without being compared"))
+		return nil
+	}
+	if got == want {
+		c.verified = append(c.verified, "portable kernel")
+		c.progressf("portable kernel: %s matches the digest brig pins for the %s machine, %s",
+			filepath.Base(assets.Kernel), assets.Machine, want)
+		return nil
+	}
+	detail := fmt.Sprintf("%s is %s, not the %s brig pins for the %s machine",
+		assets.Kernel, got, want, assets.Machine)
+	if !assets.KernelNamed {
+		return fmt.Errorf("refusing to boot: the portable kernel at the place brig looks for it is "+
+			"not the one brig pins: %s. Delete it and put the portable kernel there, or set "+
+			"BRIG_PORTABLE_KERNEL to it if it is your own build", detail)
+	}
+	if c.Verify == verify.Require {
+		return fmt.Errorf("refusing to boot: you named the portable kernel, and it is not the one brig "+
+			"pins: %s (BRIG_VERIFY=require). Set BRIG_VERIFY=warn to boot it", detail)
+	}
+	c.alertf("%s", notice.Newf("the portable kernel you named is not the one brig pins: %s", detail).
+		Note("booting it as your own build, so nothing vouches for the kernel this sandbox boots"))
 	return nil
 }
 

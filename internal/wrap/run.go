@@ -377,6 +377,10 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err := c.checkBootDigests(bootAssets); err != nil {
 		return &VerifyRefusedError{Err: err}
 	}
+	// The portable kernel no bundle lists, against the digest brig pins.
+	if err := c.checkPortableKernel(bootAssets); err != nil {
+		return &VerifyRefusedError{Err: err}
+	}
 	// Both checks are in, so the run can state the outcome in one line. Here
 	// rather than inside either check, because there is one answer for the step
 	// and two checks that reach it. See sayVerified.
