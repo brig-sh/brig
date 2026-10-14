@@ -50,6 +50,7 @@ func (c *Config) Plan() PlanDocument {
 		// Beside the home, which it changes. Omitted when false, so a plan
 		// of an ordinary run is the document it was before this field.
 		Teleportable: c.Teleportable,
+		Machine:      c.infoMachine(),
 		Skills:       c.planSkills(),
 		Image:        InfoImage{Ref: c.Image, Pull: c.Pull},
 		Verify:       c.infoVerify(),
@@ -196,8 +197,11 @@ type PlanDocument struct {
 	Home      PlanMount    `json:"home"`
 	// Teleportable is set when the session owns all its storage, and Home
 	// then has no host path and the mode "disk". See Config.Teleportable.
-	Teleportable bool       `json:"teleportable,omitempty"`
-	Project      *PlanMount `json:"project,omitempty"`
+	Teleportable bool `json:"teleportable,omitempty"`
+	// Machine is the machine profile the boot asks hvi for, on a
+	// teleportable session only. See InfoDocument.Machine.
+	Machine string     `json:"machine,omitempty"`
+	Project *PlanMount `json:"project,omitempty"`
 	// ProjectRefused is why the project this session remembers is not
 	// mounted, as in the Info payload. Refused carries the same reason,
 	// because the run stops on it.
@@ -337,7 +341,8 @@ func (c *Config) PrintPlan(d PlanDocument) {
 		envelopeRow{"HOME", planHomeLine(d)},
 	)
 	if d.Teleportable {
-		rows = append(rows, envelopeRow{"TELEPORTABLE", teleportableLine})
+		rows = append(rows, envelopeRow{"TELEPORTABLE", teleportableLine},
+			envelopeRow{"MACHINE", c.machineLine()})
 	}
 	if d.Project != nil {
 		rows = append(rows, envelopeRow{"PROJECT",

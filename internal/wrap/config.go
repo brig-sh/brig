@@ -266,6 +266,10 @@ type Config struct {
 	// teleportState is the migration record the runtime keeps for this
 	// session, read by brig info alone. See readTeleportState.
 	teleportState runtime.Migration
+	// machineSeen is the machine hull's record says the sandbox runs, read
+	// by brig info alone, or "" when the record does not say. See
+	// readTeleportState and machineLine.
+	machineSeen string
 	// arrival is set when the session was moved here from another host. See
 	// arrival.go: it carries the rules the session was under, it holds the
 	// session back until the move has finished, and it lets an exec here run
