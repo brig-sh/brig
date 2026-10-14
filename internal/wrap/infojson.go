@@ -25,6 +25,7 @@ import (
 // and the text say the same thing for the same reason the block and the report
 // already do.
 func (c *Config) InfoData(set creds.Set) InfoDocument {
+	c.readTeleportState()
 	d := InfoDocument{
 		Session:      c.RawName,
 		Profile:      c.Profile.Name,
@@ -42,6 +43,9 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 	}
 	if c.Project != "" {
 		d.Project = &InfoProject{Host: c.Project, Guest: c.GuestProject}
+	}
+	if m := c.teleportState; m.State != "" {
+		d.Teleport = &InfoTeleport{State: m.State, BundleDir: m.BundleDir, TxID: m.TxID}
 	}
 	if c.projectRefused != nil {
 		d.ProjectRefused = c.projectRefused.Error()
@@ -68,15 +72,19 @@ type InfoDocument struct {
 	// for a teleportable session, which has none: Teleportable is then true.
 	// Added within the apiVersion, so it is omitted when false and a reader
 	// written before it parses every document unchanged.
-	Workspace    string           `json:"workspace"`
-	Teleportable bool             `json:"teleportable,omitempty"`
-	Project      *InfoProject     `json:"project,omitempty"`
-	Image        InfoImage        `json:"image"`
-	Verify       InfoVerify       `json:"verify"`
-	Network      string           `json:"network"`
-	Credentials  []InfoCredential `json:"credentials"`
-	Deny         *InfoDeny        `json:"deny,omitempty"`
-	Git          InfoGit          `json:"git"`
+	Workspace    string `json:"workspace"`
+	Teleportable bool   `json:"teleportable,omitempty"`
+	// Teleport is the migration record hull keeps for a teleportable
+	// session: the state a checkpoint, restore or move left it in. Absent
+	// until there is one, and on every other session.
+	Teleport    *InfoTeleport    `json:"teleport,omitempty"`
+	Project     *InfoProject     `json:"project,omitempty"`
+	Image       InfoImage        `json:"image"`
+	Verify      InfoVerify       `json:"verify"`
+	Network     string           `json:"network"`
+	Credentials []InfoCredential `json:"credentials"`
+	Deny        *InfoDeny        `json:"deny,omitempty"`
+	Git         InfoGit          `json:"git"`
 	// ArgvExposed is the values BRIG_ENV_ARGV would put on the runtime's command
 	// line, by name. Empty -- and omitted -- when the hatch is off, which is the
 	// default. The names are variable names, never values.
@@ -88,6 +96,14 @@ type InfoDocument struct {
 	// mounted, and so why Project is absent. It is omitted when nothing was
 	// refused, so a script can tell a refusal from a run with --no-project.
 	ProjectRefused string `json:"projectRefused,omitempty"`
+}
+
+// InfoTeleport is the TELEPORT row as data: hull's word for where the
+// session stands, and the checkpoint that word refers to.
+type InfoTeleport struct {
+	State     string `json:"state"`
+	BundleDir string `json:"bundleDir,omitempty"`
+	TxID      string `json:"txid,omitempty"`
 }
 
 // InfoRuntime is the runtime this run resolved to, and whether it is there at

@@ -2036,6 +2036,19 @@ tp "$WORK/brig" info claude > "$WORK/tp-info.out" 2>&1
 grep -q '^TELEPORTABLE ' "$WORK/tp-info.out" && grep -q '^WORKSPACE .*none on the host' "$WORK/tp-info.out" \
   && ok "info names a teleportable session and no host home" \
   || bad "info names a teleportable session and no host home -- got: $(cat "$WORK/tp-info.out")"
+# Where a checkpoint left the session, in hull's words, once hull has a
+# record and not before. The checkpoint is the stub's, asked of it directly:
+# no brig verb takes one yet.
+grep -q '^TELEPORT ' "$WORK/tp-info.out" \
+  && bad "info prints no TELEPORT row before hull records a checkpoint -- got: $(cat "$WORK/tp-info.out")" \
+  || ok "info prints no TELEPORT row before hull records a checkpoint"
+"$WORK/hull" checkpoint --then fence brig-claude-code > /dev/null
+tp "$WORK/brig" info claude > "$WORK/tp-info.out" 2>&1
+tp "$WORK/brig" info --json claude > "$WORK/tp-info.json" 2> /dev/null
+grep -q "^TELEPORT  *fenced (checkpoint in $STUB_STATE.bundle)$" "$WORK/tp-info.out" \
+  && python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["data"]["teleport"]; sys.exit(t["state"] != "fenced")' "$WORK/tp-info.json" \
+  && ok "info shows the migration state hull records for a teleportable session" \
+  || bad "info shows the migration state hull records for a teleportable session -- got: $(cat "$WORK/tp-info.out" "$WORK/tp-info.json")"
 
 # The session keeps the property: a flagless run reuses the sandbox rather
 # than taking it for a stale share and recreating it over its own disk.

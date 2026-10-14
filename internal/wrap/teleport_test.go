@@ -36,6 +36,16 @@ type guestRuntime struct {
 	removes    int
 	execs      [][]string
 	feeds      []fed
+	// migration and migrationErr are what hull's migration record says,
+	// which brig info reads for a teleportable session.
+	migration    runtime.Migration
+	migrationErr error
+	migrations   int
+}
+
+func (r *guestRuntime) Migration(string) (runtime.Migration, error) {
+	r.migrations++
+	return r.migration, r.migrationErr
 }
 
 func (r *guestRuntime) Exists(string) (bool, error) { return r.exists, nil }
@@ -436,6 +446,56 @@ func TestATeleportableBootLeavesItsCredentialsToTheExec(t *testing.T) {
 		if _, ok := exec[name]; !ok {
 			t.Errorf("the agent's exec does not carry %s: %+v", name, exec)
 		}
+	}
+}
+
+// brig info shows where a checkpoint or a move left a teleportable session,
+// in hull's words, and only when hull has a record. No record, a record hull
+// cannot read and an ordinary session all print no row and no JSON field:
+// info answers when the runtime is broken, and a row reading "none" on every
+// session is one people learn to skip.
+func TestInfoShowsTheMigrationStateHullRecords(t *testing.T) {
+	fenced := runtime.Migration{State: "fenced", BundleDir: "/s/b/t1", TxID: "t1"}
+	for _, c := range []struct {
+		what  string
+		p     func(*testing.T) profile.Profile
+		m     runtime.Migration
+		err   error
+		row   string
+		asked bool
+	}{
+		{"a fenced checkpoint", teleportProfile, fenced, nil, "fenced (checkpoint in /s/b/t1)", true},
+		{"no record", teleportProfile, runtime.Migration{}, nil, "", true},
+		{"a record hull cannot read", teleportProfile, fenced, errors.New("store is locked"), "", true},
+		{"an ordinary session", ordinaryProfile, fenced, nil, "", false},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			teleportState(t)
+			t.Chdir(t.TempDir())
+			rt := &guestRuntime{migration: c.m, migrationErr: c.err}
+			cfg := loadTeleport(t, c.p(t), Options{}, rt)
+			cfg.Info(creds.Set{})
+			out := cfg.Out.(*bytes.Buffer).String()
+			row := ""
+			for _, line := range strings.Split(out, "\n") {
+				if rest, ok := strings.CutPrefix(line, "TELEPORT "); ok {
+					row = strings.TrimSpace(rest)
+				}
+			}
+			if row != c.row {
+				t.Errorf("TELEPORT row %q, want %q in:\n%s", row, c.row, out)
+			}
+			d := cfg.InfoData(creds.Set{})
+			switch {
+			case c.row == "" && d.Teleport != nil:
+				t.Errorf("the JSON carries a teleport field with no record: %+v", d.Teleport)
+			case c.row != "" && (d.Teleport == nil || d.Teleport.State != c.m.State || d.Teleport.BundleDir != c.m.BundleDir):
+				t.Errorf("the JSON teleport field is %+v, want %+v", d.Teleport, c.m)
+			}
+			if asked := rt.migrations > 0; asked != c.asked {
+				t.Errorf("asked hull for a migration record: %v, want %v", asked, c.asked)
+			}
+		})
 	}
 }
 
