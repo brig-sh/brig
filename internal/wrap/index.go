@@ -151,6 +151,13 @@ type sessionEntry struct {
 	RemoteStore  string `json:"remoteStore,omitempty"`
 	TxID         string `json:"txid,omitempty"`
 	PendingHost  string `json:"pendingHost,omitempty"`
+	// PreparedHost is the host `brig teleport --prepare` last made ready to
+	// take the session, as USER@HOST, PreparedBase the sha256 of the base
+	// disk hull said it holds there, and PreparedAt when, in RFC 3339. Plain
+	// strings, so an entry still compares with ==.
+	PreparedHost string `json:"preparedHost,omitempty"`
+	PreparedBase string `json:"preparedBase,omitempty"`
+	PreparedAt   string `json:"preparedAt,omitempty"`
 }
 
 // isTeleportable reports whether the entry is a teleportable session's. The
@@ -545,6 +552,9 @@ func (c *Config) rememberSession() {
 	if old, ok := index[key]; ok && old.Sandbox == c.VMName {
 		entry.Host, entry.RemoteStore, entry.TxID, entry.PendingHost =
 			old.Host, old.RemoteStore, old.TxID, old.PendingHost
+		// Nor which host a prepare made ready: the base it left there
+		// is still there after the session restarts here.
+		entry.PreparedHost, entry.PreparedBase, entry.PreparedAt = old.PreparedHost, old.PreparedBase, old.PreparedAt
 	}
 	if index[key] == entry {
 		return
