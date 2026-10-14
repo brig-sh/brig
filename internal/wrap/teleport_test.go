@@ -50,6 +50,14 @@ func (r *guestRuntime) Migration(string) (runtime.Migration, error) {
 
 func (r *guestRuntime) Exists(string) (bool, error) { return r.exists, nil }
 
+// ResolveBootAssets answers the way hull does for a genericBoot profile:
+// a kernel and an initrd, the kernel swapped for the portable one when the
+// boot names the machine. Nothing is read from them here, since every case
+// runs with BRIG_VERIFY=off.
+func (r *guestRuntime) ResolveBootAssets(fetch runtime.BootFetch, _, _ io.Writer) (runtime.BootAssets, error) {
+	return runtime.BootAssets{Kernel: "/assets/Image", Initrd: "/assets/initrd", Machine: fetch.Machine}, nil
+}
+
 // SandboxNetwork answers for an instance that exists the way hull does for a
 // sandbox booted on its own network, which is what every profile here asks
 // for. Without it an Exister that finds an unrecorded sandbox leaves its
@@ -118,6 +126,7 @@ binary: tp
 mem: 1
 cpus: 1
 hypervisor: hvi
+genericBoot: true
 teleportable: true
 onboarding:
   file: .tp/state.json

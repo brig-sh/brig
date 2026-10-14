@@ -372,6 +372,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
 	}
+	// The machine the run line names and the kernel it boots come from one
+	// resolve. resolveTeleportable refuses the profile that would leave the
+	// kernel unresolved; this holds for a runtime that resolves none, and
+	// for BRIG_VERIFY=off, which skips the comparison and not the kernel.
+	if err := c.machineKernelRefusal(bootAssets); err != nil {
+		return err
+	}
 	// The files just resolved are the ones the runtime boots, so they are
 	// the ones compared with the bundle whose signature verified above.
 	if err := c.checkBootDigests(bootAssets); err != nil {

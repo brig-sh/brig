@@ -131,3 +131,73 @@ func TestATeleportableBootHandsTheMachineToTheResolveAndTheRun(t *testing.T) {
 type absentResolver struct{ *resolvingRuntime }
 
 func (absentResolver) Exists(string) (bool, error) { return false, nil }
+
+// hostMachine makes this host one whose teleportable sessions boot machine,
+// "" for a host with no portable machine, whatever the test runs on.
+func hostMachine(t *testing.T, machine string) {
+	t.Helper()
+	was := teleportableMachine
+	teleportableMachine = func() string { return machine }
+	t.Cleanup(func() { teleportableMachine = was })
+}
+
+// brig hands the portable kernel to hull through the boot assets, and only a
+// genericBoot profile has any. On a host with a portable machine a
+// teleportable session of any other profile would ask hull for that machine
+// with no kernel brig chose or checked, so it is refused before the runtime
+// is asked, and the plan says the same. On a host with no portable machine
+// the session boots the native one, and nothing is refused.
+func TestATeleportableProfileWithoutGenericBootIsRefusedOnAPortableHost(t *testing.T) {
+	for _, machine := range []string{runtime.MachinePortableArm64V1, ""} {
+		teleportState(t)
+		hostMachine(t, machine)
+		p := ordinaryProfile(t)
+		if p.GenericBoot {
+			t.Fatal("ordinaryProfile became a genericBoot profile; this case needs one that is not")
+		}
+		rt := &guestRuntime{}
+		cfg := loadTeleport(t, p, Options{Teleportable: true}, rt)
+		err := cfg.EnsureRunning(creds.Set{})
+		if machine == "" {
+			if err != nil || rt.boots != 1 {
+				t.Errorf("no portable machine: the session was not booted on the native one: %d boots (%v)", rt.boots, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "genericBoot: true") ||
+			!strings.Contains(err.Error(), machine) || !strings.Contains(err.Error(), "--teleportable") {
+			t.Fatalf("want the refusal naming the machine, genericBoot and --teleportable, got %v", err)
+		}
+		if rt.boots != 0 {
+			t.Errorf("booted %d sandboxes for a teleportable session with no portable kernel", rt.boots)
+		}
+		if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "genericBoot: true") {
+			t.Errorf("the plan did not carry the refusal: %+v", d.Refused)
+		}
+	}
+}
+
+// The run line names the machine and the resolve supplies its kernel, and a
+// boot where the two disagree is refused before the runtime is asked: a
+// runtime that resolved the bundle's kernel and no portable one would boot a
+// kernel with no hvi-time driver on the portable machine. BRIG_VERIFY=off
+// skips the digest comparison, not this.
+func TestABootWhoseResolveNamesNoMachineIsRefused(t *testing.T) {
+	hostMachine(t, runtime.MachinePortableArm64V1)
+	registryServes(t, published())
+	for _, mode := range []verify.Mode{verify.Off, verify.Warn, verify.Require} {
+		assets := writeBootAssets(t, publishedKernel, publishedInitrd, false)
+		c, rr := digestRun(t, mode, assets)
+		c.Runtime = absentResolver{rr}
+		c.Teleportable = true
+
+		err := c.EnsureRunning(creds.Set{})
+
+		if err == nil || rr.booted != nil {
+			t.Fatalf("%s: a boot with no portable kernel reached the runtime (err %v)", mode, err)
+		}
+		if !strings.Contains(err.Error(), "no portable kernel was resolved") {
+			t.Errorf("%s: want the refusal that names the missing portable kernel, got %v", mode, err)
+		}
+	}
+}
