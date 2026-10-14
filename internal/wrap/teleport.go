@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/brig-sh/brig/internal/notice"
+	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 )
@@ -314,13 +315,58 @@ func (c *Config) readTeleportState() {
 
 // teleportLine is the TELEPORT row: hull's state and the bundle it names, or
 // "" when there is no record.
+//
+// A move adds its other host, and a session moved here the host it came
+// from, so the row says where the session was or is going.
 func (c *Config) teleportLine() string {
 	m := c.teleportState
+	from := ""
+	if a := c.arrival; a != nil {
+		from = fmt.Sprintf("arrived from %s (move %s)", a.From, a.TxID)
+	}
 	switch {
 	case m.State == "":
-		return ""
-	case m.BundleDir != "":
+		return from
+	case m.Peer != "" && from == "":
+		return fmt.Sprintf("%s (move %s, %s)", m.State, m.TxID, m.Peer)
+	case m.BundleDir != "" && from == "":
 		return fmt.Sprintf("%s (checkpoint in %s)", m.State, m.BundleDir)
+	case from != "":
+		return m.State + ", " + from
 	}
 	return m.State
+}
+
+// MoveNetwork is the network a move carries: the posture and the slot the
+// guest's address is on, and the rules its gateway enforces, by value.
+type MoveNetwork struct {
+	Net      string
+	Slot     int
+	Egress   policy.Egress
+	Policies []string
+}
+
+// MoveNetwork reads the network this session's sandbox runs on, for a move
+// to carry. It refuses when what this host would resolve for the session
+// differs from what the sandbox booted with: the rules a move carries must
+// be the ones the guest is under, and either answer would carry the wrong
+// ones.
+func (c *Config) MoveNetwork() (MoveNetwork, error) {
+	if c.postureChanged() || c.networkStale() {
+		change, _ := c.postureChange()
+		return MoveNetwork{}, fmt.Errorf("%s, so the rules %s runs under are not the ones brig "+
+			"resolves for it now, and a move would carry the wrong ones. Put the network and policy "+
+			"back as the sandbox was started", change, c.VMName)
+	}
+	net, slot, ok := runtime.SandboxAddress(c.VMName)
+	if !ok {
+		return MoveNetwork{}, fmt.Errorf("brig has no record of the network %s was booted on, and a "+
+			"moved guest keeps the address it has, so the destination could not give it the same one",
+			c.VMName)
+	}
+	policies := c.Policies
+	if c.arrival != nil && c.arrival.Egress.Default != "" && len(c.arrival.Policies) > 0 {
+		policies = c.arrival.Policies
+	}
+	return MoveNetwork{Net: net, Slot: slot, Egress: c.Egress, Policies: policies}, nil
 }

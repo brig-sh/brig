@@ -128,12 +128,29 @@ const (
 // itself: it resolves the same sandbox name, reads the missing share as a
 // stale one, and recreates the sandbox, disk and all. docs/teleport.md says
 // so.
+//
+// Host is set once a teleport of the session committed: the session runs on
+// that host, named as USER@HOST, and every verb that acts on it there goes
+// over ssh. RemoteStore is the hull store it runs in there, as the brig there
+// drives it, and TxID names the move. PendingHost is set for the length of a
+// move, from before hull is asked until hull's record says how it ended: a
+// move whose end brig did not see has to be asked about, not guessed at. See
+// teleport.md.
+//
+// Sandbox stays the name the session had here, which is the name it has on
+// the destination too. An entry with either host set is not this host's to
+// prune or forget when this host's runtime no longer lists the sandbox:
+// it was moved, not lost. See away.
 type sessionEntry struct {
 	Home         string `json:"home"`
 	Sandbox      string `json:"sandbox"`
 	Project      string `json:"project,omitempty"`
 	Ephemeral    bool   `json:"ephemeral,omitempty"`
 	Teleportable bool   `json:"teleportable,omitempty"`
+	Host         string `json:"host,omitempty"`
+	RemoteStore  string `json:"remoteStore,omitempty"`
+	TxID         string `json:"txid,omitempty"`
+	PendingHost  string `json:"pendingHost,omitempty"`
 }
 
 // isTeleportable reports whether the entry is a teleportable session's. The
@@ -145,6 +162,13 @@ type sessionEntry struct {
 // the disk the session lives on.
 func (e sessionEntry) isTeleportable() bool {
 	return e.Teleportable || e.Home == ""
+}
+
+// away reports whether the session was moved to another host, or is being
+// moved. Its sandbox may be missing from this host's runtime, or fenced
+// there, and neither means the session is gone.
+func (e sessionEntry) away() bool {
+	return e.Host != "" || e.PendingHost != ""
 }
 
 // stateDir is where brig keeps what has to outlive a single invocation.
@@ -415,11 +439,16 @@ func RefOfSandbox(vmName string) string {
 // failure because a bookkeeping file could not be rewritten. rm of a sandbox
 // the runtime does not have needs it, since forgetting the session is all
 // that rm does.
+//
+// An entry for a session that was moved to another host is left alone. The
+// sandbox here was the session's old copy, and its removal says nothing
+// about the session, which runs on the other host and is reached through
+// this entry. ForgetRemoteSession drops one.
 func ForgetSandbox(vmName string) (bool, error) {
 	index := readSessionIndex()
 	dropped := false
 	for key, entry := range index {
-		if entry.Sandbox == vmName {
+		if entry.Sandbox == vmName && !entry.away() {
 			delete(index, key)
 			dropped = true
 		}
@@ -457,7 +486,9 @@ func PruneSessions(live []string) {
 	}
 	dropped := false
 	for key, entry := range index {
-		if !have[entry.Sandbox] {
+		// A moved session is not on this host's list by design, and its
+		// entry is the only way to reach it. See ForgetSandbox.
+		if !have[entry.Sandbox] && !entry.away() {
 			delete(index, key)
 			dropped = true
 		}
@@ -507,6 +538,14 @@ func (c *Config) rememberSession() {
 		Teleportable: c.Teleportable,
 	}
 	index := readSessionIndex()
+	// What a move recorded is not this run's to clear. A run never reaches
+	// here for a session that moved, since every verb on it goes to the
+	// other host, but a record written by hand or by a race must not lose
+	// the host the session went to.
+	if old, ok := index[key]; ok && old.Sandbox == c.VMName {
+		entry.Host, entry.RemoteStore, entry.TxID, entry.PendingHost =
+			old.Host, old.RemoteStore, old.TxID, old.PendingHost
+	}
 	if index[key] == entry {
 		return
 	}
