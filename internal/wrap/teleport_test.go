@@ -756,3 +756,81 @@ func TestATeleportableSandboxIsNotRecreatedForAPostureChange(t *testing.T) {
 		t.Errorf("it was recreated anyway: %d stops, %d removes, %d boots", rt.stops, rt.removes, rt.boots-boots)
 	}
 }
+
+// A running teleportable sandbox whose guest a checkpoint fenced, or a
+// restore has not brought back, is refused before anything is done to it:
+// no recreate, which would delete the disk the checkpoint was taken
+// against, and no exec into a guest whose vCPUs are parked. A record of
+// restored-paused, no record and one hull cannot read all let the run reuse
+// the sandbox: hull leaves restored-paused on the record after a resume, and
+// an unreadable record is no evidence the guest is parked.
+func TestARunRefusesATeleportableGuestACheckpointParked(t *testing.T) {
+	for _, tc := range []struct {
+		what   string
+		m      runtime.Migration
+		err    error
+		refuse string
+	}{
+		{"fenced", runtime.Migration{State: "fenced", BundleDir: "/b/t1", TxID: "t1"}, nil,
+			"fenced by a checkpoint (in /b/t1)"},
+		{"restoring", runtime.Migration{State: "restoring", BundleDir: "/b/t1", TxID: "t1"}, nil,
+			"being restored from a checkpoint (in /b/t1)"},
+		{"restored-paused", runtime.Migration{State: "restored-paused", BundleDir: "/b/t1"}, nil, ""},
+		{"no record", runtime.Migration{}, nil, ""},
+		{"an unreadable record", runtime.Migration{}, errors.New("store is locked"), ""},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			teleportState(t)
+			rt := &guestRuntime{}
+			if err := loadTeleport(t, teleportProfile(t), Options{}, rt).EnsureRunning(creds.Set{}); err != nil {
+				t.Fatalf("the first boot was refused: %v", err)
+			}
+			rt.running = true
+			rt.boots, rt.stops, rt.removes, rt.migrations = 0, 0, 0, 0
+			rt.execs, rt.feeds = nil, nil
+			rt.migration, rt.migrationErr = tc.m, tc.err
+
+			err := loadTeleport(t, teleportProfile(t), Options{}, rt).EnsureRunning(creds.Set{})
+			if rt.migrations != 1 {
+				t.Errorf("hull's record was asked %d times, want once", rt.migrations)
+			}
+			if tc.refuse == "" {
+				if err != nil {
+					t.Fatalf("a running sandbox was refused: %v", err)
+				}
+				if rt.boots != 0 || rt.stops != 0 || rt.removes != 0 {
+					t.Errorf("it was recreated: %d stops, %d removes, %d boots", rt.stops, rt.removes, rt.boots)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.refuse) {
+				t.Fatalf("a %s guest was not refused for that reason: %v", tc.what, err)
+			}
+			for _, says := range []string{"hull restore brig-", "brig rm "} {
+				if !strings.Contains(err.Error(), says) {
+					t.Errorf("the refusal does not name %q: %v", says, err)
+				}
+			}
+			if strings.Contains(err.Error(), "hull resume") {
+				t.Errorf("the refusal names a resume hull refuses for this guest: %v", err)
+			}
+			if rt.boots != 0 || rt.stops != 0 || rt.removes != 0 || len(rt.execs) != 0 || len(rt.feeds) != 0 {
+				t.Errorf("something was done to it anyway: %d stops, %d removes, %d boots, execs %q, feeds %d",
+					rt.stops, rt.removes, rt.boots, rt.execs, len(rt.feeds))
+			}
+		})
+	}
+}
+
+// An ordinary session is never asked about: only a teleportable one can be
+// checkpointed, and every run of an ordinary one would pay for the call.
+func TestARunOfAnOrdinarySessionDoesNotReadTheMigrationRecord(t *testing.T) {
+	teleportState(t)
+	t.Chdir(t.TempDir())
+	rt := &guestRuntime{running: true, migration: runtime.Migration{State: "fenced"}}
+	c := loadTeleport(t, ordinaryProfile(t), Options{}, rt)
+	_ = c.refuseParkedTeleportable()
+	if rt.migrations != 0 {
+		t.Errorf("an ordinary session read hull's migration record %d times", rt.migrations)
+	}
+}

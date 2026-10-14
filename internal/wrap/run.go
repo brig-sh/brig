@@ -238,6 +238,12 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			return fmt.Errorf("sandbox %s appeared after its network was inspected; run the command again "+
 				"to recover its posture before reusing it", c.VMName)
 		}
+		// Before anything below is done to it: a recreate would delete the
+		// disk a checkpoint was taken against, and delivery and the agent's
+		// exec would wait on a guest whose vCPUs are parked.
+		if err := c.refuseParkedTeleportable(); err != nil {
+			return err
+		}
 		// Two things can be wrong with the mounts of a sandbox that is up, and
 		// both are answered the same way, so they share the one recreate below
 		// rather than growing a second path: a share is bound at boot and
@@ -701,6 +707,59 @@ func (c *Config) refuseStoppedTeleportable() error {
 	return fmt.Errorf("the teleportable sandbox %s is stopped. Its guest home is inside its disk, and "+
 		"the runtime cannot start a stopped sandbox again without recreating it, which deletes that "+
 		"disk. brig will not. Remove it with `brig rm %s` to start the session over", c.VMName, ref)
+}
+
+// refuseParkedTeleportable refuses to reuse a running teleportable sandbox
+// whose guest hull's record says is not running. A fenced guest, or one a
+// restore has not finished, still has its VMM up, so Running says yes, and
+// what follows would deliver files and exec the agent into a guest whose
+// vCPUs are parked: a run that hangs, or fails with an error that names the
+// exec and not the checkpoint.
+//
+// Not restored-paused. hull leaves that on its record after `hull resume`,
+// so it reads the same for a guest that is running again, and refusing it
+// would refuse every later run of a session a move restored.
+//
+// A record that cannot be read lets the run go on. Running has already
+// answered for the runtime, and a refusal here would stop every run of the
+// session for as long as hull's store cannot be read, on no evidence that
+// its guest is parked.
+func (c *Config) refuseParkedTeleportable() error {
+	if !c.Teleportable {
+		return nil
+	}
+	mi, ok := c.Runtime.(runtime.MigrationInspector)
+	if !ok {
+		return nil
+	}
+	m, err := mi.Migration(c.VMName)
+	if err != nil {
+		return nil
+	}
+	ref := sessionKey(c.Profile.Name, c.Slug)
+	switch m.State {
+	case runtime.MigrationFenced:
+		return fmt.Errorf("the teleportable sandbox %s was fenced by a checkpoint (in %s), and its guest "+
+			"will not run again in this process. brig will not reuse it: stop it with `hull stop %s` and "+
+			"restore it with `hull restore %s`, or remove the session with `brig rm %s`, which deletes "+
+			"its disk", c.VMName, orUnnamed(m.BundleDir), c.VMName, c.VMName, ref)
+	case runtime.MigrationRestoring:
+		return fmt.Errorf("the teleportable sandbox %s is being restored from a checkpoint (in %s), or a "+
+			"restore of it failed, so its guest is not running. brig will not reuse it: wait for the "+
+			"restore, or stop it with `hull stop %s` and run `hull restore %s` again, or remove the "+
+			"session with `brig rm %s`, which deletes its disk",
+			c.VMName, orUnnamed(m.BundleDir), c.VMName, c.VMName, ref)
+	}
+	return nil
+}
+
+// orUnnamed is a bundle directory for a message, or a stand-in when hull's
+// record names none.
+func orUnnamed(dir string) string {
+	if dir == "" {
+		return "a directory hull did not record"
+	}
+	return dir
 }
 
 // refuseUnrecordedTeleportable refuses to delete a sandbox, running or

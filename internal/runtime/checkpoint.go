@@ -30,6 +30,15 @@ const (
 	CheckpointFence    = "fence"
 )
 
+// MigrationFenced and MigrationRestoring are the two states of hull's record
+// in which a sandbox's VMM can be up with a guest that is not running: a
+// checkpoint fenced it, or a restore has not finished, or failed before the
+// guest ran. A caller that would exec into a running sandbox asks for these.
+const (
+	MigrationFenced    = "fenced"
+	MigrationRestoring = "restoring"
+)
+
 // CheckpointSpec is a request to checkpoint a running sandbox.
 type CheckpointSpec struct {
 	// Dir is where the bundle is written, as an absolute path. Empty leaves
