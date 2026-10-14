@@ -96,8 +96,13 @@ type Migration struct {
 	State string
 	// BundleDir is the checkpoint the state refers to.
 	BundleDir string
-	// TxID names that checkpoint.
+	// TxID names that checkpoint, or the move it belongs to.
 	TxID string
+	// MoveTxID names the move the checkpoint belongs to, when a move took
+	// it over, and Peer is that move's other host, as hull recorded it: the
+	// destination on the source, the source on the destination.
+	MoveTxID string
+	Peer     string
 }
 
 // Pauser stops and restarts a running sandbox's guest in place: its vCPUs and
@@ -195,6 +200,8 @@ func migrationOf(name string, record []byte) (Migration, error) {
 			State     string `json:"state"`
 			BundleDir string `json:"bundleDir"`
 			TxID      string `json:"txid"`
+			MoveTxID  string `json:"moveTxid"`
+			Peer      string `json:"peer"`
 		} `json:"migration"`
 	}
 	if err := json.Unmarshal(record, &state); err != nil {
@@ -207,7 +214,7 @@ func migrationOf(name string, record []byte) (Migration, error) {
 		return Migration{}, nil
 	}
 	return Migration{State: state.Migration.State, BundleDir: state.Migration.BundleDir,
-		TxID: state.Migration.TxID}, nil
+		TxID: state.Migration.TxID, MoveTxID: state.Migration.MoveTxID, Peer: state.Migration.Peer}, nil
 }
 
 // checkpointArgs is the one place the checkpoint command line is built.
@@ -258,9 +265,12 @@ func seconds(d time.Duration) string {
 // call runs one hull verb and returns its standard output. Its standard
 // error is folded into the error, as quiet does, so a refusal reaches the
 // caller in hull's words.
-func (h *hull) call(args []string) (string, error) {
+func (h *hull) call(args []string, drop ...string) (string, error) {
 	cmd := exec.Command(h.bin, hullArgs(args...)...)
 	cmd.Env = mergeEnv(h.countedEnv(false))
+	for _, name := range drop {
+		cmd.Env = withoutEnv(cmd.Env, name)
+	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

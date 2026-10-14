@@ -95,6 +95,48 @@ func (a netAlloc) release(name string) {
 	_ = a.write(assigned)
 }
 
+// claim assigns this sandbox exactly this slot, for a sandbox that already
+// has an address it cannot give up: a guest moved here from another host
+// still holds the address it had there. A slot another sandbox holds is
+// refused rather than shared, which would put two guests on one address.
+func (a netAlloc) claim(name string, slot int) error {
+	if slot < a.first || slot > a.last {
+		return fmt.Errorf("slot %d is outside %s", slot, a.space)
+	}
+	unlock, err := a.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	assigned := a.read()
+	if holder := holderOf(assigned, slot, name); holder != "" {
+		return fmt.Errorf("%s already gives slot %d to %s, and %s needs that one: its guest "+
+			"keeps the address it had", a.space, slot, holder, name)
+	}
+	if cur, ok := assigned[name]; ok && cur == slot {
+		return nil
+	}
+	assigned[name] = slot
+	if err := a.write(assigned); err != nil {
+		return fmt.Errorf("could not record the sandbox network: %w", err)
+	}
+	return nil
+}
+
+// holder names the sandbox other than name that holds slot, or "".
+func (a netAlloc) holder(slot int, name string) string {
+	return holderOf(a.read(), slot, name)
+}
+
+func holderOf(assigned map[string]int, slot int, name string) string {
+	for other, s := range assigned {
+		if s == slot && other != name {
+			return other
+		}
+	}
+	return ""
+}
+
 // lock takes an exclusive lock on the store, and returns the release.
 func (a netAlloc) lock() (func(), error) { return flock(a.path) }
 

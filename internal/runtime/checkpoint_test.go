@@ -79,8 +79,10 @@ func TestMigrationOf(t *testing.T) {
 		{"a null record", `{"id":"s","migration":null}`, Migration{}},
 		{"a fenced checkpoint", `{"id":"s","migration":{"state":"fenced","bundleDir":"/b","txid":"t1"}}`,
 			Migration{State: "fenced", BundleDir: "/b", TxID: "t1"}},
-		{"a field this brig does not know", `{"id":"s","migration":{"state":"restored","peer":"h"}}`,
+		{"a field this brig does not know", `{"id":"s","migration":{"state":"restored","epoch":3}}`,
 			Migration{State: "restored"}},
+		{"the other host of a move", `{"id":"s","migration":{"state":"migrated","txid":"t2","peer":"me@box"}}`,
+			Migration{State: "migrated", TxID: "t2", Peer: "me@box"}},
 	} {
 		got, err := migrationOf("s", []byte(c.record))
 		if err != nil {
