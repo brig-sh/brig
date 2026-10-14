@@ -57,7 +57,9 @@ type MoveRound struct {
 // hull prints a streamed move's rounds after "move: ", as
 // "disk round 1: 12 blocks, 768.0 KiB (301.2 KiB on the wire) in 0.20 s,
 // 1.5 MiB/s, guest wrote 60 blocks/s" and "ram-round-0: 90.7 MiB in 2.10 s,
-// 43.2 MiB/s", and the downtime as "downtime about 1450 ms".
+// 43.2 MiB/s", and the downtime as "downtime about 1450 ms". During a long
+// round it prints how far the round has got, "disk round 0: 812 blocks so
+// far, 30.1 MiB/s (34% of 2381)", which is not a round of its own.
 var (
 	lineRound    = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+))?\b[^:]*:\s*(.*)$`)
 	lineSize     = regexp.MustCompile(`^(?:\d+ blocks, )?(\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB))\b`)
@@ -81,6 +83,11 @@ func (r *MoveReport) Add(line string) {
 	if m := lineRound.FindStringSubmatch(line); m != nil {
 		name, _, _ := strings.Cut(strings.TrimPrefix(line, "move: "), ":")
 		rest := m[4]
+		if strings.Contains(rest, " so far") {
+			// hull's line during a long round ("disk round 0: 812 blocks
+			// so far, 30.1 MiB/s (34% of 2381)"): the round has not ended.
+			return
+		}
 		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" ||
 			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest), Seconds: lineFloat(lineSeconds, rest),
 			MiBPerSec: lineMiBPerSec(rest), DirtyPagesPerSec: lineFloat(lineDirty, rest),

@@ -52,11 +52,13 @@ func TestMoveReportReadsHullsLines(t *testing.T) {
 // hull's streamed move names its rounds by what they copy: the disk rounds
 // numbered and then the final one taken in the pause, and the memory rounds
 // by hvi's component names. Each is a round of its kind, the final ones
-// marked, and the downtime is read from hull's closing line.
+// marked, and the downtime is read from hull's closing line. A line on how
+// far a long round has got is not a round. The lines are hull 4a30a43's.
 func TestMoveReportReadsAStreamedMove(t *testing.T) {
 	var r MoveReport
 	for _, line := range []string{
 		"Streaming s to me@box (stream)",
+		"move: disk round 0: 812 blocks so far, 30.1 MiB/s (34% of 2381)",
 		"move: disk round 0: 2381 blocks, 148.8 MiB (61.0 MiB on the wire) in 1.92 s, 31.8 MiB/s",
 		"move: disk round 1: 12 blocks, 768.0 KiB (301.2 KiB on the wire) in 0.20 s, 1.5 MiB/s, guest wrote 60 blocks/s",
 		"move: ram-round-0: 90.7 MiB in 2.10 s, 43.2 MiB/s",
