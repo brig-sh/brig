@@ -112,8 +112,8 @@ func migrateHull(t *testing.T, migrate string) (*hull, string) {
 // move record back after a move, a status and an abort alike.
 func TestHullMigrateSeam(t *testing.T) {
 	h, log := migrateHull(t, "case \"$*\" in *--dry-run*) ;; *) echo committed > RECORD ;; esac")
-	if st, err := h.MigrateStatus("s"); err != nil || st != (MoveStatus{}) {
-		t.Fatalf("before a move: %+v, %v; want no record", st, err)
+	if st, err := h.MigrateStatus("s"); err != nil || st != (MoveStatus{Read: true}) {
+		t.Fatalf("before a move: %+v, %v; want a read with no record", st, err)
 	}
 	if _, err := h.Migrate("s", "me@box", MigrateSpec{DryRun: true}); err != nil {
 		t.Fatal(err)
@@ -148,8 +148,47 @@ func TestAFailedMoveStillReadsTheRecord(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("a failed move came back as %v", err)
 	}
-	if st.State != "committing" || st.TxID != tx1 {
+	if !st.Read || st.State != "committing" || st.TxID != tx1 {
 		t.Errorf("record after a failed move: %+v", st)
+	}
+}
+
+// A record that does not read is not a record with no move in it. After a
+// move that failed, and after one that hull says succeeded, the status comes
+// back unread with the read's error beside the move's, so the caller cannot
+// take it for a move that never began.
+func TestAnUnreadRecordIsNotNoRecord(t *testing.T) {
+	for _, c := range []struct {
+		what, migrate string
+		want          []string
+	}{
+		{"a failed move", "echo transferring > RECORD; echo 'ssh: connection reset' >&2; exit 1",
+			[]string{"connection reset", "did not read"}},
+		{"a move hull says committed", "echo committed > RECORD",
+			[]string{"did not read"}},
+	} {
+		h, _ := migrateHull(t, c.migrate)
+		// hull's status line changes shape: brig cannot read it.
+		script, err := os.ReadFile(h.bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		script = []byte(strings.Replace(string(script), ", epoch 1", ", generation 1", 1))
+		if err := os.WriteFile(h.bin, script, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		st, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1})
+		if st.Read || st != (MoveStatus{}) {
+			t.Errorf("%s: an unparsable record came back as %+v", c.what, st)
+		}
+		for _, w := range c.want {
+			if err == nil || !strings.Contains(err.Error(), w) {
+				t.Errorf("%s: error %v does not say %q", c.what, err, w)
+			}
+		}
+		if err != nil && strings.Contains(err.Error(), "\n") {
+			t.Errorf("%s: error spans lines: %q", c.what, err)
+		}
 	}
 }
 

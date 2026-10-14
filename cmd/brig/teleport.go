@@ -265,13 +265,15 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 				Note("its record says the guest runs on %s, and that is what brig records", host))
 		}
 		return finishMove(ref, vm, host, spec.RemoteStore, txid, st.State, wantJSON)
-	case moveErr != nil && (st.TxID != txid || !runtime.MoveFenced(st.State)) && st.State != runtime.MoveCommitted:
-		// hull's record says the move never fenced the guest, or names no
-		// part of this move: the guest still runs here, and brig undoes
-		// its own half. A record hull aborted is the same: hull has run
-		// the guest here again. A record hull left at preflight or
+	case moveErr != nil && st.Read && (st.TxID != txid || !runtime.MoveFenced(st.State)) &&
+		st.State != runtime.MoveCommitted:
+		// hull's record, read back, says the move never fenced the guest,
+		// or names no part of this move: the guest still runs here, and
+		// brig undoes its own half. A record hull aborted is the same: hull
+		// has run the guest here again. A record hull left at preflight or
 		// reserved is ended too, which is safe with nothing fenced, or the
-		// next move of the session would find it in hull's way.
+		// next move of the session would find it in hull's way. A record
+		// that did not read says none of this, and is the case below.
 		if st.TxID == txid && st.State != runtime.MoveAborted {
 			if _, err := mover.MigrateAbort(vm, txid); err != nil {
 				warnf("%s", notice.Newf("could not end hull's record of move %s: %v", txid, err).
@@ -287,11 +289,14 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 			"good: %w. `hull migrate --status %s` says more", vm, host, moveErr, vm)
 	}
 	// Anything else is a move whose end brig did not see: it may have
-	// committed, or not. Nothing is resumed and the record stays unfinished,
-	// for --status to settle from hull's record.
+	// committed, or not, whatever the call returned. Nothing is resumed and
+	// the record stays unfinished, for --status to settle from hull's record.
 	why := "hull's record says " + orNone(st.State)
-	if moveErr != nil {
+	switch {
+	case moveErr != nil:
 		why = moveErr.Error()
+	case !st.Read:
+		why = "hull's record of it did not read"
 	}
 	return fmt.Errorf("the move of %s to %s (%s) did not report how it ended: %s. brig resumes the guest "+
 		"on neither host until hull's record says. `brig teleport %s --status` reads that record (`hull "+

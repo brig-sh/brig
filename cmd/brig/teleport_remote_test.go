@@ -293,6 +293,9 @@ type moveRuntime struct {
 	state   string
 	moveErr error
 	dryErr  error
+	// unread is a move after which hull's record does not read: Migrate
+	// returns the zero status, and MigrateStatus an error.
+	unread  bool
 	asked   []string
 	specs   []runtime.MigrateSpec
 	removed int
@@ -322,19 +325,25 @@ func (r *moveRuntime) Migrate(name, to string, spec runtime.MigrateSpec) (runtim
 	}
 	r.asked = append(r.asked, "migrate "+to)
 	r.txid = spec.TxID
-	return runtime.MoveStatus{TxID: spec.TxID, State: r.state, Peer: to}, r.moveErr
+	if r.unread {
+		return runtime.MoveStatus{}, r.moveErr
+	}
+	return runtime.MoveStatus{Read: true, TxID: spec.TxID, State: r.state, Peer: to}, r.moveErr
 }
 func (r *moveRuntime) MigrateStatus(string) (runtime.MoveStatus, error) {
 	r.asked = append(r.asked, "status")
-	if r.state == "" {
-		return runtime.MoveStatus{}, nil
+	if r.unread {
+		return runtime.MoveStatus{}, errors.New("hull's move status of brig-claude-code did not read")
 	}
-	return runtime.MoveStatus{TxID: r.txid, State: r.state, Peer: "me@box"}, nil
+	if r.state == "" {
+		return runtime.MoveStatus{Read: true}, nil
+	}
+	return runtime.MoveStatus{Read: true, TxID: r.txid, State: r.state, Peer: "me@box"}, nil
 }
 func (r *moveRuntime) MigrateAbort(_, txid string) (runtime.MoveStatus, error) {
 	r.asked = append(r.asked, "abort "+txid)
 	r.state = runtime.MoveAborted
-	return runtime.MoveStatus{TxID: txid, State: r.state}, nil
+	return runtime.MoveStatus{Read: true, TxID: txid, State: r.state}, nil
 }
 
 // moveHost is a source host with claude's default session running as a
@@ -540,6 +549,42 @@ func TestALostAcknowledgementIsSettledFromHullsRecord(t *testing.T) {
 	}
 	if len(*calls) != 1 || !strings.Contains((*calls)[0][len((*calls)[0])-1], "--abort") {
 		t.Errorf("the destination's network was not given back: %v", *calls)
+	}
+}
+
+// A move after which hull's record did not read is one whose end brig did
+// not see, whether the call failed or hull said it succeeded: the record
+// stays unfinished, hull is asked to abort nothing, and the destination
+// keeps the network it was given.
+func TestAMoveWhoseRecordDidNotReadStaysUnfinished(t *testing.T) {
+	for _, moveErr := range []error{errors.New("ssh: connection reset"), nil} {
+		rt := &moveRuntime{running: true, unread: true, moveErr: moveErr}
+		calls := moveHost(t, rt, noNetProbe())
+		_, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+		if err == nil || !strings.Contains(err.Error(), "did not report how it ended") {
+			t.Errorf("moveErr %v: %v", moveErr, err)
+		}
+		if e := entryOf(t); e["pendingHost"] != "me@box" || e["txid"] != rt.txid {
+			t.Errorf("moveErr %v: the unfinished move was not kept: %v", moveErr, e)
+		}
+		for _, a := range rt.asked {
+			if strings.HasPrefix(a, "abort ") {
+				t.Errorf("moveErr %v: hull was asked to %s", moveErr, a)
+			}
+		}
+		for _, argv := range *calls {
+			if strings.Contains(argv[len(argv)-1], receiveVerb+" --json --abort") {
+				t.Errorf("moveErr %v: the destination was asked to give the network back: %q", moveErr, argv)
+			}
+		}
+		// --status cannot read the record either, and settles nothing.
+		*calls = nil
+		if _, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status"}) }); err == nil {
+			t.Errorf("moveErr %v: --status settled an unread record", moveErr)
+		}
+		if e := entryOf(t); e["pendingHost"] != "me@box" || len(*calls) != 0 {
+			t.Errorf("moveErr %v: --status changed %v, asked %v", moveErr, e, *calls)
+		}
 	}
 }
 
