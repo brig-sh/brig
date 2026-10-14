@@ -20,6 +20,7 @@ against.
 | `brig stop claude` | stops the sandbox and keeps its state on disk |
 | `brig rm claude` | stops the sandbox and removes it |
 | `brig network publish claude 3000` | opens the agent's port 3000 on `localhost:3000` |
+| `brig teleport claude --to me@build-box` | moves a teleportable session's running sandbox to another host |
 
 ## Help
 
@@ -202,6 +203,13 @@ brig rm claude --dry-run
 
 `rm` and `stop` each take a single ref.
 
+On a session that [`brig teleport`](#brig-teleport) moved to another host,
+`brig rm <ref>` removes the copy the move left on this host, once the brig on
+that host says the session runs there, and keeps the record that reaches the
+session. With no copy left, `brig rm <ref>` forgets the session on this host
+and touches nothing on the other host. `brig rm --all` leaves the copy of a
+moved session, and of one whose move has not finished, alone.
+
 ### `brig ls`
 
 ```bash
@@ -212,6 +220,11 @@ brig ls
 `REF`, `SANDBOX` (the runtime's name for the sandbox), `STATE` and
 `WORKSPACE` (the guest home). A [teleportable session](teleport.md) has no
 guest home on the host, so its `WORKSPACE` reads `(in the sandbox disk)`.
+A session [`brig teleport`](#brig-teleport) moved to another host is listed
+whether or not this host still has its sandbox, with the `STATE` `moved`
+(`moving` while the move has not finished) and the `WORKSPACE`
+`(in the sandbox disk on <user>@<host>)`. `--json` carries the host as
+`host`, or `pendingHost` while the move has not finished.
 
 ```bash
 brig ls -q
@@ -267,7 +280,9 @@ the next boot is different, the row gives that posture too.
 For a [teleportable session](teleport.md) that hull has checkpointed, a
 `TELEPORT` row gives hull's record of where the checkpoint left it, and
 `--json` carries it as a `teleport` object with `state`, `bundleDir` and
-`txid`. Neither appears before hull has a record.
+`txid`, and `peer` for a move. Neither appears before hull has a record. On a
+host a session was moved to, the row also says where it came from, and the
+object carries `from`.
 
 If Brig cannot resolve a required secret, `info` fails with exit `6`. For a
 declared secret marked `required: false`, `info` prints a warning and still
@@ -427,6 +442,35 @@ fields:
 | `required` | whether the run stops without it |
 | `state` | `resolved`, `unresolved`, `withheld` (the run drops it at a guard), or `unknown` (the store did not answer a listing) |
 | `reason` | why the credential is not `resolved`, omitted when it is |
+
+### `brig teleport`
+
+```bash
+brig teleport claude --to me@build-box
+brig teleport claude --status
+brig teleport claude --abort
+```
+
+`brig teleport` moves the running sandbox of a
+[teleportable session](teleport.md) to another host over ssh, with hull's
+`hull migrate`. The destination needs Brig, hull and hvi. Brig checks this
+host and the destination first, and refuses with the reason before anything
+is paused. After the move, `brig sh`, `brig run`, `brig stop`, `brig info`
+and `brig logs` on the ref run on the destination, through
+`ssh <user>@<host> brig <verb> <ref>` with the line as typed.
+
+| Flag | Meaning |
+| --- | --- |
+| `--to USER@HOST` | move the session to that host. It must be `USER@HOST`, with no part that ssh could read as an option |
+| `--status` | where the move stands, from hull's record. A move that committed or that hull aborted is recorded as such |
+| `--abort` | call off a move that has not committed. hull runs the session here again once the destination confirms |
+| `--json` | print the outcome as a `Teleport` document |
+
+The line takes one of `--to`, `--status` and `--abort`. A move whose end Brig
+did not see stays recorded as unfinished, and every other verb on the ref
+refuses until `--status` or `--abort` settles it. See
+[teleport.md](teleport.md#move-a-session) for the steps, what the guest keeps,
+the credential rule and recovery.
 
 ### `brig network`
 
@@ -785,6 +829,7 @@ the agent.
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
 | Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--teleportable`, `--network`, `--offline`, `--publish`, `-q`/`--quiet` and `--json` |
+| Teleport line | `--to`, `--status`, `--abort` and `--json`, on `brig teleport` only. On the run line these are the agent's |
 
 The global position takes only those three flags. Brig refuses any other
 flag there by name:
@@ -865,6 +910,7 @@ The verbs that accept `--json` depend on the position of the flag.
 | `version` | global, or local after `version` | envelope |
 | `network ls`, `network publish`, `network unpublish` | global, or local after the ref | envelope, `kind: Ports` |
 | `run`, `sh` | global, or local on the run line | one compact line, see below |
+| `teleport` | global, or local on the teleport line | envelope, `kind: Teleport` |
 | `agent ls` | global, or local after `ls` | envelope |
 | `secret ls` | global, or local after `ls` | envelope |
 | `agent show`, `agent export`, `agent new` | local only, after the subcommand | bare document, no envelope |
@@ -885,7 +931,8 @@ global position refuses `agent show` and `policy show`:
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
 info, plan, agent ls, secret ls, doctor, version and the network verbs (env
-takes it too, but env is deprecated; prefer info), and for run and sh
+takes it too, but env is deprecated; prefer info), for run and sh, and for
+teleport
 ```
 
 Put the flag after the subcommand, where each of the two accepts it.
@@ -965,7 +1012,7 @@ every success case goes, and the usual error line on stderr. See
 | `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing. The refusal names the setting that caused it |
 | `5` | a boot refused over image verification |
 | `6` | a required secret was not resolved, or the secret store did not open. A declared secret marked `required: false` produces a warning and no failure |
-| `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The refusal names the property, the runtime and the backend. See [Exit 7 cases](#exit-7-cases) |
+| `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The refusal names the property, the runtime and the backend. `brig teleport` also exits `7` for a session that is not teleportable and for a destination that cannot enforce the session's policy. See [Exit 7 cases](#exit-7-cases) |
 
 [Stability](stability.md) lists this table as stable enough to script
 against.
@@ -999,6 +1046,14 @@ They refuse a [teleportable session](teleport.md) with `7` on every run path
 but hull's `hvi`: on `vz`, on `qemu`, on hull with no hypervisor named (which
 is `vz`), and on nerdctl and docker. The refusal says `cannot run a
 teleportable session` and names the run path.
+
+`brig teleport` refuses with `7`, before anything is paused, a session that
+is not teleportable or not on hull's `hvi`, and a session under an egress
+policy when the destination's hull gateway does not take egress rules. The
+refusal begins `brig will not teleport this session` and ends
+`Nothing was paused`. Every other refusal of a move exits `1`, and a line
+that names none, or more than one, of `--to`, `--status` and `--abort` exits
+`2`.
 
 Two refusals exit `1`. With no policy bound, the refusal of an isolated
 network on `vz` or `qemu` is a different refusal. A refusal that Brig reaches
@@ -1154,4 +1209,13 @@ satisfy the isolated posture of those profiles.
 | `BRIG_BOOT_ASSETS_REF` (global only) | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | the bundle Brig fetches when the boot assets are missing |
 | `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway. Names matching `sandbox-*.sock` are reserved for isolated gateways and refused here |
 | `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where gateway sockets, logs and network records live, shared and per-sandbox alike |
+
+### Teleport
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BRIG_HULL_STORE_DIR` (global only) | hull's own default, `~/.hull/store` | the hull store Brig drives, passed to hull as `--store-dir`. A moved session runs in the store the destination's brig drives, and the brig on the source hands it to that brig on every later verb |
+| `BRIG_TELEPORT_SSH` (global only) | `ssh` on `PATH` | the ssh `brig teleport` and the verbs on a moved session run |
+| `BRIG_TELEPORT_REMOTE_BRIG` (global only) | `brig` | the brig to run on the destination |
+| `BRIG_TELEPORT_REMOTE_ENV` (global only) | (unset) | space-separated `NAME=VALUE` words put in front of every brig command on the destination. Each name must be a variable name |
 

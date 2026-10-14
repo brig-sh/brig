@@ -144,10 +144,21 @@ with the sandbox:
 | `brig stop` | kept on the stopped sandbox's disk, but the session ends: the next run refuses until `brig rm` |
 | `brig rm`, `brig rm --all` | deleted with the disk |
 | A host reboot | as `brig stop` |
+| `brig teleport <ref> --to <user>@<host>` | moved with the disk and the guest's memory to that host, where the session goes on running. This host keeps a fenced copy until `brig rm <ref>` removes it, and every later verb on the ref runs there |
 
 Nothing from the host is shared into a teleportable session. Its guest home
 lives in the sandbox's disk image, not in a host directory. Reach it with
 `brig sh <ref>`.
+
+The session index records where a moved session runs. Its entry gains the
+host, as `USER@HOST`, the hull store it runs in there, and the move's txid,
+and keeps the sandbox name, which is the same on both hosts. While a move has
+not finished, the entry holds the destination as a pending host instead.
+`brig ls` does not prune an entry with a host, and `brig rm` of the copy left
+behind keeps it: it is how this host reaches the session. A second `brig rm`
+of the ref, with no copy left, drops it. A Brig release from before teleport
+rewrites the index without these fields, and then reads the session as one
+on this host. See [teleport.md](teleport.md#move-a-session).
 
 When the runtime reports no sandbox for the ref, `brig rm` forgets the
 session and names the guest home that it leaves.
