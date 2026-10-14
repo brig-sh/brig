@@ -419,6 +419,10 @@ boots hvi's `portable-arm64-v1` machine, and that machine needs its own
 kernel. Brig hands hull `--profile portable-arm64-v1` and the portable kernel
 in the kernel annotation, with the boot bundle's initrd. hull boots the
 annotated files and does not look up its own copy of the portable kernel.
+Only a `genericBoot` profile has boot assets to annotate, so on an arm64 host
+Brig refuses a teleportable session of any other profile before the run.
+Before the run, Brig also asks `hull run --help` whether hull takes
+`--profile`, and refuses with exit `7` a hull that does not.
 
 | | the boot bundle's kernel | the portable kernel |
 | --- | --- | --- |

@@ -876,6 +876,10 @@ so there is no digest to bind.
 A [teleportable session](teleport.md#the-machine-it-boots) on an arm64 host
 boots hvi's `portable-arm64-v1` machine, with a kernel that no boot bundle
 lists. Brig compares the portable kernel with the sha256 that Brig pins for it before the boot.
+Brig hands hull that kernel with the boot assets of a `genericBoot` profile.
+On an arm64 host, a teleportable session of a profile without
+`genericBoot: true` is refused before the boot, so hull never picks a kernel
+for the portable machine that Brig did not compare.
 The boot bundle's check then compares the initrd alone. A `sha256` file
 beside the kernel is not read: anything that can rewrite the kernel there
 can rewrite that file too.

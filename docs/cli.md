@@ -1060,7 +1060,10 @@ records the port, and a failed probe refuses the next run with `7`.
 They refuse a [teleportable session](teleport.md) with `7` on every run path
 but hull's `hvi`: on `vz`, on `qemu`, on hull with no hypervisor named (which
 is `vz`), and on nerdctl and docker. The refusal says `cannot run a
-teleportable session` and names the run path.
+teleportable session` and names the run path. On an arm64 host they also
+refuse it on `hvi` when `hull run --help` does not list `--profile`, or when
+that probe fails: hull is told the machine with that flag. The refusal names
+hull's version.
 
 `brig teleport` refuses with `7`, before anything is paused, a session that
 is not teleportable or not on hull's `hvi`, and a session under an egress
