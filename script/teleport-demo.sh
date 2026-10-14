@@ -21,15 +21,30 @@
 # writes the count every 200 ms and keeps fd 3 open on a file it deleted, and
 # an awk process that holds 64 KiB of random bytes in memory and prints
 # "RANDSUM <n> <sum>" every 2 s. After each move the counter has gone on, the
-# deleted file still reads, the sum is the one from before, and the guest
-# logged one boot.
+# deleted file still reads, the sum is the one from before, the kernel's
+# boot_id is the one from before (a boot makes a new one), and the kernel
+# logged one more hvi-time resume line. hull's records on both hosts say
+# which one runs the guest.
 #
-# --faults also runs the refusals and failures, each on a fresh session:
-# a policy DST cannot enforce (exit 7), a session that is not teleportable
-# (exit 7), an abort after the transfer, a lost commit answer settled by a
-# retry, and the source brig killed during the commit. It writes a stand-in
-# ssh to ROOT/fault on SRC, a stand-in hull to ROOT/fault on DST, and a
-# profile and a policy for the policy case to ROOT on both hosts.
+# --faults also runs the refusals and failures, each on a fresh session, and
+# checks each exit status and where the guest ended up:
+#   - a policy DST cannot enforce: exit 7, no move on record, the session
+#     goes on; then the same session, on an isolated network under a deny
+#     policy, moves for real and keeps its address and its policy, and one
+#     connection the policy allows opens on both hosts and one it denies
+#     does not;
+#   - a session that is not teleportable: exit 7;
+#   - an abort after the transfer: the move exits 1, --abort 0, and the
+#     source runs the guest again;
+#   - a lost commit answer: the move exits 1, the retry --status names exits
+#     0, and DST runs the guest;
+#   - the source brig killed with SIGKILL during the commit: exit 137, and
+#     hull, which outlives it, commits the move.
+# It writes a stand-in ssh to ROOT/fault on SRC, a stand-in hull to
+# ROOT/fault on DST, and a profile and a policy for the policy case to ROOT
+# on both hosts. The denied connection goes to DENY_TO (default
+# 1.1.1.1/443); it counts only when both hosts reach it themselves. The
+# allowed one goes to port 22 of DST's address as SRC resolves it.
 #
 # Exit status: 0 when every check passed, 1 when one failed, 2 for a usage
 # error.
@@ -48,12 +63,18 @@ fi
 SRC=$1 DST=$2
 ROOT=${ROOT:-'$HOME/b4'}
 REF=${REF:-ubuntu}
-VM=brig-${REF/@/-}
-FAILED=0
+DENY_TO=${DENY_TO:-1.1.1.1/443}
+# vmof REF: the sandbox brig names for REF.
+vmof() { printf 'brig-%s' "${1/@/-}"; }
+VM=$(vmof "$REF")
+FAILED=0 NPASS=0 NFAIL=0
+OUT=$(mktemp -d "${TMPDIR:-/tmp}/teleport-demo.XXXXXX")
 
 say() { printf '\n== %s\n' "$*"; }
-pass() { printf 'PASS %s\n' "$*"; }
-fail() { printf 'FAIL %s\n' "$*"; FAILED=1; }
+pass() { printf 'PASS %s\n' "$*"; NPASS=$((NPASS + 1)); }
+fail() { printf 'FAIL %s\n' "$*"; FAILED=1; NFAIL=$((NFAIL + 1)); }
+# expect LABEL WANT-RC GOT-RC
+expect() { [ "$3" = "$2" ] && pass "$1: exit $3" || fail "$1: exit ${3:-(none)}, want $2"; }
 # on HOST CMD...: CMD in a shell on HOST, with ROOT/env.sh read first.
 on() { local h=$1; shift; ssh -o BatchMode=yes "$h" "source $ROOT/env.sh && $*"; }
 # A teleport destination as the other host names it: the host part only.
@@ -84,6 +105,7 @@ nohup setsid sh -c '\''od -An -tu1 -v -N65536 /dev/urandom | awk -v out=/tmp/wl/
 sleep 3
 echo "TOKEN $(cat /tmp/wl/token.start)"
 rm -f /tmp/wl/token.start
+echo "BOOTID $(cat /proc/sys/kernel/random/boot_id)"
 tail -1 /tmp/wl/randsum'
 CHECK='pid=$(cat /tmp/wl/counter.pid)
 echo "COUNT $(cut -d" " -f1 /tmp/wl/count)"
@@ -91,10 +113,12 @@ echo "HELD-FD $(readlink /proc/$pid/fd/3)"
 echo "$(cat /proc/$pid/fd/3)"
 echo "SUMS $(awk "{print \$3}" /tmp/wl/randsum | sort -u | tr "\n" " ")"
 tail -1 /tmp/wl/randsum
-echo "BOOTS $(dmesg | grep -c "Booting Linux")"
+echo "BOOTID $(cat /proc/sys/kernel/random/boot_id)"
+echo "RESUMES $(dmesg | grep -c "hvi-time: generation [0-9]*: .*downtime total")"
+echo "ADDR $(awk "/32 host LOCAL/ { print p } { p = \$2 }" /proc/net/fib_trie | grep -v "^127\." | sort -u | tr "\n" " ")"
 echo "CLOCKSOURCE $(cat /sys/devices/system/clocksource/clocksource0/current_clocksource)"
 echo "UPTIME $(cut -d" " -f1 /proc/uptime)"
-dmesg | grep "hvi-time: generation" | tail -1
+dmesg | grep "hvi-time: generation [0-9]*: "
 awk "NR > 1 { g = \$2 - t; if (g > 0.5) printf \"GAP %.3f s between count %d and %d\\n\", g, c, \$1 } { c = \$1; t = \$2 }" /tmp/wl/ticks | sort -k2 -rn | head -1'
 
 # guest HOST REF SCRIPT: SCRIPT in REF's guest, through brig on HOST.
@@ -103,9 +127,10 @@ guest() { on "$1" "brig sh $2 -c \"\$(cat)\"" <<<"$3"; }
 # output that came through ssh can end its lines in CR.
 field() { tr -d '\r' | awk -v k="$1" '$1 == k { $1 = ""; sub(/^ /, ""); sub(/ +$/, ""); print; exit }'; }
 
-# check_after LABEL BEFORE AFTER TOKEN: the guest carried on.
+# check_after LABEL BEFORE AFTER TOKEN BOOTID RESTORES: the guest carried
+# on, with RESTORES (0 or 1) restores of it between BEFORE and AFTER.
 check_after() {
-  local label=$1 before after token=$4 c0 c1
+  local label=$1 before after token=$4 bootid=$5 restores=$6 c0 c1 r0 r1
   before=$(tr -d '\r' <<<"$2") after=$(tr -d '\r' <<<"$3")
   c0=$(field COUNT <<<"$before") c1=$(field COUNT <<<"$after")
   [ -n "$c1" ] && [ "$c1" -gt "$c0" ] && pass "$label: the counter went on ($c0 -> $c1)" \
@@ -118,8 +143,33 @@ check_after() {
   [ "$(wc -w <<<"$sums" | tr -d ' ')" = 1 ] && [ "$sums" = "$(field SUMS <<<"$before")" ] \
     && pass "$label: RANDSUM is the sum from before ($sums)" \
     || fail "$label: RANDSUM sums before: $(field SUMS <<<"$before"), after: $sums"
-  [ "$(field BOOTS <<<"$after")" = 1 ] && pass "$label: the guest logged one boot" \
-    || fail "$label: the guest logged $(field BOOTS <<<"$after") boots"
+  [ -n "$bootid" ] && [ "$(field BOOTID <<<"$after")" = "$bootid" ] \
+    && pass "$label: the kernel did not boot again (boot_id $bootid)" \
+    || fail "$label: boot_id was ${bootid:-(none)}, is $(field BOOTID <<<"$after")"
+  r0=$(field RESUMES <<<"$before") r1=$(field RESUMES <<<"$after")
+  [ -n "$r0" ] && [ "$r1" = $((r0 + restores)) ] \
+    && pass "$label: the kernel logged $restores more hvi-time resume line(s) ($r0 -> $r1)" \
+    || fail "$label: hvi-time resume lines $r0 -> $r1, want $restores more"
+}
+
+# runs HOST VM, migrated HOST VM, absent HOST VM: hull's record of VM on HOST.
+hullps() { on "$1" "hull --store-dir \$BRIG_HULL_STORE_DIR ps 2>/dev/null"; }
+runs() { hullps "$1" | grep -q "^$2  *running " && pass "$1 runs $2" || fail "$1 does not run $2"; }
+migrated() {
+  hullps "$1" | grep -q "^$2 .* migrated\$" && pass "$1 keeps a stopped copy of $2 whose checkpoint is migrated" \
+    || fail "$1's copy of $2 is not migrated"
+}
+absent() { hullps "$1" | grep -q "^$2 " && fail "$1 has an instance $2" || pass "$1 has no instance $2"; }
+# has LABEL FILE TEXT: FILE holds TEXT.
+has() { grep -qF -- "$3" "$2" && pass "$1" || fail "$1: no \"$3\" in $(basename "$2")"; }
+# rcof PREFIX FILE: the status a line "PREFIXrc=N" in FILE gives.
+rcof() { tr -d '\r' <"$2" | sed -n "s/^$1rc=//p" | tail -1; }
+# start HOST REF: start the workload in REF's guest; sets TOK and BID.
+start() {
+  local s
+  s=$(guest "$1" "$2" "$START")
+  TOK=$(field TOKEN <<<"$s") BID=$(field BOOTID <<<"$s")
+  [ -n "$TOK" ] && [ -n "$BID" ] && pass "the workload started in $2 (token $TOK)" || fail "the workload did not start in $2"
 }
 
 # timings HOST TXID LOG: the move's numbers, from hull's records on both hosts
@@ -168,12 +218,12 @@ print(f"epoch {dst['epoch']}, destination {dst['state']}")
 PY
 }
 
-# move FROM TO: brig teleport on FROM, its output stamped into a log there.
-# Prints the txid of a move that committed, and nothing otherwise.
+# move FROM TO [REF]: brig teleport on FROM, its output stamped into a log
+# there. Prints the txid of a move that committed, and nothing otherwise.
 move() {
-  local log
-  log=$ROOT/logs/demo-move-$(hostof "$1").log
-  on "$1" "mkdir -p $ROOT/logs; { echo \"\$(date +%s.%N) start\"; brig teleport $REF --to $2 2>&1; rc=\$?; echo \"\$(date +%s.%N) rc=\$rc\"; } | while IFS= read -r l; do case \$l in [0-9]*) echo \"\$l\";; *) echo \"\$(date +%s.%N) \$l\";; esac; done > $log; cat $log" >&2
+  local log ref=${3:-$REF}
+  log=$ROOT/logs/demo-move-$(hostof "$1")${3:+-$3}.log
+  on "$1" "mkdir -p $ROOT/logs; { echo \"\$(date +%s.%N) start\"; brig teleport $ref --to $2 2>&1; rc=\$?; echo \"\$(date +%s.%N) rc=\$rc\"; } | while IFS= read -r l; do case \$l in [0-9]*) echo \"\$l\";; *) echo \"\$(date +%s.%N) \$l\";; esac; done > $log; cat $log" >&2
   on "$1" "grep -q ' rc=0\$' $log && sed -n 's/.*(move \\([0-9a-f]\\{32\\}\\)).*/\\1/p' $log | head -1"
 }
 
@@ -236,8 +286,7 @@ done
 
 say "boot on $SRC"
 on "$SRC" "t0=\$(date +%s%N); brig -q run --teleportable $REF -d; echo \"run rc=\$? in \$(( (\$(date +%s%N) - t0) / 1000000 )) ms\"; brig info $REF | grep -E '^(TELEPORTABLE|MACHINE|NETWORK) '"
-TOKEN=$(guest "$SRC" "$REF" "$START" | field TOKEN)
-[ -n "$TOKEN" ] && pass "the workload started (token $TOKEN)" || fail "the workload did not start"
+start "$SRC" "$REF"; TOKEN=$TOK BOOTID=$BID
 sleep 3
 BEFORE=$(guest "$SRC" "$REF" "$CHECK"); echo "$BEFORE"
 
@@ -247,11 +296,9 @@ TX=$(move "$SRC" "$DST")
 
 say "after the move, from here: ssh $SRC brig sh $REF lands on $(hostof "$DST")"
 AFTER=$(guest "$SRC" "$REF" "$CHECK"); echo "$AFTER"
-check_after "$SRC -> $DST" "$BEFORE" "$AFTER" "$TOKEN"
-on "$DST" "hull --store-dir \$BRIG_HULL_STORE_DIR ps 2>/dev/null | grep -q '^$VM  *running '" \
-  && pass "$DST runs $VM" || fail "$DST does not run $VM"
-on "$SRC" "hull --store-dir \$BRIG_HULL_STORE_DIR ps 2>/dev/null | grep -q '^$VM .* migrated$'" \
-  && pass "$SRC keeps a stopped copy whose checkpoint is migrated" || fail "$SRC's copy is not migrated"
+check_after "$SRC -> $DST" "$BEFORE" "$AFTER" "$TOKEN" "$BOOTID" 1
+runs "$DST" "$VM"
+migrated "$SRC" "$VM"
 on "$SRC" "brig ls; brig teleport $REF --status; brig info $REF 2>/dev/null | grep -E '^(TELEPORT|MACHINE) '"
 reattach "$SRC"
 printf 'from here, ssh -t %s brig sh %s: ' "$SRC" "$REF"
@@ -265,7 +312,9 @@ BEFORE=$(guest "$DST" "$REF" "$CHECK")
 TX2=$(move "$DST" "$SRC")
 [ -n "$TX2" ] && pass "brig teleport on $DST committed move $TX2" || fail "the move back did not commit"
 AFTER=$(guest "$SRC" "$REF" "$CHECK"); echo "$AFTER"
-check_after "$DST -> $SRC" "$BEFORE" "$AFTER" "$TOKEN"
+check_after "$DST -> $SRC" "$BEFORE" "$AFTER" "$TOKEN" "$BOOTID" 1
+runs "$SRC" "$VM"
+migrated "$DST" "$VM"
 say "numbers, $DST -> $SRC"
 timings "$DST" "$TX2" "$ROOT/logs/demo-move-$(hostof "$DST").log"
 
@@ -281,13 +330,14 @@ for h in "$SRC" "$DST"; do
 done
 
 if [ "$FAULTS" = 1 ]; then
-  # expect LABEL WANT-RC GOT-RC
-  expect() { [ "$3" = "$2" ] && pass "$1: exit $3" || fail "$1: exit $3, want $2"; }
   FROOT=$ROOT/fault
 
   say "faults: a policy $DST cannot enforce"
+  # The policy allows DST's address, as SRC resolves it, and 10.0.0.0/8.
+  ALLOW_IP=$(on "$SRC" "getent ahostsv4 $(hostof "$DST") | awk 'NR == 1 { print \$1 }'")
+  ALLOW_TO=$ALLOW_IP/22
   for h in "$SRC" "$DST"; do
-    on "$h" "mkdir -p \$BRIG_POLICY_DIR && sed -e 's/^name: .*/name: worker/' -e 's/^kind: .*/kind: agent/' -e 's/^network: .*/network: isolated/' \"\$BRIG_PROFILE_DIR/$REF.yaml\" > \"\$BRIG_PROFILE_DIR/worker.yaml\" && printf 'apiVersion: brig.sh/v1alpha1\nname: locked\ndesc: deny by default (teleport-demo)\negress:\n  default: deny\n  allow:\n    - cidr: 10.0.0.0/8\n' > \"\$BRIG_POLICY_DIR/locked.yaml\""
+    on "$h" "mkdir -p \$BRIG_POLICY_DIR && sed -e 's/^name: .*/name: worker/' -e 's/^kind: .*/kind: agent/' -e 's/^network: .*/network: isolated/' \"\$BRIG_PROFILE_DIR/$REF.yaml\" > \"\$BRIG_PROFILE_DIR/worker.yaml\" && printf 'apiVersion: brig.sh/v1alpha1\nname: locked\ndesc: deny by default (teleport-demo)\negress:\n  default: deny\n  allow:\n    - cidr: 10.0.0.0/8\n    - cidr: $ALLOW_IP/32\n' > \"\$BRIG_POLICY_DIR/locked.yaml\""
   done
   # A stand-in hull on DST whose network gateway does not start: the probe
   # there finds no gateway that enforces a policy. Every other verb runs hull.
@@ -297,21 +347,71 @@ for a; do [ "$a" = network-gateway ] && { echo "network-gateway: unavailable (te
 exec "@HULL@" "$@"
 EOF
   clean worker
+  WVM=$(vmof worker)
   on "$SRC" "brig policy attach locked worker >/dev/null; brig -q run --teleportable worker -d"
-  guest "$SRC" worker "$START" >/dev/null
-  on "$SRC" "BRIG_TELEPORT_REMOTE_ENV=\"\$BRIG_TELEPORT_REMOTE_ENV BRIG_RUNTIME_BIN=$FROOT/nogw/hull\" brig teleport worker --to $DST; echo \"rc=\$?\"" >"${TMPDIR:-/tmp}/demo-pol.out" 2>&1
-  cat "${TMPDIR:-/tmp}/demo-pol.out"
-  expect "a policy $DST cannot enforce" 7 "$(sed -n 's/^rc=//p' "${TMPDIR:-/tmp}/demo-pol.out")"
-  on "$SRC" "hull --store-dir \$BRIG_HULL_STORE_DIR migrate --status brig-worker 2>&1 | grep -q 'no move on record'" \
-    && pass "nothing was paused: hull has no move of brig-worker" || fail "hull recorded a move of brig-worker"
-  on "$SRC" "brig rm worker >/dev/null; brig policy detach locked worker >/dev/null"
+  start "$SRC" worker; WTOK=$TOK WBID=$BID
+  B=$(guest "$SRC" worker "$CHECK")
+  on "$SRC" "BRIG_TELEPORT_REMOTE_ENV=\"\$BRIG_TELEPORT_REMOTE_ENV BRIG_RUNTIME_BIN=$FROOT/nogw/hull\" brig teleport worker --to $DST; echo \"rc=\$?\"" >"$OUT/pol.out" 2>&1
+  cat "$OUT/pol.out"
+  expect "a policy $DST cannot enforce" 7 "$(rcof '' "$OUT/pol.out")"
+  has "the refusal says nothing was paused" "$OUT/pol.out" "Nothing was paused"
+  on "$SRC" "hull --store-dir \$BRIG_HULL_STORE_DIR migrate --status $WVM 2>&1 | grep -q 'no move on record'" \
+    && pass "nothing was paused: hull has no move of $WVM" || fail "hull recorded a move of $WVM"
+  runs "$SRC" "$WVM"
+  absent "$DST" "$WVM"
+  A=$(guest "$SRC" worker "$CHECK"); echo "$A"
+  check_after "refused move" "$B" "$A" "$WTOK" "$WBID" 0
+
+  say "an isolated session under a deny policy moves: $SRC -> $DST"
+  # conns HOST: the allowed and the denied connection from worker's guest,
+  # through brig on HOST.
+  conns() {
+    guest "$1" worker "for t in $ALLOW_TO $DENY_TO; do if timeout 5 bash -c \"exec 3<>/dev/tcp/\$t\" 2>/dev/null; then echo \"CONN \$t open\"; else echo \"CONN \$t closed\"; fi; done" | tr -d '\r'
+  }
+  # check_conns LABEL OUTPUT: the allowed connection opened, and the denied
+  # one did not, where both hosts reach DENY_TO themselves.
+  DENY_REACHED=1
+  for h in "$SRC" "$DST"; do
+    on "$h" "timeout 5 bash -c 'exec 3<>/dev/tcp/$DENY_TO'" 2>/dev/null || DENY_REACHED=0
+  done
+  check_conns() {
+    grep -qx "CONN $ALLOW_TO open" <<<"$2" && pass "$1: the policy lets $ALLOW_TO open" \
+      || fail "$1: $ALLOW_TO, which the policy allows, did not open"
+    if [ "$DENY_REACHED" = 1 ]; then
+      grep -qx "CONN $DENY_TO closed" <<<"$2" && pass "$1: the policy keeps $DENY_TO closed" \
+        || fail "$1: $DENY_TO, which the policy denies, opened"
+    else
+      echo "SKIP $1: a host does not reach $DENY_TO itself, so its refusal proves nothing"
+    fi
+  }
+  C=$(conns "$SRC"); echo "$C"
+  check_conns "before the move" "$C"
+  B=$(guest "$SRC" worker "$CHECK"); echo "$B"
+  on "$SRC" "brig info worker 2>/dev/null | grep -E '^(NETWORK|POLICY) '"
+  TXW=$(move "$SRC" "$DST" worker)
+  [ -n "$TXW" ] && pass "brig teleport committed move $TXW of worker" || fail "brig teleport did not move worker"
+  A=$(guest "$SRC" worker "$CHECK"); echo "$A"
+  check_after "policy move" "$B" "$A" "$WTOK" "$WBID" 1
+  [ -n "$(field ADDR <<<"$B")" ] && [ "$(field ADDR <<<"$A")" = "$(field ADDR <<<"$B")" ] \
+    && pass "the guest kept its address ($(field ADDR <<<"$A"))" \
+    || fail "the guest's address was $(field ADDR <<<"$B"), is $(field ADDR <<<"$A")"
+  on "$SRC" "brig info worker 2>/dev/null | grep -E '^(TELEPORT|NETWORK|POLICY) '" | tr -d '\r' >"$OUT/pinfo.out"
+  cat "$OUT/pinfo.out"
+  grep -q "^POLICY  *locked (carried from $SRC)" "$OUT/pinfo.out" \
+    && pass "brig info on $DST shows the policy carried from $SRC" || fail "brig info shows no policy carried from $SRC"
+  runs "$DST" "$WVM"
+  migrated "$SRC" "$WVM"
+  C=$(conns "$SRC"); echo "$C"
+  check_conns "after the move" "$C"
+  clean worker
+  on "$SRC" "brig policy detach locked worker >/dev/null"
 
   say "faults: a session that is not teleportable"
   # Linux hull shares no host directory, so an ordinary session cannot boot
   # there. A sandbox hull runs under the name brig would give one stands in.
-  on "$SRC" "hull --store-dir \$BRIG_HULL_STORE_DIR run -d --name brig-plain --hypervisor hvi --rootfs-type block --net none docker.io/library/ubuntu:latest sleep infinity >/dev/null 2>&1; sed -e 's/^name: .*/name: plain/' -e '/^teleportable:/d' \"\$BRIG_PROFILE_DIR/$REF.yaml\" > \"\$BRIG_PROFILE_DIR/plain.yaml\"; brig teleport plain --to $DST; echo \"rc=\$?\"; hull --store-dir \$BRIG_HULL_STORE_DIR rm --force brig-plain >/dev/null 2>&1" >"${TMPDIR:-/tmp}/demo-plain.out" 2>&1
-  cat "${TMPDIR:-/tmp}/demo-plain.out"
-  expect "a session that is not teleportable" 7 "$(sed -n 's/^rc=//p' "${TMPDIR:-/tmp}/demo-plain.out")"
+  on "$SRC" "hull --store-dir \$BRIG_HULL_STORE_DIR run -d --name brig-plain --hypervisor hvi --rootfs-type block --net none docker.io/library/ubuntu:latest sleep infinity >/dev/null 2>&1; sed -e 's/^name: .*/name: plain/' -e '/^teleportable:/d' \"\$BRIG_PROFILE_DIR/$REF.yaml\" > \"\$BRIG_PROFILE_DIR/plain.yaml\"; brig teleport plain --to $DST; echo \"rc=\$?\"; hull --store-dir \$BRIG_HULL_STORE_DIR rm --force brig-plain >/dev/null 2>&1" >"$OUT/plain.out" 2>&1
+  cat "$OUT/plain.out"
+  expect "a session that is not teleportable" 7 "$(rcof '' "$OUT/plain.out")"
 
   # A stand-in ssh on SRC, ahead of ssh on PATH, for hull's steps: it passes
   # every call to ssh except the one FROOT/mode names.
@@ -330,41 +430,70 @@ EOF
   FSSH="PATH=$FROOT/ssh:\$PATH"
 
   say "faults: an abort after the transfer resumes the source"
-  R=$REF@ab
+  R=$REF@ab RVM=$(vmof "$REF@ab")
   clean "$R"
   on "$SRC" "brig -q run --teleportable $R -d"
-  T=$(guest "$SRC" "$R" "$START" | field TOKEN); B=$(guest "$SRC" "$R" "$CHECK")
-  on "$SRC" "echo prepare > $FROOT/mode; $FSSH brig teleport $R --to $DST; echo \"rc=\$?\"; echo none > $FROOT/mode; brig teleport $R --status | head -1; brig teleport $R --abort; echo \"abort rc=\$?\""
+  start "$SRC" "$R"; B=$(guest "$SRC" "$R" "$CHECK")
+  on "$SRC" "echo prepare > $FROOT/mode; $FSSH brig teleport $R --to $DST; echo \"rc=\$?\"; echo none > $FROOT/mode; brig teleport $R --status 2>&1 | head -1; brig teleport $R --abort; echo \"abort rc=\$?\"" >"$OUT/ab.out" 2>&1
+  cat "$OUT/ab.out"
+  has "the link was cut before migrate-prepare" "$OUT/ab.out" "teleport-demo: link cut before migrate-prepare"
+  expect "the move with the link cut" 1 "$(rcof '' "$OUT/ab.out")"
+  has "--status says the move has not finished" "$OUT/ab.out" "has not finished"
+  expect "--abort" 0 "$(rcof 'abort ' "$OUT/ab.out")"
+  runs "$SRC" "$RVM"
+  absent "$DST" "$RVM"
   A=$(guest "$SRC" "$R" "$CHECK"); echo "$A"
-  check_after "abort" "$B" "$A" "$T"
+  check_after "abort" "$B" "$A" "$TOK" "$BID" 1
   clean "$R"
 
   say "faults: a lost commit answer, settled by a retry"
-  R=$REF@la
+  R=$REF@la RVM=$(vmof "$REF@la")
   clean "$R"
   on "$SRC" "brig -q run --teleportable $R -d"
-  T=$(guest "$SRC" "$R" "$START" | field TOKEN); B=$(guest "$SRC" "$R" "$CHECK")
-  on "$SRC" "echo commit > $FROOT/mode; $FSSH brig teleport $R --to $DST; echo \"rc=\$?\"; echo none > $FROOT/mode" 2>&1 | tail -2
-  on "$SRC" "brig teleport $R --status" >"${TMPDIR:-/tmp}/demo-la.out" 2>&1
-  cat "${TMPDIR:-/tmp}/demo-la.out"
-  RETRY=$(sed -n 's/.*`\(hull [^`]* --txid [0-9a-f]*\)`.*/\1/p' "${TMPDIR:-/tmp}/demo-la.out")
+  start "$SRC" "$R"; B=$(guest "$SRC" "$R" "$CHECK")
+  on "$SRC" "echo commit > $FROOT/mode; $FSSH brig teleport $R --to $DST; echo \"rc=\$?\"; echo none > $FROOT/mode" >"$OUT/la-move.out" 2>&1
+  cat "$OUT/la-move.out"
+  has "the reply to migrate-commit was lost" "$OUT/la-move.out" "teleport-demo: the reply to migrate-commit was lost"
+  expect "the move whose commit answer was lost" 1 "$(rcof '' "$OUT/la-move.out")"
+  on "$SRC" "brig teleport $R --status" >"$OUT/la.out" 2>&1
+  cat "$OUT/la.out"
+  has "--status says the move has not finished" "$OUT/la.out" "has not finished"
+  RETRY=$(sed -n 's/.*`\(hull [^`]* --txid [0-9a-f]*\)`.*/\1/p' "$OUT/la.out")
   [ -n "$RETRY" ] && pass "--status names the retry: $RETRY" || fail "--status names no retry"
-  on "$SRC" "$RETRY; echo \"retry rc=\$?\"; brig teleport $R --status"
+  on "$SRC" "$RETRY; echo \"retry rc=\$?\"; brig teleport $R --status" >"$OUT/la-retry.out" 2>&1
+  cat "$OUT/la-retry.out"
+  expect "the retry --status names" 0 "$(rcof 'retry ' "$OUT/la-retry.out")"
+  has "--status then records the host" "$OUT/la-retry.out" "teleported $R to $DST"
+  runs "$DST" "$RVM"
+  migrated "$SRC" "$RVM"
   A=$(guest "$SRC" "$R" "$CHECK"); echo "$A"
-  check_after "lost answer" "$B" "$A" "$T"
+  check_after "lost answer" "$B" "$A" "$TOK" "$BID" 1
   clean "$R"
 
   say "faults: the source brig killed during the commit"
-  R=$REF@kb
+  R=$REF@kb RVM=$(vmof "$REF@kb")
   clean "$R"
   on "$SRC" "brig -q run --teleportable $R -d"
-  T=$(guest "$SRC" "$R" "$START" | field TOKEN); B=$(guest "$SRC" "$R" "$CHECK")
-  on "$SRC" "rm -f $FROOT/stalled; echo stall > $FROOT/mode; ($FSSH brig teleport $R --to $DST >/dev/null 2>&1 & echo \$! > $FROOT/brig.pid); for i in \$(seq 60); do [ -f $FROOT/stalled ] && break; sleep 0.5; done; kill -KILL \$(cat $FROOT/brig.pid); echo none > $FROOT/mode; echo \"killed the source brig during the commit\"; brig teleport $R --status | head -2; sleep 25; brig teleport $R --status"
+  start "$SRC" "$R"; B=$(guest "$SRC" "$R" "$CHECK")
+  # brig is this shell's own child, so wait gives its status.
+  on "$SRC" "rm -f $FROOT/stalled; echo stall > $FROOT/mode; $FSSH brig teleport $R --to $DST >/dev/null 2>&1 & pid=\$!; for i in \$(seq 60); do [ -f $FROOT/stalled ] && break; sleep 0.5; done; [ -f $FROOT/stalled ] && echo 'ssh holds migrate-commit'; kill -KILL \$pid; wait \$pid; echo \"rc=\$?\"; echo none > $FROOT/mode; brig teleport $R --status 2>&1 | head -2" >"$OUT/kb.out" 2>&1
+  cat "$OUT/kb.out"
+  has "ssh held migrate-commit when brig was killed" "$OUT/kb.out" "ssh holds migrate-commit"
+  expect "the source brig killed with SIGKILL" 137 "$(rcof '' "$OUT/kb.out")"
+  has "--status says the move has not finished" "$OUT/kb.out" "has not finished"
+  sleep 25
+  on "$SRC" "brig teleport $R --status" >"$OUT/kb2.out" 2>&1
+  cat "$OUT/kb2.out"
+  has "hull outlived brig and committed; --status records the host" "$OUT/kb2.out" "teleported $R to $DST"
+  runs "$DST" "$RVM"
+  migrated "$SRC" "$RVM"
   A=$(guest "$SRC" "$R" "$CHECK"); echo "$A"
-  check_after "killed brig" "$B" "$A" "$T"
+  check_after "killed brig" "$B" "$A" "$TOK" "$BID" 1
   clean "$R"
 fi
 
 say "result"
+rm -rf "$OUT"
+echo "$NPASS passed, $NFAIL failed"
 if [ "$FAILED" = 0 ]; then echo "every check passed"; else echo "a check failed"; fi
 exit "$FAILED"
