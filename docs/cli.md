@@ -485,7 +485,7 @@ reported them. `-q` drops hull's lines with Brig's other notices. Besides
 | Field | When | Meaning |
 | --- | --- | --- |
 | `prepared` | after `--prepare`, and from `--status` while a prepared host is recorded | `host`, `at` (RFC 3339), `stream` (whether a move there sends only what the guest changed) and `why` when it does not, `base` (the digest of the base the host holds), and after `--prepare` also hull's `steps` (each with `what`, `result`, `detail`, `bytes` and `seconds`) and the `kernels` the host holds, by profile |
-| `move` | after a move this run saw commit | `seconds`, how long `hull migrate` took as Brig timed it, and what hull reported: `downtimeSeconds`, `bytes`, `mibPerSec` and `rounds`, each round with `round`, `bytes`, `seconds`, `mibPerSec` and `dirtyPagesPerSec`. A number hull did not report is left out |
+| `move` | after a move this run saw commit | `seconds`, how long `hull migrate` took as Brig timed it, and what hull reported: `downtimeSeconds`, `bytes`, `mibPerSec`, `stepsMs` (the milliseconds of each of hull's steps, by its name for the step: `fence`, `transfer`, `restore paused`, `commit`) and `rounds`, each round with `round`, `bytes`, `seconds`, `mibPerSec` and `dirtyPagesPerSec`. A number hull did not report is left out |
 
 The line takes one of `--to`, `--status` and `--abort`, and `--prepare` only
 with `--to`. A move whose end Brig
