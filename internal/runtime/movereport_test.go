@@ -21,6 +21,7 @@ func TestMoveReportReadsHullsLines(t *testing.T) {
 		"round 2: 8.0 MiB in 0.2 s",
 		"Sent 1.7 GiB in 46.3 s (37.1 MiB/s); disk 1.6 GiB of 16.0 GiB carried; destination: verified",
 		"Resumed s on me@box; downtime 1450 ms",
+		"Timings (ms): fence 1326, transfer 4765, restore paused 861, commit 489, verify 12",
 	} {
 		r.Add(line)
 	}
@@ -28,7 +29,8 @@ func TestMoveReportReadsHullsLines(t *testing.T) {
 		{Round: 0, Bytes: 1048576, Seconds: 0.5, MiBPerSec: 2, DirtyPagesPerSec: 120},
 		{Round: 1, Bytes: 65536, Seconds: 0.1, MiBPerSec: 0.5, DirtyPagesPerSec: 40.5},
 		{Round: 2, Seconds: 0.2},
-	}, MiBPerSec: 37.1, DowntimeSeconds: 1.45}
+	}, MiBPerSec: 37.1, DowntimeSeconds: 1.45,
+		StepsMs: map[string]int64{"fence": 1326, "transfer": 4765, "restore paused": 861, "commit": 489, "verify": 12}}
 	got, _ := json.Marshal(r)
 	wantJSON, _ := json.Marshal(want)
 	if string(got) != string(wantJSON) {
@@ -40,7 +42,8 @@ func TestMoveReportReadsHullsLines(t *testing.T) {
 		t.Errorf("a line with nothing to read gave %s", b)
 	}
 	r.Seconds = 7.25
-	if s := r.Summary(); s != "hull's move took 7.2 s, the guest was paused 1.45 s, 3 rounds" {
+	if s := r.Summary(); s != "hull's move took 7.2 s, the guest was paused 1.45 s, at 37.1 MiB/s, 3 rounds; "+
+		"fence 1.33 s, transfer 4.76 s, restore paused 0.86 s, commit 0.49 s, verify 0.01 s" {
 		t.Errorf("summary %q", s)
 	}
 }
