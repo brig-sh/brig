@@ -71,6 +71,9 @@ type MigrateSpec struct {
 	// DryRun asks hull to check both hosts, the destination's machine
 	// against this one included, and to change nothing on either.
 	DryRun bool
+	// Progress, when set, is handed each line hull prints on stderr during
+	// the move, as hull prints it. A dry run hands it nothing.
+	Progress func(line string)
 }
 
 // MoveStatus is hull's move record of a sandbox on this host, as `hull
@@ -121,10 +124,11 @@ func (h *hull) Migrate(name, to string, spec MigrateSpec) (MoveStatus, error) {
 	if err != nil {
 		return MoveStatus{}, err
 	}
-	_, callErr := h.call(args, moveTransports...)
 	if spec.DryRun {
-		return MoveStatus{}, callErr
+		_, err := h.call(args, moveTransports...)
+		return MoveStatus{}, err
 	}
+	_, callErr := h.callLines(args, spec.Progress, moveTransports...)
 	st, readErr := h.MigrateStatus(name)
 	return st, withReadErr(callErr, readErr)
 }
