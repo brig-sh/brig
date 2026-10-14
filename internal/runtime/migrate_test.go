@@ -194,7 +194,8 @@ func TestAnUnreadRecordIsNotNoRecord(t *testing.T) {
 
 // A move brig asks for leaves only through ssh to the host named: hull is not
 // handed a program to run in ssh's place, even when brig's own environment
-// has one.
+// has one. Its status and its abort ask the other host too, and are not
+// handed one either.
 func TestAMoveIsNotHandedAnotherTransport(t *testing.T) {
 	t.Setenv("HULL_MIGRATE_SSH", "/tmp/elsewhere")
 	dir := t.TempDir()
@@ -215,12 +216,20 @@ func TestAMoveIsNotHandedAnotherTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	statuses := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(got)), "\n") {
-		if strings.HasPrefix(line, "migrate --to") || strings.HasPrefix(line, "migrate --abort") {
+		if strings.HasPrefix(line, "migrate --status") {
+			statuses++
+		}
+		if strings.HasPrefix(line, "migrate --to") || strings.HasPrefix(line, "migrate --abort") ||
+			strings.HasPrefix(line, "migrate --status") {
 			if !strings.HasSuffix(line, "transport=none") {
 				t.Errorf("hull was handed a transport: %q", line)
 			}
 		}
+	}
+	if statuses == 0 {
+		t.Errorf("hull's record was not read back: %s", got)
 	}
 	if !strings.Contains(string(got), "migrate --to transport=none") {
 		t.Errorf("the move was not asked: %s", got)
