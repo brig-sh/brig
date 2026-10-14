@@ -7,18 +7,21 @@ import (
 	"testing"
 )
 
-// The move's line names the destination, the store there and the txid, and
-// the sandbox last, where hull's parser takes it. A dry run pauses nothing
-// and needs no txid.
+const tx1 = "0123456789abcdef0123456789abcdef"
+
+// The move's line names the destination, the store and the hull there, the
+// gateway brig started there and the txid, and the sandbox last, where
+// hull's parser takes it. A dry run changes nothing and needs no txid.
 func TestMigrateArgs(t *testing.T) {
 	for _, c := range []struct {
 		what string
 		spec MigrateSpec
 		want string
 	}{
-		{"a move", MigrateSpec{TxID: "tx1"}, "migrate --to me@box --txid tx1 s"},
-		{"into a named store", MigrateSpec{TxID: "tx1", RemoteStore: "/st/b"},
-			"migrate --to me@box --remote-store /st/b --txid tx1 s"},
+		{"a move", MigrateSpec{TxID: tx1}, "migrate --to me@box --txid " + tx1 + " s"},
+		{"into a named store, through brig's gateway", MigrateSpec{TxID: tx1, RemoteStore: "/st/b",
+			RemoteHull: "/opt/hull", GatewaySock: "/g/sandbox-s.sock"},
+			"migrate --to me@box --remote-store /st/b --remote-hull /opt/hull --remote-gateway-sock /g/sandbox-s.sock --txid " + tx1 + " s"},
 		{"a dry run", MigrateSpec{DryRun: true}, "migrate --to me@box --dry-run s"},
 	} {
 		got, err := migrateArgs("s", "me@box", c.spec)
@@ -33,11 +36,33 @@ func TestMigrateArgs(t *testing.T) {
 	if got, err := migrateArgs("s", "me@box", MigrateSpec{}); err == nil {
 		t.Errorf("a move with no txid was accepted as %q", got)
 	}
-	if got, err := migrateAbortArgs("s", ""); err == nil {
-		t.Errorf("an abort naming no move was accepted as %q", got)
+	if got, err := migrateArgs("s", "me@box", MigrateSpec{TxID: "tp-1"}); err == nil {
+		t.Errorf("a txid hull does not take was accepted as %q", got)
 	}
-	if got, _ := migrateAbortArgs("s", "tx1"); strings.Join(got, " ") != "migrate-abort --txid tx1 s" {
-		t.Errorf("abort line %q", strings.Join(got, " "))
+	if _, err := (&hull{bin: "/nonexistent"}).MigrateAbort("s", ""); err == nil {
+		t.Errorf("an abort naming no move was accepted")
+	}
+}
+
+// hull's status report is read from its first line: the move, its state and
+// the other host. A line for another instance, or one that does not read, is
+// an error rather than a guess.
+func TestMoveStatusOf(t *testing.T) {
+	out := "Move " + tx1 + " of s: committing, to me@box, epoch 1\n  2026-10-14 06:00:00.000  preflight\n"
+	got, err := moveStatusOf("s", out)
+	if err != nil || got.TxID != tx1 || got.State != "committing" || got.Peer != "me@box" {
+		t.Errorf("got %+v, %v", got, err)
+	}
+	for _, bad := range []string{"", "Move x of s: fenced, to me@box, epoch 1", "Move " + tx1 + " of other: fenced, to me@box, epoch 1"} {
+		if got, err := moveStatusOf("s", bad); err == nil {
+			t.Errorf("%q read as %+v", bad, got)
+		}
+	}
+	for state, fenced := range map[string]bool{"": false, MovePreflight: false, MoveReserved: false,
+		MoveAborted: false, "fenced": true, "transferring": true, "committing": true, MoveCommitted: true} {
+		if MoveFenced(state) != fenced {
+			t.Errorf("MoveFenced(%q) = %v", state, !fenced)
+		}
 	}
 }
 
@@ -61,22 +86,22 @@ func TestCheckRemote(t *testing.T) {
 	}
 }
 
-// migrateHull is a hull that logs every argv, moves by recording the
-// migration record a move leaves, and aborts by recording the abort.
+// migrateHull is a hull that logs every argv, answers a move by recording
+// the state it leaves, and reports that record the way `hull migrate
+// --status` does.
 func migrateHull(t *testing.T, migrate string) (*hull, string) {
 	t.Helper()
 	dir := t.TempDir()
 	bin, log := filepath.Join(dir, "hull"), filepath.Join(dir, "argv.log")
+	rec := dir + "/record"
 	script := "#!/bin/sh\n" +
 		"echo \"$*\" >> " + log + "\n" +
-		"case \"$1\" in\n" +
-		"  migrate) " + migrate + " ;;\n" +
-		"  migrate-status) echo 'move tx1 of s to me@box: migrated' ;;\n" +
-		"  migrate-abort) echo '{\"id\":\"s\",\"migration\":{\"state\":\"aborted\",\"txid\":\"tx1\",\"peer\":\"me@box\"}}' > " + dir + "/record\n" +
-		"    echo 'move tx1 aborted' ;;\n" +
-		"  inspect) cat " + dir + "/record 2>/dev/null || echo '{\"id\":\"s\"}' ;;\n" +
+		"case \"$1 $2\" in\n" +
+		"  'migrate --status') [ -f " + rec + " ] || { echo 'error: instance s has no move on record' >&2; exit 1; }\n" +
+		"    echo \"Move " + tx1 + " of s: $(cat " + rec + "), to me@box, epoch 1\" ;;\n" +
+		"  'migrate --abort') echo aborted > " + rec + "; echo 'Aborted move' >&2 ;;\n" +
+		"  migrate*) " + strings.ReplaceAll(migrate, "RECORD", rec) + " ;;\n" +
 		"esac\n"
-	script = strings.ReplaceAll(script, "RECORD", dir+"/record")
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -84,67 +109,46 @@ func migrateHull(t *testing.T, migrate string) (*hull, string) {
 }
 
 // The seam drives hull with the lines the builders make and reads hull's
-// record back for where the move stands, after a move, a status and an
-// abort alike.
+// move record back after a move, a status and an abort alike.
 func TestHullMigrateSeam(t *testing.T) {
-	h, log := migrateHull(t, "echo '{\"id\":\"s\",\"migration\":{\"state\":\"migrated\",\"txid\":\"tx1\",\"peer\":\"me@box\"}}' > RECORD; echo 'moved s to me@box'")
+	h, log := migrateHull(t, "case \"$*\" in *--dry-run*) ;; *) echo committed > RECORD ;; esac")
+	if st, err := h.MigrateStatus("s"); err != nil || st != (MoveStatus{}) {
+		t.Fatalf("before a move: %+v, %v; want no record", st, err)
+	}
 	if _, err := h.Migrate("s", "me@box", MigrateSpec{DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := h.Migrate("s", "me@box", MigrateSpec{TxID: "tx1", RemoteStore: "/st"})
-	if err != nil {
-		t.Fatal(err)
+	st, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1, RemoteStore: "/st"})
+	if err != nil || st.TxID != tx1 || st.State != MoveCommitted || st.Peer != "me@box" {
+		t.Errorf("move: %+v, %v", st, err)
 	}
-	want := Migration{State: MigrationMigrated, TxID: "tx1", Peer: "me@box"}
-	if res.Migration != want || res.RecordErr != nil || res.Summary != "moved s to me@box" {
-		t.Errorf("move result %+v, want %+v", res, want)
-	}
-	st, err := h.MigrateStatus("s")
-	if err != nil || st.Migration != want || !strings.Contains(st.Said, "migrated") {
-		t.Errorf("status %+v, %v", st, err)
-	}
-	st, err = h.MigrateAbort("s", "tx1")
-	if err != nil || st.Migration.State != MigrationAborted {
-		t.Errorf("abort %+v, %v", st, err)
+	st, err = h.MigrateAbort("s", tx1)
+	if err != nil || st.State != MoveAborted {
+		t.Errorf("abort: %+v, %v", st, err)
 	}
 	got, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantLog := "migrate --to me@box --dry-run s\n" +
-		"migrate --to me@box --remote-store /st --txid tx1 s\ninspect s\n" +
-		"migrate-status s\ninspect s\n" +
-		"migrate-abort --txid tx1 s\ninspect s\n"
+	wantLog := "migrate --status s\n" +
+		"migrate --to me@box --dry-run s\n" +
+		"migrate --to me@box --remote-store /st --txid " + tx1 + " s\nmigrate --status s\n" +
+		"migrate --abort " + tx1 + "\nmigrate --status s\n"
 	if string(got) != wantLog {
 		t.Errorf("hull was asked:\n%s\nwant:\n%s", got, wantLog)
 	}
 }
 
-// A move hull reports as finished whose record names another move is not
-// taken for this one: the record is what says where the guest runs, and a
-// caller told "done" for the wrong move would record a host the session is
-// not on.
-func TestAMoveWhoseRecordNamesAnotherMoveSaysSo(t *testing.T) {
-	h, _ := migrateHull(t, "echo '{\"id\":\"s\",\"migration\":{\"state\":\"migrated\",\"txid\":\"other\"}}' > RECORD")
-	res, err := h.Migrate("s", "me@box", MigrateSpec{TxID: "tx1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.RecordErr == nil || !strings.Contains(res.RecordErr.Error(), "other") {
-		t.Errorf("RecordErr = %v, want one naming the other move", res.RecordErr)
-	}
-}
-
-// A move that failed still has its record read: a move that failed after the
-// fence leaves the source unable to run, and the caller decides on that, not
-// on the exit status alone.
+// A move that failed still has its record read: a move that failed after
+// the fence leaves the source unable to run, and the caller decides on that,
+// not on the exit status alone.
 func TestAFailedMoveStillReadsTheRecord(t *testing.T) {
-	h, _ := migrateHull(t, "echo '{\"id\":\"s\",\"migration\":{\"state\":\"migrating\",\"txid\":\"tx1\"}}' > RECORD; echo 'ssh: connection reset' >&2; exit 1")
-	res, err := h.Migrate("s", "me@box", MigrateSpec{TxID: "tx1"})
+	h, _ := migrateHull(t, "echo committing > RECORD; echo 'ssh: connection reset' >&2; exit 1")
+	st, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1})
 	if err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("a failed move came back as %v", err)
 	}
-	if res.Migration.State != MigrationMigrating || res.Migration.TxID != "tx1" {
-		t.Errorf("record after a failed move: %+v", res.Migration)
+	if st.State != "committing" || st.TxID != tx1 {
+		t.Errorf("record after a failed move: %+v", st)
 	}
 }
