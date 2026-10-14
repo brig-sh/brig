@@ -61,6 +61,18 @@ guest loses on it.
 
 Brig hands `hull run` the flag `--profile portable-arm64-v1`, after
 `--rootfs-type block`. The kernel is the only other change to the run line.
+Before the run, Brig asks `hull run --help` whether this hull takes
+`--profile`. A hull from before machine profiles does not, and the run is
+refused with exit `7` and hull's version.
+
+Brig hands hull the portable kernel with the boot assets, and only a profile
+with `genericBoot: true` has boot assets. On an arm64 host, Brig refuses a
+teleportable session of any other profile before the runtime is asked, and
+`brig plan` shows the refusal. Such a profile boots its image's own kernel or
+one hull picks, Brig checks neither, and a kernel without the `hvi-time`
+driver has no clock on the portable machine. Of the built-in profiles,
+`cursor` has no `genericBoot`. `claude-desktop` is refused for a reason of its
+own: it reads its credentials at boot.
 
 The portable machine needs a kernel of its own, built with the `hvi-time`
 clock driver. The boot bundle's kernel does not have that driver. Brig boots
