@@ -44,8 +44,9 @@ neither a guest home nor a project into it, so no host directory is mounted at
 all. Its guest home is a directory on the sandbox's own disk. A teleportable
 session's disk holds no credential value Brig resolved. Brig hands the boot
 no credential, because hull writes the boot environment into the sandbox's
-files, and every exec hands the credentials in by name instead. See
-[teleport.md](teleport.md#credentials-stay-off-the-disk).
+files, and every exec hands the credentials in by name instead. That is
+what Brig writes. The agent holds the values and can still write one to the
+disk itself. See [teleport.md](teleport.md#credentials-stay-off-the-disk).
 
 The host can reach the guest only on a port you publish. See
 [Published ports](#published-ports).

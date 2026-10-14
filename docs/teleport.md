@@ -3,8 +3,8 @@
 A teleportable session owns all of its storage. Its guest root is a block
 disk, its guest home is a directory on that disk, and no host directory is
 shared into it. Brig gives a session this shape so that a later release can
-move the running sandbox to another host as a whole. This page describes only
-the session mode. Brig does not move a session yet.
+move the running sandbox to another host as a whole. This page describes the
+session mode and what that move will do. Brig does not move a session yet.
 
 ## Start one
 
@@ -84,11 +84,15 @@ passes `HOME` and the other names hull reads for itself, the literal
 a credential.
 
 The agent loses nothing. Brig starts it with `hull exec`, and every exec,
-the agent's and every later `brig sh`, hands the credentials in by name, as
-on any session. hull carries an exec's environment to the guest process and
-writes it nowhere. A process the agent starts inherits the values. A
-`files:` binding goes into a tmpfs after the boot, as before, and is gone
-when the sandbox stops.
+the agent's and every later `brig sh`, hands the credentials in as on any
+session: by name on the command line, with the values in the environment of
+the `hull exec` process. `BRIG_ENV_ARGV` changes that for an exec as it does
+everywhere; see [Not in argv](security.md#not-in-argv). A process the agent
+starts inherits the values. A `files:` binding goes into a tmpfs after the
+boot, as before, and is gone when the sandbox stops.
+
+This covers what Brig hands hull. The agent holds the values, and it can
+still write one into a file on the disk.
 
 A profile whose workload reads its credentials when the sandbox boots
 cannot work this way. A `kind: gui` profile is one: its window is the boot
@@ -147,23 +151,25 @@ through these steps:
    same machine. The second check covers the backend, the hvi build, the CPU,
    the counter frequency and the interrupt controller. A move between hosts
    that differ is refused before anything is paused.
-2. hull pauses the guest and writes a checkpoint: the guest's memory, its
-   vCPUs, its devices and its interrupt controller. The disk is synced and
-   goes with it.
+2. hull checkpoints the guest and fences it. It pauses the guest, writes its
+   memory, its vCPUs, its devices and its interrupt controller, and syncs the
+   disk. From then on the source never runs again in that process: hull
+   refuses to resume it. The disk is copied after this step, so a source that
+   kept running would write to a disk that no longer matches the memory that
+   was shipped.
 3. The checkpoint and the disk are copied to the destination over `ssh`.
 4. The destination's hull restores the sandbox paused.
-5. The source's hull fences its copy. A fenced guest never runs again in
-   that process, and hull refuses to resume it.
-6. The destination resumes the guest. From then on, `brig sh`, `brig stop`
+5. The destination resumes the guest. From then on, `brig sh`, `brig stop`
    and the other verbs on that ref go to the destination host.
 
 The invariant the steps keep is that at most one host executes the VM. The
-destination stays paused until the source is fenced, and Brig never resumes
-the source after the destination may have started. If a step fails before
-the fence, the source resumes and the destination copy is discarded. If it
-fails after, the source stays fenced and the move is finished or retried
-from the destination. A lost connection can leave a session paused on both
-hosts. It never leaves it running on both.
+source is fenced before anything leaves it, and the destination runs only
+once it holds the whole checkpoint. If a step fails before Brig asks the
+destination to resume, the destination's copy is discarded. The session is
+then restored on the source from its own checkpoint, or the copy is tried
+again. Brig never restores the source once it has asked the destination to
+resume. A connection lost at that moment can leave the session stopped on
+both hosts, with its checkpoint on both. It never leaves it running on both.
 
 What the guest sees:
 
