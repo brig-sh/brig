@@ -153,6 +153,24 @@ func TestAFailedMoveStillReadsTheRecord(t *testing.T) {
 	}
 }
 
+// A move hull stopped says why. hull narrates the steps before the line that
+// names the reason, and the error keeps that line however many steps came
+// first, as a move whose checkpoint hvi refused printed on real hardware.
+func TestAStoppedMoveSaysWhyAfterItsSteps(t *testing.T) {
+	h, _ := migrateHull(t, "echo aborted > RECORD; "+
+		"printf 'Move %s of s to me@box, epoch 1\\nReserved s on me@box\\nFencing s (checkpoint with then=fence)\\n' "+tx1+" >&2; "+
+		"echo 'error: move stopped at reserved: hvi refused checkpoint: no backend checkpoints it yet (refused)' >&2; "+
+		"echo 'The instance still runs here.' >&2; exit 1")
+	_, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1})
+	if err == nil || !strings.Contains(err.Error(), "hvi refused checkpoint: no backend checkpoints it yet") ||
+		!strings.Contains(err.Error(), "Fencing s") {
+		t.Fatalf("a stopped move came back as %v, want its steps and its reason", err)
+	}
+	if strings.Contains(err.Error(), "still runs here") {
+		t.Errorf("the error kept lines past the reason: %v", err)
+	}
+}
+
 // A record that does not read is not a record with no move in it. After a
 // move that failed, and after one that hull says succeeded, the status comes
 // back unread with the read's error beside the move's, so the caller cannot
