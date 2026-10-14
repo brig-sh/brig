@@ -365,7 +365,7 @@ func portableCheck(rt runtime.Runtime) check {
 	if !pk.Present {
 		return check{Name: "portable", State: stateInfo, Finding: fmt.Sprintf("no %s kernel at %s; "+
 			"only a teleportable session needs it (set BRIG_PORTABLE_KERNEL to it, or install it with "+
-			"`hull assets pull --profile %s`)", machine, pk.Path, machine)}
+			"`%s`)", machine, pk.Path, runtime.HullLine("assets", "pull", "--profile", machine))}
 	}
 	got, err := verify.FileDigest(pk.Path)
 	if err != nil {

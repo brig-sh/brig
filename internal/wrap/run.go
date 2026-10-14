@@ -763,15 +763,17 @@ func (c *Config) refuseParkedTeleportable() error {
 	switch m.State {
 	case runtime.MigrationFenced:
 		return fmt.Errorf("the teleportable sandbox %s was fenced by a checkpoint (in %s), and its guest "+
-			"will not run again in this process. brig will not reuse it: stop it with `hull stop %s` and "+
-			"restore it with `hull restore %s`, or remove the session with `brig rm %s`, which deletes "+
-			"its disk", c.VMName, orUnnamed(m.BundleDir), c.VMName, c.VMName, ref)
+			"will not run again in this process. brig will not reuse it: stop it with `%s` and "+
+			"restore it with `%s`, or remove the session with `brig rm %s`, which deletes "+
+			"its disk", c.VMName, orUnnamed(m.BundleDir), runtime.HullLine("stop", c.VMName),
+			runtime.HullLine("restore", c.VMName), ref)
 	case runtime.MigrationRestoring:
 		return fmt.Errorf("the teleportable sandbox %s is being restored from a checkpoint (in %s), or a "+
 			"restore of it failed, so its guest is not running. brig will not reuse it: wait for the "+
-			"restore, or stop it with `hull stop %s` and run `hull restore %s` again, or remove the "+
+			"restore, or stop it with `%s` and run `%s` again, or remove the "+
 			"session with `brig rm %s`, which deletes its disk",
-			c.VMName, orUnnamed(m.BundleDir), c.VMName, c.VMName, ref)
+			c.VMName, orUnnamed(m.BundleDir), runtime.HullLine("stop", c.VMName),
+			runtime.HullLine("restore", c.VMName), ref)
 	}
 	return nil
 }

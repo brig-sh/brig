@@ -41,3 +41,16 @@ func TestHullArgsNameTheStoreBeforeTheVerb(t *testing.T) {
 		}
 	}
 }
+
+// A hull line printed as a remedy names the store the way the calls do, so
+// it finds the sandbox when it is copied, and is quoted for a shell.
+func TestHullLineNamesTheStore(t *testing.T) {
+	t.Setenv(HullStoreDir, "")
+	if got := HullLine("migrate", "--status", "brig-x"); got != "hull migrate --status brig-x" {
+		t.Errorf("unset: %q", got)
+	}
+	t.Setenv(HullStoreDir, "/st/my store")
+	if got := HullLine("restore", "brig-x"); got != "hull --store-dir '/st/my store' restore brig-x" {
+		t.Errorf("set: %q", got)
+	}
+}
