@@ -174,6 +174,19 @@ func TestATeleportableProfileWithoutGenericBootIsRefusedOnAPortableHost(t *testi
 		if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "genericBoot: true") {
 			t.Errorf("the plan did not carry the refusal: %+v", d.Refused)
 		}
+		if strings.Contains(err.Error(), "brig rm") {
+			t.Errorf("a new session is told to remove itself: %v", err)
+		}
+
+		// A session the index records as teleportable cannot be run as an
+		// ordinary one, so its refusal names rm as the way out instead.
+		cfg.rememberSession()
+		later := loadTeleport(t, p, Options{}, &guestRuntime{})
+		err = later.EnsureRunning(creds.Set{})
+		if err == nil || !strings.Contains(err.Error(), "genericBoot: true") ||
+			!strings.Contains(err.Error(), "`brig rm tp`") {
+			t.Errorf("a recorded session: want the refusal naming `brig rm tp`, got %v", err)
+		}
 	}
 }
 
