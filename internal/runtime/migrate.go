@@ -102,11 +102,12 @@ type Migrator interface {
 
 var _ Migrator = (*hull)(nil)
 
-// moveTransports are the settings with which hull would carry a move over
-// something other than ssh to the host it was given: HULL_MIGRATE_SSH names
-// a program hull runs in ssh's place, for hull's own tests. A move brig asks
-// for leaves the host only through ssh to the host the user named, so hull
-// is not handed one from brig's environment, wherever it was set.
+// moveTransports are the settings with which hull would reach the other host
+// of a move over something other than ssh to the host it was given:
+// HULL_MIGRATE_SSH names a program hull runs in ssh's place, for hull's own
+// tests. A move brig asks for, and hull's status and abort of it, reach the
+// other host only through ssh to the host the user named, so no call of
+// `hull migrate` is handed one from brig's environment, wherever it was set.
 var moveTransports = []string{"HULL_MIGRATE_SSH"}
 
 // Migrate runs `hull migrate`, then reads the move record back, after a move
@@ -141,9 +142,11 @@ func withReadErr(callErr, readErr error) error {
 
 // MigrateStatus runs `hull migrate --status` and reads its first line, which
 // names the move, its state and the other host. A sandbox with no move on
-// record is a read status with no move in it, not an error.
+// record is a read status with no move in it, not an error. hull asks the
+// destination about the move too, over the ssh a move takes, so this call is
+// not handed another transport either.
 func (h *hull) MigrateStatus(name string) (MoveStatus, error) {
-	out, err := h.call([]string{"migrate", "--status", name})
+	out, err := h.call([]string{"migrate", "--status", name}, moveTransports...)
 	if err != nil {
 		if strings.Contains(err.Error(), "has no move on record") {
 			return MoveStatus{Read: true}, nil
