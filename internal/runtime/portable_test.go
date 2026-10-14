@@ -29,6 +29,24 @@ func TestTeleportableMachineFollowsTheGuestArch(t *testing.T) {
 	}
 }
 
+// The pin is the four-patch Image that hvi's tools/guest/kernel/README.md
+// names, not an earlier one. That README lists two: the two-patch Image
+// 32725b9b counts one move two or more times on a guest with more than one
+// vCPU, and the three-patch Image 4b2e8c5c counts a host sleep as a move.
+// Putting either back would boot it on every teleportable session with no
+// other test failing, since the tests that compare a kernel with the pin
+// swap in a digest of their own.
+func TestPortableKernelDigestPinsTheFourPatchImage(t *testing.T) {
+	const want = "sha256:e85e4338feeb361c5329b4105fa3bda5cd72a235c9ae16c3c4ff94728b12aa1f"
+	if PortableKernelDigest != want {
+		t.Errorf("PortableKernelDigest = %s, want the four-patch Image %s", PortableKernelDigest, want)
+	}
+	hex, ok := strings.CutPrefix(PortableKernelDigest, "sha256:")
+	if !ok || len(hex) != 64 || strings.Trim(hex, "0123456789abcdef") != "" {
+		t.Errorf("PortableKernelDigest %q is not sha256: and 64 lowercase hex digits", PortableKernelDigest)
+	}
+}
+
 // writeFile writes a non-empty file at path.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()

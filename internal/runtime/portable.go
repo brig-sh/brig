@@ -40,13 +40,16 @@ const (
 	portableKernelPath = MachinePortableArm64V1 + "/Image"
 
 	// PortableKernelDigest is the sha256 of the portable kernel brig boots:
-	// Linux 6.12.95 with the hvi-time driver and the EL0 counter patch, the
-	// build the portable profile was measured with. It is pinned here
+	// Linux 6.12.95 with the four patches in hvi's tools/guest/kernel: the
+	// EL0 counter, the hvi-time driver, one count per page generation, and
+	// host-sleep publishes counted apart from restores. That README names
+	// this Image. Without the third patch a guest with more than one vCPU
+	// counts one move two or more times. It is pinned here
 	// because nothing publishes that kernel yet. A sha256 file beside the
 	// kernel would vouch for nothing, since whatever can rewrite the kernel
 	// there can rewrite the file too. A later release fetches the kernel by
 	// an OCI reference whose signature verifies, and that replaces the pin.
-	PortableKernelDigest = "sha256:32725b9b4327a8833d833e2a017f510310504309a8ed1d1030ef0118d018a152"
+	PortableKernelDigest = "sha256:e85e4338feeb361c5329b4105fa3bda5cd72a235c9ae16c3c4ff94728b12aa1f"
 )
 
 // guestArch is the architecture of the guest a sandbox here boots, which is
