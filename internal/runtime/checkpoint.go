@@ -176,7 +176,7 @@ func (h *hull) Restore(name string, spec RestoreSpec) error {
 // Migration reads the migration object of `hull inspect`. A sandbox hull
 // does not have, and one with no migration record, are both the zero value.
 func (h *hull) Migration(name string) (Migration, error) {
-	out, stderr, err := inspectNetwork(h.bin, "inspect", name)
+	out, stderr, err := inspectNetwork(h.bin, hullArgs("inspect", name)...)
 	if err != nil {
 		if strings.Contains(stderr, "instance not found") {
 			return Migration{}, nil
@@ -259,7 +259,7 @@ func seconds(d time.Duration) string {
 // error is folded into the error, as quiet does, so a refusal reaches the
 // caller in hull's words.
 func (h *hull) call(args []string) (string, error) {
-	cmd := exec.Command(h.bin, args...)
+	cmd := exec.Command(h.bin, hullArgs(args...)...)
 	cmd.Env = mergeEnv(h.countedEnv(false))
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
