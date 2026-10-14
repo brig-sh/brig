@@ -139,8 +139,9 @@ entry as teleportable from its empty guest home.
 | A run path other than hull on `hvi` | `7` |
 | `brig teleport` of a ref with no sandbox | `3` |
 | `brig teleport` of a session that is not teleportable, or not on hull's `hvi` | `7` |
-| `brig teleport` of a session under an egress policy, to a host whose gateway cannot enforce one | `7` |
-| `brig teleport` that the destination cannot take: no brig, hull or hvi there, no such agent, the sandbox name or the guest's address taken, too little room | `1` |
+| `brig teleport` of a session under an egress policy, to a host whose gateway cannot enforce one. An offline session needs no gateway, and is not refused | `7` |
+| `brig teleport` that the destination cannot take: no brig, hull or hvi there, no such agent, the sandbox name or the guest's address taken, too little room, or a policy bound to the session there whose rules differ from the ones it runs under | `1` |
+| `brig teleport` of a session that another `brig teleport` on this host is moving or asking about | `1` |
 | `brig teleport` of a stopped or parked sandbox, one renamed with `BRIG_NAME`, or one whose network or policy changed since it booted | `1` |
 | `brig teleport` with none, or more than one, of `--to`, `--status` and `--abort`, or a destination that is not `USER@HOST` | `2` |
 
@@ -191,15 +192,19 @@ another `brig` there.
    runtime that `BRIG_RUNTIME` resolves to, hull and hvi and their versions,
    whether hull's network gateway there takes egress rules (the same
    `hull network-gateway --help` check a boot runs), the free space in its
-   hull store, whether it has the agent, and whether the sandbox name and the
-   guest's address are free there.
+   hull store, whether it has the agent, whether the sandbox name and the
+   guest's address are free there, and the policy that host's own files bind
+   to the session. A binding there with other rules is refused: the brig
+   there resolves its own binding first, and would refuse every verb on the
+   moved session as a changed policy.
 3. **The record.** Brig makes the move's txid and records the move in its
    session index, before hull is asked for anything.
 4. **The destination takes the network.** `brig teleport-receive` on the
    destination gives the sandbox the network it had: the same isolated `/30`,
    or the same address on the shared network, or no network. It starts the
    gateway with the session's egress rules, by value, before hull resumes
-   the guest there. It records the posture in that host's `networks.json`,
+   the guest there. An offline session's rules go with it as its policy,
+   with no gateway, as on the source. It records the posture in that host's `networks.json`,
    and files the session in that host's index as a teleportable session.
 5. **hull's dry run.** `hull migrate --dry-run` checks both hosts, including
    hull's own machine check of the destination against this host. It pauses
@@ -213,7 +218,13 @@ another `brig` there.
 
 A refusal in steps 1 and 2 comes before anything is paused, and says why. If
 steps 4 or 5 fail, Brig gives the destination's network back and drops its
-record. Nothing was paused.
+record. Nothing was paused. Step 4 failing includes an answer lost on the
+way back, so Brig asks for the network back even when it does not know the
+destination took it.
+
+A move holds a lock on the session on this host from step 1 to the end.
+Another `brig teleport` of the same session, including `--status` and
+`--abort`, refuses while it is held.
 
 ### After a move
 
@@ -274,7 +285,8 @@ destination may resume, and the destination resumes only on the commit.
 Brig never resumes the source once a move began. Two things can do it,
 and both belong to hull: an abort that the destination confirmed, and a
 re-run of `hull migrate` that learns the commit. A move whose end Brig did not
-see stays recorded as unfinished. While it is unfinished, every verb on the
+see stays recorded as unfinished. That includes a move after which Brig could
+not read hull's record, whatever `hull migrate` returned. While it is unfinished, every verb on the
 ref except `brig teleport --status` and `--abort` refuses, and names those
 two.
 
@@ -287,15 +299,22 @@ two.
 | `--status` says the move has not finished | hull's record is between the fence and the commit | `hull migrate <sandbox> --txid <txid>` takes it on from where it stopped. `brig teleport <ref> --abort` calls it off if it has not committed |
 | `--status` says the move committed | the session runs on the destination | nothing: `--status` recorded it |
 | `--abort` says hull did not confirm | the destination did not answer, or it already runs the guest | retry when it answers. `hull migrate --status <sandbox>` says which |
+| `--abort` says the move is called off and hull reported an error | hull recorded the abort, then could not restore the guest here. It may be stopped with its fenced checkpoint | `hull restore <sandbox>` |
+| `--status` says hull has no record and this host has no sandbox | the source was removed, and its record with it. The move may have committed | ask the destination: `ssh <user>@<host> hull migrate --status <sandbox>` |
+| "is running on this host" | another `brig teleport` of the session holds its lock | let it finish, then run the command again |
 
 `brig teleport <ref> --status` reads hull's record (`hull migrate --status`).
 If the record says the move committed, it records the host. If it says hull
-aborted the move, it gives the destination's network back. Otherwise it says
-where the move stands. `brig teleport <ref> --abort` asks hull to abort the
+aborted the move, it gives the destination's network back. If hull has no
+record, the move never began, but only while hull still has the sandbox on
+this host. `hull rm` of a source whose move committed removes the record
+too. Otherwise it says where the move stands. `brig teleport <ref> --abort` asks hull to abort the
 move. Brig then gives the destination's network back, but only once hull's
 record says the move is aborted. hull aborts only on the destination's word
-that it is not running the guest, and then runs the guest on this host again
-itself.
+that it is not running the guest, and then restores the guest on this host
+itself. hull records the abort before that restore, so an abort whose restore
+failed still ends the move. Brig then reports hull's error and names
+`hull restore`.
 
 ### Settings
 
@@ -303,14 +322,15 @@ itself.
 | --- | --- | --- |
 | `BRIG_TELEPORT_SSH` | `ssh` on `PATH` | the ssh brig runs to reach the destination |
 | `BRIG_TELEPORT_REMOTE_BRIG` | `brig` | the brig to run on the destination |
-| `BRIG_TELEPORT_REMOTE_ENV` | (unset) | `NAME=VALUE` words, space-separated, put in front of every brig command on the destination. Use it for a destination whose login does not give brig the settings it needs |
+| `BRIG_TELEPORT_REMOTE_ENV` | (unset) | `NAME=VALUE` words, space-separated, put in front of every brig command on the destination. Use it for a destination whose login does not give brig the settings it needs. |
 | `BRIG_HULL_STORE_DIR` | hull's own default, `~/.hull/store` | the hull store brig drives. A move lands in the store the destination's brig drives, and later verbs there name it |
 
 hull carries the checkpoint and the disk over ssh with your ssh
 configuration, so the destination's host key and the `authorized_keys`
 there decide who can receive the guest. Brig does not hand hull
 `HULL_MIGRATE_SSH`, the setting with which hull runs another program in
-place of ssh.
+place of ssh, for the move or for its status or its abort, each of which
+reaches the destination too.
 
 ### Not yet run on real hardware
 

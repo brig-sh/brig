@@ -463,12 +463,13 @@ and `brig logs` on the ref run on the destination, through
 | --- | --- |
 | `--to USER@HOST` | move the session to that host. It must be `USER@HOST`, with no part that ssh could read as an option |
 | `--status` | where the move stands, from hull's record. A move that committed or that hull aborted is recorded as such |
-| `--abort` | call off a move that has not committed. hull runs the session here again once the destination confirms |
+| `--abort` | call off a move that has not committed. hull restores the session here once the destination confirms |
 | `--json` | print the outcome as a `Teleport` document |
 
 The line takes one of `--to`, `--status` and `--abort`. A move whose end Brig
 did not see stays recorded as unfinished, and every other verb on the ref
-refuses until `--status` or `--abort` settles it. See
+refuses until `--status` or `--abort` settles it. One `brig teleport` of a
+session runs at a time on a host, and a second one refuses while it does. See
 [teleport.md](teleport.md#move-a-session) for the steps, what the guest keeps,
 the credential rule and recovery.
 
