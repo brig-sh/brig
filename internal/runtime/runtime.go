@@ -69,6 +69,16 @@ type Var struct {
 	// outliving the sandbox in a file the user never sees is a different
 	// severity of leak.
 	Secret bool
+	// Credential marks a value brig resolved through a ref on this run, out
+	// of the caller's environment or out of its own store, as opposed to a
+	// literal the profile wrote or brig's own plumbing. Every Secret is one,
+	// and so is a GH_TOKEN read from the shell, which is not a Secret: see
+	// creds.Set.Add for why the two flags differ.
+	//
+	// A teleportable boot leaves every such Var off the run. hull writes the
+	// boot environment, values included, into a file of the sandbox (see
+	// RunSpec.Teleportable), and that sandbox's disk is the session.
+	Credential bool
 }
 
 // RunSpec is a request to boot a sandbox.
