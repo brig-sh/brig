@@ -140,3 +140,23 @@ func TestAnUnreadablePortableKernelWarnsOrRefuses(t *testing.T) {
 		t.Errorf("require booted a kernel it could not read: %v", err)
 	}
 }
+
+// A bundle brig could not check leaves the initrd unchecked on the portable
+// machine, not the kernel, which the pin covers. The warning says which.
+func TestAnUncheckedBundleSaysWhatItLeavesUncheckedOnThePortableMachine(t *testing.T) {
+	c := testConfig(t, t.TempDir(), t.TempDir())
+	if got := c.bundleUncheckedNote(); !strings.Contains(got, "about the kernel") {
+		t.Errorf("an ordinary session's note is %q, want it to name the kernel", got)
+	}
+	c.Teleportable = true
+	got := c.bundleUncheckedNote()
+	if c.machine() == "" {
+		if !strings.Contains(got, "about the kernel") {
+			t.Errorf("a teleportable session with no portable machine notes %q, want the kernel", got)
+		}
+		return
+	}
+	if !strings.Contains(got, "about the initrd") || !strings.Contains(got, "pins") {
+		t.Errorf("a portable session's note is %q, want the initrd unchecked and the kernel pinned", got)
+	}
+}
