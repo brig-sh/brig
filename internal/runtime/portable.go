@@ -24,7 +24,10 @@ import (
 // The portable machine needs a guest kernel built for it, with the hvi-time
 // clock driver in it. The boot bundle's kernel has none, so the portable
 // kernel is a file of its own, beside it. Only the kernel differs: the initrd,
-// and the guest agent in it, are the bundle's.
+// and the guest agent in it, are the bundle's. The kernel's uevent at each
+// move helps only once the bundle's agent acts on it (urunc's urunit-agent
+// from 3a3f2fd on); with an older agent the kernel boots and behaves as the
+// four-patch one did.
 const (
 	// MachinePortableArm64V1 is hvi's name for the portable arm64 machine,
 	// as `hvi boot --profile` and `hull run --profile` take it.
@@ -40,13 +43,19 @@ const (
 	portableKernelPath = MachinePortableArm64V1 + "/Image"
 
 	// PortableKernelDigest is the sha256 of the portable kernel brig boots:
-	// Linux 6.12.95 with the hvi-time driver and the EL0 counter patch, the
-	// build the portable profile was measured with. It is pinned here
+	// Linux 6.12.95 with the five patches in hvi's tools/guest/kernel: the
+	// EL0 counter, the hvi-time driver, one count per page generation,
+	// host-sleep publishes counted apart from restores, and a uevent at
+	// each move, with CONFIG_INET_DIAG_DESTROY set. That README names this
+	// Image. Without the third patch a guest with more than one vCPU counts
+	// one move two or more times. Without the fifth, or without the guest
+	// agent that acts on its uevent, a TCP connection the guest only reads
+	// from stays open about a minute after a move. It is pinned here
 	// because nothing publishes that kernel yet. A sha256 file beside the
 	// kernel would vouch for nothing, since whatever can rewrite the kernel
 	// there can rewrite the file too. A later release fetches the kernel by
 	// an OCI reference whose signature verifies, and that replaces the pin.
-	PortableKernelDigest = "sha256:32725b9b4327a8833d833e2a017f510310504309a8ed1d1030ef0118d018a152"
+	PortableKernelDigest = "sha256:778700360da1641466b5b9791a0fe231a52a20c4fb221e1b0e2cdf42730ed295"
 )
 
 // guestArch is the architecture of the guest a sandbox here boots, which is

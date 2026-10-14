@@ -743,7 +743,8 @@ value in, store the secret on the destination with `brig secret`.
 | The guest's address and its egress rules | the same, on a gateway the destination's brig started |
 | `brig sh`, the agent's terminal | a new `brig sh` connects on the destination. One open across the move ends |
 | Connections to the guest agent (vsock) | reset. The guest sees them close |
-| Connections to the outside network | may reset, and reconnect from the destination. One that only receives can stay open with nothing on it: Claude Code's API stream did, for about 60 s, until Claude Code gave up on it |
+| Connections to the outside network | end as the guest resumes, and reconnect from the destination: the guest agent closes every TCP connection to a peer off the guest. With an agent from before urunc `3a3f2fd`, one that only receives stays open with nothing on it until its keepalive gives up, about 60 s for Claude Code's API stream. See [A stream open at the pause](#a-stream-open-at-the-pause) |
+| Loopback connections in the guest | continue: both ends moved |
 | Published ports | stay on the source. Publish them again on the destination |
 | Host NAT and the path out | the destination's |
 | The monotonic clock | continues from where it stopped |
@@ -1096,7 +1097,9 @@ The sequence, with what each step gave:
    connects again. The Claude Code task did not run, so that was not seen
    that day. On 2026-10-16 it was: Claude Code's API stream did not
    reset, it went silent for about 60 s, and then Claude Code asked again
-   over a new connection (see [On the LAN](#on-the-lan)).
+   over a new connection (see [On the LAN](#on-the-lan)). The guest agent
+   now closes such a connection as the guest resumes; see
+   [A stream open at the pause](#a-stream-open-at-the-pause).
 10. **Credentials on the Pi.** Each exec there printed:
 
     ```text
@@ -1131,11 +1134,22 @@ status of a `$(...)` substitution, not brig's. That move's commit is shown
 by its `teleported` line and by the destination's hull record, `running`.
 The script now takes brig's own status. Its `--claude` option also starts
 a Claude Code task like the one of step 5, with no tools and no
-thinking, and checks that the task's `COUNT` lines go on after the move,
-from where they were, with no restart and no error event. It ran six
-times on 2026-10-16 and its check failed each time, on the last run
-because the task's answer started over after the move; see
-[On the LAN](#on-the-lan). `--prepare` prepares the
+thinking. On 2026-10-16 it checked that the task's `COUNT` lines go on
+after the move, from where they were, with no restart and no error
+event. It ran six times that day and its check failed each time, on the
+last run because the task's answer started over after the move; see
+[On the LAN](#on-the-lan). The check now passes a restarted answer: the
+stream must come back on the destination within 5 s of the guest's
+resume, and the turn must complete, with exit 0 and a result event of
+subtype `success`, waited for up to 600 s. The stall is from the guest's
+own record of its resume to the first `message_start` after it, the
+start of the response Claude Code asks for again. The `message_stop`
+that marks the cut-off answer as abandoned comes as soon as the old
+connection fails, so it does not count. An error event after that
+reconnect fails the check too; one between the resume and the
+reconnect, which the guest agent's close of the old connection causes,
+is printed. Whether the `COUNT` lines run with no restart, gap or repeat
+is printed as information. `--prepare` prepares the
 destination after the boot, and the script's numbers show a streamed
 move's rounds and the rise in the guest's `downtime total`.
 
@@ -1314,6 +1328,59 @@ write timeouts and aborts at 08:44:45 to 08:44:54, during the prepare of
 run 2, which made the spare copy of the base, and a 4 KiB synced write
 there took 0.29 s once in three tries afterwards.
 
+##### A stream open at the pause
+
+From hvi's five-patch portable kernel (sha256 `77870036...`, which Brig
+pins) and the guest agent at urunc `3a3f2fd`, a TCP connection to a peer
+off the guest ends as the guest resumes on the destination. The kernel's
+`hvi-time` driver sends a uevent at each move. The agent,
+`urunit-agent`, which the boot bundle's initrd carries into every
+`genericBoot` guest, then destroys each TCP connection that still
+expects a peer, unless the peer is loopback or the guest itself, as
+`ss -K` does. The client's next call fails with `ECONNABORTED`, and it
+connects again from the destination. Loopback connections stay open:
+both of their ends moved. The agent writes one line per move into the
+guest's kernel log:
+
+```text
+urunit-agent: migration 1: closed 1 TCP connections to peers off the guest in 2ms
+```
+
+On 2026-10-16 a teleportable `claude-code` session moved from the Mac
+to `rp2` eight times with a stand-in for an API stream: a Python reader
+in the guest, with curl's keepalive (60 s idle, 60 s interval), on a
+connection to a server on `rp1` that sends one line and then nothing.
+One move is left out: it began 184 s late, while `rp2` made the guest's
+disk from the base, and the server had closed the connection by then.
+The builds were brig `b8ce7af`, hull `3e2ce92` on the Mac and `251e226`
+on `rp2`, and hvi `94faf8f`. The time is from the
+guest's resume (its `hvi-time: generation 4` line) to the reader's
+error, on the guest's clocks:
+
+| Kernel and agent | Moves | Resume to the reader's error |
+| --- | --- | --- |
+| `e85e4338...`, the bundle's agent | 3 | 53.0, 52.4 and 21.1 s, `ECONNRESET`, at the reader's next keepalive (60.6 to 124.5 s after the last data) |
+| `77870036...`, the agent at `3a3f2fd` | 4 | under 5 ms each time, `ECONNABORTED`; the agent closed 1 connection in 2 to 3 ms |
+
+Under 5 ms is as close as the reader measures: it reads the guest's page
+generation every 10 ms. In the last two moves the reader also held a
+loopback connection across the move, and it still carried a byte
+afterwards. For the second set, only the Mac booted the new kernel and an
+initrd with the new agent appended; the destination needs neither, since
+both moved in the guest's memory.
+
+`script/teleport-demo-claude.sh pmoust@rp2`, without `--claude`, ran once
+the same way with brig `a71d64c` and printed 19 passed and 0 failed. Its
+HTTPS stand-in ended with `curl: (56) Recv failure: Software caused
+connection abort`, the agent's close, where it used to read `Connection
+reset by peer`, and the next attempt downloaded from `rp2`.
+
+The agent at `3a3f2fd` is not in a published boot bundle yet. Until the
+bundle carries it, a guest boots the pinned kernel with the bundle's
+older agent, and an open stream behaves as before. A Claude Code turn
+across a move with both was not run yet: the login brig held had been
+imported at 08:30 that day and had expired.
+
 #### Known issues
 
 - brig `7d0a000`: two `brig sh` of one `claude-code` session started at
@@ -1325,10 +1392,14 @@ there took 0.29 s once in three tries afterwards.
   race fails rather than writing through a link
   (`writeSecretFile`, `internal/wrap/secretfiles.go`, line 453). The
   recording's panes start 1 s apart for this reason.
-- An agent's API stream that is open when the guest pauses does not
-  reset on the destination: it goes silent. Claude Code 2.1.292 waited
-  61 to 64 s, then gave up on the message and asked again, and once its
-  answer started over. See [On the LAN](#on-the-lan).
+- Fixed by hvi's five-patch kernel and the agent at urunc `3a3f2fd`, once
+  the boot bundle carries that agent: an agent's API stream that was open
+  when the guest paused did not reset on the destination, it went silent.
+  Claude Code 2.1.292 waited 61 to 64 s, then gave up on the message and
+  asked again, and once its answer started over. See
+  [On the LAN](#on-the-lan). The stand-in for such a stream now fails
+  within 5 ms of the resume, against 21 to 53 s before; see
+  [A stream open at the pause](#a-stream-open-at-the-pause).
 - Two of the five moves of the recording on 2026-10-16 had 13.0 and
   6.25 s of downtime, against 0.19 to 0.48 s for the other three and
   0.19 to 0.86 s for the six moves of the script that day. The guest

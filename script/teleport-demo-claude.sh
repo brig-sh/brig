@@ -38,16 +38,22 @@
 # 2026-10-16 (MAX_THINKING_TOKENS=0 did not stop it; with the setting
 # alwaysThinkingEnabled false it began within seconds on most runs, not
 # all). The move waits (up to 60 s) until the stream has at least 2 COUNT
-# lines. After the
-# move the COUNT lines read from the stream are the ones from before the
-# move, in order, followed by new ones: no restart, no gap, and more of
-# them than at the first look on DST, or the task ended with exit 0. That
-# second look polls for up to 150 s: a stream that is open when the guest
-# pauses goes silent on DST until Claude Code gives up on it (about 60 s
-# on the runs of 2026-10-16) and asks again on a new connection. The
-# check prints the stream's longest silence after the move. Any error
-# event written after the move fails the check, and so does a task that
-# exited with another status. It needs a Claude login brig can forward that
+# lines. The API connection that is open at the pause does not survive
+# the move: the guest's agent closes it when the guest resumes on DST, and
+# Claude Code asks again on a new connection, which may start the answer
+# over. So the check passes when the stream comes back on DST within 5 s
+# of the resume (the stall: from the guest's own record of its resume to
+# the first message_start after it, the start of the response Claude Code
+# asks for again; the message_stop that marks the cut-off answer as
+# abandoned does not count), no error event comes after that reconnect,
+# the task writes more COUNT lines after the move, and the turn completes:
+# exit 0 and a result event of subtype success, waited for up to 600 s.
+# Whether the COUNT lines go on with no restart, gap or repeat, the error
+# events between the resume and the reconnect, the stream's longest
+# silence and a message Claude Code gave up on are printed as
+# information. Before the agent closed the connection, the
+# stream went silent for about 60 s on the runs of 2026-10-16 until
+# Claude Code gave up on it. It needs a Claude login brig can forward that
 # has not expired.
 #
 # --prepare runs `brig teleport REF --to DST --prepare` after the boot,
@@ -201,14 +207,26 @@ echo "TASKPROC $(pgrep -c -x claude)"
 cat /root/task.exit /root/task.err 2>/dev/null
 tail -c 600 /root/task.jsonl'
 # TASKREAD: the task's stream, whole, then the end of the task. The echo
-# ends a last line the task had only half written.
-TASKREAD='cat /root/task.jsonl; echo; echo "TASKPROC $(pgrep -c -x claude)"; cat /root/task.exit 2>/dev/null'
+# ends a last line the task had only half written. RESUME lines give the
+# wall-clock time of each resume the guest's hvi-time driver logged: the
+# kernel log stamps it on a clock that stops while the guest is paused, as
+# CLOCK_MONOTONIC does, so the wall clock of that moment is now on the wall
+# clock minus the time since then on the monotonic one.
+TASKREAD='cat /root/task.jsonl; echo; echo "TASKPROC $(pgrep -c -x claude)"; cat /root/task.exit 2>/dev/null
+dmesg | python3 -c "
+import re, sys, time
+off = time.time() - time.monotonic()
+for l in sys.stdin:
+    m = re.match(r\"^\\[ *([0-9.]+)\\] hvi-time: generation ([0-9]+): \", l)
+    if m:
+        print(\"RESUME %s %.6f\" % (m.group(2), float(m.group(1)) + off))
+"'
 
 # TASKJUDGE BEFORE AFTER1 AFTER2: the --claude check, from three reads of
 # the task's stream (TASKREAD's output): right before the move, on DST, and
-# on DST once the stream has more COUNT lines than then (or the task ended,
-# or 150 s passed). TASKJUDGE count READ prints how many COUNT lines one
-# read has, for the waits. Each line of the stream is a stamp and a stream-json
+# on DST once the task ended (or 600 s passed). TASKJUDGE count READ prints
+# how many COUNT lines one read has and whether the task exited, for the
+# waits. Each line of the stream is a stamp and a stream-json
 # event. "After the move" is a stamp later than the last one the first read
 # has, which takes in the second or so of brig's checks before the pause. A
 # read on DST goes through ssh with a terminal, so its lines end in CR LF
@@ -226,12 +244,16 @@ TASKJUDGE='
 import json, re, sys
 
 def read(path):
-    events, proc, exits = [], None, []
+    events, proc, exits, resumes = [], None, [], {}
     for raw in open(path, encoding="utf-8", errors="replace"):
         raw = raw.strip()
         m = re.match(r"^TASKPROC ([0-9]+)$", raw)
         if m:
             proc = int(m.group(1))
+            continue
+        m = re.match(r"^RESUME ([0-9]+) ([0-9.]+)$", raw)
+        if m:
+            resumes[int(m.group(1))] = float(m.group(2))
             continue
         m = re.match(r"^[0-9.]+ EXIT (-?[0-9]+)$", raw)
         if m:
@@ -246,7 +268,7 @@ def read(path):
             continue
         if isinstance(e, dict):
             events.append((float(m.group(1)), m.group(2), e))
-    return events, proc, exits
+    return events, proc, exits, resumes
 
 def text(events):
     deltas, whole, block, some = [], [], None, False
@@ -284,28 +306,61 @@ def errors(events):
 def say(ok, what):
     print(("PASS " if ok else "FAIL ") + what)
 
+def info(ok, what):
+    print("INFO " + ("yes: " if ok else "no: ") + what)
+
 if sys.argv[1] == "count":
-    events, _, exits = read(sys.argv[2])
+    events, _, exits, _ = read(sys.argv[2])
     print(len(counts(events)), "exited" if exits else "running")
     sys.exit(0)
 
-(b, _, bx), (a1, _, x1), (a2, proc, x2) = (read(p) for p in sys.argv[1:4])
+reads = [read(p) for p in sys.argv[1:4]]
+(b, _, bx, _), (a1, _, x1, _), (a2, proc, x2, _) = reads
+resumes = {}
+for r in reads:
+    resumes.update(r[3])
 cb, c1, c2 = counts(b), counts(a1), counts(a2)
 say(len(cb) >= 2, "the task had written %d COUNT lines before the move, at least 2" % len(cb))
 say(not bx, "the task was running when the guest paused" + (" (it had exited %s)" % bx if bx else ""))
-say(c1[:len(cb)] == cb and c2[:len(c1)] == c1,
-    "the COUNT lines after the move go on from the %d before it, with no restart" % len(cb))
-say(c2 == list(range(1, len(c2) + 1)), "the COUNT lines run 1 to %d with no gap or repeat" % len(c2))
+paused = max([t for t, _, _ in b] or [0.0])
+# The stall: from the resume of this move, the last one the guest logged,
+# to the start of the response Claude Code asks for again: the first
+# message_start after it, or the first content delta when the stream has
+# none. The message_stop that marks a cut-off answer as abandoned comes as
+# soon as the connection fails, before any new connection, so it does not
+# count.
+resume = resumes[max(resumes)] if resumes else None
+def kind(e):
+    return (e.get("event") or {}).get("type") if e.get("type") == "stream_event" else None
+after = [(t, body, e) for t, body, e in a2 if resume is not None and t > resume and "abandoned" not in body]
+back = [t for t, _, e in after if kind(e) == "message_start"] or \
+    [t for t, _, e in after if kind(e) == "content_block_delta"]
+if resume is None:
+    say(False, "the stream came back on DST within 5 s of the resume: the guest logged no resume")
+elif not back:
+    say(False, "the stream came back on DST within 5 s of the resume: no API stream event after it")
+else:
+    say(back[0] - resume < 5, "the stream came back on DST %.2f s after the guest resumed (the stall), under 5 s" % (back[0] - resume))
 say(len(c2) > len(cb), "the task wrote %d COUNT lines after the move (%d before, %d now)" % (
     len(c2) - len(cb), len(cb), len(c2)))
-alive = len(c2) > len(c1)
-say(alive or x2 == [0], "the stream is alive on DST: %d COUNT lines at the first look, %d at the second%s" % (
-    len(c1), len(c2), ", and the task ended with exit 0" if x2 == [0] else ""))
-say(x2 in ([], [0]) and (x2 == [0] or (proc or 0) >= 1),
-    "the task is running (%s claude) or ended with exit 0 (exits %s)" % (proc, x2))
-paused = max([t for t, _, _ in b] or [0.0])
-late = errors([ev for ev in a2 if ev[0] > paused])
-say(not late, "no error event in the stream after the move" + ("" if not late else ": " + late[0]))
+result = [e for _, _, e in a2 if e.get("type") == "result"]
+done = x2 == [0] and bool(result) and result[-1].get("subtype") == "success" and result[-1].get("is_error") is not True
+say(done, "the turn completed: exit %s, result %s" % (
+    x2[-1] if x2 else "none yet (%s claude running)" % proc,
+    (result[-1].get("subtype"), "error" if result[-1].get("is_error") else "ok") if result else "none"))
+info(c1[:len(cb)] == cb and c2[:len(c1)] == c1,
+    "the COUNT lines after the move go on from the %d before it, with no restart" % len(cb))
+info(c2 == list(range(1, len(c2) + 1)), "the COUNT lines run 1 to %d with no gap or repeat" % len(c2))
+# Claude Code reports an error when the guest agent closes the old
+# connection, between the resume and the reconnect. An error event after
+# the reconnect, or any when there was no reconnect to time, fails.
+late = [ev for ev in a2 if ev[0] > paused]
+window = [ev for ev in late if back and resume is not None and resume < ev[0] < back[0]]
+late = errors([ev for ev in late if ev not in window])
+say(not late, "no error event in the stream after the move, but for the reconnect" + ("" if not late else ": " + late[0]))
+excused = errors(window)
+if excused:
+    print("INFO %d error event(s) between the resume and the reconnect, the first: %s" % (len(excused), excused[0]))
 # The longest silence of the stream that takes in the move: from the last event
 # before the move to the first after it, or a later gap.
 stamps = sorted({t for t, _, _ in a2})
@@ -452,16 +507,19 @@ if [ "$CLAUDE" = 1 ]; then
   K=$(guest "$TASKCHECK" 2>/dev/null); echo "$K"
   guest "$TASKREAD" >"$OUT/task.1" 2>/dev/null
   n1=$(python3 -c "$TASKJUDGE" count "$OUT/task.1" | cut -d' ' -f1)
-  # The second look: once the stream has more COUNT lines than the first,
-  # or the task ended, or 150 s passed.
+  # The second look: once the task ended, or 600 s passed. The wait asks
+  # only whether the task wrote its exit line; the stream is read once,
+  # after it.
   t0=$(now)
-  for _ in $(seq 30); do
+  for _ in $(seq 120); do
     sleep 5
-    guest "$TASKREAD" >"$OUT/task.2" 2>/dev/null
-    read -r n2 st < <(python3 -c "$TASKJUDGE" count "$OUT/task.2")
-    [ "${n2:-0}" -gt "${n1:-0}" ] || [ "$st" = exited ] && break
+    x=$(guest 'test -e /root/task.exit && echo exited' 2>/dev/null | tr -d '\r')
+    grep -qx exited <<<"$x" && break
   done
-  echo "the second look, $(awk "BEGIN { printf \"%.0f\", $(now) - $t0 }") s after the first: ${n1:-0} -> ${n2:-0} COUNT lines, task $st"
+  t1=$(now)
+  guest "$TASKREAD" >"$OUT/task.2" 2>/dev/null
+  read -r n2 st < <(python3 -c "$TASKJUDGE" count "$OUT/task.2")
+  echo "the second look, $(awk "BEGIN { printf \"%.0f\", $t1 - $t0 }") s after the first: ${n1:-0} -> ${n2:-0} COUNT lines, task $st"
   while IFS= read -r l; do
     case $l in
       "PASS "*) pass "${l#PASS }" ;;
