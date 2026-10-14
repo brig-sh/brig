@@ -830,8 +830,9 @@ as it needs a login that has not expired.
   thread's first `free()` went through glibc's `tcache_init` and
   `arena_get2` to `__get_nprocs`, which opens
   `/sys/devices/system/cpu/online`, and hvi's seccomp filter does not allow
-  `openat`. A process with fewer threads may never reach that call, which
-  may be why the 1-vCPU moves above did not; that was not tested. hvi
+  `openat`. hvi's commit says that read happens only once more than eight
+  arenas exist, which takes many threads allocating at once. That is
+  likely why the 1-vCPU moves above did not hit it; it was not tested. hvi
   `9274685` calls `mallopt(M_ARENA_MAX, 1)` first in `main`, so glibc never
   counts the CPUs and has no other heap to shrink. With that hvi, the
   destination's hull needs no wrapper.
