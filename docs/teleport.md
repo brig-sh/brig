@@ -448,8 +448,8 @@ processes, started with `brig sh`:
   `RANDSUM <n> <sum>` every 2 s.
 
 [`script/teleport-demo.sh`](../script/teleport-demo.sh) runs the whole
-sequence from a third machine and checks each step. It took both moves
-below, and the failure cases, with every check passing:
+sequence from a third machine and checks each step. It took the two moves in
+the "busy" columns below, and the failure cases, with every check passing:
 
 ```bash
 script/teleport-demo.sh --faults pmoust@rp1 pmoust@rp2
@@ -483,16 +483,18 @@ hosts 4 ms apart:
 | Downtime: the source pauses for the fence, to `running` on the destination | 6.51 s | 30.44 s | 9.18 s |
 | Downtime: `fenced` (the capture written) to `running` | 5.34 s | 29.29 s | 7.51 s |
 | `brig teleport`, start to end | 8.87 s | 35.14 s | 12.47 s |
-| `brig sh` on `rp1` to the first prompt from the guest on `rp2` | 0.34 to 0.40 s | 5.98 s | |
-| The same from a Mac, `ssh -t rp1 brig sh ubuntu` | 0.52 to 0.57 s | 0.67 s | |
+| `brig sh` on `rp1` to the first prompt from the guest on `rp2` | 0.34 to 0.40 s | 0.42 to 0.68 s; once 5.98 s | |
+| The same from a Mac, `ssh -t rp1 brig sh ubuntu` | 0.52 to 0.57 s | 0.60 to 0.67 s | |
 
 The guest's own count of the pause, the `downtime total` hvi-time logs,
 agreed with the first downtime row to 10 ms. The transfer carries the
 checkpoint (108 MB of the 1 GiB RAM) and the 118 MB of the disk that holds
 data, out of 16 GB. "Busy" is a build of another project that was running on
-`rp2` at the time, at a load of about 4. The first column is a run by hand
+`rp2` at the time, at a load of 3 to 4. The first column is a run by hand
 before `script/teleport-demo.sh` existed, with brig `cb0333c`; the brig
-changes since do not touch the move's path.
+changes since do not touch the move's path. The 5.98 s prompt was the demo's
+one sample; three later runs of the same step on the busy pair took 0.42 to
+0.68 s.
 
 The move back went from `rp2`, as [Moving back](#moving-back) says, after
 two `brig rm` on `rp1`. hull's owner epoch was 2 at home.
@@ -509,8 +511,8 @@ The failure cases, each on a fresh session:
 | --- | --- | --- | --- |
 | A policy the destination cannot enforce | the session above, with the destination's hull replaced by a wrapper whose `network-gateway` fails | `7`: "worker is under an egress policy, and pmoust@rp2 cannot enforce one ... Nothing was paused" | hull has no move on record; the counter went on |
 | A session that is not teleportable | a sandbox that `hull run` started under the name Brig derives, standing in for an ordinary session, which Linux hull cannot boot, as it shares no host directory | `7`: "plain is not a teleportable session ... Nothing was paused" | nothing |
-| An abort before the commit | ssh failed `migrate-prepare`, so hull stopped at `transferred` with the source fenced | `1`, "did not report how it ended"; `--status` "has not finished"; `--abort` `0` in 2.1 s | the source ran again from its fenced checkpoint, 8 to 13 s after the fence, with the same counter, file and sum, and one boot |
-| A lost commit answer | ssh ran `migrate-commit` on `rp2` and lost its reply | `1`; `--status` "has not finished", hull `committing`, `rp2` `running`; `--abort` `1`, refused because the move committed there | the retry `--status` names, `hull --store-dir ... migrate <sandbox> --txid <txid>`, recorded the commit; `--status` then recorded the host |
+| An abort before the commit | ssh failed `migrate-prepare`, so hull stopped at `transferred` with the source fenced | `1`, "did not report how it ended"; `--status` "has not finished"; `--abort` `0` (2.1 s in the run by hand) | the source ran again from its fenced checkpoint, 8 to 13 s after the fence, with the same counter, file and sum, and one boot |
+| A lost commit answer | ssh ran `migrate-commit` on `rp2` and lost its reply | `1`; `--status` "has not finished", hull `committing`, `rp2` `running`; in the run by hand, `--abort` `1`, refused because the move committed there | the retry `--status` names, `hull --store-dir ... migrate <sandbox> --txid <txid>`, recorded the commit; `--status` then recorded the host |
 | The source brig killed during the commit | ssh held `migrate-commit` for 20 s and `brig` was killed with SIGKILL | `137`; `--status` "has not finished" | hull, which outlived brig, committed the move; the next `--status` recorded the host |
 
 In each of the last three cases, the guest went on where it stopped, with
@@ -553,21 +555,23 @@ What did not hold on the first runs, and is fixed in Brig:
 #### Running it on two hosts
 
 Each host needs the same brig, hull and hvi, the profile, and an `env.sh`
-that sets Brig up and names the destination's brig for the source:
+that sets Brig up and names the destination's brig for the source. This is
+the one the runs above read, as `~/b4/env.sh` on both hosts:
 
 ```bash
-B4=$HOME/b4   # the same layout on both hosts
+B4=$HOME/b4
 export PATH=$B4/bin:$PATH
 export BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B4/bin/hull
 export BRIG_STATE_DIR=$B4/state BRIG_GATEWAY_DIR=$B4/gw BRIG_HULL_STORE_DIR=$B4/store
 export BRIG_PROFILE_DIR=$B4/profiles BRIG_POLICY_DIR=$B4/policies BRIG_BOOT_ASSETS=$B4/assets
 export BRIG_PORTABLE_KERNEL=$B4/assets/portable-arm64-v1/Image
+export BRIG_VERIFY=warn DO_NOT_TRACK=1 HULL_TELEMETRY_DISABLED=1 BRIG_TELEMETRY=off
 export BRIG_TELEPORT_REMOTE_BRIG=$B4/bin/brig
-export BRIG_TELEPORT_REMOTE_ENV="PATH=$B4/bin:/usr/bin:/bin BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B4/bin/hull BRIG_STATE_DIR=$B4/state BRIG_GATEWAY_DIR=$B4/gw BRIG_HULL_STORE_DIR=$B4/store BRIG_PROFILE_DIR=$B4/profiles BRIG_POLICY_DIR=$B4/policies BRIG_BOOT_ASSETS=$B4/assets BRIG_PORTABLE_KERNEL=$B4/assets/portable-arm64-v1/Image"
+export BRIG_TELEPORT_REMOTE_ENV="PATH=$B4/bin:/usr/local/bin:/usr/bin:/bin BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B4/bin/hull BRIG_STATE_DIR=$B4/state BRIG_GATEWAY_DIR=$B4/gw BRIG_HULL_STORE_DIR=$B4/store BRIG_PROFILE_DIR=$B4/profiles BRIG_POLICY_DIR=$B4/policies BRIG_BOOT_ASSETS=$B4/assets BRIG_PORTABLE_KERNEL=$B4/assets/portable-arm64-v1/Image BRIG_VERIFY=warn DO_NOT_TRACK=1 HULL_TELEMETRY_DISABLED=1 BRIG_TELEMETRY=off"
 ```
 
-Install the portable kernel through hull on each host, as above. Then, on the
-first host:
+Install the portable kernel through hull on each host, as above. Then, on
+`rp1`, after `source ~/b4/env.sh`:
 
 ```bash
 brig run --teleportable ubuntu -d
@@ -579,9 +583,9 @@ brig teleport ubuntu --status
 brig info ubuntu                     # runs on rp2
 brig rm ubuntu                       # removes the fenced copy left here
 brig rm ubuntu                       # forgets the session here
-ssh me@rp2 brig teleport ubuntu --to me@rp1    # with env.sh read there
+ssh me@rp2 'source ~/b4/env.sh && brig teleport ubuntu --to me@rp1'
 brig sh ubuntu -c 'cat /tmp/count'   # runs here again
-ssh me@rp2 brig rm ubuntu            # the fenced copy on rp2, then once more
+ssh me@rp2 'source ~/b4/env.sh && brig rm ubuntu && brig rm ubuntu'
 brig rm ubuntu
 ```
 
