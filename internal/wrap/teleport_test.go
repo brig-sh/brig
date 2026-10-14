@@ -822,9 +822,10 @@ func TestARunRefusesATeleportableGuestACheckpointParked(t *testing.T) {
 	}
 }
 
-// An ordinary session is never asked about: only a teleportable one can be
-// checkpointed, and every run of an ordinary one would pay for the call.
-func TestARunOfAnOrdinarySessionDoesNotReadTheMigrationRecord(t *testing.T) {
+// The parked-guest check asks nothing of an ordinary session: only a
+// teleportable one can be checkpointed, and every run of an ordinary one
+// would pay for the call.
+func TestTheParkedGuestCheckSkipsAnOrdinarySession(t *testing.T) {
 	teleportState(t)
 	t.Chdir(t.TempDir())
 	rt := &guestRuntime{running: true, migration: runtime.Migration{State: "fenced"}}

@@ -12,9 +12,11 @@ import (
 )
 
 // The seam a teleport is built on: stop a sandbox's guest where it stands,
-// write it down, and bring it back from what was written. No brig verb calls
-// these yet. They are here so the verb that moves a session is written
-// against the runtime's answers and not against hull's command line.
+// write it down, and bring it back from what was written. No brig verb
+// pauses, checkpoints or restores yet; brig info and a run that reuses a
+// running sandbox read the migration record. The rest is here so the verb
+// that moves a session is written against the runtime's answers and not
+// against hull's command line.
 //
 // Each is optional, the way StorageInspector is: a runtime that cannot hold a
 // teleportable session has nothing to checkpoint, and a caller asks for the
