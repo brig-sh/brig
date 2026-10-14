@@ -98,6 +98,13 @@ type Migrator interface {
 
 var _ Migrator = (*hull)(nil)
 
+// moveTransports are the settings with which hull would carry a move over
+// something other than ssh to the host it was given: HULL_MIGRATE_SSH names
+// a program hull runs in ssh's place, for hull's own tests. A move brig asks
+// for leaves the host only through ssh to the host the user named, so hull
+// is not handed one from brig's environment, wherever it was set.
+var moveTransports = []string{"HULL_MIGRATE_SSH"}
+
 // Migrate runs `hull migrate`, then reads the move record back, after a move
 // that failed too: one that failed after the fence leaves a source that
 // cannot run, and that is what a caller decides on.
@@ -106,7 +113,7 @@ func (h *hull) Migrate(name, to string, spec MigrateSpec) (MoveStatus, error) {
 	if err != nil {
 		return MoveStatus{}, err
 	}
-	_, callErr := h.call(args)
+	_, callErr := h.call(args, moveTransports...)
 	if spec.DryRun {
 		return MoveStatus{}, callErr
 	}
@@ -138,7 +145,7 @@ func (h *hull) MigrateAbort(name, txid string) (MoveStatus, error) {
 	if err := checkMoveTxID(txid); err != nil {
 		return MoveStatus{}, err
 	}
-	out, err := h.call([]string{"migrate", "--abort", txid})
+	out, err := h.call([]string{"migrate", "--abort", txid}, moveTransports...)
 	st, readErr := h.MigrateStatus(name)
 	if st.Said == "" {
 		st.Said = strings.TrimSpace(out)

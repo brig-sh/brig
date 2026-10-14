@@ -265,9 +265,12 @@ func seconds(d time.Duration) string {
 // call runs one hull verb and returns its standard output. Its standard
 // error is folded into the error, as quiet does, so a refusal reaches the
 // caller in hull's words.
-func (h *hull) call(args []string) (string, error) {
+func (h *hull) call(args []string, drop ...string) (string, error) {
 	cmd := exec.Command(h.bin, hullArgs(args...)...)
 	cmd.Env = mergeEnv(h.countedEnv(false))
+	for _, name := range drop {
+		cmd.Env = withoutEnv(cmd.Env, name)
+	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
