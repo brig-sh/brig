@@ -406,15 +406,18 @@ What ran:
 - `brig teleport-probe` ran on `rp2` over ssh and reported hull, hvi, the
   store and a gateway that enforces egress.
 - `brig teleport ubuntu --to pmoust@rp2` ran its checks, the probe, the
-  receive on `rp2` and hull's dry run. The dry run refused: the hvi that
-  could boot the portable machine took no control socket. Brig gave `rp2`
-  its network and index back, the counter kept counting on `rp1`, and
+  receive on `rp2`, hull's dry run, and the move up to the fence. hull
+  reserved the name on `rp2` and asked hvi for the checkpoint, and hvi
+  refused it: `the guest has the portable-arm64-v1 machine profile, which
+  no backend checkpoints yet`. hull aborted the move before anything was
+  paused. Brig gave `rp2` its network and index back and said why, the
+  counter kept counting on `rp1` with no reboot in the guest, and
   `--status` reported no move.
 
-What is still to run: the move itself, which needs an hvi that boots the
-portable machine, checkpoints it and restores it on KVM. The hvi on
-`feat/teleport` had none of the three at the time. Until a move has
-committed on real hardware, read the move rows of
+What is still to run: the move itself, from the fence on. It needs an hvi
+that checkpoints the portable machine and restores it on KVM, which the hvi
+on `feat/teleport` (`f4594f0`) did not do yet. Until a move has committed on
+real hardware, read the move rows of
 [claims.md](claims.md#rows-checked-at-the-command-line-only) as true of the
 command lines only.
 
