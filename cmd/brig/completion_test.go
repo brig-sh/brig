@@ -596,6 +596,10 @@ func TestGroupsTableCoversEveryGroupFlag(t *testing.T) {
 	// today.
 	elsewhere := map[string]string{
 		"parseGlobal": "the global position, left of the verb; see brigFlags",
+		// The destination's half of a move, run there over ssh by the
+		// source's brig. Hidden verbs, never typed, so never completed.
+		"teleportProbeCmd":   "the hidden probe verb a source runs on a destination",
+		"teleportReceiveCmd": "the hidden receive verb a source runs on a destination",
 	}
 	seen := map[string]bool{}
 

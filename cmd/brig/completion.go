@@ -143,17 +143,19 @@ var verbs = []string{
 	"sh",
 	"stop",
 	"telemetry",
+	"teleport",
 	"version",
 }
 
 // refVerbs are the verbs whose operand is a session ref.
 var refVerbs = map[string]bool{
-	"run":  true,
-	"sh":   true,
-	"stop": true,
-	"rm":   true,
-	"info": true,
-	"plan": true,
+	"run":      true,
+	"sh":       true,
+	"stop":     true,
+	"rm":       true,
+	"info":     true,
+	"plan":     true,
+	"teleport": true,
 }
 
 // complete decides what may stand where the cursor is.
@@ -407,8 +409,9 @@ func hasSpelling(args []string, spelling string) bool {
 // three accept an agent that has never run. stop and rm do not: offering every
 // agent would offer sessions that do not exist.
 var sessionVerbs = map[string]bool{
-	"stop": true,
-	"rm":   true,
+	"stop":     true,
+	"rm":       true,
+	"teleport": true,
 }
 
 func refsFor(verb string) []string {
@@ -763,12 +766,7 @@ func completeNetwork(rest []string, cur string) (string, []string) {
 
 // verbPosition is where this verb's own flags stand. The network verbs read a
 // vocabulary of their own, so completion offers that one; see posPublish.
-func verbPosition(verb string) position {
-	if onPortLine(verb) {
-		return posPublish
-	}
-	return posRun
-}
+func verbPosition(verb string) position { return linePosition(verb) }
 
 // bareWords returns the positional arguments at one position: tokens that are
 // neither a flag nor a flag's value.
