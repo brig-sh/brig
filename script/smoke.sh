@@ -254,6 +254,9 @@ case "$verb" in
     # each shared directory. Off by default, because the same record answers
     # SandboxNetwork, and the cases that do not ask for it are written
     # against a hull whose posture cannot be read back.
+    # The migration record a checkpoint below leaves, which brig info reads.
+    migration=""
+    [ -f "$STUB_STATE.migration" ] && migration=", \"migration\": $(cat "$STUB_STATE.migration")"
     if [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] ||
        [ "$1" = "$(cat "$STUB_STATE.stopped" 2>/dev/null)" ]; then
       if [ -n "${STUB_INSPECT_ARGV:-}" ]; then
@@ -262,20 +265,57 @@ case "$verb" in
         while IFS= read -r dir; do
           [ -n "$dir" ] && argv="$argv, \"--share-rw\", \"${dir%%:*}\", \"share\""
         done < "$STUB_STATE.shares"
-        printf '{"id": "%s", "backend": "hvi", "cmdLine": [%s]}\n' "$1" "$argv"
+        printf '{"id": "%s", "backend": "hvi", "cmdLine": [%s]%s}\n' "$1" "$argv" "$migration"
       else
-        printf '{"name": "%s"}\n' "$1"
+        printf '{"name": "%s"%s}\n' "$1" "$migration"
       fi
     else
       printf 'error: instance not found: %s\n' "$1" >&2
       exit 1
     fi
     ;;
+  pause|resume)
+    # hull pauses and resumes an hvi guest in place. A fenced guest never
+    # runs again in its process, and hull refuses the resume in these words.
+    [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] || { printf 'instance not found: %s\n' "$1" >&2; exit 1; }
+    if [ "$verb" = resume ] && grep -q '"fenced"' "$STUB_STATE.migration" 2>/dev/null; then
+      printf 'instance %s was fenced by `hull checkpoint --then fence`\n' "$1" >&2; exit 1
+    fi
+    ;;
+  checkpoint)
+    # `hull checkpoint [--then continue|fence] [--dir DIR] [--timeout N] NAME`
+    # writes a bundle and records it in the instance's migration object,
+    # which inspect above then reports.
+    then=continue; dir=""
+    while [ $# -gt 1 ]; do
+      case "$1" in
+        --then) then="$2"; shift 2 ;;
+        --dir) dir="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] || { printf 'instance %s is not running\n' "$1" >&2; exit 1; }
+    [ -n "$dir" ] || dir="$STUB_STATE.bundle"
+    state=checkpointed; [ "$then" = fence ] && state=fenced
+    printf '{"state": "%s", "bundleDir": "%s", "txid": "t1"}' "$state" "$dir" > "$STUB_STATE.migration"
+    printf 'Checkpoint of %s written to %s in 1ms (then %s)\n' "$1" "$dir" "$then"
+    ;;
+  restore)
+    # `hull restore --detach [--paused] [--timeout N] NAME` brings a stopped
+    # instance back from its bundle, on the same name.
+    while [ $# -gt 1 ]; do
+      case "$1" in --paused) paused=1 ;; esac; shift
+    done
+    [ "$1" = "$(cat "$STUB_STATE.stopped" 2>/dev/null)" ] || { printf 'instance %s is not stopped\n' "$1" >&2; exit 1; }
+    mv "$STUB_STATE.stopped" "$STUB_STATE"
+    state=restored; [ -n "${paused:-}" ] && state=restored-paused
+    printf '{"state": "%s", "bundleDir": "%s.bundle", "txid": "t1"}' "$state" "$STUB_STATE" > "$STUB_STATE.migration"
+    ;;
   stop)
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
   rm)
-    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts"
+    rm -f "$STUB_STATE" "$STUB_STATE.stopped" "$STUB_STATE.mounts" "$STUB_STATE.migration"
     ;;
 esac
 exit 0
