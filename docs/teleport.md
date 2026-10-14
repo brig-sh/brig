@@ -30,20 +30,64 @@ its ref do not need the flag. Brig records the property in its session index.
 | Guest home | a host directory, shared in read-write | a directory on the sandbox's own disk |
 | Project | optional, shared in at `/work/<name>` | none |
 | Backend | any | hull's `hvi` only |
+| Machine | hvi's native machine | `portable-arm64-v1` on an arm64 host. See [The machine it boots](#the-machine-it-boots) |
 | Network, policy, published ports | as configured | the same |
 | Credentials | a `files:` binding is delivered into a tmpfs by `hull exec`; an environment variable is handed to `hull run` and to each `hull exec` | a `files:` binding the same; an environment variable is handed to each `hull exec` only, never to `hull run`. See [Credentials stay off the disk](#credentials-stay-off-the-disk) |
 | Onboarding seed | written into the host home | written into the guest home, inside the guest |
 | `--skills`, `BRIG_GIT_CONFIG` | copy files into the host home | refused: there is no host home |
 
-`brig info` and `brig plan` print a `TELEPORTABLE` row. `brig ls` prints
-`(in the sandbox disk)` in place of a workspace.
-The `--json` documents of `ls`, `info` and `plan` carry `"teleportable": true`.
+`brig info` and `brig plan` print a `TELEPORTABLE` row and a `MACHINE` row.
+`brig ls` prints `(in the sandbox disk)` in place of a workspace.
+The `--json` documents of `ls`, `info` and `plan` carry `"teleportable": true`,
+and those of `info` and `plan` carry the machine as `machine`.
 
 Once hull has checkpointed the sandbox, `brig info` also prints a `TELEPORT`
 row with hull's record of it: the state (`checkpointed`, `fenced`,
 `restoring`, `restored-paused` or `restored`) and the checkpoint it refers
 to. `brig info --json` carries the same record as a `teleport` object. Both
 are absent until hull has a record, and absent when hull cannot be read.
+
+## The machine it boots
+
+On an arm64 host, a teleportable session boots hvi's `portable-arm64-v1`
+machine. The guest sees the same machine on a Mac and on a Linux arm64 host:
+a GICv2, a Cortex-A76 identity with a reduced feature set, and an `hvi-time`
+device for its clocks and timers. A checkpoint of it restores on either kind
+of host. An ordinary session boots hvi's native machine, which is the host's
+own. A guest of the native machine has cached its host's counter rate, GIC
+and CPU features, so its checkpoint restores only on the same kind of host.
+hvi's `docs/portable-profile.md` describes the portable machine and what the
+guest loses on it.
+
+Brig hands `hull run` the flag `--profile portable-arm64-v1`, after
+`--rootfs-type block`. The kernel is the only other change to the run line.
+
+The portable machine needs a kernel of its own, built with the `hvi-time`
+clock driver. The boot bundle's kernel does not have that driver. Brig boots
+the portable kernel with the boot bundle's initrd, and looks for the kernel
+here, in this order:
+
+1. `BRIG_PORTABLE_KERNEL`, the path of a kernel `Image`.
+2. `portable-arm64-v1/Image` in the boot asset directory. This is where
+   `hull assets pull --profile portable-arm64-v1` installs it, for example
+   from a local file named in `HULL_PORTABLE_KERNEL`.
+
+Nothing publishes the portable kernel yet, so Brig never downloads it. A
+teleportable run with no portable kernel is refused before the boot, and the
+message names `BRIG_PORTABLE_KERNEL`. Brig compares the kernel with a sha256
+that Brig pins, before the boot, as described in
+[The portable kernel](security.md#the-portable-kernel). The `portable` row of
+`brig doctor` says whether the kernel is there and whether it is the pinned
+build.
+
+`brig info` reads the `MACHINE` row from hull's record of the sandbox. A
+teleportable session that started before Brig chose the portable machine
+shows `native, as hull records the boot`. That session cannot move to a host
+of another kind. To move it, `brig rm` it and run it again.
+
+On an amd64 host there is no portable machine. A teleportable session there
+boots hvi's native machine, the run line names no profile, and the session
+moves only to a host of the same kind.
 
 ## What you lose
 

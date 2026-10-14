@@ -414,6 +414,22 @@ digests before it boots them. The list is in the verified bundle or in that
 signed record. See
 [The kernel, not only the image](security.md#the-kernel-not-only-the-image).
 
+A [teleportable session](teleport.md#the-machine-it-boots) on an arm64 host
+boots hvi's `portable-arm64-v1` machine, and that machine needs its own
+kernel. Brig hands hull `--profile portable-arm64-v1` and the portable kernel
+in the kernel annotation, with the boot bundle's initrd. hull boots the
+annotated files and does not look up its own copy of the portable kernel.
+
+| | the boot bundle's kernel | the portable kernel |
+| --- | --- | --- |
+| where Brig finds it | the boot asset directory | `BRIG_PORTABLE_KERNEL`, else `portable-arm64-v1/Image` in the boot asset directory, which is where `hull assets pull --profile portable-arm64-v1` installs it |
+| how it arrives | fetched by digest when it is missing | never fetched by Brig: nothing publishes it yet. A missing one refuses the run |
+| what it is compared with | the digest the verified bundle lists | the sha256 that Brig pins for it, compiled into Brig. The bundle's check compares the initrd alone |
+| who chose the file | a directory Brig chose refuses a difference under `warn` and `require` | the same. A file named in `BRIG_PORTABLE_KERNEL` or `BRIG_BOOT_ASSETS` is said under `warn` and refused under `require` |
+
+A later release fetches the portable kernel by an OCI reference whose
+signature verifies, the way the boot bundle arrives. That replaces the pin.
+
 Brig fetches the boot bundle by the digest whose signature it verified, and
 not by the tag:
 
@@ -481,6 +497,10 @@ The rest of what Brig asks of a runtime is in optional interfaces in
   read the migration record: `brig info`, and a run that reuses a running
   teleportable sandbox, which refuses one whose guest is fenced or still
   restoring.
+- `MachineInspector`: which hvi machine a sandbox runs, from the runtime's
+  record of it. hull answers from the profile it records for the instance,
+  then from hvi's own machine profile file, then from the `--profile` on the
+  hvi argv. `brig info` reads it for the `MACHINE` row.
 - `Migrator`: move a running sandbox to another host over ssh, read where
   a move stands, and call one off. hull implements it with `hull migrate`,
   its `--status` and its `--abort`, and Brig reads hull's move record back

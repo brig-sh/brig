@@ -277,6 +277,12 @@ credentials by name. `brig --verbose run` prints the same envelope before it boo
 The network row gives the posture of the running sandbox. When the posture of
 the next boot is different, the row gives that posture too.
 
+A [teleportable session](teleport.md) has a `MACHINE` row under its
+`TELEPORTABLE` row: the hvi machine it runs, `portable-arm64-v1` on an arm64
+host, read from hull's record of the sandbox. A record that names another
+machine than a boot would ask for now says so. `--json` carries the machine
+as `machine`.
+
 For a [teleportable session](teleport.md) that hull has checkpointed, a
 `TELEPORT` row gives hull's record of where the checkpoint left it, and
 `--json` carries it as a `teleport` object with `state`, `bundleDir` and
@@ -412,6 +418,7 @@ fields, in order:
 | `isolation` | string | what the sandbox stands on, as a sentence |
 | `home` | mount | the guest home |
 | `teleportable` | bool, omitted when false | `true` for a [teleportable session](teleport.md). `home` then has an empty `host` and the mode `disk` |
+| `machine` | string, omitted on a session that is not teleportable | the hvi machine the boot asks for: `portable-arm64-v1` on an arm64 host, `native` on any other. See [The machine it boots](teleport.md#the-machine-it-boots) |
 | `project` | mount, omitted when the run has none | the project |
 | `projectRefused` | string, omitted when nothing was refused | why the project this session remembers is not mounted. `refused` carries the same reason |
 | `skills` | list of mounts | the host directories `--skills` copies into the guest home |
@@ -531,8 +538,15 @@ brig doctor
 ```
 
 `brig doctor` examines these items, one line each: the Brig build, the host,
-the hypervisor, the runtime, the boot assets, cosign, the profile directory,
-the secret store and brigd.
+the hypervisor, the runtime, the boot assets, the portable kernel, cosign, the
+profile directory, the secret store and brigd.
+
+The `portable` line is for [teleportable sessions](teleport.md#the-machine-it-boots).
+It says whether the kernel of the `portable-arm64-v1` machine is on this host
+and whether it is the build that Brig pins. A missing kernel is marked `--`,
+because only a teleportable session boots it. A kernel that is there and is
+not the pinned build is marked `!!`. On a host that is not arm64 the line says
+there is no portable machine.
 
 The first line is the build that `brig version` prints. `doctor` asks a
 running brigd for its build. If that build differs from the `brig` binary,
@@ -1207,6 +1221,7 @@ satisfy the isolated posture of those profiles.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BRIG_BOOT_ASSETS` (global only) | on macOS, wherever `hull assets dir` says (`~/.hull/assets` if hull cannot answer). On Linux, `$XDG_DATA_HOME/brig/assets` (`~/.local/share/brig/assets` when that is unset) | directory holding the host kernel and initrd a `genericBoot` agent needs |
+| `BRIG_PORTABLE_KERNEL` (global only) | `portable-arm64-v1/Image` in the boot asset directory, where `hull assets pull --profile portable-arm64-v1` installs it | the kernel a [teleportable session](teleport.md#the-machine-it-boots) on an arm64 host boots, with the boot bundle's initrd. Brig compares it with the sha256 that Brig pins. A file named here is your own build: `BRIG_VERIFY=warn` states a difference and boots it, and `require` refuses |
 | `BRIG_BOOT_ASSETS_REF` (global only) | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | the bundle Brig fetches when the boot assets are missing |
 | `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway. Names matching `sandbox-*.sock` are reserved for isolated gateways and refused here |
 | `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where gateway sockets, logs and network records live, shared and per-sandbox alike |
