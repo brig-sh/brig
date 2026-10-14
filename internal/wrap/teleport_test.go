@@ -418,11 +418,14 @@ func TestEnsureRunningBootsATeleportableSessionWithNoShare(t *testing.T) {
 	}
 }
 
-// The boot of a teleportable session tells the runtime so, which is what
-// keeps every credential off `hull run` (see runArgs), and the exec that runs
-// the agent still carries them. Asked of the spec the runtime receives, so a
-// boot that forgot the mark fails here and not only on the argv test.
-func TestATeleportableBootLeavesItsCredentialsToTheExec(t *testing.T) {
+// The boot of a teleportable session tells the runtime so, and still hands
+// it every credential with its marks. The runtime adapter is where the
+// credentials come off `hull run` (see runtime.bootVars), so a boot that
+// dropped the mark, or a mark, would boot with them on the disk, and a boot
+// that dropped the credentials here would leave the adapter nothing to judge
+// and a later change free to lose them for the exec too. The exec that runs
+// the agent is checked end to end in smoke.
+func TestATeleportableBootHandsTheRuntimeItsCredentialsMarked(t *testing.T) {
 	teleportState(t)
 	t.Chdir(t.TempDir())
 	rt := &guestRuntime{}
@@ -438,13 +441,16 @@ func TestATeleportableBootLeavesItsCredentialsToTheExec(t *testing.T) {
 	if !rt.spec.Teleportable {
 		t.Fatalf("a teleportable boot did not tell the runtime so: %+v", rt.spec)
 	}
-	exec := map[string]runtime.Var{}
-	for _, v := range c.execSpec(set, []string{"tp"}, false).Env {
-		exec[v.Name] = v
+	got := map[string]runtime.Var{}
+	for _, v := range rt.spec.Env {
+		got[v.Name] = v
 	}
-	for _, name := range []string{"GH_TOKEN", "CLAUDE_TOKEN", "IS_SANDBOX"} {
-		if _, ok := exec[name]; !ok {
-			t.Errorf("the agent's exec does not carry %s: %+v", name, exec)
+	for _, want := range []runtime.Var{
+		{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true},
+		{Name: "CLAUDE_TOKEN", Value: "from-store", Secret: true, Credential: true},
+	} {
+		if v := got[want.Name]; v != want {
+			t.Errorf("the runtime was handed %s as %+v, want %+v", want.Name, v, want)
 		}
 	}
 }
