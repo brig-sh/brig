@@ -655,8 +655,11 @@ The sequence, with what each step gave:
    `hvi-time: generation 4` line and ran on. hvi was still running 11 s
    after the move on the `rp1` run that waited. The first
    `brig sh claude -c true` reached the brig on the Pi, which failed:
-   `could not make the guest home /root in the sandbox: exit status 1`. hvi
-   had died of SIGSYS on that exec, and printed nothing. Each later
+   `could not make the guest home /root in the sandbox: exit status 1`. On
+   the two `rp1` runs, with strace and then gdb on hvi, hvi died of SIGSYS
+   on that exec and printed nothing. On `rp2`, which was not traced, hvi
+   also printed nothing, and the journal shows its session scope ending
+   during that exec. Each later
    `brig sh` said
    `the teleportable sandbox brig-claude-code is stopped ... Remove it with
    brig rm claude-code to start the session over`. The source copy was
@@ -695,7 +698,6 @@ The sequence, with what each step gave:
     started on the Mac, still held `GH_TOKEN`; only the names were read.
     The credentials file in the `/brig/claude` tmpfs moved in the guest's
     memory and was still there, unchanged since the last exec on the Mac.
-    Brig did not deliver it again, as it had no value to deliver.
 11. **The follow-up turn** (`claude -p --continue "What is the code word?"`)
     could not run. The session that held the first turn was the one on
     `rp2`, which had stopped, and brig refused the exec there. The login
@@ -743,12 +745,22 @@ as it needs a login that has not expired.
   a thread for each agent connection. That thread's first `free()` goes
   through glibc's `tcache_init` and `arena_get2` to `__get_nprocs`, which
   opens `/sys/devices/system/cpu/online`, and hvi's seccomp filter does not
-  allow `openat`. glibc asks for the CPU count only once the process has
-  more than 8 malloc arenas. That would explain why the 1-vCPU moves above
-  did not hit it, but it was not tested. `MALLOC_ARENA_MAX=4` in the
-  environment of the destination's hull, which starts hvi, keeps glibc from
-  asking, and a move then works. The fix belongs in hvi, for example a cap
-  on the arenas before the filter goes on.
+  allow `openat`. Why the 1-vCPU moves above did not hit it was not tested;
+  a process with fewer threads may never reach that call. With
+  `MALLOC_ARENA_MAX=4` in the environment of the destination's hull, which
+  starts hvi, the moves worked. The runs above used this wrapper on the
+  destination as a stand-in for the hvi fix, named in
+  `BRIG_TELEPORT_REMOTE_ENV` as `BRIG_RUNTIME_BIN=/home/pmoust/b4/d1wrap/hull` in
+  place of the plain hull:
+
+  ```sh
+  #!/bin/sh
+  export MALLOC_ARENA_MAX=4
+  exec /home/pmoust/b4/bin/hull "$@"
+  ```
+
+  The fix belongs in hvi, for example a cap on the arenas before the filter
+  goes on.
 
 #### Running it on two hosts
 
