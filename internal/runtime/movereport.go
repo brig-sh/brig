@@ -198,17 +198,20 @@ func (r *MoveReport) Summary() string {
 	if n := len(r.Rounds); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d rounds", n))
 	}
-	// hull's steps in the order a move takes them, then any other.
+	// hull's steps in the order a move takes them, then any other. A
+	// streamed move has no separate fence or restore, and hull reports
+	// them as 0; the JSON keeps them, the line leaves them out.
 	var steps []string
 	seen := map[string]bool{}
 	for _, name := range []string{"fence", "transfer", "restore paused", "commit"} {
-		if ms, ok := r.StepsMs[name]; ok {
-			steps, seen[name] = append(steps, fmt.Sprintf("%s %.2f s", name, float64(ms)/1000)), true
+		if ms, ok := r.StepsMs[name]; ok && ms > 0 {
+			steps = append(steps, fmt.Sprintf("%s %.2f s", name, float64(ms)/1000))
 		}
+		seen[name] = true
 	}
 	var rest []string
-	for name := range r.StepsMs {
-		if !seen[name] {
+	for name, ms := range r.StepsMs {
+		if !seen[name] && ms > 0 {
 			rest = append(rest, name)
 		}
 	}

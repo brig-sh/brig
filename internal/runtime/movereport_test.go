@@ -127,6 +127,9 @@ func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 	if r.Bytes != 0 || r.DowntimeSeconds != 0.358 || r.MiBPerSec != 20.3 || r.StepsMs["transfer"] != 5394 {
 		t.Errorf("report %+v", r)
 	}
+	if s := r.Summary(); !strings.HasSuffix(s, "5 rounds; transfer 5.39 s, commit 0.09 s") {
+		t.Errorf("summary %q", s)
+	}
 }
 
 // A fake hull printing its lines while it moves: they reach a MoveReport
