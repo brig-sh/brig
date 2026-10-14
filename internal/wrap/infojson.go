@@ -45,7 +45,13 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 		d.Project = &InfoProject{Host: c.Project, Guest: c.GuestProject}
 	}
 	if m := c.teleportState; m.State != "" {
-		d.Teleport = &InfoTeleport{State: m.State, BundleDir: m.BundleDir, TxID: m.TxID}
+		d.Teleport = &InfoTeleport{State: m.State, BundleDir: m.BundleDir, TxID: m.TxID, Peer: m.Peer}
+	}
+	if a := c.arrival; a != nil {
+		if d.Teleport == nil {
+			d.Teleport = &InfoTeleport{State: "arrived", TxID: a.TxID}
+		}
+		d.Teleport.From = a.From
 	}
 	if c.projectRefused != nil {
 		d.ProjectRefused = c.projectRefused.Error()
@@ -100,10 +106,17 @@ type InfoDocument struct {
 
 // InfoTeleport is the TELEPORT row as data: hull's word for where the
 // session stands, and the checkpoint that word refers to.
+//
+// Peer is the other host of a move, as hull recorded it, and From the host a
+// session moved here came from, as this host's brig recorded the arrival.
+// State is hull's word, or "arrived" for a moved session hull has no record
+// for here yet.
 type InfoTeleport struct {
 	State     string `json:"state"`
 	BundleDir string `json:"bundleDir,omitempty"`
 	TxID      string `json:"txid,omitempty"`
+	Peer      string `json:"peer,omitempty"`
+	From      string `json:"from,omitempty"`
 }
 
 // InfoRuntime is the runtime this run resolved to, and whether it is there at

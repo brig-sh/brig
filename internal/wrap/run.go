@@ -105,6 +105,9 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 	if open == nil {
 		open = openStore
 	}
+	if c.arrival != nil {
+		return c.resolveArrivedSecrets(open)
+	}
 	return creds.ResolveSecrets(c.Profile, c.VMName, open, os.LookupEnv)
 }
 
@@ -114,6 +117,12 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 //
 // Read-only, because Plan calls it: both answers were settled in Load.
 func (c *Config) sessionRefusal() error {
+	// A session moved here whose move has not finished: the guest may not
+	// be here yet, and a run that booted one would take the name the move
+	// is bringing.
+	if err := c.arrivalRefusal(); err != nil {
+		return err
+	}
 	// A teleportable session asked for something only a host home could give
 	// it. Settled in Load, held for the same reason projectRefused is.
 	if c.teleportRefused != nil {
@@ -955,6 +964,9 @@ func (c *Config) Remove() error {
 	// the one place the sandbox itself goes away.
 	runtime.ForgetPublications(c.VMName)
 	runtime.ForgetBootedNet(c.VMName)
+	if err == nil {
+		forgetArrival(c.VMName)
+	}
 	return err
 }
 
