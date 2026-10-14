@@ -46,7 +46,11 @@ session's disk holds no credential value Brig resolved. Brig hands the boot
 no credential, because hull writes the boot environment into the sandbox's
 files, and every exec hands the credentials in by name instead. That is
 what Brig writes. The agent holds the values and can still write one to the
-disk itself. See [teleport.md](teleport.md#credentials-stay-off-the-disk).
+disk itself. A checkpoint of the session is different: it holds the guest's
+memory, credential values included. hull keeps it on the host in a
+directory of mode `0700` under the sandbox's instance directory, after the
+sandbox stops, until `brig rm` removes the sandbox. See
+[teleport.md](teleport.md#credentials-stay-off-the-disk).
 
 The host can reach the guest only on a port you publish. See
 [Published ports](#published-ports).
