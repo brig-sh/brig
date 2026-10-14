@@ -568,9 +568,10 @@ On 2026-10-14 and 15 a teleportable `claude-code` session moved from a Mac
 KVM). It is the profile as shipped: the image
 `ghcr.io/brig-sh/claude-code-stock:root`, hvi, an `isolated` network,
 `genericBoot`, 4 vCPUs and 4096 MB. The move committed every time. As built,
-hvi on the Pi then died on the first exec into the moved guest; see Known
-issues. With hvi's allocator capped, as a stand-in for the fix, the guest
-carried on and the terminal reattached from the Mac. The Claude Code task
+hvi on the Pi then died on the first exec into the moved guest. hvi
+`9274685` fixes that; see Known issues. With hvi's allocator capped, as a
+stand-in for the fix, the guest carried on and the terminal reattached from
+the Mac. The Claude Code task
 itself did not run, because the login brig held had expired.
 
 The builds were brig `658ade4`, hull `0021196` and hvi `8697de0`, with the
@@ -739,28 +740,25 @@ as it needs a login that has not expired.
 - The refusal of a session that is not teleportable says its guest home is a
   host directory shared in, even for a sandbox Brig has no record of, whose
   hull record shows no share.
-- hvi `8697de0` on Linux dies of SIGSYS on the first exec into a 4-vCPU
-  guest that moved from a Mac, and prints nothing. A 4-vCPU guest booted on
-  Linux was not tried. The vsock bridge starts
-  a thread for each agent connection. That thread's first `free()` goes
-  through glibc's `tcache_init` and `arena_get2` to `__get_nprocs`, which
-  opens `/sys/devices/system/cpu/online`, and hvi's seccomp filter does not
-  allow `openat`. Why the 1-vCPU moves above did not hit it was not tested;
-  a process with fewer threads may never reach that call. With
-  `MALLOC_ARENA_MAX=4` in the environment of the destination's hull, which
-  starts hvi, the moves worked. The runs above used this wrapper on the
-  destination as a stand-in for the hvi fix, named in
-  `BRIG_TELEPORT_REMOTE_ENV` as `BRIG_RUNTIME_BIN=/home/pmoust/b4/d1wrap/hull` in
-  place of the plain hull:
+- Fixed in hvi `9274685`: hvi `8697de0` on Linux died of SIGSYS on the
+  first exec into a 4-vCPU guest that moved from a Mac, and printed
+  nothing. The vsock bridge starts a thread for each agent connection. That
+  thread's first `free()` went through glibc's `tcache_init` and
+  `arena_get2` to `__get_nprocs`, which opens
+  `/sys/devices/system/cpu/online`, and hvi's seccomp filter does not allow
+  `openat`. A process with fewer threads may never reach that call, which
+  may be why the 1-vCPU moves above did not; that was not tested. hvi
+  `9274685` calls `mallopt(M_ARENA_MAX, 1)` first in `main`, so glibc never
+  counts the CPUs and has no other heap to shrink. With that hvi, the
+  destination's hull needs no wrapper.
 
-  ```sh
-  #!/bin/sh
-  export MALLOC_ARENA_MAX=4
-  exec /home/pmoust/b4/bin/hull "$@"
-  ```
-
-  The fix belongs in hvi, for example a cap on the arenas before the filter
-  goes on.
+  The runs above came before that commit. As a stand-in for the fix, they
+  ran the destination's hull through a wrapper that set
+  `MALLOC_ARENA_MAX=4`, and hvi inherited it. That cap does not cover every
+  case: hvi's commit records that a 60 s agent stress test with it still
+  died of SIGSYS, when glibc read `/proc/sys/vm/overcommit_memory` the
+  first time the heap of another arena shrank. The moves above have not
+  been run again with hvi `9274685`.
 
 #### Running it on two hosts
 
