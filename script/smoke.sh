@@ -363,6 +363,8 @@ case "$verb" in
         printf '{"state": "restored", "txid": "%s", "moveTxid": "%s", "peer": "source"}' "$txid" "$txid" > "$STUB_REMOTE_STATE.migration"
         printf '{"state": "migrated", "moveTxid": "%s", "peer": "%s"}' "$txid" "$to" > "$STUB_STATE.migration"
         printf '%s committed %s\n' "$txid" "$to" > "$STUB_STATE.move"
+        # hull stops the source's fenced VMM once the move committed.
+        mv "$STUB_STATE" "$STUB_STATE.stopped"
         ;;
     esac
     ;;
@@ -2253,7 +2255,12 @@ echo "== teleport =="
 # ssh that runs the remote command the way sshd hands it to a shell. It drops
 # ssh's own options and the host and gives the one command string to sh, so a
 # word brig failed to quote fails here as it would over a real ssh. A host it
-# was not told about is refused the way ssh refuses an unknown one.
+# was not told about is refused the way ssh refuses an unknown one. Like sshd
+# it hands the remote command none of the caller's environment: only what a
+# login there would have, and the settings that make this machine the
+# destination. A credential in this shell must not reach the destination, and
+# a posture the destination resolved only because it inherited this shell's
+# would hide a bug.
 RSTATE="$WORK/remote-state"; RGW="$WORK/remote-gw"
 export STUB_REMOTE_STATE="$WORK/remote-instance"
 export SSH_LOG="$WORK/ssh.log" REMOTE_LOG="$WORK/remote-argv.log"
@@ -2264,7 +2271,10 @@ cat > "$WORK/ssh" <<SSH
 while [ \$# -gt 0 ] && [ "\$1" != -- ]; do shift; done
 shift; host="\$1"; shift
 [ "\$host" = me@box ] || { echo "ssh: Could not resolve hostname \$host" >&2; exit 255; }
-exec env BRIG_STATE_DIR="$RSTATE" BRIG_GATEWAY_DIR="$RGW" STUB_STATE="$STUB_REMOTE_STATE" \
+exec env -i PATH="\$PATH" HOME="\$HOME" USER="\${USER:-}" HULL_TELEMETRY_DISABLED=1 \
+  BRIG_RUNTIME=hull BRIG_RUNTIME_BIN="$WORK/hull" BRIG_BOOT_ASSETS="$WORK/assets" BRIG_VERIFY=off \
+  BRIG_PROFILE_DIR="$WORK/remote-profiles" BRIG_READY_TIMEOUT=5 STUB_GATEWAY="\$STUB_GATEWAY" \
+  BRIG_STATE_DIR="$RSTATE" BRIG_GATEWAY_DIR="$RGW" STUB_STATE="$STUB_REMOTE_STATE" \
   STUB_LOG="\$REMOTE_LOG" STUB_NO_EGRESS="\${REMOTE_NO_EGRESS:-}" sh -c "\$*"
 SSH
 chmod +x "$WORK/ssh"
@@ -2336,6 +2346,11 @@ grep -q '^argv: \(exec\|run\|ps\|inspect\) ' "$STUB_LOG" \
 grep -q 'tp-gh-secret' "$SSH_LOG" \
   && bad "sh handed a credential value from this host to ssh" \
   || ok "sh hands no credential from this host to ssh"
+# And the exec there carries none of this host's: the brig there resolves
+# only what its own store and environment hold.
+grep -q '^env-gh:<unset>$' "$REMOTE_LOG" && ! grep -q 'tp-gh-secret' "$REMOTE_LOG" \
+  && ok "the exec on the destination carries no credential from this host" \
+  || bad "the exec on the destination carries no credential from this host -- got: $(grep '^env-' "$REMOTE_LOG")"
 tpr "$WORK/brig" info claude > "$WORK/tpm-info.out" 2> "$WORK/tpm-info.err"
 grep -q '^TELEPORT .*arrived from ' "$WORK/tpm-info.out" && grep -q 'runs on me@box' "$WORK/tpm-info.err" \
   && ok "info on a teleported session is the brig there's, and says so" \
@@ -2349,7 +2364,7 @@ case "$rc:$out" in
   "0:removed the copy of claude left on this host; it runs on me@box") ok "rm removes the fenced copy left on this host" ;;
   *) bad "rm removes the fenced copy left on this host -- got $rc: $out" ;;
 esac
-grep -q '^argv: rm brig-claude-code$' "$STUB_LOG" && [ ! -f "$STUB_STATE" ] && [ -f "$STUB_REMOTE_STATE" ] \
+grep -q '^argv: rm brig-claude-code$' "$STUB_LOG" && [ ! -f "$STUB_STATE.stopped" ] && [ -f "$STUB_REMOTE_STATE" ] \
   && ok "rm took the local instance and left the one there" \
   || bad "rm took the local instance and left the one there -- got: $(grep '^argv:' "$STUB_LOG")"
 tpr "$WORK/brig" ls > "$WORK/tpm-ls.out" 2>&1
