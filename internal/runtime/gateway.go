@@ -690,6 +690,11 @@ func (r Rule) arg() string {
 // The rules are sorted, so that reordering two allow lines in a policy
 // document is not treated as a different policy. They are prefixed per list,
 // so that moving a rule from allow to deny is.
+// SameEgress reports whether two rule sets are the same to a gateway: what
+// a running sandbox's gateway is checked against, so rule order and the
+// subnet do not count.
+func SameEgress(a, b Egress) bool { return gatewaySpec(0, a) == gatewaySpec(0, b) }
+
 func gatewaySpec(index int, e Egress) string {
 	parts := []string{"subnet=" + sandboxSubnet(index), "gateway=" + sandboxGatewayIP(index)}
 	if !e.Filtered() {

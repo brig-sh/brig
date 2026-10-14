@@ -11,7 +11,9 @@ const tx1 = "0123456789abcdef0123456789abcdef"
 
 // The move's line names the destination, the store and the hull there, the
 // gateway brig started there and the txid, and the sandbox last, where
-// hull's parser takes it. A dry run changes nothing and needs no txid.
+// hull's parser takes it. The gateway is its stream socket, the one hvi
+// restore on the destination carries the guest's frames on. A dry run
+// changes nothing and needs no txid.
 func TestMigrateArgs(t *testing.T) {
 	for _, c := range []struct {
 		what string
@@ -21,7 +23,7 @@ func TestMigrateArgs(t *testing.T) {
 		{"a move", MigrateSpec{TxID: tx1}, "migrate --to me@box --txid " + tx1 + " s"},
 		{"into a named store, through brig's gateway", MigrateSpec{TxID: tx1, RemoteStore: "/st/b",
 			RemoteHull: "/opt/hull", GatewaySock: "/g/sandbox-s.sock"},
-			"migrate --to me@box --remote-store /st/b --remote-hull /opt/hull --remote-gateway-sock /g/sandbox-s.sock --txid " + tx1 + " s"},
+			"migrate --to me@box --remote-store /st/b --remote-hull /opt/hull --remote-gateway-sock /g/sandbox-s.sock.qemu --txid " + tx1 + " s"},
 		{"a dry run", MigrateSpec{DryRun: true}, "migrate --to me@box --dry-run s"},
 	} {
 		got, err := migrateArgs("s", "me@box", c.spec)

@@ -53,6 +53,20 @@ fail on its own leak. A few checks also run their real probes through a stub
 that each check judges an answer correctly. Only a booted sandbox proves that
 the guest has none.
 
+## Rows checked at the command line only
+
+The rows for moving a session, from "RAM with credentials leaves the host
+only through ssh to the host you named." to "After a move, an exec on the
+destination carries only the credentials that host's own store and
+environment hold.", are defended by tests against a stub hull and a fake
+ssh.
+Those tests check every command line a move runs and every record it keeps.
+They do not show what a real ssh and a real hull do with those lines. Brig's
+move has not yet run against real hardware: see
+[Not yet run on real hardware](teleport.md#not-yet-run-on-real-hardware).
+Until it has, read those rows as true of the command lines, not yet of a
+real move.
+
 ## The table
 
 | Claim | Section | Defended by |
@@ -70,7 +84,8 @@ the guest has none.
 | "Brig shares neither a guest home nor a project into it, so no host directory is mounted at all." | What the agent can reach | `go:TestRunArgsForATeleportableSessionShareNothing` `go:TestEnsureRunningBootsATeleportableSessionWithNoShare` `smoke:a teleportable boot passes no --shared-dir` `smoke:a teleportable run makes no guest home on the host` |
 | "A teleportable session's disk holds no credential value Brig resolved." | What the agent can reach | `go:TestRunArgsForATeleportableSessionCarryNoCredential` `go:TestBindMarksEveryRefResolvedVarACredential` `go:TestATeleportableBootHandsTheRuntimeItsCredentialsMarked` `go:TestATeleportableBootLeavesHullItsOwnEnvironment` `go:TestTeleportableRefusesAProfileThatReadsCredentialsAtBoot` `smoke:a teleportable run line names no credential and hands hull none` `smoke:the agent's exec on a teleportable session carries GH_TOKEN` |
 | "RAM with credentials leaves the host only through ssh to the host you named." | What the agent can reach | `go:TestSSHArgvNamesOnlyTheHost` `go:TestCheckRemote` `go:TestMigrateArgs` `go:TestAMoveIsNotHandedAnotherTransport` `go:TestATeleportThatCommitsRecordsTheHost` `smoke:the move goes over ssh to the named host and no other` |
-| "A session under an egress policy is moved only to a host whose gateway can enforce one, and is refused before anything is paused otherwise." | What the agent can reach | `go:TestCheckProbeRefusesEachReason` `go:TestATeleportRefusedBeforeAnythingIsPaused` `smoke:a policy the destination cannot enforce is refused with exit 7` `smoke:the refused move paused nothing and reserved nothing there` |
+| "A session on a network and under an egress policy is moved only to a host whose gateway can enforce one, and is refused before anything is paused otherwise." | What the agent can reach | `go:TestCheckProbeRefusesEachReason` `go:TestATeleportRefusedBeforeAnythingIsPaused` `smoke:a policy the destination cannot enforce is refused with exit 7` `smoke:the refused move paused nothing and reserved nothing there` |
+| "An offline session has no gateway on either host, and its rules move with it as its recorded policy." | What the agent can reach | `go:TestCheckProbeRefusesEachReason` `go:TestAnOfflineArrivalKeepsItsRulesWithNoGateway` `smoke:an offline session under a policy moves with no gateway there` `smoke:the brig there runs the offline session under the rules it carries` |
 | "After a move, an exec on the destination carries only the credentials that host's own store and environment hold." | What the agent can reach | `go:TestAnArrivedSessionRunsWithoutASecretThisHostLacks` `go:TestAMovedSessionsVerbsRunOnItsHost` `smoke:no credential value reaches an ssh line` `smoke:sh hands no credential from this host to ssh` `smoke:the exec on the destination carries no credential from this host` |
 | "The guest gets only the credentials you deliver to it." | What the agent can reach | `smoke:an undeclared ambient variable and its value reach no runtime argv or env line` `smoke:an undeclared ambient variable stays out under an override too` `smoke:the declared credential name reaches the guest` |
 | "`--home` pointed at a symlink is refused for the same reason, with the same kind of message, and is fixed by naming the real directory." | Writing into the workspace | `go:TestWorkspaceStillRefusesASymlinkAtTheWorkspace` `go:TestSymlinkedWorkspaceRootIsRefused` `go:TestWorkspaceRefusesASymlinkedParentComponent` |

@@ -62,7 +62,7 @@ func TestPrepareArrivalRefusesWhatItCannotKeepApart(t *testing.T) {
 		t.Errorf("a name derived differently: %v", err)
 	}
 	ruled := spec
-	ruled.Egress = tpRules
+	ruled.Network, ruled.Egress = "shared", tpRules
 	if _, err := PrepareArrival(p, "", ruled, &guestRuntime{}); err == nil ||
 		!strings.Contains(err.Error(), "isolated") {
 		t.Errorf("rules on a network that holds none: %v", err)
@@ -100,6 +100,24 @@ func TestPrepareArrivalRefusesWhatItCannotKeepApart(t *testing.T) {
 	if _, err := PrepareArrival(p, "", spec, &guestRuntime{}); err == nil ||
 		!strings.Contains(err.Error(), "already has a session tp") {
 		t.Errorf("a ref this host already files: %v", err)
+	}
+}
+
+// An offline session under a policy moves with its rules and no gateway to
+// hold them: it has no network for them to act on. The brig here then
+// resolves the carried rules for it, and keeps it offline.
+func TestAnOfflineArrivalKeepsItsRulesWithNoGateway(t *testing.T) {
+	teleportState(t)
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	p := teleportProfile(t)
+	spec := ArrivalSpec{Sandbox: "brig-tp", TxID: "tx1", From: "me@src", Network: "none", Egress: tpRules}
+	sock, err := PrepareArrival(p, "", spec, &guestRuntime{})
+	if err != nil || sock != "" {
+		t.Fatalf("an offline arrival under a policy: %q, %v", sock, err)
+	}
+	c := loadTeleport(t, p, Options{}, nil)
+	if c.Egress.Default != "deny" || c.Network != NetOffline {
+		t.Errorf("the offline arrival resolves %+v on %s", c.Egress, c.Network)
 	}
 }
 

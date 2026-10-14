@@ -2273,7 +2273,8 @@ shift; host="\$1"; shift
 [ "\$host" = me@box ] || { echo "ssh: Could not resolve hostname \$host" >&2; exit 255; }
 exec env -i PATH="\$PATH" HOME="\$HOME" USER="\${USER:-}" HULL_TELEMETRY_DISABLED=1 \
   BRIG_RUNTIME=hull BRIG_RUNTIME_BIN="$WORK/hull" BRIG_BOOT_ASSETS="$WORK/assets" BRIG_VERIFY=off \
-  BRIG_PROFILE_DIR="$WORK/remote-profiles" BRIG_READY_TIMEOUT=5 STUB_GATEWAY="\$STUB_GATEWAY" \
+  BRIG_PROFILE_DIR="$WORK/remote-profiles" BRIG_POLICY_DIR="$WORK/remote-policies" \
+  BRIG_READY_TIMEOUT=5 STUB_GATEWAY="\$STUB_GATEWAY" \
   BRIG_STATE_DIR="$RSTATE" BRIG_GATEWAY_DIR="$RGW" STUB_STATE="$STUB_REMOTE_STATE" \
   STUB_LOG="\$REMOTE_LOG" STUB_NO_EGRESS="\${REMOTE_NO_EGRESS:-}" sh -c "\$*"
 SSH
@@ -2382,6 +2383,86 @@ case "$rc:$out" in
       || bad "a second rm forgets the session here and touches nothing there -- got: $(cat "$SSH_LOG")" ;;
   *) bad "a second rm forgets the session here and touches nothing there -- got $rc: $out" ;;
 esac
+
+# The default posture moves too: an isolated session under a policy, to a
+# destination that can enforce it. The destination's brig starts a gateway on
+# the same /30 with the same rules before hull is asked, hull is handed that
+# gateway, and the brig there then runs the session as its own: the rules it
+# resolves are the carried ones, since that host binds no policy, so sh there
+# is not refused as a changed policy.
+mkdir -p "$WORK/tp-policies"
+cat > "$WORK/tp-policies/carry.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: carry
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+export BRIG_POLICY_DIR="$WORK/tp-policies"
+"$WORK/brig" policy attach carry claude-code -n mv > /dev/null 2>&1 \
+  || bad "a policy attaches to the session that moves under it"
+TP_NET=isolated tpr "$WORK/brig" run --teleportable claude@mv -d > "$WORK/tpi.out" 2>&1 \
+  || bad "an isolated teleportable session under a policy boots -- got: $(cat "$WORK/tpi.out")"
+: > "$STUB_LOG"; : > "$SSH_LOG"; : > "$REMOTE_LOG"
+TP_NET=isolated tpr "$WORK/brig" teleport claude@mv --to me@box > "$WORK/tpi.out" 2>&1; rc=$?
+rsock="$(sed -n 's/^argv: network-gateway --socket \([^ ]*\) .*/\1/p' "$REMOTE_LOG" | head -1)"
+case "$rc:$rsock" in
+  0:"$RGW"/*) grep -q "^argv: network-gateway --socket $rsock .*--egress-default deny --egress-allow host=api.anthropic.com" "$REMOTE_LOG" \
+      && ok "the destination starts the session's gateway with the rules it carries" \
+      || bad "the destination starts the session's gateway with the rules it carries -- got: $(grep '^argv: network-gateway' "$REMOTE_LOG")" ;;
+  *) bad "the destination starts the session's gateway with the rules it carries -- got $rc: $(cat "$WORK/tpi.out") $(grep '^argv: network-gateway' "$REMOTE_LOG")" ;;
+esac
+[ -n "$rsock" ] && grep -q "^argv: migrate .*--remote-gateway-sock $rsock.qemu --txid [0-9a-f]* brig-claude-code-mv$" "$STUB_LOG" \
+  && ok "hull is handed the stream socket of the gateway the destination started" \
+  || bad "hull is handed the stream socket of the gateway the destination started -- got: $(grep '^argv: migrate' "$STUB_LOG")"
+: > "$REMOTE_LOG"
+out="$(TP_NET=isolated tpr "$WORK/brig" sh claude@mv -c true 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -qF -- '[--][bash][-lc][true]' "$REMOTE_LOG" \
+  && ok "the brig there runs the moved session under the rules it carries" \
+  || bad "the brig there runs the moved session under the rules it carries -- got $rc: $out"
+"$WORK/brig" policy detach carry claude-code -n mv > /dev/null 2>&1
+unset BRIG_POLICY_DIR
+# The copy here, then the record here, then the session there.
+tpr "$WORK/brig" rm claude@mv > /dev/null 2>&1
+tpr "$WORK/brig" rm claude@mv > /dev/null 2>&1
+"$WORK/ssh" -- me@box "$WORK/brig rm claude@mv" > /dev/null 2>&1
+[ -n "$(tpr "$WORK/brig" ls -q 2>/dev/null)" ] \
+  && bad "the moved sessions were not cleared from this host -- got: $(tpr "$WORK/brig" ls -q 2>&1)"
+
+# An offline session under a policy has no gateway on either host, so it
+# moves to a destination whose gateway could not enforce rules. Its rules go
+# with it, and the brig there resolves them and keeps it offline: sh there is
+# not refused as a changed policy.
+mkdir -p "$WORK/tp-policies"
+cat > "$WORK/tp-policies/shut.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: shut
+egress:
+  default: deny
+YAML
+export BRIG_POLICY_DIR="$WORK/tp-policies"
+"$WORK/brig" policy attach shut claude-code -n off > /dev/null 2>&1 \
+  || bad "a policy attaches to the offline session that moves under it"
+tpr "$WORK/brig" run --teleportable claude@off -d > "$WORK/tpo.out" 2>&1 \
+  || bad "an offline teleportable session under a policy boots -- got: $(cat "$WORK/tpo.out")"
+: > "$STUB_LOG"; : > "$SSH_LOG"; : > "$REMOTE_LOG"
+out="$(REMOTE_NO_EGRESS=1 tpr "$WORK/brig" teleport claude@off --to me@box 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q 'teleport-receive .*--network none .*"default":"deny"' "$SSH_LOG" \
+  && ! grep -q '^argv: network-gateway --socket' "$REMOTE_LOG" \
+  && ok "an offline session under a policy moves with no gateway there" \
+  || bad "an offline session under a policy moves with no gateway there -- got $rc: $out"
+out="$(tpr "$WORK/brig" sh claude@off -c true 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -qF -- '[--][bash][-lc][true]' "$REMOTE_LOG" \
+  && ok "the brig there runs the offline session under the rules it carries" \
+  || bad "the brig there runs the offline session under the rules it carries -- got $rc: $out"
+"$WORK/brig" policy detach shut claude-code -n off > /dev/null 2>&1
+unset BRIG_POLICY_DIR
+tpr "$WORK/brig" rm claude@off > /dev/null 2>&1
+tpr "$WORK/brig" rm claude@off > /dev/null 2>&1
+"$WORK/ssh" -- me@box "$WORK/brig rm claude@off" > /dev/null 2>&1
+[ -n "$(tpr "$WORK/brig" ls -q 2>/dev/null)" ] \
+  && bad "the moved offline session was not cleared from this host -- got: $(tpr "$WORK/brig" ls -q 2>&1)"
 
 # The refusals come before anything is paused: no pause, no checkpoint, no
 # move, and the destination is asked to take nothing. A session under a

@@ -98,7 +98,9 @@ func PrepareArrival(t profile.Profile, name string, spec ArrivalSpec, rt runtime
 			return "", fmt.Errorf("the rules the session carries do not read as a policy: %w", err)
 		}
 	}
-	if spec.Egress.Default != "" && spec.Network != "isolated" {
+	// An offline guest's rules are kept with no gateway to hold them: it
+	// has no network for them to act on, here as on the source.
+	if spec.Egress.Default != "" && spec.Network != "isolated" && spec.Network != "none" {
 		return "", fmt.Errorf("the session carries egress rules on the %s network, and only an isolated "+
 			"network holds rules for one sandbox", spec.Network)
 	}
@@ -315,6 +317,29 @@ func (c *Config) resolveArrivedSecrets(open func() (creds.SecretReader, error)) 
 // about its own move is told the sandbox here is its own.
 func ArrivingMove(sandbox string) string {
 	return readArrivals()[sandbox].TxID
+}
+
+// BoundEgress is the egress this host's own policy files bind to the
+// session ref names, before any carried rules stand in: the rules Load here
+// would resolve for it. `brig teleport-probe` reports them, so a source does
+// not move a session onto a host whose binding differs from the rules its
+// gateway enforces, which Load refuses as a changed policy once it arrived.
+func BoundEgress(ref string) (policy.Egress, []string, error) {
+	t, label, err := profileOfRef(ref)
+	if err != nil {
+		return policy.Egress{}, nil, err
+	}
+	slug, _, _, err := sessionNames(t, NewEnv(t.Name, os.LookupEnv), label)
+	if err != nil {
+		return policy.Egress{}, nil, err
+	}
+	return policy.Resolve(t, slug, policy.Dir())
+}
+
+// SameEgress reports whether two rule sets are the same to the gateway that
+// enforces them, the comparison a running sandbox's rules are checked by.
+func SameEgress(a, b policy.Egress) bool {
+	return runtime.SameEgress(runtimeEgress(a), runtimeEgress(b))
 }
 
 // ArrivalReceive is PrepareArrival for a ref as typed, which is how the
