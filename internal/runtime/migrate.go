@@ -59,9 +59,10 @@ type MigrateSpec struct {
 	// RemoteHull is the hull the brig on the destination drives, so the
 	// move lands where that brig looks. Empty is the hull on its PATH.
 	RemoteHull string
-	// GatewaySock is the network gateway brig started on the destination
-	// for the moved guest, with the network and the rules it had here.
-	// Empty for a guest with no network.
+	// GatewaySock is the control socket of the network gateway brig
+	// started on the destination for the moved guest, with the network and
+	// the rules it had here. hull is handed its stream socket. Empty for a
+	// guest with no network.
 	GatewaySock string
 	// TxID names the move: 32 lower-case hex digits. brig makes it and
 	// records it before it asks, so a move whose end it did not see can
@@ -202,11 +203,22 @@ func migrateArgs(name, to string, spec MigrateSpec) ([]string, error) {
 			return nil, err
 		}
 	}
+	// hull hands --remote-gateway-sock to hvi restore on the destination as
+	// its --net-gateway, the socket hvi carries the guest's frames on. That
+	// is the gateway's stream socket, not the control socket brig names a
+	// gateway by: on the control socket the gateway waits for a member's
+	// file descriptor, hvi sends frames, and the moved guest reaches
+	// nothing. hull's own run takes the control socket and derives the
+	// stream socket the same way.
+	var gateway string
+	if spec.GatewaySock != "" {
+		gateway = qemuGatewaySocket(spec.GatewaySock)
+	}
 	args := []string{"migrate", "--to", to}
 	for _, f := range []struct{ flag, value string }{
 		{"--remote-store", spec.RemoteStore},
 		{"--remote-hull", spec.RemoteHull},
-		{"--remote-gateway-sock", spec.GatewaySock},
+		{"--remote-gateway-sock", gateway},
 		{"--txid", spec.TxID},
 	} {
 		if f.value != "" {

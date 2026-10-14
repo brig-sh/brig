@@ -2551,9 +2551,9 @@ case "$rc:$rsock" in
       || bad "the destination starts the session's gateway with the rules it carries -- got: $(grep '^argv: network-gateway' "$REMOTE_LOG")" ;;
   *) bad "the destination starts the session's gateway with the rules it carries -- got $rc: $(cat "$WORK/tpi.out") $(grep '^argv: network-gateway' "$REMOTE_LOG")" ;;
 esac
-[ -n "$rsock" ] && grep -q "^argv: migrate .*--remote-gateway-sock $rsock --txid [0-9a-f]* brig-claude-code-mv$" "$STUB_LOG" \
-  && ok "hull is handed the gateway the destination started" \
-  || bad "hull is handed the gateway the destination started -- got: $(grep '^argv: migrate' "$STUB_LOG")"
+[ -n "$rsock" ] && grep -q "^argv: migrate .*--remote-gateway-sock $rsock.qemu --txid [0-9a-f]* brig-claude-code-mv$" "$STUB_LOG" \
+  && ok "hull is handed the stream socket of the gateway the destination started" \
+  || bad "hull is handed the stream socket of the gateway the destination started -- got: $(grep '^argv: migrate' "$STUB_LOG")"
 : > "$REMOTE_LOG"
 out="$(TP_NET=isolated tpr "$WORK/brig" sh claude@mv -c true 2>&1)"; rc=$?
 [ "$rc" = 0 ] && grep -qF -- '[--][bash][-lc][true]' "$REMOTE_LOG" \
