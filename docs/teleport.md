@@ -343,6 +343,25 @@ driver logged:
 | Guest stopped | 7.43 s | 279 ms (340 ms for `rp2` to `rp1`) |
 | Sent | 288.2 MiB in 5.1 s | 109.5 MiB: disk 287 MiB, sent as 34.6 MiB, and 74.9 MiB of memory in 3 rounds |
 
+The same streamed move through `brig teleport`, on the same pair with the
+same hull and hvi, brig `e1a9c2d` there and `e38f18d` back, and the same
+guest writing a counter to its disk five times a second. `--prepare` first
+sent the 110.8 MiB base as 49.2 MiB in 1.1 s (3.0 s in all), and found
+everything held on the way back. After each move the counter went on, and
+the guest's `boot_id` and the sha256 of a 32 MiB file it wrote were the
+same:
+
+| | `rp1` to `rp2` | `rp2` to `rp1`, `rp2` busy with another project's builds |
+| --- | --- | --- |
+| `brig teleport`, start to end | 7.6 s | 11.9 s |
+| `hull migrate`, as Brig timed it | 6.0 s | 10.6 s |
+| Guest stopped, hull's `downtime about` | 358 ms | 4842 ms |
+| Sent | 109.5 MiB in 5.4 s: disk 274.9 MiB as 34.4 MiB, memory 75.0 MiB | 109.6 MiB in 10.3 s |
+
+On the move back, hvi on `rp2` sealed its stream 1163 ms after the last
+memory round began, and the last disk round took 717 ms. The guest's
+`hvi-time` line agreed with hull there: wall clock moved 4.84 s.
+
 The `claude-code` guest from a Mac to a Pi:
 
 | | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: streamed move |
