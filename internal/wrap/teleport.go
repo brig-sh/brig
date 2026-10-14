@@ -314,13 +314,24 @@ func (c *Config) readTeleportState() {
 
 // teleportLine is the TELEPORT row: hull's state and the bundle it names, or
 // "" when there is no record.
+//
+// A move adds its other host, and a session moved here the host it came
+// from, so the row says where the session was or is going.
 func (c *Config) teleportLine() string {
 	m := c.teleportState
+	from := ""
+	if a := c.arrival; a != nil {
+		from = fmt.Sprintf("arrived from %s (move %s)", a.From, a.TxID)
+	}
 	switch {
 	case m.State == "":
-		return ""
-	case m.BundleDir != "":
+		return from
+	case m.Peer != "" && from == "":
+		return fmt.Sprintf("%s (move %s, %s)", m.State, m.TxID, m.Peer)
+	case m.BundleDir != "" && from == "":
 		return fmt.Sprintf("%s (checkpoint in %s)", m.State, m.BundleDir)
+	case from != "":
+		return m.State + ", " + from
 	}
 	return m.State
 }

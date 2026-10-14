@@ -266,6 +266,11 @@ type Config struct {
 	// teleportState is the migration record the runtime keeps for this
 	// session, read by brig info alone. See readTeleportState.
 	teleportState runtime.Migration
+	// arrival is set when the session was moved here from another host. See
+	// arrival.go: it carries the rules the session was under, it holds the
+	// session back until the move has finished, and it lets an exec here run
+	// without a credential this host's store does not have.
+	arrival *Arrival
 	// indexed records that the session index has an entry for this ref and
 	// sandbox. The one-time teleportable notice reads it to tell a new
 	// session from a later run of one, and EnsureRunning reads it to know
@@ -588,6 +593,13 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if err != nil && strictErr == nil {
 		strictErr = err
 	}
+	// A session moved here from another host brings the rules its gateway
+	// enforced there, and they stand when this host binds none to it. See
+	// arrival.go.
+	arrival := arrivalOf(sessionKey(t.Name, slug), vmName)
+	if arrival != nil && egress.Default == "" && arrival.Egress.Default != "" {
+		egress, policies = arrival.Egress, carriedPolicies(arrival)
+	}
 	askedNet := network
 	if egress.Default != "" && network != NetOffline {
 		network = NetIsolated
@@ -646,6 +658,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Verbosity:      o.Verbosity,
 		Teleportable:   tp.on,
 		teleportSource: tp.source,
+		arrival:        arrival,
 		env:            env,
 	}
 	if strictErr != nil {
