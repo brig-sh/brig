@@ -843,6 +843,44 @@ func TestRmOfAMovedSessionRemovesOnlyTheCopyHere(t *testing.T) {
 	}
 }
 
+// hull's own record of the copy here, migrated by the move the index names,
+// is proof enough that the copy is stale: rm removes it without asking the
+// destination, whose brig may no longer have the session or may not answer.
+// A record of another move, or of a guest only fenced, proves nothing, and
+// the copy stays while the destination does not say the session runs there.
+func TestRmOfACopyHullRecordsAsMigratedNeedsNoWordFromThere(t *testing.T) {
+	const txid = "0123456789abcdef0123456789abcdef"
+	for _, c := range []struct {
+		what   string
+		m      runtime.Migration
+		remove bool
+	}{
+		{"migrated by this move", runtime.Migration{State: runtime.MigrationMigrated, MoveTxID: txid}, true},
+		{"migrated by another move", runtime.Migration{State: runtime.MigrationMigrated, MoveTxID: "ffff"}, false},
+		{"only fenced", runtime.Migration{State: runtime.MigrationFenced, MoveTxID: txid}, false},
+	} {
+		rt := &moveRuntime{running: true, inspect: c.m}
+		probe := noNetProbe()
+		probe.Sandbox.Running = false
+		calls := moveHost(t, rt, probe)
+		if err := os.WriteFile(filepath.Join(os.Getenv("BRIG_STATE_DIR"), "sessions.json"),
+			[]byte(`{"claude-code": `+movedEntry+`}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		withRuntime(t, rt)
+		_, err := captureStdout(t, func() error { return run([]string{"rm", "claude"}) })
+		if c.remove && (err != nil || rt.removed != 1 || len(*calls) != 0) {
+			t.Errorf("%s: %v, removed %d, asked %v", c.what, err, rt.removed, *calls)
+		}
+		if !c.remove && (err == nil || rt.removed != 0 || len(*calls) != 1) {
+			t.Errorf("%s: the copy was not kept for the destination's word: %v, removed %d", c.what, err, rt.removed)
+		}
+		if e := entryOf(t); e["host"] != "me@box" {
+			t.Errorf("%s: rm dropped the record that reaches the session: %v", c.what, e)
+		}
+	}
+}
+
 // ls names a moved session, here or not, with its host.
 func TestListingNamesWhereAMovedSessionRuns(t *testing.T) {
 	movedHost(t, movedEntry)
