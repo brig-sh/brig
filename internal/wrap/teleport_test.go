@@ -475,6 +475,31 @@ func TestEnsureRunningRefusesATeleportableSessionOffHvi(t *testing.T) {
 	}
 }
 
+// A gui profile's window reads its credentials from the boot environment,
+// and a teleportable boot carries none. --teleportable on one is refused for
+// that reason, before any backend is asked, and the plan says the same.
+func TestTeleportableRefusesAProfileThatReadsCredentialsAtBoot(t *testing.T) {
+	teleportState(t)
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	desktop, ok := profile.Lookup("claude-desktop")
+	if !ok || !desktop.CredentialsAtBoot() {
+		t.Fatalf("claude-desktop is no longer a profile that reads credentials at boot: %+v", desktop)
+	}
+	rt := &guestRuntime{}
+	cfg := loadTeleport(t, desktop, Options{Teleportable: true}, rt)
+	err := cfg.EnsureRunning(creds.Set{})
+	if err == nil || !strings.Contains(err.Error(), "reads its credentials at boot") ||
+		!strings.Contains(err.Error(), "--teleportable") {
+		t.Fatalf("want the boot-credential refusal naming --teleportable, got %v", err)
+	}
+	if rt.boots != 0 {
+		t.Errorf("booted %d sandboxes for a refused teleportable gui session", rt.boots)
+	}
+	if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "reads its credentials at boot") {
+		t.Errorf("the plan did not carry the refusal: %+v", d.Refused)
+	}
+}
+
 // A sandbox the index has no entry for, and that hull's record says owns its
 // disk, is a teleportable session whose record was lost. An ordinary run must
 // not recreate it, running or stopped: that deletes the disk the agent's

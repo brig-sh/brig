@@ -182,6 +182,12 @@ func (p Profile) Validate() error {
 	// so, not at a boot several layers down. An empty hypervisor is vz, the
 	// runtime's default, so the profile has to name hvi.
 	if p.Teleportable {
+		// First, because it is the reason no backend would help: the
+		// window reads its credentials from the boot environment, and a
+		// teleportable session keeps them out of the disk hull writes it to.
+		if p.CredentialsAtBoot() {
+			return fmt.Errorf("teleportable: true cannot be kept: %s", TeleportableBootCredentials)
+		}
 		if p.Hypervisor != "hvi" {
 			return fmt.Errorf("teleportable: true needs hypervisor: hvi (this profile %s); "+
 				"hvi is the backend that keeps a session's whole state in its own disk", namesHypervisor(p.Hypervisor))
@@ -189,9 +195,6 @@ func (p Profile) Validate() error {
 		if p.RootfsType != "" && p.RootfsType != "block" {
 			return fmt.Errorf("teleportable: true boots a block root, and this profile asks for rootfsType: %s; "+
 				"drop rootfsType or set it to block", p.RootfsType)
-		}
-		if p.IsGUI() {
-			return fmt.Errorf("teleportable: true needs the hvi backend, and kind: gui needs vz for its window")
 		}
 	}
 	// A policy name ends up in a file path wherever it is resolved, so it
