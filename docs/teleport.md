@@ -315,12 +315,12 @@ place of ssh.
 ### Not yet run on real hardware
 
 Every step above runs in `script/smoke.sh` against a stub hull, with a fake
-ssh that runs the destination on the same machine. A real move needs an hvi
-with a `restore` subcommand. No hvi has one yet, so `hull migrate` refuses a
-move at its preflight, and Brig reports that refusal from its dry run before
-anything is paused. Once hvi can restore, a move on one Mac with two stores
-goes like this. Remote Login must be on, and ssh to localhost must work with
-a key:
+ssh that runs the destination on the same machine. Brig's move has not yet
+run against a real hull and hvi. hull's own `hull migrate` has committed a
+move between two stores on one Mac (see hull's `docs/migration.md`). Brig's
+move needs real ssh from the source to the destination, logging in with a
+key, because Brig hands hull no other transport. On one Mac with Remote
+Login on, a move between two stores goes like this:
 
 ```bash
 # The destination's brig: its own state, gateway directory and hull store.
