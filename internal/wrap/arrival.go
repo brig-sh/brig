@@ -317,6 +317,29 @@ func ArrivingMove(sandbox string) string {
 	return readArrivals()[sandbox].TxID
 }
 
+// BoundEgress is the egress this host's own policy files bind to the
+// session ref names, before any carried rules stand in: the rules Load here
+// would resolve for it. `brig teleport-probe` reports them, so a source does
+// not move a session onto a host whose binding differs from the rules its
+// gateway enforces, which Load refuses as a changed policy once it arrived.
+func BoundEgress(ref string) (policy.Egress, []string, error) {
+	t, label, err := profileOfRef(ref)
+	if err != nil {
+		return policy.Egress{}, nil, err
+	}
+	slug, _, _, err := sessionNames(t, NewEnv(t.Name, os.LookupEnv), label)
+	if err != nil {
+		return policy.Egress{}, nil, err
+	}
+	return policy.Resolve(t, slug, policy.Dir())
+}
+
+// SameEgress reports whether two rule sets are the same to the gateway that
+// enforces them, the comparison a running sandbox's rules are checked by.
+func SameEgress(a, b policy.Egress) bool {
+	return runtime.SameEgress(runtimeEgress(a), runtimeEgress(b))
+}
+
 // ArrivalReceive is PrepareArrival for a ref as typed, which is how the
 // source names the session over ssh.
 func ArrivalReceive(ref string, spec ArrivalSpec, rt runtime.Runtime) (string, error) {

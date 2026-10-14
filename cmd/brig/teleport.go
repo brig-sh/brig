@@ -19,6 +19,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/notice"
+	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -49,8 +50,9 @@ const (
 	probeVerb   = "teleport-probe"
 	receiveVerb = "teleport-receive"
 	// probeFormat is the shape of the probe's answer. A source that reads a
-	// shape it does not know refuses rather than guesses.
-	probeFormat = 1
+	// shape it does not know refuses rather than guesses. 2 added the policy
+	// the destination binds to the session.
+	probeFormat = 2
 )
 
 // teleportOptions is the teleport line: a move, or one of the two questions
@@ -232,7 +234,7 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 	if err != nil {
 		return err
 	}
-	report, err := probeRemote(host, t.Name, vm, net)
+	report, err := probeRemote(host, ref, t.Name, vm, net)
 	if err != nil {
 		return err
 	}
@@ -541,6 +543,15 @@ type probeReport struct {
 	Agent    *probeAgent   `json:"agent,omitempty"`
 	Sandbox  *probeSandbox `json:"sandbox,omitempty"`
 	Network  *probeNetwork `json:"network,omitempty"`
+	Policy   *probePolicy  `json:"policy,omitempty"`
+}
+
+// probePolicy is the egress the destination's own policy files bind to the
+// session, which its brig resolves for the session once it arrived.
+type probePolicy struct {
+	Egress   policy.Egress `json:"egress"`
+	Policies []string      `json:"policies,omitempty"`
+	Error    string        `json:"error,omitempty"`
 }
 
 type probeRuntime struct {
@@ -595,9 +606,10 @@ type probeNetwork struct {
 func teleportProbeCmd(out io.Writer, args []string) error {
 	fs := flag.NewFlagSet(probeVerb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var agent, sandbox, net string
+	var agent, sandbox, net, ref string
 	slot := -1
 	fs.Bool("json", true, "")
+	fs.StringVar(&ref, "ref", "", "")
 	fs.StringVar(&agent, "agent", "", "")
 	fs.StringVar(&sandbox, "sandbox", "", "")
 	fs.StringVar(&net, "network", "", "")
@@ -630,6 +642,13 @@ func teleportProbeCmd(out io.Writer, args []string) error {
 	if agent != "" {
 		_, known := profile.Lookup(agent)
 		r.Agent = &probeAgent{Name: agent, Known: known}
+	}
+	if ref != "" {
+		e, names, err := wrap.BoundEgress(ref)
+		r.Policy = &probePolicy{Egress: e, Policies: names}
+		if err != nil {
+			r.Policy.Error = err.Error()
+		}
 	}
 	if sandbox != "" {
 		sb := &probeSandbox{Name: sandbox, Arriving: wrap.ArrivingMove(sandbox)}
@@ -724,9 +743,9 @@ func firstLine(s string) string {
 }
 
 // probeRemote asks the destination's brig what it has.
-func probeRemote(host, agent, sandbox string, net wrap.MoveNetwork) (probeReport, error) {
+func probeRemote(host, ref, agent, sandbox string, net wrap.MoveNetwork) (probeReport, error) {
 	out, err := remoteOutput(host, "", probeVerb, "--json", "--agent", agent, "--sandbox", sandbox,
-		"--network", net.Net, "--slot", strconv.Itoa(net.Slot))
+		"--network", net.Net, "--slot", strconv.Itoa(net.Slot), "--ref", ref)
 	if err != nil {
 		return probeReport{}, fmt.Errorf("could not ask the brig on %s whether it can take %s, and nothing "+
 			"was paused: %w. It needs ssh to %s without a password prompt, and brig on the PATH there "+
@@ -768,6 +787,23 @@ func checkProbe(cfg *wrap.Config, r probeReport, host, ref, txid string, net wra
 		return moveRefusal(fmt.Sprintf("%s is under an egress policy, and %s cannot enforce one: %s",
 			ref, host, orNone(r.Egress.Why)),
 			"Install a hull there whose network-gateway takes --egress-default, or detach the policy here")
+	}
+	// The brig there resolves its own binding for the session first, and the
+	// carried rules only when it binds none. A binding with other rules would
+	// read as a changed policy there, and every verb on the moved session
+	// would refuse while the guest ran under the carried ones.
+	switch p := r.Policy; {
+	case p == nil || p.Error != "":
+		why := "it did not say"
+		if p != nil {
+			why = p.Error
+		}
+		return fmt.Errorf("cannot tell which policy %s binds to %s: %s. Nothing was paused", host, ref, why)
+	case p.Egress.Default != "" && !wrap.SameEgress(p.Egress, net.Egress):
+		return fmt.Errorf("%s binds %s to %s, whose rules are not the ones %s runs under here, and the brig "+
+			"there would refuse the moved session as a changed policy. Detach it there (`ssh %s brig policy "+
+			"ls` names the binding), or bind the same rules. Nothing was paused", host,
+			strings.Join(p.Policies, ", "), ref, ref, host)
 	}
 	if sb := r.Sandbox; sb == nil || sb.Error != "" {
 		why := "it did not answer for the sandbox"
