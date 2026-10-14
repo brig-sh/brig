@@ -264,6 +264,11 @@ credentials by name. `brig --verbose run` prints the same envelope before it boo
 The network row gives the posture of the running sandbox. When the posture of
 the next boot is different, the row gives that posture too.
 
+For a [teleportable session](teleport.md) that hull has checkpointed, a
+`TELEPORT` row gives hull's record of where the checkpoint left it, and
+`--json` carries it as a `teleport` object with `state`, `bundleDir` and
+`txid`. Neither appears before hull has a record.
+
 If Brig cannot resolve a required secret, `info` fails with exit `6`. For a
 declared secret marked `required: false`, `info` prints a warning and still
 exits `0`. The two secrets of `claude-code` are both optional, so
