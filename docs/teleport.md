@@ -425,6 +425,12 @@ What ran:
   paused. Brig gave `rp2` its network and index back and said why, the
   counter kept counting on `rp1` with no reboot in the guest, and
   `--status` reported no move.
+- A copy of that profile without `genericBoot: true`, run with
+  `--teleportable` and `BRIG_PORTABLE_KERNEL` set to a missing file, was
+  refused by `brig run` (exit 1) and shown as refused by `brig plan`. hull
+  was not asked to run anything.
+- An older hull build whose `hull run --help` has no `--profile` was refused
+  with exit `7` before `hull run` was called.
 
 What is still to run: the move itself, from the fence on. It needs an hvi
 that checkpoints the portable machine and restores it on KVM, which the hvi
