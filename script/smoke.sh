@@ -2486,7 +2486,8 @@ assert doc["kind"] == "Teleport" and p["host"] == "me@box" and p["base"] == "0" 
 assert p["stream"] and p["kernels"]["portable-arm64-v1"] == "0" * 63 + "9" and doc["data"]["state"] == "here", doc
 assert [st["result"] for st in p["steps"]] == ["held", "held"], doc
 e = index["claude-code"]
-assert e["preparedHost"] == "me@box" and e["preparedBase"] == p["base"] and not e.get("pendingHost"), e
+assert e["preparedHost"] == "me@box" and e["preparedBase"] == p["base"] and e["preparedStream"] is True, e
+assert not e.get("pendingHost"), e
 PY
 : > "$STUB_LOG"; : > "$SSH_LOG"
 GH_TOKEN=tp-gh-secret tpr "$WORK/brig" teleport claude --to me@box > "$WORK/tpm.out" 2> "$WORK/tpm.err"; rc=$?

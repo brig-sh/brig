@@ -354,13 +354,15 @@ arrive, then prints what hull did for each part (`held`, `sent`,
 `skipped` or `failed`) and the digest of the base the destination holds.
 A prepare pauses nothing, and the guest keeps running here.
 
-Brig records the host in its session index only when hull says that a move
-there will send only what the guest changed. `brig teleport --status` and
-`--json` then name it, and a move to that host says it was prepared. A
-committed move clears the record, because the next move starts from the
-destination. When hull says a move there would still send everything, for
-example because the hull or hvi there predates the streamed move, Brig says
-why and records nothing. The prepare does not fail.
+Brig records the host in its session index once it holds the sandbox's
+base, with whether hull says a move there sends only what the guest
+changed. `brig teleport --status` and `--json` then name it, and a move to
+that host says it was prepared and whether it streams. A committed move
+clears the record, because the next move starts from the destination. When
+hull says a move there would still send everything, for example because
+the hull or hvi there predates the streamed move, Brig says why. A host
+that holds no base of the sandbox is not recorded. The prepare does not
+fail in either case.
 
 A prepare takes no network on the destination. The session's gateway, with
 its egress rules, is still started by the move (step 4). You can run it
