@@ -65,9 +65,11 @@ They do not show what a real ssh and a real hull do with those lines, and CI
 runs no move. On 2026-10-14 moves committed between two Raspberry Pi 5 hosts,
 there and back, over real ssh, by hand and with `script/teleport-demo.sh`:
 see [On real hardware](teleport.md#on-real-hardware). Those runs saw the
-policy row's refusal (exit 7, nothing paused), and an offline session, with
-no policy, move with no gateway on either host. They checked no credential:
-the sessions had none. The
+policy row's refusal (exit 7, nothing paused), an offline session, with no
+policy, move with no gateway on either host, and an isolated session move
+under a deny policy, which kept its address and its rules on the
+destination's gateway. They checked no credential: the sessions had none.
+The
 rows are still defended only at the command line; the runs are not repeated
 by any check here.
 

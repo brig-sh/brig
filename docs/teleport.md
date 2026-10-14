@@ -327,9 +327,12 @@ ssh <user>@<host> brig teleport <ref> --to <you>@<old host>
 ```
 
 Between the second `brig rm` and the move, the old host has no record of the
-session, so `brig sh <ref>` there does not reach it. Run it on the host the
-session runs on. hull counts the owner epoch on: 0 where the session started,
-1 after the first move, 2 back home.
+session. Run nothing for the ref there. `brig sh <ref>` or `brig run <ref>`
+on the old host does not reach the session: it boots a new, empty session
+under the same sandbox name, and the move back is then refused, as the name
+is taken. Remove that new session with `brig rm <ref>` before the move. Run
+your commands on the host the session runs on. hull counts the owner epoch
+on: 0 where the session started, 1 after the first move, 2 back home.
 
 To remove a moved session everywhere, remove the fenced copy on the old host
 first, then the session where it runs. In the other order, `brig rm` of the
@@ -433,8 +436,9 @@ hands hull no other transport.
 On 2026-10-14 a teleportable session moved between two Raspberry Pi 5 hosts,
 `rp1` and `rp2` (Linux 6.12, KVM with a vGICv2), and back, with its
 processes, its memory and its open files, and without a boot. Both hosts ran
-the same builds: brig `ed78222`, hull `a167a07`, and hvi `46a18dc`
-(`feat/teleport`), with the portable kernel (sha256 `32725b9b...`). Each host
+the same builds: hull `a167a07`, hvi `46a18dc` (`feat/teleport` at the time;
+now `b3aea90`) with the portable kernel (sha256 `32725b9b...`), and the brig
+each run below names. Each host
 had a state directory, a gateway directory and a hull store of its own under
 `~/b4`, and each reached the other over ssh with a key.
 
@@ -448,25 +452,35 @@ processes, started with `brig sh`:
   `RANDSUM <n> <sum>` every 2 s.
 
 [`script/teleport-demo.sh`](../script/teleport-demo.sh) runs the whole
-sequence from a third machine and checks each step. It took the two moves in
-the "busy" columns below, and the failure cases, with every check passing:
+sequence from a third machine and checks each step:
 
 ```bash
 script/teleport-demo.sh --faults pmoust@rp1 pmoust@rp2
 ```
+
+Its run with brig `ed78222` gave the two moves in the "busy" columns below.
+The demo now also checks each failure case's exit codes and where the guest
+ended up, the kernel's `boot_id`, and the move of a session under a policy.
+That version ran with brig `4d905b8` and passed all 85 of its checks.
 
 After each move, through `brig sh` on `rp1`:
 
 - the counter had gone on from where it stopped;
 - the deleted file still read the token written before the move;
 - the sum was the one from before;
-- the guest had logged one boot, and its clocksource was still `hvi-time`;
-- its last kernel lines were the boot's, then one
-  `hvi-time: generation N: ... downtime total ...` line for each move, and no
-  second boot banner.
+- the clocksource was still `hvi-time`;
+- the kernel's `boot_id` was the one from before. A boot makes a new one;
+- the kernel had logged one more
+  `hvi-time: generation N: ... downtime total ...` line, one for each
+  restore.
+
+The `ed78222` run checked all of these but the last two. It counted boot
+banners in `dmesg` instead, which a reboot does not change, and printed the
+last `hvi-time` line.
 
 `hull ps` showed the guest running on the destination, and the copy on the
-source stopped with its checkpoint `migrated`. `brig ls` on `rp1` showed the
+source stopped with its checkpoint `migrated`; the `4d905b8` run checks both
+after each move. `brig ls` on `rp1` showed the
 session `moved`, `(in the sandbox disk on pmoust@rp2)`. `--status` said
 `ubuntu runs on pmoust@rp2`. `brig info` ran on `rp2` and showed
 `TELEPORT restored, arrived from pmoust@rp1`.
@@ -494,29 +508,37 @@ data, out of 16 GB. "Busy" is a build of another project that was running on
 before `script/teleport-demo.sh` existed, with brig `cb0333c`; the brig
 changes since do not touch the move's path. The 5.98 s prompt was the demo's
 one sample; three later runs of the same step on the busy pair took 0.42 to
-0.68 s.
+0.68 s. The `4d905b8` run, with `rp2` running other work again, had 9.44 s
+of downtime from `rp1` to `rp2` (40.1 MiB/s), and 7.45 s back
+(51.5 MiB/s).
 
 The move back went from `rp2`, as [Moving back](#moving-back) says, after
 two `brig rm` on `rp1`. hull's owner epoch was 2 at home.
 
-A session on an `isolated` network under an egress policy (`default: deny`)
-moved the same way. On `rp2` it ran behind a gateway that `brig
-teleport-receive` started, with the same address, and `brig info` showed
-`POLICY locked (carried from pmoust@rp1)`. No connection from the guest was
-tried after the move.
+In the `4d905b8` run, a session on an `isolated` network moved the same way
+under an egress policy, `default: deny`, that allows `10.0.0.0/8` and
+`rp2`'s address. On `rp2` it ran behind a gateway that `brig
+teleport-receive` started, with the same address, `198.18.1.2`, and `brig
+info` showed `POLICY locked (carried from pmoust@rp1)`. From the guest, port
+22 of `rp2`'s address, which the policy allows, opened before and after the
+move. `1.1.1.1:443`, which the policy denies and both hosts reach, did not
+open. With an earlier brig, the moved guest reached nothing, not even its
+gateway; see below.
 
-The failure cases, each on a fresh session:
+The failure cases, each on a fresh session. The `4d905b8` run checks each
+exit code in the table, and hull's record on both hosts of where the guest
+ended up:
 
 | Case | What ran | Exit | What was left |
 | --- | --- | --- | --- |
-| A policy the destination cannot enforce | the session above, with the destination's hull replaced by a wrapper whose `network-gateway` fails | `7`: "worker is under an egress policy, and pmoust@rp2 cannot enforce one ... Nothing was paused" | hull has no move on record; the counter went on |
+| A policy the destination cannot enforce | the session above, with the destination's hull replaced by a wrapper whose `network-gateway` fails | `7`: "worker is under an egress policy, and pmoust@rp2 cannot enforce one ... Nothing was paused" | hull has no move on record; `rp1` runs the guest and `rp2` has no instance; the counter went on |
 | A session that is not teleportable | a sandbox that `hull run` started under the name Brig derives, standing in for an ordinary session, which Linux hull cannot boot, as it shares no host directory | `7`: "plain is not a teleportable session ... Nothing was paused" | nothing |
-| An abort before the commit | ssh failed `migrate-prepare`, so hull stopped at `transferred` with the source fenced | `1`, "did not report how it ended"; `--status` "has not finished"; `--abort` `0` (2.1 s in the run by hand) | the source ran again from its fenced checkpoint, 8 to 13 s after the fence, with the same counter, file and sum, and one boot |
-| A lost commit answer | ssh ran `migrate-commit` on `rp2` and lost its reply | `1`; `--status` "has not finished", hull `committing`, `rp2` `running`; in the run by hand, `--abort` `1`, refused because the move committed there | the retry `--status` names, `hull --store-dir ... migrate <sandbox> --txid <txid>`, recorded the commit; `--status` then recorded the host |
-| The source brig killed during the commit | ssh held `migrate-commit` for 20 s and `brig` was killed with SIGKILL | `137`; `--status` "has not finished" | hull, which outlived brig, committed the move; the next `--status` recorded the host |
+| An abort before the commit | ssh failed `migrate-prepare`, so hull stopped at `transferred` with the source fenced | `1`, "did not report how it ended"; `--status` "has not finished"; `--abort` `0` (2.1 s in the run by hand) | the source ran again from its fenced checkpoint, and `rp2` had no instance |
+| A lost commit answer | ssh ran `migrate-commit` on `rp2` and lost its reply | `1`; `--status` "has not finished", hull `committing`, `rp2` `running`; in the run by hand, `--abort` `1`, refused because the move committed there | the retry `--status` names, `hull --store-dir ... migrate <sandbox> --txid <txid>`, exited `0` and recorded the commit; `--status` then recorded the host; `rp2` runs the guest and `rp1`'s copy is `migrated` |
+| The source brig killed during the commit | ssh held `migrate-commit` for 20 s and `brig` was killed with SIGKILL | `137`; `--status` "has not finished" | hull, which outlived brig, committed the move; the next `--status` recorded the host; `rp2` runs the guest and `rp1`'s copy is `migrated` |
 
 In each of the last three cases, the guest went on where it stopped, with
-one boot.
+the same counter, file, sum and `boot_id`.
 
 What did not hold on the first runs, and is fixed in Brig:
 
@@ -527,6 +549,17 @@ What did not hold on the first runs, and is fixed in Brig:
 - `brig rm` of the old copy, after the session had been removed on the host
   it ran on, refused for good: it waited for that host to say the session ran
   there. It now takes hull's own `migrated` record as the proof.
+- A moved session on an `isolated` network kept its address, but on the
+  destination it reached nothing, not even its gateway. Brig handed hull the
+  gateway's control socket, and hull gives that socket to `hvi restore` as
+  the one for the guest's network frames. On the control socket the gateway
+  waits for something else, so it dropped them. Brig now hands hull the
+  gateway's stream socket, `<socket>.qemu`, the one hull's own run gives
+  hvi.
+- The refusal of a teleportable run with no portable kernel, and the
+  `portable` row of `brig doctor`, named an install line that missed the
+  store or `HULL_PORTABLE_KERNEL`. Both now print the line under Known
+  issues.
 
 #### Known issues
 
