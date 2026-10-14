@@ -475,12 +475,20 @@ The rest of what Brig asks of a runtime is in optional interfaces in
   resume a guest in place, write it to a checkpoint that can continue or
   fence it, restore it from that checkpoint paused, and read where the
   runtime's record says a checkpoint or a move left it. These are the seam
-  a [teleport](teleport.md#what-teleport-will-do) is built on. hull
+  a [teleport](teleport.md#move-a-session) is built on. hull
   implements them with its `pause`, `resume`, `checkpoint` and `restore`
   verbs for `hvi`. No Brig verb pauses, checkpoints or restores yet. Two
   read the migration record: `brig info`, and a run that reuses a running
   teleportable sandbox, which refuses one whose guest is fenced or still
   restoring.
+- `Migrator`: move a running sandbox to another host over ssh, read where
+  a move stands, and call one off. hull implements it with `hull migrate`,
+  its `--status` and its `--abort`, and Brig reads hull's move record back
+  after each and decides on it rather than on the call's exit status.
+  `brig teleport` drives it. The seam hands hull no `HULL_MIGRATE_SSH`, so a
+  move hull runs for Brig goes over ssh to the host named and nowhere else.
+- `DiskInspector`: where a sandbox's root disk is, which a move reads to say
+  how much room the destination needs.
 
 ### Shared and Brig-only parts
 
