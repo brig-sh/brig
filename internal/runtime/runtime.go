@@ -146,6 +146,17 @@ type RunSpec struct {
 	// publication is part of a sandbox's configuration and outlives one run.
 	// See publish.go.
 	Publish []Publication
+	// Teleportable marks a session that owns its storage and that a later
+	// release moves to another host with its disk. Run then leaves every Var
+	// marked Credential or Secret out of the boot: hull writes the boot
+	// environment, values included, into /urunit.conf on the root disk or
+	// /urunc-env in the boot initrd, and on this session the first is the
+	// storage that moves and the second sits in the instance directory. A
+	// value there would outlive a rotation and travel with the session.
+	// Nothing is lost by it: every exec hands the credentials again, by name,
+	// and the agent is an exec. The names the runtime reads for itself, the
+	// literals a profile writes and brig's plumbing still go on the run.
+	Teleportable bool
 	// Counted marks a user action, whose boot and lifetime hull's telemetry
 	// reports, rather than brig's own plumbing. See telemetryEnv.
 	Counted bool

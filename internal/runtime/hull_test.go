@@ -225,3 +225,64 @@ func TestRunArgsForATeleportableSessionShareNothing(t *testing.T) {
 		}
 	}
 }
+
+// hull writes every --env it is given, value included, into the sandbox's
+// own files: /urunit.conf on the root disk, or /urunc-env in the boot initrd.
+// On a teleportable session that disk is the session, kept for its life and
+// moved with it, so no credential brig resolved may be on its run line: not
+// one from the store, and not one read from the shell, which is not Secret
+// and which BRIG_ENV_ARGV would otherwise put on the line with its value.
+// The names hull reads for itself, the literals a profile writes and brig's
+// plumbing still go. Every exec hands the credentials again, by name.
+func TestRunArgsForATeleportableSessionCarryNoCredential(t *testing.T) {
+	t.Setenv("BRIG_ENV_ARGV", "1")
+	env := []Var{
+		{Name: "HOME", Value: "/root"},
+		{Name: "IS_SANDBOX", Value: "1"},
+		{Name: "GIT_TERMINAL_PROMPT", Value: "0"},
+		{Name: "GH_TOKEN", Value: "gh-from-shell", Credential: true},
+		{Name: "CLAUDE_TOKEN", Value: "from-store", Secret: true, Credential: true},
+		// A Var marked Secret alone is still a credential: the older of the
+		// two marks must not be the one that leaks.
+		{Name: "OLD_SECRET", Value: "secret-only", Secret: true},
+	}
+	spec := RunSpec{Name: "brig-claude-code", Image: "img", Mem: 4096, CPUs: 4,
+		RootfsType: "block", Teleportable: true, Env: env}
+	args, vals, err := runArgs(spec, "hvi", "none", "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("runArgs: %v", err)
+	}
+	for i, a := range args {
+		if a != "--env" || i+1 == len(args) {
+			continue
+		}
+		name, _, _ := strings.Cut(args[i+1], "=")
+		switch name {
+		case "GH_TOKEN", "CLAUDE_TOKEN", "OLD_SECRET":
+			t.Errorf("a teleportable run line carries the credential %s: %q", name, args)
+		}
+	}
+	for _, kv := range vals {
+		for _, value := range []string{"gh-from-shell", "from-store", "secret-only"} {
+			if strings.Contains(kv, value) {
+				t.Errorf("a teleportable run hands hull the credential value %q", kv)
+			}
+		}
+	}
+	got := strings.Join(args, " ")
+	for _, want := range []string{"--env HOME=/root", "--env IS_SANDBOX=1", "--env GIT_TERMINAL_PROMPT=0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a teleportable run line lacks %q: %s", want, got)
+		}
+	}
+
+	// The same Vars on an ordinary boot all go, so the drop is the
+	// session's and not a rule that lost a credential everywhere.
+	spec.Teleportable = false
+	got = argv(t, spec, "hvi", "none", "", "")
+	for _, want := range []string{"--env GH_TOKEN", "--env CLAUDE_TOKEN", "--env OLD_SECRET"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("an ordinary run line lacks %q: %s", want, got)
+		}
+	}
+}
