@@ -298,8 +298,11 @@ disk. The `claude-code` move from a Mac to a Pi in
 [Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi) sent
 1.8 GB while the guest was paused, for 50 to 57 s of downtime.
 
-The streamed move (H7 in hvi and hull, being built on `feat/teleport` when
-this was written) sends most of it while the guest runs. When hull boots a
+The streamed move sends most of it while the guest runs. When this was
+written it was in hull `81e118b` on `feat/teleport`, and in hvi only on
+hvi's `feat/teleport-fast` and `feat/teleport-fast-disk` branches, not yet
+on hvi's `feat/teleport`. hull falls back to the whole-bundle move, and
+says why, when either host lacks it. When hull boots a
 teleportable sandbox, it keeps a read-only copy of the disk as built, its
 base, named by its digest. `brig teleport <ref> --to <user>@<host>
 --prepare` has hull put that base on the destination, with the image and
@@ -308,9 +311,10 @@ first, before the pause. The move then copies in rounds while the guest
 runs. hvi records which pages of memory and which 64 KiB disk blocks the
 guest writes. Round 0 sends the memory that is not zero and the disk blocks
 that differ from the base. Each later round sends what the guest changed
-during the round before. hull pauses the guest when a round is at most
-8 MiB, or 2% of the guest's memory if that is more, or after 5 rounds, or
-after 60 s. It then sends the last changes, the CPU state and the device
+during the round before. hvi pauses the guest when the pages written during
+a round come to at most 8 MiB, or 2% of the guest's memory that is not zero
+if that is more, or after 5 rounds, or after 60 s, whichever comes first.
+These are hvi's defaults. It then sends the last changes, the CPU state and the device
 state, and the destination resumes the guest. Only that last round is
 downtime. A guest that writes faster than the link can carry never gets a
 small round. The cap still ends the copy, and the last round is then
@@ -325,7 +329,23 @@ guest dirtied pages. When the move commits, it prints how long hull's move
 took, how long the guest was paused, and the bytes sent, as far as hull
 reported them. `--json` carries the same in its `move` object.
 
-| | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: streamed move, Mac to Pi |
+hull measured both paths on the Linux pair, with the 1 GiB `ubuntu` guest
+under a writing workload, over real ssh. The numbers below are from hull's
+`docs/migration.md` at `6bfc09f`. hull was built at `1ecb5c8` (the same
+tree as `81e118b`), and hvi at `ef8833a`, a merge of hvi's two
+`feat/teleport-fast` branches. These moves ran `hull migrate` directly, not
+through `brig teleport`. "Guest stopped" is what the guest's own `hvi-time`
+driver logged:
+
+| `rp1` to `rp2` | Before: whole bundle | After: streamed |
+| --- | --- | --- |
+| `hull migrate`, start to end | 8.2 s | 5.4 s (5.7 s for `rp2` to `rp1`) |
+| Guest stopped | 7.43 s | 279 ms (340 ms for `rp2` to `rp1`) |
+| Sent | 288.2 MiB in 5.1 s | 109.5 MiB: disk 287 MiB, sent as 34.6 MiB, and 74.9 MiB of memory in 3 rounds |
+
+The `claude-code` guest from a Mac to a Pi:
+
+| | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: streamed move |
 | --- | --- | --- | --- |
 | Sent while the guest runs | nothing | the base once (`--prepare`), then the rounds | pending |
 | Sent while the guest is paused | 1.80 GB in 46.3 to 53.7 s, at 32.0 to 37.1 MiB/s | the last round | pending |
@@ -336,8 +356,8 @@ reported them. `--json` carries the same in its `move` object.
 
 The before column is the four moves to `rp1` in
 [Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi). No
-streamed move had run when this was written, so the after column is
-pending.
+streamed move from a Mac had run when this was written: the Mac's hvi
+needs the same streamed checkpoint. So that after column is pending.
 
 #### Prepare the destination
 
