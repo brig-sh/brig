@@ -53,6 +53,17 @@ fail on its own leak. A few checks also run their real probes through a stub
 that each check judges an answer correctly. Only a booted sandbox proves that
 the guest has none.
 
+## Rows checked at the command line only
+
+The rows for moving a session (the ones on teleport, ssh and the
+destination) are defended by tests against a stub hull and a fake ssh.
+Those tests check every command line a move runs and every record it keeps.
+They do not show what a real ssh and a real hull do with those lines. Brig's
+move has not yet run against real hardware: see
+[Not yet run on real hardware](teleport.md#not-yet-run-on-real-hardware).
+Until it has, read those rows as true of the command lines, not yet of a
+real move.
+
 ## The table
 
 | Claim | Section | Defended by |

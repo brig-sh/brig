@@ -375,6 +375,10 @@ no authentication of its own.
 value you set there is trusted like ssh: Brig hands it the host and the
 command and nothing else, and does not check what it does with them.
 
+`BRIG_TELEPORT_REMOTE_ENV` goes on that command line as it is. Process
+listings on this host and the shell on the destination show it, so it must
+never hold a credential.
+
 The checkpoint stays on both hosts after a move, at rest in hull's instance
 directory, until `brig rm` on the source and the destination remove the
 sandbox there.
