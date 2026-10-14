@@ -86,6 +86,22 @@ func resolveTeleportable(t profile.Profile, o Options, env Env, ref, vmName stri
 			"Run it as an ordinary session", tp.source, t.Name, profile.TeleportableBootCredentials)
 		return tp
 	}
+	// On a host with a portable machine, the session boots that machine,
+	// and the machine needs the portable kernel: the one with the hvi-time
+	// clock driver, compared with the digest brig pins. brig hands hull that
+	// kernel through the boot assets, and only a genericBoot profile has
+	// boot assets. Any other profile boots its image's own kernel or one hull
+	// picks, neither of which brig checks, and a kernel without the driver
+	// boots a guest that has no clock on that machine. Refused here, like
+	// the credentials, because it is the profile that cannot be teleportable.
+	if m := teleportableMachine(); m != "" && !t.GenericBoot {
+		tp.refusal = fmt.Errorf("%s asks for a teleportable session, and %s cannot be one on this host. "+
+			"A teleportable session here boots the %s machine, which boots the portable kernel, and brig "+
+			"supplies that kernel only to a profile with genericBoot: true. %s boots a kernel of its own "+
+			"image or one the runtime picks, and brig checks neither. Run it as an ordinary session",
+			tp.source, t.Name, m, t.Name)
+		return tp
+	}
 	// A session brig already knows, started with a host home. One sandbox
 	// cannot be both, and either answer here would lose a home: booting it
 	// teleportable leaves the host home behind, and keeping it ordinary
@@ -328,7 +344,26 @@ func (c *Config) machine() string {
 	if !c.Teleportable {
 		return ""
 	}
-	return runtime.TeleportableMachine()
+	return teleportableMachine()
+}
+
+// teleportableMachine is runtime.TeleportableMachine, a variable so a test on
+// an amd64 host can ask what an arm64 host decides.
+var teleportableMachine = runtime.TeleportableMachine
+
+// machineKernelRefusal refuses a boot that would ask hull for a machine
+// whose kernel was not resolved for it. hull would then boot the image's own
+// kernel, or look up a copy of its own, on a machine that needs the portable
+// kernel, and brig would have checked neither.
+func (c *Config) machineKernelRefusal(assets runtime.BootAssets) error {
+	m := c.machine()
+	if m == "" || assets.Machine == m {
+		return nil
+	}
+	return fmt.Errorf("refusing to boot: this teleportable session boots the %s machine, and no portable "+
+		"kernel was resolved for it, so brig cannot hand the runtime the kernel that machine boots or "+
+		"compare it with the digest brig pins. A teleportable session needs a profile with genericBoot: "+
+		"true and a runtime that resolves boot assets (hull)", m)
 }
 
 // machineName is machine as a row names it.

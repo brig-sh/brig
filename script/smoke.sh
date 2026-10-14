@@ -2318,6 +2318,35 @@ if [ -n "$TP_MACHINE" ]; then
   grep -q '^argv: run ' "$STUB_LOG" \
     && bad "a teleportable run with no portable kernel reached the runtime" \
     || ok "a teleportable run with no portable kernel reached no runtime"
+  # A profile that is not genericBoot has no boot assets, so brig has no
+  # portable kernel to hand hull and none to check. Refused on the profile,
+  # before the kernel is looked for and before the runtime is asked, and the
+  # plan says the same.
+  cat > "$BRIG_PROFILE_DIR/tp-ownkernel.yaml" <<'YAML'
+name: tp-ownkernel
+image: smoke/image:latest
+binary: sh
+guestHome: /root
+mem: 256
+cpus: 1
+hypervisor: hvi
+YAML
+  : > "$STUB_LOG"
+  out="$(BRIG_PORTABLE_KERNEL="$WORK/no-such-kernel" tp "$WORK/brig" run --teleportable tp-ownkernel -d 2>&1)"; rc=$?
+  case "$rc:$out" in
+    1:*--teleportable*portable-arm64-v1*"genericBoot: true"*) ok "a teleportable run of a profile that is not genericBoot is refused, saying why" ;;
+    *) bad "a teleportable run of a profile that is not genericBoot is refused, saying why -- got $rc: $out" ;;
+  esac
+  grep -q '^argv: run ' "$STUB_LOG" \
+    && bad "a teleportable run of a profile that is not genericBoot reached the runtime -- got: $(grep '^argv:' "$STUB_LOG" | head -3)" \
+    || ok "a teleportable run of a profile that is not genericBoot reached no runtime"
+  out="$(BRIG_PORTABLE_KERNEL="$WORK/no-such-kernel" tp "$WORK/brig" plan --teleportable tp-ownkernel 2>&1)"
+  case "$out" in
+    *"brig run refuses this"*"genericBoot: true"*) ok "the plan of a teleportable profile that is not genericBoot carries the refusal" ;;
+    *) bad "the plan of a teleportable profile that is not genericBoot carries the refusal -- got: $out" ;;
+  esac
+  rm -f "$BRIG_PROFILE_DIR/tp-ownkernel.yaml"
+  "$WORK/brig" rm --all -y > /dev/null 2>&1
 fi
 # An ordinary run on hvi is the line it was: no machine profile, and the
 # bundle's kernel.
