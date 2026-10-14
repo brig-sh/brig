@@ -75,7 +75,8 @@ type Var struct {
 	// and so is a GH_TOKEN read from the shell, which is not a Secret: see
 	// creds.Set.Add for why the two flags differ.
 	//
-	// A teleportable boot leaves every such Var off the run. hull writes the
+	// A teleportable boot leaves every such Var off the run, except one with
+	// a name the runtime reads for itself (see bootVars). hull writes the
 	// boot environment, values included, into a file of the sandbox (see
 	// RunSpec.Teleportable), and that sandbox's disk is the session.
 	Credential bool
@@ -154,8 +155,9 @@ type RunSpec struct {
 	// storage that moves and the second sits in the instance directory. A
 	// value there would outlive a rotation and travel with the session.
 	// Nothing is lost by it: every exec hands the credentials again, by name,
-	// and the agent is an exec. The names the runtime reads for itself, the
-	// literals a profile writes and brig's plumbing still go on the run.
+	// and the agent is an exec. The names the runtime reads for itself, even
+	// when a ref bound them, the literals a profile writes and brig's
+	// plumbing still go on the run.
 	Teleportable bool
 	// Counted marks a user action, whose boot and lifetime hull's telemetry
 	// reports, rather than brig's own plumbing. See telemetryEnv.

@@ -79,9 +79,11 @@ So Brig hands a teleportable session's boot no credential. An environment
 credential, such as the `GH_TOKEN` that `claude-code` forwards, is left off
 `hull run`. That holds whether the value comes from your shell or from
 Brig's secret store, and whatever `BRIG_ENV_ARGV` says. The run still
-passes `HOME` and the other names hull reads for itself, the literal
-`value:` entries of the profile, and Brig's git settings. None of these is
-a credential.
+passes `HOME`, `PATH` and the other names hull reads for itself, even when
+you forward them from your shell, the literal `value:` entries of the
+profile, and Brig's git settings. None of these is a credential. hull keeps
+its own values of those names, and of its own `HULL_` settings, such as
+`HULL_REGISTRY_TOKEN`.
 
 The agent loses nothing. Brig starts it with `hull exec`, and every exec,
 the agent's and every later `brig sh`, hands the credentials in as on any
