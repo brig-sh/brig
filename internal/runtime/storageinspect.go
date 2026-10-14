@@ -58,3 +58,30 @@ func ownsItsDisk(name string, record []byte) (bool, error) {
 	disk, ok := argvValue(args, "--disk")
 	return ok && disk != "", nil
 }
+
+// DiskInspector reads where an existing sandbox's root disk is, from the
+// runtime's record of its boot. A move reads it to say how much room the
+// destination needs.
+type DiskInspector interface {
+	// RootDisk is the host path of the sandbox's block root, or "" with a nil
+	// error when the record names none.
+	RootDisk(name string) (string, error)
+}
+
+var _ DiskInspector = (*hull)(nil)
+
+// RootDisk reads the --disk of the VMM argv hull persisted at boot.
+func (h *hull) RootDisk(name string) (string, error) {
+	out, stderr, err := inspectNetwork(h.bin, hullArgs("inspect", name)...)
+	if err != nil {
+		return "", fmt.Errorf("inspect storage of %s: %w: %s", name, err, firstLines(stderr, 3))
+	}
+	var state struct {
+		CmdLine []string `json:"cmdLine"`
+	}
+	if err := json.Unmarshal(out, &state); err != nil || len(state.CmdLine) < 2 {
+		return "", nil
+	}
+	disk, _ := argvValue(state.CmdLine[1:], "--disk")
+	return disk, nil
+}

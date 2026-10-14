@@ -11,6 +11,7 @@ import (
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/session"
 )
 
 // The destination's half of a move. Before hull restores and resumes a moved
@@ -286,4 +287,35 @@ func (c *Config) resolveArrivedSecrets(open func() (creds.SecretReader, error)) 
 		res.Warnings = append([]string{head.String()}, res.Warnings...)
 	}
 	return res, nil
+}
+
+// ArrivingMove is the txid of the move arriving on this host as sandbox, or
+// "" when none is. `brig teleport-probe` reports it, so a source asking again
+// about its own move is told the sandbox here is its own.
+func ArrivingMove(sandbox string) string {
+	return readArrivals()[sandbox].TxID
+}
+
+// ArrivalReceive is PrepareArrival for a ref as typed, which is how the
+// source names the session over ssh.
+func ArrivalReceive(ref string, spec ArrivalSpec, rt runtime.Runtime) (string, error) {
+	t, label, err := profileOfRef(ref)
+	if err != nil {
+		return "", err
+	}
+	return PrepareArrival(t, label, spec, rt)
+}
+
+// profileOfRef is the profile and label of a ref.
+func profileOfRef(ref string) (profile.Profile, string, error) {
+	r, err := session.ParseRef(ref)
+	if err != nil {
+		return profile.Profile{}, "", err
+	}
+	t, ok := profile.Lookup(r.Agent)
+	if !ok {
+		return profile.Profile{}, "", fmt.Errorf("this host has no agent %q, so it cannot run %s; "+
+			"add the agent here first", r.Agent, ref)
+	}
+	return t, r.Label, nil
 }

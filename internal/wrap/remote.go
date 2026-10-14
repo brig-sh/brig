@@ -102,10 +102,11 @@ func updateEntry(ref, sandbox string, edit func(*sessionEntry) error) error {
 	return writeSessionIndex(index)
 }
 
-// RecordMoveStarted records that a move of the session to host began, under
-// txid. Written before hull is asked, so a move whose end nobody saw is one
-// brig can still name. A session already moving or moved is refused.
-func RecordMoveStarted(ref, sandbox, host, txid string) error {
+// RecordMoveStarted records that a move of the session to host, into store
+// there, began under txid. Written before hull is asked, so a move whose end
+// nobody saw is one brig can still name. A session already moving or moved
+// is refused.
+func RecordMoveStarted(ref, sandbox, host, store, txid string) error {
 	return updateEntry(ref, sandbox, func(e *sessionEntry) error {
 		switch {
 		case e.Host != "":
@@ -113,7 +114,7 @@ func RecordMoveStarted(ref, sandbox, host, txid string) error {
 		case e.PendingHost != "" && e.TxID != txid:
 			return fmt.Errorf("a move of %s to %s (%s) has not finished", ref, e.PendingHost, e.TxID)
 		}
-		e.PendingHost, e.TxID = host, txid
+		e.PendingHost, e.RemoteStore, e.TxID = host, store, txid
 		return nil
 	})
 }
@@ -137,7 +138,7 @@ func ClearMove(ref, sandbox, txid string) error {
 		if e.TxID != txid || e.Host != "" {
 			return fmt.Errorf("the record of %s does not name an unfinished move %s", ref, txid)
 		}
-		e.PendingHost, e.TxID = "", ""
+		e.PendingHost, e.RemoteStore, e.TxID = "", "", ""
 		return nil
 	})
 }

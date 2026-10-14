@@ -88,13 +88,13 @@ func TestAMoveIsRecordedAgainstTheEntryItBeganFrom(t *testing.T) {
 	writeEntries(t, dir, map[string]map[string]any{
 		"claude-code": {"home": "", "sandbox": "brig-claude-code", "teleportable": true},
 	})
-	if err := RecordMoveStarted("claude-code", "brig-other", "me@box", "tx1"); err == nil {
+	if err := RecordMoveStarted("claude-code", "brig-other", "me@box", "", "tx1"); err == nil {
 		t.Errorf("a move was recorded against another sandbox")
 	}
-	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@box", "tx1"); err != nil {
+	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@box", "", "tx1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@box", "tx2"); err == nil {
+	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@box", "", "tx2"); err == nil {
 		t.Errorf("a second move began while the first was unfinished")
 	}
 	if err := RecordMoved("claude-code", "brig-claude-code", "me@box", "/st", "tx2"); err == nil {
@@ -106,7 +106,7 @@ func TestAMoveIsRecordedAgainstTheEntryItBeganFrom(t *testing.T) {
 	if e := readSessionIndex()["claude-code"]; e.away() || e.TxID != "" {
 		t.Errorf("a cleared move left %+v", e)
 	}
-	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@box", "tx3"); err != nil {
+	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@box", "", "tx3"); err != nil {
 		t.Fatal(err)
 	}
 	if err := RecordMoved("claude-code", "brig-claude-code", "me@box", "/st", "tx3"); err != nil {
@@ -116,7 +116,7 @@ func TestAMoveIsRecordedAgainstTheEntryItBeganFrom(t *testing.T) {
 	if e.Host != "me@box" || e.PendingHost != "" || e.RemoteStore != "/st" || !e.isTeleportable() {
 		t.Errorf("a committed move left %+v", e)
 	}
-	if err := RecordMoveStarted("claude-code", "brig-claude-code", "you@other", "tx4"); err == nil ||
+	if err := RecordMoveStarted("claude-code", "brig-claude-code", "you@other", "", "tx4"); err == nil ||
 		!strings.Contains(err.Error(), "already runs on me@box") {
 		t.Errorf("a moved session began a second move: %v", err)
 	}
