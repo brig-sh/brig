@@ -61,6 +61,9 @@ type teleportOptions struct {
 	to     string
 	status bool
 	abort  bool
+	// prepare makes the host --to names ready to take the session, and
+	// moves nothing.
+	prepare bool
 }
 
 // teleportData is a Teleport document: where the session is after the verb.
@@ -75,6 +78,20 @@ type teleportData struct {
 	RemoteStore string `json:"remoteStore,omitempty"`
 	TxID        string `json:"txid,omitempty"`
 	Hull        string `json:"hull,omitempty"`
+	// Prepared is the host a prepare made ready, and what hull said it
+	// holds there.
+	Prepared *preparedData `json:"prepared,omitempty"`
+	// Move is how the move went, from hull's lines as they arrived: each
+	// round of the copy, and the totals.
+	Move *runtime.MoveReport `json:"move,omitempty"`
+}
+
+// preparedData is a prepared host in a Teleport document. At is when brig
+// recorded it, in RFC 3339.
+type preparedData struct {
+	Host string `json:"host"`
+	At   string `json:"at,omitempty"`
+	runtime.Prepared
 }
 
 // teleportCmd is `brig teleport`, after the session is loaded and before any
@@ -88,6 +105,9 @@ func teleportCmd(cfg *wrap.Config, t profile.Profile, ref string, o teleportOpti
 	}
 	if asked != 1 {
 		return usagef("`brig teleport` takes one of --to USER@HOST, --status and --abort")
+	}
+	if o.prepare && o.to == "" {
+		return usagef("--prepare makes a host ready for a move, and needs the host: `brig teleport %s --to USER@HOST --prepare`", ref)
 	}
 	if o.to != "" {
 		if err := runtime.CheckRemote(o.to); err != nil {
@@ -113,6 +133,8 @@ func teleportCmd(cfg *wrap.Config, t profile.Profile, ref string, o teleportOpti
 		return teleportStatus(cfg, ref, wantJSON)
 	case o.abort:
 		return teleportAbort(cfg, ref, wantJSON)
+	case o.prepare:
+		return teleportPrepare(cfg, t, ref, o.to, wantJSON)
 	}
 	return teleportMove(cfg, t, ref, o.to, wantJSON)
 }
@@ -246,6 +268,11 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 			Note("publish them on %s once it runs there: ssh %s brig network publish %s PORT", host, host, ref))
 	}
 	spec := runtime.MigrateSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin, TxID: txid}
+	moved := &runtime.MoveReport{}
+	spec.Progress = func(line string) {
+		hullSaid(line)
+		moved.Add(line)
+	}
 
 	// From here a record names the move, so whatever happens next can be
 	// asked about by name. The destination takes the guest's network first,
@@ -272,8 +299,17 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 		return fmt.Errorf("hull would not move %s to %s, and paused nothing: %w", vm, host, err)
 	}
 
+	if loc.PreparedHost == host {
+		how := "a move there streams"
+		if !loc.PreparedStream {
+			how = "hull said a move there still sends everything"
+		}
+		warnf("%s was prepared for %s at %s and holds its base; %s", host, ref, loc.PreparedAt, how)
+	}
 	warnf("moving %s to %s (move %s): the guest pauses here and resumes there", ref, host, txid)
+	started := time.Now()
 	st, moveErr := mover.Migrate(vm, host, spec)
+	moved.Seconds = time.Since(started).Seconds()
 	// hull's record, read back, says the move never fenced the guest, or
 	// names no part of this move. A record that did not read says neither.
 	undo := moveErr != nil && st.Read && (st.TxID != txid || !runtime.MoveFenced(st.State)) &&
@@ -287,7 +323,7 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 			warnf("%s", notice.Newf("hull reported a failure after the move committed: %v", moveErr).
 				Note("its record says the guest runs on %s, and that is what brig records", host))
 		}
-		return finishMove(ref, vm, host, spec.RemoteStore, txid, st.State, wantJSON)
+		return finishMove(ref, vm, host, spec.RemoteStore, txid, st.State, moved, wantJSON)
 	case undo:
 		// hull's record says the move never fenced the guest, or names no
 		// part of this move: the guest still runs here, and brig undoes
@@ -339,7 +375,8 @@ func errSuffix(err error) string {
 
 // finishMove records a move hull committed: the destination's brig marks the
 // arrival finished, and this host's record says where the session runs.
-func finishMove(ref, vm, host, store, txid, hullState string, wantJSON bool) error {
+// moved is how the move went, when this run saw it; nil from --status.
+func finishMove(ref, vm, host, store, txid, hullState string, moved *runtime.MoveReport, wantJSON bool) error {
 	if _, err := remoteOutput(host, store, receiveVerb, "--json", "--commit", "--sandbox", vm, "--txid", txid); err != nil {
 		// The destination reads hull's record for itself when this is lost.
 		// See wrap.arrivalRefusal.
@@ -350,12 +387,123 @@ func finishMove(ref, vm, host, store, txid, hullState string, wantJSON bool) err
 		return fmt.Errorf("%s runs on %s now, and brig could not record that here: %w. "+
 			"Reach it with ssh %s brig sh %s", ref, host, err, host, ref)
 	}
-	d := teleportData{Ref: ref, Sandbox: vm, State: "moved", Host: host, RemoteStore: store, TxID: txid, Hull: hullState}
+	d := teleportData{Ref: ref, Sandbox: vm, State: "moved", Host: host, RemoteStore: store, TxID: txid, Hull: hullState,
+		Move: moved}
 	if wantJSON {
 		return writeJSONDocument(os.Stdout, "Teleport", d)
 	}
 	fmt.Printf("teleported %s to %s (move %s)\n", ref, host, txid)
+	if moved != nil {
+		fmt.Printf("  %s\n", moved.Summary())
+	}
 	warnf("brig sh %s, run, stop, info and logs now run there; brig rm %s removes the fenced copy left here", ref, ref)
+	return nil
+}
+
+// hullSaid passes on a line hull printed during a move or a prepare, as it
+// arrives. On stderr, with brig's notices: stdout carries the outcome, and
+// with --json only its document.
+func hullSaid(line string) {
+	warnf("hull: %s", line)
+}
+
+// preparedOfLocation is the prepared host the index records, or nil.
+func preparedOfLocation(loc wrap.Location) *preparedData {
+	if loc.PreparedHost == "" {
+		return nil
+	}
+	return &preparedData{Host: loc.PreparedHost, At: loc.PreparedAt,
+		Prepared: runtime.Prepared{Base: loc.PreparedBase, Stream: loc.PreparedStream}}
+}
+
+// teleportPrepare is --prepare: make host ready to take the session, so a
+// move there afterwards carries only what changed. hull puts on host what a
+// move does not need to send while the guest is paused: the image, the
+// kernel and the base disk the sandbox booted from. The guest keeps running
+// here and nothing is fenced, so there is no move to record or to undo; the
+// index notes the host, for the move and for --status.
+//
+// It runs the checks a move runs, here and on host, so a host that could not
+// take the session is refused before hull copies anything to it.
+func teleportPrepare(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSON bool) error {
+	vm := cfg.VMName
+	loc := cfg.Location()
+	switch {
+	case loc.Host != "":
+		return fmt.Errorf("%s runs on %s. A move starts from there, and so does its prepare", ref, loc.Host)
+	case loc.PendingHost != "":
+		return fmt.Errorf("a move of %s to %s (%s) has not finished. `brig teleport %s --status` "+
+			"finds out where it stands", ref, loc.PendingHost, loc.TxID, ref)
+	}
+	if _, err := sourceChecks(cfg, t, ref); err != nil {
+		return err
+	}
+	preparer, ok := cfg.Runtime.(runtime.MovePreparer)
+	if !ok {
+		return moveRefusal("this runtime has no way to prepare a host for a move", "")
+	}
+	net, err := cfg.MoveNetwork()
+	if err != nil {
+		return err
+	}
+	report, err := probeRemote(host, ref, t.Name, vm, net)
+	if err != nil {
+		return err
+	}
+	if err := checkProbe(cfg, report, host, ref, "", net); err != nil {
+		return err
+	}
+	warnf("preparing %s for %s: the guest keeps running here", host, ref)
+	spec := runtime.PrepareSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin, Progress: hullSaid}
+	p, err := preparer.MigratePrepare(vm, host, spec)
+	if err != nil {
+		return fmt.Errorf("hull did not prepare %s for %s, and nothing was paused: %w", host, ref, err)
+	}
+	// A host that holds the sandbox's base is recorded, with whether hull
+	// said a move there streams: an older hvi there takes the base and
+	// still gets the whole checkpoint and disk, and the record says which.
+	// A host that holds no base is not prepared for anything a move uses.
+	at := time.Now()
+	if p.Base != "" {
+		if err := wrap.RecordPrepared(ref, vm, host, p.Base, p.Stream, at); err != nil {
+			return fmt.Errorf("%s holds the base of %s, and brig could not record that here: %w", host, ref, err)
+		}
+	}
+	d := teleportData{Ref: ref, Sandbox: vm, State: "here",
+		Prepared: &preparedData{Host: host, At: at.UTC().Format(time.RFC3339), Prepared: p}}
+	if !p.Stream {
+		n := notice.Newf("%s holds what hull could put there, and a move of %s there still sends the "+
+			"whole checkpoint and disk: %s", host, ref, orNone(p.Why))
+		if p.Base == "" {
+			n = n.Note("it holds no base of %s, so brig records no prepared host", ref)
+		}
+		warnf("%s", n)
+	}
+	if wantJSON {
+		return writeJSONDocument(os.Stdout, "Teleport", d)
+	}
+	switch {
+	case p.Stream:
+		fmt.Printf("prepared %s for %s\n", host, ref)
+	case p.Base != "":
+		fmt.Printf("prepared %s for %s; a move there still sends the whole checkpoint and disk\n", host, ref)
+	default:
+		fmt.Printf("%s is not prepared for %s\n", host, ref)
+	}
+	for _, st := range p.Steps {
+		line := "  " + st.What + ": " + st.Result
+		if st.Detail != "" {
+			line += " (" + st.Detail + ")"
+		}
+		fmt.Println(line)
+	}
+	if p.Base != "" {
+		fmt.Printf("  base digest: %s\n", p.Base)
+	}
+	fmt.Println("  gateway: brig starts it there at the move, with the session's egress rules")
+	if p.Stream {
+		warnf("`brig teleport %s --to %s` now sends what the guest changed since its base", ref, host)
+	}
 	return nil
 }
 
@@ -375,13 +523,17 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 	vm := cfg.VMName
 	loc := cfg.Location()
 	d := teleportData{Ref: ref, Sandbox: vm, State: "here", Host: loc.Host, PendingHost: loc.PendingHost,
-		RemoteStore: loc.RemoteStore, TxID: loc.TxID}
+		RemoteStore: loc.RemoteStore, TxID: loc.TxID, Prepared: preparedOfLocation(loc)}
 	if loc.Host != "" {
 		d.State = "moved"
 		return printTeleport(d, wantJSON, fmt.Sprintf("%s runs on %s (move %s)", ref, loc.Host, loc.TxID))
 	}
 	if loc.PendingHost == "" {
-		return printTeleport(d, wantJSON, fmt.Sprintf("%s runs on this host; no move of it is recorded", ref))
+		line := fmt.Sprintf("%s runs on this host; no move of it is recorded", ref)
+		if p := d.Prepared; p != nil {
+			line += fmt.Sprintf(". %s was prepared for it at %s", p.Host, p.At)
+		}
+		return printTeleport(d, wantJSON, line)
 	}
 	mover, ok := cfg.Runtime.(runtime.Migrator)
 	if !ok || cfg.Runtime == nil {
@@ -412,7 +564,7 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 	}
 	switch {
 	case st.TxID == loc.TxID && st.State == runtime.MoveCommitted:
-		return finishMove(ref, vm, loc.PendingHost, loc.RemoteStore, loc.TxID, st.State, wantJSON)
+		return finishMove(ref, vm, loc.PendingHost, loc.RemoteStore, loc.TxID, st.State, nil, wantJSON)
 	case st.TxID == loc.TxID && st.State == runtime.MoveAborted:
 		abortReceive(loc.PendingHost, loc.RemoteStore, ref, vm, loc.TxID)
 		if err := wrap.ClearMove(ref, vm, loc.TxID); err != nil {
@@ -768,7 +920,8 @@ func probeRemote(host, ref, agent, sandbox string, net wrap.MoveNetwork) (probeR
 }
 
 // checkProbe refuses a destination that cannot take this session, each
-// with its reason, before anything is paused.
+// with its reason, before anything is paused. txid is the move's, or "" for
+// a prepare.
 func checkProbe(cfg *wrap.Config, r probeReport, host, ref, txid string, net wrap.MoveNetwork) error {
 	vm := cfg.VMName
 	switch {
@@ -814,7 +967,8 @@ func checkProbe(cfg *wrap.Config, r probeReport, host, ref, txid string, net wra
 			why = sb.Error
 		}
 		return fmt.Errorf("cannot tell whether %s already has a sandbox %s: %s. Nothing was paused", host, vm, why)
-	} else if (sb.Exists || sb.Arriving != "") && sb.Arriving != txid {
+	} else if (sb.Exists || sb.Arriving != "") && (txid == "" || sb.Arriving != txid) {
+		// txid is "" for a prepare, which no move arriving there is.
 		what := "a sandbox " + vm
 		if sb.Arriving != "" {
 			what = "move " + sb.Arriving + " of " + vm + " arriving"

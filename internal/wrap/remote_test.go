@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brig-sh/brig/internal/profile"
 )
@@ -138,5 +139,70 @@ func TestRememberingASessionKeepsTheHostAMoveRecorded(t *testing.T) {
 	c.rememberSession()
 	if e := readSessionIndex()["claude-code"]; e.Host != "me@box" || e.TxID != "tx1" {
 		t.Errorf("rememberSession dropped the move: %+v", e)
+	}
+}
+
+// A prepare is recorded against the session's own entry, and names the host
+// it made ready and no other: preparing one host and then asking about the
+// session finds that host, a second prepare replaces the first, another
+// session's entry is untouched, and a run that records the session again
+// keeps it. A committed move drops it, since the next move starts from the
+// host the session went to; an aborted one keeps it, since the base is still
+// there. A session that is not here is refused.
+func TestAPrepareRecordsTheHostItMadeReady(t *testing.T) {
+	dir := isolateState(t)
+	writeEntries(t, dir, map[string]map[string]any{
+		"claude-code":   {"home": "", "sandbox": "brig-claude-code", "teleportable": true},
+		"claude-code@b": {"home": "", "sandbox": "brig-claude-code-b", "teleportable": true},
+		"claude-code@m": {"home": "", "sandbox": "brig-claude-code-m", "teleportable": true, "host": "me@box", "txid": "tx0"},
+	})
+	at := time.Date(2026, 10, 15, 1, 30, 0, 0, time.FixedZone("EEST", 3*3600))
+	if err := RecordPrepared("claude-code", "brig-other", "me@box", "ab12", true, at); err == nil {
+		t.Errorf("a prepare was recorded against another sandbox")
+	}
+	if err := RecordPrepared("claude-code@m", "brig-claude-code-m", "you@other", "ab12", true, at); err == nil {
+		t.Errorf("a prepare was recorded for a session that runs on another host")
+	}
+	if err := RecordPrepared("claude-code", "brig-claude-code", "me@box", "ab12", true, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPrepared("claude-code", "brig-claude-code", "me@pi", "cd34", false, at); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := profile.Lookup("claude")
+	loc, ok, err := SessionLocation(p, "")
+	if err != nil || !ok || loc.PreparedHost != "me@pi" || loc.PreparedBase != "cd34" || loc.PreparedStream ||
+		loc.PreparedAt != "2026-10-14T22:30:00Z" || loc.Away() {
+		t.Errorf("after two prepares: %+v, %v, %v", loc, ok, err)
+	}
+	if b, _, _ := SessionLocation(p, "b"); b.PreparedHost != "" {
+		t.Errorf("preparing claude-code claimed claude-code@b: %+v", b)
+	}
+	c := mustLoadAs(t, "claude", Options{})
+	c.rememberSession()
+	if e := readSessionIndex()["claude-code"]; e.PreparedHost != "me@pi" || e.PreparedBase != "cd34" {
+		t.Errorf("rememberSession dropped the prepared host: %+v", e)
+	}
+	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@pi", "", "tx1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearMove("claude-code", "brig-claude-code", "tx1"); err != nil {
+		t.Fatal(err)
+	}
+	if e := readSessionIndex()["claude-code"]; e.PreparedHost != "me@pi" {
+		t.Errorf("a move that never left dropped the prepared host: %+v", e)
+	}
+	if err := RecordMoveStarted("claude-code", "brig-claude-code", "me@pi", "/st", "tx2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPrepared("claude-code", "brig-claude-code", "me@pi", "ef56", true, at); err == nil {
+		t.Errorf("a prepare was recorded while a move was under way")
+	}
+	if err := RecordMoved("claude-code", "brig-claude-code", "me@pi", "/st", "tx2"); err != nil {
+		t.Fatal(err)
+	}
+	if e := readSessionIndex()["claude-code"]; e.PreparedHost != "" || e.PreparedBase != "" || e.PreparedStream ||
+		e.PreparedAt != "" {
+		t.Errorf("a committed move kept the prepared host: %+v", e)
 	}
 }

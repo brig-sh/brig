@@ -114,6 +114,7 @@ const teleportUsage = `brig teleport -- move a running sandbox to another host
 
 usage:
   brig teleport <ref> --to USER@HOST [--json]
+  brig teleport <ref> --to USER@HOST --prepare [--json]
   brig teleport <ref> --status [--json]
   brig teleport <ref> --abort [--json]
 
@@ -122,12 +123,19 @@ memory, its disk and its network rules, without booting it again. The host
 needs brig, hull and hvi. Brig checks first that the host can run the session
 and enforce its policy, and refuses with the reason before anything is paused.
 Afterwards sh, run, stop, info and logs on the ref run there, over ssh.
+hull's lines about the copy go to stderr as they arrive.
+
+With --prepare, hull puts the image, the kernel and the sandbox's base disk
+on USER@HOST and moves nothing: the guest keeps running here, and a move
+there afterwards sends only what changed since the base.
 
 flags:
       --to USER@HOST  the host to move the session to
       --status        where a move stands, and finish recording one whose end
                       brig did not see
       --abort         call off a move that has not finished
+      --prepare       with --to, make the host ready for a move and move
+                      nothing
       --json          print the outcome as JSON
 
 docs/teleport.md has the steps and what survives a move.

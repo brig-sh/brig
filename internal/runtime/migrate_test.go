@@ -255,3 +255,70 @@ func TestAMoveIsNotHandedAnotherTransport(t *testing.T) {
 		t.Errorf("the move was not asked: %s", got)
 	}
 }
+
+// hull's lines on stderr during a move reach the caller as hull prints them,
+// not when it exits: the fake hull prints a line and then waits until the
+// caller has seen it, so a call that held the lines back until exit would
+// never let it finish. A carriage return ends a line too, and the dry run,
+// which is the plan rather than progress, hands nothing on.
+func TestAMovesLinesArriveAsHullPrintsThem(t *testing.T) {
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen")
+	h, _ := migrateHull(t, "case \"$*\" in *--dry-run*) echo 'Dry run: s can move' >&2 ;; *) "+
+		"printf 'Move "+tx1+" of s to me@box, epoch 1\\n' >&2; "+
+		"i=0; while [ ! -f "+seen+" ]; do i=$((i+1)); [ $i -gt 200 ] && exit 3; sleep 0.05; done; "+
+		"printf 'round 1\\rround 2\\n' >&2; echo committed > RECORD ;; esac")
+	var lines []string
+	progress := func(line string) {
+		lines = append(lines, line)
+		if strings.HasPrefix(line, "Move ") {
+			if err := os.WriteFile(seen, nil, 0o600); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	if _, err := h.Migrate("s", "me@box", MigrateSpec{DryRun: true, Progress: progress}); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 0 {
+		t.Errorf("the dry run handed on %q", lines)
+	}
+	st, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1, Progress: progress})
+	if err != nil || st.State != MoveCommitted {
+		t.Fatalf("move: %+v, %v (lines %q)", st, err, lines)
+	}
+	want := "Move " + tx1 + " of s to me@box, epoch 1|round 1|round 2"
+	if got := strings.Join(lines, "|"); got != want {
+		t.Errorf("lines %q, want %q", got, want)
+	}
+}
+
+// A move that fails still says why when its lines were streamed: the error
+// keeps hull's steps and its error line, as call's does.
+func TestAStreamedMoveThatFailsSaysWhy(t *testing.T) {
+	h, _ := migrateHull(t, "echo transferring > RECORD; printf 'Sending s to me@box\\n' >&2; "+
+		"echo 'error: transfer to me@box: ssh: connection reset' >&2; exit 1")
+	var lines []string
+	st, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1, Progress: func(l string) { lines = append(lines, l) }})
+	if err == nil || !strings.Contains(err.Error(), "connection reset") || !strings.Contains(err.Error(), "Sending s") {
+		t.Errorf("a failed streamed move came back as %v", err)
+	}
+	if !st.Read || st.State != "transferring" || len(lines) != 2 {
+		t.Errorf("record %+v, lines %q", st, lines)
+	}
+}
+
+// readLines hands on a line longer than its buffer in pieces rather than
+// stopping, and reads to the end, so hull is never left blocked writing.
+func TestReadLinesTakesALongLineAndReadsToTheEnd(t *testing.T) {
+	long := strings.Repeat("x", maxLine+10)
+	var got []string
+	readLines(strings.NewReader("a\n"+long+"\nb\r\n\n  c  "), func(l string) { got = append(got, l) })
+	if len(got) != 5 || got[0] != "a" || len(got[1])+len(got[2]) != len(long) || got[3] != "b" || got[4] != "c" {
+		var lens []int
+		for _, l := range got {
+			lens = append(lens, len(l))
+		}
+		t.Errorf("got %d lines of lengths %v", len(got), lens)
+	}
+}
