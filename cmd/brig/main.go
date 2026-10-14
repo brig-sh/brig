@@ -58,7 +58,8 @@ usage:
                                                  serving that sandbox alone
   brig teleport <ref> --to USER@HOST             move the running sandbox to another
                                                  host over ssh; --status and --abort
-                                                 ask about or call off a move
+                                                 ask about or call off a move, and
+                                                 --prepare readies the host first
   brig info <ref>                                print the execution envelope and the
                                                  full environment, by name. Fails
                                                  if a required secret is missing
@@ -1119,6 +1120,7 @@ var brigFlags = []struct {
 	{long: "to", value: true, position: posTeleport},
 	{long: "status", position: posTeleport},
 	{long: "abort", position: posTeleport},
+	{long: "prepare", position: posTeleport},
 	{long: "json", position: posTeleport},
 }
 
@@ -1743,6 +1745,7 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		{"to", "", func(n string) { fs.StringVar(&o.teleport.to, n, "", "") }},
 		{"status", "", func(n string) { fs.BoolVar(&o.teleport.status, n, false, "") }},
 		{"abort", "", func(n string) { fs.BoolVar(&o.teleport.abort, n, false, "") }},
+		{"prepare", "", func(n string) { fs.BoolVar(&o.teleport.prepare, n, false, "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
 		// lands in one place and the last one on the line wins.
