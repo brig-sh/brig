@@ -110,6 +110,30 @@ flags:
 brig help lists every command, every flag and every setting.
 `
 
+const teleportUsage = `brig teleport -- move a running sandbox to another host
+
+usage:
+  brig teleport <ref> --to USER@HOST [--json]
+  brig teleport <ref> --status [--json]
+  brig teleport <ref> --abort [--json]
+
+Moves a teleportable session's running sandbox to USER@HOST over ssh: its
+memory, its disk and its network rules, without booting it again. The host
+needs brig, hull and hvi. Brig checks first that the host can run the session
+and enforce its policy, and refuses with the reason before anything is paused.
+Afterwards sh, run, stop, info and logs on the ref run there, over ssh.
+
+flags:
+      --to USER@HOST  the host to move the session to
+      --status        where a move stands, and finish recording one whose end
+                      brig did not see
+      --abort         call off a move that has not finished
+      --json          print the outcome as JSON
+
+docs/teleport.md has the steps and what survives a move.
+brig help lists every command, every flag and every setting.
+`
+
 const infoUsage = `brig info -- print the execution envelope and the environment
 
 usage:
@@ -216,6 +240,7 @@ var verbUsages = map[string]string{
 	"ls":         lsUsage,
 	"doctor":     doctorUsage,
 	"version":    versionUsage,
+	"teleport":   teleportUsage,
 	"agent":      agentUsage,
 	"secret":     secretUsage,
 	"policy":     policyUsage,

@@ -56,6 +56,9 @@ usage:
   brig logs --gateway [<ref>]                    the gateway's log: the shared
                                                  one, or with a ref the gateway
                                                  serving that sandbox alone
+  brig teleport <ref> --to USER@HOST             move the running sandbox to another
+                                                 host over ssh; --status and --abort
+                                                 ask about or call off a move
   brig info <ref>                                print the execution envelope and the
                                                  full environment, by name. Fails
                                                  if a required secret is missing
@@ -464,9 +467,15 @@ func dispatch(args []string) error {
 		}
 		rmDryRun = o.dryRun
 		rest = others
-	case "run", "sh", "stop", "info", "plan":
+	case "run", "sh", "stop", "info", "plan", "teleport":
 		// The taught lifecycle spellings. They fall through to the run line
 		// below, which is where the ref and the flags are read.
+	case probeVerb:
+		// The two halves of a move that run on the destination, asked over
+		// ssh by the source's brig. Hidden: nobody types them.
+		return teleportProbeCmd(os.Stdout, rest)
+	case receiveVerb:
+		return teleportReceiveCmd(os.Stdout, rest)
 	case "network":
 		// The subcommands take a ref, so they continue on the run line below.
 		// The verb keeps the group's name, and every message that names the
@@ -568,6 +577,8 @@ func dispatch(args []string) error {
 	case verb == "info" || verb == "env" || verb == "plan":
 	// All three answer with what the sandbox publishes.
 	case onPortLine(verb):
+	case verb == "teleport":
+		// The outcome of the move, or where it stands, as a Teleport document.
 	case verb == "run" || verb == "sh":
 		// The state main needs to print the Run object once dispatch returns. The
 		// sandbox name is not known until Load below; the ref is what was typed.
@@ -633,6 +644,20 @@ func dispatch(args []string) error {
 	// runs nothing once the sandbox is up, so there is nothing to read.
 	if verb == "sh" || (verb == "run" && t.IsShell() && !opts.detach) {
 		if err := checkShellCommand(tail); err != nil {
+			return err
+		}
+	}
+	// A session moved to another host runs there, and so does every verb
+	// that acts on its sandbox. Asked before the runtime here is found or the
+	// session loaded: loading it asks this host's runtime about a sandbox
+	// that is not here, and the credential resolution after that would open
+	// this host's store for a session that runs on another. See remote.go.
+	loc, filed, err := wrap.SessionLocation(t, opts.load.Name)
+	if err != nil {
+		return err
+	}
+	if filed && loc.Away() {
+		if handled, err := remoteVerb(verb, g, rest, t, loc, wantJSON); handled {
 			return err
 		}
 	}
@@ -707,7 +732,19 @@ func dispatch(args []string) error {
 		// The slug, not the name as typed: ParseRef refuses a label that is not
 		// already its own slug, so naming RawName here would print a ref brig
 		// would then turn away. The index is keyed by the slug too.
-		return removeSandbox(cfg, session.Ref{Agent: profileName, Label: cfg.Slug}.String(), rmDryRun)
+		ref := session.Ref{Agent: profileName, Label: cfg.Slug}.String()
+		// A session that runs on another host leaves at most its old copy
+		// here, and rm of that is a different question. See remote.go.
+		if loc := cfg.Location(); loc.Away() {
+			return removeMovedCopy(cfg, t, ref, loc, rmDryRun)
+		}
+		return removeSandbox(cfg, ref, rmDryRun)
+	case "teleport":
+		// Ahead of BuildEnv for the reason stop and rm are: a move resolves
+		// no credential. What the guest holds is in its memory, and that is
+		// what moves.
+		return teleportCmd(cfg, t, session.Ref{Agent: profileName, Label: cfg.Slug}.String(),
+			opts.teleport, wantJSON)
 	case "network ls":
 		return reportPorts(cfg, refDisplay(profileName, opts), wantJSON)
 	case "network publish":
@@ -899,6 +936,9 @@ type options struct {
 	// all is `brig network unpublish --all`, which withdraws every port this
 	// sandbox offers.
 	all bool
+	// teleport is what `brig teleport` was asked: a move, or where one
+	// stands, or calling one off.
+	teleport teleportOptions
 }
 
 // repeated collects a flag written more than once, in the order it was
@@ -945,6 +985,12 @@ const (
 	// posRun is the run line, from the verb to the ref. Every flag that shapes
 	// a run is here.
 	posRun
+	// posTeleport is the line of `brig teleport`, which takes a ref and its
+	// own small set. A position of its own so that --to, --status and
+	// --abort are brig's only there: on the run line they are words an
+	// agent may well have, and `brig run codex --status` must keep reaching
+	// codex.
+	posTeleport
 	// posPublish is the line of the `brig network` verbs, which take a ref
 	// and their own small set. A position of their own because those verbs
 	// shape no run: --mem or --image on one of them is a mistake
@@ -1067,6 +1113,13 @@ var brigFlags = []struct {
 	// And on the publish line, where the ports are bare words: without this
 	// the flag falls into the tail and is read as a port.
 	{long: "json", position: posPublish},
+	// The teleport line: where to move the session, or which question to
+	// ask about a move. See posTeleport. --json there prints the outcome as
+	// a Teleport document.
+	{long: "to", value: true, position: posTeleport},
+	{long: "status", position: posTeleport},
+	{long: "abort", position: posTeleport},
+	{long: "json", position: posTeleport},
 }
 
 // deprecatedFlags are the spellings on their way out, and what replaces each.
@@ -1214,7 +1267,7 @@ func helpFlagTakesValue(verb, name string) bool {
 	if verb == "logs" {
 		return name == "--tail"
 	}
-	mine, takesValue := ours(name, posRun)
+	mine, takesValue := ours(name, linePosition(verb))
 	return mine && takesValue
 }
 
@@ -1299,10 +1352,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 	// Which vocabulary brig reads on this line. publish and unpublish shape no
 	// run, so a run-line flag on one of them is a mistake to name rather than
 	// a flag to honour. See posPublish.
-	at := posRun
-	if onPortLine(verb) {
-		at = posPublish
-	}
+	at := linePosition(verb)
 	passed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -1399,6 +1449,19 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 		}
 	}
 	return mine, ref, word, tail, nil
+}
+
+// linePosition is the vocabulary brig reads on a verb's line: the publish
+// line's for the network verbs, the teleport line's for teleport, and the run
+// line's for the rest. split and completion both read it.
+func linePosition(verb string) position {
+	switch {
+	case onPortLine(verb):
+		return posPublish
+	case verb == "teleport":
+		return posTeleport
+	}
+	return posRun
 }
 
 // forwardsTail reports whether a verb hands what follows the ref to the agent.
@@ -1499,6 +1562,11 @@ func agentTail(verb string, tail []string) []string {
 		// A flag brig reads only on the publish line stands nowhere on this
 		// one, so the agent's own --all is the agent's.
 		if found == posPublish && !takesPorts(verb) {
+			continue
+		}
+		// Nor one brig reads only on the teleport line: `brig run codex
+		// --status` is codex's question, and nothing about it is brig's.
+		if found == posTeleport {
 			continue
 		}
 		name, _, _ := strings.Cut(a, "=")
@@ -1671,6 +1739,10 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		{"publish", "", func(n string) { fs.Var(repeated{&o.load.Publish}, n, "") }},
 		// Only unpublish reads it, and split only lets it through there.
 		{"all", "", func(n string) { fs.BoolVar(&o.all, n, false, "") }},
+		// The teleport line's. split lets them through on no other verb.
+		{"to", "", func(n string) { fs.StringVar(&o.teleport.to, n, "", "") }},
+		{"status", "", func(n string) { fs.BoolVar(&o.teleport.status, n, false, "") }},
+		{"abort", "", func(n string) { fs.BoolVar(&o.teleport.abort, n, false, "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
 		// lands in one place and the last one on the line wins.
@@ -1950,6 +2022,34 @@ func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 		}
 		rows = append(rows, row)
 	}
+	return movedRows(rows)
+}
+
+// movedRows marks the rows of sessions the index says were moved to another
+// host, and adds one for each such session this host's runtime no longer
+// lists, so ls names every session a verb here reaches. The STATE of a moved
+// session is brig's word, not the runtime's: what runs here, if anything, is
+// the fenced copy the move left, and calling it running would send a reader
+// to the wrong host.
+func movedRows(rows []sandboxRow) []sandboxRow {
+	listed := map[string]int{}
+	for i, r := range rows {
+		listed[r.name] = i
+	}
+	for _, loc := range wrap.RemoteSessions() {
+		state := "moved"
+		if loc.Host == "" {
+			state = "moving"
+		}
+		i, ok := listed[loc.Sandbox]
+		if !ok {
+			rows = append(rows, sandboxRow{ref: loc.Ref, name: loc.Sandbox, teleportable: true})
+			i = len(rows) - 1
+		}
+		rows[i].ref, rows[i].state = loc.Ref, state
+		rows[i].host, rows[i].pendingHost, rows[i].teleportable = loc.Host, loc.PendingHost, true
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
 	return rows
 }
 
@@ -1973,6 +2073,10 @@ func pruneSessionIndex(list []runtime.Instance, rt runtime.Runtime) {
 		live = append(live, inst.Name)
 	}
 	live = append(live, unlistedButNotGone(live, rt)...)
+	// A sandbox a move is still bringing here may not be on hull's list
+	// yet, and its session and posture are what the moved guest is reached
+	// by. See wrap.ArrivingSandboxes.
+	live = append(live, wrap.ArrivingSandboxes()...)
 	wrap.PruneSessions(live)
 	runtime.PruneBootedNets(live)
 }
@@ -2019,6 +2123,10 @@ type sandboxRow struct {
 	// teleportable is the session's record, read from the index. A sandbox
 	// with no entry reads false, which is what it is to every verb too.
 	teleportable bool
+	// host is where a teleported session runs, and pendingHost where a move
+	// that has not finished is taking it. See movedRows.
+	host        string
+	pendingHost string
 }
 
 // sandboxListJSON is `brig ls` as data, the SandboxList payload. The runtime
@@ -2054,6 +2162,10 @@ type sandboxJSON struct {
 	// Teleportable is added within the apiVersion, and omitted when false so
 	// a listing of ordinary sandboxes is the document it was before.
 	Teleportable bool `json:"teleportable,omitempty"`
+	// Host and PendingHost are where a teleported session runs and where an
+	// unfinished move is taking one, added on the same terms.
+	Host        string `json:"host,omitempty"`
+	PendingHost string `json:"pendingHost,omitempty"`
 }
 
 // sandboxListData turns the rows the table prints into the SandboxList payload.
@@ -2066,7 +2178,8 @@ func sandboxListData(rows []sandboxRow, rt runtime.Runtime) sandboxListJSON {
 		out.Runtime = sandboxRuntimeJSON{Kind: rt.Kind(), Bin: rt.Bin(), Available: true}
 	}
 	for _, r := range rows {
-		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace, Teleportable: r.teleportable}
+		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace, Teleportable: r.teleportable,
+			Host: r.host, PendingHost: r.pendingHost}
 		// A ref brig has for the sandbox carries its agent and label, split here so
 		// the consumer does not. A row with none is included ref-less: the sandbox
 		// is real, and the table shows it too.
@@ -2136,7 +2249,12 @@ func printSandboxes(w io.Writer, rows []sandboxRow) {
 // and it changes the shape of every user's listing for the few who have one.
 // The JSON carries the field.
 func workspaceCell(r sandboxRow) string {
-	if r.teleportable {
+	switch {
+	case r.host != "":
+		return "(in the sandbox disk on " + r.host + ")"
+	case r.pendingHost != "":
+		return "(in the sandbox disk, moving to " + r.pendingHost + ")"
+	case r.teleportable:
 		return "(in the sandbox disk)"
 	}
 	return r.workspace
@@ -2548,11 +2666,29 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	if err != nil {
 		return err
 	}
+	// The copy a move left here is not removed with everything else. While
+	// the move is unfinished it may be the session's only copy, and once it
+	// committed `brig rm <ref>` removes it after the other host says the
+	// session runs there; see removeMovedCopy.
+	moved := map[string]wrap.Location{}
+	for _, loc := range wrap.RemoteSessions() {
+		moved[loc.Sandbox] = loc
+	}
 	var mine []runtime.Instance
 	for _, inst := range list {
-		if strings.HasPrefix(inst.Name, sandboxPrefix) {
-			mine = append(mine, inst)
+		if !strings.HasPrefix(inst.Name, sandboxPrefix) {
+			continue
 		}
+		if loc, ok := moved[inst.Name]; ok {
+			where := "was moved to " + loc.Host
+			if loc.Host == "" {
+				where = "is being moved to " + loc.PendingHost
+			}
+			warnf("%s", notice.Newf("kept %s: %s %s", inst.Name, loc.Ref, where).
+				Note("`brig rm %s` removes the copy here once that host says the session runs there", loc.Ref))
+			continue
+		}
+		mine = append(mine, inst)
 	}
 	if o.dryRun {
 		// The list is the command's whole output, so it goes where output
@@ -2587,6 +2723,9 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		wrap.ForgetSlugClaim(inst.Name)
 		runtime.ForgetPublications(inst.Name)
 		runtime.ForgetBootedNet(inst.Name)
+		if err == nil {
+			wrap.ForgetArrival(inst.Name)
+		}
 		if err != nil {
 			warnf("could not remove %s: %v", inst.Name, err)
 			continue
@@ -3761,7 +3900,7 @@ var globalJSON bool
 // --json left of it is a usage error rather than a flag dropped on the floor.
 func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
-	case "ls", "info", "plan", "env", "doctor", "version", "--version", "run", "sh":
+	case "ls", "info", "plan", "env", "doctor", "version", "--version", "run", "sh", "teleport":
 		return true
 	case "agent", "secret":
 		return len(rest) > 0 && rest[0] == "ls"
@@ -3780,8 +3919,8 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
 		"ls, info, plan, agent ls, secret ls, doctor, version and the network verbs "+
-		"(env takes it too, but env is deprecated; prefer info), and for run "+
-		"and sh", verb)
+		"(env takes it too, but env is deprecated; prefer info), for run "+
+		"and sh, and for teleport", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run

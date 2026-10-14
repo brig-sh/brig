@@ -253,6 +253,13 @@ run as a set of sandboxes
 
 Until remote operation ships, `ssh` to the host and run Brig there.
 
+One narrow part of remote operation exists now: `brig teleport` moves a
+running [teleportable session](teleport.md) to another host, and the verbs on
+that session then run there, over the same `ssh`. It drives the brig on that
+host, which runs the session as one of its own. It is not a remote API, and
+it covers only teleportable sessions on hull's `hvi`. Remote operation in
+general stays with #482.
+
 ## Proposing one of these anyway
 
 Open an issue with the `enhancement` label. Name the item. Say which trigger

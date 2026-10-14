@@ -144,7 +144,7 @@ func TestParseNetworkAndOffline(t *testing.T) {
 func TestBrigFlagsDeclareAPosition(t *testing.T) {
 	for _, f := range brigFlags {
 		switch f.position {
-		case posGlobal, posRun, posPublish:
+		case posGlobal, posRun, posPublish, posTeleport:
 		default:
 			t.Errorf("brig flag --%s has no position", f.long)
 		}

@@ -2,9 +2,9 @@
 
 A teleportable session owns all of its storage. Its guest root is a block
 disk, its guest home is a directory on that disk, and no host directory is
-shared into it. Brig gives a session this shape so that a later release can
-move the running sandbox to another host as a whole. This page describes the
-session mode and what that move will do. Brig does not move a session yet.
+shared into it. Brig gives a session this shape so that it can move the
+running sandbox to another host as a whole, with `brig teleport`. This page
+describes the session mode and the move.
 
 ## Start one
 
@@ -71,7 +71,7 @@ sandbox, values included. An image that boots through urunit gets
 `/urunit.conf` on its root disk. A generic boot gets `/urunc-env` in the
 boot initrd, which hull keeps in the sandbox's instance directory. On a
 teleportable session the root disk is the session's storage. It lives as
-long as the session, and a later release will move it to another host. A
+long as the session, and `brig teleport` moves it to another host. A
 credential written there would keep the value the sandbox booted with after
 you rotate it, and would travel with the session.
 
@@ -137,6 +137,12 @@ entry as teleportable from its empty guest home.
 | `--teleportable` for a profile whose workload reads its credentials at boot (`kind: gui`) | `1` |
 | A run on a sandbox whose guest hull's record shows `fenced` by a checkpoint or still `restoring` | `1` |
 | A run path other than hull on `hvi` | `7` |
+| `brig teleport` of a ref with no sandbox | `3` |
+| `brig teleport` of a session that is not teleportable, or not on hull's `hvi` | `7` |
+| `brig teleport` of a session under an egress policy, to a host whose gateway cannot enforce one | `7` |
+| `brig teleport` that the destination cannot take: no brig, hull or hvi there, no such agent, the sandbox name or the guest's address taken, too little room | `1` |
+| `brig teleport` of a stopped or parked sandbox, one renamed with `BRIG_NAME`, or one whose network or policy changed since it booted | `1` |
+| `brig teleport` with none, or more than one, of `--to`, `--status` and `--abort`, or a destination that is not `USER@HOST` | `2` |
 
 Each refusal names the setting to drop, or `brig rm <ref>` when the session
 has to start over.
@@ -155,56 +161,172 @@ the answer. A sandbox booted on a `block` root with no host directory shared
 in is a teleportable session, and Brig refuses to recreate it, running or
 stopped. A running one can be used again with `--teleportable`.
 
-## What teleport will do
-
-This release does not move a session. The next one adds a verb for it:
+## Move a session
 
 ```bash
 brig teleport <ref> --to <user>@<host>
 ```
 
-The destination needs Brig, hull and hvi, reached over `ssh`. The move goes
-through these steps:
+`brig teleport` moves the running sandbox of a teleportable session to
+another host over `ssh`. The guest keeps its memory, its processes, its open
+files and its disk. It does not boot again.
 
-1. Brig checks the session is teleportable, that the destination's hull can
-   enforce the session's network policy, and that the two hosts can run the
-   same machine. The second check covers the backend, the hvi build, the CPU,
-   the counter frequency and the interrupt controller. A move between hosts
-   that differ is refused before anything is paused.
-2. hull checkpoints the guest and fences it. It pauses the guest, writes its
-   memory, its vCPUs, its devices and its interrupt controller, and syncs the
-   disk. From then on the source never runs again in that process: hull
-   refuses to resume it. The disk is copied after this step, so a source that
-   kept running would write to a disk that no longer matches the memory that
-   was shipped.
-3. The checkpoint and the disk are copied to the destination over `ssh`.
-4. The destination's hull restores the sandbox paused.
-5. The destination resumes the guest. From then on, `brig sh`, `brig stop`
-   and the other verbs on that ref go to the destination host.
+The destination needs Brig, hull and hvi, and an agent of the same name.
+Brig reaches it as `ssh <user>@<host> brig ...`, so the account there needs
+`brig` on the `PATH` that a non-interactive ssh session gets, and an ssh key
+that logs in without a password prompt. `BRIG_TELEPORT_REMOTE_BRIG` names
+another `brig` there.
 
-The invariant the steps keep is that at most one host executes the VM. The
-source is fenced before anything leaves it, and the destination runs only
-once it holds the whole checkpoint. If a step fails before Brig asks the
-destination to resume, the destination's copy is discarded. The session is
-then restored on the source from its own checkpoint, or the copy is tried
-again. Brig never restores the source once it has asked the destination to
-resume. A connection lost at that moment can leave the session stopped on
-both hosts, with its checkpoint on both. It never leaves it running on both.
+### What a move does
 
-What the guest sees:
+1. **Checks on this host.** The session is teleportable and runs on hull's
+   `hvi` backend. hull's record of the boot shows a `block` root with no host
+   directory shared in. The sandbox is running, and no checkpoint or earlier
+   move has parked it. `BRIG_NAME` is unset, because the brig on the
+   destination derives the sandbox name from the ref alone. The network and
+   the policy that Brig resolves for the session now are the ones the
+   sandbox booted with, because those are the rules the move carries.
+2. **The probe.** Brig runs `brig teleport-probe` on the destination over
+   ssh. That command changes nothing. It reports the brig version there, the
+   runtime that `BRIG_RUNTIME` resolves to, hull and hvi and their versions,
+   whether hull's network gateway there takes egress rules (the same
+   `hull network-gateway --help` check a boot runs), the free space in its
+   hull store, whether it has the agent, and whether the sandbox name and the
+   guest's address are free there.
+3. **The record.** Brig makes the move's txid and records the move in its
+   session index, before hull is asked for anything.
+4. **The destination takes the network.** `brig teleport-receive` on the
+   destination gives the sandbox the network it had: the same isolated `/30`,
+   or the same address on the shared network, or no network. It starts the
+   gateway with the session's egress rules, by value, before hull resumes
+   the guest there. It records the posture in that host's `networks.json`,
+   and files the session in that host's index as a teleportable session.
+5. **hull's dry run.** `hull migrate --dry-run` checks both hosts, including
+   hull's own machine check of the destination against this host. It pauses
+   nothing.
+6. **The move.** `hull migrate` fences the guest here, sends its checkpoint
+   and its disk over ssh, restores it paused on the destination, and resumes
+   it there. See hull's `docs/migration.md` for the steps and the states.
+7. **The commit.** Once hull's record says the move committed, the
+   destination's brig marks the arrival finished. This host records the host
+   and the hull store the session now runs in.
 
-- Its processes, its memory and its open files continue. It does not boot
-  again.
-- Its monotonic clock continues from where it stopped, so the time the move
-  took does not appear there. Its wall clock is behind by that time until
-  the guest corrects it.
-- Connections to the outside network may reset and reconnect.
-- Every connection to the guest agent is reset. A `brig sh` open across a
-  move ends, and a new one connects to the destination.
+A refusal in steps 1 and 2 comes before anything is paused, and says why. If
+steps 4 or 5 fail, Brig gives the destination's network back and drops its
+record. Nothing was paused.
 
-The checkpoint holds the guest's memory, and so whatever credential the
-agent holds there. It leaves the host only over `ssh`, to the host you name,
-and on each host it stays at rest as described in
-[Credentials stay off the disk](#credentials-stay-off-the-disk).
-The disk holds no credential value Brig resolved, as described in
-[Credentials stay off the disk](#credentials-stay-off-the-disk).
+### After a move
+
+`brig sh`, `brig run`, `brig stop`, `brig info` and `brig logs` on the ref
+run on the destination. Brig hands the same verb, the same ref and the same
+flags to the brig there: `ssh -t <user>@<host> brig sh <ref>`. For `brig sh`
+and `brig run`, brig replaces itself with ssh, the way it replaces itself with
+hull for a local session. This host's runtime and secret store are not asked
+anything.
+
+`brig ls` lists the session with the state `moved` and the workspace
+`(in the sandbox disk on <user>@<host>)`. Its `--json` carries a `host`
+field. `brig plan` and the `brig network` verbs act on this host, so they
+refuse a moved session and name the ssh line that works.
+
+`brig rm <ref>` removes the copy the move left on this host: a guest that
+the move fenced, which can never run again. It does so only after the brig on
+the destination says that the session runs there, and it asks nothing else.
+It keeps the record that reaches the session. A second `brig rm <ref>` with
+no copy left forgets the session on this host and touches nothing on the
+destination. `ssh <user>@<host> brig rm <ref>` removes the session there.
+`brig rm --all` leaves the copy of a moved session alone. On the source, the
+network gateway brig started for the sandbox keeps running until `brig rm`
+removes the copy.
+
+### Credentials after a move
+
+The session takes its credentials with it in the guest's memory, which is what
+moved. A later exec on the destination, the agent's or a `brig sh`, carries
+only what the destination's brig resolves from its own secret store and its
+own environment. Brig asks no other host for a credential.
+
+A secret the destination does not have is not a refusal there, unlike on a
+boot. The exec runs without it, and brig prints which secrets it could not
+hand in and why. The agent keeps the values it already holds. To hand a fresh
+value in, store the secret on the destination with `brig secret`.
+
+### What reconnects and what does not
+
+| | After a move |
+| --- | --- |
+| The guest's processes, memory and open files | continue. The guest does not boot again |
+| The disk and the guest home on it | moved with the guest |
+| The guest's address and its egress rules | the same, on a gateway the destination's brig started |
+| `brig sh`, the agent's terminal | a new `brig sh` connects on the destination. One open across the move ends |
+| Connections to the guest agent (vsock) | reset. The guest sees them close |
+| Connections to the outside network | may reset, and reconnect from the destination |
+| Published ports | stay on the source. Publish them again on the destination |
+| Host NAT and the path out | the destination's |
+| The monotonic clock | continues from where it stopped |
+| The wall clock | behind by the time the move took, until the guest corrects it |
+
+### What a move keeps true
+
+At most one host runs the guest. hull fences the source before the
+destination may resume, and the destination resumes only on the commit.
+
+Brig never resumes the source once a move began. Two things can do it,
+and both belong to hull: an abort that the destination confirmed, and a
+re-run of `hull migrate` that learns the commit. A move whose end Brig did not
+see stays recorded as unfinished. While it is unfinished, every verb on the
+ref except `brig teleport --status` and `--abort` refuses, and names those
+two.
+
+### Recovery
+
+| What you see | What it means | What to do |
+| --- | --- | --- |
+| A refusal that ends in "Nothing was paused" | the move never began | fix what it names, and run the move again |
+| "did not report how it ended" | the move may have committed, or not. hull's record is the authority | `brig teleport <ref> --status` |
+| `--status` says the move has not finished | hull's record is between the fence and the commit | `hull migrate <sandbox> --txid <txid>` takes it on from where it stopped. `brig teleport <ref> --abort` calls it off if it has not committed |
+| `--status` says the move committed | the session runs on the destination | nothing: `--status` recorded it |
+| `--abort` says hull did not confirm | the destination did not answer, or it already runs the guest | retry when it answers. `hull migrate --status <sandbox>` says which |
+
+`brig teleport <ref> --status` reads hull's record (`hull migrate --status`).
+If the record says the move committed, it records the host. If it says hull
+aborted the move, it gives the destination's network back. Otherwise it says
+where the move stands. `brig teleport <ref> --abort` asks hull to abort the
+move. Brig then gives the destination's network back, but only once hull's
+record says the move is aborted. hull aborts only on the destination's word
+that it is not running the guest, and then runs the guest on this host again
+itself.
+
+### Settings
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `BRIG_TELEPORT_SSH` | `ssh` on `PATH` | the ssh brig runs to reach the destination |
+| `BRIG_TELEPORT_REMOTE_BRIG` | `brig` | the brig to run on the destination |
+| `BRIG_TELEPORT_REMOTE_ENV` | (unset) | `NAME=VALUE` words, space-separated, put in front of every brig command on the destination. Use it for a destination whose login does not give brig the settings it needs |
+| `BRIG_HULL_STORE_DIR` | hull's own default, `~/.hull/store` | the hull store brig drives. A move lands in the store the destination's brig drives, and later verbs there name it |
+
+hull carries the checkpoint and the disk over ssh with your ssh
+configuration, so the destination's host key and the `authorized_keys`
+there decide who can receive the guest. Brig does not hand hull
+`HULL_MIGRATE_SSH`, the setting with which hull runs another program in
+place of ssh.
+
+### Not yet run on real hardware
+
+Every step above runs in `script/smoke.sh` against a stub hull, with a fake
+ssh that runs the destination on the same machine. Brig's move has not yet
+run against a real hull and hvi. hull's own `hull migrate` has committed a
+move between two stores on one Mac (see hull's `docs/migration.md`). Brig's
+move needs real ssh from the source to the destination, logging in with a
+key, because Brig hands hull no other transport. On one Mac with Remote
+Login on, a move between two stores goes like this:
+
+```bash
+# The destination's brig: its own state, gateway directory and hull store.
+export BRIG_TELEPORT_REMOTE_ENV="BRIG_STATE_DIR=$HOME/.brig-b BRIG_GATEWAY_DIR=$HOME/.brig-b BRIG_HULL_STORE_DIR=$HOME/.hull/store-b"
+brig run --teleportable claude -d
+brig teleport claude --to "$USER@localhost"
+brig sh claude -c 'uptime'          # runs in the moved guest, over ssh
+brig rm claude                      # removes the fenced copy left here
+```
