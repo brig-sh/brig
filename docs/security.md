@@ -52,6 +52,17 @@ in a directory of mode `0700` under the sandbox's instance directory, after
 the sandbox stops, until `brig rm` removes the sandbox. See
 [teleport.md](teleport.md#credentials-stay-off-the-disk).
 
+`brig teleport` moves a teleportable session to another host, and its memory
+goes with it, credential values included. RAM with credentials leaves the host
+only through ssh to the host you named. Brig hands that host to `hull migrate`
+as `--to`, and puts it on each of its own ssh lines right after `--`. It hands
+hull no program to run in place of ssh. A session under an egress policy is
+moved only to a host whose gateway can enforce one, and is refused before
+anything is paused otherwise. After a move, an exec on the destination
+carries only the credentials that host's own store and environment hold. Brig
+asks no other host for a credential. The limits of this are under
+[Moving a session](#moving-a-session).
+
 The host can reach the guest only on a port you publish. See
 [Published ports](#published-ports).
 
@@ -352,6 +363,21 @@ replaces the directory under `/brig/claude` there while the sandbox runs, the
 guest drops the `tmpfs`. A credential the agent writes before Brig's next
 command then lands in hull's store, and stays there until `brig rm`. Brig's
 next command mounts the `tmpfs` again.
+
+### Moving a session
+
+Whoever can log in as the destination account can receive the guest's
+memory. hull runs ssh with your ssh configuration, so the destination's host
+key in `known_hosts` and its `authorized_keys` decide who that is. Brig adds
+no authentication of its own.
+
+`BRIG_TELEPORT_SSH` names the program Brig runs for its own ssh lines. A
+value you set there is trusted like ssh: Brig hands it the host and the
+command and nothing else, and does not check what it does with them.
+
+The checkpoint stays on both hosts after a move, at rest in hull's instance
+directory, until `brig rm` on the source and the destination remove the
+sandbox there.
 
 ## The secret store
 
