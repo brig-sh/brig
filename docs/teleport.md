@@ -299,14 +299,41 @@ field. `brig plan` and the `brig network` verbs act on this host, so they
 refuse a moved session and name the ssh line that works.
 
 `brig rm <ref>` removes the copy the move left on this host: a guest that
-the move fenced, which can never run again. It does so only after the brig on
-the destination says that the session runs there, and it asks nothing else.
-It keeps the record that reaches the session. A second `brig rm <ref>` with
+the move fenced, which can never run again. It does so when hull's own record
+here says the move committed (the copy's checkpoint is `migrated`, by the move
+Brig recorded), or else once the brig on the destination says that the
+session runs there, and it asks nothing else. hull marks the checkpoint
+`migrated` only after the destination answered the commit, so that record
+needs no word from the destination, which may since have removed the session
+or gone away. It keeps the record that reaches the session. A second `brig rm <ref>` with
 no copy left forgets the session on this host and touches nothing on the
 destination. `ssh <user>@<host> brig rm <ref>` removes the session there.
 `brig rm --all` leaves the copy of a moved session alone. On the source, the
 network gateway brig started for the sandbox keeps running until `brig rm`
 removes the copy.
+
+### Moving back
+
+A second move goes from the host the session runs on: `brig teleport` there,
+with this host as the destination. This host still has the fenced copy and
+its record of the move, and the destination refuses both: the probe finds the
+sandbox name taken, and `brig teleport-receive` finds the session already
+filed. So on the old host, first remove the copy and then forget the session:
+
+```bash
+brig rm <ref>       # on the old host: removes the fenced copy
+brig rm <ref>       # on the old host: forgets the session there
+ssh <user>@<host> brig teleport <ref> --to <you>@<old host>
+```
+
+Between the second `brig rm` and the move, the old host has no record of the
+session, so `brig sh <ref>` there does not reach it. Run it on the host the
+session runs on. hull counts the owner epoch on: 0 where the session started,
+1 after the first move, 2 back home.
+
+To remove a moved session everywhere, remove the fenced copy on the old host
+first, then the session where it runs. In the other order, `brig rm` of the
+old copy still works, because hull's record of it says `migrated`.
 
 ### Credentials after a move
 
@@ -361,6 +388,10 @@ two.
 | `--status` says hull has no record and this host has no sandbox | the source was removed, and its record with it. The move may have committed | ask the destination: `ssh <user>@<host> hull migrate --status <sandbox>` |
 | "is running on this host" | another `brig teleport` of the session holds its lock | let it finish, then run the command again |
 
+When `BRIG_HULL_STORE_DIR` names a store, each hull line above needs
+`--store-dir <dir>` before the verb, or hull looks in its default store and
+finds no such instance. The lines Brig prints carry it.
+
 `brig teleport <ref> --status` reads hull's record (`hull migrate --status`).
 If the record says the move committed, it records the host. If it says hull
 aborted the move, it gives the destination's network back. If hull has no
@@ -393,68 +424,165 @@ reaches the destination too.
 ### On real hardware
 
 Every step above runs in `script/smoke.sh` against a stub hull, with a fake
-ssh that runs the destination on the same machine. hull's own `hull migrate`
-has committed a move between two stores on one Mac (see hull's
-`docs/migration.md`). Brig's move needs real ssh from the source to the
-destination, logging in with a key, because Brig hands hull no other
-transport.
+ssh that runs the destination on the same machine. Brig's move needs real
+ssh from the source to the destination, logging in with a key, because Brig
+hands hull no other transport.
 
 #### The Linux pair
 
-On 2026-10-14 Brig ran on two Raspberry Pi 5 hosts, `rp1` and `rp2` (Linux
-6.12, KVM with a vGICv2), with `BRIG_RUNTIME=hull`, a state directory and a
-hull store of its own on each, and real ssh from `rp1` to `rp2` with a key.
-Both hosts ran the same brig, hull and hvi builds. The profile was a copy of
-`ubuntu` with `teleportable: true`, `network: offline`, 1 vCPU and 1 GiB.
+On 2026-10-14 a teleportable session moved between two Raspberry Pi 5 hosts,
+`rp1` and `rp2` (Linux 6.12, KVM with a vGICv2), and back, with its
+processes, its memory and its open files, and without a boot. Both hosts ran
+the same builds: brig `ed78222`, hull `a167a07`, and hvi `46a18dc`
+(`feat/teleport`), with the portable kernel (sha256 `32725b9b...`). Each host
+had a state directory, a gateway directory and a hull store of its own under
+`~/b4`, and each reached the other over ssh with a key.
 
-What ran:
+The session was a copy of `ubuntu` with `teleportable: true`,
+`genericBoot: true`, `network: offline`, 1 vCPU and 1 GiB. Its guest ran two
+processes, started with `brig sh`:
 
-- `brig doctor` on `rp1` reported the portable kernel present and the
-  pinned build.
-- `brig run --teleportable ubuntu -d` booted the `portable-arm64-v1` machine
-  on KVM: hull recorded the profile, the hvi command line carried
-  `--profile portable-arm64-v1`, and the guest ran the portable kernel with
-  `hvi-time` as its clocksource. `brig info` printed
-  `MACHINE portable-arm64-v1`.
-- `brig sh ubuntu` started a counter loop in the guest and read it back.
-- `brig teleport-probe` ran on `rp2` over ssh and reported hull, hvi, the
-  store and a gateway that enforces egress.
-- `brig teleport ubuntu --to pmoust@rp2` ran its checks, the probe, the
-  receive on `rp2`, hull's dry run, and the move up to the fence. hull
-  reserved the name on `rp2` and asked hvi for the checkpoint, and hvi
-  refused it: `the guest has the portable-arm64-v1 machine profile, which
-  no backend checkpoints yet`. hull aborted the move before anything was
-  paused. Brig gave `rp2` its network and index back and said why, the
-  counter kept counting on `rp1` with no reboot in the guest, and
-  `--status` reported no move.
-- A copy of that profile without `genericBoot: true`, run with
-  `--teleportable` and `BRIG_PORTABLE_KERNEL` set to a missing file, was
-  refused by `brig run` (exit 1) and shown as refused by `brig plan`. hull
-  was not asked to run anything.
-- An older hull build whose `hull run --help` has no `--profile` was refused
-  with exit `7` before `hull run` was called.
+- a counter held in a shell variable, which wrote the count every 200 ms and
+  kept a file open that it had deleted;
+- an awk process holding 64 KiB of random bytes in memory, which printed
+  `RANDSUM <n> <sum>` every 2 s.
 
-What is still to run: the move itself, from the fence on. It needs an hvi
-that checkpoints the portable machine and restores it on KVM, which the hvi
-on `feat/teleport` (`f4594f0`) did not do yet. Until a move has committed on
-real hardware, read the move rows of
-[claims.md](claims.md#rows-checked-at-the-command-line-only) as true of the
-command lines only.
-
-To run the move on such a pair, give the destination's brig its settings,
-then run the same commands:
+[`script/teleport-demo.sh`](../script/teleport-demo.sh) runs the whole
+sequence from a third machine and checks each step. It took both moves
+below, and the failure cases, with every check passing:
 
 ```bash
-B3=/home/me/b3   # the same layout on both hosts
-export BRIG_TELEPORT_REMOTE_BRIG=$B3/bin/brig
-export BRIG_TELEPORT_REMOTE_ENV="PATH=$B3/bin:/usr/bin:/bin BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B3/bin/hull BRIG_STATE_DIR=$B3/state BRIG_HULL_STORE_DIR=$B3/store BRIG_PROFILE_DIR=$B3/profiles BRIG_BOOT_ASSETS=$B3/assets"
+script/teleport-demo.sh --faults pmoust@rp1 pmoust@rp2
+```
+
+After each move, through `brig sh` on `rp1`:
+
+- the counter had gone on from where it stopped;
+- the deleted file still read the token written before the move;
+- the sum was the one from before;
+- the guest had logged one boot, and its clocksource was still `hvi-time`;
+- its last kernel lines were the boot's, then one
+  `hvi-time: generation N: ... downtime total ...` line for each move, and no
+  second boot banner.
+
+`hull ps` showed the guest running on the destination, and the copy on the
+source stopped with its checkpoint `migrated`. `brig ls` on `rp1` showed the
+session `moved`, `(in the sandbox disk on pmoust@rp2)`. `--status` said
+`ubuntu runs on pmoust@rp2`. `brig info` ran on `rp2` and showed
+`TELEPORT restored, arrived from pmoust@rp1`.
+
+The numbers, from hull's records on both hosts, with the clocks of the two
+hosts 4 ms apart:
+
+| | `rp1` to `rp2`, both hosts idle | `rp1` to `rp2`, `rp2` busy | `rp2` to `rp1`, `rp2` busy |
+| --- | --- | --- | --- |
+| Brig's checks, probe, receive and dry run | 1.02 s | 3.29 s | 1.55 s |
+| hull's fence, with the capture | 1.17 s | 1.14 s | 1.66 s |
+| Transfer | 226.8 MB (216.3 MiB) in 3.45 s, 62.8 MiB/s | 216.2 MiB in 27.0 s, 8.0 MiB/s | 216.6 MiB in 5.43 s, 39.9 MiB/s |
+| Restore paused, then commit | 1.30 s, 0.30 s | 1.58 s, 0.35 s | 1.42 s, 0.30 s |
+| Downtime: the source pauses for the fence, to `running` on the destination | 6.51 s | 30.44 s | 9.18 s |
+| Downtime: `fenced` (the capture written) to `running` | 5.34 s | 29.29 s | 7.51 s |
+| `brig teleport`, start to end | 8.87 s | 35.14 s | 12.47 s |
+| `brig sh` on `rp1` to the first prompt from the guest on `rp2` | 0.34 to 0.40 s | 5.98 s | |
+| The same from a Mac, `ssh -t rp1 brig sh ubuntu` | 0.52 to 0.57 s | 0.67 s | |
+
+The guest's own count of the pause, the `downtime total` hvi-time logs,
+agreed with the first downtime row to 10 ms. The transfer carries the
+checkpoint (108 MB of the 1 GiB RAM) and the 118 MB of the disk that holds
+data, out of 16 GB. "Busy" is a build of another project that was running on
+`rp2` at the time, at a load of about 4. The first column is a run by hand
+before `script/teleport-demo.sh` existed, with brig `cb0333c`; the brig
+changes since do not touch the move's path.
+
+The move back went from `rp2`, as [Moving back](#moving-back) says, after
+two `brig rm` on `rp1`. hull's owner epoch was 2 at home.
+
+A session on an `isolated` network under an egress policy (`default: deny`)
+moved the same way. On `rp2` it ran behind a gateway that `brig
+teleport-receive` started, with the same address, and `brig info` showed
+`POLICY locked (carried from pmoust@rp1)`. No connection from the guest was
+tried after the move.
+
+The failure cases, each on a fresh session:
+
+| Case | What ran | Exit | What was left |
+| --- | --- | --- | --- |
+| A policy the destination cannot enforce | the session above, with the destination's hull replaced by a wrapper whose `network-gateway` fails | `7`: "worker is under an egress policy, and pmoust@rp2 cannot enforce one ... Nothing was paused" | hull has no move on record; the counter went on |
+| A session that is not teleportable | a sandbox that `hull run` started under the name Brig derives, standing in for an ordinary session, which Linux hull cannot boot, as it shares no host directory | `7`: "plain is not a teleportable session ... Nothing was paused" | nothing |
+| An abort before the commit | ssh failed `migrate-prepare`, so hull stopped at `transferred` with the source fenced | `1`, "did not report how it ended"; `--status` "has not finished"; `--abort` `0` in 2.1 s | the source ran again from its fenced checkpoint, 8 to 13 s after the fence, with the same counter, file and sum, and one boot |
+| A lost commit answer | ssh ran `migrate-commit` on `rp2` and lost its reply | `1`; `--status` "has not finished", hull `committing`, `rp2` `running`; `--abort` `1`, refused because the move committed there | the retry `--status` names, `hull --store-dir ... migrate <sandbox> --txid <txid>`, recorded the commit; `--status` then recorded the host |
+| The source brig killed during the commit | ssh held `migrate-commit` for 20 s and `brig` was killed with SIGKILL | `137`; `--status` "has not finished" | hull, which outlived brig, committed the move; the next `--status` recorded the host |
+
+In each of the last three cases, the guest went on where it stopped, with
+one boot.
+
+What did not hold on the first runs, and is fixed in Brig:
+
+- The hull lines Brig prints as remedies named no store. With
+  `BRIG_HULL_STORE_DIR` set, the `hull migrate <sandbox> --txid <txid>` that
+  `--status` printed failed with "instance not found". They now name the
+  store.
+- `brig rm` of the old copy, after the session had been removed on the host
+  it ran on, refused for good: it waited for that host to say the session ran
+  there. It now takes hull's own `migrated` record as the proof.
+
+#### Known issues
+
+- hull `a167a07` names `hull migrate <sandbox> --txid <txid>` without the
+  store when it refuses an abort of a committed move
+  (`cmd/hull/migrate_source.go`, lines 973 to 975, in `sourceAbort`), although
+  it was run with `--store-dir`. Add the store by hand. Brig passes hull's
+  text through as is.
+- hull `a167a07` refuses a run with `--profile portable-arm64-v1` when its
+  store has no record of the portable kernel (`VerifyProfileKernel`,
+  `internal/bootassets/profile.go`, line 352) ("no portable-arm64-v1
+  kernel is installed ... `hull assets pull --profile portable-arm64-v1`
+  installs one"), even with the kernel file in place. `brig doctor` checks the
+  file and the pin, not hull's record, so it reports `ok` for a kernel hull
+  then refuses. Install the kernel through hull:
+
+  ```bash
+  HULL_PORTABLE_KERNEL=/path/to/Image hull --store-dir "$BRIG_HULL_STORE_DIR" \
+      assets pull --profile portable-arm64-v1
+  ```
+
+- The refusal of a session that is not teleportable says its guest home is a
+  host directory shared in, even for a sandbox Brig has no record of, whose
+  hull record shows no share.
+
+#### Running it on two hosts
+
+Each host needs the same brig, hull and hvi, the profile, and an `env.sh`
+that sets Brig up and names the destination's brig for the source:
+
+```bash
+B4=$HOME/b4   # the same layout on both hosts
+export PATH=$B4/bin:$PATH
+export BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B4/bin/hull
+export BRIG_STATE_DIR=$B4/state BRIG_GATEWAY_DIR=$B4/gw BRIG_HULL_STORE_DIR=$B4/store
+export BRIG_PROFILE_DIR=$B4/profiles BRIG_POLICY_DIR=$B4/policies BRIG_BOOT_ASSETS=$B4/assets
+export BRIG_PORTABLE_KERNEL=$B4/assets/portable-arm64-v1/Image
+export BRIG_TELEPORT_REMOTE_BRIG=$B4/bin/brig
+export BRIG_TELEPORT_REMOTE_ENV="PATH=$B4/bin:/usr/bin:/bin BRIG_RUNTIME=hull BRIG_RUNTIME_BIN=$B4/bin/hull BRIG_STATE_DIR=$B4/state BRIG_GATEWAY_DIR=$B4/gw BRIG_HULL_STORE_DIR=$B4/store BRIG_PROFILE_DIR=$B4/profiles BRIG_POLICY_DIR=$B4/policies BRIG_BOOT_ASSETS=$B4/assets BRIG_PORTABLE_KERNEL=$B4/assets/portable-arm64-v1/Image"
+```
+
+Install the portable kernel through hull on each host, as above. Then, on the
+first host:
+
+```bash
 brig run --teleportable ubuntu -d
 brig sh ubuntu -c 'nohup setsid sh -c "i=0; while :; do i=\$((i+1)); echo \$i > /tmp/count; sleep 0.2; done" >/dev/null 2>&1 </dev/null &'
 brig teleport ubuntu --to me@rp2
 brig sh ubuntu -c 'cat /tmp/count'   # runs on rp2, over ssh
 brig ls
 brig teleport ubuntu --status
+brig info ubuntu                     # runs on rp2
 brig rm ubuntu                       # removes the fenced copy left here
+brig rm ubuntu                       # forgets the session here
+ssh me@rp2 brig teleport ubuntu --to me@rp1    # with env.sh read there
+brig sh ubuntu -c 'cat /tmp/count'   # runs here again
+ssh me@rp2 brig rm ubuntu            # the fenced copy on rp2, then once more
+brig rm ubuntu
 ```
 
 #### One Mac
