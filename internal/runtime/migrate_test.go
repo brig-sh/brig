@@ -152,3 +152,38 @@ func TestAFailedMoveStillReadsTheRecord(t *testing.T) {
 		t.Errorf("record after a failed move: %+v", st)
 	}
 }
+
+// A move brig asks for leaves only through ssh to the host named: hull is not
+// handed a program to run in ssh's place, even when brig's own environment
+// has one.
+func TestAMoveIsNotHandedAnotherTransport(t *testing.T) {
+	t.Setenv("HULL_MIGRATE_SSH", "/tmp/elsewhere")
+	dir := t.TempDir()
+	bin, log := filepath.Join(dir, "hull"), filepath.Join(dir, "env.log")
+	script := "#!/bin/sh\necho \"$1 $2 transport=${HULL_MIGRATE_SSH:-none}\" >> " + log + "\n" +
+		"[ \"$2\" = --status ] && echo 'Move " + tx1 + " of s: committed, to me@box, epoch 1'\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &hull{bin: bin}
+	if _, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.MigrateAbort("s", tx1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(got)), "\n") {
+		if strings.HasPrefix(line, "migrate --to") || strings.HasPrefix(line, "migrate --abort") {
+			if !strings.HasSuffix(line, "transport=none") {
+				t.Errorf("hull was handed a transport: %q", line)
+			}
+		}
+	}
+	if !strings.Contains(string(got), "migrate --to transport=none") {
+		t.Errorf("the move was not asked: %s", got)
+	}
+}
