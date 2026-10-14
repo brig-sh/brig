@@ -485,8 +485,10 @@ The rest of what Brig asks of a runtime is in optional interfaces in
   a move stands, and call one off. hull implements it with `hull migrate`,
   its `--status` and its `--abort`, and Brig reads hull's move record back
   after each and decides on it rather than on the call's exit status.
-  `brig teleport` drives it. The seam hands hull no `HULL_MIGRATE_SSH`, so a
-  move hull runs for Brig goes over ssh to the host named and nowhere else.
+  A record that does not read is reported as unread, never as no record.
+  `brig teleport` drives it. The seam hands no `hull migrate` call
+  `HULL_MIGRATE_SSH`, so a move hull runs for Brig, and hull's status and
+  abort of it, go over ssh to the host named and nowhere else.
 - `DiskInspector`: where a sandbox's root disk is, which a move reads to say
   how much room the destination needs.
 
