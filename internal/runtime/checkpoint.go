@@ -275,9 +275,27 @@ func (h *hull) call(args []string, drop ...string) (string, error) {
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
 		if said := strings.TrimSpace(errb.String()); said != "" {
-			return out.String(), fmt.Errorf("%s %s: %w: %s", h.bin, strings.Join(args, " "), err, firstLines(said, 3))
+			return out.String(), fmt.Errorf("%s %s: %w: %s", h.bin, strings.Join(args, " "), err, hullReason(said))
 		}
 		return out.String(), fmt.Errorf("%s %s: %w", h.bin, strings.Join(args, " "), err)
 	}
 	return out.String(), nil
+}
+
+// hullReason is what a failed hull call said, kept to an error message: its
+// first lines, and its error line when that comes after them. hull narrates
+// a move's steps on stderr before the line that says why it stopped, so the
+// first lines alone named the steps and dropped the reason.
+func hullReason(said string) string {
+	head := firstLines(said, 3)
+	lines := strings.Split(said, "\n")
+	if len(lines) <= 3 {
+		return head
+	}
+	for _, line := range lines[3:] {
+		if strings.HasPrefix(line, "error:") {
+			return head + "; " + line
+		}
+	}
+	return head
 }
