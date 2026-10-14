@@ -288,3 +288,39 @@ case $kind in
   *) no "unknown kind $kind" ;;
 esac`
 )
+
+// readTeleportState fills teleportState from the runtime's migration record,
+// for brig info. The run envelope does not ask: it has no use for a second
+// call to hull before every boot. A run that reuses a running sandbox reads
+// the record for itself, to refuse a parked guest; see
+// refuseParkedTeleportable.
+//
+// Read on a teleportable session only, since no other can be checkpointed.
+// Every failure leaves it empty: info answers when the runtime is broken,
+// and the row it would print is the one fact it could not establish.
+func (c *Config) readTeleportState() {
+	c.teleportState = runtime.Migration{}
+	if !c.Teleportable || c.Runtime == nil {
+		return
+	}
+	mi, ok := c.Runtime.(runtime.MigrationInspector)
+	if !ok {
+		return
+	}
+	if m, err := mi.Migration(c.VMName); err == nil {
+		c.teleportState = m
+	}
+}
+
+// teleportLine is the TELEPORT row: hull's state and the bundle it names, or
+// "" when there is no record.
+func (c *Config) teleportLine() string {
+	m := c.teleportState
+	switch {
+	case m.State == "":
+		return ""
+	case m.BundleDir != "":
+		return fmt.Sprintf("%s (checkpoint in %s)", m.State, m.BundleDir)
+	}
+	return m.State
+}

@@ -74,6 +74,13 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 	if c.Teleportable {
 		rows = append(rows, envelopeRow{"TELEPORTABLE", teleportableLine})
 	}
+	// Where a checkpoint or a move left the session, as hull records it, and
+	// only once there is a record: a session that was never checkpointed has
+	// nothing to say here. Read by info and not by a run's block; see
+	// readTeleportState.
+	if line := c.teleportLine(); line != "" {
+		rows = append(rows, envelopeRow{"TELEPORT", line})
+	}
 	// Directly under the home, because it is the same subject read twice: two
 	// host directories this run is about to hand a sandbox read-write. Only
 	// when there is one -- a run that named no project has no second mount to
@@ -300,6 +307,7 @@ func (c *Config) Info(set creds.Set) {
 	if c.teleportRefused != nil {
 		c.warnf("%v", c.teleportRefused)
 	}
+	c.readTeleportState()
 	c.renderEnvelope(c.Out, set)
 	c.Status(set)
 }

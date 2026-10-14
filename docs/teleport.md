@@ -92,10 +92,19 @@ session: by name on the command line, with the values in the environment of
 the `hull exec` process. `BRIG_ENV_ARGV` changes that for an exec as it does
 everywhere; see [Not in argv](security.md#not-in-argv). A process the agent
 starts inherits the values. A `files:` binding goes into a tmpfs after the
-boot, as before, and is gone when the sandbox stops.
+boot, as before, and is gone when the sandbox stops, unless a checkpoint was
+taken while it ran.
 
 This covers what Brig hands hull. The agent holds the values, and it can
 still write one into a file on the disk.
+
+A checkpoint is not the disk. It holds the guest's memory, so it holds every
+credential the guest held when it was taken: the `files:` tmpfs, and the
+values in the agent's environment. hull writes it on the host, by default
+under the sandbox's instance directory in a `checkpoint` directory it
+creates with mode `0700`. It stays there after the sandbox stops, until
+`brig rm` removes the sandbox. A checkpoint written to a directory you name
+stays until you delete it.
 
 A profile whose workload reads its credentials when the sandbox boots
 cannot work this way. A `kind: gui` profile is one: its window is the boot
@@ -126,10 +135,18 @@ entry as teleportable from its empty guest home.
 | `--teleportable` for a session that already has a host home | `1` |
 | A run that would recreate a sandbox Brig has no record of, when hull's record of its boot shows a `block` root and no share | `1` |
 | `--teleportable` for a profile whose workload reads its credentials at boot (`kind: gui`) | `1` |
+| A run on a sandbox whose guest hull's record shows `fenced` by a checkpoint or still `restoring` | `1` |
 | A run path other than hull on `hvi` | `7` |
 
 Each refusal names the setting to drop, or `brig rm <ref>` when the session
 has to start over.
+
+A fenced guest, and one a restore has not brought back, still has its VMM
+running, so the sandbox reads as up. Brig refuses to use it again rather
+than run the agent in a guest whose vCPUs are stopped. The refusal names
+`hull restore` and `brig rm`. A guest that hull's record shows as
+`restored-paused` is not refused, because hull keeps that state on its
+record after `hull resume`.
 
 The record Brig keeps can be lost, for example when the session index file
 is deleted. Brig then asks hull how the sandbox was booted before it
@@ -186,6 +203,8 @@ What the guest sees:
   move ends, and a new one connects to the destination.
 
 The checkpoint holds the guest's memory, and so whatever credential the
-agent holds there. It leaves the host only over `ssh`, to the host you name.
+agent holds there. It leaves the host only over `ssh`, to the host you name,
+and on each host it stays at rest as described in
+[Credentials stay off the disk](#credentials-stay-off-the-disk).
 The disk holds no credential value Brig resolved, as described in
 [Credentials stay off the disk](#credentials-stay-off-the-disk).

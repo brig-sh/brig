@@ -477,8 +477,10 @@ The rest of what Brig asks of a runtime is in optional interfaces in
   runtime's record says a checkpoint or a move left it. These are the seam
   a [teleport](teleport.md#what-teleport-will-do) is built on. hull
   implements them with its `pause`, `resume`, `checkpoint` and `restore`
-  verbs for `hvi`. No Brig verb calls them yet except `brig info`, which
-  reads the migration record.
+  verbs for `hvi`. No Brig verb pauses, checkpoints or restores yet. Two
+  read the migration record: `brig info`, and a run that reuses a running
+  teleportable sandbox, which refuses one whose guest is fenced or still
+  restoring.
 
 ### Shared and Brig-only parts
 

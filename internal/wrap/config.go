@@ -263,6 +263,9 @@ type Config struct {
 	Teleportable    bool
 	teleportSource  string
 	teleportRefused error
+	// teleportState is the migration record the runtime keeps for this
+	// session, read by brig info alone. See readTeleportState.
+	teleportState runtime.Migration
 	// indexed records that the session index has an entry for this ref and
 	// sandbox. The one-time teleportable notice reads it to tell a new
 	// session from a later run of one, and EnsureRunning reads it to know
