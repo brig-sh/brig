@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -585,6 +586,66 @@ func TestAMoveWhoseRecordDidNotReadStaysUnfinished(t *testing.T) {
 		if e := entryOf(t); e["pendingHost"] != "me@box" || len(*calls) != 0 {
 			t.Errorf("moveErr %v: --status changed %v, asked %v", moveErr, e, *calls)
 		}
+	}
+}
+
+// hull's having no move on record says the move never began only while the
+// sandbox is here: a source removed after its move committed away takes the
+// record with it. --status then keeps the move recorded, resumes nothing and
+// gives the destination nothing back, and says where to ask.
+func TestNoRecordOfAMoveWhoseSandboxIsGoneSettlesNothing(t *testing.T) {
+	rt := &moveRuntime{running: true, state: "committing", moveErr: errors.New("ssh: connection reset")}
+	calls := moveHost(t, rt, noNetProbe())
+	_, _ = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+	// `hull rm` of the stale source: the instance and its record are gone.
+	rt.state, rt.gone = "", true
+	*calls = nil
+	_, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status"}) })
+	if err == nil || !strings.Contains(err.Error(), "may have committed") ||
+		!strings.Contains(err.Error(), "ssh me@box hull migrate --status brig-claude-code") {
+		t.Errorf("--status with the source gone: %v", err)
+	}
+	if e := entryOf(t); e["pendingHost"] != "me@box" || e["txid"] != rt.txid {
+		t.Errorf("--status dropped the move: %v", e)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("--status asked the destination %v", *calls)
+	}
+	// With the sandbox here, no record does mean the move never began.
+	rt.gone = false
+	if out, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status"}) }); err != nil ||
+		!strings.Contains(out, "never began") {
+		t.Errorf("--status with the sandbox here: %q, %v", out, err)
+	}
+	if e := entryOf(t); e["pendingHost"] != nil {
+		t.Errorf("a move that never began was kept: %v", e)
+	}
+}
+
+// One teleport of a session at a time: while one holds the session's move,
+// a second move, --status and --abort each refuse and change nothing.
+func TestATeleportRefusesWhileAnotherHoldsTheMove(t *testing.T) {
+	rt := &moveRuntime{running: true, state: "transferring", moveErr: errors.New("killed")}
+	calls := moveHost(t, rt, noNetProbe())
+	_, _ = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+	before := entryOf(t)
+	unlock, err := wrap.LockMove("brig-claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	rt.asked, *calls = nil, nil
+	for _, args := range [][]string{{"--status"}, {"--abort"}, {"--to", "me@box"}} {
+		_, err := captureStdout(t, func() error { return run(append([]string{"teleport", "claude"}, args...)) })
+		if err == nil || !strings.Contains(err.Error(), "is running on this host") {
+			t.Errorf("%v while the move is held: %v", args, err)
+		}
+	}
+	if len(rt.asked) != 0 || len(*calls) != 0 {
+		t.Errorf("a refused teleport asked hull %v and the destination %v", rt.asked, *calls)
+	}
+	if e := entryOf(t); fmt.Sprint(e) != fmt.Sprint(before) {
+		t.Errorf("a refused teleport changed the record: %v, was %v", e, before)
 	}
 }
 

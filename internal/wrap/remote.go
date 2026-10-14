@@ -1,9 +1,12 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"syscall"
 
 	"github.com/brig-sh/brig/internal/profile"
 )
@@ -154,4 +157,42 @@ func ForgetRemoteSession(ref, sandbox string) error {
 	}
 	delete(index, ref)
 	return writeSessionIndex(index)
+}
+
+// ErrMoveBusy is LockMove's refusal: another brig on this host holds the
+// session's move.
+var ErrMoveBusy = errors.New("another brig on this host is moving this session")
+
+// LockMove takes the session's move lock on this host, without waiting, and
+// returns the release. `brig teleport` holds it for the whole of a move, and
+// --status and --abort take it too: a --status run while a move is between
+// its record here and hull's own would read hull's empty record as a move
+// that never began, and give the destination's network back under it.
+//
+// flock on a file of its own in the state directory, so the lock goes with
+// the process that holds it, however that process ends, and the hull it
+// starts does not inherit it.
+func LockMove(sandbox string) (func(), error) {
+	dir, err := stateDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "teleport-"+sandbox+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrMoveBusy
+		}
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
