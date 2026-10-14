@@ -301,7 +301,10 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 		abortReceive(host, spec.RemoteStore, ref, vm, txid)
 		_ = wrap.ClearMove(ref, vm, txid)
 		if st.TxID == txid && st.State == runtime.MoveAborted {
-			return fmt.Errorf("hull called off the move of %s to %s and runs it here again: %w", vm, host, moveErr)
+			// hull records the abort before it restores the guest here, so
+			// the record alone does not say the restore worked.
+			return fmt.Errorf("hull called off the move of %s to %s: %w. hull restores the guest here "+
+				"itself; %s", vm, host, moveErr, restoreRemedy(vm))
 		}
 		return fmt.Errorf("hull did not move %s to %s, and its record says the guest was not paused for "+
 			"good: %w. `hull migrate --status %s` says more", vm, host, moveErr, vm)
@@ -412,7 +415,7 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 		}
 		d.State, d.PendingHost = "aborted", ""
 		return printTeleport(d, wantJSON, fmt.Sprintf("the move of %s to %s (%s) was called off, and hull "+
-			"runs the session on this host again", ref, loc.PendingHost, loc.TxID))
+			"restores the session on this host itself; %s", ref, loc.PendingHost, loc.TxID, restoreRemedy(vm)))
 	case st.TxID != loc.TxID && !runtime.MoveFenced(st.State):
 		// hull has no record of this move past its start: it never fenced
 		// the guest, which still runs here.
@@ -457,6 +460,11 @@ func remoteHullStatus(store, vm string) string {
 	return "hull --store-dir " + shellJoin([]string{store}) + " migrate --status " + vm
 }
 
+// restoreRemedy is what brings back a guest an abort left stopped here.
+func restoreRemedy(vm string) string {
+	return fmt.Sprintf("if `brig sh` then refuses it, `hull restore %s` brings it back from its checkpoint", vm)
+}
+
 func orNone(s string) string {
 	if s == "" {
 		return "nothing"
@@ -496,6 +504,13 @@ func teleportAbort(cfg *wrap.Config, ref string, wantJSON bool) error {
 	abortReceive(loc.PendingHost, loc.RemoteStore, ref, vm, loc.TxID)
 	if err := wrap.ClearMove(ref, vm, loc.TxID); err != nil {
 		return err
+	}
+	if err != nil {
+		// hull records the abort before it restores the guest here, so a
+		// restore that failed still reads aborted. The move is over either
+		// way; the guest may be stopped here.
+		return fmt.Errorf("called off the move of %s to %s (%s), and hull reported: %v. The guest may be "+
+			"stopped here with its fenced checkpoint: %s", ref, loc.PendingHost, loc.TxID, err, restoreRemedy(vm))
 	}
 	d := teleportData{Ref: ref, Sandbox: vm, State: "aborted", TxID: loc.TxID, Hull: st.State}
 	return printTeleport(d, wantJSON, fmt.Sprintf("called off the move of %s to %s (%s); hull runs it "+

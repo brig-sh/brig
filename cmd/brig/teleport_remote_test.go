@@ -296,11 +296,14 @@ type moveRuntime struct {
 	dryErr  error
 	// unread is a move after which hull's record does not read: Migrate
 	// returns the zero status, and MigrateStatus an error.
-	unread  bool
-	asked   []string
-	specs   []runtime.MigrateSpec
-	removed int
-	txid    string
+	unread bool
+	// abortErr is what an abort returns beside the aborted record: hull
+	// records the abort, then fails to restore the guest here.
+	abortErr error
+	asked    []string
+	specs    []runtime.MigrateSpec
+	removed  int
+	txid     string
 }
 
 func (r *moveRuntime) Kind() string                                { return "hull" }
@@ -344,7 +347,7 @@ func (r *moveRuntime) MigrateStatus(string) (runtime.MoveStatus, error) {
 func (r *moveRuntime) MigrateAbort(_, txid string) (runtime.MoveStatus, error) {
 	r.asked = append(r.asked, "abort "+txid)
 	r.state = runtime.MoveAborted
-	return runtime.MoveStatus{Read: true, TxID: txid, State: r.state}, nil
+	return runtime.MoveStatus{Read: true, TxID: txid, State: r.state}, r.abortErr
 }
 
 // moveHost is a source host with claude's default session running as a
@@ -646,6 +649,28 @@ func TestATeleportRefusesWhileAnotherHoldsTheMove(t *testing.T) {
 	}
 	if e := entryOf(t); fmt.Sprint(e) != fmt.Sprint(before) {
 		t.Errorf("a refused teleport changed the record: %v, was %v", e, before)
+	}
+}
+
+// An abort hull recorded and whose restore here then failed still ends the
+// move, and says the guest may be stopped here and what brings it back,
+// rather than that it runs here again.
+func TestAnAbortWhoseRestoreFailedSaysSo(t *testing.T) {
+	rt := &moveRuntime{running: true, state: "transferring", moveErr: errors.New("killed"),
+		abortErr: errors.New("aborted move, and brig-claude-code stays stopped with its fenced checkpoint")}
+	calls := moveHost(t, rt, noNetProbe())
+	_, _ = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+	*calls = nil
+	out, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--abort"}) })
+	if err == nil || !strings.Contains(err.Error(), "stays stopped") ||
+		!strings.Contains(err.Error(), "hull restore brig-claude-code") || strings.Contains(out, "again") {
+		t.Errorf("an abort whose restore failed: %q, %v", out, err)
+	}
+	if e := entryOf(t); e["pendingHost"] != nil || e["txid"] != nil {
+		t.Errorf("an aborted move left %v", e)
+	}
+	if len(*calls) != 1 || !strings.Contains((*calls)[0][len((*calls)[0])-1], "--abort") {
+		t.Errorf("the destination's network was not given back: %v", *calls)
 	}
 }
 
