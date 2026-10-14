@@ -2073,6 +2073,10 @@ func pruneSessionIndex(list []runtime.Instance, rt runtime.Runtime) {
 		live = append(live, inst.Name)
 	}
 	live = append(live, unlistedButNotGone(live, rt)...)
+	// A sandbox a move is still bringing here may not be on hull's list
+	// yet, and its session and posture are what the moved guest is reached
+	// by. See wrap.ArrivingSandboxes.
+	live = append(live, wrap.ArrivingSandboxes()...)
 	wrap.PruneSessions(live)
 	runtime.PruneBootedNets(live)
 }
@@ -2719,6 +2723,9 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		wrap.ForgetSlugClaim(inst.Name)
 		runtime.ForgetPublications(inst.Name)
 		runtime.ForgetBootedNet(inst.Name)
+		if err == nil {
+			wrap.ForgetArrival(inst.Name)
+		}
 		if err != nil {
 			warnf("could not remove %s: %v", inst.Name, err)
 			continue

@@ -602,3 +602,30 @@ func TestListingNamesWhereAMovedSessionRuns(t *testing.T) {
 		t.Errorf("JSON %+v", d.Sandboxes[0])
 	}
 }
+
+// On the destination, a session a move is still bringing in is not pruned
+// by a listing that does not have its sandbox yet: its entry and its
+// posture are what the guest is reached by once it runs.
+func TestAListingKeepsWhatAMoveIsBringingIn(t *testing.T) {
+	scratchHost(t)
+	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	dir := os.Getenv("BRIG_STATE_DIR")
+	if err := os.WriteFile(filepath.Join(dir, "sessions.json"),
+		[]byte(`{"claude-code": {"home": "", "sandbox": "brig-claude-code", "teleportable": true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "arrivals.json"),
+		[]byte(`{"brig-claude-code": {"ref": "claude-code", "txid": "tx", "from": "me@src", "network": "none", "state": "prepared"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RecordBootedNet("brig-claude-code", "none"); err != nil {
+		t.Fatal(err)
+	}
+	pruneSessionIndex(nil, nil)
+	if e := entryOf(t); e["sandbox"] != "brig-claude-code" {
+		t.Errorf("the arriving session's entry was pruned: %v", e)
+	}
+	if net, _ := runtime.BootedNet("brig-claude-code"); net != "none" {
+		t.Errorf("the arriving session's posture was pruned: %q", net)
+	}
+}
