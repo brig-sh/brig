@@ -368,40 +368,16 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 
 	rawName := o.Name
 
-	slug := ""
-	if rawName != "" {
-		var err error
-		if slug, err = session.Resolve(t.Name, rawName); err != nil {
-			return nil, err
-		}
+	// The sandbox name is settled first because the entry read back below is
+	// only good for the sandbox it was recorded against. See index.go.
+	slug, vmBase, vmName, err := sessionNames(t, env, rawName)
+	if err != nil {
+		return nil, err
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine the current directory: %w", err)
-	}
-
-	// The sandbox name is settled first because the entry read back below is
-	// only good for the sandbox it was recorded against. See index.go.
-	vmName := env.String("NAME", NamePrefix+t.Name)
-	// BRIG_NAME replaces the whole sandbox name, and brig finds its own
-	// sandboxes by the brig- prefix: ls lists what carries it and reset removes
-	// what carries it. A name set through BRIG_NAME without the prefix boots and
-	// runs fine and is then invisible to both -- a sandbox brig started that it
-	// can no longer see or clean up. Refuse it at creation and say what it must
-	// carry, rather than track brig's own sandboxes through some second channel:
-	// the runtime hands back only the name `ps` prints, so the prefix is the one
-	// mark that survives a stop, a reboot and a brig that has forgotten it ever
-	// ran. See sandboxPrefix in cmd/brig, which reads the same mark back.
-	if !strings.HasPrefix(vmName, NamePrefix) {
-		return nil, fmt.Errorf("BRIG_NAME is %q, but a brig sandbox name must begin with %q so that "+
-			"`brig ls` and `brig rm --all` can find it; use %q instead", vmName, NamePrefix, NamePrefix+vmName)
-	}
-	// Kept before the suffix goes on, for the migration notice below: it has
-	// to name the sandbox an older release derived from this same profile.
-	vmBase := vmName
-	if slug != "" {
-		vmName += "-" + slug
 	}
 
 	// Whether this invocation named a directory at all, tracked apart from the
@@ -766,6 +742,40 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// sessionNames resolves a session's slug and its sandbox name, before and
+// after the slug goes on. Load and SessionLocation both call it, so the
+// sandbox a verb acts on here and the one a moved session is filed under
+// cannot be derived two ways.
+func sessionNames(t profile.Profile, env Env, rawName string) (slug, vmBase, vmName string, err error) {
+	if rawName != "" {
+		if slug, err = session.Resolve(t.Name, rawName); err != nil {
+			return "", "", "", err
+		}
+	}
+	vmName = env.String("NAME", NamePrefix+t.Name)
+	// BRIG_NAME replaces the whole sandbox name, and brig finds its own
+	// sandboxes by the brig- prefix: ls lists what carries it and reset removes
+	// what carries it. A name set through BRIG_NAME without the prefix boots and
+	// runs fine and is then invisible to both -- a sandbox brig started that it
+	// can no longer see or clean up. Refuse it at creation and say what it must
+	// carry, rather than track brig's own sandboxes through some second channel:
+	// the runtime hands back only the name `ps` prints, so the prefix is the one
+	// mark that survives a stop, a reboot and a brig that has forgotten it ever
+	// ran. See sandboxPrefix in cmd/brig, which reads the same mark back.
+	if !strings.HasPrefix(vmName, NamePrefix) {
+		return "", "", "", fmt.Errorf("BRIG_NAME is %q, but a brig sandbox name must begin with %q so that "+
+			"`brig ls` and `brig rm --all` can find it; use %q instead", vmName, NamePrefix, NamePrefix+vmName)
+	}
+	// Kept before the suffix goes on, for the migration notice in Load: it
+	// has to name the sandbox an older release derived from this same
+	// profile.
+	vmBase = vmName
+	if slug != "" {
+		vmName += "-" + slug
+	}
+	return slug, vmBase, vmName, nil
 }
 
 // KeptProject returns the host directory this session names as its project:
