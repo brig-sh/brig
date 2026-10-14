@@ -362,6 +362,13 @@ type moveRuntime struct {
 	specs    []runtime.MigrateSpec
 	removed  int
 	txid     string
+	// progress are the lines the move hands to its Progress, as hull
+	// would print them; prepared is what a prepare reports, and
+	// prepareErr its failure.
+	progress   []string
+	prepared   runtime.Prepared
+	prepareErr error
+	prepares   []runtime.PrepareSpec
 }
 
 func (r *moveRuntime) Kind() string                                { return "hull" }
@@ -387,10 +394,25 @@ func (r *moveRuntime) Migrate(name, to string, spec runtime.MigrateSpec) (runtim
 	}
 	r.asked = append(r.asked, "migrate "+to)
 	r.txid = spec.TxID
+	for _, line := range r.progress {
+		if spec.Progress != nil {
+			spec.Progress(line)
+		}
+	}
 	if r.unread {
 		return runtime.MoveStatus{}, r.moveErr
 	}
 	return runtime.MoveStatus{Read: true, TxID: spec.TxID, State: r.state, Peer: to}, r.moveErr
+}
+func (r *moveRuntime) MigratePrepare(name, to string, spec runtime.PrepareSpec) (runtime.Prepared, error) {
+	r.asked = append(r.asked, "prepare "+to)
+	r.prepares = append(r.prepares, spec)
+	for _, line := range r.progress {
+		if spec.Progress != nil {
+			spec.Progress(line)
+		}
+	}
+	return r.prepared, r.prepareErr
 }
 func (r *moveRuntime) MigrateStatus(string) (runtime.MoveStatus, error) {
 	r.asked = append(r.asked, "status")

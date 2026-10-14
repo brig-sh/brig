@@ -335,6 +335,30 @@ case "$verb" in
     state=restored; [ -n "${paused:-}" ] && state=restored-paused
     printf '{"state": "%s", "bundleDir": "%s.bundle", "txid": "t1"}' "$state" "$STUB_STATE" > "$STUB_STATE.migration"
     ;;
+  migrate-prepare)
+    # `hull migrate-prepare --to H [--remote-store D] [--remote-hull B]
+    # [--json] NAME`: put the image, the kernel and the sandbox's base on H.
+    # The first prepare of a host sends the base and a second finds it held,
+    # as hull's is idempotent. Its steps go on stderr, and with --json its
+    # report on stdout in hull's shape. A flag it does not know is refused,
+    # as hull refuses it.
+    to=""; json=""
+    while [ $# -gt 1 ]; do
+      case "$1" in
+        --to) to="$2"; shift 2 ;;
+        --remote-store|--remote-hull) shift 2 ;;
+        --json) json=1; shift ;;
+        *) printf 'error: flag provided but not defined: %s\n' "$1" >&2; exit 1 ;;
+      esac
+    done
+    [ "$1" = "$(cat "$STUB_STATE" 2>/dev/null)" ] || { printf 'error: instance not found: %s\n' "$1" >&2; exit 1; }
+    base="$(printf '%064d' 7)"; result=held
+    grep -qxF "$to" "$STUB_STATE.prepared" 2>/dev/null || { result=sent; printf '%s\n' "$to" >> "$STUB_STATE.prepared"; }
+    printf 'Preparing %s for %s\n  image 1a2b3c4d5e6f: held\n  base %s: %s\n' "$to" "$1" "${base:0:12}" "$result" >&2
+    printf '%s is prepared: a move of %s sends only what the guest changed\n' "$to" "$1" >&2
+    [ -z "$json" ] || printf '{"name":"%s","to":"%s","steps":[{"what":"image 1a2b3c4d5e6f","result":"held"},{"what":"base %s","result":"%s","bytes":1048576}],"holds":{"bases":["%s"],"profileKernels":{"portable-arm64-v1":"%064d"}},"stream":true}\n' \
+      "$1" "$to" "${base:0:12}" "$result" "$base" 9
+    ;;
   migrate)
     # `hull migrate --to H [--remote-store D] [--remote-hull B]
     # [--remote-gateway-sock S] [--txid X] [--dry-run] NAME`, and
@@ -376,6 +400,10 @@ case "$verb" in
           printf '%s committing %s\n' "$txid" "$to" > "$STUB_STATE.move"
           printf 'error: ssh: connection reset by peer\n' >&2; exit 1
         fi
+        # How the copy went, on stderr as hull prints it.
+        printf 'Move %s of %s to %s, epoch 1\n' "$txid" "$1" "$to" >&2
+        printf 'round 0: 1048576 bytes in 0.5 s (2.0 MiB/s), dirty 120 pages/s\n' >&2
+        printf 'round 1: 65536 bytes in 0.1 s (0.6 MiB/s), dirty 40 pages/s\n' >&2
         printf '%s' "$1" > "$STUB_REMOTE_STATE"
         printf 'block' > "$STUB_REMOTE_STATE.rootfs"
         : > "$STUB_REMOTE_STATE.shares"
@@ -2424,12 +2452,53 @@ tpr() { env -u BRIG_WORKSPACE BRIG_HYPERVISOR=hvi BRIG_NETWORK="${TP_NET:-offlin
 
 GH_TOKEN=tp-gh-secret tpr "$WORK/brig" run --teleportable claude -d > "$WORK/tpm.out" 2>&1 \
   || bad "a teleportable session for the move boots -- got: $(cat "$WORK/tpm.out")"
+# --prepare: hull is asked to make the destination ready, with the store and
+# the hull the destination's brig drives, and nothing moves. brig says what
+# the host holds, passes hull's lines on as they come, and notes the host.
+: > "$STUB_LOG"; : > "$SSH_LOG"
+GH_TOKEN=tp-gh-secret tpr "$WORK/brig" teleport claude --to me@box --prepare > "$WORK/tpp.out" 2> "$WORK/tpp.err"; rc=$?
+base7="$(printf '%064d' 7)"
+case "$rc:$(cat "$WORK/tpp.out")" in
+  "0:prepared me@box for claude-code"*"base 000000000000: sent"*"base digest: $base7"*) ok "teleport --prepare readies the host and says what it holds" ;;
+  *) bad "teleport --prepare readies the host and says what it holds -- got $rc: $(cat "$WORK/tpp.out" "$WORK/tpp.err")" ;;
+esac
+grep -qE '^argv: migrate-prepare --to me@box --remote-hull [^ ]*/hull --json brig-claude-code$' "$STUB_LOG" \
+  && ! grep -q '^argv: migrate ' "$STUB_LOG" && [ ! -s "$STUB_REMOTE_STATE" ] \
+  && ok "a prepare asks hull with the destination's hull and moves nothing" \
+  || bad "a prepare asks hull with the destination's hull and moves nothing -- got: $(grep '^argv: migrate' "$STUB_LOG")"
+others="$(grep -v '^ssh:\(\[-o\]\[BatchMode=yes\]\)\?\[--\]\[me@box\]\[' "$SSH_LOG")"
+[ -s "$SSH_LOG" ] && [ -z "$others" ] && ! grep -q 'teleport-receive' "$SSH_LOG" \
+  && ok "a prepare asks the named host's brig only the probe" \
+  || bad "a prepare asks the named host's brig only the probe -- got: $others $(cat "$SSH_LOG")"
+grep -q '^brig: hull: base 000000000000: sent$' "$WORK/tpp.err" \
+  && ok "a prepare passes hull's lines on to stderr" \
+  || bad "a prepare passes hull's lines on to stderr -- got: $(cat "$WORK/tpp.err")"
+GH_TOKEN=tp-gh-secret tpr "$WORK/brig" teleport claude --to me@box --prepare --json > "$WORK/tpp.out" 2> "$WORK/tpp.err"; rc=$?
+python3 - "$WORK/tpp.out" "$BRIG_STATE_DIR/sessions.json" <<'PY' && [ "$rc" = 0 ] && grep -q '^brig: hull: base 000000000000: held$' "$WORK/tpp.err" \
+  && ok "a second prepare is sent nothing, and the index notes the host" \
+  || bad "a second prepare is sent nothing, and the index notes the host -- got $rc: $(cat "$WORK/tpp.out" "$WORK/tpp.err")"
+import json, sys
+doc, index = (json.load(open(p)) for p in sys.argv[1:])
+p = doc["data"]["prepared"]
+assert doc["kind"] == "Teleport" and p["host"] == "me@box" and p["base"] == "0" * 63 + "7", doc
+assert p["stream"] and p["kernels"]["portable-arm64-v1"] == "0" * 63 + "9" and doc["data"]["state"] == "here", doc
+assert [st["result"] for st in p["steps"]] == ["held", "held"], doc
+e = index["claude-code"]
+assert e["preparedHost"] == "me@box" and e["preparedBase"] == p["base"] and not e.get("pendingHost"), e
+PY
 : > "$STUB_LOG"; : > "$SSH_LOG"
 GH_TOKEN=tp-gh-secret tpr "$WORK/brig" teleport claude --to me@box > "$WORK/tpm.out" 2> "$WORK/tpm.err"; rc=$?
 case "$rc:$(cat "$WORK/tpm.out")" in
-  "0:teleported claude-code to me@box (move "*")") ok "teleport moves the session and says where to" ;;
+  "0:teleported claude-code to me@box (move "*")"*) ok "teleport moves the session and says where to" ;;
   *) bad "teleport moves the session and says where to -- got $rc: $(cat "$WORK/tpm.out" "$WORK/tpm.err")" ;;
 esac
+# hull's lines about the copy reach stderr as hull prints them, the move
+# says the host was prepared, and the outcome ends with the numbers.
+grep -q '^brig: me@box was prepared for claude-code at ' "$WORK/tpm.err" \
+  && grep -q '^brig: hull: round 1: 65536 bytes in 0.1 s (0.6 MiB/s), dirty 40 pages/s$' "$WORK/tpm.err" \
+  && grep -q "hull's move took [0-9.]* s" "$WORK/tpm.out" \
+  && ok "a move passes hull's lines on and ends with its numbers" \
+  || bad "a move passes hull's lines on and ends with its numbers -- got: $(cat "$WORK/tpm.out" "$WORK/tpm.err")"
 # hull is asked for a dry run first and then the move, named by a txid of
 # hull's shape, with the destination's hull, and the sandbox last.
 grep -qE '^argv: migrate --to me@box --remote-hull [^ ]*/hull --dry-run brig-claude-code$' "$STUB_LOG" \
