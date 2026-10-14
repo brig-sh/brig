@@ -13,7 +13,7 @@ import (
 // shared root, so a block root with no share flag at all is a sandbox that
 // owns its storage.
 func (h *hull) OwnsItsDisk(name string) (bool, error) {
-	out, stderr, err := inspectNetwork(h.bin, "inspect", name)
+	out, stderr, err := inspectNetwork(h.bin, hullArgs("inspect", name)...)
 	if err != nil {
 		if strings.Contains(stderr, "instance not found") {
 			return false, nil
