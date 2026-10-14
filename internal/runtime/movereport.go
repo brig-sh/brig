@@ -70,6 +70,7 @@ var (
 	lineBlocks   = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
 	lineDowntime = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
 	lineSent     = regexp.MustCompile(`^Sent\b`)
+	lineSentN    = regexp.MustCompile(`^Sent (\d+) bytes\b`)
 	lineTimings  = regexp.MustCompile(`^Timings \(ms\): (.+)$`)
 	lineStep     = regexp.MustCompile(`^([a-z][a-z ]*?) (\d+)$`)
 )
@@ -126,9 +127,11 @@ func (r *MoveReport) Add(line string) {
 		return
 	}
 	if lineSent.MatchString(line) {
-		// hull's line for the whole copy: what it sent and how fast.
-		if b := lineByteCount(line); b > 0 {
-			r.Bytes = b
+		// hull's line for the whole copy: what it sent and how fast. Only
+		// the count right after "Sent" is the total; a streamed move's line
+		// goes on with the parts, "state 53259 bytes" among them.
+		if m := lineSentN.FindStringSubmatch(line); m != nil {
+			r.Bytes, _ = strconv.ParseInt(m[1], 10, 64)
 		}
 		if rate := lineMiBPerSec(line); rate > 0 {
 			r.MiBPerSec = rate
