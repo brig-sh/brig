@@ -239,7 +239,7 @@ func (r *MoveReport) Summary() string {
 		parts = append(parts, how)
 	}
 	if r.DowntimeSeconds > 0 {
-		parts = append(parts, fmt.Sprintf("the guest was paused %.2f s", r.DowntimeSeconds))
+		parts = append(parts, fmt.Sprintf("hull estimates the guest was paused about %.2f s", r.DowntimeSeconds))
 	}
 	if r.Bytes > 0 {
 		parts = append(parts, fmt.Sprintf("%d bytes sent", r.Bytes))

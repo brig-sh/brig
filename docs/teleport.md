@@ -328,12 +328,15 @@ before it runs anything.
 the rate, and for a disk round after the first, how many blocks a second
 the guest wrote. hull prints no such rate for memory. When the move
 commits, it prints how long hull's move took, whether hull streamed it,
-how long the guest was paused, and the bytes sent, as far as hull reported
-them. `--json` carries the same in its `move` object. Brig prints hull's lines
-from a queue of its own, so hull never waits on Brig's stderr, which hull
-writes to while the guest is paused. When that stderr falls a few thousand
-lines behind, Brig drops lines and then says how many. A stderr whose
-reader has gone does not stop the move.
+hull's estimate of how long the guest was paused, and the bytes sent, as
+far as hull reported them. hull's `downtime about` is an estimate: it is
+the time the destination resumed the guest less the time the last memory
+round began to arrive here, read on two hosts' clocks. `--json` carries the same in its
+`move` object. Brig prints hull's lines from a queue of its own, so hull
+never waits on Brig's stderr, which hull writes to while the guest is
+paused. When that stderr falls a few thousand lines behind, Brig drops
+lines and then says how many. A stderr whose reader has gone does not
+stop the move.
 
 hull measured both paths on the Linux pair, with the 1 GiB `ubuntu` guest
 under a writing workload, over real ssh. The numbers below are from hull's
