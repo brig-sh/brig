@@ -25,8 +25,9 @@ type routeServer interface {
 	// Forget removes a sandbox, which refuses its tokens from then on, and
 	// stops the broker when no sandbox is left. It starts nothing.
 	Forget(id string) error
-	// Status is what a running broker reports, and false when none runs. It
-	// starts nothing.
+	// Status is what a running broker reports, and false when none answers.
+	// A broker whose process is alive and does not answer reports its PID
+	// alone, with false. It starts nothing.
 	Status() (injector.Status, bool)
 }
 
@@ -71,7 +72,8 @@ func (b *brokerProcess) Status() (injector.Status, bool) {
 	}
 	running, ok := injector.Running(dir)
 	if !ok {
-		return injector.Status{}, false
+		pid, _ := injector.LivePID(dir)
+		return injector.Status{PID: pid}, false
 	}
 	return running.Status, true
 }

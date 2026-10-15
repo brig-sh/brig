@@ -49,6 +49,11 @@ func Running(dir string) (*Broker, bool) {
 	return &Broker{Client: c, Status: st}, true
 }
 
+// LivePID returns the pid of the broker serving dir, while that process is
+// still the one its pid file records. It asks the broker nothing, so a broker
+// that does not answer still has one.
+func LivePID(dir string) (int, bool) { return livePID(dir) }
+
 // Register registers s with the broker serving dir, and starts that broker
 // when none is running. A broker that was stopping when it was asked is
 // waited for and replaced.
