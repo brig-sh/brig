@@ -30,7 +30,7 @@ type PrepareSpec struct {
 	RemoteStore string
 	RemoteHull  string
 	// Progress, when set, is handed each line hull prints on stderr, as
-	// hull prints it.
+	// hull prints it. As for MigrateSpec, it must not block.
 	Progress func(line string)
 }
 
