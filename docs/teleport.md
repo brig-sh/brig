@@ -371,7 +371,10 @@ disk, the steps are the fence, the restore and the resume. hull's
 warnings and errors are printed as hull wrote them, and so are the two
 lines that explain a long wait: a base that hull sends first to a host
 that does not hold it, and a destination that copied the base while the
-guest was paused. `--verbose` prints every line hull prints, as hull
+guest was paused. So is the line that says where the guest is when a
+streamed move falls through before hvi fenced it (`hvi did not fence
+brig-ubuntu: its stream ended before the manifest, and the guest runs on
+here`). `--verbose` prints every line hull prints, as hull
 printed it, after `brig: hull:`: how hull moves the guest, each round with
 its rate, and for a disk round after the first, how many blocks a second
 the guest wrote (hull prints no such rate for memory), hvi's figures for
