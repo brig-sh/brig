@@ -269,9 +269,16 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 	}
 	spec := runtime.MigrateSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin, TxID: txid}
 	moved := &runtime.MoveReport{}
+	transport := ""
 	spec.Progress = func(line string) {
 		hullSaid(line)
 		moved.Add(line)
+		if moved.Transport != transport {
+			transport = moved.Transport
+			if n := transportSurprise(loc, host, ref, moved); n != nil {
+				warnf("%s", n)
+			}
+		}
 	}
 
 	// From here a record names the move, so whatever happens next can be
@@ -300,11 +307,14 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 	}
 
 	if loc.PreparedHost == host {
-		how := "a move there streams"
+		// What the prepare found then, not now: the base may have gone
+		// from there since, or the session booted again with a new one.
+		// hull's Transport line says how this move goes.
+		how := "a move there would stream"
 		if !loc.PreparedStream {
-			how = "hull said a move there still sends everything"
+			how = "a move there would still send the whole checkpoint and disk"
 		}
-		warnf("%s was prepared for %s at %s and holds its base; %s", host, ref, loc.PreparedAt, how)
+		warnf("%s was prepared for %s at %s, when hull said %s", host, ref, loc.PreparedAt, how)
 	}
 	warnf("moving %s to %s (move %s): the guest pauses here and resumes there", ref, host, txid)
 	started := time.Now()
@@ -397,6 +407,29 @@ func finishMove(ref, vm, host, store, txid, hullState string, moved *runtime.Mov
 		fmt.Printf("  %s\n", moved.Summary())
 	}
 	warnf("brig sh %s, run, stop, info and logs now run there; brig rm %s removes the fenced copy left here", ref, ref)
+	return nil
+}
+
+// transportSurprise is a notice when hull's word on how it moves the guest
+// is not what the prepare recorded for host said, and nil otherwise. A
+// prepare is a record of then: a later boot of the session has another
+// base, which the host does not hold, and a whole-bundle move pauses the
+// guest for the length of the copy.
+func transportSurprise(loc wrap.Location, host, ref string, moved *runtime.MoveReport) *notice.Block {
+	if loc.PreparedHost != host || moved.Transport == "" {
+		return nil
+	}
+	switch {
+	case moved.Transport == "bundle" && loc.PreparedStream:
+		return notice.Newf("hull sends the whole checkpoint and disk of %s, with the guest paused, though "+
+			"the prepare at %s said a move to %s would stream: %s", ref, loc.PreparedAt, host,
+			orNone(moved.TransportWhy)).
+			Note("`brig teleport %s --to %s --prepare` puts the session's base there again for the next move",
+				ref, host)
+	case moved.Transport == "stream" && !loc.PreparedStream:
+		return notice.Newf("hull streams the move of %s, though the prepare at %s said a move to %s "+
+			"would send the whole checkpoint and disk", ref, loc.PreparedAt, host)
+	}
 	return nil
 }
 
