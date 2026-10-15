@@ -331,7 +331,7 @@ func TestCreatePolicyForceOverwritesFlagAfterName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
-	stubEditor(t, `sed -i.bak 's/^desc:$/desc: replaced/' "$1"`)
+	stubEditor(t, `sed -i.bak 's/^  description:$/  description: replaced/' "$1"`)
 
 	if err := createPolicy([]string{"no-net", "--force"}); err != nil {
 		t.Fatalf("create --force after the name failed: %v", err)
@@ -518,7 +518,8 @@ func TestShowPolicyJSONFlagAfterName(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
 		t.Fatalf("show --json did not print valid JSON: %v\n%s", err, out)
 	}
-	if decoded["name"] != "no-net" {
+	meta, _ := decoded["metadata"].(map[string]any)
+	if meta["name"] != "no-net" {
 		t.Errorf("show --json printed the wrong policy: %v", decoded)
 	}
 }
@@ -2046,5 +2047,86 @@ func TestCheckCmdDispatch(t *testing.T) {
 	loadTestProfiles(t)
 	if err := policyCmd([]string{"check", "claude-code"}); err != nil {
 		t.Errorf("policy check dispatch failed: %v", err)
+	}
+}
+
+const noNetEnvelope = "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata:\n  name: no-net\n" +
+	"spec:\n  egress:\n    default: deny\n    allow:\n      - host: api.anthropic.com\n"
+
+// check is where a bound policy is inspected, so it is where the flat form is
+// reported as retired. The notice goes to stderr, and stdout stays one name
+// per line.
+func TestCheckReportsTheFlatFormAsRetired(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		retired    bool
+	}{
+		{"flat", noNetBody, true},
+		{"envelope", noNetEnvelope, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("BRIG_POLICY_DIR", dir)
+			writePolicyFile(t, dir, "no-net", c.body)
+			loadTestProfiles(t)
+			if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+				t.Fatal(err)
+			}
+			var out string
+			stderr := captureStderr(t, func() {
+				var err error
+				out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+			if strings.TrimSpace(out) != "no-net" {
+				t.Errorf("stdout is not just the policy name: %q", out)
+			}
+			said := strings.Contains(stderr, "flat policy form")
+			if said != c.retired {
+				t.Fatalf("flat-form notice printed = %v, want %v:\n%s", said, c.retired, stderr)
+			}
+			if !c.retired {
+				return
+			}
+			for _, want := range []string{flatPolicyGoesIn, "brig policy show no-net"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("the notice does not name %q:\n%s", want, stderr)
+				}
+			}
+		})
+	}
+}
+
+// create writes the current spelling, so a new policy never starts out
+// retired.
+func TestCreatePolicyWritesTheEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	stubEditor(t, `true`)
+	if err := createPolicy([]string{"no-net"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := policy.LoadAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := entries["no-net"]; !ok || e.Flat {
+		t.Errorf("the starter is not an envelope: %+v", e)
+	}
+}
+
+// The flat form outlives the other retired spellings by one release, and the
+// pages that say so name that release.
+func TestDocsNameTheFlatPolicyRemovalRelease(t *testing.T) {
+	for _, name := range []string{"docs/migration.md", "docs/stability.md", "docs/policies.md"} {
+		blob, err := os.ReadFile(filepath.Join("..", "..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(blob), flatPolicyGoesIn) {
+			t.Errorf("%s does not name %s, the release that removes the flat policy form", name, flatPolicyGoesIn)
+		}
 	}
 }

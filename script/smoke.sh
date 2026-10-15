@@ -744,16 +744,21 @@ fi
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 rm -f "$BRIG_PROFILE_DIR/hvi-default.yaml"
 
+# The envelope form, where the vz case above uses the flat form: both have to
+# reach the same boot.
 cat > "$WORK/policies/reachable.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
-name: reachable
-egress:
-  default: deny
-  allow:
-    - host: api.anthropic.com
-    - cidr: 140.82.112.0/20
-  deny:
-    - host: telemetry.example.com
+kind: Policy
+metadata:
+  name: reachable
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.anthropic.com
+      - cidr: 140.82.112.0/20
+    deny:
+      - host: telemetry.example.com
 YAML
 export BRIG_POLICY_DIR="$WORK/policies"
 "$WORK/brig" policy attach reachable claude-code > /dev/null 2>&1

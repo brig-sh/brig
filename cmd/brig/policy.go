@@ -156,7 +156,7 @@ func listPolicies() error {
 		wrap.Stderr.Error(err.Error())
 	}
 	for _, name := range names {
-		fmt.Printf("%-15s %s\n", name, entries[name].Policy.Desc)
+		fmt.Printf("%-15s %s\n", name, entries[name].Policy.Metadata.Description)
 		if b := bound[name]; len(b) > 0 {
 			fmt.Printf("                bound to: %s\n", strings.Join(b, ", "))
 		}
@@ -393,12 +393,15 @@ func createPolicy(args []string) error {
 // policyStarter is a minimal, valid policy document to start editing from.
 func policyStarter(name string) string {
 	return fmt.Sprintf(`apiVersion: %s
-name: %s
-desc:
-egress:
-  default: deny
-  allow:
-    - host: api.anthropic.com
+kind: Policy
+metadata:
+  name: %s
+  description:
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.anthropic.com
 `, policy.APIVersion, name)
 }
 
@@ -463,26 +466,26 @@ func editPolicy(args []string) error {
 	if err != nil {
 		return err
 	}
-	if other, ok := others[edited.Name]; ok && other.Path != entry.Path {
+	if other, ok := others[edited.Metadata.Name]; ok && other.Path != entry.Path {
 		return fmt.Errorf("not saved, %s is unchanged: name %q is already declared in %s\n"+
-			"your edit is still at %s", entry.Path, edited.Name, other.Path, scratchPath)
+			"your edit is still at %s", entry.Path, edited.Metadata.Name, other.Path, scratchPath)
 	}
 	// The same refusal create makes. This file is not the reserved one, so
 	// saving the rename would destroy nothing -- but it would leave a
 	// policy under a name create cannot produce and brig keeps for its own
 	// records, reachable only because it came in through edit. Two ways in
 	// with different rules is the shape of a bug either way.
-	if policy.IsReservedName(edited.Name) {
+	if policy.IsReservedName(edited.Metadata.Name) {
 		return fmt.Errorf("not saved, %s is unchanged: %q is reserved -- brig keeps %s.yaml in "+
 			"the policy directory for its own records, so a policy cannot be called that\n"+
-			"your edit is still at %s", entry.Path, edited.Name, edited.Name, scratchPath)
+			"your edit is still at %s", entry.Path, edited.Metadata.Name, edited.Metadata.Name, scratchPath)
 	}
-	// A rename leaves whatever named entry.Policy.Name (an attach, or a
+	// A rename leaves whatever named entry.Policy.Metadata.Name (an attach, or a
 	// profile's own inline policy: entry) pointing at a name this file no
 	// longer declares. A name unchanged by the edit needs no such check --
 	// the file it is bound to is still right here.
-	if !force && edited.Name != entry.Policy.Name {
-		b, err := boundTo(entry.Policy.Name)
+	if !force && edited.Metadata.Name != entry.Policy.Metadata.Name {
+		b, err := boundTo(entry.Policy.Metadata.Name)
 		if err != nil {
 			return err
 		}
@@ -490,7 +493,7 @@ func editPolicy(args []string) error {
 			return fmt.Errorf("not saved, %s is unchanged: renaming %s to %s would leave %s "+
 				"pointing at a name nothing declares. %s first, or pass --force to rename it anyway\n"+
 				"your edit is still at %s",
-				entry.Path, entry.Policy.Name, edited.Name, strings.Join(b, ", "), howToUnbind(b), scratchPath)
+				entry.Path, entry.Policy.Metadata.Name, edited.Metadata.Name, strings.Join(b, ", "), howToUnbind(b), scratchPath)
 		}
 	}
 	editedBytes, err := os.ReadFile(scratchPath)
@@ -612,6 +615,28 @@ func howToUnbind(b []string) string {
 		return "Edit the profile's policy: list"
 	default:
 		return "Detach it"
+	}
+}
+
+// flatPolicyGoesIn is the release that stops reading the flat policy form. The
+// form is retired in the release after v0.4.0, and stability.md removes a
+// spelling at least one release after its first notice, so it outlives
+// retiredGoesIn by one minor release.
+const flatPolicyGoesIn = "v0.6.0"
+
+// warnFlat prints the retired-spelling notice for each loaded policy in names
+// that a file still writes in the flat form. The command it names prints the
+// same policy in the envelope form, ready to save over the file.
+func warnFlat(entries map[string]policy.Entry, names []string) {
+	for _, name := range names {
+		e, ok := entries[name]
+		if !ok || !e.Flat {
+			continue
+		}
+		warnf("%s", notice.Newf("%s uses the flat policy form, which is now `kind: Policy` "+
+			"with `metadata:` and `spec:`", e.Path).
+			Note("the old spelling is removed in %s", flatPolicyGoesIn).
+			Do("to print it in the new form", "brig policy show "+name))
 	}
 }
 
@@ -971,6 +996,7 @@ func checkPolicy(args []string) error {
 		}
 		fmt.Printf("%s (not loaded)\n", name)
 	}
+	warnFlat(entries, append(slices.Clone(names), stray...))
 	if err := policy.CheckCoverage(p); err != nil {
 		return fmt.Errorf("cannot enforce any policy on %s: %w", p.Name, err)
 	}

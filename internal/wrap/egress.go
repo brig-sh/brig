@@ -17,7 +17,7 @@ func runtimeEgress(e policy.Egress) runtime.Egress {
 	if e.Default == "" {
 		return runtime.Egress{}
 	}
-	out := runtime.Egress{Default: e.Default}
+	out := runtime.Egress{Default: string(e.Default)}
 	for _, r := range e.Allow {
 		out.Allow = append(out.Allow, runtime.Rule{Host: r.Host, CIDR: r.CIDR})
 	}
