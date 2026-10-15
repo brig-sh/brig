@@ -1,6 +1,7 @@
 // Package broker is the credential broker of brokered routes: it verifies the
-// session token a guest sends, applies the route's request.allow, injects the
-// credential and forwards the request to the route's upstream.
+// session token a guest sends, refuses a request that holds a token anywhere
+// but its carrier, applies the route's request.allow, injects the credential
+// and forwards the request to the route's upstream.
 //
 // A guest holds a session token per route and no credential. A request names
 // its sandbox and route in the path, /<sandbox-id>/r/<route>/<rest>, and the
@@ -28,6 +29,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
@@ -71,13 +73,22 @@ type Config struct {
 	// Sandboxes is optional. Each one is added as by AddSandbox.
 	Sandboxes []Sandbox
 	// ReplayBudget is optional, and defaults to 64 MiB. It bounds the bytes
-	// of request bodies held at once, across all requests, for a retry after
-	// an upstream 401.
+	// of request bodies held at once, across all requests, for the
+	// placeholder scan and a retry after an upstream 401. Each sandbox holds
+	// at most its share: the budget over the registered sandboxes, and never
+	// less than one whole body.
 	ReplayBudget int64
+	// BodyTimeout is optional, and defaults to 60 seconds. It bounds the time
+	// a request may take to send the part of its body the broker holds. A
+	// body waits a tenth of it for the budget to hold it.
+	BodyTimeout time.Duration
 }
 
 // DefaultReplayBudget is the default of Config.ReplayBudget.
 const DefaultReplayBudget = 64 << 20
+
+// DefaultBodyTimeout is the default of Config.BodyTimeout.
+const DefaultBodyTimeout = 60 * time.Second
 
 // renewInterval is the shortest time between two renewals of one secret that
 // upstream 401s force. Each renewal rotates the refresh token, and one that
@@ -126,6 +137,7 @@ type Handler struct {
 	transport http.RoundTripper
 	arrival   func(sandbox, remoteAddr string) bool
 	replay    *budget
+	bodyWait  time.Duration
 
 	mu        sync.RWMutex
 	sandboxes map[string]*sandbox
@@ -141,6 +153,17 @@ type sandbox struct {
 	profile string
 	key     []byte
 	routes  map[string]*route
+
+	// placeholders counts the requests refused for a session token outside
+	// its carrier.
+	placeholders atomic.Int64
+
+	liveMu sync.Mutex
+	// live are the session tokens of the sandbox that the placeholder scan
+	// looks for, oldest first, and match finds them. A nil match is built
+	// again on the next request.
+	live  []liveToken
+	match *matcher
 }
 
 // route is a registered route with its upstream parsed.
@@ -171,9 +194,16 @@ func New(cfg Config) (*Handler, error) {
 	if cfg.ReplayBudget < 0 {
 		return nil, fmt.Errorf("the broker replay budget is %d bytes; it cannot be negative", cfg.ReplayBudget)
 	}
-	h.replay = &budget{left: cfg.ReplayBudget}
 	if cfg.ReplayBudget == 0 {
-		h.replay.left = DefaultReplayBudget
+		cfg.ReplayBudget = DefaultReplayBudget
+	}
+	h.replay = newBudget(cfg.ReplayBudget)
+	if cfg.BodyTimeout < 0 {
+		return nil, fmt.Errorf("the broker body timeout is %s; it cannot be negative", cfg.BodyTimeout)
+	}
+	h.bodyWait = cfg.BodyTimeout
+	if h.bodyWait == 0 {
+		h.bodyWait = DefaultBodyTimeout
 	}
 	h.renewer, _ = cfg.Credentials.(Renewer)
 	if h.audit == nil {
@@ -262,7 +292,8 @@ func ValidID(id string) error {
 
 // RemoveSandbox stops serving the sandbox id. Its tokens are refused from the
 // next request on: with 404 while the id is not registered, and with 401
-// after a sandbox is added again under the same id.
+// after a sandbox is added again under the same id. Its live tokens and its
+// placeholder count go with it.
 func (h *Handler) RemoveSandbox(id string) {
 	h.mu.Lock()
 	delete(h.sandboxes, id)
@@ -304,25 +335,54 @@ func (h *Handler) mayForceRenew(secret string) bool {
 	return true
 }
 
-// budget is a count of bytes that callers take and give back.
+// budget is a count of bytes that callers take and give back, in all and per
+// sandbox.
 type budget struct {
-	mu   sync.Mutex
-	left int64
+	mu    sync.Mutex
+	left  int64
+	total int64
+	held  map[string]int64
+	// freed is closed, and replaced, each time bytes come back.
+	freed chan struct{}
 }
 
-// take takes n bytes, and reports whether there were n left.
-func (b *budget) take(n int64) bool {
+func newBudget(n int64) *budget {
+	return &budget{left: n, total: n, held: map[string]int64{}, freed: make(chan struct{})}
+}
+
+// take takes n bytes for sandbox when n are left and the sandbox holds no
+// more than share with them. Otherwise it returns a channel that is closed
+// when bytes come back.
+func (b *budget) take(sandbox string, n, share int64) (bool, <-chan struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if n > b.left {
-		return false
+	if n > b.left || b.held[sandbox]+n > share {
+		return false, b.freed
 	}
 	b.left -= n
-	return true
+	b.held[sandbox] += n
+	return true, nil
 }
 
-func (b *budget) give(n int64) {
+func (b *budget) give(sandbox string, n int64) {
+	if n == 0 {
+		return
+	}
 	b.mu.Lock()
 	b.left += n
+	if b.held[sandbox] -= n; b.held[sandbox] <= 0 {
+		delete(b.held, sandbox)
+	}
+	close(b.freed)
+	b.freed = make(chan struct{})
 	b.mu.Unlock()
+}
+
+// share is what one sandbox may hold of the replay budget: the budget over
+// the registered sandboxes, and never less than one whole body.
+func (h *Handler) share() int64 {
+	h.mu.RLock()
+	n := int64(max(len(h.sandboxes), 1))
+	h.mu.RUnlock()
+	return max(h.replay.total/n, maxHeld)
 }

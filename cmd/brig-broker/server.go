@@ -443,7 +443,11 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Unlock()
 	sort.Strings(ids)
 	pending, failing := s.creds.report()
-	reply(w, injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids, Pending: pending, Failing: failing})
+	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids, Pending: pending, Failing: failing}
+	if n := s.handler.Placeholders(); len(n) > 0 {
+		st.Placeholder = n
+	}
+	reply(w, st)
 }
 
 // stopRequest stops the broker. With ifIdle it stops only when no sandbox
