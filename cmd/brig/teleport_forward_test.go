@@ -275,3 +275,32 @@ func TestAMoveBackLeftArrivingHereIsNotTakenForOneOfThisHosts(t *testing.T) {
 		t.Errorf("an arrival not finished was handed on %q, or this host's hull asked %v", *forwarded, rt.asked)
 	}
 }
+
+// A move the brig there says came here, with no arrival of it filed here,
+// as when that brig reached this host under another BRIG_STATE_DIR, is not
+// recorded as running on this host: a record that names this host would
+// send every verb here over ssh to itself. brig says so and leaves the
+// record as it was.
+func TestAMoveSaidToComeHereWithNoArrivalIsNotRecordedAsElsewhere(t *testing.T) {
+	t.Setenv("USER", "me")
+	name, err := os.Hostname()
+	if err != nil || name == "" {
+		t.Skip("this host has no name")
+	}
+	here := "me@" + name
+	rt := &moveRuntime{inspect: runtime.Migration{State: runtime.MigrationMigrated,
+		MoveTxID: "0123456789abcdef0123456789abcdef"}}
+	forwarded, _ := forwardHost(t, rt, 0, teleportData{State: "moved", Host: here, TxID: forwardedTxID})
+	stderr := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", here}) })
+	})
+	if err != nil || len(*forwarded) != 1 {
+		t.Fatalf("%v, handed on %q", err, *forwarded)
+	}
+	if !strings.Contains(stderr, "says claude-code moved to this host, and no arrival of it is filed here") {
+		t.Errorf("a move said to come here with no arrival: %q", stderr)
+	}
+	if e := entryOf(t); e["host"] != "me@box" || e["txid"] != "0123456789abcdef0123456789abcdef" {
+		t.Errorf("the record after a move said to come here with no arrival: %v", e)
+	}
+}
