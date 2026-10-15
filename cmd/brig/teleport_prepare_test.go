@@ -112,9 +112,9 @@ func TestTeleportPrepareReadiesTheHostAndMovesNothing(t *testing.T) {
 
 // A prepare runs the checks a move runs and is refused the same way, before
 // hull copies anything: a host that could not take the session is not sent
-// its base. A prepare hull fails records nothing. A session that runs on
-// another host, or whose move has not finished, is prepared from nowhere
-// here.
+// its base. A prepare hull fails records nothing. A session whose move
+// from here has not finished is prepared from nowhere. One that runs on
+// another host is prepared from there (TestAMovedSessionsTeleportRunsOnItsHost).
 func TestATeleportPrepareIsRefusedLikeAMove(t *testing.T) {
 	for _, c := range []struct {
 		what  string
@@ -127,9 +127,9 @@ func TestATeleportPrepareIsRefusedLikeAMove(t *testing.T) {
 		{"no such agent there", &moveRuntime{running: true}, func(r *probeReport) { r.Agent.Known = false }, "", "no agent"},
 		{"the name taken there", &moveRuntime{running: true}, func(r *probeReport) { r.Sandbox.Exists = true }, "", "already has a sandbox"},
 		{"hull fails", &moveRuntime{running: true, prepareErr: errors.New("ssh: connection reset")}, nil, "", "connection reset"},
-		{"moved", &moveRuntime{running: true}, nil,
-			`{"claude-code": {"home": "", "sandbox": "brig-claude-code", "teleportable": true, "host": "you@pi", "txid": "t"}}`,
-			"runs on you@pi"},
+		{"moving", &moveRuntime{running: true}, nil,
+			`{"claude-code": {"home": "", "sandbox": "brig-claude-code", "teleportable": true, "pendingHost": "you@pi", "txid": "t"}}`,
+			"to you@pi (t) has not finished"},
 	} {
 		probe := noNetProbe()
 		if c.probe != nil {

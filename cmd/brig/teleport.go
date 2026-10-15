@@ -98,6 +98,43 @@ type preparedData struct {
 // teleportCmd is `brig teleport`, after the session is loaded and before any
 // credential is resolved.
 func teleportCmd(cfg *wrap.Config, t profile.Profile, ref string, o teleportOptions, wantJSON bool) error {
+	if err := teleportAsked(ref, o); err != nil {
+		return err
+	}
+	// The ref the index files the session under, the resolved profile and
+	// the slug, which is also how the destination's brig files it.
+	ref = cfg.Location().Ref
+	// One teleport of a session at a time on this host, the move and the
+	// two questions alike. Taken before the record is read, so what each
+	// one decides on is not changing under it.
+	unlock, err := wrap.LockMove(cfg.VMName)
+	if errors.Is(err, wrap.ErrMoveBusy) {
+		return fmt.Errorf("a `brig teleport` of %s is running on this host. Let it finish, then run this again", ref)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot take the move lock of %s: %w", ref, err)
+	}
+	defer unlock()
+	// A session that runs on another host moves from there. --to, --prepare
+	// and --abort go to the brig there; --status reads the record here.
+	if loc := cfg.Location(); loc.Host != "" && !o.status {
+		return teleportForward(cfg, t, ref, o, loc, wantJSON)
+	}
+	switch {
+	case o.status:
+		return teleportStatus(cfg, ref, wantJSON)
+	case o.abort:
+		return teleportAbort(cfg, ref, wantJSON)
+	case o.prepare:
+		return teleportPrepare(cfg, t, ref, o.to, wantJSON)
+	}
+	return teleportMove(cfg, t, ref, o.to, wantJSON)
+}
+
+// teleportAsked refuses a teleport line that does not ask one thing, as a
+// usage error: none, or more than one, of --to, --status and --abort,
+// --prepare without --to, or a destination that is not USER@HOST.
+func teleportAsked(ref string, o teleportOptions) error {
 	asked := 0
 	for _, on := range []bool{o.to != "", o.status, o.abort} {
 		if on {
@@ -115,29 +152,7 @@ func teleportCmd(cfg *wrap.Config, t profile.Profile, ref string, o teleportOpti
 			return usagef("%s", err)
 		}
 	}
-	// The ref the index files the session under, the resolved profile and
-	// the slug, which is also how the destination's brig files it.
-	ref = cfg.Location().Ref
-	// One teleport of a session at a time on this host, the move and the
-	// two questions alike. Taken before the record is read, so what each
-	// one decides on is not changing under it.
-	unlock, err := wrap.LockMove(cfg.VMName)
-	if errors.Is(err, wrap.ErrMoveBusy) {
-		return fmt.Errorf("a `brig teleport` of %s is running on this host. Let it finish, then run this again", ref)
-	}
-	if err != nil {
-		return fmt.Errorf("cannot take the move lock of %s: %w", ref, err)
-	}
-	defer unlock()
-	switch {
-	case o.status:
-		return teleportStatus(cfg, ref, wantJSON)
-	case o.abort:
-		return teleportAbort(cfg, ref, wantJSON)
-	case o.prepare:
-		return teleportPrepare(cfg, t, ref, o.to, wantJSON)
-	}
-	return teleportMove(cfg, t, ref, o.to, wantJSON)
+	return nil
 }
 
 // moveRefusal is a refusal of a move as a capability: exit 7.
@@ -308,7 +323,7 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 		}
 		warnf("%s was prepared for %s at %s, when hull said %s", host, ref, loc.PreparedAt, how)
 	}
-	warnf("moving %s to %s (move %s): the guest pauses here and resumes there", ref, host, txid)
+	warnf("moving %s from %s to %s (move %s)", ref, thisHostSaid(), host, txid)
 	// hull's lines are read into the report as they come, and printed
 	// from an Echo, which hull never waits on.
 	moved := &runtime.MoveReport{}
@@ -524,7 +539,7 @@ func teleportPrepare(cfg *wrap.Config, t profile.Profile, ref, host string, want
 	if err := checkProbe(cfg, report, host, ref, "", net); err != nil {
 		return err
 	}
-	warnf("preparing %s for %s: the guest keeps running here", host, ref)
+	warnf("preparing %s for %s: the guest keeps running on %s", host, ref, thisHostSaid())
 	defer catchBrokenPipe()()
 	echo := runtime.NewEcho(func(s string) { warnf("%s", s) })
 	spec := runtime.PrepareSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin,
@@ -605,7 +620,8 @@ func teleportStatus(cfg *wrap.Config, ref string, wantJSON bool) error {
 		RemoteStore: loc.RemoteStore, TxID: loc.TxID, Prepared: preparedOfLocation(loc)}
 	if loc.Host != "" {
 		d.State = "moved"
-		return printTeleport(d, wantJSON, fmt.Sprintf("%s runs on %s (move %s)", ref, loc.Host, loc.TxID))
+		return printTeleport(d, wantJSON, fmt.Sprintf("%s runs on %s (move %s); its moves are driven from there",
+			ref, loc.Host, loc.TxID))
 	}
 	if loc.PendingHost == "" {
 		line := fmt.Sprintf("%s runs on this host; no move of it is recorded", ref)
@@ -1086,10 +1102,7 @@ func receiveRemote(host, store, ref, vm, txid string, net wrap.MoveNetwork) (str
 	if err != nil {
 		return "", err
 	}
-	from, _ := os.Hostname()
-	if u := os.Getenv("USER"); u != "" && from != "" {
-		from = u + "@" + from
-	}
+	from := thisHostName()
 	args := []string{receiveVerb, "--json", "--ref", ref, "--sandbox", vm, "--txid", txid,
 		"--from", from, "--network", net.Net, "--slot", strconv.Itoa(net.Slot), "--egress", string(egress)}
 	if len(net.Policies) > 0 {
