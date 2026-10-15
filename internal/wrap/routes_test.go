@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -22,6 +23,10 @@ type fakeBroker struct {
 	minted     []injector.MintRequest
 	forgotten  []string
 	running    bool
+	// stuck is a broker whose process is alive and does not answer.
+	stuck bool
+	// extra is what Status reports besides the pid and the port.
+	extra injector.Status
 }
 
 const fakeBrokerPort = 47821
@@ -43,7 +48,15 @@ func (f *fakeBroker) Forget(id string) error {
 }
 
 func (f *fakeBroker) Status() (injector.Status, bool) {
-	return injector.Status{PID: 4242, Port: fakeBrokerPort}, f.running
+	if f.stuck {
+		return injector.Status{PID: 4242}, false
+	}
+	if !f.running {
+		return injector.Status{}, false
+	}
+	st := f.extra
+	st.PID, st.Port = 4242, fakeBrokerPort
+	return st, true
 }
 
 // hostRunRecorder is the host kind as far as a boot goes: it records the spec
@@ -310,5 +323,82 @@ func TestEnvelopeHasABrokerRow(t *testing.T) {
 	if got := c.brokerLine(); !strings.Contains(got, "transport brig.internal") ||
 		!strings.Contains(got, "brig.internal routing is not available on this runtime yet") {
 		t.Errorf("the BROKER row on hull is %q", got)
+	}
+}
+
+// The BROKER row and info --json name a secret whose renewal journal is not
+// settled, and the placeholder refusals of this sandbox alone. Another
+// sandbox's count is not this run's to report, and a sandbox with none
+// shows nothing.
+func TestTheBrokerRowNamesRecoveryAndThisSandboxsRefusals(t *testing.T) {
+	c := routedConfig(t, claudeAndGitHub, &hostRunRecorder{})
+	fb := &fakeBroker{running: true, extra: injector.Status{
+		Recovering:  []string{"claude-credentials"},
+		Placeholder: map[string]int64{c.VMName: 3, "brig-other": 9},
+	}}
+	c.broker = fb
+	line := c.brokerLine()
+	// The semicolon ends the count, so a sum of both sandboxes' counts
+	// does not match.
+	for _, want := range []string{"refresh recovering: claude-credentials;", "placeholder refusals: 3;"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the BROKER row %q does not carry %q", line, want)
+		}
+	}
+	d := c.InfoData(creds.Set{})
+	if d.Broker == nil || !slices.Equal(d.Broker.Recovering, []string{"claude-credentials"}) || d.Broker.Placeholder != 3 {
+		t.Errorf("info --json broker = %+v", d.Broker)
+	}
+
+	fb.extra = injector.Status{Placeholder: map[string]int64{"brig-other": 9}}
+	if line := c.brokerLine(); strings.Contains(line, "placeholder") || strings.Contains(line, "recovering") {
+		t.Errorf("the BROKER row of a sandbox with no refusal and nothing recovering is %q", line)
+	}
+	blob, err := json.Marshal(c.InfoData(creds.Set{}).Broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "placeholder") || strings.Contains(string(blob), "recovering") {
+		t.Errorf("info --json broker of a sandbox with neither is %s", blob)
+	}
+}
+
+// A broker whose process is alive and does not answer on its control socket
+// is named by its pid. It is not reported as "not running", which would say
+// that the next run starts a broker, and the next run fails to.
+func TestABrokerThatDoesNotAnswerIsNamed(t *testing.T) {
+	c := routedConfig(t, claudeAndGitHub, &hostRunRecorder{})
+	c.broker = &fakeBroker{stuck: true}
+	if line := c.brokerLine(); !strings.Contains(line, "brig-broker pid 4242 is not answering on its control socket") ||
+		strings.Contains(line, "the run starts it") {
+		t.Errorf("the BROKER row of a broker that does not answer is %q", line)
+	}
+	c.broker = &fakeBroker{}
+	if line := c.brokerLine(); !strings.Contains(line, "brig-broker not running; the run starts it") {
+		t.Errorf("the BROKER row with no broker is %q", line)
+	}
+
+	// brig-broker as a run finds it: a pid file that names this process,
+	// with its start time, and no control socket.
+	t.Setenv("BRIG_STATE_DIR", t.TempDir())
+	dir, err := injector.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if st, ok := (&brokerProcess{}).Status(); ok || st.PID != 0 {
+		t.Errorf("with no pid file, Status = %+v, %v", st, ok)
+	}
+	start, err := injector.ProcessStart(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, injector.PIDName), []byte(injector.PIDLine(os.Getpid(), start)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, ok := (&brokerProcess{}).Status(); ok || st.PID != os.Getpid() {
+		t.Errorf("with a live pid and no socket, Status = %+v, %v, want pid %d and false", st, ok, os.Getpid())
 	}
 }

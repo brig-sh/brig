@@ -393,7 +393,9 @@ an rm.
 Brig does not restart a broker that exited. The `BROKER` row says it is not
 running, and the next run starts a new one. That run registers the sandbox
 again with a new key, so an agent still running with a token from the old
-broker gets 401 until its next exec.
+broker gets 401 until its next exec. A broker that is alive and does not
+answer on its control socket is named in the row by its pid, with
+`broker.log` to read.
 
 ### The port
 

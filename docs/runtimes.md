@@ -272,7 +272,14 @@ BRIG_RUNTIME=host brig run claude-code
 
 `brig info` prints a `BROKER` row: the transport, the routes, the pid and
 port of `brig-broker`, and the secrets it keeps on the host. A refresh that
-failed, or a write-back still pending, is named there too.
+failed, a write-back still pending, and a secret whose
+[renewal journal](secrets.md#the-renewal-journal) is not settled are named
+there too. So is the number of this sandbox's requests the broker refused
+for a [session token outside its carrier](broker.md#placeholder-detection).
+`brig info --json` carries the same in its `broker` object: `transport`,
+`routes` and `running`, then `pid`, `port`, `pending`, `failing`,
+`recovering`, `placeholder`, `keptOnHost` and `refused`, each left out when
+it is empty.
 
 ### Egress policy answers
 

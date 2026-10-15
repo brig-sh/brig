@@ -80,6 +80,17 @@ func (c *Config) brokerLine() string {
 		if len(st.Failing) > 0 {
 			parts = append(parts, "refresh failing: "+strings.Join(st.Failing, ", "))
 		}
+		if len(st.Recovering) > 0 {
+			parts = append(parts, "refresh recovering: "+strings.Join(st.Recovering, ", "))
+		}
+		// The count is this sandbox's: another sandbox's leaks are not
+		// this run's to report.
+		if n := st.Placeholder[c.VMName]; n > 0 {
+			parts = append(parts, fmt.Sprintf("placeholder refusals: %d", n))
+		}
+	case st.PID != 0:
+		parts = append(parts, fmt.Sprintf("brig-broker pid %d is not answering on its control socket; "+
+			"see %s", st.PID, injector.LogName))
 	default:
 		parts = append(parts, "brig-broker not running; the run starts it")
 	}
@@ -99,6 +110,11 @@ type InfoBroker struct {
 	Port      int      `json:"port,omitempty"`
 	Pending   []string `json:"pending,omitempty"`
 	Failing   []string `json:"failing,omitempty"`
+	// Recovering are the secrets with a renewal journal not yet settled.
+	Recovering []string `json:"recovering,omitempty"`
+	// Placeholder is the number of this sandbox's requests the broker
+	// refused for a session token outside its carrier.
+	Placeholder int64 `json:"placeholder,omitempty"`
 	// KeptOnHost are the secrets the routes inject, which the profile would
 	// otherwise have delivered to the guest.
 	KeptOnHost []string `json:"keptOnHost,omitempty"`
@@ -120,6 +136,7 @@ func (c *Config) infoBroker() *InfoBroker {
 	}
 	if st, ok := c.routeBroker().Status(); ok {
 		b.Running, b.PID, b.Port, b.Pending, b.Failing = true, st.PID, st.Port, st.Pending, st.Failing
+		b.Recovering, b.Placeholder = st.Recovering, st.Placeholder[c.VMName]
 	}
 	return b
 }
