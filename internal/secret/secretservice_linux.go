@@ -259,7 +259,7 @@ func (s *secretService) object(path dbus.ObjectPath) dbus.BusObject {
 // Create stores a new secret with no provenance, and returns ErrExists if the
 // name is taken.
 func (s *secretService) Create(name string, value []byte) error {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return err
 	}
 	return s.write(name, value, Provenance{}, false)
@@ -269,7 +269,7 @@ func (s *secretService) Create(name string, value []byte) error {
 // ErrNotFound rather than creating: an update naming a secret that is not there
 // is a typo, and creating it silently would hide that.
 func (s *secretService) Update(name string, value []byte) error {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return err
 	}
 	return s.write(name, value, Provenance{}, true)
@@ -280,7 +280,7 @@ func (s *secretService) Update(name string, value []byte) error {
 // they ride in the keychain comment on macOS. A zero Provenance writes no
 // provenance attribute, which is how a hand-created secret reads back as absent.
 func (s *secretService) Write(name string, value []byte, p Provenance, update bool) error {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return err
 	}
 	return s.write(name, value, p, update)
@@ -357,7 +357,7 @@ func (s *secretService) replace(item dbus.ObjectPath, attrs map[string]string, s
 
 // Read returns the value, or ErrNotFound.
 func (s *secretService) Read(name string) ([]byte, error) {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return nil, err
 	}
 	item, err := s.find(name)
@@ -379,7 +379,7 @@ func (s *secretService) Read(name string) ([]byte, error) {
 
 // Delete removes a secret, or returns ErrNotFound.
 func (s *secretService) Delete(name string) error {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return err
 	}
 	item, err := s.find(name)

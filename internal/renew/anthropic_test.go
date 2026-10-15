@@ -587,7 +587,7 @@ func TestTwoSandboxesWithAnExpiredTokenRefreshOnce(t *testing.T) {
 
 func TestWriteBackFailureIsRetriedOnALaterAccess(t *testing.T) {
 	f := newOAuthFixture(t, 5*time.Minute)
-	f.store.failNext(1)
+	f.store.failWritesOf(credName, 1)
 
 	first := f.resolve(t)
 	if accessToken(t, first) != "sk-ant-oat01-issued-1" {
