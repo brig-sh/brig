@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"slices"
 	"sort"
@@ -56,6 +57,13 @@ type Arrival struct {
 	Egress   policy.Egress `json:"egress"`
 	Policies []string      `json:"policies,omitempty"`
 	State    string        `json:"state"`
+	// Replaced is the entry this host had for the session when the move
+	// began, one that recorded the session as running on another host: the
+	// origin's record of a move away, which a move back replaces. An abort
+	// puts it back, since the session runs there still, and the commit
+	// drops it. Kept here, not on the session index, for the reason the
+	// rest of the arrival is.
+	Replaced *sessionEntry `json:"replaced,omitempty"`
 }
 
 func readArrivals() map[string]Arrival         { return readIndex[Arrival](arrivalsName) }
@@ -74,9 +82,10 @@ type ArrivalSpec struct {
 }
 
 // PrepareArrival takes this host's half of a move before hull resumes the
-// guest here: it checks the session and the sandbox name are free, gives the
-// sandbox the network it left with the rules it was under, and files the
-// session and the arrival. It returns the gateway's control socket, or "" for
+// guest here: it checks the session and the sandbox name are free (an entry
+// that records the session as running elsewhere is free; see
+// arrivalOnEntry), gives the sandbox the network it left with the rules it
+// was under, and files the session and the arrival. It returns the gateway's control socket, or "" for
 // a guest with no network. A second call for the same move does the same
 // again and is not refused, so a source that lost the answer can ask again.
 func PrepareArrival(t profile.Profile, name string, spec ArrivalSpec, rt runtime.Runtime) (string, error) {
@@ -106,15 +115,23 @@ func PrepareArrival(t profile.Profile, name string, spec ArrivalSpec, rt runtime
 	}
 	key := sessionKey(t.Name, slug)
 	arrivals := readArrivals()
-	if old, ok := arrivals[vmName]; ok && old.TxID != spec.TxID {
+	old, have := arrivals[vmName]
+	again := have && old.TxID == spec.TxID
+	// A committed arrival of an earlier move is the record of a session
+	// that has since left: the sandbox check below refuses one still here.
+	if have && !again && old.State != arrivalCommitted {
 		return "", fmt.Errorf("move %s of %s is already arriving here; it has to finish or be "+
 			"called off from %s first", old.TxID, key, old.From)
 	}
-	_, again := arrivals[vmName]
-	if !again {
+	var replaced *sessionEntry
+	if again {
+		replaced = old.Replaced
+	} else {
 		if entry, ok := readSessionIndex()[key]; ok {
-			return "", fmt.Errorf("this host already has a session %s, on sandbox %s; remove it with "+
-				"`brig rm %s` here before moving another onto it", key, entry.Sandbox, key)
+			if err := arrivalOnEntry(key, vmName, entry); err != nil {
+				return "", err
+			}
+			replaced = &entry
 		}
 		if exister, ok := rt.(runtime.Exister); ok {
 			exists, err := exister.Exists(vmName)
@@ -133,7 +150,7 @@ func PrepareArrival(t profile.Profile, name string, spec ArrivalSpec, rt runtime
 		return "", err
 	}
 	arrivals[vmName] = Arrival{Ref: key, TxID: spec.TxID, From: spec.From, Network: spec.Network,
-		Slot: spec.Slot, Egress: spec.Egress, Policies: spec.Policies, State: arrivalPrepared}
+		Slot: spec.Slot, Egress: spec.Egress, Policies: spec.Policies, State: arrivalPrepared, Replaced: replaced}
 	if err := writeArrivals(arrivals); err != nil {
 		runtime.ReleaseReceivedNetwork(vmName)
 		return "", err
@@ -146,6 +163,75 @@ func PrepareArrival(t profile.Profile, name string, spec ArrivalSpec, rt runtime
 	return sock, nil
 }
 
+// arrivalOnEntry refuses an arrival onto the session this host files as
+// key, unless that entry records the session as running on another host,
+// with the sandbox the move brings. That is the session coming back: the
+// origin keeps its record of a move away, and an older brig, or `hull rm` of
+// the fenced copy, leaves it after the copy is gone. The host it names need
+// not be the source, which names itself by its hostname and may have moved
+// the session on since. A move out of this host that has not finished is
+// refused: the session may still be here.
+func arrivalOnEntry(key, vmName string, entry sessionEntry) error {
+	switch {
+	case entry.PendingHost != "":
+		return fmt.Errorf("a move of %s from this host to %s (move %s) has not finished, and the session "+
+			"may still be here. `brig teleport %s --status` here says where it stands", key, entry.PendingHost,
+			entry.TxID, key)
+	case entry.Host != "" && entry.Sandbox == vmName:
+		return nil
+	}
+	return fmt.Errorf("this host already has a session %s, on sandbox %s; remove it with "+
+		"`brig rm %s` here before moving another onto it", key, entry.Sandbox, key)
+}
+
+// ReplacedRecord is the entry a move here replaced, when it said the session
+// runs on a host other than the one the move came from.
+type ReplacedRecord struct {
+	Host string `json:"host"`
+	TxID string `json:"txid,omitempty"`
+}
+
+// ArrivalReplacedElsewhere is the entry the move txid replaced, when that
+// entry named a host other than the move's source. Nothing ties an arrival
+// to the session an entry records beyond its key and sandbox, so this is
+// either the session coming back after it moved on from that host, or
+// another session of the same agent and label, which still runs there and
+// which this host no longer reaches. The source says so; it is not refused,
+// since a session that moved on is the case arrivalOnEntry lets in.
+func ArrivalReplacedElsewhere(sandbox, txid string) (ReplacedRecord, bool) {
+	a, ok := readArrivals()[sandbox]
+	if !ok || a.TxID != txid || a.Replaced == nil || sameHost(a.Replaced.Host, a.From) {
+		return ReplacedRecord{}, false
+	}
+	return ReplacedRecord{Host: a.Replaced.Host, TxID: a.Replaced.TxID}, true
+}
+
+// sameHost reports whether two USER@HOST spellings name one host: the same
+// host part, or, for names rather than addresses, the same first label, as
+// "rp2" from a hostname and "rp2.local" as typed. The user is ignored. An
+// empty one is not known to be the same.
+func sameHost(a, b string) bool {
+	host := func(s string) string {
+		if i := strings.LastIndex(s, "@"); i >= 0 {
+			s = s[i+1:]
+		}
+		return strings.TrimSuffix(strings.ToLower(s), ".")
+	}
+	ha, hb := host(a), host(b)
+	if ha == "" || hb == "" {
+		return false
+	}
+	if ha == hb {
+		return true
+	}
+	if net.ParseIP(ha) != nil || net.ParseIP(hb) != nil {
+		return false
+	}
+	la, _, _ := strings.Cut(ha, ".")
+	lb, _, _ := strings.Cut(hb, ".")
+	return la == lb
+}
+
 // CommitArrival marks the move txid as one the source saw finish.
 func CommitArrival(sandbox, txid string) error {
 	arrivals := readArrivals()
@@ -156,13 +242,14 @@ func CommitArrival(sandbox, txid string) error {
 	if a.State == arrivalCommitted {
 		return nil
 	}
-	a.State = arrivalCommitted
+	a.State, a.Replaced = arrivalCommitted, nil
 	arrivals[sandbox] = a
 	return writeArrivals(arrivals)
 }
 
 // AbortArrival gives back what PrepareArrival took, for a move hull called
-// off. It refuses while hull here runs the guest: the move reached the
+// off, and puts back the entry it replaced, which says where the session
+// still runs. It refuses while hull here runs the guest: the move reached the
 // destination, and taking its network away would cut a running session off.
 func AbortArrival(sandbox, txid string, rt runtime.Runtime) error {
 	arrivals := readArrivals()
@@ -182,8 +269,16 @@ func AbortArrival(sandbox, txid string, rt runtime.Runtime) error {
 	}
 	runtime.ReleaseReceivedNetwork(sandbox)
 	index := readSessionIndex()
+	changed := false
 	if entry, ok := index[a.Ref]; ok && entry.Sandbox == sandbox && !entry.away() {
 		delete(index, a.Ref)
+		changed = true
+	}
+	if _, ok := index[a.Ref]; !ok && a.Replaced != nil {
+		index[a.Ref] = *a.Replaced
+		changed = true
+	}
+	if changed {
 		if err := writeSessionIndex(index); err != nil {
 			return err
 		}

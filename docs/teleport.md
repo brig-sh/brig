@@ -458,9 +458,10 @@ Brig recorded), or else once the brig on the destination says that the
 session runs there, and it asks nothing else. hull marks the checkpoint
 `migrated` only after the destination answered the commit, so that record
 needs no word from the destination, which may since have removed the session
-or gone away. It keeps the record that reaches the session. A second `brig rm <ref>` with
-no copy left forgets the session on this host and touches nothing on the
-destination. `ssh <user>@<host> brig rm <ref>` removes the session there.
+or gone away. It then forgets the session on this host, and touches nothing
+on the destination. With no copy left here, as after `hull rm` of the copy,
+`brig rm <ref>` only forgets the session here. `ssh <user>@<host> brig rm
+<ref>` removes the session there.
 `brig rm --all` leaves the copy of a moved session alone. On the source, the
 network gateway brig started for the sandbox keeps running until `brig rm`
 removes the copy.
@@ -468,18 +469,30 @@ removes the copy.
 ### Moving back
 
 A second move goes from the host the session runs on: `brig teleport` there,
-with this host as the destination. This host still has the fenced copy and
-its record of the move, and the destination refuses both: the probe finds the
-sandbox name taken, and `brig teleport-receive` finds the session already
-filed. So on the old host, first remove the copy and then forget the session:
+with this host as the destination. This host still has the fenced copy,
+under the sandbox name the move back needs, and both hull and the probe
+refuse a destination that has it. So on the old host, remove the copy
+first. That one `brig rm` also forgets the session there:
 
 ```bash
-brig rm <ref>       # on the old host: removes the fenced copy
-brig rm <ref>       # on the old host: forgets the session there
+brig rm <ref>       # on the old host: removes the fenced copy, forgets the session
 ssh <user>@<host> brig teleport <ref> --to <you>@<old host>
 ```
 
-Between the second `brig rm` and the move, the old host has no record of the
+A record that says the session runs on another host does not refuse the move
+back. An older Brig's `brig rm`, or `hull rm` of the copy, leaves that record,
+and the move back replaces it. If the move back is called off, the old host
+gets the record back, as the session still runs on the other host. A move
+out of the old host that has not finished still refuses: `brig teleport
+<ref> --status` there settles it first. The record is taken by the ref and
+sandbox name alone, as the session may have moved on from the host it names
+before coming back. When that host is not the one the move comes from, the
+brig moving it says which record the old host had and that the move
+replaced it: a different session under the same name would still run on
+that host, and the old host would no longer reach it by the ref. A record
+under another sandbox name, as after `BRIG_NAME` changed, still refuses.
+
+Between the `brig rm` and the move, the old host has no record of the
 session. Run nothing for the ref there. `brig sh <ref>` or `brig run <ref>`
 on the old host does not reach the session: it boots a new, empty session
 under the same sandbox name, and the move back is then refused, as the name
@@ -487,9 +500,10 @@ is taken. Remove that new session with `brig rm <ref>` before the move. Run
 your commands on the host the session runs on. hull counts the owner epoch
 on: 0 where the session started, 1 after the first move, 2 back home.
 
-To remove a moved session everywhere, remove the fenced copy on the old host
-first, then the session where it runs. In the other order, `brig rm` of the
-old copy still works, because hull's record of it says `migrated`.
+To remove a moved session everywhere, run `brig rm <ref>` on the old host,
+which removes the fenced copy and forgets the session there, then on the
+host where it runs. In the other order, `brig rm` of the old copy still
+works, because hull's record of it says `migrated`.
 
 ### Credentials after a move
 
@@ -666,7 +680,8 @@ of downtime from `rp1` to `rp2` (40.1 MiB/s), and 7.45 s back
 (51.5 MiB/s).
 
 The move back went from `rp2`, as [Moving back](#moving-back) says, after
-two `brig rm` on `rp1`. hull's owner epoch was 2 at home.
+two `brig rm` on `rp1`, which the brig of that run needed; one does it now.
+hull's owner epoch was 2 at home.
 
 In the `4d905b8` run, a session on an `isolated` network moved the same way
 under an egress policy, `default: deny`, that allows `10.0.0.0/8` and
@@ -972,11 +987,10 @@ brig sh ubuntu -c 'cat /tmp/count'   # runs on rp2, over ssh
 brig ls
 brig teleport ubuntu --status
 brig info ubuntu                     # runs on rp2
-brig rm ubuntu                       # removes the fenced copy left here
-brig rm ubuntu                       # forgets the session here
+brig rm ubuntu                       # removes the fenced copy left here, forgets the session
 ssh me@rp2 'source ~/b4/env.sh && brig teleport ubuntu --to me@rp1'
 brig sh ubuntu -c 'cat /tmp/count'   # runs here again
-ssh me@rp2 'source ~/b4/env.sh && brig rm ubuntu && brig rm ubuntu'
+ssh me@rp2 'source ~/b4/env.sh && brig rm ubuntu'
 brig rm ubuntu
 ```
 
@@ -990,5 +1004,5 @@ export BRIG_TELEPORT_REMOTE_ENV="BRIG_STATE_DIR=$HOME/.brig-b BRIG_GATEWAY_DIR=$
 brig run --teleportable claude -d
 brig teleport claude --to "$USER@localhost"
 brig sh claude -c 'uptime'          # runs in the moved guest, over ssh
-brig rm claude                      # removes the fenced copy left here
+brig rm claude                      # removes the fenced copy left here, forgets the session
 ```

@@ -103,6 +103,155 @@ func TestPrepareArrivalRefusesWhatItCannotKeepApart(t *testing.T) {
 	}
 }
 
+// A session coming back to a host it left finds that host's record of the
+// move away: an entry that says the session runs on another host. That entry
+// does not refuse the arrival, whichever host it names, since the source
+// names itself by hostname and may have moved the session on since. The
+// arrival keeps it, an abort puts it back, as the session still runs there,
+// and the commit drops it. A move out of this host that has not finished
+// still refuses, and so does the fenced copy while hull here still has it.
+func TestAnArrivalTakesTheRecordOfASessionThatRunsElsewhere(t *testing.T) {
+	teleportState(t)
+	p := teleportProfile(t)
+	away := sessionEntry{Sandbox: "brig-tp", Teleportable: true, Host: "me@rp2", RemoteStore: "/s", TxID: "tx0"}
+	if err := writeSessionIndex(map[string]sessionEntry{"tp": away}); err != nil {
+		t.Fatal(err)
+	}
+	spec := ArrivalSpec{Sandbox: "brig-tp", TxID: "tx1", From: "me@elsewhere", Network: "none"}
+
+	if _, err := PrepareArrival(p, "", spec, &guestRuntime{exists: true}); err == nil ||
+		!strings.Contains(err.Error(), "already has a sandbox brig-tp") {
+		t.Errorf("the fenced copy still here: %v", err)
+	}
+	if _, err := PrepareArrival(p, "", spec, &guestRuntime{}); err != nil {
+		t.Fatalf("the session coming back was refused: %v", err)
+	}
+	if e := readSessionIndex()["tp"]; e.away() || e.Sandbox != "brig-tp" || e.TxID != "" {
+		t.Errorf("the arrival filed %+v", e)
+	}
+	if a := readArrivals()["brig-tp"]; a.Replaced == nil || *a.Replaced != away {
+		t.Errorf("the arrival kept %+v of the entry it replaced", a.Replaced)
+	}
+	// The entry named rp2 and the move came from elsewhere: the source is
+	// told what was replaced, in case it was another session.
+	if r, ok := ArrivalReplacedElsewhere("brig-tp", "tx1"); !ok || r.Host != "me@rp2" || r.TxID != "tx0" {
+		t.Errorf("the record replaced from another host: %+v, %v", r, ok)
+	}
+	// The same move asked again keeps what the first ask replaced.
+	if _, err := PrepareArrival(p, "", spec, &guestRuntime{}); err != nil {
+		t.Fatal(err)
+	}
+	if a := readArrivals()["brig-tp"]; a.Replaced == nil || *a.Replaced != away {
+		t.Errorf("a repeated ask lost the replaced entry: %+v", a.Replaced)
+	}
+	if err := AbortArrival("brig-tp", "tx1", &guestRuntime{}); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := readSessionIndex()["tp"]; !ok || e != away {
+		t.Errorf("the abort left %+v (%v), not the record of where the session runs", e, ok)
+	}
+
+	second := spec
+	second.TxID = "tx2"
+	if _, err := PrepareArrival(p, "", second, &guestRuntime{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitArrival("brig-tp", "tx2"); err != nil {
+		t.Fatal(err)
+	}
+	if a := readArrivals()["brig-tp"]; a.Replaced != nil || a.State != arrivalCommitted {
+		t.Errorf("the commit kept %+v", a)
+	}
+	if e := readSessionIndex()["tp"]; e.away() {
+		t.Errorf("the committed arrival left the session recorded away: %+v", e)
+	}
+
+	// The session left again, and its committed arrival stayed behind, as
+	// `hull rm` of the fenced copy leaves it. Neither refuses the next move
+	// back.
+	again := sessionEntry{Sandbox: "brig-tp", Teleportable: true, Host: "me@rp3", TxID: "tx3"}
+	if err := writeSessionIndex(map[string]sessionEntry{"tp": again}); err != nil {
+		t.Fatal(err)
+	}
+	third := spec
+	third.TxID = "tx4"
+	if _, err := PrepareArrival(p, "", third, &guestRuntime{}); err != nil {
+		t.Errorf("a stale committed arrival refused the move back: %v", err)
+	}
+
+	// An entry away under another sandbox name, as after BRIG_NAME changed,
+	// is another session, and refuses.
+	if err := writeArrivals(nil); err != nil {
+		t.Fatal(err)
+	}
+	other := sessionEntry{Sandbox: "brig-other", Teleportable: true, Host: "me@rp2", TxID: "tx7"}
+	if err := writeSessionIndex(map[string]sessionEntry{"tp": other}); err != nil {
+		t.Fatal(err)
+	}
+	seventh := spec
+	seventh.TxID = "tx8"
+	if _, err := PrepareArrival(p, "", seventh, &guestRuntime{}); err == nil ||
+		!strings.Contains(err.Error(), "already has a session") {
+		t.Errorf("an arrival onto an away entry of another sandbox: %v", err)
+	}
+	if e := readSessionIndex()["tp"]; e != other {
+		t.Errorf("the refused arrival changed the entry to %+v", e)
+	}
+
+	// A move out of here whose end is not known refuses.
+	if err := writeArrivals(nil); err != nil {
+		t.Fatal(err)
+	}
+	pending := sessionEntry{Sandbox: "brig-tp", Teleportable: true, PendingHost: "me@rp2", TxID: "tx5"}
+	if err := writeSessionIndex(map[string]sessionEntry{"tp": pending}); err != nil {
+		t.Fatal(err)
+	}
+	fifth := spec
+	fifth.TxID = "tx6"
+	if _, err := PrepareArrival(p, "", fifth, &guestRuntime{}); err == nil ||
+		!strings.Contains(err.Error(), "has not finished") || !strings.Contains(err.Error(), "--status") {
+		t.Errorf("an arrival onto a move out of here: %v", err)
+	}
+}
+
+// The source of a move back is told about the record it replaced only when
+// that record named another host: from the host it names, the move is the
+// session coming back, however the two spell the host.
+func TestAnArrivalSaysOnlyWhenItReplacedARecordOfAnotherHost(t *testing.T) {
+	teleportState(t)
+	p := teleportProfile(t)
+	for _, c := range []struct {
+		host, from string
+		said       bool
+	}{
+		{"me@rp2", "me@rp2", false},
+		{"rp2.local", "pmoust@rp2", false},
+		{"me@RP2", "me@rp2.", false},
+		{"me@rp3", "me@rp2", true},
+		{"me@100.64.0.2", "me@100.64.0.3", true},
+		{"me@rp2", "", true},
+	} {
+		if err := writeArrivals(nil); err != nil {
+			t.Fatal(err)
+		}
+		away := sessionEntry{Sandbox: "brig-tp", Teleportable: true, Host: c.host, TxID: "tx0"}
+		if err := writeSessionIndex(map[string]sessionEntry{"tp": away}); err != nil {
+			t.Fatal(err)
+		}
+		spec := ArrivalSpec{Sandbox: "brig-tp", TxID: "tx1", From: c.from, Network: "none"}
+		if _, err := PrepareArrival(p, "", spec, &guestRuntime{}); err != nil {
+			t.Fatalf("%+v: %v", c, err)
+		}
+		r, said := ArrivalReplacedElsewhere("brig-tp", "tx1")
+		if said != c.said || (said && r.Host != c.host) {
+			t.Errorf("entry on %s, move from %q: said %v (%+v), want %v", c.host, c.from, said, r, c.said)
+		}
+	}
+	if _, said := ArrivalReplacedElsewhere("brig-tp", "tx9"); said {
+		t.Error("another move's arrival said it replaced a record")
+	}
+}
+
 // An offline session under a policy moves with its rules and no gateway to
 // hold them: it has no network for them to act on. The brig here then
 // resolves the carried rules for it, and keeps it offline.

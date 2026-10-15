@@ -2568,21 +2568,76 @@ grep -q '^TELEPORT .*arrived from ' "$WORK/tpm-info.out" && grep -q 'runs on me@
   && ok "info on a teleported session is the brig there's, and says so" \
   || bad "info on a teleported session is the brig there's, and says so -- got: $(cat "$WORK/tpm-info.out" "$WORK/tpm-info.err")"
 
+# A move back here is refused while the fenced copy is here: hull keeps it
+# under the same name, and hull would refuse the move too.
+rtx=0123456789abcdef0123456789abcdef
+recv() { tpr "$WORK/brig" teleport-receive --json --ref claude --sandbox brig-claude-code --txid "$rtx" \
+  --from me@elsewhere --network none --slot 0 "$@"; }
+out="$(recv 2>&1)"; rc=$?
+case "$rc:$out" in
+  [1-9]*"already has a sandbox brig-claude-code"*) ok "a move back is refused while the fenced copy is here" ;;
+  *) bad "a move back is refused while the fenced copy is here -- got $rc: $out" ;;
+esac
 # rm removes the fenced copy left here, once the brig there says the session
-# runs, and keeps the record that reaches it. It asks nothing.
+# runs, and forgets the session here, so one rm leaves this host ready to
+# take it back. It asks nothing of the host the session runs on.
 : > "$STUB_LOG"
 out="$(tpr "$WORK/brig" rm claude 2>&1)"; rc=$?
 case "$rc:$out" in
-  "0:removed the copy of claude left on this host; it runs on me@box") ok "rm removes the fenced copy left on this host" ;;
+  "0:removed the copy of claude left on this host and forgot it here; it runs on me@box, untouched there"*"ssh me@box brig rm claude removes it there"*)
+    ok "rm removes the fenced copy left on this host" ;;
   *) bad "rm removes the fenced copy left on this host -- got $rc: $out" ;;
 esac
 grep -q '^argv: rm brig-claude-code$' "$STUB_LOG" && [ ! -f "$STUB_STATE.stopped" ] && [ -f "$STUB_REMOTE_STATE" ] \
   && ok "rm took the local instance and left the one there" \
   || bad "rm took the local instance and left the one there -- got: $(grep '^argv:' "$STUB_LOG")"
 tpr "$WORK/brig" ls > "$WORK/tpm-ls.out" 2>&1
-grep -q '^claude-code  *brig-claude-code  *moved ' "$WORK/tpm-ls.out" \
-  && ok "the session is still listed, on its host" \
-  || bad "the session is still listed, on its host -- got: $(cat "$WORK/tpm-ls.out")"
+python3 - "$BRIG_STATE_DIR/sessions.json" <<'PY' && ! grep -q '^claude-code  *brig-claude-code ' "$WORK/tpm-ls.out" \
+  && ok "rm of the fenced copy forgets the session here" \
+  || bad "rm of the fenced copy forgets the session here -- got: $(cat "$WORK/tpm-ls.out" "$BRIG_STATE_DIR/sessions.json")"
+import json, sys
+assert "claude-code" not in json.load(open(sys.argv[1])), "the entry stayed"
+PY
+# An entry that records the session as running elsewhere, which an older
+# brig's rm or `hull rm` of the copy leaves, does not refuse the move back.
+# The arrival keeps it, and an abort puts it back: the session still runs
+# there.
+python3 - "$BRIG_STATE_DIR/sessions.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+index = json.load(open(p))
+index["claude-code"] = {"home": "", "sandbox": "brig-claude-code", "teleportable": True, "host": "me@box",
+                        "remoteStore": "/st/b", "txid": "f" * 32}
+json.dump(index, open(p, "w"))
+PY
+out="$(recv --egress '{}' 2>&1)"; rc=$?
+python3 - "$BRIG_STATE_DIR/sessions.json" "$BRIG_STATE_DIR/arrivals.json" <<'PY' && [ "$rc" = 0 ] \
+  && ok "a move back onto the record of a session that runs elsewhere is taken" \
+  || bad "a move back onto the record of a session that runs elsewhere is taken -- got $rc: $out"
+import json, sys
+index, arr = (json.load(open(p)) for p in sys.argv[1:])
+e = index["claude-code"]
+assert e["sandbox"] == "brig-claude-code" and not e.get("host") and not e.get("txid"), e
+a = arr["brig-claude-code"]
+assert a["state"] == "prepared" and a["replaced"]["host"] == "me@box", a
+PY
+# The record named me@box and the move came from me@elsewhere: nothing ties
+# the two to one session, so the answer names the record, and the source
+# says it replaced it.
+python3 -c 'import json, sys
+r = json.loads(sys.argv[1])["data"]["replaced"]
+assert r == {"host": "me@box", "txid": "f" * 32}, r' "$out" \
+  && ok "the move back names the record of another host it replaced" \
+  || bad "the move back names the record of another host it replaced -- got: $out"
+out="$(recv --abort 2>&1)"; rc=$?
+python3 - "$BRIG_STATE_DIR/sessions.json" "$BRIG_STATE_DIR/arrivals.json" <<'PY' && [ "$rc" = 0 ] \
+  && ok "an abort of the move back puts back the record of where the session runs" \
+  || bad "an abort of the move back puts back the record of where the session runs -- got $rc: $out"
+import json, sys
+index, arr = (json.load(open(p)) for p in sys.argv[1:])
+assert index["claude-code"]["host"] == "me@box" and index["claude-code"]["txid"] == "f" * 32, index
+assert "brig-claude-code" not in arr, arr
+PY
 # With no copy left here, rm forgets the session on this host and leaves the
 # one there alone.
 : > "$SSH_LOG"

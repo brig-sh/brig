@@ -206,8 +206,9 @@ brig rm claude --dry-run
 On a session that [`brig teleport`](#brig-teleport) moved to another host,
 `brig rm <ref>` removes the copy the move left on this host, once hull's
 record here says that copy is `migrated` by the move or the brig on that host
-says the session runs there, and keeps the record that reaches the session. With no copy left, `brig rm <ref>` forgets the session on this host
-and touches nothing on the other host. `brig rm --all` leaves the copy of a
+says the session runs there, and then forgets the session on this host. With
+no copy left here, as after `hull rm` of the copy, it only forgets the
+session. It touches nothing on the other host. `brig rm --all` leaves the copy of a
 moved session, and of one whose move has not finished, alone.
 
 ### `brig ls`
