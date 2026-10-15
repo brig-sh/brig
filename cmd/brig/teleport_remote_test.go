@@ -836,8 +836,9 @@ func TestAMoveHullDidNotBeginIsUndone(t *testing.T) {
 }
 
 // rm on a moved session removes the copy left here only once the brig
-// there says the session runs there, and keeps the record that reaches it.
-// With no copy left, rm forgets the session here and touches nothing there.
+// there says the session runs there, and then forgets the session here, so
+// one rm leaves this host ready to take it back. A copy it keeps keeps the
+// record that reaches the session.
 func TestRmOfAMovedSessionRemovesOnlyTheCopyHere(t *testing.T) {
 	for _, running := range []bool{false, true} {
 		rt := &moveRuntime{running: true}
@@ -856,8 +857,10 @@ func TestRmOfAMovedSessionRemovesOnlyTheCopyHere(t *testing.T) {
 		if !running && (err == nil || rt.removed != 0) {
 			t.Errorf("a copy whose session is not confirmed there was removed: %v", err)
 		}
-		if e := entryOf(t); e["host"] != "me@box" {
-			t.Errorf("rm dropped the record that reaches the session: %v", e)
+		if e := entryOf(t); running && e != nil {
+			t.Errorf("rm removed the copy and kept the record: %v", e)
+		} else if !running && e["host"] != "me@box" {
+			t.Errorf("rm kept the copy and dropped the record that reaches the session: %v", e)
 		}
 		if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0], " "), "BRIG_HULL_STORE_DIR=/st/b") {
 			t.Errorf("the brig there was asked %v", *calls)
@@ -897,8 +900,10 @@ func TestRmOfACopyHullRecordsAsMigratedNeedsNoWordFromThere(t *testing.T) {
 		if !c.remove && (err == nil || rt.removed != 0 || len(*calls) != 1) {
 			t.Errorf("%s: the copy was not kept for the destination's word: %v, removed %d", c.what, err, rt.removed)
 		}
-		if e := entryOf(t); e["host"] != "me@box" {
-			t.Errorf("%s: rm dropped the record that reaches the session: %v", c.what, e)
+		if e := entryOf(t); c.remove && e != nil {
+			t.Errorf("%s: rm removed the copy and kept the record: %v", c.what, e)
+		} else if !c.remove && e["host"] != "me@box" {
+			t.Errorf("%s: rm kept the copy and dropped the record that reaches the session: %v", c.what, e)
 		}
 	}
 }
