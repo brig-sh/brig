@@ -762,7 +762,8 @@ unix socket path on macOS can have at most 104 bytes. The gateway's stream
 socket is `<gateway dir>/sandbox-<sandbox>.sock.qemu`, as
 `sandbox-brig-claude-code.sock.qemu` was on these runs. For a sandbox name
 too long for that, Brig names the socket after a hash of the name,
-`sandbox-<8 hex digits>.sock`, so it is the gateway directory that must
+`sandbox-<8 hex digits>.sock.qemu` (the control socket beside it is the
+same name without `.qemu`), so it is the gateway directory that must
 leave room for it; Brig refuses one that does not. The Mac's directories
 were reached through a short link for that reason.
 
@@ -949,7 +950,9 @@ its check has run only on made-up streams.
   CPUs, and has no other heap to shrink. Two probes of
   `hvi seccomp-selftest` reach the two reads under the `vmm` filter,
   "allocate on many threads at once (vmm)" and "free a thread's heap memory
-  (vmm)", and each fails unless malloc is kept to one arena. The
+  (vmm)". hvi's commit says both fail with SIGSYS on the code before it,
+  and that the second still fails with an arena cap of four: a cap above
+  one still leaves a heap other than the main one to shrink. The
   destination's hull needs no setting for it.
 
   The Claude Code runs above came before that fix, and stood in for it with
