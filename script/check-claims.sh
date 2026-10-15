@@ -23,9 +23,15 @@
 #   `go:TestName`     a func TestName( in a _test.go file
 #   `smoke:<text>`    an ok "<text>" line in script/smoke.sh
 #   `vm:<check>`      a vm_check <check> line in script/claims-vm.sh
+#   `macos:TestName`  a go: test that runs on macOS alone
+#   `macos-smoke:<text>`  a smoke: assertion in the part of smoke.sh that runs
+#                     on macOS alone
 #
 # A vm check needs a booted sandbox, so it runs under `make claims-vm` and
 # never here. This script resolves the name and lists the row as not yet run.
+# CI runs on Linux, where a macos: test skips and a macos-smoke: assertion is
+# never reached. This script resolves those too, and lists them as run on a
+# Mac only, so a row defended by them alone does not read as checked in CI.
 #
 # Usage:
 #   script/check-claims.sh               check docs/claims.md
@@ -90,7 +96,7 @@ section_text() {
 # seeded table and a seeded repository.
 check() {
 	local table="$1" page="$2" smoke="$3" vm="$4" goroot="$5"
-	local fail=0 rows=0 n_go=0 n_smoke=0 n_vm=0 not_run=""
+	local fail=0 rows=0 n_go=0 n_smoke=0 n_vm=0 n_mac=0 not_run="" mac_only=""
 	local flat n=0 line body k in_table=0 pending="" pending_n=0 prev=""
 	local claim section defended quote sect_flat tokens rest tok name text where
 	flat="$(collapse <"$page")"
@@ -214,6 +220,29 @@ check() {
 					fail=1
 				fi
 				;;
+			macos:Test*)
+				name="${tok#macos:}"
+				if grep -rqF --include='*_test.go' --exclude-dir=.git --exclude-dir=.claude \
+					-- "func $name(" "$goroot"; then
+					n_mac=$((n_mac + 1))
+					mac_only="$mac_only$where: $tok
+"
+				else
+					echo "$where: missing go test: $name"
+					fail=1
+				fi
+				;;
+			macos-smoke:?*)
+				text="${tok#macos-smoke:}"
+				if grep -qF -- "ok \"$text\"" "$smoke"; then
+					n_mac=$((n_mac + 1))
+					mac_only="$mac_only$where: $tok
+"
+				else
+					echo "$where: missing smoke assertion: $text"
+					fail=1
+				fi
+				;;
 			vm:?*)
 				name="${tok#vm:}"
 				case "$name" in
@@ -250,10 +279,14 @@ EOF
 		echo "$table: no rows"
 		fail=1
 	fi
-	echo "$table: $rows rows, $n_go go tests, $n_smoke smoke assertions, $n_vm vm checks"
+	echo "$table: $rows rows, $n_go go tests, $n_smoke smoke assertions, $n_vm vm checks, $n_mac macOS-only"
 	if [ -n "$not_run" ]; then
 		echo "not yet run, these need a booted sandbox (make claims-vm):"
 		printf '%s' "$not_run" | sed 's/^/  /'
+	fi
+	if [ -n "$mac_only" ]; then
+		echo "not run in CI, which runs on Linux; these run on a Mac (go test ./... and script/smoke.sh):"
+		printf '%s' "$mac_only" | sed 's/^/  /'
 	fi
 	return "$fail"
 }
@@ -296,7 +329,7 @@ EOF
 	cat >"$tmp/claims.md" <<'EOF'
 | Claim | Section | Defended by |
 | --- | --- | --- |
-| "The guest  reaches only what you name." (a note the page does not carry) | Page | `go:TestClaimsSelfTestReal` `smoke:a real smoke assertion` `vm:real-check` |
+| "The guest  reaches only what you name." (a note the page does not carry) | Page | `go:TestClaimsSelfTestReal` `smoke:a real smoke assertion` `vm:real-check` `macos:TestClaimsSelfTestReal` `macos-smoke:a real smoke assertion` |
 | "The guest reaches only what you name." | Page | `go:TestClaimsSelfTestMissing` |
 | "The guest reaches only what you name." | Page | `smoke:a smoke assertion nobody wrote` |
 | "A sentence the page never carried." | Page | `go:TestClaimsSelfTestReal` |
@@ -327,13 +360,23 @@ a line with no cells
 EOF
 	# A table with a header and no rows proves nothing, so it fails too.
 	printf '| Claim | Section | Defended by |\n| --- | --- | --- |\n' >"$tmp/empty.md"
+	# A macOS-only defence that does not exist is refused like any other.
+	cat >"$tmp/mac.md" <<'EOF'
+| Claim | Section | Defended by |
+| --- | --- | --- |
+| "The guest reaches only what you name." | Page | `macos:TestClaimsSelfTestMissing` |
+| "The guest reaches only what you name." | Page | `macos-smoke:a smoke assertion nobody wrote` |
+EOF
 	out="$(check "$tmp/claims.md" "$tmp/page.md" "$tmp/smoke.sh" "$tmp/claims-vm.sh" "$tmp/go" 2>&1)"
 	status=$?
+	local mac mac_status
+	mac="$(check "$tmp/mac.md" "$tmp/page.md" "$tmp/smoke.sh" "$tmp/claims-vm.sh" "$tmp/go" 2>&1)"
+	mac_status=$?
 	local empty empty_status
 	empty="$(check "$tmp/empty.md" "$tmp/page.md" "$tmp/smoke.sh" "$tmp/claims-vm.sh" "$tmp/go" 2>&1)"
 	empty_status=$?
 	rm -rf "$tmp"
-	printf '%s\n%s\n' "$out" "$empty"
+	printf '%s\n%s\n%s\n' "$out" "$empty" "$mac"
 
 	expect() {
 		if grep -qF -- "$tmp/claims.md:$1: $2" <<<"$out"; then
@@ -362,6 +405,24 @@ EOF
 	expect 23 "a pipe line outside any table"
 	expect 25 "a pipe line outside any table"
 	expect 29 "a table that is not three columns"
+	local want
+	for want in "$tmp/mac.md:3: missing go test: TestClaimsSelfTestMissing" \
+		"$tmp/mac.md:4: missing smoke assertion: a smoke assertion nobody wrote"; do
+		if [ "$mac_status" != 0 ] && grep -qF -- "$want" <<<"$mac"; then
+			echo "self-test: ok   refused: ${want#"$tmp/"}"
+		else
+			echo "self-test: FAIL not refused: ${want#"$tmp/"}"
+			bad=1
+		fi
+	done
+	# A resolved macOS-only defence is listed as not run in CI.
+	if grep -qF -- "$tmp/claims.md:3: macos:TestClaimsSelfTestReal" <<<"$out" &&
+		grep -qF -- "$tmp/claims.md:3: macos-smoke:a real smoke assertion" <<<"$out"; then
+		echo "self-test: ok   macOS-only defences are listed as not run in CI"
+	else
+		echo "self-test: FAIL macOS-only defences are not listed as not run in CI"
+		bad=1
+	fi
 	if [ "$empty_status" != 0 ] && grep -qF -- "$tmp/empty.md: no rows" <<<"$empty"; then
 		echo "self-test: ok   a table with no rows refused"
 	else

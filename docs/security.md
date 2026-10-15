@@ -4,6 +4,10 @@ Brig runs an agent in a microVM. On the host, the agent can reach its guest
 home, the credentials you deliver to it, and any project you name on the run
 line. No other host directory is mounted.
 
+The `host` kind, which you choose by name, runs the agent as a process
+instead, and most of this page does not hold for it. See
+[The process boundary](#the-process-boundary).
+
 A run reads no host credential source. See [Credentials](#credentials).
 
 Network reach has weaker limits. See
@@ -71,7 +75,8 @@ backend limits.
 
 ## The boundary
 
-The sandbox is a microVM on macOS and on Linux.
+The sandbox is a microVM on macOS and on Linux, unless you choose the `host`
+kind. See [The process boundary](#the-process-boundary).
 
 | Host | How the microVM boots |
 | --- | --- |
@@ -81,7 +86,9 @@ The sandbox is a microVM on macOS and on Linux.
 On a Linux host that has another microVM shim, `BRIG_CONTAINERD_RUNTIME` can
 name that shim. Brig refuses a shim that it knows shares the host kernel:
 `runc` or `crun`, by name or by path. A container that shares the host kernel
-is not the boundary Brig provides.
+is not the boundary Brig provides through a container runtime. The `host`
+kind shares it too, and you choose that by name. See
+[The process boundary](#the-process-boundary).
 
 The `ISOLATION` row of the execution envelope names the boundary that this
 run resolved. `brig info` prints the row and boots nothing. `brig --verbose
@@ -93,6 +100,7 @@ ISOLATION    microVM (hull, vz backend)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2)
 ISOLATION    container (nerdctl over containerd, runc: the guest shares the host kernel)
 ISOLATION    unknown (nerdctl over containerd, io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
+ISOLATION    process (shared kernel)
 ```
 
 The row reports the binary in hand, the backend the run settled on, and the
@@ -116,6 +124,59 @@ Beyond those, the guest does not have your keychain, your SSH agent, your
 secret manager, or any other directory on the host. The guest cannot fetch a
 credential for itself, so you must deliver each credential explicitly. See
 [Credentials](#credentials).
+
+### The process boundary
+
+The `host` kind is a third boundary, and a weaker one. You choose it with
+`BRIG_RUNTIME=host` or `isolation: process`, and Brig never falls back to it.
+It runs the agent as a process on your Mac, as you, under `sandbox-exec`
+(Seatbelt). See [The host kind](runtimes.md#the-host-kind) for the profile
+Brig writes.
+
+| | microVM | process |
+| --- | --- | --- |
+| kernel | a guest kernel of its own | yours. A kernel bug, or a hole in Seatbelt, is a way out |
+| files | the guest home, the project, and hostmounts | every file you can read. Every file you can write, except Brig's own directories |
+| other processes | not visible | their environments are readable, those of `brigd` and `hull` included |
+| keychain | not reachable | denied by the profile |
+| SSH agent, `brigd` | not reachable | denied by the profile: the one unix socket allowed is the system resolver's |
+| other apps | not reachable | denied by the profile: no `open`, no AppleEvents |
+| network out | per posture and policy, at a gateway or a bridge outside the guest | per posture, by Seatbelt. A policy with `host` or `cidr` rules is refused |
+| network in | only a port you publish | none. The process cannot listen |
+| user | the guest's | you |
+
+Most of what this page says about the guest describes the microVM, and the
+file boundary is where the two differ most. A process sandbox reads your
+`~/.ssh`, `~/.aws` and every other credential file in your home. It can
+change your shell startup files. It can read the environment of every other
+process you run, through `sysctl`, and those of `brigd` and `hull` carry the
+credentials Brig forwards to microVM sandboxes. Brig has found no Seatbelt
+rule that stops that. Neither promise holds in a process sandbox the way it
+holds for a microVM. Do not give a process sandbox an agent you would not run
+in your own shell.
+
+What does hold:
+
+- The process gets the variables the profile delivers, and from the
+  environment Brig runs in only the ones runtimes.md lists, such as `PATH`
+  and `TERM`.
+- No value is on its command line.
+- On `isolated`, no IP connection leaves this Mac, and a local address is
+  reachable only on the ports Brig names.
+- On `offline`, nothing is reachable.
+- The process cannot listen for a connection.
+- The process cannot start an app through LaunchServices.
+- The process cannot send a signal to a process outside it.
+- The process cannot write Brig's own profiles, policies or state outside
+  its guest home, and cannot read or rewrite the profile it runs under.
+- The process cannot ask the keychain for a secret, or connect to a unix
+  socket other than the system resolver's, your SSH agent's included.
+
+A credential the profile delivers reaches a process sandbox as its real
+value. A placeholder in its place needs a credential broker on the host,
+which is separate work
+([#302](https://github.com/brig-sh/brig/issues/302)). Until it lands, the
+process sandbox holds the same credential a microVM would.
 
 ### Published ports
 

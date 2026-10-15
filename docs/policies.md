@@ -598,10 +598,10 @@ They do not change the policy or the profile.
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down claude-code -n refactor
 attached locked-down to claude-code -n refactor
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down ubuntu
 brig: cannot attach locked-down to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
@@ -631,7 +631,7 @@ It also runs the same `CheckCoverage` refusal as `attach`:
 ```console
 $ brig policy check claude-code
 locked-down
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig policy check ubuntu
 no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
@@ -756,7 +756,7 @@ brig: no-net is recorded under "My Work", which no run reaches
   ↳ a session named "My Work" starts "my-work"
   → to remove it:  brig policy detach no-net claude-code -n "My Work"
 no-net
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 ```
 
 One gap remains. `attach -n` refuses a name that any reserved profile ends
@@ -918,6 +918,8 @@ a probe at boot confirms the answer or overturns it.
 | hull on `vz` | `cannot enforce` | vmnet, which Brig does not filter | |
 | hull on `qemu` | `cannot enforce` | vmnet, which Brig does not filter | |
 | docker, on any shim | `cannot enforce` | docker's own bridges and firewall, which Brig does not filter | |
+| host (macOS), `offline` or `isolated`, with no `host` or `cidr` rule | `enforced` | the Seatbelt profile denies every IP connection but the ports Brig names on a local address, or every connection on `offline`. A `default: allow` policy is held the same way, so only loopback is reachable | `sandbox-exec` |
+| host (macOS), with a `host` or `cidr` rule | `cannot enforce` | Seatbelt matches addresses, not names, and of addresses only loopback | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 
 Enforcement on nerdctl is measured on rootless nerdctl. Brig treats nerdctl
@@ -954,7 +956,7 @@ policy applies to the run, Brig refuses a hull without those flags by name:
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig run claude
 brig: a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of /opt/homebrew/bin/hull has no --egress-default. Upgrade the runtime, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```

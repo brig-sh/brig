@@ -4,6 +4,10 @@ Brig boots a sandbox through a runtime: `hull` on macOS, `nerdctl` on Linux.
 See [A container runtime or a VMM](non-goals.md#a-container-runtime-or-a-vmm)
 for the reason.
 
+A third kind, `host`, boots nothing. It runs the agent as a process on your
+Mac, under the sandbox that macOS ships. You choose it by name, and Brig
+never falls back to it. See [The host kind](#the-host-kind).
+
 `hull` and `nerdctl` are runtimes. Under hull, `vz`, `hvi` and `qemu` are
 hypervisor backends, or backends for short.
 
@@ -71,6 +75,158 @@ the three backends. It comes from one read of the `kern.hv_support` sysctl,
 which says only whether this Mac can run a microVM. That line never changes
 the exit status.
 
+## The host kind
+
+The `host` kind runs the profile's `binary` from your `PATH`, as you, under
+`sandbox-exec` (Seatbelt). There is no image, no VM and no guest kernel. It
+is macOS only. On Linux, Brig refuses it as unsupported on this platform.
+
+Choose it with `BRIG_RUNTIME=host` for one run, or with `isolation: process`
+in a profile. `isolation: microvm` is the default. Brig refuses a
+`BRIG_RUNTIME` that names the other boundary than a profile's `isolation:`,
+rather than pick one of the two. `BRIG_RUNTIME_BIN`, or a profile's
+`runtimeBin`, names the `sandbox-exec` to drive, and Brig refuses a binary
+of any other name.
+
+Use it when the agent needs your host tools, or when a microVM is not
+available, and when what you need held is the network rather than the files.
+The process shares your kernel and sees your files. See
+[The process boundary](security.md#the-process-boundary) before you choose
+it.
+
+### What a host sandbox is
+
+`brig run` writes a Seatbelt profile for the sandbox and a record of it, and
+then replaces itself with the agent under that profile:
+
+```
+~/.brig/host/<sandbox>/profile.sb   # the Seatbelt profile
+~/.brig/host/<sandbox>/spec.json    # network, loopback ports, shares. No environment
+~/.brig/host/<sandbox>/pids/<pid>   # one per agent started, with its start time
+~/.brig/host/<sandbox>/events.log   # what brig logs prints
+```
+
+`BRIG_STATE_DIR` moves the lot. Brig refuses a state directory that is a
+link. The sandbox is running while an agent it started is alive, a
+`--json` run included. `brig stop` signals those agents and every process
+below them, read from the process table before the first signal, and the
+process group of an agent that leads one. A process that left the tree
+before the stop, by a double fork, is not reached. `brig rm` deletes the
+directory once no agent is alive.
+
+`brig sh` enters the same envelope as `brig run`, and a second command
+joins the agent that is already running. Every command in a host sandbox,
+the agent, a shell and the checks Brig makes, runs the same way:
+
+```
+sandbox-exec -f ~/.brig/host/<sandbox>/profile.sb /bin/sh -c '<cd, then exec -->' brig-host <dir> <command>...
+```
+
+A directory that cannot be entered exits `125`. A command that is not found
+exits `127`, a first word such as `-l` included. Brig refuses an empty
+command.
+
+The process gets a fresh environment: `PATH`, `TERM`, `COLORTERM`, `LANG`,
+`LC_*`, `TZ`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR` and
+`__CF_USER_TEXT_ENCODING` from the environment of Brig, then the variables
+the profile delivers. No other variable of your shell is in its
+environment, and a value never goes on the command line. The process can
+still read the environment of every other process you run, through
+`sysctl` (`KERN_PROCARGS2`). Brig has found no Seatbelt rule that stops it. That
+includes `brigd` and `hull`, which carry the credentials Brig forwards to
+microVM sandboxes. See [The process boundary](security.md#the-process-boundary).
+
+`HOME` is the guest home on the host, `~/.brig/homes/<slug>`. A project is
+at its real path, not at `/work/<name>`. Brig maps the guest paths in the
+working directory, the environment and its own commands, such as the read of
+the workspace marker, back to the host ones. The agent's own arguments are
+passed as they are.
+
+### What it enforces
+
+Every profile starts from `(allow default)`, takes the network away, and ends
+with the same denies. A later rule wins in Seatbelt, so the home is allowed
+after the deny on the state directory that holds it, and the denies that
+must hold whatever else is allowed come last:
+
+```
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
+(allow network-outbound (remote ip "localhost:48711"))          ; one per loopback port
+(deny network-inbound)
+(deny signal)
+(allow signal (target same-sandbox))
+(deny lsopen)
+(deny appleevent-send)
+(deny file-write* (subpath "~/.brig"))                          ; and the profile and policy directories
+(allow file-write* (subpath "~/.brig/homes/<slug>"))            ; each share
+(deny file-write* (literal "~/.config"))                        ; each directory above those you can rename
+(deny file-read* file-write* (regex #"^/dev/bpf[0-9]+$"))
+(deny mach-lookup (global-name "com.apple.SecurityServer"))
+(deny file-read* file-write* (subpath "~/.brig/host/<sandbox>/secret"))
+(deny file-read* file-write* (subpath "~/.brig/host"))
+```
+
+Brig writes every path in the profile as its real path, because Seatbelt
+matches the path the kernel resolved.
+
+| network | what the process can open |
+| --- | --- |
+| `isolated` (brokered) | the system resolver's socket, so names resolve, and TCP or UDP on the ports Brig names, to any local address of this Mac. Seatbelt's `localhost` also matches the address of a network interface. No other IP connection, and no other unix socket |
+| `offline` | nothing. Names do not resolve |
+| `shared` | any IP connection. Of the unix sockets, only the resolver's |
+
+No loopback port is named yet: a run on `isolated` reaches the resolver and
+nothing else. The ports are for a broker on the host that will hold the
+credential, which is separate work and not in this release. The resolver is
+still a way out: a name the agent looks up reaches the DNS servers of your
+network, so it can carry data in the name.
+
+The denies hold in every mode:
+
+- inbound connections. The process cannot listen on a port, so nothing on
+  your network can connect to it
+- signals to a process outside the sandbox. The agent can still signal
+  its own children
+- `open` and AppleEvents, which hand work to a process outside the sandbox.
+  An app started through LaunchServices runs with no profile. So
+  `claude /login` prints its URL and does not open a browser
+- writes to Brig's own directories: `~/.brig` apart from the shares, and the
+  profile and policy directories. The agent cannot write a profile for the
+  next run, or detach a policy from its own
+- renaming a directory above those, which would move the tree out from
+  under the rules. A file can still be created inside one
+- `/dev/bpf*`, which can read and inject packets
+- the keychain service, which answers any process that runs as you. Without
+  the deny, `security` in the sandbox read an item written the way Brig
+  writes its secrets, with no prompt
+- `~/.brig/host`, so the agent cannot read or rewrite its own profile
+- every unix socket but the resolver's, so the agent cannot use your SSH
+  agent or reach `brigd`
+
+The other limits, against a microVM:
+
+| | host kind |
+| --- | --- |
+| a policy with `host` or `cidr` rules | refused before anything is written, exit `7`. Seatbelt takes `localhost` or `*` and a port, and no other address |
+| a policy with `default: deny` and no rule | held, as `isolated` |
+| a policy with `default: allow` and no rule | held as `isolated` too, so only loopback is reachable. The `POLICY` row says so |
+| `volumes:` or `files:` | refused before the workspace is prepared. A process sandbox cannot mount a `tmpfs`. That includes `claude-code`. `brig plan` shows the refusal |
+| `kind: gui`, `--publish` | refused |
+| the image, `BRIG_VERIFY` | nothing is pulled or checked. The `IMAGE` row says so |
+| `brig ls`, `brig rm --all` | list the host sandboxes only with `BRIG_RUNTIME=host` |
+
+`brig logs` prints `events.log`. What Seatbelt denied is in the system log:
+
+```
+log show --last 10m --style compact --predicate 'sender == "Sandbox"'
+```
+
+`brig doctor` reports whether `sandbox-exec` is on `PATH`, on macOS, without
+changing the exit status.
+
 ### Egress policy answers
 
 Before a run that carries an egress policy, each run path answers one
@@ -86,6 +242,9 @@ question: does it enforce the policy. The answer is `enforced`,
 | nerdctl on any shim | `enforced` | `nft list tables` runs in the network namespace that holds its bridges. Brig enters that namespace with `nsenter` when nerdctl is rootless |
 | hull on `vz` or `qemu` | `cannot enforce` | no probe runs |
 | docker on any shim | `cannot enforce` | no probe runs |
+| host, `offline` | `enforced` | the profile denies every outbound connection |
+| host, `isolated` | `enforced` | for a policy with no `host` or `cidr` rule: the profile denies every IP connection but loopback to the ports Brig names |
+| host, with a `host` or `cidr` rule | `cannot enforce` | Seatbelt matches addresses, not names, and of addresses only loopback |
 | hull on a backend that the policies table does not name | `unknown` | |
 
 Brig boots a policy-bound run only on `enforced`. The refusal names the
@@ -207,6 +366,14 @@ The container runs `sleep infinity`, because a container exits when its
 command exits. The sandbox must outlive the exec that used it.
 `brig logs <ref>` runs `nerdctl logs <name>`.
 
+On macOS with the host kind, from `internal/runtime/host_darwin.go`:
+
+```
+sandbox-exec -f <profile.sb> /bin/sh -c '<cd or exit 125>; shift; exec -- "$@"' brig-host <dir> <command>...
+ps -o lstart= -p <pid>                  # is the recorded agent still that process?
+ps -A -o pid=,ppid=,lstart=             # brig stop: the agent and every process below it
+```
+
 Two more tools run on the same paths:
 
 ```
@@ -257,9 +424,10 @@ See [Not in argv](security.md#not-in-argv).
 
 Brig finds the runtime in this order (`internal/runtime/runtime.go`):
 
-1. `BRIG_RUNTIME` names the runtime, `hull` or `nerdctl`. Brig refuses any
-   other value by name. If the variable is unset, the runtime is `hull` on
-   macOS and `nerdctl` everywhere else.
+1. `BRIG_RUNTIME` names the runtime, `hull`, `nerdctl` or `host`. Brig
+   refuses any other value by name. If the variable is unset, a profile with
+   `isolation: process` gets `host`, and any other gets `hull` on macOS and
+   `nerdctl` everywhere else.
 2. `BRIG_RUNTIME_BIN` is the executable to run. Brig takes a path as it
    stands, and looks up a bare name on PATH. If the executable is missing or
    not executable, Brig reports that against the variable before anything

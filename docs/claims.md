@@ -28,6 +28,10 @@ be under that heading or under a heading nested in it.
   `ok "<text>"` line.
 - `vm:<check>` is a check in `script/claims-vm.sh`, found as its
   `vm_check <check>` line.
+- `macos:TestName` is a Go test that runs on macOS alone, found as a `go:`
+  test is.
+- `macos-smoke:<text>` is an assertion in the part of `script/smoke.sh` that
+  runs on macOS alone, found as a `smoke:` assertion is.
 
 Any other token, a row with no token, or text beside the tokens fails the
 check.
@@ -35,6 +39,13 @@ check.
 Every line after the table's delimiter row is a row, up to the first blank
 line, with or without its outer pipes. A line there that is not three cells
 fails the check. A pipe line outside the table fails it too.
+
+## Checks that need a Mac
+
+CI runs on Linux. There a `macos:` test skips, and smoke never reaches a
+`macos-smoke:` assertion. The CI check resolves both by name and lists them
+as not run in CI. Before a merge that touches the host kind or the broker,
+run `go test ./...` and `script/smoke.sh` on a Mac.
 
 ## Checks that need a sandbox
 
@@ -55,6 +66,10 @@ the guest has none.
 
 ## The table
 
+The rows under any section but The process boundary describe the microVM
+boundary. The `host` kind runs the agent as a process, and those rows do not
+hold for it. Its own rows are the ones under The process boundary.
+
 | Claim | Section | Defended by |
 | --- | --- | --- |
 | "Beyond those, the guest does not have your keychain, your SSH agent, your secret manager, or any other directory on the host." (your keychain) | The boundary | `go:TestTheRunPathReadsNoKeychain` `vm:keychain-not-reachable` `vm:secret-service-not-reachable` |
@@ -72,3 +87,12 @@ the guest has none.
 | "The one case with no innocent reading is an image sitting under our registry whose signature does not verify. That is the case that stops." (an image under `ghcr.io/brig-sh/`) | Guest images | `smoke:a bad signature on our own image is reported` `smoke:a bad signature stops the boot (exit 5) with no terminal to ask` `go:TestVerifyRefusesAFailedSignatureWithNoTerminal` `go:TestVerifyRefusesAFailedSignatureWithStdinOnDevNull` |
 | "A `scheme://` value read from the environment is refused as an unresolved secret-manager reference." | Credentials | `smoke:a secret-manager reference is not forwarded` `go:TestUnresolvedReferencesAreRejectedButOrdinaryURLsAreNot` `go:TestEnvRefsStillGetTheUnresolvedRefGuard` |
 | "The object cosign checked is the object that runs, and the success line names the digest instead of the tag it came from." (the object that runs) | Digest pinning | `go:TestVerifyResolvesVerifiesAndPinsAMatchingDigest` `go:TestRunArgsBootsThePinnedDigest` `go:TestNerdctlBootsTheVerifiedDigest` `smoke:the verified digest is what hull was told to boot` |
+| "The process gets the variables the profile delivers, and from the environment Brig runs in only the ones runtimes.md lists, such as `PATH` and `TERM`." | The process boundary | `go:TestHostEnvForwardsOnlyWhatIsNamed` `macos-smoke:a variable brig was not told to forward stays out of it` |
+| "No value is on its command line." | The process boundary | `macos:TestHostArgvCarriesNoValue` `macos-smoke:a credential value never reaches sandbox-exec's argv` |
+| "On `isolated`, no IP connection leaves this Mac, and a local address is reachable only on the ports Brig names." | The process boundary | `go:TestSandboxProfileNetworkAllows` `macos:TestHostSandboxDeniesWhatItShould` |
+| "On `offline`, nothing is reachable." | The process boundary | `macos:TestHostSandboxOfflineReachesNothing` |
+| "The process cannot listen for a connection." | The process boundary | `macos:TestHostSandboxCannotListen` |
+| "The process cannot start an app through LaunchServices." | The process boundary | `macos:TestHostSandboxCannotOpenAnApp` |
+| "The process cannot send a signal to a process outside it." | The process boundary | `go:TestSandboxProfileAlwaysDeniesTheSensitivePaths` `macos:TestHostSandboxDeniesWhatItShould` |
+| "The process cannot write Brig's own profiles, policies or state outside its guest home, and cannot read or rewrite the profile it runs under." | The process boundary | `macos:TestHostSandboxHoldsBrigsOwnFiles` `macos:TestHostSandboxDeniesWhatItShould` |
+| "The process cannot ask the keychain for a secret, or connect to a unix socket other than the system resolver's, your SSH agent's included." | The process boundary | `macos:TestHostSandboxDeniesTheKeychain` `macos:TestHostSandboxDeniesWhatItShould` |
