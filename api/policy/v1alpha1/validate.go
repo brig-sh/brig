@@ -9,8 +9,14 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Validate checks that a decoded policy is well formed. It reads no store and
-// no file.
+// Validate checks that a decoded policy is well formed, as written. It reads
+// no store and no file.
+//
+// A route that names a preset is checked for what it sets, since the preset
+// fills the rest and the presets are not part of this package. A route
+// without one is checked in full, except for the defaults that expansion adds:
+// mode, and Authorization in inject.headers.remove. Route.Validate checks a
+// route after expansion.
 func (p *Policy) Validate() error {
 	switch p.APIVersion {
 	case "":
@@ -35,10 +41,26 @@ func (p *Policy) Validate() error {
 	if strings.ContainsAny(p.Metadata.Description, "\r\n") {
 		return fmt.Errorf("metadata.description is one line")
 	}
-	if p.Spec.Egress == nil {
-		return fmt.Errorf("spec.egress is required")
+	if p.Spec.Egress == nil && len(p.Spec.Routes) == 0 {
+		return fmt.Errorf("a policy needs spec.egress, spec.routes or both")
 	}
-	return p.Spec.Egress.Validate()
+	if p.Spec.Egress != nil {
+		if err := p.Spec.Egress.Validate(); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for i := range p.Spec.Routes {
+		r := &p.Spec.Routes[i]
+		if err := r.validateWritten(); err != nil {
+			return err
+		}
+		if seen[r.Name] {
+			return fmt.Errorf("route %q is declared twice", r.Name)
+		}
+		seen[r.Name] = true
+	}
+	return nil
 }
 
 // Validate checks that an egress rule set has a default, and that each rule

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
@@ -28,7 +29,8 @@ usage:
   brig policy ls                                    every policy, and what binds it
   brig policy create <name> [--force]               write a starter, then open it
   brig policy edit <name> [--force]                 open yours in $VISUAL or $EDITOR
-  brig policy show <name> [--json]                  print the parsed document
+  brig policy show <name> [--json]                  print the parsed document, presets expanded
+  brig policy show --preset <preset> [--json]       print the route a preset expands to
   brig policy rm <name> [--force]                   delete it
   brig policy attach <policy> <profile> [-n NAME]   bind it to a profile, or one session
   brig policy detach <policy> <profile> [-n NAME]   reverse an attach
@@ -39,11 +41,13 @@ flags:
                 with edit: save a rename that would orphan a binding
                 with rm: delete one that is bound to something
       --json    with show: render JSON rather than YAML
+      --preset  with show: a preset brig ships, not a policy
   -n, --name    with attach/detach/check: one session by name, not every run
 
-A policy is a named document declaring what an agent may reach outbound.
-attach binds it to a profile's every run, or -- with -n -- to one session;
-a profile's own inline policy: field does the same without a separate attach.
+A policy is a named document declaring what an agent may reach outbound,
+and the brokered routes it may use. attach binds it to a profile's every run,
+or -- with -n -- to one session; a profile's own inline policy: field does the
+same without a separate attach.
 `
 
 // rejectPolicyTail refuses a word the policy listing has no place for, and
@@ -235,36 +239,100 @@ func parseWords(verb, takes string, fs *flag.FlagSet, args []string) ([]string, 
 
 // showPolicy prints the parsed document for one policy: YAML by default,
 // --json for anything consuming it programmatically.
+//
+// Each route is printed with its preset expanded, so the output says what the
+// route does without the preset file beside it. --preset prints one preset
+// the same way, with no policy around it.
 func showPolicy(args []string) error {
 	asJSON := false
+	preset := ""
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	fs.BoolVar(&asJSON, "json", false, "")
-	words, err := parseWords("show", "--json", fs, args)
+	fs.StringVar(&preset, "preset", "", "")
+	words, err := parseWords("show", "--json and --preset", fs, args)
 	if err != nil {
 		return err
 	}
-	if len(words) == 0 {
+	var (
+		doc any
+		// notes holds, per route, the lifecycle comment for the YAML form.
+		notes []string
+	)
+	switch {
+	case preset != "" && len(words) > 0:
+		return fmt.Errorf("policy show takes a name or --preset, not both")
+	case seen(fs, "preset"):
+		if preset == "" {
+			return errors.New("policy show --preset needs a value, for example `brig policy show --preset claude-code`")
+		}
+		r, err := policy.PresetRoute(v1alpha1.Preset(preset))
+		if err != nil {
+			return err
+		}
+		doc = r
+	case len(words) == 0:
 		return errors.New("policy show needs a name, for example `brig policy show no-net`")
-	}
-	if len(words) > 1 {
+	case len(words) > 1:
 		return fmt.Errorf("policy show takes one name, not %q", words[1])
-	}
-	entry, err := lookupPolicy(words[0])
-	if err != nil {
-		return err
+	default:
+		entry, err := lookupPolicy(words[0])
+		if err != nil {
+			return err
+		}
+		expanded, err := policy.Expand(entry.Policy)
+		if err != nil {
+			return err
+		}
+		// A policy document never names credential.lifecycle, so the field
+		// is left out and said in a comment. The output then parses as the
+		// policy it prints.
+		for i := range expanded.Spec.Routes {
+			r := &expanded.Spec.Routes[i]
+			note := ""
+			if r.Credential != nil && r.Credential.Lifecycle != "" {
+				note = fmt.Sprintf("# lifecycle: %s, set by preset %s", r.Credential.Lifecycle, r.Preset)
+				r.Credential.Lifecycle = ""
+			}
+			notes = append(notes, note)
+		}
+		doc = expanded
 	}
 	var blob []byte
 	if asJSON {
-		blob, err = json.MarshalIndent(entry.Policy, "", "  ")
+		blob, err = json.MarshalIndent(doc, "", "  ")
 		blob = append(blob, '\n')
 	} else {
-		blob, err = yaml.Marshal(entry.Policy)
+		blob, err = yaml.Marshal(doc)
+		blob = commentRoutes(blob, notes)
 	}
 	if err != nil {
 		return err
 	}
 	_, err = os.Stdout.Write(blob)
 	return err
+}
+
+// commentRoutes puts notes[i] under the credential: key of route i. Keys are
+// sorted, and credential is the first key of a route, so the i-th
+// "- credential:" line opens route i.
+func commentRoutes(blob []byte, notes []string) []byte {
+	if len(notes) == 0 {
+		return blob
+	}
+	var out []string
+	i := 0
+	for _, line := range strings.Split(string(blob), "\n") {
+		out = append(out, line)
+		indent, ok := strings.CutSuffix(line, "- credential:")
+		if !ok || strings.TrimSpace(indent) != "" {
+			continue
+		}
+		if i < len(notes) && notes[i] != "" {
+			out = append(out, indent+"    "+notes[i])
+		}
+		i++
+	}
+	return []byte(strings.Join(out, "\n"))
 }
 
 // parseNameAndForce pulls one name and an optional --force/-f out of args,
@@ -615,6 +683,24 @@ func howToUnbind(b []string) string {
 		return "Edit the profile's policy: list"
 	default:
 		return "Detach it"
+	}
+}
+
+// printRoutes prints one indented row on stderr for each route of p, after
+// the policy name check has just printed on stdout. stdout stays one policy
+// name per line. A route as written can leave out its mode, so the row prints
+// the default.
+func printRoutes(p policy.Policy) {
+	for _, r := range p.Spec.Routes {
+		preset := string(r.Preset)
+		if preset == "" {
+			preset = "(none)"
+		}
+		mode := r.Mode
+		if mode == "" {
+			mode = v1alpha1.ModeEndpoint
+		}
+		fmt.Fprintf(os.Stderr, "  route %s  preset %s  mode %s\n", r.Name, preset, mode)
 	}
 }
 
@@ -977,10 +1063,15 @@ func checkPolicy(args []string) error {
 	// declared by a file that would not parse, and an unparseable file has
 	// no readable name to tell those apart by. LoadAll has already named
 	// the file and the error on stderr if that is what happened.
-	var missing []string
+	var (
+		missing []string
+		loaded  []policy.Policy
+	)
 	for _, name := range names {
-		if _, ok := entries[name]; ok {
+		if e, ok := entries[name]; ok {
 			fmt.Println(name)
+			printRoutes(e.Policy)
+			loaded = append(loaded, e.Policy)
 			continue
 		}
 		fmt.Printf("%s (not loaded)\n", name)
@@ -1003,6 +1094,20 @@ func checkPolicy(args []string) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("%s is bound to %s, which no policy loads under -- "+
 			"nothing can enforce what did not load", p.Name, strings.Join(missing, ", "))
+	}
+	// Each policy loaded on its own, so what is left to refuse is a clash
+	// between them: a route name or a guest.env name that two of them use.
+	routes, err := policy.Routes(loaded)
+	if err != nil {
+		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
+	}
+	// A route is served on the sandbox's own gateway address, so a run with
+	// one needs a network of its own. The line states that plan, on stderr
+	// with the route rows, so stdout stays one policy name per line. A run
+	// refuses routes until a version serves them; see refuseRoutes in
+	// internal/wrap.
+	if len(routes) > 0 {
+		fmt.Fprintf(os.Stderr, "posture: %s\n", wrap.NetIsolated)
 	}
 	// Only where the answer would otherwise read as a verdict: names
 	// printed and an exit code of zero, from a verb that means "confirm

@@ -41,7 +41,15 @@ func parse(blob []byte) (Policy, bool, error) {
 	if err != nil {
 		return Policy{}, flat, err
 	}
-	return p, flat, p.Validate()
+	if err := p.Validate(); err != nil {
+		return Policy{}, flat, err
+	}
+	// The routes are checked again after preset expansion, which only this
+	// package can do, so a save that breaks a preset route is refused here.
+	if _, err := Routes([]Policy{p}); err != nil {
+		return Policy{}, flat, err
+	}
+	return p, flat, nil
 }
 
 // isFlat reports whether a document leaves out kind:, which is how the flat

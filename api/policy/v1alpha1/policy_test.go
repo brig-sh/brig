@@ -117,7 +117,7 @@ func TestPolicyValidate(t *testing.T) {
 		{"name that escapes a directory", func(p *Policy) { p.Metadata.Name = "../x" }, "lowercase"},
 		{"name YAML reads as a boolean", func(p *Policy) { p.Metadata.Name = "no" }, "reads as"},
 		{"two-line description", func(p *Policy) { p.Metadata.Description = "a\nb" }, "one line"},
-		{"no egress block", func(p *Policy) { p.Spec.Egress = nil }, "spec.egress is required"},
+		{"neither egress nor routes", func(p *Policy) { p.Spec.Egress = nil }, "spec.egress, spec.routes or both"},
 		{"missing default", func(p *Policy) { p.Spec.Egress.Default = "" }, "egress.default is required"},
 		{"bad default", func(p *Policy) { p.Spec.Egress.Default = "maybe" }, "maybe"},
 		{"rule with neither form", func(p *Policy) { p.Spec.Egress.Deny = []Rule{{}} }, "needs host"},

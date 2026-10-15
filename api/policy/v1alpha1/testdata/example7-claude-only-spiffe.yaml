@@ -1,0 +1,15 @@
+# Example 7 of the broker spec, rev 4: the route of example 1 in v2. The
+# reference to a 1Password broker is a comment in the spec too, so the
+# document is example 1 under another name.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-only-spiffe
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }   # a reference: {broker: 1password-oidc, ref: op://Agents/Claude/credentials}

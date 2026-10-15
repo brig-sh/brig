@@ -369,8 +369,8 @@ spec:
       - host: api.anthropic.com
 ```
 
-`brig policy show <name>` prints any policy in the envelope form. Its output
-is a valid policy file.
+`brig policy show <name>` prints any policy in the envelope form. For a
+policy in the flat form, its output is a valid policy file.
 
 The flat form outlives the other retired spellings by one release, because
 v0.5.0 is the first release that prints its notice.
