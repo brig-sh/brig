@@ -324,8 +324,9 @@ the same pause, and the destination checks every part against its sha256
 before it runs anything.
 
 `brig teleport` prints hull's lines on stderr as they arrive, after
-`brig: hull:`: each round, the bytes it sent, the rate, and how fast the
-guest dirtied pages. When the move commits, it prints how long hull's move
+`brig: hull:`: each round, the bytes it sent and the rate, and for a disk
+round after the first, how many blocks a second the guest wrote. hull
+prints no such rate for memory. When the move commits, it prints how long hull's move
 took, how long the guest was paused, and the bytes sent, as far as hull
 reported them. `--json` carries the same in its `move` object.
 

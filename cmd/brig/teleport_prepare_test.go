@@ -255,8 +255,17 @@ func writeIndex(t *testing.T, index string) {
 // carries how it went: the text ends with the numbers, and --json has them
 // in its move object, rounds included. stdout stays the one document.
 func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
-	lines := []string{"round 0: 1048576 bytes in 0.5 s (2.0 MiB/s), dirty 120 pages/s",
-		"round 1: 65536 bytes in 0.1 s (0.6 MiB/s), dirty 40 pages/s", "downtime: 1.4 s"}
+	// hull 1ecb5c8's lines for a streamed move of the ubuntu guest.
+	lines := []string{"Transport: streamed (pre-copy rounds; the disk blocks that differ from base 13fd46b9d871)",
+		"move: disk round 0: 4393 blocks, 274.6 MiB (34.4 MiB on the wire) in 2.26 s, 15.2 MiB/s",
+		"move: disk round 1: 2 blocks, 131072 bytes (797 bytes on the wire) in 0.00 s, 383648 bytes/s, guest wrote 1 blocks/s",
+		"move: ram-round-0: 74.0 MiB in 2.88 s, 25.7 MiB/s",
+		"move: ram-round-1: 1.0 MiB in 0.03 s, 34.4 MiB/s",
+		"move: disk round 2 (final): 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 1.5 MiB/s",
+		"move: hvi sealed the stream and fenced brig-claude-code (39 ms after the last RAM round began)",
+		"Timings (ms): fence 0, transfer 5394, restore paused 0, commit 91",
+		"move: 109.5 MiB in 5.4 s; disk 34.4 MiB, RAM 75.0 MiB, state 53259 bytes; sealed 39 ms after the last RAM " +
+			"round began, last disk round 3 ms; downtime about 358 ms"}
 	for _, wantJSON := range []bool{false, true} {
 		rt := &moveRuntime{running: true, state: runtime.MoveCommitted, progress: lines}
 		moveHost(t, rt, noNetProbe())
@@ -277,7 +286,7 @@ func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
 			}
 		}
 		if !wantJSON {
-			if !strings.Contains(out, "\n  hull's move took ") || !strings.Contains(out, "the guest was paused 1.40 s, 2 rounds") {
+			if !strings.Contains(out, "\n  hull's move took ") || !strings.Contains(out, "the guest was paused 0.36 s, 5 rounds") {
 				t.Errorf("stdout %q", out)
 			}
 			continue
@@ -289,7 +298,7 @@ func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
 			t.Fatalf("--json is not one document: %q, %v", out, err)
 		}
 		m := doc.Data.Move
-		if m == nil || len(m.Rounds) != 2 || m.Rounds[1].DirtyPagesPerSec != 40 || m.DowntimeSeconds != 1.4 ||
+		if m == nil || len(m.Rounds) != 5 || m.Rounds[1].DirtyBlocksPerSec != 1 || m.DowntimeSeconds != 0.358 ||
 			doc.Data.State != "moved" {
 			t.Errorf("--json says %+v, move %+v", doc.Data, m)
 		}
