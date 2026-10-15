@@ -491,7 +491,13 @@ back. An older Brig's `brig rm`, or `hull rm` of the copy, leaves that record,
 and the move back replaces it. If the move back is called off, the old host
 gets the record back, as the session still runs on the other host. A move
 out of the old host that has not finished still refuses: `brig teleport
-<ref> --status` there settles it first.
+<ref> --status` there settles it first. The record is taken by the ref and
+sandbox name alone, as the session may have moved on from the host it names
+before coming back. When that host is not the one the move comes from, the
+brig moving it says which record the old host had and that the move
+replaced it: a different session under the same name would still run on
+that host, and the old host would no longer reach it by the ref. A record
+under another sandbox name, as after `BRIG_NAME` changed, still refuses.
 
 Between the `brig rm` and the move, the old host has no record of the
 session. Run nothing for the ref there. `brig sh <ref>` or `brig run <ref>`

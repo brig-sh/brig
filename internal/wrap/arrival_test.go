@@ -132,6 +132,11 @@ func TestAnArrivalTakesTheRecordOfASessionThatRunsElsewhere(t *testing.T) {
 	if a := readArrivals()["brig-tp"]; a.Replaced == nil || *a.Replaced != away {
 		t.Errorf("the arrival kept %+v of the entry it replaced", a.Replaced)
 	}
+	// The entry named rp2 and the move came from elsewhere: the source is
+	// told what was replaced, in case it was another session.
+	if r, ok := ArrivalReplacedElsewhere("brig-tp", "tx1"); !ok || r.Host != "me@rp2" || r.TxID != "tx0" {
+		t.Errorf("the record replaced from another host: %+v, %v", r, ok)
+	}
 	// The same move asked again keeps what the first ask replaced.
 	if _, err := PrepareArrival(p, "", spec, &guestRuntime{}); err != nil {
 		t.Fatal(err)
@@ -206,6 +211,44 @@ func TestAnArrivalTakesTheRecordOfASessionThatRunsElsewhere(t *testing.T) {
 	if _, err := PrepareArrival(p, "", fifth, &guestRuntime{}); err == nil ||
 		!strings.Contains(err.Error(), "has not finished") || !strings.Contains(err.Error(), "--status") {
 		t.Errorf("an arrival onto a move out of here: %v", err)
+	}
+}
+
+// The source of a move back is told about the record it replaced only when
+// that record named another host: from the host it names, the move is the
+// session coming back, however the two spell the host.
+func TestAnArrivalSaysOnlyWhenItReplacedARecordOfAnotherHost(t *testing.T) {
+	teleportState(t)
+	p := teleportProfile(t)
+	for _, c := range []struct {
+		host, from string
+		said       bool
+	}{
+		{"me@rp2", "me@rp2", false},
+		{"rp2.local", "pmoust@rp2", false},
+		{"me@RP2", "me@rp2.", false},
+		{"me@rp3", "me@rp2", true},
+		{"me@100.64.0.2", "me@100.64.0.3", true},
+		{"me@rp2", "", true},
+	} {
+		if err := writeArrivals(nil); err != nil {
+			t.Fatal(err)
+		}
+		away := sessionEntry{Sandbox: "brig-tp", Teleportable: true, Host: c.host, TxID: "tx0"}
+		if err := writeSessionIndex(map[string]sessionEntry{"tp": away}); err != nil {
+			t.Fatal(err)
+		}
+		spec := ArrivalSpec{Sandbox: "brig-tp", TxID: "tx1", From: c.from, Network: "none"}
+		if _, err := PrepareArrival(p, "", spec, &guestRuntime{}); err != nil {
+			t.Fatalf("%+v: %v", c, err)
+		}
+		r, said := ArrivalReplacedElsewhere("brig-tp", "tx1")
+		if said != c.said || (said && r.Host != c.host) {
+			t.Errorf("entry on %s, move from %q: said %v (%+v), want %v", c.host, c.from, said, r, c.said)
+		}
+	}
+	if _, said := ArrivalReplacedElsewhere("brig-tp", "tx9"); said {
+		t.Error("another move's arrival said it replaced a record")
 	}
 }
 

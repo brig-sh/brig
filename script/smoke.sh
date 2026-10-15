@@ -2621,6 +2621,14 @@ assert e["sandbox"] == "brig-claude-code" and not e.get("host") and not e.get("t
 a = arr["brig-claude-code"]
 assert a["state"] == "prepared" and a["replaced"]["host"] == "me@box", a
 PY
+# The record named me@box and the move came from me@elsewhere: nothing ties
+# the two to one session, so the answer names the record, and the source
+# says it replaced it.
+python3 -c 'import json, sys
+r = json.loads(sys.argv[1])["data"]["replaced"]
+assert r == {"host": "me@box", "txid": "f" * 32}, r' "$out" \
+  && ok "the move back names the record of another host it replaced" \
+  || bad "the move back names the record of another host it replaced -- got: $out"
 out="$(recv --abort 2>&1)"; rc=$?
 python3 - "$BRIG_STATE_DIR/sessions.json" "$BRIG_STATE_DIR/arrivals.json" <<'PY' && [ "$rc" = 0 ] \
   && ok "an abort of the move back puts back the record of where the session runs" \
