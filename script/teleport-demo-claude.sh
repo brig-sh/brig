@@ -198,8 +198,13 @@ TASKREAD='cat /root/task.jsonl; echo; echo "TASKPROC $(pgrep -c -x claude)"; cat
 # and brig's notices come first: a line counts as an event only when it is
 # a stamp and a JSON object. The text is put back together from the
 # text_delta events alone, or from the assistant messages when the stream
-# has none, and a COUNT n counts only once a newline ends it, so a COUNT 1
-# cut off on its way to COUNT 12 is not read. It prints PASS and FAIL lines.
+# has none. A text block can end with no newline, and a task that writes
+# its program through tools sends a short block between tool calls, so the
+# end of each block and message ends a line: COUNT n at the start of the
+# next one is then still at the start of a line. A COUNT n counts only once
+# a byte other than a digit follows it, so a COUNT 1 cut off on its way to
+# COUNT 12 is not read, and markdown around it (**COUNT 3**) is allowed. It
+# prints PASS and FAIL lines.
 TASKJUDGE='
 import json, re, sys
 
@@ -227,21 +232,29 @@ def read(path):
     return events, proc, exits
 
 def text(events):
-    deltas, whole = [], []
+    deltas, whole, block, some = [], [], None, False
     for _, _, e in events:
         if e.get("type") == "stream_event":
             ev = e.get("event") or {}
             d = ev.get("delta") or {}
-            if ev.get("type") == "content_block_delta" and d.get("type") == "text_delta":
+            kind = ev.get("type")
+            if kind in ("content_block_start", "content_block_stop", "message_start", "message_stop"):
+                deltas.append("\n")
+                block = None
+            elif kind == "content_block_delta" and d.get("type") == "text_delta":
+                if block is not None and ev.get("index") != block:
+                    deltas.append("\n")
+                block = ev.get("index")
                 deltas.append(d.get("text", ""))
+                some = True
         elif e.get("type") == "assistant":
             for c in (e.get("message") or {}).get("content") or []:
                 if isinstance(c, dict) and c.get("type") == "text":
                     whole.append(c.get("text", "") + "\n")
-    return "".join(deltas) if deltas else "".join(whole)
+    return "".join(deltas) if some else "".join(whole)
 
 def counts(events):
-    return [int(n) for n in re.findall(r"(?m)^COUNT ([0-9]+)[ \t]*\n", text(events))]
+    return [int(n) for n in re.findall(r"(?m)^\W*COUNT ([0-9]+)(?=[^0-9])", text(events))]
 
 def errors(events):
     out = []
