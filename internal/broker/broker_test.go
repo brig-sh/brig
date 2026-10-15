@@ -368,7 +368,7 @@ func TestClaudeCodePresetEndToEnd(t *testing.T) {
 	tok := r.mint("brig-a", "anthropic")
 	h := bearer(tok)
 	h.Set("X-Api-Key", "junk-guest-api-key")
-	h.Set("X-Brig-Session", tok)
+	h.Set("X-Brig-Session", "junk-brig-session")
 	h.Set("X-Brig-Debug", "1")
 	h.Set("Proxy-Authorization", "Basic Zm9vOmJhcg==")
 	h.Set("Proxy-Extra", "1")
@@ -1159,11 +1159,15 @@ func TestOversizedBodyIsNotReplayed(t *testing.T) {
 
 func TestReplayBudgetBoundsBuffering(t *testing.T) {
 	up := newUpstream(t, refuseStale)
-	r := newRig(t, up, claudeRoutes(t, up), func(c *Config) { c.ReplayBudget = 16 })
+	r := newRig(t, up, claudeRoutes(t, up), func(c *Config) {
+		c.ReplayBudget = 16
+		c.BodyTimeout = 200 * time.Millisecond
+	})
+	// A body the budget cannot hold is refused, since it cannot be scanned.
 	resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages", bearer(r.mint("brig-a", "anthropic")),
 		strings.Repeat("x", 100))
-	wantStatus(t, resp, http.StatusUnauthorized)
-	wantAudit(t, r.lastAudit(), "renew=body")
+	wantStatus(t, resp, http.StatusServiceUnavailable)
+	wantAudit(t, r.lastAudit(), "check=budget")
 	// A body that fits is replayed, and its bytes come back to the budget.
 	resp, _ = r.do("POST", "/brig-a/r/anthropic/v1/messages", bearer(r.mint("brig-a", "anthropic")), "{}")
 	wantStatus(t, resp, http.StatusOK)

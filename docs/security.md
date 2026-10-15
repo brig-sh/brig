@@ -193,6 +193,15 @@ read the environment of another one through `sysctl`, so it can read that
 sandbox's tokens. `brig-broker` keeps no key or credential in its environment
 or on its command line.
 
+A session token sent anywhere in a request but the one place its route reads
+it from is refused with 403, before the broker reads the credential. That
+catches a prompt that echoes the environment, a token in a path, a query or
+another header, and a token of another route of the same sandbox. The broker
+looks for the token raw and in the common encodings, and in the first 8 MiB
+of a body. A body it cannot hold is refused, never forwarded unscanned. A
+spelling it does not know, or a token past 8 MiB, is not found.
+[Placeholder detection](broker.md#placeholder-detection) has the list.
+
 While `brig-broker` is down, its loopback port is free, and any local process
 can bind it, another user's included. A host sandbox still running then sends
 its session token and its request there. Brig refuses to start the broker
