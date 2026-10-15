@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/profile"
 )
 
@@ -19,13 +20,13 @@ func TestMergeOfNothingIsUnfiltered(t *testing.T) {
 // alternative is that adding a restrictive policy to a permissive one leaves
 // the permissive one in charge, which is the wrong direction to be wrong in.
 func TestMergeTakesTheStrictestDefault(t *testing.T) {
-	permissive := Policy{Egress: Egress{Default: "allow"}}
-	restrictive := Policy{Egress: Egress{Default: "deny"}}
+	permissive := withEgress(Egress{Default: "allow"})
+	restrictive := withEgress(Egress{Default: "deny"})
 
 	for _, tt := range []struct {
 		name string
 		in   []Policy
-		want string
+		want v1alpha1.EgressDefault
 	}{
 		{"allow alone", []Policy{permissive}, "allow"},
 		{"deny alone", []Policy{restrictive}, "deny"},
@@ -45,9 +46,9 @@ func TestMergeTakesTheStrictestDefault(t *testing.T) {
 // a run reach something one of its policies alone would have denied.
 func TestMergeUnionsTheRules(t *testing.T) {
 	got := Merge([]Policy{
-		{Egress: Egress{Default: "deny", Allow: []Rule{{Host: "a.example"}}}},
-		{Egress: Egress{Default: "deny", Allow: []Rule{{Host: "b.example"}},
-			Deny: []Rule{{CIDR: "10.0.0.0/8"}}}},
+		withEgress(Egress{Default: "deny", Allow: []Rule{{Host: "a.example"}}}),
+		withEgress(Egress{Default: "deny", Allow: []Rule{{Host: "b.example"}},
+			Deny: []Rule{{CIDR: "10.0.0.0/8"}}}),
 	})
 	if len(got.Allow) != 2 {
 		t.Errorf("allow rules were not unioned: %+v", got.Allow)
@@ -63,8 +64,8 @@ func TestMergeUnionsTheRules(t *testing.T) {
 func TestMergeDropsARuleTwoPoliciesShare(t *testing.T) {
 	shared := Rule{Host: "api.anthropic.com"}
 	got := Merge([]Policy{
-		{Egress: Egress{Default: "deny", Allow: []Rule{shared, {Host: "a.example"}}}},
-		{Egress: Egress{Default: "deny", Allow: []Rule{shared}}},
+		withEgress(Egress{Default: "deny", Allow: []Rule{shared, {Host: "a.example"}}}),
+		withEgress(Egress{Default: "deny", Allow: []Rule{shared}}),
 	})
 	if len(got.Allow) != 2 {
 		t.Errorf("a rule two policies share was kept twice: %+v", got.Allow)
@@ -212,6 +213,11 @@ func TestResolveExplainsWhenTheBoundPolicyIsTheBrokenOne(t *testing.T) {
 	if !strings.Contains(err.Error(), "mine.yaml") {
 		t.Errorf("the error does not carry the reason the document did not load: %v", err)
 	}
+}
+
+// withEgress is a policy that carries e as its spec.egress and nothing else.
+func withEgress(e Egress) Policy {
+	return Policy{Spec: v1alpha1.PolicySpec{Egress: &e}}
 }
 
 func writeEgressPolicy(t *testing.T, dir, name, def, allow string) {

@@ -11,9 +11,11 @@ brig: `brig profiles` is now `brig agent ls`
 
 When stderr is not a terminal, both lines start with `brig:`.
 
-Brig removes the old spellings in v0.5.0, with one exception. `brig exec`
+Brig removes the old spellings in v0.5.0, with two exceptions. `brig exec`
 stays until `brig sh` can pipe the output of a command, and its notice says
-that instead of a release. `brig run` is never removed.
+that instead of a release. The flat form of a
+[policy document](#policy-documents) is removed in v0.6.0. `brig run` is
+never removed.
 [Stability](stability.md#retired-spellings) has the rule.
 
 To find retired spellings in a script, run
@@ -316,6 +318,62 @@ For an unknown posture, restore the posture record or name a posture with
 including the ambiguity of stale specs left beside old shared overrides.
 
 </details>
+
+## Policy documents
+
+A policy document uses the Kubernetes envelope: `kind: Policy`, `metadata:`
+and `spec:`. The flat form, with `name:`, `desc:` and `egress:` at the top
+level, still parses until v0.6.0. Brig converts it into the envelope as it
+loads it.
+
+`brig policy check` prints a notice for each bound policy that a file still
+writes in the flat form:
+
+```
+brig: /home/you/.config/brig/policies/locked-down.yaml uses the flat policy form, which is now `kind: Policy` with `metadata:` and `spec:`
+  ↳ the old spelling is removed in v0.6.0
+  → to print it in the new form:  brig policy show locked-down
+```
+
+| Flat form | Envelope |
+| --- | --- |
+| no `kind:` | `kind: Policy` |
+| `name:` | `metadata.name:` |
+| `desc:` | `metadata.description:`, which is one line. Brig joins the lines of a longer `desc:` with spaces |
+| `egress:` | `spec.egress:` |
+
+`apiVersion:` does not change. For instance, this flat document:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+name: locked-down
+desc: only Anthropic's API
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+```
+
+is this envelope:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: locked-down
+  description: only Anthropic's API
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.anthropic.com
+```
+
+`brig policy show <name>` prints any policy in the envelope form. Its output
+is a valid policy file.
+
+The flat form outlives the other retired spellings by one release, because
+v0.5.0 is the first release that prints its notice.
 
 ## Settings
 
