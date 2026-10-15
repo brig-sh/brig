@@ -638,6 +638,7 @@ brig policy ls
 brig policy create <name> [--force]
 brig policy edit <name> [--force]
 brig policy show <name> [--json]
+brig policy show --preset <preset> [--json]
 brig policy rm <name> [--force]
 brig policy attach <policy> <agent> [-n <label>]
 brig policy detach <policy> <agent> [-n <label>]

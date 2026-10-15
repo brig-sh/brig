@@ -1,0 +1,29 @@
+# The anthropic-api-key preset: the Anthropic API on a console API key,
+# metered to the console account that owns the key. The key is static, so the
+# route has no lifecycle.
+#
+# The Anthropic-Beta list is the reviewed list of the claude-code preset
+# without oauth-2025-04-20, which an API key does not use. Extending the list
+# is a reviewed change to this file.
+name: anthropic
+mode: endpoint
+upstream: https://api.anthropic.com
+inject:
+  headers:
+    set:
+      - name: x-api-key
+        value: "{value}"
+    remove:
+      - Authorization
+    allow:
+      - name: Anthropic-Beta
+        values:
+          - claude-code-20250219
+          - interleaved-thinking-2025-05-14
+          - fine-grained-tool-streaming-2025-05-14
+          - context-1m-2025-08-07
+          - context-management-2025-06-27
+guest:
+  env:
+    ANTHROPIC_BASE_URL: "{route.url}"
+    ANTHROPIC_API_KEY: "{session.token}"

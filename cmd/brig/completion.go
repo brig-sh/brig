@@ -435,6 +435,8 @@ const (
 	opFile
 	// opNetwork is the posture set --network takes.
 	opNetwork
+	// opPreset is a route preset brig ships, which --preset takes.
+	opPreset
 )
 
 func operandCandidates(kind operand, cur string) (string, []string) {
@@ -453,6 +455,8 @@ func operandCandidates(kind operand, cur string) (string, []string) {
 		return dirFiles, nil
 	case opNetwork:
 		return names(cur, networkModes)
+	case opPreset:
+		return names(cur, presetNames())
 	}
 	return dirNone, nil
 }
@@ -504,7 +508,12 @@ var groups = map[string][]sub{
 		{name: "ls"},
 		{name: "create", operands: []operand{opNothing}},
 		{name: "edit", operands: []operand{opPolicy}},
-		{name: "show", flags: []string{"--json"}, operands: []operand{opPolicy}},
+		{
+			name:     "show",
+			flags:    []string{"--json"},
+			values:   map[string]operand{"--preset": opPreset},
+			operands: []operand{opPolicy},
+		},
 		{name: "rm", flags: []string{"--force", "-f"}, operands: []operand{opPolicy}},
 		{
 			name:     "attach",
@@ -842,6 +851,15 @@ func refCandidates() []string {
 		add(ref)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// presetNames returns the route presets brig ships.
+func presetNames() []string {
+	var out []string
+	for _, p := range policy.PresetNames() {
+		out = append(out, string(p))
+	}
 	return out
 }
 

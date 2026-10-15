@@ -112,8 +112,11 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 // backend, or nil. EnsureRunning returns it before anything else, and Plan
 // reports it, so a plan cannot promise a run that `brig run` then refuses.
 //
-// Read-only, because Plan calls it: both answers were settled in Load.
+// Read-only, because Plan calls it: every answer was settled in Load.
 func (c *Config) sessionRefusal() error {
+	if c.routesRefused != nil {
+		return c.routesRefused
+	}
 	// The session has no project this run, and every check after this one
 	// that compares the sandbox with this run would read that as a project to
 	// drop, and recreate the sandbox without it. See Load.

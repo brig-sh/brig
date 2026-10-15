@@ -1,0 +1,15 @@
+# Example 2 of the broker spec, rev 4: Claude Code on a metered API key. The
+# spec's request.allow.models is cut, so the route has no request block.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-api-key
+  description: Claude Code billed to the team console key
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: anthropic-api-key
+      credential:
+        secretRef: { name: anthropic-api-key }

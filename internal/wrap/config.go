@@ -251,6 +251,9 @@ type Config struct {
 	// returns it, so a verb that never boots or joins the sandbox can still
 	// reach the session.
 	projectRefused error
+	// routesRefused is why a run bound to a policy with routes is refused:
+	// this version reads routes and serves none. See refuseRoutes.
+	routesRefused error
 	// refusedProject is the remembered project projectRefused is about. See
 	// KeptProject.
 	refusedProject string
@@ -580,10 +583,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// Keyed by the slug, the one identity a session has: vmName and the
 	// workspace above are built from it, the index keys on it, and `attach -n`
 	// writes no other spelling, so the rules follow the same key as the rest.
-	egress, policies, err := policy.Resolve(t, slug, policy.Dir())
+	bound, policies, err := policy.ResolvePolicies(t, slug, policy.Dir())
 	if err != nil && strictErr == nil {
 		strictErr = err
 	}
+	egress := policy.Merge(bound)
 	askedNet := network
 	if egress.Default != "" && network != NetOffline {
 		network = NetIsolated
@@ -627,6 +631,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		PublishAsked:   asked,
 		Egress:         egress,
 		Policies:       policies,
+		routesRefused:  refuseRoutes(bound),
 		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
 		RuntimePolicy:  runtimePolicy(env),

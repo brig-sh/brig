@@ -1,0 +1,36 @@
+# The claude-code preset: Claude Code, billed to the subscription that the
+# OAuth pair belongs to. The secret is the .credentials.json document that
+# `brig secret import claude-code` stores. The broker refreshes the pair ahead
+# of its expiry and writes the new pair back to the store.
+#
+# Claude Code 2.1.292 sends anthropic-beta with oauth-2025-04-20 itself under
+# CLAUDE_CODE_OAUTH_TOKEN, so the broker does not set that header. It keeps
+# the values on the reviewed list below and drops the rest. Extending the list
+# is a reviewed change to this file.
+name: anthropic
+mode: endpoint
+upstream: https://api.anthropic.com
+credential:
+  field: claudeAiOauth.accessToken
+  lifecycle: anthropic-oauth
+inject:
+  headers:
+    set:
+      - name: Authorization
+        value: "Bearer {value}"
+    remove:
+      - Authorization
+      - X-Api-Key
+    allow:
+      - name: Anthropic-Beta
+        values:
+          - oauth-2025-04-20
+          - claude-code-20250219
+          - interleaved-thinking-2025-05-14
+          - fine-grained-tool-streaming-2025-05-14
+          - context-1m-2025-08-07
+          - context-management-2025-06-27
+guest:
+  env:
+    ANTHROPIC_BASE_URL: "{route.url}"
+    CLAUDE_CODE_OAUTH_TOKEN: "{session.token}"

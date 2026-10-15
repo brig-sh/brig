@@ -17,12 +17,23 @@ import (
 // which is the failure this whole path exists to prevent. `brig policy check`
 // reports the same condition before a boot rather than during one.
 func Resolve(p profile.Profile, session, dir string) (Egress, []string, error) {
-	names, err := EffectivePolicies(p, session, dir)
+	policies, names, err := ResolvePolicies(p, session, dir)
 	if err != nil {
 		return Egress{}, nil, err
 	}
+	return Merge(policies), names, nil
+}
+
+// ResolvePolicies is Resolve before the merge: every policy bound to this
+// run, loaded, in binding order, with the names it came from. A boot reads
+// the routes from here, which Merge does not fold.
+func ResolvePolicies(p profile.Profile, session, dir string) ([]Policy, []string, error) {
+	names, err := EffectivePolicies(p, session, dir)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(names) == 0 {
-		return Egress{}, nil, nil
+		return nil, nil, nil
 	}
 	// LoadAll returns what it could read alongside its error: a file that does
 	// not parse, or two files claiming one name, is reported without stopping
@@ -54,11 +65,11 @@ func Resolve(p profile.Profile, session, dir string) (Egress, []string, error) {
 		if loadErr != nil {
 			because = ": " + loadErr.Error()
 		}
-		return Egress{}, nil, fmt.Errorf("policy %v is attached to %s but no document of that "+
+		return nil, nil, fmt.Errorf("policy %v is attached to %s but no document of that "+
 			"name loads from %s; `brig policy check %s` says which, and `brig policy ls` what "+
 			"is there%s", missing, p.Name, dir, p.Name, because)
 	}
-	return Merge(policies), names, nil
+	return policies, names, nil
 }
 
 // Merge folds every policy that applies to one run into a single rule set.

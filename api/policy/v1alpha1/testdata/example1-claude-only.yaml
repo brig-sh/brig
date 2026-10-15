@@ -1,0 +1,16 @@
+# Example 1 of the broker spec, rev 4: Claude Code on the subscription, and
+# nothing else reachable. The spec's request.allow.models is cut, so the route
+# has no request block. Example 6 runs this same document on Linux.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-only
+  description: Claude Code through the broker; no other egress
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }

@@ -6,7 +6,9 @@
 // retired flat form, which has name, desc and egress at the top level. A
 // caller above this package sees one shape.
 //
-// The only rule class is egress.
+// A policy holds egress rules, brokered routes, or both. This package keeps
+// the presets that routes name, and expands them. Nothing serves a route
+// yet, so internal/wrap refuses a run bound to one.
 package policy
 
 import "github.com/brig-sh/brig/api/policy/v1alpha1"
