@@ -343,6 +343,7 @@ A route is a brokered endpoint. The agent in the guest is pointed at the
 route, and the broker forwards each request upstream with the credential
 added on the host. The guest holds a session token for the route, and never
 the credential itself.
+[broker.md](broker.md) describes how the broker handles each request.
 
 > [!NOTE]
 > This release reads, checks and prints routes, and serves none. Brig refuses
