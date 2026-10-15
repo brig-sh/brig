@@ -422,7 +422,13 @@ func TestARefreshIsNotSentWithoutItsJournal(t *testing.T) {
 	if got := f.cache.Failing(); !slices.Equal(got, []string{credName}) {
 		t.Errorf("Failing = %v, want [%s]", got, credName)
 	}
-	f.clock.Advance(retryAfter)
+	// No retry until retryAfter has passed: one short of it, the journal is
+	// not written again and the provider is not called.
+	f.clock.Advance(retryAfter - time.Second)
+	if got := f.resolve(t); !bytes.Equal(got, f.initial) || f.renewer.callCount() != 0 {
+		t.Errorf("a renewal ran %d time(s) before retryAfter", f.renewer.callCount())
+	}
+	f.clock.Advance(time.Second)
 	if got := f.resolve(t); bytes.Equal(got, f.initial) {
 		t.Error("the renewal was not tried again once the store took writes")
 	}
