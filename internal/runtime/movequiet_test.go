@@ -84,6 +84,8 @@ func TestQuietLinesOfOtherMoves(t *testing.T) {
 			"the destination took the stream in 22.9 s (it copied the base)"},
 		{"warning: stopping the fenced VMM here: exit status 1", "warning: stopping the fenced VMM here: exit status 1"},
 		{"error: ssh: connection reset by peer", "error: ssh: connection reset by peer"},
+		{"move: hvi did not fence brig-ubuntu: its stream ended before the manifest, and the guest runs on here",
+			"hvi did not fence brig-ubuntu: its stream ended before the manifest, and the guest runs on here"},
 	} {
 		if got, ok := QuietLine(c.line); !ok || got != c.want {
 			t.Errorf("%q: said %q (%v), want %q", c.line, got, ok, c.want)

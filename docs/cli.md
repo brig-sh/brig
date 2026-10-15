@@ -478,8 +478,10 @@ and `brig logs` on the ref run on the destination, through
 
 During a move, Brig prints one short line on stderr for each round of the
 copy, the pause, the seal, the restore and the resume, as hull reports
-them, and hull's warnings and errors. `--verbose` prints every line hull
-prints during a move or a prepare, as it arrives, after `brig: hull:`. When
+them, hull's warnings and errors, and hull's line saying the guest still
+runs here when a move fell through before hvi fenced it. `--verbose`
+prints every line hull prints during a move or a prepare, as it arrives,
+after `brig: hull:`. When
 a move commits, Brig prints how long hull's move took, hull's estimate of
 how long the guest was paused, and the bytes sent, as far as hull reported
 them. `-q` drops these lines with Brig's other notices. Besides

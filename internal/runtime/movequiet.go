@@ -24,9 +24,12 @@ import (
 //	Fenced brig-ubuntu: checkpoint /path
 //	Restoring brig-ubuntu paused on pmoust@rp2
 //
-// and two that say why the pause is long, or a wait before it: the base sent
+// two that say why the pause is long, or a wait before it: the base sent
 // first to a host that did not hold it, and a destination that copied the
-// base while the guest was paused.
+// base while the guest was paused; and one that says where the guest is
+// when a streamed move falls through before hvi fenced it:
+//
+//	move: hvi did not fence brig-ubuntu: its stream ended before the manifest, and the guest runs on here
 var (
 	quietPause      = regexp.MustCompile(`^(?:move: )?hvi: (\d+ RAM rounds?(?: \([^)]*\))?)`)
 	quietSealed     = regexp.MustCompile(`^(?:move: )?hvi sealed the stream\b[^(]*(?:\((\d+ ms after the [^)]*)\))?`)
@@ -37,13 +40,15 @@ var (
 	quietRestoring  = regexp.MustCompile(`^Restoring (\S+) paused on (\S+)`)
 	quietSendBase   = regexp.MustCompile(`^(Sending base \S+ to \S+)`)
 	quietTookStream = regexp.MustCompile(`^move: (the destination took the stream in .*)$`)
+	quietNotFenced  = regexp.MustCompile(`^(?:move: )?(hvi did not fence .*)$`)
 )
 
 // QuietLine is what brig prints by default of one line hull printed during a
 // move, and whether it prints anything: a round as its name, size and time
 // ("ram-round-0 40.6 MiB in 1.00 s"), the pause, the seal, the restore and
-// the resume each in a few words, and a warning or an error as hull wrote
-// it. Every other line is for --verbose. A round's progress while it runs
+// the resume each in a few words, a warning or an error as hull wrote it,
+// and the line that says a move fell through with the guest still here.
+// Every other line is for --verbose. A round's progress while it runs
 // ("so far") is not a round.
 func QuietLine(line string) (string, bool) {
 	line = strings.TrimSpace(line)
@@ -98,6 +103,9 @@ func QuietLine(line string) (string, bool) {
 		return strings.ToLower(m[1][:1]) + m[1][1:] + " first", true
 	}
 	if m := quietTookStream.FindStringSubmatch(line); m != nil {
+		return m[1], true
+	}
+	if m := quietNotFenced.FindStringSubmatch(line); m != nil {
 		return m[1], true
 	}
 	return "", false
