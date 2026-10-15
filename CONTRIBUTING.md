@@ -4,7 +4,7 @@
 
 | Command | What it does |
 | --- | --- |
-| `make build` | Builds `./brig` and `./brigd`. |
+| `make build` | Builds `./brig`, `./brigd` and `./brig-broker`. |
 | `make test` | Runs `go test -race ./...`. |
 | `make vet` | Runs `go vet ./...`. |
 | `make all` | Runs vet, test and build, in that order. |
