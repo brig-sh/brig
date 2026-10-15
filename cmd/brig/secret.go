@@ -165,6 +165,12 @@ func readSecret(out io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	// The store also takes a renewal journal's name, which no secret has.
+	// A journal can hold the only valid copy of a renewed credential, so
+	// neither read nor delete reaches one.
+	if err := secret.ValidName(name); err != nil {
+		return err
+	}
 	store, err := openStore()
 	if err != nil {
 		return err
@@ -201,6 +207,9 @@ func deleteSecret(out io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := secret.ValidName(name); err != nil {
+		return err
+	}
 	store, err := openStore()
 	if err != nil {
 		return err
@@ -212,6 +221,13 @@ func deleteSecret(out io.Writer, args []string) error {
 		return fmt.Errorf("no secret named %q. `brig secret ls` lists them", name)
 	} else if err != nil {
 		return err
+	}
+	// The renewal journal can hold a renewed copy of the value (see
+	// internal/renew/journal.go), so a delete that left it would leave the
+	// credential behind. It goes too.
+	journal := secret.JournalName(name)
+	if err := store.Delete(journal); err != nil && !errors.Is(err, secret.ErrNotFound) {
+		return fmt.Errorf("deleted %s, but not its renewal journal %s: %w", name, journal, err)
 	}
 	fmt.Fprintf(out, "deleted %s\n", name)
 	return nil

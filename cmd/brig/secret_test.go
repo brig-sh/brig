@@ -381,6 +381,48 @@ func TestDeleteRemovesAndReportsAbsence(t *testing.T) {
 	}
 }
 
+// The renewal journal can hold a renewed copy of the value, so deleting a
+// secret deletes its journal too. Another secret's journal stays.
+func TestDeleteAlsoRemovesTheRenewalJournal(t *testing.T) {
+	f := newFake(t)
+	f.seed("claude-credentials", "v")
+	f.seed(secret.JournalName("claude-credentials"), `{"v":1,"phase":"renewed","doc":"djI="}`)
+	f.seed(secret.JournalName("other"), "j")
+	if err := secretCmd(&bytes.Buffer{}, []string{"delete", "claude-credentials", "-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.items[secret.JournalName("claude-credentials")]; ok {
+		t.Error("the delete left the renewal journal, and the renewed copy in it")
+	}
+	if _, ok := f.items[secret.JournalName("other")]; !ok {
+		t.Error("the delete removed another secret's journal")
+	}
+}
+
+// A renewal journal can hold the only valid copy of a renewed credential.
+// Its name is outside the name rules, so read does not print it and delete
+// does not remove it.
+func TestReadAndDeleteRefuseAJournalName(t *testing.T) {
+	f := newFake(t)
+	journal := secret.JournalName("claude-credentials")
+	f.seed(journal, `{"v":1,"phase":"renewed","doc":"djI="}`)
+	var out bytes.Buffer
+	err := secretCmd(&out, []string{"read", journal})
+	if err == nil || !strings.Contains(err.Error(), "a secret name holds letters, digits, - and _") {
+		t.Errorf("read %s = %v, want the name rule", journal, err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("read %s printed %q", journal, out.String())
+	}
+	err = secretCmd(&bytes.Buffer{}, []string{"delete", journal, "-y"})
+	if err == nil || !strings.Contains(err.Error(), "a secret name holds letters, digits, - and _") {
+		t.Errorf("delete %s = %v, want the name rule", journal, err)
+	}
+	if _, ok := f.items[journal]; !ok {
+		t.Error("delete removed the journal")
+	}
+}
+
 // rm is the spelling brig uses elsewhere -- `brig rm`, `brig profile rm` --
 // so it works here too.
 func TestDeleteAndRmAreSynonyms(t *testing.T) {
