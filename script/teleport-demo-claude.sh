@@ -185,43 +185,50 @@ TASKCHECK='echo "TASKLINES $(wc -l < /root/task.jsonl)"
 echo "TASKPROC $(pgrep -c -x claude)"
 cat /root/task.exit /root/task.err 2>/dev/null
 tail -c 600 /root/task.jsonl'
-# TASKREAD: the task's stream, whole, then the end of the task.
-TASKREAD='cat /root/task.jsonl; echo "TASKPROC $(pgrep -c -x claude)"; cat /root/task.exit 2>/dev/null'
+# TASKREAD: the task's stream, whole, then the end of the task. The echo
+# ends a last line the task had only half written.
+TASKREAD='cat /root/task.jsonl; echo; echo "TASKPROC $(pgrep -c -x claude)"; cat /root/task.exit 2>/dev/null'
 
 # TASKJUDGE BEFORE AFTER1 AFTER2: the --claude check, from three reads of
 # the task's stream (TASKREAD's output): right before the move, on DST, and
-# on DST 20 s later. "After the move" is what the stream has past the first
-# read, which takes in the second or so of brig's checks before the pause. Each line of the stream is a stamp and a stream-json event.
-# The text is put back together from the text_delta events alone, or from
-# the assistant messages when the stream has none, and a COUNT n counts only
-# once a newline ends it, so a COUNT 1 cut off on its way to COUNT 12 is not
-# read. It prints PASS and FAIL lines.
+# on DST 20 s later. Each line of the stream is a stamp and a stream-json
+# event. "After the move" is a stamp later than the last one the first read
+# has, which takes in the second or so of brig's checks before the pause. A
+# read on DST goes through ssh with a terminal, so its lines end in CR LF
+# and brig's notices come first: a line counts as an event only when it is
+# a stamp and a JSON object. The text is put back together from the
+# text_delta events alone, or from the assistant messages when the stream
+# has none, and a COUNT n counts only once a newline ends it, so a COUNT 1
+# cut off on its way to COUNT 12 is not read. It prints PASS and FAIL lines.
 TASKJUDGE='
 import json, re, sys
 
 def read(path):
     events, proc, exits = [], None, []
     for raw in open(path, encoding="utf-8", errors="replace"):
-        raw = raw.rstrip("\r\n")
-        if raw.startswith("TASKPROC "):
-            proc = int(raw.split()[1]) if raw.split()[1:] and raw.split()[1].isdigit() else 0
+        raw = raw.strip()
+        m = re.match(r"^TASKPROC ([0-9]+)$", raw)
+        if m:
+            proc = int(m.group(1))
             continue
         m = re.match(r"^[0-9.]+ EXIT (-?[0-9]+)$", raw)
         if m:
             exits.append(int(m.group(1)))
             continue
-        stamp, _, body = raw.partition(" ")
+        m = re.match(r"^([0-9]+[.][0-9]+) ([{].*)$", raw)
+        if not m:
+            continue
         try:
-            events.append((body, json.loads(body)))
+            e = json.loads(m.group(2))
         except ValueError:
-            events.append((body, None))
+            continue
+        if isinstance(e, dict):
+            events.append((float(m.group(1)), m.group(2), e))
     return events, proc, exits
 
 def text(events):
     deltas, whole = [], []
-    for _, e in events:
-        if not isinstance(e, dict):
-            continue
+    for _, _, e in events:
         if e.get("type") == "stream_event":
             ev = e.get("event") or {}
             d = ev.get("delta") or {}
@@ -238,12 +245,9 @@ def counts(events):
 
 def errors(events):
     out = []
-    for body, e in events:
-        bad = "api_error" in body
-        if isinstance(e, dict):
-            bad = bad or e.get("is_error") is True or e.get("type") == "error" or (
-                e.get("type") == "result" and e.get("subtype") not in (None, "success"))
-        if bad:
+    for _, body, e in events:
+        if "api_error" in body or e.get("is_error") is True or e.get("type") == "error" or (
+                e.get("type") == "result" and e.get("subtype") not in (None, "success")):
             out.append(body[:160])
     return out
 
@@ -263,7 +267,8 @@ say(alive or x2 == [0], "the stream is alive on DST: %d COUNT lines at the first
     len(c1), len(c2), ", and the task ended with exit 0" if x2 == [0] else ""))
 say(x2 in ([], [0]) and (x2 == [0] or (proc or 0) >= 1),
     "the task is running (%s claude) or ended with exit 0 (exits %s)" % (proc, x2))
-late = errors(a2[len(b):])
+paused = max([t for t, _, _ in b] or [0.0])
+late = errors([ev for ev in a2 if ev[0] > paused])
 say(not late, "no error event in the stream after the move" + ("" if not late else ": " + late[0]))
 '
 
