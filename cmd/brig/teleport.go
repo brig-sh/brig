@@ -315,7 +315,9 @@ func teleportMove(cfg *wrap.Config, t profile.Profile, ref, host string, wantJSO
 	echo := runtime.NewEcho(func(s string) { warnf("%s", s) })
 	transport := ""
 	spec.Progress = func(line string) {
-		echo.Say(hullSaid(line))
+		if said, ok := sayHull(line); ok {
+			echo.Say(said)
+		}
 		moved.Add(line)
 		if moved.Transport != transport {
 			transport = moved.Transport
@@ -414,7 +416,9 @@ func finishMove(ref, vm, host, store, txid, hullState string, moved *runtime.Mov
 	if moved != nil {
 		fmt.Printf("  %s\n", moved.Summary())
 	}
-	warnf("brig sh %s, run, stop, info and logs now run there; brig rm %s removes the fenced copy left here", ref, ref)
+	if verbosity >= wrap.Verbose {
+		warnf("brig sh %s, run, stop, info and logs now run there; brig rm %s removes the fenced copy left here", ref, ref)
+	}
 	return nil
 }
 
@@ -442,10 +446,22 @@ func transportSurprise(loc wrap.Location, host, ref string, moved *runtime.MoveR
 }
 
 // hullSaid is a line hull printed during a move or a prepare, as brig
-// passes it on. On stderr, with brig's notices: stdout carries the outcome,
-// and with --json only its document.
+// passes it on under --verbose. On stderr, with brig's notices: stdout
+// carries the outcome, and with --json only its document.
 func hullSaid(line string) string {
 	return "hull: " + line
+}
+
+// sayHull is what brig prints of a line hull printed during a move or a
+// prepare, and whether it prints anything. --verbose has every line whole.
+// By default a move says its rounds, the pause, the seal, the restore and
+// the resume, a few words each (runtime.QuietLine), and a prepare only what
+// brig says after it: the rest is in the report, and in --json.
+func sayHull(line string) (string, bool) {
+	if verbosity >= wrap.Verbose {
+		return hullSaid(line), true
+	}
+	return runtime.QuietLine(line)
 }
 
 // catchBrokenPipe makes a write to a closed stderr or stdout fail with EPIPE
@@ -512,7 +528,11 @@ func teleportPrepare(cfg *wrap.Config, t profile.Profile, ref, host string, want
 	defer catchBrokenPipe()()
 	echo := runtime.NewEcho(func(s string) { warnf("%s", s) })
 	spec := runtime.PrepareSpec{RemoteStore: report.Store.Named, RemoteHull: report.Runtime.Bin,
-		Progress: func(line string) { echo.Say(hullSaid(line)) }}
+		Progress: func(line string) {
+			if said, ok := sayHull(line); ok {
+				echo.Say(said)
+			}
+		}}
 	p, err := preparer.MigratePrepare(vm, host, spec)
 	echo.Stop()
 	if err != nil {
