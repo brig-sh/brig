@@ -1,6 +1,7 @@
 package hostsrc_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,7 @@ func TestTheRunPathCannotReachTheImporter(t *testing.T) {
 	// below: the keychain was read through a second door, creds.ReadHost behind
 	// the profile's hostCredential: field, which never touched this package.
 	for _, pkg := range runPathPackages {
-		out, err := exec.Command("go", "list", "-deps", pkg).Output()
+		out, err := goList("-deps", pkg)
 		if err != nil {
 			t.Fatalf("go list -deps %s: %v", pkg, err)
 		}
@@ -51,7 +52,7 @@ func TestTheRunPathCannotReachTheImporter(t *testing.T) {
 func TestTheRunPathCannotReachTheRefresher(t *testing.T) {
 	const refresher = "github.com/brig-sh/brig/internal/renew"
 	for _, pkg := range append(slices.Clone(runPathPackages), "github.com/brig-sh/brig/cmd/brig") {
-		out, err := exec.Command("go", "list", "-deps", pkg).Output()
+		out, err := goList("-deps", pkg)
 		if err != nil {
 			t.Fatalf("go list -deps %s: %v", pkg, err)
 		}
@@ -61,13 +62,75 @@ func TestTheRunPathCannotReachTheRefresher(t *testing.T) {
 	}
 }
 
+// goList runs go list with args for each GOOS brig ships for, and returns the
+// outputs joined. CI runs on Linux alone, and a file built only for macOS, or
+// only for Linux, can add an import the other build does not have.
+func goList(args ...string) ([]byte, error) {
+	var all []byte
+	for _, goos := range []string{"darwin", "linux"} {
+		cmd := exec.Command("go", append([]string{"list"}, args...)...)
+		cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=arm64")
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("GOOS=%s: %w", goos, err)
+		}
+		all = append(all, out...)
+	}
+	return all, nil
+}
+
 // runPathPackages are the packages a run is built from. cmd/brig is not among
 // them: `brig secret import` is wired there, so it necessarily links the
 // importer, and the file-level tests below take over its half of the guarantee.
+// internal/injector is brig's side of the credential broker: it starts
+// brig-broker and asks it for tokens, on every run with a route.
 var runPathPackages = []string{
 	"github.com/brig-sh/brig/internal/wrap",
 	"github.com/brig-sh/brig/internal/creds",
+	"github.com/brig-sh/brig/internal/injector",
 	"github.com/brig-sh/brig/cmd/brigd",
+}
+
+// brokerBinary is brig-broker, the one process that refreshes a credential
+// and signs session tokens. It is not on the run path, because it links the
+// refresher. It reads brig's own store and no host source.
+const brokerBinary = "github.com/brig-sh/brig/cmd/brig-broker"
+
+// The host key that signs session tokens lives in brig-broker alone, and
+// internal/broker is the package that signs with it. A run asks brig-broker
+// for a token over its socket, so no run-path package, and not the CLI,
+// links the signer: a run that could mint its own tokens would not need the
+// broker to agree.
+func TestTheRunPathCannotMintTokens(t *testing.T) {
+	const signer = "github.com/brig-sh/brig/internal/broker"
+	for _, pkg := range append(slices.Clone(runPathPackages), "github.com/brig-sh/brig/cmd/brig") {
+		out, err := goList("-deps", pkg)
+		if err != nil {
+			t.Fatalf("go list -deps %s: %v", pkg, err)
+		}
+		if slices.Contains(strings.Split(string(out), "\n"), signer) {
+			t.Errorf("%s depends on %s: a run can now mint a session token", pkg, signer)
+		}
+	}
+}
+
+// brig-broker reads the credential a route injects from brig's own store,
+// on every request. It must not reach a host source: a route names a secret
+// in the store, never the agent's own keychain item.
+func TestTheBrokerCannotReachTheImporter(t *testing.T) {
+	out, err := goList("-deps", brokerBinary)
+	if err != nil {
+		t.Fatalf("go list -deps %s: %v", brokerBinary, err)
+	}
+	deps := strings.Split(string(out), "\n")
+	if slices.Contains(deps, "github.com/brig-sh/brig/internal/hostsrc") {
+		t.Errorf("%s depends on internal/hostsrc: the broker can now read a host source", brokerBinary)
+	}
+	// The proof the other tests lean on: brig-broker does link the
+	// refresher, so a check that found nothing there would prove nothing.
+	if !slices.Contains(deps, "github.com/brig-sh/brig/internal/renew") {
+		t.Errorf("%s does not link internal/renew; this test checks the wrong package", brokerBinary)
+	}
 }
 
 // A run reads no host source. The dependency test above cannot say so on its
@@ -85,7 +148,7 @@ func TestTheRunPathReadsNoKeychain(t *testing.T) {
 	const allowed = module + "internal/secret"
 	seen := map[string]bool{}
 	for _, pkg := range runPathPackages {
-		out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}} {{.Dir}}", pkg).Output()
+		out, err := goList("-deps", "-f", "{{.ImportPath}} {{.Dir}}", pkg)
 		if err != nil {
 			t.Fatalf("go list -deps %s: %v", pkg, err)
 		}

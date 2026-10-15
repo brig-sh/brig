@@ -249,7 +249,7 @@ jobs:
             --archive "on_linux:on_intel:brig-$V-linux-amd64.tar.gz" \
             --desc "Run a coding agent in a microVM sandbox with only the credentials it needs" \
             --source "$SOURCE" \
-            --binary brig --binary brigd \
+            --binary brig --binary brigd --binary brig-broker \
             --completion bash --completion zsh --completion fish \
             --depends-cask "brig-sh/brig/hull@$CHANNEL" --depends-formula cosign \
             --conflicts-with "$OTHER" \
