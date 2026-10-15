@@ -323,11 +323,26 @@ the destination may resume, the last memory and disk changes are taken in
 the same pause, and the destination checks every part against its sha256
 before it runs anything.
 
-`brig teleport` prints hull's lines on stderr as they arrive, after
-`brig: hull:`: how hull moves the guest, each round, the bytes it sent and
-the rate, and for a disk round after the first, how many blocks a second
-the guest wrote. hull prints no such rate for memory. When the move
-commits, it prints how long hull's move took, whether hull streamed it,
+By default `brig teleport` prints one short line on stderr for each step
+hull reports, as it arrives: each round of the copy with its size and time
+(`ram-round-0 40.6 MiB in 1.00 s`), the pause (`paused after 2 RAM rounds
+(converged)`), the seal (`sealed 19 ms after the pause`), what was sent
+and the restore on the destination, and the resume there (`resumed on
+pmoust@rp2 (epoch 1)`). For a move that sends the whole checkpoint and
+disk, the steps are the fence, the restore and the resume. hull's
+warnings and errors are printed as hull wrote them, and so are the two
+lines that explain a long wait: a base that hull sends first to a host
+that does not hold it, and a destination that copied the base while the
+guest was paused. So is the line that says where the guest is when a
+streamed move falls through before hvi fenced it (`hvi did not fence
+brig-ubuntu: its stream ended before the manifest, and the guest runs on
+here`). `--verbose` prints every line hull prints, as hull
+printed it, after `brig: hull:`: how hull moves the guest, each round with
+its rate, and for a disk round after the first, how many blocks a second
+the guest wrote (hull prints no such rate for memory), hvi's figures for
+the pause, hull's timings of each step and its timeline from the seal on
+both hosts. `--json` carries those numbers in its `move` object. When the
+move commits, `brig teleport` prints how long hull's move took, whether hull streamed it,
 hull's estimate of how long the guest was paused, the bytes sent, and the
 rounds: how many of the disk and of memory, and the size and time of the
 final disk round, which the guest waits for, then what it was sent as.
@@ -344,10 +359,9 @@ round's own line, "the final disk round sent as 161172 bytes in
 names for the disk rounds as hull 511877d printed them
 (`disk round 3 (final)`) and as hull `d2bb5e9` prints hvi's own
 (`disk-round-0`, `disk-round-final`). A line Brig cannot read is still
-printed, and adds nothing to the summary. hull's `downtime about` is an estimate: it is
+printed under `--verbose`, and adds nothing to the summary. hull's `downtime about` is an estimate: it is
 the time the destination resumed the guest less the time the last memory
-round began to arrive here, read on two hosts' clocks. `--json` carries the same in its
-`move` object. Brig prints hull's lines from a queue of its own, so hull
+round began to arrive here, read on two hosts' clocks. Brig prints hull's lines from a queue of its own, so hull
 never waits on Brig's stderr, which hull writes to while the guest is
 paused. When that stderr falls a few thousand lines behind, Brig drops
 lines and then says how many. A stderr whose reader has gone does not
@@ -449,9 +463,9 @@ brig teleport <ref> --to <user>@<host> --prepare
 `hull migrate-prepare --to <user>@<host> --json <sandbox>`, with the hull
 store and the hull that the destination's brig drives. hull puts the
 image, the portable kernel and the sandbox's base on the destination,
-each only if it is not there yet. Brig passes hull's lines on as they
-arrive, then prints what hull did for each part (`held`, `sent`,
-`skipped` or `failed`) and the digest of the base the destination holds.
+each only if it is not there yet. Brig prints what hull did for each part
+(`held`, `sent`, `skipped` or `failed`) and the digest of the base the
+destination holds. `--verbose` also passes hull's lines on as they arrive.
 A prepare pauses nothing, and the guest keeps running here.
 
 Brig records the host in its session index once it holds the sandbox's
