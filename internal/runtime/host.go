@@ -303,9 +303,37 @@ func hostDir() (string, error) {
 	return filepath.Join(home, ".brig", "host"), nil
 }
 
+// HostDir is where host sandboxes live: ~/.brig/host, or host under
+// BRIG_STATE_DIR. The credential broker keeps its files in HostBrokerDir below
+// it, because a host sandbox can neither read nor write this directory.
+func HostDir() (string, error) { return hostDir() }
+
+// CheckHostDirLinks refuses a host directory that is a link, or whose state
+// directory above it is one. The state directory is protected by its real
+// path, and a link could be swapped for another, so the profile would protect
+// the old target. The broker keeps its keys below it for the same reason.
+func CheckHostDirLinks(dir string) error {
+	if info, err := os.Lstat(filepath.Dir(dir)); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing %s: it is a link, and the host kind keeps its "+
+			"profiles there. Point BRIG_STATE_DIR at the real directory", filepath.Dir(dir))
+	}
+	if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing %s: it is a link, and the host kind keeps its "+
+			"profiles there. Remove the link, and brig creates a directory there", dir)
+	}
+	return nil
+}
+
+// HostBrokerDir is the name of the broker's directory under HostDir. It is
+// never a sandbox, so no sandbox may take it.
+const HostBrokerDir = "broker"
+
 // hostName refuses a sandbox name that is not one path component of the
-// shape brig gives its sandboxes.
+// shape brig gives its sandboxes, and the broker's directory.
 func hostName(name string) error {
+	if name == HostBrokerDir {
+		return fmt.Errorf("%q is reserved for the credential broker", name)
+	}
 	if name == "" || name == "." || name == ".." || strings.ContainsFunc(name, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
 			r == '-' || r == '_' || r == '.')

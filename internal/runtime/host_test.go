@@ -361,3 +361,14 @@ func TestDetectForRefusesAConflictWithTheProfile(t *testing.T) {
 		}
 	}
 }
+
+// The broker keeps its directory under the host sandboxes', so no sandbox
+// may take its name, and a listing never shows it as one.
+func TestTheBrokerDirectoryIsNoSandbox(t *testing.T) {
+	if err := hostName(HostBrokerDir); err == nil {
+		t.Errorf("%q was accepted as a sandbox name", HostBrokerDir)
+	}
+	if err := hostName("brig-broker"); err != nil {
+		t.Errorf("an ordinary name was refused: %v", err)
+	}
+}

@@ -82,11 +82,8 @@ func openHostRoot(create bool) (*os.Root, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	// The state directory is protected by its real path. A link there could
-	// be swapped for another, and the profile would protect the old target.
-	if info, err := os.Lstat(filepath.Dir(dir)); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return nil, "", fmt.Errorf("refusing %s: it is a link, and the host kind keeps its "+
-			"profiles there. Point BRIG_STATE_DIR at the real directory", filepath.Dir(dir))
+	if err := CheckHostDirLinks(dir); err != nil {
+		return nil, "", err
 	}
 	if create {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
