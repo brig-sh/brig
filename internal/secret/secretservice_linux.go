@@ -3,6 +3,7 @@
 package secret
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -92,14 +93,18 @@ type secretService struct {
 	conn       *dbus.Conn
 	session    dbus.ObjectPath
 	collection dbus.ObjectPath
+	// ctx bounds every bus call and every wait on a keyring prompt. Nil
+	// means no bound.
+	ctx context.Context
 }
 
 // Caught at build time rather than wherever a secretService first gets assigned
 // to a Store: a method that stops matching the interface fails here, in the
 // file that has to change.
 var (
-	_ Store     = (*secretService)(nil)
-	_ Annotator = (*secretService)(nil)
+	_ Store        = (*secretService)(nil)
+	_ Annotator    = (*secretService)(nil)
+	_ ContextStore = (*secretService)(nil)
 )
 
 // dialBus and hasSecretService are the two steps open() can fail at, held as
@@ -133,7 +138,7 @@ var (
 	// noObject a keyring with no default collection returns.
 	readDefaultAlias = func(s *secretService) (dbus.ObjectPath, error) {
 		var path dbus.ObjectPath
-		if err := s.service0().Call(methodReadAlias, 0, defaultAlias).Store(&path); err != nil {
+		if err := s.service0().CallWithContext(s.context(), methodReadAlias, 0, defaultAlias).Store(&path); err != nil {
 			return noObject, fmt.Errorf("finding the default keyring collection: %w", err)
 		}
 		return path, nil
@@ -202,6 +207,21 @@ func errNoDefaultCollection() error {
 
 func (s *secretService) Kind() string { return "secret-service" }
 
+// WithContext returns a view of the store with every bus call, and every wait
+// on a keyring prompt, bound to ctx. The connection and session are shared.
+func (s *secretService) WithContext(ctx context.Context) Store {
+	c := *s
+	c.ctx = ctx
+	return &c
+}
+
+func (s *secretService) context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
 // openSession opens a plain (unencrypted) transport session. brig is a local
 // process talking to a local keyring over the user's own session bus, so the
 // DH-encrypted session the API also offers guards a channel that is already
@@ -210,7 +230,7 @@ func (s *secretService) Kind() string { return "secret-service" }
 func (s *secretService) openSession() error {
 	var output dbus.Variant
 	var session dbus.ObjectPath
-	err := s.service0().Call(methodOpenSession, 0, "plain", dbus.MakeVariant("")).Store(&output, &session)
+	err := s.service0().CallWithContext(s.context(), methodOpenSession, 0, "plain", dbus.MakeVariant("")).Store(&output, &session)
 	if err != nil {
 		return fmt.Errorf("opening a Secret Service session: %w", err)
 	}
@@ -304,7 +324,7 @@ func (s *secretService) create(collPath dbus.ObjectPath, name string, attrs map[
 	var item, prompt dbus.ObjectPath
 	// replace=false: the collision has already been ruled out above, and a
 	// concurrent create racing this one should surface rather than clobber.
-	err := s.object(collPath).Call(methodCreateItem, 0, props, sec, false).Store(&item, &prompt)
+	err := s.object(collPath).CallWithContext(s.context(), methodCreateItem, 0, props, sec, false).Store(&item, &prompt)
 	if err != nil {
 		return fmt.Errorf("storing %q: %w", name, err)
 	}
@@ -318,7 +338,7 @@ func (s *secretService) create(collPath dbus.ObjectPath, name string, attrs map[
 // matching the keychain's clear-on-update behaviour.
 func (s *secretService) replace(item dbus.ObjectPath, attrs map[string]string, sec dbusSecret) error {
 	obj := s.object(item)
-	if err := obj.Call(methodSetSecret, 0, sec).Err; err != nil {
+	if err := obj.CallWithContext(s.context(), methodSetSecret, 0, sec).Err; err != nil {
 		return fmt.Errorf("updating the value: %w", err)
 	}
 	if err := obj.SetProperty(propAttributes, dbus.MakeVariant(attrs)); err != nil {
@@ -343,7 +363,7 @@ func (s *secretService) Read(name string) ([]byte, error) {
 		return nil, err
 	}
 	var sec dbusSecret
-	if err := s.object(item).Call(methodGetSecret, 0, s.session).Store(&sec); err != nil {
+	if err := s.object(item).CallWithContext(s.context(), methodGetSecret, 0, s.session).Store(&sec); err != nil {
 		return nil, fmt.Errorf("reading %q: %w", name, err)
 	}
 	return sec.Value, nil
@@ -362,7 +382,7 @@ func (s *secretService) Delete(name string) error {
 		return ErrNotFound
 	}
 	var prompt dbus.ObjectPath
-	if err := s.object(item).Call(methodDeleteItem, 0).Store(&prompt); err != nil {
+	if err := s.object(item).CallWithContext(s.context(), methodDeleteItem, 0).Store(&prompt); err != nil {
 		return fmt.Errorf("deleting %q: %w", name, err)
 	}
 	return s.await(prompt)
@@ -419,7 +439,7 @@ func (s *secretService) find(name string) (dbus.ObjectPath, error) {
 // being unlocked, or a locked keyring would read as empty.
 func (s *secretService) search(attrs map[string]string) ([]dbus.ObjectPath, error) {
 	var unlocked, locked []dbus.ObjectPath
-	if err := s.service0().Call(methodSearchItems, 0, attrs).Store(&unlocked, &locked); err != nil {
+	if err := s.service0().CallWithContext(s.context(), methodSearchItems, 0, attrs).Store(&unlocked, &locked); err != nil {
 		return nil, fmt.Errorf("searching the keyring: %w", err)
 	}
 	return append(unlocked, locked...), nil
@@ -481,7 +501,7 @@ func (s *secretService) resolveCollection() error {
 func (s *secretService) unlock(obj dbus.ObjectPath) error {
 	var unlocked []dbus.ObjectPath
 	var prompt dbus.ObjectPath
-	if err := s.service0().Call(methodUnlock, 0, []dbus.ObjectPath{obj}).Store(&unlocked, &prompt); err != nil {
+	if err := s.service0().CallWithContext(s.context(), methodUnlock, 0, []dbus.ObjectPath{obj}).Store(&unlocked, &prompt); err != nil {
 		return fmt.Errorf("unlocking the keyring: %w", err)
 	}
 	return s.await(prompt)
@@ -507,10 +527,21 @@ func (s *secretService) await(prompt dbus.ObjectPath) error {
 	s.conn.Signal(ch)
 	defer s.conn.RemoveSignal(ch)
 
-	if err := s.object(prompt).Call(methodPrompt, 0, "").Err; err != nil {
+	if err := s.object(prompt).CallWithContext(s.context(), methodPrompt, 0, "").Err; err != nil {
 		return fmt.Errorf("showing the keyring prompt: %w", err)
 	}
-	for sig := range ch {
+	ctx := s.context()
+	for {
+		var sig *dbus.Signal
+		var open bool
+		select {
+		case sig, open = <-ch:
+		case <-ctx.Done():
+			return fmt.Errorf("waiting on the keyring prompt: %w", ctx.Err())
+		}
+		if !open {
+			return nil
+		}
 		if sig.Path != prompt || sig.Name != promptIface+"."+memberCompleted {
 			continue
 		}
@@ -524,7 +555,6 @@ func (s *secretService) await(prompt dbus.ObjectPath) error {
 		}
 		return nil
 	}
-	return nil
 }
 
 // attributes maps a secret's name and provenance to the item attribute map, and

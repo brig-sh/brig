@@ -217,7 +217,7 @@ func importOne(
 	// decoder drops anything outside its charset, which would make brig's own
 	// import read back as hand-created and refuse the next one without -y.
 	prov := secret.Provenance{V: secret.ProvenanceVersion, From: secret.SafeFrom(v.From), ExpiresAt: expiry}
-	if err := writeValue(store, d.Name, value, prov, exists); err != nil {
+	if err := secret.WriteWithProvenance(store, d.Name, value, prov, exists); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "  %s: %s from %s%s\n", d.Name, verb, describe(v.From), expires(expiry))
@@ -404,24 +404,6 @@ func currentValue(store secret.Store, name string) (value []byte, exists bool, e
 		return nil, true, nil
 	}
 	return nil, false, fmt.Errorf("could not read the stored %q: %w", name, err)
-}
-
-// writeValue stores a value with its provenance where the backend can carry
-// one, and without where it cannot.
-//
-// The Annotator arm is a single call in both directions -- create and update --
-// because delete-then-create is the shape this must never take.
-func writeValue(store secret.Store, name string, value []byte, p secret.Provenance, update bool) error {
-	if a, ok := store.(secret.Annotator); ok {
-		return a.Write(name, value, p, update)
-	}
-	// A backend with no room for provenance still imports: the value is what
-	// the run needs, and absent provenance is the same zero value a
-	// hand-created secret carries. Same contract as secret.Secret.Modified.
-	if update {
-		return store.Update(name, value)
-	}
-	return store.Create(name, value)
 }
 
 // reportOtherProfiles names the other profiles a fill reaches.

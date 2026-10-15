@@ -4,6 +4,7 @@ package secret
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -48,6 +49,8 @@ const (
 
 type keychain struct {
 	service string
+	// ctx bounds every security(1) call. Nil means no bound.
+	ctx context.Context
 	// beforeSeal, when set, runs before every sealed write. Tests use it to
 	// make that write fail at the one point a create has to roll back.
 	beforeSeal func() error
@@ -58,10 +61,18 @@ type keychain struct {
 // that has to change, instead of at some distant call site.
 var _ Store = keychain{}
 var _ Annotator = keychain{}
+var _ ContextStore = keychain{}
 
 func open() (Store, error) { return keychain{service: service}, nil }
 
 func (k keychain) Kind() string { return "keychain" }
+
+// WithContext returns the keychain with every security(1) call bound to ctx.
+// A call still running when ctx ends is killed.
+func (k keychain) WithContext(ctx context.Context) Store {
+	k.ctx = ctx
+	return k
+}
 
 // maxLine is the buffer security(1) reads one interactive command into.
 // Measured on macOS 15: a line of 4095 characters and its newline is accepted
@@ -210,11 +221,20 @@ func (k keychain) keyFor(name string, update bool) ([]byte, error) {
 // nil for a command that reads none. A failure carries security's own
 // explanation and, through errors.As, its exit code, which status reads.
 func (k keychain) security(stdin io.Reader, args ...string) (string, error) {
-	cmd := exec.Command(securityBin, args...)
+	ctx := k.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, securityBin, args...)
 	cmd.Stdin = stdin
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
+		// A killed process exits with a signal, which says nothing about
+		// why. The context does.
+		if cerr := ctx.Err(); cerr != nil {
+			return "", fmt.Errorf("security did not finish: %w", cerr)
+		}
 		return "", securityError(err, errb.String())
 	}
 	return out.String(), nil
