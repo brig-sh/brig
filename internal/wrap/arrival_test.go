@@ -339,6 +339,40 @@ func TestAnUnfinishedArrivalIsRefusedUntilHullSaysTheGuestRuns(t *testing.T) {
 	}
 }
 
+// UnfinishedArrival answers from arrivals.json as it is when asked, for
+// the ref and sandbox the arrival names, until the source commits the move
+// or hull here restored the guest under it. A committed arrival is not one.
+func TestUnfinishedArrivalReadsTheRecordAsItIsNow(t *testing.T) {
+	teleportState(t)
+	p := teleportProfile(t)
+	rt := &guestRuntime{}
+	if _, ok := UnfinishedArrival("tp", "brig-tp", rt); ok {
+		t.Fatalf("no arrival, and one was reported")
+	}
+	if _, err := PrepareArrival(p, "", ArrivalSpec{Sandbox: "brig-tp", TxID: "tx1", From: "me@src",
+		Network: "none"}, rt); err != nil {
+		t.Fatal(err)
+	}
+	a, ok := UnfinishedArrival("tp", "brig-tp", rt)
+	if !ok || a.From != "me@src" || a.TxID != "tx1" {
+		t.Errorf("a prepared arrival: %+v, %v", a, ok)
+	}
+	if _, ok := UnfinishedArrival("other", "brig-tp", rt); ok {
+		t.Errorf("an arrival of tp was reported for another ref")
+	}
+	rt.migration = runtime.Migration{State: "restored", TxID: "tx1"}
+	if _, ok := UnfinishedArrival("tp", "brig-tp", rt); ok {
+		t.Errorf("hull restored the guest under this move, and the arrival was still unfinished")
+	}
+	rt.migration = runtime.Migration{}
+	if err := CommitArrival("brig-tp", "tx1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := UnfinishedArrival("tp", "brig-tp", rt); ok {
+		t.Errorf("a committed arrival was reported unfinished")
+	}
+}
+
 // An exec into a session moved here carries only what this host has. A
 // secret this host lacks is not a refusal, as it is on a boot, and it is
 // not fetched from anywhere: the exec runs without it and says why. The same

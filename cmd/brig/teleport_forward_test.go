@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -188,5 +190,88 @@ func TestAMoveBackHereRemovesTheCopyTheMoveLeft(t *testing.T) {
 	_, err = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", here}) })
 	if err == nil || !strings.Contains(err.Error(), "is kept") || rt.removed != 0 || len(*forwarded) != 0 {
 		t.Errorf("an unproven copy: %v, removed %d, handed on %q", err, rt.removed, *forwarded)
+	}
+}
+
+// writeArrival files a prepared arrival of move forwardedTxID from me@box
+// here, as the brig on me@box files it over ssh at the start of a move back,
+// with the session filed here as running and the record it replaced kept.
+func writeArrival(t *testing.T) {
+	t.Helper()
+	writeIndex(t, `{"claude-code": {"home": "", "sandbox": "brig-claude-code", "teleportable": true}}`)
+	arrivals := `{"brig-claude-code": {"ref": "claude-code", "txid": "` + forwardedTxID + `", "from": "me@box", ` +
+		`"network": "none", "slot": 0, "egress": {}, "state": "prepared", "replaced": ` + movedEntry + `}}`
+	if err := os.WriteFile(filepath.Join(os.Getenv("BRIG_STATE_DIR"), "arrivals.json"), []byte(arrivals), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A move back here whose ssh drops after the brig there began it leaves an
+// arrival filed here, which the source has to settle: the arrival rewrote
+// this host's record as a session of its own. brig says that, not that the
+// record still names the other host, and says the fenced copy is gone.
+// Afterwards --status here says the move is arriving and where it is driven
+// from, and --abort and --to are refused with the line that settles it,
+// rather than taken for a session that runs here.
+func TestAMoveBackLeftArrivingHereIsNotTakenForOneOfThisHosts(t *testing.T) {
+	t.Setenv("USER", "me")
+	name, err := os.Hostname()
+	if err != nil || name == "" {
+		t.Skip("this host has no name")
+	}
+	here := "me@" + name
+	rt := &moveRuntime{inspect: runtime.Migration{State: runtime.MigrationMigrated,
+		MoveTxID: "0123456789abcdef0123456789abcdef"}}
+	forwarded, _ := forwardHost(t, rt, sshFailed, teleportData{})
+	prevForward := forwardRemote
+	forwardRemote = func(argv, env []string) (int, error) {
+		writeArrival(t)
+		return prevForward(argv, env)
+	}
+	_, err = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", here}) })
+	if code := exitCode(err); code != exitFailure || len(*forwarded) != 1 {
+		t.Fatalf("a dropped move back: exit %d (%v), handed on %q", code, err, *forwarded)
+	}
+	for _, want := range []string{
+		"`ssh me@box brig teleport claude-code --status` says where it stands",
+		"This host records claude-code as arriving from me@box (move " + forwardedTxID + "), and the move has not finished",
+		"The fenced copy the move away left here was removed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a dropped move back said %q, want %q in it", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "still says") {
+		t.Errorf("a dropped move back said the record still names the other host: %v", err)
+	}
+	forwardRemote = prevForward
+
+	out, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status"}) })
+	if err != nil || strings.Contains(out, "runs on this host") ||
+		!strings.Contains(out, "claude-code is arriving on this host from me@box (move "+forwardedTxID+")") ||
+		!strings.Contains(out, "`ssh me@box brig teleport claude-code --status` settles it") {
+		t.Errorf("--status of an arrival not finished: %q, %v", out, err)
+	}
+	out, err = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status", "--json"}) })
+	var doc struct {
+		Data teleportData `json:"data"`
+	}
+	if err != nil || json.Unmarshal([]byte(out), &doc) != nil || doc.Data.State != "arriving" ||
+		doc.Data.From != "me@box" || doc.Data.TxID != forwardedTxID || doc.Data.Host != "" {
+		t.Errorf("--status --json of an arrival not finished: %q, %v", out, err)
+	}
+	for _, args := range [][]string{
+		{"teleport", "claude", "--abort"},
+		{"teleport", "claude", "--to", "me@far"},
+		{"teleport", "claude", "--to", "me@far", "--prepare"},
+	} {
+		_, err := captureStdout(t, func() error { return run(args) })
+		if code := exitCode(err); code != exitFailure || !strings.Contains(err.Error(), "is not moved or called off from here") ||
+			!strings.Contains(err.Error(), "`ssh me@box brig teleport claude-code --abort` calls it off") {
+			t.Errorf("%q of an arrival not finished: exit %d, %v", args, code, err)
+		}
+	}
+	if len(*forwarded) != 1 || len(rt.asked) != 0 {
+		t.Errorf("an arrival not finished was handed on %q, or this host's hull asked %v", *forwarded, rt.asked)
 	}
 }

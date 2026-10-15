@@ -334,17 +334,41 @@ func forgetArrival(vmName string) {
 // one that says where the guest runs. Anything else waits for the source.
 func (c *Config) arrivalRefusal() error {
 	a := c.arrival
-	if a == nil || a.State == arrivalCommitted {
+	if !arrivalUnfinished(a, c.VMName, c.Runtime) {
 		return nil
-	}
-	if mi, ok := c.Runtime.(runtime.MigrationInspector); ok {
-		if m, err := mi.Migration(c.VMName); err == nil && m.TxID == a.TxID && arrivedState(m.State) {
-			return nil
-		}
 	}
 	return fmt.Errorf("%s is arriving on this host from %s (move %s), and the move has not finished. "+
 		"`brig teleport %s --status` on %s finishes it or says why it cannot", c.VMName, a.From, a.TxID,
 		a.Ref, a.From)
+}
+
+// arrivalUnfinished reports whether a, the arrival of sandbox, is a move
+// that has not finished here: the source has not seen it commit, and hull
+// here has not restored the guest under the move's txid.
+func arrivalUnfinished(a *Arrival, sandbox string, rt runtime.Runtime) bool {
+	if a == nil || a.State == arrivalCommitted {
+		return false
+	}
+	if mi, ok := rt.(runtime.MigrationInspector); ok {
+		if m, err := mi.Migration(sandbox); err == nil && m.TxID == a.TxID && arrivedState(m.State) {
+			return false
+		}
+	}
+	return true
+}
+
+// UnfinishedArrival is the arrival of the session ref on sandbox when its
+// move has not finished, as arrivalRefusal reads it. It reads arrivals.json
+// as it is now, not as Load found it: a move back that the brig here handed
+// to the session's host files its arrival here while that brig runs, and
+// `brig teleport` here must not then take the session for one of this
+// host's own. The source holds the move's record and settles it.
+func UnfinishedArrival(ref, sandbox string, rt runtime.Runtime) (Arrival, bool) {
+	a, ok := readArrivals()[sandbox]
+	if !ok || a.Ref != ref || !arrivalUnfinished(&a, sandbox, rt) {
+		return Arrival{}, false
+	}
+	return a, true
 }
 
 // arrivedState reports whether hull's record of a guest on the destination

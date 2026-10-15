@@ -205,6 +205,7 @@ entry as teleportable from its empty guest home.
 | `brig teleport --to` of a session to the host it runs on | `1` |
 | `brig teleport --to`, `--prepare` or `--abort` of a session that runs on another host, which the brig there refuses or fails | that brig's code |
 | `brig teleport --to`, `--prepare` or `--abort` of a session that runs on another host, when ssh to that host fails or drops before the brig there answers | `1` |
+| `brig teleport --to`, `--prepare` or `--abort` of a session whose move to this host has not finished: the source drives it, and `brig teleport <ref> --status` there settles it | `1` |
 | `brig teleport --to` or `--prepare` back to this host, when the fenced copy the move away left here is not shown as stale: hull's record here does not say that move committed away, and the brig on the session's host does not say it runs there | `1` |
 
 Each refusal names the setting to drop, or `brig rm <ref>` when the session
@@ -608,12 +609,22 @@ host. The copy that the move back left on the other host is what `brig rm
 <ref>` there removes. When the move went on to a third host, the old host
 records that host, and its verbs go there. If the old host cannot ask, it
 keeps its record, and its verbs go to the host it names, whose brig hands
-them on. A forwarded line that fails changes nothing on the old host. Its
-exit code is the code of the brig there, or `1` when ssh fails or drops
-before that brig answers. The move may then have run, and `ssh <user>@<host>
-brig teleport <ref> --status` says where it stands. `brig teleport <ref>
---status` on the old host reads that host's record only, and says that the
-moves of the session are driven from the host where it runs.
+them on. A forwarded line that fails exits with the code of the brig
+there, or `1` when ssh fails or drops before that brig answers. The move
+may then have run, and `ssh <user>@<host> brig teleport <ref> --status`
+says where it stands. `brig teleport <ref> --status` on the old host reads
+that host's record only, and says that the moves of the session are driven
+from the host where it runs.
+
+A move back that fails can leave the old host changed. The fenced copy is
+gone: brig removed it before it handed the line on. When the brig there
+had begun the move, the old host also has its arrival recorded, which
+files the session there as running until that brig settles the move. A
+move called off gives the old record back. While the arrival is recorded,
+`brig teleport <ref> --status` on the old host says the move is arriving
+and names the host it comes from, and `--to`, `--prepare` and `--abort`
+there are refused with the lines to run on that host instead. The message
+of the failed line says which of these the old host has.
 
 The brig on the session's host reaches the destination with its own
 settings: the `BRIG_TELEPORT_*` settings that its ssh login gives it, not

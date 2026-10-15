@@ -79,6 +79,9 @@ type teleportData struct {
 	RemoteStore string `json:"remoteStore,omitempty"`
 	TxID        string `json:"txid,omitempty"`
 	Hull        string `json:"hull,omitempty"`
+	// From is the source of a move arriving here that has not finished, as
+	// it names itself, with State "arriving".
+	From string `json:"from,omitempty"`
 	// Prepared is the host a prepare made ready, and what hull said it
 	// holds there.
 	Prepared *preparedData `json:"prepared,omitempty"`
@@ -115,9 +118,18 @@ func teleportCmd(cfg *wrap.Config, t profile.Profile, ref string, o teleportOpti
 		return fmt.Errorf("cannot take the move lock of %s: %w", ref, err)
 	}
 	defer unlock()
+	loc := cfg.Location()
+	// A move arriving here that has not finished is the source's to drive
+	// and settle. The arrival files the session here as running, so it is
+	// asked about before anything reads that record as this host's own.
+	if !loc.Away() {
+		if a, ok := wrap.UnfinishedArrival(ref, cfg.VMName, cfg.Runtime); ok {
+			return teleportArriving(ref, cfg.VMName, o, a, wantJSON)
+		}
+	}
 	// A session that runs on another host moves from there. --to, --prepare
 	// and --abort go to the brig there; --status reads the record here.
-	if loc := cfg.Location(); loc.Host != "" && !o.status {
+	if loc.Host != "" && !o.status {
 		return teleportForward(cfg, t, ref, o, loc, wantJSON)
 	}
 	switch {

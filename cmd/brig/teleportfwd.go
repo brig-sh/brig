@@ -50,8 +50,10 @@ func teleportForward(cfg *wrap.Config, t profile.Profile, ref string, o teleport
 	if o.to != "" && sameAccount(o.to, host) {
 		return fmt.Errorf("%s runs on %s already", ref, host)
 	}
+	removed := false
 	if o.to != "" && isThisHost(o.to) {
-		if err := clearLeftCopy(cfg, t, ref, loc); err != nil {
+		var err error
+		if removed, err = clearLeftCopy(cfg, t, ref, loc); err != nil {
 			return err
 		}
 	}
@@ -64,15 +66,20 @@ func teleportForward(cfg *wrap.Config, t profile.Profile, ref string, o teleport
 	code, err := forwardRemote(argv, os.Environ())
 	switch {
 	case err != nil:
-		return fmt.Errorf("cannot run ssh to reach %s: %w", host, err)
+		return fmt.Errorf("cannot run ssh to reach %s: %w%s", host, err, copyRemovedNote(removed))
 	case code == sshFailed:
 		// ssh failed to connect, or the connection dropped while the brig
 		// there ran: the move may have begun, or ended, there.
 		return fmt.Errorf("ssh to %s ended without the brig there's answer, so whether %s ran there is not "+
-			"known here. `ssh %s brig teleport %s --status` says where it stands; this host's record still says "+
-			"%s runs on %s", host, what, host, ref, ref, host)
+			"known here. `ssh %s brig teleport %s --status` says where it stands. %s%s", host, what, host, ref,
+			recordNow(cfg, ref), copyRemovedNote(removed))
 	case code != 0:
 		// The brig there said why on stderr, and its code is the answer.
+		// A move back here that failed after the arrival began leaves it
+		// recorded here, until the brig there settles the move.
+		if _, ok := wrap.UnfinishedArrival(ref, cfg.VMName, cfg.Runtime); ok {
+			warnf("%s%s", recordNow(cfg, ref), copyRemovedNote(removed))
+		}
 		return &agentExit{code: code}
 	}
 	if o.to == "" || o.prepare {
@@ -80,6 +87,33 @@ func teleportForward(cfg *wrap.Config, t profile.Profile, ref string, o teleport
 		return nil
 	}
 	return recordForwardedMove(cfg, ref, loc)
+}
+
+// recordNow says what this host's record of the session is after a
+// forwarded line ended without an answer, read again: a move back here
+// files its arrival here before the guest moves, and that brig, not this
+// one, settles it.
+func recordNow(cfg *wrap.Config, ref string) string {
+	if a, ok := wrap.UnfinishedArrival(ref, cfg.VMName, cfg.Runtime); ok {
+		return fmt.Sprintf("This host records %s as arriving from %s (move %s), and the move has not "+
+			"finished; the brig on %s settles it", ref, a.From, a.TxID, a.From)
+	}
+	if now := cfg.Location(); now.Host != "" {
+		return fmt.Sprintf("This host's record still says %s runs on %s", ref, now.Host)
+	} else if now.PendingHost != "" {
+		return fmt.Sprintf("This host's record says a move of %s to %s has not finished", ref, now.PendingHost)
+	}
+	return fmt.Sprintf("This host's record files %s as running here", ref)
+}
+
+// copyRemovedNote is the sentence a failed line adds when the brig here
+// removed the fenced copy before it handed the line on.
+func copyRemovedNote(removed bool) string {
+	if !removed {
+		return ""
+	}
+	return ". The fenced copy the move away left here was removed before the line was handed on, " +
+		"as it could never run again"
 }
 
 // recordForwardedMove brings this host's record up to date after the brig
@@ -131,27 +165,44 @@ func recordForwardedMove(cfg *wrap.Config, ref string, loc wrap.Location) error 
 // record here says the move loc names committed away, or the brig on the
 // session's host says it runs there. The record of where the session runs
 // is kept: the move back replaces it, and an abort puts it back.
-func clearLeftCopy(cfg *wrap.Config, t profile.Profile, ref string, loc wrap.Location) error {
+func clearLeftCopy(cfg *wrap.Config, t profile.Profile, ref string, loc wrap.Location) (bool, error) {
 	vm := cfg.VMName
 	if cfg.Runtime == nil {
-		return nil
+		return false, nil
 	}
 	present, err := sandboxPresent(cfg.Runtime, vm)
 	if err != nil || !present {
-		return err
+		return false, err
 	}
 	if !staleByHullsRecord(cfg.Runtime, vm, loc.TxID) {
 		if err := confirmRunsThere(loc, t.Name, vm); err != nil {
-			return fmt.Errorf("this host has the copy of %s that the move to %s left, which a move back has to "+
-				"replace, and it is kept: %w", ref, loc.Host, err)
+			return false, fmt.Errorf("this host has the copy of %s that the move to %s left, which a move back "+
+				"has to replace, and it is kept: %w", ref, loc.Host, err)
 		}
 	}
 	if err := cfg.Remove(); err != nil {
-		return fmt.Errorf("could not remove the copy of %s that the move to %s left here, which a move back "+
-			"has to replace: %w", ref, loc.Host, err)
+		return false, fmt.Errorf("could not remove the copy of %s that the move to %s left here, which a move "+
+			"back has to replace: %w", ref, loc.Host, err)
 	}
 	warnf("removed the fenced copy of %s that the move to %s left here", ref, loc.Host)
-	return nil
+	return true, nil
+}
+
+// teleportArriving is `brig teleport` of a session whose move here has not
+// finished. The source drives that move and holds its record, and its
+// --status settles it, so --status here says where the move comes from, and
+// --to, --prepare and --abort are refused: this host's record of the session
+// is the arrival's, and neither a move out nor an abort here acts on it.
+func teleportArriving(ref, vm string, o teleportOptions, a wrap.Arrival, wantJSON bool) error {
+	settle := fmt.Sprintf("`ssh %s brig teleport %s --status`", a.From, ref)
+	if o.status {
+		d := teleportData{Ref: ref, Sandbox: vm, State: "arriving", From: a.From, TxID: a.TxID}
+		return printTeleport(d, wantJSON, fmt.Sprintf("%s is arriving on this host from %s (move %s), and the "+
+			"move has not finished; it is driven from there, and %s settles it", ref, a.From, a.TxID, settle))
+	}
+	return fmt.Errorf("%s is arriving on this host from %s (move %s), and the move has not finished, so it "+
+		"is not moved or called off from here. %s settles it, and `ssh %s brig teleport %s --abort` calls it off",
+		ref, a.From, a.TxID, settle, a.From, ref)
 }
 
 // isThisHost reports whether USER@HOST names this host and this account, as
