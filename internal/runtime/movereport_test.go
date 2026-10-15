@@ -420,6 +420,28 @@ func TestTheFinalDiskRoundsTimeIsOnlyWhatHullSaid(t *testing.T) {
 		{[]string{"move: disk-round-final: 5696 bytes in 0.01 s, 25.0 MiB/s",
 			"move: 9.1 MiB in 2.3 s; last disk round 4 ms; downtime about 107 ms"},
 			"the final disk round in 4 ms (sent as 5696 bytes)"},
+		// hull 9fb5e62 prints "0 bytes in 0 ms" on its last line when
+		// hvi's reply gives no figures for the round taken paused. Beside
+		// a round that sent something that is no raw size, and the
+		// round's own pair is said.
+		{[]string{"move: disk-round-final: 161172 bytes in 0.01 s, 14.5 MiB/s",
+			"move: 70.9 MiB in 69.0 s; disk 2.6 MiB, RAM 68.2 MiB, state 67757 bytes; sealed 5087 ms after the " +
+				"pause, last disk round 0 bytes in 0 ms; downtime about 7958 ms"},
+			"the final disk round sent as 161172 bytes in 0.01 s"},
+		{[]string{"move: disk-round-final: 6.3 MiB in 0.12 s, 52.5 MiB/s",
+			"move: 9.1 MiB in 2.3 s; last disk round 0 bytes in 0 ms; downtime about 107 ms"},
+			"the final disk round sent as 6.3 MiB in 0.12 s"},
+		// An empty round is said as hull gave it. These are the lines of
+		// H8b's idle and writer moves from rp1 to rp2: hvi's round came to
+		// 0 bytes in its stream, so its 0 bytes raw is no contradiction.
+		{[]string{"move: disk-round-final: 0 bytes in 0.00 s, 0 bytes/s",
+			"move: 109.5 MiB in 2.0 s; disk 34.5 MiB, RAM 74.9 MiB, state 54333 bytes; sealed 5 ms after the " +
+				"pause, last disk round 0 bytes in 3 ms; downtime about 84 ms"},
+			"the final disk round 0 bytes in 3 ms (sent as 0 bytes)"},
+		{[]string{"move: disk-round-final: 0 bytes in 0.00 s, 0 bytes/s",
+			"move: 310.4 MiB in 4.8 s; disk 128.5 MiB, RAM 181.8 MiB, state 55597 bytes; sealed 5 ms after the " +
+				"pause, last disk round 0 bytes in 0 ms; downtime about 102 ms"},
+			"the final disk round 0 bytes in under 1 ms (sent as 0 bytes)"},
 	} {
 		var r MoveReport
 		for _, line := range c.lines {

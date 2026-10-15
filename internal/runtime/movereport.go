@@ -230,8 +230,9 @@ func (r *MoveReport) Add(line string) {
 // roundsSaid is the summary's part on the rounds: how many, of which kind,
 // and the final disk round, the one the guest waited for. Its size and time
 // are said only as one pair hull gave: the raw size and hvi's time from
-// hull's last line, or else the size and time on the round's own line. What
-// it was sent as follows apart. A size or time hull did not give is left
+// hull's last line, unless that is only hull's default (finalDiskPair), or
+// else the size and time on the round's own line. What it was sent as
+// follows apart. A size or time hull did not give is left
 // out, and the sent bytes are never given the raw round's time.
 func (r *MoveReport) roundsSaid(n int) string {
 	var disk, ram int
@@ -256,20 +257,21 @@ func (r *MoveReport) roundsSaid(n int) string {
 		return said
 	}
 	size, took := final.Size, roundTook(final.took, final.Seconds)
-	if r.finalDiskTimed {
-		took = "in " + strconv.FormatInt(r.finalDiskMs, 10) + " ms"
-		if r.finalDiskMs == 0 {
+	lastSize, lastMs, timed := r.finalDiskPair(final)
+	if timed {
+		took = "in " + strconv.FormatInt(lastMs, 10) + " ms"
+		if lastMs == 0 {
 			// hvi counts whole milliseconds: 0 is a round shorter than
 			// one, not none.
 			took = "in under 1 ms"
 		}
-		if r.finalDiskSize != "" {
-			size = r.finalDiskSize
+		if lastSize != "" {
+			size = lastSize
 		}
 	}
 	var of []string
 	switch {
-	case size == "" && !r.finalDiskTimed && final.Sent != "":
+	case size == "" && !timed && final.Sent != "":
 		// The round's own line, hull d2bb5e9's, with no last line to
 		// give the raw size: its time is the time to pass on what was
 		// sent.
@@ -291,6 +293,24 @@ func (r *MoveReport) roundsSaid(n int) string {
 		said += ", the final disk round " + strings.Join(of, " ")
 	}
 	return said
+}
+
+// finalDiskPair is the raw size and the time hull's last line gave for the
+// final disk round, final, and whether the report has them. It has none
+// without that line, and none from hull's default for it: hull prints
+// "last disk round 0 bytes in 0 ms" when hvi's reply has no figures for a
+// disk round taken in the pause, so 0 bytes in 0 ms beside a round line
+// that sent something is no account of that round, and the summary would
+// give a raw size of 0 next to a sent size that is not.
+func (r *MoveReport) finalDiskPair(final *MoveRound) (size string, ms int64, ok bool) {
+	if !r.finalDiskTimed {
+		return "", 0, false
+	}
+	if r.finalDiskSize == "0 bytes" && r.finalDiskMs == 0 && final != nil && final.Sent != "" &&
+		final.Sent != "0 bytes" {
+		return "", 0, false
+	}
+	return r.finalDiskSize, r.finalDiskMs, true
 }
 
 // roundTook is a round's time as its own line gave it, as took and secs
