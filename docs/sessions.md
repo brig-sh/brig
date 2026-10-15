@@ -154,9 +154,11 @@ The session index records where a moved session runs. Its entry gains the
 host, as `USER@HOST`, the hull store it runs in there, and the move's txid,
 and keeps the sandbox name, which is the same on both hosts. While a move has
 not finished, the entry holds the destination as a pending host instead.
-`brig ls` does not prune an entry with a host, and `brig rm` of the copy left
-behind keeps it: it is how this host reaches the session. A second `brig rm`
-of the ref, with no copy left, drops it. A Brig release from before teleport
+`brig ls` does not prune an entry with a host: it is how this host reaches
+the session. `brig rm` of the ref removes the copy left behind, once hull's
+record says the move committed or the brig on that host says the session
+runs there, and drops the entry with it. With no copy left, it only drops
+the entry. A Brig release from before teleport
 rewrites the index without these fields, and then reads the session as one
 on this host. See [teleport.md](teleport.md#move-a-session).
 
