@@ -395,3 +395,23 @@ func TestRemoveAllRemovesASandboxWhoseProfileIsGone(t *testing.T) {
 		t.Errorf("removed %v, want brig-gone", rt.removed)
 	}
 }
+
+// rm --all and reset remove sandboxes without a Config, so they revoke each
+// sandbox's session tokens themselves, as brig stop and brig rm do.
+func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		var revoked []string
+		swap(t, &revokeRoutes, func(name string) error {
+			revoked = append(revoked, name)
+			return nil
+		})
+		if _, err := captureStdout(t, func() error { return run(args) }); err != nil {
+			t.Fatalf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if strings.Join(revoked, " ") != "brig-faker brig-faker-refactor" {
+			t.Errorf("brig %s revoked %v, want both sandboxes", strings.Join(args, " "), revoked)
+		}
+	}
+}

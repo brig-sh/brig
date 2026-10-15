@@ -2287,6 +2287,9 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 				}
 				runtime.ForgetBootedNet(cfg.VMName)
 				wrap.ForgetSlugClaim(cfg.VMName)
+				if err := revokeRoutes(cfg.VMName); err != nil {
+					warnf("the credential broker could not revoke the session tokens of %s: %v", cfg.VMName, err)
+				}
 				if forgot {
 					for _, n := range stays {
 						warnf("%s", n)
@@ -2421,6 +2424,10 @@ func noSandboxf(ref string) error {
 // spelling is the command as it was typed, for the messages: this is reached as
 // `brig rm --all` and as the retired `brig reset`, and an error about the wrong
 // one of those sends the reader to fix a line they did not write.
+// revokeRoutes is the seam a test replaces to see which sandboxes rm --all
+// and reset revoke.
+var revokeRoutes = wrap.RevokeRoutes
+
 func removeAll(spelling string, args []string, o removeOpts) error {
 	// This stops and removes every brig sandbox, so a flag typed to make it
 	// safer must not be read past and ignored, which is exactly how a command
@@ -2459,6 +2466,11 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	}
 	removed, homesGone := 0, 0
 	for _, inst := range mine {
+		// First, as brig stop does, so a sandbox that will not stop holds no
+		// token that still works.
+		if err := revokeRoutes(inst.Name); err != nil {
+			warnf("the credential broker could not revoke the session tokens of %s: %v", inst.Name, err)
+		}
 		_ = rt.Stop(inst.Name)
 		err := rt.Remove(inst.Name)
 		// The same deletion and pruning `brig rm` of one sandbox does, for the

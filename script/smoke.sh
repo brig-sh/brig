@@ -250,6 +250,9 @@ chmod +x "$WORK/hull"
 export STUB_GATEWAY='import os, socket, sys, time; p = sys.argv[1]; c = socket.socket(socket.AF_UNIX); r = c.connect_ex(p); c.close(); r != 0 and os.path.exists(p) and os.unlink(p); s = socket.socket(socket.AF_UNIX); s.bind(p); s.listen(8); time.sleep(120)'
 
 go build -o "$WORK/brig" ./cmd/brig || { echo "build failed"; exit 1; }
+# Beside brig, where brig finds it. Only the host kind's routed run below
+# starts it.
+go build -o "$WORK/brig-broker" ./cmd/brig-broker || { echo "build failed"; exit 1; }
 
 export BRIG_RUNTIME=hull
 export BRIG_RUNTIME_BIN="$WORK/hull"
@@ -686,9 +689,11 @@ grep -q '^argv: run' "$STUB_LOG" \
   || ok "nothing reached the runtime"
 "$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
 
-# Nothing serves a route yet, so the binary is held to what it prints: the
-# preset a route expands to, and the posture check plans for a run with one.
-# A run bound to a route is refused before the runtime is asked anything.
+# A route is served to the host kind alone in this version. On hull the binary
+# is held to what it prints: the preset a route expands to, and the posture
+# check plans for a run with one. A run bound to a route there is refused
+# before the runtime is asked anything. The host kind's routed run is under
+# "the host kind" below.
 cat > "$WORK/policies/claude-only.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
 kind: Policy
@@ -717,12 +722,15 @@ else
 fi
 : > "$STUB_LOG"
 if env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/routes-run.out" 2>&1; then
-  bad "a run bound to a route was booted, and this version serves no route"
+  bad "a run bound to a route was booted on hull, which cannot reach the broker yet"
 else
-  grep -q 'does not serve routes' "$WORK/routes-run.out" \
+  grep -q 'brig.internal routing is not available on this runtime (hull) yet' "$WORK/routes-run.out" \
     && ok "a run bound to a route is refused, naming why" \
     || bad "the route refusal does not say why -- got: $(cat "$WORK/routes-run.out")"
 fi
+[ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
+  && bad "a refused run started the credential broker" \
+  || ok "a refused run starts no credential broker"
 grep -q '^argv: run' "$STUB_LOG" \
   && bad "the runtime was asked to boot a run bound to a route" \
   || ok "nothing reached the runtime for a run bound to a route"
@@ -2027,6 +2035,81 @@ if [ "$(uname -s)" = Darwin ] && [ -x /usr/bin/sandbox-exec ]; then
     *) bad "a second command leaves the first host agent running -- got: $out" ;;
   esac
   BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" "$WORK/brig" rm ubuntu > /dev/null 2>&1
+
+  # A route on the host kind. brig starts brig-broker, registers the sandbox,
+  # mints a token for the exec and allows the broker's port in the profile.
+  # The sandbox reaches the broker, and a token that is not its own is
+  # refused there with 401, before any credential is read: nothing here reads
+  # the keychain of whoever runs this. The agent is sh, because a policy binds
+  # an agent profile and not a shell one.
+  cat > "$BRIG_PROFILE_DIR/routed.yaml" <<'YAML'
+name: routed
+image: smoke/image:latest
+binary: sh
+guestHome: /root
+mem: 256
+cpus: 1
+YAML
+  mkdir -p "$WORK/host-policies"
+  cat > "$WORK/host-policies/claude-routed.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-routed
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+YAML
+  export BRIG_POLICY_DIR="$WORK/host-policies"
+  "$WORK/brig" policy attach claude-routed routed > /dev/null 2>&1 \
+    || bad "a routed policy attaches to an agent profile"
+  : > "$STUB_LOG"
+  out="$(BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" "$WORK/brig" --verbose run routed -- \
+    -c 'printf "url:%s\ntoken:%s\n" "$ANTHROPIC_BASE_URL" "$CLAUDE_CODE_OAUTH_TOKEN"
+      printf "header = \"Authorization: Bearer not-a-token\"\n" | curl -s -o /dev/null -w "forged:%{http_code}\n" -K - "$ANTHROPIC_BASE_URL/v1/models"' 2>&1)"
+  rc=$?
+  port="$(cat "$BRIG_STATE_DIR/host/broker/port" 2>/dev/null)"
+  [ "$rc" = 0 ] && ok "a run bound to a route runs on the host kind" \
+    || bad "a run bound to a route runs on the host kind -- got $rc: $out"
+  case "$out" in
+    *"url:http://127.0.0.1:$port/brig-routed/r/anthropic"*) ok "the guest is pointed at its route on the broker's port" ;;
+    *) bad "the guest is pointed at its route on the broker's port -- got: $out" ;;
+  esac
+  case "$out" in
+    *"forged:401"*) ok "the host sandbox reaches the broker, which refuses a token it did not mint" ;;
+    *) bad "the host sandbox reaches the broker, which refuses a token it did not mint -- got: $out" ;;
+  esac
+  printf '%s\n' "$out" | grep -q '^BROKER .*transport loopback, routes anthropic' \
+    && ok "the envelope names the broker, its transport and its routes" \
+    || bad "the envelope names the broker, its transport and its routes -- got: $out"
+  grep -qxF "(allow network-outbound (remote ip \"localhost:$port\"))" "$BRIG_STATE_DIR/host/brig-routed/profile.sb" \
+    && ok "the profile allows the broker's port" \
+    || bad "the profile allows the broker's port -- got: $(cat "$BRIG_STATE_DIR/host/brig-routed/profile.sb")"
+  token="$(printf '%s\n' "$out" | sed -n 's/^token://p')"
+  if [ -z "$token" ]; then
+    bad "no session token reached the sandbox, so nothing reached a credential in argv proves nothing"
+  elif grep -qF -- "$token" "$STUB_LOG" || grep -q 'claude-credentials\|accessToken' "$STUB_LOG"; then
+    bad "a session token or a credential reached sandbox-exec's argv"
+  else
+    ok "nothing reached a credential in argv: the session token stays out of sandbox-exec's"
+  fi
+  [ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
+    && ok "brig-broker runs while a routed sandbox is registered" \
+    || bad "brig-broker runs while a routed sandbox is registered"
+  BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" "$WORK/brig" rm routed > /dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] || break
+    sleep 0.3
+  done
+  [ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
+    && bad "brig rm of the last routed sandbox stops brig-broker" \
+    || ok "brig rm of the last routed sandbox stops brig-broker"
+  "$WORK/brig" policy detach claude-routed routed > /dev/null 2>&1
+  rm -f "$BRIG_PROFILE_DIR/routed.yaml"
+  unset BRIG_POLICY_DIR
 else
   echo "  --   not macOS, skipping the host kind"
 fi

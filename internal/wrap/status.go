@@ -41,6 +41,12 @@ func (c *Config) Status(set creds.Set) {
 			c.sayf("  %s", n)
 		}
 	}
+	if rcs := c.routeCredentials(); len(rcs) > 0 {
+		c.sayf("through the credential broker, a session token each:")
+		for _, rc := range rcs {
+			c.sayf("  %s(route: %s)", rc.Name, rc.Route)
+		}
+	}
 	c.reportDeny(set)
 	c.reportOverride()
 

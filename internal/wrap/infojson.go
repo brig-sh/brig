@@ -49,6 +49,7 @@ func (c *Config) InfoData(set creds.Set) InfoDocument {
 		d.Deny = c.infoDeny(set)
 	}
 	d.GuestLogin = c.infoGuestLogin(set)
+	d.Broker = c.infoBroker()
 	if c.GitIdentity {
 		d.Identity = &InfoIdentity{Cwd: c.Cwd, Name: c.GitName, Email: c.GitEmail}
 	}
@@ -77,6 +78,8 @@ type InfoDocument struct {
 	ArgvExposed []string         `json:"argvExposed,omitempty"`
 	GuestLogin  []InfoGuestLogin `json:"guestLogin,omitempty"`
 	Identity    *InfoIdentity    `json:"identity,omitempty"`
+	// Broker is the credential broker of a run with routes.
+	Broker *InfoBroker `json:"broker,omitempty"`
 
 	// ProjectRefused is why the project this session remembers was not
 	// mounted, and so why Project is absent. It is omitted when nothing was
@@ -126,9 +129,13 @@ type InfoProject struct {
 // InfoCredential is one credential this run hands the guest: its name, and
 // where the value came from ("environment", "secret" or "file"). Never
 // the value.
+//
+// "broker" is a session token for a route: the credential stays on the host,
+// and Route names the route the token is for.
 type InfoCredential struct {
 	Name   string `json:"name"`
 	Source string `json:"source,omitempty"`
+	Route  string `json:"route,omitempty"`
 }
 
 // InfoDeny is what the denylist did to this run, rather than the list recited:
@@ -214,6 +221,9 @@ func (c *Config) infoCredentials(set creds.Set) []InfoCredential {
 		if _, ok := c.secrets.Values[r.Name]; ok {
 			out = append(out, InfoCredential{Name: r.Name, Source: "file"})
 		}
+	}
+	for _, rc := range c.routeCredentials() {
+		out = append(out, InfoCredential{Name: rc.Name, Source: "broker", Route: rc.Route})
 	}
 	return out
 }

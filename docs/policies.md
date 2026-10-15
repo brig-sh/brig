@@ -339,11 +339,12 @@ the credential itself.
 [broker.md](broker.md) describes how the broker handles each request.
 
 > [!NOTE]
-> This release reads, checks and prints routes, and serves none. Brig refuses
-> a run bound to a policy with routes before anything boots:
+> This release serves routes to the [host kind](runtimes.md#the-host-kind)
+> only, over loopback. On hull and nerdctl, Brig refuses a run bound to a
+> policy with routes before anything boots:
 >
 > ```
-> brig: policy claude-only (route anthropic) declares routes, and this version of brig does not serve routes; refusing the run rather than booting without them. Detach the policy, or remove its spec.routes
+> brig: policy claude-only (route anthropic) declares routes, and this version of brig serves routes only under the host kind; brig.internal routing is not available on this runtime (hull) yet. Refusing the run rather than booting without them. Run it under the host kind (BRIG_RUNTIME=host, or isolation: process), or detach the policy
 > ```
 
 A policy with one route:
@@ -857,7 +858,10 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |
 | `route x: preset claude-code keeps its credential fresh (anthropic-oauth) …` | a route changes the `upstream` or `credential.field` of a preset with a lifecycle |
 | `guest.git.insteadOf PREFIX is rewritten by route x of a and by route y of b; …` | two bound routes rewrite the same git prefix |
-| `policy x (route y) declares routes, and this version of brig does not serve routes; …` | a run, `sh` or plan of a profile bound to a policy with routes |
+| `policy x (route y) declares routes, and this version of brig serves routes only under the host kind; …` | a run, `sh` or plan on hull or nerdctl of a profile bound to a policy with routes |
+| `policy x (route y) declares routes, and this run has no network (BRIG_NETWORK=none) to reach them on; …` | a run with routes and `--offline` or `network: none` |
+| `could not register the routes of brig-x with the credential broker: …` | `brig-broker` is not installed, did not start, or refused the routes. `broker.log` in `~/.brig/host/broker` says why |
+| `… another process holds the credential broker's port, 127.0.0.1:N, so brig refuses the run. …` | another process listens on the port host sandboxes allow. See [The port](broker.md#the-port) |
 | `route x: inject takes headers.set or basicAuth, not both` | a route, or a route and its preset, set both |
 | `route x: credential.lifecycle is set by a preset, and a policy does not name it` | a policy names `credential.lifecycle` |
 | `route x is declared by both a and b; …` | two bound policies declare a route of the same name |

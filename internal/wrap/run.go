@@ -116,8 +116,8 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 //
 // Read-only, because Plan calls it: every answer was settled in Load.
 func (c *Config) sessionRefusal() error {
-	if c.routesRefused != nil {
-		return c.routesRefused
+	if err := c.routeRefusal(); err != nil {
+		return err
 	}
 	// The session has no project this run, and every check after this one
 	// that compares the sandbox with this run would read that as a project to
@@ -176,6 +176,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// disagree about which backend this run wants. See hypervisor.
 	hypervisor := c.hypervisor()
 	if err := c.backendRefusal(hypervisor); err != nil {
+		return err
+	}
+	// Before anything is prepared, and on the path that finds the sandbox
+	// up as well: the broker has to know the sandbox before its agent sends
+	// a request, and the tokens of this exec are minted here. The port goes
+	// into the profile of a host sandbox booted below.
+	if err := c.serveRoutes(set); err != nil {
 		return err
 	}
 	// Said on the run, not in BuildEnv: BuildEnv resolves the set for every
@@ -409,10 +416,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		Shares: c.shares(ws.dir, project, volumeShares),
 		Tmpfs:  tmpfs,
 		// What the next run reads, which a host sandbox must not write.
-		Protect:  []string{profile.Dir(), policy.Dir()},
-		Env:      c.guestEnv(set),
-		GUI:      check.GUI,
-		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
+		Protect: []string{profile.Dir(), policy.Dir()},
+		// The broker's port, the one address a host sandbox with routes may
+		// reach. See serveRoutes.
+		LoopbackPorts: c.routePorts,
+		Env:           c.guestEnv(set),
+		GUI:           check.GUI,
+		GUITitle:      c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.
@@ -686,6 +696,8 @@ func (c *Config) projectShareStale() string {
 // "gone anyway" puts the swallow back: the user is told a VM holding a
 // forwarded credential is down when nothing checked.
 func (c *Config) Stop() error {
+	// First, so a sandbox that will not stop holds no token that still works.
+	c.forgetRoutes()
 	err := c.Runtime.Stop(c.VMName)
 	if err == nil {
 		return nil
@@ -721,6 +733,7 @@ func (c *Config) Stop() error {
 // the sandbox is gone, and the next run of the session deletes what is left
 // before it boots. See reapOrphanHome.
 func (c *Config) Remove() error {
+	c.forgetRoutes()
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)
 	if err == nil {
@@ -760,16 +773,20 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 // HOME is set here because the runtime cannot be relied on for it. runc fills
 // it in from the guest's /etc/passwd when the spec has none, but an exec
 // through urunc leaves it unset. A HOME the set already carries is kept.
+//
+// The route variables come last, so a route value replaces a profile value of
+// the same name, as the spec of guest.env says.
 func (c *Config) guestEnv(set creds.Set) []runtime.Var {
+	vars := append(append([]runtime.Var(nil), set.Vars...), c.routeVars...)
 	if c.Profile.GuestHome == "" {
-		return set.Vars
+		return vars
 	}
 	for _, v := range set.Vars {
 		if v.Name == "HOME" {
-			return set.Vars
+			return vars
 		}
 	}
-	return append([]runtime.Var{{Name: "HOME", Value: c.Profile.GuestHome}}, set.Vars...)
+	return append([]runtime.Var{{Name: "HOME", Value: c.Profile.GuestHome}}, vars...)
 }
 
 // Exec hands the terminal to a command inside the sandbox. It does not return
