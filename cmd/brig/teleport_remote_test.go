@@ -369,6 +369,8 @@ type moveRuntime struct {
 	prepared   runtime.Prepared
 	prepareErr error
 	prepares   []runtime.PrepareSpec
+	// said is hull's own account in its status, which brig passes on.
+	said string
 }
 
 func (r *moveRuntime) Kind() string                                { return "hull" }
@@ -422,7 +424,7 @@ func (r *moveRuntime) MigrateStatus(string) (runtime.MoveStatus, error) {
 	if r.state == "" {
 		return runtime.MoveStatus{Read: true}, nil
 	}
-	return runtime.MoveStatus{Read: true, TxID: r.txid, State: r.state, Peer: "me@box"}, nil
+	return runtime.MoveStatus{Read: true, TxID: r.txid, State: r.state, Peer: "me@box", Said: r.said}, nil
 }
 func (r *moveRuntime) MigrateAbort(_, txid string) (runtime.MoveStatus, error) {
 	r.asked = append(r.asked, "abort "+txid)
@@ -633,6 +635,37 @@ func TestALostAcknowledgementIsSettledFromHullsRecord(t *testing.T) {
 	}
 	if len(*calls) != 1 || !strings.Contains((*calls)[0][len((*calls)[0])-1], "--abort") {
 		t.Errorf("the destination's network was not given back: %v", *calls)
+	}
+}
+
+// --status passes hull's account of a move on as hull wrote it, and decides
+// only on the state word. hull d2bb5e9 says the source is fenced while a
+// streamed move is still in its rounds, and the fix planned in hull says the
+// guest still runs there: whichever hull prints, brig keeps the move
+// unfinished, resumes nothing, and quotes no word of its own on the fence.
+func TestStatusPassesOnHullsAccountOfAMoveInItsRounds(t *testing.T) {
+	var outs []string
+	for _, said := range []string{
+		"The source is fenced and stays so until the move commits or is aborted.",
+		"The guest still runs here; hvi is streaming it.",
+	} {
+		rt := &moveRuntime{running: true, state: "transferring", moveErr: errors.New("killed"), said: said}
+		moveHost(t, rt, noNetProbe())
+		_, _ = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+		out, err := captureStdout(t, func() error { return run([]string{"teleport", "claude", "--status"}) })
+		if err != nil || !strings.Contains(out, "has not finished: "+said+"\n") {
+			t.Errorf("--status with hull saying %q: %q, %v", said, out, err)
+		}
+		if e := entryOf(t); e["pendingHost"] != "me@box" || e["host"] != nil {
+			t.Errorf("--status with hull saying %q changed the record: %v", said, e)
+		}
+		if strings.Contains(rt.asked[len(rt.asked)-1], "abort") {
+			t.Errorf("--status with hull saying %q asked hull %v", said, rt.asked)
+		}
+		outs = append(outs, strings.ReplaceAll(strings.Replace(out, said, "SAID", 1), rt.txid, "TXID"))
+	}
+	if outs[0] != outs[1] {
+		t.Errorf("brig's own words changed with hull's:\n%s\n%s", outs[0], outs[1])
 	}
 }
 

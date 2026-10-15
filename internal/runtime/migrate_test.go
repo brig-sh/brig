@@ -308,6 +308,30 @@ func TestAStreamedMoveThatFailsSaysWhy(t *testing.T) {
 	}
 }
 
+// A status reads hull's first line for the move, its state and the other
+// host, and keeps the rest as hull's own account, whatever it says. hull
+// d2bb5e9 says a streamed move in its rounds has fenced the source, and
+// the fix planned in hull says the guest still runs there; brig reads the
+// state word alike from both and passes either text on whole.
+func TestAMoveStatusKeepsHullsAccountAsHullWroteIt(t *testing.T) {
+	for _, said := range []string{
+		"The source is fenced and stays so until the move commits or is aborted.",
+		"The guest still runs here; hvi is streaming it.",
+	} {
+		out := "Move " + tx1 + " of s: transferring, to pmoust@rp2, epoch 3\n" +
+			"  2026-10-15 13:52:28.995  preflight\n" +
+			"  2026-10-15 13:52:29.120  reserved\n" +
+			"  2026-10-15 13:52:29.140  transferring\n" +
+			"  " + said + "\n" +
+			"  destination pmoust@rp2: receiving\n"
+		st, err := moveStatusOf("s", out)
+		if err != nil || !st.Read || st.TxID != tx1 || st.State != "transferring" || st.Peer != "pmoust@rp2" ||
+			st.Said != strings.TrimSpace(out) {
+			t.Errorf("hull saying %q read as %+v, %v", said, st, err)
+		}
+	}
+}
+
 // readLines hands on a line longer than its buffer in pieces rather than
 // stopping, and reads to the end, so hull is never left blocked writing.
 func TestReadLinesTakesALongLineAndReadsToTheEnd(t *testing.T) {
