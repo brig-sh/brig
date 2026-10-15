@@ -774,3 +774,219 @@ func TestAShortLifetimeIsRenewedHalfwayThrough(t *testing.T) {
 	}
 	f.renewer.checkNoReuse(t)
 }
+
+// A secret deleted, or re-imported in a form the renewer cannot read, while
+// a renewal runs is found by the read before the write-back. Resolve returns
+// that error, and never an empty document with no error.
+func TestAChangeDuringARenewalIsAnError(t *testing.T) {
+	for name, change := range map[string]func(*cacheFixture) error{
+		"delete": func(f *cacheFixture) error { return f.store.Delete(credName) },
+		"unreadable re-import": func(f *cacheFixture) error {
+			return f.store.Write(credName, []byte("not a document"), importedFrom, true)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCacheFixture(t, 5*time.Minute)
+			started, release := make(chan struct{}), make(chan struct{})
+			f.renewer.started, f.renewer.release = started, release
+			type result struct {
+				doc []byte
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				doc, err := f.cache.Resolve(context.Background(), credName, testWorkload)
+				done <- result{doc, err}
+			}()
+			<-started
+			if err := change(f); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			r := <-done
+			if r.err == nil {
+				t.Fatalf("Resolve = %q with no error after the change during the renewal", r.doc)
+			}
+			if r.doc != nil {
+				t.Errorf("Resolve returned %q beside its error", r.doc)
+			}
+		})
+	}
+}
+
+// A store read that fails before a renewal cannot tell a re-import from
+// nothing changed. A renewal then would spend the refresh token on a pair
+// that the next good read drops for the re-import, so none is made until a
+// read succeeds.
+func TestAFailedReadHoldsTheRenewal(t *testing.T) {
+	for name, c := range map[string]struct {
+		expiresIn, wait time.Duration
+		fails           int
+	}{
+		// The document is due and the recheck is due too. The recheck's
+		// read fails, and so does the read made for the renewal.
+		"at the recheck": {time.Hour, 55 * time.Minute, 2},
+		// The document is due before the recheck, so the read is the one
+		// made for the renewal.
+		"before the renewal": {14 * time.Minute, 4*time.Minute + 30*time.Second, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCacheFixture(t, c.expiresIn)
+			broker := &failingBroker{Broker: secret.StoreBroker(f.store)}
+			f.cache.broker = broker
+			f.resolve(t)
+			fresh := fakeDoc(100, f.clock.Now().Add(8*time.Hour))
+			f.reimport(t, fresh)
+			f.clock.Advance(c.wait)
+			broker.failNext(c.fails)
+			if got := f.resolve(t); !bytes.Equal(got, f.initial) {
+				t.Errorf("Resolve = %q while the store cannot be read, want the current document", got)
+			}
+			if n := f.renewer.callCount(); n != 0 {
+				t.Fatalf("renewed %d time(s) after a failed store read", n)
+			}
+			if got := f.cache.Failing(); !slices.Equal(got, []string{credName}) {
+				t.Errorf("Failing = %v, want [%s]", got, credName)
+			}
+			f.clock.Advance(retryAfter)
+			if got := f.resolve(t); !bytes.Equal(got, fresh) {
+				t.Errorf("Resolve = %q once the store reads again, want the re-import", got)
+			}
+			if n := f.renewer.callCount(); n != 0 {
+				t.Errorf("renewed %d time(s), want none: the re-import needs no renewal", n)
+			}
+		})
+	}
+}
+
+// ForceRenew reads the store first too, and refuses to renew when that read
+// fails.
+func TestForceRenewHoldsTheRenewalAfterAFailedRead(t *testing.T) {
+	f := newCacheFixture(t, time.Hour)
+	broker := &failingBroker{Broker: secret.StoreBroker(f.store)}
+	f.cache.broker = broker
+	stale := f.resolve(t)
+	f.reimport(t, fakeDoc(100, f.clock.Now().Add(8*time.Hour)))
+	broker.failNext(1)
+	if doc, err := f.cache.ForceRenew(context.Background(), credName, testWorkload, stale); err == nil {
+		t.Errorf("ForceRenew = %q with no error after a failed store read", doc)
+	}
+	if n := f.renewer.callCount(); n != 0 {
+		t.Errorf("ForceRenew renewed %d time(s) after a failed store read", n)
+	}
+	if got := f.store.value(credName); bytes.Equal(got, stale) {
+		t.Error("the re-import was overwritten")
+	}
+}
+
+// cuttingBroker cuts its next read short the way a caller does: it cancels
+// the caller's context, when it was given the cancel, and waits until that
+// context is done, then fails with the context's error.
+type cuttingBroker struct {
+	secret.Broker
+	mu     sync.Mutex
+	armed  bool
+	cancel context.CancelFunc
+}
+
+func (b *cuttingBroker) Resolve(ctx context.Context, name string, w secret.Workload) ([]byte, error) {
+	b.mu.Lock()
+	armed, cancel := b.armed, b.cancel
+	b.armed, b.cancel = false, nil
+	b.mu.Unlock()
+	if !armed {
+		return b.Broker.Resolve(ctx, name, w)
+	}
+	if cancel != nil {
+		cancel()
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *cuttingBroker) cutNext(cancel context.CancelFunc) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.armed, b.cancel = true, cancel
+}
+
+// cutCaller makes one Resolve whose context ends during the read before a
+// renewal: canceled, or past a deadline far shorter than storeTimeout.
+func cutCaller(t *testing.T, f *cacheFixture, b *cuttingBroker, deadline bool) error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	if deadline {
+		ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+	}
+	defer cancel()
+	if deadline {
+		b.cutNext(nil)
+	} else {
+		b.cutNext(cancel)
+	}
+	_, err := f.cache.Resolve(ctx, credName, testWorkload)
+	return err
+}
+
+// A caller that goes away during the read before a renewal says nothing
+// about the store. It gets its own error, and the next caller renews.
+func TestACanceledCallerDoesNotHoldTheRenewal(t *testing.T) {
+	for name, deadline := range map[string]bool{"canceled": false, "past its deadline": true} {
+		t.Run(name, func(t *testing.T) {
+			f := newCacheFixture(t, 14*time.Minute)
+			broker := &cuttingBroker{Broker: secret.StoreBroker(f.store)}
+			f.cache.broker = broker
+			f.resolve(t)
+			f.clock.Advance(4*time.Minute + 30*time.Second)
+			err := cutCaller(t, f, broker, deadline)
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("Resolve = %v, want the caller's own context error", err)
+			}
+			if got := f.cache.Failing(); len(got) != 0 {
+				t.Errorf("Failing = %v after a caller went away, want none", got)
+			}
+			if got := f.resolve(t); bytes.Equal(got, f.initial) {
+				t.Error("the next caller was served the old document, want a renewed one")
+			}
+			if n := f.renewer.callCount(); n != 1 {
+				t.Errorf("renewed %d time(s), want 1: the store was healthy throughout", n)
+			}
+		})
+	}
+}
+
+// ForceRenew's own read succeeds, so neither a caller that went away nor an
+// earlier failed read holds its renewal, and it does not report a store read
+// failure.
+func TestForceRenewIsNotHeldAfterItsOwnReadSucceeds(t *testing.T) {
+	for name, hold := range map[string]func(*testing.T, *cacheFixture){
+		"after a canceled caller": func(t *testing.T, f *cacheFixture) {
+			broker := &cuttingBroker{Broker: secret.StoreBroker(f.store)}
+			f.cache.broker = broker
+			_ = cutCaller(t, f, broker, false)
+		},
+		"after a failed read": func(t *testing.T, f *cacheFixture) {
+			broker := &failingBroker{Broker: secret.StoreBroker(f.store)}
+			f.cache.broker = broker
+			broker.failNext(1)
+			f.resolve(t)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCacheFixture(t, 14*time.Minute)
+			stale := f.resolve(t)
+			f.clock.Advance(4*time.Minute + 30*time.Second)
+			hold(t, f)
+			doc, err := f.cache.ForceRenew(context.Background(), credName, testWorkload, stale)
+			if err != nil {
+				t.Fatalf("ForceRenew = %v after its own read succeeded", err)
+			}
+			if bytes.Equal(doc, stale) {
+				t.Error("ForceRenew returned the refused document")
+			}
+			if n := f.renewer.callCount(); n != 1 {
+				t.Errorf("renewed %d time(s), want 1", n)
+			}
+		})
+	}
+}

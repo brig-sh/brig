@@ -49,7 +49,10 @@ const storeTimeout = 30 * time.Second
 // renewal, before every write-back, and at least every recheck. A deleted
 // secret stops being served. A document someone else stored, a re-import for
 // instance, replaces the one in memory, and a pending write-back never
-// overwrites it.
+// overwrites it. A renewal whose read fails waits for one that succeeds,
+// retryAfter later at the earliest. A secret deleted, or stored again in a
+// form the renewer cannot read, during a renewal is an error for its
+// caller.
 //
 // A renewed document is written back before it is served. If the write, or
 // the store read before it, fails, Cache keeps the new document in memory
@@ -128,10 +131,10 @@ func (c *Cache) Resolve(ctx context.Context, name string, w secret.Workload) ([]
 
 	read := false
 	if c.stale(e) {
-		if err := c.sync(ctx, name, w, e, r); err != nil {
+		var err error
+		if read, err = c.syncRead(ctx, name, w, e, r); err != nil {
 			return nil, err
 		}
-		read = true
 	}
 	if err := c.flush(ctx, name, w, e, r); err != nil {
 		return nil, err
@@ -140,14 +143,27 @@ func (c *Cache) Resolve(ctx context.Context, name string, w secret.Workload) ([]
 		// Read the store before renewing: a re-import there is newer than
 		// the document in memory and needs no renewal.
 		if !read {
-			if err := c.sync(ctx, name, w, e, r); err != nil {
+			var err error
+			if read, err = c.syncRead(ctx, name, w, e, r); err != nil {
 				return nil, err
 			}
 		}
-		if c.due(e) {
-			// The error is kept on the entry. It matters once the current
-			// document has expired, which serve reports.
-			_ = c.renew(ctx, name, w, e, r)
+		switch {
+		case !read:
+			// A read that failed cannot tell a re-import from nothing
+			// changed. A renewal now could spend the refresh token on a
+			// pair that the next good read drops for the re-import, so it
+			// waits for a read that succeeds, like a write-back does.
+			c.holdRenewal(e)
+		case c.due(e):
+			// A renewal error is kept on the entry. It matters once the
+			// current document has expired, which serve reports. An error
+			// that cleared the entry is returned: the read before the
+			// write-back found the secret deleted, or stored again in a
+			// form the renewer cannot read.
+			if err := c.renew(ctx, name, w, e, r); err != nil && c.cleared(e) {
+				return nil, err
+			}
 		}
 	}
 	return c.serve(name, e)
@@ -170,10 +186,15 @@ func (c *Cache) ForceRenew(ctx context.Context, name string, w secret.Workload, 
 	}
 	defer e.release()
 
-	if err := c.sync(ctx, name, w, e, r); err != nil {
+	read, err := c.syncRead(ctx, name, w, e, r)
+	if err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
+	if read && errors.Is(e.failure, errUnread) {
+		// A hold waits for a read that succeeds, and this one did.
+		e.failure, e.failedAt = nil, time.Time{}
+	}
 	current := !bytes.Equal(e.doc, stale)
 	doc, spent, failure := bytes.Clone(e.doc), e.spent, e.failure
 	backoff := c.backingOff(e.failure, e.failedAt)
@@ -181,6 +202,9 @@ func (c *Cache) ForceRenew(ctx context.Context, name string, w secret.Workload, 
 	switch {
 	case current:
 		return doc, nil
+	case !read:
+		// As in Resolve, a renewal waits for a read that succeeds.
+		return nil, fmt.Errorf("%q could not be renewed: %w", name, errUnread)
 	case spent:
 		return nil, fmt.Errorf("%q is not renewed again after a refresh that failed at the provider: %w",
 			name, failure)
@@ -291,9 +315,33 @@ func (c *Cache) backingOff(failure error, at time.Time) bool {
 	return failure != nil && c.now().Sub(at) < retryAfter
 }
 
+// errUnread is the renewal failure while the store cannot be read.
+var errUnread = errors.New("the store could not be read before the renewal")
+
+// holdRenewal records errUnread as the renewal's failure, so the entry is
+// not due again until retryAfter. A read in ForceRenew that succeeds lifts
+// it sooner.
+func (c *Cache) holdRenewal(e *entry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e.failure, e.failedAt, e.spent = errUnread, c.now(), false
+}
+
+// cleared reports whether the entry holds no document.
+func (c *Cache) cleared(e *entry) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return e.doc == nil
+}
+
 func (c *Cache) serve(name string, e *entry) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if e.doc == nil {
+		// Every path that clears the entry returns its error first. An
+		// empty credential is never served in place of one.
+		return nil, fmt.Errorf("%q: %w", name, secret.ErrNotFound)
+	}
 	if c.expiredLocked(e) {
 		if e.failure != nil {
 			return nil, fmt.Errorf("%q expired and could not be renewed: %w", name, e.failure)
@@ -303,20 +351,16 @@ func (c *Cache) serve(name string, e *entry) ([]byte, error) {
 	return bytes.Clone(e.doc), nil
 }
 
-// sync reads the store and reconciles the entry with it. The caller holds
-// the entry's turn.
+// syncRead reads the store and reconciles the entry with it, and reports
+// whether the store was read. The caller holds the entry's turn.
 //
-// A secret no longer in the store is dropped, and sync returns ErrNotFound.
-// Any other read failure keeps the document in memory, until the next
-// recheck, and is returned only when there is no document to serve.
-func (c *Cache) sync(ctx context.Context, name string, w secret.Workload, e *entry, r secret.Renewer) error {
-	_, err := c.syncRead(ctx, name, w, e, r)
-	return err
-}
-
-// syncRead is sync, and also reports whether the store was read. It is false
-// when a read failed and the entry kept its document.
-func (c *Cache) syncRead(ctx context.Context, name string, w secret.Workload, e *entry, r secret.Renewer) (bool, error) {
+// A secret no longer in the store is dropped, and syncRead returns
+// ErrNotFound. A read cut short by the caller's context is returned and
+// changes nothing. Any other read failure keeps the document in memory,
+// until the next recheck, and is returned only when there is no document to
+// serve. Otherwise read is false, and nothing that a re-import would change
+// is decided on the document in memory.
+func (c *Cache) syncRead(ctx context.Context, name string, w secret.Workload, e *entry, r secret.Renewer) (read bool, err error) {
 	rctx, cancel := context.WithTimeout(ctx, c.storeTimeout)
 	defer cancel()
 	v, err := c.broker.Resolve(rctx, name, w)
@@ -325,6 +369,11 @@ func (c *Cache) syncRead(ctx context.Context, name string, w secret.Workload, e 
 	switch {
 	case errors.Is(err, secret.ErrNotFound):
 		e.reset(nil, time.Time{}, time.Time{})
+		return false, err
+	case err != nil && ctx.Err() != nil:
+		// The caller was canceled or ran out of time, which says nothing
+		// about the store. Nothing is recorded: a hold here would refuse
+		// the renewal of every other caller while the store is healthy.
 		return false, err
 	case err != nil:
 		if e.doc == nil {

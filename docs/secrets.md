@@ -455,6 +455,65 @@ key bytes to a guest.
 
 </details>
 
+## Renewal on the host
+
+This section describes a part of the credential broker. No release uses it
+yet. A run still delivers `claude-credentials` as a file, and
+[What file delivery buys](security.md#what-file-delivery-buys-and-what-it-costs)
+still describes that.
+
+A credential type can carry a lifecycle. The lifecycle renews the stored
+value on the host, so the guest never holds what it renews with. The first
+one is `anthropic-oauth`, for the `claude-credentials` document that
+`brig secret import claude-code` stores.
+
+| | `anthropic-oauth` |
+| --- | --- |
+| What refreshes | The OAuth pair in `claudeAiOauth`: `accessToken`, `refreshToken` and `expiresAt` |
+| When | 10 minutes before `expiresAt`, or halfway through the life of a pair Brig refreshed when that life is shorter than 20 minutes, and once when the provider refuses the access token |
+| From where | The host, to the provider's token endpoint over HTTPS, with system roots and full verification. Never through a broker route, and never after a redirect. The host's proxy settings (`HTTPS_PROXY`, `NO_PROXY`) apply |
+| What is written back | The same document with the three fields replaced. Every other field is kept. The provenance keeps its `FROM`, and its expiry moves to the new `expiresAt` |
+| What is refused | An answer that is not a 200 with an access token and a refresh token. Brig keeps the old document and writes nothing. For another status it reports the status code. For a 200 it cannot use, it reports a fixed error and nothing from the body |
+
+An answer with both tokens and an expiry outside 60 seconds to 30 days is
+kept, with `expiresAt` set to 0. Brig then renews that pair when the
+provider refuses its access token.
+
+The provider rotates the refresh token single-use. A refresh makes the
+previous document invalid, so one owner on the host refreshes each secret,
+one refresh at a time. Two sandboxes that share the secret wait on the same
+refresh.
+
+Once a refresh request has reached the provider, Brig does not send that
+refresh token again, whatever fails after it. The provider may already have
+rotated it. Brig serves the old document until its own expiry and reports
+the refresh as failing. A refresh that never reached the provider is tried
+again 30 seconds later at the earliest.
+
+The new document is written back to the store before its access token is
+used. If that write fails, Brig keeps the new document in memory and retries
+the write 30 seconds later at the earliest. Until the write lands, the store
+holds a document the provider already refuses, and the new document lives
+only in the broker's memory. A broker that stops before the write lands
+loses it: log in on the host and run `brig secret import claude-code`.
+
+Brig reads the store again before every refresh, before every write-back,
+and at least every 5 minutes. A deleted secret stops being served. A secret
+you import again replaces the document in memory, and a pending write-back
+never overwrites it. A refresh or a write-back whose read fails waits for
+one that succeeds, so Brig never spends a refresh token on a document that
+an import has already replaced. A read cut short because the request that
+made it was canceled, or ran out of time, is not a failed read. A secret deleted, or imported again in a
+form Brig cannot read, while a refresh runs fails the request that waited on
+it. After a failed refresh, log in on the host and run
+`brig secret import claude-code`.
+
+The import copies the host's own refresh token. Brig and Claude Code on the
+host then hold the same pair, and whichever side refreshes first invalidates
+the copy the other holds. Brig's write-back keeps its own store current. It
+does not reach the host's Claude Code. Do not run Claude Code on the host
+against the same account during a brokered run.
+
 ## Linux
 
 On Linux, Brig stores secrets in a Secret Service keyring on your D-Bus
