@@ -241,6 +241,76 @@ Brig reaches it as `ssh <user>@<host> brig ...`, so the account there needs
 that logs in without a password prompt. `BRIG_TELEPORT_REMOTE_BRIG` names
 another `brig` there.
 
+### Watch it
+
+![Two terminal panes on rp1. Left: brig teleport ubuntu --to pmoust@rp2 prints one line for each round, the pause, the seal, the restore and the resume, then the outcome; --status says ubuntu runs on pmoust@rp2 and its moves are driven from there; brig sh there prints the guest's hostname and the boot_id it had before; brig teleport ubuntu --to pmoust@rp1, typed on rp1, removes the fenced copy there and hands the move back to the brig on rp2, and brig ls shows ubuntu running on rp1. Right: the guest's feed counts on through both moves with no tick missing, the same boot_id, and a downtime total that rises by 62 ms at the first move and 71 ms at the second.](media/teleport-pi-pair.gif)
+
+A real run on [the Linux pair](#the-linux-pair) on 2026-10-16, brig
+`304689b`, hull `9cb3440`, hvi `ba9b2d2` ([MP4](media/teleport-pi-pair.mp4)).
+A loop in the guest appends a line to `/tmp/feed` five times a second: a
+tick held in a shell variable, the guest's hostname (the script sets it,
+as the guest boots with none), the start of the kernel's `boot_id`, and
+the downtime total its `hvi-time` driver keeps, from
+`/sys/kernel/hvi_time/snapshot`. hull's moves took 1.6 and 1.5 s, and the
+guest's downtime total rose by 62.0 ms and then 71.1 ms.
+
+Both moves are typed on `rp1`. The move back is handed to the brig on
+`rp2`, as [Moving back](#moving-back) says, after the brig on `rp1`
+removes the fenced copy the first move left there. The brig on `rp2`
+reaches `rp1` with the demo's settings through `BRIG_TELEPORT_REMOTE_BRIG`,
+a script that sources them and runs brig.
+
+Both hosts were prepared before the recording. `rp2` was prepared with
+`brig teleport ubuntu --to pmoust@rp2 --prepare`. `rp1` already holds the
+base the session booted from. On it, `hull migrate-spare-base` was run by
+hand: it is the step `--prepare` runs on a destination that holds the base,
+and it makes the spare copy of the base that the move back takes. `brig
+teleport ubuntu --to pmoust@rp1 --prepare`, run on `rp1` while the guest
+is on `rp2`, or on `rp2` after `brig rm ubuntu` on `rp1`, does the same
+through Brig (see [Prepare the destination](#prepare-the-destination)).
+
+The right pane is `brig sh ubuntu -c 'tail -f /tmp/feed'` in a loop. Its
+"reconnecting" line is that vsock session ending as the guest leaves the
+host, not the guest: the ticks go on with none missing. The scripts are in
+`script/demo/`.
+
+#### From a Mac to a Pi
+
+![Three terminal panes on a Mac. Left: brig teleport claude --to pmoust@rp2 prints one line for each disk and memory round, the pause after 4 memory rounds, the seal 34 ms after the pause, the restore and the resume on pmoust@rp2, then the outcome: hull's move took 8.3 s and hull estimates the guest was paused about 0.48 s; --status says claude-code runs on pmoust@rp2; brig sh there prints brig's notice that rp2 has no value for the session's credentials, then the guest's hostname, its uptime and the boot_id it had before the move. Right top: the guest's feed counts on with no tick missing and the same boot_id, and its downtime total goes from 0.0 to 479.7 ms. Right bottom: a Claude Code turn in the guest, started on the Mac, shows Bash(vmstat 1 30), Read(os-release) and Read(hostname); after the move the command's 34 lines of output arrive, then the two files, then five bullets about the machine and done: 4 turns in 36 s.](media/teleport-mac-to-pi.gif)
+
+A real run from this Mac to `rp2` on 2026-10-16, brig `7d0a000`, hull
+`251e226`, hvi `94faf8f` ([MP4](media/teleport-mac-to-pi.mp4)), with the
+Mac on the same LAN as the Pis. The session is the `claude-code` profile
+as shipped, with the login that `brig secret import claude-code` had
+stored that morning. The right top pane is the feed of the Pi pair's
+recording. The right bottom pane is a Claude Code turn that runs in the
+guest across the move: `claude -p` with `--output-format stream-json`,
+started off camera a few seconds before the recording, with its stream
+written to a file in the guest. The raw stream is JSON, one event a
+line; `script/demo/claude-feed.jq` shows each event as one line, as
+Claude Code shows a tool call (`● Read(hostname)`), and the result as
+`✓ done: ...`. The pane reads the file with `brig sh`, which a move
+ends, as it ends the feed's; then it reads on from the line after the
+last one it showed.
+
+hull's move took 8.3 s, and the guest's downtime total rose by 479.7 ms.
+The turn asked for `vmstat 1 30` and the two files on the Mac. The
+command started there and ended on `rp2`; its 34 lines of output and the
+two files then reached Claude Code, and its answer streamed in on `rp2`.
+The long command is there on purpose: the guest paused while Claude Code
+waited on a command, not on the API. A turn
+whose API stream is open when the guest pauses goes silent on the
+destination for about 60 s, until Claude Code gives up on that stream
+and asks again, and on one run the answer then started over (see
+[On the LAN](#on-the-lan)). This recording does not show that case.
+
+It is the third of five takes. Two of the five moves had long
+downtimes, 13.0 s and 6.25 s (see [On the LAN](#on-the-lan)); the
+other two had 239 and 192 ms. In the fifth take the move went through,
+but Claude Code in the guest could no longer log in ("OAuth session
+expired and could not be refreshed"), 73 minutes after the login was
+imported, and its turn ended at once.
+
 ### What a move does
 
 1. **Checks on this host.** The session is teleportable and runs on hull's
@@ -414,36 +484,48 @@ not measure the downtime: after the first move it read 10.34 s, against
 
 The `claude-code` guest from a Mac to a Pi, beside the same streamed path
 between the two Pis. The links were not the same. On 2026-10-15 the Mac
-reached the Pis from another network, at 1.0 to 1.1 MiB/s, so the Mac
-column after measures that link. The Pi column after is hull's own run
-on the Linux pair that day, over their wired LAN, with the 1 GiB `ubuntu`
+reached the Pis from another network, at 1.0 to 1.1 MiB/s. That column
+is superseded by the runs of 2026-10-16, with the Mac on the Pis' LAN,
+and is kept for the comparison. The Pi column is hull's own run on the
+Linux pair on 2026-10-15, over their wired LAN, with the 1 GiB `ubuntu`
 guest (1 vCPU) and `hull migrate` run directly, not through `brig
 teleport`. Its numbers are from hull's `docs/migration.md` at `9fb5e62`:
 
-| | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: hull `d2bb5e9`, hvi `c4131f5`, Mac to `rp2`, 2 runs | After: hull `ef78fb6`, hvi `c4131f5`, `rp1` to `rp2`, `ubuntu` idle and writer, 1 run each |
-| --- | --- | --- | --- | --- |
-| The link | Mac to Pi, 32.0 to 37.1 MiB/s | | Mac to Pi, 1.0 to 1.1 MiB/s | Pi to Pi: the name `rp2` goes over Tailscale, which went direct over one wired gigabit LAN when checked (see below) |
-| Sent once per image and host (`--prepare`) | nothing | the base | the 1.5 GiB base as 742.8 MiB in 733.8 s; the prepares after it found it held | the base, by `hull migrate-prepare` first |
-| Sent while the guest runs | nothing | the rounds | disk round 0, 3834 and 3839 blocks (240 MiB) as 2.5 MiB, and memory round 0, 62.8 and 63.3 MiB in 60.9 and 59.7 s; on the second run also a disk round of 102 blocks and a memory round of 5.5 MiB | idle: disk rounds of 4393 and 7 blocks, and 2 memory rounds; writer: disk rounds of 5426, 487, 0 and 0 blocks, and 4 memory rounds |
-| Sent while the guest is paused | 1.80 GB in 46.3 to 53.7 s | the last round | the last memory round, 5.4 and 4.4 MiB, and the last disk round, 101 and 7 blocks (161,299 and 9,396 bytes on the wire) | the last memory round, the 3rd idle and the 5th with the writer; the last disk round was empty in both |
-| Sent in all | 1.80 GB | | 70.9 and 75.9 MiB | idle 109.5 MiB (disk 275.0 MiB as 34.5 MiB, memory 74.9 MiB); writer 310.4 MiB (disk 369.6 MiB as 128.5 MiB, memory 181.8 MiB) |
-| hvi's pause to its seal | (hull's fence, with the capture: 1.63 to 2.08 s) | | 5087 and 3677 ms | |
-| hvi's seal to the destination's resume | | | 2.9 and 3.1 s | 55 to 90 ms, hull's range over all four of its idle and writer moves on the Pis, `rp1` to `rp2` and back |
-| Restore paused, then commit | 1.23 to 1.38 s, then 0.22 to 0.25 s | | restored as the stream arrived; commit 0.07 and 0.09 s | restored as the stream arrived |
-| Downtime | 49.95 to 57.43 s, the source pauses to `running` on the destination | 1 to 2 s | 7962 and 6819 ms, the rise in the guest's `hvi-time` `downtime total`; hull's estimate 7958 and 6813 ms | idle 78.6 ms, writer 94.7 ms, the rise in the guest's `hvi-time` `downtime total` |
-| `hull migrate`, start to end | | | 70.1 and 73.1 s | idle 2.29 s, writer 5.13 s |
-| `brig teleport`, start to end | 52.18 to 59.52 s | under 10 s | 71.73 and 75.00 s | not run through Brig |
+| | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | Superseded: hull `d2bb5e9`, hvi `c4131f5`, Mac to `rp2` over a 1 MiB/s link, 2 runs | After: hull `251e226`, hvi `94faf8f`, Mac to `rp2` on the LAN, runs 5 and 6 | After: hull `ef78fb6`, hvi `c4131f5`, `rp1` to `rp2`, `ubuntu` idle and writer, 1 run each |
+| --- | --- | --- | --- | --- | --- |
+| The link | Mac to Pi, 32.0 to 37.1 MiB/s | | Mac to Pi, 1.0 to 1.1 MiB/s | Mac to Pi on one LAN: 32 MiB through ssh in 1.1 to 1.7 s (19 to 29 MiB/s); the name `rp2` goes over Tailscale, direct to `192.168.17.94` when checked | Pi to Pi: the name `rp2` goes over Tailscale, which went direct over one wired gigabit LAN when checked (see below) |
+| Sent once per image and host (`--prepare`) | nothing | the base | the 1.5 GiB base as 742.8 MiB in 733.8 s; the prepares after it found it held | the 1.5 GiB base as 740.8 MiB in 48.2 s (52.4 s in all); the prepares after it found it held, in 5.3 to 5.8 s | the base, by `hull migrate-prepare` first |
+| Sent while the guest runs | nothing | the rounds | disk round 0, 3834 and 3839 blocks (240 MiB) as 2.5 MiB, and memory round 0, 62.8 and 63.3 MiB in 60.9 and 59.7 s; on the second run also a disk round of 102 blocks and a memory round of 5.5 MiB | disk round 0, 3999 and 3914 blocks (250 and 245 MiB) as 2.8 MiB, and memory round 0, 188.4 and 205.6 MiB in 6.34 and 6.16 s; then 2 and 4 more rounds of each, the memory ones 13.1 and 6.8 MiB, and 27.4 down to 4.8 MiB | idle: disk rounds of 4393 and 7 blocks, and 2 memory rounds; writer: disk rounds of 5426, 487, 0 and 0 blocks, and 4 memory rounds |
+| Sent while the guest is paused | 1.80 GB in 46.3 to 53.7 s | the last round | the last memory round, 5.4 and 4.4 MiB, and the last disk round, 101 and 7 blocks (161,299 and 9,396 bytes on the wire) | the last memory round, 2.4 and 4.0 MiB, and the last disk round, 1 and 0 blocks (651 and 122 bytes on the wire) | the last memory round, the 3rd idle and the 5th with the writer; the last disk round was empty in both |
+| Sent in all | 1.80 GB | | 70.9 and 75.9 MiB | 213.5 and 260.5 MiB | idle 109.5 MiB (disk 275.0 MiB as 34.5 MiB, memory 74.9 MiB); writer 310.4 MiB (disk 369.6 MiB as 128.5 MiB, memory 181.8 MiB) |
+| hvi's pause to its seal | (hull's fence, with the capture: 1.63 to 2.08 s) | | 5087 and 3677 ms | 50 and 183 ms | |
+| hvi's seal to the destination's resume | | | 2.9 and 3.1 s | 0.41 and 0.30 s, between brig's lines for the two on the Mac | 55 to 90 ms, hull's range over all four of its idle and writer moves on the Pis, `rp1` to `rp2` and back |
+| Restore paused, then commit | 1.23 to 1.38 s, then 0.22 to 0.25 s | | restored as the stream arrived; commit 0.07 and 0.09 s | restored as the stream arrived; commit 0.02 s | restored as the stream arrived |
+| Downtime | 49.95 to 57.43 s, the source pauses to `running` on the destination | 1 to 2 s | 7962 and 6819 ms, the rise in the guest's `hvi-time` `downtime total`; hull's estimate 7958 and 6813 ms | 345.7 and 387.1 ms, the rise in the guest's `hvi-time` `downtime total`; hull's estimate 349 and 388 ms | idle 78.6 ms, writer 94.7 ms, the rise in the guest's `hvi-time` `downtime total` |
+| `hull migrate`, start to end | | | 70.1 and 73.1 s | 8.2 and 8.8 s | idle 2.29 s, writer 5.13 s |
+| `brig teleport`, start to end | 52.18 to 59.52 s | under 10 s | 71.73 and 75.00 s | 9.65 and 9.89 s | not run through Brig |
 
 The before column is the four moves to `rp1` in
-[Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi), and the
-Mac column after the two streamed moves to `rp2` there. The streamed move
-sent 23 to 24 times fewer bytes. On the Mac's link it met neither target.
-Most of the time is memory round 0, about 63 MiB at the link's rate, with
-the guest running. The pause holds the last memory round, which took 5.05
-and 3.66 s to send. The 2.9 and 3.1 s from hvi's seal to the
-destination's resume are hull's part, against 55 to 90 ms between the
-Pis; that difference was not explained. A run of the `claude-code` guest
-on a faster link has not been made.
+[Claude Code session, Mac to Pi](#claude-code-session-mac-to-pi), the
+superseded column the two streamed moves to `rp2` there on 2026-10-15,
+and the LAN column two of the six moves of 2026-10-16 in
+[On the LAN](#on-the-lan). On the 1 MiB/s link the streamed move met
+neither target. Most of the time was memory round 0, about 63 MiB at the
+link's rate, with the guest running. The pause held the last memory
+round, which took 5.05 and 3.66 s to send, and hull's part from hvi's
+seal to the destination's resume took 2.9 and 3.1 s.
+
+On the LAN the same path met both targets in runs 5 and 6: 9.65 and
+9.89 s from start to end, and 346 and 387 ms of downtime. Memory round 0
+sent 188 and 206 MiB at about 30 MiB/s in about 6 s, and the rounds
+after it came down to the last one, 2.4 and 4.0 MiB, sent in the pause.
+Runs 3 and 4 were the same, in 8.35 and 9.34 s with 188 and 195 ms. Runs
+1 and 2 were not: their guest ran a Claude Code task that was thinking
+hard, the memory rounds were larger and went at about 17 MiB/s, and hvi
+stopped at its cap of rounds. They took 20.27 and 24.99 s, with 864 and
+663 ms of downtime. Two of the five moves of the recording made the same
+day, with the same builds, had 13.0 and 6.25 s of downtime (see [On the
+LAN](#on-the-lan)).
 
 On the Linux pair the streamed move, hull `ef78fb6` (`d2bb5e9` adds the
 fixes of its review) with hvi `c4131f5`, moved the idle guest in 2.29 s
@@ -507,7 +589,8 @@ that did, the destination took the stream 23.5 s late.
 
 The way back is prepared the same way, with the old host as the
 destination: `brig teleport <ref> --to <you>@<old host> --prepare`, typed
-on either host (see [Moving back](#moving-back)). The old host still
+on the old host, or on the session's host after `brig rm <ref>` on the old
+host (see [Moving back](#moving-back)). The old host still
 holds the base the session booted from, so hull sends nothing and only
 makes the spare copy that the move back takes. Without the spare, the
 move back copies the base on the old host while the guest is paused: 22.9
@@ -569,8 +652,8 @@ there. It keeps its record that the session runs on the other host. The
 move back replaces that record, and an abort of the move back puts it
 back. The copy is gone either way: it could never run again. Typed on the
 host the session runs on, the move back is refused while the old host has
-the copy. Run `brig rm <ref>` on the old host first: it removes the copy
-and forgets the session there.
+the copy, and so is its prepare. Run `brig rm <ref>` on the old host
+first: it removes the copy and forgets the session there.
 
 After a move typed on the old host commits, that host's brig asks the
 brig there where the session runs now, and records it. When the move came
@@ -660,7 +743,7 @@ value in, store the secret on the destination with `brig secret`.
 | The guest's address and its egress rules | the same, on a gateway the destination's brig started |
 | `brig sh`, the agent's terminal | a new `brig sh` connects on the destination. One open across the move ends |
 | Connections to the guest agent (vsock) | reset. The guest sees them close |
-| Connections to the outside network | may reset, and reconnect from the destination |
+| Connections to the outside network | may reset, and reconnect from the destination. One that only receives can stay open with nothing on it: Claude Code's API stream did, for about 60 s, until Claude Code gave up on it |
 | Published ports | stay on the source. Publish them again on the destination |
 | Host NAT and the path out | the destination's |
 | The monotonic clock | continues from where it stopped |
@@ -880,7 +963,9 @@ did not run, because the login brig held had expired. On 2026-10-15 the
 session moved again, to `rp2`, on the streamed path and with hvi's fix:
 every exec after the move worked, and nothing capped the allocator from
 outside hvi. See [The streamed move](#the-streamed-move). The login had
-still expired.
+still expired. On 2026-10-16, with the Mac on the Pis' LAN and a login
+imported that morning, the Claude Code task ran across the move; see
+[On the LAN](#on-the-lan).
 
 The builds of the runs before the fix were brig `658ade4`, hull
 `0021196` and hvi `8697de0`, with the
@@ -932,7 +1017,8 @@ The sequence, with what each step gave:
    the code word PINEAPPLE-42 and reply OK' --output-format json` exited 1
    after 1.39 s with `"is_error":true` and `"result":"Failed to
    authenticate: OAuth session expired and could not be refreshed"`. So the
-   long task did not run. It would have been
+   long task did not run that day (it ran on 2026-10-16, see
+   [On the LAN](#on-the-lan)). It would have been
    `claude -p 'Write a 400-line Python program one function at a time;
    before each function print the line COUNT n' --output-format stream-json
    --verbose --include-partial-messages`, with its output stamped into
@@ -1007,7 +1093,10 @@ The sequence, with what each step gave:
    downloaded. The moved guest's connections went through a new gateway on
    `rp1`, and the old one's state stayed on the Mac. An agent's open stream
    is expected to break the same way, and to go on only if the agent
-   connects again. The Claude Code task did not run, so that was not seen.
+   connects again. The Claude Code task did not run, so that was not seen
+   that day. On 2026-10-16 it was: Claude Code's API stream did not
+   reset, it went silent for about 60 s, and then Claude Code asked again
+   over a new connection (see [On the LAN](#on-the-lan)).
 10. **Credentials on the Pi.** Each exec there printed:
 
     ```text
@@ -1030,7 +1119,8 @@ steps 3, 4 and 6 to 10 from the Mac and checks each one, and cleans up:
 
 ```bash
 script/teleport-demo-claude.sh pmoust@rp1
-script/teleport-demo-claude.sh --prepare pmoust@rp2   # the streamed move
+script/teleport-demo-claude.sh --prepare pmoust@rp2            # the streamed move
+script/teleport-demo-claude.sh --claude --prepare pmoust@rp2   # and a Claude Code task
 ```
 
 With brig `658ade4`, run before hvi's fix with the allocator capped
@@ -1040,10 +1130,12 @@ it printed 18 passed and 0 failed. One of those checks, that
 status of a `$(...)` substitution, not brig's. That move's commit is shown
 by its `teleported` line and by the destination's hull record, `running`.
 The script now takes brig's own status. Its `--claude` option also starts
-the Claude Code task of step 5 and checks that the task's `COUNT` lines go
-on after the move, from where they were, with no restart and no error
-event. That option has not run, as it needs a login that has not expired;
-its check has run only on made-up streams. `--prepare` prepares the
+a Claude Code task like the one of step 5, with no tools and no
+thinking, and checks that the task's `COUNT` lines go on after the move,
+from where they were, with no restart and no error event. It ran six
+times on 2026-10-16 and its check failed each time, on the last run
+because the task's answer started over after the move; see
+[On the LAN](#on-the-lan). `--prepare` prepares the
 destination after the boot, and the script's numbers show a streamed
 move's rounds and the rise in the guest's `downtime total`.
 
@@ -1107,8 +1199,141 @@ The two fault cases, each on a fresh session of the same image, with
 The move back did not run. It goes from `rp2` to the Mac over ssh, and
 the Mac had Remote Login off.
 
+##### On the LAN
+
+On 2026-10-16 the Mac was on the same LAN as the Pis, and the login brig
+held had been imported that morning (`brig secret ls` showed
+`claude-credentials` updated at 08:30, from `keychain:Claude
+Code-credentials`), so the Claude Code task ran. The builds were brig
+`7d0a000`, hull `251e226` and hvi `94faf8f`. On the Mac, brig was built
+with the Makefile's build stamp flags, hull with `make urunc_macos`, and
+hvi with `cargo build --release` and `HVI_GIT_SHA` set to the full
+commit, then signed ad hoc with `hvi.entitlements`. For `rp2`, brig and
+hull were cross-built with the same stamps, and hvi was built there from
+a bundle of `94faf8f` with the same `HVI_GIT_SHA` and
+`CARGO_BUILD_JOBS=3`, in 54 s. Each host had a state directory, a
+gateway directory and a hull store of its own, the Mac's under a short
+link and `rp2`'s under `~/vhsdemo`. `hull pull` of the image took 32 s on
+the Mac and 24 s on `rp2`. The name `rp2` went over Tailscale, direct to
+`192.168.17.94` (`tailscale ping`), and 32 MiB went through ssh in 1.1 to
+1.7 s.
+
+`script/teleport-demo-claude.sh --claude --prepare pmoust@rp2` ran six
+times. Its options must come before `DST`. Runs 2 and 6 also had
+`--keep`, so that the guest could be read on `rp2` afterwards. The first
+prepare sent the base (740.8 MiB in 48.2 s); the others found it held.
+
+| Run | The task in the guest | `brig teleport` | `hull migrate` | Downtime, the guest's count (hull's estimate) | Sent | Rounds, disk and memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | the task of 2026-10-15: tools on, default effort | 20.27 s | 18.9 s | 864.3 ms (870 ms) | 305.9 MiB | 6 and 6, hvi's cap of rounds; sealed 702 ms after the pause |
+| 2 | the same | 24.99 s | 23.9 s | 662.5 ms (664 ms) | 396.7 MiB at 17.0 MiB/s | 6 and 6, the cap; sealed 469 ms after the pause |
+| 3 | no tools, low effort | 8.35 s | 6.9 s | 187.8 ms (189 ms) | 208.5 MiB at 32.9 MiB/s | 4 and 4, converged; sealed 35 ms after the pause |
+| 4 | the same, and `MAX_THINKING_TOKENS=0` | 9.34 s | 7.9 s | 194.6 ms (196 ms) | 215.4 MiB at 29.9 MiB/s | 5 and 5, converged; 35 ms |
+| 5 | no tools, low effort, `alwaysThinkingEnabled` false | 9.65 s | 8.2 s | 345.7 ms (349 ms) | 213.5 MiB at 27.9 MiB/s | 4 and 4, converged; 50 ms |
+| 6 | the same | 9.89 s | 8.8 s | 387.1 ms (388 ms) | 260.5 MiB at 32.4 MiB/s | 6 and 6, the cap; 183 ms |
+
+Runs 5 and 6 ran the script as it is now; runs 1 to 4 ran it as the
+task was being fixed (below). The hvi and hull on each host were the same
+in all six. On every run:
+
+- `brig teleport` exited 0, and printed hull's rounds as they ended and
+  its summary;
+- on `rp2` the counter went on, the deleted file still read its token,
+  the sum and the `boot_id` were the ones from before, the kernel had
+  logged one more `hvi-time` line, and the guest kept its address,
+  `198.18.1.2`;
+- the first `brig sh claude@demo -c true` exited 0 in 0.59 to 0.72 s,
+  and every exec after it worked. hvi on `rp2` kept running, and the
+  kernel log on `rp2` has no seccomp record from 08:39 that day to 09:52,
+  after the last take;
+- the stand-in's download was reset when the guest resumed
+  (`curl: (56) Recv failure: Connection reset by peer`, about 1 s after
+  the resume), and the next attempt, 1 s later, downloaded from `rp2`;
+- an exec on `rp2` had no `GH_TOKEN`, brig there said it had no value for
+  `claude-credentials` or `gh-token`, and the stand-in still held
+  `GH_TOKEN`;
+- the Claude Code task was running when the guest paused, and its
+  process was still running on `rp2`.
+
+The task's check passed on none of the six runs. On runs 1 and 2 the
+task, as the script had it, wrote its program to a file through the Write
+tool: no `COUNT` line reached the text, so the check had nothing to
+compare, and it failed. The script's task now runs with no tools. On
+runs 3 to 5 the task wrote no `COUNT` line for 80 s and more, thinking
+first, so the move came before any (the check now waits for 2 before the
+move, for up to 60 s, and fails when there are none). Low effort and
+`MAX_THINKING_TOKENS=0` did not change that. With the setting
+`alwaysThinkingEnabled` false the task began to write within seconds on
+run 6 and in four runs by hand, but not on run 5.
+Run 1 also printed none of the numbers: the script looked for brig's
+line "the guest pauses here", which brig no longer prints. It now looks
+for brig's "moving ... from ... to ..." line.
+
+On run 6 the task had written 10 `COUNT` lines when the move began, and
+22 when the guest paused. Then:
+
+1. The stream that was open at the pause went silent on `rp2` for
+   63.8 s. The `claude` process ran on. (On run 2, read during the same
+   silence, `ss` in the guest showed its socket to the API still
+   established, with a keepalive timer.)
+2. Claude Code then gave up on that message: its stream has a
+   `message_stop` event with `abandoned_blocks`, then a user message it
+   wrote itself: "Your response above was cut off mid-stream. Resume
+   directly from where it stops — no apology, no recap. If none of it
+   survived, answer the request from the start."
+3. It asked again, over a new connection from `rp2`, and the answer
+   started over: `COUNT 1` to `COUNT 21` of another program, after the
+   22 of the first.
+
+The check failed on "the COUNT lines run 1 to 27 with no gap or repeat",
+as it should: 28 passed and 1 failed. The same silence came on every run
+that measured it: 64.5 s on run 2, and 62.3, 64.4 and 63.8 s on runs 3 to
+5, each followed by the same message. So the guest, the agent's process
+and its memory move, but an API stream open at the pause does not, and
+Claude Code finds out only after about 60 s with no data.
+
+The five takes of the recording in [Watch it](#from-a-mac-to-a-pi) ran
+the same day with the same builds, each on a fresh session:
+
+| Take | `hull migrate` | Downtime, the guest's count (hull's estimate) | Sent |
+| --- | --- | --- | --- |
+| 1 | 7.2 s | 239.1 ms (0.24 s) | 214.3 MiB |
+| 2 | 21.6 s | 13019.5 ms (13.00 s) | 253.9 MiB in 20.8 s |
+| 3, the recording | 8.3 s | 479.7 ms (0.48 s) | 225.8 MiB in 7.8 s |
+| 4 | 17.3 s | 6248.0 ms (6.25 s) | 238.4 MiB in 16.7 s, 14.2 MiB/s |
+| 5, its turn could not log in | 6.6 s | 192.4 ms (193 ms) | 174.1 MiB in 6.0 s |
+
+In takes 2 and 4 hvi's rounds converged, and hvi sealed its stream 36 and
+4 ms after the pause, but the guest waited on `rp2`. In take 2, `rp2`
+read the stream's manifest 12.5 s after the seal (on the two hosts'
+clocks), and then restored the guest in 0.3 s: the stream was still on
+its way at the seal. In take 4, `rp2` read the manifest 0.1 s after the
+seal, and hvi there restored the guest paused 6.1 s later. Neither delay
+was explained. `rp2`'s kernel logged nothing then. It had logged NVMe
+write timeouts and aborts at 08:44:45 to 08:44:54, during the prepare of
+run 2, which made the spare copy of the base, and a 4 KiB synced write
+there took 0.29 s once in three tries afterwards.
+
 #### Known issues
 
+- brig `7d0a000`: two `brig sh` of one `claude-code` session started at
+  the same moment on the Mac both write the session's credentials file
+  into the guest, and all but one can fail with "could not create
+  .claude/.credentials.json in the sandbox: exit status 1" (or 2). Three
+  at once on 2026-10-16 gave one success and two such failures. The
+  write removes the file and creates it again with `set -C`, so that a
+  race fails rather than writing through a link
+  (`writeSecretFile`, `internal/wrap/secretfiles.go`, line 453). The
+  recording's panes start 1 s apart for this reason.
+- An agent's API stream that is open when the guest pauses does not
+  reset on the destination: it goes silent. Claude Code 2.1.292 waited
+  61 to 64 s, then gave up on the message and asked again, and once its
+  answer started over. See [On the LAN](#on-the-lan).
+- Two of the five moves of the recording on 2026-10-16 had 13.0 and
+  6.25 s of downtime, against 0.19 to 0.48 s for the other three and
+  0.19 to 0.86 s for the six moves of the script that day. The guest
+  waited on `rp2`, once for the stream and once for hvi's restore there.
+  The cause was not found. See [On the LAN](#on-the-lan).
 - hull `a167a07` names `hull migrate <sandbox> --txid <txid>` without the
   store when it refuses an abort of a committed move
   (`cmd/hull/migrate_source.go`, lines 973 to 975, in `sourceAbort`), although
