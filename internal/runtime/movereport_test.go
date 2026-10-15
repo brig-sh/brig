@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -140,7 +141,8 @@ func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 		t.Errorf("report %+v", r)
 	}
 	if s := r.Summary(); !strings.HasPrefix(s, "hull's move took 0.0 s, streamed, ") ||
-		!strings.HasSuffix(s, "5 rounds; transfer 5.39 s, commit 0.09 s") || r.Transport != "stream" {
+		!strings.HasSuffix(s, "5 rounds (3 disk, 2 memory), the final disk round 262144 bytes in 3 ms (sent as 5696 bytes); "+
+			"transfer 5.39 s, commit 0.09 s") || r.Transport != "stream" {
 		t.Errorf("summary %q", s)
 	}
 }
@@ -216,5 +218,319 @@ func TestMoveReportReadsHullsTransport(t *testing.T) {
 	old.Add("Sent 203.1 MiB in 4.8 s (42.6 MiB/s); disk 112.3 MiB of 15.0 GiB carried; destination: complete")
 	if b, _ := json.Marshal(old); strings.Contains(string(b), "transport") {
 		t.Errorf("a hull that said nothing of its transport gave %s", b)
+	}
+}
+
+// rounds is each round of a report as name|kind|round|final|size|seconds.
+func rounds(r MoveReport) string {
+	var got []string
+	for _, rd := range r.Rounds {
+		got = append(got, fmt.Sprintf("%s|%s|%d|%v|%s|%.2f", rd.Name, rd.Kind, rd.Round, rd.Final, rd.Size, rd.Seconds))
+	}
+	return strings.Join(got, "\n")
+}
+
+// The lines of a streamed move from rp2 to rp1 with the hull of U5's fix
+// (d4ae775; 511877d on top of it changes only docs, so it prints the same),
+// as hull printed them: three disk rounds while the guest ran, five memory
+// rounds, the seal, then the final disk round with the guest stopped. The
+// summary says how many rounds of each kind, and the final disk round, which
+// the guest waited for.
+func TestMoveReportReadsTheLinesOfHull511877d(t *testing.T) {
+	var r MoveReport
+	for _, line := range []string{
+		"Streaming fx1 to pmoust@rp1 (live)",
+		"move: the destination took the stream in 2.2 s (it copied the base)",
+		"move: disk round 0: 1574 blocks so far, 48.1 MiB/s",
+		"move: disk round 0: 1731 blocks, 108.2 MiB (97.6 MiB on the wire) in 3.13 s, 31.2 MiB/s",
+		"move: disk round 1: 163 blocks, 10.2 MiB (10.0 MiB on the wire) in 0.19 s, 53.5 MiB/s, guest wrote 52 blocks/s",
+		"move: disk round 2: 0 blocks, 0 bytes (0 bytes on the wire) in 0.01 s, 0 bytes/s",
+		"move: ram-round-0: 123.2 MiB so far, 61.6 MiB/s",
+		"move: ram-round-0: 138.2 MiB in 2.56 s, 53.9 MiB/s",
+		"move: ram-round-1: 15.7 MiB in 0.26 s, 59.5 MiB/s",
+		"move: ram-round-2: 3.9 MiB in 0.09 s, 45.5 MiB/s",
+		"move: ram-round-3: 2.9 MiB in 0.05 s, 53.8 MiB/s",
+		"move: ram-round-4: 28854 bytes in 0.00 s, 27.5 MiB/s",
+		"move: hvi sealed the stream and fenced fx1 (7 ms after the last RAM round began)",
+		"move: disk round 3 (final): 163 blocks, 10.2 MiB (10.0 MiB on the wire) in 0.16 s, 64.1 MiB/s",
+		"Sent 278.6 MiB in 8.8 s (31.5 MiB/s): disk 128.6 MiB as 117.7 MiB, RAM 160.8 MiB, state 53575 bytes; " +
+			"destination: stream: 154 hvi components and 2057 disk blocks in 143 batches checked; hvi restored the guest paused",
+		"Moved fx1 to pmoust@rp1: it runs there at epoch 8. Its checkpoint here is stale",
+		"Timings (ms): fence 0, transfer 8843, restore paused 0, commit 54",
+		"move: 278.6 MiB in 8.8 s; disk 117.7 MiB, RAM 160.8 MiB, state 53575 bytes; sealed 7 ms after the last RAM " +
+			"round began, last disk round 10.2 MiB in 156 ms; downtime about 13442 ms",
+		"move: the guest wrote up to 3.3 MiB/s to its disk during the disk rounds",
+	} {
+		r.Add(line)
+	}
+	want := strings.Join([]string{
+		"disk round 0|disk|0|false|108.2 MiB|3.13",
+		"disk round 1|disk|1|false|10.2 MiB|0.19",
+		"disk round 2|disk|2|false|0 bytes|0.01",
+		"ram-round-0|ram|0|false|138.2 MiB|2.56",
+		"ram-round-1|ram|1|false|15.7 MiB|0.26",
+		"ram-round-2|ram|2|false|3.9 MiB|0.09",
+		"ram-round-3|ram|3|false|2.9 MiB|0.05",
+		"ram-round-4|ram|4|true|28854 bytes|0.00",
+		"disk round 3 (final)|disk|3|true|10.2 MiB|0.16",
+	}, "\n")
+	if got := rounds(r); got != want {
+		t.Errorf("rounds:\n%s\nwant:\n%s", got, want)
+	}
+	if r.DowntimeSeconds != 13.442 || r.MiBPerSec != 31.5 || r.Transport != "" || r.Rounds[1].DirtyBlocksPerSec != 52 {
+		t.Errorf("report %+v", r)
+	}
+	if s := r.Summary(); !strings.Contains(s, ", 9 rounds (4 disk, 5 memory), the final disk round 10.2 MiB in 156 ms (sent as 10.0 MiB); ") {
+		t.Errorf("summary %q", s)
+	}
+}
+
+// Since hull d2bb5e9 hvi carries the disk rounds inside its migrate
+// stream, and hull names them by hvi's components: "disk-round-k" before
+// "ram-round-k" while the guest runs, and "disk-round-final" in the pause.
+// Such a round's line gives one size, what the round came to in hvi's
+// stream, and no raw size. The lines are the second streamed claude-code
+// move from the Mac to rp2 (brig's H8d demo, 2026-10-15), as hull d2bb5e9
+// printed them; hull 9fb5e62 changes only its docs, so it prints the same.
+// The final round is final and numbered after the others of its kind, the
+// last memory round is the paused one once hull says hvi sealed the
+// stream, and the summary takes the final disk round's raw size and time
+// from hull's last line, where hvi's 7 blocks are 458752 bytes in 0 ms.
+func TestMoveReportReadsTheRoundsHviStreams(t *testing.T) {
+	var r MoveReport
+	for _, line := range []string{
+		"Transport: streamed (pre-copy rounds; the disk blocks that differ from base 9890a88a4845)",
+		"Streaming brig-claude-code-demo to pmoust@rp2 (live)",
+		"move: disk-round-0: 2.5 MiB in 0.06 s, 38.9 MiB/s",
+		"move: ram-round-0: 61.1 MiB so far, 1.0 MiB/s",
+		"move: ram-round-0: 63.3 MiB in 59.71 s, 1.1 MiB/s",
+		"move: disk-round-1: 155430 bytes in 0.01 s, 16.8 MiB/s",
+		"move: ram-round-1: 5.5 MiB in 5.45 s, 1.0 MiB/s",
+		"move: disk-round-final: 9271 bytes in 0.01 s, 1046368 bytes/s",
+		"move: ram-round-2: 4.4 MiB in 3.66 s, 1.2 MiB/s",
+		"move: hvi: 3 RAM rounds (time_cap), disk rounds of 3839, 102, 7 blocks (246.8 MiB, 2.6 MiB on the wire); " +
+			"paused 3677 ms, disk sync 20 ms before the pause and 15 ms in it",
+		"move: hvi sealed the stream and fenced brig-claude-code-demo (3675 ms after the pause)",
+		"Sent 75.9 MiB in 72.2 s (1.1 MiB/s): disk 246.8 MiB as 2.6 MiB, RAM 73.2 MiB, state 68388 bytes; " +
+			"destination: stream: 83 hvi components checked; hvi checked them against its manifest, wrote the " +
+			"disk rounds onto base 9890a88a4845 and restored the guest paused",
+		"Moved brig-claude-code-demo to pmoust@rp2: it runs there at epoch 1. Its checkpoint here is stale",
+		"Timings (ms): fence 0, transfer 72181, restore paused 0, commit 92",
+		"move: 75.9 MiB in 72.2 s; disk 2.6 MiB, RAM 73.2 MiB, state 68388 bytes; sealed 3675 ms after the " +
+			"pause, last disk round 458752 bytes in 0 ms; downtime about 6813 ms",
+	} {
+		r.Add(line)
+	}
+	// The final disk round's raw size and hvi's time for it come from
+	// hull's last line, as the summary says them.
+	want := strings.Join([]string{
+		"disk-round-0|disk|0|false||0|2.5 MiB|0|0.06|-",
+		"ram-round-0|ram|0|false|63.3 MiB|0||0|59.71|-",
+		"disk-round-1|disk|1|false||0|155430 bytes|155430|0.01|-",
+		"ram-round-1|ram|1|false|5.5 MiB|0||0|5.45|-",
+		"disk-round-final|disk|2|true|458752 bytes|458752|9271 bytes|9271|0.01|0",
+		"ram-round-2|ram|2|true|4.4 MiB|0||0|3.66|-",
+	}, "\n")
+	if got := sentRounds(r); got != want {
+		t.Errorf("rounds:\n%s\nwant:\n%s", got, want)
+	}
+	if s := r.Summary(); !strings.HasSuffix(s, ", 6 rounds (3 disk, 3 memory), the final disk round 458752 bytes "+
+		"in under 1 ms (sent as 9271 bytes); transfer 72.18 s, commit 0.09 s") {
+		t.Errorf("summary %q", s)
+	}
+}
+
+// sentRounds is each round of a report as
+// name|kind|round|final|size|bytes|sent|sentBytes|seconds|ms, with "-" for
+// no ms.
+func sentRounds(r MoveReport) string {
+	var got []string
+	for _, rd := range r.Rounds {
+		ms := "-"
+		if rd.Ms != nil {
+			ms = strconv.FormatInt(*rd.Ms, 10)
+		}
+		got = append(got, fmt.Sprintf("%s|%s|%d|%v|%s|%d|%s|%d|%.2f|%s", rd.Name, rd.Kind, rd.Round, rd.Final,
+			rd.Size, rd.Bytes, rd.Sent, rd.SentBytes, rd.Seconds, ms))
+	}
+	return strings.Join(got, "\n")
+}
+
+// The summary pairs the final disk round's size with its time as hull
+// paired them, and says what it was sent as apart. Before, it gave the
+// round line's 161172 bytes, what the round came to in hvi's stream, with
+// the 21 ms hull's last line gives for its raw 6.3 MiB. The lines are the
+// first streamed claude-code move from the Mac to rp2 (brig's H8d demo,
+// 2026-10-15), as hull d2bb5e9 printed them, which hull 9fb5e62 prints the
+// same.
+func TestTheFinalDiskRoundIsSaidAsHullPairedIt(t *testing.T) {
+	var r MoveReport
+	for _, line := range []string{
+		"Transport: streamed (pre-copy rounds; the disk blocks that differ from base 9890a88a4845)",
+		"move: disk-round-0: 2.5 MiB in 0.07 s, 37.2 MiB/s",
+		"move: ram-round-0: 3.4 MiB so far, 1.2 MiB/s",
+		"move: ram-round-0: 62.8 MiB in 60.90 s, 1.0 MiB/s",
+		"move: disk-round-final: 161172 bytes in 0.01 s, 14.5 MiB/s",
+		"move: ram-round-1: 5.4 MiB in 5.05 s, 1.1 MiB/s",
+		"move: hvi: 2 RAM rounds (time_cap), disk rounds of 3834, 101 blocks (245.9 MiB, 2.6 MiB on the wire); " +
+			"paused 5087 ms, disk sync 14 ms before the pause and 16 ms in it",
+		"move: hvi sealed the stream and fenced brig-claude-code-demo (5087 ms after the pause)",
+		"Timings (ms): fence 0, transfer 69005, restore paused 0, commit 73",
+		"move: 70.9 MiB in 69.0 s; disk 2.6 MiB, RAM 68.2 MiB, state 67757 bytes; sealed 5087 ms after the " +
+			"pause, last disk round 6.3 MiB in 21 ms; downtime about 7958 ms",
+	} {
+		r.Add(line)
+	}
+	r.Seconds = 70.1
+	want := "hull's move took 70.1 s, streamed, hull estimates the guest was paused about 7.96 s, 4 rounds " +
+		"(2 disk, 2 memory), the final disk round 6.3 MiB in 21 ms (sent as 161172 bytes); transfer 69.00 s, " +
+		"commit 0.07 s"
+	if s := r.Summary(); s != want {
+		t.Errorf("summary %q\nwant    %q", s, want)
+	}
+	// --json carries the same pair on the round: hull's rounded raw size,
+	// with no count of bytes made from it, and hvi's 21 ms.
+	final := r.Rounds[2]
+	if final.Name != "disk-round-final" || final.Size != "6.3 MiB" || final.Bytes != 0 ||
+		final.SentBytes != 161172 || final.Seconds != 0.01 || final.Ms == nil || *final.Ms != 21 {
+		t.Errorf("the final disk round %+v", final)
+	}
+}
+
+// --json gives the final disk round what the summary gives it, under the
+// names cli.md documents: hull's raw size and hvi's time from the last
+// line, with hvi's 0 ms kept as 0, and nothing of hull's default for a
+// round hvi gave no figures for.
+func TestTheJSONCarriesTheFinalDiskRoundAsTheSummarySaysIt(t *testing.T) {
+	round := "move: disk-round-final: 9271 bytes in 0.01 s, 1046368 bytes/s"
+	for _, c := range []struct {
+		last string
+		want string
+	}{
+		{"move: 75.9 MiB in 72.2 s; sealed 3675 ms after the pause, last disk round 458752 bytes in 0 ms; " +
+			"downtime about 6813 ms",
+			`size="458752 bytes" bytes=458752 sent="9271 bytes" sentBytes=9271 seconds=0.01 ms=0`},
+		{"move: 75.9 MiB in 72.2 s; sealed 3675 ms after the pause, last disk round 0 bytes in 0 ms; " +
+			"downtime about 6813 ms",
+			`size=<nil> bytes=<nil> sent="9271 bytes" sentBytes=9271 seconds=0.01 ms=<nil>`},
+	} {
+		var r MoveReport
+		r.Add(round)
+		r.Add(c.last)
+		doc, err := json.Marshal(r.Rounds[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(doc, &fields); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, k := range []string{"size", "bytes", "sent", "sentBytes", "seconds", "ms"} {
+			v, ok := fields[k]
+			switch {
+			case !ok:
+				got = append(got, k+"=<nil>")
+			case k == "size" || k == "sent":
+				got = append(got, fmt.Sprintf("%s=%q", k, v))
+			default:
+				got = append(got, fmt.Sprintf("%s=%v", k, v))
+			}
+		}
+		if g := strings.Join(got, " "); g != c.want {
+			t.Errorf("after %q\ngot  %s\nwant %s\nfrom %s", c.last, g, c.want, doc)
+		}
+	}
+}
+
+// The summary gives the final disk round's time only as hull gave it: in
+// milliseconds from hull's last line when it has one, or else as the
+// round's own line wrote it, with hull's "in 0.00 s" said as under 0.01 s,
+// not as no time at all. A round line with no time gives none: a number
+// hull did not report is left out. The time goes with the raw size it was
+// given with, and what the round was sent as follows apart. These lines
+// are made up, in the shapes hull 511877d and hull d2bb5e9 give a round.
+func TestTheFinalDiskRoundsTimeIsOnlyWhatHullSaid(t *testing.T) {
+	last := "move: 9.1 MiB in 2.3 s; disk 1.0 MiB, RAM 8.0 MiB, state 53575 bytes; sealed 7 ms after the pause, " +
+		"last disk round 256.0 KiB in 4 ms; downtime about 107 ms"
+	for _, c := range []struct {
+		lines []string
+		want  string
+	}{
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire), 25.0 MiB/s"},
+			"the final disk round 262144 bytes (sent as 5696 bytes)"},
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 25.0 MiB/s"},
+			"the final disk round 262144 bytes in under 0.01 s (sent as 5696 bytes)"},
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire) in 4 ms, 25.0 MiB/s"},
+			"the final disk round 262144 bytes in 4 ms (sent as 5696 bytes)"},
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 25.0 MiB/s",
+			last}, "the final disk round 256.0 KiB in 4 ms (sent as 5696 bytes)"},
+		{[]string{"move: disk-round-final: in 0.02 s"}, "the final disk round in 0.02 s"},
+		// hull d2bb5e9's round line gives only what was sent, and the
+		// time hull took to pass it on: they stay a pair.
+		{[]string{"move: disk-round-final: 5696 bytes in 0.01 s, 25.0 MiB/s"},
+			"the final disk round sent as 5696 bytes in 0.01 s"},
+		{[]string{"move: disk-round-final: 5696 bytes in 0.01 s, 25.0 MiB/s", last},
+			"the final disk round 256.0 KiB in 4 ms (sent as 5696 bytes)"},
+		// A last line with a time and no size leaves the raw size out:
+		// the sent bytes do not stand in for it.
+		{[]string{"move: disk-round-final: 5696 bytes in 0.01 s, 25.0 MiB/s",
+			"move: 9.1 MiB in 2.3 s; last disk round 4 ms; downtime about 107 ms"},
+			"the final disk round in 4 ms (sent as 5696 bytes)"},
+		// hull 9fb5e62 prints "0 bytes in 0 ms" on its last line when
+		// hvi's reply gives no figures for the round taken paused. Beside
+		// a round that sent something that is no raw size, and the
+		// round's own pair is said.
+		{[]string{"move: disk-round-final: 161172 bytes in 0.01 s, 14.5 MiB/s",
+			"move: 70.9 MiB in 69.0 s; disk 2.6 MiB, RAM 68.2 MiB, state 67757 bytes; sealed 5087 ms after the " +
+				"pause, last disk round 0 bytes in 0 ms; downtime about 7958 ms"},
+			"the final disk round sent as 161172 bytes in 0.01 s"},
+		{[]string{"move: disk-round-final: 6.3 MiB in 0.12 s, 52.5 MiB/s",
+			"move: 9.1 MiB in 2.3 s; last disk round 0 bytes in 0 ms; downtime about 107 ms"},
+			"the final disk round sent as 6.3 MiB in 0.12 s"},
+		// An empty round is said as hull gave it. These are the lines of
+		// H8b's idle and writer moves from rp1 to rp2: hvi's round came to
+		// 0 bytes in its stream, so its 0 bytes raw is no contradiction.
+		{[]string{"move: disk-round-final: 0 bytes in 0.00 s, 0 bytes/s",
+			"move: 109.5 MiB in 2.0 s; disk 34.5 MiB, RAM 74.9 MiB, state 54333 bytes; sealed 5 ms after the " +
+				"pause, last disk round 0 bytes in 3 ms; downtime about 84 ms"},
+			"the final disk round 0 bytes in 3 ms (sent as 0 bytes)"},
+		{[]string{"move: disk-round-final: 0 bytes in 0.00 s, 0 bytes/s",
+			"move: 310.4 MiB in 4.8 s; disk 128.5 MiB, RAM 181.8 MiB, state 55597 bytes; sealed 5 ms after the " +
+				"pause, last disk round 0 bytes in 0 ms; downtime about 102 ms"},
+			"the final disk round 0 bytes in under 1 ms (sent as 0 bytes)"},
+	} {
+		var r MoveReport
+		for _, line := range c.lines {
+			r.Add(line)
+		}
+		s := r.Summary()
+		if !strings.HasSuffix(s, "1 rounds (1 disk, 0 memory), "+c.want) {
+			t.Errorf("%q\ngives %q\nwant it to end %q", c.lines, s, c.want)
+		}
+	}
+}
+
+// A line the report does not know changes nothing in it, and it reaches
+// the move's Progress whole, as hull printed it: brig prints every line
+// hull prints, so a hull that words its lines anew is still seen.
+func TestALineTheReportDoesNotKnowIsPassedOnWhole(t *testing.T) {
+	lines := []string{
+		"move: hvi: 3 disk components, 12 frames",
+		"Moving s in a way brig has not seen: 42 of 43",
+		"move: round trip 3 ms to the destination",
+	}
+	h, _ := migrateHull(t, "printf '"+strings.Join(lines, "\\n")+"\\n' >&2; echo committed > RECORD")
+	var r MoveReport
+	var seen []string
+	each := func(line string) { seen = append(seen, line); r.Add(line) }
+	if _, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1, Progress: each}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, "\n") != strings.Join(lines, "\n") {
+		t.Errorf("passed on:\n%s\nwant:\n%s", strings.Join(seen, "\n"), strings.Join(lines, "\n"))
+	}
+	if b, _ := json.Marshal(r); string(b) != "{}" {
+		t.Errorf("lines the report does not know gave %s", b)
 	}
 }

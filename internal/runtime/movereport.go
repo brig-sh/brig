@@ -33,6 +33,16 @@ type MoveReport struct {
 	// took, by hull's name for the step: fence, transfer, restore paused,
 	// commit.
 	StepsMs map[string]int64 `json:"stepsMs,omitempty"`
+	// finalDiskSize and finalDiskMs are the final disk round in hull's
+	// last line, "last disk round 6.3 MiB in 21 ms": its raw size, as hull
+	// wrote it, and hvi's time for it, when finalDiskTimed says hull gave
+	// one. The two are one pair, hvi's account of the round. The round's
+	// own line, from hull d2bb5e9 on, has neither: it gives what the round
+	// came to in hvi's stream and how long hull took to pass it on. A hull
+	// older than d2bb5e9 gives only the time, "last disk round 3 ms".
+	finalDiskSize  string
+	finalDiskMs    int64
+	finalDiskTimed bool
 }
 
 // MoveRound is one round of a move's copy: of the guest's memory, of its
@@ -48,10 +58,31 @@ type MoveRound struct {
 	// marks it so once hull says hvi sealed the stream.
 	Final bool `json:"final,omitempty"`
 	// Size is what hull says the round carried, as hull wrote it, and
-	// Bytes the same when hull gave it as a count of bytes.
-	Size    string  `json:"size,omitempty"`
-	Bytes   int64   `json:"bytes,omitempty"`
-	Seconds float64 `json:"seconds,omitempty"`
+	// Bytes the same when hull gave it as a count of bytes. For a disk
+	// round that is its raw size, which only a line that also says what
+	// went on the wire gives, or, for the final disk round, hull's last
+	// line, "last disk round 6.3 MiB in 21 ms"; Ms is the time that line
+	// gives with it. Sent is what a disk round was sent as: the
+	// part "on the wire" of such a line, or the one size of a disk round's
+	// line from hull d2bb5e9 on, "disk-round-final: 161172 bytes in
+	// 0.01 s", which is what the round came to in hvi's stream (hull's
+	// framing adds a little on the wire). SentBytes is Sent as a count of
+	// bytes.
+	Size      string  `json:"size,omitempty"`
+	Bytes     int64   `json:"bytes,omitempty"`
+	Sent      string  `json:"sent,omitempty"`
+	SentBytes int64   `json:"sentBytes,omitempty"`
+	Seconds   float64 `json:"seconds,omitempty"`
+	// Ms is the final disk round's time in whole milliseconds as hull's
+	// last line gives it: hvi's time for the round from hull d2bb5e9 on,
+	// not Seconds, which is how long hull took to pass the round on. 0
+	// is a round shorter than a millisecond, so Ms is nil, not 0, when
+	// hull gave no time.
+	Ms *int64 `json:"ms,omitempty"`
+	// took is the round's time as hull wrote it, "0.16 s" or "3 ms", or
+	// "" when its line gave none: Seconds is 0 both for hull's "in 0.00 s"
+	// and for a line with no time.
+	took string
 	// MiBPerSec is the round's rate, and DirtyBlocksPerSec how fast the
 	// guest wrote disk blocks during it, which hull prints for a disk
 	// round after the first. hull prints no such rate for memory.
@@ -61,21 +92,32 @@ type MoveRound struct {
 
 // The parts of hull's lines a report reads. Each is matched on its own, so
 // a line hull words differently still gives up the parts it has, and a line
-// without them changes nothing. Bytes are read only where hull prints a
-// count of bytes: its 1.7 GiB is rounded, and a count made from it would
-// claim a precision hull did not give.
+// without them changes nothing: brig passes every line on as hull printed
+// it, and a line the report does not know is only printed. Bytes are read
+// only where hull prints a count of bytes: its 1.7 GiB is rounded, and a
+// count made from it would claim a precision hull did not give.
 //
-// hull prints a streamed move's rounds after "move: ", as
-// "disk round 1: 12 blocks, 768.0 KiB (301.2 KiB on the wire) in 0.20 s,
-// 1.5 MiB/s, guest wrote 60 blocks/s" and "ram-round-0: 90.7 MiB in 2.10 s,
-// 43.2 MiB/s", and the downtime as "downtime about 1450 ms". During a long
-// round it prints how far the round has got, "disk round 0: 812 blocks so
-// far, 30.1 MiB/s (34% of 2381)", which is not a round of its own.
+// hull 511877d prints a streamed move's rounds after "move: ", as
+// "disk round 1: 163 blocks, 10.2 MiB (10.0 MiB on the wire) in 0.19 s,
+// 53.5 MiB/s, guest wrote 52 blocks/s", "disk round 3 (final): ..." and
+// "ram-round-0: 138.2 MiB in 2.56 s, 53.9 MiB/s", and the downtime as
+// "downtime about 1450 ms". During a long round it prints how far the round
+// has got, "disk round 0: 1574 blocks so far, 48.1 MiB/s", which is not a
+// round of its own. Since hull d2bb5e9 hvi carries the disk rounds in its
+// own stream, and the rounds take hvi's component names, "disk-round-0" and
+// on, and the one hvi takes in the pause is "disk-round-final"; a round
+// named final in either spelling is numbered after the rounds of its kind
+// before it. Such a disk round's line gives one size, what the round came
+// to in hvi's stream, "disk-round-final: 161172 bytes in 0.01 s, 14.5
+// MiB/s", and hull's last line gives its raw size and hvi's time for it,
+// "last disk round 6.3 MiB in 21 ms".
 var (
-	lineRound     = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+))?\b[^:]*:\s*(.*)$`)
+	lineRound     = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+|final))?\b[^:]*:\s*(.*)$`)
 	lineSize      = regexp.MustCompile(`^(?:\d+ blocks, )?(\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB))\b`)
 	lineBytes     = regexp.MustCompile(`\b(\d+) bytes(?:[^/]|$)`)
-	lineSeconds   = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?s\b`)
+	lineSeconds   = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?(ms|s)\b`)
+	lineFinalDisk = regexp.MustCompile(`\blast disk round (?:([^;]*?) in )?(\d+) ms\b`)
+	lineOnWire    = regexp.MustCompile(`\((\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB)) on the wire\)`)
 	lineRate      = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(bytes|KiB|MiB|GiB)/s\b`)
 	lineBlocks    = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
 	lineDowntime  = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
@@ -93,6 +135,15 @@ func (r *MoveReport) Add(line string) {
 	if m := lineDowntime.FindStringSubmatch(line); m != nil {
 		r.DowntimeSeconds = lineDuration(m[1], m[2])
 	}
+	if m := lineFinalDisk.FindStringSubmatch(line); m != nil {
+		// hull's last line: "...; sealed 5087 ms after the pause, last
+		// disk round 6.3 MiB in 21 ms; downtime about 7958 ms", or "last
+		// disk round 3 ms" from a hull older than d2bb5e9.
+		r.finalDiskSize = strings.TrimSpace(m[1])
+		r.finalDiskMs, _ = strconv.ParseInt(m[2], 10, 64)
+		r.finalDiskTimed = true
+		r.fillFinalDisk()
+	}
 	if m := lineRound.FindStringSubmatch(line); m != nil {
 		name, _, _ := strings.Cut(strings.TrimPrefix(line, "move: "), ":")
 		rest := m[4]
@@ -101,13 +152,18 @@ func (r *MoveReport) Add(line string) {
 			// so far, 30.1 MiB/s (34% of 2381)"): the round has not ended.
 			return
 		}
-		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" ||
-			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest), Seconds: lineFloat(lineSeconds, rest),
+		named := strings.ToLower(m[3])
+		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" || named == "final" ||
+			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest),
 			MiBPerSec: lineMiBPerSec(rest), DirtyBlocksPerSec: lineFloat(lineBlocks, rest)}
-		if m[3] != "" {
-			round.Round, _ = strconv.Atoi(m[3])
+		if tm := lineSeconds.FindStringSubmatch(rest); tm != nil {
+			round.Seconds, round.took = lineDuration(tm[1], tm[2]), tm[1]+" "+tm[2]
+		}
+		if named != "" && named != "final" {
+			round.Round, _ = strconv.Atoi(named)
 		} else if n := len(r.Rounds); n > 0 && round.Final {
-			// "disk final round" follows the numbered ones.
+			// "disk final round" and "disk-round-final" follow the
+			// numbered ones.
 			for _, prev := range r.Rounds {
 				if prev.Kind == round.Kind && prev.Round >= round.Round {
 					round.Round = prev.Round + 1
@@ -117,7 +173,19 @@ func (r *MoveReport) Add(line string) {
 		if sm := lineSize.FindStringSubmatch(rest); sm != nil {
 			round.Size = sm[1]
 		}
+		if round.Kind == "disk" {
+			// A disk round's raw size is on its line only beside what
+			// went on the wire. A line with one size, as hull d2bb5e9's,
+			// gives what was sent, and nothing of the raw size.
+			if wm := lineOnWire.FindStringSubmatch(rest); wm != nil {
+				round.Sent = wm[1]
+			} else {
+				round.Sent, round.Size, round.Bytes = round.Size, "", 0
+			}
+			round.SentBytes = lineByteCount(round.Sent)
+		}
 		r.Rounds = append(r.Rounds, round)
+		r.fillFinalDisk()
 		return
 	}
 	if m := lineTimings.FindStringSubmatch(line); m != nil {
@@ -167,6 +235,130 @@ func (r *MoveReport) Add(line string) {
 			r.MiBPerSec = rate
 		}
 	}
+}
+
+// roundsSaid is the summary's part on the rounds: how many, of which kind,
+// and the final disk round, the one the guest waited for. Its size and time
+// are said only as one pair hull gave: the raw size and hvi's time from
+// hull's last line, unless that is only hull's default (finalDiskPair), or
+// else the size and time on the round's own line. What it was sent as
+// follows apart. A size or time hull did not give is left
+// out, and the sent bytes are never given the raw round's time.
+func (r *MoveReport) roundsSaid(n int) string {
+	var disk, ram int
+	var final *MoveRound
+	for i, rd := range r.Rounds {
+		switch rd.Kind {
+		case "disk":
+			disk++
+			if rd.Final {
+				final = &r.Rounds[i]
+			}
+		case "ram":
+			ram++
+		}
+	}
+	said := fmt.Sprintf("%d rounds", n)
+	if disk+ram == 0 {
+		return said
+	}
+	said += fmt.Sprintf(" (%d disk, %d memory)", disk, ram)
+	if final == nil {
+		return said
+	}
+	size, took := final.Size, roundTook(final.took, final.Seconds)
+	lastSize, lastMs, timed := r.finalDiskPair(final)
+	if timed {
+		took = "in " + strconv.FormatInt(lastMs, 10) + " ms"
+		if lastMs == 0 {
+			// hvi counts whole milliseconds: 0 is a round shorter than
+			// one, not none.
+			took = "in under 1 ms"
+		}
+		if lastSize != "" {
+			size = lastSize
+		}
+	}
+	var of []string
+	switch {
+	case size == "" && !timed && final.Sent != "":
+		// The round's own line, hull d2bb5e9's, with no last line to
+		// give the raw size: its time is the time to pass on what was
+		// sent.
+		of = append(of, "sent as "+final.Sent)
+		if took != "" {
+			of = append(of, took)
+		}
+	default:
+		for _, part := range []string{size, took} {
+			if part != "" {
+				of = append(of, part)
+			}
+		}
+		if final.Sent != "" {
+			of = append(of, "(sent as "+final.Sent+")")
+		}
+	}
+	if len(of) > 0 {
+		said += ", the final disk round " + strings.Join(of, " ")
+	}
+	return said
+}
+
+// finalDiskPair is the raw size and the time hull's last line gave for the
+// final disk round, final, and whether the report has them. It has none
+// without that line, and none from hull's default for it: hull prints
+// "last disk round 0 bytes in 0 ms" when hvi's reply has no figures for a
+// disk round taken in the pause, so 0 bytes in 0 ms beside a round line
+// that sent something is no account of that round, and the summary would
+// give a raw size of 0 next to a sent size that is not.
+func (r *MoveReport) finalDiskPair(final *MoveRound) (size string, ms int64, ok bool) {
+	if !r.finalDiskTimed {
+		return "", 0, false
+	}
+	if r.finalDiskSize == "0 bytes" && r.finalDiskMs == 0 && final != nil && final.Sent != "" &&
+		final.Sent != "0 bytes" {
+		return "", 0, false
+	}
+	return r.finalDiskSize, r.finalDiskMs, true
+}
+
+// fillFinalDisk puts what hull's last line gave for the final disk round on
+// that round, so that --json carries the pair the summary says: the raw
+// size in Size, and in Bytes when it is a count of bytes, where the
+// round's own line gave none, and the time in Ms. hull prints its last
+// line after the rounds, but the report fills the round whichever comes
+// first.
+func (r *MoveReport) fillFinalDisk() {
+	for i := len(r.Rounds) - 1; i >= 0; i-- {
+		rd := &r.Rounds[i]
+		if rd.Kind != "disk" || !rd.Final {
+			continue
+		}
+		size, ms, ok := r.finalDiskPair(rd)
+		if !ok {
+			return
+		}
+		if rd.Size == "" && size != "" {
+			rd.Size, rd.Bytes = size, lineByteCount(size)
+		}
+		rd.Ms = &ms
+		return
+	}
+}
+
+// roundTook is a round's time as its own line gave it, as took and secs
+// hold it, for the summary. hull's "in 0.00 s" is a time too short for its
+// rounding, not none.
+func roundTook(took string, secs float64) string {
+	switch {
+	case took == "":
+		return ""
+	case secs == 0:
+		_, unit, _ := strings.Cut(took, " ")
+		return map[string]string{"s": "in under 0.01 s", "ms": "in under 1 ms"}[unit]
+	}
+	return "in " + took
 }
 
 // markPausedRAM marks the last memory round as the one taken in the pause.
@@ -248,7 +440,7 @@ func (r *MoveReport) Summary() string {
 		parts = append(parts, fmt.Sprintf("at %.1f MiB/s", r.MiBPerSec))
 	}
 	if n := len(r.Rounds); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d rounds", n))
+		parts = append(parts, r.roundsSaid(n))
 	}
 	// hull's steps in the order a move takes them, then any other. A
 	// streamed move has no separate fence or restore, and hull reports
