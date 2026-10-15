@@ -42,6 +42,7 @@ other pages follow, in the order a new reader needs them.
 | Page | What it gives you |
 | --- | --- |
 | [cli.md](cli.md) | Every verb and flag, the environment variables, the JSON output and the exit codes |
+| [broker.md](broker.md) | How the credential broker checks, edits and forwards a request on a route |
 | [migration.md](migration.md) | Every retired spelling and its replacement |
 | [stability.md](stability.md) | What you can script against, and what can change |
 | [telemetry.md](telemetry.md) | What Brig counts, and how to turn it off |
