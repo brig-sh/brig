@@ -33,6 +33,12 @@ type MoveReport struct {
 	// took, by hull's name for the step: fence, transfer, restore paused,
 	// commit.
 	StepsMs map[string]int64 `json:"stepsMs,omitempty"`
+	// finalDiskMs is the time of the final disk round in hull's last
+	// line, "last disk round 196608 bytes in 3 ms", in hull's own unit,
+	// when finalDiskTimed says hull gave it. The round's own line rounds
+	// it to hundredths of a second.
+	finalDiskMs    int64
+	finalDiskTimed bool
 }
 
 // MoveRound is one round of a move's copy: of the guest's memory, of its
@@ -52,6 +58,10 @@ type MoveRound struct {
 	Size    string  `json:"size,omitempty"`
 	Bytes   int64   `json:"bytes,omitempty"`
 	Seconds float64 `json:"seconds,omitempty"`
+	// took is the round's time as hull wrote it, "0.16 s" or "3 ms", or
+	// "" when its line gave none: Seconds is 0 both for hull's "in 0.00 s"
+	// and for a line with no time.
+	took string
 	// MiBPerSec is the round's rate, and DirtyBlocksPerSec how fast the
 	// guest wrote disk blocks during it, which hull prints for a disk
 	// round after the first. hull prints no such rate for memory.
@@ -80,7 +90,8 @@ var (
 	lineRound     = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+|final))?\b[^:]*:\s*(.*)$`)
 	lineSize      = regexp.MustCompile(`^(?:\d+ blocks, )?(\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB))\b`)
 	lineBytes     = regexp.MustCompile(`\b(\d+) bytes(?:[^/]|$)`)
-	lineSeconds   = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?s\b`)
+	lineSeconds   = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?(ms|s)\b`)
+	lineFinalDisk = regexp.MustCompile(`\blast disk round (?:[^;]*? in )?(\d+) ms\b`)
 	lineRate      = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(bytes|KiB|MiB|GiB)/s\b`)
 	lineBlocks    = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
 	lineDowntime  = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
@@ -98,6 +109,13 @@ func (r *MoveReport) Add(line string) {
 	if m := lineDowntime.FindStringSubmatch(line); m != nil {
 		r.DowntimeSeconds = lineDuration(m[1], m[2])
 	}
+	if m := lineFinalDisk.FindStringSubmatch(line); m != nil {
+		// hull's last line: "...; sealed 7 ms after the last RAM round
+		// began, last disk round 10.2 MiB in 156 ms; downtime about
+		// 13442 ms", or "last disk round 3 ms" from an older hull.
+		r.finalDiskMs, _ = strconv.ParseInt(m[1], 10, 64)
+		r.finalDiskTimed = true
+	}
 	if m := lineRound.FindStringSubmatch(line); m != nil {
 		name, _, _ := strings.Cut(strings.TrimPrefix(line, "move: "), ":")
 		rest := m[4]
@@ -108,8 +126,11 @@ func (r *MoveReport) Add(line string) {
 		}
 		named := strings.ToLower(m[3])
 		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" || named == "final" ||
-			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest), Seconds: lineFloat(lineSeconds, rest),
+			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest),
 			MiBPerSec: lineMiBPerSec(rest), DirtyBlocksPerSec: lineFloat(lineBlocks, rest)}
+		if tm := lineSeconds.FindStringSubmatch(rest); tm != nil {
+			round.Seconds, round.took = lineDuration(tm[1], tm[2]), tm[1]+" "+tm[2]
+		}
 		if named != "" && named != "final" {
 			round.Round, _ = strconv.Atoi(named)
 		} else if n := len(r.Rounds); n > 0 && round.Final {
@@ -177,7 +198,9 @@ func (r *MoveReport) Add(line string) {
 }
 
 // roundsSaid is the summary's part on the rounds: how many, of which kind,
-// and the final disk round, the one the guest waited for.
+// and the final disk round, the one the guest waited for: its size, and its
+// time in milliseconds from hull's last line, or else as its own line gave
+// it. A size or time hull did not give is left out.
 func (r *MoveReport) roundsSaid(n int) string {
 	var disk, ram int
 	var final *MoveRound
@@ -197,8 +220,26 @@ func (r *MoveReport) roundsSaid(n int) string {
 		return said
 	}
 	said += fmt.Sprintf(" (%d disk, %d memory)", disk, ram)
-	if final != nil && final.Size != "" {
-		said += fmt.Sprintf(", the final disk round %s in %.2f s", final.Size, final.Seconds)
+	if final == nil {
+		return said
+	}
+	var of []string
+	if final.Size != "" {
+		of = append(of, final.Size)
+	}
+	switch {
+	case r.finalDiskTimed:
+		of = append(of, fmt.Sprintf("in %d ms", r.finalDiskMs))
+	case final.took != "" && final.Seconds == 0:
+		// hull's "in 0.00 s" is a time too short for its rounding, not
+		// none.
+		_, unit, _ := strings.Cut(final.took, " ")
+		of = append(of, map[string]string{"s": "in under 0.01 s", "ms": "in under 1 ms"}[unit])
+	case final.took != "":
+		of = append(of, "in "+final.took)
+	}
+	if len(of) > 0 {
+		said += ", the final disk round " + strings.Join(of, " ")
 	}
 	return said
 }
