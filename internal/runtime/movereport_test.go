@@ -61,7 +61,9 @@ func TestMoveReportReadsHullsLines(t *testing.T) {
 // hull's streamed move names its rounds by what they copy: the disk rounds
 // numbered and then the final one taken in the pause, and the memory rounds
 // by hvi's component names. Each is a round of its kind, the final ones
-// marked, and the downtime is read from hull's closing line. A line on how
+// marked: hull names the final disk round, and the last memory round is
+// marked when hull says hvi sealed the stream, since hvi takes it in the
+// pause. The downtime is read from hull's closing line. A line on how
 // far a long round has got is not a round. The lines are hull 4a30a43's.
 func TestMoveReportReadsAStreamedMove(t *testing.T) {
 	var r MoveReport
@@ -89,7 +91,7 @@ func TestMoveReportReadsAStreamedMove(t *testing.T) {
 		"disk round 0|disk|0|false|148.8 MiB|1.92|0",
 		"disk round 1|disk|1|false|768.0 KiB|0.20|60",
 		"ram-round-0|ram|0|false|90.7 MiB|2.10|0",
-		"ram-round-1|ram|1|false|3.1 MiB|0.09|0",
+		"ram-round-1|ram|1|true|3.1 MiB|0.09|0",
 		"disk final round|disk|2|true|128.0 KiB|0.03|0",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -102,8 +104,9 @@ func TestMoveReportReadsAStreamedMove(t *testing.T) {
 
 // The lines brig passed on during a streamed move from rp1 to rp2 through
 // brig teleport, with hull 1ecb5c8 and hvi ef8833a, as printed: a round is
-// counted once, at its end, and the state's 53259 bytes on the Sent line are
-// not the total, which hull gave only rounded.
+// counted once, at its end, the last memory round is the one taken in the
+// pause though hull does not name it final, and the state's 53259 bytes on
+// the Sent line are not the total, which hull gave only rounded.
 func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 	var r MoveReport
 	for _, line := range []string{
@@ -129,7 +132,7 @@ func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 		names = append(names, fmt.Sprintf("%s/%s/%v", rd.Name, rd.Size, rd.Final))
 	}
 	want := "disk round 0/274.6 MiB/false|disk round 1/131072 bytes/false|ram-round-0/74.0 MiB/false|" +
-		"ram-round-1/1.0 MiB/false|disk round 2 (final)/262144 bytes/true"
+		"ram-round-1/1.0 MiB/true|disk round 2 (final)/262144 bytes/true"
 	if strings.Join(names, "|") != want {
 		t.Errorf("rounds %s\nwant   %s", strings.Join(names, "|"), want)
 	}
@@ -163,5 +166,26 @@ func TestAMoveReportIsFedAsTheMoveRuns(t *testing.T) {
 	}
 	if !strings.Contains(r.Summary(), "at 20.3 MiB/s, 2 rounds") {
 		t.Errorf("summary %q", r.Summary())
+	}
+}
+
+// A memory round is final only once the rounds are over: while hull is
+// still copying, the last round so far is not the paused one. A hull that
+// does not say it sealed ends the rounds with its Sent line.
+func TestOnlyTheLastMemoryRoundIsMarkedPaused(t *testing.T) {
+	var r MoveReport
+	r.Add("move: ram-round-0: 74.0 MiB in 2.88 s, 25.7 MiB/s")
+	if r.Rounds[0].Final {
+		t.Fatal("a memory round was marked paused before the rounds ended")
+	}
+	r.Add("move: ram-round-1: 1.0 MiB in 0.03 s, 34.4 MiB/s")
+	r.Add("move: disk round 2 (final): 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 1.5 MiB/s")
+	r.Add("Sent 109.5 MiB in 5.4 s (20.3 MiB/s): disk 274.9 MiB as 34.4 MiB, RAM 75.0 MiB, state 53259 bytes")
+	var got []bool
+	for _, rd := range r.Rounds {
+		got = append(got, rd.Final)
+	}
+	if fmt.Sprint(got) != "[false true true]" {
+		t.Errorf("final %v, want [false true true]", got)
 	}
 }

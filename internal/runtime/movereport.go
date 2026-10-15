@@ -34,7 +34,10 @@ type MoveRound struct {
 	Name  string `json:"name"`
 	Kind  string `json:"kind,omitempty"`
 	Round int    `json:"round"`
-	// Final is the round taken while the guest was paused.
+	// Final is the round taken while the guest was paused: the disk round
+	// hull names final, and the last memory round. hull names no memory
+	// round final; hvi takes the last one in the pause, and the report
+	// marks it so once hull says hvi sealed the stream.
 	Final bool `json:"final,omitempty"`
 	// Size is what hull says the round carried, as hull wrote it, and
 	// Bytes the same when hull gave it as a count of bytes.
@@ -68,6 +71,7 @@ var (
 	lineRate     = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(bytes|KiB|MiB|GiB)/s\b`)
 	lineBlocks   = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
 	lineDowntime = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
+	lineSealed   = regexp.MustCompile(`^(?:move: )?hvi sealed the stream\b`)
 	lineSent     = regexp.MustCompile(`^Sent\b`)
 	lineSentN    = regexp.MustCompile(`^Sent (\d+) bytes\b`)
 	lineTimings  = regexp.MustCompile(`^Timings \(ms\): (.+)$`)
@@ -124,7 +128,16 @@ func (r *MoveReport) Add(line string) {
 		}
 		return
 	}
+	if lineSealed.MatchString(line) {
+		// "move: hvi sealed the stream and fenced s (39 ms after the last
+		// RAM round began)": the RAM rounds are over, and hvi took the
+		// last one with the guest paused.
+		r.markPausedRAM()
+		return
+	}
 	if lineSent.MatchString(line) {
+		// A hull that does not say it sealed has still ended the rounds.
+		r.markPausedRAM()
 		// hull's line for the whole copy: what it sent and how fast. Only
 		// the count right after "Sent" is the total; a streamed move's line
 		// goes on with the parts, "state 53259 bytes" among them.
@@ -133,6 +146,18 @@ func (r *MoveReport) Add(line string) {
 		}
 		if rate := lineMiBPerSec(line); rate > 0 {
 			r.MiBPerSec = rate
+		}
+	}
+}
+
+// markPausedRAM marks the last memory round as the one taken in the pause.
+// hvi stops the guest before its last round, whatever its size, so that
+// round is the memory part of the downtime.
+func (r *MoveReport) markPausedRAM() {
+	for i := len(r.Rounds) - 1; i >= 0; i-- {
+		if r.Rounds[i].Kind == "ram" {
+			r.Rounds[i].Final = true
+			return
 		}
 	}
 }
