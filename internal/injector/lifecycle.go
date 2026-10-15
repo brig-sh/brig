@@ -49,6 +49,11 @@ func Running(dir string) (*Broker, bool) {
 	return &Broker{Client: c, Status: st}, true
 }
 
+// LivePID returns the pid of the broker serving dir, while that process is
+// still the one its pid file records. It asks the broker nothing, so a broker
+// that does not answer still has one.
+func LivePID(dir string) (int, bool) { return livePID(dir) }
+
 // beforeAdd runs between finding the broker and registering with it. A test
 // stops the broker there.
 var beforeAdd = func() {}
