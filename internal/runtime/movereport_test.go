@@ -140,7 +140,7 @@ func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 		t.Errorf("report %+v", r)
 	}
 	if s := r.Summary(); !strings.HasPrefix(s, "hull's move took 0.0 s, streamed, ") ||
-		!strings.HasSuffix(s, "5 rounds (3 disk, 2 memory), the final disk round 262144 bytes in 0.00 s; "+
+		!strings.HasSuffix(s, "5 rounds (3 disk, 2 memory), the final disk round 262144 bytes in 3 ms; "+
 			"transfer 5.39 s, commit 0.09 s") || r.Transport != "stream" {
 		t.Errorf("summary %q", s)
 	}
@@ -279,7 +279,7 @@ func TestMoveReportReadsTheLinesOfHull511877d(t *testing.T) {
 	if r.DowntimeSeconds != 13.442 || r.MiBPerSec != 31.5 || r.Transport != "" || r.Rounds[1].DirtyBlocksPerSec != 52 {
 		t.Errorf("report %+v", r)
 	}
-	if s := r.Summary(); !strings.Contains(s, ", 9 rounds (4 disk, 5 memory), the final disk round 10.2 MiB in 0.16 s; ") {
+	if s := r.Summary(); !strings.Contains(s, ", 9 rounds (4 disk, 5 memory), the final disk round 10.2 MiB in 156 ms; ") {
 		t.Errorf("summary %q", s)
 	}
 }
@@ -319,6 +319,40 @@ func TestMoveReportReadsTheRoundsHviStreams(t *testing.T) {
 	}
 	if s := r.Summary(); !strings.Contains(s, "6 rounds (3 disk, 3 memory), the final disk round 262144 bytes in 0.01 s") {
 		t.Errorf("summary %q", s)
+	}
+}
+
+// The summary gives the final disk round's time only as hull gave it: in
+// milliseconds from hull's last line when it has one, or else as the
+// round's own line wrote it, with hull's "in 0.00 s" said as under 0.01 s,
+// not as no time at all. A round line with no time gives none: a number
+// hull did not report is left out. These lines are made up, in the shape
+// hull 511877d gives a round, as H8b may print them.
+func TestTheFinalDiskRoundsTimeIsOnlyWhatHullSaid(t *testing.T) {
+	for _, c := range []struct {
+		lines []string
+		want  string
+	}{
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire), 25.0 MiB/s"},
+			"the final disk round 262144 bytes"},
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 25.0 MiB/s"},
+			"the final disk round 262144 bytes in under 0.01 s"},
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire) in 4 ms, 25.0 MiB/s"},
+			"the final disk round 262144 bytes in 4 ms"},
+		{[]string{"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.00 s, 25.0 MiB/s",
+			"move: 9.1 MiB in 2.3 s; disk 1.0 MiB, RAM 8.0 MiB, state 53575 bytes; sealed 7 ms after the last RAM " +
+				"round began, last disk round 256.0 KiB in 4 ms; downtime about 107 ms"},
+			"the final disk round 262144 bytes in 4 ms"},
+		{[]string{"move: disk-round-final: in 0.02 s"}, "the final disk round in 0.02 s"},
+	} {
+		var r MoveReport
+		for _, line := range c.lines {
+			r.Add(line)
+		}
+		s := r.Summary()
+		if !strings.HasSuffix(s, "1 rounds (1 disk, 0 memory), "+c.want) {
+			t.Errorf("%q\ngives %q\nwant it to end %q", c.lines, s, c.want)
+		}
 	}
 }
 
