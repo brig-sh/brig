@@ -735,11 +735,13 @@ On 2026-10-14 and 15 a teleportable `claude-code` session moved from a Mac
 KVM). It is the profile as shipped: the image
 `ghcr.io/brig-sh/claude-code-stock:root`, hvi, an `isolated` network,
 `genericBoot`, 4 vCPUs and 4096 MB. The move committed every time. As built,
-hvi on the Pi then died on the first exec into the moved guest. hvi
-`ebc1116` fixes that; see Known issues. With hvi's allocator capped, as a
-stand-in for the fix, the guest carried on and the terminal reattached from
-the Mac. The Claude Code task
-itself did not run, because the login brig held had expired.
+hvi on the Pi then died on the first exec into the moved guest. hvi caps
+its own allocator since `ebc1116`, which fixes that; see Known issues. On
+the runs before that fix, with the allocator capped from outside hvi as a
+stand-in, the guest carried on, and `brig sh claude -c ...` from the Mac
+reached it on the Pi. Every exec after a move was such a command: no
+interactive terminal was attached after a move. The Claude Code task itself
+did not run, because the login brig held had expired.
 
 The builds were brig `658ade4`, hull `0021196` and hvi `8697de0`, with the
 four-patch portable kernel (sha256 `e85e4338...`) installed in each hull
@@ -754,9 +756,13 @@ linux`), and hvi was built on `rp2` from a bundle of `8697de0`
 Mac had a state directory, a gateway directory and a hull store of its own,
 and named the brig on the Pi with `BRIG_TELEPORT_REMOTE_BRIG` and
 `BRIG_TELEPORT_REMOTE_ENV`, with the same values as `env.sh` there. A
-socket path on macOS can have at most 104 bytes, so those directories must
-have a short path: a gateway socket is
-`<gateway dir>/sandbox-<sandbox>-n.sock.qemu`.
+unix socket path on macOS can have at most 104 bytes. The gateway's stream
+socket is `<gateway dir>/sandbox-<sandbox>.sock.qemu`, as
+`sandbox-brig-claude-code.sock.qemu` was on these runs. For a sandbox name
+too long for that, Brig names the socket after a hash of the name,
+`sandbox-<8 hex digits>.sock`, so it is the gateway directory that must
+leave room for it; Brig refuses one that does not. The Mac's directories
+were reached through a short link for that reason.
 
 The sequence, with what each step gave:
 
@@ -766,8 +772,8 @@ The sequence, with what each step gave:
    1.60 GB.
 2. **Look at what the session forwards.** `brig plan claude` lists
    `GH_TOKEN (env) from the secret gh-token` and
-   `.claude/.credentials.json (file) from the secret claude-credentials`. On
-   `rp2`, where no secret store answers, both say `unknown`.
+   `.claude/.credentials.json (file) from the secret claude-credentials`.
+   That was recorded on the Mac only.
 3. **Boot on the Mac.** `brig run --teleportable claude -d` took 21.6 s, with
    the image already pulled. brig said:
    `the imported credential claude-credentials (claude-code) expired 11d ago`,
@@ -791,13 +797,14 @@ The sequence, with what each step gave:
    --verbose --include-partial-messages`, with its output stamped into
    `/root/task.jsonl`. Claude Code keeps its session under
    `CLAUDE_CONFIG_DIR`, which this profile sets to `/brig/claude`, a 512 MB
-   tmpfs. The failed turn's session file, 32,601 bytes, was there. A
-   conversation of this profile lives in the guest's memory, not on its
-   disk: it moves with the guest, and is gone when the sandbox stops.
+   tmpfs. The failed turn's session file, 32,601 bytes, was there. So a
+   conversation of this profile is expected to live in the guest's memory,
+   not on its disk, to move with the guest, and to be gone when the sandbox
+   stops. No session file was read after a move, so that is not shown yet.
 6. **Move.** `brig teleport claude --to pmoust@rp2`. The numbers, from hull's
    records on both hosts (the clocks were 82 to 83 ms apart):
 
-   | | to `rp2`, as built | to `rp1`, as built (2 runs) | to `rp1`, allocator capped |
+   | | to `rp2`, as built | to `rp1`, as built (2 runs) | to `rp1`, allocator capped outside hvi, before its fix |
    | --- | --- | --- | --- |
    | Brig's checks, probe, receive and dry run | 0.94 s | 1.05 s, 0.94 s | 0.98 s; script 0.95 s |
    | hull's fence, with the capture | 2.07 s | 1.84 s, 1.63 s | 2.08 s; 1.70 s |
@@ -810,11 +817,13 @@ The sequence, with what each step gave:
    The transfer is the guest's memory (463 MB of the 4 GB on the `rp2` run)
    and the 1.6 GB of the 16 GB disk that hold data, almost all of it the
    image. The guest is paused for the whole transfer, so most of the
-   downtime is the transfer. Tailscale showed the path to `rp2` through a
-   relay, not direct, which explains that rate. `rp2` was running another
-   project's builds. They ran it out of memory once during the session,
-   while a debug copy of the guest also ran there, so the runs after the
-   first went to `rp1`, which was idle. The guest's own count
+   downtime is the transfer. The rate to `rp2` was not explained: the path
+   there was not shown to be direct. `rp2` was running another project's
+   builds. During the session `rp2` ran out of memory while a debug copy of
+   this 4 GiB guest ran there beside those builds, and the debug copy
+   probably triggered it. That copy also logged an RCU stall in its disk
+   driver, so it is no clean control. The runs after the first went to
+   `rp1`, which was idle. The guest's own count
    of the pause, `downtime total` in its `hvi-time: generation 4` line, was
    131.19 s on the `rp2` run and 52.70 s on the capped run, within 0.1 s of
    the downtime row.
@@ -832,9 +841,12 @@ The sequence, with what each step gave:
    `the teleportable sandbox brig-claude-code is stopped ... Remove it with
    brig rm claude-code to start the session over`. The source copy was
    fenced, so the session was lost.
-8. **After the move, allocator capped.** With `MALLOC_ARENA_MAX=4` in the
-   environment of the destination's hull, which hvi inherits, every exec
-   worked. From the Mac, `brig sh` said
+8. **After the move, allocator capped outside hvi.** These runs came before
+   hvi's fix. They capped glibc's malloc arenas through the environment of
+   the destination's hull, which hvi inherits. That stand-in is obsolete:
+   hvi caps itself now, and the cap the runs used is not enough in every
+   case (see Known issues). With it, every exec worked. From the Mac,
+   `brig sh` said
    `claude-code@r3 runs on pmoust@rp1` and ran there:
    - the counter went on, 96 to 131, after a 53.5 s gap in its ticks;
    - the deleted file still read the token from before;
@@ -853,7 +865,8 @@ The sequence, with what each step gave:
    peer`, exit 56. The next attempt began 1 s later, from `rp1`, and
    downloaded. The moved guest's connections went through a new gateway on
    `rp1`, and the old one's state stayed on the Mac. An agent's open stream
-   breaks the same way, and continues only if the agent connects again.
+   is expected to break the same way, and to go on only if the agent
+   connects again. The Claude Code task did not run, so that was not seen.
 10. **Credentials on the Pi.** Each exec there printed:
 
     ```text
@@ -878,11 +891,17 @@ steps 3, 4 and 6 to 10 from the Mac and checks each one, and cleans up:
 script/teleport-demo-claude.sh pmoust@rp1
 ```
 
-With brig `658ade4`, run with the capped allocator on `rp1` and brig's
-settings for this Mac in the environment, it passed all 18 of its checks.
-Its `--claude` option also starts the Claude Code task of step 5 and
-checks that its output still grows after the move. That option has not run,
-as it needs a login that has not expired.
+With brig `658ade4`, run before hvi's fix with the allocator capped
+outside hvi on `rp1`, and brig's settings for this Mac in the environment,
+it printed 18 passed and 0 failed. One of those checks, that
+`brig teleport` exited 0, could not fail in that version: it read the
+status of a `$(...)` substitution, not brig's. That move's commit is shown
+by its `teleported` line and by the destination's hull record, `running`.
+The script now takes brig's own status. Its `--claude` option also starts
+the Claude Code task of step 5 and checks that the task's `COUNT` lines go
+on after the move, from where they were, with no restart and no error
+event. That option has not run, as it needs a login that has not expired;
+its check has run only on made-up streams.
 
 #### Known issues
 
@@ -907,27 +926,33 @@ as it needs a login that has not expired.
 - The refusal of a session that is not teleportable says its guest home is a
   host directory shared in, even for a sandbox Brig has no record of, whose
   hull record shows no share.
-- Fixed in hvi `ebc1116`, with `fc10511`: hvi `8697de0` on Linux died of
-  SIGSYS on the first exec into a 4-vCPU guest that moved from a Mac, and
-  printed nothing. The vsock bridge starts a thread for each agent connection. That
-  thread's first `free()` went through glibc's `tcache_init` and
-  `arena_get2` to `__get_nprocs`, which opens
+- Fixed in hvi `ebc1116`, with `fc10511`, on hvi's `feat/teleport` since
+  (`0c4cdfd` when this was written): hvi `8697de0` on Linux died of SIGSYS
+  on the first exec into a 4-vCPU guest that moved from a Mac, and printed
+  nothing. Its vsock bridge started a reader and a writer thread for each
+  agent connection. A new thread's first `free()` went through glibc's
+  `tcache_init` and `arena_get2` to `__get_nprocs`, which opens
   `/sys/devices/system/cpu/online`, and hvi's seccomp filter does not allow
   `openat`. hvi's commit says that read happens only once more than eight
-  arenas exist, which takes many threads allocating at once. That is
-  likely why the 1-vCPU moves above did not hit it; it was not tested. hvi
-  now calls `mallopt(M_ARENA_MAX, 1)` for a confined boot or restore, after
-  it parses its arguments and before it starts any thread, so glibc never
-  counts the CPUs and has no other heap to shrink. With that hvi, the
-  destination's hull needs no wrapper.
+  arenas exist, which takes many threads allocating at once. That is likely
+  why the 1-vCPU moves above did not hit it; it was not tested. glibc reads
+  a second file, `/proc/sys/vm/overcommit_memory`, the first time the heap
+  of an arena other than the main one shrinks, and a cap of more than one
+  arena leaves that read in place: hvi records that a guest with heavy agent
+  traffic still killed the VMM within a minute with a cap of four.
 
-  The runs above came before that commit. As a stand-in for the fix, they
-  ran the destination's hull through a wrapper that set
-  `MALLOC_ARENA_MAX=4`, and hvi inherited it. That cap does not cover every
-  case: hvi's commit records that a 60 s agent stress test with it still
-  died of SIGSYS, when glibc read `/proc/sys/vm/overcommit_memory` the
-  first time the heap of another arena shrank. The moves above have not
-  been run again with hvi `ebc1116` or later.
+  So hvi caps itself at one arena. For a confined boot or restore,
+  `one_malloc_arena()` calls `mallopt(M_ARENA_MAX, 1)` after hvi parses its
+  arguments and before it starts any thread. glibc then never counts the
+  CPUs, and has no other heap to shrink. Two probes of
+  `hvi seccomp-selftest` reach the two reads under the `vmm` filter,
+  "allocate on many threads at once (vmm)" and "free a thread's heap memory
+  (vmm)", and each fails unless malloc is kept to one arena. The
+  destination's hull needs no setting for it.
+
+  The Claude Code runs above came before that fix, and stood in for it with
+  an arena cap in the environment of the destination's hull. That stand-in
+  is obsolete. The runs have not been repeated with hvi `0c4cdfd`.
 
 #### Running it on two hosts
 
