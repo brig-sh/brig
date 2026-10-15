@@ -336,7 +336,11 @@ time for it from hull's last line, "the final disk round 6.3 MiB in
 21 ms (sent as 161172 bytes)", or else the size and time on the round's
 own line. hull `d2bb5e9`'s line for a round gives only what the round came
 to in hvi's stream, and Brig never gives that the raw round's time. A
-size or time hull did not print is left out. It reads hull's
+size or time hull did not print is left out. hull prints "last disk round
+0 bytes in 0 ms" when hvi's reply has no figures for the round, so beside
+a round that sent something Brig takes that as no figures and gives the
+round's own line, "the final disk round sent as 161172 bytes in
+0.01 s". It reads hull's
 names for the disk rounds as hull 511877d printed them
 (`disk round 3 (final)`) and as hull `d2bb5e9` prints hvi's own
 (`disk-round-0`, `disk-round-final`). A line Brig cannot read is still
