@@ -10,13 +10,16 @@ A complete policy:
 
 ```yaml
 apiVersion: brig.sh/v1alpha1
-name: locked-down
-desc: only Anthropic's API and one internal range
-egress:
-  default: deny
-  allow:
-    - host: api.anthropic.com
-    - cidr: 10.0.0.0/8
+kind: Policy
+metadata:
+  name: locked-down
+  description: only Anthropic's API and one internal range
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.anthropic.com
+      - cidr: 10.0.0.0/8
 ```
 
 <p align="center">
@@ -274,7 +277,8 @@ requires.
 The directory starts empty. Brig writes there only when you run `brig
 policy create`, `edit`, `rm`, `attach` or `detach`.
 
-`name:` inside the file wins over the filename, as it does for a profile.
+`metadata.name:` inside the file wins over the filename, as it does for a
+profile.
 `create` always gives the file the name of the policy, but a file with a
 different name is valid. A directory can hold any number of policies.
 
@@ -284,16 +288,19 @@ load. It reports two files that declare the same name in the same way.
 
 ## Policy fields
 
-The [quick example](#quick-example) shows a complete document.
+The [quick example](#quick-example) shows a complete document. It uses the
+Kubernetes envelope: `apiVersion`, `kind`, `metadata` and `spec`.
 
 | field | required | what it is |
 | --- | --- | --- |
 | `apiVersion` | yes | Pins the document shape. `brig.sh/v1alpha1` is the only value this build knows. Anything else is refused |
-| `name` | yes | The policy's identifier. Wins over the filename, and follows the same character rule as a profile name. See [Naming a policy](#naming-a-policy) |
-| `desc` | no | One line, shown by `brig policy ls` |
-| `egress.default` | yes | `allow` or `deny`, applied to any traffic neither list below names |
-| `egress.allow` | no | Exceptions to a `deny` default |
-| `egress.deny` | no | A host or range to refuse regardless. At the gateway that enforces the rules, `deny` takes priority over `allow` and over `default`. Brig applies no priority: it passes every rule through as a flag. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
+| `kind` | yes | `Policy`. A document without `kind` is read as the retired flat form. See [The flat form](#the-flat-form) |
+| `metadata.name` | yes | The policy's identifier. Wins over the filename, and follows the same character rule as a profile name. See [Naming a policy](#naming-a-policy) |
+| `metadata.description` | no | One line, shown by `brig policy ls` |
+| `metadata.labels`, `metadata.annotations` | no | Maps of strings. Brig does not read them |
+| `spec.egress.default` | yes | `allow` or `deny`, applied to any traffic neither list below names |
+| `spec.egress.allow` | no | Exceptions to a `deny` default |
+| `spec.egress.deny` | no | A host or range to refuse regardless. At the gateway that enforces the rules, `deny` takes priority over `allow` and over `default`. Brig applies no priority: it passes every rule through as a flag. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
 
 Each entry in `allow` or `deny` names one of `host:` or `cidr:`. Brig
 refuses an entry that names both, and an entry that names neither.
@@ -301,15 +308,31 @@ refuses an entry that names both, and an entry that names neither.
 | Key | Value | What Brig checks |
 | --- | --- | --- |
 | `host:` | a domain, or a glob such as `"*.githubusercontent.com"` | Brig refuses a host only for whitespace or a control character |
-| `cidr:` | a network range such as `10.0.0.0/8` | Brig checks it with Go's `net.ParseCIDR`. It refuses a typo such as `10.0.0/8` (an octet short), which cannot then reach the gateway as a rule that matches nothing |
+| `cidr:` | a network range such as `10.0.0.0/8` | Brig checks it with Go's `netip.ParsePrefix`. It refuses a typo such as `10.0.0/8` (an octet short), which cannot then reach the gateway as a rule that matches nothing |
 
 Brig does not hold `host:` to a glob grammar. The enforcer decides which
 wildcard forms it honors. The gateway that enforces a policy today matches
 the glob against the name that the guest asks its resolver for.
 
 Parsing is strict. A field that the format does not recognize fails to
-parse. Examples are `engine:`, `mode:`, and a typo such as `dsc:`. The
-format has no field that names how a rule is applied.
+parse. Examples are `engine:` under `spec`, and a typo such as
+`descripton:`. A key must match the field name byte for byte, so `Spec:`,
+or a key with a lookalike letter such as `ſpec:`, is refused too. A file
+holds one document, and Brig refuses a second one after `---`. The format
+has no field that names how an egress rule is applied.
+
+### The flat form
+
+Older policies leave out `kind` and put `name`, `desc` and `egress` at the
+top level. Brig still reads that form until v0.6.0, and converts it into the
+envelope as it loads it. It reads the flat form as it always did, so a key
+there matches its field without regard to case, as in `Egress:`. It refuses
+two spellings of one key, such as `name:` and `Name:`, which older versions
+read by dropping one, and a second document after `---`, which they
+ignored. `brig policy check` prints a notice for each bound policy that a
+file still writes in the flat form. `brig policy show` prints any policy in
+the envelope form.
+[Policy documents](migration.md#policy-documents) has the mapping.
 
 ## Naming a policy
 
@@ -488,7 +511,7 @@ leave the real file half written:
 
 ```console
 $ brig policy edit locked-down
-brig: not saved, /home/you/.config/brig/policies/locked-down.yaml is unchanged: cidr "10.0.0/8" is not a valid CIDR: invalid CIDR address: 10.0.0/8
+brig: not saved, /home/you/.config/brig/policies/locked-down.yaml is unchanged: cidr "10.0.0/8" is not a valid CIDR: netip.ParsePrefix("10.0.0/8"): ParseAddr("10.0.0"): IPv4 address too short
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
@@ -581,30 +604,39 @@ Show it, as YAML or as JSON:
 ```console
 $ brig policy show locked-down
 apiVersion: brig.sh/v1alpha1
-desc: only Anthropic's API and one internal range
-egress:
-  allow:
-  - host: api.anthropic.com
-  - cidr: 10.0.0.0/8
-  default: deny
-name: locked-down
+kind: Policy
+metadata:
+  description: only Anthropic's API and one internal range
+  name: locked-down
+spec:
+  egress:
+    allow:
+    - host: api.anthropic.com
+    - cidr: 10.0.0.0/8
+    default: deny
 $ brig policy show locked-down --json
 {
   "apiVersion": "brig.sh/v1alpha1",
-  "name": "locked-down",
-  "desc": "only Anthropic's API and one internal range",
-  "egress": {
-    "default": "deny",
-    "allow": [
-      { "host": "api.anthropic.com" },
-      { "cidr": "10.0.0.0/8" }
-    ]
+  "kind": "Policy",
+  "metadata": {
+    "name": "locked-down",
+    "description": "only Anthropic's API and one internal range"
+  },
+  "spec": {
+    "egress": {
+      "default": "deny",
+      "allow": [
+        { "host": "api.anthropic.com" },
+        { "cidr": "10.0.0.0/8" }
+      ]
+    }
   }
 }
 ```
 
 `show` prints the parsed document, so the field order differs from the file
-that you typed. The YAML output sorts keys.
+that you typed. The YAML output sorts keys. A policy written in the flat form
+is printed in the envelope form.
 
 Edit it, and remove it:
 
@@ -629,6 +661,9 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `cidr "x" is not a valid CIDR: …` | a typo in a `cidr:` value, such as a missing octet |
 | `host "x" contains whitespace or a control character` | a `host:` value that cannot be a domain or glob under any grammar |
 | `apiVersion is required, and must be "brig.sh/v1alpha1"` | a document with no `apiVersion:`, or the wrong one |
+| `unknown field "Spec"` | a key that is not the exact name of a field, such as `Spec` or a lookalike letter |
+| `the file holds more than one YAML document; one file is one document` | a second document after `---` |
+| `kind is required, and must be "Policy"` | a document with `kind:` and no value. A document with no `kind:` key is read as [the flat form](#the-flat-form) |
 | `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate, or renamed a name that is bound to something, without `--force`. The real file is untouched. The error names where your edit still is |
 | ``unknown profile "x". `brig agent ls` lists them`` | `attach`, `detach` or `check` naming a profile that is not there |
 | `cannot attach x to y: y is kind: shell, which has no agent to hook an egress rule into. Nothing was written` | `attach` to a `kind: shell` or `kind: gui` profile |

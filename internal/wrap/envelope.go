@@ -125,7 +125,7 @@ func (c *Config) policyLine() string {
 	if len(c.Policies) == 0 {
 		return ""
 	}
-	return strings.Join(c.Policies, ", ") + " (egress default: " + c.Egress.Default + ")"
+	return strings.Join(c.Policies, ", ") + " (egress default: " + string(c.Egress.Default) + ")"
 }
 
 // isolationLine is the ISOLATION row: what the sandbox this run would boot

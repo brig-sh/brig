@@ -13,6 +13,9 @@ import (
 type Entry struct {
 	Policy Policy
 	Path   string
+	// Flat is whether the file uses the retired flat form, which `brig
+	// policy check` reports. Policy holds the converted envelope either way.
+	Flat bool
 }
 
 // reservedBasenames are the files in the policy directory that are not
@@ -54,9 +57,9 @@ func isPolicyFile(name string) bool {
 	return false
 }
 
-// LoadAll reads every policy in dir, keyed by the name: inside the file
-// rather than the filename, since a file need not be named after the policy
-// it declares.
+// LoadAll reads every policy in dir, keyed by the metadata.name inside the
+// file rather than the filename, since a file need not be named after the
+// policy it declares.
 //
 // A directory that does not exist is not an error: most installs have none
 // yet. A file that fails to parse does not stop the others from loading --
@@ -86,17 +89,17 @@ func LoadAll(dir string) (map[string]Entry, error) {
 			unusable = append(unusable, fmt.Sprintf("%s: %v", name, err))
 			continue
 		}
-		p, err := Parse(blob)
+		p, flat, err := parse(blob)
 		if err != nil {
 			unusable = append(unusable, fmt.Sprintf("%s: %v", name, err))
 			continue
 		}
-		if prev, ok := entries[p.Name]; ok {
+		if prev, ok := entries[p.Metadata.Name]; ok {
 			duplicate = append(duplicate, fmt.Sprintf(
 				"%s and %s both declare the policy %q; %s wins",
-				filepath.Base(prev.Path), name, p.Name, name))
+				filepath.Base(prev.Path), name, p.Metadata.Name, name))
 		}
-		entries[p.Name] = Entry{Policy: p, Path: path}
+		entries[p.Metadata.Name] = Entry{Policy: p, Path: path, Flat: flat}
 	}
 
 	var parts []string

@@ -1,20 +1,25 @@
 package policy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
+)
 
 func validPolicy() Policy {
 	return Policy{
-		APIVersion: APIVersion,
-		Name:       "no-net",
-		Egress: Egress{
+		TypeMeta: v1alpha1.TypeMeta{APIVersion: APIVersion, Kind: v1alpha1.Kind},
+		Metadata: v1alpha1.ObjectMeta{Name: "no-net"},
+		Spec: v1alpha1.PolicySpec{Egress: &Egress{
 			Default: "deny",
 			Allow:   []Rule{{Host: "api.anthropic.com"}},
-		},
+		}},
 	}
 }
 
 func TestValidatePolicyOK(t *testing.T) {
-	if err := validPolicy().Validate(); err != nil {
+	p := validPolicy()
+	if err := p.Validate(); err != nil {
 		t.Fatalf("valid policy rejected: %v", err)
 	}
 }
@@ -26,37 +31,37 @@ func TestValidatePolicyRejections(t *testing.T) {
 	}{
 		{"missing apiVersion", func(p *Policy) { p.APIVersion = "" }},
 		{"unsupported apiVersion", func(p *Policy) { p.APIVersion = "brig.sh/v2" }},
-		{"missing name", func(p *Policy) { p.Name = "" }},
-		{"uppercase name", func(p *Policy) { p.Name = "No-Net" }},
-		{"name starting with a dash", func(p *Policy) { p.Name = "-no-net" }},
-		{"missing egress.default", func(p *Policy) { p.Egress.Default = "" }},
-		{"bad egress.default", func(p *Policy) { p.Egress.Default = "maybe" }},
+		{"missing name", func(p *Policy) { p.Metadata.Name = "" }},
+		{"uppercase name", func(p *Policy) { p.Metadata.Name = "No-Net" }},
+		{"name starting with a dash", func(p *Policy) { p.Metadata.Name = "-no-net" }},
+		{"missing egress.default", func(p *Policy) { p.Spec.Egress.Default = "" }},
+		{"bad egress.default", func(p *Policy) { p.Spec.Egress.Default = "maybe" }},
 		{"allow rule with neither host nor cidr", func(p *Policy) {
-			p.Egress.Allow = []Rule{{}}
+			p.Spec.Egress.Allow = []Rule{{}}
 		}},
 		{"allow rule with both host and cidr", func(p *Policy) {
-			p.Egress.Allow = []Rule{{Host: "example.com", CIDR: "10.0.0.0/8"}}
+			p.Spec.Egress.Allow = []Rule{{Host: "example.com", CIDR: "10.0.0.0/8"}}
 		}},
 		{"deny rule with neither host nor cidr", func(p *Policy) {
-			p.Egress.Deny = []Rule{{}}
+			p.Spec.Egress.Deny = []Rule{{}}
 		}},
 		{"cidr with an octet missing", func(p *Policy) {
-			p.Egress.Deny = []Rule{{CIDR: "10.0.0/8"}}
+			p.Spec.Egress.Deny = []Rule{{CIDR: "10.0.0/8"}}
 		}},
 		{"cidr with no prefix length", func(p *Policy) {
-			p.Egress.Allow = []Rule{{CIDR: "10.0.0.0"}}
+			p.Spec.Egress.Allow = []Rule{{CIDR: "10.0.0.0"}}
 		}},
 		{"cidr that is not an address at all", func(p *Policy) {
-			p.Egress.Allow = []Rule{{CIDR: "not-a-cidr"}}
+			p.Spec.Egress.Allow = []Rule{{CIDR: "not-a-cidr"}}
 		}},
 		{"host with a space", func(p *Policy) {
-			p.Egress.Allow = []Rule{{Host: "exa mple.com"}}
+			p.Spec.Egress.Allow = []Rule{{Host: "exa mple.com"}}
 		}},
 		{"host with a tab", func(p *Policy) {
-			p.Egress.Allow = []Rule{{Host: "example.com\t"}}
+			p.Spec.Egress.Allow = []Rule{{Host: "example.com\t"}}
 		}},
 		{"host with a newline", func(p *Policy) {
-			p.Egress.Allow = []Rule{{Host: "example.com\n"}}
+			p.Spec.Egress.Allow = []Rule{{Host: "example.com\n"}}
 		}},
 	}
 	for _, c := range cases {
@@ -72,7 +77,7 @@ func TestValidatePolicyRejections(t *testing.T) {
 
 func TestValidatePolicyAcceptsCIDR(t *testing.T) {
 	p := validPolicy()
-	p.Egress.Allow = []Rule{{CIDR: "10.0.0.0/8"}}
+	p.Spec.Egress.Allow = []Rule{{CIDR: "10.0.0.0/8"}}
 	if err := p.Validate(); err != nil {
 		t.Fatalf("a cidr: rule should parse and validate: %v", err)
 	}
@@ -80,7 +85,7 @@ func TestValidatePolicyAcceptsCIDR(t *testing.T) {
 
 func TestValidatePolicyAcceptsDenyList(t *testing.T) {
 	p := validPolicy()
-	p.Egress.Deny = []Rule{{Host: "evil.example.com"}}
+	p.Spec.Egress.Deny = []Rule{{Host: "evil.example.com"}}
 	if err := p.Validate(); err != nil {
 		t.Fatalf("a deny: entry should validate alongside allow: %v", err)
 	}
@@ -92,7 +97,7 @@ func TestValidatePolicyAcceptsDenyList(t *testing.T) {
 func TestValidatePolicyDoesNotJudgeGlobShape(t *testing.T) {
 	for _, host := range []string{"*", "*.githubusercontent.com", "example.*", "ex*ample.com"} {
 		p := validPolicy()
-		p.Egress.Allow = []Rule{{Host: host}}
+		p.Spec.Egress.Allow = []Rule{{Host: host}}
 		if err := p.Validate(); err != nil {
 			t.Errorf("Validate() rejected host %q: %v", host, err)
 		}

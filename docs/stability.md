@@ -78,6 +78,11 @@ These can change without a deprecation cycle:
 - The wording of any human-readable output. Parse `--json` output and do not
   parse prose.
 - Anything marked "example profile" in `brig agent ls`.
+- The Go package `github.com/brig-sh/brig/api/policy/v1alpha1`, which holds
+  the policy document types and their validation. It is alpha, and it carries
+  no compatibility promise. A field can be added, renamed or removed in any
+  release. It is public so that another program, such as a Kubernetes
+  operator, can link the types without linking Brig.
 
 ## Retired spellings
 
@@ -93,7 +98,7 @@ The retired spellings that still work today are removed in v0.5.0. v0.3.0
 removed only `brig shell` and the `hostCredential:` profile key, and v0.4.0
 removed none.
 
-Two exceptions:
+Three exceptions:
 
 - `brig exec` names no release. It stays until `brig sh` can pipe a command's
   output ([#335](https://github.com/brig-sh/brig/issues/335)). Its notice says
@@ -102,6 +107,9 @@ Two exceptions:
 - The profile keys `forward:`, `statePaths:`, `shell:` and `gui:`, and the
   `BRIG_TEMPLATE_DIR` setting, print no notice at run time. They are also
   removed in v0.5.0, and [migration.md](migration.md) says so for each.
+- The flat form of a policy document is removed in v0.6.0. v0.5.0 is the
+  first release that prints its notice, from `brig policy check`. See
+  [Policy documents](migration.md#policy-documents).
 
 ## Breaking changes
 
