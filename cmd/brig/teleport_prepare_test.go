@@ -287,7 +287,7 @@ func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
 			}
 		}
 		if !wantJSON {
-			if !strings.Contains(out, "\n  hull's move took ") || !strings.Contains(out, "the guest was paused 0.36 s, 5 rounds") {
+			if !strings.Contains(out, "\n  hull's move took ") || !strings.Contains(out, "hull estimates the guest was paused about 0.36 s, 5 rounds") {
 				t.Errorf("stdout %q", out)
 			}
 			continue

@@ -2500,7 +2500,7 @@ esac
 # says the host was prepared, and the outcome ends with the numbers.
 grep -q '^brig: me@box was prepared for claude-code at ' "$WORK/tpm.err" \
   && grep -q '^brig: hull: move: ram-round-0: 1.5 MiB in 0.10 s, 15.0 MiB/s$' "$WORK/tpm.err" \
-  && grep -q "hull's move took [0-9.]* s, streamed, the guest was paused 0.14 s, 2 rounds" "$WORK/tpm.out" \
+  && grep -q "hull's move took [0-9.]* s, streamed, hull estimates the guest was paused about 0.14 s, 2 rounds" "$WORK/tpm.out" \
   && ok "a move passes hull's lines on and ends with its numbers" \
   || bad "a move passes hull's lines on and ends with its numbers -- got: $(cat "$WORK/tpm.out" "$WORK/tpm.err")"
 # hull is asked for a dry run first and then the move, named by a txid of

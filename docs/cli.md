@@ -477,15 +477,15 @@ and `brig logs` on the ref run on the destination, through
 
 During a move or a prepare, Brig prints hull's lines on stderr as they
 arrive, after `brig: hull:`. When a move commits, it prints how long hull's
-move took, how long the guest was paused and the bytes sent, as far as hull
-reported them. `-q` drops hull's lines with Brig's other notices. Besides
+move took, hull's estimate of how long the guest was paused, and the bytes
+sent, as far as hull reported them. `-q` drops hull's lines with Brig's other notices. Besides
 `ref`, `sandbox`, `state`, `host`, `pendingHost`, `remoteStore`, `txid` and
 `hull`, the `Teleport` document carries:
 
 | Field | When | Meaning |
 | --- | --- | --- |
 | `prepared` | after `--prepare`, and from `--status` while a prepared host is recorded | `host`, `at` (RFC 3339), `stream` (whether a move there sends only what the guest changed) and `why` when it does not, `base` (the digest of the base the host holds), and after `--prepare` also hull's `steps` (each with `what`, `result`, `detail`, `bytes` and `seconds`) and the `kernels` the host holds, by profile |
-| `move` | after a move this run saw commit | `seconds`, how long `hull migrate` took as Brig timed it, and what hull reported: `transport`, `stream` when hull copied the guest in rounds while it ran or `bundle` when it sent the whole checkpoint and disk with the guest paused, with hull's reason in `transportWhy` (left out from a hull that does not say), `downtimeSeconds`, `bytes`, `mibPerSec`, `stepsMs` (the milliseconds of each of hull's steps, by its name for the step: `fence`, `transfer`, `restore paused`, `commit`) and `rounds`. Each round has hull's `name` for it, its `kind` (`disk` or `ram`), its number in `round`, `final` for a round taken while the guest was paused (the disk round hull names final, and the last `ram` round, which hvi takes in the pause), its `size` as hull wrote it, `bytes` when hull gave a count of bytes, `seconds`, `mibPerSec`, and `dirtyBlocksPerSec`, how fast the guest wrote disk blocks, which hull reports for a disk round after the first. A number hull did not report is left out |
+| `move` | after a move this run saw commit | `seconds`, how long `hull migrate` took as Brig timed it, and what hull reported: `transport`, `stream` when hull copied the guest in rounds while it ran or `bundle` when it sent the whole checkpoint and disk with the guest paused, with hull's reason in `transportWhy` (left out from a hull that does not say), `downtimeSeconds` (hull's `downtime about`, an estimate across the two hosts' clocks), `bytes`, `mibPerSec`, `stepsMs` (the milliseconds of each of hull's steps, by its name for the step: `fence`, `transfer`, `restore paused`, `commit`) and `rounds`. Each round has hull's `name` for it, its `kind` (`disk` or `ram`), its number in `round`, `final` for a round taken while the guest was paused (the disk round hull names final, and the last `ram` round, which hvi takes in the pause), its `size` as hull wrote it, `bytes` when hull gave a count of bytes, `seconds`, `mibPerSec`, and `dirtyBlocksPerSec`, how fast the guest wrote disk blocks, which hull reports for a disk round after the first. A number hull did not report is left out |
 
 The line takes one of `--to`, `--status` and `--abort`, and `--prepare` only
 with `--to`. A move whose end Brig
