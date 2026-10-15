@@ -685,6 +685,49 @@ grep -q '^argv: run' "$STUB_LOG" \
   && bad "the runtime was invoked for a policy that could not be enforced" \
   || ok "nothing reached the runtime"
 "$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
+
+# Nothing serves a route yet, so the binary is held to what it prints: the
+# preset a route expands to, and the posture check plans for a run with one.
+# A run bound to a route is refused before the runtime is asked anything.
+cat > "$WORK/policies/claude-only.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-only
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+YAML
+"$WORK/brig" policy show --preset claude-code 2>&1 | grep -q 'CLAUDE_CODE_OAUTH_TOKEN' \
+  && ok "policy show --preset prints the claude-code route" \
+  || bad "policy show --preset prints the claude-code route"
+"$WORK/brig" policy attach claude-only claude-code > /dev/null 2>&1
+"$WORK/brig" policy check claude-code > "$WORK/routes.out" 2> "$WORK/routes.err"
+if [ "$(cat "$WORK/routes.out")" = "claude-only" ] \
+  && grep -q '^  route anthropic  preset claude-code  mode endpoint$' "$WORK/routes.err" \
+  && grep -q '^posture: isolated$' "$WORK/routes.err"; then
+  ok "policy check lists a route and plans the isolated posture, with stdout one name per line"
+else
+  bad "policy check lists a route and plans the isolated posture -- got: $(cat "$WORK/routes.out" "$WORK/routes.err")"
+fi
+: > "$STUB_LOG"
+if env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/routes-run.out" 2>&1; then
+  bad "a run bound to a route was booted, and this version serves no route"
+else
+  grep -q 'does not serve routes' "$WORK/routes-run.out" \
+    && ok "a run bound to a route is refused, naming why" \
+    || bad "the route refusal does not say why -- got: $(cat "$WORK/routes-run.out")"
+fi
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "the runtime was asked to boot a run bound to a route" \
+  || ok "nothing reached the runtime for a run bound to a route"
+"$WORK/brig" policy detach claude-only claude-code > /dev/null 2>&1
+rm -f "$WORK/policies/claude-only.yaml"
 unset BRIG_POLICY_DIR
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 

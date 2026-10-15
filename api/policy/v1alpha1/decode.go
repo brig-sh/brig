@@ -29,13 +29,14 @@ func Decode(doc []byte) (*Policy, error) {
 // UnmarshalStrict decodes one YAML or JSON document into into, a pointer to a
 // type of this package or to a struct with json tags of the same kind.
 //
-// It refuses a stream of more than one document, a key given twice, and a key
-// that is not the exact json name of a field. sigs.k8s.io/yaml decodes through
-// encoding/json, which matches a key to a field without regard to case, and
-// folds ſ to s and the Kelvin sign to k. A key such as Spec or upſtream would
-// then set the field it resembles, and win over the real key beside it. So the
-// document is decoded a second time into maps, and every key is compared byte
-// for byte with the field names of the target type.
+// It refuses a stream of more than one document, a key given twice, a block
+// or a list with no value, and a key that is not the exact json name of a
+// field. sigs.k8s.io/yaml decodes through encoding/json, which matches a key
+// to a field without regard to case, and folds ſ to s and the Kelvin sign to
+// k. A key such as Spec or upſtream would then set the field it resembles,
+// and win over the real key beside it. So the document is decoded a second
+// time into maps, and every key is compared byte for byte with the field
+// names of the target type.
 func UnmarshalStrict(doc []byte, into any) error {
 	if err := singleDocument(doc); err != nil {
 		return err
@@ -116,6 +117,13 @@ func exactKeys(v any, t reflect.Type, path string) error {
 			ft, ok := fields[k]
 			if !ok {
 				return fmt.Errorf("unknown field %q", join(path, k))
+			}
+			// A block or a list with no value decodes as if it were left
+			// out. Under request: that turns an allow list whose rules are
+			// all commented out into a route that allows every request. A
+			// string with no value reads as empty, and is left alone.
+			if obj[k] == nil && (ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice) {
+				return fmt.Errorf("field %q has no value; give it one, or leave the key out", join(path, k))
 			}
 			if err := exactKeys(obj[k], ft, join(path, k)); err != nil {
 				return err

@@ -125,6 +125,11 @@ func (c *Config) policyLine() string {
 	if len(c.Policies) == 0 {
 		return ""
 	}
+	// A policy with routes and no egress block sets no default, and an empty
+	// parenthetical would read as a rule set with a blank in it.
+	if c.Egress.Default == "" {
+		return strings.Join(c.Policies, ", ")
+	}
 	return strings.Join(c.Policies, ", ") + " (egress default: " + string(c.Egress.Default) + ")"
 }
 

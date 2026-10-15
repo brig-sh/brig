@@ -46,10 +46,13 @@ type Policy struct {
 	Spec PolicySpec `json:"spec"`
 }
 
-// PolicySpec is what a policy asks for.
+// PolicySpec is what a policy asks for. A policy sets Egress, Routes or both.
 type PolicySpec struct {
-	// Egress is required in this version. It is the outbound rule set.
+	// Egress is optional. It is the outbound rule set.
 	Egress *Egress `json:"egress,omitempty"`
+	// Routes is optional. Each route is a brokered endpoint, and route names
+	// are unique within the policy.
+	Routes []Route `json:"routes,omitempty"`
 }
 
 // EgressDefault is the verdict for traffic that no rule names.

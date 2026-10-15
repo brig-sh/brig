@@ -1,0 +1,15 @@
+# Example 3 of the broker spec, rev 4: git to github.com, limited to one org.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: github-brig-sh
+  description: git over HTTPS to github.com, brig-sh repositories only
+spec:
+  routes:
+    - name: github
+      preset: github-token
+      credential:
+        secretRef: { name: gh-token }
+      request:
+        allow:
+          repos: [brig-sh/*]

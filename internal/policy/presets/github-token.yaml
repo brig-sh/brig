@@ -1,0 +1,18 @@
+# The github-token preset: git over HTTPS to github.com, with a static token
+# sent as the basic-auth password of x-access-token. git in the guest rewrites
+# both GitHub URL forms to the route. gh has no base URL setting for
+# github.com, so only git goes through the route.
+name: github
+mode: endpoint
+upstream: https://github.com
+inject:
+  basicAuth:
+    username: x-access-token
+  headers:
+    remove:
+      - Authorization
+guest:
+  git:
+    insteadOf:
+      - "https://github.com/"
+      - "git@github.com:"

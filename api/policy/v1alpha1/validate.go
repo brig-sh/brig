@@ -9,8 +9,14 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Validate checks that a decoded policy is well formed. It reads no store and
-// no file.
+// Validate checks that a decoded policy is well formed, as written. It reads
+// no store and no file.
+//
+// A route that names a preset is checked for what it sets, since the preset
+// fills the rest and the presets are not part of this package. A route
+// without one is checked in full, except for the defaults that expansion adds:
+// mode, and Authorization in inject.headers.remove. Route.Validate checks a
+// route after expansion.
 func (p *Policy) Validate() error {
 	switch p.APIVersion {
 	case "":
@@ -35,10 +41,26 @@ func (p *Policy) Validate() error {
 	if strings.ContainsAny(p.Metadata.Description, "\r\n") {
 		return fmt.Errorf("metadata.description is one line")
 	}
-	if p.Spec.Egress == nil {
-		return fmt.Errorf("spec.egress is required")
+	if p.Spec.Egress == nil && len(p.Spec.Routes) == 0 {
+		return fmt.Errorf("a policy needs spec.egress, spec.routes or both")
 	}
-	return p.Spec.Egress.Validate()
+	if p.Spec.Egress != nil {
+		if err := p.Spec.Egress.Validate(); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for i := range p.Spec.Routes {
+		r := &p.Spec.Routes[i]
+		if err := r.validateWritten(); err != nil {
+			return err
+		}
+		if seen[r.Name] {
+			return fmt.Errorf("route %q is declared twice", r.Name)
+		}
+		seen[r.Name] = true
+	}
+	return nil
 }
 
 // Validate checks that an egress rule set has a default, and that each rule
@@ -87,8 +109,8 @@ func (r Rule) Validate() error {
 	return nil
 }
 
-// CheckName returns an error when name is not usable as a policy or route
-// name.
+// CheckName returns an error when name is not usable as a policy name. A route
+// name also passes CheckRouteName.
 //
 // The character rule is a copy of the profile name grammar in internal/profile.
 // It is copied because a package under api/ does not import internal/, and
@@ -110,6 +132,27 @@ func CheckName(name string) error {
 			"pick a different name", name, decoded)
 	}
 	return nil
+}
+
+// CheckRouteName returns an error when name is not usable as a route name.
+//
+// A route name is the path segment of the route URL, and it names the guest
+// variable BRIG_ROUTE_<NAME>_TOKEN, with - read as _. So it uses lowercase
+// letters, digits and dashes, and starts with a letter. A dot would end the
+// variable name for the shell, and an underscore would let a_b and a-b name
+// the same variable. The name also reads back as itself in YAML, as
+// CheckName requires.
+func CheckRouteName(name string) error {
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case (r >= '0' && r <= '9' || r == '-') && i > 0:
+		default:
+			return fmt.Errorf("route name %q may use only lowercase letters, digits and dashes, "+
+				"and must start with a letter", name)
+		}
+	}
+	return CheckName(name)
 }
 
 func safeName(s string) bool {

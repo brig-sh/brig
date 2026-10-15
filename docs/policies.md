@@ -317,9 +317,12 @@ the glob against the name that the guest asks its resolver for.
 Parsing is strict. A field that the format does not recognize fails to
 parse. Examples are `engine:` under `spec`, and a typo such as
 `descripton:`. A key must match the field name byte for byte, so `Spec:`,
-or a key with a lookalike letter such as `ſpec:`, is refused too. A file
-holds one document, and Brig refuses a second one after `---`. The format
-has no field that names how an egress rule is applied.
+or a key with a lookalike letter such as `ſpec:`, is refused too. So is a
+block or a list with no value, such as `allow:` with every rule under it
+commented out: give it a value, or leave the key out. A file holds one
+document, and Brig refuses a second one after `---`. A `---` with nothing
+after it, or only comments, starts no second document. The format has no
+field that names how an egress rule is applied.
 
 ### The flat form
 
@@ -333,6 +336,194 @@ ignored. `brig policy check` prints a notice for each bound policy that a
 file still writes in the flat form. `brig policy show` prints any policy in
 the envelope form.
 [Policy documents](migration.md#policy-documents) has the mapping.
+
+## Routes
+
+A route is a brokered endpoint. The agent in the guest is pointed at the
+route, and the broker forwards each request upstream with the credential
+added on the host. The guest holds a session token for the route, and never
+the credential itself.
+
+> [!NOTE]
+> This release reads, checks and prints routes, and serves none. Brig refuses
+> a run bound to a policy with routes before anything boots:
+>
+> ```
+> brig: policy claude-only (route anthropic) declares routes, and this version of brig does not serve routes; refusing the run rather than booting without them. Detach the policy, or remove its spec.routes
+> ```
+
+A policy with one route:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-only
+  description: Claude Code through the broker; no other egress
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+```
+
+A policy needs `spec.egress`, `spec.routes`, or both.
+
+### Route fields
+
+| field | required | what it is |
+| --- | --- | --- |
+| `name` | yes | The path segment of the route URL, and unique across the policies bound to a run. Lowercase letters, digits and dashes, starting with a letter: the name also names the guest variable `BRIG_ROUTE_<NAME>_TOKEN`, with `-` read as `_`, so Brig refuses a dot and an underscore |
+| `preset` | no | A route type that Brig ships. See [Presets](#presets) |
+| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This version refuses any other mode |
+| `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
+| `credential.secretRef.name` | yes | A secret in Brig's store. It is never delivered to the guest |
+| `credential.field` | no | For a document-shaped secret, the field that is injected |
+| `inject.headers.set` | unless a preset sets it, or `basicAuth` is set | `{name, value}` pairs. Each replaces a guest header of the same name. A value holds `{value}` at most once, and at least one value holds it. A value never holds `{route.url}` or `{session.token}` |
+| `inject.headers.remove` | no | Guest headers dropped before the request goes upstream, and before `set` applies. `Authorization` is always in the list, because the guest's own `Authorization` carries a session token |
+| `inject.headers.allow` | no | `{name, values}` pairs. Brig keeps only the listed values of that guest header, and drops the rest |
+| `inject.basicAuth.username` | unless a preset sets it, or `headers.set` is set | Sends `Authorization: Basic base64(username:{value})` |
+| `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the two guest placeholders below |
+| `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
+| `request.allow.methods` | no | HTTP methods, in upper case |
+| `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
+| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them |
+
+Each `request.allow` list that is set must match. Brig refuses an empty
+list, such as `repos: []`, rather than read it as unset and allow every
+repository. Leave the key out to allow any.
+
+`inject` sets exactly one of `headers.set` and `basicAuth`. Brig refuses a
+route that sets both.
+
+`remove` applies before `set`, so Brig refuses a header named in both. The
+exception is `Authorization`, which is always removed and which a route may
+set. No header list names `Host`, `Connection`, `Content-Length`,
+`Transfer-Encoding`, `Upgrade`, `Keep-Alive`, `TE`, `Trailer` or a `Proxy-`
+header. The broker sets those itself, or drops them as hop-by-hop headers
+that never reach upstream.
+
+### Placeholders
+
+A route names values that the guest never holds through three placeholders:
+
+| Placeholder | Where | What it stands for |
+| --- | --- | --- |
+| `{value}` | an `inject.headers.set` value | the credential |
+| `{route.url}` | a `guest.env` value | the URL of the route |
+| `{session.token}` | a `guest.env` value | the session token of the route |
+
+A `guest.env` value is `{route.url}` or `{session.token}`, and nothing else.
+Brig refuses a literal, so a route cannot put a value of its own into the
+guest's environment:
+
+```console
+$ brig policy edit claude-only
+brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url} or {session.token}, never a literal
+your edit is still at /tmp/brig-policy-edit-2427992151.yaml
+```
+
+### Presets
+
+A preset is a route written in full, and shipped with Brig. A route that
+names one takes every field it does not set from the preset.
+
+| Preset | Upstream | Inject | Guest | Credential lifecycle |
+| --- | --- | --- | --- | --- |
+| `claude-code` | `https://api.anthropic.com` | `Authorization: Bearer {value}` from `claudeAiOauth.accessToken`. Removes `X-Api-Key`. Keeps only the reviewed `Anthropic-Beta` values | `ANTHROPIC_BASE_URL={route.url}`, `CLAUDE_CODE_OAUTH_TOKEN={session.token}` | `anthropic-oauth`: the OAuth pair is refreshed on the host and written back to the store |
+| `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
+| `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
+
+The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
+`claude-code-20250219`, `interleaved-thinking-2025-05-14`,
+`fine-grained-tool-streaming-2025-05-14`, `context-1m-2025-08-07` and
+`context-management-2025-06-27`. Claude Code sends `oauth-2025-04-20` itself,
+so the `claude-code` preset does not set the header. It only drops the values
+outside the list.
+
+Print a preset, or a policy with its presets expanded:
+
+```bash
+brig policy show --preset claude-code
+brig policy show claude-only
+```
+
+A field that the route sets overrides the value of the preset:
+
+- A struct, such as `credential`, merges field by field.
+- `guest.env` merges name by name.
+- `inject.headers.remove` is the union of both lists, so a route cannot stop
+  a preset from dropping a header.
+- Any other list, such as `inject.headers.set`, is replaced whole.
+
+`credential.lifecycle` comes from the preset alone. Brig refuses a policy
+that names it. A preset with a lifecycle, such as `claude-code`, keeps its
+`upstream` and its `credential.field`, because its refresh is for that
+endpoint and that field. Brig refuses a route that changes either.
+
+`brig policy show` leaves `credential.lifecycle` out, and names it in a
+comment under `credential:`. Its output is a policy that Brig reads back:
+
+```yaml
+  routes:
+  - credential:
+      # lifecycle: anthropic-oauth, set by preset claude-code
+      field: claudeAiOauth.accessToken
+      secretRef:
+        name: claude-credentials
+```
+
+### Several policies with routes
+
+Every route of every policy bound to a run applies to that run, as every
+egress rule does. Brig refuses three clashes between routes:
+
+- Two routes with one name. The name is the path of the route URL.
+- Two routes that set one `guest.env` name. The guest has one variable of
+  that name.
+- Two routes that rewrite one `guest.git.insteadOf` prefix. git sends a
+  prefix to one URL.
+
+`brig policy check` refuses each of them:
+
+```console
+$ brig policy check claude-code
+claude-only
+  route anthropic  preset claude-code  mode endpoint
+claude-api-key
+  route anthropic  preset anthropic-api-key  mode endpoint
+brig: the policies bound to claude-code cannot apply together: route anthropic is declared by both claude-only and claude-api-key; a route name is unique across the policies bound to a run
+```
+
+### What check prints for routes
+
+`check` prints each route under the policy that declares it, with its preset
+and its mode. When any route applies, it ends with the posture that the run
+would get. The route rows and the `posture:` line go to stderr, so stdout
+stays one policy name per line. With two policies attached to one profile:
+
+```bash
+brig policy attach claude-only claude-code
+brig policy attach github-brig-sh claude-code
+```
+
+```console
+$ brig policy check claude-code
+claude-only
+  route anthropic  preset claude-code  mode endpoint
+github-brig-sh
+  route github  preset github-token  mode endpoint
+posture: isolated
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+```
+
+A route is served on the sandbox's own gateway address, so a run with a route
+needs the `isolated` posture. The `posture:` line is that plan. This release
+serves no route, so a run bound to one is refused, as the note at the top of
+[Routes](#routes) says. `brig plan` reports the same refusal.
 
 ## Naming a policy
 
@@ -360,11 +551,12 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy ls` | every policy that parses, by name and description, and, for one bound to anything, what binds it |
 | `brig policy create <name> [--force]` | write a starter document, then open it: `$VISUAL`, then `$EDITOR`, then `vi` |
 | `brig policy edit <name> [--force]` | open an existing one, and only replace it if the save still parses and validates. Refuses a rename that orphans anything bound to it, inline or attached, unless `--force` |
-| `brig policy show <name> [--json]` | print the parsed document |
+| `brig policy show <name> [--json]` | print the parsed document, with each route's preset expanded |
+| `brig policy show --preset <preset> [--json]` | print the route that a preset expands to. See [Presets](#presets) |
 | `brig policy rm <name> [--force]` | delete it. Refuses one that is bound to anything, inline or attached, unless `--force` |
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
-| `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session), and report whether Brig can enforce anything against it at all |
+| `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session) with its routes, and report whether Brig can enforce anything against it at all |
 
 Complete command lines for all eight:
 
@@ -373,6 +565,7 @@ brig policy ls
 brig policy create locked-down
 brig policy edit locked-down
 brig policy show locked-down --json
+brig policy show --preset claude-code
 brig policy attach locked-down claude-code
 brig policy detach locked-down claude-code
 brig policy check claude-code
@@ -455,11 +648,16 @@ no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
 ```
 
-`check` does two checks:
+`check` does three checks:
 
 1. Is the profile `kind: shell` or `kind: gui`? Such a profile can never
    enforce a policy.
 2. Does every bound name still resolve to a policy that loaded?
+3. Can the routes of the bound policies apply together? See
+   [Several policies with routes](#several-policies-with-routes).
+
+For a policy with routes, `check` also prints the routes and the posture.
+See [What check prints for routes](#what-check-prints-for-routes).
 
 `check` does not resolve the current runtime, the current hypervisor, or the
 version of the runtime. It cannot tell you whether the current host will
@@ -663,6 +861,18 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `apiVersion is required, and must be "brig.sh/v1alpha1"` | a document with no `apiVersion:`, or the wrong one |
 | `unknown field "Spec"` | a key that is not the exact name of a field, such as `Spec` or a lookalike letter |
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
+| `route x: mode "…" is not supported; this version serves "endpoint" only` | a route's `mode` is not `endpoint` |
+| `route x: guest.env NAME is a literal; a value is {route.url} or {session.token}, never a literal` | a `guest.env` value that is not one of the two placeholders. The error leaves the value out |
+| `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
+| `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
+| `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |
+| `route x: preset claude-code keeps its credential fresh (anthropic-oauth) …` | a route changes the `upstream` or `credential.field` of a preset with a lifecycle |
+| `guest.git.insteadOf PREFIX is rewritten by route x of a and by route y of b; …` | two bound routes rewrite the same git prefix |
+| `policy x (route y) declares routes, and this version of brig does not serve routes; …` | a run, `sh` or plan of a profile bound to a policy with routes |
+| `route x: inject takes headers.set or basicAuth, not both` | a route, or a route and its preset, set both |
+| `route x: credential.lifecycle is set by a preset, and a policy does not name it` | a policy names `credential.lifecycle` |
+| `route x is declared by both a and b; …` | two bound policies declare a route of the same name |
+| `guest.env NAME is set by route x of a and by route y of b; …` | two bound routes set the same `guest.env` name |
 | `kind is required, and must be "Policy"` | a document with `kind:` and no value. A document with no `kind:` key is read as [the flat form](#the-flat-form) |
 | `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate, or renamed a name that is bound to something, without `--force`. The real file is untouched. The error names where your edit still is |
 | ``unknown profile "x". `brig agent ls` lists them`` | `attach`, `detach` or `check` naming a profile that is not there |

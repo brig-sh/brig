@@ -1,0 +1,25 @@
+# Example 4 of the broker spec, rev 4: a custom internal API, written in full.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: inventory-api
+  description: read-only access to the inventory service
+spec:
+  routes:
+    - name: inventory
+      upstream: https://inventory.internal.example.com
+      credential:
+        secretRef: { name: inventory-token }
+        field: token
+      inject:
+        headers:
+          set:
+            - { name: X-Api-Key, value: "{value}" }
+      guest:
+        env:
+          INVENTORY_URL: "{route.url}"
+          INVENTORY_TOKEN: "{session.token}"
+      request:
+        allow:
+          methods: [GET]
+          paths: ["/v2/items/*", "/v2/search"]
