@@ -614,7 +614,11 @@ reached the old host with another `BRIG_STATE_DIR`, the old host keeps its
 record and says so: a record that named the old host itself would send its
 verbs to itself. If the old host cannot ask, it
 keeps its record, and its verbs go to the host it names, whose brig hands
-them on. A forwarded line that fails exits with the code of the brig
+them on. `--abort` on the old host calls off a move that the session's
+host began and has not finished. A move that committed is not undone: the
+brig there answers that it has no move of the session to call off, and
+`brig teleport` from there moves the session again. A forwarded line that
+fails exits with the code of the brig
 there, or `1` when ssh fails or drops before that brig answers. The move
 may then have run, and `ssh <user>@<host> brig teleport <ref> --status`
 says where it stands. `brig teleport <ref> --status` on the old host reads
@@ -1128,7 +1132,7 @@ The two fault cases, each on a fresh session of the same image, with
 
 | Case | What ran | Exit | What was left |
 | --- | --- | --- | --- |
-| brig killed during memory round 0 | `kill -KILL` of `brig teleport` alone, 10 s into the move | brig `137`. hull outlived brig and committed the move 55 s after it began. `--abort` `1`: "committed, and it runs there. A committed move is not called off"; `--status` `0`, and it recorded the host | `rp2` ran the guest, with 4.03 s of downtime by the guest's count; the Mac's copy was `migrated` |
+| brig killed during memory round 0 | `kill -KILL` of `brig teleport` alone, 10 s into the move | brig `137`. hull outlived brig and committed the move 55 s after it began. `--abort` `1`: "committed, and it runs there. A committed move is not called off", from the brig of that run (from brig `304689b`, `--abort` of a moved session goes to the brig where it runs); `--status` `0`, and it recorded the host | `rp2` ran the guest, with 4.03 s of downtime by the guest's count; the Mac's copy was `migrated` |
 | brig, hull and ssh killed during memory round 0 | `kill -KILL` of brig's process group, 33 s into the move, 23.5 s of which the destination spent copying the base | brig `137`. `--status` "has not finished", with `rp2` "receiving, last error: receive: the stream ended in hvi's ram-round-0: unexpected EOF". `--abort` `0` in 0.90 s: "hull runs it on this host again" | the guest ran on the Mac the whole time, not fenced: its counter went on with no gap over 0.5 s, and its kernel logged no restore. `rp2` had no instance and no record of the session |
 
 The move back did not run. It goes from `rp2` to the Mac over ssh, and
