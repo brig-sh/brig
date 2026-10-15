@@ -365,17 +365,24 @@ same:
 | `brig teleport`, start to end | 7.6 s | 11.9 s |
 | `hull migrate`, as Brig timed it | 6.0 s | 10.6 s |
 | Guest stopped, hull's `downtime about` | 358 ms | 4842 ms |
+| Guest stopped, the change in the guest's `hvi-time` `downtime total` | 346 ms | 4837 ms |
 | Sent | 109.5 MiB in 5.4 s: disk 274.9 MiB as 34.4 MiB, memory 75.0 MiB | 109.6 MiB in 10.3 s |
 
 On the move back, hvi on `rp2` sealed its stream 1163 ms after the last
-memory round began, and the last disk round took 717 ms. The guest's
-`hvi-time` line agreed with hull there: wall clock moved 4.84 s.
+memory round began, and the last disk round took 717 ms. The guest's own
+figure agrees with hull's in both directions. The guest's `hvi-time`
+driver logs `downtime total` at each restore, a total since boot, so the
+downtime of one move is the change from the restore before it: 346 ms at
+generation 4, after the move to `rp2`, and 5183.6 less 346.2, 4837 ms, at
+generation 6, after the move back. The same line's `wall clock moved` does
+not measure the downtime: after the first move it read 10.34 s, against
+346 ms. After the move back it read 4.84 s.
 
 The `claude-code` guest from a Mac to a Pi:
 
 | | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: streamed move |
 | --- | --- | --- | --- |
-| Sent while the guest runs | nothing | the base once (`--prepare`), then the rounds | pending |
+| Sent while the guest runs | nothing | the base once per image and host (`--prepare`), then the rounds | pending |
 | Sent while the guest is paused | 1.80 GB in 46.3 to 53.7 s, at 32.0 to 37.1 MiB/s | the last round | pending |
 | hull's fence, with the capture | 1.63 to 2.08 s | | pending |
 | Restore paused, then commit | 1.23 to 1.38 s, then 0.22 to 0.25 s | | pending |
@@ -419,7 +426,16 @@ fail in either case.
 
 A prepare takes no network on the destination. The session's gateway, with
 its egress rules, is still started by the move (step 4). You can run it
-again at any time: a host that holds everything is sent nothing.
+again at any time: a host that holds everything for this boot of the
+session is sent nothing.
+
+The base is not yet once per image and host. With hull `6bfc09f`, each
+boot of a sandbox gets a base of its own, with its own digest: three boots
+of the same `ubuntu` image gave three. So each new session needs its own
+prepare, and that prepare sends the whole base again: 110.8 MiB as
+49.2 MiB on the wire for `ubuntu`. For `claude-code` we estimate it at
+about 1.6 GiB a session, the size of its disk; that was not measured. Once
+per image and host is the target, not what hull does today.
 
 ### After a move
 
