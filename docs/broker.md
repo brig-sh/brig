@@ -37,15 +37,19 @@ error of that step, and the upstream is never dialed.
 4. Verify the token: the signature with the sandbox key, the sandbox claim
    against the path, the route claim against the route, the expiry, and the
    address the request arrived from. Any failure is a 401.
-5. Refuse a `<rest>` that the upstream could read as another path. This is
+5. Read the body, up to 8 MiB, and check the expiry again: the body can
+   take longer to arrive than the token had left. An expired token is a
+   401. Then refuse a session token anywhere but its carrier. This is a
+   403. See [Placeholder detection](#placeholder-detection).
+6. Refuse a `<rest>` that the upstream could read as another path. This is
    a 400. See [Canonical paths](#canonical-paths).
-6. Check `request.allow`. A miss is a 403 with the refusal below. No
+7. Check `request.allow`. A miss is a 403 with the refusal below. No
    credential has been read yet.
-7. Resolve the credential through the secret broker. A failure is a 502,
+8. Resolve the credential through the secret broker. A failure is a 502,
    and nothing is cached.
-8. Edit the headers and forward the request. The response streams back as
+9. Edit the headers and forward the request. The response streams back as
    the upstream sends it, with the credential redacted.
-9. Write the audit line.
+10. Write the audit line.
 
 ### Canonical paths
 
@@ -108,6 +112,8 @@ Before the request goes upstream, the broker removes:
   itself, so the response body the broker redacts is plain. On a request
   with `Range`, or a `HEAD`, the transport asks for none, and the broker
   sends `Accept-Encoding: identity`
+- every request trailer. The rules here edit the headers, and a trailer
+  would carry past them what they remove
 
 The names are compared in lower case.
 
@@ -170,11 +176,136 @@ minute is retried only when another request has renewed the secret since.
 Otherwise it goes back to the guest. A credential close to its expiry is
 renewed ahead of time when it is resolved, without a 401.
 
-The broker keeps a copy of the request body for the retry, up to 8 MiB per
-request. All requests together hold at most 64 MiB, which `ReplayBudget` in
-the broker's configuration changes. A body over either limit is not sent
-again, and the first 401 goes back to the guest. So does a 401 that the
-upstream sends before it has read the whole body.
+The broker reads the request body before the request goes upstream, up to
+8 MiB per request, to scan it for a [session token](#placeholder-detection).
+The same copy is what a retry sends. A body over 8 MiB is not sent again,
+and the first 401 goes back to the guest. [Holding the
+body](#holding-the-body) has the limits on what all requests hold at once.
+
+## Placeholder detection
+
+The session token is the guest's handle on its route. The tool in the guest
+sends it in one place, the carrier: `Authorization: Bearer`, the basic-auth
+password on a `basicAuth` route, or a header the route sets with `{value}`,
+such as `x-api-key`. Anywhere else, the agent is leaking its handle: in a
+prompt that echoes the environment, a path, a query, a header of its own. So
+after the token verifies, and before `request.allow` and the credential, the
+broker scans the request for every live token of the sandbox. A hit is a 403,
+and the upstream is never dialed:
+
+```
+brig: refused: the session token was sent outside its carrier (route github, in body)
+```
+
+The route is the route of the token found. A token of route `github` in a
+request to route `anthropic` is a hit too. Sent as the carrier of the other
+route, it fails the route check with 401 before the scan. The audit line has
+`check=placeholder`, `where=` and `encoding=`, and never the token or the
+body. `GET /status` on the control socket counts the refusals per sandbox.
+
+The scan covers:
+
+- the method, the path as sent and as decoded, and the query as sent and as
+  decoded. The query is decoded escape by escape, and an escape that is not
+  two hex digits stays as it is
+- `Host`, and every header name and value. In a carrier it scans what the
+  value holds besides the token: the scheme, the basic-auth username, the
+  text around `{value}`. A carrier that holds another token is refused. The
+  same token in two carriers of its route, such as `Authorization` and
+  `x-api-key`, passes
+- the body, up to 8 MiB, and the trailers of a body read to its end. The
+  trailers are not forwarded
+
+It looks for each token in these spellings:
+
+| Encoding | Spelling |
+| --- | --- |
+| `raw` | The token. A JSON string holds it as is |
+| `percent` | Every byte percent-escaped, in upper or lower case hex |
+| `json` | Every byte as `\u00XX`, in upper or lower case hex |
+| `hex` | Upper or lower case |
+| `base64` | With or without padding, alone or inside the encoding of a longer string, such as `Bearer <token>`, at any of the three alignments. A token's base64 holds no `+` or `/`, so it is the same in the standard and the URL alphabet |
+
+Each spelling uses one case throughout. Outside the path and the query,
+which the broker decodes, a token escaped in mixed case, such as `%6a%4B`,
+is not found.
+
+The scan drops spaces, tabs and line breaks first, and the escapes `\n`,
+`\r` and `\t` that a JSON string writes them as, and reads `\/` as `/`, each
+also escaped again, as `\\n` is in a JSON string inside a JSON string. So a
+token split across lines is found, such as base64 wrapped at 76 columns,
+also inside a JSON string. A gzip or deflate body is scanned as it
+decompresses, and the encoding is named `gzip+raw` and so on. It is also
+scanned as sent, since an upstream that ignores the coding reads it so.
+
+The live tokens of a sandbox are every token minted for it, and any token
+presented as its carrier, until each expires: 12 hours for a token Brig
+mints. A sandbox keeps at most 1024. Brig mints one per route on every exec,
+so only a sandbox with more than 512 execs in 12 hours on two routes drops
+its oldest early. They are kept in memory only. A broker that restarts
+registers each sandbox with a new key, so a token of the old broker fails
+the signature check before the scan. A sandbox that is removed takes its
+tokens and its count with it.
+
+The tokens of other sandboxes are not looked for. A leak of a handle is a
+leak by the sandbox that holds it. The broker cannot tell another sandbox's
+token in a prompt from data the agent was handed, and refusing it would let
+one sandbox stop another's conversation by planting its own token in a file
+the other reads.
+
+The broker keeps, per live token, the hash of the last 32 bytes of each of
+its ten spellings, and not the spellings. The scan hashes every 32-byte
+window of the request once. Where a hash matches, it compares that spelling,
+computed byte by byte from the token. The last 32 bytes encode the token's
+MAC, so a match is nearly always a real one, and the time is linear in the
+request, whatever the number of tokens. 1024 tokens take about 540 KB.
+Measured on a Mac with an M-series chip, for an 8 MiB body: 21 ms with 10
+live tokens, and 35 ms for a body built of the ends of the spellings of 64
+(`BenchmarkPlaceholderScanAdversarial`). A test holds the scan under 500 ms.
+
+Limits:
+
+- Above 8 MiB, the start of the body is scanned and the rest goes upstream
+  unscanned. The audit line says `placeholder=partial`. No smaller body is
+  scanned in part: one the budget cannot hold is refused.
+- A request body with a `Content-Encoding` other than `gzip`, `x-gzip` or
+  `deflate`, with more than one, that does not decompress, or with bytes
+  after the end of its compressed stream, is refused with 415. So is a
+  body above 8 MiB whose stream fails or ends before the cut at 8 MiB.
+  `deflate` is read as zlib, or as raw deflate when it has no zlib header.
+  A compressed body is scanned up to 8 MiB of its decompressed bytes, and
+  goes upstream as the guest compressed it. One read whole that
+  decompresses to more is refused with 413. git compresses the body of a
+  large fetch negotiation with gzip.
+- A spelling not in the table is not found: a token escaped in part or in
+  mixed case outside the path and query, JSON escapes other than the four
+  above, quoted-printable, hex with separators, HTML entities, encoded
+  twice, encrypted, or inside an archive in the body. Go puts a header name
+  in canonical case, so a token in a name is found only in a spelling that
+  keeps its case, such as lower case hex. The scan stops a leak by accident or by an injected
+  prompt. An agent that means to hide its token can.
+- A conversation whose history holds the token is refused on every later
+  turn, since the history is sent again each time, until the token expires
+  or the sandbox is removed. A new conversation works.
+
+### Holding the body
+
+The broker reads the body before the request goes upstream. What it holds is
+taken from the replay budget, 64 MiB for all requests at once, which
+`ReplayBudget` in the broker's configuration changes:
+
+- The buffer grows as the bytes arrive, from 32 KiB at a time, and not from
+  the length the request declares. A body that declares 8 MiB and stalls
+  holds 32 KiB.
+- A sandbox holds at most its share: the budget over the registered
+  sandboxes, and never less than 8 MiB and one byte. So one sandbox that
+  stalls its bodies leaves the rest of the budget to the others.
+- A body the budget cannot hold is never forwarded unscanned. It waits for
+  bytes to come back, up to a tenth of `BodyTimeout`, and is then refused
+  with 503 and `Retry-After: 1`. The audit line says `check=budget`.
+- The part the broker holds has to arrive within `BodyTimeout`, 60 seconds
+  by default. A body that does not is refused with 408. The rest of a body
+  over 8 MiB streams with no deadline.
 
 ## Errors
 
@@ -183,11 +314,18 @@ upstream sends before it has read the whole body.
 | 400 | The request asks for a protocol upgrade, or is a `CONNECT` | `upgrade` |
 | 404 | The path is not `/<sandbox-id>/r/<route>/…`, or names a sandbox or route the broker does not serve | `path`, `sandbox`, `route` |
 | 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, an expired token, or a request that arrived on another sandbox's gateway | `token`, `signature`, `token.sandbox`, `token.route`, `expired`, `arrival` |
+| 400 | The request body could not be read | `body` |
+| 408 | The part of the body the broker holds did not arrive within `BodyTimeout` | `body` |
+| 503 | The replay budget, or the sandbox's share of it, could not hold the body in time | `budget` |
+| 413 | A compressed body read whole decompresses to more than 8 MiB | `body` |
+| 403 | A session token of the sandbox is in the request outside its carrier | `placeholder` |
+| 415 | The request body has a `Content-Encoding` other than gzip or deflate, more than one, does not decompress, or has bytes after its compressed stream | `content-encoding` |
 | 400 | `<rest>` is not in canonical form | `path` |
 | 403 | `request.allow` does not cover the request | `request.allow.methods`, `request.allow.paths`, `request.allow.repos` |
 | 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open | `credential` |
 | 502 | The upstream cannot be reached, or its certificate does not verify | `upstream` |
 | 502 | The response body has a `Content-Encoding` the broker cannot read | `response.encoding` |
+| 500 | The broker failed on a bug. `broker.log` has the error. When the response had already started, the connection is closed and the line keeps its status | `panic` |
 
 A 401 body does not say which check failed. The audit line does.
 
@@ -356,7 +494,7 @@ underscores. 255 bytes is the longest name of a directory.
 | `POST /sandboxes` | `{id, profile, routes: [{policy, route}]}` | 204. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}` |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing}`. Names only |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, placeholder}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits
@@ -472,6 +610,8 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `policy`, `rule`, `reason` | The refusal of a `request.allow` miss |
 | `dropped.<header>` | The number of values that `inject.headers.allow` dropped |
 | `renew` | After an upstream 401: `retried`, `failed`, `interval` when a renewal was forced for the secret less than a minute before, or `body` when the body was not kept for a retry |
+| `where`, `encoding` | Where a [placeholder](#placeholder-detection) was found and how it was spelled. The `path` field of that line is `[redacted]`, and so is `method` when the token was in it |
+| `placeholder` | `partial` when only the start of the body was scanned |
 
 The line never holds a credential, a token, a header value or a body.
 

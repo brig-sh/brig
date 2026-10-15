@@ -119,7 +119,8 @@ func verify(key []byte, token, sandbox, route string, now time.Time) (claims, er
 //
 // The caller delivers it to the guest in place of the credential. The broker
 // only verifies tokens, so a guest cannot mint one: it holds neither the host
-// key nor any sandbox key.
+// key nor any sandbox key. The sandbox keeps the token among its live ones,
+// for the placeholder scan.
 func (h *Handler) Mint(sandbox, session, route string, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
 		return "", fmt.Errorf("a session token needs a positive lifetime, not %s", ttl)
@@ -131,11 +132,17 @@ func (h *Handler) Mint(sandbox, session, route string, ttl time.Duration) (strin
 	if _, ok := sb.routes[route]; !ok {
 		return "", fmt.Errorf("sandbox %s has no route %q", sandbox, route)
 	}
-	return mint(sb.key, claims{
+	exp := h.now().Add(ttl).Unix()
+	tok, err := mint(sb.key, claims{
 		Sandbox: sandbox,
 		Session: session,
 		Route:   route,
-		Exp:     h.now().Add(ttl).Unix(),
+		Exp:     exp,
 		Typ:     tokenType,
 	})
+	if err != nil {
+		return "", err
+	}
+	sb.remember(tok, route, time.Unix(exp, 0))
+	return tok, nil
 }

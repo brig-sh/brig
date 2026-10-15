@@ -372,7 +372,7 @@ func TestClaudeCodePresetEndToEnd(t *testing.T) {
 	tok := r.mint("brig-a", "anthropic")
 	h := bearer(tok)
 	h.Set("X-Api-Key", "junk-guest-api-key")
-	h.Set("X-Brig-Session", tok)
+	h.Set("X-Brig-Session", "junk-brig-session")
 	h.Set("X-Brig-Debug", "1")
 	h.Set("Proxy-Authorization", "Basic Zm9vOmJhcg==")
 	h.Set("Proxy-Extra", "1")
@@ -901,7 +901,10 @@ func TestEventStreamIsNotBuffered(t *testing.T) {
 // body, or waits for the guest to finish it.
 func TestEventStreamStartsBeforeTheRequestBodyEnds(t *testing.T) {
 	up := &upstream{}
+	reached := make(chan struct{})
+	var once sync.Once
 	up.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(reached) })
 		rc := http.NewResponseController(w)
 		_ = rc.EnableFullDuplex()
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -945,11 +948,20 @@ func TestEventStreamStartsBeforeTheRequestBodyEnds(t *testing.T) {
 		_, _ = io.WriteString(pw, strings.Repeat("x", maxReplay+1))
 		close(wrote)
 	}()
+	// The broker scans the first maxReplay bytes before it forwards. Under
+	// the race detector with coverage that takes seconds, so the wait for
+	// the first event starts once the upstream has the request.
 	var f first
 	select {
+	case <-reached:
+		select {
+		case f = <-got:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the first event waited for the end of the request body")
+		}
 	case f = <-got:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the first event waited for the end of the request body")
+	case <-time.After(time.Minute):
+		t.Fatal("the request did not reach the upstream before its body ended")
 	}
 	if f.resp != nil {
 		defer f.resp.Body.Close()
@@ -1408,11 +1420,15 @@ func TestOversizedBodyIsNotReplayed(t *testing.T) {
 
 func TestReplayBudgetBoundsBuffering(t *testing.T) {
 	up := newUpstream(t, refuseStale)
-	r := newRig(t, up, claudeRoutes(t, up), func(c *Config) { c.ReplayBudget = 16 })
+	r := newRig(t, up, claudeRoutes(t, up), func(c *Config) {
+		c.ReplayBudget = 16
+		c.BodyTimeout = 200 * time.Millisecond
+	})
+	// A body the budget cannot hold is refused, since it cannot be scanned.
 	resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages", bearer(r.mint("brig-a", "anthropic")),
 		strings.Repeat("x", 100))
-	wantStatus(t, resp, http.StatusUnauthorized)
-	wantAudit(t, r.lastAudit(), "renew=body")
+	wantStatus(t, resp, http.StatusServiceUnavailable)
+	wantAudit(t, r.lastAudit(), "check=budget")
 	// A body that fits is replayed, and its bytes come back to the budget.
 	resp, _ = r.do("POST", "/brig-a/r/anthropic/v1/messages", bearer(r.mint("brig-a", "anthropic")), "{}")
 	wantStatus(t, resp, http.StatusOK)

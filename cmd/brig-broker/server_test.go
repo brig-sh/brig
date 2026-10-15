@@ -310,6 +310,36 @@ func TestControlProtocolRegistersMintsAndRevokes(t *testing.T) {
 	}
 }
 
+// A request that sends its session token outside its carrier is refused,
+// and /status counts it against the sandbox, by name and count alone.
+func TestStatusCountsPlaceholderRefusals(t *testing.T) {
+	u := newUpstream(t)
+	r := startBroker(t, shortDir(t), u, nil)
+	for _, id := range []string{"brig-a", "brig-b"} {
+		if err := r.client.AddSandbox(injector.Sandbox{ID: id, Profile: "claude-code",
+			Routes: []injector.Route{claudeRoute()}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token := r.mint(t, "brig-a", "anthropic")
+	if got := r.send(t, "brig-a", "anthropic", token, "/v1/"+token); got != http.StatusForbidden {
+		t.Fatalf("a token in the path got %d, want 403", got)
+	}
+	if got := r.send(t, "brig-a", "anthropic", token, "/v1/messages"); got != http.StatusOK {
+		t.Fatalf("the token in its carrier got %d", got)
+	}
+	if n := len(u.requests()); n != 1 {
+		t.Errorf("upstream saw %d requests, want the clean one", n)
+	}
+	st, err := r.client.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Placeholder) != 1 || st.Placeholder["brig-a"] != 1 {
+		t.Errorf("status placeholder = %v, want brig-a: 1", st.Placeholder)
+	}
+}
+
 // Registering the same routes again, as every exec does, keeps the tokens an
 // agent already holds. A sandbox registered again with other routes is a new
 // registration, and the tokens of the old one fail.

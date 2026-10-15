@@ -5,23 +5,25 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"runtime/debug"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/secret"
 )
 
-// maxReplay is the largest request body held for the retry after an upstream
-// 401. A larger body streams without a copy, and its 401 goes back to the
-// guest.
+// maxReplay is the largest request body held before the request goes
+// upstream: scanned whole for a session token, and kept for the retry after
+// an upstream 401. Of a larger body only the start is scanned, and its 401
+// goes back to the guest.
 const maxReplay = 8 << 20
 
 // ServeHTTP serves /<sandbox-id>/r/<route>/<rest>. The checks run in the order
@@ -31,7 +33,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := &recorder{ResponseWriter: w}
 	// The path goes on the audit line once it splits, as <rest>.
 	a := &auditLine{method: r.Method}
-	defer func() { h.writeAudit(r.Context(), a, rec.code(), h.now().Sub(start)) }()
+	defer func() {
+		// A panic is a bug. net/http would recover it and drop the
+		// connection, and the line would say 200 for a request that got no
+		// answer. It is answered 500 instead when nothing was sent yet, and
+		// the line says check=panic. ErrAbortHandler is ReverseProxy giving
+		// up on a response it started, and goes on as it is.
+		v := recover()
+		if v != nil && v != http.ErrAbortHandler {
+			log.Printf("brig broker: panic: %v\n%s", v, debug.Stack())
+			a.check = "panic"
+			if rec.status == 0 {
+				http.Error(rec, "brig broker: internal error", http.StatusInternalServerError)
+				v = nil
+			} else {
+				v = http.ErrAbortHandler
+			}
+		}
+		h.writeAudit(r.Context(), a, rec.code(), h.now().Sub(start))
+		if v != nil {
+			panic(v)
+		}
+	}()
 
 	// ReverseProxy turns an upgrade into a raw pipe that carries the
 	// credential past every later request, and it sets Upgrade again after
@@ -82,6 +105,69 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	wl := sb.workload(c.Session)
 	a.workload = workloadID(wl)
+	sb.remember(token, c.Route, time.Unix(c.Exp, 0))
+
+	// A token anywhere but its carrier is refused before anything else reads
+	// the request. The body is held for the scan, and goes upstream from the
+	// copy.
+	held, err := h.holdBody(rec, r, p.sandbox)
+	defer held.release()
+	if err != nil {
+		// The rest of the body is not read, and the server must not wait
+		// for it before it answers.
+		rec.Header().Set("Connection", "close")
+	}
+	switch {
+	case errors.Is(err, errBudget):
+		a.check = "budget"
+		rec.Header().Set("Retry-After", "1")
+		http.Error(rec, "brig broker: too many request bodies are held at once; try again", http.StatusServiceUnavailable)
+		return
+	case timedOut(err):
+		a.check = "body"
+		http.Error(rec, "brig broker: the request body did not arrive in time", http.StatusRequestTimeout)
+		return
+	case err != nil:
+		a.check = "body"
+		http.Error(rec, "brig broker: the request body could not be read", http.StatusBadRequest)
+		return
+	}
+	// The hold can outlast the token. One that expired meanwhile is refused
+	// as on arrival, and the scan runs at the same instant, so a token that
+	// passes here is still among the live ones the scan looks for.
+	now := h.now()
+	if !now.Before(time.Unix(c.Exp, 0)) {
+		a.check = errTokenExpired.Error()
+		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
+		return
+	}
+	hit, partial, err := findPlaceholder(sb.matcher(now), r, p, rt.spec.Inject, token, held)
+	if partial {
+		a.placeholder = "partial"
+	}
+	switch {
+	case errors.Is(err, errInflated):
+		a.check = "body"
+		http.Error(rec, "brig broker: the request body decompresses to more than 8 MiB", http.StatusRequestEntityTooLarge)
+		return
+	case errors.Is(err, errContentEncoding):
+		a.check = "content-encoding"
+		http.Error(rec, "brig broker: a request body to a route is plain, gzip or deflate, and readable",
+			http.StatusUnsupportedMediaType)
+		return
+	case hit != nil:
+		sb.placeholders.Add(1)
+		a.check, a.where, a.encoding = "placeholder", hit.where, hit.encoding
+		// The line of a refusal carries neither the path nor a method that
+		// held the token.
+		a.path = redacted
+		if hit.where == "method" {
+			a.method = redacted
+		}
+		http.Error(rec, fmt.Sprintf("brig: refused: the session token was sent outside its carrier (route %s, in %s)",
+			hit.route, hit.where), http.StatusForbidden)
+		return
+	}
 
 	// request.allow matches the path the upstream serves, so a path that
 	// the upstream could resolve to another one is refused first.
@@ -122,21 +208,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: the credential of route "+p.route+" could not be resolved", http.StatusBadGateway)
 		return
 	}
-	h.forward(rec, r, a, p, rt, token, wl, doc, value)
+	h.forward(rec, r, a, p, rt, token, wl, doc, value, held)
 }
 
 // forward sends the request to the route's upstream with the credential
 // injected, and streams the response back with the credential redacted.
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, p routePath, rt *route,
-	token string, wl secret.Workload, doc []byte, value string) {
+	token string, wl secret.Workload, doc []byte, value string, held *heldBody) {
 	in := rt.spec.Inject
-	trip := &upstreamTrip{h: h, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a}
+	trip := &upstreamTrip{h: h, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
 	trip.addSecret(value)
-	if trip.renewable() && r.Body != nil && r.Body != http.NoBody {
-		trip.body = newReplayBody(r.Body, r.ContentLength, h.replay)
-		defer trip.body.release()
-		r.Body = trip.body
-	}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = &url.URL{
@@ -147,6 +228,10 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 				RawQuery: r.URL.RawQuery,
 			}
 			pr.Out.Host = ""
+			// Request trailers are not forwarded. The held body is read to
+			// its end before this clone, and the header rules below would
+			// not see them.
+			pr.Out.Trailer = nil
 			a.dropped = dropGuestHeaders(in, pr.Out.Header, token)
 			// The transport asks for gzip, and undoes it, only when the
 			// request has no Range and is not a HEAD. Otherwise the
@@ -209,9 +294,9 @@ type upstreamTrip struct {
 	workload secret.Workload
 	doc      []byte
 	audit    *auditLine
-	// body records the request body for the retry. ReverseProxy wraps the
+	// body is the request body held for the retry. ReverseProxy wraps the
 	// body it hands the transport, so the trip keeps its own reference.
-	body *replayBody
+	body *heldBody
 	// secrets are the exact strings the broker put on the upstream request
 	// that carry a credential. The response is redacted of each.
 	secrets []string
@@ -291,93 +376,6 @@ func (u *upstreamTrip) renewed(ctx context.Context) ([]byte, bool) {
 		return nil, false
 	}
 	return fresh, true
-}
-
-// replayBody records a request body as the transport sends it, so the request
-// can be sent again after a 401. It holds at most maxReplay bytes, taken from
-// the Handler's replay budget, and stops recording when either runs out.
-type replayBody struct {
-	rc     io.ReadCloser
-	budget *budget
-
-	mu    sync.Mutex
-	buf   []byte
-	taken int64
-	over  bool
-	eof   bool
-}
-
-// newReplayBody wraps rc. A known length is taken from the budget at once and
-// sizes the buffer. An unknown one is taken as the bytes arrive.
-func newReplayBody(rc io.ReadCloser, length int64, b *budget) *replayBody {
-	rb := &replayBody{rc: rc, budget: b}
-	switch {
-	case length > maxReplay:
-		rb.over = true
-	case length > 0:
-		if b.take(length) {
-			rb.taken = length
-			rb.buf = make([]byte, 0, length)
-		} else {
-			rb.over = true
-		}
-	}
-	return rb
-}
-
-func (b *replayBody) Read(p []byte) (int, error) {
-	n, err := b.rc.Read(p)
-	b.mu.Lock()
-	if !b.over && n > 0 {
-		need := int64(len(b.buf)+n) - b.taken
-		switch {
-		case int64(len(b.buf)+n) > maxReplay:
-			b.stop()
-		case need > 0 && !b.budget.take(need):
-			b.stop()
-		default:
-			if need > 0 {
-				b.taken += need
-			}
-			b.buf = append(b.buf, p[:n]...)
-		}
-	}
-	if err == io.EOF {
-		b.eof = true
-	}
-	b.mu.Unlock()
-	return n, err
-}
-
-// stop gives the buffer up. b.mu is held.
-func (b *replayBody) stop() {
-	b.over = true
-	b.buf = nil
-}
-
-func (b *replayBody) Close() error { return b.rc.Close() }
-
-// complete returns the whole body when the transport read it to the end and
-// it fit. The buffer is handed over, since nothing writes to it after the end.
-func (b *replayBody) complete() ([]byte, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !b.eof || b.over {
-		return nil, false
-	}
-	if b.buf == nil {
-		return []byte{}, true
-	}
-	return b.buf, true
-}
-
-// release gives the bytes back to the budget once the request is done.
-func (b *replayBody) release() {
-	b.mu.Lock()
-	taken := b.taken
-	b.taken, b.buf = 0, nil
-	b.mu.Unlock()
-	b.budget.give(taken)
 }
 
 // routePath is a request path split at its route prefix.
@@ -539,6 +537,10 @@ type auditLine struct {
 	// renew says what an upstream 401 led to: retried, failed, or body when
 	// the body was too large to send again.
 	renew string
+	// where and encoding say where a session token outside its carrier was
+	// found, and how it was spelled. placeholder is partial when only the
+	// start of the body was scanned.
+	where, encoding, placeholder string
 }
 
 // The longest method and path an audit line carries. Anything that reaches
@@ -558,7 +560,7 @@ func clip(s string, n int) string {
 }
 
 func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur time.Duration) {
-	attrs := make([]slog.Attr, 0, 13)
+	attrs := make([]slog.Attr, 0, 16)
 	// A request whose token has not verified carries only what the broker
 	// chose: the method, the status and the check. Its path, sandbox and
 	// route are whatever the sender wrote.
@@ -595,6 +597,12 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 	}
 	if a.renew != "" {
 		attrs = append(attrs, slog.String("renew", a.renew))
+	}
+	if a.where != "" {
+		attrs = append(attrs, slog.String("where", a.where), slog.String("encoding", a.encoding))
+	}
+	if a.placeholder != "" {
+		attrs = append(attrs, slog.String("placeholder", a.placeholder))
 	}
 	h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
 }
