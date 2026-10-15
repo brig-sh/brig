@@ -336,6 +336,31 @@ func TestReRegisteringKeepsTokensAndChangingRoutesRevokesThem(t *testing.T) {
 	}
 }
 
+// A run that boots a new guest removes the sandbox before it registers it
+// again. The same routes after a removal are a new registration, and the
+// tokens of the guest before it fail.
+func TestTheSameRoutesAfterARemovalRevokeTheOldTokens(t *testing.T) {
+	u := newUpstream(t)
+	r := startBroker(t, shortDir(t), u, nil)
+	sb := injector.Sandbox{ID: "brig-a", Profile: "claude-code", Routes: []injector.Route{claudeRoute()}}
+	if err := r.client.AddSandbox(sb); err != nil {
+		t.Fatal(err)
+	}
+	old := r.mint(t, "brig-a", "anthropic")
+	if _, err := r.client.RemoveSandbox("brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.client.AddSandbox(sb); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.send(t, "brig-a", "anthropic", old, "/v1/messages"); got != http.StatusUnauthorized {
+		t.Errorf("a token of the guest before the removal got %d, want 401", got)
+	}
+	if got := r.send(t, "brig-a", "anthropic", r.mint(t, "brig-a", "anthropic"), "/v1/messages"); got != http.StatusOK {
+		t.Errorf("a token of the new registration got %d", got)
+	}
+}
+
 // A token minted for one sandbox is refused on another's path, and the
 // upstream is never dialled for it.
 func TestATokenOfAnotherSandboxIsRefusedOverLoopback(t *testing.T) {

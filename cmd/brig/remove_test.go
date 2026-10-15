@@ -3,10 +3,12 @@ package main
 import (
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/wrap"
 )
 
 // removeRuntime is a runtime holding a fixed list of sandboxes and recording
@@ -393,5 +395,95 @@ func TestRemoveAllRemovesASandboxWhoseProfileIsGone(t *testing.T) {
 	}
 	if len(rt.removed) != 1 || rt.removed[0] != "brig-gone" {
 		t.Errorf("removed %v, want brig-gone", rt.removed)
+	}
+}
+
+// rm --all and reset remove sandboxes without a Config, so they revoke each
+// sandbox's session tokens themselves, as brig stop and brig rm do.
+func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		var revoked []string
+		swap(t, &revokeRoutes, func(name string) error {
+			revoked = append(revoked, name)
+			return nil
+		})
+		if _, err := captureStdout(t, func() error { return run(args) }); err != nil {
+			t.Fatalf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if strings.Join(revoked, " ") != "brig-faker brig-faker-refactor" {
+			t.Errorf("brig %s revoked %v, want both sandboxes", strings.Join(args, " "), revoked)
+		}
+	}
+}
+
+// rm --all and reset also revoke what the broker still holds after their
+// own removals: a sandbox the detected runtime does not list keeps no token
+// that still works.
+func TestRemoveAllRevokesWhatTheBrokerStillHolds(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		swap(t, &revokeRoutes, func(string) error { return nil })
+		calls := 0
+		swap(t, &revokeAllRoutes, func() ([]string, error) {
+			calls++
+			return []string{"brig-unlisted"}, nil
+		})
+		var err error
+		stderr := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		if err != nil {
+			t.Fatalf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if calls != 1 {
+			t.Errorf("brig %s asked the broker for what it still holds %d times, want once",
+				strings.Join(args, " "), calls)
+		}
+		if !strings.Contains(stderr, "brig-unlisted") {
+			t.Errorf("brig %s did not say it revoked brig-unlisted: %q", strings.Join(args, " "), stderr)
+		}
+	}
+}
+
+// rm of a sandbox the runtime does not list revokes its tokens whatever the
+// runtime then says about it: an Exists that fails, one that finds it after
+// all, and a runtime that cannot be asked. Revoking starts nothing, so it
+// comes first, as in brig stop. --dry-run revokes nothing.
+func TestRemoveRevokesASandboxTheRuntimeDoesNotList(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		rt     func() runtime.Runtime
+		dryRun bool
+		want   []string
+	}{
+		{"reported absent", func() runtime.Runtime { return &existsRuntime{listRuntime: absent()} }, false,
+			[]string{"brig-claude-code"}},
+		{"runtime cannot say", func() runtime.Runtime {
+			return &existsRuntime{listRuntime: absent(), err: errors.New("inspect: store locked")}
+		}, false, []string{"brig-claude-code"}},
+		{"stopped and missed by the listing", func() runtime.Runtime {
+			return &existsRuntime{listRuntime: absent(), exists: true}
+		}, false, []string{"brig-claude-code"}},
+		{"no Exists to ask", func() runtime.Runtime { return absent() }, false, []string{"brig-claude-code"}},
+		{"dry run", func() runtime.Runtime { return &existsRuntime{listRuntime: absent()} }, true, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lostSession(t)
+			var revoked []string
+			swap(t, &revokeRoutes, func(name string) error {
+				revoked = append(revoked, name)
+				return nil
+			})
+			err := removeSandbox(&wrap.Config{VMName: "brig-claude-code", Runtime: tt.rt()}, "claude@refactor", tt.dryRun)
+			if exitCode(err) != exitNotFound {
+				t.Fatalf("rm exits %d, want %d: %v", exitCode(err), exitNotFound, err)
+			}
+			if !slices.Equal(revoked, tt.want) {
+				t.Errorf("revoked %v, want %v", revoked, tt.want)
+			}
+		})
 	}
 }

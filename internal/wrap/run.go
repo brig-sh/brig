@@ -114,8 +114,8 @@ func (c *Config) resolveSecrets() (creds.Resolution, error) {
 //
 // Read-only, because Plan calls it: every answer was settled in Load.
 func (c *Config) sessionRefusal() error {
-	if c.routesRefused != nil {
-		return c.routesRefused
+	if err := c.routeRefusal(); err != nil {
+		return err
 	}
 	// The session has no project this run, and every check after this one
 	// that compares the sandbox with this run would read that as a project to
@@ -174,6 +174,12 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// disagree about which backend this run wants. See hypervisor.
 	hypervisor := c.hypervisor()
 	if err := c.backendRefusal(hypervisor); err != nil {
+		return err
+	}
+	// Before anything is prepared, and on the path that finds the sandbox up
+	// as well: a route whose secret the broker cannot read answers 502 to
+	// every request of the agent. The store is listed, never read.
+	if err := c.routeStoreRefusal(c.checkRouteStore()); err != nil {
 		return err
 	}
 	// Said on the run, not in BuildEnv: BuildEnv resolves the set for every
@@ -250,6 +256,17 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 				Note("a share cannot be attached to a live sandbox, so brig restarts it").
 				Note("%s", disconnects))
 		default:
+			// The broker has to know the sandbox before its agent sends a
+			// request, and the tokens of this exec are minted here. With no
+			// route left, a policy was detached from the running sandbox,
+			// and its registration goes, so the tokens its agent holds are
+			// refused.
+			if len(c.routes) == 0 {
+				c.forgetRoutes()
+			}
+			if err := c.serveRoutes(set); err != nil {
+				return err
+			}
 			// The guest has confirmed this workspace, so record it. Nothing has
 			// changed for a session brig already knows about; for one created
 			// before the index existed, this is where its entry appears.
@@ -282,6 +299,21 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	}
 	// Clear a stale stopped instance holding the name.
 	_ = c.Runtime.Remove(c.VMName)
+	// The guest booted below is a new one. The guest before it was stopped
+	// through the runtime, not through Stop, so the broker may still hold its
+	// registration, and the same registration again would keep its tokens
+	// valid. It is removed first, so serveRoutes registers the sandbox with a
+	// new key, or leaves it out when no route is left.
+	c.forgetRoutes()
+	// No sandbox holds the name until the boot below. A run that stops
+	// before it boots one removes the sandbox from the broker, which stops
+	// when it serves no other, rather than leave it registered for nothing.
+	booted := false
+	defer func() {
+		if err != nil && !booted && len(c.routes) > 0 {
+			c.forgetRoutes()
+		}
+	}()
 
 	// Verify before boot, not after: the point is to decide whether to run
 	// this image at all.
@@ -314,6 +346,12 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// rather than inside either check, because there is one answer for the step
 	// and two checks that reach it. See sayVerified.
 	c.sayVerified()
+	// Once the checks above have passed, so a refused run starts no broker.
+	// The broker has to know the sandbox before its agent sends a request,
+	// and the tokens of this exec are minted here.
+	if err := c.serveRoutes(set); err != nil {
+		return err
+	}
 
 	// The share below is a path, and the runtime resolves it again on its own
 	// time -- after the image pull, after the VM starts. PrepareWorkspace
@@ -429,6 +467,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	if err := c.Runtime.Run(spec); err != nil {
 		return fmt.Errorf("could not start the sandbox: %w", err)
 	}
+	booted = true
 	// Recorded once the boot has installed the ports. The spec already
 	// carried them: Load merges this line's --publish into the record it
 	// read. A run refused before this point, by verification or by the boot
@@ -682,6 +721,8 @@ func (c *Config) projectShareStale() string {
 // "gone anyway" puts the swallow back: the user is told a VM holding a
 // forwarded credential is down when nothing checked.
 func (c *Config) Stop() error {
+	// First, so a sandbox that will not stop holds no token that still works.
+	c.forgetRoutes()
 	err := c.Runtime.Stop(c.VMName)
 	if err == nil {
 		return nil
@@ -717,6 +758,7 @@ func (c *Config) Stop() error {
 // the sandbox is gone, and the next run of the session deletes what is left
 // before it boots. See reapOrphanHome.
 func (c *Config) Remove() error {
+	c.forgetRoutes()
 	_ = c.Runtime.Stop(c.VMName)
 	err := c.Runtime.Remove(c.VMName)
 	if err == nil {
@@ -756,16 +798,20 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 // HOME is set here because the runtime cannot be relied on for it. runc fills
 // it in from the guest's /etc/passwd when the spec has none, but an exec
 // through urunc leaves it unset. A HOME the set already carries is kept.
+//
+// The route variables come last, so a route value replaces a profile value of
+// the same name, as the spec of guest.env says.
 func (c *Config) guestEnv(set creds.Set) []runtime.Var {
+	vars := append(append([]runtime.Var(nil), set.Vars...), c.routeVars...)
 	if c.Profile.GuestHome == "" {
-		return set.Vars
+		return vars
 	}
 	for _, v := range set.Vars {
 		if v.Name == "HOME" {
-			return set.Vars
+			return vars
 		}
 	}
-	return append([]runtime.Var{{Name: "HOME", Value: c.Profile.GuestHome}}, set.Vars...)
+	return append([]runtime.Var{{Name: "HOME", Value: c.Profile.GuestHome}}, vars...)
 }
 
 // Exec hands the terminal to a command inside the sandbox. It does not return

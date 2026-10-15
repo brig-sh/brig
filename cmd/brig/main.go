@@ -2235,6 +2235,15 @@ func removeSandbox(cfg *wrap.Config, ref string, dryRun bool) error {
 		return err
 	}
 	if !present {
+		// The broker forgets the sandbox first, whatever the runtime says
+		// about it below, so its tokens are refused from the next request
+		// on. Forget starts nothing, and brig stop and Remove call it first
+		// too.
+		if !dryRun {
+			if err := revokeRoutes(cfg.VMName); err != nil {
+				warnf("the credential broker could not revoke the session tokens of %s: %v", cfg.VMName, err)
+			}
+		}
 		// Published ports go whatever the index holds. `brig network publish`
 		// records a port for a sandbox that has never booted, and the next run
 		// would open it.
@@ -2421,6 +2430,14 @@ func noSandboxf(ref string) error {
 // spelling is the command as it was typed, for the messages: this is reached as
 // `brig rm --all` and as the retired `brig reset`, and an error about the wrong
 // one of those sends the reader to fix a line they did not write.
+// revokeRoutes is the seam a test replaces to see which sandboxes rm, rm
+// --all and reset revoke.
+var revokeRoutes = wrap.RevokeRoutes
+
+// revokeAllRoutes is the seam a test replaces to see that rm --all and
+// reset revoke what the broker still holds.
+var revokeAllRoutes = wrap.RevokeAllRoutes
+
 func removeAll(spelling string, args []string, o removeOpts) error {
 	// This stops and removes every brig sandbox, so a flag typed to make it
 	// safer must not be read past and ignored, which is exactly how a command
@@ -2459,6 +2476,11 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	}
 	removed, homesGone := 0, 0
 	for _, inst := range mine {
+		// First, as brig stop does, so a sandbox that will not stop holds no
+		// token that still works.
+		if err := revokeRoutes(inst.Name); err != nil {
+			warnf("the credential broker could not revoke the session tokens of %s: %v", inst.Name, err)
+		}
 		_ = rt.Stop(inst.Name)
 		err := rt.Remove(inst.Name)
 		// The same deletion and pruning `brig rm` of one sandbox does, for the
@@ -2485,6 +2507,14 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		}
 		fmt.Println(inst.Name)
 		removed++
+	}
+	// The broker can hold sandboxes the list above lacks: a sandbox of a
+	// runtime other than the detected one, or a run that registered and
+	// failed before its sandbox existed. Their tokens go too.
+	if ids, err := revokeAllRoutes(); err != nil {
+		warnf("the credential broker could not revoke the session tokens it still holds: %v", err)
+	} else if len(ids) > 0 {
+		warnf("revoked the session tokens the credential broker still held for %s", strings.Join(ids, ", "))
 	}
 	warnf("%s", notice.Newf("removed %d sandbox(es) and %d guest home(s) brig created", removed, homesGone).
 		Note("%s", namedHomesStay))
