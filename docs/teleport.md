@@ -236,6 +236,33 @@ Brig reaches it as `ssh <user>@<host> brig ...`, so the account there needs
 that logs in without a password prompt. `BRIG_TELEPORT_REMOTE_BRIG` names
 another `brig` there.
 
+### Watch it
+
+![Two terminal panes on rp1. Left: brig teleport ubuntu --to pmoust@rp2 prints hull's rounds, the pause and the commit; --status says ubuntu runs on pmoust@rp2; brig sh there prints the guest's hostname and the boot_id it had before; brig rm ubuntu and a move back from rp2 follow, and brig ls shows ubuntu running on rp1. Right: the guest's feed counts on through both moves with no tick missing, the same boot_id, and a downtime total that rises by about 60 ms at each move.](media/teleport-pi-pair.gif)
+
+A real run on [the Linux pair](#the-linux-pair) on 2026-10-15, brig
+`e88abe6`, hull `9cb3440`, hvi `ba9b2d2` ([MP4](media/teleport-pi-pair.mp4)).
+A loop in the guest appends a line to `/tmp/feed` five times a second: a
+tick held in a shell variable, the guest's hostname (the script sets it,
+as the guest boots with none), the start of the kernel's `boot_id`, and
+the downtime total its `hvi-time` driver keeps, from
+`/sys/kernel/hvi_time/snapshot`. hull's moves took 1.5 and 1.6 s, and the
+guest's downtime total rose by 58.8 ms and then 67.8 ms.
+
+Both hosts were prepared before the recording. `rp2` was prepared with
+`brig teleport ubuntu --to pmoust@rp2 --prepare`. `rp1` already holds the
+base the session booted from. On it, `hull migrate-spare-base` was run by
+hand: it is the step `--prepare` runs on a destination that holds the base,
+and it makes the spare copy of the base that the move back takes. `ssh rp2
+brig teleport ubuntu --to pmoust@rp1 --prepare`, run while the guest is on
+`rp2`, does the same through Brig. The move back goes from `rp2`, as
+[Moving back](#moving-back) says.
+
+The right pane is `brig sh ubuntu -c 'tail -f /tmp/feed'` in a loop. Its
+"reconnecting" line is that vsock session ending as the guest leaves the
+host, not the guest: the ticks go on with none missing. The scripts are in
+`script/demo/`.
+
 ### What a move does
 
 1. **Checks on this host.** The session is teleportable and runs on hull's
