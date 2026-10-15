@@ -173,10 +173,31 @@ What does hold:
   socket other than the system resolver's, your SSH agent's included.
 
 A credential the profile delivers reaches a process sandbox as its real
-value. A placeholder in its place needs a credential broker on the host,
-which is separate work
-([#302](https://github.com/brig-sh/brig/issues/302)). Until it lands, the
-process sandbox holds the same credential a microVM would.
+value. A secret that a policy's [route](policies.md#routes) names does not:
+it stays in `brig-broker` on the host, and the process gets a session token
+for the route. See [Brokered credentials](runtimes.md#brokered-credentials).
+With a route:
+
+- A secret a route injects never reaches the process, its environment or
+  its guest home.
+- A session token works only on its own sandbox's route, and stops working
+  when `brig stop`, `brig rm` or `brig rm --all` removes the sandbox.
+- The process cannot read the broker's directory, which holds the host key
+  and the key of the brig CA.
+- No session token is on a command line, and the audit log holds no token and
+  no credential.
+
+A session token is a credential too. Until it expires, after 12 hours, it
+works through its route for anything that holds it. A process sandbox can
+read the environment of another one through `sysctl`, so it can read that
+sandbox's tokens. `brig-broker` keeps no key or credential in its environment
+or on its command line.
+
+While `brig-broker` is down, its loopback port is free, and any local process
+can bind it, another user's included. A host sandbox still running then sends
+its session token and its request there. Brig refuses to start the broker
+while another process holds the port, and `brig doctor` names that process.
+[The port](broker.md#the-port) has the details.
 
 ### Published ports
 
@@ -243,12 +264,19 @@ Two host reads do happen on a run, and no setting turns either off:
 Brig does with the answers. They do not stop the reads.
 
 A credential reaches the guest by one of two channels. The profile picks the
-channel for each secret.
+channel for each secret. A third channel, `broker`, keeps the credential on
+the host. A policy's [route](policies.md#routes) names the secret, and the
+guest gets a session token for the route in its place. This release serves a
+route to the host kind only.
 
 | Channel | What it does |
 | --- | --- |
 | `files:` | Writes the credential into the guest at the path the agent already reads |
 | `env:` | Binds the credential as an environment variable, for a credential whose consumer offers no file interface |
+| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
+
+`brig info --json` names the channel of each credential as its `source`:
+`environment`, `secret`, `file` or `broker`.
 
 For an `env.<name>` binding, or the deprecated `forward:` spelling of one,
 Brig still reads the named variable from its own environment. Whatever
@@ -387,6 +415,9 @@ credential. The sandbox cannot use a credential it cannot see. Brig forwards
 the credential and limits the blast radius. It does not use a sentinel value
 or a host-side proxy (see
 [A TLS-terminating host proxy](non-goals.md#a-tls-terminating-host-proxy)).
+A [route](policies.md#routes) on the host kind is the exception. There the
+sandbox sees a session token, which works through its route until it expires
+or the sandbox is stopped.
 
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.

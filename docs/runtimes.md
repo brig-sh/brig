@@ -104,6 +104,7 @@ then replaces itself with the agent under that profile:
 ~/.brig/host/<sandbox>/spec.json    # network, loopback ports, shares. No environment
 ~/.brig/host/<sandbox>/pids/<pid>   # one per agent started, with its start time
 ~/.brig/host/<sandbox>/events.log   # what brig logs prints
+~/.brig/host/broker/                # the credential broker of every routed sandbox
 ```
 
 `BRIG_STATE_DIR` moves the lot. Brig refuses a state directory that is a
@@ -178,11 +179,11 @@ matches the path the kernel resolved.
 | `offline` | nothing. Names do not resolve |
 | `shared` | any IP connection. Of the unix sockets, only the resolver's |
 
-No loopback port is named yet: a run on `isolated` reaches the resolver and
-nothing else. The ports are for a broker on the host that will hold the
-credential, which is separate work and not in this release. The resolver is
-still a way out: a name the agent looks up reaches the DNS servers of your
-network, so it can carry data in the name.
+A run with a route names one port, the port of `brig-broker`. A run with no
+route names none, and on `isolated` reaches the resolver and nothing else.
+See [Brokered credentials](#brokered-credentials). The resolver is still a way
+out: a name the agent looks up reaches the DNS servers of your network, so it
+can carry data in the name.
 
 The denies hold in every mode:
 
@@ -213,7 +214,7 @@ The other limits, against a microVM:
 | a policy with `host` or `cidr` rules | refused before anything is written, exit `7`. Seatbelt takes `localhost` or `*` and a port, and no other address |
 | a policy with `default: deny` and no rule | held, as `isolated` |
 | a policy with `default: allow` and no rule | held as `isolated` too, so only loopback is reachable. The `POLICY` row says so |
-| `volumes:` or `files:` | refused before the workspace is prepared. A process sandbox cannot mount a `tmpfs`. That includes `claude-code`. `brig plan` shows the refusal |
+| `volumes:` or `files:` | refused before the workspace is prepared. A process sandbox cannot mount a `tmpfs`. That includes `claude-code`, unless a route serves its `claude-credentials`. See [Brokered credentials](#brokered-credentials). `brig plan` shows the refusal |
 | `kind: gui`, `--publish` | refused |
 | the image, `BRIG_VERIFY` | nothing is pulled or checked. The `IMAGE` row says so |
 | `brig ls`, `brig rm --all` | list the host sandboxes only with `BRIG_RUNTIME=host` |
@@ -225,7 +226,53 @@ log show --last 10m --style compact --predicate 'sender == "Sandbox"'
 ```
 
 `brig doctor` reports whether `sandbox-exec` is on `PATH`, on macOS, without
-changing the exit status.
+changing the exit status. Its `broker` row says whether `brig-broker` runs,
+on which port, and whether its directory is yours alone.
+
+### Brokered credentials
+
+A policy with [routes](policies.md#routes) runs on the host kind with the
+`loopback` transport. The credential stays in `brig-broker`, and the process
+gets a session token and the URL of the route:
+
+```
+ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/brig-claude-code/r/anthropic
+CLAUDE_CODE_OAUTH_TOKEN=<session token>
+```
+
+Brig starts `brig-broker` on the first run with a route, registers the
+sandbox, and mints a token per route on every exec. The profile of the
+sandbox allows the broker's port and no other IP connection. `brig stop`,
+`brig rm` and `brig rm --all` revoke the sandbox's tokens. [broker.md](broker.md#hosting) has the
+lifecycle and the files under `~/.brig/host/broker`.
+
+`claude-code` runs on the host kind once a route serves its
+`claude-credentials`. Its `.credentials.json` is not written, so the `tmpfs`
+that held it is not needed. `CLAUDE_CONFIG_DIR` is then `.claude` in the guest
+home, on the host disk, and `IS_SANDBOX=1` stays. `ANTHROPIC_API_KEY` and
+`ANTHROPIC_AUTH_TOKEN` stay denied as ambient variables. A policy for it:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-routed
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+```
+
+```
+brig policy attach claude-routed claude-code
+BRIG_RUNTIME=host brig run claude-code
+```
+
+`brig info` prints a `BROKER` row: the transport, the routes, the pid and
+port of `brig-broker`, and the secrets it keeps on the host. A refresh that
+failed, or a write-back still pending, is named there too.
 
 ### Egress policy answers
 

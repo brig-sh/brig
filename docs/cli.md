@@ -1140,4 +1140,5 @@ satisfy the isolated posture of those profiles.
 | `BRIG_BOOT_ASSETS_REF` (global only) | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | the bundle Brig fetches when the boot assets are missing |
 | `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway. Names matching `sandbox-*.sock` are reserved for isolated gateways and refused here |
 | `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where gateway sockets, logs and network records live, shared and per-sandbox alike |
+| `BRIG_BROKER_BIN` (global only) | `brig-broker` beside `brig`, else on `PATH` | the credential broker a run with a [route](policies.md#routes) starts. See [broker.md](broker.md#hosting) |
 
