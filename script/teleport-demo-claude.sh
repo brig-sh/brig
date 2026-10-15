@@ -4,7 +4,7 @@
 # there. It is the run recorded in docs/teleport.md, "Claude Code session,
 # Mac to Pi".
 #
-#   script/teleport-demo-claude.sh [--claude] [--keep] [--replace] DST
+#   script/teleport-demo-claude.sh [--claude] [--prepare] [--keep] [--replace] DST
 #
 # DST is USER@HOST. Run it on the Mac with brig's settings for this Mac in
 # the environment: BRIG_RUNTIME_BIN, BRIG_HULL_STORE_DIR and the other
@@ -41,6 +41,11 @@
 # run the login brig held had expired, and `claude -p` failed to
 # authenticate. Its parser was checked only against made-up streams.
 #
+# --prepare runs `brig teleport REF --to DST --prepare` after the boot,
+# before the workload starts, and checks that it exited 0 and that DST
+# holds the session's base. The move then sends only what the guest
+# changed. A DST that holds the base of the image already is sent nothing.
+#
 # --keep leaves the session on DST and the fenced copy here. Otherwise both
 # go at the end: one `brig rm` here removes the copy and forgets the session
 # here, and one on DST removes the session there.
@@ -58,10 +63,11 @@
 # shellcheck disable=SC2016,SC2015
 set -uo pipefail
 
-CLAUDE=0 KEEP=0 REPLACE=0
+CLAUDE=0 PREPARE=0 KEEP=0 REPLACE=0
 while [ $# -gt 1 ]; do
   case $1 in
     --claude) CLAUDE=1 ;;
+    --prepare) PREPARE=1 ;;
     --keep) KEEP=1 ;;
     --replace) REPLACE=1 ;;
     *) break ;;
@@ -316,6 +322,14 @@ t0=$(now); brig -q run --teleportable "$REF" -d; rc=$?; t1=$(now)
 [ "$rc" = 0 ] && pass "brig run --teleportable $REF: exit 0 in $(awk "BEGIN { printf \"%.1f\", $t1 - $t0 }") s" \
   || { fail "brig run --teleportable $REF: exit $rc"; exit 1; }
 brig info "$REF" 2>/dev/null | grep -E '^(TELEPORTABLE|MACHINE|NETWORK|CREDENTIALS) '
+if [ "$PREPARE" = 1 ]; then
+  say "prepare $DST"
+  t0=$(now); brig teleport "$REF" --to "$DST" --prepare >"$OUT/prepare.log" 2>&1; rc=$?; t1=$(now)
+  cat "$OUT/prepare.log"
+  [ "$rc" = 0 ] && grep -q 'base [0-9a-f]*: \(held\|sent\)' "$OUT/prepare.log" \
+    && pass "brig teleport --prepare: exit 0 in $(awk "BEGIN { printf \"%.1f\", $t1 - $t0 }") s, $DST holds the base" \
+    || fail "brig teleport --prepare: exit $rc, $DST does not say it holds the base"
+fi
 S=$(guest "$START" 2>/dev/null)
 TOKEN=$(field TOKEN <<<"$S") BOOTID=$(field BOOTID <<<"$S")
 [ -n "$TOKEN" ] && [ -n "$BOOTID" ] && pass "the workload started (token $TOKEN)" || fail "the workload did not start"
@@ -413,11 +427,15 @@ fi
 
 say "numbers"
 # The move's numbers, from hull's records here and on DST, as in
-# script/teleport-demo.sh.
-python3 - "${BRIG_HULL_STORE_DIR:-$HOME/.hull/store}" "$VM" "$TX" "$OUT/move.log" <<'PY'
+# script/teleport-demo.sh, and the guest's own count of the pause: the rise
+# in the downtime total its hvi-time driver logs at each restore, a total
+# since boot.
+dtotal() { tr -d '\r' | grep -o 'downtime total [0-9]*' | tail -1 | awk '{ print $3 }'; }
+python3 - "${BRIG_HULL_STORE_DIR:-$HOME/.hull/store}" "$VM" "$TX" "$OUT/move.log" \
+  "$(dtotal <<<"$BEFORE")" "$(dtotal <<<"$AFTER")" <<'PY'
 import json, subprocess, sys, time
 from datetime import datetime
-store, vm, txid, log = sys.argv[1:]
+store, vm, txid, log, dt0, dt1 = sys.argv[1:]
 src = json.load(open(f"{store}/instances/{vm}/migration.json"))
 peer = src["remote"]["target"]
 def ts(s):
@@ -442,15 +460,34 @@ t0 = float(lines[0][0])
 moving = next(float(t) for t, l in lines if "the guest pauses here" in l)
 end = float(lines[-1][0])
 tr = src["transfer"]
+tm = src.get("timingsMs") or {}
+ms = lambda k: f"{tm[k] / 1000:.2f} s" if k in tm else "none"
 print(f"clock offset {peer} minus here: {off * 1000:+.1f} ms")
 print(f"brig preflight (checks, probe, receive, dry run): {moving - t0:.2f} s")
-print(f"hull: reserve {h['reserved'] - h['preflight']:.2f} s, fence {src['timingsMs']['fence'] / 1000:.2f} s, "
-      f"transfer {tr['seconds']:.2f} s, restore paused {src['timingsMs']['prepare'] / 1000:.2f} s, "
-      f"commit {src['timingsMs']['commit'] / 1000:.2f} s")
+print(f"hull: transport {src.get('transport', 'bundle')}, reserve {h['reserved'] - h['preflight']:.2f} s, "
+      f"fence {ms('fence')}, transfer {tr['seconds']:.2f} s, restore paused {ms('prepare')}, commit {ms('commit')}")
 print(f"transfer: {tr['bytes']} bytes ({tr['bytes'] / 2**20:.1f} MiB) in {tr['seconds']:.2f} s, "
-      f"{tr['bytesPerSec'] / 2**20:.1f} MiB/s; disk data {src['disk']['dataBytes']} of {src['disk']['size']} bytes")
-print(f"downtime, reserved here to running there: {d['running'] - h['reserved']:.2f} s")
-print(f"downtime, fenced here to running there: {d['running'] - h['fenced']:.2f} s")
+      f"{tr['bytesPerSec'] / 2**20:.2f} MiB/s")
+st = src.get("stream")
+if st:
+    # A streamed move: the rounds as hull relayed them, and hull's estimate
+    # of the pause, from hvi's pause to the destination's resume.
+    print(f"stream {st.get('mode')}: disk {st.get('diskBytes', 0)} bytes as {st.get('diskWireBytes', 0)} on the wire, "
+          f"RAM {st.get('ramBytes', 0)}, state {st.get('stateBytes', 0)}; stop {st.get('stopReason')}, "
+          f"hvi paused {st.get('hviPausedMs')} ms, sealed {st.get('sealedMs')} ms after the pause, "
+          f"hull's downtime estimate {st.get('downtimeMs')} ms")
+    for r in st.get("rounds") or []:
+        if r.get("kind") != "state":
+            print(f"  {r['name']}: {r['bytes']} bytes, {r['wireBytes']} on the wire, {r['seconds']:.2f} s"
+                  + (f", {r['blocks']} blocks" if r.get("blocks") is not None else "")
+                  + (", taken paused" if r.get("final") else ""))
+else:
+    print(f"disk data {src['disk']['dataBytes']} of {src['disk']['size']} bytes")
+    print(f"downtime, reserved here to running there: {d['running'] - h['reserved']:.2f} s")
+if "fenced" in h and "running" in d:
+    print(f"fenced here to running there: {d['running'] - h['fenced']:.2f} s")
+if dt1:
+    print(f"the guest's hvi-time downtime total rose by {(int(dt1) - int(dt0 or 0)) / 1e6:.1f} ms")
 print(f"brig teleport, start to end: {end - t0:.2f} s")
 print(f"epoch {dst['epoch']}, destination {dst['state']}")
 PY
