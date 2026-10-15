@@ -263,9 +263,10 @@ func remoteOutput(host, store string, args ...string) ([]byte, error) {
 // can never run again. rm removes it once the brig on the other host says
 // the session runs there, or once hull's own record here says the move
 // committed (see staleByHullsRecord), and asks nothing else: it is not the
-// session. With
-// no copy left here, rm forgets the session on this host and leaves the one
-// there alone.
+// session. It then forgets the session on this host, as it does when no copy
+// is left here, and leaves the one there alone. One rm leaves this host ready
+// to take the session back: a record kept here would only say where it runs,
+// and the old copy's removal is what a move back needs.
 func removeMovedCopy(cfg *wrap.Config, t profile.Profile, ref string, loc wrap.Location, dryRun bool) error {
 	vm := cfg.VMName
 	if loc.PendingHost != "" {
@@ -294,13 +295,19 @@ func removeMovedCopy(cfg *wrap.Config, t profile.Profile, ref string, loc wrap.L
 		}
 	}
 	if dryRun {
-		fmt.Printf("would remove the copy of %s left on this host (sandbox %s); it runs on %s\n", ref, vm, loc.Host)
+		fmt.Printf("would remove the copy of %s left on this host (sandbox %s) and forget it here; it runs on %s\n",
+			ref, vm, loc.Host)
 		return nil
 	}
 	if err := cfg.Remove(); err != nil {
 		return err
 	}
-	fmt.Printf("removed the copy of %s left on this host; it runs on %s\n", ref, loc.Host)
+	if err := wrap.ForgetRemoteSession(loc.Ref, vm); err != nil {
+		return fmt.Errorf("removed the copy of %s left on this host, and could not forget it here: %w", ref, err)
+	}
+	fmt.Printf("removed the copy of %s left on this host and forgot it here; it runs on %s, untouched there\n",
+		ref, loc.Host)
+	warnf("%s", notice.Newf("ssh %s brig rm %s removes it there", loc.Host, ref))
 	return nil
 }
 
