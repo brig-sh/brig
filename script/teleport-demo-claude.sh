@@ -4,7 +4,7 @@
 # there. It is the run recorded in docs/teleport.md, "Claude Code session,
 # Mac to Pi".
 #
-#   script/teleport-demo-claude.sh [--claude] [--keep] DST
+#   script/teleport-demo-claude.sh [--claude] [--prepare] [--keep] [--replace] DST
 #
 # DST is USER@HOST. Run it on the Mac with brig's settings for this Mac in
 # the environment: BRIG_RUNTIME_BIN, BRIG_HULL_STORE_DIR and the other
@@ -30,17 +30,32 @@
 #
 # --claude also starts a Claude Code task in the guest before the move:
 # `claude -p` with --output-format stream-json, its output and its errors
-# stamped into /root/task.jsonl and /root/task.err, and checks that the file
-# still grows after the move. It needs a Claude login brig can forward that
+# stamped into /root/task.jsonl and /root/task.err. The task prints the
+# line COUNT n before each function it writes. After the move the COUNT
+# lines read from the stream are the ones from before the move, in order,
+# followed by new ones: no restart, no gap, and more of them 20 s later
+# than at the first look on DST, or the task ended with exit 0. Any error
+# event written after the move fails the check, and so does a task that
+# exited with another status. It needs a Claude login brig can forward that
 # has not expired. This path has not run to the end yet: on the recorded
 # run the login brig held had expired, and `claude -p` failed to
-# authenticate.
+# authenticate. Its parser was checked only against made-up streams.
 #
-# --keep leaves the session on DST and the fenced copy here; otherwise both
-# are removed at the end.
+# --prepare runs `brig teleport REF --to DST --prepare` after the boot,
+# before the workload starts, and checks that it exited 0 and that DST
+# holds the session's base. The move then sends only what the guest
+# changed. A DST that holds the base of the image already is sent nothing.
+#
+# --keep leaves the session on DST and the fenced copy here. Otherwise both
+# go at the end: one `brig rm` here removes the copy and forgets the session
+# here, and one on DST removes the session there.
+#
+# The script removes nothing it did not start: when this host or DST
+# already has a session REF, it stops, unless --replace says to remove
+# that session first, on both hosts, with its guest home.
 #
 # Exit status: 0 when every check passed, 1 when one failed, 2 for a usage
-# error.
+# error or a session REF that is already there.
 
 # The guest scripts are expanded in the guest, so single quotes and \$ are on
 # purpose (SC2016); pass never fails, so A && pass || fail is an
@@ -48,11 +63,13 @@
 # shellcheck disable=SC2016,SC2015
 set -uo pipefail
 
-CLAUDE=0 KEEP=0
+CLAUDE=0 PREPARE=0 KEEP=0 REPLACE=0
 while [ $# -gt 1 ]; do
   case $1 in
     --claude) CLAUDE=1 ;;
+    --prepare) PREPARE=1 ;;
     --keep) KEEP=1 ;;
+    --replace) REPLACE=1 ;;
     *) break ;;
   esac
   shift
@@ -174,12 +191,122 @@ TASKCHECK='echo "TASKLINES $(wc -l < /root/task.jsonl)"
 echo "TASKPROC $(pgrep -c -x claude)"
 cat /root/task.exit /root/task.err 2>/dev/null
 tail -c 600 /root/task.jsonl'
+# TASKREAD: the task's stream, whole, then the end of the task. The echo
+# ends a last line the task had only half written.
+TASKREAD='cat /root/task.jsonl; echo; echo "TASKPROC $(pgrep -c -x claude)"; cat /root/task.exit 2>/dev/null'
 
+# TASKJUDGE BEFORE AFTER1 AFTER2: the --claude check, from three reads of
+# the task's stream (TASKREAD's output): right before the move, on DST, and
+# on DST 20 s later. Each line of the stream is a stamp and a stream-json
+# event. "After the move" is a stamp later than the last one the first read
+# has, which takes in the second or so of brig's checks before the pause. A
+# read on DST goes through ssh with a terminal, so its lines end in CR LF
+# and brig's notices come first: a line counts as an event only when it is
+# a stamp and a JSON object. The text is put back together from the
+# text_delta events alone, or from the assistant messages when the stream
+# has none. A text block can end with no newline, and a task that writes
+# its program through tools sends a short block between tool calls, so the
+# end of each block and message ends a line: COUNT n at the start of the
+# next one is then still at the start of a line. A COUNT n counts only once
+# a byte other than a digit follows it, so a COUNT 1 cut off on its way to
+# COUNT 12 is not read, and markdown around it (**COUNT 3**) is allowed. It
+# prints PASS and FAIL lines.
+TASKJUDGE='
+import json, re, sys
+
+def read(path):
+    events, proc, exits = [], None, []
+    for raw in open(path, encoding="utf-8", errors="replace"):
+        raw = raw.strip()
+        m = re.match(r"^TASKPROC ([0-9]+)$", raw)
+        if m:
+            proc = int(m.group(1))
+            continue
+        m = re.match(r"^[0-9.]+ EXIT (-?[0-9]+)$", raw)
+        if m:
+            exits.append(int(m.group(1)))
+            continue
+        m = re.match(r"^([0-9]+[.][0-9]+) ([{].*)$", raw)
+        if not m:
+            continue
+        try:
+            e = json.loads(m.group(2))
+        except ValueError:
+            continue
+        if isinstance(e, dict):
+            events.append((float(m.group(1)), m.group(2), e))
+    return events, proc, exits
+
+def text(events):
+    deltas, whole, block, some = [], [], None, False
+    for _, _, e in events:
+        if e.get("type") == "stream_event":
+            ev = e.get("event") or {}
+            d = ev.get("delta") or {}
+            kind = ev.get("type")
+            if kind in ("content_block_start", "content_block_stop", "message_start", "message_stop"):
+                deltas.append("\n")
+                block = None
+            elif kind == "content_block_delta" and d.get("type") == "text_delta":
+                if block is not None and ev.get("index") != block:
+                    deltas.append("\n")
+                block = ev.get("index")
+                deltas.append(d.get("text", ""))
+                some = True
+        elif e.get("type") == "assistant":
+            for c in (e.get("message") or {}).get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    whole.append(c.get("text", "") + "\n")
+    return "".join(deltas) if some else "".join(whole)
+
+def counts(events):
+    return [int(n) for n in re.findall(r"(?m)^\W*COUNT ([0-9]+)(?=[^0-9])", text(events))]
+
+def errors(events):
+    out = []
+    for _, body, e in events:
+        if "api_error" in body or e.get("is_error") is True or e.get("type") == "error" or (
+                e.get("type") == "result" and e.get("subtype") not in (None, "success")):
+            out.append(body[:160])
+    return out
+
+def say(ok, what):
+    print(("PASS " if ok else "FAIL ") + what)
+
+(b, _, bx), (a1, _, x1), (a2, proc, x2) = (read(p) for p in sys.argv[1:4])
+cb, c1, c2 = counts(b), counts(a1), counts(a2)
+say(not bx, "the task was running when the guest paused" + (" (it had exited %s)" % bx if bx else ""))
+say(c1[:len(cb)] == cb and c2[:len(c1)] == c1,
+    "the COUNT lines after the move go on from the %d before it, with no restart" % len(cb))
+say(c2 == list(range(1, len(c2) + 1)), "the COUNT lines run 1 to %d with no gap or repeat" % len(c2))
+say(len(c2) > len(cb), "the task wrote %d COUNT lines after the move (%d before, %d now)" % (
+    len(c2) - len(cb), len(cb), len(c2)))
+alive = len(c2) > len(c1)
+say(alive or x2 == [0], "the stream is alive on DST: %d COUNT lines at the first look, %d 20 s later%s" % (
+    len(c1), len(c2), ", and the task ended with exit 0" if x2 == [0] else ""))
+say(x2 in ([], [0]) and (x2 == [0] or (proc or 0) >= 1),
+    "the task is running (%s claude) or ended with exit 0 (exits %s)" % (proc, x2))
+paused = max([t for t, _, _ in b] or [0.0])
+late = errors([ev for ev in a2 if ev[0] > paused])
+say(not late, "no error event in the stream after the move" + ("" if not late else ": " + late[0]))
+'
+
+# have [on]: whether `brig ls` lists the session's sandbox VM, here, or on
+# DST with on. A ref can be spelled with an alias, the sandbox name cannot.
+have() {
+  if [ "${1:-}" = on ]; then on "brig ls --json"; else brig ls --json; fi 2>/dev/null | python3 -c 'import json, sys
+d = json.load(sys.stdin).get("data") or {}
+sys.exit(0 if any(s.get("sandbox") == sys.argv[1] for s in d.get("sandboxes") or []) else 1)' "$VM"
+}
 clean() {
-  brig rm "$REF" >/dev/null 2>&1
-  on "brig rm $REF >/dev/null 2>&1; brig rm $REF >/dev/null 2>&1; true"
-  brig rm "$REF" >/dev/null 2>&1
-  brig rm "$REF" >/dev/null 2>&1
+  if ! have && ! have on; then return 0; fi
+  if [ "$REPLACE" = 0 ]; then
+    echo "a session $REF is already here or on $DST; --replace removes it on both hosts, with its guest home" >&2
+    exit 2
+  fi
+  brig rm "$REF"
+  on "brig rm $REF; true"
+  brig rm "$REF" 2>/dev/null
   true
 }
 
@@ -195,6 +322,14 @@ t0=$(now); brig -q run --teleportable "$REF" -d; rc=$?; t1=$(now)
 [ "$rc" = 0 ] && pass "brig run --teleportable $REF: exit 0 in $(awk "BEGIN { printf \"%.1f\", $t1 - $t0 }") s" \
   || { fail "brig run --teleportable $REF: exit $rc"; exit 1; }
 brig info "$REF" 2>/dev/null | grep -E '^(TELEPORTABLE|MACHINE|NETWORK|CREDENTIALS) '
+if [ "$PREPARE" = 1 ]; then
+  say "prepare $DST"
+  t0=$(now); brig teleport "$REF" --to "$DST" --prepare >"$OUT/prepare.log" 2>&1; rc=$?; t1=$(now)
+  cat "$OUT/prepare.log"
+  [ "$rc" = 0 ] && grep -q 'base [0-9a-f]*: \(held\|sent\)' "$OUT/prepare.log" \
+    && pass "brig teleport --prepare: exit 0 in $(awk "BEGIN { printf \"%.1f\", $t1 - $t0 }") s, $DST holds the base" \
+    || fail "brig teleport --prepare: exit $rc, $DST does not say it holds the base"
+fi
 S=$(guest "$START" 2>/dev/null)
 TOKEN=$(field TOKEN <<<"$S") BOOTID=$(field BOOTID <<<"$S")
 [ -n "$TOKEN" ] && [ -n "$BOOTID" ] && pass "the workload started (token $TOKEN)" || fail "the workload did not start"
@@ -211,13 +346,19 @@ fi
 sleep 3
 BEFORE=$(guest "$CHECK" 2>/dev/null); echo "$BEFORE"
 
+[ "$CLAUDE" = 1 ] && guest "$TASKREAD" >"$OUT/task.0" 2>/dev/null
+
 say "teleport here -> $DST"
-{ echo "$(now) start"; brig teleport "$REF" --to "$DST" 2>&1; echo "$(now) rc=$?"; } \
+# The group runs in a subshell of the pipeline, so brig's status goes out
+# through a file: $? after the group would be tee's, and inside an echo's
+# $(now) it would be that substitution's.
+{ echo "$(now) start"; brig teleport "$REF" --to "$DST" 2>&1; rc=$?; echo "$rc" >"$OUT/move.rc"; echo "$(now) rc=$rc"; } \
   | perl -MTime::HiRes=time -ne '$|=1; if (/^\d{10}\.\d+ /) { print } else { printf "%.6f %s", time, $_ }' \
   | tee "$OUT/move.log"
+MRC=$(cat "$OUT/move.rc" 2>/dev/null)
 TX=$(sed -n 's/.*teleported .*(move \([0-9a-f]\{32\}\)).*/\1/p' "$OUT/move.log" | head -1)
-grep -q ' rc=0$' "$OUT/move.log" && [ -n "$TX" ] && pass "brig teleport committed move $TX" \
-  || { fail "brig teleport did not commit"; exit 1; }
+[ "$MRC" = 0 ] && [ -n "$TX" ] && pass "brig teleport exited 0 and committed move $TX" \
+  || { fail "brig teleport did not commit (exit ${MRC:-unknown}, move ${TX:-not named})"; exit 1; }
 
 say "the first exec after the move, from here"
 # Over ssh with a terminal, the brig there writes its notices to stdout.
@@ -253,12 +394,16 @@ grep -q "^$VM .* migrated\$" <<<"$PS" \
 say "credentials on $DST"
 guest 'echo "ENV $(env | cut -d= -f1 | sort | tr "\n" " ")"' >"$OUT/env.err" 2>&1
 E=$(field ENV <"$OUT/env.err"); echo "an exec on $DST has: $E"
+grep -qw PATH <<<"$E" && pass "an exec on $DST ran and printed its environment's names" \
+  || fail "an exec on $DST printed no environment: $(tr '\n' ' ' <"$OUT/env.err")"
 grep -q 'this host has no value for' "$OUT/env.err" && pass "brig on $DST says this exec carries no secret: $(grep -o 'has no value for .*' "$OUT/env.err")" \
   || fail "brig on $DST did not say which secrets it could not hand in"
 sleep 20
 N=$(guest "$NET" 2>/dev/null); echo "$N"
 for s in $SECRETS; do
-  grep -qw "$s" <<<"$E" && fail "an exec on $DST got $s" || pass "an exec on $DST got no $s"
+  if [ -z "$E" ]; then fail "whether an exec on $DST got $s is not known: none printed its environment"
+  elif grep -qw "$s" <<<"$E"; then fail "an exec on $DST got $s"
+  else pass "an exec on $DST got no $s"; fi
   grep -qw "$s" <<<"$(field HELD-NAMES <<<"$N")" && pass "a process started before the move still holds $s" \
     || fail "the process started before the move lost $s"
 done
@@ -269,17 +414,28 @@ b0=$(field BYTES <<<"$N"); sleep 10; b1=$(guest "$NET" 2>/dev/null | field BYTES
 if [ "$CLAUDE" = 1 ]; then
   say "the Claude Code task across the move"
   K=$(guest "$TASKCHECK" 2>/dev/null); echo "$K"
-  l1=$(field TASKLINES <<<"$K")
-  [ -n "$l1" ] && [ "$l1" -gt "${L0:-0}" ] && pass "the task file grew ($L0 -> $l1 lines)" || fail "the task file did not grow ($L0 -> $l1 lines)"
+  guest "$TASKREAD" >"$OUT/task.1" 2>/dev/null
+  sleep 20
+  guest "$TASKREAD" >"$OUT/task.2" 2>/dev/null
+  while IFS= read -r l; do
+    case $l in
+      "PASS "*) pass "${l#PASS }" ;;
+      *) fail "${l#FAIL }" ;;
+    esac
+  done < <(python3 -c "$TASKJUDGE" "$OUT/task.0" "$OUT/task.1" "$OUT/task.2" 2>&1 || echo "FAIL the task check did not run")
 fi
 
 say "numbers"
 # The move's numbers, from hull's records here and on DST, as in
-# script/teleport-demo.sh.
-python3 - "${BRIG_HULL_STORE_DIR:-$HOME/.hull/store}" "$VM" "$TX" "$OUT/move.log" <<'PY'
+# script/teleport-demo.sh, and the guest's own count of the pause: the rise
+# in the downtime total its hvi-time driver logs at each restore, a total
+# since boot.
+dtotal() { tr -d '\r' | grep -o 'downtime total [0-9]*' | tail -1 | awk '{ print $3 }'; }
+python3 - "${BRIG_HULL_STORE_DIR:-$HOME/.hull/store}" "$VM" "$TX" "$OUT/move.log" \
+  "$(dtotal <<<"$BEFORE")" "$(dtotal <<<"$AFTER")" <<'PY'
 import json, subprocess, sys, time
 from datetime import datetime
-store, vm, txid, log = sys.argv[1:]
+store, vm, txid, log, dt0, dt1 = sys.argv[1:]
 src = json.load(open(f"{store}/instances/{vm}/migration.json"))
 peer = src["remote"]["target"]
 def ts(s):
@@ -304,24 +460,43 @@ t0 = float(lines[0][0])
 moving = next(float(t) for t, l in lines if "the guest pauses here" in l)
 end = float(lines[-1][0])
 tr = src["transfer"]
+tm = src.get("timingsMs") or {}
+ms = lambda k: f"{tm[k] / 1000:.2f} s" if k in tm else "none"
 print(f"clock offset {peer} minus here: {off * 1000:+.1f} ms")
 print(f"brig preflight (checks, probe, receive, dry run): {moving - t0:.2f} s")
-print(f"hull: reserve {h['reserved'] - h['preflight']:.2f} s, fence {src['timingsMs']['fence'] / 1000:.2f} s, "
-      f"transfer {tr['seconds']:.2f} s, restore paused {src['timingsMs']['prepare'] / 1000:.2f} s, "
-      f"commit {src['timingsMs']['commit'] / 1000:.2f} s")
+print(f"hull: transport {src.get('transport', 'bundle')}, reserve {h['reserved'] - h['preflight']:.2f} s, "
+      f"fence {ms('fence')}, transfer {tr['seconds']:.2f} s, restore paused {ms('prepare')}, commit {ms('commit')}")
 print(f"transfer: {tr['bytes']} bytes ({tr['bytes'] / 2**20:.1f} MiB) in {tr['seconds']:.2f} s, "
-      f"{tr['bytesPerSec'] / 2**20:.1f} MiB/s; disk data {src['disk']['dataBytes']} of {src['disk']['size']} bytes")
-print(f"downtime, reserved here to running there: {d['running'] - h['reserved']:.2f} s")
-print(f"downtime, fenced here to running there: {d['running'] - h['fenced']:.2f} s")
+      f"{tr['bytesPerSec'] / 2**20:.2f} MiB/s")
+st = src.get("stream")
+if st:
+    # A streamed move: the rounds as hull relayed them, and hull's estimate
+    # of the pause, from hvi's pause to the destination's resume.
+    print(f"stream {st.get('mode')}: disk {st.get('diskBytes', 0)} bytes as {st.get('diskWireBytes', 0)} on the wire, "
+          f"RAM {st.get('ramBytes', 0)}, state {st.get('stateBytes', 0)}; stop {st.get('stopReason')}, "
+          f"hvi paused {st.get('hviPausedMs')} ms, sealed {st.get('sealedMs')} ms after the pause, "
+          f"hull's downtime estimate {st.get('downtimeMs')} ms")
+    for r in st.get("rounds") or []:
+        if r.get("kind") != "state":
+            print(f"  {r['name']}: {r['bytes']} bytes, {r['wireBytes']} on the wire, {r['seconds']:.2f} s"
+                  + (f", {r['blocks']} blocks" if r.get("blocks") is not None else "")
+                  + (", taken paused" if r.get("final") else ""))
+else:
+    print(f"disk data {src['disk']['dataBytes']} of {src['disk']['size']} bytes")
+    print(f"downtime, reserved here to running there: {d['running'] - h['reserved']:.2f} s")
+if "fenced" in h and "running" in d:
+    print(f"fenced here to running there: {d['running'] - h['fenced']:.2f} s")
+if dt1:
+    print(f"the guest's hvi-time downtime total rose by {(int(dt1) - int(dt0 or 0)) / 1e6:.1f} ms")
 print(f"brig teleport, start to end: {end - t0:.2f} s")
 print(f"epoch {dst['epoch']}, destination {dst['state']}")
 PY
 
 if [ "$KEEP" = 0 ]; then
   say "clean up: the fenced copy here, then the session on $DST"
+  # One rm here removes the fenced copy and forgets the session here.
   brig rm "$REF"
-  on "brig rm $REF; brig rm $REF"
-  brig rm "$REF"
+  on "brig rm $REF"
 fi
 
 say "result"
