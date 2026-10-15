@@ -328,8 +328,13 @@ before it runs anything.
 the rate, and for a disk round after the first, how many blocks a second
 the guest wrote. hull prints no such rate for memory. When the move
 commits, it prints how long hull's move took, whether hull streamed it,
-hull's estimate of how long the guest was paused, and the bytes sent, as
-far as hull reported them. hull's `downtime about` is an estimate: it is
+hull's estimate of how long the guest was paused, the bytes sent, and the
+rounds: how many of the disk and of memory, and the size and time of the
+final disk round, which the guest waits for. It reads hull's names for the
+disk rounds as hull 511877d prints them (`disk round 3 (final)`) and as
+they will be once hvi carries the disk in its own stream (`disk-round-0`,
+`disk-round-final`). A line Brig cannot read is still printed, and adds
+nothing to the summary. hull's `downtime about` is an estimate: it is
 the time the destination resumed the guest less the time the last memory
 round began to arrive here, read on two hosts' clocks. `--json` carries the same in its
 `move` object. Brig prints hull's lines from a queue of its own, so hull

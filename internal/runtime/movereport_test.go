@@ -140,7 +140,8 @@ func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 		t.Errorf("report %+v", r)
 	}
 	if s := r.Summary(); !strings.HasPrefix(s, "hull's move took 0.0 s, streamed, ") ||
-		!strings.HasSuffix(s, "5 rounds; transfer 5.39 s, commit 0.09 s") || r.Transport != "stream" {
+		!strings.HasSuffix(s, "5 rounds (3 disk, 2 memory), the final disk round 262144 bytes in 0.00 s; "+
+			"transfer 5.39 s, commit 0.09 s") || r.Transport != "stream" {
 		t.Errorf("summary %q", s)
 	}
 }
@@ -216,5 +217,131 @@ func TestMoveReportReadsHullsTransport(t *testing.T) {
 	old.Add("Sent 203.1 MiB in 4.8 s (42.6 MiB/s); disk 112.3 MiB of 15.0 GiB carried; destination: complete")
 	if b, _ := json.Marshal(old); strings.Contains(string(b), "transport") {
 		t.Errorf("a hull that said nothing of its transport gave %s", b)
+	}
+}
+
+// rounds is each round of a report as name|kind|round|final|size|seconds.
+func rounds(r MoveReport) string {
+	var got []string
+	for _, rd := range r.Rounds {
+		got = append(got, fmt.Sprintf("%s|%s|%d|%v|%s|%.2f", rd.Name, rd.Kind, rd.Round, rd.Final, rd.Size, rd.Seconds))
+	}
+	return strings.Join(got, "\n")
+}
+
+// The lines of a streamed move from rp2 to rp1 with the hull of U5's fix
+// (d4ae775; 511877d on top of it changes only docs, so it prints the same),
+// as hull printed them: three disk rounds while the guest ran, five memory
+// rounds, the seal, then the final disk round with the guest stopped. The
+// summary says how many rounds of each kind, and the final disk round, which
+// the guest waited for.
+func TestMoveReportReadsTheLinesOfHull511877d(t *testing.T) {
+	var r MoveReport
+	for _, line := range []string{
+		"Streaming fx1 to pmoust@rp1 (live)",
+		"move: the destination took the stream in 2.2 s (it copied the base)",
+		"move: disk round 0: 1574 blocks so far, 48.1 MiB/s",
+		"move: disk round 0: 1731 blocks, 108.2 MiB (97.6 MiB on the wire) in 3.13 s, 31.2 MiB/s",
+		"move: disk round 1: 163 blocks, 10.2 MiB (10.0 MiB on the wire) in 0.19 s, 53.5 MiB/s, guest wrote 52 blocks/s",
+		"move: disk round 2: 0 blocks, 0 bytes (0 bytes on the wire) in 0.01 s, 0 bytes/s",
+		"move: ram-round-0: 123.2 MiB so far, 61.6 MiB/s",
+		"move: ram-round-0: 138.2 MiB in 2.56 s, 53.9 MiB/s",
+		"move: ram-round-1: 15.7 MiB in 0.26 s, 59.5 MiB/s",
+		"move: ram-round-2: 3.9 MiB in 0.09 s, 45.5 MiB/s",
+		"move: ram-round-3: 2.9 MiB in 0.05 s, 53.8 MiB/s",
+		"move: ram-round-4: 28854 bytes in 0.00 s, 27.5 MiB/s",
+		"move: hvi sealed the stream and fenced fx1 (7 ms after the last RAM round began)",
+		"move: disk round 3 (final): 163 blocks, 10.2 MiB (10.0 MiB on the wire) in 0.16 s, 64.1 MiB/s",
+		"Sent 278.6 MiB in 8.8 s (31.5 MiB/s): disk 128.6 MiB as 117.7 MiB, RAM 160.8 MiB, state 53575 bytes; " +
+			"destination: stream: 154 hvi components and 2057 disk blocks in 143 batches checked; hvi restored the guest paused",
+		"Moved fx1 to pmoust@rp1: it runs there at epoch 8. Its checkpoint here is stale",
+		"Timings (ms): fence 0, transfer 8843, restore paused 0, commit 54",
+		"move: 278.6 MiB in 8.8 s; disk 117.7 MiB, RAM 160.8 MiB, state 53575 bytes; sealed 7 ms after the last RAM " +
+			"round began, last disk round 10.2 MiB in 156 ms; downtime about 13442 ms",
+		"move: the guest wrote up to 3.3 MiB/s to its disk during the disk rounds",
+	} {
+		r.Add(line)
+	}
+	want := strings.Join([]string{
+		"disk round 0|disk|0|false|108.2 MiB|3.13",
+		"disk round 1|disk|1|false|10.2 MiB|0.19",
+		"disk round 2|disk|2|false|0 bytes|0.01",
+		"ram-round-0|ram|0|false|138.2 MiB|2.56",
+		"ram-round-1|ram|1|false|15.7 MiB|0.26",
+		"ram-round-2|ram|2|false|3.9 MiB|0.09",
+		"ram-round-3|ram|3|false|2.9 MiB|0.05",
+		"ram-round-4|ram|4|true|28854 bytes|0.00",
+		"disk round 3 (final)|disk|3|true|10.2 MiB|0.16",
+	}, "\n")
+	if got := rounds(r); got != want {
+		t.Errorf("rounds:\n%s\nwant:\n%s", got, want)
+	}
+	if r.DowntimeSeconds != 13.442 || r.MiBPerSec != 31.5 || r.Transport != "" || r.Rounds[1].DirtyBlocksPerSec != 52 {
+		t.Errorf("report %+v", r)
+	}
+	if s := r.Summary(); !strings.Contains(s, ", 9 rounds (4 disk, 5 memory), the final disk round 10.2 MiB in 0.16 s; ") {
+		t.Errorf("summary %q", s)
+	}
+}
+
+// Once hvi carries the disk rounds inside its migrate stream, hull names
+// them by hvi's components: "disk-round-k" before "ram-round-k" while the
+// guest runs, and "disk-round-final" in the pause. These lines are
+// anticipated, not observed: the names are the ones SPEC-H8 C1 fixes, worded
+// the way hull 511877d words a round. The final round is final and numbered
+// after the others of its kind, not read as round 0, and the last memory
+// round is the paused one once hull says hvi sealed the stream.
+func TestMoveReportReadsTheRoundsHviStreams(t *testing.T) {
+	var r MoveReport
+	for _, line := range []string{
+		"move: disk-round-0: 812 blocks so far, 30.1 MiB/s",
+		"move: disk-round-0: 1731 blocks, 108.2 MiB (97.6 MiB on the wire) in 3.13 s, 31.2 MiB/s",
+		"move: ram-round-0: 138.2 MiB in 2.56 s, 53.9 MiB/s",
+		"move: disk-round-1: 163 blocks, 10.2 MiB (10.0 MiB on the wire) in 0.19 s, 53.5 MiB/s, guest wrote 52 blocks/s",
+		"move: ram-round-1: 15.7 MiB in 0.26 s, 59.5 MiB/s",
+		"move: disk-round-final: 4 blocks, 262144 bytes (5696 bytes on the wire) in 0.01 s, 25.0 MiB/s",
+		"move: ram-round-2: 28854 bytes in 0.00 s, 27.5 MiB/s",
+		"move: hvi sealed the stream and fenced s (7 ms after the last RAM round began)",
+		"move: a line hull has not printed before: 3 of something",
+	} {
+		r.Add(line)
+	}
+	want := strings.Join([]string{
+		"disk-round-0|disk|0|false|108.2 MiB|3.13",
+		"ram-round-0|ram|0|false|138.2 MiB|2.56",
+		"disk-round-1|disk|1|false|10.2 MiB|0.19",
+		"ram-round-1|ram|1|false|15.7 MiB|0.26",
+		"disk-round-final|disk|2|true|262144 bytes|0.01",
+		"ram-round-2|ram|2|true|28854 bytes|0.00",
+	}, "\n")
+	if got := rounds(r); got != want {
+		t.Errorf("rounds:\n%s\nwant:\n%s", got, want)
+	}
+	if s := r.Summary(); !strings.Contains(s, "6 rounds (3 disk, 3 memory), the final disk round 262144 bytes in 0.01 s") {
+		t.Errorf("summary %q", s)
+	}
+}
+
+// A line the report does not know changes nothing in it, and it reaches
+// the move's Progress whole, as hull printed it: brig prints every line
+// hull prints, so a hull that words its lines anew is still seen.
+func TestALineTheReportDoesNotKnowIsPassedOnWhole(t *testing.T) {
+	lines := []string{
+		"move: hvi: 3 disk components, 12 frames",
+		"Moving s in a way brig has not seen: 42 of 43",
+		"move: round trip 3 ms to the destination",
+	}
+	h, _ := migrateHull(t, "printf '"+strings.Join(lines, "\\n")+"\\n' >&2; echo committed > RECORD")
+	var r MoveReport
+	var seen []string
+	each := func(line string) { seen = append(seen, line); r.Add(line) }
+	if _, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1, Progress: each}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, "\n") != strings.Join(lines, "\n") {
+		t.Errorf("passed on:\n%s\nwant:\n%s", strings.Join(seen, "\n"), strings.Join(lines, "\n"))
+	}
+	if b, _ := json.Marshal(r); string(b) != "{}" {
+		t.Errorf("lines the report does not know gave %s", b)
 	}
 }

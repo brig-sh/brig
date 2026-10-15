@@ -61,18 +61,23 @@ type MoveRound struct {
 
 // The parts of hull's lines a report reads. Each is matched on its own, so
 // a line hull words differently still gives up the parts it has, and a line
-// without them changes nothing. Bytes are read only where hull prints a
-// count of bytes: its 1.7 GiB is rounded, and a count made from it would
-// claim a precision hull did not give.
+// without them changes nothing: brig passes every line on as hull printed
+// it, and a line the report does not know is only printed. Bytes are read
+// only where hull prints a count of bytes: its 1.7 GiB is rounded, and a
+// count made from it would claim a precision hull did not give.
 //
-// hull prints a streamed move's rounds after "move: ", as
-// "disk round 1: 12 blocks, 768.0 KiB (301.2 KiB on the wire) in 0.20 s,
-// 1.5 MiB/s, guest wrote 60 blocks/s" and "ram-round-0: 90.7 MiB in 2.10 s,
-// 43.2 MiB/s", and the downtime as "downtime about 1450 ms". During a long
-// round it prints how far the round has got, "disk round 0: 812 blocks so
-// far, 30.1 MiB/s (34% of 2381)", which is not a round of its own.
+// hull 511877d prints a streamed move's rounds after "move: ", as
+// "disk round 1: 163 blocks, 10.2 MiB (10.0 MiB on the wire) in 0.19 s,
+// 53.5 MiB/s, guest wrote 52 blocks/s", "disk round 3 (final): ..." and
+// "ram-round-0: 138.2 MiB in 2.56 s, 53.9 MiB/s", and the downtime as
+// "downtime about 1450 ms". During a long round it prints how far the round
+// has got, "disk round 0: 1574 blocks so far, 48.1 MiB/s", which is not a
+// round of its own. Once hvi carries the disk rounds in its own stream, the
+// rounds take hvi's component names, "disk-round-0" and on, and the one hvi
+// takes in the pause is "disk-round-final"; a round named final in either
+// spelling is numbered after the rounds of its kind before it.
 var (
-	lineRound     = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+))?\b[^:]*:\s*(.*)$`)
+	lineRound     = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+|final))?\b[^:]*:\s*(.*)$`)
 	lineSize      = regexp.MustCompile(`^(?:\d+ blocks, )?(\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB))\b`)
 	lineBytes     = regexp.MustCompile(`\b(\d+) bytes(?:[^/]|$)`)
 	lineSeconds   = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?s\b`)
@@ -101,13 +106,15 @@ func (r *MoveReport) Add(line string) {
 			// so far, 30.1 MiB/s (34% of 2381)"): the round has not ended.
 			return
 		}
-		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" ||
+		named := strings.ToLower(m[3])
+		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" || named == "final" ||
 			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest), Seconds: lineFloat(lineSeconds, rest),
 			MiBPerSec: lineMiBPerSec(rest), DirtyBlocksPerSec: lineFloat(lineBlocks, rest)}
-		if m[3] != "" {
-			round.Round, _ = strconv.Atoi(m[3])
+		if named != "" && named != "final" {
+			round.Round, _ = strconv.Atoi(named)
 		} else if n := len(r.Rounds); n > 0 && round.Final {
-			// "disk final round" follows the numbered ones.
+			// "disk final round" and "disk-round-final" follow the
+			// numbered ones.
 			for _, prev := range r.Rounds {
 				if prev.Kind == round.Kind && prev.Round >= round.Round {
 					round.Round = prev.Round + 1
@@ -167,6 +174,33 @@ func (r *MoveReport) Add(line string) {
 			r.MiBPerSec = rate
 		}
 	}
+}
+
+// roundsSaid is the summary's part on the rounds: how many, of which kind,
+// and the final disk round, the one the guest waited for.
+func (r *MoveReport) roundsSaid(n int) string {
+	var disk, ram int
+	var final *MoveRound
+	for i, rd := range r.Rounds {
+		switch rd.Kind {
+		case "disk":
+			disk++
+			if rd.Final {
+				final = &r.Rounds[i]
+			}
+		case "ram":
+			ram++
+		}
+	}
+	said := fmt.Sprintf("%d rounds", n)
+	if disk+ram == 0 {
+		return said
+	}
+	said += fmt.Sprintf(" (%d disk, %d memory)", disk, ram)
+	if final != nil && final.Size != "" {
+		said += fmt.Sprintf(", the final disk round %s in %.2f s", final.Size, final.Seconds)
+	}
+	return said
 }
 
 // markPausedRAM marks the last memory round as the one taken in the pause.
@@ -248,7 +282,7 @@ func (r *MoveReport) Summary() string {
 		parts = append(parts, fmt.Sprintf("at %.1f MiB/s", r.MiBPerSec))
 	}
 	if n := len(r.Rounds); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d rounds", n))
+		parts = append(parts, r.roundsSaid(n))
 	}
 	// hull's steps in the order a move takes them, then any other. A
 	// streamed move has no separate fence or restore, and hull reports
