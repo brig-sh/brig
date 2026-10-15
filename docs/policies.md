@@ -871,6 +871,8 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `route x: preset claude-code keeps its credential fresh (anthropic-oauth) …` | a route changes the `upstream` or `credential.field` of a preset with a lifecycle |
 | `guest.git.insteadOf PREFIX is rewritten by route x of a and by route y of b; …` | two bound routes rewrite the same git prefix |
 | `policy x (route y) declares routes, and brig.internal routing is not available on this runtime (…) yet. …` | a run, `sh` or plan on hull or nerdctl of a profile bound to a policy with routes |
+| `policy x (route y) injects a secret that brig's secret store does not hold: missing secret "s" …` | a run or `sh` of a profile bound to a route whose secret is not in the store. It exits `6`. The message names the import or create command |
+| `policy x (route y) injects s, which the broker reads from brig's secret store on the host, and the store is not available: …` | the same, on a host whose store does not open, such as Linux with no Secret Service. It exits `6` |
 | `route x: inject takes headers.set or basicAuth, not both` | a route, or a route and its preset, set both |
 | `route x: credential.lifecycle is set by a preset, and a policy does not name it` | a policy names `credential.lifecycle` |
 | `route x is declared by both a and b; …` | two bound policies declare a route of the same name |

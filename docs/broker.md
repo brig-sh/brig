@@ -6,10 +6,10 @@ checks the token and the route's `request.allow`, adds the credential on the
 host, and forwards the request to the route's upstream. The guest never holds
 the credential.
 
-This page describes `internal/broker`, the request handler. This release does
-not run it yet, and a run bound to a policy with routes is still refused. The
-process that hosts the handler, serves TLS for `brig.internal` and mints the
-tokens comes in a later change.
+This page describes `internal/broker`, the request handler, and
+`brig-broker`, the process that hosts it. In this release no runtime routes a
+guest to the broker yet, and a run bound to a policy with routes on hull or
+nerdctl is refused before boot. See [Transports](#transports).
 
 ## Request path
 
@@ -185,7 +185,7 @@ upstream sends before it has read the whole body.
 | 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, an expired token, or a request that arrived on another sandbox's gateway | `token`, `signature`, `token.sandbox`, `token.route`, `expired`, `arrival` |
 | 400 | `<rest>` is not in canonical form | `path` |
 | 403 | `request.allow` does not cover the request | `request.allow.methods`, `request.allow.paths`, `request.allow.repos` |
-| 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value | `credential` |
+| 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open | `credential` |
 | 502 | The upstream cannot be reached, or its certificate does not verify | `upstream` |
 | 502 | The response body has a `Content-Encoding` the broker cannot read | `response.encoding` |
 
@@ -256,11 +256,201 @@ with 401. Replacing a sandbox that is still registered does the same.
 
 ## Hosting
 
-The process that hosts the broker bounds what a guest can hold open. It sets
-a read-header timeout and an idle timeout on its server, and limits the
-connections per sandbox. The upstream transport has no response-header
-timeout, because a model can take minutes before the first byte of an event
-stream.
+`brig-broker` hosts the broker, one per host. It is a binary of its own,
+installed beside `brig`, because it refreshes credentials and no package on
+the run path links the refresher (`internal/hostsrc/arch_test.go`). Neither
+does the run path link `internal/broker`, so `brig` cannot mint a token
+itself. It asks `brig-broker`.
+
+### Lifecycle
+
+Brig starts `brig-broker` on the first run that has a route. It runs in a
+session of its own, so it outlives the `brig` that started it and does not
+take the terminal's signals. Every later run reuses it while its pid file
+names a live process with the start time it recorded. A pid alone can be
+reused by an unrelated process. The start time is the number the kernel keeps
+for the process, not the text `ps` prints, which follows the locale. Brig
+holds `start.lock` while it checks for a broker and starts one, so runs
+started at once start one broker.
+
+`brig stop`, `brig rm` and `brig rm --all` remove each sandbox they stop
+from the broker. Its tokens are refused from the next
+request on. They ask the control socket whatever the pid file says, and warn
+when the broker is there and does not answer. When no sandbox is left, Brig
+asks the broker to stop, and it stops only if no run registered a sandbox
+since. A run registers its sandbox after the checks before boot, image
+verification included. A run that fails before its sandbox boots removes it
+from the broker again, which stops the broker when no sandbox is left. A run
+whose registration the broker refuses stops the broker it started for it.
+A run that boots a guest, a restart included, removes the sandbox from the
+broker first, so the tokens of the guest before it are refused even when
+the routes are the same. An exec into a running sandbox whose policies no
+longer declare a route removes it too.
+
+`brig rm --all` then removes every sandbox the broker still has registered
+and stops it. That includes a sandbox of a runtime other than the detected
+one, and a run that was killed between its registration and its boot. A
+sandbox that is still running gets 404 on its routes until its next exec
+registers it again.
+
+On a host where brig's secret store does not open, such as a Linux host with
+no Secret Service on its session bus, Brig refuses a run with a route before
+boot, with exit `6`. A store that stops opening after the boot reaches the
+broker instead. Each route then answers 502, ending in "brig's secret store
+is not available on this host", with `check=credential`, and reaches no
+upstream. The broker tries the store again on each request, and
+`broker.log` says why it did not open.
+
+Brig does not restart a broker that exited. The `BROKER` row says it is not
+running, and the next run starts a new one. That run registers the sandbox
+again with a new key, so an agent still running with a token from the old
+broker gets 401 until its next exec.
+
+### The port
+
+The broker picks a free loopback port at first start and writes it to
+`port`. Every later start binds that port and no other. If another process
+holds it, the broker does not start, and Brig refuses the run and every exec
+of a routed sandbox:
+
+```
+brig: could not register the routes of brig-claude-code with the credential broker: another process holds the credential broker's port, 127.0.0.1:52546, so brig refuses the run. ...
+```
+
+While the broker is down, its port is free. Any local process can bind it,
+another user's included on a host several people use. Brig refuses to start
+a broker beside such a process, and `brig doctor` fails its `broker` row and
+names the process that holds the port.
+
+`BRIG_BROKER_BIN` names a `brig-broker` to run instead of the one beside
+`brig`, then on `PATH`.
+
+### Files
+
+Everything is in `~/.brig/host/broker`, or `host/broker` under
+`BRIG_STATE_DIR`. Brig and the broker refuse the directory when it is a
+link, belongs to another user, or is open to the group or to others. Every
+file is created `0600`.
+
+| File | What it holds |
+| --- | --- |
+| `hostkey` | 32 random bytes, drawn at first start. Each sandbox key is derived from it. Only the broker reads it. It is never on a command line or in a log |
+| `ca.pem`, `ca.key` | The brig CA of this host. See [Transports](#transports). A `ca.key` that is not the key of `ca.pem` is refused at start. Remove both, and the next start creates a new pair |
+| `control.sock` | The control socket |
+| `broker.pid` | The pid of the running broker and its start time |
+| `broker.lock` | Held by the running broker. A second one exits |
+| `port` | The loopback port, written by the broker at first start and bound at every start after. See [The port](#the-port) |
+| `start.lock` | Held by `brig` while it starts the broker |
+| `audit.log`, `audit.log.1` | The [audit line](#audit-line) of every request. Rotated at 64 MiB, one previous file kept |
+| `broker.log`, `broker.log.1` | The broker's own output, rotated the same way. What the broker writes to stderr, a panic included, moves to the new file with each rotation |
+
+### Control protocol
+
+Brig talks to the broker over HTTP on `control.sock`, with JSON bodies. A
+request with a field the protocol does not have is refused with 400, and so
+is a sandbox id that is not 1 to 255 letters, digits, dots, dashes and
+underscores. 255 bytes is the longest name of a directory.
+
+| Request | Body | Answer |
+| --- | --- | --- |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}]}` | 204. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key |
+| `DELETE /sandboxes/<id>` | | `{removed, remaining}` |
+| `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing}`. Names only |
+| `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
+
+A broker on its way out answers 503 to a registration or a mint. Brig waits
+for it to exit and starts another. It does the same when the broker it found
+is gone by the time it registers, because another `brig` removed the last
+sandbox and stopped it. A token travels only on the control socket
+to Brig, and from Brig to the guest in the environment of one exec. Brig mints
+one per route on every exec.
+
+### Server limits
+
+The broker bounds what a guest can hold open. A request header has 10
+seconds to arrive, an idle connection is closed after 90 seconds, and the
+request line and headers together are at most 16 KiB. A larger request gets
+431 before it reaches the handler, and writes no audit line. The broker holds at most 256 connections at
+once. A loopback connection names no sandbox until its request is read, so
+the bound is for the host and not per sandbox. The upstream transport has no
+response-header timeout, because a model can take minutes before the first
+byte of an event stream.
+
+### Credentials
+
+The broker reads the credential of a route from Brig's own store, the login
+keychain on macOS, on every request. A secret with a lifecycle, such as
+`claude-credentials` under the `claude-code` preset, has one cache in the
+broker. The cache refreshes it and writes it back, as
+[Renewal on the host](secrets.md#renewal-on-the-host) describes, so two
+sandboxes that share it share one refresh.
+
+The broker reads the keychain with `security`, from its own session. Measured
+on macOS 26: a process in a new session, whose parent had exited, read a
+keychain item of the login session with no prompt. A broker started from an
+SSH session can only read an unlocked keychain. A read that fails is a 502.
+
+## Transports
+
+A guest reaches the broker at `brig.internal`. `brig info` names the
+transport in the `BROKER` row.
+
+| Transport | Runtime | Route URL |
+| --- | --- | --- |
+| `brig.internal` | hull, nerdctl | `https://brig.internal/<sandbox-id>/r/<route>` |
+
+**brig.internal.** TLS to a name only Brig serves, with the brig CA trusted
+in the guest. At first start the broker creates the CA, an ECDSA P-256 key in
+`ca.key`. Its name constraints permit `brig.internal` and exclude every IP
+address, so a guest that trusts it trusts no other site. The broker signs a
+certificate for `brig.internal` at every start, and that key stays in
+memory. Brig points the guest at the CA in `SSL_CERT_FILE`,
+`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `GIT_SSL_CAINFO`, at
+`/brig/ca/brig.pem`.
+
+This release does not route `brig.internal` from a guest to the broker.
+`hull network-gateway` serves a static DNS record and forwards a host port
+into a guest, but it has no forward from a guest to the host. So a run with a
+route on hull or nerdctl is refused before boot, with "brig.internal routing
+is not available on this runtime yet". The CA and the guest environment
+exist, and no listener uses them (#265).
+
+## What the guest gets
+
+Brig mints a token per route on every exec and hands the guest the route's
+`guest.env`, with `{route.url}` and `{session.token}` filled in. A token is
+never on a command line:
+
+| Preset | Guest environment |
+| --- | --- |
+| `claude-code` | `ANTHROPIC_BASE_URL=<route URL>`, `CLAUDE_CODE_OAUTH_TOKEN=<token>` |
+| `anthropic-api-key` | `ANTHROPIC_BASE_URL=<route URL>`, `ANTHROPIC_API_KEY=<token>` |
+| `github-token` | `BRIG_ROUTE_GITHUB_TOKEN=<token>`, and git configuration in `GIT_CONFIG_COUNT` |
+
+A route with `guest.git` points git at the route through the environment,
+and writes nothing into the guest home:
+
+```
+url.<route URL>/.insteadOf = https://github.com/
+url.<route URL>/.insteadOf = git@github.com:
+credential.<route URL>/.helper =
+credential.<route URL>/.helper = !f() { test "$1" = get || exit 0; printf '%s\n' 'username=x-access-token' "password=$BRIG_ROUTE_GITHUB_TOKEN"; }; f
+```
+
+The empty helper resets the list for the route URL, so a helper from your own
+git configuration is not asked first. The username is quoted for the shell.
+A `GIT_CONFIG_COUNT` the profile already delivers keeps its entries, and the
+route's entries are numbered after them.
+
+The secret a route injects stays on the host, whatever the profile binds:
+
+- a `files:` binding of it is dropped
+- an `env:` binding whose chain names it is dropped whole, so an ambient
+  value cannot stand in for it
+- Brig does not read it. The broker does
+
+A run with a route runs isolated.
 
 ## Audit line
 
@@ -274,8 +464,8 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | --- | --- |
 | `workload` | The workload the credential was resolved for. Only a request with a valid token has one |
 | `sandbox`, `route` | From the path |
-| `method` | The request method |
-| `path` | `<rest>`, without the query. Empty when the request is refused before its path is split (`check=upgrade`, or `check=path` with a 404) |
+| `method` | The request method, cut to 16 bytes |
+| `path` | `<rest>`, without the query, cut to 256 bytes |
 | `status` | The status sent to the guest |
 | `dur` | The time from the request to the end of the response |
 | `check` | The check that refused the request |
@@ -284,3 +474,12 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `renew` | After an upstream 401: `retried`, `failed`, `interval` when a renewal was forced for the secret less than a minute before, or `body` when the body was not kept for a retry |
 
 The line never holds a credential, a token, a header value or a body.
+
+Anything on the host that reaches the broker's port can send it a request.
+So the line of a request whose token has not verified carries only
+`method`, `status`, `dur` and `check`, and nothing the sender wrote into the
+path. Measured on a Mac, a flood of 200,000 such requests with 8 KiB paths
+in 5 seconds wrote 21 MB. The broker rotates `audit.log` to `audit.log.1` at 64
+MiB and keeps that one previous file, so the two take at most 128 MiB. A log
+that cannot rotate keeps its file, says so once on stderr, which is
+`broker.log`, and tries again at the next line.

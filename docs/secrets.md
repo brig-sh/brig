@@ -455,6 +455,22 @@ key bytes to a guest.
 
 </details>
 
+## A secret behind a route
+
+A policy's [route](policies.md#routes) names a secret in this store. On a run
+with that route, Brig does not read the secret and does not deliver it.
+`brig-broker` reads it from the store on each request through the route, and
+adds it on the host. The guest gets a session token. A `files:` or `env:`
+binding of the same secret in the profile is dropped for that run, and
+`brig info` lists it as kept on the host.
+
+Before boot, Brig lists the store and checks that the secret is there. It
+reads no value. A run whose route's secret is missing, or whose store does
+not open, is refused with exit `6`, and the message names the command that
+puts the secret there. A secret removed after the boot makes the route
+answer 502, and the audit line in `~/.brig/host/broker/audit.log` names the
+check. Create or import the secret, and the next request finds it.
+
 ## Renewal on the host
 
 This section describes a part of the credential broker. No release uses it

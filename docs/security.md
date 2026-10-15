@@ -182,12 +182,19 @@ Two host reads do happen on a run, and no setting turns either off:
 Brig does with the answers. They do not stop the reads.
 
 A credential reaches the guest by one of two channels. The profile picks the
-channel for each secret.
+channel for each secret. A third channel, `broker`, keeps the credential on
+the host. A policy's [route](policies.md#routes) names the secret, and the
+guest gets a session token for the route in its place. No runtime serves a
+route in this release yet, and Brig refuses a run bound to one before boot.
 
 | Channel | What it does |
 | --- | --- |
 | `files:` | Writes the credential into the guest at the path the agent already reads |
 | `env:` | Binds the credential as an environment variable, for a credential whose consumer offers no file interface |
+| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
+
+`brig info --json` names the channel of each credential as its `source`:
+`environment`, `secret`, `file` or `broker`.
 
 For an `env.<name>` binding, or the deprecated `forward:` spelling of one,
 Brig still reads the named variable from its own environment. Whatever

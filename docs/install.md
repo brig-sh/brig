@@ -2,10 +2,10 @@
 
 | Host | Use | What it installs |
 | --- | --- | --- |
-| macOS | [Homebrew](#macos-with-homebrew) | `brig`, `brigd`, `hull`, `cosign`, shell completions |
-| macOS without Homebrew | [install.sh](#installsh) | `brig`, `brigd`, `hull`, `cosign` |
-| Linux | [install.sh](#linux) | the runtime bundle (`nerdctl`, containerd, the `urunc` shim), with `brig` and `brigd` from the Brig release, and `cosign` |
-| Any | [A source build](#building-from-source) | `brig` and `brigd`, without a runtime |
+| macOS | [Homebrew](#macos-with-homebrew) | `brig`, `brigd`, `brig-broker`, `hull`, `cosign`, shell completions |
+| macOS without Homebrew | [install.sh](#installsh) | `brig`, `brigd`, `brig-broker`, `hull`, `cosign` |
+| Linux | [install.sh](#linux) | the runtime bundle (`nerdctl`, containerd, the `urunc` shim), with `brig`, `brigd` and `brig-broker` from the Brig release, and `cosign` |
+| Any | [A source build](#building-from-source) | `brig`, `brigd` and `brig-broker`, without a runtime |
 
 On macOS, Brig drives the `hull` runtime. On Linux, Brig drives `nerdctl`
 over containerd, and `urunc` boots each container as a microVM.
@@ -22,8 +22,9 @@ brew trust brig-sh/brig
 brew install --cask brig
 ```
 
-The cask installs `brig`, `brigd` and `hull`, and puts them on `PATH`. It
-also installs the bash, zsh and fish completions.
+The cask installs `brig`, `brigd`, `brig-broker` and `hull`, and puts them on
+`PATH`. It also installs the bash, zsh and fish completions. `brig-broker` is
+the [credential broker](broker.md#hosting) a run with a route starts.
 
 | If | Do this |
 | --- | --- |
@@ -78,8 +79,8 @@ curl -fsSL https://raw.githubusercontent.com/brig-sh/brig/main/install.sh | sh
 
 | Host | What `install.sh` installs |
 | --- | --- |
-| macOS | `brig` and `brigd`, plus `hull` with the `vz-runner` and `hvi` executables it drives |
-| Linux | The runtime bundle, with `brig` and `brigd` from the Brig release inside it. See [Linux](#linux). |
+| macOS | `brig`, `brigd` and `brig-broker`, plus `hull` with the `vz-runner` and `hvi` executables it drives |
+| Linux | The runtime bundle, with `brig`, `brigd` and `brig-broker` from the Brig release inside it. See [Linux](#linux). |
 | Both | `cosign` |
 
 `install.sh` downloads the newest `v`-tagged release for your OS and
@@ -178,7 +179,8 @@ monitors, the guest kernel and a private containerd, under `/var/lib/brig`.
 release asset, checked against the same signed `checksums.txt` as the bundle.
 
 The bundle carries its own `brig` and `brigd`. `install.sh` replaces them
-with the ones from the Brig release, the same release it installs on macOS.
+with the ones from the Brig release, the same release it installs on macOS,
+and adds `brig-broker` from that release.
 As a result, `BRIG_VERSION` selects the Brig version on Linux too. The
 runtime and Brig are versioned separately.
 
@@ -257,8 +259,8 @@ artifact to fetch by hand and the directory to put it in.
 
 ### A runtime you already have
 
-**`BRIG_INSTALL_RUNTIME=0`** skips the bundle and installs `brig` and `brigd`
-alone. Use it on a host that already has `nerdctl`, containerd and `urunc`.
+**`BRIG_INSTALL_RUNTIME=0`** skips the bundle and installs `brig`, `brigd` and
+`brig-broker` alone. Use it on a host that already has `nerdctl`, containerd and `urunc`.
 
 - That `urunc` must be a build of the branch the bundle uses. No urunc
   release reads the boot annotations, so a `genericBoot` profile never
@@ -290,9 +292,9 @@ cd brig
 make build
 ```
 
-`make build` writes `brig` and `brigd` into the current directory. The build
-needs no signing and no entitlement, because Brig reaches the hypervisor only
-through `hull`.
+`make build` writes `brig`, `brigd` and `brig-broker` into the current
+directory. The build needs no signing and no entitlement, because Brig
+reaches the hypervisor only through `hull`.
 
 A `hull` that you build from source cannot boot a sandbox without a Developer
 ID certificate. See

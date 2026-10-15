@@ -76,6 +76,13 @@ a new and attractive target. In exchange, it narrows an exposure that Brig
 already limits to a narrow blast radius: one guest home, one fine-grained
 token.
 
+The credential broker of [routes](policies.md#routes) is not this proxy. It
+terminates no TLS that the guest opens to an upstream. The guest sends its
+request to the broker's own endpoint, `brig.internal`, with a CA that signs
+only that name. The broker then opens its own TLS connection to the
+upstream, verified with the system roots. A route covers a tool that is
+pointed at it, and nothing else.
+
 **Reopens when** one of these is true:
 
 - The agents that people run under Brig have a credential surface that is
