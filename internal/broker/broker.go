@@ -210,8 +210,8 @@ func defaultTransport() http.RoundTripper {
 // Each registration takes a new sandbox key. A replaced sandbox refuses the
 // tokens minted for the one it replaces, so the caller mints again.
 func (h *Handler) AddSandbox(s Sandbox) error {
-	if s.ID == "" || strings.ContainsAny(s.ID, "/%") {
-		return fmt.Errorf("sandbox id %q is empty or holds a slash or a percent sign", s.ID)
+	if err := ValidID(s.ID); err != nil {
+		return err
 	}
 	nonce := make([]byte, nonceSize)
 	if _, err := rand.Read(nonce); err != nil {
@@ -239,6 +239,24 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 	h.mu.Lock()
 	h.sandboxes[s.ID] = sb
 	h.mu.Unlock()
+	return nil
+}
+
+// maxID is the longest sandbox id the broker takes. A sandbox id is the
+// sandbox's name, which brig does not shorten, and a name brig keeps state
+// under is a directory name, at most 255 bytes.
+const maxID = 255
+
+// ValidID refuses a sandbox id that is not 1 to 255 letters, digits, dots,
+// dashes and underscores, or that is "." or "..". The id is a path segment of
+// every route URL and a field of the audit line.
+func ValidID(id string) error {
+	if id == "" || id == "." || id == ".." || len(id) > maxID || strings.ContainsFunc(id, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			r == '-' || r == '_' || r == '.')
+	}) {
+		return fmt.Errorf("sandbox id %q is not 1 to %d letters, digits, dots, dashes and underscores", id, maxID)
+	}
 	return nil
 }
 

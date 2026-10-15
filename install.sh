@@ -4,10 +4,10 @@
 #   curl -fsSL https://brig.sh/install | sh
 #
 # Downloads the newest release for this platform, checks it against the
-# published checksums, and installs brig and brigd. On macOS it also installs
-# hull -- the microVM runtime brig drives there, without which a first `brig
-# run` fails -- and cosign, which is what verifies the kernel, initrd and guest
-# agent every sandbox boots.
+# published checksums, and installs brig, brigd and brig-broker. On macOS it
+# also installs hull -- the microVM runtime brig drives there, without which a
+# first `brig run` fails -- and cosign, which is what verifies the kernel,
+# initrd and guest agent every sandbox boots.
 #
 # On Linux the runtime is nerdctl over containerd with the urunc shim, none of
 # which is brig's to build, so this delegates to the bundle that packages it
@@ -202,6 +202,10 @@ install_brig() {
   fetch_brig
   install_from "$tmp/brig" brig
   install_from "$tmp/brig" brigd
+  # Releases before the credential broker do not carry it.
+  if [ -f "$tmp/brig/brig-broker" ]; then
+    install_from "$tmp/brig" brig-broker
+  fi
   say "installed $("$DEST/brig" version) to $DEST"
 }
 
@@ -369,6 +373,9 @@ install_runtime() {
     || die "the runtime installer left no brig at $prefix/bin/brig to replace"
   install -m 0755 "$tmp/brig/brig" "$prefix/bin/brig"
   install -m 0755 "$tmp/brig/brigd" "$prefix/bin/brigd"
+  if [ -f "$tmp/brig/brig-broker" ]; then
+    install -m 0755 "$tmp/brig/brig-broker" "$prefix/bin/brig-broker"
+  fi
   # pins.env is what `brig-ctl version` reports, so it names the brig that is
   # there now.
   if [ -f "$prefix/pins.env" ]; then

@@ -1,7 +1,8 @@
 # goreleaser builds and publishes brig.
 #
-# Two binaries from one module: brig, the CLI, and brigd, the session daemon.
-# Both are pure Go with no cgo, so one Linux runner cross-compiles every
+# Three binaries from one module: brig, the CLI, brigd, the session daemon,
+# and brig-broker, the credential broker of brokered routes. All three are
+# pure Go with no cgo, so one Linux runner cross-compiles every
 # target -- including darwin/arm64, which is the one that matters most. The
 # keychain is read by shelling out to `security` rather than through cgo
 # precisely so this stays true.
@@ -56,6 +57,19 @@ builds:
       - -X github.com/brig-sh/hull/pkg/telemetry.Endpoint={{ .Env.TELEMETRY_ENDPOINT }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  # A binary of its own because it refreshes credentials, and no package on
+  # brig's run path links the refresher. brig finds it beside itself. It
+  # sends no telemetry.
+  - id: brig-broker
+    main: ./cmd/brig-broker
+    binary: brig-broker
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
 # Developer ID signing and notarization for the macOS binaries.
 #
 # cosign proves who built an artifact; Gatekeeper wants an Apple signature and
@@ -69,7 +83,7 @@ builds:
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      ids: [brig, brigd]
+      ids: [brig, brigd, brig-broker]
       sign:
         certificate: "{{.Env.MACOS_SIGN_P12}}"
         password: "{{.Env.MACOS_SIGN_PASSWORD}}"
@@ -82,8 +96,8 @@ notarize:
 
 archives:
   - id: brig
-    ids: [brig, brigd]
-    # One archive per platform carrying both binaries, named the way the
+    ids: [brig, brigd, brig-broker]
+    # One archive per platform carrying every binary, named the way the
     # Homebrew tap already expects to find a release asset.
     name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
     formats: [tar.gz]
@@ -179,7 +193,7 @@ release:
 homebrew_casks:
   - name: brig
     ids: [brig]
-    binaries: [brig, brigd]
+    binaries: [brig, brigd, brig-broker]
     repository:
       owner: brig-sh
       name: homebrew-brig

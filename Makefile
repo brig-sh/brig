@@ -22,6 +22,7 @@ all: vet test build
 build:
 	go build -ldflags '$(LDFLAGS)' -o $(BINDIR)/brig ./cmd/brig
 	go build -ldflags '$(LDFLAGS)' -o $(BINDIR)/brigd ./cmd/brigd
+	go build -ldflags '$(LDFLAGS)' -o $(BINDIR)/brig-broker ./cmd/brig-broker
 
 test:
 	go test -race ./...
@@ -74,4 +75,4 @@ claims-vm: build
 	BRIG=$(BINDIR)/brig ./script/claims-vm.sh
 
 clean:
-	rm -rf dist brig brigd
+	rm -rf dist brig brigd brig-broker

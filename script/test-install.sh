@@ -40,9 +40,14 @@ rel="$T/srv/brig-sh/brig/releases/download/v9.9.9"
 mkdir -p "$rel"
 printf '#!/bin/sh\necho brig 9.9.9\n' > "$T/pkg/brig"
 printf '#!/bin/sh\nexit 0\n' > "$T/pkg/brigd"
-chmod 0755 "$T/pkg/brig" "$T/pkg/brigd"
-tar -C "$T/pkg" -czf "$rel/brig-9.9.9-linux-amd64.tar.gz" brig brigd
-echo "$(sha "$rel/brig-9.9.9-linux-amd64.tar.gz")  brig-9.9.9-linux-amd64.tar.gz" > "$rel/checksums.txt"
+printf '#!/bin/sh\nexit 0\n' > "$T/pkg/brig-broker"
+chmod 0755 "$T/pkg/brig" "$T/pkg/brigd" "$T/pkg/brig-broker"
+# release <files...>: the brig release archive, holding the files named.
+release() {
+  tar -C "$T/pkg" -czf "$rel/brig-9.9.9-linux-amd64.tar.gz" "$@"
+  echo "$(sha "$rel/brig-9.9.9-linux-amd64.tar.gz")  brig-9.9.9-linux-amd64.tar.gz" > "$rel/checksums.txt"
+}
+release brig brigd brig-broker
 
 # The runtime installer. As a user it puts a launcher in ~/.local/bin and a
 # brig in the tree, as the bundle's does. As root it fails: the node-wide
@@ -124,6 +129,9 @@ if grep -q "remove it" "$T/out.log"; then
   fail "a user install was told to remove a file it does not own"
 fi
 ok "a user install with /usr/local/bin first gets the PATH change"
+[ -x "$T/home/.local/share/brig/data/bin/brig-broker" ] \
+  || { cat "$T/out.log" >&2; fail "the release's brig-broker was not installed beside brig"; }
+ok "a user install puts brig-broker beside brig"
 
 # 2. The same with ~/.local/bin off PATH altogether.
 run_install "$T/stub:$T/usrlocal/bin:$base"
@@ -145,3 +153,12 @@ run_install "$T/root-stub:$T/stub:$T/usrlocal/bin:$base"
 grep -qF "$T/usrlocal/bin/brig is from an earlier install, and may run instead of the bundle's launcher; remove it" "$T/out.log" \
   || { cat "$T/out.log" >&2; fail "a node-wide install lost the advice to remove it"; }
 ok "a node-wide install is still told to remove it"
+
+# 5. A release from before the credential broker carries no brig-broker, and
+#    still installs.
+release brig brigd
+run_install "$T/stub:$user_bin:$T/usrlocal/bin:$base"
+[ "$rc" = 0 ] || { cat "$T/out.log" >&2; fail "a release without brig-broker did not install"; }
+[ ! -e "$T/home/.local/share/brig/data/bin/brig-broker" ] \
+  || fail "a brig-broker appeared from a release that has none"
+ok "a release without brig-broker still installs"

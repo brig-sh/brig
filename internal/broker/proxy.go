@@ -108,7 +108,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	doc, err := h.creds.Resolve(r.Context(), cred.SecretRef.Name, wl)
 	if err != nil {
 		a.check = "credential"
-		http.Error(rec, "brig broker: the credential of route "+p.route+" could not be resolved", http.StatusBadGateway)
+		msg := "brig broker: the credential of route " + p.route + " could not be resolved"
+		if errors.Is(err, secret.ErrUnsupported) {
+			// The one reason the guest can act on: the host has no store.
+			msg += ": brig's secret store is not available on this host; see the broker log"
+		}
+		http.Error(rec, msg, http.StatusBadGateway)
 		return
 	}
 	value, err := credentialValue(cred, doc)
@@ -536,16 +541,45 @@ type auditLine struct {
 	renew string
 }
 
+// The longest method and path an audit line carries. Anything that reaches
+// the broker's port can send a request, and the audit log must not grow by
+// what the sender chooses to write.
+const (
+	maxAuditMethod = 16
+	maxAuditPath   = 256
+)
+
+// clip cuts s to n bytes.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur time.Duration) {
 	attrs := make([]slog.Attr, 0, 13)
-	if a.workload != "" {
-		attrs = append(attrs, slog.String("workload", a.workload))
+	// A request whose token has not verified carries only what the broker
+	// chose: the method, the status and the check. Its path, sandbox and
+	// route are whatever the sender wrote.
+	if a.workload == "" {
+		attrs = append(attrs,
+			slog.String("method", clip(a.method, maxAuditMethod)),
+			slog.Int("status", status),
+			slog.Duration("dur", dur),
+		)
+		if a.check != "" {
+			attrs = append(attrs, slog.String("check", a.check))
+		}
+		h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
+		return
 	}
 	attrs = append(attrs,
+		slog.String("workload", a.workload),
 		slog.String("sandbox", a.sandbox),
 		slog.String("route", a.route),
-		slog.String("method", a.method),
-		slog.String("path", a.path),
+		slog.String("method", clip(a.method, maxAuditMethod)),
+		slog.String("path", clip(a.path, maxAuditPath)),
 		slog.Int("status", status),
 		slog.Duration("dur", dur),
 	)
