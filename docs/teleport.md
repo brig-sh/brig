@@ -1055,8 +1055,10 @@ the Mac had Remote Login off.
   worked.
 - hull `d2bb5e9`'s `migrate --status`, during a streamed move's rounds,
   says "The source is fenced and stays so until the move commits or is
-  aborted", while the guest still runs on the source. `brig teleport
-  --status` passes that text on. The guest is fenced only from hvi's seal.
+  aborted", while the guest still runs on the source. The guest is fenced
+  only from hvi's seal. `brig teleport --status` passes hull's text on as
+  hull wrote it and decides only on hull's state word, so a hull that
+  corrects the text needs no change in Brig.
 
 #### Running it on two hosts
 
