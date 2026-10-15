@@ -242,25 +242,31 @@ another `brig` there.
 
 ### Watch it
 
-![Two terminal panes on rp1. Left: brig teleport ubuntu --to pmoust@rp2 prints hull's rounds, the pause and the commit; --status says ubuntu runs on pmoust@rp2; brig sh there prints the guest's hostname and the boot_id it had before; brig rm ubuntu and a move back from rp2 follow, and brig ls shows ubuntu running on rp1. Right: the guest's feed counts on through both moves with no tick missing, the same boot_id, and a downtime total that rises by about 60 ms at each move.](media/teleport-pi-pair.gif)
+![Two terminal panes on rp1. Left: brig teleport ubuntu --to pmoust@rp2 prints one line for each round, the pause, the seal, the restore and the resume, then the outcome; --status says ubuntu runs on pmoust@rp2 and its moves are driven from there; brig sh there prints the guest's hostname and the boot_id it had before; brig teleport ubuntu --to pmoust@rp1, typed on rp1, removes the fenced copy there and hands the move back to the brig on rp2, and brig ls shows ubuntu running on rp1. Right: the guest's feed counts on through both moves with no tick missing, the same boot_id, and a downtime total that rises by 62 ms at the first move and 71 ms at the second.](media/teleport-pi-pair.gif)
 
-A real run on [the Linux pair](#the-linux-pair) on 2026-10-15, brig
-`e88abe6`, hull `9cb3440`, hvi `ba9b2d2` ([MP4](media/teleport-pi-pair.mp4)).
+A real run on [the Linux pair](#the-linux-pair) on 2026-10-16, brig
+`304689b`, hull `9cb3440`, hvi `ba9b2d2` ([MP4](media/teleport-pi-pair.mp4)).
 A loop in the guest appends a line to `/tmp/feed` five times a second: a
 tick held in a shell variable, the guest's hostname (the script sets it,
 as the guest boots with none), the start of the kernel's `boot_id`, and
 the downtime total its `hvi-time` driver keeps, from
-`/sys/kernel/hvi_time/snapshot`. hull's moves took 1.5 and 1.6 s, and the
-guest's downtime total rose by 58.8 ms and then 67.8 ms.
+`/sys/kernel/hvi_time/snapshot`. hull's moves took 1.6 and 1.5 s, and the
+guest's downtime total rose by 62.0 ms and then 71.1 ms.
+
+Both moves are typed on `rp1`. The move back is handed to the brig on
+`rp2`, as [Moving back](#moving-back) says, after the brig on `rp1`
+removes the fenced copy the first move left there. The brig on `rp2`
+reaches `rp1` with the demo's settings through `BRIG_TELEPORT_REMOTE_BRIG`,
+a script that sources them and runs brig.
 
 Both hosts were prepared before the recording. `rp2` was prepared with
 `brig teleport ubuntu --to pmoust@rp2 --prepare`. `rp1` already holds the
 base the session booted from. On it, `hull migrate-spare-base` was run by
 hand: it is the step `--prepare` runs on a destination that holds the base,
-and it makes the spare copy of the base that the move back takes. `ssh rp2
-brig teleport ubuntu --to pmoust@rp1 --prepare`, run while the guest is on
-`rp2`, does the same through Brig. The move back goes from `rp2`, as
-[Moving back](#moving-back) says.
+and it makes the spare copy of the base that the move back takes. `brig
+teleport ubuntu --to pmoust@rp1 --prepare`, run on either host while the
+guest is on `rp2`, does the same through Brig (see [Prepare the
+destination](#prepare-the-destination)).
 
 The right pane is `brig sh ubuntu -c 'tail -f /tmp/feed'` in a loop. Its
 "reconnecting" line is that vsock session ending as the guest leaves the
