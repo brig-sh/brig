@@ -2438,22 +2438,41 @@ echo "== teleport =="
 # destination. A credential in this shell must not reach the destination, and
 # a posture the destination resolved only because it inherited this shell's
 # would hide a bug.
+#
+# A second host, $HERE, is this one as the destination's brig reaches it
+# back: the source's own state, gateway directory and stub instance, for a
+# move back here. The destination's brig reaches it through the same fake
+# ssh, and its hull's move lands in the source's stub instance.
 RSTATE="$WORK/remote-state"; RGW="$WORK/remote-gw"
 export STUB_REMOTE_STATE="$WORK/remote-instance"
 export SSH_LOG="$WORK/ssh.log" REMOTE_LOG="$WORK/remote-argv.log"
+HERE="smoke@$(hostname)"
 : > "$SSH_LOG"; : > "$REMOTE_LOG"
 cat > "$WORK/ssh" <<SSH
 #!/bin/bash
-{ printf 'ssh:'; printf '[%s]' "\$@"; printf '\n'; } >> "\$SSH_LOG"
+{ printf 'ssh:'; printf '[%s]' "\$@"; printf '\n'; } >> "$SSH_LOG"
 while [ \$# -gt 0 ] && [ "\$1" != -- ]; do shift; done
 shift; host="\$1"; shift
-[ "\$host" = me@box ] || { echo "ssh: Could not resolve hostname \$host" >&2; exit 255; }
-exec env -i PATH="\$PATH" HOME="\$HOME" USER="\${USER:-}" HULL_TELEMETRY_DISABLED=1 \
-  BRIG_RUNTIME=hull BRIG_RUNTIME_BIN="$WORK/hull" BRIG_BOOT_ASSETS="$WORK/assets" BRIG_VERIFY=off \
-  BRIG_PROFILE_DIR="$WORK/remote-profiles" BRIG_POLICY_DIR="$WORK/remote-policies" \
-  BRIG_READY_TIMEOUT=5 STUB_GATEWAY="\$STUB_GATEWAY" \
-  BRIG_STATE_DIR="$RSTATE" BRIG_GATEWAY_DIR="$RGW" STUB_STATE="$STUB_REMOTE_STATE" \
-  STUB_LOG="\$REMOTE_LOG" STUB_NO_EGRESS="\${REMOTE_NO_EGRESS:-}" sh -c "\$*"
+case "\$host" in
+  me@box)
+    exec env -i PATH="\$PATH" HOME="\$HOME" USER="\${USER:-}" HULL_TELEMETRY_DISABLED=1 \
+      BRIG_RUNTIME=hull BRIG_RUNTIME_BIN="$WORK/hull" BRIG_BOOT_ASSETS="$WORK/assets" BRIG_VERIFY=off \
+      BRIG_PROFILE_DIR="$WORK/remote-profiles" BRIG_POLICY_DIR="$WORK/remote-policies" \
+      BRIG_READY_TIMEOUT=5 STUB_GATEWAY="\$STUB_GATEWAY" \
+      BRIG_STATE_DIR="$RSTATE" BRIG_GATEWAY_DIR="$RGW" STUB_STATE="$STUB_REMOTE_STATE" \
+      STUB_REMOTE_STATE="$STUB_STATE" STUB_INSPECT_ARGV="\${REMOTE_INSPECT_ARGV:-}" \
+      BRIG_TELEPORT_SSH="$WORK/ssh" BRIG_TELEPORT_REMOTE_BRIG="$WORK/brig" \
+      STUB_LOG="\$REMOTE_LOG" STUB_NO_EGRESS="\${REMOTE_NO_EGRESS:-}" sh -c "\$*" ;;
+  "$HERE")
+    exec env -i PATH="\$PATH" HOME="\$HOME" USER=smoke HULL_TELEMETRY_DISABLED=1 \
+      BRIG_RUNTIME=hull BRIG_RUNTIME_BIN="$WORK/hull" BRIG_BOOT_ASSETS="$WORK/assets" BRIG_VERIFY=off \
+      BRIG_PROFILE_DIR="$WORK/profiles" BRIG_POLICY_DIR="$WORK/here-policies" \
+      BRIG_READY_TIMEOUT=5 STUB_GATEWAY="\$STUB_GATEWAY" \
+      BRIG_STATE_DIR="$WORK/state" BRIG_GATEWAY_DIR="$WORK/gw" STUB_STATE="$STUB_STATE" \
+      STUB_REMOTE_STATE="$STUB_REMOTE_STATE" STUB_INSPECT_ARGV=1 \
+      STUB_LOG="$STUB_LOG" sh -c "\$*" ;;
+  *) echo "ssh: Could not resolve hostname \$host" >&2; exit 255 ;;
+esac
 SSH
 chmod +x "$WORK/ssh"
 # hull's hvi sits beside it; the probe looks there.
@@ -2784,6 +2803,61 @@ esac
   && bad "a move refused as not teleportable reached ssh or hull" \
   || ok "a move refused as not teleportable reaches neither ssh nor hull"
 "$WORK/brig" rm claude > /dev/null 2>&1 || true
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+
+# The way back, typed here. A session that runs on me@box moves from there:
+# brig hands --prepare and --to to the brig there, over ssh, and that brig
+# moves it to $HERE, this host as it reaches it. The copy the move away left
+# here goes first, as hull's record says that move committed away: the
+# probe, the arrival and hull would each refuse a host that has it. After
+# the move the arrival has filed the session here as running, and the brig
+# on me@box records that it runs here.
+mkdir -p "$WORK/here-policies"
+export BRIG_POLICY_DIR="$WORK/here-policies"
+tpb() { USER=smoke REMOTE_INSPECT_ARGV=1 tpr "$@"; }
+tpb "$WORK/brig" run --teleportable claude@back -d > "$WORK/tpb.out" 2>&1 \
+  && tpb "$WORK/brig" teleport claude@back --to me@box > "$WORK/tpb.out" 2>&1 \
+  || bad "a session moves to me@box before it comes back -- got: $(cat "$WORK/tpb.out")"
+: > "$STUB_LOG"; : > "$SSH_LOG"; : > "$REMOTE_LOG"
+tpb "$WORK/brig" teleport claude@back --to "$HERE" --prepare > "$WORK/tpb.out" 2> "$WORK/tpb.err"; rc=$?
+case "$rc:$(cat "$WORK/tpb.out")" in
+  "0:prepared $HERE for claude-code@back"*) ok "a prepare of the way back, typed here, runs on the session's host" ;;
+  *) bad "a prepare of the way back, typed here, runs on the session's host -- got $rc: $(cat "$WORK/tpb.out" "$WORK/tpb.err")" ;;
+esac
+grep -qF -- "ssh:[--][me@box][$WORK/brig teleport claude-code@back --to $HERE --prepare]" "$SSH_LOG" \
+  && grep -q '^argv: rm brig-claude-code-back$' "$STUB_LOG" \
+  && grep -q "^argv: migrate-prepare --to $HERE " "$REMOTE_LOG" \
+  && grep -q "^brig: removed the fenced copy of claude-code@back that the move to me@box left here$" "$WORK/tpb.err" \
+  && ok "the prepare goes to the brig on me@box, after the copy the move left here is removed" \
+  || bad "the prepare goes to the brig on me@box, after the copy the move left here is removed -- got: $(cat "$SSH_LOG" "$WORK/tpb.err"; grep '^argv: \(rm\|migrate\)' "$STUB_LOG" "$REMOTE_LOG")"
+: > "$STUB_LOG"; : > "$SSH_LOG"; : > "$REMOTE_LOG"
+tpb "$WORK/brig" teleport claude@back --to "$HERE" > "$WORK/tpb.out" 2> "$WORK/tpb.err"; rc=$?
+case "$rc:$(cat "$WORK/tpb.out")" in
+  "0:teleported claude-code@back to $HERE (move "*")"*) ok "a move back, typed here, runs on the session's host and comes here" ;;
+  *) bad "a move back, typed here, runs on the session's host and comes here -- got $rc: $(cat "$WORK/tpb.out" "$WORK/tpb.err")" ;;
+esac
+grep -q "^argv: migrate --to $HERE .*--txid [0-9a-f]* brig-claude-code-back$" "$REMOTE_LOG" \
+  && grep -q '^brig: claude-code@back runs on this host again; `ssh me@box brig rm claude-code@back` removes the copy left there$' "$WORK/tpb.err" \
+  && grep -q '^brig: resumed on '"$HERE"' (epoch 1)$' "$WORK/tpb.err" \
+  && ok "hull on me@box moves the session here, and brig says it runs here again" \
+  || bad "hull on me@box moves the session here, and brig says it runs here again -- got: $(cat "$WORK/tpb.err"; grep '^argv: migrate' "$REMOTE_LOG")"
+python3 - "$BRIG_STATE_DIR/sessions.json" "$RSTATE/sessions.json" "$BRIG_STATE_DIR/arrivals.json" "$HERE" <<'PY' \
+  && ok "both hosts record that the session runs here again" \
+  || bad "both hosts record that the session runs here again -- got: $(cat "$BRIG_STATE_DIR/sessions.json" "$RSTATE/sessions.json")"
+import json, sys
+here, there, arr = (json.load(open(p)) for p in sys.argv[1:4])
+e = here["claude-code@back"]
+assert e["sandbox"] == "brig-claude-code-back" and not e.get("host") and not e.get("pendingHost"), e
+assert arr["brig-claude-code-back"]["state"] == "committed", arr
+assert there["claude-code@back"]["host"] == sys.argv[4], there
+PY
+tpb "$WORK/brig" teleport claude@back --status > "$WORK/tpb.out" 2>&1
+grep -q '^claude-code@back runs on this host; no move of it is recorded$' "$WORK/tpb.out" \
+  && ok "--status here says the session runs here" \
+  || bad "--status here says the session runs here -- got: $(cat "$WORK/tpb.out")"
+"$WORK/ssh" -- me@box "$WORK/brig rm claude@back" > /dev/null 2>&1
+tpb "$WORK/brig" rm claude@back > /dev/null 2>&1
+unset BRIG_POLICY_DIR
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== flags =="

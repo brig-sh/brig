@@ -129,6 +129,30 @@ func TestAMoveIsRecordedAgainstTheEntryItBeganFrom(t *testing.T) {
 	}
 }
 
+// A session that moved on from the host it was moved to is recorded on the
+// host the brig there names, in the store and under the move it names,
+// only while the record still says it runs where the brig there moved it
+// from.
+func TestAMoveOnFromTheHostItRunsOnIsRecorded(t *testing.T) {
+	dir := isolateState(t)
+	writeEntries(t, dir, map[string]map[string]any{
+		"claude-code": {"home": "", "sandbox": "brig-claude-code", "teleportable": true, "host": "me@box",
+			"remoteStore": "/st/b", "txid": "tx1"},
+	})
+	for _, c := range []struct{ from, txid string }{{"you@other", "tx1"}, {"me@box", "tx0"}} {
+		if err := RecordMovedOn("claude-code", "brig-claude-code", c.from, c.txid, "me@far", "/st/c", "tx2"); err == nil {
+			t.Errorf("a move on from %s after %s was recorded over a record of me@box after tx1", c.from, c.txid)
+		}
+	}
+	if err := RecordMovedOn("claude-code", "brig-claude-code", "me@box", "tx1", "me@far", "/st/c", "tx2"); err != nil {
+		t.Fatal(err)
+	}
+	if e := readSessionIndex()["claude-code"]; e.Host != "me@far" || e.RemoteStore != "/st/c" || e.TxID != "tx2" ||
+		e.PendingHost != "" || !e.isTeleportable() {
+		t.Errorf("the move on left %+v", e)
+	}
+}
+
 // A run that records the session never clears the host a move recorded.
 func TestRememberingASessionKeepsTheHostAMoveRecorded(t *testing.T) {
 	dir := isolateState(t)
