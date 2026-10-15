@@ -265,9 +265,9 @@ Both hosts were prepared before the recording. `rp2` was prepared with
 base the session booted from. On it, `hull migrate-spare-base` was run by
 hand: it is the step `--prepare` runs on a destination that holds the base,
 and it makes the spare copy of the base that the move back takes. `brig
-teleport ubuntu --to pmoust@rp1 --prepare`, run on either host while the
-guest is on `rp2`, does the same through Brig (see [Prepare the
-destination](#prepare-the-destination)).
+teleport ubuntu --to pmoust@rp1 --prepare`, run on `rp1` while the guest
+is on `rp2`, or on `rp2` after `brig rm ubuntu` on `rp1`, does the same
+through Brig (see [Prepare the destination](#prepare-the-destination)).
 
 The right pane is `brig sh ubuntu -c 'tail -f /tmp/feed'` in a loop. Its
 "reconnecting" line is that vsock session ending as the guest leaves the
@@ -537,7 +537,8 @@ that did, the destination took the stream 23.5 s late.
 
 The way back is prepared the same way, with the old host as the
 destination: `brig teleport <ref> --to <you>@<old host> --prepare`, typed
-on either host (see [Moving back](#moving-back)). The old host still
+on the old host, or on the session's host after `brig rm <ref>` on the old
+host (see [Moving back](#moving-back)). The old host still
 holds the base the session booted from, so hull sends nothing and only
 makes the spare copy that the move back takes. Without the spare, the
 move back copies the base on the old host while the guest is paused: 22.9
@@ -599,8 +600,8 @@ there. It keeps its record that the session runs on the other host. The
 move back replaces that record, and an abort of the move back puts it
 back. The copy is gone either way: it could never run again. Typed on the
 host the session runs on, the move back is refused while the old host has
-the copy. Run `brig rm <ref>` on the old host first: it removes the copy
-and forgets the session there.
+the copy, and so is its prepare. Run `brig rm <ref>` on the old host
+first: it removes the copy and forgets the session there.
 
 After a move typed on the old host commits, that host's brig asks the
 brig there where the session runs now, and records it. When the move came
