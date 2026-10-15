@@ -123,7 +123,8 @@ memory, its disk and its network rules, without booting it again. The host
 needs brig, hull and hvi. Brig checks first that the host can run the session
 and enforce its policy, and refuses with the reason before anything is paused.
 Afterwards sh, run, stop, info and logs on the ref run there, over ssh.
-hull's lines about the copy go to stderr as they arrive.
+stderr has a line for each round of the copy, the pause and the resume as
+they come; --verbose has every line hull prints.
 
 With --prepare, hull puts the image, the kernel and the sandbox's base disk
 on USER@HOST and moves nothing: the guest keeps running here, and a move

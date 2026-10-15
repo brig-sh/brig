@@ -400,13 +400,21 @@ case "$verb" in
           printf '%s committing %s\n' "$txid" "$to" > "$STUB_STATE.move"
           printf 'error: ssh: connection reset by peer\n' >&2; exit 1
         fi
-        # How the copy went, on stderr in the words hull's streamed move
-        # uses.
+        # How the copy went, on stderr in the words hull 7b3f7b1's
+        # streamed move uses.
         printf 'Move %s of %s to %s, epoch 1\n' "$txid" "$1" "$to" >&2
         printf 'Transport: streamed (pre-copy rounds; the disk blocks that differ from base e85e4338aaaa)\n' >&2
-        printf 'move: disk round 0: 16 blocks, 1.0 MiB (512.0 KiB on the wire) in 0.50 s, 1.0 MiB/s\n' >&2
+        printf 'Streaming %s to %s (live)\n' "$1" "$to" >&2
+        printf 'move: disk-round-0: 512.0 KiB in 0.50 s, 1.0 MiB/s\n' >&2
         printf 'move: ram-round-0: 1.5 MiB in 0.10 s, 15.0 MiB/s\n' >&2
-        printf 'move: 2.0 MiB in 0.7 s; disk 512.0 KiB, RAM 1.5 MiB, state 4.0 KiB; downtime about 140 ms\n' >&2
+        printf 'move: disk-round-final: 0 bytes in 0.01 s, 0 bytes/s\n' >&2
+        printf 'move: ram-round-1: 64.0 KiB in 0.01 s, 6.4 MiB/s\n' >&2
+        printf 'move: hvi: 2 RAM rounds (converged), disk rounds of 16, 0 blocks (1.0 MiB, 512.0 KiB on the wire); paused 3 ms, disk sync 0 ms before the pause and 0 ms in it\n' >&2
+        printf 'move: hvi sealed the stream and fenced %s (2 ms after the pause)\n' "$1" >&2
+        printf 'Sent 2.0 MiB in 0.7 s (2.9 MiB/s): disk 1.0 MiB as 512.0 KiB, RAM 1.6 MiB, state 4.0 KiB; destination: stream: 9 hvi components checked; hvi checked them against its manifest, wrote the disk rounds onto base e85e4338aaaa and restored the guest paused\n' >&2
+        printf 'Moved %s to %s: it runs there at epoch 1. Its checkpoint here is stale\n' "$1" "$to" >&2
+        printf 'Timings (ms): fence 0, transfer 700, restore paused 0, commit 10\n' >&2
+        printf 'move: 2.0 MiB in 0.7 s; disk 512.0 KiB, RAM 1.6 MiB, state 4.0 KiB; sealed 2 ms after the pause, last disk round 0 bytes in 0 ms; downtime about 140 ms\n' >&2
         printf '%s' "$1" > "$STUB_REMOTE_STATE"
         printf 'block' > "$STUB_REMOTE_STATE.rootfs"
         : > "$STUB_REMOTE_STATE.shares"
@@ -2473,10 +2481,10 @@ others="$(grep -v '^ssh:\(\[-o\]\[BatchMode=yes\]\)\?\[--\]\[me@box\]\[' "$SSH_L
 [ -s "$SSH_LOG" ] && [ -z "$others" ] && ! grep -q 'teleport-receive' "$SSH_LOG" \
   && ok "a prepare asks the named host's brig only the probe" \
   || bad "a prepare asks the named host's brig only the probe -- got: $others $(cat "$SSH_LOG")"
-grep -q '^brig: hull: base 000000000000: sent$' "$WORK/tpp.err" \
-  && ok "a prepare passes hull's lines on to stderr" \
-  || bad "a prepare passes hull's lines on to stderr -- got: $(cat "$WORK/tpp.err")"
-GH_TOKEN=tp-gh-secret tpr "$WORK/brig" teleport claude --to me@box --prepare --json > "$WORK/tpp.out" 2> "$WORK/tpp.err"; rc=$?
+grep -q 'hull: ' "$WORK/tpp.err" \
+  && bad "a prepare passes hull's lines on only under --verbose -- got: $(cat "$WORK/tpp.err")" \
+  || ok "a prepare passes hull's lines on only under --verbose"
+GH_TOKEN=tp-gh-secret tpr "$WORK/brig" --verbose teleport claude --to me@box --prepare --json > "$WORK/tpp.out" 2> "$WORK/tpp.err"; rc=$?
 python3 - "$WORK/tpp.out" "$BRIG_STATE_DIR/sessions.json" <<'PY' && [ "$rc" = 0 ] && grep -q '^brig: hull: base 000000000000: held$' "$WORK/tpp.err" \
   && ok "a second prepare is sent nothing, and the index notes the host" \
   || bad "a second prepare is sent nothing, and the index notes the host -- got $rc: $(cat "$WORK/tpp.out" "$WORK/tpp.err")"
@@ -2496,13 +2504,18 @@ case "$rc:$(cat "$WORK/tpm.out")" in
   "0:teleported claude-code to me@box (move "*")"*) ok "teleport moves the session and says where to" ;;
   *) bad "teleport moves the session and says where to -- got $rc: $(cat "$WORK/tpm.out" "$WORK/tpm.err")" ;;
 esac
-# hull's lines about the copy reach stderr as hull prints them, the move
-# says the host was prepared, and the outcome ends with the numbers.
+# By default a move says each round, the pause, the seal, the restore and
+# the resume in a few words, and nothing else of hull's; the move says the
+# host was prepared, and the outcome ends with the numbers.
 grep -q '^brig: me@box was prepared for claude-code at ' "$WORK/tpm.err" \
-  && grep -q '^brig: hull: move: ram-round-0: 1.5 MiB in 0.10 s, 15.0 MiB/s$' "$WORK/tpm.err" \
-  && grep -q "hull's move took [0-9.]* s, streamed, hull estimates the guest was paused about 0.14 s, 2 rounds" "$WORK/tpm.out" \
-  && ok "a move passes hull's lines on and ends with its numbers" \
-  || bad "a move passes hull's lines on and ends with its numbers -- got: $(cat "$WORK/tpm.out" "$WORK/tpm.err")"
+  && grep -q '^brig: ram-round-0 1.5 MiB in 0.10 s$' "$WORK/tpm.err" \
+  && grep -q '^brig: paused after 2 RAM rounds (converged)$' "$WORK/tpm.err" \
+  && grep -q '^brig: sealed 2 ms after the pause$' "$WORK/tpm.err" \
+  && grep -q '^brig: resumed on me@box (epoch 1)$' "$WORK/tpm.err" \
+  && ! grep -q 'hull: \|Timings' "$WORK/tpm.err" \
+  && grep -q "hull's move took [0-9.]* s, streamed, hull estimates the guest was paused about 0.14 s, at 2.9 MiB/s, 4 rounds" "$WORK/tpm.out" \
+  && ok "a move says its rounds, pause and resume and ends with its numbers" \
+  || bad "a move says its rounds, pause and resume and ends with its numbers -- got: $(cat "$WORK/tpm.out" "$WORK/tpm.err")"
 # hull is asked for a dry run first and then the move, named by a txid of
 # hull's shape, with the destination's hull, and the sandbox last.
 grep -qE '^argv: migrate --to me@box --remote-hull [^ ]*/hull --dry-run brig-claude-code$' "$STUB_LOG" \
