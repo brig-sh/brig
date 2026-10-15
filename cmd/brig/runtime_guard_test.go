@@ -32,7 +32,7 @@ func TestEnvSurfacesUnknownRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("brig env with an unknown BRIG_RUNTIME was accepted")
 	}
-	if want := `unknown BRIG_RUNTIME "podman" (want hull or nerdctl)`; !strings.Contains(err.Error(), want) {
+	if want := `unknown BRIG_RUNTIME "podman" (want hull, nerdctl or host)`; !strings.Contains(err.Error(), want) {
 		t.Errorf("env error = %v, want it to name the bad value: %q", err, want)
 	}
 }
@@ -49,7 +49,7 @@ func TestLsSurfacesUnknownRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("brig ls with an unknown BRIG_RUNTIME was accepted")
 	}
-	if want := `unknown BRIG_RUNTIME "podman" (want hull or nerdctl)`; !strings.Contains(err.Error(), want) {
+	if want := `unknown BRIG_RUNTIME "podman" (want hull, nerdctl or host)`; !strings.Contains(err.Error(), want) {
 		t.Errorf("ls error = %v, want it to name the bad value: %q", err, want)
 	}
 }
@@ -121,7 +121,7 @@ func TestInfoSurfacesUnknownRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("brig info with an unknown BRIG_RUNTIME was accepted")
 	}
-	if want := `unknown BRIG_RUNTIME "podman" (want hull or nerdctl)`; !strings.Contains(err.Error(), want) {
+	if want := `unknown BRIG_RUNTIME "podman" (want hull, nerdctl or host)`; !strings.Contains(err.Error(), want) {
 		t.Errorf("info error = %v, want it to name the bad value: %q", err, want)
 	}
 }

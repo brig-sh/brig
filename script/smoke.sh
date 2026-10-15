@@ -1964,6 +1964,73 @@ grep -qF -- '[--][bash][-lc]["$@"][bash][uname][-a]' "$STUB_LOG" \
 grep -q -- ':/root/work' "$STUB_LOG" \
   && ok "ubuntu mounts the workspace at /root/work" || bad "ubuntu mounts at /root/work"
 
+echo "== the host kind =="
+# macOS only: the host kind is Seatbelt, and elsewhere brig refuses it. The
+# stub logs what brig hands sandbox-exec, then runs the real one, so the
+# command below runs under the profile brig wrote. The log path is written
+# into the stub, because the host kind hands it no STUB_LOG.
+if [ "$(uname -s)" = Darwin ] && [ -x /usr/bin/sandbox-exec ]; then
+  { printf '#!/bin/bash\n'
+    printf '{ printf "host-words:"; printf "[%%s]" "$@"; printf "\\n"; } >> %q\n' "$STUB_LOG"
+    printf 'exec /usr/bin/sandbox-exec "$@"\n'
+  } > "$WORK/sandbox-exec"
+  chmod +x "$WORK/sandbox-exec"
+  : > "$STUB_LOG"
+  out="$(BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" BRIG_NETWORK=isolated \
+    GH_TOKEN=gh-host-secret SMOKE_AMBIENT=ambient-host-value \
+    "$WORK/brig" run ubuntu -- sh -c 'printf "home:%s gh:%s ambient:%s\n" "$HOME" "$GH_TOKEN" "${SMOKE_AMBIENT:-unset}"' 2>&1)"
+  rc=$?
+  [ "$rc" = 0 ] && ok "a shell profile runs on the host kind" \
+    || bad "a shell profile runs on the host kind -- got $rc: $out"
+  profile_sb="$BRIG_STATE_DIR/host/brig-ubuntu/profile.sb"
+  grep -qF -- "[-f][$(cd "$BRIG_STATE_DIR" && pwd -P)/host/brig-ubuntu/profile.sb]" "$STUB_LOG" \
+    && grep -qx '(deny network-outbound)' "$profile_sb" \
+    && ok "every host exec runs under the profile brig wrote" \
+    || bad "every host exec runs under the profile brig wrote -- got: $(cat "$STUB_LOG")"
+  if ! grep -q '^host-words:' "$STUB_LOG"; then
+    bad "a credential value never reaches sandbox-exec's argv -- sandbox-exec was never called"
+  elif grep -q 'gh-host-secret' "$STUB_LOG"; then
+    bad "a credential value reached sandbox-exec's argv"
+  else
+    ok "a credential value never reaches sandbox-exec's argv"
+  fi
+  case "$out" in
+    *"gh:gh-host-secret"*) ok "a forwarded variable reaches the host sandbox" ;;
+    *) bad "a forwarded variable reaches the host sandbox -- got: $out" ;;
+  esac
+  case "$out" in
+    *"ambient:unset"*) ok "a variable brig was not told to forward stays out of it" ;;
+    *) bad "a variable brig was not told to forward stays out of it -- got: $out" ;;
+  esac
+  case "$out" in
+    *"home:$(cd "$WS" && pwd -P) "*) ok "HOME is the guest home on the host" ;;
+    *) bad "HOME is the guest home on the host -- got: $out" ;;
+  esac
+  # A second command in a running host sandbox joins it. It used to read the
+  # guest path of the workspace marker, find nothing, call the share stale and
+  # stop the first agent with it.
+  ( BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" \
+      "$WORK/brig" run ubuntu -- -c 'sleep 5' > /dev/null 2>&1
+    echo "first:$?" > "$WORK/host-first" ) &
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" "$WORK/brig" ls 2>/dev/null \
+      | grep -q 'brig-ubuntu *running' && break
+    sleep 0.3
+  done
+  out="$(BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" "$WORK/brig" sh ubuntu -- -c 'echo second' 2>&1)"
+  wait
+  case "$out" in
+    *"went stale"*) bad "a second command leaves the first host agent running -- got: $out" ;;
+    *second*) [ "$(cat "$WORK/host-first")" = first:0 ] \
+      && ok "a second command leaves the first host agent running" \
+      || bad "a second command leaves the first host agent running -- the first ended $(cat "$WORK/host-first")" ;;
+    *) bad "a second command leaves the first host agent running -- got: $out" ;;
+  esac
+  BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" "$WORK/brig" rm ubuntu > /dev/null 2>&1
+else
+  echo "  --   not macOS, skipping the host kind"
+fi
+
 echo "== agents =="
 # YAML is the default spelling, and the header is what makes a printed agent a
 # starting point rather than a puzzle.

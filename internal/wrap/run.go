@@ -10,6 +10,8 @@ import (
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/notice"
+	"github.com/brig-sh/brig/internal/policy"
+	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
@@ -404,8 +406,10 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// into the workspace rather than mounted, so it needs no share of its
 		// own -- see seedHostConfig. volumeShares is empty on hull and carries
 		// the profile's hostmounts on a container runtime.
-		Shares:   c.shares(ws.dir, project, volumeShares),
-		Tmpfs:    tmpfs,
+		Shares: c.shares(ws.dir, project, volumeShares),
+		Tmpfs:  tmpfs,
+		// What the next run reads, which a host sandbox must not write.
+		Protect:  []string{profile.Dir(), policy.Dir()},
 		Env:      c.guestEnv(set),
 		GUI:      check.GUI,
 		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),

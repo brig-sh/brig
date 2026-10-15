@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -384,5 +385,33 @@ func TestDoctorRuntimeFixNamesTheProfilesRuntimeBin(t *testing.T) {
 	}
 	if strings.Contains(rt.Fix, "BRIG_RUNTIME_BIN") || !strings.Contains(rt.Fix, "runtimeBin") {
 		t.Errorf("the fix %q should name the profile's runtimeBin, not BRIG_RUNTIME_BIN", rt.Fix)
+	}
+}
+
+// The sandbox row is the host kind's prerequisite. It is reported on macOS
+// only, and a Mac without sandbox-exec still exits 0: a microVM run never
+// calls it.
+func TestDoctorReportsSandboxExecWithoutGating(t *testing.T) {
+	healthyHost(t)
+	checks := runDoctor(nil, nil)
+	if goruntime.GOOS != "darwin" {
+		for _, c := range checks {
+			if c.Name == "sandbox" {
+				t.Errorf("a sandbox row off macOS: %+v", c)
+			}
+		}
+		return
+	}
+	if c := findCheck(t, checks, "sandbox"); c.State != statePass {
+		t.Errorf("sandbox row is %q on a Mac with sandbox-exec: %s", c.State, c.Finding)
+	}
+	swap(t, &lookSandboxExec, func() (string, error) { return "", errors.New("not found") })
+	checks = runDoctor(nil, nil)
+	c := findCheck(t, checks, "sandbox")
+	if c.State != stateFail || c.Fix == "" {
+		t.Errorf("a missing sandbox-exec is %q with fix %q, want !! with a fix", c.State, c.Fix)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("a missing sandbox-exec changed the exit status: %v", err)
 	}
 }

@@ -8,8 +8,8 @@ import (
 
 // Boundary is what stands between the guest and the host kernel.
 //
-// Three values rather than two, because "brig cannot tell" is a real answer
-// and the only honest one for a shim brig does not recognise. A reader acts on
+// "brig cannot tell" is a value of its own, because it is a real answer and
+// the only honest one for a shim brig does not recognise. A reader acts on
 // this row -- it is the difference between running an agent on an untrusted
 // repository and not -- so a guess in the direction of the stronger boundary is
 // the one mistake this type must not make.
@@ -20,6 +20,9 @@ const (
 	BoundaryVM Boundary = "microVM"
 	// BoundaryContainer is a guest sharing the host kernel.
 	BoundaryContainer Boundary = "container"
+	// BoundaryProcess is a host process under the operating system's own
+	// sandbox. It shares the host kernel, and runs as you.
+	BoundaryProcess Boundary = "process"
 	// BoundaryUnknown is everything brig has not established either way.
 	BoundaryUnknown Boundary = "unknown"
 )

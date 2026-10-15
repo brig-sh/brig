@@ -701,7 +701,7 @@ func (c *Config) createTimeVolumes(home string) (tmpfs []string, shares []runtim
 	for _, v := range profile.MountOrder(c.Profile.Volumes) {
 		switch v.Kind {
 		case profile.VolumeTmpfs:
-			tmpfs = append(tmpfs, c.mountTarget(v.Path)+":"+v.TmpfsOptions())
+			tmpfs = append(tmpfs, c.tmpfsMount(v))
 		case profile.VolumeHostMount:
 			shares = append(shares, runtime.Share{
 				Host:  filepath.Join(home, filepath.FromSlash(v.Path)),
@@ -710,4 +710,9 @@ func (c *Config) createTimeVolumes(home string) (tmpfs []string, shares []runtim
 		}
 	}
 	return tmpfs, shares
+}
+
+// tmpfsMount is one tmpfs volume as a runtime takes it: "<path>:<options>".
+func (c *Config) tmpfsMount(v profile.Volume) string {
+	return c.mountTarget(v.Path) + ":" + v.TmpfsOptions()
 }

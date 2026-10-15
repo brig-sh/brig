@@ -71,3 +71,31 @@ genericBoot: true
 		t.Fatalf("backend fields did not survive parsing: %+v", got)
 	}
 }
+
+// isolation picks the boundary, so a typo there must not fall back to the
+// default and run the agent behind a boundary nobody asked for.
+func TestValidateRejectsAnUnknownIsolation(t *testing.T) {
+	for _, iso := range []string{"", "microvm", "process"} {
+		p := backendBase()
+		p.Isolation = iso
+		if err := p.Validate(); err != nil {
+			t.Errorf("isolation %q must be accepted: %v", iso, err)
+		}
+	}
+	p := backendBase()
+	p.Isolation = "proces"
+	err := p.Validate()
+	if err == nil || !strings.Contains(err.Error(), "microvm or process") {
+		t.Fatalf("got %v, want the unknown isolation refused with the accepted values", err)
+	}
+}
+
+func TestParseKeepsTheIsolationField(t *testing.T) {
+	got, err := Parse([]byte("name: p\nimage: img\nguestHome: /root\nbinary: sh\nmem: 1\ncpus: 1\nisolation: process\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Isolation != "process" {
+		t.Errorf("isolation = %q, want process", got.Isolation)
+	}
+}

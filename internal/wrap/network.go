@@ -147,7 +147,7 @@ func (n Network) Line() string {
 // spec that is actually booted, so the two cannot come to different answers
 // about the same run. The boot fills in the rest.
 func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
-	return runtime.RunSpec{
+	spec := runtime.RunSpec{
 		Name:       c.VMName,
 		Hypervisor: hypervisor,
 		Net:        c.Network.RuntimeNet(),
@@ -155,6 +155,14 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Publish:    c.Publish,
 		GUI:        c.Profile.IsGUI(),
 	}
+	// The host kind cannot mount a tmpfs, and refuses a profile that needs
+	// one before the workspace is prepared.
+	if !runtime.RunsImage(c.Runtime) {
+		for _, v := range c.Profile.Tmpfs() {
+			spec.Tmpfs = append(spec.Tmpfs, c.tmpfsMount(v))
+		}
+	}
+	return spec
 }
 
 // checkBackend refuses a run this backend cannot honour, before anything is
@@ -348,6 +356,11 @@ func (c *Config) networkLine() string {
 		return line
 	}
 	line := c.Network.Line()
+	// The host kind has no network of its own to give. isolated there is
+	// Seatbelt denying every IP connection but the loopback ports brig names.
+	if c.Network == NetIsolated && c.Runtime != nil && c.Runtime.Kind() == runtime.HostKind {
+		line = "isolated (process sandbox: no IP egress but loopback to the ports brig names)"
+	}
 	if c.Network == NetShared && c.netFallback != "" {
 		line += "; " + c.netFallback + " does not support isolated networking"
 	}

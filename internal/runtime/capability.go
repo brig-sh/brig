@@ -83,6 +83,14 @@ var records = []Record{
 	// own bridges and firewall, and brig does not put rules on them.
 	{EgressPolicy, RunPath{"docker", anyBackend}, CannotEnforce, dockerWhy,
 		"Use nerdctl (BRIG_RUNTIME_BIN=nerdctl), or detach the policy"},
+	// The host kind has no backend, so its network mode stands in the
+	// backend's place. See hostEgressMode.
+	{EgressPolicy, RunPath{HostKind, hostOffline}, Enforced,
+		"the process sandbox denies every outbound connection", ""},
+	{EgressPolicy, RunPath{HostKind, hostBrokered}, Enforced,
+		"the process sandbox denies every outbound IP connection but loopback to the ports brig names", ""},
+	{EgressPolicy, RunPath{HostKind, anyBackend}, CannotEnforce, hostWhy,
+		"Run it in a microVM (unset BRIG_RUNTIME, or isolation: microvm in the profile), or detach the policy"},
 }
 
 const dockerWhy = "brig enforces a policy on nerdctl's container network, and does not filter docker's"

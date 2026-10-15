@@ -698,7 +698,7 @@ func (d *daemon) config(req Request) (*wrap.Config, *bytes.Buffer, error) {
 	if !ok {
 		return nil, nil, &exitcode.NotFoundError{Err: fmt.Errorf("unknown agent %q", req.Agent)}
 	}
-	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin})
+	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin, Isolation: t.Isolation})
 	if err != nil {
 		return nil, nil, err
 	}
