@@ -395,3 +395,53 @@ func TestRemoveAllRemovesASandboxWhoseProfileIsGone(t *testing.T) {
 		t.Errorf("removed %v, want brig-gone", rt.removed)
 	}
 }
+
+// rm --all and reset remove sandboxes without a Config, so they revoke each
+// sandbox's session tokens themselves, as brig stop and brig rm do.
+func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		var revoked []string
+		swap(t, &revokeRoutes, func(name string) error {
+			revoked = append(revoked, name)
+			return nil
+		})
+		if _, err := captureStdout(t, func() error { return run(args) }); err != nil {
+			t.Fatalf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if strings.Join(revoked, " ") != "brig-faker brig-faker-refactor" {
+			t.Errorf("brig %s revoked %v, want both sandboxes", strings.Join(args, " "), revoked)
+		}
+	}
+}
+
+// rm --all and reset also revoke what the broker still holds after their
+// own removals: a sandbox the detected runtime does not list keeps no token
+// that still works.
+func TestRemoveAllRevokesWhatTheBrokerStillHolds(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		swap(t, &revokeRoutes, func(string) error { return nil })
+		calls := 0
+		swap(t, &revokeAllRoutes, func() ([]string, error) {
+			calls++
+			return []string{"brig-unlisted"}, nil
+		})
+		var err error
+		stderr := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		if err != nil {
+			t.Fatalf("brig %s: %v", strings.Join(args, " "), err)
+		}
+		if calls != 1 {
+			t.Errorf("brig %s asked the broker for what it still holds %d times, want once",
+				strings.Join(args, " "), calls)
+		}
+		if !strings.Contains(stderr, "brig-unlisted") {
+			t.Errorf("brig %s did not say it revoked brig-unlisted: %q", strings.Join(args, " "), stderr)
+		}
+	}
+}

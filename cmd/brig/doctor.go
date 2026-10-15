@@ -4,15 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/brig-sh/brig/internal/brigsock"
 	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
@@ -175,18 +179,102 @@ func doctorExit(checks []check) error {
 func runDoctor(agent *profile.Profile, loadErr error) []check {
 	rtCheck, rt := runtimeCheck(agent)
 	runtimeOK := rtCheck.State == statePass
-	return []check{
+	checks := []check{
 		brigCheck(),
 		hostCheck(),
 		virtualCheck(),
 		rtCheck,
+	}
+	if goruntime.GOOS == "darwin" {
+		checks = append(checks, brokerCheck())
+	}
+	return append(checks,
 		bootCheck(rt),
 		verifyCheck(),
 		profilesCheck(loadErr),
 		secretsCheck(),
 		brigdCheck(),
 		imageCheck(agent, runtimeOK),
+	)
+}
+
+// brokerCheck reports on brig-broker, which serves the routes of a run:
+// whether it is installed, whether its directory is brig's alone, and
+// whether it is running and on which port. It does not gate the exit status:
+// a run with no route never starts it.
+func brokerCheck() check {
+	bin, binErr := injector.Bin()
+	dir, err := injector.Dir()
+	if err != nil {
+		return check{Name: "broker", State: stateInfo, Finding: err.Error()}
 	}
+	if _, err := os.Lstat(dir); err != nil {
+		if binErr != nil {
+			return check{Name: "broker", State: stateInfo,
+				Finding: "brig-broker is not installed, so a run with a route cannot start; " + binErr.Error()}
+		}
+		return check{Name: "broker", State: stateInfo,
+			Finding: "not started; brig starts " + bin + " on the first run with a route"}
+	}
+	if err := injector.CheckDir(dir); err != nil {
+		return check{Name: "broker", State: stateFail, Finding: err.Error(),
+			Fix: "chmod 700 " + dir + ", or remove it and let the next run create it -- it holds the broker's keys"}
+	}
+	running, ok := injector.Running(dir)
+	if !ok {
+		finding := "not running (directory " + dir + ")"
+		blob, err := os.ReadFile(filepath.Join(dir, injector.PortName))
+		if err != nil {
+			return check{Name: "broker", State: stateInfo, Finding: finding}
+		}
+		port := strings.TrimSpace(string(blob))
+		// A client of this port sends its tokens to it, so anything else
+		// listening there receives them.
+		if holder, held := portHolder(port); held {
+			return check{Name: "broker", State: stateFail,
+				Finding: fmt.Sprintf("%s, and %s listens on its port %s", finding, holder, port),
+				Fix: "stop that process: a client of this port sends its session tokens to it, " +
+					"and brig refuses to start the broker while it is taken"}
+		}
+		return check{Name: "broker", State: stateInfo, Finding: finding + ", port " + port + " kept for the next start"}
+	}
+	st := running.Status
+	finding := fmt.Sprintf("brig-broker pid %d on 127.0.0.1:%d, serving %d sandboxes", st.PID, st.Port, len(st.Sandboxes))
+	if len(st.Pending) > 0 {
+		finding += "; write-back pending: " + strings.Join(st.Pending, ", ")
+	}
+	if len(st.Failing) > 0 {
+		return check{Name: "broker", State: stateFail, Finding: finding + "; refresh failing: " + strings.Join(st.Failing, ", "),
+			Fix: "brig secret import claude-code after a fresh login on the host"}
+	}
+	return check{Name: "broker", State: statePass, Finding: finding}
+}
+
+// portHolder reports whether something listens on the loopback port, and
+// names it from lsof when lsof can say.
+func portHolder(port string) (string, bool) {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", port), 500*time.Millisecond)
+	if err != nil {
+		return "", false
+	}
+	_ = conn.Close()
+	out, err := exec.Command("lsof", "-nP", "-iTCP:"+port, "-sTCP:LISTEN", "-Fpc").Output()
+	if err != nil {
+		return "another process", true
+	}
+	pid, name := "", ""
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "p") && pid == "":
+			pid = line[1:]
+		case strings.HasPrefix(line, "c") && name == "":
+			name = line[1:]
+		}
+	}
+	if pid == "" {
+		return "another process", true
+	}
+	return fmt.Sprintf("pid %s (%s)", pid, name), true
 }
 
 // brigCheck names the build that produced the report: the version, the

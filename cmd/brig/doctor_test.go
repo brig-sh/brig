@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -385,4 +388,54 @@ func TestDoctorRuntimeFixNamesTheProfilesRuntimeBin(t *testing.T) {
 	if strings.Contains(rt.Fix, "BRIG_RUNTIME_BIN") || !strings.Contains(rt.Fix, "runtimeBin") {
 		t.Errorf("the fix %q should name the profile's runtimeBin, not BRIG_RUNTIME_BIN", rt.Fix)
 	}
+}
+
+// The broker row says whether brig-broker has started, and fails a broker
+// directory anyone else can enter, which holds the keys that sign tokens.
+// It never gates the exit status.
+func TestDoctorBrokerCheck(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", state)
+	if c := brokerCheck(); c.State != stateInfo {
+		t.Errorf("before any route ran: %+v", c)
+	}
+	dir := filepath.Join(state, "host", "broker")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := brokerCheck()
+	if c.State != stateFail || !strings.Contains(c.Fix, "chmod 700") || c.err != nil {
+		t.Errorf("an open broker directory: %+v", c)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "port"), []byte("40123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c := brokerCheck(); c.State != stateInfo || !strings.Contains(c.Finding, "port 40123") {
+		t.Errorf("a broker that is not running: %+v", c)
+	}
+	// Another process on the recorded port receives the tokens of every
+	// client of the port, so the row fails and names it.
+	squatter, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = squatter.Close() }()
+	port := squatter.Addr().(*net.TCPAddr).Port
+	if err := os.WriteFile(filepath.Join(dir, "port"), []byte(fmt.Sprintf("%d\n", port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c = brokerCheck()
+	if c.State != stateFail || !strings.Contains(c.Finding, fmt.Sprintf("its port %d", port)) || c.err != nil {
+		t.Errorf("a port held by another process: %+v", c)
+	}
+	if _, err := exec.LookPath("lsof"); err == nil && !strings.Contains(c.Finding, fmt.Sprintf("pid %d", os.Getpid())) {
+		t.Errorf("the row does not name the holder, this test's pid %d: %s", os.Getpid(), c.Finding)
+	}
+	t.Logf("doctor: %s", c.Finding)
 }

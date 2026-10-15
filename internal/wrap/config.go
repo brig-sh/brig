@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/policy"
@@ -251,9 +252,24 @@ type Config struct {
 	// returns it, so a verb that never boots or joins the sandbox can still
 	// reach the session.
 	projectRefused error
-	// routesRefused is why a run bound to a policy with routes is refused:
-	// this version reads routes and serves none. See refuseRoutes.
-	routesRefused error
+	// routes are the routes of the policies bound to this run, expanded and
+	// merged, and routePolicy names the policy that declares each. routesErr
+	// is why they could not be merged. See routes.go.
+	routes      []v1alpha1.Route
+	routePolicy map[string]string
+	routesErr   error
+	// routeSkipped are the secrets the routes inject, which stay on the
+	// host whether or not the profile would have delivered them.
+	routeSkipped []string
+	// routeDecls are the profile's secret declarations before the routed
+	// ones were dropped, for the command a refusal of a missing one names.
+	routeDecls []profile.SecretDecl
+	// broker serves this run's routes. nil is brig-broker; a test sets its
+	// own.
+	broker routeServer
+	// routeVars are what serveRoutes got for this exec: the variables that
+	// point the guest at its routes.
+	routeVars []runtime.Var
 	// refusedProject is the remembered project projectRefused is about. See
 	// KeptProject.
 	refusedProject string
@@ -592,6 +608,20 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if egress.Default != "" && network != NetOffline {
 		network = NetIsolated
 	}
+	// Routes take the posture too: a route is served on the broker's own
+	// address, which an isolated sandbox is allowed and nothing else. And a
+	// secret a route injects stays on the host, so the profile delivering it
+	// is changed here, before anything resolves or reports it.
+	routes, routePolicy, routesErr := routesOf(bound)
+	var routeSkipped []string
+	var routeDecls []profile.SecretDecl
+	if routesErr == nil && len(routes) > 0 {
+		routeDecls = t.Secrets
+		t, bindings, routeSkipped = withRoutes(t, bindings, routes)
+		if network != NetOffline {
+			network = NetIsolated
+		}
+	}
 
 	c := &Config{
 		Profile:        t,
@@ -631,7 +661,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		PublishAsked:   asked,
 		Egress:         egress,
 		Policies:       policies,
-		routesRefused:  refuseRoutes(bound),
+		routes:         routes,
+		routePolicy:    routePolicy,
+		routesErr:      routesErr,
+		routeSkipped:   routeSkipped,
+		routeDecls:     routeDecls,
 		Verify:         verifyMode,
 		VerifyPolicy:   verifyPolicy(env),
 		RuntimePolicy:  runtimePolicy(env),

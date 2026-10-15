@@ -332,14 +332,25 @@ func (r *bootRecorder) Run(runtime.RunSpec) error {
 	return errors.New("stub runtime: not booting")
 }
 
-// brig policy check prints a route and the isolated posture it plans for, and
-// this version serves no route. A run bound to one is refused before anything
-// boots, so it never comes up without the route on a network nobody chose.
+// kindRecorder is a bootRecorder of another runtime kind.
+type kindRecorder struct {
+	bootRecorder
+	kind string
+}
+
+func (r *kindRecorder) Kind() string { return r.kind }
+
+// A microVM or a container reaches the broker at brig.internal, which no
+// runtime routes yet, so a run there bound to a route is refused before
+// anything boots, and never comes up without the route on a network nobody
+// chose.
 func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
-	for _, c := range []struct{ name, spec string }{
-		{"routes only", "  routes:\n    - name: github\n      preset: github-token\n" +
+	for _, c := range []struct{ name, kind, spec string }{
+		{"routes only", "hull", "  routes:\n    - name: github\n      preset: github-token\n" +
 			"      credential: {secretRef: {name: gh-token}}\n"},
-		{"routes and egress", "  egress: {default: deny}\n  routes:\n    - name: github\n      preset: github-token\n" +
+		{"routes and egress", "hull", "  egress: {default: deny}\n  routes:\n    - name: github\n      preset: github-token\n" +
+			"      credential: {secretRef: {name: gh-token}}\n"},
+		{"nerdctl", "nerdctl", "  routes:\n    - name: github\n      preset: github-token\n" +
 			"      credential: {secretRef: {name: gh-token}}\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -351,13 +362,16 @@ func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
 			t.Setenv("BRIG_POLICY_DIR", dir)
 
 			cfg := loadWithPolicy(t, "github-brig-sh")
-			rec := &bootRecorder{}
+			rec := &kindRecorder{kind: c.kind}
 			cfg.Runtime = rec
+			broker := &fakeBroker{}
+			cfg.broker = broker
 			err := cfg.EnsureRunning(creds.Set{})
 			if err == nil {
 				t.Fatal("a run bound to a route went ahead")
 			}
-			for _, want := range []string{"does not serve routes", "github-brig-sh (route github)"} {
+			for _, want := range []string{"brig.internal routing is not available on this runtime (" + c.kind + ")",
+				"github-brig-sh (route github)"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}
@@ -365,8 +379,11 @@ func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
 			if len(rec.asked) != 0 {
 				t.Errorf("the runtime was asked %v before the refusal", rec.asked)
 			}
+			if len(broker.registered) != 0 {
+				t.Errorf("the broker was asked to serve a refused run: %v", broker.registered)
+			}
 			// Plan reports the same refusal, so a plan cannot promise the run.
-			if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "does not serve routes") {
+			if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "brig.internal routing is not available") {
 				t.Errorf("the plan does not carry the refusal: %+v", d.Refused)
 			}
 		})

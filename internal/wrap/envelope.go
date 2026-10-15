@@ -113,6 +113,11 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 	if line := c.policyLine(); line != "" {
 		rows = append(rows, envelopeRow{"POLICY", line})
 	}
+	// Under the policy that declares the routes it serves, and only when
+	// there is one.
+	if line := c.brokerLine(); line != "" {
+		rows = append(rows, envelopeRow{"BROKER", line})
+	}
 	return rows
 }
 
@@ -219,6 +224,11 @@ func (c *Config) credentialLine(set creds.Set) string {
 		if _, ok := c.secrets.Values[r.Name]; ok {
 			names = append(names, r.Name)
 		}
+	}
+	// A route hands the guest a session token, never the credential, and
+	// the row says which route each one is for.
+	for _, rc := range c.routeCredentials() {
+		names = append(names, rc.Name+"(route: "+rc.Route+")")
 	}
 	if len(names) == 0 {
 		return "(none)"
