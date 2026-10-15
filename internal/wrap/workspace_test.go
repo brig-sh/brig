@@ -32,6 +32,15 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("BRIG_GATEWAY_DIR", gw); err != nil {
 		panic(err)
 	}
+	// The credential broker's directory follows BRIG_STATE_DIR. A stop or an
+	// rm asks a broker running there to forget the sandbox, and without this
+	// a case would ask the one serving the real sandboxes of whoever runs the
+	// tests. A case that needs a directory of its own still sets one.
+	if os.Getenv("BRIG_STATE_DIR") == "" {
+		if err := os.Setenv("BRIG_STATE_DIR", filepath.Join(gw, "state")); err != nil {
+			panic(err)
+		}
+	}
 	// The boot-asset digest check reads the bundle's manifest from a registry.
 	// No unit test reaches one: a case that wants an answer stands one in.
 	registryDigests = func(string, string) (verify.BootDigests, error) {

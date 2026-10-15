@@ -686,9 +686,10 @@ grep -q '^argv: run' "$STUB_LOG" \
   || ok "nothing reached the runtime"
 "$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
 
-# Nothing serves a route yet, so the binary is held to what it prints: the
-# preset a route expands to, and the posture check plans for a run with one.
-# A run bound to a route is refused before the runtime is asked anything.
+# No runtime routes brig.internal to the broker yet, so the binary is held to
+# what it prints: the preset a route expands to, and the posture check plans
+# for a run with one. A run bound to a route is refused before the runtime is
+# asked anything.
 cat > "$WORK/policies/claude-only.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
 kind: Policy
@@ -717,12 +718,15 @@ else
 fi
 : > "$STUB_LOG"
 if env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/routes-run.out" 2>&1; then
-  bad "a run bound to a route was booted, and this version serves no route"
+  bad "a run bound to a route was booted on hull, which cannot reach the broker yet"
 else
-  grep -q 'does not serve routes' "$WORK/routes-run.out" \
+  grep -q 'brig.internal routing is not available on this runtime (hull) yet' "$WORK/routes-run.out" \
     && ok "a run bound to a route is refused, naming why" \
     || bad "the route refusal does not say why -- got: $(cat "$WORK/routes-run.out")"
 fi
+[ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
+  && bad "a refused run started the credential broker" \
+  || ok "a refused run starts no credential broker"
 grep -q '^argv: run' "$STUB_LOG" \
   && bad "the runtime was asked to boot a run bound to a route" \
   || ok "nothing reached the runtime for a run bound to a route"
