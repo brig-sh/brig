@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"slices"
 	"sort"
@@ -181,6 +182,54 @@ func arrivalOnEntry(key, vmName string, entry sessionEntry) error {
 	}
 	return fmt.Errorf("this host already has a session %s, on sandbox %s; remove it with "+
 		"`brig rm %s` here before moving another onto it", key, entry.Sandbox, key)
+}
+
+// ReplacedRecord is the entry a move here replaced, when it said the session
+// runs on a host other than the one the move came from.
+type ReplacedRecord struct {
+	Host string `json:"host"`
+	TxID string `json:"txid,omitempty"`
+}
+
+// ArrivalReplacedElsewhere is the entry the move txid replaced, when that
+// entry named a host other than the move's source. Nothing ties an arrival
+// to the session an entry records beyond its key and sandbox, so this is
+// either the session coming back after it moved on from that host, or
+// another session of the same agent and label, which still runs there and
+// which this host no longer reaches. The source says so; it is not refused,
+// since a session that moved on is the case arrivalOnEntry lets in.
+func ArrivalReplacedElsewhere(sandbox, txid string) (ReplacedRecord, bool) {
+	a, ok := readArrivals()[sandbox]
+	if !ok || a.TxID != txid || a.Replaced == nil || sameHost(a.Replaced.Host, a.From) {
+		return ReplacedRecord{}, false
+	}
+	return ReplacedRecord{Host: a.Replaced.Host, TxID: a.Replaced.TxID}, true
+}
+
+// sameHost reports whether two USER@HOST spellings name one host: the same
+// host part, or, for names rather than addresses, the same first label, as
+// "rp2" from a hostname and "rp2.local" as typed. The user is ignored. An
+// empty one is not known to be the same.
+func sameHost(a, b string) bool {
+	host := func(s string) string {
+		if i := strings.LastIndex(s, "@"); i >= 0 {
+			s = s[i+1:]
+		}
+		return strings.TrimSuffix(strings.ToLower(s), ".")
+	}
+	ha, hb := host(a), host(b)
+	if ha == "" || hb == "" {
+		return false
+	}
+	if ha == hb {
+		return true
+	}
+	if net.ParseIP(ha) != nil || net.ParseIP(hb) != nil {
+		return false
+	}
+	la, _, _ := strings.Cut(ha, ".")
+	lb, _, _ := strings.Cut(hb, ".")
+	return la == lb
 }
 
 // CommitArrival marks the move txid as one the source saw finish.

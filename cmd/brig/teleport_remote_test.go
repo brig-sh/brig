@@ -784,6 +784,41 @@ func TestAnAbortWhoseRestoreFailedSaysSo(t *testing.T) {
 	}
 }
 
+// A destination whose record of the session named another host, which the
+// move replaced, says so in its answer, and the source passes it on: it may
+// have been another session of the same name. The move goes on.
+func TestAMoveSaysWhenTheDestinationReplacedARecordOfAnotherHost(t *testing.T) {
+	rt := &moveRuntime{running: true, state: runtime.MoveCommitted}
+	moveHost(t, rt, noNetProbe())
+	ok := outputRemote
+	outputRemote = func(argv []string) ([]byte, error) {
+		if line := argv[len(argv)-1]; strings.Contains(line, receiveVerb) && !strings.Contains(line, "--commit") &&
+			!strings.Contains(line, "--abort") {
+			var b bytes.Buffer
+			_ = writeJSONDocument(&b, "TeleportReceive", map[string]any{"state": "prepared",
+				"replaced": map[string]string{"host": "me@rp3", "txid": "tx0"}})
+			return b.Bytes(), nil
+		}
+		return ok(argv)
+	}
+	var err error
+	said := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"teleport", "claude", "--to", "me@box"}) })
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"me@box had a record that claude-code runs on me@rp3 (move tx0)",
+		"another session, it still runs on me@rp3", "ssh me@rp3 brig info claude-code"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, said)
+		}
+	}
+	if e := entryOf(t); e["host"] != "me@box" {
+		t.Errorf("the move did not go on: %v", e)
+	}
+}
+
 // A receive whose answer was lost may still have taken the network on the
 // destination: the move asks for it back before it drops its record, and
 // hull is never asked to move.

@@ -1081,13 +1081,34 @@ func receiveRemote(host, store, ref, vm, txid string, net wrap.MoveNetwork) (str
 	}
 	var doc struct {
 		Data struct {
-			Socket string `json:"socket"`
+			Socket   string               `json:"socket"`
+			Replaced *wrap.ReplacedRecord `json:"replaced"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return "", fmt.Errorf("its answer did not read: %w", err)
 	}
+	if r := doc.Data.Replaced; r != nil {
+		warnf("%s", replacedNotice(host, ref, from, *r))
+	}
 	return doc.Data.Socket, nil
+}
+
+// replacedNotice says that the destination had a record of ref running on
+// a host other than this one, and that the move replaced it. Nothing ties
+// that record to this session beyond its name, so it may have been another
+// session of the same agent and label, which still runs there.
+func replacedNotice(host, ref, from string, r wrap.ReplacedRecord) string {
+	move := ""
+	if r.TxID != "" {
+		move = " (move " + r.TxID + ")"
+	}
+	return notice.Newf("%s had a record that %s runs on %s%s, and this move from %s replaces it",
+		host, ref, r.Host, move, from).
+		Note("it is this session if the session moved from %s to here since", r.Host).
+		Note("if it was another session, it still runs on %s, and %s no longer reaches it by %s", r.Host, host, ref).
+		Do("ask there", "ssh "+r.Host+" brig info "+ref).
+		String()
 }
 
 // teleportReceiveCmd is `brig teleport-receive`, run on a destination by the
@@ -1119,6 +1140,10 @@ func teleportReceiveCmd(out io.Writer, args []string) error {
 	reply := struct {
 		State  string `json:"state"`
 		Socket string `json:"socket,omitempty"`
+		// Replaced is the record of the session this host had and the
+		// move replaced, when it named a host other than the source.
+		// An older source ignores it.
+		Replaced *wrap.ReplacedRecord `json:"replaced,omitempty"`
 	}{}
 	switch {
 	case commit:
@@ -1156,6 +1181,9 @@ func teleportReceiveCmd(out io.Writer, args []string) error {
 			return err
 		}
 		reply.State, reply.Socket = "prepared", sock
+		if r, ok := wrap.ArrivalReplacedElsewhere(spec.Sandbox, spec.TxID); ok {
+			reply.Replaced = &r
+		}
 	}
 	return writeJSONDocument(out, "TeleportReceive", reply)
 }
