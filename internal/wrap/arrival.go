@@ -200,17 +200,17 @@ type ReplacedRecord struct {
 // since a session that moved on is the case arrivalOnEntry lets in.
 func ArrivalReplacedElsewhere(sandbox, txid string) (ReplacedRecord, bool) {
 	a, ok := readArrivals()[sandbox]
-	if !ok || a.TxID != txid || a.Replaced == nil || sameHost(a.Replaced.Host, a.From) {
+	if !ok || a.TxID != txid || a.Replaced == nil || SameHost(a.Replaced.Host, a.From) {
 		return ReplacedRecord{}, false
 	}
 	return ReplacedRecord{Host: a.Replaced.Host, TxID: a.Replaced.TxID}, true
 }
 
-// sameHost reports whether two USER@HOST spellings name one host: the same
+// SameHost reports whether two USER@HOST spellings name one host: the same
 // host part, or, for names rather than addresses, the same first label, as
 // "rp2" from a hostname and "rp2.local" as typed. The user is ignored. An
 // empty one is not known to be the same.
-func sameHost(a, b string) bool {
+func SameHost(a, b string) bool {
 	host := func(s string) string {
 		if i := strings.LastIndex(s, "@"); i >= 0 {
 			s = s[i+1:]

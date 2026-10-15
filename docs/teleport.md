@@ -202,6 +202,10 @@ entry as teleportable from its empty guest home.
 | `brig teleport` of a session that another `brig teleport` on this host is moving or asking about | `1` |
 | `brig teleport` of a stopped or parked sandbox, one renamed with `BRIG_NAME`, or one whose network or policy changed since it booted | `1` |
 | `brig teleport` with none, or more than one, of `--to`, `--status` and `--abort`, or a destination that is not `USER@HOST` | `2` |
+| `brig teleport --to` of a session to the host it runs on | `1` |
+| `brig teleport --to`, `--prepare` or `--abort` of a session that runs on another host, which the brig there refuses or fails | that brig's code |
+| `brig teleport --to`, `--prepare` or `--abort` of a session that runs on another host, when ssh to that host fails or drops before the brig there answers | `1` |
+| `brig teleport --to` or `--prepare` back to this host, when the fenced copy the move away left here is not shown as stale: hull's record here does not say that move committed away, and the brig on the session's host does not say it runs there | `1` |
 
 Each refusal names the setting to drop, or `brig rm <ref>` when the session
 has to start over.
@@ -524,10 +528,21 @@ each making the spare copy of the base the destination keeps for the
 next move. A move that finds no spare copies the base first: on the one
 that did, the destination took the stream 23.5 s late.
 
+The way back is prepared the same way, with the old host as the
+destination: `brig teleport <ref> --to <you>@<old host> --prepare`, typed
+on either host (see [Moving back](#moving-back)). The old host still
+holds the base the session booted from, so hull sends nothing and only
+makes the spare copy that the move back takes. Without the spare, the
+move back copies the base on the old host while the guest is paused: 22.9
+s of downtime in one run on the Linux pair. A hull that makes the spare on
+the source by itself once a move commits needs no such prepare. hull
+`7b3f7b1` does not.
+
 ### After a move
 
 `brig sh`, `brig run`, `brig stop`, `brig info` and `brig logs` on the ref
-run on the destination. Brig hands the same verb, the same ref and the same
+run on the destination, and so do `brig teleport --to`, `--prepare` and
+`--abort`: see [Moving back](#moving-back). Brig hands the same verb, the same ref and the same
 flags to the brig there: `ssh -t <user>@<host> brig sh <ref>`. For `brig sh`
 and `brig run`, brig replaces itself with ssh, the way it replaces itself with
 hull for a local session. This host's runtime and secret store are not asked
@@ -555,16 +570,51 @@ removes the copy.
 
 ### Moving back
 
-A second move goes from the host the session runs on: `brig teleport` there,
-with this host as the destination. This host still has the fenced copy,
-under the sandbox name the move back needs, and both hull and the probe
-refuse a destination that has it. So on the old host, remove the copy
-first. That one `brig rm` also forgets the session there:
+A second move goes from the host the session runs on, because hull fences
+the guest where it runs and the brig there holds the move's record. Type it
+on either host. On the old host, `brig teleport --to`, `--prepare` and
+`--abort` go to the brig where the session runs, over ssh, as `brig sh`
+does, and its lines come back as it prints them:
 
 ```bash
-brig rm <ref>       # on the old host: removes the fenced copy, forgets the session
-ssh <user>@<host> brig teleport <ref> --to <you>@<old host>
+brig teleport <ref> --to <you>@<old host>             # on the old host
+ssh <user>@<host> brig teleport <ref> --to <you>@<old host>   # the same, typed there
 ```
+
+The old host still has the copy the first move left, fenced, under the
+sandbox name the move back arrives as. The probe, the arrival and hull
+each refuse a destination that has it. When the move back, or its
+prepare, is typed on the old host, that host's brig removes the copy
+before it asks the brig there, once the copy is shown to be stale, as
+`brig rm` shows it: hull's record on the old host says that move
+committed away, or the brig on the session's host says the session runs
+there. It keeps its record that the session runs on the other host. The
+move back replaces that record, and an abort of the move back puts it
+back. The copy is gone either way: it could never run again. Typed on the
+host the session runs on, the move back is refused while the old host has
+the copy. Run `brig rm <ref>` on the old host first: it removes the copy
+and forgets the session there.
+
+After a move typed on the old host commits, that host's brig asks the
+brig there where the session runs now, and records it. When the move came
+back, the arrival has already filed the session as running on the old
+host. The copy that the move back left on the other host is what `brig rm
+<ref>` there removes. When the move went on to a third host, the old host
+records that host, and its verbs go there. If the old host cannot ask, it
+keeps its record, and its verbs go to the host it names, whose brig hands
+them on. A forwarded line that fails changes nothing on the old host. Its
+exit code is the code of the brig there, or `1` when ssh fails or drops
+before that brig answers. The move may then have run, and `ssh <user>@<host>
+brig teleport <ref> --status` says where it stands. `brig teleport <ref>
+--status` on the old host reads that host's record only, and says that the
+moves of the session are driven from the host where it runs.
+
+The brig on the session's host reaches the destination with its own
+settings: the `BRIG_TELEPORT_*` settings that its ssh login gives it, not
+the old host's. A brig that runs with settings its login does not give it
+needs a `BRIG_TELEPORT_REMOTE_BRIG` on the old host that sets them, for
+example a script there that sources them and runs brig. See
+[Settings](#settings).
 
 A record that says the session runs on another host does not refuse the move
 back. An older Brig's `brig rm`, or `hull rm` of the copy, leaves that record,
@@ -579,13 +629,15 @@ replaced it: a different session under the same name would still run on
 that host, and the old host would no longer reach it by the ref. A record
 under another sandbox name, as after `BRIG_NAME` changed, still refuses.
 
-Between the `brig rm` and the move, the old host has no record of the
-session. Run nothing for the ref there. `brig sh <ref>` or `brig run <ref>`
-on the old host does not reach the session: it boots a new, empty session
-under the same sandbox name, and the move back is then refused, as the name
-is taken. Remove that new session with `brig rm <ref>` before the move. Run
-your commands on the host the session runs on. hull counts the owner epoch
-on: 0 where the session started, 1 after the first move, 2 back home.
+After `brig rm <ref>` on the old host, the old host has no record of the
+session until the move back. Run nothing for the ref there in that time.
+`brig sh <ref>` or `brig run <ref>` on the old host does not reach the
+session: it boots a new, empty session under the same sandbox name, and the
+move back is then refused, as the name is taken. Remove that new session
+with `brig rm <ref>` before the move. A move back typed on the old host
+keeps the record, so its verbs go to the session until the move back
+commits. hull counts the owner epoch on: 0 where the session started, 1
+after the first move, 2 back home.
 
 To remove a moved session everywhere, run `brig rm <ref>` on the old host,
 which removes the fenced copy and forgets the session there, then on the
@@ -668,7 +720,7 @@ failed still ends the move. Brig then reports hull's error and names
 | --- | --- | --- |
 | `BRIG_TELEPORT_SSH` | `ssh` on `PATH` | the ssh brig runs to reach the destination |
 | `BRIG_TELEPORT_REMOTE_BRIG` | `brig` | the brig to run on the destination |
-| `BRIG_TELEPORT_REMOTE_ENV` | (unset) | `NAME=VALUE` words, space-separated, put in front of every brig command on the destination. Use it for a destination whose login does not give brig the settings it needs. The words go on the ssh command line, where process listings on this host and the shell on the destination show them. Never put a credential there |
+| `BRIG_TELEPORT_REMOTE_ENV` | (unset) | `NAME=VALUE` words, space-separated, put in front of every brig command on the destination. Use it for a destination whose login does not give brig the settings it needs. The words go on the ssh command line, where process listings on this host and the shell on the destination show them. Never put a credential there. The brig on the destination does not pass them on: a `brig teleport` that the old host hands to the session's host runs with that host's own `BRIG_TELEPORT_*`, so a brig that needs settings to reach back is better named by a `BRIG_TELEPORT_REMOTE_BRIG` script that sets them |
 | `BRIG_HULL_STORE_DIR` | hull's own default, `~/.hull/store` | the hull store brig drives. A move lands in the store the destination's brig drives, and later verbs there name it |
 
 hull carries the checkpoint and the disk over ssh with your ssh

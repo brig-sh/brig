@@ -147,6 +147,21 @@ func RecordMoved(ref, sandbox, host, store, txid string) error {
 	})
 }
 
+// RecordMovedOn records that the session, which ran on from after the move
+// txid, moved on: the brig there moved it to host, into store there, under
+// the move next. It is refused unless the record still says from and txid,
+// so a record that changed while the brig there moved the session is not
+// written over.
+func RecordMovedOn(ref, sandbox, from, txid, host, store, next string) error {
+	return updateEntry(ref, sandbox, func(e *sessionEntry) error {
+		if e.Host != from || e.TxID != txid || e.PendingHost != "" {
+			return fmt.Errorf("the record of %s no longer says it runs on %s after move %s", ref, from, txid)
+		}
+		e.Host, e.RemoteStore, e.TxID = host, store, next
+		return nil
+	})
+}
+
 // RecordPrepared records that host was made ready to take the session:
 // hull holds the base disk whose digest is base there, as of at, and stream
 // says whether hull said a move there sends only what the guest changed
