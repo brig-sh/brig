@@ -7,31 +7,33 @@ import (
 	"testing"
 )
 
-// A report reads the parts of hull's lines it knows, each on its own: a
-// round's number, its bytes, time, rate and dirty rate, the downtime, and
-// the whole copy's rate from hull's Sent line. hull's rounded sizes are not
-// turned into byte counts, and a line with none of the parts changes
-// nothing, so the JSON leaves out what hull did not say.
+// A report reads the parts of hull's lines it knows, each on its own. These
+// are hull's lines for a whole-bundle move, as brig passed them on when it
+// moved the ubuntu guest from rp1 to rp2 with hull 97b7c58: no rounds, no
+// downtime line, and a Sent line whose size is rounded, so the report has
+// the rate and the steps and no byte count. hull's line on the capture
+// says "paused 0 ms", which is not the guest's downtime and is not read as
+// it. A line with none of the parts changes nothing, so the JSON leaves out
+// what hull did not say.
 func TestMoveReportReadsHullsLines(t *testing.T) {
 	var r MoveReport
 	for _, line := range []string{
-		"Move " + tx1 + " of s to me@box, epoch 1",
-		"Reserved s on me@box",
-		"round 0: 1048576 bytes in 0.5 s (2.0 MiB/s), dirty 120 pages/s",
-		"Round 1: 65536 bytes in 0.1 s (512.0 KiB/s), dirty 40.5 pages/s",
-		"round 2: 8.0 MiB in 0.2 s, 512 bytes/s",
-		"Sent 1.7 GiB in 46.3 s (37.1 MiB/s); disk 1.6 GiB of 16.0 GiB carried; destination: verified",
-		"Resumed s on me@box; downtime 1450 ms",
-		"Timings (ms): fence 1326, transfer 4765, restore paused 861, commit 489, verify 12",
+		"Move " + tx1 + " of brig-ubuntu to pmoust@rp2, epoch 1",
+		"Reserved brig-ubuntu on pmoust@rp2",
+		"Fencing brig-ubuntu (checkpoint with then=fence)",
+		"Checkpoint written in then fence, paused 0 ms, capture 1318 ms, RAM 90.7 of 1024.0 MiB stored",
+		"Fenced brig-ubuntu: checkpoint /home/pmoust/b5/store/instances/brig-ubuntu/checkpoint/" + tx1,
+		"Sending brig-ubuntu to pmoust@rp2",
+		"Sent 203.1 MiB in 4.8 s (42.6 MiB/s); disk 112.3 MiB of 15.0 GiB carried; destination: complete: " +
+			"every part a restore needs is captured",
+		"Restoring brig-ubuntu paused on pmoust@rp2",
+		"Moved brig-ubuntu to pmoust@rp2: it runs there at epoch 1. Its checkpoint here is stale",
+		"Timings (ms): fence 1326, transfer 4765, restore paused 861, commit 489",
 	} {
 		r.Add(line)
 	}
-	want := MoveReport{Rounds: []MoveRound{
-		{Name: "round 0", Round: 0, Size: "1048576 bytes", Bytes: 1048576, Seconds: 0.5, MiBPerSec: 2, DirtyPagesPerSec: 120},
-		{Name: "Round 1", Round: 1, Size: "65536 bytes", Bytes: 65536, Seconds: 0.1, MiBPerSec: 0.5, DirtyPagesPerSec: 40.5},
-		{Name: "round 2", Round: 2, Size: "8.0 MiB", Seconds: 0.2, MiBPerSec: 512.0 / (1 << 20)},
-	}, MiBPerSec: 37.1, DowntimeSeconds: 1.45,
-		StepsMs: map[string]int64{"fence": 1326, "transfer": 4765, "restore paused": 861, "commit": 489, "verify": 12}}
+	want := MoveReport{MiBPerSec: 42.6,
+		StepsMs: map[string]int64{"fence": 1326, "transfer": 4765, "restore paused": 861, "commit": 489}}
 	got, _ := json.Marshal(r)
 	wantJSON, _ := json.Marshal(want)
 	if string(got) != string(wantJSON) {
@@ -42,10 +44,17 @@ func TestMoveReportReadsHullsLines(t *testing.T) {
 	if b, _ := json.Marshal(empty); string(b) != "{}" {
 		t.Errorf("a line with nothing to read gave %s", b)
 	}
-	r.Seconds = 7.25
-	if s := r.Summary(); s != "hull's move took 7.2 s, the guest was paused 1.45 s, at 37.1 MiB/s, 3 rounds; "+
-		"fence 1.33 s, transfer 4.76 s, restore paused 0.86 s, commit 0.49 s, verify 0.01 s" {
+	r.Seconds = 9.3
+	if s := r.Summary(); s != "hull's move took 9.3 s, at 42.6 MiB/s; "+
+		"fence 1.33 s, transfer 4.76 s, restore paused 0.86 s, commit 0.49 s" {
 		t.Errorf("summary %q", s)
+	}
+	// hull prints a size below 1 MiB as a count of bytes, and that count
+	// is the total.
+	var small MoveReport
+	small.Add("Sent 524288 bytes in 0.1 s (5.0 MiB/s); disk 0 bytes of 15.0 GiB carried; destination: complete")
+	if small.Bytes != 524288 || small.MiBPerSec != 5 {
+		t.Errorf("small move %+v", small)
 	}
 }
 
@@ -133,19 +142,26 @@ func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 }
 
 // A fake hull printing its lines while it moves: they reach a MoveReport
-// through the move's Progress, as brig teleport wires them.
+// through the move's Progress, as brig teleport wires them. The lines are
+// hull 1ecb5c8's, from a streamed move of the ubuntu guest.
 func TestAMoveReportIsFedAsTheMoveRuns(t *testing.T) {
-	h, _ := migrateHull(t, "printf 'round 0: 4096 bytes in 0.1 s (0.1 MiB/s), dirty 9 pages/s\\n"+
-		"Sent 1048576 bytes in 0.2 s (5.0 MiB/s); state 4096 bytes\\ndowntime: 0.8 s\\n' >&2; echo committed > RECORD")
+	h, _ := migrateHull(t, "printf '"+
+		"move: disk round 1: 2 blocks, 131072 bytes (797 bytes on the wire) in 0.00 s, 383648 bytes/s, "+
+		"guest wrote 1 blocks/s\\n"+
+		"move: ram-round-0: 74.0 MiB in 2.88 s, 25.7 MiB/s\\n"+
+		"Sent 109.5 MiB in 5.4 s (20.3 MiB/s): disk 274.9 MiB as 34.4 MiB, RAM 75.0 MiB, state 53259 bytes; "+
+		"destination: stream: 80 hvi components and 4399 disk blocks in 288 batches checked\\n"+
+		"move: 109.5 MiB in 5.4 s; disk 34.4 MiB, RAM 75.0 MiB, state 53259 bytes; sealed 39 ms after the "+
+		"last RAM round began, last disk round 3 ms; downtime about 358 ms\\n' >&2; echo committed > RECORD")
 	var r MoveReport
 	if _, err := h.Migrate("s", "me@box", MigrateSpec{TxID: tx1, Progress: r.Add}); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.Rounds) != 1 || r.Rounds[0].Bytes != 4096 || r.Bytes != 1048576 || r.MiBPerSec != 5 ||
-		r.DowntimeSeconds != 0.8 {
+	if len(r.Rounds) != 2 || r.Rounds[0].Bytes != 131072 || r.Rounds[0].DirtyBlocksPerSec != 1 ||
+		r.Bytes != 0 || r.MiBPerSec != 20.3 || r.DowntimeSeconds != 0.358 {
 		t.Errorf("report %+v", r)
 	}
-	if !strings.Contains(r.Summary(), "1048576 bytes sent") {
+	if !strings.Contains(r.Summary(), "at 20.3 MiB/s, 2 rounds") {
 		t.Errorf("summary %q", r.Summary())
 	}
 }

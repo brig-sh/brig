@@ -41,10 +41,10 @@ type MoveRound struct {
 	Size    string  `json:"size,omitempty"`
 	Bytes   int64   `json:"bytes,omitempty"`
 	Seconds float64 `json:"seconds,omitempty"`
-	// MiBPerSec is the round's rate, and the dirty rates how fast the
-	// guest wrote memory pages or disk blocks during it.
+	// MiBPerSec is the round's rate, and DirtyBlocksPerSec how fast the
+	// guest wrote disk blocks during it, which hull prints for a disk
+	// round after the first. hull prints no such rate for memory.
 	MiBPerSec         float64 `json:"mibPerSec,omitempty"`
-	DirtyPagesPerSec  float64 `json:"dirtyPagesPerSec,omitempty"`
 	DirtyBlocksPerSec float64 `json:"dirtyBlocksPerSec,omitempty"`
 }
 
@@ -66,7 +66,6 @@ var (
 	lineBytes    = regexp.MustCompile(`\b(\d+) bytes(?:[^/]|$)`)
 	lineSeconds  = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?s\b`)
 	lineRate     = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(bytes|KiB|MiB|GiB)/s\b`)
-	lineDirty    = regexp.MustCompile(`\b(\d+(?:\.\d+)?) pages/s\b`)
 	lineBlocks   = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
 	lineDowntime = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
 	lineSent     = regexp.MustCompile(`^Sent\b`)
@@ -91,8 +90,7 @@ func (r *MoveReport) Add(line string) {
 		}
 		round := MoveRound{Name: name, Kind: strings.ToLower(m[1]), Final: m[2] != "" ||
 			strings.Contains(name, "(final)"), Bytes: lineByteCount(rest), Seconds: lineFloat(lineSeconds, rest),
-			MiBPerSec: lineMiBPerSec(rest), DirtyPagesPerSec: lineFloat(lineDirty, rest),
-			DirtyBlocksPerSec: lineFloat(lineBlocks, rest)}
+			MiBPerSec: lineMiBPerSec(rest), DirtyBlocksPerSec: lineFloat(lineBlocks, rest)}
 		if m[3] != "" {
 			round.Round, _ = strconv.Atoi(m[3])
 		} else if n := len(r.Rounds); n > 0 && round.Final {
