@@ -29,11 +29,14 @@ const (
 
 // The states of hull's move record on the source, which `hull migrate
 // --status` reports. A move passes preflight, reserved, fenced, transferring,
-// transferred, committing and committed, or ends aborted. Up to reserved the
-// guest still runs here and nothing was fenced; from fenced on it never runs
-// here again unless the move is aborted; committed means it runs on the
-// destination. brig decides on these words, read back from hull, never on
-// what a call it made returned.
+// transferred, committing and committed, or ends aborted. A streamed move
+// skips fenced: it goes from reserved to transferring, the guest runs here
+// through the pre-copy rounds, and hvi fences it only when it seals the
+// stream, partway through transferring. Up to reserved the guest still runs
+// here and nothing was fenced; once fenced it never runs here again unless
+// the move is aborted; committed means it runs on the destination. brig
+// decides on these words, read back from hull, never on what a call it made
+// returned.
 const (
 	MovePreflight = "preflight"
 	MoveReserved  = "reserved"
@@ -41,8 +44,12 @@ const (
 	MoveAborted   = "aborted"
 )
 
-// MoveFenced reports whether a move in state has fenced the source: whether
-// the guest has stopped here for good unless the move is aborted.
+// MoveFenced reports whether a move in state may have fenced the source:
+// whether brig must take the guest as stopped here for good unless the move
+// is aborted. It counts transferring as fenced although a streamed move's
+// guest runs here until hvi's seal, which hull's state does not show. That
+// is on purpose: a move brig takes as fenced is never undone or resumed by
+// brig, so a guest hvi has sealed is never taken as running here.
 func MoveFenced(state string) bool {
 	switch state {
 	case "", MovePreflight, MoveReserved, MoveAborted:
