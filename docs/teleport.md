@@ -403,13 +403,13 @@ teleport`. Its numbers are from hull's `docs/migration.md` at `9fb5e62`:
 
 | | Before: hull `0021196`, hvi `8697de0`, Mac to `rp1`, 4 runs | Target | After: hull `d2bb5e9`, hvi `c4131f5`, Mac to `rp2`, 2 runs | After: hull `ef78fb6`, hvi `c4131f5`, `rp1` to `rp2`, `ubuntu` idle and writer, 1 run each |
 | --- | --- | --- | --- | --- |
-| The link | Mac to Pi, 32.0 to 37.1 MiB/s | | Mac to Pi, 1.0 to 1.1 MiB/s | Pi to Pi on one wired gigabit LAN (see below) |
+| The link | Mac to Pi, 32.0 to 37.1 MiB/s | | Mac to Pi, 1.0 to 1.1 MiB/s | Pi to Pi: the name `rp2` goes over Tailscale, which went direct over one wired gigabit LAN when checked (see below) |
 | Sent once per image and host (`--prepare`) | nothing | the base | the 1.5 GiB base as 742.8 MiB in 733.8 s; the prepares after it found it held | the base, by `hull migrate-prepare` first |
 | Sent while the guest runs | nothing | the rounds | disk round 0, 3834 and 3839 blocks (240 MiB) as 2.5 MiB, and memory round 0, 62.8 and 63.3 MiB in 60.9 and 59.7 s; on the second run also a disk round of 102 blocks and a memory round of 5.5 MiB | idle: disk rounds of 4393 and 7 blocks, and 2 memory rounds; writer: disk rounds of 5426, 487, 0 and 0 blocks, and 4 memory rounds |
 | Sent while the guest is paused | 1.80 GB in 46.3 to 53.7 s | the last round | the last memory round, 5.4 and 4.4 MiB, and the last disk round, 101 and 7 blocks (161,299 and 9,396 bytes on the wire) | the last memory round, the 3rd idle and the 5th with the writer; the last disk round was empty in both |
 | Sent in all | 1.80 GB | | 70.9 and 75.9 MiB | idle 109.5 MiB (disk 275.0 MiB as 34.5 MiB, memory 74.9 MiB); writer 310.4 MiB (disk 369.6 MiB as 128.5 MiB, memory 181.8 MiB) |
 | hvi's pause to its seal | (hull's fence, with the capture: 1.63 to 2.08 s) | | 5087 and 3677 ms | |
-| hvi's seal to the destination's resume | | | 2.9 and 3.1 s | 55 to 90 ms |
+| hvi's seal to the destination's resume | | | 2.9 and 3.1 s | 55 to 90 ms, hull's range over all four of its idle and writer moves on the Pis, `rp1` to `rp2` and back |
 | Restore paused, then commit | 1.23 to 1.38 s, then 0.22 to 0.25 s | | restored as the stream arrived; commit 0.07 and 0.09 s | restored as the stream arrived |
 | Downtime | 49.95 to 57.43 s, the source pauses to `running` on the destination | 1 to 2 s | 7962 and 6819 ms, the rise in the guest's `hvi-time` `downtime total`; hull's estimate 7958 and 6813 ms | idle 78.6 ms, writer 94.7 ms, the rise in the guest's `hvi-time` `downtime total` |
 | `hull migrate`, start to end | | | 70.1 and 73.1 s | idle 2.29 s, writer 5.13 s |
@@ -427,16 +427,17 @@ Pis; that difference was not explained. A run of the `claude-code` guest
 on a faster link has not been made.
 
 On the Linux pair the streamed move, hull `ef78fb6` (`d2bb5e9` adds the
-fixes of its review) with hvi `c4131f5`, moved the idle guest in 2.29 s with 78.6 ms of downtime, and the writer (about 10 MiB/s
-to its disk) in 5.13 s with 94.7 ms. That pair is not the `claude-code`
-guest: it has a quarter of the memory and one vCPU, so it shows the path
-where the link does not limit it, not what the Mac move would take on a
-fast link. `rp1` and `rp2` each reach the LAN on `eth0` at 1000 Mb/s, and
-the name `rp2` resolves on `rp1` to its Tailscale address, which goes
-direct over that LAN: on 2026-10-15 `tailscale ping rp2` from `rp1`
-answered "via 192.168.17.94" in 1 ms, and a plain ping of that address
-took 0.27 ms. hull's record of its runs does not say which path its ssh
-took; this is the path that name took when checked.
+fixes of its review) with hvi `c4131f5`, moved the idle guest in 2.29 s
+with 78.6 ms of downtime, and the writer (about 10 MiB/s to its disk) in
+5.13 s with 94.7 ms. That pair is not the `claude-code` guest: it has a
+quarter of the memory and one vCPU, so it shows the path where the link
+does not limit it, not what the Mac move would take on a fast link.
+`rp1` and `rp2` each reach the LAN on `eth0` at 1000 Mb/s, and the name
+`rp2` resolves on `rp1` to its Tailscale address, which goes direct over
+that LAN: on 2026-10-15 `tailscale ping rp2` from `rp1` answered "via
+192.168.17.94" in 1 ms, and a plain ping of that address averaged 0.27
+to 0.30 ms in three checks. hull's record of its runs does not say which
+path its ssh took; this is the path that name took when checked.
 
 #### Prepare the destination
 
