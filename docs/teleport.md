@@ -330,9 +330,13 @@ the guest wrote. hull prints no such rate for memory. When the move
 commits, it prints how long hull's move took, whether hull streamed it,
 hull's estimate of how long the guest was paused, the bytes sent, and the
 rounds: how many of the disk and of memory, and the size and time of the
-final disk round, which the guest waits for. The time is in milliseconds
-when hull's last line gives it, and as the round's own line gave it
-otherwise; a size or time hull did not print is left out. It reads hull's
+final disk round, which the guest waits for, then what it was sent as.
+The size and time are one pair hull gave: the round's raw size and hvi's
+time for it from hull's last line, "the final disk round 6.3 MiB in
+21 ms (sent as 161172 bytes)", or else the size and time on the round's
+own line. hull `d2bb5e9`'s line for a round gives only what the round came
+to in hvi's stream, and Brig never gives that the raw round's time. A
+size or time hull did not print is left out. It reads hull's
 names for the disk rounds as hull 511877d printed them
 (`disk round 3 (final)`) and as hull `d2bb5e9` prints hvi's own
 (`disk-round-0`, `disk-round-final`). A line Brig cannot read is still
@@ -1053,11 +1057,6 @@ the Mac had Remote Login off.
   says "The source is fenced and stays so until the move commits or is
   aborted", while the guest still runs on the source. `brig teleport
   --status` passes that text on. The guest is fenced only from hvi's seal.
-- Brig's summary of a streamed move gives the final disk round's bytes on
-  the wire, from the round's own line, beside the time from hull's last
-  line, which goes with the round's raw size: "the final disk round
-  161172 bytes in 21 ms", where hull's last line said "last disk round
-  6.3 MiB in 21 ms".
 
 #### Running it on two hosts
 
