@@ -93,7 +93,8 @@ func TestTeleportPrepareReadiesTheHostAndMovesNothing(t *testing.T) {
 			t.Errorf("move: %v", err)
 		}
 	})
-	if !strings.Contains(stderr, "me@box was prepared for claude-code at ") || !strings.Contains(stderr, "a move there streams") {
+	if !strings.Contains(stderr, "me@box was prepared for claude-code at ") ||
+		!strings.Contains(stderr, ", when hull said a move there would stream\n") {
 		t.Errorf("the move did not say the host was prepared: %q", stderr)
 	}
 	if e := entryOf(t); e["host"] != "me@box" || e["preparedHost"] != nil {
@@ -200,7 +201,7 @@ func TestAPrepareThatCannotStreamSaysSo(t *testing.T) {
 				t.Errorf("move: %v", err)
 			}
 		})
-		if !strings.Contains(stderr, "holds its base; hull said a move there still sends everything") {
+		if !strings.Contains(stderr, ", when hull said a move there would still send the whole checkpoint and disk\n") {
 			t.Errorf("%s: the move's note: %q", c.what, stderr)
 		}
 	}
@@ -302,5 +303,51 @@ func TestAMovePassesHullsLinesOnAndReportsItsNumbers(t *testing.T) {
 			doc.Data.State != "moved" {
 			t.Errorf("--json says %+v, move %+v", doc.Data, m)
 		}
+	}
+}
+
+// A prepare is a record of what hull said then. When hull's Transport line
+// says this move sends the whole checkpoint and disk to a host the prepare
+// said would stream, the move says so, and --json carries hull's word and
+// its reason, so a -q --json caller sees it too. hull's last Transport line
+// is the one that counts: it switches after a base it sends first fails.
+func TestAMoveSaysWhenHullDoesNotStreamToAPreparedHost(t *testing.T) {
+	rt := &moveRuntime{running: true, prepared: preparedReport(true)}
+	moveHost(t, rt, noNetProbe())
+	if _, err := captureStdout(t, func() error {
+		return run([]string{"teleport", "claude", "--to", "me@box", "--prepare"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rt.state = runtime.MoveCommitted
+	rt.progress = []string{"Transport: streamed (pre-copy rounds; the disk blocks that differ from base e85e4338aaaa)",
+		"Sending base e85e4338aaaa to me@box (once per base; `hull migrate-prepare` does it ahead of a move)",
+		"Transport: the whole checkpoint and disk, because sending the base failed: no space left on device"}
+	var out string
+	stderr := captureStderr(t, func() {
+		var err error
+		if out, err = captureStdout(t, func() error {
+			return run([]string{"teleport", "claude", "--to", "me@box", "--json"})
+		}); err != nil {
+			t.Errorf("move: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "brig: hull sends the whole checkpoint and disk of claude-code, with the guest "+
+		"paused, though the prepare at ") ||
+		!strings.Contains(stderr, "said a move to me@box would stream: sending the base failed: no space left on device") {
+		t.Errorf("the move did not say hull stopped streaming: %q", stderr)
+	}
+	if strings.Count(stderr, "the prepare at ") != 1 {
+		t.Errorf("the move said it more than once: %q", stderr)
+	}
+	var doc struct {
+		Data teleportData `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("--json: %q, %v", out, err)
+	}
+	if m := doc.Data.Move; m == nil || m.Transport != "bundle" ||
+		m.TransportWhy != "sending the base failed: no space left on device" {
+		t.Errorf("--json move %+v", doc.Data.Move)
 	}
 }

@@ -324,11 +324,12 @@ the same pause, and the destination checks every part against its sha256
 before it runs anything.
 
 `brig teleport` prints hull's lines on stderr as they arrive, after
-`brig: hull:`: each round, the bytes it sent and the rate, and for a disk
-round after the first, how many blocks a second the guest wrote. hull
-prints no such rate for memory. When the move commits, it prints how long hull's move
-took, how long the guest was paused, and the bytes sent, as far as hull
-reported them. `--json` carries the same in its `move` object.
+`brig: hull:`: how hull moves the guest, each round, the bytes it sent and
+the rate, and for a disk round after the first, how many blocks a second
+the guest wrote. hull prints no such rate for memory. When the move
+commits, it prints how long hull's move took, whether hull streamed it,
+how long the guest was paused, and the bytes sent, as far as hull reported
+them. `--json` carries the same in its `move` object.
 
 hull measured both paths on the Linux pair, with the 1 GiB `ubuntu` guest
 under a writing workload, over real ssh. The numbers below are from hull's
@@ -397,7 +398,12 @@ A prepare pauses nothing, and the guest keeps running here.
 Brig records the host in its session index once it holds the sandbox's
 base, with whether hull says a move there sends only what the guest
 changed. `brig teleport --status` and `--json` then name it, and a move to
-that host says it was prepared and whether it streams. A committed move
+that host says when it was prepared and what hull said then. That is a
+record of the prepare, not a check made at the move. hull decides again
+when the move starts, and says how on its `Transport:` line. When hull
+sends the whole checkpoint and disk to a host that the prepare said would
+stream, Brig says so, and the move's `--json` carries hull's word in
+`transport` and `transportWhy`. A committed move
 clears the record, because the next move starts from the destination. When
 hull says a move there would still send everything, for example because
 the hull or hvi there predates the streamed move, Brig says why. A host

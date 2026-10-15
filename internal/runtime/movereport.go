@@ -11,6 +11,14 @@ import (
 // MoveReport is how a move went, read from hull's lines as they arrived.
 // A field hull did not report is left out of the JSON rather than zero.
 type MoveReport struct {
+	// Transport is how hull said it moved the guest: "stream", in rounds
+	// while the guest ran, or "bundle", the whole checkpoint and disk with
+	// the guest paused, for the reason in TransportWhy. Empty from a hull
+	// that does not say. hull may change its mind before the guest stops,
+	// when the base it sends first does not arrive, and the last word is
+	// kept.
+	Transport    string `json:"transport,omitempty"`
+	TransportWhy string `json:"transportWhy,omitempty"`
 	// Rounds are the rounds of the copy, in the order hull reported them.
 	Rounds []MoveRound `json:"rounds,omitempty"`
 	// Seconds is how long hull's move took, start to end, as brig timed it.
@@ -64,18 +72,19 @@ type MoveRound struct {
 // round it prints how far the round has got, "disk round 0: 812 blocks so
 // far, 30.1 MiB/s (34% of 2381)", which is not a round of its own.
 var (
-	lineRound    = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+))?\b[^:]*:\s*(.*)$`)
-	lineSize     = regexp.MustCompile(`^(?:\d+ blocks, )?(\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB))\b`)
-	lineBytes    = regexp.MustCompile(`\b(\d+) bytes(?:[^/]|$)`)
-	lineSeconds  = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?s\b`)
-	lineRate     = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(bytes|KiB|MiB|GiB)/s\b`)
-	lineBlocks   = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
-	lineDowntime = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
-	lineSealed   = regexp.MustCompile(`^(?:move: )?hvi sealed the stream\b`)
-	lineSent     = regexp.MustCompile(`^Sent\b`)
-	lineSentN    = regexp.MustCompile(`^Sent (\d+) bytes\b`)
-	lineTimings  = regexp.MustCompile(`^Timings \(ms\): (.+)$`)
-	lineStep     = regexp.MustCompile(`^([a-z][a-z ]*?) (\d+)$`)
+	lineRound     = regexp.MustCompile(`(?i)^(?:move: )?(?:(disk|ram)[ -])?(?:(final) )?round(?:[ -](\d+))?\b[^:]*:\s*(.*)$`)
+	lineSize      = regexp.MustCompile(`^(?:\d+ blocks, )?(\d+(?:\.\d+)? (?:bytes|KiB|MiB|GiB))\b`)
+	lineBytes     = regexp.MustCompile(`\b(\d+) bytes(?:[^/]|$)`)
+	lineSeconds   = regexp.MustCompile(`\bin (\d+(?:\.\d+)?) ?s\b`)
+	lineRate      = regexp.MustCompile(`\b(\d+(?:\.\d+)?) ?(bytes|KiB|MiB|GiB)/s\b`)
+	lineBlocks    = regexp.MustCompile(`\b(\d+(?:\.\d+)?) blocks/s\b`)
+	lineDowntime  = regexp.MustCompile(`(?i)\bdowntime:?(?: about)? (\d+(?:\.\d+)?) ?(ms|s)\b`)
+	lineTransport = regexp.MustCompile(`^Transport: (?:(streamed)\b|the whole checkpoint and disk(?:, because (.*))?)`)
+	lineSealed    = regexp.MustCompile(`^(?:move: )?hvi sealed the stream\b`)
+	lineSent      = regexp.MustCompile(`^Sent\b`)
+	lineSentN     = regexp.MustCompile(`^Sent (\d+) bytes\b`)
+	lineTimings   = regexp.MustCompile(`^Timings \(ms\): (.+)$`)
+	lineStep      = regexp.MustCompile(`^([a-z][a-z ]*?) (\d+)$`)
 )
 
 // Add reads one line hull printed. A line it does not know changes nothing.
@@ -125,6 +134,16 @@ func (r *MoveReport) Add(line string) {
 				}
 				r.StepsMs[sm[1]] = ms
 			}
+		}
+		return
+	}
+	if m := lineTransport.FindStringSubmatch(line); m != nil {
+		// "Transport: streamed (pre-copy rounds; ...)", or "Transport: the
+		// whole checkpoint and disk, because WHY".
+		if m[1] != "" {
+			r.Transport, r.TransportWhy = "stream", ""
+		} else {
+			r.Transport, r.TransportWhy = "bundle", m[2]
 		}
 		return
 	}
@@ -209,6 +228,16 @@ func lineDuration(v, unit string) float64 {
 // Summary is the report in one line, for a person.
 func (r *MoveReport) Summary() string {
 	parts := []string{fmt.Sprintf("hull's move took %.1f s", r.Seconds)}
+	switch r.Transport {
+	case "stream":
+		parts = append(parts, "streamed")
+	case "bundle":
+		how := "the whole checkpoint and disk"
+		if r.TransportWhy != "" {
+			how += " (" + r.TransportWhy + ")"
+		}
+		parts = append(parts, how)
+	}
 	if r.DowntimeSeconds > 0 {
 		parts = append(parts, fmt.Sprintf("the guest was paused %.2f s", r.DowntimeSeconds))
 	}

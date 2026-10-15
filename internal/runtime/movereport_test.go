@@ -139,7 +139,8 @@ func TestMoveReportReadsALiveStreamedMove(t *testing.T) {
 	if r.Bytes != 0 || r.DowntimeSeconds != 0.358 || r.MiBPerSec != 20.3 || r.StepsMs["transfer"] != 5394 {
 		t.Errorf("report %+v", r)
 	}
-	if s := r.Summary(); !strings.HasSuffix(s, "5 rounds; transfer 5.39 s, commit 0.09 s") {
+	if s := r.Summary(); !strings.HasPrefix(s, "hull's move took 0.0 s, streamed, ") ||
+		!strings.HasSuffix(s, "5 rounds; transfer 5.39 s, commit 0.09 s") || r.Transport != "stream" {
 		t.Errorf("summary %q", s)
 	}
 }
@@ -187,5 +188,33 @@ func TestOnlyTheLastMemoryRoundIsMarkedPaused(t *testing.T) {
 	}
 	if fmt.Sprint(got) != "[false true true]" {
 		t.Errorf("final %v, want [false true true]", got)
+	}
+}
+
+// hull says how it moves the guest on its Transport line, and says it again
+// when the base it sends first fails and it falls back to the whole bundle:
+// the last line is the one that counts. A hull that prints no Transport
+// line, as 97b7c58 did not, leaves it out of the report rather than have
+// brig guess.
+func TestMoveReportReadsHullsTransport(t *testing.T) {
+	var r MoveReport
+	r.Add("Transport: streamed (pre-copy rounds; the disk blocks that differ from base 13fd46b9d871)")
+	if r.Transport != "stream" || r.TransportWhy != "" {
+		t.Errorf("streamed: %+v", r)
+	}
+	r.Add("Transport: the whole checkpoint and disk, because sending the base failed: no space left on device")
+	if r.Transport != "bundle" || r.TransportWhy != "sending the base failed: no space left on device" {
+		t.Errorf("fallback: %+v", r)
+	}
+	r.Seconds = 9.3
+	if s := r.Summary(); s != "hull's move took 9.3 s, the whole checkpoint and disk "+
+		"(sending the base failed: no space left on device)" {
+		t.Errorf("summary %q", s)
+	}
+	var old MoveReport
+	old.Add("Move " + tx1 + " of brig-ubuntu to pmoust@rp2, epoch 1")
+	old.Add("Sent 203.1 MiB in 4.8 s (42.6 MiB/s); disk 112.3 MiB of 15.0 GiB carried; destination: complete")
+	if b, _ := json.Marshal(old); strings.Contains(string(b), "transport") {
+		t.Errorf("a hull that said nothing of its transport gave %s", b)
 	}
 }
