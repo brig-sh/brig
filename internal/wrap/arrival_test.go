@@ -174,6 +174,25 @@ func TestAnArrivalTakesTheRecordOfASessionThatRunsElsewhere(t *testing.T) {
 		t.Errorf("a stale committed arrival refused the move back: %v", err)
 	}
 
+	// An entry away under another sandbox name, as after BRIG_NAME changed,
+	// is another session, and refuses.
+	if err := writeArrivals(nil); err != nil {
+		t.Fatal(err)
+	}
+	other := sessionEntry{Sandbox: "brig-other", Teleportable: true, Host: "me@rp2", TxID: "tx7"}
+	if err := writeSessionIndex(map[string]sessionEntry{"tp": other}); err != nil {
+		t.Fatal(err)
+	}
+	seventh := spec
+	seventh.TxID = "tx8"
+	if _, err := PrepareArrival(p, "", seventh, &guestRuntime{}); err == nil ||
+		!strings.Contains(err.Error(), "already has a session") {
+		t.Errorf("an arrival onto an away entry of another sandbox: %v", err)
+	}
+	if e := readSessionIndex()["tp"]; e != other {
+		t.Errorf("the refused arrival changed the entry to %+v", e)
+	}
+
 	// A move out of here whose end is not known refuses.
 	if err := writeArrivals(nil); err != nil {
 		t.Fatal(err)
