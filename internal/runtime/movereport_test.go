@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -320,13 +321,15 @@ func TestMoveReportReadsTheRoundsHviStreams(t *testing.T) {
 	} {
 		r.Add(line)
 	}
+	// The final disk round's raw size and hvi's time for it come from
+	// hull's last line, as the summary says them.
 	want := strings.Join([]string{
-		"disk-round-0|disk|0|false||2.5 MiB|0|0.06",
-		"ram-round-0|ram|0|false|63.3 MiB||0|59.71",
-		"disk-round-1|disk|1|false||155430 bytes|155430|0.01",
-		"ram-round-1|ram|1|false|5.5 MiB||0|5.45",
-		"disk-round-final|disk|2|true||9271 bytes|9271|0.01",
-		"ram-round-2|ram|2|true|4.4 MiB||0|3.66",
+		"disk-round-0|disk|0|false||0|2.5 MiB|0|0.06|-",
+		"ram-round-0|ram|0|false|63.3 MiB|0||0|59.71|-",
+		"disk-round-1|disk|1|false||0|155430 bytes|155430|0.01|-",
+		"ram-round-1|ram|1|false|5.5 MiB|0||0|5.45|-",
+		"disk-round-final|disk|2|true|458752 bytes|458752|9271 bytes|9271|0.01|0",
+		"ram-round-2|ram|2|true|4.4 MiB|0||0|3.66|-",
 	}, "\n")
 	if got := sentRounds(r); got != want {
 		t.Errorf("rounds:\n%s\nwant:\n%s", got, want)
@@ -338,12 +341,17 @@ func TestMoveReportReadsTheRoundsHviStreams(t *testing.T) {
 }
 
 // sentRounds is each round of a report as
-// name|kind|round|final|size|sent|sentBytes|seconds.
+// name|kind|round|final|size|bytes|sent|sentBytes|seconds|ms, with "-" for
+// no ms.
 func sentRounds(r MoveReport) string {
 	var got []string
 	for _, rd := range r.Rounds {
-		got = append(got, fmt.Sprintf("%s|%s|%d|%v|%s|%s|%d|%.2f", rd.Name, rd.Kind, rd.Round, rd.Final, rd.Size,
-			rd.Sent, rd.SentBytes, rd.Seconds))
+		ms := "-"
+		if rd.Ms != nil {
+			ms = strconv.FormatInt(*rd.Ms, 10)
+		}
+		got = append(got, fmt.Sprintf("%s|%s|%d|%v|%s|%d|%s|%d|%.2f|%s", rd.Name, rd.Kind, rd.Round, rd.Final,
+			rd.Size, rd.Bytes, rd.Sent, rd.SentBytes, rd.Seconds, ms))
 	}
 	return strings.Join(got, "\n")
 }
@@ -380,9 +388,58 @@ func TestTheFinalDiskRoundIsSaidAsHullPairedIt(t *testing.T) {
 	if s := r.Summary(); s != want {
 		t.Errorf("summary %q\nwant    %q", s, want)
 	}
+	// --json carries the same pair on the round: hull's rounded raw size,
+	// with no count of bytes made from it, and hvi's 21 ms.
 	final := r.Rounds[2]
-	if final.Name != "disk-round-final" || final.Size != "" || final.Bytes != 0 || final.SentBytes != 161172 {
+	if final.Name != "disk-round-final" || final.Size != "6.3 MiB" || final.Bytes != 0 ||
+		final.SentBytes != 161172 || final.Seconds != 0.01 || final.Ms == nil || *final.Ms != 21 {
 		t.Errorf("the final disk round %+v", final)
+	}
+}
+
+// --json gives the final disk round what the summary gives it, under the
+// names cli.md documents: hull's raw size and hvi's time from the last
+// line, with hvi's 0 ms kept as 0, and nothing of hull's default for a
+// round hvi gave no figures for.
+func TestTheJSONCarriesTheFinalDiskRoundAsTheSummarySaysIt(t *testing.T) {
+	round := "move: disk-round-final: 9271 bytes in 0.01 s, 1046368 bytes/s"
+	for _, c := range []struct {
+		last string
+		want string
+	}{
+		{"move: 75.9 MiB in 72.2 s; sealed 3675 ms after the pause, last disk round 458752 bytes in 0 ms; " +
+			"downtime about 6813 ms",
+			`size="458752 bytes" bytes=458752 sent="9271 bytes" sentBytes=9271 seconds=0.01 ms=0`},
+		{"move: 75.9 MiB in 72.2 s; sealed 3675 ms after the pause, last disk round 0 bytes in 0 ms; " +
+			"downtime about 6813 ms",
+			`size=<nil> bytes=<nil> sent="9271 bytes" sentBytes=9271 seconds=0.01 ms=<nil>`},
+	} {
+		var r MoveReport
+		r.Add(round)
+		r.Add(c.last)
+		doc, err := json.Marshal(r.Rounds[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(doc, &fields); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, k := range []string{"size", "bytes", "sent", "sentBytes", "seconds", "ms"} {
+			v, ok := fields[k]
+			switch {
+			case !ok:
+				got = append(got, k+"=<nil>")
+			case k == "size" || k == "sent":
+				got = append(got, fmt.Sprintf("%s=%q", k, v))
+			default:
+				got = append(got, fmt.Sprintf("%s=%v", k, v))
+			}
+		}
+		if g := strings.Join(got, " "); g != c.want {
+			t.Errorf("after %q\ngot  %s\nwant %s\nfrom %s", c.last, g, c.want, doc)
+		}
 	}
 }
 

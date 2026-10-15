@@ -60,7 +60,9 @@ type MoveRound struct {
 	// Size is what hull says the round carried, as hull wrote it, and
 	// Bytes the same when hull gave it as a count of bytes. For a disk
 	// round that is its raw size, which only a line that also says what
-	// went on the wire gives. Sent is what a disk round was sent as: the
+	// went on the wire gives, or, for the final disk round, hull's last
+	// line, "last disk round 6.3 MiB in 21 ms"; Ms is the time that line
+	// gives with it. Sent is what a disk round was sent as: the
 	// part "on the wire" of such a line, or the one size of a disk round's
 	// line from hull d2bb5e9 on, "disk-round-final: 161172 bytes in
 	// 0.01 s", which is what the round came to in hvi's stream (hull's
@@ -71,6 +73,12 @@ type MoveRound struct {
 	Sent      string  `json:"sent,omitempty"`
 	SentBytes int64   `json:"sentBytes,omitempty"`
 	Seconds   float64 `json:"seconds,omitempty"`
+	// Ms is the final disk round's time in whole milliseconds as hull's
+	// last line gives it: hvi's time for the round from hull d2bb5e9 on,
+	// not Seconds, which is how long hull took to pass the round on. 0
+	// is a round shorter than a millisecond, so Ms is nil, not 0, when
+	// hull gave no time.
+	Ms *int64 `json:"ms,omitempty"`
 	// took is the round's time as hull wrote it, "0.16 s" or "3 ms", or
 	// "" when its line gave none: Seconds is 0 both for hull's "in 0.00 s"
 	// and for a line with no time.
@@ -134,6 +142,7 @@ func (r *MoveReport) Add(line string) {
 		r.finalDiskSize = strings.TrimSpace(m[1])
 		r.finalDiskMs, _ = strconv.ParseInt(m[2], 10, 64)
 		r.finalDiskTimed = true
+		r.fillFinalDisk()
 	}
 	if m := lineRound.FindStringSubmatch(line); m != nil {
 		name, _, _ := strings.Cut(strings.TrimPrefix(line, "move: "), ":")
@@ -176,6 +185,7 @@ func (r *MoveReport) Add(line string) {
 			round.SentBytes = lineByteCount(round.Sent)
 		}
 		r.Rounds = append(r.Rounds, round)
+		r.fillFinalDisk()
 		return
 	}
 	if m := lineTimings.FindStringSubmatch(line); m != nil {
@@ -311,6 +321,30 @@ func (r *MoveReport) finalDiskPair(final *MoveRound) (size string, ms int64, ok 
 		return "", 0, false
 	}
 	return r.finalDiskSize, r.finalDiskMs, true
+}
+
+// fillFinalDisk puts what hull's last line gave for the final disk round on
+// that round, so that --json carries the pair the summary says: the raw
+// size in Size, and in Bytes when it is a count of bytes, where the
+// round's own line gave none, and the time in Ms. hull prints its last
+// line after the rounds, but the report fills the round whichever comes
+// first.
+func (r *MoveReport) fillFinalDisk() {
+	for i := len(r.Rounds) - 1; i >= 0; i-- {
+		rd := &r.Rounds[i]
+		if rd.Kind != "disk" || !rd.Final {
+			continue
+		}
+		size, ms, ok := r.finalDiskPair(rd)
+		if !ok {
+			return
+		}
+		if rd.Size == "" && size != "" {
+			rd.Size, rd.Bytes = size, lineByteCount(size)
+		}
+		rd.Ms = &ms
+		return
+	}
 }
 
 // roundTook is a round's time as its own line gave it, as took and secs
