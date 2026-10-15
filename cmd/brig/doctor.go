@@ -238,10 +238,21 @@ func brokerCheck() check {
 		}
 		return check{Name: "broker", State: stateInfo, Finding: finding + ", port " + port + " kept for the next start"}
 	}
-	st := running.Status
+	return brokerStatusCheck(running.Status)
+}
+
+// brokerStatusCheck is the broker row of a broker that answered its control
+// socket.
+func brokerStatusCheck(st injector.Status) check {
 	finding := fmt.Sprintf("brig-broker pid %d on 127.0.0.1:%d, serving %d sandboxes", st.PID, st.Port, len(st.Sandboxes))
 	if len(st.Pending) > 0 {
 		finding += "; write-back pending: " + strings.Join(st.Pending, ", ")
+	}
+	if len(st.Recovering) > 0 {
+		// Not a failure yet: the broker is settling the journal of a
+		// refresh another broker left or holds. It reports the secret as
+		// failing if the provider has spent the stored pair.
+		finding += "; refresh recovering: " + strings.Join(st.Recovering, ", ")
 	}
 	if len(st.Failing) > 0 {
 		return check{Name: "broker", State: stateFail, Finding: finding + "; refresh failing: " + strings.Join(st.Failing, ", "),

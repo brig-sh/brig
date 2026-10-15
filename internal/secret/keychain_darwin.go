@@ -90,9 +90,10 @@ const maxLine = 4096
 //
 // Quoting is safe to do by hand here because nothing variable on this line
 // needs it: the service is a constant, the key is base64, and the name has
-// been through ValidName, so it holds only letters, digits, - and _. The
-// label is the one argument with a space in it, and its shape is fixed. -j's
-// argument is safe unquoted for the same reason: Encode's base64url output
+// been through validStoreName, so it holds only letters, digits, - and _,
+// and the dot of a journal's suffix. The label is the one argument with a
+// space in it, and its shape is fixed. -j's argument is safe unquoted for
+// the same reason: Encode's base64url output
 // holds only letters, digits, - and _, which is the whole point of that
 // encoding (see Provenance.Encode).
 func (k keychain) writePrefix(name string, update bool, p Provenance) (string, error) {
@@ -172,6 +173,11 @@ func (k keychain) writePrefix(name string, update bool, p Provenance) (string, e
 // and one more update or import repairs it. Once an item holds a key every
 // concurrent update shares it, so the window is that first move only.
 func (k keychain) Write(name string, value []byte, p Provenance, update bool) error {
+	// The name rides the interactive line unquoted, so it is checked here
+	// and not only on the update arm, where keyFor reads the item first.
+	if err := validStoreName(name); err != nil {
+		return err
+	}
 	key, err := k.keyFor(name, update)
 	if err != nil {
 		return err
@@ -323,7 +329,7 @@ func (k keychain) verify(name string, value []byte, update bool) error {
 }
 
 func (k keychain) Create(name string, value []byte) error {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return err
 	}
 	return k.write(name, value, false)
@@ -389,7 +395,7 @@ func (k keychain) Read(name string) ([]byte, error) {
 // marked key for a sealed secret, base64 of the value for one written
 // before sealing.
 func (k keychain) readItem(name string) (string, error) {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return "", err
 	}
 	return k.readLine(name)
@@ -415,7 +421,7 @@ func (k keychain) readLine(account string) (string, error) {
 // to lose it is to delete the secret between the two calls, and the outcome
 // is a secret that exists again rather than damage.
 func (k keychain) Update(name string, value []byte) error {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return err
 	}
 	// No existence probe of its own: Write reads the key item first, and
@@ -429,7 +435,7 @@ func (k keychain) Update(name string, value []byte) error {
 // with no key item, left by a create that failed between its two steps, is
 // swept up here too, and the caller still learns there was no secret.
 func (k keychain) Delete(name string) error {
-	if err := ValidName(name); err != nil {
+	if err := validStoreName(name); err != nil {
 		return err
 	}
 	itemErr := k.deleteItem(name)

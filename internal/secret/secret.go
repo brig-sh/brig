@@ -13,6 +13,7 @@ package secret
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -87,6 +88,29 @@ type Annotator interface {
 // which is the whole of the backend auto-detection: a host has one system
 // keyring, and brig uses it.
 func Open() (Store, error) { return open() }
+
+// JournalSuffix ends the name of a renewal journal: `<name>.journal` holds
+// the refresh of name that is in flight, so a refresh the provider answered
+// survives a crash of the process that asked for it (internal/renew).
+//
+// The dot is outside the name grammar, like the macOS store's `.sealed`. No
+// secret can be named like a journal, and List, which skips names outside
+// the grammar, never shows one. Only the backends' own calls take the name,
+// through validStoreName.
+const JournalSuffix = ".journal"
+
+// JournalName is the store name of the renewal journal of name.
+func JournalName(name string) string { return name + JournalSuffix }
+
+// validStoreName reports whether a backend reads, writes or deletes name: a
+// name ValidName takes, or the journal of one. A journal's journal is not
+// one, and neither is anything else with a dot.
+func validStoreName(name string) error {
+	if base, ok := strings.CutSuffix(name, JournalSuffix); ok && ValidName(base) == nil {
+		return nil
+	}
+	return ValidName(name)
+}
 
 // maxName is generous for a label and short enough that the error arrives
 // before the keychain's own limits do.

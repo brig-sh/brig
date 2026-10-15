@@ -389,6 +389,9 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sandboxes[req.ID] = string(key)
+	for _, name := range tracked {
+		s.creds.recover(name)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -442,8 +445,9 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.mu.Unlock()
 	sort.Strings(ids)
-	pending, failing := s.creds.report()
-	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids, Pending: pending, Failing: failing}
+	pending, failing, recovering := s.creds.report()
+	st := injector.Status{PID: os.Getpid(), Port: s.port, Sandboxes: ids,
+		Pending: pending, Failing: failing, Recovering: recovering}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
 	}
@@ -513,6 +517,17 @@ func (c *credentials) track(name string, l v1alpha1.Lifecycle) (bool, error) {
 	return true, nil
 }
 
+// recover settles, in the background, the renewal journal a broker that
+// stopped left for the secret name. The first request for it waits on the
+// same turn, so it is served only once that is done. Registration does not
+// wait: a keychain that hangs would hold it, and the control socket behind
+// it, for as long.
+func (c *credentials) recover(name string) {
+	if cache := c.cache(name); cache != nil {
+		go func() { _ = cache.Recover(context.Background(), name) }()
+	}
+}
+
 // untrack drops the cache of the secret name.
 func (c *credentials) untrack(name string) {
 	c.mu.Lock()
@@ -541,18 +556,21 @@ func (c *credentials) ForceRenew(ctx context.Context, name string, w secret.Work
 	return cache.ForceRenew(ctx, name, w, stale)
 }
 
-// report returns the secrets with a write-back pending and those whose last
-// refresh failed. Names only.
-func (c *credentials) report() (pending, failing []string) {
+// report returns the secrets with a write-back pending, those whose last
+// refresh failed, and those with a renewal journal still to settle. Names
+// only.
+func (c *credentials) report() (pending, failing, recovering []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, cache := range c.caches {
 		pending = append(pending, cache.Pending()...)
 		failing = append(failing, cache.Failing()...)
+		recovering = append(recovering, cache.Recovering()...)
 	}
 	slices.Sort(pending)
 	slices.Sort(failing)
-	return pending, failing
+	slices.Sort(recovering)
+	return pending, failing, recovering
 }
 
 // takeLock opens and locks path for the life of the broker.
