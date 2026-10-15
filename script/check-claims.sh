@@ -5,7 +5,9 @@
 # until a refactor ends it. docs/claims.md ties each quoted sentence on that
 # page to the tests that defend it. This script fails when a row quotes a
 # sentence the page no longer carries, or names a defence that no longer
-# exists. A claim then cannot lose its test without CI saying so.
+# exists. A claim then cannot lose its test without CI saying so. A row can
+# quote another page beside security.md, such as broker.md, by naming it in
+# its section cell.
 #
 # A table starts at its delimiter row, and every non-blank line after that is
 # a row until the first blank line. That is where Markdown ends the table. The
@@ -16,7 +18,9 @@
 # A row has three cells: the claim, the section it sits in, and the defences.
 # Only the double-quoted part of the claim cell is matched against the page,
 # so a row can add a note in parentheses after it. The quote has to sit under
-# the heading the section cell names, or under a heading nested in it. The
+# the heading the section cell names, or under a heading nested in it. A
+# section cell of the form "broker.md: Heading" names a page beside
+# security.md, in the same directory, and the heading on it. The
 # page wraps its prose, so whitespace is collapsed on both sides before the
 # match. Each defence is a backticked token, and the cell holds nothing else:
 #
@@ -90,15 +94,31 @@ section_text() {
 	END { exit !found }' "$1"
 }
 
+# heading_level PAGE HEADING prints the level of HEADING on the page, 1 for
+# a # title, or nothing when the page has no such heading.
+heading_level() {
+	awk -v want="$2" '
+	/^ *(```|~~~)/ { fence = !fence }
+	!fence && /^#+ / {
+		level = match($0, /[^#]/) - 1
+		title = substr($0, level + 1)
+		sub(/^ +/, "", title)
+		sub(/ +#* *$/, "", title)
+		if (title == want) { print level; exit }
+	}' "$1"
+}
+
 # check TABLE PAGE SMOKE VM GOROOT
 #
 # Every path is an argument so the self-test can point the same code at a
-# seeded table and a seeded repository.
+# seeded table and a seeded repository. PAGE is the page a row quotes unless
+# its section cell names another one beside it.
 check() {
 	local table="$1" page="$2" smoke="$3" vm="$4" goroot="$5"
 	local fail=0 rows=0 n_go=0 n_smoke=0 n_vm=0 n_mac=0 not_run="" mac_only=""
 	local flat n=0 line body k in_table=0 pending="" pending_n=0 prev=""
 	local claim section defended quote sect_flat tokens rest tok name text where
+	local row_page row_flat row_name
 	flat="$(collapse <"$page")"
 
 	while IFS= read -r line || [ -n "$line" ]; do
@@ -146,12 +166,50 @@ check() {
 		IFS='|' read -r claim section defended <<<"$body"
 
 		section="$(printf '%s' "$section" | trim)"
+		# "broker.md: Heading" quotes broker.md, beside the page.
+		row_page="$page" row_flat="$flat" row_name="the page"
+		case "$section" in
+		*.md:\ *)
+			row_name="${section%%: *}"
+			section="$(printf '%s' "${section#*: }" | trim)"
+			case "$row_name" in
+			*[!a-z0-9-]*.md | .md)
+				echo "$where: not a page beside $(basename "$page"): $row_name"
+				fail=1
+				row_flat=""
+				;;
+			"$(basename "$table")")
+				# The table quotes its own rows, so every quote is on it.
+				echo "$where: the table cannot quote itself: $row_name"
+				fail=1
+				row_flat=""
+				;;
+			*)
+				row_page="$(dirname "$page")/$row_name"
+				if [ -f "$row_page" ]; then
+					row_flat="$(collapse <"$row_page")"
+				else
+					echo "$where: no such page: $row_name"
+					fail=1
+					row_flat=""
+				fi
+				;;
+			esac
+			;;
+		esac
 		sect_flat=""
 		if [ -z "$section" ]; then
 			echo "$where: no section in the Section cell"
 			fail=1
-		elif ! sect_flat="$(section_text "$page" "$section" | collapse)"; then
-			echo "$where: no heading on the page: $section"
+		elif [ -z "$row_flat" ]; then
+			:
+		elif [ "$(heading_level "$row_page" "$section")" = 1 ]; then
+			# The title holds the whole page, so it would take any sentence.
+			echo "$where: the page title is not a section: $section"
+			fail=1
+			row_flat=""
+		elif ! sect_flat="$(section_text "$row_page" "$section" | collapse)"; then
+			echo "$where: no heading on $row_name: $section"
 			fail=1
 			sect_flat=""
 		fi
@@ -166,8 +224,10 @@ check() {
 			# here-string: piped from printf, grep -q can exit on an early
 			# match while printf still writes, and pipefail then turns the
 			# SIGPIPE into a refusal of a quote that is on the page.
-			if [ -z "$quote" ] || ! grep -qF -- "$quote" <<<"$flat"; then
-				echo "$where: not on the page: $quote"
+			if [ -z "$row_flat" ]; then
+				:
+			elif [ -z "$quote" ] || ! grep -qF -- "$quote" <<<"$row_flat"; then
+				echo "$where: not on $row_name: $quote"
 				fail=1
 			elif [ -n "$sect_flat" ] && ! grep -qF -- "$quote" <<<"$sect_flat"; then
 				echo "$where: not under the heading $section: $quote"
@@ -307,12 +367,14 @@ self_test() {
 	# The page wraps the good sentence across a line, as docs/security.md
 	# does. Other is nested in Page, and a # line in a fence is no heading.
 	cat >"$tmp/page.md" <<'EOF'
-# Page
+# Seed
+
+## Page
 
 The guest reaches only
 what you   name.
 
-## Other
+### Other
 
 A sentence under another heading.
 
@@ -320,12 +382,26 @@ A sentence under another heading.
 # Fenced
 ```
 EOF
+	# A second page beside it, which a row names in its section cell. Its
+	# title, like the first page's, is no section.
+	cat >"$tmp/other.md" <<'EOF'
+# Other page
+
+## Elsewhere
+
+A sentence on the other
+page.
+EOF
 	# Lines 17 and 18 are a row without its outer pipes and an indented one,
 	# each naming a test that does not exist. Lines 19 and 20 are the same
 	# shapes with a good row. Line 21 is a one-cell row. The table ends at
 	# line 22, so line 23 is a pipe line with no table. Lines 25 and 26 are
 	# a header with no delimiter row, and lines 28 to 30 a table of two
-	# columns.
+	# columns. Lines 34 to 39 quote the second page: a good row, then its
+	# sentence without the page named, the first page's sentence with it, a
+	# page that is not there, a heading that is not on it, and a path out of
+	# the directory. Lines 40 to 42 name a page title, of either page, and the
+	# table itself.
 	cat >"$tmp/claims.md" <<'EOF'
 | Claim | Section | Defended by |
 | --- | --- | --- |
@@ -357,6 +433,18 @@ a line with no cells
 | Claim | Defended by |
 | --- | --- |
 | "The guest reaches only what you name." | `go:TestClaimsSelfTestReal` |
+
+| Claim | Section | Defended by |
+| --- | --- | --- |
+| "A sentence on the other page." (a note) | other.md: Elsewhere | `go:TestClaimsSelfTestReal` |
+| "A sentence on the other page." | Page | `go:TestClaimsSelfTestReal` |
+| "The guest reaches only what you name." | other.md: Elsewhere | `go:TestClaimsSelfTestReal` |
+| "A sentence on the other page." | missing.md: Elsewhere | `go:TestClaimsSelfTestReal` |
+| "A sentence on the other page." | other.md: Nowhere | `go:TestClaimsSelfTestReal` |
+| "A sentence on the other page." | ../page.md: Page | `go:TestClaimsSelfTestReal` |
+| "A sentence on the other page." | other.md: Other page | `go:TestClaimsSelfTestReal` |
+| "The guest reaches only what you name." | Seed | `go:TestClaimsSelfTestReal` |
+| "The guest reaches only what you name." | claims.md: Claim | `go:TestClaimsSelfTestReal` |
 EOF
 	# A table with a header and no rows proves nothing, so it fails too.
 	printf '| Claim | Section | Defended by |\n| --- | --- | --- |\n' >"$tmp/empty.md"
@@ -405,6 +493,14 @@ EOF
 	expect 23 "a pipe line outside any table"
 	expect 25 "a pipe line outside any table"
 	expect 29 "a table that is not three columns"
+	expect 35 "not on the page: A sentence on the other page."
+	expect 36 "not on other.md: The guest reaches only what you name."
+	expect 37 "no such page: missing.md"
+	expect 38 "no heading on other.md: Nowhere"
+	expect 39 "not a page beside page.md: ../page.md"
+	expect 40 "the page title is not a section: Other page"
+	expect 41 "the page title is not a section: Seed"
+	expect 42 "the table cannot quote itself: claims.md"
 	local want
 	for want in "$tmp/mac.md:3: missing go test: TestClaimsSelfTestMissing" \
 		"$tmp/mac.md:4: missing smoke assertion: a smoke assertion nobody wrote"; do
@@ -432,7 +528,7 @@ EOF
 	# A refusal starts its line with the row's place. The not-yet-run list
 	# names the first good row too, indented, and is not a refusal.
 	local good
-	for good in 3 19 20; do
+	for good in 3 19 20 34; do
 		case "$nl$out" in
 		*"$nl$tmp/claims.md:$good: "*)
 			echo "self-test: FAIL the good row on line $good was refused"

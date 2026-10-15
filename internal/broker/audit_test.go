@@ -2,6 +2,8 @@ package broker
 
 import (
 	"net/http"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -23,6 +25,11 @@ func TestAuditLineOfAnUnverifiedRequestCarriesNoPath(t *testing.T) {
 			}
 		}
 		wantAudit(t, line, "method=POST", "status=")
+		// The fields are these and no others: the logger's own three, then
+		// method, status, dur and check.
+		if got, want := auditKeys(line), []string{"time", "level", "msg", "method", "status", "dur", "check"}; !slices.Equal(got, want) {
+			t.Errorf("the audit line of an unverified request has the fields %v, want %v: %.200s", got, want, line)
+		}
 	}
 	resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages"+long, bearer(r.mint("brig-a", "anthropic")), "{}")
 	wantStatus(t, resp, http.StatusOK)
@@ -32,6 +39,19 @@ func TestAuditLineOfAnUnverifiedRequestCarriesNoPath(t *testing.T) {
 		t.Errorf("the audit line of a verified request is %d bytes, want the path cut to 256", len(line))
 	}
 }
+
+// auditKeys returns the keys of an audit line, in order.
+func auditKeys(line string) []string {
+	var keys []string
+	for _, m := range auditKey.FindAllStringSubmatch(line, -1) {
+		keys = append(keys, m[1])
+	}
+	return keys
+}
+
+// auditKey matches a key of the logger's text format. No value these tests
+// log holds a space followed by a key.
+var auditKey = regexp.MustCompile(`(?:^| )([A-Za-z_.]+)=`)
 
 // A sandbox id is a path segment and an audit field, so it is a plain name.
 func TestSandboxIDsArePlainNames(t *testing.T) {

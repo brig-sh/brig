@@ -2,24 +2,32 @@
 
 Each row in [the table](#the-table) quotes one sentence from
 [security.md](security.md) and names the tests that defend it. security.md
-states what the guest can and cannot reach.
+states what the guest can and cannot reach. Where a promise there rests on
+detail another page holds, such as [broker.md](broker.md),
+[runtimes.md](runtimes.md) or [secrets.md](secrets.md), a row quotes that
+page instead.
 
 `script/check-claims.sh` reads the table on every pull request. It fails when
-a quoted sentence is gone from security.md, or when a named test no longer
+a quoted sentence is gone from its page, or when a named test no longer
 exists. `make claims` runs the same check after its self-test.
 
 ## Reading a row
 
 A row has three cells.
 
-**Claim.** The cell quotes security.md. The check matches only the part in
+**Claim.** The cell quotes the page. The check matches only the part in
 double quotes. A note in parentheses after the quote says which part of the
 sentence the row covers. Quote the whole sentence, through its period. Then a
-qualifier added to the sentence in security.md ends the match. security.md
-wraps its prose, so the match ignores line breaks and runs of spaces.
+qualifier added to the sentence on the page ends the match. A list item or a
+table cell with no period is quoted whole. The pages wrap their prose, so
+the match ignores line breaks and runs of spaces.
 
 **Section.** The cell names the heading the sentence is under. The quote must
-be under that heading or under a heading nested in it.
+be under that heading or under a heading nested in it. A sentence of a page
+other than security.md names its page first, with a colon, such as
+`broker.md: Placeholder detection`. The page is in `docs/`, and is not
+claims.md. A page's `#` title is not a section, since it holds the whole
+page.
 
 **Defended by.** Each defence is one token:
 
@@ -66,9 +74,11 @@ the guest has none.
 
 ## The table
 
-The rows under any section but The process boundary describe the microVM
-boundary. The `host` kind runs the agent as a process, and those rows do not
-hold for it. Its own rows are the ones under The process boundary.
+The rows under any section of security.md but The process boundary describe
+the microVM boundary. The `host` kind runs the agent as a process, and those
+rows do not hold for it. Its own rows are the ones under The process
+boundary, and the rows that quote broker.md, runtimes.md and secrets.md. In
+this release the broker serves the host kind alone.
 
 | Claim | Section | Defended by |
 | --- | --- | --- |
@@ -93,10 +103,64 @@ hold for it. Its own rows are the ones under The process boundary.
 | "On `offline`, nothing is reachable." | The process boundary | `macos:TestHostSandboxOfflineReachesNothing` |
 | "The process cannot listen for a connection." | The process boundary | `macos:TestHostSandboxCannotListen` |
 | "The process cannot start an app through LaunchServices." | The process boundary | `macos:TestHostSandboxCannotOpenAnApp` |
-| "The process cannot send a signal to a process outside it." | The process boundary | `go:TestSandboxProfileAlwaysDeniesTheSensitivePaths` `macos:TestHostSandboxDeniesWhatItShould` |
+| "The process cannot send a signal to a process outside it." | The process boundary | `go:TestSandboxProfileAlwaysDeniesTheSensitivePaths` `macos:TestHostSandboxDeniesWhatItShould` `macos:TestTheHostKindReachesItsRouteAndNothingElse` |
 | "The process cannot write Brig's own profiles, policies or state outside its guest home, and cannot read or rewrite the profile it runs under." | The process boundary | `macos:TestHostSandboxHoldsBrigsOwnFiles` `macos:TestHostSandboxDeniesWhatItShould` |
+| "The process cannot write Brig's own profiles, policies or state outside its guest home, and cannot read or rewrite the profile it runs under." (another sandbox's guest home and record: A cannot write B's guest home or read B's record under `~/.brig/host`. A can read B's guest home, which the page allows as a file you can read) | The process boundary | `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
 | "The process cannot ask the keychain for a secret, or connect to a unix socket other than the system resolver's, your SSH agent's included." | The process boundary | `macos:TestHostSandboxDeniesTheKeychain` `macos:TestHostSandboxDeniesWhatItShould` |
-| "A secret a route injects never reaches the process, its environment or its guest home." | The process boundary | `macos:TestTheHostKindReachesItsRouteAndNothingElse` `go:TestAHostRunBoundToARouteGetsATokenAndThePort` `go:TestABrokeredSecretIsNeverDelivered` |
+| "A secret a route injects never reaches the process, its environment or its guest home." | The process boundary | `macos:TestTheHostKindReachesItsRouteAndNothingElse` `go:TestAHostRunBoundToARouteGetsATokenAndThePort` `go:TestABrokeredSecretIsNeverDelivered` `macos-smoke:the sweep: the sandboxed process holds its session token in its environment, and not the credential` `macos-smoke:the sweep: the guest home holds no credential and no session token` |
 | "A session token works only on its own sandbox's route, and stops working when `brig stop`, `brig rm` or `brig rm --all` removes the sandbox." | The process boundary | `macos:TestTheHostKindReachesItsRouteAndNothingElse` `go:TestATokenOfAnotherSandboxIsRefusedOverLoopback` `go:TestControlProtocolRegistersMintsAndRevokes` `go:TestStopAndRemoveRevokeTheSandboxTokens` `go:TestRemoveAllRevokesEverySandboxsTokens` `macos-smoke:the host sandbox reaches the broker, which refuses a token it did not mint` |
+| "A session token works only on its own sandbox's route, and stops working when `brig stop`, `brig rm` or `brig rm --all` removes the sandbox." (per sandbox: with two sandboxes at one broker, A's token on B's route is a 401 and the upstream is not dialled, and removing A leaves B's token working. B's token is in no file A can read. A can still read it from B's environment through `sysctl`, as the page says, and then use it on B's route) | The process boundary | `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
 | "The process cannot read the broker's directory, which holds the host key and the key of the brig CA." | The process boundary | `macos:TestTheHostKindReachesItsRouteAndNothingElse` `go:TestTheBrokerRefusesADirectoryOrKeyOthersCanReach` |
-| "No session token is on a command line, and the audit log holds no token and no credential." | The process boundary | `macos:TestTheHostKindReachesItsRouteAndNothingElse` `go:TestTheAuditLogHoldsNoValueOrToken` `go:TestAuditLineOfAnUnverifiedRequestCarriesNoPath` `macos-smoke:nothing reached a credential in argv: the session token stays out of sandbox-exec's` |
+| "No session token is on a command line, and the audit log holds no token and no credential." | The process boundary | `macos:TestTheHostKindReachesItsRouteAndNothingElse` `go:TestTheAuditLogHoldsNoValueOrToken` `go:TestAuditLineOfAnUnverifiedRequestCarriesNoPath` `macos-smoke:nothing reached a credential in argv: the session token stays out of sandbox-exec's` `macos-smoke:the sweep: no command line holds the session token or the credential` `macos-smoke:the sweep: the audit log, broker.log and the sandbox's events.log hold no credential and no session token` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "`brig-broker` keeps no key or credential in its environment or on its command line." | The process boundary | `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "A session token sent anywhere in a request but the one place its route reads it from is refused with 403, before the broker reads the credential." | The process boundary | `go:TestPlaceholderInEveryPositionAndEncodingIsRefused` `go:TestTokenInItsCarrierAlonePasses` `go:TestPlaceholderOfAnotherRouteIsRefused` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` `macos-smoke:the session token in a body is refused with 403 and audited as a placeholder` |
+| "A body it cannot hold is refused, never forwarded unscanned." | The process boundary | `go:TestBodyTheBudgetCannotHoldIsRefused` `go:TestASandboxHoldsAtMostItsShareOfTheBudget` `go:TestOneSandboxCannotDrainTheBodyBudget` |
+| "Brig refuses to start the broker while another process holds the port, and `brig doctor` names that process." | The process boundary | `go:TestRegisterRefusesWhenThePortIsHeld` `go:TestTheBrokerKeepsItsRecordedPort` `go:TestDoctorBrokerCheck` |
+| "`brig info --json` names the channel of each credential as its `source`: `environment`, `secret`, `file` or `broker`." (`broker`) | Credentials | `go:TestEnvelopeHasABrokerRow` `macos-smoke:brig info --json carries the broker, the token's source and the placeholder count` |
+| "A request that fails one step gets the error of that step, and the upstream is never dialed." | broker.md: Request path | `go:TestTokenOfAnotherSandboxIsRefused` `go:TestTokenForAnotherRouteIsRefused` `go:TestPlaceholderInEveryPositionAndEncodingIsRefused` `go:TestRequestAllowMissIsRefusedBeforeResolve` `go:TestNonCanonicalPathIsRefused` `go:TestUpgradeIsRefused` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` `macos-smoke:the sweep: the upstream saw the credential as the bearer of every request the broker passed, and never the session token` |
+| "every request trailer. The rules here edit the headers, and a trailer would carry past them what they remove" | broker.md: Headers | `go:TestRequestTrailersAreNotForwarded` |
+| "drops every `Set-Cookie`" | broker.md: Response | `go:TestReflectedCredentialIsRedacted` |
+| "drops every header and trailer whose value holds an injected string" | broker.md: Response | `go:TestReflectedCredentialIsRedacted` |
+| "replaces each injected string in the body with `[redacted]`, as the body streams" | broker.md: Response | `go:TestReflectedCredentialIsRedacted` `go:TestRedactedEventStreamIsNotBuffered` `macos-smoke:the sweep: the credential the upstream reflected reaches the guest as [redacted]` |
+| "So after the token verifies, and before `request.allow` and the credential, the broker scans the request for every live token of the sandbox." | broker.md: Placeholder detection | `go:TestPlaceholderInEveryPositionAndEncodingIsRefused` `go:TestPlaceholderInAHeaderNameIsRefused` `go:TestPlaceholderInTheMethodIsNotAudited` `go:TestTokensStayLiveUntilTheyExpire` |
+| "Sent as the carrier of the other route, it fails the route check with 401 before the scan." | broker.md: Placeholder detection | `go:TestPlaceholderOfAnotherRouteIsRefused` `go:TestTokenForAnotherRouteIsRefused` |
+| "`GET /status` on the control socket counts the refusals per sandbox." | broker.md: Placeholder detection | `go:TestPlaceholdersAreCounted` `go:TestStatusCountsPlaceholderRefusals` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "A carrier that holds another token is refused." | broker.md: Placeholder detection | `go:TestCarrierHoldingAnotherTokenIsRefused` |
+| "the body, up to 8 MiB, and the trailers of a body read to its end. The trailers are not forwarded" | broker.md: Placeholder detection | `go:TestPlaceholderEndingAtTheCapIsFound` `go:TestPlaceholderInATrailerIsRefused` `go:TestRequestTrailersAreNotForwarded` |
+| "It looks for each token in these spellings:" (`raw`, `percent`, `json`, `hex` and `base64`, each in upper and lower case, in the path, the query, a header and the body) | broker.md: Placeholder detection | `go:TestPlaceholderInEveryPositionAndEncodingIsRefused` `go:TestBase64AtEveryAlignmentIsFound` `go:TestSpellingsTheScanFindsAndMisses` |
+| "So a token split across lines is found, such as base64 wrapped at 76 columns, also inside a JSON string." | broker.md: Placeholder detection | `go:TestPlaceholderInEveryPositionAndEncodingIsRefused` `go:TestSpellingsTheScanFindsAndMisses` `go:TestScanCarriesAnEscapeAcrossWrites` |
+| "A gzip or deflate body is scanned as it decompresses, and the encoding is named `gzip+raw` and so on." | broker.md: Placeholder detection | `go:TestCompressedBodies` |
+| "A sandbox that is removed takes its tokens and its count with it." | broker.md: Placeholder detection | `go:TestLiveTokensAreBoundedAndPruned` |
+| "The tokens of other sandboxes are not looked for." | broker.md: Placeholder detection | `go:TestTokenOfAnotherSandboxInTheBodyPasses` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "A body the budget cannot hold is never forwarded unscanned." | broker.md: Holding the body | `go:TestBodyTheBudgetCannotHoldIsRefused` |
+| "So one sandbox that stalls its bodies leaves the rest of the budget to the others." | broker.md: Holding the body | `go:TestOneSandboxCannotDrainTheBodyBudget` `go:TestASandboxHoldsAtMostItsShareOfTheBudget` |
+| "Each sandbox has its own key, so a token of one sandbox fails the signature check on the path of another." | broker.md: Session tokens | `go:TestSandboxKeysDiffer` `go:TestTokenOfAnotherSandboxIsRefused` `go:TestATokenOfAnotherSandboxIsRefusedOverLoopback` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "Removing a sandbox from the broker refuses its tokens from the next request on, with 404." | broker.md: Session tokens | `go:TestRemovedSandboxTokensAreRefused` `go:TestControlProtocolRegistersMintsAndRevokes` `macos:TestTheHostKindReachesItsRouteAndNothingElse` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "A sandbox added again under the same id has a new nonce and a new key, so the tokens minted before the removal fail the signature check with 401." | broker.md: Session tokens | `go:TestReAddedSandboxDoesNotReviveOldTokens` `go:TestReRegisteringKeepsTokensAndChangingRoutesRevokesThem` |
+| "`brig stop`, `brig rm` and `brig rm --all` remove each sandbox they stop from the broker." | broker.md: Lifecycle | `go:TestStopAndRemoveRevokeTheSandboxTokens` `go:TestRemoveAllRevokesEverySandboxsTokens` `macos-smoke:brig rm stops the broker of the swept run` |
+| "A host sandbox can neither read nor write `~/.brig/host`." | broker.md: Files | `go:TestSandboxProfileAlwaysDeniesTheSensitivePaths` `macos:TestHostSandboxHoldsBrigsOwnFiles` `macos:TestTheHostKindReachesItsRouteAndNothingElse` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "The line never holds a credential, a token, a header value or a body." | broker.md: Audit line | `go:TestAuditHoldsNoSecret` `go:TestPlaceholderAuditHoldsNoToken` `go:TestTheAuditLogHoldsNoValueOrToken` `macos-smoke:the sweep: the audit log, broker.log and the sandbox's events.log hold no credential and no session token` |
+| "So the line of a request whose token has not verified carries only `method`, `status`, `dur` and `check`, and nothing the sender wrote into the path." | broker.md: Audit line | `go:TestAuditLineOfAnUnverifiedRequestCarriesNoPath` `go:TestAFloodOfUnverifiedRequestsIsBounded` |
+| "A token is never on a command line." | broker.md: What the guest gets | `macos:TestTheHostKindReachesItsRouteAndNothingElse` `macos-smoke:the sweep: no command line holds the session token or the credential` |
+| "signals to a process outside the sandbox. The agent can still signal its own children" | runtimes.md: What it enforces | `go:TestSandboxProfileAlwaysDeniesTheSensitivePaths` `macos:TestHostSandboxDeniesWhatItShould` `macos:TestTheHostKindReachesItsRouteAndNothingElse` |
+| "writes to Brig's own directories: `~/.brig` apart from the shares, and the profile and policy directories. The agent cannot write a profile for the next run, or detach a policy from its own" | runtimes.md: What it enforces | `macos:TestHostSandboxHoldsBrigsOwnFiles` `macos:TestHostSandboxDeniesWhatItShould` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "`brig stop`, `brig rm` and `brig rm --all` revoke the sandbox's tokens." | runtimes.md: Brokered credentials | `go:TestStopAndRemoveRevokeTheSandboxTokens` `go:TestRemoveAllRevokesEverySandboxsTokens` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
+| "`brig info` prints a `BROKER` row: the transport, the routes, the pid and port of `brig-broker`, and the secrets it keeps on the host." | runtimes.md: Brokered credentials | `go:TestEnvelopeHasABrokerRow` `macos-smoke:brig info names the running broker, its transport and this sandbox's placeholder refusals` `macos-smoke:the sweep: the envelope names the broker over loopback, and the token by its route` |
+| "So is the number of this sandbox's requests the broker refused for a [session token outside its carrier](broker.md#placeholder-detection)." | runtimes.md: Brokered credentials | `go:TestTheBrokerRowNamesRecoveryAndThisSandboxsRefusals` `macos-smoke:brig info names the running broker, its transport and this sandbox's placeholder refusals` `macos-smoke:brig info --json carries the broker, the token's source and the placeholder count` |
+| "A refresh that failed, a write-back still pending, and a secret whose [renewal journal](secrets.md#the-renewal-journal) is not settled are named there too." | runtimes.md: Brokered credentials | `go:TestTheBrokerRowNamesRecoveryAndThisSandboxsRefusals` `go:TestStatusNamesARecoveringSecret` |
+| "If the journal cannot be written, the refresh is not sent, Brig reports it as failing, and the broker tries again 30 seconds later at the earliest." | secrets.md: The renewal journal | `go:TestARefreshIsNotSentWithoutItsJournal` |
+| "A refused access token in that window is not renewed again." | secrets.md: The renewal journal | `go:TestAFailedPromotionIsServedAndRetried` |
+| "It also does this when a sandbox registers a route for the secret, without waiting for a request." | secrets.md: The renewal journal | `go:TestRegistrationRecoversAnInterruptedRefresh` |
+| "Writes the journal's document to the secret, and deletes the journal. It does not call the provider" (a crash after the provider answered and the journal took the answer: `renewed`, with the secret still the document the refresh started from) | secrets.md: The renewal journal | `go:TestACrashAfterTheJournalPromotesIt` `go:TestRegistrationRecoversAnInterruptedRefresh` |
+| "Keeps the secret, deletes the journal, and renews once at the next request, whatever the expiry." (a crash before the journal took the answer: `renewing`) | secrets.md: The renewal journal | `go:TestACrashBeforeAnyWriteRenewsOnceAndReportsSpent` `go:TestAJournalWhoseRefreshNeverLeftRenewsOnce` |
+| "If the provider refuses the token as spent, the secret is reported as failing and is not renewed again." | secrets.md: The renewal journal | `go:TestACrashBeforeAnyWriteRenewsOnceAndReportsSpent` |
+| "`renewed`, and the secret already holds the journal's document" (a crash after the secret took the document: the journal is deleted, and nothing else is written or called) | secrets.md: The renewal journal | `go:TestACrashAfterPromotionOnlyClearsTheJournal` |
+| "Any journal, and the secret changed since the refresh started" (the journal is deleted, and the secret imported again stays) | secrets.md: The renewal journal | `go:TestARenewedJournalLosesToAReimport` |
+| "A journal of another broker that still runs, younger than 10 minutes" (left alone, and not renewed) | secrets.md: The renewal journal | `go:TestAYoungJournalBlocksAndAStaleOneIsIgnored` `go:TestTwoCachesOverOneStoreAgree` |
+| "A journal of another broker, older than 10 minutes or dated in the future" (treated as left by a broker that stopped) | secrets.md: The renewal journal | `go:TestAYoungJournalBlocksAndAStaleOneIsIgnored` `go:TestAJournalFromTheFutureIsStale` |
+| "A journal of this broker that it did not know of" (deleted, and the renewal goes on) | secrets.md: The renewal journal | `go:TestAnOrphanJournalOfThisCacheIsDeleted` |
+| "A journal Brig cannot read: damaged in the store, not one Brig wrote, or a `renewed` document that is not a credential of the secret's kind" (not promoted, and cleared) | secrets.md: The renewal journal | `go:TestAHalfWrittenJournalIsReportedAndCleared` `go:TestAJournalDocumentThatDoesNotParseIsNotPromoted` |
+| "Serves the stored document, and reads the journal again 30 seconds later at the earliest" (the store does not answer) | secrets.md: The renewal journal | `go:TestAJournalThatCannotBeReadIsReported` |
+| "A broker counts as running when a process of yours has that id and that start time." | secrets.md: The renewal journal | `go:TestAJournalOwnerIsThisUsersProcessWithItsStartTime` |
+| "`brig secret delete` removes the journal with the secret." | secrets.md: The renewal journal | `go:TestDeleteAlsoRemovesTheRenewalJournal` `go:TestADeletedSecretTakesItsJournal` |
+| "`brig secret read` and `delete` refuse a journal's own name, because a journal can hold the only valid copy of a renewed credential." | secrets.md: The renewal journal | `go:TestReadAndDeleteRefuseAJournalName` |

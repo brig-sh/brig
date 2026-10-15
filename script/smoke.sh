@@ -1972,6 +1972,95 @@ grep -qF -- '[--][bash][-lc]["$@"][bash][uname][-a]' "$STUB_LOG" \
 grep -q -- ':/root/work' "$STUB_LOG" \
   && ok "ubuntu mounts the workspace at /root/work" || bad "ubuntu mounts at /root/work"
 
+# broker_sweep checks what one routed run of the host kind left behind, once
+# it has ended, against a broker that injects a known fake credential. It is
+# the per-run half of the broker's claims in docs/claims.md: the per-sandbox
+# half is TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn.
+#
+#   broker_sweep TOKEN CRED OUT ERR PROC TABLE UPSTREAM SANDBOX
+#
+# TOKEN is the session token of the run, read from the environment of its
+# sandboxed process and from nowhere else. CRED is the credential the broker
+# injects. OUT and ERR are brig's stdout, with the agent's output and the
+# --json line, and its stderr, with the envelope. PROC is the command line and
+# the environment of the sandboxed process (ps -E), TABLE the command line of
+# every process while it ran, and UPSTREAM the requests the upstream logged.
+# holds PATH STRING... succeeds when a file at PATH, or under it, holds one
+# of the strings.
+holds() {
+  local path="$1" str
+  shift
+  for str in "$@"; do
+    [ -n "$str" ] && grep -rqF -- "$str" "$path" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+broker_sweep() {
+  local token="$1" cred="$2" out="$3" err="$4" proc="$5" table="$6" upstream="$7" sandbox="$8"
+  local broker="$BRIG_STATE_DIR/host/broker" f leaked="" n
+  if [ -z "$token" ]; then
+    bad "the sweep found no session token in the sandboxed process, so it proves nothing"
+    return
+  fi
+  # Each is looked for in every spelling a leak is likely in: the
+  # credential, the refresh token beside it in the document and the
+  # credential's base64, and the token whole and each of its halves.
+  local cred_s tok_s
+  cred_s=("$cred" fake-refresh "$(printf '%s' "$cred" | base64)")
+  tok_s=("$token" "${token%%.*}" "${token#*.}")
+  if grep -qF -- "CLAUDE_CODE_OAUTH_TOKEN=$token" "$proc" && ! holds "$proc" "${cred_s[@]}"; then
+    ok "the sweep: the sandboxed process holds its session token in its environment, and not the credential"
+  else
+    bad "the sweep: the sandboxed process holds its session token in its environment, and not the credential -- got: $(cat "$proc")"
+  fi
+  # The ps table is a snapshot taken while the agent sleeps. The command line
+  # of a process that came and went before it, such as each curl, is not in
+  # it. sandbox-exec's own command line is in STUB_LOG.
+  if holds "$table" "${cred_s[@]}" "${tok_s[@]}" || holds "$STUB_LOG" "${cred_s[@]}" "${tok_s[@]}"; then
+    bad "the sweep: no command line holds the session token or the credential"
+  else
+    ok "the sweep: no command line holds the session token or the credential"
+  fi
+  if holds "$WS" "${cred_s[@]}" "${tok_s[@]}"; then
+    bad "the sweep: the guest home holds no credential and no session token -- found in: $(for f in "${cred_s[@]}" "${tok_s[@]}"; do grep -rlF -- "$f" "$WS"; done | sort -u)"
+  else
+    ok "the sweep: the guest home holds no credential and no session token"
+  fi
+  for f in "$broker/audit.log" "$broker/broker.log" "$BRIG_STATE_DIR/host/$sandbox/events.log"; do
+    [ -f "$f" ] || { leaked="$leaked $f(missing)"; continue; }
+    holds "$f" "${cred_s[@]}" "${tok_s[@]}" && leaked="$leaked $f"
+  done
+  [ -z "$leaked" ] && ok "the sweep: the audit log, broker.log and the sandbox's events.log hold no credential and no session token" \
+    || bad "the sweep: the audit log, broker.log and the sandbox's events.log hold no credential and no session token -- in:$leaked"
+  if holds "$out" "${cred_s[@]}" "${tok_s[@]}" || holds "$err" "${cred_s[@]}" "${tok_s[@]}"; then
+    bad "the sweep: brig's output, its --json line and the envelope hold no credential and no session token"
+  else
+    ok "the sweep: brig's output, its --json line and the envelope hold no credential and no session token"
+  fi
+  # Every request that reached the upstream carried the credential as its
+  # one bearer, and none carried the token. The upstream saw as many requests
+  # as the broker passed, so no refused one was dialled.
+  n="$(grep -c . "$upstream" 2>/dev/null)"
+  if [ "${n:-0}" -gt 0 ] && [ "$(grep -cF -- "\"Authorization\":[\"Bearer $cred\"]" "$upstream")" = "$n" ] \
+      && [ "$(grep -c "sandbox=$sandbox .*status=200 " "$broker/audit.log")" = "$n" ] \
+      && ! holds "$upstream" "${tok_s[@]}"; then
+    ok "the sweep: the upstream saw the credential as the bearer of every request the broker passed, and never the session token"
+  else
+    bad "the sweep: the upstream saw the credential as the bearer of every request the broker passed, and never the session token -- got: $(cat "$upstream" "$broker/audit.log" 2>/dev/null)"
+  fi
+  grep -qF '"saw":"Bearer [redacted]"' "$out" \
+    && ok "the sweep: the credential the upstream reflected reaches the guest as [redacted]" \
+    || bad "the sweep: the credential the upstream reflected reaches the guest as [redacted] -- got: $(cat "$out")"
+  if grep -q '^BROKER  *transport loopback, routes anthropic' "$err" \
+      && grep -qF 'CLAUDE_CODE_OAUTH_TOKEN(route: anthropic)' "$err" \
+      && grep -qF '"kind":"Run"' "$out"; then
+    ok "the sweep: the envelope names the broker over loopback, and the token by its route"
+  else
+    bad "the sweep: the envelope names the broker over loopback, and the token by its route -- got: $(cat "$err" "$out")"
+  fi
+}
+
 echo "== the host kind =="
 # macOS only: the host kind is Seatbelt, and elsewhere brig refuses it. The
 # stub logs what brig hands sandbox-exec, then runs the real one, so the
@@ -2107,6 +2196,83 @@ YAML
   [ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
     && bad "brig rm of the last routed sandbox stops brig-broker" \
     || ok "brig rm of the last routed sandbox stops brig-broker"
+
+  # The same routed run, against a broker that holds a fake credential, so a
+  # request goes upstream and back. The broker is a test binary of
+  # cmd/brig-broker that serves the broker's own code with a memory store and
+  # a logging TLS upstream (TestBrokerHelperProcess). It reads no keychain,
+  # and nothing leaves the host. The credential is the fake one
+  # cmd/brig-broker/server_test.go seeds. The run ends with broker_sweep.
+  sweep_cred=fake-access-token-for-the-broker-tests
+  go test -c -o "$WORK/brig-broker.test" ./cmd/brig-broker || { echo "build failed"; exit 1; }
+  printf '#!/bin/sh\nBRIG_TEST_BROKER_HELPER=1 BRIG_TEST_UPSTREAM_LOG=%q exec %q -test.run=%q -- "$@"\n' \
+    "$WORK/upstream.log" "$WORK/brig-broker.test" '^TestBrokerHelperProcess$' > "$WORK/brig-broker-fake"
+  chmod +x "$WORK/brig-broker-fake"
+  : > "$STUB_LOG"
+  : > "$WORK/upstream.log"
+  # The agent sends one request with its token in its carrier, then one with
+  # the token in the body too, and sleeps long enough for ps to find it. curl
+  # reads the token from stdin, never from its command line.
+  BRIG_BROKER_BIN="$WORK/brig-broker-fake" BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" \
+    "$WORK/brig" --verbose run --json routed -- -c '
+      printf "header = \"Authorization: Bearer %s\"\n" "$CLAUDE_CODE_OAUTH_TOKEN" | curl -s --max-time 10 -K - -d "{}" "$ANTHROPIC_BASE_URL/v1/messages"; echo
+      printf "header = \"Authorization: Bearer %s\"\ndata = \"leak=%s\"\n" "$CLAUDE_CODE_OAUTH_TOKEN" "$CLAUDE_CODE_OAUTH_TOKEN" \
+        | curl -s -o /dev/null -w "leak:%{http_code}\n" --max-time 10 -K - "$ANTHROPIC_BASE_URL/v1/messages"
+      sleep 2.7182' > "$WORK/sweep.out" 2> "$WORK/sweep.err" &
+  sweep_job=$!
+  # sandbox-exec applies the profile and execs, so the sandboxed process
+  # shows as its command. Its environment is read here, on the host: ps does
+  # not run inside the sandbox.
+  sweep_pid=""
+  for _ in $(seq 1 100); do
+    # The sleep alone: brig's own command line ends in the same words.
+    sweep_pid="$(ps -axww -o pid=,args= | awk 'NF == 3 && $2 == "sleep" && $3 == "2.7182" { print $1; exit }')"
+    [ -n "$sweep_pid" ] && break
+    sleep 0.1
+  done
+  : > "$WORK/sweep.proc"
+  : > "$WORK/sweep.table"
+  if [ -n "$sweep_pid" ]; then
+    ps -E -ww -o command= -p "$sweep_pid" > "$WORK/sweep.proc" 2>&1
+    ps -axww -o args= > "$WORK/sweep.table" 2>&1
+  fi
+  wait "$sweep_job"
+  rc=$?
+  [ "$rc" = 0 ] && [ -n "$sweep_pid" ] && ok "a routed run reaches the upstream through the broker and ends" \
+    || bad "a routed run reaches the upstream through the broker and ends -- got $rc, pid '$sweep_pid': $(cat "$WORK/sweep.err" "$WORK/sweep.out")"
+  grep -qx 'leak:403' "$WORK/sweep.out" && grep -q 'status=403 .*check=placeholder where=body' "$BRIG_STATE_DIR/host/broker/audit.log" \
+    && ok "the session token in a body is refused with 403 and audited as a placeholder" \
+    || bad "the session token in a body is refused with 403 and audited as a placeholder -- got: $(cat "$WORK/sweep.out")"
+  sweep_token="$(tr ' ' '\n' < "$WORK/sweep.proc" | sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' | head -1)"
+  broker_sweep "$sweep_token" "$sweep_cred" "$WORK/sweep.out" "$WORK/sweep.err" "$WORK/sweep.proc" \
+    "$WORK/sweep.table" "$WORK/upstream.log" brig-routed
+  # brig info, not only the run's envelope, names the broker while the
+  # sandbox is registered, with this sandbox's placeholder refusal.
+  out="$(BRIG_BROKER_BIN="$WORK/brig-broker-fake" BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" \
+    "$WORK/brig" info routed 2>/dev/null)"
+  printf '%s\n' "$out" | grep -q '^BROKER  *transport loopback, routes anthropic; brig-broker pid [0-9]* on 127.0.0.1:[0-9]*; placeholder refusals: 1$' \
+    && printf '%s\n' "$out" | grep -qF 'CLAUDE_CODE_OAUTH_TOKEN(route: anthropic)' \
+    && ok "brig info names the running broker, its transport and this sandbox's placeholder refusals" \
+    || bad "brig info names the running broker, its transport and this sandbox's placeholder refusals -- got: $out"
+  out="$(BRIG_BROKER_BIN="$WORK/brig-broker-fake" BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" \
+    "$WORK/brig" info --json routed 2>/dev/null)"
+  case "$out" in
+    *'"source": "broker"'*'"route": "anthropic"'*'"transport": "loopback"'*'"running": true'*'"placeholder": 1'*)
+      case "$out" in
+        *"$sweep_cred"*|*"${sweep_token:-no session token was found}"*) bad "brig info --json carries the broker, the token's source and the placeholder count -- and a value" ;;
+        *) ok "brig info --json carries the broker, the token's source and the placeholder count" ;;
+      esac ;;
+    *) bad "brig info --json carries the broker, the token's source and the placeholder count -- got: $out" ;;
+  esac
+  BRIG_BROKER_BIN="$WORK/brig-broker-fake" BRIG_RUNTIME=host BRIG_RUNTIME_BIN="$WORK/sandbox-exec" \
+    "$WORK/brig" rm routed > /dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] || break
+    sleep 0.3
+  done
+  [ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
+    && bad "brig rm stops the broker of the swept run" \
+    || ok "brig rm stops the broker of the swept run"
   "$WORK/brig" policy detach claude-routed routed > /dev/null 2>&1
   rm -f "$BRIG_PROFILE_DIR/routed.yaml"
   unset BRIG_POLICY_DIR
