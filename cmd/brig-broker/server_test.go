@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1071,5 +1073,97 @@ func TestStderrFollowsTheRotatedLog(t *testing.T) {
 	old, _ := os.ReadFile(path + ".1")
 	if !strings.Contains(string(cur), "written to stderr after the rotation") {
 		t.Errorf("stderr after the rotation is not in the current log %q; the previous one holds %q", cur, old)
+	}
+}
+
+// A broker that starts after one stopped mid-refresh settles the journal it
+// left when a sandbox registers the secret, before any request: the renewed
+// document in the journal is promoted, and the provider is not called.
+func TestRegistrationRecoversAnInterruptedRefresh(t *testing.T) {
+	u := newUpstream(t)
+	r := startBroker(t, shortDir(t), u, nil)
+	stored := fakeDoc(fakeAccess, time.Now().Add(time.Hour))
+	renewed := fakeDoc("fake-access-token-from-the-journal", time.Now().Add(8*time.Hour))
+	sum := sha256.Sum256(stored)
+	journal, err := json.Marshal(map[string]any{
+		"v": 1, "phase": "renewed", "owner": map[string]any{"pid": 1 << 30, "nonce": "stopped"},
+		"startedAt": time.Now().UnixMilli(), "docHash": hex.EncodeToString(sum[:]), "doc": renewed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.store.values["claude-credentials"] = stored
+	r.store.values[secret.JournalName("claude-credentials")] = journal
+
+	if err := r.client.AddSandbox(injector.Sandbox{ID: "brig-a", Profile: "claude-code",
+		Routes: []injector.Route{claudeRoute()}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, _ := r.store.Read("claude-credentials")
+		_, jerr := r.store.Read(secret.JournalName("claude-credentials"))
+		if bytes.Equal(got, renewed) && errors.Is(jerr, secret.ErrNotFound) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the journal was not settled after registration: secret %q, journal read %v", got, jerr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	token := r.mint(t, "brig-a", "anthropic")
+	if got := r.send(t, "brig-a", "anthropic", token, "/v1/messages"); got != http.StatusOK {
+		t.Fatalf("got %d", got)
+	}
+	for _, h := range u.requests() {
+		if h.Get("Authorization") != "Bearer fake-access-token-from-the-journal" {
+			t.Errorf("upstream saw %q, want the journal's token", h.Get("Authorization"))
+		}
+	}
+	st, err := r.client.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Recovering) != 0 || len(st.Pending) != 0 || len(st.Failing) != 0 {
+		t.Errorf("status after the recovery = %+v, want nothing pending", st)
+	}
+}
+
+// /status names a secret whose journal another live broker holds, and
+// nothing about it but the name.
+func TestStatusNamesARecoveringSecret(t *testing.T) {
+	u := newUpstream(t)
+	r := startBroker(t, shortDir(t), u, nil)
+	stored := fakeDoc(fakeAccess, time.Now().Add(time.Hour))
+	sum := sha256.Sum256(stored)
+	journal, err := json.Marshal(map[string]any{
+		"v": 1, "phase": "renewing", "owner": map[string]any{"pid": os.Getpid(), "nonce": "another-broker"},
+		"startedAt": time.Now().UnixMilli(), "docHash": hex.EncodeToString(sum[:]),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.store.values["claude-credentials"] = stored
+	r.store.values[secret.JournalName("claude-credentials")] = journal
+	if err := r.client.AddSandbox(injector.Sandbox{ID: "brig-a", Profile: "claude-code",
+		Routes: []injector.Route{claudeRoute()}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, err := r.client.Status()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Equal(st.Recovering, []string{"claude-credentials"}) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status = %+v, want claude-credentials recovering", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := r.store.Read(secret.JournalName("claude-credentials")); err != nil {
+		t.Errorf("the journal of a live broker was touched: %v", err)
 	}
 }

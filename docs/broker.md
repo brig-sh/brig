@@ -494,7 +494,7 @@ underscores. 255 bytes is the longest name of a directory.
 | `POST /sandboxes` | `{id, profile, routes: [{policy, route}]}` | 204. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}` |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, placeholder}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits

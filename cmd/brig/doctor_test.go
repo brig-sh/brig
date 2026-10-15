@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
@@ -438,4 +439,22 @@ func TestDoctorBrokerCheck(t *testing.T) {
 		t.Errorf("the row does not name the holder, this test's pid %d: %s", os.Getpid(), c.Finding)
 	}
 	t.Logf("doctor: %s", c.Finding)
+}
+
+// A broker settling a refresh journal says so on the broker row, by name,
+// without failing it. A refresh that failed still fails the row.
+func TestDoctorBrokerRowNamesARecovery(t *testing.T) {
+	c := brokerStatusCheck(injector.Status{PID: 7, Port: 40123, Recovering: []string{"claude-credentials"}})
+	if c.State != statePass || !strings.Contains(c.Finding, "refresh recovering: claude-credentials") {
+		t.Errorf("a broker recovering a refresh: %+v", c)
+	}
+	c = brokerStatusCheck(injector.Status{PID: 7, Port: 40123})
+	if strings.Contains(c.Finding, "recovering") {
+		t.Errorf("a broker with nothing to recover: %+v", c)
+	}
+	c = brokerStatusCheck(injector.Status{PID: 7, Port: 40123,
+		Recovering: []string{"claude-credentials"}, Failing: []string{"claude-credentials"}})
+	if c.State != stateFail {
+		t.Errorf("a broker whose recovery found the pair spent: %+v", c)
+	}
 }

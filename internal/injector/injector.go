@@ -168,4 +168,7 @@ type Status struct {
 	// session token sent outside its carrier. A sandbox with none is left
 	// out.
 	Placeholder map[string]int64 `json:"placeholder,omitempty"`
+	// Recovering are the secrets with a renewal journal left by a broker
+	// that stopped, or held by another one, not yet settled.
+	Recovering []string `json:"recovering,omitempty"`
 }

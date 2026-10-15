@@ -329,7 +329,7 @@ func TestConcurrentCallersShareOneRenewal(t *testing.T) {
 
 func TestCacheKeepsTheRenewedDocumentWhenWriteBackFails(t *testing.T) {
 	f := newCacheFixture(t, 5*time.Minute)
-	f.store.failNext(1)
+	f.store.failWritesOf(credName, 1)
 
 	renewed := f.resolve(t)
 	if bytes.Equal(renewed, f.initial) {
@@ -361,7 +361,7 @@ func TestCacheKeepsTheRenewedDocumentWhenWriteBackFails(t *testing.T) {
 // macOS. A store that keeps refusing must not see one per request.
 func TestWriteBackRetriesAreSpaced(t *testing.T) {
 	f := newCacheFixture(t, 5*time.Minute)
-	f.store.failNext(100)
+	f.store.failWritesOf(credName, 100)
 	renewed := f.resolve(t)
 	writes, lists := f.store.counts()
 	for range 5 {
@@ -511,7 +511,7 @@ func TestCacheServesAReimport(t *testing.T) {
 // it would replace the user's fresh import with it.
 func TestReimportIsNeverOverwrittenByAStaleWriteBack(t *testing.T) {
 	f := newCacheFixture(t, 5*time.Minute)
-	f.store.failNext(1)
+	f.store.failWritesOf(credName, 1)
 	renewed := f.resolve(t)
 	if !slices.Equal(f.cache.Pending(), []string{credName}) {
 		t.Fatal("the failed write-back is not pending")
@@ -717,7 +717,7 @@ func TestAFailedReadHoldsThePendingWriteBack(t *testing.T) {
 	f := newCacheFixture(t, 5*time.Minute)
 	broker := &failingBroker{Broker: secret.StoreBroker(f.store)}
 	f.cache.broker = broker
-	f.store.failNext(1)
+	f.store.failWritesOf(credName, 1)
 	renewed := f.resolve(t)
 	if !slices.Equal(f.cache.Pending(), []string{credName}) {
 		t.Fatal("the failed write-back is not pending")
