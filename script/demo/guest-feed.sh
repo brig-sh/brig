@@ -24,10 +24,12 @@
 # feed is tick N. The first attach shows the last 30 lines.
 #
 # GATE, if set, names a file that holds "go" or "hold". show reattaches only
-# while it holds "go" (or is missing). The demo's launcher writes "hold"
-# before `brig rm` on the old host: between that rm and the move back, this
-# host has no record of the session, and a brig sh there would boot a new,
-# empty one under the same name.
+# while it holds "go" (or is missing). A move back that is typed on the
+# host it comes back to needs none: that host keeps its record of the
+# session until the arrival replaces it, and refuses brig sh until the
+# move has finished. Between `brig rm` there and a move back typed on the
+# other host, that host has no record of the session, and a brig sh there
+# would boot a new, empty one under the same name: hold the feed then.
 set -uo pipefail
 
 mode=${1:?usage: guest-feed.sh start|show [REF]}

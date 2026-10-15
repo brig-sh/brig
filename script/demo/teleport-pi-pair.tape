@@ -16,8 +16,11 @@
 #   script/demo/guest-feed.sh start
 #
 # Without the spare copy on rp1, the move back copies the base while the
-# guest is paused: 22.9 s of downtime in one run. See docs/teleport.md,
-# "Watch it".
+# guest is paused: 22.9 s of downtime in one run. Both moves are typed on
+# rp1: the brig there hands the move back to the brig on rp2, which
+# reaches rp1 with the settings env.sh gives it through
+# BRIG_TELEPORT_REMOTE_BRIG (~/vhsdemo/bin/brig-env, a script that sources
+# env.sh and runs brig). See docs/teleport.md, "Watch it".
 
 Output docs/media/teleport-pi-pair.gif
 Output docs/media/teleport-pi-pair.mp4
