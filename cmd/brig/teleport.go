@@ -739,14 +739,12 @@ func orNone(s string) string {
 
 // teleportAbort is --abort: hull calls the move off, and only when its record
 // then says the destination cannot run the guest does brig give the network
-// there back and ask hull to resume the source.
+// there back and ask hull to resume the source. A session whose move
+// committed runs on the host it went to, and its --abort is the brig
+// there's (teleportForward), never this one's.
 func teleportAbort(cfg *wrap.Config, ref string, wantJSON bool) error {
 	vm := cfg.VMName
 	loc := cfg.Location()
-	if loc.Host != "" {
-		return fmt.Errorf("the move of %s to %s committed, and it runs there. A committed move is not "+
-			"called off; `brig teleport` from there moves it again", ref, loc.Host)
-	}
 	if loc.PendingHost == "" {
 		return fmt.Errorf("no move of %s is recorded, so there is nothing to call off", ref)
 	}
