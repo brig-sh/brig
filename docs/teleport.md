@@ -607,7 +607,11 @@ brig there where the session runs now, and records it. When the move came
 back, the arrival has already filed the session as running on the old
 host. The copy that the move back left on the other host is what `brig rm
 <ref>` there removes. When the move went on to a third host, the old host
-records that host, and its verbs go there. If the old host cannot ask, it
+records that host, and its verbs go there. When that brig says the session
+came back, and the old host has no arrival of it filed, as when that brig
+reached the old host with another `BRIG_STATE_DIR`, the old host keeps its
+record and says so: a record that named the old host itself would send its
+verbs to itself. If the old host cannot ask, it
 keeps its record, and its verbs go to the host it names, whose brig hands
 them on. A forwarded line that fails exits with the code of the brig
 there, or `1` when ssh fails or drops before that brig answers. The move

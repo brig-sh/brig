@@ -143,6 +143,14 @@ func recordForwardedMove(cfg *wrap.Config, ref string, loc wrap.Location) error 
 	}
 	now := cfg.Location()
 	switch {
+	case now.Away() && isThisHost(d.Host):
+		// The brig there filed the arrival in a state this brig does not
+		// read, as under another BRIG_STATE_DIR. A record naming this host
+		// would send every verb here to itself over ssh.
+		warnf("the brig on %s says %s moved to this host, and no arrival of it is filed here: that brig "+
+			"reached this host with other settings, such as another BRIG_STATE_DIR (see "+
+			"BRIG_TELEPORT_REMOTE_BRIG). This host's record is left as it was, naming %s", host, ref, host)
+		return nil
 	case !now.Away():
 		// The move came here, and the arrival filed the session as one of
 		// this host's own.
