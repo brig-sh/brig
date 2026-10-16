@@ -321,9 +321,17 @@ say(len(cb) >= 2, "the task had written %d COUNT lines before the move, at least
 say(not bx, "the task was running when the guest paused" + (" (it had exited %s)" % bx if bx else ""))
 paused = max([t for t, _, _ in b] or [0.0])
 # The stall: from the resume of this move, the last one the guest logged,
-# to the first event of the API stream after it.
+# to the start of the response Claude Code asks for again: the first
+# message_start after it, or the first content delta when the stream has
+# none. The message_stop that marks a cut-off answer as abandoned comes as
+# soon as the connection fails, before any new connection, so it does not
+# count.
 resume = resumes[max(resumes)] if resumes else None
-back = [t for t, _, e in a2 if resume is not None and t > resume and e.get("type") == "stream_event"]
+def kind(e):
+    return (e.get("event") or {}).get("type") if e.get("type") == "stream_event" else None
+after = [(t, body, e) for t, body, e in a2 if resume is not None and t > resume and "abandoned" not in body]
+back = [t for t, _, e in after if kind(e) == "message_start"] or \
+    [t for t, _, e in after if kind(e) == "content_block_delta"]
 if resume is None:
     say(False, "the stream came back on DST within 5 s of the resume: the guest logged no resume")
 elif not back:
