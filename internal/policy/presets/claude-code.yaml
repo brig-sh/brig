@@ -3,10 +3,17 @@
 # `brig secret import claude-code` stores. The broker refreshes the pair ahead
 # of its expiry and writes the new pair back to the store.
 #
-# Claude Code 2.1.292 sends anthropic-beta with oauth-2025-04-20 itself under
+# Claude Code sends anthropic-beta with oauth-2025-04-20 itself under
 # CLAUDE_CODE_OAUTH_TOKEN, so the broker does not set that header. It keeps
 # the values on the reviewed list below and drops the rest. Extending the list
 # is a reviewed change to this file.
+#
+# The list holds every value Claude Code 2.1.292, 2.1.301 and 2.1.309 send,
+# measured on 2026-10-17 and 2026-10-23 against a local listener in both
+# OAuth and API-key modes. A value Claude Code sends that is not on the list
+# costs every session two 400 answers from the upstream, after which Claude
+# Code retries without its newer features. A new Claude Code release can add
+# values; measure it again then.
 name: anthropic
 mode: endpoint
 modes: [endpoint]
@@ -31,6 +38,18 @@ inject:
           - fine-grained-tool-streaming-2025-05-14
           - context-1m-2025-08-07
           - context-management-2025-06-27
+          - advanced-tool-use-2025-11-20
+          - advisor-tool-2026-03-01
+          - afk-mode-2026-01-31
+          - dangerous-tool-use-2026-09-03
+          - effort-2025-11-24
+          - extended-cache-ttl-2025-04-11
+          - inline-tools-2026-09-15
+          - mid-conversation-system-2026-04-07
+          - mid-conversation-tool-changes-2026-07-01
+          - per-turn-control-2026-07-01
+          - prompt-caching-scope-2026-01-05
+          - thinking-token-count-2026-05-13
 guest:
   env:
     ANTHROPIC_BASE_URL: "{route.url}"

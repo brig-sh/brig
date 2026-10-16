@@ -441,10 +441,22 @@ names one takes every field it does not set from the preset.
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
-`fine-grained-tool-streaming-2025-05-14`, `context-1m-2025-08-07` and
-`context-management-2025-06-27`. Claude Code sends `oauth-2025-04-20` itself,
-so the `claude-code` preset does not set the header. It only drops the values
-outside the list.
+`fine-grained-tool-streaming-2025-05-14`, `context-1m-2025-08-07`,
+`context-management-2025-06-27`, `advanced-tool-use-2025-11-20`,
+`advisor-tool-2026-03-01`, `afk-mode-2026-01-31`,
+`dangerous-tool-use-2026-09-03`, `effort-2025-11-24`,
+`extended-cache-ttl-2025-04-11`, `inline-tools-2026-09-15`,
+`mid-conversation-system-2026-04-07`,
+`mid-conversation-tool-changes-2026-07-01`, `per-turn-control-2026-07-01`,
+`prompt-caching-scope-2026-01-05` and `thinking-token-count-2026-05-13`.
+They are the values Claude Code 2.1.292, 2.1.301 and 2.1.309 send. Claude
+Code sends `oauth-2025-04-20` itself, so the `claude-code` preset does not
+set the header. It only drops the values outside the list. The
+`anthropic-api-key` preset keeps the same list without `oauth-2025-04-20`.
+
+A value outside the list costs each session two `400` answers from the
+upstream. Claude Code then retries without the features the value names. The
+broker's audit line counts the dropped values as `dropped.anthropic-beta`.
 
 Print a preset, or a policy with its presets expanded:
 
