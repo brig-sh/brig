@@ -78,7 +78,8 @@ The rows under any section of security.md but The process boundary describe
 the microVM boundary. The `host` kind runs the agent as a process, and those
 rows do not hold for it. Its own rows are the ones under The process
 boundary, and the rows that quote broker.md, runtimes.md and secrets.md. In
-this release the broker serves the host kind alone.
+this release the broker serves the host kind over loopback, and hull on `hvi`
+and nerdctl at `brig.internal`.
 
 | Claim | Section | Defended by |
 | --- | --- | --- |
@@ -125,6 +126,17 @@ this release the broker serves the host kind alone.
 | "replaces each injected string in the body with `[redacted]`, as the body streams" | broker.md: Response | `go:TestReflectedCredentialIsRedacted` `go:TestRedactedEventStreamIsNotBuffered` `macos-smoke:the sweep: the credential the upstream reflected reaches the guest as [redacted]` |
 | "So after the token verifies, and before `request.allow` and the credential, the broker scans the request for every live token of the sandbox." | broker.md: Placeholder detection | `go:TestPlaceholderInEveryPositionAndEncodingIsRefused` `go:TestPlaceholderInAHeaderNameIsRefused` `go:TestPlaceholderInTheMethodIsNotAudited` `go:TestTokensStayLiveUntilTheyExpire` |
 | "Sent as the carrier of the other route, it fails the route check with 401 before the scan." | broker.md: Placeholder detection | `go:TestPlaceholderOfAnotherRouteIsRefused` `go:TestTokenForAnotherRouteIsRefused` |
+| "Each request carries the sandbox whose socket it arrived on." | broker.md: Transports | `go:TestBrigInternalRefusesATokenOnAnotherSandboxsSocket` |
+| "The arrival check refuses a request for another sandbox with `401` and `check=arrival`." | broker.md: Transports | `go:TestBrigInternalRefusesATokenOnAnotherSandboxsSocket` |
+| "A sandbox registered for `brig.internal` is refused on the loopback port the same way." | broker.md: Transports | `go:TestBrigInternalRefusesATokenOnAnotherSandboxsSocket` |
+| "The key never leaves the broker." | broker.md: Transports | `go:TestTheCAHandedOverHoldsNoKey` `go:TestTheBrigCAIsCheckedBeforeTheGuestGetsIt` `go:TestTheBrigCAIsDeliveredWithoutItsKey` `macos-smoke:an endpoint run on hvi routes brig.internal to the broker and hands the guest the CA alone` |
+| "A diverted connection to it is served as `brig.internal` and never dialed." | broker.md: Transports | `go:TestBrigInternalIsServedOnTheDivertSocket` `go:TestBrigInternalServesTLSOnPort443Alone` |
+| "It refuses by closing the socket, and the diverter then resets the guest's connection." | broker.md: Transports | `go:TestDivertClosesOnABadPreamble` `go:TestBrigInternalServesTLSOnPort443Alone` |
+| "A connection over either is closed." | broker.md: Transports | `go:TestDivertCapsConnectionsAcrossSandboxes` |
+| "The table refuses every other port of the bridge address, except DNS." | policies.md: Routing brig.internal | `go:TestRulesetDivertsBrigInternalOnPort443Alone` |
+| "A policy that names another mode still parses." | broker.md: Route modes | `go:TestRouteValidateLeavesAnotherModeToTheBuild` `go:TestAPresetRefusesAModeItDoesNotList` |
+| "`brig policy check` refuses the route, and a run refuses it before boot with exit `7`:" | broker.md: Route modes | `go:TestCheckRefusesARouteInAModeNotInThisBuild` `go:TestARouteInAModeNotInThisBuildIsRefused` `macos-smoke:policy check refuses a route in a mode this build does not serve, with stdout one name per line` `macos-smoke:a run bound to a route in a mode this build does not serve is refused with exit 7` `macos-smoke:nothing reached the runtime for a run refused for its route mode` |
+| "A route in mode `endpoint` is refused where its run path cannot reach the broker:" | broker.md: Route modes | `go:TestARunBoundToARouteIsRefusedBeforeBoot` `go:TestCheckRefusesAnEndpointRouteItCannotServe` `go:TestCheckBrigInternal` `go:TestHullRefusesBrigInternalOffTheGateway` `macos-smoke:policy check refuses an endpoint route on vz, naming why` `macos-smoke:a run bound to a route on vz is refused with exit 7, naming why` |
 | "`GET /status` on the control socket counts the refusals per sandbox." | broker.md: Placeholder detection | `go:TestPlaceholdersAreCounted` `go:TestStatusCountsPlaceholderRefusals` `macos:TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn` |
 | "A carrier that holds another token is refused." | broker.md: Placeholder detection | `go:TestCarrierHoldingAnotherTokenIsRefused` |
 | "the body, up to 8 MiB, and the trailers of a body read to its end. The trailers are not forwarded" | broker.md: Placeholder detection | `go:TestPlaceholderEndingAtTheCapIsFound` `go:TestPlaceholderInATrailerIsRefused` `go:TestRequestTrailersAreNotForwarded` |
