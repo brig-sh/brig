@@ -177,7 +177,7 @@ start() {
 # the two hosts measured over one ssh session.
 timings() {
   on "$1" "python3 - \"\$BRIG_HULL_STORE_DIR\" $VM $2 $3" <<'PY'
-import json, subprocess, sys, time
+import json, re, subprocess, sys, time
 from datetime import datetime
 store, vm, txid, log = sys.argv[1:]
 src = json.load(open(f"{store}/instances/{vm}/migration.json"))
@@ -201,7 +201,9 @@ h = {e["state"]: ts(e["at"]) for e in src["history"]}
 d = {e["state"]: ts(e["at"]) - off for e in dst["history"]}
 lines = [l.split(" ", 1) for l in open(log) if l[:1].isdigit()]
 t0 = float(lines[0][0])
-moving = next(float(t) for t, l in lines if "the guest pauses here" in l)
+# brig says "moving REF from HERE to DST" as it hands the move to hull;
+# a brig before 304689b said "the guest pauses here".
+moving = next(float(t) for t, l in lines if "the guest pauses here" in l or re.search(r"brig: moving \S+ from \S+ to ", l))
 end = float(lines[-1][0])
 tr = src["transfer"]
 print(f"clock offset {peer} minus here: {off * 1000:+.1f} ms")

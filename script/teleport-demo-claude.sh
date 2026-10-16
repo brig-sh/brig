@@ -29,17 +29,26 @@
 # shows what an open connection does across the move.
 #
 # --claude also starts a Claude Code task in the guest before the move:
-# `claude -p` with --output-format stream-json, its output and its errors
-# stamped into /root/task.jsonl and /root/task.err. The task prints the
-# line COUNT n before each function it writes. After the move the COUNT
-# lines read from the stream are the ones from before the move, in order,
-# followed by new ones: no restart, no gap, and more of them 20 s later
-# than at the first look on DST, or the task ended with exit 0. Any error
+# `claude -p` with --output-format stream-json, no tools, low effort and
+# no thinking, its output and its errors stamped into /root/task.jsonl and
+# /root/task.err. The task prints the line COUNT n, as text, before each
+# function it writes: with tools, Claude Code writes the program to a file
+# through Write and no COUNT line reaches the text, and with thinking on it
+# thought for 90 s and more before the first one on the runs of
+# 2026-10-16 (MAX_THINKING_TOKENS=0 did not stop it; with the setting
+# alwaysThinkingEnabled false it began within seconds on most runs, not
+# all). The move waits (up to 60 s) until the stream has at least 2 COUNT
+# lines. After the
+# move the COUNT lines read from the stream are the ones from before the
+# move, in order, followed by new ones: no restart, no gap, and more of
+# them than at the first look on DST, or the task ended with exit 0. That
+# second look polls for up to 150 s: a stream that is open when the guest
+# pauses goes silent on DST until Claude Code gives up on it (about 60 s
+# on the runs of 2026-10-16) and asks again on a new connection. The
+# check prints the stream's longest silence after the move. Any error
 # event written after the move fails the check, and so does a task that
 # exited with another status. It needs a Claude login brig can forward that
-# has not expired. This path has not run to the end yet: on the recorded
-# run the login brig held had expired, and `claude -p` failed to
-# authenticate. Its parser was checked only against made-up streams.
+# has not expired.
 #
 # --prepare runs `brig teleport REF --to DST --prepare` after the boot,
 # before the workload starts, and checks that it exited 0 and that DST
@@ -177,8 +186,8 @@ cd /root/task
 stamp() { while IFS= read -r l; do printf "%s %s\n" "$(date +%s.%N)" "$l"; done; }
 rm -f /root/task/err.fifo && mkfifo /root/task/err.fifo
 stamp < /root/task/err.fifo > /root/task.err &
-claude -p "Write a 400-line Python program one function at a time; before each function print the line COUNT n" \
-  --output-format stream-json --verbose --include-partial-messages 2>/root/task/err.fifo | stamp > /root/task.jsonl
+claude -p "Reply in text only and write no files: write a 1000-line Python program one function at a time; before each function print the line COUNT n" \
+  --tools "" --effort low --settings "{\"alwaysThinkingEnabled\":false}" --output-format stream-json --verbose --include-partial-messages 2>/root/task/err.fifo | stamp > /root/task.jsonl
 echo "$(date +%s.%N) EXIT ${PIPESTATUS[0]}" >> /root/task.exit
 wait
 EOS
@@ -197,7 +206,9 @@ TASKREAD='cat /root/task.jsonl; echo; echo "TASKPROC $(pgrep -c -x claude)"; cat
 
 # TASKJUDGE BEFORE AFTER1 AFTER2: the --claude check, from three reads of
 # the task's stream (TASKREAD's output): right before the move, on DST, and
-# on DST 20 s later. Each line of the stream is a stamp and a stream-json
+# on DST once the stream has more COUNT lines than then (or the task ended,
+# or 150 s passed). TASKJUDGE count READ prints how many COUNT lines one
+# read has, for the waits. Each line of the stream is a stamp and a stream-json
 # event. "After the move" is a stamp later than the last one the first read
 # has, which takes in the second or so of brig's checks before the pause. A
 # read on DST goes through ssh with a terminal, so its lines end in CR LF
@@ -273,8 +284,14 @@ def errors(events):
 def say(ok, what):
     print(("PASS " if ok else "FAIL ") + what)
 
+if sys.argv[1] == "count":
+    events, _, exits = read(sys.argv[2])
+    print(len(counts(events)), "exited" if exits else "running")
+    sys.exit(0)
+
 (b, _, bx), (a1, _, x1), (a2, proc, x2) = (read(p) for p in sys.argv[1:4])
 cb, c1, c2 = counts(b), counts(a1), counts(a2)
+say(len(cb) >= 2, "the task had written %d COUNT lines before the move, at least 2" % len(cb))
 say(not bx, "the task was running when the guest paused" + (" (it had exited %s)" % bx if bx else ""))
 say(c1[:len(cb)] == cb and c2[:len(c1)] == c1,
     "the COUNT lines after the move go on from the %d before it, with no restart" % len(cb))
@@ -282,13 +299,23 @@ say(c2 == list(range(1, len(c2) + 1)), "the COUNT lines run 1 to %d with no gap 
 say(len(c2) > len(cb), "the task wrote %d COUNT lines after the move (%d before, %d now)" % (
     len(c2) - len(cb), len(cb), len(c2)))
 alive = len(c2) > len(c1)
-say(alive or x2 == [0], "the stream is alive on DST: %d COUNT lines at the first look, %d 20 s later%s" % (
+say(alive or x2 == [0], "the stream is alive on DST: %d COUNT lines at the first look, %d at the second%s" % (
     len(c1), len(c2), ", and the task ended with exit 0" if x2 == [0] else ""))
 say(x2 in ([], [0]) and (x2 == [0] or (proc or 0) >= 1),
     "the task is running (%s claude) or ended with exit 0 (exits %s)" % (proc, x2))
 paused = max([t for t, _, _ in b] or [0.0])
 late = errors([ev for ev in a2 if ev[0] > paused])
 say(not late, "no error event in the stream after the move" + ("" if not late else ": " + late[0]))
+# The longest silence of the stream that takes in the move: from the last event
+# before the move to the first after it, or a later gap.
+stamps = sorted({t for t, _, _ in a2})
+gaps = [(n - t, t) for t, n in zip(stamps, stamps[1:]) if n > paused]
+if gaps:
+    g, t = max(gaps)
+    print("INFO the longest silence of the stream from the move on: %.1f s, after the event at %.3f (the last before the move: %.3f)" % (g, t, paused))
+abandoned = sum(1 for _, body, _ in a2 if "abandoned_blocks" in body)
+if abandoned:
+    print("INFO Claude Code gave up on %d message cut off mid-stream and asked again" % abandoned)
 '
 
 # have [on]: whether `brig ls` lists the session's sandbox VM, here, or on
@@ -342,6 +369,15 @@ if [ "$CLAUDE" = 1 ]; then
   L0=$(field TASKLINES <<<"$T")
   [ "${L0:-0}" -gt 0 ] && ! grep -q '^[0-9.]* EXIT' <<<"$T" \
     && pass "the Claude Code task is streaming ($L0 lines)" || fail "the Claude Code task is not streaming"
+  # Wait, up to 60 s, until the stream has 2 COUNT lines: a move before the
+  # first one could not tell a restart from a task that goes on.
+  for _ in $(seq 30); do
+    guest "$TASKREAD" >"$OUT/task.0" 2>/dev/null
+    n=$(python3 -c "$TASKJUDGE" count "$OUT/task.0" | cut -d' ' -f1)
+    [ "${n:-0}" -ge 2 ] && break
+    sleep 2
+  done
+  echo "COUNT lines before the move: ${n:-0}"
 fi
 sleep 3
 BEFORE=$(guest "$CHECK" 2>/dev/null); echo "$BEFORE"
@@ -415,11 +451,21 @@ if [ "$CLAUDE" = 1 ]; then
   say "the Claude Code task across the move"
   K=$(guest "$TASKCHECK" 2>/dev/null); echo "$K"
   guest "$TASKREAD" >"$OUT/task.1" 2>/dev/null
-  sleep 20
-  guest "$TASKREAD" >"$OUT/task.2" 2>/dev/null
+  n1=$(python3 -c "$TASKJUDGE" count "$OUT/task.1" | cut -d' ' -f1)
+  # The second look: once the stream has more COUNT lines than the first,
+  # or the task ended, or 150 s passed.
+  t0=$(now)
+  for _ in $(seq 30); do
+    sleep 5
+    guest "$TASKREAD" >"$OUT/task.2" 2>/dev/null
+    read -r n2 st < <(python3 -c "$TASKJUDGE" count "$OUT/task.2")
+    [ "${n2:-0}" -gt "${n1:-0}" ] || [ "$st" = exited ] && break
+  done
+  echo "the second look, $(awk "BEGIN { printf \"%.0f\", $(now) - $t0 }") s after the first: ${n1:-0} -> ${n2:-0} COUNT lines, task $st"
   while IFS= read -r l; do
     case $l in
       "PASS "*) pass "${l#PASS }" ;;
+      "INFO "*) echo "${l#INFO }" ;;
       *) fail "${l#FAIL }" ;;
     esac
   done < <(python3 -c "$TASKJUDGE" "$OUT/task.0" "$OUT/task.1" "$OUT/task.2" 2>&1 || echo "FAIL the task check did not run")
@@ -433,7 +479,7 @@ say "numbers"
 dtotal() { tr -d '\r' | grep -o 'downtime total [0-9]*' | tail -1 | awk '{ print $3 }'; }
 python3 - "${BRIG_HULL_STORE_DIR:-$HOME/.hull/store}" "$VM" "$TX" "$OUT/move.log" \
   "$(dtotal <<<"$BEFORE")" "$(dtotal <<<"$AFTER")" <<'PY'
-import json, subprocess, sys, time
+import json, re, subprocess, sys, time
 from datetime import datetime
 store, vm, txid, log, dt0, dt1 = sys.argv[1:]
 src = json.load(open(f"{store}/instances/{vm}/migration.json"))
@@ -457,7 +503,9 @@ h = {e["state"]: ts(e["at"]) for e in src["history"]}
 d = {e["state"]: ts(e["at"]) - off for e in dst["history"]}
 lines = [l.split(" ", 1) for l in open(log) if l[:1].isdigit()]
 t0 = float(lines[0][0])
-moving = next(float(t) for t, l in lines if "the guest pauses here" in l)
+# brig says "moving REF from HERE to DST" as it hands the move to hull;
+# a brig before 304689b said "the guest pauses here".
+moving = next(float(t) for t, l in lines if "the guest pauses here" in l or re.search(r"brig: moving \S+ from \S+ to ", l))
 end = float(lines[-1][0])
 tr = src["transfer"]
 tm = src.get("timingsMs") or {}
