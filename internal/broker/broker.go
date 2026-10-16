@@ -66,10 +66,12 @@ type Config struct {
 	// proxy.
 	Transport http.RoundTripper
 	// ArrivalCheck is optional. It reports whether a request for sandbox
-	// that arrived from remoteAddr came in on that sandbox's gateway. It
-	// defaults to accepting every address, which fits a runtime where all
-	// sandboxes share one gateway.
-	ArrivalCheck func(sandbox, remoteAddr string) bool
+	// that arrived from remoteAddr came in where that sandbox reaches the
+	// broker, and names the sandbox remoteAddr belongs to, or "" when it
+	// names none. A request that fails it is answered as one for a sandbox
+	// the broker does not serve. It defaults to accepting every address,
+	// which fits a runtime where all sandboxes share one gateway.
+	ArrivalCheck func(sandbox, remoteAddr string) (arrived string, ok bool)
 	// Sandboxes is optional. Each one is added as by AddSandbox.
 	Sandboxes []Sandbox
 	// ReplayBudget is optional, and defaults to 64 MiB. It bounds the bytes
@@ -135,7 +137,7 @@ type Handler struct {
 	audit     *slog.Logger
 	now       func() time.Time
 	transport http.RoundTripper
-	arrival   func(sandbox, remoteAddr string) bool
+	arrival   func(sandbox, remoteAddr string) (string, bool)
 	replay    *budget
 	bodyWait  time.Duration
 
@@ -216,7 +218,7 @@ func New(cfg Config) (*Handler, error) {
 		h.transport = defaultTransport()
 	}
 	if h.arrival == nil {
-		h.arrival = func(string, string) bool { return true }
+		h.arrival = func(string, string) (string, bool) { return "", true }
 	}
 	for _, s := range cfg.Sandboxes {
 		if err := h.AddSandbox(s); err != nil {

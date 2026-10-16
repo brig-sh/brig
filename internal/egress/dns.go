@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -230,6 +231,24 @@ func reply(query []byte, q question, rcode byte) []byte {
 	return out
 }
 
+// localAnswer returns the response to a query for a name the resolver
+// answers itself: one A record with addr for an A query, and no answer for
+// any other type, as hull's gateway answers its own records. It is the one
+// record the resolver builds, and its TTL is zero.
+func localAnswer(query []byte, q question, addr netip.Addr) []byte {
+	out := reply(query, q, 0)
+	// AA set: the name is the resolver's own.
+	out[2] |= 0x04
+	if q.qtype != typeA || !addr.Is4() {
+		return out
+	}
+	binary.BigEndian.PutUint16(out[6:], 1)
+	a := addr.As4()
+	// The owner is a pointer to the question's name, at the end of the
+	// header. Then type A, class IN, TTL 0, and four bytes of address.
+	return append(out, 0xc0, headerLen, 0, typeA, 0, classIN, 0, 0, 0, 0, 0, 4, a[0], a[1], a[2], a[3])
+}
+
 // headerReply returns a response to a query whose question could not be
 // read. It carries the header alone.
 func headerReply(query []byte, rcode byte) []byte {
@@ -321,4 +340,87 @@ func inspectAnswer(resp, query []byte, q question, ttl uint32) ([]byte, []netip.
 	}
 	binary.BigEndian.PutUint16(out[10:], uint16(len(opt)))
 	return out, addrs, nil
+}
+
+// chainAddrs returns the IPv4 addresses that the answer section of resp gives
+// name, through any CNAME chain in the section that starts at name.
+//
+// A divert learns a diverted host's addresses this way. The guest may ask
+// for the diverted host, whose answer can be a chain of aliases, or for an
+// alias of it. Either way the A records at the end of the chain are the
+// host's.
+func chainAddrs(resp []byte, name string) ([]netip.Addr, error) {
+	if len(resp) < headerLen {
+		return nil, errShort
+	}
+	_, off, err := nameLabels(resp, headerLen, true)
+	if err != nil {
+		return nil, err
+	}
+	off += 4
+	type record struct {
+		owner, target string
+		addr          netip.Addr
+	}
+	var records []record
+	for i := 0; i < int(binary.BigEndian.Uint16(resp[6:])); i++ {
+		owner, next, err := nameLabels(resp, off, true)
+		if err != nil {
+			return nil, err
+		}
+		if next+10 > len(resp) {
+			return nil, errShort
+		}
+		rtype := binary.BigEndian.Uint16(resp[next:])
+		class := binary.BigEndian.Uint16(resp[next+2:])
+		rdlen := int(binary.BigEndian.Uint16(resp[next+8:]))
+		rdata := next + 10
+		if rdata+rdlen > len(resp) {
+			return nil, errShort
+		}
+		r := record{owner: joinLabels(owner)}
+		switch {
+		case rtype == typeCNAME && class == classIN:
+			target, _, err := nameLabels(resp, rdata, true)
+			if err != nil {
+				return nil, err
+			}
+			r.target = joinLabels(target)
+		case rtype == typeA && class == classIN && rdlen == 4:
+			r.addr = netip.AddrFrom4([4]byte(resp[rdata : rdata+4]))
+		}
+		records = append(records, r)
+		off = rdata + rdlen
+	}
+	// Each pass follows one more link of the chain, and a chain cannot be
+	// longer than the section.
+	names := []string{normalizeName(name)}
+	for range records {
+		grew := false
+		for _, r := range records {
+			if r.target != "" && slices.Contains(names, r.owner) && !slices.Contains(names, r.target) {
+				names = append(names, r.target)
+				grew = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+	var out []netip.Addr
+	for _, r := range records {
+		if r.addr.IsValid() && slices.Contains(names, r.owner) && !slices.Contains(out, r.addr) {
+			out = append(out, r.addr)
+		}
+	}
+	return out, nil
+}
+
+// joinLabels returns a name from its labels, in lower case.
+func joinLabels(labels [][]byte) string {
+	parts := make([]string, len(labels))
+	for i, l := range labels {
+		parts[i] = strings.ToLower(string(l))
+	}
+	return strings.Join(parts, ".")
 }

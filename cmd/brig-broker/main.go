@@ -27,11 +27,13 @@ import (
 	"github.com/brig-sh/brig/internal/secret"
 )
 
-func main() { os.Exit(run(os.Args[1:], os.Stderr)) }
+func main() { os.Exit(run(os.Args[1:], os.Stderr, serverConfig{openStore: secret.Open})) }
 
-// run parses the command line and serves until stopped. It returns the exit
-// status.
-func run(args []string, stderr io.Writer) int {
+// run parses the command line and serves cfg on the directory it names until
+// stopped. It returns the exit status. cfg carries everything but the
+// directory: main passes brig's secret store, and the tests a memory store
+// and an upstream of their own.
+func run(args []string, stderr io.Writer, cfg serverConfig) int {
 	fs := flag.NewFlagSet("brig-broker", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", "", "the broker directory, ~/.brig/host/broker (required)")
@@ -45,7 +47,8 @@ func run(args []string, stderr io.Writer) int {
 	// Every file the broker creates is its own: the host key, the CA key,
 	// the audit log and the control socket.
 	syscall.Umask(0o077)
-	srv, err := newServer(serverConfig{dir: *dir, openStore: secret.Open})
+	cfg.dir = *dir
+	srv, err := newServer(cfg)
 	if err == errAlreadyRunning {
 		_, _ = fmt.Fprintln(stderr, "brig-broker: another broker is serving", *dir)
 		return 0

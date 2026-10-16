@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -73,10 +74,13 @@ func writeNew(path string, data []byte) error {
 }
 
 // The lifetimes of the brig CA and of the brig.internal certificate it
-// signs. The leaf is drawn at every start and its key is never written.
+// signs. The leaf is drawn at every start and its key is never written. A
+// broker that runs for longer signs a new one leafRenew before the old one
+// expires.
 const (
 	caLifetime   = 10 * 365 * 24 * time.Hour
 	leafLifetime = 30 * 24 * time.Hour
+	leafRenew    = 7 * 24 * time.Hour
 )
 
 // authority is the brig CA of this host. It signs brig.internal and nothing
@@ -85,8 +89,13 @@ const (
 type authority struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
-	// leaf is the brig.internal certificate, signed at start.
+
+	mu sync.Mutex
+	// leaf is the brig.internal certificate, signed at start and again
+	// before it expires.
 	leaf tls.Certificate
+	// leafEnd is when leaf expires.
+	leafEnd time.Time
 }
 
 // loadOrCreateCA reads the CA in dir, creates it at first start, and signs
@@ -103,10 +112,32 @@ func loadOrCreateCA(dir string) (*authority, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.leaf, err = a.sign(injector.BrigInternal, time.Now()); err != nil {
+	if _, err := a.current(time.Now()); err != nil {
 		return nil, err
 	}
 	return a, nil
+}
+
+// current returns the brig.internal certificate, signing a new one when the
+// one held expires within leafRenew.
+func (a *authority) current(now time.Time) (*tls.Certificate, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.leaf.Certificate == nil || now.Add(leafRenew).After(a.leafEnd) {
+		leaf, err := a.sign(injector.BrigInternal, now)
+		if err != nil {
+			return nil, err
+		}
+		a.leaf, a.leafEnd = leaf, now.Add(leafLifetime)
+	}
+	leaf := a.leaf
+	return &leaf, nil
+}
+
+// certPEM is the CA certificate in PEM, what a guest trusts brig.internal by.
+// It holds no key.
+func (a *authority) certPEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: a.cert.Raw})
 }
 
 func readCA(certPath, keyPath string) (*authority, error) {
@@ -223,11 +254,17 @@ func (a *authority) sign(name string, now time.Time) (tls.Certificate, error) {
 	return tls.Certificate{Certificate: [][]byte{der, a.cert.Raw}, PrivateKey: key}, nil
 }
 
-// serverConfig is the TLS configuration that serves brig.internal. No
-// listener uses it in this version: no runtime routes brig.internal from a
-// guest to the broker yet (#265).
+// serverConfig is the TLS configuration that serves brig.internal on the
+// divert sockets. The route server reads HTTP/1.1 from the connections it is
+// handed, so that is the one protocol offered.
 func (a *authority) serverConfig() *tls.Config {
-	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{a.leaf}}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"http/1.1"},
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return a.current(time.Now())
+		},
+	}
 }
 
 func serial() *big.Int {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -18,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/divert"
 	"github.com/brig-sh/brig/internal/egress"
 )
 
@@ -197,28 +200,36 @@ func (ns containerNetns) upstreams() ([]netip.Addr, error) {
 // shim the run uses.
 func nerdctlPath() RunPath { return RunPath{"nerdctl", containerdRuntime()} }
 
-// egressRefusal is the refusal of a boot whose rules brig could not put in
-// place. The record answers Enforced, so what failed is this host, and the
-// answer for it is unknown.
-func egressRefusal(why, remedy string, err error) error {
-	return &CapabilityError{Property: EgressPolicy, Path: nerdctlPath(), State: Unknown,
-		Why: why, Remedy: remedy, Err: err}
+// egressRefusal is the refusal of a boot whose rules or divert brig could
+// not put in place. The record answers Enforced, so what failed is this host,
+// and the answer for it is unknown. A run with a policy is refused as an
+// egress policy. A run that only diverts is refused as a route in mode
+// endpoint, which is what diverts brig.internal. fix is the first half of
+// the remedy.
+func egressRefusal(e Egress, why, fix string, err error) error {
+	prop := EgressPolicy
+	if !e.Filtered() {
+		prop = RouteModeProperty(v1alpha1.ModeEndpoint)
+	}
+	return &CapabilityError{Property: prop, Path: nerdctlPath(), State: Unknown, Why: why,
+		Remedy: fix + ", or detach the policy", Err: err}
 }
 
-const egressSetupRemedy = "Install nftables and util-linux's nsenter, or detach the policy"
+const egressSetupFix = "Install nftables and util-linux's nsenter"
 
 // egressEnforces confirms, at boot, the table's answer for this runtime: that
 // nft runs in the namespace the bridges live in. A probe that fails answers
 // unknown and refuses the boot, as the gateway probe does on hvi.
-func egressEnforces() (containerNetns, error) {
+func egressEnforces(e Egress) (containerNetns, error) {
 	ns, err := findContainerNetns()
 	if err != nil {
-		return containerNetns{}, egressRefusal("brig cannot find the network namespace of the container network",
-			egressSetupRemedy, err)
+		return containerNetns{}, egressRefusal(e, "brig cannot find the network namespace of the container network",
+			egressSetupFix, err)
 	}
 	argv, _, err := ns.nftArgv()
 	if err != nil {
-		return containerNetns{}, egressRefusal("brig enforces a policy here with nftables", egressSetupRemedy, err)
+		return containerNetns{}, egressRefusal(e, "brig puts the sandbox's rules in place with nftables",
+			egressSetupFix, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), egressProbeTimeout)
 	defer cancel()
@@ -230,8 +241,8 @@ func egressEnforces() (containerNetns, error) {
 		} else if msg := strings.TrimSpace(string(out)); msg != "" {
 			err = fmt.Errorf("%w: %s", err, firstLines(msg, 3))
 		}
-		return containerNetns{}, egressRefusal(fmt.Sprintf("the probe `%s list tables` failed", strings.Join(argv, " ")),
-			egressSetupRemedy, err)
+		return containerNetns{}, egressRefusal(e, fmt.Sprintf("the probe `%s list tables` failed", strings.Join(argv, " ")),
+			egressSetupFix, err)
 	}
 	return ns, nil
 }
@@ -333,20 +344,70 @@ func egressLock(name string) (func(), error) {
 
 // egressSpec is what a sandbox's egress was started to enforce. It reuses the
 // gateway's spelling, sorted, so that two orderings of one policy compare
-// equal and a rule moved from allow to deny does not.
+// equal and a rule moved from allow to deny does not. The diverts follow the
+// rules, so a divert added or dropped since the boot reads stale.
 func egressSpec(e Egress) string {
-	if !e.Filtered() {
-		return ""
+	var lines []string
+	if e.Filtered() {
+		rules := []string{}
+		for _, r := range e.Allow {
+			rules = append(rules, "allow "+r.arg())
+		}
+		for _, r := range e.Deny {
+			rules = append(rules, "deny "+r.arg())
+		}
+		slices.Sort(rules)
+		lines = append([]string{"default=" + e.Default}, rules...)
 	}
-	rules := []string{}
-	for _, r := range e.Allow {
-		rules = append(rules, "allow "+r.arg())
+	if e.Divert.Requested() {
+		var routes []string
+		for _, r := range e.Divert.Routes {
+			routes = append(routes, "divert "+r.arg())
+		}
+		slices.Sort(routes)
+		if e.Divert.BrigInternal {
+			routes = append(routes, "brig.internal")
+		}
+		lines = append(append(lines, routes...), "divert-socket "+e.Divert.Socket)
 	}
-	for _, r := range e.Deny {
-		rules = append(rules, "deny "+r.arg())
+	return strings.Join(lines, "\n")
+}
+
+func (r DivertRoute) arg() string { return net.JoinHostPort(r.Host, strconv.Itoa(r.Port)) }
+
+// args returns the resolver's flags for the divert, on a bridge whose own
+// address is gw. brig.internal is a record the resolver answers with gw, and
+// a divert of gw's port 443. The sandbox's table refuses every other port of
+// gw but DNS.
+func (d Divert) args(gw netip.Addr) []string {
+	if !d.Requested() {
+		return nil
 	}
-	slices.Sort(rules)
-	return strings.Join(append([]string{"default=" + e.Default}, rules...), "\n")
+	var args []string
+	for _, r := range d.on(gw) {
+		args = append(args, "--divert", r.arg())
+	}
+	if d.BrigInternal {
+		args = append(args, "--host", BrigInternalName+"="+gw.String())
+	}
+	return append(args, "--divert-socket", d.Socket)
+}
+
+// checkDivert refuses a divert the resolver would refuse, before anything
+// boots.
+func checkDivert(d Divert) error {
+	if !d.Requested() {
+		return nil
+	}
+	if !filepath.IsAbs(d.Socket) {
+		return fmt.Errorf("the injector socket %q is not an absolute path", d.Socket)
+	}
+	for _, r := range d.Routes {
+		if _, err := divert.ParseRoute(r.arg()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // egressBoot is what a run needs from startEgress: the resolver the guest is
@@ -366,15 +427,15 @@ var egressStart = (*nerdctl).startEgress
 // has seen that the sandbox is not running.
 func (n *nerdctl) startEgress(name string, e Egress) (egressBoot, error) {
 	if !stopEgress(name) {
-		return egressBoot{}, egressRefusal("the egress resolver of this sandbox's previous boot is still running",
-			"Stop that process, or detach the policy", nil)
+		return egressBoot{}, egressRefusal(e, "the egress resolver of this sandbox's previous boot is still running",
+			"Stop that process", nil)
 	}
-	ns, err := egressEnforces()
+	ns, err := egressEnforces(e)
 	if err != nil {
 		return egressBoot{}, err
 	}
 	refuse := func(why string, err error) (egressBoot, error) {
-		return egressBoot{}, egressRefusal(why, "See docs/troubleshooting.md, or detach the policy", err)
+		return egressBoot{}, egressRefusal(e, why, "See docs/troubleshooting.md", err)
 	}
 	table, err := egress.TableName(name)
 	if err != nil {
@@ -391,7 +452,7 @@ func (n *nerdctl) startEgress(name string, e Egress) (egressBoot, error) {
 	bridge.Redirect = upstream
 	nftArgv, nftBin, err := ns.nftArgv()
 	if err != nil {
-		return refuse("brig enforces a policy here with nftables", err)
+		return refuse("brig puts the sandbox's rules in place with nftables", err)
 	}
 	var b [2]byte
 	_, _ = rand.Read(b[:])
@@ -450,6 +511,7 @@ func startResolver(name, table string, bridge egress.Network, mark uint16, ns co
 		args = append(args, "--upstream", netip.AddrPortFrom(u, 53).String(), "--redirect", u.String())
 	}
 	args = append(args, e.args()...)
+	args = append(args, e.Divert.args(bridge.Gateway)...)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	// The resolver needs nothing from brig's environment, which can hold the

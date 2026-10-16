@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 )
 
 // The hvi backend brings no network of its own. Its built-in stack answers
@@ -498,6 +501,11 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 			return "", err
 		}
 	}
+	if policy.Divert.Requested() {
+		if err := gatewayDiverts(bin); err != nil {
+			return "", err
+		}
+	}
 	// A gateway serving something else has to be gone before the replacement
 	// starts, and gone is not the same as asked to go. shutDownGateway is best
 	// effort: the record can be missing, the pid can belong to something else,
@@ -516,7 +524,16 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 				"holding %s", name, name, qemuGatewaySocket(sock))
 		}
 	}
-	return startGateway(bin, sock, sandboxSubnet(index), sandboxGatewayIP(index), policy, want)
+	sock, err = startGateway(bin, sock, sandboxSubnet(index), sandboxGatewayIP(index), policy, want)
+	// A gateway that takes --divert and does not come up with it diverts
+	// nothing, and the guest's connections go nowhere brig serves. That is a
+	// refusal of the route, with exit 7.
+	if err != nil && policy.Divert.Requested() {
+		return "", &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: RunPath{"hull", "hvi"},
+			State: Unknown, Why: "the network gateway that diverts the route's connections did not start",
+			Remedy: "Read the gateway log, or detach the policy", Err: err}
+	}
+	return sock, err
 }
 
 // startGateway runs one gateway and waits for it to answer.
@@ -558,6 +575,10 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 	// /forwards endpoint behind it, and unpublishable names that.
 	args = append(args, "--api", gatewayAPISocket(sock))
 	args = append(args, policy.args()...)
+	// gatewayIP is one brig derived. Were it not an address, a divert of it
+	// would read "invalid IP", which the gateway refuses at start.
+	gw, _ := netip.ParseAddr(gatewayIP)
+	args = append(args, policy.divertArgs(gw)...)
 
 	cmd := exec.Command(bin, args...)
 	cmd.Env = mergeEnv(telemetryEnv(false))
@@ -676,6 +697,75 @@ func (e Egress) args() []string {
 	return args
 }
 
+// divertArgs is the diverts as the gateway's command line takes them, one
+// --divert host:port=socket each. brig.internal is a --host record of the
+// gateway's own address gw, and a divert of its port 443. The gateway never
+// dials its own address, so its other ports are refused.
+func (e Egress) divertArgs(gw netip.Addr) []string {
+	var args []string
+	for _, r := range e.Divert.on(gw) {
+		args = append(args, "--divert", gatewayDivert(r, e.Divert.Socket))
+	}
+	if e.Divert.BrigInternal {
+		args = append(args, "--host", BrigInternalName+"="+gw.String())
+	}
+	return args
+}
+
+// gatewayDivert is one route as hull's gateway takes it: host:port=socket.
+func gatewayDivert(r DivertRoute, socket string) string {
+	return r.arg() + "=" + socket
+}
+
+// gatewayDiverts checks that this runtime's gateway takes --divert, which
+// brig.internal needs. A hull that lacks it refuses the flag at start, so the
+// run is refused before the gateway is asked. A probe that fails refuses too,
+// for the reason gatewayEnforces gives.
+func gatewayDiverts(bin string) error {
+	return helpLists(bin, "--divert", "network-gateway")
+}
+
+// helpLists runs `bin <cmd...> --help` and refuses, as a capability of the
+// endpoint mode on hvi, a binary whose help does not list flag.
+func helpLists(bin, flag string, cmd ...string) error {
+	args := append(append([]string(nil), cmd...), "--help")
+	probe := bin + " " + strings.Join(args, " ")
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, bin, args...)
+	c.WaitDelay = time.Second
+	out, err := c.CombinedOutput()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
+	}
+	hvi := RunPath{"hull", "hvi"}
+	if err != nil {
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+			Why:    fmt.Sprintf("the probe `%s` failed", probe),
+			Remedy: "Fix the runtime, or detach the policy", Err: err}
+	}
+	if listsFlag(string(out), flag) {
+		return nil
+	}
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: CannotEnforce,
+		Why:    fmt.Sprintf("`%s` of %s has no %s", strings.Join(cmd, " "), bin, flag),
+		Remedy: "Upgrade hull, or detach the policy"}
+}
+
+// listsFlag returns whether help lists flag as an option: the first word of
+// a line, followed by a space, "=", "," or the end of the line. A longer
+// flag that starts with it, such as --divert-dns, and a sentence that
+// mentions it do not count.
+func listsFlag(help, flag string) bool {
+	for _, line := range strings.Split(help, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimLeft(line, " \t"), flag)
+		if ok && (rest == "" || strings.ContainsRune(" \t=,", rune(rest[0]))) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r Rule) arg() string {
 	if r.CIDR != "" {
 		return "cidr=" + r.CIDR
@@ -692,8 +782,19 @@ func (r Rule) arg() string {
 // so that moving a rule from allow to deny is.
 func gatewaySpec(index int, e Egress) string {
 	parts := []string{"subnet=" + sandboxSubnet(index), "gateway=" + sandboxGatewayIP(index)}
+	// A divert names the broker's socket, and a gateway started with other
+	// diverts or none sends the route's connections elsewhere.
+	var diverts []string
+	gw, _ := netip.ParseAddr(sandboxGatewayIP(index))
+	for _, r := range e.Divert.on(gw) {
+		diverts = append(diverts, "divert "+gatewayDivert(r, e.Divert.Socket))
+	}
+	if e.Divert.BrigInternal {
+		diverts = append(diverts, "host "+BrigInternalName+"="+sandboxGatewayIP(index))
+	}
+	slices.Sort(diverts)
 	if !e.Filtered() {
-		return strings.Join(append(parts, "unfiltered"), "\n")
+		return strings.Join(append(append(parts, "unfiltered"), diverts...), "\n")
 	}
 	rules := []string{"default=" + e.Default}
 	for _, r := range e.Allow {
@@ -703,7 +804,7 @@ func gatewaySpec(index int, e Egress) string {
 		rules = append(rules, "deny "+r.arg())
 	}
 	slices.Sort(rules[1:])
-	return strings.Join(append(parts, rules...), "\n")
+	return strings.Join(append(append(parts, rules...), diverts...), "\n")
 }
 
 // writeGatewayRecord records which process serves this socket and what it was
