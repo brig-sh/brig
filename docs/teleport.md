@@ -1142,9 +1142,14 @@ last run because the task's answer started over after the move; see
 stream must come back on the destination within 5 s of the guest's
 resume, and the turn must complete, with exit 0 and a result event of
 subtype `success`, waited for up to 600 s. The stall is from the guest's
-own record of its resume to the first API stream event after it. Whether
-the `COUNT` lines run with no restart, gap or repeat, and the error
-events after the move, are printed as information. `--prepare` prepares the
+own record of its resume to the first `message_start` after it, the
+start of the response Claude Code asks for again. The `message_stop`
+that marks the cut-off answer as abandoned comes as soon as the old
+connection fails, so it does not count. An error event after that
+reconnect fails the check too; one between the resume and the
+reconnect, which the guest agent's close of the old connection causes,
+is printed. Whether the `COUNT` lines run with no restart, gap or repeat
+is printed as information. `--prepare` prepares the
 destination after the boot, and the script's numbers show a streamed
 move's rounds and the rise in the guest's `downtime total`.
 

@@ -43,12 +43,15 @@
 # Claude Code asks again on a new connection, which may start the answer
 # over. So the check passes when the stream comes back on DST within 5 s
 # of the resume (the stall: from the guest's own record of its resume to
-# the first API stream event after it), the task writes more COUNT lines
-# after the move, and the turn completes: exit 0 and a result event of
-# subtype success, waited for up to 600 s. Whether the COUNT lines go on
-# with no restart, gap or repeat, the error events after the move, the
-# stream's longest silence and a message Claude Code gave up on are
-# printed as information. Before the agent closed the connection, the
+# the first message_start after it, the start of the response Claude Code
+# asks for again; the message_stop that marks the cut-off answer as
+# abandoned does not count), no error event comes after that reconnect,
+# the task writes more COUNT lines after the move, and the turn completes:
+# exit 0 and a result event of subtype success, waited for up to 600 s.
+# Whether the COUNT lines go on with no restart, gap or repeat, the error
+# events between the resume and the reconnect, the stream's longest
+# silence and a message Claude Code gave up on are printed as
+# information. Before the agent closed the connection, the
 # stream went silent for about 60 s on the runs of 2026-10-16 until
 # Claude Code gave up on it. It needs a Claude login brig can forward that
 # has not expired.
@@ -348,8 +351,16 @@ say(done, "the turn completed: exit %s, result %s" % (
 info(c1[:len(cb)] == cb and c2[:len(c1)] == c1,
     "the COUNT lines after the move go on from the %d before it, with no restart" % len(cb))
 info(c2 == list(range(1, len(c2) + 1)), "the COUNT lines run 1 to %d with no gap or repeat" % len(c2))
-late = errors([ev for ev in a2 if ev[0] > paused])
-info(not late, "no error event in the stream after the move" + ("" if not late else ": " + late[0]))
+# Claude Code reports an error when the guest agent closes the old
+# connection, between the resume and the reconnect. An error event after
+# the reconnect, or any when there was no reconnect to time, fails.
+late = [ev for ev in a2 if ev[0] > paused]
+window = [ev for ev in late if back and resume is not None and resume < ev[0] < back[0]]
+late = errors([ev for ev in late if ev not in window])
+say(not late, "no error event in the stream after the move, but for the reconnect" + ("" if not late else ": " + late[0]))
+excused = errors(window)
+if excused:
+    print("INFO %d error event(s) between the resume and the reconnect, the first: %s" % (len(excused), excused[0]))
 # The longest silence of the stream that takes in the move: from the last event
 # before the move to the first after it, or a later gap.
 stamps = sorted({t for t, _, _ in a2})
