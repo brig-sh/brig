@@ -1,9 +1,13 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // A move used to carry the whole guest while it was paused: its memory and
@@ -76,7 +80,11 @@ var _ MovePreparer = (*hull)(nil)
 // the destination over ssh to the host given, as a move does, so it is not
 // handed another transport either.
 func (h *hull) MigratePrepare(name, to string, spec PrepareSpec) (Prepared, error) {
-	args, err := prepareArgs(name, to, spec)
+	pin := ""
+	if h.prepareTakesKernelPin() {
+		pin = PortableKernelDigest
+	}
+	args, err := prepareArgs(name, to, pin, spec)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -87,10 +95,34 @@ func (h *hull) MigratePrepare(name, to string, spec PrepareSpec) (Prepared, erro
 	return preparedOf(name, to, out)
 }
 
+// kernelPinFlag is how `hull migrate-prepare --help` lists --kernel-sha256,
+// matched as profileFlag matches --profile.
+var kernelPinFlag = regexp.MustCompile(`(?m)^\s*--kernel-sha256[\s=]`)
+
+// prepareTakesKernelPin reports whether this hull's prepare takes
+// --kernel-sha256, the portable kernel the destination is to hold. With it,
+// a prepare to a host that holds another portable kernel, such as one set up
+// before brig pinned this one, replaces that kernel with the pinned one when
+// this host's is the pin; brig refuses to boot any other there. A hull from
+// before the flag would reject it, so it is asked first, as takesProfile
+// asks; a hull that does not answer gets the prepare without it, which
+// leaves another kernel there as it is.
+func (h *hull) prepareTakesKernelPin() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.bin, "migrate-prepare", "--help")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	// See gatewayEnforces.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	return err == nil && kernelPinFlag.Match(out)
+}
+
 // prepareArgs is the one place the prepare's command line is built, flags
 // first and the sandbox last, as for a move. The host is checked here as
-// well, since it goes to hull and from hull to ssh.
-func prepareArgs(name, to string, spec PrepareSpec) ([]string, error) {
+// well, since it goes to hull and from hull to ssh. pin, when not "", is the
+// portable kernel's digest for --kernel-sha256.
+func prepareArgs(name, to, pin string, spec PrepareSpec) ([]string, error) {
 	if err := CheckRemote(to); err != nil {
 		return nil, err
 	}
@@ -101,6 +133,7 @@ func prepareArgs(name, to string, spec PrepareSpec) ([]string, error) {
 	for _, f := range []struct{ flag, value string }{
 		{"--remote-store", spec.RemoteStore},
 		{"--remote-hull", spec.RemoteHull},
+		{"--kernel-sha256", pin},
 	} {
 		if f.value != "" {
 			args = append(args, f.flag, f.value)
