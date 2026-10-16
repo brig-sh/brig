@@ -63,8 +63,14 @@ func hostSupports(spec RunSpec) error {
 	// The host kind has no network of its own to divert from. A spec that
 	// asks for a divert is refused, so its connections never go straight to
 	// the destination.
+	if err := requireDiverts(spec, RunPath{HostKind, anyBackend}); err != nil {
+		return err
+	}
 	if len(spec.Egress.Divert.Routes) > 0 {
 		return errors.New("the host kind has no network of its own to divert a connection from")
+	}
+	if err := checkSetup(spec, RunPath{HostKind, anyBackend}); err != nil {
+		return err
 	}
 	// The host kind reaches the broker over loopback.
 	if spec.Egress.Divert.BrigInternal {

@@ -529,9 +529,10 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 	// nothing, and the guest's connections go nowhere brig serves. That is a
 	// refusal of the route, with exit 7.
 	if err != nil && policy.Divert.Requested() {
-		return "", &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: RunPath{"hull", "hvi"},
+		prop, without := policy.Divert.refusal()
+		return "", &CapabilityError{Property: prop, Path: RunPath{"hull", "hvi"},
 			State: Unknown, Why: "the network gateway that diverts the route's connections did not start",
-			Remedy: "Read the gateway log, or detach the policy", Err: err}
+			Remedy: "Read the gateway log, or " + without, Err: err}
 	}
 	return sock, err
 }

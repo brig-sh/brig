@@ -10,8 +10,8 @@ import (
 )
 
 // Validate checks a complete route, as it is after preset expansion: every
-// required field is set, the mode is one this version serves, and
-// Authorization is in inject.headers.remove. A credential lifecycle passes
+// required field is set, the mode is a mode name, and Authorization is in
+// inject.headers.remove. A credential lifecycle passes
 // only when SetLifecycleFromPreset set it.
 func (r *Route) Validate() error {
 	return r.wrap(r.validate(true))
@@ -50,13 +50,12 @@ func (r *Route) validate(expanded bool) error {
 		return fmt.Errorf("preset %q is not one of %s, %s or %s",
 			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken)
 	}
-	switch r.Mode {
-	case "", ModeEndpoint:
-	case ModeSplice:
-		return fmt.Errorf("mode %q is reserved for the in-stream splice, and this version "+
-			"does not support it; use %q", r.Mode, ModeEndpoint)
-	default:
-		return fmt.Errorf("mode %q is not %q", r.Mode, ModeEndpoint)
+	// Whether this build serves a mode other than endpoint is the run's to
+	// say, so a policy reads the same in every build.
+	if r.Mode != "" && r.Mode != ModeEndpoint {
+		if err := CheckName(string(r.Mode)); err != nil {
+			return fmt.Errorf("mode: %w", err)
+		}
 	}
 	// A route as written without a preset has nothing to fill it, so it is
 	// held to the required fields too.
