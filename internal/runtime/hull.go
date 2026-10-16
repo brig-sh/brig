@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/telemetry"
 )
 
@@ -529,6 +531,35 @@ func (h *hull) Run(spec RunSpec) error {
 	return nil
 }
 
+// brigInternalProbes holds the answer of ProbeBrigInternal per hull binary.
+// Each probe runs a process, and brig info asks more than once.
+var brigInternalProbes sync.Map
+
+// ProbeBrigInternal reports whether this hull's network gateway takes
+// --divert, which brig.internal needs beside the --host record every hull
+// takes. A hull without it refuses the flag only when the sandbox's gateway
+// starts.
+func (h *hull) ProbeBrigInternal() error {
+	if err, ok := brigInternalProbes.Load(h.bin); ok {
+		err, _ := err.(error)
+		return err
+	}
+	err := gatewayDiverts(h.bin)
+	brigInternalProbes.Store(h.bin, err)
+	return err
+}
+
+// BrigInternalAddr is the address of the sandbox's own gateway, which hull
+// answers brig.internal with. A sandbox that reaches brig.internal has a
+// gateway of its own (see isolatedNet), on the network sandboxNet assigns it.
+func (h *hull) BrigInternalAddr(name string) (netip.Addr, error) {
+	index, err := sandboxNet(name)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	return netip.ParseAddr(sandboxGatewayIP(index))
+}
+
 // CanRun is supports for a caller that has not started anything yet, so that
 // the refusals below also reach the path that joins a running sandbox instead
 // of booting one. See RunChecker.
@@ -554,6 +585,24 @@ func supports(spec RunSpec, hv string) error {
 	// is refused too. See capability.go.
 	if err := requireEgress(spec, RunPath{"hull", hv}); err != nil {
 		return err
+	}
+	// A divert is the gateway's, which is hvi's alone. A run elsewhere would
+	// reach the diverted destinations directly.
+	if len(spec.Egress.Divert.Routes) > 0 && hv != "hvi" {
+		return fmt.Errorf("brig diverts a sandbox's connections at hull's network gateway, which only the hvi "+
+			"backend uses, and this run asks for %s. Run it on hvi (BRIG_HYPERVISOR=hvi)", hv)
+	}
+	// brig.internal is a record and a divert on the gateway too. wrap
+	// refuses the run first, with the route mode table; this is the same
+	// answer for a caller that did not ask it.
+	if spec.Egress.Divert.BrigInternal {
+		if err := RequireRouteMode(v1alpha1.ModeEndpoint, RunPath{"hull", hv}); err != nil {
+			return err
+		}
+		if spec.Net == "none" {
+			return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: RunPath{"hull", hv},
+				State: CannotEnforce, Why: endpointOfflineWhy, Remedy: "Run it with a network, or detach the policy"}
+		}
 	}
 	// Published on the gateway, which is the hvi backend's alone. vz takes its
 	// network from vmnet, where brig has nothing to ask. Refused rather than
@@ -612,8 +661,11 @@ func hullNet(net string) string {
 // other, and it is not a choice: an egress policy belongs to a gateway and
 // covers every member of its network, so a sandbox answering to rules of its
 // own cannot be sharing a gateway with sandboxes that do not.
+//
+// A divert is a third. It names the broker socket of one sandbox, and
+// belongs to the gateway like a rule does.
 func isolatedNet(net string, policy Egress) bool {
-	return net == "isolated" || policy.Filtered()
+	return net == "isolated" || policy.Filtered() || policy.Divert.Requested()
 }
 
 // runArgs is the one place the run command line is built, so that what a test

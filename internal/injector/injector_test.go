@@ -57,10 +57,73 @@ func TestGuestEnvOnBrigInternal(t *testing.T) {
 	if env["ANTHROPIC_API_KEY"].Value != "tok" || !env["ANTHROPIC_API_KEY"].Secret {
 		t.Errorf("ANTHROPIC_API_KEY = %+v", env["ANTHROPIC_API_KEY"])
 	}
+	// Node adds the CA to its roots. The others take one file in place of
+	// theirs, so they read the bundle that keeps the image's roots.
+	want := map[string]string{"NODE_EXTRA_CA_CERTS": GuestCAPath, "SSL_CERT_FILE": GuestCABundlePath,
+		"REQUESTS_CA_BUNDLE": GuestCABundlePath, "GIT_SSL_CAINFO": GuestCABundlePath}
 	for _, name := range caEnv {
-		if env[name].Value != GuestCAPath {
-			t.Errorf("%s = %q, want %s", name, env[name].Value, GuestCAPath)
+		if env[name].Value != want[name] || env[name].Secret {
+			t.Errorf("%s = %+v, want %s", name, env[name], want[name])
 		}
+	}
+	if len(want) != len(caEnv) {
+		t.Errorf("caEnv is %v", caEnv)
+	}
+	if env["ANTHROPIC_BASE_URL"].Value != "https://brig.internal/brig-a/r/anthropic" {
+		t.Errorf("ANTHROPIC_BASE_URL = %q", env["ANTHROPIC_BASE_URL"].Value)
+	}
+}
+
+// On brig.internal, git is pointed at the route through GIT_CONFIG_COUNT:
+// both of the preset's prefixes are rewritten to the route URL, and its
+// credential prompt is answered by a helper that reads the token from the
+// environment, never from the config. Only the token variables are Secret,
+// and no other variable carries a token.
+func TestGuestEnvPointsGitAtBrigInternal(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	routes := []v1alpha1.Route{
+		presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token"),
+		presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "claude-credentials"),
+	}
+	got, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a", "github": "tok-g"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vars(got)
+	want := map[string]string{
+		"ANTHROPIC_BASE_URL":      "https://brig.internal/brig-a/r/anthropic",
+		"CLAUDE_CODE_OAUTH_TOKEN": "tok-a",
+		"BRIG_ROUTE_GITHUB_TOKEN": "tok-g",
+		"GIT_CONFIG_COUNT":        "4",
+		"GIT_CONFIG_KEY_0":        "url.https://brig.internal/brig-a/r/github/.insteadOf",
+		"GIT_CONFIG_VALUE_0":      "https://github.com/",
+		"GIT_CONFIG_KEY_1":        "url.https://brig.internal/brig-a/r/github/.insteadOf",
+		"GIT_CONFIG_VALUE_1":      "git@github.com:",
+		"GIT_CONFIG_KEY_2":        "credential.https://brig.internal/brig-a/r/github/.helper",
+		"GIT_CONFIG_VALUE_2":      "",
+		"GIT_CONFIG_KEY_3":        "credential.https://brig.internal/brig-a/r/github/.helper",
+	}
+	for name, value := range want {
+		if v, ok := env[name]; !ok || v.Value != value {
+			t.Errorf("%s = %q (present %v), want %q", name, v.Value, ok, value)
+		}
+	}
+	helper := env["GIT_CONFIG_VALUE_3"].Value
+	if !strings.Contains(helper, "$BRIG_ROUTE_GITHUB_TOKEN") || strings.Contains(helper, "tok-g") ||
+		!strings.Contains(helper, "username=x-access-token") {
+		t.Errorf("the credential helper is %q", helper)
+	}
+	for _, v := range got {
+		secret := v.Value == "tok-a" || v.Value == "tok-g"
+		if secret != v.Secret {
+			t.Errorf("%s: Secret = %v", v.Name, v.Secret)
+		}
+		if !v.Secret && (strings.Contains(v.Value, "tok-a") || strings.Contains(v.Value, "tok-g")) {
+			t.Errorf("%s carries a token outside a Secret variable", v.Name)
+		}
+	}
+	if _, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a"}, nil); err == nil {
+		t.Error("a route without a token was handed to the guest")
 	}
 }
 

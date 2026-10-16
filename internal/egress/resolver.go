@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -72,6 +73,13 @@ type Resolver struct {
 	// Log receives what the resolver refused and what failed. Nil logs
 	// nothing.
 	Log *log.Logger
+	// Diverts learns the addresses of the diverted hosts from the answers.
+	// Nil diverts nothing.
+	Diverts *Diverts
+	// Hosts are the names the resolver answers itself, lower case with no
+	// trailing dot, and the address of each. brig.internal is one: it names
+	// the sandbox's own gateway, and the policy has no say in it.
+	Hosts map[string]netip.Addr
 
 	// exchange sends one message upstream over network ("udp" or "tcp").
 	// Nil means exchangeNet. Tests replace it.
@@ -150,6 +158,9 @@ func (r *Resolver) Answer(ctx context.Context, query []byte, network string, gue
 		}
 		return headerReply(query, rcodeFormErr)
 	}
+	if addr, ok := r.Hosts[strings.TrimSuffix(strings.ToLower(q.name), ".")]; ok {
+		return localAnswer(query, q, addr)
+	}
 	if !r.Policy.AllowsQuery(q.name) {
 		r.logGuest(q.name, "egress: refused the query %s from %s", q.name, guest)
 		return reply(query, q, rcodeRefused)
@@ -170,6 +181,13 @@ func (r *Resolver) Answer(ctx context.Context, query []byte, network string, gue
 	if err != nil {
 		r.logGuest(q.name, "egress: %s: bad upstream answer: %v", q.name, err)
 		return reply(query, q, rcodeServFail)
+	}
+	if r.Diverts != nil && q.qtype == typeA {
+		// As with a pin, a failed divert fails the query.
+		if err := r.Diverts.Answered(ctx, resp); err != nil {
+			r.logGuest(q.name, "egress: %s: could not divert: %v", q.name, err)
+			return reply(query, q, rcodeServFail)
+		}
 	}
 	if set, ok := r.pinSet(q); ok && len(addrs) > 0 {
 		// The guest must not get an address before the set that governs it
@@ -366,7 +384,23 @@ func (r *Resolver) RefreshHosts(ctx context.Context, interval time.Duration) {
 	if interval <= 0 || len(allow)+len(deny) == 0 {
 		return
 	}
-	res := &net.Resolver{
+	res := r.netResolver()
+	lifetime := refreshRetention * interval
+	var wg sync.WaitGroup
+	for _, h := range allow {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.refreshHost(ctx, res, h, SetAllowHost, lifetime) }()
+	}
+	for _, h := range deny {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.refreshHost(ctx, res, h, SetDenyHost, lifetime) }()
+	}
+	wg.Wait()
+}
+
+// netResolver returns a resolver that asks the upstream servers.
+func (r *Resolver) netResolver() *net.Resolver {
+	return &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			var d net.Dialer
@@ -381,17 +415,6 @@ func (r *Resolver) RefreshHosts(ctx context.Context, interval time.Duration) {
 			return nil, errors.Join(errs...)
 		},
 	}
-	lifetime := refreshRetention * interval
-	var wg sync.WaitGroup
-	for _, h := range allow {
-		wg.Add(1)
-		go func() { defer wg.Done(); r.refreshHost(ctx, res, h, SetAllowHost, lifetime) }()
-	}
-	for _, h := range deny {
-		wg.Add(1)
-		go func() { defer wg.Done(); r.refreshHost(ctx, res, h, SetDenyHost, lifetime) }()
-	}
-	wg.Wait()
 }
 
 // WatchHosts calls RefreshHosts every interval until ctx is done. The first

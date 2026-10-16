@@ -168,7 +168,7 @@ func TestServeIsUpOnlyOnceTheHostsArePinned(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	go func() {
-		served <- serve(ctx, k, r, netip.MustParseAddr("127.0.0.1"), RefreshInterval, 0, 1, logger)
+		served <- serve(ctx, k, r, nil, Network{Gateway: netip.MustParseAddr("127.0.0.1")}, RefreshInterval, 0, 1, logger)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for !strings.Contains(logged.String(), "egress resolver on ") {

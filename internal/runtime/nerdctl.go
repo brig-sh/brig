@@ -316,6 +316,12 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 	if len(spec.Publish) > 0 && spec.Net == "none" {
 		return offlinePublishError(spec.Publish)
 	}
+	// docker puts no rule on the sandbox's bridge, so a connection to a
+	// diverted destination would be routed directly.
+	if spec.Egress.Divert.Requested() && spec.Net != "none" && n.isDocker() {
+		return fmt.Errorf("brig diverts a sandbox's connections with nftables on nerdctl, and this is docker (%s). "+
+			"Point BRIG_RUNTIME_BIN at nerdctl", n.bin)
+	}
 	return nil
 }
 
@@ -344,12 +350,26 @@ func (n *nerdctl) Run(spec RunSpec) error {
 			Why:    fmt.Sprintf("its rules need a network of its own, and the run asks for the %s network", spec.Net),
 			Remedy: "Run it with --network isolated, or detach the policy"}
 	}
+	// A divert is set up the way a policy is: the resolver runs it and the
+	// sandbox's table holds its rules. An offline sandbox has no connection
+	// to divert.
+	diverted := spec.Egress.Divert.Requested() && spec.Net != "none"
+	if diverted && spec.Net != "isolated" {
+		return fmt.Errorf("brig diverts a sandbox's connections on a network of its own, "+
+			"and the run asks for the %s network. Run it with --network isolated", spec.Net)
+	}
+	if diverted {
+		if err := checkDivert(spec.Egress.Divert); err != nil {
+			return err
+		}
+	}
+	managed := filtered || diverted
 	// The lock is held through `nerdctl run`. Another brig's stop, remove or
 	// prune then cannot take the rules from under this boot. And this boot
 	// cannot take them from a sandbox another brig booted since wrap looked.
 	// --detach returns once the container starts, so the lock covers the boot
 	// and not the sandbox's life.
-	if filtered || hasEgressFiles(spec.Name) {
+	if managed || hasEgressFiles(spec.Name) {
 		unlock, err := egressLock(spec.Name)
 		if err != nil {
 			return err
@@ -364,7 +384,7 @@ func (n *nerdctl) Run(spec RunSpec) error {
 		}
 	}
 	var boot egressBoot
-	if filtered {
+	if managed {
 		if boot, err = egressStart(n, spec.Name, spec.Egress); err != nil {
 			return err
 		}
@@ -382,17 +402,17 @@ func (n *nerdctl) Run(spec RunSpec) error {
 	said := narrate(spec.Progress)
 	cmd.Stderr = said
 	if err := cmd.Run(); err != nil {
-		if filtered {
+		if managed {
 			n.dropEgressLocked(spec.Name)
 		}
 		return said.explain(fmt.Errorf("%s run: %w", n.bin, err))
 	}
-	if filtered {
+	if managed {
 		if err := boot.up(); err != nil {
 			_ = exec.Command(n.bin, "rm", "-f", spec.Name).Run()
 			n.dropEgressLocked(spec.Name)
-			return egressRefusal("the sandbox's bridge is not where brig put the rules", "Point BRIG_RUNTIME_BIN "+
-				"at the nerdctl of the containerd brig finds, or detach the policy", err)
+			return egressRefusal(spec.Egress, "the sandbox's bridge is not where brig put the rules",
+				"Point BRIG_RUNTIME_BIN at the nerdctl of the containerd brig finds", err)
 		}
 	}
 	return nil

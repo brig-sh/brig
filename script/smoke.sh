@@ -106,6 +106,8 @@ case "$verb" in
     # than through argv, and the HOME this process runs with.
     printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG"
     printf 'env-gh:%s\n' "${GH_TOKEN:-<unset>}" >> "$STUB_LOG"
+    printf 'env-base-url:%s\n' "${ANTHROPIC_BASE_URL:-<unset>}" >> "$STUB_LOG"
+    printf 'env-node-ca:%s\n' "${NODE_EXTRA_CA_CERTS:-<unset>}" >> "$STUB_LOG"
     printf 'env-home:%s\n' "${HOME:-<unset>}" >> "$STUB_LOG"
     ;;
   exec)
@@ -207,6 +209,7 @@ case "$verb" in
     case " $* " in
       *" --help "*)
         printf -- '   --egress-default string  verdict for a connection no egress rule matches\n'
+        printf -- '   --divert host:port=socket  hand the connections to host:port to the unix socket\n'
         exit 0
         ;;
     esac
@@ -686,10 +689,12 @@ grep -q '^argv: run' "$STUB_LOG" \
   || ok "nothing reached the runtime"
 "$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
 
-# No runtime routes brig.internal to the broker yet, so the binary is held to
-# what it prints: the preset a route expands to, and the posture check plans
-# for a run with one. A run bound to a route is refused before the runtime is
-# asked anything.
+# A route in mode endpoint reaches a hull guest at brig.internal on hvi, where
+# brig owns the gateway, and on no other backend. The binary is held to what
+# it prints: the preset a route expands to, a row per run path with the
+# transport, and the posture check plans for a run with one. On vz, check
+# and run refuse the route before the runtime is asked anything. The served
+# run on hvi is in the gateway cases below.
 cat > "$WORK/policies/claude-only.yaml" <<'YAML'
 apiVersion: brig.sh/v1alpha1
 kind: Policy
@@ -708,21 +713,31 @@ YAML
   && ok "policy show --preset prints the claude-code route" \
   || bad "policy show --preset prints the claude-code route"
 "$WORK/brig" policy attach claude-only claude-code > /dev/null 2>&1
-"$WORK/brig" policy check claude-code > "$WORK/routes.out" 2> "$WORK/routes.err"
+BRIG_HYPERVISOR=hvi "$WORK/brig" policy check claude-code > "$WORK/routes.out" 2> "$WORK/routes.err"
 if [ "$(cat "$WORK/routes.out")" = "claude-only" ] \
   && grep -q '^  route anthropic  preset claude-code  mode endpoint$' "$WORK/routes.err" \
+  && grep -q '^    hull on hvi  enforced: .*; transport: brig.internal$' "$WORK/routes.err" \
   && grep -q '^posture: isolated$' "$WORK/routes.err"; then
-  ok "policy check lists a route and plans the isolated posture, with stdout one name per line"
+  ok "policy check lists a route with its transport and plans the isolated posture, with stdout one name per line"
 else
-  bad "policy check lists a route and plans the isolated posture -- got: $(cat "$WORK/routes.out" "$WORK/routes.err")"
+  bad "policy check lists a route with its transport and plans the isolated posture -- got: $(cat "$WORK/routes.out" "$WORK/routes.err")"
+fi
+if BRIG_HYPERVISOR=vz "$WORK/brig" policy check claude-code > /dev/null 2> "$WORK/routes.err"; then
+  bad "policy check passed an endpoint route on vz"
+else
+  grep -q 'declares a route in mode endpoint, and brig refuses the run before boot: .*vz takes its network from vmnet' "$WORK/routes.err" \
+    && ok "policy check refuses an endpoint route on vz, naming why" \
+    || bad "policy check refuses an endpoint route on vz, naming why -- got: $(cat "$WORK/routes.err")"
 fi
 : > "$STUB_LOG"
-if env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/routes-run.out" 2>&1; then
-  bad "a run bound to a route was booted on hull, which cannot reach the broker yet"
+env BRIG_HYPERVISOR=vz "$WORK/brig" run claude -d > "$WORK/routes-run.out" 2>&1
+rc=$?
+if [ "$rc" = 0 ]; then
+  bad "a run bound to a route was booted on vz, which has no gateway to answer brig.internal"
 else
-  grep -q 'brig.internal routing is not available on this runtime (hull) yet' "$WORK/routes-run.out" \
-    && ok "a run bound to a route is refused, naming why" \
-    || bad "the route refusal does not say why -- got: $(cat "$WORK/routes-run.out")"
+  [ "$rc" = 7 ] && grep -q 'declares a route in mode endpoint, which the guest reaches at brig.internal: .*vz takes its network from vmnet' "$WORK/routes-run.out" \
+    && ok "a run bound to a route on vz is refused with exit 7, naming why" \
+    || bad "the route refusal on vz does not say why -- got $rc: $(cat "$WORK/routes-run.out")"
 fi
 [ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
   && bad "a refused run started the credential broker" \
@@ -732,6 +747,7 @@ grep -q '^argv: run' "$STUB_LOG" \
   || ok "nothing reached the runtime for a run bound to a route"
 "$WORK/brig" policy detach claude-only claude-code > /dev/null 2>&1
 rm -f "$WORK/policies/claude-only.yaml"
+
 unset BRIG_POLICY_DIR
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
@@ -917,6 +933,150 @@ if [ -n "$sharedsock" ]; then
   kill "$oldpid" > /dev/null 2>&1
   "$WORK/brig" rm --all -y > /dev/null 2>&1
 fi
+# The broker of the endpoint run below is a test binary of cmd/brig-broker
+# that serves the broker's own code with a memory store
+# (TestBrokerHelperProcess), so no keychain is read.
+go test -c -o "$WORK/brig-broker-helper.test" ./cmd/brig-broker || { echo "build failed"; exit 1; }
+printf '#!/bin/sh\nBRIG_TEST_BROKER_HELPER=1 BRIG_TEST_UPSTREAM_LOG=%q exec %q -test.run=%q -- "$@"\n' \
+  "$WORK/helper-upstream.log" "$WORK/brig-broker-helper.test" '^TestBrokerHelperProcess$' > "$WORK/brig-broker-helper"
+chmod +x "$WORK/brig-broker-helper"
+# brig refuses a routed run whose secret is not in its store, and the store of
+# whoever runs this is not the test's to fill. A routed run goes through
+# brig-stored instead: a test binary of cmd/brig that is brig itself, with a
+# store in memory that holds the secrets BRIG_TEST_SECRETS names, or no store
+# under BRIG_TEST_NO_STORE=1 (brigHelper).
+go test -c -o "$WORK/brig-stored.test" ./cmd/brig || { echo "build failed"; exit 1; }
+printf '#!/bin/sh\nBRIG_TEST_BRIG_HELPER=1 exec %q "$@"\n' "$WORK/brig-stored.test" > "$WORK/brig-stored"
+chmod +x "$WORK/brig-stored"
+export BRIG_POLICY_DIR="$WORK/policies"
+
+# A route in mode endpoint on hvi. The gateway answers brig.internal with its
+# own address and diverts port 443 of it to the broker's socket, the guest is
+# pointed at https://brig.internal with the CA variables, and the CA the
+# broker handed over reaches /brig/ca/brig.pem on stdin, with no key. A TLS
+# client that trusts that CA reaches the broker through the socket as the
+# gateway would hand it a connection: the guest's own token is served, and
+# the upstream sees the helper store's credential and never the token. A
+# token the broker never minted is refused with 401, and a client without the
+# CA, or a connection to port 80, gets no TLS at all.
+cat > "$WORK/policies/claude-only.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-only
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+YAML
+"$WORK/brig" policy attach claude-only claude-code > /dev/null 2>&1
+ep_state="$(mktemp -d "${TMPDIR:-/tmp}/bs.XXXXXX")"
+ep_env=(BRIG_STATE_DIR="$ep_state" BRIG_HYPERVISOR=hvi BRIG_BROKER_BIN="$WORK/brig-broker-helper"
+  BRIG_TEST_SECRETS=claude-credentials)
+# The route's secret is not in the store, and then there is no store: each
+# run is refused before boot with exit 6, naming what to do, and neither the
+# broker nor the runtime is asked. The plan says the same.
+for missing in absent nostore; do
+  : > "$STUB_LOG"
+  if [ "$missing" = absent ]; then
+    store=BRIG_TEST_SECRETS= want='missing secret "claude-credentials" .*brig secret import claude-code'
+  else
+    store=BRIG_TEST_NO_STORE=1 want='claude-credentials, which the broker reads .*not available.*Secret Service'
+  fi
+  env "${ep_env[@]}" "$store" "$WORK/brig-stored" run claude -d > "$WORK/ep-$missing.out" 2>&1
+  rc=$?
+  [ "$rc" = 6 ] && grep -q "$want" "$WORK/ep-$missing.out" \
+    && ok "an endpoint run whose secret store answers $missing is refused before boot with exit 6, naming the fix" \
+    || bad "an endpoint run whose secret store answers $missing is refused before boot with exit 6 -- got $rc: $(cat "$WORK/ep-$missing.out")"
+  [ -e "$ep_state/host/broker/broker.pid" ] \
+    && bad "a run refused for its route's secret ($missing) started the credential broker" \
+    || ok "a run refused for its route's secret ($missing) starts no credential broker"
+  grep -q '^argv: run\|^argv: network-gateway --socket' "$STUB_LOG" \
+    && bad "the runtime was asked to boot a run refused for its route's secret ($missing)" \
+    || ok "nothing reached the runtime for a run refused for its route's secret ($missing)"
+  out="$(env "${ep_env[@]}" "$store" "$WORK/brig-stored" plan claude 2>&1)"
+  printf '%s\n' "$out" | grep -q '^REFUSED .*claude-credentials' \
+    && printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; .*so the run is refused' \
+    && ok "brig plan refuses the run whose secret store answers $missing, and its BROKER row says why" \
+    || bad "brig plan refuses the run whose secret store answers $missing, and its BROKER row says why -- got: $out"
+done
+out="$(env "${ep_env[@]}" "$WORK/brig-stored" plan claude 2>&1)"
+printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; modes endpoint$' \
+  && ! printf '%s\n' "$out" | grep -q '^REFUSED' \
+  && ok "brig plan has a BROKER row for a run with a route" \
+  || bad "brig plan has a BROKER row for a run with a route -- got: $out"
+: > "$STUB_LOG"
+rm -f "$STUB_STATE".fed.*
+env "${ep_env[@]}" "$WORK/brig-stored" run claude -d > "$WORK/ep-on.out" 2>&1
+eprc=$?
+epgw="$(grep '^argv: network-gateway --socket' "$STUB_LOG")"
+epaddr="$(printf '%s' "$epgw" | sed -n 's/.*--host brig\.internal=\([0-9.]*\).*/\1/p')"
+epsock="$(printf '%s' "$epgw" | sed -n "s/.*--divert ${epaddr}:443=\\([^ ]*\\).*/\\1/p")"
+epca="$STUB_STATE.fed._brig_ca_brig.pem"
+eptoken="$(sed -n 's/^env-token://p' "$STUB_LOG" | head -1)"
+if [ "$eprc" != 0 ]; then
+  bad "an endpoint run on hvi failed: $(cat "$WORK/ep-on.out")"
+elif [ -z "$epaddr" ] || [ -z "$epsock" ] || [ ! -S "$epsock" ]; then
+  bad "the gateway was not handed brig.internal and a divert socket the broker listens on: $epgw"
+elif printf '%s' "$epgw" | grep -q -- "--divert ${epaddr}:80\\|--divert api.anthropic.com"; then
+  bad "the gateway diverts more than port 443 of brig.internal: $epgw"
+elif ! grep -q '^env-base-url:https://brig.internal/brig-claude-code/r/anthropic$' "$STUB_LOG"; then
+  bad "the guest was not pointed at brig.internal: $(grep '^env-base-url' "$STUB_LOG")"
+elif ! grep -q '^env-node-ca:/brig/ca/brig.pem$' "$STUB_LOG"; then
+  bad "the guest was not pointed at the brig CA: $(grep '^env-node-ca' "$STUB_LOG")"
+elif ! grep -q 'BEGIN CERTIFICATE' "$epca" 2>/dev/null || grep -q 'PRIVATE KEY' "$epca"; then
+  bad "the guest did not get the CA certificate alone at /brig/ca/brig.pem: $(cat "$epca" 2>&1)"
+else
+  ok "an endpoint run on hvi routes brig.internal to the broker and hands the guest the CA alone"
+fi
+ep_tls='import socket, ssl, sys
+sock, addr, port, ca, token = sys.argv[1:6]
+s = socket.socket(socket.AF_UNIX); s.connect(sock)
+s.sendall(("BRIG-DIVERT/1 %s %s 198.18.1.2 40000\n" % (addr, port)).encode())
+ctx = ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+try:
+    t = ctx.wrap_socket(s, server_hostname="brig.internal")
+except (ssl.SSLError, OSError) as e:
+    print("tls-failed", type(e).__name__); sys.exit(0)
+t.sendall(("POST /brig-claude-code/r/anthropic/v1/messages HTTP/1.1\r\nHost: brig.internal\r\n"
+           "Authorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: 2\r\n"
+           "Connection: close\r\n\r\n{}" % token).encode())
+print(t.recv(64).decode(errors="replace").split("\r\n")[0])'
+if [ -S "$epsock" ]; then
+  : > "$WORK/helper-upstream.log"
+  own="$(python3 -c "$ep_tls" "$epsock" "$epaddr" 443 "$epca" "$eptoken" 2>&1)"
+  forged="$(python3 -c "$ep_tls" "$epsock" "$epaddr" 443 "$epca" "not-a-minted-token" 2>&1)"
+  noca="$(python3 -c "$ep_tls" "$epsock" "$epaddr" 443 "" "$eptoken" 2>&1)"
+  other="$(python3 -c "$ep_tls" "$epsock" "$epaddr" 80 "$epca" "$eptoken" 2>&1)"
+  case "$own|$forged|$noca|$other" in
+    "HTTP/1.1 200 "*"|HTTP/1.1 401 "*"|tls-failed "*"|tls-failed "*)
+      if [ -n "$eptoken" ] && grep -q '"/v1/messages"' "$WORK/helper-upstream.log" \
+        && ! grep -qF "$eptoken" "$WORK/helper-upstream.log"; then
+        ok "brig.internal answers TLS under the delivered CA: the guest's token is served and never sent upstream, another is 401, no CA or port 80 gets no TLS"
+      else
+        bad "the upstream of a brig.internal request saw the token, or nothing: $(cat "$WORK/helper-upstream.log")"
+      fi ;;
+    *) bad "brig.internal over the divert socket -- own: $own; forged: $forged; no CA: $noca; port 80: $other" ;;
+  esac
+fi
+out="$(env "${ep_env[@]}" "$WORK/brig-stored" info claude 2>/dev/null)"
+printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; brig-broker pid [0-9]* on 127.0.0.1:[0-9]*;.* modes endpoint' \
+  && ok "brig info names the brig.internal transport and the endpoint mode" \
+  || bad "brig info names the brig.internal transport and the endpoint mode -- got: $out"
+env "${ep_env[@]}" "$WORK/brig" rm --all -y > /dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -e "$ep_state/host/broker/broker.pid" ] || break
+  sleep 0.3
+done
+[ -n "$epsock" ] && [ -e "$epsock" ] \
+  && bad "rm --all left the divert socket of brig.internal ($epsock)" \
+  || ok "rm --all removes the divert socket of brig.internal"
+"$WORK/brig" policy detach claude-only claude-code > /dev/null 2>&1
+rm -f "$WORK/policies/claude-only.yaml"
+rm -rf "$ep_state"
+
 # Whatever a failed case above left behind outlives this script otherwise.
 pkill -f "$BRIG_GATEWAY_DIR/" > /dev/null 2>&1
 unset BRIG_POLICY_DIR

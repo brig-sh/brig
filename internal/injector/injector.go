@@ -15,6 +15,8 @@
 package injector
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -116,6 +118,46 @@ type Sandbox struct {
 	ID      string  `json:"id"`
 	Profile string  `json:"profile"`
 	Routes  []Route `json:"routes"`
+	// BrigInternal is the address the sandbox's guest resolves brig.internal
+	// to, or "" for a sandbox that reaches the broker over loopback. The
+	// runtime diverts that address on BrigInternalPort to the sandbox's
+	// divert socket, and the broker serves brig.internal there, with TLS. A
+	// sandbox registered with it is refused over loopback.
+	BrigInternal string `json:"brigInternal,omitempty"`
+}
+
+// DivertDirName is the directory of the divert sockets, under the broker
+// directory.
+const DivertDirName = "divert"
+
+// DivertSocket returns the divert socket of sandbox id under the broker
+// directory dir. It depends on the id alone, so a broker that restarts
+// listens where a running diverter connects, and brig names the socket to
+// the diverter before it registers the sandbox.
+func DivertSocket(dir, id string) (string, error) {
+	// 48 bits of the hash keep the path short. Two sandboxes whose ids
+	// collide would share a socket, and the tokens of one fail the other's
+	// checks.
+	sum := sha256.Sum256([]byte(id))
+	sock := filepath.Join(dir, DivertDirName, hex.EncodeToString(sum[:6])+".sock")
+	if len(sock) > sockaddrUnMax {
+		return "", fmt.Errorf("the divert socket %s is %d bytes, and a unix socket path is at most %d; "+
+			"point BRIG_STATE_DIR at a shorter directory", sock, len(sock), sockaddrUnMax)
+	}
+	return sock, nil
+}
+
+// AddResponse is the answer to add-sandbox.
+type AddResponse struct {
+	// DivertSocket is the unix socket the broker listens on for the
+	// sandbox's diverted connections, or "" for a sandbox with no
+	// BrigInternal address. It is the path DivertSocket returns. The
+	// diverter connects to it once per guest connection.
+	DivertSocket string `json:"divertSocket,omitempty"`
+	// CA is the brig CA certificate, in PEM, for a sandbox with a
+	// BrigInternal address. The guest trusts it for brig.internal. Its key
+	// never leaves the broker.
+	CA string `json:"ca,omitempty"`
 }
 
 // MintRequest is the body of mint.

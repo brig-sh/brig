@@ -16,6 +16,10 @@ import (
 // literal, so a test that looks a profile up has to load the built-ins the way
 // main does. No test here writes to it, so once for the package is enough.
 func TestMain(m *testing.M) {
+	// Before the settings below, which are the tests' and not brig's.
+	if os.Getenv(brigHelperEnv) == "1" {
+		brigHelper()
+	}
 	if err := profile.Load(); err != nil {
 		panic(err)
 	}
