@@ -26,14 +26,35 @@ type fakeBroker struct {
 	stuck bool
 	// extra is what Status reports besides the pid and the port.
 	extra injector.Status
+	// ca is the CA it hands a brig.internal sandbox, or "" for testBrigCA.
+	ca string
+	// calls are the registrations and removals, in order.
+	calls []string
 }
 
 const fakeBrokerPort = 47821
 
-func (f *fakeBroker) Register(s injector.Sandbox) (int, error) {
+func (f *fakeBroker) Register(s injector.Sandbox) (int, injector.AddResponse, error) {
 	f.registered = append(f.registered, s)
+	f.calls = append(f.calls, "register "+s.ID)
 	f.running = true
-	return fakeBrokerPort, nil
+	var added injector.AddResponse
+	if s.BrigInternal != "" {
+		dir, err := injector.Dir()
+		if err != nil {
+			return 0, added, err
+		}
+		if added.DivertSocket, err = injector.DivertSocket(dir, s.ID); err != nil {
+			return 0, added, err
+		}
+	}
+	if s.BrigInternal != "" {
+		added.CA = f.ca
+		if added.CA == "" {
+			added.CA = testBrigCA()
+		}
+	}
+	return fakeBrokerPort, added, nil
 }
 
 func (f *fakeBroker) Mint(r injector.MintRequest) (string, error) {
@@ -43,6 +64,7 @@ func (f *fakeBroker) Mint(r injector.MintRequest) (string, error) {
 
 func (f *fakeBroker) Forget(id string) error {
 	f.forgotten = append(f.forgotten, id)
+	f.calls = append(f.calls, "forget "+id)
 	return nil
 }
 
@@ -105,6 +127,14 @@ func routedConfig(t *testing.T, doc string, rt runtime.Runtime) *Config {
 	}
 	c.OpenStore = func() (creds.SecretReader, error) { return held, nil }
 	return c
+}
+
+func envOf(vars []runtime.Var) map[string]runtime.Var {
+	out := map[string]runtime.Var{}
+	for _, v := range vars {
+		out[v.Name] = v
+	}
+	return out
 }
 
 // A secret a route injects stays on the host: its files: binding and every
@@ -179,17 +209,15 @@ func TestStopAndRemoveRevokeTheSandboxTokens(t *testing.T) {
 
 // The envelope names the broker, its transport and the routes it serves, and
 // the credentials row names each session token by its route, never a value.
-// No runtime routes brig.internal yet, so the row says the run is refused,
-// and why.
 func TestEnvelopeHasABrokerRow(t *testing.T) {
-	c := routedConfig(t, claudeAndGitHub, fakeRuntime{})
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	c := routedConfig(t, claudeAndGitHub, &hullRecorder{})
 	c.broker = &fakeBroker{running: true}
 	block := &bytes.Buffer{}
 	c.renderEnvelope(block, creds.Set{})
 	got := block.String()
 	for _, want := range []string{
-		"BROKER       transport brig.internal, routes anthropic, github; " +
-			"refused: brig.internal routing is not available on this runtime yet; " +
+		"BROKER       transport brig.internal, routes anthropic, github; brig-broker pid 4242 on 127.0.0.1:47821; " +
 			"kept on the host: claude-credentials, gh-token",
 		"CLAUDE_CODE_OAUTH_TOKEN(route: anthropic)",
 		"BRIG_ROUTE_GITHUB_TOKEN(route: github)",
@@ -199,8 +227,7 @@ func TestEnvelopeHasABrokerRow(t *testing.T) {
 		}
 	}
 	d := c.InfoData(creds.Set{})
-	if d.Broker == nil || d.Broker.Transport != "brig.internal" || d.Broker.Running ||
-		!strings.Contains(d.Broker.Refused, "brig.internal routing is not available") {
+	if d.Broker == nil || d.Broker.Transport != "brig.internal" || !d.Broker.Running || d.Broker.Port != fakeBrokerPort {
 		t.Errorf("info --json broker = %+v", d.Broker)
 	}
 	var broker []InfoCredential
@@ -211,6 +238,41 @@ func TestEnvelopeHasABrokerRow(t *testing.T) {
 	}
 	if len(broker) != 2 || broker[0].Route != "anthropic" || broker[1].Route != "github" {
 		t.Errorf("info --json credentials from the broker = %+v", broker)
+	}
+	// On a microVM whose runtime cannot route brig.internal, the row says
+	// the run is refused, and where to read why.
+	c.Runtime = fakeRuntime{}
+	if got := c.brokerLine(); !strings.Contains(got, "transport brig.internal") ||
+		!strings.Contains(got, "refused: this run cannot route brig.internal to the broker; brig info --json says why") {
+		t.Errorf("the BROKER row on hull is %q", got)
+	}
+}
+
+// The BROKER row and info --json name the route modes the run path serves.
+// hull on hvi serves endpoint routes, and hull on vz serves none.
+func TestTheBrokerRowNamesTheModes(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	c := routedConfig(t, claudeAndGitHub, &hullRecorder{})
+	c.broker = &fakeBroker{running: true}
+	if got := c.brokerLine(); !strings.Contains(got, "; modes endpoint") {
+		t.Errorf("the BROKER row on hvi is %q", got)
+	}
+	d := c.InfoData(creds.Set{})
+	if d.Broker == nil || !slices.Equal(d.Broker.Modes, []string{"endpoint"}) {
+		t.Errorf("info --json broker on hvi = %+v", d.Broker)
+	}
+
+	t.Setenv("BRIG_HYPERVISOR", "vz")
+	c.Runtime = fakeRuntime{}
+	if got := c.brokerLine(); !strings.Contains(got, "; modes none") {
+		t.Errorf("the BROKER row on vz is %q", got)
+	}
+	blob, err := json.Marshal(c.InfoData(creds.Set{}).Broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"modes":[]`) {
+		t.Errorf("info --json broker on vz = %s", blob)
 	}
 }
 

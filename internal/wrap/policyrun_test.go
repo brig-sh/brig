@@ -340,18 +340,22 @@ type kindRecorder struct {
 
 func (r *kindRecorder) Kind() string { return r.kind }
 
-// A microVM or a container reaches the broker at brig.internal, which no
-// runtime routes yet, so a run there bound to a route is refused before
-// anything boots, and never comes up without the route on a network nobody
-// chose.
+// A route in mode endpoint reaches a microVM or a container guest at
+// brig.internal, which only a gateway brig owns can answer. A run whose path
+// has none is refused before anything boots, and never comes up without the
+// route on a network nobody chose: hull on vz, a runtime that cannot say
+// where its guest reaches the name, and a run with no network. The served
+// run on hvi is TestAnEndpointRunOnHviReachesBrigInternal.
 func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
-	for _, c := range []struct{ name, kind, spec string }{
-		{"routes only", "hull", "  routes:\n    - name: github\n      preset: github-token\n" +
-			"      credential: {secretRef: {name: gh-token}}\n"},
-		{"routes and egress", "hull", "  egress: {default: deny}\n  routes:\n    - name: github\n      preset: github-token\n" +
-			"      credential: {secretRef: {name: gh-token}}\n"},
-		{"nerdctl", "nerdctl", "  routes:\n    - name: github\n      preset: github-token\n" +
-			"      credential: {secretRef: {name: gh-token}}\n"},
+	for _, c := range []struct{ name, kind, hv, net, spec, want string }{
+		{"hull on vz", "hull", "vz", "", "  routes:\n    - name: github\n      preset: github-token\n" +
+			"      credential: {secretRef: {name: gh-token}}\n", "vz takes its network from vmnet"},
+		{"routes and egress on vz", "hull", "vz", "", "  egress: {default: deny}\n  routes:\n    - name: github\n      preset: github-token\n" +
+			"      credential: {secretRef: {name: gh-token}}\n", "vz takes its network from vmnet"},
+		{"nerdctl that reports no address", "nerdctl", "", "", "  routes:\n    - name: github\n      preset: github-token\n" +
+			"      credential: {secretRef: {name: gh-token}}\n", "cannot ask this runtime where its guest reaches brig.internal"},
+		{"hull on hvi offline", "hull", "hvi", "offline", "  routes:\n    - name: github\n      preset: github-token\n" +
+			"      credential: {secretRef: {name: gh-token}}\n", "BRIG_NETWORK=offline"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -360,6 +364,8 @@ func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("BRIG_POLICY_DIR", dir)
+			t.Setenv("BRIG_HYPERVISOR", c.hv)
+			t.Setenv("BRIG_NETWORK", c.net)
 
 			cfg := loadWithPolicy(t, "github-brig-sh")
 			rec := &kindRecorder{kind: c.kind}
@@ -370,8 +376,11 @@ func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
 			if err == nil {
 				t.Fatal("a run bound to a route went ahead")
 			}
-			for _, want := range []string{"brig.internal routing is not available on this runtime (" + c.kind + ")",
-				"github-brig-sh (route github)"} {
+			var ce *runtime.CapabilityError
+			if !errors.As(err, &ce) {
+				t.Errorf("the refusal is not a CapabilityError, so it does not exit 7: %v", err)
+			}
+			for _, want := range []string{c.want, "github-brig-sh (route github)", "route mode endpoint"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}
@@ -383,7 +392,7 @@ func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
 				t.Errorf("the broker was asked to serve a refused run: %v", broker.registered)
 			}
 			// Plan reports the same refusal, so a plan cannot promise the run.
-			if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "brig.internal routing is not available") {
+			if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, c.want) {
 				t.Errorf("the plan does not carry the refusal: %+v", d.Refused)
 			}
 		})

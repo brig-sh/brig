@@ -21,10 +21,19 @@ const (
 )
 
 // BrigInternal is the name a microVM guest reaches the broker by.
-const BrigInternal = "brig.internal"
+const BrigInternal = runtime.BrigInternalName
 
-// GuestCAPath is where a guest that reaches brig.internal finds the brig CA.
+// BrigInternalPort is the port a guest reaches brig.internal on. The runtime
+// diverts this port of the brig.internal address alone.
+const BrigInternalPort = runtime.BrigInternalPort
+
+// GuestCAPath is where a guest that reaches brig.internal finds the brig CA,
+// and nothing else.
 const GuestCAPath = "/brig/ca/brig.pem"
+
+// GuestCABundlePath is where it finds the image's own roots followed by the
+// brig CA, for a client that takes one file in place of its roots.
+const GuestCABundlePath = "/brig/ca/bundle.pem"
 
 // HostEndpoint is where the guests of one runtime reach the broker, and what
 // a guest is handed to use a route.
@@ -66,9 +75,20 @@ func gitConfigCount(forwarded []runtime.Var) (int, error) {
 	return n, nil
 }
 
-// caEnv names the variables that point a guest's TLS clients at the brig CA:
-// OpenSSL and Go, Node, Python requests and git.
+// caEnv names the variables that point a guest's TLS clients at the brig CA,
+// and the file each one names: OpenSSL and Go, Node, Python requests and
+// git. Node adds NODE_EXTRA_CA_CERTS to its roots, so it gets the CA alone.
+// The others read their one file in place of their roots, so they get the
+// bundle, and every other site still verifies for them.
 var caEnv = []string{"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO"}
+
+// caFile is the file the CA variable name points at.
+func caFile(name string) string {
+	if name == "NODE_EXTRA_CA_CERTS" {
+		return GuestCAPath
+	}
+	return GuestCABundlePath
+}
 
 // TokenVar is the variable that holds the session token of a git route, which
 // the credential helper answers with. - reads as _, so the name maps to one
@@ -164,7 +184,7 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 	}
 	if e.Transport == TransportBrigInternal && len(routes) > 0 {
 		for _, name := range caEnv {
-			vars = append(vars, runtime.Var{Name: name, Value: GuestCAPath})
+			vars = append(vars, runtime.Var{Name: name, Value: caFile(name)})
 		}
 	}
 	return vars, nil

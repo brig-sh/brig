@@ -33,6 +33,8 @@ const BinEnv = "BRIG_BROKER_BIN"
 type Broker struct {
 	Client Client
 	Status Status
+	// Added is the answer to the registration Register made.
+	Added AddResponse
 }
 
 // Running returns the broker serving dir, or false when none is. It starts
@@ -71,7 +73,7 @@ func Register(dir string, s Sandbox) (*Broker, error) {
 			return nil, err
 		}
 		beforeAdd()
-		err = b.Client.AddSandbox(s)
+		b.Added, err = b.Client.Add(s)
 		if err == nil {
 			return b, nil
 		}

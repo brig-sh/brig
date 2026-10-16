@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -91,17 +92,25 @@ type server struct {
 	ca      *authority
 	lock    *os.File
 	audit   *rotatingFile
-	log     *rotatingFile
-	routes  net.Listener
-	control net.Listener
-	port    int
+	// auditLog writes the audit lines of the handler and of the divert
+	// sockets.
+	auditLog *slog.Logger
+	log      *rotatingFile
+	routes   net.Listener
+	control  net.Listener
+	// internal takes the brig.internal connections of every divert socket,
+	// through TLS, for the route server that serves them.
+	internal *connListener
+	port     int
 	// storeErr is why brig's secret store did not open at start.
 	storeErr error
 
 	mu        sync.Mutex
 	sandboxes map[string]string // id -> the registration, as canonical JSON
-	stopping  bool
-	stop      chan struct{}
+	// diverts are the divert sockets, by sandbox id.
+	diverts  map[string]*divertSandbox
+	stopping bool
+	stop     chan struct{}
 }
 
 // newServer takes the lock, the keys and both listeners. It returns
@@ -113,7 +122,8 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	if err := injector.CheckDir(cfg.dir); err != nil {
 		return nil, err
 	}
-	s := &server{cfg: cfg, sandboxes: map[string]string{}, stop: make(chan struct{})}
+	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
+		stop: make(chan struct{}), internal: newConnListener()}
 	defer func() {
 		if err != nil {
 			s.close()
@@ -154,11 +164,13 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		renewerFor = lifecycleRenewer
 	}
 	s.creds = newCredentials(store, renewerFor)
+	s.auditLog = slog.New(slog.NewTextHandler(s.audit, nil))
 	s.handler, err = broker.New(broker.Config{
-		HostKey:     hostKey,
-		Credentials: s.creds,
-		Audit:       slog.New(slog.NewTextHandler(s.audit, nil)),
-		Transport:   cfg.transport,
+		HostKey:      hostKey,
+		Credentials:  s.creds,
+		Audit:        s.auditLog,
+		Transport:    cfg.transport,
+		ArrivalCheck: s.arrival,
 	})
 	clear(hostKey)
 	if err != nil {
@@ -207,6 +219,16 @@ func (s *server) serve(ctx context.Context) error {
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          logger,
 	}
+	// brig.internal is the same handler, on the connections the divert
+	// sockets hand over. Each request's remote address names the socket it
+	// arrived on. See briginternal.go.
+	internal := &http.Server{
+		Handler:           s.handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+		ErrorLog:          logger,
+	}
 	control := &http.Server{
 		Handler:           s.controlMux(),
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -214,8 +236,9 @@ func (s *server) serve(ctx context.Context) error {
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          logger,
 	}
-	errs := make(chan error, 2)
+	errs := make(chan error, 3)
 	go func() { errs <- routes.Serve(s.routes) }()
+	go func() { errs <- internal.Serve(s.internal) }()
 	go func() { errs <- control.Serve(s.control) }()
 	logger.Printf("serving routes on 127.0.0.1:%d, control on %s", s.port, s.control.Addr())
 	if s.storeErr != nil {
@@ -235,6 +258,7 @@ func (s *server) serve(ctx context.Context) error {
 	defer cancel()
 	_ = control.Shutdown(shut)
 	_ = routes.Shutdown(shut)
+	_ = internal.Shutdown(shut)
 	logger.Printf("stopped")
 	s.close()
 	if errors.Is(err, http.ErrServerClosed) {
@@ -247,11 +271,20 @@ func (s *server) serve(ctx context.Context) error {
 // while the lock is held, so a broker that lost the race removes nothing of
 // the one that won.
 func (s *server) close() {
+	s.mu.Lock()
+	for id, l := range s.diverts {
+		l.close()
+		delete(s.diverts, id)
+	}
+	s.mu.Unlock()
 	if s.control != nil {
 		_ = s.control.Close()
 	}
 	if s.routes != nil {
 		_ = s.routes.Close()
+	}
+	if s.internal != nil {
+		_ = s.internal.Close()
 	}
 	if s.lock != nil {
 		_ = os.Remove(filepath.Join(s.cfg.dir, injector.SocketName))
@@ -341,6 +374,11 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sb := broker.Sandbox{ID: req.ID, Profile: req.Profile}
+	internal, err := brigInternalAddr(req.BrigInternal)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+		return
+	}
 	for _, rt := range req.Routes {
 		expanded, err := policy.ExpandRoute(rt.Route)
 		if err != nil {
@@ -349,7 +387,10 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		sb.Routes = append(sb.Routes, broker.Route{Policy: rt.Policy, Route: expanded})
 	}
-	key, err := json.Marshal(sb)
+	key, err := json.Marshal(struct {
+		broker.Sandbox
+		BrigInternal string
+	}{sb, req.BrigInternal})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -360,7 +401,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.sandboxes[req.ID] == string(key) {
-		w.WriteHeader(http.StatusNoContent)
+		reply(w, s.added(req.ID))
 		return
 	}
 	// A secret tracked for this registration alone is dropped again when
@@ -388,11 +429,58 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The socket path is the sandbox's, so the listener of a registration
+	// this one replaces goes first.
+	if old := s.diverts[req.ID]; old != nil {
+		old.close()
+		delete(s.diverts, req.ID)
+	}
+	if internal.IsValid() {
+		l, err := s.openDivert(req.ID, internal)
+		if err != nil {
+			s.handler.RemoveSandbox(req.ID)
+			delete(s.sandboxes, req.ID)
+			untrack()
+			http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusInternalServerError)
+			return
+		}
+		s.diverts[req.ID] = l
+	}
 	s.sandboxes[req.ID] = string(key)
 	for _, name := range tracked {
 		s.creds.recover(name)
 	}
-	w.WriteHeader(http.StatusNoContent)
+	reply(w, s.added(req.ID))
+}
+
+// added is the answer to a registration of sandbox id. s.mu is held. A
+// sandbox that reaches brig.internal is handed the CA certificate to trust
+// it by, and never its key.
+func (s *server) added(id string) injector.AddResponse {
+	l := s.diverts[id]
+	if l == nil {
+		return injector.AddResponse{}
+	}
+	resp := injector.AddResponse{DivertSocket: l.path}
+	if l.internal.IsValid() {
+		resp.CA = string(s.ca.certPEM())
+	}
+	return resp
+}
+
+// brigInternalAddr reads the brig.internal address of a registration: "" for
+// none, or one IP address in its canonical spelling, never unspecified,
+// loopback or multicast. The broker serves brig.internal on connections to
+// it, and never dials it.
+func brigInternalAddr(s string) (netip.Addr, error) {
+	if s == "" {
+		return netip.Addr{}, nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil || a.Zone() != "" || a.String() != s || a.IsUnspecified() || a.IsLoopback() || a.IsMulticast() {
+		return netip.Addr{}, fmt.Errorf("the brig.internal address %q is not one IP address a guest can reach", s)
+	}
+	return a.Unmap(), nil
 }
 
 func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
@@ -405,6 +493,10 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	_, removed := s.sandboxes[id]
 	s.handler.RemoveSandbox(id)
 	delete(s.sandboxes, id)
+	if l := s.diverts[id]; l != nil {
+		l.close()
+		delete(s.diverts, id)
+	}
 	remaining := len(s.sandboxes)
 	s.mu.Unlock()
 	reply(w, injector.RemoveResponse{Removed: removed, Remaining: remaining})

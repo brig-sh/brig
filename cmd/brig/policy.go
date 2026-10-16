@@ -20,6 +20,7 @@ import (
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/session"
 	"github.com/brig-sh/brig/internal/wrap"
 	"sigs.k8s.io/yaml"
@@ -723,7 +724,9 @@ func howToUnbind(b []string) string {
 // printRoutes prints one indented row on stderr for each route of p, after
 // the policy name check has just printed on stdout. stdout stays one policy
 // name per line. A route as written can leave out its mode, so the row prints
-// the default.
+// the default. Each route gets a row per run path under it, from the route
+// mode table: where its mode is served, and the transport the guest reaches
+// the broker by there.
 func printRoutes(p policy.Policy) {
 	for _, r := range p.Spec.Routes {
 		preset := string(r.Preset)
@@ -735,7 +738,41 @@ func printRoutes(p policy.Policy) {
 			mode = v1alpha1.ModeEndpoint
 		}
 		fmt.Fprintf(os.Stderr, "  route %s  preset %s  mode %s\n", r.Name, preset, mode)
+		for _, rec := range runtime.ModeRecords(mode) {
+			fmt.Fprintf(os.Stderr, "    %s  %s\n", rec.Path, rec.Line())
+		}
 	}
+}
+
+// endpointServed is why a run of p cannot serve a route in mode endpoint, or
+// nil: the answer of runtime.CheckBrigInternal for the runtime and hypervisor
+// the run would use, where its guest reaches brig.internal.
+func endpointServed(p profile.Profile) error {
+	rt, err := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
+	if err != nil {
+		return fmt.Errorf("no runtime is here to serve it: %w", err)
+	}
+	env := wrap.NewEnv(p.Name, nil)
+	net := wrap.NetIsolated.RuntimeNet()
+	if env.String("NETWORK", p.Network) == string(wrap.NetOffline) {
+		net = wrap.NetOffline.RuntimeNet()
+	}
+	path := runtime.RoutePath(rt, env.String("HYPERVISOR", p.Hypervisor))
+	return runtime.CheckBrigInternal(rt, path, net)
+}
+
+// endpointRoutes names each route in mode endpoint, with the policy that
+// declares it, the way a refusal does.
+func endpointRoutes(ps []policy.Policy) []string {
+	var out []string
+	for _, p := range ps {
+		for _, r := range p.Spec.Routes {
+			if r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint {
+				out = append(out, fmt.Sprintf("%s (route %s)", p.Metadata.Name, r.Name))
+			}
+		}
+	}
+	return out
 }
 
 // flatPolicyGoesIn is the release that stops reading the flat policy form. The
@@ -1135,11 +1172,19 @@ func checkPolicy(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
 	}
+	// A boot refuses a route in mode endpoint that its run path cannot
+	// serve, so check says so before one is tried. A microVM or a container
+	// guest reaches the route at brig.internal on its own gateway. See
+	// routeRefusal in internal/wrap.
+	if endpoint := endpointRoutes(loaded); len(endpoint) > 0 {
+		if err := endpointServed(p); err != nil {
+			return fmt.Errorf("policy %s declares a route in mode endpoint, and brig refuses the run "+
+				"before boot: %w", strings.Join(endpoint, ", "), err)
+		}
+	}
 	// A route is served on the sandbox's own gateway address, so a run with
 	// one needs a network of its own. The line states that plan, on stderr
-	// with the route rows, so stdout stays one policy name per line. A run
-	// refuses routes until a version serves them; see refuseRoutes in
-	// internal/wrap.
+	// with the route rows, so stdout stays one policy name per line.
 	if len(routes) > 0 {
 		fmt.Fprintf(os.Stderr, "posture: %s\n", wrap.NetIsolated)
 	}

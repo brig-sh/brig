@@ -80,7 +80,8 @@ func (c Client) call(method, path string, body, out any) error {
 		}
 		return &RefusedError{Status: resp.StatusCode, Message: msg}
 	}
-	if out == nil {
+	// A broker older than the answer to add-sandbox sends none.
+	if out == nil || len(blob) == 0 {
 		return nil
 	}
 	return json.Unmarshal(blob, out)
@@ -107,7 +108,15 @@ func stopping(err error) bool {
 // Registering the same routes again keeps the sandbox's key, so the tokens of
 // an agent already running stay valid.
 func (c Client) AddSandbox(s Sandbox) error {
-	return c.call(http.MethodPost, "/sandboxes", s, nil)
+	_, err := c.Add(s)
+	return err
+}
+
+// Add is AddSandbox, and returns the broker's answer.
+func (c Client) Add(s Sandbox) (AddResponse, error) {
+	var out AddResponse
+	err := c.call(http.MethodPost, "/sandboxes", s, &out)
+	return out, err
 }
 
 // RemoveSandbox stops serving the sandbox id. Its tokens are refused from

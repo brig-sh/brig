@@ -2,14 +2,18 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 func writePolicyFile(t *testing.T, dir, name, body string) string {
@@ -2205,6 +2209,10 @@ func TestShowPolicyExpandsPresets(t *testing.T) {
 func TestCheckListsRoutesAndPosture(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+		return routingRuntime{doctorRuntime{bin: "hull"}, nil}, nil
+	})
 	copyExample(t, dir, "example1-claude-only.yaml")
 	copyExample(t, dir, "example3-github-brig-sh.yaml")
 	loadTestProfiles(t)
@@ -2224,11 +2232,71 @@ func TestCheckListsRoutesAndPosture(t *testing.T) {
 	if out != "claude-only\ngithub-brig-sh\n" {
 		t.Errorf("stdout is not one policy name per line:\n%s", out)
 	}
-	want := "  route anthropic  preset claude-code  mode endpoint\n" +
-		"  route github  preset github-token  mode endpoint\n" +
+	rows := ""
+	for _, rec := range runtime.ModeRecords(v1alpha1.ModeEndpoint) {
+		rows += "    " + rec.Path.String() + "  " + rec.Line() + "\n"
+	}
+	want := "  route anthropic  preset claude-code  mode endpoint\n" + rows +
+		"  route github  preset github-token  mode endpoint\n" + rows +
 		"posture: isolated\n"
 	if !strings.HasPrefix(stderr, want) {
 		t.Errorf("stderr printed:\n%s\nwant it to start with:\n%s", stderr, want)
+	}
+	for _, want := range []string{
+		"    hull on hvi  enforced: " + runtime.EndpointHviWhy + "; transport: brig.internal\n",
+		"    nerdctl on io.containerd.urunc.v2  enforced: " + runtime.EndpointNerdctlWhy + "; transport: brig.internal\n",
+		"    hull on vz  cannot enforce: vz takes its network from vmnet",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not carry %q:\n%s", want, stderr)
+		}
+	}
+}
+
+// routingRuntime is hull that routes brig.internal, and probes with err.
+type routingRuntime struct {
+	doctorRuntime
+	err error
+}
+
+func (routingRuntime) BrigInternalAddr(string) (netip.Addr, error) {
+	return netip.MustParseAddr("198.18.1.1"), nil
+}
+
+func (r routingRuntime) ProbeBrigInternal() error { return r.err }
+
+// An endpoint route its run path cannot serve is refused at check, before a
+// run is tried: hull on vz, and hull on hvi whose gateway takes no --divert.
+// No posture is planned for a run that cannot happen.
+func TestCheckRefusesAnEndpointRouteItCannotServe(t *testing.T) {
+	for _, c := range []struct{ name, hv, want string }{
+		{"vz", "vz", "vz takes its network from vmnet"},
+		{"an old hull", "hvi", "has no --divert"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("BRIG_POLICY_DIR", dir)
+			t.Setenv("BRIG_HYPERVISOR", c.hv)
+			stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+				return routingRuntime{doctorRuntime{bin: "hull"}, errors.New("`network-gateway` of hull has no --divert")}, nil
+			})
+			copyExample(t, dir, "example1-claude-only.yaml")
+			loadTestProfiles(t)
+			if err := attachPolicy([]string{"claude-only", "claude-code"}); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			stderr := captureStderr(t, func() {
+				_, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+			})
+			if err == nil || !strings.Contains(err.Error(), "claude-only (route anthropic) declares a route in mode endpoint") ||
+				!strings.Contains(err.Error(), c.want) {
+				t.Errorf("check = %v, want a refusal saying %q", err, c.want)
+			}
+			if strings.Contains(stderr, "posture:") {
+				t.Errorf("check planned a posture for a run it refuses:\n%s", stderr)
+			}
+		})
 	}
 }
 

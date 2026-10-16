@@ -1,12 +1,14 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // routeCredential is one variable a route hands the guest a session token
@@ -65,7 +67,7 @@ func (c *Config) brokerLine() string {
 	parts := []string{fmt.Sprintf("transport %s, routes %s", c.routeTransport(), strings.Join(names, ", "))}
 	switch st, ok := c.routeBroker().Status(); {
 	case c.routeRefusal() != nil:
-		parts = append(parts, "refused: brig.internal routing is not available on this runtime yet")
+		parts = append(parts, "refused: this run cannot route brig.internal to the broker; brig info --json says why")
 	case ok:
 		parts = append(parts, fmt.Sprintf("brig-broker pid %d on 127.0.0.1:%d", st.PID, st.Port))
 		if len(st.Pending) > 0 {
@@ -89,7 +91,49 @@ func (c *Config) brokerLine() string {
 		parts = append(parts, "brig-broker not running; the run starts it")
 	}
 	parts = append(parts, c.routeStoreLine(c.checkRouteStore())...)
+	parts = append(parts, c.modesLine())
 	return strings.Join(parts, "; ")
+}
+
+// servedModes are the route modes this run's path serves, never nil. An
+// endpoint is served only where endpointAnswer says so.
+func (c *Config) servedModes() []string {
+	out := []string{}
+	if c.Runtime == nil {
+		return out
+	}
+	for _, m := range runtime.ServedModes(c.routePath()) {
+		if m == v1alpha1.ModeEndpoint && c.endpointAnswer().State != runtime.Enforced {
+			continue
+		}
+		out = append(out, string(m))
+	}
+	return out
+}
+
+// endpointAnswer is the endpoint row of the route mode table for this run's
+// path. Where a guest reaches brig.internal and the table answers enforced,
+// CheckBrigInternal has the last word.
+func (c *Config) endpointAnswer() runtime.ModeRecord {
+	r := runtime.ModeAnswer(v1alpha1.ModeEndpoint, c.routePath())
+	if r.State != runtime.Enforced {
+		return r
+	}
+	var ce *runtime.CapabilityError
+	if err := c.endpointCheck(); errors.As(err, &ce) {
+		r.State, r.Why = ce.State, ce.Why
+	}
+	return r
+}
+
+// modesLine is the part of the BROKER row that names the modes this run path
+// serves.
+func (c *Config) modesLine() string {
+	modes := strings.Join(c.servedModes(), ", ")
+	if modes == "" {
+		modes = "none"
+	}
+	return "modes " + modes
 }
 
 // InfoBroker is the broker as `brig info --json` reports it. It names
@@ -118,6 +162,10 @@ type InfoBroker struct {
 	Missing    []string `json:"missing,omitempty"`
 	StoreError string   `json:"storeError,omitempty"`
 	Refused    string   `json:"refused,omitempty"`
+	// Modes are the route modes this run path serves: endpoint on hull on
+	// hvi and nerdctl on urunc when brig.internal is routed there, and none
+	// elsewhere.
+	Modes []string `json:"modes"`
 }
 
 // infoBroker is the InfoBroker of this run, or nil for a run with no route.
@@ -125,7 +173,8 @@ func (c *Config) infoBroker() *InfoBroker {
 	if len(c.routes) == 0 && c.routesErr == nil {
 		return nil
 	}
-	b := &InfoBroker{Transport: string(c.routeTransport()), KeptOnHost: c.routeSkipped}
+	b := &InfoBroker{Transport: string(c.routeTransport()), KeptOnHost: c.routeSkipped,
+		Modes: c.servedModes()}
 	for _, r := range c.routes {
 		b.Routes = append(b.Routes, r.Name)
 	}

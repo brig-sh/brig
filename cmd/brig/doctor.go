@@ -184,9 +184,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		hostCheck(),
 		virtualCheck(),
 		rtCheck,
-	}
-	if goruntime.GOOS == "darwin" {
-		checks = append(checks, brokerCheck())
+		brokerCheck(),
 	}
 	return append(checks,
 		bootCheck(rt),

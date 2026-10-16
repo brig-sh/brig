@@ -252,3 +252,62 @@ func TestAnswerRefusesAnUpstreamAnswerWithAnotherID(t *testing.T) {
 		t.Errorf("rcode %d, %d answers", rcode(resp), ancount(resp))
 	}
 }
+
+// A name the resolver holds a record of is answered from it, whatever the
+// policy says, and never asked upstream. brig.internal names the sandbox's
+// own gateway this way. Only an A query gets an address; any other type is
+// answered empty.
+func TestAnswerServesItsOwnRecordsUnderAnyPolicy(t *testing.T) {
+	gw := netip.MustParseAddr("10.4.1.1")
+	for name, p := range map[string]*Policy{
+		"deny default": mustParse(t, "deny", nil, nil),
+		"deny rule":    mustParse(t, "allow", nil, []string{"host=*.internal"}),
+		"no policy":    Unfiltered(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			pins := &fakePins{}
+			asked := 0
+			r := &Resolver{Policy: p, Upstream: []string{"up:53"}, Pins: pins,
+				exchange: upstreamAnswering("203.0.113.9", &asked), Hosts: map[string]netip.Addr{"brig.internal": gw}}
+			ctx := context.Background()
+			for i, qname := range []string{"brig.internal", "BRIG.Internal"} {
+				query := buildQuery(uint16(10+i), qname, typeA)
+				resp := r.Answer(ctx, query, "udp", guest)
+				if rcode(resp) != 0 || ancount(resp) != 1 || resp[2]&0x04 == 0 {
+					t.Fatalf("A %s: rcode %d, %d answers, flags %#x", qname, rcode(resp), ancount(resp), resp[2])
+				}
+				// The same reader that judges an upstream answer reads it.
+				q, _ := parseQuery(query)
+				_, addrs, err := inspectAnswer(resp, query, q, 0)
+				if err != nil || len(addrs) != 1 || addrs[0] != gw || answerTTL(t, resp) != 0 {
+					t.Fatalf("A %s: %v %v", qname, addrs, err)
+				}
+			}
+			resp := r.Answer(ctx, buildQuery(12, "brig.internal", typeAAAA), "udp", guest)
+			if rcode(resp) != 0 || ancount(resp) != 0 {
+				t.Errorf("AAAA brig.internal: rcode %d, %d answers", rcode(resp), ancount(resp))
+			}
+			if asked != 0 || len(pins.sets) != 0 {
+				t.Errorf("upstream asked %d times, pins %v", asked, pins.sets)
+			}
+			// A name under it is not the record.
+			resp = r.Answer(ctx, buildQuery(13, "x.brig.internal", typeA), "udp", guest)
+			if ancount(resp) == 1 && asked == 0 {
+				t.Errorf("x.brig.internal was answered from the record")
+			}
+		})
+	}
+}
+
+func TestHostsOfReadsNameEqualsIP(t *testing.T) {
+	got, err := hostsOf([]string{"Brig.Internal.=10.4.1.1"})
+	if err != nil || got["brig.internal"] != netip.MustParseAddr("10.4.1.1") {
+		t.Fatalf("hostsOf = %v, %v", got, err)
+	}
+	for _, bad := range [][]string{{"brig.internal"}, {"brig.internal=::1"}, {"*.x=10.0.0.1"},
+		{"brig.internal=10.0.0.1", "brig.internal=10.0.0.2"}, {"brig.internal=host"}} {
+		if _, err := hostsOf(bad); err == nil {
+			t.Errorf("hostsOf(%q) accepted", bad)
+		}
+	}
+}

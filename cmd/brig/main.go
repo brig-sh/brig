@@ -659,6 +659,9 @@ func dispatch(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Every verb reads the store `brig secret ls` lists, through the same
+	// seam, so a run looks for a route's secret where the import put it.
+	cfg.OpenStore = func() (creds.SecretReader, error) { return openStore() }
 	// The slug is sanitised, so the directory a named session gets does not
 	// always read back as the name typed. Say which directory it actually is
 	// whenever the two differ. A name that sanitises onto another session's
@@ -696,10 +699,8 @@ func dispatch(args []string) error {
 		return unpublishPorts(cfg, refDisplay(profileName, opts), tail, opts.all, wantJSON)
 	case "plan":
 		// Ahead of BuildEnv, which reads every needed secret and fails on a
-		// missing one. The plan lists the store instead. It lists the store
-		// `brig secret ls` lists, through the same seam, so the two agree
-		// about what is there.
-		cfg.OpenStore = func() (creds.SecretReader, error) { return openStore() }
+		// missing one. The plan lists the store instead, the one `brig secret
+		// ls` lists, so the two agree about what is there.
 		d := cfg.Plan()
 		if wantJSON {
 			return writeJSONDocument(cfg.Out, "Plan", d)

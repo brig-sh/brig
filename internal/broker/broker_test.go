@@ -530,16 +530,18 @@ func TestArrivalFromAnotherGatewayIsRefused(t *testing.T) {
 	var mu sync.Mutex
 	var asked []string
 	r := newRig(t, up, claudeRoutes(t, up), func(c *Config) {
-		c.ArrivalCheck = func(sandbox, remoteAddr string) bool {
+		c.ArrivalCheck = func(sandbox, remoteAddr string) (string, bool) {
 			mu.Lock()
 			defer mu.Unlock()
 			asked = append(asked, sandbox+" "+remoteAddr)
-			return sandbox == "brig-b"
+			return "brig-b", sandbox == "brig-b"
 		}
 	})
+	// Refused as a sandbox the broker does not serve, so a request cannot
+	// tell another sandbox from none.
 	resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages", bearer(r.mint("brig-a", "anthropic")), "{}")
-	wantStatus(t, resp, http.StatusUnauthorized)
-	wantAudit(t, r.lastAudit(), "check=arrival")
+	wantStatus(t, resp, http.StatusNotFound)
+	wantAudit(t, r.lastAudit(), "check=arrival", "arrived=brig-b")
 	if n := up.count(); n != 0 {
 		t.Fatalf("the upstream saw %d requests", n)
 	}

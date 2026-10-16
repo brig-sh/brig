@@ -72,6 +72,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
+	// A request is served only for a sandbox that reaches the broker where it
+	// arrived. Any other sandbox's path gets the answer of one that does not
+	// exist, before a lookup or a token check could tell the two apart.
+	arrived, ok := h.arrival(p.sandbox, r.RemoteAddr)
+	a.arrived = arrived
+	if !ok {
+		a.check = "arrival"
+		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+		return
+	}
 	a.sandbox, a.route, a.path = p.sandbox, p.route, p.rest
 	sb := h.sandbox(p.sandbox)
 	if sb == nil {
@@ -95,11 +105,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c, err := verify(sb.key, token, p.sandbox, p.route, h.now())
 	if err != nil {
 		a.check = err.Error()
-		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
-		return
-	}
-	if !h.arrival(p.sandbox, r.RemoteAddr) {
-		a.check = "arrival"
 		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
 		return
 	}
@@ -527,6 +532,9 @@ func (r *recorder) code() int {
 // credential or a body.
 type auditLine struct {
 	workload, sandbox, route, method, path string
+	// arrived is the sandbox whose divert socket the request arrived on, or
+	// "" for the loopback port. The broker sets it, not the sender.
+	arrived string
 	// check names the check that refused the request.
 	check string
 	// policy, rule and reason repeat the refusal body of a request.allow
@@ -562,8 +570,8 @@ func clip(s string, n int) string {
 func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur time.Duration) {
 	attrs := make([]slog.Attr, 0, 16)
 	// A request whose token has not verified carries only what the broker
-	// chose: the method, the status and the check. Its path, sandbox and
-	// route are whatever the sender wrote.
+	// chose: the method, the status, the check and where it arrived. Its
+	// path, sandbox and route are whatever the sender wrote.
 	if a.workload == "" {
 		attrs = append(attrs,
 			slog.String("method", clip(a.method, maxAuditMethod)),
@@ -572,6 +580,9 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 		)
 		if a.check != "" {
 			attrs = append(attrs, slog.String("check", a.check))
+		}
+		if a.arrived != "" {
+			attrs = append(attrs, slog.String("arrived", a.arrived))
 		}
 		h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
 		return
@@ -587,6 +598,9 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 	)
 	if a.check != "" {
 		attrs = append(attrs, slog.String("check", a.check))
+	}
+	if a.arrived != "" {
+		attrs = append(attrs, slog.String("arrived", a.arrived))
 	}
 	if a.rule != "" {
 		attrs = append(attrs, slog.String("policy", a.policy), slog.String("rule", a.rule),

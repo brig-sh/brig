@@ -133,10 +133,14 @@ func (u *upstream) requests() []http.Header {
 // transport sends every upstream request to u, whatever origin the route
 // names, and trusts u's certificate. It stands in for the system roots and
 // for DNS, and nothing else: the broker still dials TLS and verifies.
-func (u *upstream) transport() http.RoundTripper {
-	addr := u.Listener.Addr().String()
+func (u *upstream) transport() http.RoundTripper { return transportTo(u.Server) }
+
+// transportTo sends every upstream request to srv, and trusts srv's
+// certificate.
+func transportTo(srv *httptest.Server) http.RoundTripper {
+	addr := srv.Listener.Addr().String()
 	pool := x509.NewCertPool()
-	pool.AddCert(u.Certificate())
+	pool.AddCert(srv.Certificate())
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)

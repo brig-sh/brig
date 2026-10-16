@@ -441,6 +441,21 @@ func TestDoctorBrokerCheck(t *testing.T) {
 	t.Logf("doctor: %s", c.Finding)
 }
 
+// The report has a broker row on every host: nerdctl on Linux serves routes
+// through brig-broker as hull on macOS does. The row does not gate the exit
+// status.
+func TestDoctorHasABrokerRowOnEveryHost(t *testing.T) {
+	healthyHost(t)
+	t.Setenv("BRIG_STATE_DIR", t.TempDir())
+	checks := runDoctor(nil, nil)
+	if c := findCheck(t, checks, "broker"); c.State != stateInfo || c.err != nil {
+		t.Errorf("a broker that never started: %+v", c)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("the broker row gated the exit status: %v", err)
+	}
+}
+
 // A broker settling a refresh journal says so on the broker row, by name,
 // without failing it. A refresh that failed still fails the row.
 func TestDoctorBrokerRowNamesARecovery(t *testing.T) {

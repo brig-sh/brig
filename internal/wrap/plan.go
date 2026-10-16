@@ -261,6 +261,7 @@ type PlanBroker struct {
 	Missing    []string `json:"missing,omitempty"`
 	StoreError string   `json:"storeError,omitempty"`
 	Refused    string   `json:"refused,omitempty"`
+	Modes      []string `json:"modes"`
 }
 
 // planBroker is the PlanBroker of this run, or nil for a run with no route.
@@ -269,11 +270,13 @@ func (c *Config) planBroker(st routeStore) *PlanBroker {
 	if len(c.routes) == 0 && c.routesErr == nil {
 		return nil
 	}
-	b := &PlanBroker{Transport: string(c.routeTransport()), Routes: []string{}, KeptOnHost: c.routeSkipped}
+	b := &PlanBroker{Transport: string(c.routeTransport()), Routes: []string{}, KeptOnHost: c.routeSkipped,
+		Modes: c.servedModes()}
 	for _, r := range c.routes {
 		b.Routes = append(b.Routes, r.Name)
 	}
 	sort.Strings(b.Routes)
+	sort.Strings(b.Modes)
 	b.Missing, b.StoreError, b.Refused = c.routeStoreFacts(st)
 	if err := c.routeRefusal(); err != nil {
 		b.Refused = err.Error()
@@ -296,6 +299,7 @@ func (c *Config) planBrokerLine(b *PlanBroker) string {
 		st.err = errors.New(b.StoreError)
 	}
 	parts = append(parts, c.routeStoreLine(st)...)
+	parts = append(parts, c.modesLine())
 	return strings.Join(parts, "; ")
 }
 

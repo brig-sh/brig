@@ -13,9 +13,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/telemetry"
@@ -191,7 +193,65 @@ type Egress struct {
 	Default string
 	Allow   []Rule
 	Deny    []Rule
+	// Divert is the connections handed to brig's injector instead of being
+	// routed. The zero value diverts nothing. A guest that reaches the
+	// broker at brig.internal needs one. It needs a network of the
+	// sandbox's own, like the rules. hull diverts at its gateway, and
+	// nerdctl at the sandbox's table.
+	Divert Divert
 }
+
+// Divert asks the runtime to hand a sandbox's TCP connections to some
+// destinations, unmodified, to the injector's unix socket. A destination it
+// cannot divert refuses the run. See internal/divert for the contract.
+type Divert struct {
+	// Routes are the diverted destinations.
+	Routes []DivertRoute
+	// Socket is the injector's unix socket for this sandbox, on the host.
+	Socket string
+	// BrigInternal asks the runtime to route brig.internal to the broker: to
+	// answer the name with the address of the sandbox's own gateway, which
+	// BrigInternalAddr reports, and to divert that address on
+	// BrigInternalPort to Socket. Every other port of it is refused.
+	BrigInternal bool
+}
+
+// The name a guest reaches the broker by, and the one port of it that is
+// served.
+const (
+	BrigInternalName = "brig.internal"
+	BrigInternalPort = 443
+)
+
+// BrigInternalRouter is a runtime that can route brig.internal from its
+// guest to the broker.
+type BrigInternalRouter interface {
+	// BrigInternalAddr returns the address the guest of sandbox name
+	// resolves brig.internal to: its own gateway's. The broker serves
+	// brig.internal on connections to it, and never dials it. It may create
+	// the sandbox's network, and never boots the sandbox.
+	BrigInternalAddr(name string) (netip.Addr, error)
+}
+
+// on returns the diverted destinations, with port BrigInternalPort of gw when
+// brig.internal is routed.
+func (d Divert) on(gw netip.Addr) []DivertRoute {
+	routes := slices.Clone(d.Routes)
+	if d.BrigInternal {
+		routes = append(routes, DivertRoute{Host: gw.String(), Port: BrigInternalPort})
+	}
+	return routes
+}
+
+// DivertRoute is one diverted destination: a host name or an IPv4 address,
+// and a TCP port.
+type DivertRoute struct {
+	Host string
+	Port int
+}
+
+// Requested returns whether anything is diverted.
+func (d Divert) Requested() bool { return len(d.Routes) > 0 || d.BrigInternal }
 
 // Rule is one destination, by exactly one of the two spellings it can take: a
 // glob on the name the guest resolves, or a range the address is matched
