@@ -45,8 +45,13 @@ func (c *Config) routeCredentials() []routeCredential {
 	return out
 }
 
-// routeTransport is the transport this run's guest reaches its routes by.
+// routeTransport is the transport this run's guest reaches its routes by. A
+// run whose routes are all in modes besides endpoint reaches them by the
+// divert.
 func (c *Config) routeTransport() injector.Transport {
+	if len(c.routes) > 0 && len(c.endpointRoutes()) == 0 {
+		return injector.TransportDivert
+	}
 	return injector.TransportBrigInternal
 }
 
@@ -66,6 +71,8 @@ func (c *Config) brokerLine() string {
 	}
 	parts := []string{fmt.Sprintf("transport %s, routes %s", c.routeTransport(), strings.Join(names, ", "))}
 	switch st, ok := c.routeBroker().Status(); {
+	case c.modeRefusal() != nil:
+		parts = append(parts, "refused: a route is in a mode this run cannot serve; brig info --json says why")
 	case c.routeRefusal() != nil:
 		parts = append(parts, "refused: this run cannot route brig.internal to the broker; brig info --json says why")
 	case ok:
@@ -96,14 +103,20 @@ func (c *Config) brokerLine() string {
 }
 
 // servedModes are the route modes this run's path serves, never nil. An
-// endpoint is served only where endpointAnswer says so.
+// endpoint is served only where endpointAnswer says so, and another mode
+// only where its own check holds.
 func (c *Config) servedModes() []string {
 	out := []string{}
 	if c.Runtime == nil {
 		return out
 	}
 	for _, m := range runtime.ServedModes(c.routePath()) {
-		if m == v1alpha1.ModeEndpoint && c.endpointAnswer().State != runtime.Enforced {
+		switch {
+		case m == v1alpha1.ModeEndpoint:
+			if c.endpointAnswer().State != runtime.Enforced {
+				continue
+			}
+		case !c.modeServed(m):
 			continue
 		}
 		out = append(out, string(m))
@@ -127,13 +140,50 @@ func (c *Config) endpointAnswer() runtime.ModeRecord {
 }
 
 // modesLine is the part of the BROKER row that names the modes this run path
-// serves.
+// serves, and what each route mode besides endpoint adds when it is not
+// served.
 func (c *Config) modesLine() string {
 	modes := strings.Join(c.servedModes(), ", ")
 	if modes == "" {
 		modes = "none"
 	}
-	return "modes " + modes
+	line := "modes " + modes
+	for _, m := range registeredModes() {
+		if more := routeModeOf(m).unavailable(c); more != "" {
+			line += "; " + more
+		}
+	}
+	return line
+}
+
+// unavailableModes names each route mode this build serves somewhere and
+// this run's path does not, with the reason: the row of the route mode
+// table, or the check that refuses it.
+func (c *Config) unavailableModes() map[string]string {
+	out := map[string]string{}
+	for _, m := range append([]v1alpha1.RouteMode{v1alpha1.ModeEndpoint}, registeredModes()...) {
+		var r runtime.ModeRecord
+		switch {
+		case c.Runtime == nil:
+			r = runtime.ModeRecord{State: runtime.CannotEnforce, Why: "there is no runtime here"}
+		case m == v1alpha1.ModeEndpoint:
+			r = c.endpointAnswer()
+		default:
+			r = runtime.ModeAnswer(m, c.routePath())
+			var ce *runtime.CapabilityError
+			if err := checkMode(m, c.env, c.Runtime, c.routePath(), c.Network.RuntimeNet()); errors.As(err, &ce) &&
+				r.State == runtime.Enforced {
+				r.State, r.Why = ce.State, ce.Why
+			}
+		}
+		if r.State != runtime.Enforced {
+			out[string(m)] = r.Line()
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // InfoBroker is the broker as `brig info --json` reports it. It names
@@ -166,6 +216,9 @@ type InfoBroker struct {
 	// hvi and nerdctl on urunc when brig.internal is routed there, and none
 	// elsewhere.
 	Modes []string `json:"modes"`
+	// Unavailable names each route mode this build serves that this run
+	// path does not, with the reason.
+	Unavailable map[string]string `json:"unavailable,omitempty"`
 }
 
 // infoBroker is the InfoBroker of this run, or nil for a run with no route.
@@ -174,7 +227,7 @@ func (c *Config) infoBroker() *InfoBroker {
 		return nil
 	}
 	b := &InfoBroker{Transport: string(c.routeTransport()), KeptOnHost: c.routeSkipped,
-		Modes: c.servedModes()}
+		Modes: c.servedModes(), Unavailable: c.unavailableModes()}
 	for _, r := range c.routes {
 		b.Routes = append(b.Routes, r.Name)
 	}

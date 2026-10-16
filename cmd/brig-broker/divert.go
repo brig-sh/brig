@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/divert"
 	"github.com/brig-sh/brig/internal/injector"
 )
@@ -20,9 +22,10 @@ import (
 // This file serves the divert socket of a sandbox. A runtime diverts each
 // guest connection to a diverted destination to a unix socket of the
 // sandbox, with a one-line preamble that names where the guest was going.
-// The broker reads the preamble and serves the connection: a connection to
-// the sandbox's brig.internal address is served in briginternal.go, and any
-// other connection is closed. The contract with the diverter is in
+// The broker reads the preamble and serves the connection. A connection to
+// the sandbox's brig.internal address is served in briginternal.go. Any other
+// connection goes to the divert handler of a route mode that claims it, and
+// is closed when none does. The contract with the diverter is in
 // docs/broker.md ("Transports").
 
 const (
@@ -64,6 +67,44 @@ func readPreamble(r io.Reader) (preamble, error) {
 	return preamble{}, fmt.Errorf("the divert preamble is longer than %d bytes", divert.MaxPreamble)
 }
 
+// divertMode is how the broker serves a route mode besides endpoint. A
+// build that registers such a mode (see internal/routemode) adds one to
+// divertModes from an init function.
+type divertMode struct {
+	// check refuses the settings a registration of sandbox id carries for
+	// the mode, before anything is registered.
+	check func(id string, settings json.RawMessage) error
+	// open starts serving the mode for sandbox id, once the route handler
+	// holds its routes.
+	open func(s *server, id string, settings json.RawMessage) (divertHandler, error)
+}
+
+// divertModes are the route modes besides endpoint that this build's broker
+// serves.
+var divertModes = map[v1alpha1.RouteMode]divertMode{}
+
+// divertHandler serves the diverted connections of one sandbox that are not
+// brig.internal, for one route mode.
+type divertHandler interface {
+	// claims returns whether the handler serves a connection to dst.
+	claims(dst netip.AddrPort) bool
+	// serve serves one connection to dst after its preamble. It owns
+	// client, and fills in a.
+	serve(ctx context.Context, client net.Conn, dst netip.AddrPort, a *divertAudit)
+	// close stops serving, and closes what open opened.
+	close()
+}
+
+// lookupHost resolves a host name on the host.
+func lookupHost(ctx context.Context, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+// dialUpstream dials an address from the host, for a divert handler.
+func dialUpstream(ctx context.Context, addr string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+}
+
 func ownedByMe(info os.FileInfo) bool {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	return ok && int(st.Uid) == os.Getuid()
@@ -78,15 +119,20 @@ type divertSandbox struct {
 	// internal is the address the sandbox's guest resolves brig.internal
 	// to, or the zero Addr for a sandbox that does not reach it.
 	internal netip.Addr
+	// handlers serve the sandbox's route modes besides endpoint, in mode
+	// order.
+	handlers []divertHandler
 	sem      chan struct{}
 	ctx      context.Context
 	cancel   context.CancelFunc
 }
 
-// openDivert listens on the divert socket of sandbox id. internal is the
+// openDivert listens on the divert socket of sandbox id, and opens the
+// divert handler of each of modes with its settings. internal is the
 // sandbox's brig.internal address, or the zero Addr. The socket is 0600 in a
 // 0700 directory.
-func (s *server) openDivert(id string, internal netip.Addr) (*divertSandbox, error) {
+func (s *server) openDivert(id string, internal netip.Addr, modes []v1alpha1.RouteMode,
+	settings map[v1alpha1.RouteMode]json.RawMessage) (*divertSandbox, error) {
 	sock, err := injector.DivertSocket(s.cfg.dir, id)
 	if err != nil {
 		return nil, err
@@ -106,27 +152,46 @@ func (s *server) openDivert(id string, internal netip.Addr) (*divertSandbox, err
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	var handlers []divertHandler
+	closeHandlers := func() {
+		for _, h := range handlers {
+			h.close()
+		}
+	}
+	for _, m := range modes {
+		h, err := divertModes[m].open(s, id, settings[m])
+		if err != nil {
+			closeHandlers()
+			return nil, err
+		}
+		handlers = append(handlers, h)
+	}
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
+		closeHandlers()
 		return nil, fmt.Errorf("cannot open the divert socket %s: %w", sock, err)
 	}
 	if err := os.Chmod(sock, 0o600); err != nil {
 		_ = ln.Close()
+		closeHandlers()
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &divertSandbox{srv: s, id: id, path: sock, ln: ln, internal: internal,
+	l := &divertSandbox{srv: s, id: id, path: sock, ln: ln, internal: internal, handlers: handlers,
 		sem: make(chan struct{}, maxDivertConns), ctx: ctx, cancel: cancel}
 	go l.serve()
 	return l, nil
 }
 
-// close stops the listener, closes every connection of the sandbox and
-// removes the socket.
+// close stops the listener, closes every connection of the sandbox, removes
+// the socket and closes the handlers.
 func (l *divertSandbox) close() {
 	l.cancel()
 	_ = l.ln.Close()
 	_ = os.Remove(l.path)
+	for _, h := range l.handlers {
+		h.close()
+	}
 }
 
 func (l *divertSandbox) serve() {
@@ -186,6 +251,12 @@ func (l *divertSandbox) handle(client net.Conn) {
 		l.serveInternal(client, pre, a)
 		return
 	}
+	for _, h := range l.handlers {
+		if h.claims(pre.dst) {
+			h.serve(l.ctx, client, pre.dst, a)
+			return
+		}
+	}
 	a.check = "port"
 	_ = client.Close()
 }
@@ -202,8 +273,12 @@ type divertAudit struct {
 	transport string
 	// check names why the connection was not served: preamble, capacity,
 	// capacity.host or port, and on brig.internal brig.internal.port, tls
-	// or stopping.
+	// or stopping. A divert handler names its own.
 	check string
+	// msg is the message of the line, or "" for divert. A divert handler
+	// sets it, with the attributes it adds in attrs.
+	msg   string
+	attrs []slog.Attr
 }
 
 // writeDivertAudit writes the line of one diverted connection. A
@@ -220,6 +295,11 @@ func (s *server) writeDivertAudit(a *divertAudit, dur time.Duration) {
 	if a.check != "" {
 		attrs = append(attrs, slog.String("check", a.check))
 	}
+	attrs = append(attrs, a.attrs...)
 	attrs = append(attrs, slog.Duration("dur", dur))
-	s.auditLog.LogAttrs(context.Background(), slog.LevelInfo, "divert", attrs...)
+	msg := a.msg
+	if msg == "" {
+		msg = "divert"
+	}
+	s.auditLog.LogAttrs(context.Background(), slog.LevelInfo, msg, attrs...)
 }

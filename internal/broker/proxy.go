@@ -95,6 +95,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
+	// A route in another mode is not served here. Its policy did not ask for
+	// an endpoint, so its token opens none.
+	if rt.spec.Mode != "" && rt.spec.Mode != v1alpha1.ModeEndpoint {
+		a.check = "route.mode"
+		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+		return
+	}
 
 	token := sessionToken(rt.spec.Inject, r.Header)
 	if token == "" {

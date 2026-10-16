@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -24,6 +25,7 @@ import (
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/renew"
+	"github.com/brig-sh/brig/internal/routemode"
 	"github.com/brig-sh/brig/internal/secret"
 )
 
@@ -71,6 +73,12 @@ type serverConfig struct {
 	logTo io.Writer
 	// logMax is the size at which the logs rotate. Zero is maxLog.
 	logMax int64
+	// resolve resolves a host name for a divert handler. nil is the host's
+	// resolver.
+	resolve func(ctx context.Context, host string) ([]netip.Addr, error)
+	// dial dials an address from the host for a divert handler. nil dials
+	// TCP.
+	dial func(ctx context.Context, addr string) (net.Conn, error)
 }
 
 // lifecycleRenewer returns the Renewer that keeps a credential of lifecycle
@@ -105,6 +113,9 @@ type server struct {
 	// storeErr is why brig's secret store did not open at start.
 	storeErr error
 
+	resolve func(ctx context.Context, host string) ([]netip.Addr, error)
+	dial    func(ctx context.Context, addr string) (net.Conn, error)
+
 	mu        sync.Mutex
 	sandboxes map[string]string // id -> the registration, as canonical JSON
 	// diverts are the divert sockets, by sandbox id.
@@ -123,7 +134,13 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		return nil, err
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
-		stop: make(chan struct{}), internal: newConnListener()}
+		stop: make(chan struct{}), internal: newConnListener(), resolve: cfg.resolve, dial: cfg.dial}
+	if s.resolve == nil {
+		s.resolve = lookupHost
+	}
+	if s.dial == nil {
+		s.dial = dialUpstream
+	}
 	defer func() {
 		if err != nil {
 			s.close()
@@ -379,6 +396,20 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
 	}
+	// The settings of each route mode besides endpoint go to that mode's
+	// divert handler, which checks them before anything is registered.
+	for _, m := range slices.Sorted(maps.Keys(req.Modes)) {
+		dm, ok := divertModes[m]
+		if !ok {
+			http.Error(w, fmt.Sprintf("sandbox %s: %s", req.ID, routemode.NotInBuild(m)), http.StatusBadRequest)
+			return
+		}
+		if err := dm.check(req.ID, req.Modes[m]); err != nil {
+			http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+			return
+		}
+		sb.Modes = append(sb.Modes, m)
+	}
 	for _, rt := range req.Routes {
 		expanded, err := policy.ExpandRoute(rt.Route)
 		if err != nil {
@@ -390,7 +421,8 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	key, err := json.Marshal(struct {
 		broker.Sandbox
 		BrigInternal string
-	}{sb, req.BrigInternal})
+		Settings     map[v1alpha1.RouteMode]json.RawMessage
+	}{sb, req.BrigInternal, req.Modes})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -435,8 +467,9 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		old.close()
 		delete(s.diverts, req.ID)
 	}
-	if internal.IsValid() {
-		l, err := s.openDivert(req.ID, internal)
+	// One socket for brig.internal and every route mode besides endpoint.
+	if internal.IsValid() || len(sb.Modes) > 0 {
+		l, err := s.openDivert(req.ID, internal, sb.Modes, req.Modes)
 		if err != nil {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)

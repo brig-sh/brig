@@ -20,12 +20,10 @@ const (
 // RouteMode is how a route reaches the tool in the guest.
 type RouteMode string
 
-// The route modes.
-const (
-	// ModeEndpoint points the tool at the route URL. It is the default, and
-	// the one mode this version serves.
-	ModeEndpoint RouteMode = "endpoint"
-)
+// ModeEndpoint points the tool at the route URL. It is the default, and the
+// one mode every build of brig serves. A build can register others (see
+// internal/routemode).
+const ModeEndpoint RouteMode = "endpoint"
 
 // Lifecycle names how the broker keeps a credential valid.
 type Lifecycle string
@@ -56,8 +54,9 @@ type Route struct {
 	// Preset is optional. It names a route type that brig ships, and a field
 	// set here overrides the value of the preset.
 	Preset Preset `json:"preset,omitempty"`
-	// Mode is optional, and defaults to "endpoint". This version accepts only
-	// "endpoint".
+	// Mode is optional, and defaults to "endpoint". Any other mode is a
+	// policy name. A build of brig that does not serve it refuses the route
+	// before boot.
 	Mode RouteMode `json:"mode,omitempty"`
 	// Upstream is required unless a preset sets it. It is a bare https://
 	// origin in canonical form: lower case, no path, query, fragment, user

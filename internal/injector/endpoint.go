@@ -18,6 +18,10 @@ const (
 	// signs only that name trusted in the guest. It serves a microVM or a
 	// container, which reaches the host through a gateway.
 	TransportBrigInternal Transport = "brig.internal"
+	// TransportDivert is a guest connection that the runtime diverts to the
+	// broker's divert socket by its destination, for the divert handler of
+	// a route mode a build registers besides endpoint.
+	TransportDivert Transport = "divert"
 )
 
 // BrigInternal is the name a microVM guest reaches the broker by.
@@ -103,6 +107,10 @@ func TokenVar(route string) string {
 // guest.git, git configuration through GIT_CONFIG_COUNT that rewrites the
 // route's prefixes to it and answers its credential prompt with the token.
 //
+// A route in a mode other than endpoint is not reached at a route URL, so it
+// gets its session token alone: no route URL, no git configuration and no
+// brig CA.
+//
 // Nothing is written into the guest home. A session token is marked Secret,
 // so it never goes on a command line. tokens maps a route name to its token.
 // forwarded is what the guest already gets: git entries of its own through
@@ -111,6 +119,7 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 	forwarded []runtime.Var) ([]runtime.Var, error) {
 	var vars []runtime.Var
 	var git [][2]string
+	endpoints := 0
 	sorted := append([]v1alpha1.Route(nil), routes...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, r := range sorted {
@@ -126,6 +135,10 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 			return nil, fmt.Errorf("no session token for route %s", r.Name)
 		}
 		url := e.URL(sandbox, r.Name)
+		endpoint := r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint
+		if endpoint {
+			endpoints++
+		}
 		if r.Guest == nil {
 			continue
 		}
@@ -137,7 +150,9 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 		for _, name := range names {
 			switch v := r.Guest.Env[name]; v {
 			case v1alpha1.PlaceholderRouteURL:
-				vars = append(vars, runtime.Var{Name: name, Value: url})
+				if endpoint {
+					vars = append(vars, runtime.Var{Name: name, Value: url})
+				}
 			case v1alpha1.PlaceholderSessionToken:
 				vars = append(vars, runtime.Var{Name: name, Value: token, Secret: true})
 			default:
@@ -145,7 +160,7 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 				return nil, fmt.Errorf("route %s: guest.env %s is %q, not a placeholder", r.Name, name, v)
 			}
 		}
-		if r.Guest.Git == nil || len(r.Guest.Git.InsteadOf) == 0 {
+		if !endpoint || r.Guest.Git == nil || len(r.Guest.Git.InsteadOf) == 0 {
 			continue
 		}
 		tokenVar := TokenVar(r.Name)
@@ -182,7 +197,7 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 				runtime.Var{Name: "GIT_CONFIG_VALUE_" + n, Value: kv[1]})
 		}
 	}
-	if e.Transport == TransportBrigInternal && len(routes) > 0 {
+	if e.Transport == TransportBrigInternal && endpoints > 0 {
 		for _, name := range caEnv {
 			vars = append(vars, runtime.Var{Name: name, Value: caFile(name)})
 		}

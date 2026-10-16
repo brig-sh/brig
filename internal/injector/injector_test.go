@@ -727,3 +727,42 @@ func TestRegisterOutlivesABrokerStoppedUnderIt(t *testing.T) {
 		t.Errorf("the broker serves %v, want brig-b", got)
 	}
 }
+
+// A route in another mode hands the guest its session token in its preset's
+// variable, and nothing that points at a route URL: no URL, no git
+// configuration and no brig CA. An endpoint route beside it on brig.internal
+// still gets the CA.
+func TestGuestEnvOfARouteInAnotherModeIsTheTokenAlone(t *testing.T) {
+	other := presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "claude-credentials")
+	other.Mode = "relay"
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{other}, map[string]string{"anthropic": "tok-a"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "CLAUDE_CODE_OAUTH_TOKEN" || got[0].Value != "tok-a" || !got[0].Secret {
+		t.Fatalf("GuestEnv = %+v, want the token alone", got)
+	}
+	gh := presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token")
+	other.Guest.Git = &v1alpha1.GitGuest{InsteadOf: []string{"https://example.com/"}}
+	got, err = ep.GuestEnv("brig-a", []v1alpha1.Route{other, gh},
+		map[string]string{"anthropic": "tok-a", "github": "tok-g"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for _, v := range got {
+		env[v.Name] = v.Value
+	}
+	if _, ok := env["ANTHROPIC_BASE_URL"]; ok {
+		t.Error("the route in another mode got its route URL")
+	}
+	for name, v := range env {
+		if strings.Contains(v, "/r/anthropic") || strings.Contains(v, "example.com") {
+			t.Errorf("the route in another mode got %s=%s", name, v)
+		}
+	}
+	if env["NODE_EXTRA_CA_CERTS"] != GuestCAPath || env["SSL_CERT_FILE"] != GuestCABundlePath || env["BRIG_ROUTE_GITHUB_TOKEN"] != "tok-g" {
+		t.Errorf("the endpoint route beside it lost its CA or token: %v", env)
+	}
+}

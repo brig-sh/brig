@@ -255,13 +255,14 @@ type PlanEgress struct {
 // of the Info payload reports it, less what only a running broker knows: its
 // pid, its port and the state of its refreshes.
 type PlanBroker struct {
-	Transport  string   `json:"transport"`
-	Routes     []string `json:"routes"`
-	KeptOnHost []string `json:"keptOnHost,omitempty"`
-	Missing    []string `json:"missing,omitempty"`
-	StoreError string   `json:"storeError,omitempty"`
-	Refused    string   `json:"refused,omitempty"`
-	Modes      []string `json:"modes"`
+	Transport   string            `json:"transport"`
+	Routes      []string          `json:"routes"`
+	KeptOnHost  []string          `json:"keptOnHost,omitempty"`
+	Missing     []string          `json:"missing,omitempty"`
+	StoreError  string            `json:"storeError,omitempty"`
+	Refused     string            `json:"refused,omitempty"`
+	Modes       []string          `json:"modes"`
+	Unavailable map[string]string `json:"unavailable,omitempty"`
 }
 
 // planBroker is the PlanBroker of this run, or nil for a run with no route.
@@ -271,7 +272,7 @@ func (c *Config) planBroker(st routeStore) *PlanBroker {
 		return nil
 	}
 	b := &PlanBroker{Transport: string(c.routeTransport()), Routes: []string{}, KeptOnHost: c.routeSkipped,
-		Modes: c.servedModes()}
+		Modes: c.servedModes(), Unavailable: c.unavailableModes()}
 	for _, r := range c.routes {
 		b.Routes = append(b.Routes, r.Name)
 	}

@@ -748,6 +748,52 @@ grep -q '^argv: run' "$STUB_LOG" \
 "$WORK/brig" policy detach claude-only claude-code > /dev/null 2>&1
 rm -f "$WORK/policies/claude-only.yaml"
 
+# A route in a mode this build does not serve still parses, so a policy
+# reads the same in every build. check refuses it with the reason, and a run
+# is refused with exit 7 before the runtime or the broker is asked anything.
+cat > "$WORK/policies/claude-relay.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-relay
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      mode: relay
+      credential:
+        secretRef: { name: claude-credentials }
+YAML
+"$WORK/brig" policy show --preset claude-code 2>&1 | grep -A1 '^modes:$' | grep -q '^- endpoint$' \
+  && ok "policy show --preset prints the modes a preset supports" \
+  || bad "policy show --preset prints the modes a preset supports"
+"$WORK/brig" policy attach claude-relay claude-code > /dev/null 2>&1
+if BRIG_HYPERVISOR=hvi "$WORK/brig" policy check claude-code > "$WORK/relay.out" 2> "$WORK/relay.err"; then
+  bad "policy check passed a route in a mode this build does not serve"
+elif [ "$(cat "$WORK/relay.out")" = "claude-relay" ] \
+  && grep -q '^  route anthropic  preset claude-code  mode relay$' "$WORK/relay.err" \
+  && grep -q 'declares a route in mode relay, and brig refuses the run before boot: .*route mode relay is not part of this build of brig' "$WORK/relay.err"; then
+  ok "policy check refuses a route in a mode this build does not serve, with stdout one name per line"
+else
+  bad "policy check refuses a route in a mode this build does not serve -- got: $(cat "$WORK/relay.out" "$WORK/relay.err")"
+fi
+: > "$STUB_LOG"
+env BRIG_HYPERVISOR=hvi "$WORK/brig" run claude -d > "$WORK/relay-run.out" 2>&1
+rc=$?
+if [ "$rc" = 7 ] && grep -q 'route mode relay is not part of this build of brig' "$WORK/relay-run.out"; then
+  ok "a run bound to a route in a mode this build does not serve is refused with exit 7"
+else
+  bad "a run bound to a route in a mode this build does not serve is refused with exit 7 -- got $rc: $(cat "$WORK/relay-run.out")"
+fi
+[ -e "$BRIG_STATE_DIR/host/broker/broker.pid" ] \
+  && bad "a run refused for its route mode started the credential broker" \
+  || ok "a run refused for its route mode starts no credential broker"
+grep -q '^argv: run' "$STUB_LOG" \
+  && bad "the runtime was asked to boot a run refused for its route mode" \
+  || ok "nothing reached the runtime for a run refused for its route mode"
+"$WORK/brig" policy detach claude-relay claude-code > /dev/null 2>&1
+rm -f "$WORK/policies/claude-relay.yaml"
+
 unset BRIG_POLICY_DIR
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -2163,6 +2164,9 @@ func TestShowPolicyPrintsAPreset(t *testing.T) {
 	if strings.Contains(out, "ANTHROPIC_AUTH_TOKEN") {
 		t.Errorf("the claude-code preset still sets ANTHROPIC_AUTH_TOKEN:\n%s", out)
 	}
+	if !strings.Contains(out, "modes:\n- endpoint\n") {
+		t.Errorf("show --preset claude-code does not print its modes:\n%s", out)
+	}
 
 	out, err = captureStdout(t, func() error { return showPolicy([]string{"--preset", "github-token", "--json"}) })
 	if err != nil {
@@ -2172,7 +2176,7 @@ func TestShowPolicyPrintsAPreset(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
 		t.Fatalf("show --preset --json did not print JSON: %v\n%s", err, out)
 	}
-	if decoded["upstream"] != "https://github.com" {
+	if decoded["upstream"] != "https://github.com" || fmt.Sprint(decoded["modes"]) != "[endpoint]" {
 		t.Errorf("show --preset github-token --json = %v", decoded)
 	}
 
@@ -2297,6 +2301,54 @@ func TestCheckRefusesAnEndpointRouteItCannotServe(t *testing.T) {
 				t.Errorf("check planned a posture for a run it refuses:\n%s", stderr)
 			}
 		})
+	}
+}
+
+// claudeRelay is a policy with one route in mode relay.
+const claudeRelay = `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-relay
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      mode: relay
+      credential:
+        secretRef: { name: claude-credentials }
+`
+
+// A route in a mode this build does not serve attaches and lists like any
+// other, and check refuses it before a run is tried, naming the mode. No
+// posture is planned for a run that cannot happen.
+func TestCheckRefusesARouteInAModeNotInThisBuild(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+		return routingRuntime{doctorRuntime{bin: "hull"}, nil}, nil
+	})
+	writePolicyFile(t, dir, "claude-relay", claudeRelay)
+	loadTestProfiles(t)
+	if err := attachPolicy([]string{"claude-relay", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	var err error
+	stderr := captureStderr(t, func() {
+		out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+	})
+	for _, want := range []string{"claude-relay (route anthropic) declares a route in mode relay",
+		"route mode relay is not part of this build of brig", "Use mode: endpoint"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	if out != "claude-relay\n" {
+		t.Errorf("stdout is not one policy name per line: %q", out)
+	}
+	if !strings.Contains(stderr, "  route anthropic  preset claude-code  mode relay\n") || strings.Contains(stderr, "posture:") {
+		t.Errorf("stderr:\n%s", stderr)
 	}
 }
 

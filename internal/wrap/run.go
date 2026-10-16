@@ -431,6 +431,8 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// what the next boot enforces, which is the property worth having --
 		// a policy an agent could ask to have relaxed mid-run is not a policy.
 		Egress: check.Egress,
+		// What the route modes besides endpoint asked serveRoutes for.
+		Setup: c.routeSetup,
 		// The ports this sandbox offers on the host. The whole set, not only
 		// what this line asked for: the record is the sandbox's, and the boot
 		// is where it is made true again after a gateway that forgot it.

@@ -274,6 +274,9 @@ type Config struct {
 	// guest that reaches brig.internal, in PEM, or "". It is checked to be
 	// one certificate and no key. See briginternal.go.
 	brigCA string
+	// routeSetup is the sandbox setup the route modes besides endpoint asked
+	// serveRoutes for, which the boot hands the runtime. See routemode.go.
+	routeSetup []runtime.Setup
 	// refusedProject is the remembered project projectRefused is about. See
 	// KeptProject.
 	refusedProject string

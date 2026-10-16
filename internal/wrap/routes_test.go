@@ -39,7 +39,7 @@ func (f *fakeBroker) Register(s injector.Sandbox) (int, injector.AddResponse, er
 	f.calls = append(f.calls, "register "+s.ID)
 	f.running = true
 	var added injector.AddResponse
-	if s.BrigInternal != "" {
+	if s.BrigInternal != "" || len(s.Modes) > 0 {
 		dir, err := injector.Dir()
 		if err != nil {
 			return 0, added, err

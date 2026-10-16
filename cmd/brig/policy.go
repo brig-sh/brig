@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,7 +274,14 @@ func showPolicy(args []string) error {
 		if err != nil {
 			return err
 		}
-		doc = r
+		modes, err := policy.PresetModes(v1alpha1.Preset(preset))
+		if err != nil {
+			return err
+		}
+		doc = struct {
+			v1alpha1.Route
+			Modes []v1alpha1.RouteMode `json:"modes"`
+		}{r, modes}
 	case len(words) == 0:
 		return errors.New("policy show needs a name, for example `brig policy show no-net`")
 	case len(words) > 1:
@@ -744,35 +752,25 @@ func printRoutes(p policy.Policy) {
 	}
 }
 
-// endpointServed is why a run of p cannot serve a route in mode endpoint, or
-// nil: the answer of runtime.CheckBrigInternal for the runtime and hypervisor
-// the run would use, where its guest reaches brig.internal.
-func endpointServed(p profile.Profile) error {
-	rt, err := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
-	if err != nil {
-		return fmt.Errorf("no runtime is here to serve it: %w", err)
-	}
-	env := wrap.NewEnv(p.Name, nil)
-	net := wrap.NetIsolated.RuntimeNet()
-	if env.String("NETWORK", p.Network) == string(wrap.NetOffline) {
-		net = wrap.NetOffline.RuntimeNet()
-	}
-	path := runtime.RoutePath(rt, env.String("HYPERVISOR", p.Hypervisor))
-	return runtime.CheckBrigInternal(rt, path, net)
-}
-
-// endpointRoutes names each route in mode endpoint, with the policy that
-// declares it, the way a refusal does.
-func endpointRoutes(ps []policy.Policy) []string {
-	var out []string
+// routeModes lists the modes of the routes of ps in the order a boot checks
+// them: the modes besides endpoint in name order, then endpoint. Each comes
+// with the routes that name it, the way a refusal names them.
+func routeModes(ps []policy.Policy) ([]v1alpha1.RouteMode, map[v1alpha1.RouteMode][]string) {
+	byMode := map[v1alpha1.RouteMode][]string{}
 	for _, p := range ps {
 		for _, r := range p.Spec.Routes {
-			if r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint {
-				out = append(out, fmt.Sprintf("%s (route %s)", p.Metadata.Name, r.Name))
+			m := r.Mode
+			if m == "" {
+				m = v1alpha1.ModeEndpoint
 			}
+			byMode[m] = append(byMode[m], fmt.Sprintf("%s (route %s)", p.Metadata.Name, r.Name))
 		}
 	}
-	return out
+	modes := slices.Sorted(maps.Keys(byMode))
+	if i := slices.Index(modes, v1alpha1.ModeEndpoint); i >= 0 {
+		modes = append(slices.Delete(modes, i, i+1), v1alpha1.ModeEndpoint)
+	}
+	return modes, byMode
 }
 
 // flatPolicyGoesIn is the release that stops reading the flat policy form. The
@@ -1172,14 +1170,23 @@ func checkPolicy(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
 	}
-	// A boot refuses a route in mode endpoint that its run path cannot
-	// serve, so check says so before one is tried. A microVM or a container
-	// guest reaches the route at brig.internal on its own gateway. See
-	// routeRefusal in internal/wrap.
-	if endpoint := endpointRoutes(loaded); len(endpoint) > 0 {
-		if err := endpointServed(p); err != nil {
-			return fmt.Errorf("policy %s declares a route in mode endpoint, and brig refuses the run "+
-				"before boot: %w", strings.Join(endpoint, ", "), err)
+	// A boot refuses a route that its run path cannot serve, so check says
+	// so before one is tried. A microVM or a container guest reaches an
+	// endpoint route at brig.internal on its own gateway. See routeRefusal in
+	// internal/wrap.
+	if modes, byMode := routeModes(loaded); len(modes) > 0 {
+		rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
+		for _, m := range modes {
+			err := detectErr
+			if err != nil {
+				err = fmt.Errorf("no runtime is here to serve it: %w", err)
+			} else {
+				err = wrap.RouteModeServed(p, rt, m)
+			}
+			if err != nil {
+				return fmt.Errorf("policy %s declares a route in mode %s, and brig refuses the run "+
+					"before boot: %w", strings.Join(byMode[m], ", "), m, err)
+			}
 		}
 	}
 	// A route is served on the sandbox's own gateway address, so a run with

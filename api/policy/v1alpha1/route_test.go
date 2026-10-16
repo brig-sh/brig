@@ -121,7 +121,8 @@ func TestRouteValidate(t *testing.T) {
 		{"missing name", func(r *Route) { r.Name = "" }, "name is required"},
 		{"name with a slash", func(r *Route) { r.Name = "a/b" }, "lowercase"},
 		{"unknown preset", func(r *Route) { r.Preset = "openai" }, "not one of"},
-		{"unknown mode", func(r *Route) { r.Mode = "proxy" }, `mode "proxy" is not supported; this version serves "endpoint" only`},
+		{"a mode in upper case", func(r *Route) { r.Mode = "Relay" }, "lowercase"},
+		{"a mode that is not a name", func(r *Route) { r.Mode = "a/b" }, "lowercase"},
 		{"missing upstream", func(r *Route) { r.Upstream = "" }, "upstream is required"},
 		{"upstream with a path", func(r *Route) { r.Upstream = "https://api.example.com/v1" }, "has a path"},
 		{"upstream with a lone slash", func(r *Route) { r.Upstream = "https://api.example.com/" }, "has a path"},
@@ -219,6 +220,21 @@ func TestGuestEnvLiteralIsNotEchoed(t *testing.T) {
 	}
 }
 
+// A route in a mode other than endpoint validates when the mode is a name.
+// Whether the build serves it is the run's to say, so a policy reads the
+// same in every build.
+func TestRouteValidateLeavesAnotherModeToTheBuild(t *testing.T) {
+	p := routePolicy(Route{
+		Name:       "anthropic",
+		Preset:     PresetClaudeCode,
+		Mode:       "relay",
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "claude-credentials"}},
+	})
+	if err := p.Validate(); err != nil {
+		t.Fatalf("a route in another mode was refused as written: %v", err)
+	}
+}
+
 func routePolicy(routes ...Route) Policy {
 	return Policy{
 		TypeMeta: TypeMeta{APIVersion: APIVersion, Kind: Kind},
@@ -259,12 +275,12 @@ func TestPolicyValidateRoutesAsWritten(t *testing.T) {
 				Lifecycle: LifecycleAnthropicOAuth,
 			},
 		}}, "set by a preset"},
-		{"an unknown mode on a preset route", []Route{{
+		{"a mode that is not a name", []Route{{
 			Name:       "a",
 			Preset:     PresetClaudeCode,
-			Mode:       "relay",
+			Mode:       "Relay",
 			Credential: &CredentialRef{SecretRef: SecretRef{Name: "claude-credentials"}},
-		}}, "is not supported"},
+		}}, "lowercase"},
 		{"a literal on a preset route", []Route{{
 			Name:       "a",
 			Preset:     PresetClaudeCode,
