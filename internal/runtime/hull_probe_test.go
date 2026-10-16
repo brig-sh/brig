@@ -147,3 +147,23 @@ func TestOnlyDoctorBoundsTheAssetsQuestion(t *testing.T) {
 		t.Errorf("doctor got %q, %v from a slow hull, want the fallback %s", dir, err, fallback)
 	}
 }
+
+// A flag counts as listed only where hull's help lists one: at the start of
+// a line after the indent, followed by its value, a space or the line's end.
+// A longer flag that starts with it, or a sentence that names it, does not.
+func TestFlagListedReadsOnlyAFlagLine(t *testing.T) {
+	for help, want := range map[string]bool{
+		"OPTIONS:\n   --profile string   the machine\n": true,
+		"   --profile=portable\n":                       true,
+		"\t--profile\r\n":                               true,
+		"   --profile":                                  true,
+		"   --profiles string\n":                        false,
+		"   Pass --profile to name it.\n":               false,
+		"   --json   print JSON\n":                      false,
+		"":                                              false,
+	} {
+		if got := flagListed([]byte(help), "--profile"); got != want {
+			t.Errorf("flagListed(%q, --profile) = %v, want %v", help, got, want)
+		}
+	}
+}

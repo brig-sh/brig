@@ -25,9 +25,9 @@ import (
 // clock driver in it. The boot bundle's kernel has none, so the portable
 // kernel is a file of its own, beside it. Only the kernel differs: the initrd,
 // and the guest agent in it, are the bundle's. The kernel's uevent at each
-// move helps only once the bundle's agent acts on it (urunc's urunit-agent
-// from 3a3f2fd on); with an older agent the kernel boots and behaves as the
-// four-patch one did.
+// move helps only once the bundle's agent acts on it, and no published
+// bundle's agent does yet; with an older agent the kernel boots and behaves
+// as the four-patch one did.
 const (
 	// MachinePortableArm64V1 is hvi's name for the portable arm64 machine,
 	// as `hvi boot --profile` and `hull run --profile` take it.

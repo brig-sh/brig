@@ -20,6 +20,8 @@ func TestPrepareArgs(t *testing.T) {
 		{"a prepare", PrepareSpec{}, "migrate-prepare --to me@box --json s"},
 		{"into a named store, with the hull there", PrepareSpec{RemoteStore: "/st/b", RemoteHull: "/opt/hull"},
 			"migrate-prepare --to me@box --remote-store /st/b --remote-hull /opt/hull --json s"},
+		{"with the kernel pinned", PrepareSpec{RemoteStore: "/st/b", KernelSHA256: "sha256:7787"},
+			"migrate-prepare --to me@box --remote-store /st/b --kernel-sha256 sha256:7787 --json s"},
 	} {
 		got, err := prepareArgs("s", "me@box", c.spec)
 		if err != nil || strings.Join(got, " ") != c.want {
@@ -75,11 +77,15 @@ func TestHullPrepareSeam(t *testing.T) {
 	t.Setenv("HULL_MIGRATE_SSH", "/tmp/elsewhere")
 	h, log := prepareHull(t, hullPrepareReport)
 	var lines []string
-	p, err := h.MigratePrepare("s", "me@box", PrepareSpec{RemoteStore: "/st", Progress: func(l string) { lines = append(lines, l) }})
+	p, err := h.MigratePrepare("s", "me@box", PrepareSpec{RemoteStore: "/st", KernelSHA256: "sha256:7787",
+		Progress: func(l string) { lines = append(lines, l) }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(log); string(got) != "migrate-prepare --to me@box --remote-store /st --json s transport=none\n" {
+	// It asks first whether this hull takes --kernel-sha256; this one's
+	// help lists no such flag, so the pin the caller set is not sent.
+	if got, _ := os.ReadFile(log); string(got) != "migrate-prepare --help transport=/tmp/elsewhere\n"+
+		"migrate-prepare --to me@box --remote-store /st --json s transport=none\n" {
 		t.Errorf("hull was asked %q", got)
 	}
 	if strings.Join(lines, "|") != "Preparing me@box for s|base 9f8e7d6c5b4a: sent (1.6 GiB)" {
@@ -89,6 +95,36 @@ func TestHullPrepareSeam(t *testing.T) {
 		p.Base != "9f8e7d6c5b4a00000000000000000000000000000000000000000000000000ff" ||
 		!strings.HasPrefix(p.Kernels["portable-arm64-v1"], "e85e4338ffff") {
 		t.Errorf("report read as %+v", p)
+	}
+}
+
+// A hull whose prepare lists --kernel-sha256 in its help is handed the
+// portable kernel brig pins, so that a destination holding another one gets
+// the pinned one. It is asked once, however many prepares it runs.
+func TestHullPrepareHandsThePinToAHullThatTakesIt(t *testing.T) {
+	dir := t.TempDir()
+	bin, log := filepath.Join(dir, "hull"), filepath.Join(dir, "argv.log")
+	rep := filepath.Join(dir, "report.json")
+	if err := os.WriteFile(rep, []byte(hullPrepareReport), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\n" +
+		"case \"$*\" in *--help*) printf '   --json           print JSON\\n   --kernel-sha256 string  the sha256\\n'; exit 0;; esac\n" +
+		"cat " + rep + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &hull{bin: bin}
+	for range 2 {
+		if _, err := h.MigratePrepare("s", "me@box", PrepareSpec{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The second prepare does not ask again: the answer cannot change.
+	line := "migrate-prepare --to me@box --kernel-sha256 " + PortableKernelDigest + " --json s\n"
+	want := "migrate-prepare --help\n" + line + line
+	if got, _ := os.ReadFile(log); string(got) != want {
+		t.Errorf("hull was asked %q, want %q", got, want)
 	}
 }
 

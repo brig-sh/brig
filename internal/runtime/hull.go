@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/brig-sh/brig/internal/telemetry"
 )
@@ -30,6 +31,11 @@ type hull struct {
 	// telemetry gate both read.
 	versionOnce sync.Once
 	versionOut  string
+	// kernelPinOnce caches whether this hull's prepare takes
+	// --kernel-sha256 (prepareTakesKernelPin), asked of the binary once
+	// for the same reason as pins.
+	kernelPinOnce sync.Once
+	kernelPin     bool
 }
 
 // version returns what `hull --version` printed, asked once per process.
@@ -694,10 +700,40 @@ func isolatedNet(net string, policy Egress) bool {
 	return net == "isolated" || policy.Filtered()
 }
 
-// profileFlag is how `hull run --help` lists --profile: at the start of a
-// line, after the indent, and followed by its value or a space, so a flag
-// whose name only starts with it does not count.
-var profileFlag = regexp.MustCompile(`(?m)^\s*--profile[\s=]`)
+// help runs `hull VERB --help` and returns what it printed. Every question
+// brig asks of a hull's flags goes through here, bounded by
+// gatewayProbeTimeout: a probe that does not answer in time fails with an
+// error that says so. Telemetry is suppressed, as the probe is not something
+// the user asked for.
+func (h *hull) help(verb string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.bin, verb, "--help")
+	cmd.Env = mergeEnv(telemetryEnv(false))
+	// Without WaitDelay a child the runtime left behind holds the output
+	// pipe open past the kill, and the probe hangs anyway. See
+	// agentCallWaitDelay.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
+	}
+	return out, err
+}
+
+// flagListed reports whether help lists flag the way hull's help lists a
+// flag: at the start of a line, after the indent, and followed by its value,
+// a space or the end of the line, so a flag whose name only starts with it,
+// or one named in a sentence, does not count.
+func flagListed(help []byte, flag string) bool {
+	for line := range bytes.Lines(help) {
+		rest, ok := bytes.CutPrefix(bytes.TrimLeftFunc(line, unicode.IsSpace), []byte(flag))
+		if ok && (len(rest) == 0 || rest[0] == '=' || unicode.IsSpace(rune(rest[0]))) {
+			return true
+		}
+	}
+	return false
+}
 
 // takesProfile checks that this hull takes --profile on run, and is called
 // only for a run that names a machine.
@@ -713,16 +749,7 @@ var profileFlag = regexp.MustCompile(`(?m)^\s*--profile[\s=]`)
 // said it takes the flag.
 func (h *hull) takesProfile(hv, machine string) error {
 	probe := h.bin + " run --help"
-	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, h.bin, "run", "--help")
-	cmd.Env = mergeEnv(telemetryEnv(false))
-	// See gatewayEnforces.
-	cmd.WaitDelay = time.Second
-	out, err := cmd.CombinedOutput()
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
-		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
-	}
+	out, err := h.help("run")
 	path := RunPath{"hull", hv}
 	if err != nil {
 		return &CapabilityError{Property: Teleportable, Path: path, State: Unknown,
@@ -730,7 +757,7 @@ func (h *hull) takesProfile(hv, machine string) error {
 			Remedy: "Fix the runtime, or run an ordinary session",
 			Err:    err}
 	}
-	if profileFlag.Match(out) {
+	if flagListed(out, "--profile") {
 		return nil
 	}
 	version := VersionToken(h.version())

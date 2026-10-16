@@ -29,6 +29,11 @@ type PrepareSpec struct {
 	// another store is one the move does not find.
 	RemoteStore string
 	RemoteHull  string
+	// KernelSHA256, when set, is the portable kernel the destination is to
+	// hold, for --kernel-sha256. MigratePrepare sets it to
+	// PortableKernelDigest when this hull takes the flag, and clears it
+	// when it does not, whatever the caller put there.
+	KernelSHA256 string
 	// Progress, when set, is handed each line hull prints on stderr, as
 	// hull prints it. As for MigrateSpec, it must not block.
 	Progress func(line string)
@@ -76,6 +81,10 @@ var _ MovePreparer = (*hull)(nil)
 // the destination over ssh to the host given, as a move does, so it is not
 // handed another transport either.
 func (h *hull) MigratePrepare(name, to string, spec PrepareSpec) (Prepared, error) {
+	spec.KernelSHA256 = ""
+	if h.prepareTakesKernelPin() {
+		spec.KernelSHA256 = PortableKernelDigest
+	}
 	args, err := prepareArgs(name, to, spec)
 	if err != nil {
 		return Prepared{}, err
@@ -85,6 +94,23 @@ func (h *hull) MigratePrepare(name, to string, spec PrepareSpec) (Prepared, erro
 		return Prepared{}, err
 	}
 	return preparedOf(name, to, out)
+}
+
+// prepareTakesKernelPin reports whether this hull's prepare takes
+// --kernel-sha256, the portable kernel the destination is to hold. With it,
+// a prepare to a host that holds another portable kernel, such as one set up
+// before brig pinned this one, replaces that kernel with the pinned one when
+// this host's is the pin; brig refuses to boot any other there. A hull from
+// before the flag would reject it, so it is asked first, as takesProfile
+// asks; a hull that does not answer gets the prepare without it, which
+// leaves another kernel there as it is. The answer is kept on h, since it
+// cannot change while brig runs.
+func (h *hull) prepareTakesKernelPin() bool {
+	h.kernelPinOnce.Do(func() {
+		out, err := h.help("migrate-prepare")
+		h.kernelPin = err == nil && flagListed(out, "--kernel-sha256")
+	})
+	return h.kernelPin
 }
 
 // prepareArgs is the one place the prepare's command line is built, flags
@@ -101,6 +127,7 @@ func prepareArgs(name, to string, spec PrepareSpec) ([]string, error) {
 	for _, f := range []struct{ flag, value string }{
 		{"--remote-store", spec.RemoteStore},
 		{"--remote-hull", spec.RemoteHull},
+		{"--kernel-sha256", spec.KernelSHA256},
 	} {
 		if f.value != "" {
 			args = append(args, f.flag, f.value)
