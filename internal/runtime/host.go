@@ -100,8 +100,12 @@ type sandboxPolicy struct {
 	// policies. They are denied for write, so the agent cannot change what
 	// the next run of brig reads.
 	Protect []string
-	// Shares are written to again after Protect, because the guest home is
-	// inside brig's state directory.
+	// Homes is the directory that holds the guest homes brig creates. It is
+	// denied for read and write, so a sandbox cannot reach the home of
+	// another one.
+	Homes string
+	// Shares are read and written again after Protect and Homes, because
+	// the guest home is inside both.
 	Shares []string
 	// Ancestors are the directories above StateDir and Protect that you can
 	// rename. Renaming one moves the whole tree out from under a subpath
@@ -117,6 +121,9 @@ type sandboxPolicy struct {
 // allowed come last.
 func sandboxProfile(p sandboxPolicy) (string, error) {
 	paths := append([]string{p.StateDir, p.SecretDir}, p.Protect...)
+	if p.Homes != "" {
+		paths = append(paths, p.Homes)
+	}
 	paths = append(append(paths, p.Shares...), p.Ancestors...)
 	for _, path := range paths {
 		if err := sbplPath(path); err != nil {
@@ -160,8 +167,15 @@ func sandboxProfile(p sandboxPolicy) (string, error) {
 	for _, d := range p.Protect {
 		fmt.Fprintf(&b, "(deny file-write* (subpath %q))\n", d)
 	}
+	// The homes of other sandboxes hold what their agents wrote. The homes
+	// directory may only be looked up, so the path of a share inside it
+	// still resolves, and it cannot be listed.
+	if p.Homes != "" {
+		fmt.Fprintf(&b, "(deny file-read* file-write* (subpath %q))\n", p.Homes)
+		fmt.Fprintf(&b, "(allow file-read-metadata (literal %q))\n", p.Homes)
+	}
 	for _, d := range p.Shares {
-		fmt.Fprintf(&b, "(allow file-write* (subpath %q))\n", d)
+		fmt.Fprintf(&b, "(allow file-read* file-write* (subpath %q))\n", d)
 	}
 	for _, d := range p.Ancestors {
 		fmt.Fprintf(&b, "(deny file-write* (literal %q))\n", d)
@@ -327,6 +341,11 @@ func CheckHostDirLinks(dir string) error {
 // HostBrokerDir is the name of the broker's directory under HostDir. It is
 // never a sandbox, so no sandbox may take it.
 const HostBrokerDir = "broker"
+
+// HomesDirName is the name of the directory, beside HostDir, that holds the
+// guest homes brig creates. A host sandbox reaches its own home there and no
+// other.
+const HomesDirName = "homes"
 
 // hostName refuses a sandbox name that is not one path component of the
 // shape brig gives its sandboxes, and the broker's directory.

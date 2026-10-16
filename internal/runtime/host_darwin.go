@@ -249,6 +249,13 @@ func (h *host) Run(spec RunSpec) error {
 	if err != nil {
 		return err
 	}
+	// The real path, since Seatbelt matches the path the kernel resolved,
+	// and a homes directory that is a link would escape a deny on its name.
+	homes, err := realPath(filepath.Join(filepath.Dir(stateDir), HomesDirName))
+	if err != nil {
+		return err
+	}
+	own := filepath.Join(homes, spec.Name)
 	var shares []string
 	for _, s := range spec.Shares {
 		real, err := realShare(s.Host)
@@ -261,6 +268,12 @@ func (h *host) Run(spec RunSpec) error {
 					"host sandbox must not write. Name a directory that does not contain it", s.Host, d)
 			}
 		}
+		// The profile allows a share back after the deny on the homes, so a
+		// share of the homes, or of another sandbox's home, would open them.
+		if real == homes || (strings.HasPrefix(real, homes+"/") && real != own && !strings.HasPrefix(real, own+"/")) {
+			return fmt.Errorf("refusing the share %s: it is in %s, which holds the guest homes of every "+
+				"sandbox. A host sandbox can share its own, %s, and no other", s.Host, homes, own)
+		}
 		rec.Shares = append(rec.Shares, hostShare{Guest: s.Guest, Host: real})
 		shares = append(shares, real)
 	}
@@ -271,6 +284,7 @@ func (h *host) Run(spec RunSpec) error {
 		StateDir:      stateDir,
 		SecretDir:     filepath.Join(inst.dir, "secret"),
 		Protect:       protect,
+		Homes:         homes,
 		Shares:        shares,
 		Ancestors:     renamableAncestors(append([]string{stateDir}, protect...)),
 	})

@@ -398,6 +398,64 @@ func TestHostRunRefusesAShareHoldingBrigsDirectories(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "must not write") {
 		t.Fatalf("got %v", err)
 	}
+
+	// The profile allows a share back after the deny on the homes, so the
+	// homes directory and another sandbox's home are refused as shares. The
+	// sandbox's own home, and a directory in it, are not.
+	homes := filepath.Join(os.Getenv("BRIG_STATE_DIR"), HomesDirName)
+	for _, d := range []string{"brig-wide/sub", "brig-other/sub"} {
+		if err := os.MkdirAll(filepath.Join(homes, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		share  string
+		refuse bool
+	}{
+		{homes, true},
+		{filepath.Join(homes, "brig-other"), true},
+		{filepath.Join(homes, "brig-other", "sub"), true},
+		{filepath.Join(homes, "brig-wide"), false},
+		{filepath.Join(homes, "brig-wide", "sub"), false},
+	} {
+		err := h.Run(RunSpec{Name: "brig-wide", Net: "none", Shares: []Share{{Host: tt.share, Guest: "/root"}}})
+		switch {
+		case tt.refuse && (err == nil || !strings.Contains(err.Error(), "holds the guest homes")):
+			t.Errorf("the share %s: got %v, want a refusal", tt.share, err)
+		case !tt.refuse && err != nil:
+			t.Errorf("the share %s: %v", tt.share, err)
+		}
+	}
+}
+
+// A homes directory that is a link is denied where it leads. Seatbelt
+// matches the path the kernel resolved, so a deny on the link's own name
+// would leave every home open.
+func TestTheHomesDenyFollowsALinkedHomesDirectory(t *testing.T) {
+	hostState(t)
+	state := os.Getenv("BRIG_STATE_DIR")
+	elsewhere, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(elsewhere, "brig-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(state, HomesDirName)); err != nil {
+		t.Fatal(err)
+	}
+	h := &host{bin: "/usr/bin/sandbox-exec"}
+	if err := h.Run(RunSpec{Name: "brig-a", Net: "none",
+		Shares: []Share{{Host: filepath.Join(elsewhere, "brig-a"), Guest: "/root"}}}); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := os.ReadFile(filepath.Join(state, "host", "brig-a", "profile.sb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("(deny file-read* file-write* (subpath %q))", elsewhere); !strings.Contains(string(blob), want) {
+		t.Errorf("the profile does not hold %s:\n%s", want, blob)
+	}
 }
 
 // listener counts the connections that reach it.

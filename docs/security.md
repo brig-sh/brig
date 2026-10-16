@@ -136,7 +136,7 @@ Brig writes.
 | | microVM | process |
 | --- | --- | --- |
 | kernel | a guest kernel of its own | yours. A kernel bug, or a hole in Seatbelt, is a way out |
-| files | the guest home, the project, and hostmounts | every file you can read. Every file you can write, except Brig's own directories |
+| files | the guest home, the project, and hostmounts | every file you can read, except the guest homes Brig creates for other sandboxes. Every file you can write, except Brig's own directories |
 | other processes | not visible | their environments are readable, those of `brigd` and `hull` included |
 | keychain | not reachable | denied by the profile |
 | SSH agent, `brigd` | not reachable | denied by the profile: the one unix socket allowed is the system resolver's |
@@ -169,8 +169,17 @@ What does hold:
 - The process cannot send a signal to a process outside it.
 - The process cannot write Brig's own profiles, policies or state outside
   its guest home, and cannot read or rewrite the profile it runs under.
+- The process cannot read or write a guest home that Brig creates for
+  another sandbox in `~/.brig/homes`, and cannot list that directory.
 - The process cannot ask the keychain for a secret, or connect to a unix
   socket other than the system resolver's, your SSH agent's included.
+
+The guest homes rule covers the homes Brig creates. The process can still
+tell whether a name exists in `~/.brig/homes`. A home you name with
+`--home` or `BRIG_WORKSPACE`, and a home of an older release in `~/brig`,
+are directories of yours, and every process sandbox can read them. A file
+in a home that also has a hard link outside it can be read through that
+link.
 
 A credential the profile delivers reaches a process sandbox as its real
 value. A secret that a policy's [route](policies.md#routes) names does not:

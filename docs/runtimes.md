@@ -162,7 +162,9 @@ must hold whatever else is allowed come last:
 (deny lsopen)
 (deny appleevent-send)
 (deny file-write* (subpath "~/.brig"))                          ; and the profile and policy directories
-(allow file-write* (subpath "~/.brig/homes/<slug>"))            ; each share
+(deny file-read* file-write* (subpath "~/.brig/homes"))
+(allow file-read-metadata (literal "~/.brig/homes"))
+(allow file-read* file-write* (subpath "~/.brig/homes/<slug>")) ; each share
 (deny file-write* (literal "~/.config"))                        ; each directory above those you can rename
 (deny file-read* file-write* (regex #"^/dev/bpf[0-9]+$"))
 (deny mach-lookup (global-name "com.apple.SecurityServer"))
@@ -188,7 +190,9 @@ can carry data in the name.
 The denies hold in every mode:
 
 - inbound connections. The process cannot listen on a port, so nothing on
-  your network can connect to it
+  your network can connect to it. It cannot bind a unix socket either, in
+  its own home included, so a tool that serves one, such as ssh's
+  `ControlMaster` or `gpg-agent`, fails there
 - signals to a process outside the sandbox. The agent can still signal
   its own children
 - `open` and AppleEvents, which hand work to a process outside the sandbox.
@@ -204,6 +208,12 @@ The denies hold in every mode:
   the deny, `security` in the sandbox read an item written the way Brig
   writes its secrets, with no prompt
 - `~/.brig/host`, so the agent cannot read or rewrite its own profile
+- reads and writes of the guest homes Brig creates for other sandboxes, in
+  `~/.brig/homes`. The agent can look up that directory, so the path of its
+  own home resolves, but it cannot list it. It can still tell whether a name
+  exists there. Brig refuses a share of that directory, or of another
+  sandbox's home in it. A home named with `--home` or `BRIG_WORKSPACE`, or
+  one in `~/brig` from an older release, is not covered
 - every unix socket but the resolver's, so the agent cannot use your SSH
   agent or reach `brigd`
 
