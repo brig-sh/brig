@@ -70,6 +70,14 @@ show)
 		[ "$last" -gt 0 ] && from=+$((last + 1))
 		brig -q sh "$REF" -c "tail -n $from -f /tmp/feed" </dev/null 2>/dev/null |
 			while IFS= read -r line; do
+				# A session that moved here from another host gets brig's
+				# notice about its credentials on each exec, on stdout when
+				# it comes over ssh: only the feed's own lines are shown.
+				line=${line%$'\r'}
+				case $line in
+				"tick "*) ;;
+				*) continue ;;
+				esac
 				printf '%s\n' "$line"
 				t=${line#tick }
 				printf '%s\n' "$((10#${t%% *}))" >"$seen"
