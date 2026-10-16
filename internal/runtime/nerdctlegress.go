@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/divert"
 	"github.com/brig-sh/brig/internal/egress"
 )
@@ -203,16 +202,15 @@ func nerdctlPath() RunPath { return RunPath{"nerdctl", containerdRuntime()} }
 // egressRefusal is the refusal of a boot whose rules or divert brig could
 // not put in place. The record answers Enforced, so what failed is this host,
 // and the answer for it is unknown. A run with a policy is refused as an
-// egress policy. A run that only diverts is refused as a route in mode
-// endpoint, which is what diverts brig.internal. fix is the first half of
-// the remedy.
+// egress policy. A run that only diverts is refused as the route mode that
+// asked for the divert. fix is the first half of the remedy.
 func egressRefusal(e Egress, why, fix string, err error) error {
-	prop := EgressPolicy
+	prop, without := EgressPolicy, "detach the policy"
 	if !e.Filtered() {
-		prop = RouteModeProperty(v1alpha1.ModeEndpoint)
+		prop, without = e.Divert.refusal()
 	}
 	return &CapabilityError{Property: prop, Path: nerdctlPath(), State: Unknown, Why: why,
-		Remedy: fix + ", or detach the policy", Err: err}
+		Remedy: fix + ", or " + without, Err: err}
 }
 
 const egressSetupFix = "Install nftables and util-linux's nsenter"

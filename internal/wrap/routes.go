@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/routemode"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
@@ -103,15 +105,20 @@ func routesOf(bound []policy.Policy) ([]v1alpha1.Route, map[string]string, error
 	return routes, owner, nil
 }
 
-// routeRefusal is why this run cannot serve its routes, or nil. A microVM or
-// a container reaches a route at brig.internal, which hull on hvi and nerdctl
-// route to the broker; on any other run path, a run with a route is refused
-// rather than booted without the routes its policy names (see endpointCheck).
+// routeRefusal is why this run cannot serve its routes, or nil. A route in a
+// mode besides endpoint is checked first (see modeRefusal). A microVM or a
+// container reaches an endpoint route at brig.internal, which hull on hvi and
+// nerdctl route to the broker; on any other run path, a run with a route is
+// refused rather than booted without the routes its policy names (see
+// endpointCheck).
 //
 // Read-only, like sessionRefusal, which returns it.
 func (c *Config) routeRefusal() error {
 	if c.routesErr != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", c.Profile.Name, c.routesErr)
+	}
+	if err := c.modeRefusal(); err != nil {
+		return err
 	}
 	if len(c.routes) == 0 || c.Runtime == nil {
 		return nil
@@ -214,6 +221,20 @@ func (c *Config) serveRoutes(set creds.Set) error {
 		}
 		s.BrigInternal = addr.String()
 	}
+	// Each route mode besides endpoint adds what the broker needs, and the
+	// setup the boot hands the runtime.
+	c.routeSetup = nil
+	for _, m := range c.otherModes() {
+		h := routeModeOf(m)
+		if h == nil {
+			return fmt.Errorf("the routes of %s: %s", c.VMName, routemode.NotInBuild(m))
+		}
+		setup, err := h.register(c, &s)
+		if err != nil {
+			return err
+		}
+		c.routeSetup = append(c.routeSetup, setup...)
+	}
 	_, added, err := b.Register(s)
 	if err != nil {
 		return fmt.Errorf("could not register the routes of %s with the credential broker: %w", c.VMName, err)
@@ -221,7 +242,7 @@ func (c *Config) serveRoutes(set creds.Set) error {
 	// The gateway is handed the socket before the broker answers, from the
 	// same function. A broker that listens elsewhere would leave the route's
 	// connections reset.
-	if s.BrigInternal != "" {
+	if s.BrigInternal != "" || len(s.Modes) > 0 {
 		want := c.diverts()
 		if !want.Requested() || added.DivertSocket != want.Socket {
 			return fmt.Errorf("the credential broker listens for the diverted connections of %s on %q, "+
@@ -266,6 +287,9 @@ func (c *Config) forgetRoutes() {
 	if err := c.routeBroker().Forget(c.VMName); err != nil {
 		c.warnf("the credential broker could not revoke the session tokens of %s: %v", c.VMName, err)
 	}
+	if err := forgetModes(c.VMName); err != nil {
+		c.warnf("could not remove what the routes of %s left on the host: %v", c.VMName, err)
+	}
 }
 
 // RevokeRoutes removes the sandbox vmName from the credential broker, which
@@ -273,7 +297,19 @@ func (c *Config) forgetRoutes() {
 // when no sandbox is left. It starts nothing. brig rm --all and brig reset
 // call it for each sandbox they remove, beside ForgetSandbox, because they
 // remove sandboxes without a Config.
-func RevokeRoutes(vmName string) error { return (&brokerProcess{}).Forget(vmName) }
+func RevokeRoutes(vmName string) error {
+	return errors.Join((&brokerProcess{}).Forget(vmName), forgetModes(vmName))
+}
+
+// forgetModes removes what each route mode besides endpoint left on the host
+// for sandbox vmName.
+func forgetModes(vmName string) error {
+	var errs []error
+	for _, m := range registeredModes() {
+		errs = append(errs, routeModeOf(m).forget(vmName))
+	}
+	return errors.Join(errs...)
+}
 
 // RevokeAllRoutes removes every sandbox the credential broker still has
 // registered, and stops it. It returns the ids it removed. brig rm --all

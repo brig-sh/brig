@@ -9,6 +9,7 @@
 # is a reviewed change to this file.
 name: anthropic
 mode: endpoint
+modes: [endpoint]
 upstream: https://api.anthropic.com
 credential:
   field: claudeAiOauth.accessToken

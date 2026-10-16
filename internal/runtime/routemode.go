@@ -2,8 +2,11 @@ package runtime
 
 import (
 	"fmt"
+	"slices"
+	"sync"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/routemode"
 )
 
 // RouteModeProperty is the property a run asks for when a policy bound to it
@@ -20,6 +23,9 @@ type ModeRecord struct {
 	State Capability
 	// Why says what makes this the answer. A refusal quotes it.
 	Why string
+	// Note is more of the answer, which a row and a refusal print after
+	// Why, or "".
+	Note string
 	// Remedy says what to do about a refusal on this path.
 	Remedy string
 	// Transport is how the guest reaches the broker on this path, where the
@@ -33,12 +39,15 @@ const (
 	transportBrigInternal = BrigInternalName
 )
 
-// Line is the answer as one row prints it: the state, the reason, and the
-// transport where the mode is served.
+// Line is the answer as one row prints it: the state, the reason with its
+// note, and the transport where the mode is served.
 func (r ModeRecord) Line() string {
 	line := string(r.State)
 	if r.Why != "" {
 		line += ": " + r.Why
+	}
+	if r.Note != "" {
+		line += "; " + r.Note
 	}
 	if r.Transport != "" && r.State == Enforced {
 		line += "; transport: " + r.Transport
@@ -62,6 +71,9 @@ const (
 	endpointGuestRemedy = "Detach the policy"
 	endpointOfflineWhy  = "the guest reaches brig.internal over its network, and this run has none " +
 		"(BRIG_NETWORK=offline)"
+	// otherModeRemedy is the remedy of a refused route in a mode other
+	// than endpoint.
+	otherModeRemedy = "Use mode: endpoint, or detach the policy"
 )
 
 // runcBackend stands for every shim that boots a container on the host
@@ -90,11 +102,36 @@ var modeRecords = []ModeRecord{
 		Remedy: "Use nerdctl (BRIG_RUNTIME_BIN=nerdctl), or detach the policy"},
 }
 
+// modeRecordsMu guards modeRecords against RegisterModeRecords.
+var modeRecordsMu sync.RWMutex
+
+// RegisterModeRecords adds the rows of a route mode registered in this build
+// (see internal/routemode) to the table, after the rows already there. It
+// returns a function that removes them again, for a test.
+func RegisterModeRecords(rs ...ModeRecord) (unregister func()) {
+	modeRecordsMu.Lock()
+	defer modeRecordsMu.Unlock()
+	start := len(modeRecords)
+	modeRecords = append(slices.Clip(modeRecords), rs...)
+	return func() {
+		modeRecordsMu.Lock()
+		defer modeRecordsMu.Unlock()
+		modeRecords = slices.Delete(slices.Clip(modeRecords), start, start+len(rs))
+	}
+}
+
+// modeTable returns the route mode table.
+func modeTable() []ModeRecord {
+	modeRecordsMu.RLock()
+	defer modeRecordsMu.RUnlock()
+	return modeRecords
+}
+
 // ModeRecords returns every answer brig holds for a route mode, in table
 // order.
 func ModeRecords(m v1alpha1.RouteMode) []ModeRecord {
 	var out []ModeRecord
-	for _, r := range modeRecords {
+	for _, r := range modeTable() {
 		if r.Mode == m {
 			out = append(out, r)
 		}
@@ -121,11 +158,16 @@ func modeKey(path RunPath) RunPath {
 
 // ModeAnswer is the record for one route mode on one run path. A path with
 // no record answers Unknown, so a backend brig has not been taught about is
-// refused.
+// refused. A mode this build does not serve cannot be enforced anywhere.
 func ModeAnswer(m v1alpha1.RouteMode, path RunPath) ModeRecord {
+	if !routemode.Served(m) {
+		return ModeRecord{Mode: m, Path: path, State: CannotEnforce, Why: routemode.NotInBuild(m),
+			Remedy: otherModeRemedy}
+	}
 	key := modeKey(path)
+	table := modeTable()
 	for _, exact := range []bool{true, false} {
-		for _, r := range modeRecords {
+		for _, r := range table {
 			if r.Mode != m || r.Path.Runtime != key.Runtime {
 				continue
 			}
@@ -135,15 +177,19 @@ func ModeAnswer(m v1alpha1.RouteMode, path RunPath) ModeRecord {
 			}
 		}
 	}
+	remedy := endpointGuestRemedy
+	if m != v1alpha1.ModeEndpoint {
+		remedy = otherModeRemedy
+	}
 	return ModeRecord{Mode: m, Path: path, State: Unknown, Why: "brig holds no answer for this run path",
-		Remedy: endpointGuestRemedy}
+		Remedy: remedy}
 }
 
-// ServedModes lists the route modes the run path serves, in table order. It
-// is empty where no mode is served.
+// ServedModes lists the route modes the run path serves: endpoint, then the
+// registered modes in name order. It is empty where no mode is served.
 func ServedModes(path RunPath) []v1alpha1.RouteMode {
 	out := []v1alpha1.RouteMode{}
-	for _, m := range []v1alpha1.RouteMode{v1alpha1.ModeEndpoint} {
+	for _, m := range append([]v1alpha1.RouteMode{v1alpha1.ModeEndpoint}, routemode.Names()...) {
 		if ModeAnswer(m, path).State == Enforced {
 			out = append(out, m)
 		}
@@ -158,7 +204,11 @@ func RequireRouteMode(m v1alpha1.RouteMode, path RunPath) error {
 	if r.State == Enforced {
 		return nil
 	}
-	return &CapabilityError{Property: RouteModeProperty(m), Path: path, State: r.State, Why: r.Why, Remedy: r.Remedy}
+	why := r.Why
+	if r.Note != "" {
+		why += "; " + r.Note
+	}
+	return &CapabilityError{Property: RouteModeProperty(m), Path: path, State: r.State, Why: why, Remedy: r.Remedy}
 }
 
 // BrigInternalProber is a runtime that can say whether its binaries route

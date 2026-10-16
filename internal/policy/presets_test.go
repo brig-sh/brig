@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/routemode"
 	"sigs.k8s.io/yaml"
 )
 
@@ -378,8 +380,8 @@ func TestParseRefusesARouteThatDoesNotExpand(t *testing.T) {
 			"set by a preset"},
 		{"unknown preset", "    - name: openai\n      preset: openai\n" +
 			"      credential: {secretRef: {name: k}}\n", "not one of"},
-		{"unknown mode", "    - name: anthropic\n      preset: claude-code\n      mode: relay\n" +
-			"      credential: {secretRef: {name: claude-credentials}}\n", "is not supported"},
+		{"a mode that is not a name", "    - name: anthropic\n      preset: claude-code\n      mode: Relay\n" +
+			"      credential: {secretRef: {name: claude-credentials}}\n", "lowercase"},
 		{"two routes on one variable", "    - name: anthropic\n      preset: claude-code\n" +
 			"      credential: {secretRef: {name: claude-credentials}}\n" +
 			"    - name: metered\n      preset: anthropic-api-key\n" +
@@ -409,5 +411,108 @@ func TestRoutesRefusesASharedInsteadOfPrefix(t *testing.T) {
 	_, err := Routes([]Policy{github, other})
 	if err == nil || !strings.Contains(err.Error(), "guest.git.insteadOf https://github.com/ is rewritten by route github of github-brig-sh") {
 		t.Errorf("Routes = %v, want the shared prefix refused", err)
+	}
+}
+
+// relayMode registers a route mode of the claude-code preset alone, for the
+// length of a test. check is its Check.
+func relayMode(t *testing.T, check func(base, written, expanded v1alpha1.Route) error) {
+	t.Helper()
+	t.Cleanup(routemode.Register(routemode.Mode{Name: "relay",
+		Presets: []v1alpha1.Preset{v1alpha1.PresetClaudeCode}, Check: check}))
+}
+
+// Every preset brig ships lists endpoint first, and a registered mode adds
+// itself to the presets it names and to no other.
+func TestPresetsListTheirModes(t *testing.T) {
+	for _, name := range PresetNames() {
+		got, err := PresetModes(name)
+		if err != nil || len(got) == 0 || got[0] != v1alpha1.ModeEndpoint || slices.Contains(got, "relay") {
+			t.Errorf("PresetModes(%s) = %v, %v, want endpoint first", name, got, err)
+		}
+	}
+	if _, err := PresetModes("openai"); err == nil {
+		t.Error("PresetModes took a preset brig does not ship")
+	}
+	relayMode(t, nil)
+	if got, _ := PresetModes(v1alpha1.PresetClaudeCode); !slices.Contains(got, "relay") {
+		t.Errorf("PresetModes(claude-code) with relay registered = %v", got)
+	}
+	if got, _ := PresetModes(v1alpha1.PresetGitHubToken); slices.Contains(got, "relay") {
+		t.Errorf("PresetModes(github-token) with relay registered = %v", got)
+	}
+}
+
+// A route is refused in a registered mode its preset does not support, and
+// with no preset. It expands in one its preset supports, keeps its mode, and
+// is held to the mode's Check. A route in a mode this build does not serve
+// expands as written, and the run refuses it.
+func TestAPresetRefusesAModeItDoesNotList(t *testing.T) {
+	r := withSecret(v1alpha1.PresetClaudeCode)
+	r.Mode = "relay"
+	got, err := ExpandRoute(r)
+	if err != nil || got.Mode != "relay" {
+		t.Fatalf("a mode this build does not serve: %+v, %v", got.Mode, err)
+	}
+
+	var checked []v1alpha1.Route
+	relayMode(t, func(base, written, expanded v1alpha1.Route) error {
+		checked = append(checked, base, written, expanded)
+		if written.Inject != nil {
+			return errors.New("relay keeps the preset's inject")
+		}
+		return nil
+	})
+	if got, err := ExpandRoute(r); err != nil || got.Mode != "relay" {
+		t.Fatalf("relay on claude-code: %+v, %v", got.Mode, err)
+	}
+	if len(checked) != 3 || checked[0].Upstream != "https://api.anthropic.com" || checked[1].Upstream != "" ||
+		checked[2].Upstream != "https://api.anthropic.com" || checked[2].Mode != "relay" {
+		t.Errorf("Check was handed %+v", checked)
+	}
+	gh := withSecret(v1alpha1.PresetGitHubToken)
+	gh.Mode = "relay"
+	if _, err := ExpandRoute(gh); err == nil || !strings.Contains(err.Error(), "preset github-token supports mode endpoint, not relay") {
+		t.Errorf("relay on github-token: %v", err)
+	}
+	moved := r
+	moved.Inject = &v1alpha1.Inject{Headers: &v1alpha1.HeaderInject{Remove: []string{"X-Extra"}}}
+	if _, err := ExpandRoute(moved); err == nil || !strings.Contains(err.Error(), "route r: relay keeps the preset's inject") {
+		t.Errorf("a route its mode's Check refuses: %v", err)
+	}
+	custom := v1alpha1.Route{Name: "inventory", Mode: "relay", Upstream: "https://api.example.com",
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "k"}}}
+	if _, err := ExpandRoute(custom); err == nil || !strings.Contains(err.Error(), `mode "relay" needs a preset that lists it`) {
+		t.Errorf("relay with no preset: %v", err)
+	}
+}
+
+// checkModes is what keeps a preset file honest about its modes.
+func TestPresetModesAreChecked(t *testing.T) {
+	ok := presetFile{Route: v1alpha1.Route{Mode: v1alpha1.ModeEndpoint}, Modes: []v1alpha1.RouteMode{v1alpha1.ModeEndpoint}}
+	if err := ok.checkModes(); err != nil {
+		t.Fatalf("a good modes list was refused: %v", err)
+	}
+	for _, c := range []struct {
+		name  string
+		mode  v1alpha1.RouteMode
+		modes []v1alpha1.RouteMode
+	}{
+		{"no modes", v1alpha1.ModeEndpoint, nil},
+		{"a mode not in this build", v1alpha1.ModeEndpoint, []v1alpha1.RouteMode{v1alpha1.ModeEndpoint, "relay"}},
+		{"a mode twice", v1alpha1.ModeEndpoint, []v1alpha1.RouteMode{v1alpha1.ModeEndpoint, v1alpha1.ModeEndpoint}},
+		{"no endpoint", v1alpha1.ModeEndpoint, []v1alpha1.RouteMode{"relay"}},
+		{"a route in another mode", "relay", []v1alpha1.RouteMode{v1alpha1.ModeEndpoint, "relay"}},
+	} {
+		p := presetFile{Route: v1alpha1.Route{Mode: c.mode}, Modes: c.modes}
+		if err := p.checkModes(); err == nil {
+			t.Errorf("%s: checkModes accepted %v", c.name, c.modes)
+		}
+	}
+	relayMode(t, nil)
+	both := presetFile{Route: v1alpha1.Route{Mode: v1alpha1.ModeEndpoint},
+		Modes: []v1alpha1.RouteMode{v1alpha1.ModeEndpoint, "relay"}}
+	if err := both.checkModes(); err != nil {
+		t.Errorf("a registered mode in the list was refused: %v", err)
 	}
 }
