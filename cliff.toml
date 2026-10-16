@@ -113,6 +113,9 @@ commit_parsers = [
   { message = '^fix[(!:]', group = "<!-- 2 -->Fixes" },
   { message = '^refactor[(!:]', group = "<!-- 3 -->Refactors" },
   { message = '^docs[(!:]', group = "<!-- 4 -->Documentation" },
+  # install.sh pins what a Linux install runs: the runtime bundle and cosign.
+  # Moving a pin changes the release for its users, so it is listed.
+  { message = '^chore\(install\):', group = "<!-- 2 -->Fixes" },
   { message = '^(test|chore|ci|build|style)[(!:]', skip = true },
   { message = ".*", group = "<!-- 9 -->Others" },
 ]
