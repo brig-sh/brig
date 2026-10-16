@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/telemetry"
 )
 
@@ -129,6 +130,9 @@ type RunSpec struct {
 	// once, when that gateway starts, which is also why a sandbox carrying
 	// one needs a network of its own. See gateway.go.
 	Egress Egress
+	// Setup is the sandbox setup the run's route modes ask for besides the
+	// divert, or nil. Only a route mode registered in this build adds one.
+	Setup []Setup
 	// Publish are the guest ports this run offers on the host.
 	//
 	// Every one of them is a hole in the sandbox boundary, so they are named
@@ -248,6 +252,74 @@ func (d Divert) on(gw netip.Addr) []DivertRoute {
 type DivertRoute struct {
 	Host string
 	Port int
+	// Mode is the route mode that asked for the divert, or "". A refusal of
+	// the divert names it.
+	Mode v1alpha1.RouteMode
+}
+
+// refusal is the property a refusal of d names, and how to do without it: the
+// route mode of its first destination that names one, or else the endpoint
+// mode, which diverts brig.internal.
+func (d Divert) refusal() (Property, string) {
+	for _, r := range d.Routes {
+		if r.Mode != "" {
+			return RouteModeProperty(r.Mode), "use mode: endpoint"
+		}
+	}
+	return RouteModeProperty(v1alpha1.ModeEndpoint), "detach the policy"
+}
+
+// requireDiverts refuses the destinations of d that path does not serve, by
+// the route mode of each, and any of them on a run with no network.
+func requireDiverts(spec RunSpec, path RunPath) error {
+	for _, r := range spec.Egress.Divert.Routes {
+		if r.Mode == "" {
+			continue
+		}
+		if err := RequireRouteMode(r.Mode, path); err != nil {
+			return err
+		}
+		if spec.Net == "none" {
+			return &CapabilityError{Property: RouteModeProperty(r.Mode), Path: path, State: CannotEnforce,
+				Why: "the runtime diverts the route's connections on the guest's network, and this run has none " +
+					"(BRIG_NETWORK=offline)", Remedy: otherModeRemedy}
+		}
+	}
+	return nil
+}
+
+// Setup is sandbox setup that a route mode registered in this build adds to a
+// run. The runtime asks it to check the run before anything boots, and adds
+// its arguments to the run command line.
+type Setup interface {
+	// Check refuses spec on path, or returns nil.
+	Check(path RunPath, spec RunSpec) error
+	// Args returns what the setup adds to the run command line of the
+	// runtime on path, in that runtime's spelling.
+	Args(path RunPath) ([]string, error)
+}
+
+// checkSetup refuses spec on path when any of its setup does.
+func checkSetup(spec RunSpec, path RunPath) error {
+	for _, s := range spec.Setup {
+		if err := s.Check(path, spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setupArgs returns the arguments spec's setup adds on path, in order.
+func setupArgs(spec RunSpec, path RunPath) ([]string, error) {
+	var args []string
+	for _, s := range spec.Setup {
+		a, err := s.Args(path)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, a...)
+	}
+	return args, nil
 }
 
 // Requested returns whether anything is diverted.

@@ -186,6 +186,9 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		rtCheck,
 		brokerCheck(),
 	}
+	for _, mc := range modeChecks {
+		checks = append(checks, mc(agent, rt))
+	}
 	return append(checks,
 		bootCheck(rt),
 		verifyCheck(),
@@ -238,6 +241,12 @@ func brokerCheck() check {
 	}
 	return brokerStatusCheck(running.Status)
 }
+
+// modeChecks are the rows that the route modes besides endpoint registered
+// in this build add to the report, in the order they were added. Each says
+// whether the mode is served on this host's run path. agent and rt may be
+// nil.
+var modeChecks []func(agent *profile.Profile, rt runtime.Runtime) check
 
 // brokerStatusCheck is the broker row of a broker that answered its control
 // socket.

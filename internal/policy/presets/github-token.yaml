@@ -4,6 +4,7 @@
 # github.com, so only git goes through the route.
 name: github
 mode: endpoint
+modes: [endpoint]
 upstream: https://github.com
 inject:
   basicAuth:

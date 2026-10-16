@@ -322,6 +322,9 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 		return fmt.Errorf("brig diverts a sandbox's connections with nftables on nerdctl, and this is docker (%s). "+
 			"Point BRIG_RUNTIME_BIN at nerdctl", n.bin)
 	}
+	if err := checkSetup(spec, RunPath{n.driver(), containerdRuntime()}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -541,6 +544,11 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 			args = append(args, "--annotation", kv)
 		}
 	}
+	setup, err := setupArgs(spec, RunPath{n.driver(), containerdRuntime()})
+	if err != nil {
+		return nil, nil, err
+	}
+	args = append(args, setup...)
 	for _, s := range spec.Shares {
 		mount := s.Host + ":" + s.Guest
 		if s.ReadOnly {

@@ -587,10 +587,18 @@ func supports(spec RunSpec, hv string) error {
 		return err
 	}
 	// A divert is the gateway's, which is hvi's alone. A run elsewhere would
-	// reach the diverted destinations directly.
+	// reach the diverted destinations directly. wrap refuses the run first,
+	// with the route mode table; this is the same answer for a caller that
+	// did not ask it.
+	if err := requireDiverts(spec, RunPath{"hull", hv}); err != nil {
+		return err
+	}
 	if len(spec.Egress.Divert.Routes) > 0 && hv != "hvi" {
 		return fmt.Errorf("brig diverts a sandbox's connections at hull's network gateway, which only the hvi "+
 			"backend uses, and this run asks for %s. Run it on hvi (BRIG_HYPERVISOR=hvi)", hv)
+	}
+	if err := checkSetup(spec, RunPath{"hull", hv}); err != nil {
+		return err
 	}
 	// brig.internal is a record and a divert on the gateway too. wrap
 	// refuses the run first, with the route mode table; this is the same
@@ -712,6 +720,11 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 		}
 		args = append(args, "--shared-dir", spec)
 	}
+	setup, err := setupArgs(spec, RunPath{"hull", hv})
+	if err != nil {
+		return nil, nil, err
+	}
+	args = append(args, setup...)
 	if spec.GUI {
 		args = append(args, "--gui")
 		if spec.GUITitle != "" {

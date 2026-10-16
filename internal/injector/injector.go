@@ -17,6 +17,7 @@ package injector
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -124,6 +125,10 @@ type Sandbox struct {
 	// divert socket, and the broker serves brig.internal there, with TLS. A
 	// sandbox registered with it is refused over loopback.
 	BrigInternal string `json:"brigInternal,omitempty"`
+	// Modes holds the settings of the sandbox's routes in each route mode
+	// besides endpoint, by mode, or is nil. The broker refuses a route in
+	// such a mode without them, and hands them to the mode's divert handler.
+	Modes map[v1alpha1.RouteMode]json.RawMessage `json:"modes,omitempty"`
 }
 
 // DivertDirName is the directory of the divert sockets, under the broker
@@ -150,9 +155,10 @@ func DivertSocket(dir, id string) (string, error) {
 // AddResponse is the answer to add-sandbox.
 type AddResponse struct {
 	// DivertSocket is the unix socket the broker listens on for the
-	// sandbox's diverted connections, or "" for a sandbox with no
-	// BrigInternal address. It is the path DivertSocket returns. The
-	// diverter connects to it once per guest connection.
+	// sandbox's diverted connections, or "" for a sandbox with neither a
+	// BrigInternal address nor a route mode besides endpoint. It is the path
+	// DivertSocket returns. The diverter connects to it once per guest
+	// connection.
 	DivertSocket string `json:"divertSocket,omitempty"`
 	// CA is the brig CA certificate, in PEM, for a sandbox with a
 	// BrigInternal address. The guest trusts it for brig.internal. Its key

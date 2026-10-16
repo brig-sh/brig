@@ -8,13 +8,26 @@ import (
 	"strings"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/routemode"
 )
 
 // presetFiles holds the presets brig ships. Each file is one route written in
-// full, and decodes strictly into a v1alpha1.Route.
+// full, with the modes the preset supports, and decodes strictly into a
+// presetFile.
 //
 //go:embed presets/*.yaml
 var presetFiles embed.FS
+
+// presetFile is one preset as its file writes it.
+type presetFile struct {
+	v1alpha1.Route
+	// Modes lists the route modes the file says the preset supports. It
+	// holds the mode of the route, which is endpoint. A mode registered in
+	// this build adds itself to the presets it names (see PresetModes).
+	Modes []v1alpha1.RouteMode `json:"modes"`
+	// presetName is the preset the file holds.
+	presetName v1alpha1.Preset
+}
 
 // PresetNames lists the presets brig ships, sorted.
 func PresetNames() []v1alpha1.Preset {
@@ -36,31 +49,81 @@ func PresetNames() []v1alpha1.Preset {
 // applied. It has no credential.secretRef, which only a policy names, so it
 // is not a complete route on its own.
 func PresetRoute(name v1alpha1.Preset) (v1alpha1.Route, error) {
-	r, err := decodePreset(name)
+	p, err := decodePreset(name)
 	if err != nil {
 		return v1alpha1.Route{}, err
 	}
-	setDefaults(&r)
-	return r, nil
+	setDefaults(&p.Route)
+	return p.Route, nil
+}
+
+// PresetModes returns the route modes a preset supports in this build: the
+// modes its file lists, in that order, then each registered mode that names
+// the preset, in name order.
+func PresetModes(name v1alpha1.Preset) ([]v1alpha1.RouteMode, error) {
+	p, err := decodePreset(name)
+	if err != nil {
+		return nil, err
+	}
+	return p.modes(), nil
+}
+
+func (p presetFile) modes() []v1alpha1.RouteMode {
+	out := slices.Clone(p.Modes)
+	for _, name := range routemode.Names() {
+		m, _ := routemode.Lookup(name)
+		if slices.Contains(m.Presets, p.presetName) && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // decodePreset reads one preset file. Each call decodes the file again, so a
 // caller can change the result without reaching the next one.
-func decodePreset(name v1alpha1.Preset) (v1alpha1.Route, error) {
+func decodePreset(name v1alpha1.Preset) (presetFile, error) {
 	blob, err := presetFiles.ReadFile("presets/" + string(name) + ".yaml")
 	if err != nil {
-		return v1alpha1.Route{}, fmt.Errorf("preset %q is not one brig ships (%s)", name, presetList())
+		return presetFile{}, fmt.Errorf("preset %q is not one brig ships (%s)", name, presetList())
 	}
-	var r v1alpha1.Route
-	if err := v1alpha1.UnmarshalStrict(blob, &r); err != nil {
-		return v1alpha1.Route{}, fmt.Errorf("preset %s: %w", name, err)
+	var p presetFile
+	if err := v1alpha1.UnmarshalStrict(blob, &p); err != nil {
+		return presetFile{}, fmt.Errorf("preset %s: %w", name, err)
 	}
+	if err := p.checkModes(); err != nil {
+		return presetFile{}, fmt.Errorf("preset %s: %w", name, err)
+	}
+	p.presetName = name
 	// A lifecycle is the preset's to set, and Route.Validate accepts it only
 	// when it was set this way.
-	if r.Credential != nil {
-		r.SetLifecycleFromPreset(r.Credential.Lifecycle)
+	if p.Credential != nil {
+		p.SetLifecycleFromPreset(p.Credential.Lifecycle)
 	}
-	return r, nil
+	return p, nil
+}
+
+// checkModes refuses a modes list that is empty, names a mode twice or a mode
+// this build does not serve, or leaves out the mode of the preset's own
+// route.
+func (p presetFile) checkModes() error {
+	if p.Mode != v1alpha1.ModeEndpoint {
+		return fmt.Errorf("mode is %q; a preset's route is %q", p.Mode, v1alpha1.ModeEndpoint)
+	}
+	if len(p.Modes) == 0 {
+		return fmt.Errorf("modes lists nothing")
+	}
+	for i, m := range p.Modes {
+		if !routemode.Served(m) {
+			return fmt.Errorf("modes names %q: %s", m, routemode.NotInBuild(m))
+		}
+		if slices.Contains(p.Modes[:i], m) {
+			return fmt.Errorf("modes names %s twice", m)
+		}
+	}
+	if !slices.Contains(p.Modes, p.Mode) {
+		return fmt.Errorf("modes leaves out %s, the mode of the preset's route", p.Mode)
+	}
+	return nil
 }
 
 func presetList() string {
@@ -81,14 +144,34 @@ func presetList() string {
 // comes from the preset alone. A preset with a lifecycle keeps its upstream
 // and its credential.field, since the refresh it runs is for that endpoint and
 // that field.
+//
+// A route in a mode its preset does not support is refused. So is a route in
+// a registered mode that names no preset, or that the mode's Check refuses.
+// A route in a mode this build does not serve expands as written, and the
+// run refuses it (see internal/routemode).
 func ExpandRoute(r v1alpha1.Route) (v1alpha1.Route, error) {
 	out := *r.DeepCopy()
+	var base presetFile
+	mode, registered := routemode.Lookup(r.Mode)
 	if r.Preset != "" {
-		base, err := decodePreset(r.Preset)
-		if err != nil {
+		var err error
+		if base, err = decodePreset(r.Preset); err != nil {
 			return v1alpha1.Route{}, fmt.Errorf("route %s: %w", r.Name, err)
 		}
-		if out, err = overlay(base, out); err != nil {
+		if out, err = overlay(base.Route, out); err != nil {
+			return v1alpha1.Route{}, fmt.Errorf("route %s: %w", r.Name, err)
+		}
+		if modes := base.modes(); routemode.Served(out.Mode) && !slices.Contains(modes, out.Mode) {
+			return v1alpha1.Route{}, fmt.Errorf("route %s: preset %s supports mode %s, not %s",
+				r.Name, r.Preset, joinModes(modes), out.Mode)
+		}
+	} else if registered {
+		return v1alpha1.Route{}, fmt.Errorf("route %s: mode %q needs a preset that lists it", r.Name, r.Mode)
+	}
+	// The mode's own rules come ahead of the general ones, so a route that
+	// breaks both is refused for the mode.
+	if registered && mode.Check != nil {
+		if err := mode.Check(base.Route, r, out); err != nil {
 			return v1alpha1.Route{}, fmt.Errorf("route %s: %w", r.Name, err)
 		}
 	}
@@ -97,6 +180,15 @@ func ExpandRoute(r v1alpha1.Route) (v1alpha1.Route, error) {
 		return v1alpha1.Route{}, err
 	}
 	return out, nil
+}
+
+// joinModes names modes the way an error lists them.
+func joinModes(modes []v1alpha1.RouteMode) string {
+	names := make([]string, 0, len(modes))
+	for _, m := range modes {
+		names = append(names, string(m))
+	}
+	return strings.Join(names, " and ")
 }
 
 // overlay returns base with every field that r sets taking r's value. Both
