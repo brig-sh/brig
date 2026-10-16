@@ -7,9 +7,93 @@ host, and forwards the request to the route's upstream. The guest never holds
 the credential.
 
 This page describes `internal/broker`, the request handler, and
-`brig-broker`, the process that hosts it. In this release no runtime routes a
-guest to the broker yet, and a run bound to a policy with routes on hull or
-nerdctl is refused before boot. See [Transports](#transports).
+`brig-broker`, the process that hosts it. hull on `hvi` and nerdctl with
+urunc reach a route at `brig.internal`. A run bound to a policy with routes
+on any other runtime is refused before boot. See [Transports](#transports).
+
+## Use it
+
+Let us consider Claude Code, with its OAuth login kept on the host. The
+guest gets a session token for one route, and never the login.
+
+Import the login once. Brig stores it as `claude-credentials`
+(see [Authentication](authentication.md)):
+
+```bash
+brig secret import claude-code
+```
+
+Write a policy with one route on the `claude-code` preset, in
+`~/.config/brig/policies/claude-routed.yaml`:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: claude-routed
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential:
+        secretRef: { name: claude-credentials }
+```
+
+A route puts the run on the `isolated` posture. On hull on `hvi` that
+posture still reaches the internet, so `default: deny` is what keeps the
+guest to the broker. Add `allow` rules for anything else the agent needs.
+See [Policy fields](policies.md#policy-fields).
+
+Attach the policy and check it. `check` prints a row per run path, and
+refuses a route the run would refuse:
+
+```bash
+brig policy attach claude-routed claude-code
+brig policy check claude-code
+```
+
+Then run the agent. The command depends on the runtime:
+
+| Runtime | Command | What it needs |
+| --- | --- | --- |
+| hull on `hvi`, on macOS | `BRIG_HYPERVISOR=hvi brig run claude-code` | a hull whose `network-gateway --help` lists `--divert`. `vz` and `qemu` are refused |
+| nerdctl with urunc, on Linux | `brig run claude-code` | `nft` on the host. docker and runc are refused |
+
+Brig starts `brig-broker` on the first run, registers the sandbox, and mints
+a token for the route on every exec. `brig info claude-code` names the
+broker in its `BROKER` row:
+
+```
+BROKER  transport brig.internal, routes anthropic; brig-broker pid 4242 on 127.0.0.1:52546; kept on the host: claude-credentials; modes endpoint
+```
+
+Brig refuses the run before boot, with exit `6`, when the store does not
+hold a route's secret, or does not open. The message names the command that
+puts the secret there. On Linux the store is a Secret Service, which needs a
+desktop session with a keyring such as gnome-keyring or KWallet. Brig lists
+the store by name and reads no value: the broker reads it on the host.
+`brig info` and `brig plan` say so in the `BROKER` row, and the plan opens
+with a `REFUSED` row.
+
+The guest holds the route URL and the session token, in the variables of
+the preset:
+
+```
+ANTHROPIC_BASE_URL=https://brig.internal/brig-claude-code/r/anthropic
+CLAUDE_CODE_OAUTH_TOKEN=<session token>
+```
+
+On hull and nerdctl the guest also gets the brig CA, which it trusts for
+`brig.internal` alone. `/brig/ca/brig.pem` holds the CA, and
+`/brig/ca/bundle.pem` the image's own roots followed by it. `SSL_CERT_FILE`,
+`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `GIT_SSL_CAINFO` point at
+them. No `.credentials.json` is written into the guest.
+
+`brig stop claude-code` and `brig rm claude-code` revoke the sandbox's
+tokens. A token that leaked out of the guest is refused from then on. The
+broker exits when the last sandbox is removed.
 
 ## Request path
 
@@ -29,14 +113,16 @@ error of that step, and the upstream is never dialed.
    `Connection`, or the `CONNECT` method. This is a 400. An upgraded
    connection or a tunnel would be a raw pipe with the credential on it, and
    no later request on it would be checked.
-2. Split the path. An unknown sandbox or route is a 404.
+2. Split the path, and check where the request arrived: on a divert
+   socket, only the sandbox of that socket is served. An unknown sandbox or
+   route, or another sandbox's path, is a 404.
 3. Read the session token. It comes from `Authorization: Bearer`. On a
    `basicAuth` route it can also be the basic-auth password, which is what
    git's credential helper sends. On a route that sets the credential in
    another header, such as `x-api-key`, it can also come from that header.
 4. Verify the token: the signature with the sandbox key, the sandbox claim
-   against the path, the route claim against the route, the expiry, and the
-   address the request arrived from. Any failure is a 401.
+   against the path, the route claim against the route, and the expiry.
+   Any failure is a 401.
 5. Read the body, up to 8 MiB, and check the expiry again: the body can
    take longer to arrive than the token had left. An expired token is a
    401. Then refuse a session token anywhere but its carrier. This is a
@@ -312,8 +398,8 @@ taken from the replay budget, 64 MiB for all requests at once, which
 | Status | When | `check=` on the audit line |
 | --- | --- | --- |
 | 400 | The request asks for a protocol upgrade, or is a `CONNECT` | `upgrade` |
-| 404 | The path is not `/<sandbox-id>/r/<route>/…`, or names a sandbox or route the broker does not serve | `path`, `sandbox`, `route` |
-| 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, an expired token, or a request that arrived on another sandbox's gateway | `token`, `signature`, `token.sandbox`, `token.route`, `expired`, `arrival` |
+| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on | `path`, `arrival`, `sandbox`, `route` |
+| 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, or an expired token | `token`, `signature`, `token.sandbox`, `token.route`, `expired` |
 | 400 | The request body could not be read | `body` |
 | 408 | The part of the body the broker holds did not arrive within `BodyTimeout` | `body` |
 | 503 | The replay budget, or the sandbox's share of it, could not hold the body in time | `budget` |
@@ -482,7 +568,8 @@ file is created `0600`.
 | `broker.lock` | Held by the running broker. A second one exits |
 | `port` | The loopback port, written by the broker at first start and bound at every start after. See [The port](#the-port) |
 | `start.lock` | Held by `brig` while it starts the broker |
-| `audit.log`, `audit.log.1` | The [audit line](#audit-line) of every request. Rotated at 64 MiB, one previous file kept |
+| `audit.log`, `audit.log.1` | The [audit line](#audit-line) of every request and of every diverted connection. Rotated at 64 MiB, one previous file kept |
+| `divert/<hash>.sock` | The divert socket of a sandbox that reaches `brig.internal`, 0600 in a 0700 directory. `<hash>` is the first 12 hex digits of the SHA-256 of the sandbox id. It is removed with the sandbox and when the broker stops |
 | `broker.log`, `broker.log.1` | The broker's own output, rotated the same way. What the broker writes to stderr, a panic included, moves to the new file with each rotation |
 
 ### Control protocol
@@ -494,8 +581,8 @@ underscores. 255 bytes is the longest name of a directory.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}]}` | 204. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key |
-| `DELETE /sandboxes/<id>` | | `{removed, remaining}` |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca}`. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
+| `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
 | `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
@@ -532,6 +619,41 @@ on macOS 26: a process in a new session, whose parent had exited, read a
 keychain item of the login session with no prompt. A broker started from an
 SSH session can only read an unlocked keychain. A read that fails is a 502.
 
+## Route modes
+
+A route's `mode` says how the tool in the guest reaches it. `endpoint`, the
+default, points the tool at the route URL. The tool sends its session token
+there. The broker answers the request, adds the credential, and sends the
+request upstream on a TLS connection of its own.
+
+An `endpoint` route can never:
+
+- leave the tool as it is. The tool is pointed at the route URL, and on
+  hull and nerdctl it trusts the brig CA for `brig.internal`.
+- serve a tool that pins the upstream's certificate, or that has no setting
+  for its endpoint, such as `gh` for github.com.
+- keep one session from the tool to the upstream. There are two: the
+  tool's to the broker, and the broker's to the upstream.
+- leave a request untouched. The broker reads and forwards every request.
+
+This build of Brig serves the `endpoint` mode alone. A policy that names
+another mode still parses. `brig policy check` refuses the route, and a run
+refuses it before boot with exit `7`:
+
+```
+brig: policy claude-relay (route anthropic) declares a route in mode relay: a policy applies to this sandbox, and hull on hvi cannot enforce the route mode relay: route mode relay is not part of this build of brig. Use mode: endpoint, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
+```
+
+A route in mode `endpoint` is refused where its run path cannot reach the
+broker:
+
+| Where | What is refused |
+| --- | --- |
+| `brig policy check` | a route that the run would refuse, on the runtime and hypervisor the run would use. It prints a row per run path and exits non-zero |
+| `brig run`, `brig sh` and `brig plan` | a route on hull on `vz` or `qemu`, on docker, on nerdctl without `--network isolated`, on hull or nerdctl with no network, or on a hull whose gateway takes no `--divert`. Nothing is started, and Brig exits `7`. See [Route mode answers](runtimes.md#route-mode-answers) |
+
+`brig info` names the modes the run path serves in its `BROKER` row.
+
 ## Transports
 
 A guest reaches the broker at `brig.internal`. `brig info` names the
@@ -539,29 +661,80 @@ transport in the `BROKER` row.
 
 | Transport | Runtime | Route URL |
 | --- | --- | --- |
-| `brig.internal` | hull, nerdctl | `https://brig.internal/<sandbox-id>/r/<route>` |
+| `brig.internal` | hull on `hvi`, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>` |
 
 **brig.internal.** TLS to a name only Brig serves, with the brig CA trusted
 in the guest. At first start the broker creates the CA, an ECDSA P-256 key in
 `ca.key`. Its name constraints permit `brig.internal` and exclude every IP
 address, so a guest that trusts it trusts no other site. The broker signs a
 certificate for `brig.internal` at every start, and that key stays in
-memory. Brig points the guest at the CA in `SSL_CERT_FILE`,
-`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `GIT_SSL_CAINFO`, at
-`/brig/ca/brig.pem`.
+memory. A broker that runs for 23 days signs a new one.
 
-This release does not route `brig.internal` from a guest to the broker.
-`hull network-gateway` serves a static DNS record and forwards a host port
-into a guest, but it has no forward from a guest to the host. So a run with a
-route on hull or nerdctl is refused before boot, with "brig.internal routing
-is not available on this runtime yet". The CA and the guest environment
-exist, and no listener uses them (#265).
+The name resolves to the sandbox's own gateway, and its port 443 reaches the
+broker through the sandbox's divert socket:
+
+| Runtime | Name | Port 443 | Other ports of the address |
+| --- | --- | --- | --- |
+| hull on `hvi` | a `--host` record of the gateway's address on `hull network-gateway` | a `--divert` of the address to the divert socket | reset. The gateway never dials its own address |
+| nerdctl | a record the egress resolver answers with the bridge's address, whatever the policy | the sandbox's nftables table redirects it to the relay of the resolver. See [Routing brig.internal](policies.md#routing-briginternal) | refused by the table |
+
+The broker learns the address when Brig registers the sandbox. A diverted
+connection to it is served as `brig.internal` and never dialed. The broker
+completes the TLS handshake with the `brig.internal` certificate, offers
+HTTP/1.1, and hands the connection to the route handler of the loopback
+port. Each request carries the sandbox whose socket it arrived on. The
+arrival check refuses a request for another sandbox with `404` and
+`check=arrival`, before the sandbox is looked up or a token is read, so a
+guest cannot tell another sandbox from one that does not exist. A sandbox
+registered for `brig.internal` is refused on the loopback port the same way.
+
+Brig writes the CA certificate into the guest after the boot, and again on
+every exec, through stdin. The broker hands it over at registration, and Brig
+refuses anything but one certificate of a CA constrained to `brig.internal`.
+The key never leaves the broker. The guest gets two files, root's and 0644,
+and its own trust store is left as it is:
+
+| File | What it holds | Variables |
+| --- | --- | --- |
+| `/brig/ca/brig.pem` | the CA certificate | `NODE_EXTRA_CA_CERTS`, which Node adds to its roots |
+| `/brig/ca/bundle.pem` | the image's own roots, then the CA | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, which replace a client's roots |
+
+The bundle keeps every other site trusted for a client that reads one file.
+Brig takes the first of `/etc/ssl/certs/ca-certificates.crt`,
+`/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem` that the image
+has. An image with none gets the CA alone.
+
+`brig.internal` needs a network of the sandbox's own. hull starts a gateway
+for the sandbox whatever the posture, and nerdctl needs `--network
+isolated`. hull on `vz` and `qemu` takes its network from vmnet, and docker
+manages its own bridges, so neither has a gateway to answer the name on. A
+run with a route there is refused before boot, with exit `7`.
+
+**The divert socket.** The runtime hands a guest connection to the
+`brig.internal` address to the divert socket of the sandbox, instead of
+dialing it. The diverter connects once per guest connection, and writes one
+line first:
+
+```
+BRIG-DIVERT/1 <dst-ip> <dst-port> <src-ip> <src-port>\n
+```
+
+The addresses are in the form Go's `netip.Addr` prints, IPv6 without
+brackets and without a zone. The ports are decimal, with no leading zero.
+The line is at most 160 bytes with its newline. After it come the guest's
+bytes, both ways, unchanged. The broker writes nothing back before it
+serves. It refuses by closing the socket, and the diverter then resets the
+guest's connection. Each side passes a half-close on.
+
+The broker holds at most 64 diverted connections of one sandbox open at
+once, and 512 of every sandbox together. A connection over either is closed.
 
 ## What the guest gets
 
 Brig mints a token per route on every exec and hands the guest the route's
 `guest.env`, with `{route.url}` and `{session.token}` filled in. A token is
-never on a command line:
+never on a command line. A guest that reaches `brig.internal` also gets the
+CA variables of [Transports](#transports). Per preset:
 
 | Preset | Guest environment |
 | --- | --- |
@@ -610,6 +783,7 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `status` | The status sent to the guest |
 | `dur` | The time from the request to the end of the response |
 | `check` | The check that refused the request |
+| `arrived` | The sandbox whose divert socket the request arrived on. A request on the loopback port has none |
 | `policy`, `rule`, `reason` | The refusal of a `request.allow` miss |
 | `dropped.<header>` | The number of values that `inject.headers.allow` dropped |
 | `renew` | After an upstream 401: `retried`, `failed`, `interval` when a renewal was forced for the secret less than a minute before, or `body` when the body was not kept for a retry |
@@ -618,10 +792,24 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 
 The line never holds a credential, a token, a header value or a body.
 
+A diverted connection writes one line of its own when it ends. On
+`brig.internal`, the requests it carried have lines of their own beside it:
+
+```
+msg=divert sandbox=brig-7f3a dst=198.18.1.1:443 transport=brig.internal dur=41s
+```
+
+| Field | What it is |
+| --- | --- |
+| `sandbox` | The sandbox of the divert socket |
+| `dst` | The address and port the guest dialed |
+| `transport` | `brig.internal` for a connection to the sandbox's `brig.internal` address |
+| `check` | Why the connection was not served: `preamble`, `capacity`, `capacity.host` or `port`, and on `brig.internal`, `brig.internal.port`, `tls` or `stopping` |
+
 Anything on the host that reaches the broker's port can send it a request.
 So the line of a request whose token has not verified carries only
-`method`, `status`, `dur` and `check`, and nothing the sender wrote into the
-path. Measured on a Mac, a flood of 200,000 such requests with 8 KiB paths
+`method`, `status`, `dur`, `check` and `arrived`, and nothing the sender
+wrote into the path. Measured on a Mac, a flood of 200,000 such requests with 8 KiB paths
 in 5 seconds wrote 21 MB. The broker rotates `audit.log` to `audit.log.1` at 64
 MiB and keeps that one previous file, so the two take at most 128 MiB. A log
 that cannot rotate keeps its file, says so once on stderr, which is

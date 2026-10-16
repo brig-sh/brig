@@ -973,8 +973,8 @@ agent's, and anything else means that it is one of the classes in the table.
 
 ### Exit 7 cases
 
-The one such property today is an egress policy. `brig run`, `brig sh` and
-the retired spellings that stand for them refuse a policy with `7`:
+An egress policy is one such property. `brig run`, `brig sh` and the retired
+spellings that stand for them refuse a policy with `7`:
 
 - on hull's `vz` or `qemu`
 - on docker
@@ -984,6 +984,12 @@ the retired spellings that stand for them refuse a policy with `7`:
 
 The code is `7` whether a flag, `BRIG_NETWORK` or the profile's `network:`
 chose the posture.
+
+A [route](broker.md#route-modes) is refused with `7` too, where its run path
+cannot serve it: on hull's `vz` or `qemu`, on docker, on nerdctl without
+`--network isolated`, on hull or nerdctl with no network, and on a hull whose
+gateway takes no `--divert`. So is a route in a mode this build of Brig does not
+serve, on every run path.
 
 `brig network publish` refuses with `7` on `vz`, `qemu`, docker and a
 backend that Brig holds no answer for. It runs no gateway probe. On `hvi` it

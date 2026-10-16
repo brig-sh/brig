@@ -346,13 +346,17 @@ the credential itself.
 [broker.md](broker.md) describes how the broker handles each request.
 
 > [!NOTE]
-> This release delivers routes to no runtime yet: hull and nerdctl do not
-> route `brig.internal` to the broker. Brig refuses a run bound to a policy
-> with routes before anything boots:
+> A guest of hull on `hvi` or of nerdctl reaches a route at
+> `https://brig.internal`, with the brig CA (see
+> [Transports](broker.md#transports)). On hull on `vz` or `qemu`, and on
+> docker, Brig refuses a run bound to a policy with routes before anything
+> boots, with exit `7`:
 >
 > ```
-> brig: policy claude-only (route anthropic) declares routes, and brig.internal routing is not available on this runtime (hull) yet. Refusing the run rather than booting without them. Detach the policy
+> brig: policy claude-only (route anthropic) declares a route in mode endpoint, which the guest reaches at brig.internal: a policy applies to this sandbox, and hull on vz cannot enforce the route mode endpoint: vz takes its network from vmnet, and brig routes brig.internal at the user-mode network gateway that only the hvi backend uses. Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 > ```
+>
+> [Use it](broker.md#use-it) walks through a first run.
 
 A policy with one route:
 
@@ -380,7 +384,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | --- | --- | --- |
 | `name` | yes | The path segment of the route URL, and unique across the policies bound to a run. Lowercase letters, digits and dashes, starting with a letter: the name also names the guest variable `BRIG_ROUTE_<NAME>_TOKEN`, with `-` read as `_`, so Brig refuses a dot and an underscore |
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
-| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This version refuses any other mode |
+| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
 | `credential.secretRef.name` | yes | A secret in Brig's store. It is never delivered to the guest |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
@@ -465,6 +469,9 @@ brig policy show --preset claude-code
 brig policy show claude-only
 ```
 
+`brig policy show --preset` prints the route modes of the preset under
+`modes:`. Every preset lists `endpoint`.
+
 A field that the route sets overrides the value of the preset:
 
 - A struct, such as `credential`, merges field by field.
@@ -524,20 +531,37 @@ brig policy attach claude-only claude-code
 brig policy attach github-brig-sh claude-code
 ```
 
+Each route gets a row per run path under it, with the answer of the
+[route mode table](runtimes.md#route-mode-answers) and the transport where
+its mode is served:
+
 ```console
-$ brig policy check claude-code
+$ BRIG_HYPERVISOR=hvi brig policy check claude-code
 claude-only
   route anthropic  preset claude-code  mode endpoint
+    hull on hvi  enforced: hull's gateway answers brig.internal with its own address and diverts port 443 of it to the broker, which serves it with TLS under the brig CA; transport: brig.internal
+    hull on vz  cannot enforce: vz takes its network from vmnet, and brig routes brig.internal at the user-mode network gateway that only the hvi backend uses
+    ...
 github-brig-sh
   route github  preset github-token  mode endpoint
+    ...
 posture: isolated
 note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
 ```
 
 A route is served on the sandbox's own gateway address, so a run with a route
-needs the `isolated` posture. The `posture:` line is that plan. This release
-serves no route, so a run bound to one is refused, as the note at the top of
-[Routes](#routes) says. `brig plan` reports the same refusal.
+needs the `isolated` posture. The `posture:` line is that plan.
+
+`check` then asks the runtime and hypervisor the run would use. Where the
+run would refuse a route, `check` exits non-zero with the reason on stderr,
+and plans no posture. stdout still holds the policy names alone. On a hull
+whose gateway takes no `--divert`:
+
+```
+brig: policy claude-only (route anthropic) declares a route in mode endpoint, and brig refuses the run before boot: a policy applies to this sandbox, and hull on hvi cannot enforce the route mode endpoint: `network-gateway` of /opt/homebrew/bin/hull has no --divert. Upgrade hull, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
+```
+
+`brig plan` and `brig run` report the same refusal.
 
 ## Naming a policy
 
@@ -875,16 +899,21 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `apiVersion is required, and must be "brig.sh/v1alpha1"` | a document with no `apiVersion:`, or the wrong one |
 | `unknown field "Spec"` | a key that is not the exact name of a field, such as `Spec` or a lookalike letter |
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
-| `route x: mode "…" is not supported; this version serves "endpoint" only` | a route's `mode` is not `endpoint` |
+| `route x: mode: name "…" may use only lowercase letters, …` | a route's `mode` is not a name |
+| `policy x (route y) declares a route in mode m, and brig refuses the run before boot: … route mode m is not part of this build of brig. …` | `check` on a profile bound to a route in a mode this build does not serve. A run, `sh` or plan refuses it the same way, and exits `7` |
 | `route x: guest.env NAME is a literal; a value is {route.url} or {session.token}, never a literal` | a `guest.env` value that is not one of the two placeholders. The error leaves the value out |
 | `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
 | `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |
 | `route x: preset claude-code keeps its credential fresh (anthropic-oauth) …` | a route changes the `upstream` or `credential.field` of a preset with a lifecycle |
 | `guest.git.insteadOf PREFIX is rewritten by route x of a and by route y of b; …` | two bound routes rewrite the same git prefix |
-| `policy x (route y) declares routes, and brig.internal routing is not available on this runtime (…) yet. …` | a run, `sh` or plan on hull or nerdctl of a profile bound to a policy with routes |
+| `policy x (route y) declares a route in mode endpoint, which the guest reaches at brig.internal: …` | a run, `sh` or plan of a profile bound to a policy with routes, on hull on `vz` or `qemu`, on docker, on nerdctl without `--network isolated`, or on a hull whose gateway takes no `--divert`. It exits `7` |
+| `policy x (route y) declares a route in mode endpoint, and brig refuses the run before boot: …` | `check` on a profile bound to such a route |
+| `policy x (route y) declares routes, and this run has no network (BRIG_NETWORK=none) to reach them on; …` | a run with routes and `--offline` or `network: none` |
+| `could not register the routes of brig-x with the credential broker: …` | `brig-broker` is not installed, did not start, or refused the routes. `broker.log` in `~/.brig/host/broker` says why |
 | `policy x (route y) injects a secret that brig's secret store does not hold: missing secret "s" …` | a run or `sh` of a profile bound to a route whose secret is not in the store. It exits `6`. The message names the import or create command |
 | `policy x (route y) injects s, which the broker reads from brig's secret store on the host, and the store is not available: …` | the same, on a host whose store does not open, such as Linux with no Secret Service. It exits `6` |
+| `… another process holds the credential broker's port, 127.0.0.1:N, so brig refuses the run. …` | another process listens on the broker's port. See [The port](broker.md#the-port) |
 | `route x: inject takes headers.set or basicAuth, not both` | a route, or a route and its preset, set both |
 | `route x: credential.lifecycle is set by a preset, and a policy does not name it` | a policy names `credential.lifecycle` |
 | `route x is declared by both a and b; …` | two bound policies declare a route of the same name |
@@ -900,10 +929,11 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `x is bound to y. Detach it first, or pass --force to remove it anyway` | `rm` on a policy attached to a profile or a session (a policy declared only inline says "edit the profile's policy: list" instead) |
 | `a policy applies to this sandbox, and hull on vz cannot enforce the egress policy: …` | a policy on a run path whose answer is `cannot enforce`: hull's `vz` or `qemu` backend, or docker. See [Where a policy is enforced](#where-a-policy-is-enforced-and-where-it-is-not) |
 | `a policy applies to this sandbox, and whether nerdctl on <shim> enforces the egress policy is unknown: brig cannot find the network namespace of the container network: …` | rootless containerd is not running, `XDG_RUNTIME_DIR` is not set, or `nsenter` is not installed |
-| `… is unknown: brig enforces a policy here with nftables: nft is not installed` | `nft` is not installed |
+| `… is unknown: brig puts the sandbox's rules in place with nftables: nft is not installed` | `nft` is not installed |
 | ``… is unknown: the probe `<nsenter …> /usr/sbin/nft list tables` failed: …`` | nft ran in the namespace and failed, for instance on a kernel without nftables |
 | `… is unknown: brig could not start the egress resolver: …` | the resolver cannot install the table or bind the bridge address. The error quotes its log |
 | `… is unknown: the sandbox's bridge is not where brig put the rules: …` | `BRIG_RUNTIME_BIN` reaches a containerd other than the rootless one Brig found. Brig removes the container |
+| `a policy applies to this sandbox, and whether nerdctl on <shim> enforces the route mode endpoint is unknown: …` | a run with routes and no egress policy, whose [brig.internal routing](#routing-briginternal) Brig could not put in place. The reasons are those of the egress policy rows above |
 | `<sandbox> is already running, so brig leaves its egress rules alone` | another `brig` booted the sandbox between this one's check and its boot. Run the command again |
 | `a policy applies to this sandbox, and nerdctl on <shim> cannot enforce the egress policy: its rules need a network of its own, and the run asks for the shared network` | a run reached nerdctl with a policy and the `shared` posture. A policy normally narrows the posture to `isolated`, so this is a mismatch between the two. Run it with `--network isolated`. It exits `7` |
 | `a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of <bin> has no --egress-default. Upgrade the runtime, or detach the policy` | the runtime is older than the hull that added the `--egress-*` gateway flags |
@@ -1099,6 +1129,40 @@ The resolver logs to `~/.brig/egress/<sandbox>.log`, or under
 - one line for each name every 30 seconds
 - at most 20 such lines every 30 seconds
 - at most 4 MiB of such lines in all
+
+#### Routing brig.internal
+
+A guest of nerdctl reaches its routes at `brig.internal` (see
+[Transports](broker.md#transports)). The resolver and the table of the
+sandbox route the name, and the run needs the `isolated` posture for them. A
+sandbox with routes and no policy gets the same resolver and table. The
+resolver then answers every name, and the table filters nothing else.
+
+- The resolver answers `brig.internal` with the bridge address, under any
+  policy. The guest asks it as any sandbox with a policy does: Brig gives the
+  guest the bridge address as its resolver, and the table sends DNS for the
+  resolvers of the container's `resolv.conf` there. DNS to any other server
+  is ordinary traffic, under the policy when there is one.
+- The table redirects a TCP connection from the guest to the bridge address
+  on port 443 to a relay. The same resolver process runs the relay on the
+  bridge address, on port 15443.
+- The table refuses every other port of the bridge address, except DNS.
+- The relay reads the original destination with `SO_ORIGINAL_DST`. It resets
+  a connection to any destination that is not diverted.
+- The relay connects to the sandbox's divert socket, `divert/<hash>.sock` in
+  the [broker directory](broker.md#files), which `brig-broker` listens on. It
+  writes a one-line preamble, then copies the bytes both ways, unchanged. It
+  never logs them.
+
+Brig names the socket to the resolver before the broker answers, and checks
+the broker's answer against it.
+
+| Failure | Result |
+| --- | --- |
+| The run is not `isolated`, or it runs on docker | Brig refuses the run |
+| The broker's socket is missing, or the broker refuses the connection | The relay resets the guest's connection |
+| The relay already carries 256 connections | The relay resets the new one |
+| The resolver dies | The redirect stays, and nothing listens on it. The guest's connection is refused |
 
 ### Properties of a bound policy
 
