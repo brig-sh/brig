@@ -743,7 +743,7 @@ value in, store the secret on the destination with `brig secret`.
 | The guest's address and its egress rules | the same, on a gateway the destination's brig started |
 | `brig sh`, the agent's terminal | a new `brig sh` connects on the destination. One open across the move ends |
 | Connections to the guest agent (vsock) | reset. The guest sees them close |
-| Connections to the outside network | end as the guest resumes, and reconnect from the destination: the guest agent closes every TCP connection to a peer off the guest. With an agent from before urunc `3a3f2fd`, one that only receives stays open with nothing on it until its keepalive gives up, about 60 s for Claude Code's API stream. See [A stream open at the pause](#a-stream-open-at-the-pause) |
+| Connections to the outside network | reconnect from the destination. With the published boot bundle's guest agent, one that only receives stays open with nothing on it until its keepalive gives up, about 60 s for Claude Code's API stream. A guest agent that closes every TCP connection to a peer off the guest as the guest resumes is written, but no published bundle carries it yet. See [A stream open at the pause](#a-stream-open-at-the-pause) |
 | Loopback connections in the guest | continue: both ends moved |
 | Published ports | stay on the source. Publish them again on the destination |
 | Host NAT and the path out | the destination's |
@@ -1097,8 +1097,9 @@ The sequence, with what each step gave:
    connects again. The Claude Code task did not run, so that was not seen
    that day. On 2026-10-16 it was: Claude Code's API stream did not
    reset, it went silent for about 60 s, and then Claude Code asked again
-   over a new connection (see [On the LAN](#on-the-lan)). The guest agent
-   now closes such a connection as the guest resumes; see
+   over a new connection (see [On the LAN](#on-the-lan)). A guest agent
+   that closes such a connection as the guest resumes is written, and no
+   published bundle carries it yet; see
    [A stream open at the pause](#a-stream-open-at-the-pause).
 10. **Credentials on the Pi.** Each exec there printed:
 
@@ -1330,20 +1331,36 @@ there took 0.29 s once in three tries afterwards.
 
 ##### A stream open at the pause
 
-From hvi's five-patch portable kernel (sha256 `77870036...`, which Brig
-pins) and the guest agent at urunc `3a3f2fd`, a TCP connection to a peer
-off the guest ends as the guest resumes on the destination. The kernel's
-`hvi-time` driver sends a uevent at each move. The agent,
-`urunit-agent`, which the boot bundle's initrd carries into every
-`genericBoot` guest, then destroys each TCP connection that still
-expects a peer, unless the peer is loopback or the guest itself, as
-`ss -K` does. The client's next call fails with `ECONNABORTED`, and it
-connects again from the destination. Loopback connections stay open:
-both of their ends moved. The agent writes one line per move into the
-guest's kernel log:
+With hvi's five-patch portable kernel (sha256 `77870036...`, which Brig
+pins) and a guest agent that acts on the kernel's move uevent, a TCP
+connection to a peer off the guest ends as the guest resumes on the
+destination. No published boot bundle carries that agent yet. The change
+is to `urunit-agent`, which the boot bundle's initrd carries into every
+`genericBoot` guest, on urunc's branch `feat/agent-migration-tcp-reset`,
+which is not published. Until a bundle carries it, a guest boots the
+pinned kernel with the bundle's older agent, and an open stream behaves
+as before: see the first row of the table below.
+
+The kernel's `hvi-time` driver sends a uevent at each move. The agent
+then destroys, as `ss -K` does, each TCP connection that still expects a
+peer, unless the peer is loopback, one of the guest's own addresses, or
+reached through an interface other than the one with the default route
+(a container bridge in the guest), and unless the connection heard from
+its peer since the move. The client's next call fails with
+`ECONNABORTED`, and it connects again from the destination. Loopback
+connections stay open: both of their ends moved. The agent writes one
+line at its start and one per move into the guest's kernel log:
 
 ```text
-urunit-agent: migration 1: closed 1 TCP connections to peers off the guest in 2ms
+urunit-agent: watching for moves by uevent, after 0 so far
+urunit-agent: migration 1: closed 2 TCP connections to peers off the guest in 6ms
+```
+
+On a kernel without `CONFIG_INET_DIAG_DESTROY`, such as the four-patch
+Image, it writes one line at its start and does nothing else:
+
+```text
+urunit-agent: the kernel cannot destroy sockets (no CONFIG_INET_DIAG_DESTROY); TCP connections to peers off the guest stay open after a move
 ```
 
 On 2026-10-16 a teleportable `claude-code` session moved from the Mac
@@ -1353,43 +1370,76 @@ connection to a server on `rp1` that sends one line and then nothing.
 One move is left out: it began 184 s late, while `rp2` made the guest's
 disk from the base, and the server had closed the connection by then.
 The builds were brig `b8ce7af`, hull `3e2ce92` on the Mac and `251e226`
-on `rp2`, and hvi `94faf8f`. The time is from the
-guest's resume (its `hvi-time: generation 4` line) to the reader's
-error, on the guest's clocks:
+on `rp2`, and hvi `94faf8f`. The reader polls the guest's page
+generation every 10 ms, and the time is from the poll that saw it change
+to the reader's error, on the guest's monotonic clock:
 
-| Kernel and agent | Moves | Resume to the reader's error |
+| Kernel and agent | Moves | The generation's change to the reader's error |
 | --- | --- | --- |
 | `e85e4338...`, the bundle's agent | 3 | 53.0, 52.4 and 21.1 s, `ECONNRESET`, at the reader's next keepalive (60.6 to 124.5 s after the last data) |
-| `77870036...`, the agent at `3a3f2fd` | 4 | under 5 ms each time, `ECONNABORTED`; the agent closed 1 connection in 2 to 3 ms |
+| `77870036...`, the first version of the new agent | 4 | `ECONNABORTED` within that 10 ms poll each time (-5 to +2 ms from it); the agent closed 1 connection in 2 to 3 ms |
 
-Under 5 ms is as close as the reader measures: it reads the guest's page
-generation every 10 ms. In the last two moves the reader also held a
-loopback connection across the move, and it still carried a byte
-afterwards. For the second set, only the Mac booted the new kernel and an
-initrd with the new agent appended; the destination needs neither, since
-both moved in the guest's memory.
+In the last two moves the reader also held a loopback connection across
+the move, and it still carried a byte afterwards. For the second set,
+only the Mac booted the new kernel and an initrd with the new agent
+appended; the destination needs neither, since both moved in the guest's
+memory.
+
+The review of that version changed the agent: it lists the IPv4 and
+IPv6 sockets before it destroys any, keeps a connection that heard from
+its peer since the move and one to a peer inside the guest, tries a
+failed pass again, and on a kernel without the uevent reads the count of
+moves every 100 ms. With brig `90beff1` and hull `a7c5b78` on both Pis,
+the session then booted on `rp2` and moved to `rp1` and back, with the
+server on `rp1`, and the same reader with its 10 ms poll. After each
+move one command in the guest read the `hvi-time` snapshot and
+CLOCK_MONOTONIC together, which puts the snapshot's `base_ns` on the
+reader's clock: `now_ns - base_ns` is the guest time since the restore,
+which sets `base_ns` to the guest's time at the capture. So `base_ns`
+marks the resume with no poll in it. The reader's poll saw the new
+generation 2 to 2.5 ms after it:
+
+| Move | From `base_ns` to the reader's error | The agent's line |
+| --- | --- | --- |
+| `rp2` to `rp1`, paused about 6.75 s | 8.8 ms, `ECONNABORTED` | `migration 1: closed 2 TCP connections to peers off the guest in 6ms` |
+| `rp1` to `rp2`, paused about 1.65 s | 9.5 ms, `ECONNABORTED` | `migration 2: closed 2 TCP connections to peers off the guest in 6ms` |
+
+The second connection closed each time was one the reader opened 2 to
+3 ms after the resume, and its `connect` failed with `ECONNABORTED`. The
+agent keeps a connection that heard from its peer since the move, or a
+`SYN_SENT` one whose latest SYN went out since then, but `tcp_info`
+counts in ticks: it cannot tell a connection that new from one that
+heard from its peer just before the pause, so it also closes a
+connection opened within 11 ms of the resume, one tick at the coarsest
+HZ and a millisecond. With the uevent, its pass ran about 9 ms after the
+resume, inside that margin, so on these moves it kept no connection;
+the keep can act only when the pass runs later, as on the 100 ms poll
+of a kernel without the uevent, which was not run live. The loopback connection still carried a
+byte after each move. The agent's own tests, built from the same
+commit, passed inside the guest, as root, including a real destroy.
 
 `script/teleport-demo-claude.sh pmoust@rp2`, without `--claude`, ran once
-the same way with brig `a71d64c` and printed 19 passed and 0 failed. Its
-HTTPS stand-in ended with `curl: (56) Recv failure: Software caused
-connection abort`, the agent's close, where it used to read `Connection
-reset by peer`, and the next attempt downloaded from `rp2`.
+with the first version and brig `a71d64c` and printed 19 passed and 0
+failed. Its HTTPS stand-in ended with `curl: (56) Recv failure: Software
+caused connection abort`, the agent's close, where it used to read
+`Connection reset by peer`, and the next attempt downloaded from `rp2`.
 
-`brig teleport --prepare` does not replace a portable kernel the
-destination already holds. To `rp2`, which held the four-patch Image, it
-printed `portable-arm64-v1 kernel: skipped (it holds another one
+`brig teleport --prepare` replaces a portable kernel the destination
+holds with the one brig pins, when this host's is that one. With hull
+`a7c5b78` on both sides, to `rp1`, whose hull store held the four-patch
+Image, it printed `portable-arm64-v1 kernel: sent (778700360da1, in place
+of e85e4338feeb)`. An older hull on either side leaves the other kernel
+there: hull `3e2ce92` printed `skipped (it holds another one
 (e85e4338feeb), which is not replaced; this host's is 778700360da1)`. A
-move does not need it, since the kernel moves in the guest's memory, but
+move does not need the kernel, since it moves in the guest's memory, but
 a later boot there does, and Brig refuses one with the four-patch Image
-at its default place. Install the new Image on each host with
-`HULL_PORTABLE_KERNEL=<Image> hull --store-dir <store> assets pull
---profile portable-arm64-v1 --force`.
+at its default place. On a host with an older hull, install the new
+Image with `HULL_PORTABLE_KERNEL=<Image> hull --store-dir <store> assets
+pull --profile portable-arm64-v1 --force`.
 
-The agent at `3a3f2fd` is not in a published boot bundle yet. Until the
-bundle carries it, a guest boots the pinned kernel with the bundle's
-older agent, and an open stream behaves as before. A Claude Code turn
-across a move with both was not run yet: the login brig held had been
-imported at 08:30 that day and had expired.
+A Claude Code turn across a move with the new kernel and agent was not
+run: the login brig held had been imported at 08:30 that day and had
+expired, and it had not been imported again at 21:47.
 
 #### Known issues
 
@@ -1402,14 +1452,14 @@ imported at 08:30 that day and had expired.
   race fails rather than writing through a link
   (`writeSecretFile`, `internal/wrap/secretfiles.go`, line 453). The
   recording's panes start 1 s apart for this reason.
-- Fixed by hvi's five-patch kernel and the agent at urunc `3a3f2fd`, once
-  the boot bundle carries that agent: an agent's API stream that was open
-  when the guest paused did not reset on the destination, it went silent.
-  Claude Code 2.1.292 waited 61 to 64 s, then gave up on the message and
-  asked again, and once its answer started over. See
-  [On the LAN](#on-the-lan). The stand-in for such a stream now fails
-  within 5 ms of the resume, against 21 to 53 s before; see
-  [A stream open at the pause](#a-stream-open-at-the-pause).
+- An agent's API stream that was open when the guest paused does not
+  reset on the destination, it goes silent. Claude Code 2.1.292 waited 61
+  to 64 s, then gave up on the message and asked again, and once its
+  answer started over. See [On the LAN](#on-the-lan). hvi's five-patch
+  kernel and a new guest agent fix it, once a published boot bundle
+  carries that agent; none does yet. With them, the stand-in for such a
+  stream failed 8.8 and 9.5 ms after the resume, against 21 to 53 s
+  before; see [A stream open at the pause](#a-stream-open-at-the-pause).
 - Two of the five moves of the recording on 2026-10-16 had 13.0 and
   6.25 s of downtime, against 0.19 to 0.48 s for the other three and
   0.19 to 0.86 s for the six moves of the script that day. The guest
