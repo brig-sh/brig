@@ -8,6 +8,9 @@
 // decide by. The resolver installs the table and keeps it in place, and the
 // table refuses new connections once the resolver is gone.
 //
+// The same table and resolver divert a sandbox's connections to brig's
+// injector. See internal/divert.
+//
 // It exists because hull's gateway cannot serve a Linux guest yet. Once it
 // can, the gateway is where these rules belong, and this package is meant to
 // go.
@@ -28,7 +31,7 @@ import (
 
 // Policy is a parsed egress policy.
 type Policy struct {
-	// Default is "allow" or "deny".
+	// Default is "allow" or "deny", or "" for a policy that filters nothing.
 	Default string
 	allow   ruleSet
 	deny    ruleSet
@@ -133,6 +136,13 @@ func (r ruleSet) v4CIDRs() []netip.Prefix {
 	return out
 }
 
+// Unfiltered returns a policy that filters nothing. The resolver of a
+// sandbox that diverts connections and has no policy answers under it.
+func Unfiltered() *Policy { return &Policy{} }
+
+// Filters returns whether the policy filters anything.
+func (p *Policy) Filters() bool { return p.Default != "" }
+
 // HasHostRules returns whether any rule names a host, which is what puts the
 // resolver on the enforcement path.
 func (p *Policy) HasHostRules() bool {
@@ -146,7 +156,7 @@ func (p *Policy) HasHostRules() bool {
 // over HTTPS and DNS over TLS fail on the filter. Under an allow default every
 // query is answered, and a name a deny glob matches is pinned as denied.
 func (p *Policy) AllowsQuery(name string) bool {
-	if p.Default == "allow" {
+	if p.Default != "deny" {
 		return true
 	}
 	name = normalizeName(name)

@@ -116,10 +116,20 @@ func TestGuestEnvOnBrigInternal(t *testing.T) {
 	if env["ANTHROPIC_API_KEY"].Value != "tok" || !env["ANTHROPIC_API_KEY"].Secret {
 		t.Errorf("ANTHROPIC_API_KEY = %+v", env["ANTHROPIC_API_KEY"])
 	}
+	// Node adds the CA to its roots. The others take one file in place of
+	// theirs, so they read the bundle that keeps the image's roots.
+	want := map[string]string{"NODE_EXTRA_CA_CERTS": GuestCAPath, "SSL_CERT_FILE": GuestCABundlePath,
+		"REQUESTS_CA_BUNDLE": GuestCABundlePath, "GIT_SSL_CAINFO": GuestCABundlePath}
 	for _, name := range caEnv {
-		if env[name].Value != GuestCAPath {
-			t.Errorf("%s = %q, want %s", name, env[name].Value, GuestCAPath)
+		if env[name].Value != want[name] || env[name].Secret {
+			t.Errorf("%s = %+v, want %s", name, env[name], want[name])
 		}
+	}
+	if len(want) != len(caEnv) {
+		t.Errorf("caEnv is %v", caEnv)
+	}
+	if env["ANTHROPIC_BASE_URL"].Value != "https://brig.internal/brig-a/r/anthropic" {
+		t.Errorf("ANTHROPIC_BASE_URL = %q", env["ANTHROPIC_BASE_URL"].Value)
 	}
 }
 

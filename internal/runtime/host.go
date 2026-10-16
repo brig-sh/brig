@@ -60,6 +60,17 @@ func hostSupports(spec RunSpec) error {
 		return errors.New("this profile declares volumes: or files:, which a microVM holds in a " +
 			"tmpfs, and the host kind cannot mount one. Run it in a microVM (isolation: microvm)")
 	}
+	// The host kind has no network of its own to divert from. A spec that
+	// asks for a divert is refused, so its connections never go straight to
+	// the destination.
+	if len(spec.Egress.Divert.Routes) > 0 {
+		return errors.New("the host kind has no network of its own to divert a connection from")
+	}
+	// The host kind reaches the broker over loopback.
+	if spec.Egress.Divert.BrigInternal {
+		return errors.New("the host kind reaches the credential broker over loopback, and has no gateway " +
+			"to answer brig.internal on")
+	}
 	return requireEgress(spec, RunPath{HostKind, hostEgressMode(spec)})
 }
 

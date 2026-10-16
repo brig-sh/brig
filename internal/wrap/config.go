@@ -269,6 +269,10 @@ type Config struct {
 	// the host kind's profile allows.
 	routeVars  []runtime.Var
 	routePorts []int
+	// brigCA is the brig CA certificate the broker handed serveRoutes for a
+	// guest that reaches brig.internal, in PEM, or "". It is checked to be
+	// one certificate and no key. See briginternal.go.
+	brigCA string
 	// refusedProject is the remembered project projectRefused is about. See
 	// KeptProject.
 	refusedProject string

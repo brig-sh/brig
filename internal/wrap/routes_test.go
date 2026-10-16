@@ -27,14 +27,32 @@ type fakeBroker struct {
 	stuck bool
 	// extra is what Status reports besides the pid and the port.
 	extra injector.Status
+	// ca is the CA it hands a brig.internal sandbox, or "" for testBrigCA.
+	ca string
 }
 
 const fakeBrokerPort = 47821
 
-func (f *fakeBroker) Register(s injector.Sandbox) (int, error) {
+func (f *fakeBroker) Register(s injector.Sandbox) (int, injector.AddResponse, error) {
 	f.registered = append(f.registered, s)
 	f.running = true
-	return fakeBrokerPort, nil
+	var added injector.AddResponse
+	if s.BrigInternal != "" {
+		dir, err := injector.Dir()
+		if err != nil {
+			return 0, added, err
+		}
+		if added.DivertSocket, err = injector.DivertSocket(dir, s.ID); err != nil {
+			return 0, added, err
+		}
+	}
+	if s.BrigInternal != "" {
+		added.CA = f.ca
+		if added.CA == "" {
+			added.CA = testBrigCA()
+		}
+	}
+	return fakeBrokerPort, added, nil
 }
 
 func (f *fakeBroker) Mint(r injector.MintRequest) (string, error) {
@@ -318,11 +336,39 @@ func TestEnvelopeHasABrokerRow(t *testing.T) {
 	if len(broker) != 2 || broker[0].Route != "anthropic" || broker[1].Route != "github" {
 		t.Errorf("info --json credentials from the broker = %+v", broker)
 	}
-	// On a microVM the row says the run is refused, and why.
+	// On a microVM whose runtime cannot route brig.internal, the row says
+	// the run is refused, and where to read why.
 	c.Runtime = fakeRuntime{}
 	if got := c.brokerLine(); !strings.Contains(got, "transport brig.internal") ||
-		!strings.Contains(got, "brig.internal routing is not available on this runtime yet") {
+		!strings.Contains(got, "refused: this run cannot route brig.internal to the broker; brig info --json says why") {
 		t.Errorf("the BROKER row on hull is %q", got)
+	}
+}
+
+// The BROKER row and info --json name the route modes the run path serves.
+// The host kind serves endpoint routes, and hull on vz serves none.
+func TestTheBrokerRowNamesTheModes(t *testing.T) {
+	c := routedConfig(t, claudeAndGitHub, &hostRunRecorder{})
+	c.broker = &fakeBroker{running: true}
+	if got := c.brokerLine(); !strings.Contains(got, "; modes endpoint") {
+		t.Errorf("the BROKER row on the host kind is %q", got)
+	}
+	d := c.InfoData(creds.Set{})
+	if d.Broker == nil || !slices.Equal(d.Broker.Modes, []string{"endpoint"}) {
+		t.Errorf("info --json broker on the host kind = %+v", d.Broker)
+	}
+
+	t.Setenv("BRIG_HYPERVISOR", "vz")
+	c.Runtime = fakeRuntime{}
+	if got := c.brokerLine(); !strings.Contains(got, "; modes none") {
+		t.Errorf("the BROKER row on vz is %q", got)
+	}
+	blob, err := json.Marshal(c.InfoData(creds.Set{}).Broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"modes":[]`) {
+		t.Errorf("info --json broker on vz = %s", blob)
 	}
 }
 
