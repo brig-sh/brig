@@ -11,6 +11,10 @@ This page describes `internal/broker`, the request handler, and
 urunc reach a route at `brig.internal`. A run bound to a policy with routes
 on any other runtime is refused before boot. See [Transports](#transports).
 
+<p align="center">
+  <img alt="A request from Claude Code through the claude-code route of the credential broker. The agent in the sandbox holds ANTHROPIC_BASE_URL, the route URL, and CLAUDE_CODE_OAUTH_TOKEN, a session token for the route. It sends its request to brig.internal on a microVM. brig-broker on the host checks the token and the route's request.allow, adds the credential from Brig's secret store, and sends the request to api.anthropic.com on a TLS connection of its own. The response comes back with the credential redacted. The credential stays on the host and never reaches the sandbox, and egress: default: deny refuses a direct connection from the sandbox." src="../assets/credential-broker.svg" width="820">
+</p>
+
 ## Use it
 
 Let us consider Claude Code, with its OAuth login kept on the host. The
