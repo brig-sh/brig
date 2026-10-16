@@ -1370,6 +1370,16 @@ HTTPS stand-in ended with `curl: (56) Recv failure: Software caused
 connection abort`, the agent's close, where it used to read `Connection
 reset by peer`, and the next attempt downloaded from `rp2`.
 
+`brig teleport --prepare` does not replace a portable kernel the
+destination already holds. To `rp2`, which held the four-patch Image, it
+printed `portable-arm64-v1 kernel: skipped (it holds another one
+(e85e4338feeb), which is not replaced; this host's is 778700360da1)`. A
+move does not need it, since the kernel moves in the guest's memory, but
+a later boot there does, and Brig refuses one with the four-patch Image
+at its default place. Install the new Image on each host with
+`HULL_PORTABLE_KERNEL=<Image> hull --store-dir <store> assets pull
+--profile portable-arm64-v1 --force`.
+
 The agent at `3a3f2fd` is not in a published boot bundle yet. Until the
 bundle carries it, a guest boots the pinned kernel with the bundle's
 older agent, and an open stream behaves as before. A Claude Code turn
