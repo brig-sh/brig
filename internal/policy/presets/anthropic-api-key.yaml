@@ -24,6 +24,18 @@ inject:
           - fine-grained-tool-streaming-2025-05-14
           - context-1m-2025-08-07
           - context-management-2025-06-27
+          - advanced-tool-use-2025-11-20
+          - advisor-tool-2026-03-01
+          - afk-mode-2026-01-31
+          - dangerous-tool-use-2026-09-03
+          - effort-2025-11-24
+          - extended-cache-ttl-2025-04-11
+          - inline-tools-2026-09-15
+          - mid-conversation-system-2026-04-07
+          - mid-conversation-tool-changes-2026-07-01
+          - per-turn-control-2026-07-01
+          - prompt-caching-scope-2026-01-05
+          - thinking-token-count-2026-05-13
 guest:
   env:
     ANTHROPIC_BASE_URL: "{route.url}"
