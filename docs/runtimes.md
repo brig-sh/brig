@@ -92,6 +92,27 @@ Brig boots a policy-bound run only on `enforced`. The refusal names the
 property, the runtime and the backend, and Brig exits `7`. A sandbox with no
 policy runs no probe.
 
+### Route mode answers
+
+A run bound to a policy with [routes](policies.md#routes) asks a second
+question of its run path: does it serve each route's
+[mode](broker.md#route-modes). The answers come from one table.
+`brig policy check` prints the rows of a route's mode under it, with the
+transport where the mode is served.
+
+| run path | `endpoint` |
+| --- | --- |
+| hull on `hvi` | `enforced` over `brig.internal`, when its gateway takes `--divert` and the run has a network |
+| hull on `vz` | `cannot enforce`: vz takes its network from vmnet, and Brig routes `brig.internal` at the gateway only `hvi` uses |
+| hull on `qemu` | `cannot enforce`, as on `vz` |
+| nerdctl on urunc | `enforced` over `brig.internal`, when `nft` is installed and the run asks for `--network isolated` |
+| nerdctl on runc | `cannot enforce`: Brig boots no shim that gives the guest the host's own kernel |
+| docker | `cannot enforce`: docker manages its own bridges and firewall |
+| hull on a backend, or nerdctl on a shim, that the table does not name | `unknown` |
+
+This build of Brig serves the `endpoint` mode alone. A route in any other
+mode is refused on every run path, with exit `7`.
+
 ## Where the boundary sits
 
 <p align="center">
@@ -154,6 +175,7 @@ hull logs [--follow] [--tail <n>] <name>
 hull stop <name>
 hull rm <name>
 hull network-gateway --help             # does this hull enforce a policy? (--egress-default)
+                                        # does it route brig.internal? (--divert)
 hull network-gateway --socket <path> --qemu-socket <path>.qemu   # internal/runtime/gateway.go
      --subnet 198.18.0.0/24 --gateway-ip 198.18.0.1 --api <api socket>
 hull network-gateway --socket <path> --qemu-socket <path>.qemu
@@ -161,6 +183,8 @@ hull network-gateway --socket <path> --qemu-socket <path>.qemu
      --api <api socket>
      [--egress-default <allow|deny>]                  # an isolated sandbox, or one
      [--egress-allow <rule>]... [--egress-deny <rule>]...   # carrying a policy
+     [--divert <gateway-ip>:443=<divert socket>           # a guest that reaches
+      --host brig.internal=<gateway-ip>]                   # brig.internal
 ```
 
 Every exec goes through `hull exec`. The reachability probe, the captured
@@ -290,6 +314,7 @@ Brig asks the runtime few questions about itself:
 | which network does a sandbox have? | `inspect`, on either runtime |
 | can this hull pin a digest? | `hull --version` |
 | does this hull enforce a policy? | `network-gateway --help`. See [Egress policy answers](#egress-policy-answers) |
+| does this hull route `brig.internal`? | `network-gateway --help` lists `--divert`. See [Route mode answers](#route-mode-answers) |
 
 On an old build, Brig drops one feature at a time:
 
@@ -351,6 +376,10 @@ have `nft` and `nsenter`. Brig probes `nft` in the network namespace that
 holds the bridge. Brig starts its own resolver in that namespace, and the
 resolver installs the rules. See
 [How nerdctl enforces a policy](policies.md#how-nerdctl-enforces-a-policy).
+
+A guest that reaches `brig.internal` needs the same, with or without a
+policy, and the `isolated` posture. Brig refuses it on docker. See
+[Routing brig.internal](policies.md#routing-briginternal).
 
 That bridge is the Linux enforcement point. It is the first hop outside the
 guest that all of the traffic of the sandbox crosses, and Brig owns it. The

@@ -183,5 +183,7 @@ want it.
 - [Sessions, homes and projects](sessions.md): run several sessions, and keep
   a guest home.
 - [Policies](policies.md): restrict what the guest can reach.
+- [The credential broker](broker.md#use-it): keep a login on the host, and
+  give the guest a session token for it.
 - [Troubleshooting](troubleshooting.md): organized by what you saw on the
   terminal.
