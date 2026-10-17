@@ -31,6 +31,11 @@ type hull struct {
 	// telemetry gate both read.
 	versionOnce sync.Once
 	versionOut  string
+	// kernelPinOnce caches whether this hull's prepare takes
+	// --kernel-sha256 (prepareTakesKernelPin), asked of the binary once
+	// for the same reason as pins.
+	kernelPinOnce sync.Once
+	kernelPin     bool
 }
 
 // version returns what `hull --version` printed, asked once per process.

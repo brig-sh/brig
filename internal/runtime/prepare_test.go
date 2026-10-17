@@ -100,7 +100,7 @@ func TestHullPrepareSeam(t *testing.T) {
 
 // A hull whose prepare lists --kernel-sha256 in its help is handed the
 // portable kernel brig pins, so that a destination holding another one gets
-// the pinned one.
+// the pinned one. It is asked once, however many prepares it runs.
 func TestHullPrepareHandsThePinToAHullThatTakesIt(t *testing.T) {
 	dir := t.TempDir()
 	bin, log := filepath.Join(dir, "hull"), filepath.Join(dir, "argv.log")
@@ -115,10 +115,14 @@ func TestHullPrepareHandsThePinToAHullThatTakesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &hull{bin: bin}
-	if _, err := h.MigratePrepare("s", "me@box", PrepareSpec{}); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if _, err := h.MigratePrepare("s", "me@box", PrepareSpec{}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	want := "migrate-prepare --help\nmigrate-prepare --to me@box --kernel-sha256 " + PortableKernelDigest + " --json s\n"
+	// The second prepare does not ask again: the answer cannot change.
+	line := "migrate-prepare --to me@box --kernel-sha256 " + PortableKernelDigest + " --json s\n"
+	want := "migrate-prepare --help\n" + line + line
 	if got, _ := os.ReadFile(log); string(got) != want {
 		t.Errorf("hull was asked %q, want %q", got, want)
 	}

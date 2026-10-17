@@ -98,10 +98,14 @@ func (h *hull) MigratePrepare(name, to string, spec PrepareSpec) (Prepared, erro
 // this host's is the pin; brig refuses to boot any other there. A hull from
 // before the flag would reject it, so it is asked first, as takesProfile
 // asks; a hull that does not answer gets the prepare without it, which
-// leaves another kernel there as it is.
+// leaves another kernel there as it is. The answer is kept on h, since it
+// cannot change while brig runs.
 func (h *hull) prepareTakesKernelPin() bool {
-	out, err := h.help("migrate-prepare")
-	return err == nil && flagListed(out, "--kernel-sha256")
+	h.kernelPinOnce.Do(func() {
+		out, err := h.help("migrate-prepare")
+		h.kernelPin = err == nil && flagListed(out, "--kernel-sha256")
+	})
+	return h.kernelPin
 }
 
 // prepareArgs is the one place the prepare's command line is built, flags
