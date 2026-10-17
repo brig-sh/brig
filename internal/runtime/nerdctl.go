@@ -516,7 +516,7 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		annotations = append(annotations, annotationHypervisor+"="+monitorCloudHypervisor)
+		annotations = append(annotations, annotationHypervisor+"="+monitorHvi)
 		for _, kv := range annotations {
 			args = append(args, "--annotation", kv)
 		}

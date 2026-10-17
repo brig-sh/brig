@@ -30,7 +30,7 @@ The license column comes from the `LICENSE` file of each repository, read on
 | `hvi` | separate microVM monitor for hull's `hvi` backend, which talks to Hypervisor.framework directly | [brig-sh/hvi-vmm](https://github.com/brig-sh/hvi-vmm), a git submodule of hull, installed beside hull | Apache-2.0 |
 | `nerdctl` | Docker-compatible CLI for containerd, the binary Brig drives on Linux | [containerd/nerdctl](https://github.com/containerd/nerdctl) | Apache-2.0 |
 | `containerd` | daemon underneath nerdctl: it holds the image store and hands each container to a shim | [containerd/containerd](https://github.com/containerd/containerd) | Apache-2.0 |
-| `urunc` | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM instead of a process | [urunc-dev/urunc](https://github.com/urunc-dev/urunc), built by the Linux runtime bundle from the `feat/unchanged_containers-exec-fixes` branch | Apache-2.0 |
+| `urunc` | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM instead of a process | [urunc-dev/urunc](https://github.com/urunc-dev/urunc), built by the Linux runtime bundle from the `feat/hvi-linux-drop-in` branch | Apache-2.0 |
 | `cosign` | verifies the signature on a guest image before it boots. Optional, and verification degrades to a warning without it | [sigstore/cosign](https://github.com/sigstore/cosign) | Apache-2.0 |
 | `oras` | pulls the boot bundle on Linux for a `genericBoot` profile. Optional otherwise | [oras-project/oras](https://github.com/oras-project/oras) | Apache-2.0 |
 | boot bundle | the kernel, `container-initrd` and the in-guest agent that let Brig exec into an image built as an ordinary container. Published as an OCI artifact at `ghcr.io/nofireai/hull-assets`, one tag per guest platform | fetched by hull on macOS. On Linux the runtime bundle carries its own kernel and initrd, and oras fetches this one only on a host without that bundle | unconfirmed: signed with keyless cosign, but the repository that builds it is not public and states no license |
@@ -194,7 +194,7 @@ nerdctl run --detach --name <name>
      [--publish <addr>:<host port>:<guest port>/<proto>]...
      [--annotation com.urunc.unikernel.bootKernel=<path>]
      [--annotation com.urunc.unikernel.bootInitrd=<path>]
-     [--annotation com.urunc.unikernel.hypervisor=cloud-hypervisor]
+     [--annotation com.urunc.unikernel.hypervisor=hvi]
      [-v <host>:<guest>[:ro]]... [--tmpfs <path>:<options>]...
      [-e <NAME>|<NAME>=<value>]... <image> sleep infinity
 nerdctl exec -i [-t] [-w <dir>] [-u <user>] [-e <NAME>|<NAME>=<value>]... <name> <cmd>...
@@ -362,13 +362,13 @@ The user-mode gateway of hull does not build on Linux.
 **urunc** must read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the OCI spec of the container, and boot
 the image with them. hull takes the same pair on its command line. Brig also
-passes `com.urunc.unikernel.hypervisor=cloud-hypervisor` on every
-`genericBoot` run, so urunc must find a `cloud-hypervisor` binary.
+passes `com.urunc.unikernel.hypervisor=hvi` on every `genericBoot` run, so
+urunc must know the hvi monitor and find an `hvi` binary.
 
 > [!WARNING]
 > No urunc release reads the pair, v0.8.0 included. On a host that brings its
 > own urunc (`BRIG_INSTALL_RUNTIME=0`), use a build from the
-> `feat/unchanged_containers-exec-fixes` branch of
+> `feat/hvi-linux-drop-in` branch of
 > [urunc-dev/urunc](https://github.com/urunc-dev/urunc).
 
 A urunc release ignores both annotations and looks for a `urunc.json` in the

@@ -264,8 +264,8 @@ alone. Use it on a host that already has `nerdctl`, containerd and `urunc`.
   release reads the boot annotations, so a `genericBoot` profile never
   becomes ready on a urunc release. See
   [What Brig requires of each](runtimes.md#what-brig-requires-of-each).
-- A `genericBoot` profile also needs `oras` and `cloud-hypervisor`, which the
-  bundle carries.
+- A `genericBoot` profile also needs `oras` and `hvi`, which the bundle
+  carries.
 - [runtimes.md](runtimes.md) covers the full command surface each runtime
   needs.
 
