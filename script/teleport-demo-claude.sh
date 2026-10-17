@@ -244,8 +244,7 @@ TASKJUDGE='
 import json, re, sys
 
 def read(path):
-    events, proc, exits = [], None, []
-    global resumes
+    events, proc, exits, resumes = [], None, [], {}
     for raw in open(path, encoding="utf-8", errors="replace"):
         raw = raw.strip()
         m = re.match(r"^TASKPROC ([0-9]+)$", raw)
@@ -269,7 +268,7 @@ def read(path):
             continue
         if isinstance(e, dict):
             events.append((float(m.group(1)), m.group(2), e))
-    return events, proc, exits
+    return events, proc, exits, resumes
 
 def text(events):
     deltas, whole, block, some = [], [], None, False
@@ -310,15 +309,16 @@ def say(ok, what):
 def info(ok, what):
     print("INFO " + ("yes: " if ok else "no: ") + what)
 
-resumes = {}
-
 if sys.argv[1] == "count":
-    events, _, exits = read(sys.argv[2])
+    events, _, exits, _ = read(sys.argv[2])
     print(len(counts(events)), "exited" if exits else "running")
     sys.exit(0)
 
 reads = [read(p) for p in sys.argv[1:4]]
-(b, _, bx), (a1, _, x1), (a2, proc, x2) = reads
+(b, _, bx, _), (a1, _, x1, _), (a2, proc, x2, _) = reads
+resumes = {}
+for r in reads:
+    resumes.update(r[3])
 cb, c1, c2 = counts(b), counts(a1), counts(a2)
 say(len(cb) >= 2, "the task had written %d COUNT lines before the move, at least 2" % len(cb))
 say(not bx, "the task was running when the guest paused" + (" (it had exited %s)" % bx if bx else ""))
@@ -507,15 +507,19 @@ if [ "$CLAUDE" = 1 ]; then
   K=$(guest "$TASKCHECK" 2>/dev/null); echo "$K"
   guest "$TASKREAD" >"$OUT/task.1" 2>/dev/null
   n1=$(python3 -c "$TASKJUDGE" count "$OUT/task.1" | cut -d' ' -f1)
-  # The second look: once the task ended, or 600 s passed.
+  # The second look: once the task ended, or 600 s passed. The wait asks
+  # only whether the task wrote its exit line; the stream is read once,
+  # after it.
   t0=$(now)
   for _ in $(seq 120); do
     sleep 5
-    guest "$TASKREAD" >"$OUT/task.2" 2>/dev/null
-    read -r n2 st < <(python3 -c "$TASKJUDGE" count "$OUT/task.2")
-    [ "$st" = exited ] && break
+    x=$(guest 'test -e /root/task.exit && echo exited' 2>/dev/null | tr -d '\r')
+    grep -qx exited <<<"$x" && break
   done
-  echo "the second look, $(awk "BEGIN { printf \"%.0f\", $(now) - $t0 }") s after the first: ${n1:-0} -> ${n2:-0} COUNT lines, task $st"
+  t1=$(now)
+  guest "$TASKREAD" >"$OUT/task.2" 2>/dev/null
+  read -r n2 st < <(python3 -c "$TASKJUDGE" count "$OUT/task.2")
+  echo "the second look, $(awk "BEGIN { printf \"%.0f\", $t1 - $t0 }") s after the first: ${n1:-0} -> ${n2:-0} COUNT lines, task $st"
   while IFS= read -r l; do
     case $l in
       "PASS "*) pass "${l#PASS }" ;;
