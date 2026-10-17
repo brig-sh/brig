@@ -203,7 +203,7 @@ func TestNerdctlNamesNoHypervisorItDidNotPass(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
 
 	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{Hypervisor: "hvi"}).Line()
-	for _, never := range []string{monitorCloudHypervisor, "hvi"} {
+	for _, never := range []string{monitorHvi, "cloud-hypervisor"} {
 		if strings.Contains(got, never) {
 			t.Errorf("the row names %s, which brig did not pass: %s", never, got)
 		}
@@ -219,7 +219,7 @@ func TestDockerNamesNoHypervisorOnAGenericBoot(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
 
 	got := (&nerdctl{bin: "/usr/bin/docker"}).Isolation(RunSpec{GenericBoot: true}).Line()
-	if strings.Contains(got, monitorCloudHypervisor) {
+	if strings.Contains(got, monitorHvi) {
 		t.Errorf("the row names a monitor docker is never handed: %s", got)
 	}
 }
@@ -270,11 +270,11 @@ func TestNerdctlNamesTheMonitorItPassesOnAGenericBoot(t *testing.T) {
 
 	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
 	got := n.Isolation(RunSpec{GenericBoot: true}).Line()
-	if !strings.Contains(got, "hypervisor "+monitorCloudHypervisor) {
+	if !strings.Contains(got, "hypervisor "+monitorHvi) {
 		t.Errorf("the row does not name the monitor brig passes: %s", got)
 	}
-	if m := n.monitor(RunSpec{GenericBoot: true}); m != monitorCloudHypervisor {
-		t.Errorf("monitor() = %q, want %q, the value the annotation carries", m, monitorCloudHypervisor)
+	if m := n.monitor(RunSpec{GenericBoot: true}); m != monitorHvi {
+		t.Errorf("monitor() = %q, want %q, the value the annotation carries", m, monitorHvi)
 	}
 }
 

@@ -47,9 +47,9 @@ func TestNerdctlPassesBootAnnotations(t *testing.T) {
 }
 
 // urunc defaults an image booted this way to qemu, which the runtime bundle
-// does not ship -- it ships cloud-hypervisor and a kernel built for it. Naming
-// the monitor is what keeps a host without a system qemu from failing at the
-// shim with "vmm not found".
+// does not ship -- it ships hvi and a kernel built for it. Naming the monitor
+// is what keeps a host without a system qemu from failing at the shim with
+// "vmm not found".
 func TestNerdctlNamesTheMonitor(t *testing.T) {
 	stageBootAssets(t)
 
@@ -59,7 +59,7 @@ func TestNerdctlNamesTheMonitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Join(args, " ")
-	if !strings.Contains(got, "--annotation com.urunc.unikernel.hypervisor=cloud-hypervisor") {
+	if !strings.Contains(got, "--annotation com.urunc.unikernel.hypervisor=hvi") {
 		t.Errorf("monitor annotation not passed: %s", got)
 	}
 }

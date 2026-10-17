@@ -104,7 +104,7 @@ refused.
 
 On hull the row names the rootfs type Brig passes, or `hull default` when
 Brig passes none. Under urunc it names the hypervisor Brig passes, which is
-`cloud-hypervisor` for a `genericBoot` profile, or `urunc default` when Brig
+`hvi` for a `genericBoot` profile, or `urunc default` when Brig
 passes none. A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed with the
 variable.
 
