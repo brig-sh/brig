@@ -38,11 +38,6 @@ func TestTeleportableMachineFollowsTheGuestArch(t *testing.T) {
 // stays open about a minute after it. Putting any of them back would boot
 // it on every teleportable session with no other test failing, since the
 // tests that compare a kernel with the pin swap in a digest of their own.
-// The earlier pins, whole:
-//
-//	sha256:e85e4338feeb361c5329b4105fa3bda5cd72a235c9ae16c3c4ff94728b12aa1f (four patches)
-//	sha256:4b2e8c5ce382a2635efe1b1b198e35b081d2f0cd4d39d9689b026fbc7d8f21b7 (three)
-//	sha256:32725b9b4327a8833d833e2a017f510310504309a8ed1d1030ef0118d018a152 (two)
 func TestPortableKernelDigestPinsTheFivePatchImage(t *testing.T) {
 	const want = "sha256:778700360da1641466b5b9791a0fe231a52a20c4fb221e1b0e2cdf42730ed295"
 	if PortableKernelDigest != want {
@@ -51,6 +46,22 @@ func TestPortableKernelDigestPinsTheFivePatchImage(t *testing.T) {
 	hex, ok := strings.CutPrefix(PortableKernelDigest, "sha256:")
 	if !ok || len(hex) != 64 || strings.Trim(hex, "0123456789abcdef") != "" {
 		t.Errorf("PortableKernelDigest %q is not sha256: and 64 lowercase hex digits", PortableKernelDigest)
+	}
+}
+
+// None of the Images before the current one may come back as the pin. The
+// name is from when the four-patch Image e85e4338 was the pin and stays
+// because check-tests-kept tracks test names; the five-patch test above is
+// the one that pins the current Image.
+func TestPortableKernelDigestPinsTheFourPatchImage(t *testing.T) {
+	for _, old := range []string{
+		"sha256:e85e4338feeb361c5329b4105fa3bda5cd72a235c9ae16c3c4ff94728b12aa1f",
+		"sha256:4b2e8c5ce382a2635efe1b1b198e35b081d2f0cd4d39d9689b026fbc7d8f21b7",
+		"sha256:32725b9b4327a8833d833e2a017f510310504309a8ed1d1030ef0118d018a152",
+	} {
+		if PortableKernelDigest == old {
+			t.Errorf("PortableKernelDigest = %s, an Image from before the fifth patch", old)
+		}
 	}
 }
 
