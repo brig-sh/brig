@@ -685,6 +685,11 @@ func (n *nerdctl) Replace(spec ExecSpec) error {
 	// brig's process ends at the exec: its command event is queued, and
 	// a process of its own uploads it.
 	telemetry.Handover()
+	// The pending EOF is read as late as brig can manage, while the terminal is
+	// still canonical. The part of the race left is nerdctl's own.
+	if spec.TTY {
+		consumePendingEOF(os.Stdin)
+	}
 	if err := execHandover(n.bin, argv, env); err != nil {
 		telemetry.HandoverFailed()
 		return err
@@ -699,6 +704,11 @@ func (n *nerdctl) Attach(spec ExecSpec) (int, error) {
 	argv, env, err := n.replaceCmd(spec)
 	if err != nil {
 		return 0, err
+	}
+	// Same reason as in Replace: the mark is read before nerdctl can switch the
+	// terminal to raw.
+	if spec.TTY {
+		consumePendingEOF(os.Stdin)
 	}
 	return attachHandover(argv, env)
 }
