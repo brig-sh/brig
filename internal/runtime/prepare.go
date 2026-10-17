@@ -1,13 +1,9 @@
 package runtime
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
-	"regexp"
 	"strings"
-	"time"
 )
 
 // A move used to carry the whole guest while it was paused: its memory and
@@ -95,10 +91,6 @@ func (h *hull) MigratePrepare(name, to string, spec PrepareSpec) (Prepared, erro
 	return preparedOf(name, to, out)
 }
 
-// kernelPinFlag is how `hull migrate-prepare --help` lists --kernel-sha256,
-// matched as profileFlag matches --profile.
-var kernelPinFlag = regexp.MustCompile(`(?m)^\s*--kernel-sha256[\s=]`)
-
 // prepareTakesKernelPin reports whether this hull's prepare takes
 // --kernel-sha256, the portable kernel the destination is to hold. With it,
 // a prepare to a host that holds another portable kernel, such as one set up
@@ -108,14 +100,8 @@ var kernelPinFlag = regexp.MustCompile(`(?m)^\s*--kernel-sha256[\s=]`)
 // asks; a hull that does not answer gets the prepare without it, which
 // leaves another kernel there as it is.
 func (h *hull) prepareTakesKernelPin() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, h.bin, "migrate-prepare", "--help")
-	cmd.Env = mergeEnv(telemetryEnv(false))
-	// See gatewayEnforces.
-	cmd.WaitDelay = time.Second
-	out, err := cmd.CombinedOutput()
-	return err == nil && kernelPinFlag.Match(out)
+	out, err := h.help("migrate-prepare")
+	return err == nil && flagListed(out, "--kernel-sha256")
 }
 
 // prepareArgs is the one place the prepare's command line is built, flags

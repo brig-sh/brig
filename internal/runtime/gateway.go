@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -597,7 +596,7 @@ func startGateway(bin, sock, subnet, gatewayIP string, policy Egress, spec strin
 		sock, gatewayReadyTimeout, logPath)
 }
 
-// gatewayProbeTimeout bounds the probe gatewayEnforces runs. Printing help
+// gatewayProbeTimeout bounds every `hull VERB --help` probe (hull.help). Printing help
 // takes milliseconds, but the first run of a new binary on macOS can wait on
 // the system's security scan: a fresh script took 10.7s on its first run and
 // 8ms on its second. The probe refuses on a timeout, so a tight bound refuses
@@ -625,17 +624,7 @@ var gatewayProbeTimeout = 30 * time.Second
 // (#171).
 func gatewayEnforces(bin string) error {
 	probe := bin + " network-gateway --help"
-	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "network-gateway", "--help")
-	// Without WaitDelay a child the runtime left behind holds the output
-	// pipe open past the kill, and the probe hangs anyway. See
-	// agentCallWaitDelay.
-	cmd.WaitDelay = time.Second
-	out, err := cmd.CombinedOutput()
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
-		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
-	}
+	out, err := (&hull{bin: bin}).help("network-gateway")
 	// The table answers enforced for hvi, and this is where that answer
 	// meets the binary that starts the gateway. A probe that failed confirms
 	// neither answer, so it is unknown. A gateway that runs and lacks the
@@ -647,7 +636,7 @@ func gatewayEnforces(bin string) error {
 			Remedy: "Fix the runtime, or detach the policy",
 			Err:    err}
 	}
-	if strings.Contains(string(out), "--egress-default") {
+	if flagListed(out, "--egress-default") {
 		return nil
 	}
 	return &CapabilityError{Property: EgressPolicy, Path: hvi, State: CannotEnforce,
