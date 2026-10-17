@@ -29,6 +29,11 @@ type PrepareSpec struct {
 	// another store is one the move does not find.
 	RemoteStore string
 	RemoteHull  string
+	// KernelSHA256, when set, is the portable kernel the destination is to
+	// hold, for --kernel-sha256. MigratePrepare sets it to
+	// PortableKernelDigest when this hull takes the flag, and clears it
+	// when it does not, whatever the caller put there.
+	KernelSHA256 string
 	// Progress, when set, is handed each line hull prints on stderr, as
 	// hull prints it. As for MigrateSpec, it must not block.
 	Progress func(line string)
@@ -76,11 +81,11 @@ var _ MovePreparer = (*hull)(nil)
 // the destination over ssh to the host given, as a move does, so it is not
 // handed another transport either.
 func (h *hull) MigratePrepare(name, to string, spec PrepareSpec) (Prepared, error) {
-	pin := ""
+	spec.KernelSHA256 = ""
 	if h.prepareTakesKernelPin() {
-		pin = PortableKernelDigest
+		spec.KernelSHA256 = PortableKernelDigest
 	}
-	args, err := prepareArgs(name, to, pin, spec)
+	args, err := prepareArgs(name, to, spec)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -110,9 +115,8 @@ func (h *hull) prepareTakesKernelPin() bool {
 
 // prepareArgs is the one place the prepare's command line is built, flags
 // first and the sandbox last, as for a move. The host is checked here as
-// well, since it goes to hull and from hull to ssh. pin, when not "", is the
-// portable kernel's digest for --kernel-sha256.
-func prepareArgs(name, to, pin string, spec PrepareSpec) ([]string, error) {
+// well, since it goes to hull and from hull to ssh.
+func prepareArgs(name, to string, spec PrepareSpec) ([]string, error) {
 	if err := CheckRemote(to); err != nil {
 		return nil, err
 	}
@@ -123,7 +127,7 @@ func prepareArgs(name, to, pin string, spec PrepareSpec) ([]string, error) {
 	for _, f := range []struct{ flag, value string }{
 		{"--remote-store", spec.RemoteStore},
 		{"--remote-hull", spec.RemoteHull},
-		{"--kernel-sha256", pin},
+		{"--kernel-sha256", spec.KernelSHA256},
 	} {
 		if f.value != "" {
 			args = append(args, f.flag, f.value)

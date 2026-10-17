@@ -14,17 +14,16 @@ import (
 func TestPrepareArgs(t *testing.T) {
 	for _, c := range []struct {
 		what string
-		pin  string
 		spec PrepareSpec
 		want string
 	}{
-		{"a prepare", "", PrepareSpec{}, "migrate-prepare --to me@box --json s"},
-		{"into a named store, with the hull there", "", PrepareSpec{RemoteStore: "/st/b", RemoteHull: "/opt/hull"},
+		{"a prepare", PrepareSpec{}, "migrate-prepare --to me@box --json s"},
+		{"into a named store, with the hull there", PrepareSpec{RemoteStore: "/st/b", RemoteHull: "/opt/hull"},
 			"migrate-prepare --to me@box --remote-store /st/b --remote-hull /opt/hull --json s"},
-		{"with the kernel pinned", "sha256:7787", PrepareSpec{RemoteStore: "/st/b"},
+		{"with the kernel pinned", PrepareSpec{RemoteStore: "/st/b", KernelSHA256: "sha256:7787"},
 			"migrate-prepare --to me@box --remote-store /st/b --kernel-sha256 sha256:7787 --json s"},
 	} {
-		got, err := prepareArgs("s", "me@box", c.pin, c.spec)
+		got, err := prepareArgs("s", "me@box", c.spec)
 		if err != nil || strings.Join(got, " ") != c.want {
 			t.Errorf("%s: got %q, %v; want %q", c.what, strings.Join(got, " "), err, c.want)
 		}
@@ -32,7 +31,7 @@ func TestPrepareArgs(t *testing.T) {
 	for _, bad := range []struct{ name, to string }{
 		{"s", "-oProxyCommand=sh@box"}, {"s", "box"}, {"s", "me@box;reboot"}, {"", "me@box"}, {"--to", "me@box"},
 	} {
-		if got, err := prepareArgs(bad.name, bad.to, "", PrepareSpec{}); err == nil {
+		if got, err := prepareArgs(bad.name, bad.to, PrepareSpec{}); err == nil {
 			t.Errorf("%q on %q was accepted as %q", bad.name, bad.to, got)
 		}
 	}
@@ -78,12 +77,13 @@ func TestHullPrepareSeam(t *testing.T) {
 	t.Setenv("HULL_MIGRATE_SSH", "/tmp/elsewhere")
 	h, log := prepareHull(t, hullPrepareReport)
 	var lines []string
-	p, err := h.MigratePrepare("s", "me@box", PrepareSpec{RemoteStore: "/st", Progress: func(l string) { lines = append(lines, l) }})
+	p, err := h.MigratePrepare("s", "me@box", PrepareSpec{RemoteStore: "/st", KernelSHA256: "sha256:7787",
+		Progress: func(l string) { lines = append(lines, l) }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// It asks first whether this hull takes --kernel-sha256; this one's
-	// help lists no such flag.
+	// help lists no such flag, so the pin the caller set is not sent.
 	if got, _ := os.ReadFile(log); string(got) != "migrate-prepare --help transport=/tmp/elsewhere\n"+
 		"migrate-prepare --to me@box --remote-store /st --json s transport=none\n" {
 		t.Errorf("hull was asked %q", got)
