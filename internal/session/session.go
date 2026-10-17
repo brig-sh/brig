@@ -1,9 +1,11 @@
 // Package session turns a session name into the identifiers a run needs.
 //
-// `brig run claude --name foo` runs a session of its own: its own workspace
+// `brig run claude@foo` runs a session of its own: its own workspace
 // directory and its own microVM, so two names keep two guest homes and two
-// virtual machines. The name also reaches the agent as its display name --
-// only the paths use the slug.
+// virtual machines. The name selects the guest home and the sandbox for every
+// agent, and `brig run` also passes it to claude-code as its display name.
+// An `@` label is already slug-clean, so the name and the slug differ only
+// for the retired `--name` spelling.
 package session
 
 import (

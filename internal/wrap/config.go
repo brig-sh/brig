@@ -56,8 +56,8 @@ type Config struct {
 	Runtime runtime.Runtime
 
 	// RawName is the session name as typed; Slug is its path-safe form. The
-	// raw name reaches the agent as its display name, so what you typed is
-	// what you see; only the paths use the slug.
+	// run path passes the raw name to claude-code as its display name; no other
+	// profile receives it, and only the paths use the slug.
 	RawName string
 	Slug    string
 
