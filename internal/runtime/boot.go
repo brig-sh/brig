@@ -26,11 +26,11 @@ const (
 
 	// The monitor is named too, on Linux only, because urunc's default for an
 	// image booted this way is qemu -- and the runtime bundle does not ship
-	// qemu. It ships cloud-hypervisor, and a guest kernel built for it. Left
-	// unsaid, a host without a system qemu gets "vmm not found" from the shim,
-	// three layers from anything that mentions a monitor, while brig doctor
-	// reports the runtime and the boot assets as fine. urunc validates the
-	// pair, and cloud-hypervisor with a Linux guest is one it accepts.
+	// qemu. It ships hvi, and a guest kernel with the virtio-mmio devices hvi
+	// presents. Left unsaid, a host without a system qemu gets "vmm not found"
+	// from the shim, three layers from anything that mentions a monitor, while
+	// brig doctor reports the runtime and the boot assets as fine. urunc
+	// validates the pair, and hvi with a Linux guest is one it accepts.
 	//
 	// hull does not read this: it takes its backend as --hypervisor, from a
 	// different set of names entirely (vz, hvi), which is why this is appended
@@ -39,8 +39,8 @@ const (
 	// TODO: appended on every Linux generic boot, so a host that installed
 	// containerd and urunc itself and runs qemu fails where it booted before.
 	// Make it conditional on the bundle once hvi reaches parity on Linux.
-	annotationHypervisor   = "com.urunc.unikernel.hypervisor"
-	monitorCloudHypervisor = "cloud-hypervisor"
+	annotationHypervisor = "com.urunc.unikernel.hypervisor"
+	monitorHvi           = "hvi"
 )
 
 // bootInitrdName is the same on every platform: the initrd is a cpio built for

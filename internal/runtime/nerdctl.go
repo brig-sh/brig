@@ -129,7 +129,7 @@ func (n *nerdctl) Isolation(spec RunSpec) Isolation {
 // annotation, so the boot and the ISOLATION row read it from one place.
 func (n *nerdctl) monitor(spec RunSpec) string {
 	if spec.GenericBoot && !n.isDocker() {
-		return monitorCloudHypervisor
+		return monitorHvi
 	}
 	return ""
 }
