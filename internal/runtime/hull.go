@@ -575,6 +575,9 @@ func (h *hull) CanRun(spec RunSpec) error { return supports(spec, hypervisor(spe
 // naming the variable that caused it -- and the user who set BRIG_HYPERVISOR
 // is the only one who can undo it.
 func supports(spec RunSpec, hv string) error {
+	if err := checkRootfsMode(spec); err != nil {
+		return err
+	}
 	if spec.GUI && hv != "vz" {
 		return fmt.Errorf("this profile opens a graphical window, which only the vz backend provides "+
 			"(BRIG_HYPERVISOR is %q); unset it to run this profile", hv)
@@ -741,6 +744,13 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 		return nil, nil, err
 	}
 	args = append(args, envArgs...)
+	// hull takes the layout of the root from its environment, not a flag.
+	if spec.RootfsMode != "" {
+		if err := checkRootfsMode(spec); err != nil {
+			return nil, nil, err
+		}
+		envVals = append(envVals, "HULL_ROOTFS_MODE="+spec.RootfsMode)
+	}
 	// The verified digest when one was resolved, so the bytes that boot are the
 	// bytes cosign checked; hull resolves it against its store from rc23.
 	args = append(args, withDigest(spec.Image, spec.Digest))

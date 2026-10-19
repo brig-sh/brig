@@ -454,6 +454,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// decided in the runtime adapter. Taken from check, which the
 		// ISOLATION row read, so the row names what boots.
 		RootfsType:  check.RootfsType,
+		RootfsMode:  check.RootfsMode,
 		GenericBoot: check.GenericBoot,
 		BootAssets:  bootAssets,
 		// Resolved once at the top of EnsureRunning, where the preflight also

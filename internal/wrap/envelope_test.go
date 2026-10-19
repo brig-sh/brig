@@ -314,3 +314,17 @@ func TestEnvelopeNamesNoRootfsTypeItDidNotPass(t *testing.T) {
 		}
 	}
 }
+
+// BRIG_ROOTFS_MODE reaches the spec the check, the boot and the ISOLATION row
+// share. The check reads it there, so the join path refuses a mode the runtime
+// does not know.
+func TestBackendSpecCarriesTheRootfsMode(t *testing.T) {
+	c := envelopeConfig()
+	if got := c.backendSpec(c.hypervisor()).RootfsMode; got != "" {
+		t.Errorf("RootfsMode = %q with nothing set", got)
+	}
+	c.env = NewEnv(c.Profile.Name, oneVar("BRIG_ROOTFS_MODE", "overlay-block"))
+	if got := c.backendSpec(c.hypervisor()).RootfsMode; got != "overlay-block" {
+		t.Errorf("RootfsMode = %q, want the setting's overlay-block", got)
+	}
+}

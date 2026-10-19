@@ -288,6 +288,32 @@ func TestNerdctlNamesTheMonitorItPassesOnAGenericBoot(t *testing.T) {
 	}
 }
 
+// BRIG_ROOTFS_MODE reaches urunc as an annotation on a generic boot, so the row
+// names it there. Anywhere else brig passes no mode, and the row names none.
+func TestNerdctlNamesTheRootfsModeItPasses(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	got := n.Isolation(RunSpec{GenericBoot: true, RootfsMode: RootfsModeOverlayBlock}).Line()
+	if want := "hypervisor hvi, rootfs overlay-block)"; !strings.HasSuffix(got, want) {
+		t.Errorf("the row does not name the default monitor and the rootfs mode, want %q: %s", want, got)
+	}
+
+	for _, spec := range []RunSpec{
+		{GenericBoot: true},
+		{RootfsMode: RootfsModeOverlayBlock},
+	} {
+		if got := n.Isolation(spec).Line(); strings.Contains(got, "overlay-block") || strings.Contains(got, "rootfs") {
+			t.Errorf("%+v: the row names a rootfs mode brig does not pass: %s", spec, got)
+		}
+	}
+
+	got = (&nerdctl{bin: "/usr/bin/docker"}).Isolation(RunSpec{GenericBoot: true, RootfsMode: RootfsModeOverlayBlock}).Line()
+	if strings.Contains(got, "overlay-block") {
+		t.Errorf("the row names a rootfs mode docker is never handed: %s", got)
+	}
+}
+
 // A monitor urunc does not run is refused by CanRun. brig info boots nothing,
 // so its row names what was asked for, as brig plan does, and not hvi or
 // urunc's default.

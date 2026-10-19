@@ -147,9 +147,11 @@ func (n Network) Line() string {
 // spec that is actually booted, so the two cannot come to different answers
 // about the same run. The boot fills in the rest.
 //
-// The ISOLATION row reads it too, which is why the rootfs type and the generic
-// boot are here: the row names the rootfs and the hypervisor the runtime is
-// handed, and this is where the boot takes them from.
+// The ISOLATION row reads it too, which is why the rootfs type, the rootfs
+// mode and the generic boot are here: the row names the rootfs and the
+// hypervisor the runtime is handed, and this is where the boot takes them from.
+// The check reads the rootfs mode as well, so the join path refuses a mode the
+// runtime does not know.
 func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 	return runtime.RunSpec{
 		Name:        c.VMName,
@@ -159,6 +161,7 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Publish:     c.Publish,
 		GUI:         c.Profile.IsGUI(),
 		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
+		RootfsMode:  c.env.String("ROOTFS_MODE", ""),
 		GenericBoot: c.Profile.GenericBoot,
 	}
 }
