@@ -326,6 +326,9 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 	if len(spec.Publish) > 0 && spec.Net == "none" {
 		return offlinePublishError(spec.Publish)
 	}
+	if err := checkRootfsMode(spec); err != nil {
+		return err
+	}
 	if spec.GenericBoot {
 		if _, err := linuxMonitor(spec.Hypervisor); err != nil {
 			return err
@@ -536,6 +539,12 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 			return nil, nil, err
 		}
 		annotations = append(annotations, annotationHypervisor+"="+monitor)
+		if spec.RootfsMode != "" {
+			if err := checkRootfsMode(spec); err != nil {
+				return nil, nil, err
+			}
+			annotations = append(annotations, annotationRootfsMode+"="+spec.RootfsMode)
+		}
 		for _, kv := range annotations {
 			args = append(args, "--annotation", kv)
 		}

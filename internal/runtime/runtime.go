@@ -99,6 +99,11 @@ type RunSpec struct {
 	// when the sandbox installs packages and needs a real writable disk.
 	// Meaningless to a container runtime, which ignores it.
 	RootfsType string
+	// RootfsMode asks a generic boot for another layout of the guest root.
+	// Empty keeps the runtime's own. RootfsModeOverlayBlock is the one
+	// other: the root is an overlay on two disks, and its writes survive a
+	// restart on disk rather than in the image store.
+	RootfsMode string
 	// Tmpfs are tmpfs mounts to create with the sandbox, as
 	// "<path>:<options>". Only the container runtimes take these: hull has no
 	// create-time tmpfs, so brig mounts one there with a privileged exec

@@ -410,6 +410,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.
 		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
+		RootfsMode:  c.env.String("ROOTFS_MODE", ""),
 		GenericBoot: c.Profile.GenericBoot,
 		BootAssets:  bootAssets,
 		// Resolved once at the top of EnsureRunning, where the preflight also

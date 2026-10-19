@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -69,6 +70,43 @@ func TestRunArgsGatewayFlagsTravelTogether(t *testing.T) {
 					hasSock, hasCidr, got)
 			}
 		})
+	}
+}
+
+// hull takes the layout of the root from HULL_ROOTFS_MODE, so the mode goes in
+// its environment and nowhere on its command line.
+func TestRunArgsRootfsModeGoesToHullEnv(t *testing.T) {
+	stageBootAssets(t)
+
+	spec := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true, RootfsMode: RootfsModeOverlayBlock}
+	args, env, err := runArgs(spec, "hvi", "shared", "", "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(env, "HULL_ROOTFS_MODE=overlay-block") {
+		t.Errorf("HULL_ROOTFS_MODE not in hull's environment: %v", env)
+	}
+	if got := strings.Join(args, " "); strings.Contains(got, "overlay-block") {
+		t.Errorf("the mode leaked onto hull's command line: %s", got)
+	}
+
+	_, env, err = runArgs(RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true}, "hvi", "shared", "", "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HULL_ROOTFS_MODE=") {
+			t.Errorf("no mode asked, none set: %v", env)
+		}
+	}
+
+	for _, bad := range []RunSpec{
+		{Name: "s", Image: "img", RootfsMode: RootfsModeOverlayBlock},
+		{Name: "s", Image: "ubuntu:latest", GenericBoot: true, RootfsMode: "block"},
+	} {
+		if _, _, err := runArgs(bad, "hvi", "shared", "", "", nil, nil); err == nil {
+			t.Errorf("%+v: want a refusal", bad)
+		}
 	}
 }
 

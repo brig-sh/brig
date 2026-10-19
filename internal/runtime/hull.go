@@ -671,6 +671,13 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 		return nil, nil, err
 	}
 	args = append(args, envArgs...)
+	// hull takes the layout of the root from its environment, not a flag.
+	if spec.RootfsMode != "" {
+		if err := checkRootfsMode(spec); err != nil {
+			return nil, nil, err
+		}
+		envVals = append(envVals, "HULL_ROOTFS_MODE="+spec.RootfsMode)
+	}
 	// The verified digest when one was resolved, so the bytes that boot are the
 	// bytes cosign checked; hull resolves it against its store from rc23.
 	args = append(args, withDigest(spec.Image, spec.Digest))
