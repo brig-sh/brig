@@ -109,8 +109,8 @@ func (n *nerdctl) Fallback() string {
 // the shim the run will actually name.
 //
 // The hypervisor named is the monitor brig hands urunc, read from monitor, the
-// same call runArgs makes. spec.Hypervisor is hull's backend and nerdctl has no
-// flag for it, so it is not read here, and neither is RootfsType.
+// same call runArgs makes. RootfsType has no nerdctl flag, so it is not read
+// here.
 //
 // The variable is named beside the shim only when it is set. That is when it
 // decided the boundary, and a reader has to know which setting to undo.
@@ -120,18 +120,37 @@ func (n *nerdctl) Isolation(spec RunSpec) Isolation {
 	if os.Getenv("BRIG_CONTAINERD_RUNTIME") != "" {
 		named = "BRIG_CONTAINERD_RUNTIME=" + shim
 	}
-	return containerdIsolation(n.driver(), shim, named, n.monitor(spec))
+	monitor, err := n.monitor(spec)
+	if err != nil {
+		// CanRun refuses this run. The row names the monitor asked for, as
+		// Backend does.
+		monitor = spec.Hypervisor
+	}
+	return containerdIsolation(n.driver(), shim, named, monitor)
 }
 
 // monitor is the hypervisor brig tells urunc to boot with, or "" when brig
 // names none and urunc picks. Only a generic boot names one, and never on
-// docker, which refuses that boot. runArgs writes this value into the
-// annotation, so the boot and the ISOLATION row read it from one place.
-func (n *nerdctl) monitor(spec RunSpec) string {
-	if spec.GenericBoot && !n.isDocker() {
-		return monitorHvi
+// docker, which refuses that boot. It is the monitor BRIG_HYPERVISOR or the
+// profile names, and hvi when neither does; see linuxMonitor. runArgs writes
+// this value into the annotation, so the boot and the ISOLATION row read it
+// from one place.
+func (n *nerdctl) monitor(spec RunSpec) (string, error) {
+	if !spec.GenericBoot || n.isDocker() {
+		return "", nil
 	}
-	return ""
+	return linuxMonitor(spec.Hypervisor)
+}
+
+// Backend names the monitor the run boots on, which is what brig plan
+// reports. It reads monitor, so it is "" where brig names no monitor and urunc
+// picks. A name urunc does not run reports as asked, and the run refuses it.
+func (n *nerdctl) Backend(spec RunSpec) string {
+	m, err := n.monitor(spec)
+	if err != nil {
+		return spec.Hypervisor
+	}
+	return m
 }
 
 // driver is the binary in hand, by name. newNerdctl takes either.
@@ -344,6 +363,11 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 	}
 	if err := checkSetup(spec, RunPath{n.driver(), containerdRuntime()}); err != nil {
 		return err
+	}
+	if spec.GenericBoot {
+		if _, err := linuxMonitor(spec.Hypervisor); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -559,7 +583,11 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		annotations = append(annotations, annotationHypervisor+"="+n.monitor(spec))
+		monitor, err := n.monitor(spec)
+		if err != nil {
+			return nil, nil, err
+		}
+		annotations = append(annotations, annotationHypervisor+"="+monitor)
 		for _, kv := range annotations {
 			args = append(args, "--annotation", kv)
 		}

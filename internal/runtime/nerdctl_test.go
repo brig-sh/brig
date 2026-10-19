@@ -64,6 +64,61 @@ func TestNerdctlNamesTheMonitor(t *testing.T) {
 	}
 }
 
+// BRIG_HYPERVISOR reaches urunc on Linux. vz exists on macOS only, so a
+// profile written for both keeps the bundle's hvi here, and a name urunc does
+// not run is refused before anything boots.
+func TestNerdctlRunsTheHypervisorAsked(t *testing.T) {
+	stageBootAssets(t)
+
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	for asked, want := range map[string]string{
+		"":                 "hvi",
+		"vz":               "hvi",
+		"hvi":              "hvi",
+		"cloud-hypervisor": "cloud-hypervisor",
+		"qemu":             "qemu",
+		"firecracker":      "firecracker",
+	} {
+		spec := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true, Hypervisor: asked}
+		if err := n.CanRun(spec); err != nil {
+			t.Errorf("%q: CanRun refused it: %v", asked, err)
+		}
+		args, _, err := n.runArgs(spec)
+		if err != nil {
+			t.Fatalf("%q: %v", asked, err)
+		}
+		got := strings.Join(args, " ")
+		if !strings.Contains(got, "--annotation com.urunc.unikernel.hypervisor="+want+" ") {
+			t.Errorf("%q: want monitor %s: %s", asked, want, got)
+		}
+		if strings.Count(got, "com.urunc.unikernel.hypervisor=") != 1 {
+			t.Errorf("%q: the monitor must be named once: %s", asked, got)
+		}
+		if b := n.Backend(spec); b != want {
+			t.Errorf("%q: Backend says %q, the run boots %q", asked, b, want)
+		}
+	}
+
+	// brig passes no monitor off a generic boot or on docker, so the plan must
+	// name none either.
+	plain := RunSpec{Name: "s", Image: "ubuntu:latest", Hypervisor: "vz"}
+	if b := n.Backend(plain); b != "" {
+		t.Errorf("not a generic boot: Backend says %q, the run passes no monitor", b)
+	}
+	d := &nerdctl{bin: "/usr/bin/docker"}
+	if b := d.Backend(RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true}); b != "" {
+		t.Errorf("docker: Backend says %q, the run passes no monitor", b)
+	}
+
+	spec := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true, Hypervisor: "bhyve"}
+	if err := n.CanRun(spec); err == nil || !strings.Contains(err.Error(), "bhyve") {
+		t.Errorf("an unknown monitor must be refused by name: %v", err)
+	}
+	if _, _, err := n.runArgs(spec); err == nil {
+		t.Error("runArgs must refuse an unknown monitor too")
+	}
+}
+
 // docker does not carry annotations through to the runtime, so the sandbox
 // would boot without a kernel. Refuse where the cause is still visible.
 func TestNerdctlRefusesGenericBootOnDocker(t *testing.T) {

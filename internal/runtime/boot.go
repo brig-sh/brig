@@ -36,12 +36,26 @@ const (
 	// different set of names entirely (vz, hvi), which is why this is appended
 	// on the Linux path rather than added to the pair below.
 	//
-	// TODO: appended on every Linux generic boot, so a host that installed
-	// containerd and urunc itself and runs qemu fails where it booted before.
-	// Make it conditional on the bundle once hvi reaches parity on Linux.
+	// BRIG_HYPERVISOR names another monitor urunc runs, for a host that
+	// installed it; see linuxMonitor.
 	annotationHypervisor = "com.urunc.unikernel.hypervisor"
 	monitorHvi           = "hvi"
 )
+
+// linuxMonitor returns the urunc monitor a Linux generic boot runs on for the
+// hypervisor a profile or BRIG_HYPERVISOR asked for. Empty and vz, which
+// exists on macOS only, keep the bundle's hvi, so that a profile written for
+// both platforms boots on both. A name urunc does not run is an error.
+func linuxMonitor(hv string) (string, error) {
+	switch hv {
+	case "", "vz":
+		return monitorHvi, nil
+	case "hvi", "cloud-hypervisor", "qemu", "firecracker":
+		return hv, nil
+	}
+	return "", fmt.Errorf("hypervisor %q (BRIG_HYPERVISOR or the profile's hypervisor field) is not one urunc runs on Linux: "+
+		"use hvi, cloud-hypervisor, qemu or firecracker", hv)
+}
 
 // bootInitrdName is the same on every platform: the initrd is a cpio built for
 // the guest, not for the host running brig.
