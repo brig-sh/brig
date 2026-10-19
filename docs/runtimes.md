@@ -194,7 +194,7 @@ nerdctl run --detach --name <name>
      [--publish <addr>:<host port>:<guest port>/<proto>]...
      [--annotation com.urunc.unikernel.bootKernel=<path>]
      [--annotation com.urunc.unikernel.bootInitrd=<path>]
-     [--annotation com.urunc.unikernel.hypervisor=hvi]
+     [--annotation com.urunc.unikernel.hypervisor=<hvi|cloud-hypervisor|qemu|firecracker>]
      [-v <host>:<guest>[:ro]]... [--tmpfs <path>:<options>]...
      [-e <NAME>|<NAME>=<value>]... <image> sleep infinity
 nerdctl exec -i [-t] [-w <dir>] [-u <user>] [-e <NAME>|<NAME>=<value>]... <name> <cmd>...
@@ -362,8 +362,9 @@ The user-mode gateway of hull does not build on Linux.
 **urunc** must read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the OCI spec of the container, and boot
 the image with them. hull takes the same pair on its command line. Brig also
-passes `com.urunc.unikernel.hypervisor=hvi` on every `genericBoot` run, so
-urunc must know the hvi monitor and find an `hvi` binary.
+passes `com.urunc.unikernel.hypervisor` on every `genericBoot` run: `hvi`
+unless `BRIG_HYPERVISOR` names another monitor urunc runs. So urunc must know
+that monitor and find its binary.
 
 > [!WARNING]
 > No urunc release reads the pair, v0.8.0 included. On a host that brings its

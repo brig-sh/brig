@@ -108,10 +108,20 @@ func (n *nerdctl) Fallback() string {
 // does not. containerdRuntime is the same call runArgs makes, so the row names
 // the shim the run will actually name.
 //
-// The hypervisor is nothing to this runtime: the backend is hull's business,
-// and what boots a microVM here is the shim.
+// The hypervisor does not change the boundary: every monitor urunc runs is a
+// microVM. Which one boots is Backend's answer.
 func (n *nerdctl) Isolation(string) Isolation {
 	return containerdIsolation(n.driver(), containerdRuntime())
+}
+
+// Backend names the monitor a generic boot asking for hv runs on, which is
+// what brig plan reports. A name urunc does not run reports as asked, and the
+// run refuses it.
+func (n *nerdctl) Backend(hv string) string {
+	if m, err := linuxMonitor(hv); err == nil {
+		return m
+	}
+	return hv
 }
 
 // driver is the binary in hand, by name. newNerdctl takes either.
@@ -316,6 +326,11 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 	if len(spec.Publish) > 0 && spec.Net == "none" {
 		return offlinePublishError(spec.Publish)
 	}
+	if spec.GenericBoot {
+		if _, err := linuxMonitor(spec.Hypervisor); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -516,7 +531,11 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		annotations = append(annotations, annotationHypervisor+"="+monitorHvi)
+		monitor, err := linuxMonitor(spec.Hypervisor)
+		if err != nil {
+			return nil, nil, err
+		}
+		annotations = append(annotations, annotationHypervisor+"="+monitor)
 		for _, kv := range annotations {
 			args = append(args, "--annotation", kv)
 		}
