@@ -197,8 +197,8 @@ func TestNerdctlDoesNotCallARuncShimUnderAUruncPrefixAMicroVM(t *testing.T) {
 }
 
 // The row names only a hypervisor brig hands urunc. Outside a generic boot brig
-// passes none, so urunc picks, and a macOS backend setting that leaked into the
-// spec is not one either: nerdctl has no flag for it.
+// passes none, so urunc picks, and BRIG_HYPERVISOR is not passed either: only
+// a generic boot carries the annotation.
 func TestNerdctlNamesNoHypervisorItDidNotPass(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
 
@@ -264,17 +264,39 @@ func TestNerdctlNamesTheSettingBehindTheShim(t *testing.T) {
 }
 
 // On a generic boot brig tells urunc which monitor to use, so the row names
-// that one: the same value runArgs puts in the annotation.
+// that one: the same value runArgs puts in the annotation. hvi is the default
+// on Linux, and vz, which exists on macOS only, boots on hvi too.
 func TestNerdctlNamesTheMonitorItPassesOnAGenericBoot(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
 
 	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
-	got := n.Isolation(RunSpec{GenericBoot: true}).Line()
-	if !strings.Contains(got, "hypervisor "+monitorHvi) {
-		t.Errorf("the row does not name the monitor brig passes: %s", got)
+	for asked, want := range map[string]string{
+		"":                 monitorHvi,
+		"vz":               monitorHvi,
+		"hvi":              monitorHvi,
+		"cloud-hypervisor": "cloud-hypervisor",
+		"qemu":             "qemu",
+	} {
+		spec := RunSpec{GenericBoot: true, Hypervisor: asked}
+		got := n.Isolation(spec).Line()
+		if !strings.HasSuffix(got, ", hypervisor "+want+")") {
+			t.Errorf("%q: the row does not name the monitor brig passes, %s: %s", asked, want, got)
+		}
+		if m, err := n.monitor(spec); err != nil || m != want {
+			t.Errorf("%q: monitor() = %q, %v, want %q, the value the annotation carries", asked, m, err, want)
+		}
 	}
-	if m := n.monitor(RunSpec{GenericBoot: true}); m != monitorHvi {
-		t.Errorf("monitor() = %q, want %q, the value the annotation carries", m, monitorHvi)
+}
+
+// A monitor urunc does not run is refused by CanRun. brig info boots nothing,
+// so its row names what was asked for, as brig plan does, and not hvi or
+// urunc's default.
+func TestNerdctlNamesAnUnknownMonitorAsAsked(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{GenericBoot: true, Hypervisor: "bhyve"}).Line()
+	if !strings.HasSuffix(got, ", hypervisor bhyve)") {
+		t.Errorf("the row does not name the monitor asked for: %s", got)
 	}
 }
 

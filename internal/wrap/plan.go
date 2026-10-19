@@ -44,7 +44,7 @@ func (c *Config) Plan() PlanDocument {
 		Sandbox: c.VMName,
 		Runtime: PlanRuntime{
 			InfoRuntime: c.infoRuntime(),
-			Backend:     c.hypervisor(),
+			Backend:     c.planBackend(),
 		},
 		Isolation: c.isolationLine(),
 		Home:      PlanMount{Host: c.Workspace, Guest: c.Profile.GuestHome, Mode: "read-write"},
@@ -229,9 +229,10 @@ type PlanRefusal struct {
 	Reason string `json:"reason"`
 }
 
-// PlanRuntime is the runtime and the backend under it. Backend is the
-// hypervisor the profile or BRIG_HYPERVISOR names, empty for the runtime's
-// own default.
+// PlanRuntime is the runtime and the backend under it. Backend is the backend
+// the run boots on, as the runtime names it, else the hypervisor the profile
+// or BRIG_HYPERVISOR names. It is empty when the run names none and the
+// runtime picks.
 type PlanRuntime struct {
 	InfoRuntime
 	Backend string `json:"backend,omitempty"`
@@ -485,4 +486,15 @@ func credentialText(cr PlanCredential) string {
 		}
 	}
 	return fmt.Sprintf("%s (%s) %s", cr.Name, cr.Delivery, detail)
+}
+
+// planBackend is the backend the run boots on, as the runtime names it when it
+// can: a plan that names a backend other than the one that boots is worse than
+// none.
+func (c *Config) planBackend() string {
+	backend := c.hypervisor()
+	if namer, ok := c.Runtime.(runtime.BackendNamer); ok {
+		backend = namer.Backend(c.backendSpec(backend))
+	}
+	return backend
 }

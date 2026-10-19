@@ -103,10 +103,10 @@ recognises as sharing the host kernel, `brig info` names it and the run is
 refused.
 
 On hull the row names the rootfs type Brig passes, or `hull default` when
-Brig passes none. Under urunc it names the hypervisor Brig passes, which is
-`hvi` for a `genericBoot` profile, or `urunc default` when Brig
-passes none. A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed with the
-variable.
+Brig passes none. Under urunc it names the hypervisor Brig passes, or `urunc
+default` when Brig passes none. Brig passes one for a `genericBoot` profile:
+the monitor that `BRIG_HYPERVISOR` names, and `hvi` by default. A shim that
+`BRIG_CONTAINERD_RUNTIME` chose is printed with the variable.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write.
 Name a project on the run line and that project is a second host directory,

@@ -536,8 +536,9 @@ func (c *Config) hypervisor() string {
 // BRIG_HYPERVISOR=vz leaves that choice with the person who can weigh it.
 //
 // The version is read through c.MacOSVersion, a seam a test can pin. Off macOS
-// it reports "", and there is nothing to refuse: hvi is a macOS backend, and
-// the Linux runtime ignores the field entirely. A version brig cannot parse
+// it reports "", and there is nothing to refuse: the macOS version is the only
+// floor here, and the Linux runtime refuses a monitor urunc does not run
+// itself. A version brig cannot parse
 // also proceeds -- blocking a run over a version string we could not read
 // would trade the boot crash for a refusal that is just as opaque.
 func (c *Config) preflightHypervisor(hv string) error {

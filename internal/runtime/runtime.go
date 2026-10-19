@@ -818,6 +818,17 @@ type RunChecker interface {
 	CanRun(spec RunSpec) error
 }
 
+// BackendNamer is a runtime that can name the backend a run boots on, when
+// that is not always the one asked for. The Linux runtime is one: vz exists on
+// macOS only, and a generic boot asking for it boots on the bundle's hvi there.
+// A run that names no backend to the runtime reports "".
+//
+// Optional: a runtime without it boots what was asked for, and brig plan
+// reports that.
+type BackendNamer interface {
+	Backend(spec RunSpec) string
+}
+
 // NetworkChecker is a runtime that can say whether a sandbox already running
 // is on the network, and under the rules, that a run is asking for.
 //

@@ -42,8 +42,8 @@ func TestPreflightHypervisorRefusesHVIBelowMacOS15(t *testing.T) {
 		t.Errorf("hvi must proceed on macOS 15.0: %v", err)
 	}
 
-	// Off macOS the version reader says "", and there is nothing to refuse: the
-	// Linux runtime ignores the hypervisor field a profile still carries.
+	// Off macOS the version reader says "", and there is nothing to refuse: a
+	// Linux monitor has no macOS version floor.
 	off := &Config{MacOSVersion: func() string { return "" }}
 	if err := off.preflightHypervisor("hvi"); err != nil {
 		t.Errorf("hvi must proceed off macOS: %v", err)
