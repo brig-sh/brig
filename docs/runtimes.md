@@ -219,6 +219,7 @@ nerdctl run --detach --name <name>
      [--annotation com.urunc.unikernel.bootKernel=<path>]
      [--annotation com.urunc.unikernel.bootInitrd=<path>]
      [--annotation com.urunc.unikernel.hypervisor=<hvi|cloud-hypervisor|qemu|firecracker>]
+     [--annotation com.urunc.unikernel.rootfsMode=overlay-block]   # BRIG_ROOTFS_MODE
      [-v <host>:<guest>[:ro]]... [--tmpfs <path>:<options>]...
      [-e <NAME>|<NAME>=<value>]... <image> sleep infinity
 nerdctl exec -i [-t] [-w <dir>] [-u <user>] [-e <NAME>|<NAME>=<value>]... <name> <cmd>...
@@ -393,7 +394,10 @@ The user-mode gateway of hull does not build on Linux.
 the image with them. hull takes the same pair on its command line. Brig also
 passes `com.urunc.unikernel.hypervisor` on every `genericBoot` run: `hvi`
 unless `BRIG_HYPERVISOR` names another monitor urunc runs. So urunc must know
-that monitor and find its binary.
+that monitor and find its binary. `BRIG_ROOTFS_MODE=overlay-block` adds
+`com.urunc.unikernel.rootfsMode=overlay-block`, which needs the urunc of the
+`feat/linux-overlay-block` branch, the overlayfs snapshotter and `mke2fs` on
+the host.
 
 > [!WARNING]
 > No urunc release reads the pair, v0.8.0 included. On a host that brings its

@@ -119,6 +119,42 @@ func TestNerdctlRunsTheHypervisorAsked(t *testing.T) {
 	}
 }
 
+// BRIG_ROOTFS_MODE=overlay-block reaches urunc as the rootfsMode annotation,
+// only on a generic boot, and only with a mode urunc knows.
+func TestNerdctlPassesTheRootfsMode(t *testing.T) {
+	stageBootAssets(t)
+
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	spec := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true, RootfsMode: RootfsModeOverlayBlock}
+	if err := n.CanRun(spec); err != nil {
+		t.Fatal(err)
+	}
+	args, _, err := n.runArgs(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(args, " "); !strings.Contains(got, "--annotation com.urunc.unikernel.rootfsMode=overlay-block") {
+		t.Errorf("rootfs mode not passed: %s", got)
+	}
+
+	args, _, err = n.runArgs(RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(args, " "); strings.Contains(got, "rootfsMode") {
+		t.Errorf("no mode asked, none passed: %s", got)
+	}
+
+	for _, bad := range []RunSpec{
+		{Name: "s", Image: "img", RootfsMode: RootfsModeOverlayBlock},
+		{Name: "s", Image: "ubuntu:latest", GenericBoot: true, RootfsMode: "overlay"},
+	} {
+		if err := n.CanRun(bad); err == nil || !strings.Contains(err.Error(), "BRIG_ROOTFS_MODE") {
+			t.Errorf("%+v: want a refusal naming BRIG_ROOTFS_MODE, got %v", bad, err)
+		}
+	}
+}
+
 // docker does not carry annotations through to the runtime, so the sandbox
 // would boot without a kernel. Refuse where the cause is still visible.
 func TestNerdctlRefusesGenericBootOnDocker(t *testing.T) {

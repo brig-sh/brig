@@ -109,7 +109,8 @@ func (n *nerdctl) Fallback() string {
 // the shim the run will actually name.
 //
 // The hypervisor named is the monitor brig hands urunc, read from monitor, the
-// same call runArgs makes. RootfsType has no nerdctl flag, so it is not read
+// same call runArgs makes. The rootfs mode is named when brig hands urunc one,
+// read from rootfsMode. RootfsType has no nerdctl flag, so it is not read
 // here.
 //
 // The variable is named beside the shim only when it is set. That is when it
@@ -126,7 +127,16 @@ func (n *nerdctl) Isolation(spec RunSpec) Isolation {
 		// Backend does.
 		monitor = spec.Hypervisor
 	}
-	return containerdIsolation(n.driver(), shim, named, monitor)
+	return containerdIsolation(n.driver(), shim, named, monitor, n.rootfsMode(spec))
+}
+
+// rootfsMode is the rootfs mode brig hands urunc in the annotation, or "" when
+// it hands none. Like monitor, only a generic boot on nerdctl carries one.
+func (n *nerdctl) rootfsMode(spec RunSpec) string {
+	if !spec.GenericBoot || n.isDocker() {
+		return ""
+	}
+	return spec.RootfsMode
 }
 
 // monitor is the hypervisor brig tells urunc to boot with, or "" when brig
@@ -364,6 +374,9 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 	if err := checkSetup(spec, RunPath{n.driver(), containerdRuntime()}); err != nil {
 		return err
 	}
+	if err := checkRootfsMode(spec); err != nil {
+		return err
+	}
 	if spec.GenericBoot {
 		if _, err := linuxMonitor(spec.Hypervisor); err != nil {
 			return err
@@ -588,6 +601,12 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 			return nil, nil, err
 		}
 		annotations = append(annotations, annotationHypervisor+"="+monitor)
+		if mode := n.rootfsMode(spec); mode != "" {
+			if err := checkRootfsMode(spec); err != nil {
+				return nil, nil, err
+			}
+			annotations = append(annotations, annotationRootfsMode+"="+mode)
+		}
 		for _, kv := range annotations {
 			args = append(args, "--annotation", kv)
 		}

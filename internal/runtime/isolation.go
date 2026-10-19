@@ -136,14 +136,20 @@ func sharesHostKernel(shim string) bool { return shimBoundary(shim) == BoundaryC
 //
 // shim decides the boundary and named is how the row prints it, which is the
 // shim with the setting that chose it when one did. monitor is the hypervisor
-// brig passed urunc, or "" for urunc's own default. Only urunc reads it, so
-// only the urunc row names a hypervisor.
-func containerdIsolation(driver, shim, named, monitor string) Isolation {
+// brig passed urunc, or "" for urunc's own default. rootfsMode is the rootfs
+// mode brig passed urunc, or "" when it passed none. Only urunc reads either,
+// so only the urunc row names them, and it names a rootfs mode only when brig
+// passed one.
+func containerdIsolation(driver, shim, named, monitor, rootfsMode string) Isolation {
 	over := driver + " over containerd"
 	switch shimBoundary(shim) {
 	case BoundaryVM:
-		return Isolation{BoundaryVM, fmt.Sprintf("%s, %s, hypervisor %s",
-			over, named, orDefault(monitor, "urunc default"))}
+		detail := fmt.Sprintf("%s, %s, hypervisor %s",
+			over, named, orDefault(monitor, "urunc default"))
+		if rootfsMode != "" {
+			detail += ", rootfs " + rootfsMode
+		}
+		return Isolation{BoundaryVM, detail}
 	case BoundaryContainer:
 		return Isolation{BoundaryContainer, fmt.Sprintf(
 			"%s, %s: the guest shares the host kernel", over, named)}

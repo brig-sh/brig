@@ -91,6 +91,7 @@ run` prints it before the boot:
 ISOLATION    microVM (hull, hvi backend, rootfs hull default)
 ISOLATION    microVM (hull, vz backend, rootfs block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
 ISOLATION    container (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=runc: the guest shares the host kernel)
 ISOLATION    unknown (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
 ```
@@ -105,8 +106,10 @@ refused.
 On hull the row names the rootfs type Brig passes, or `hull default` when
 Brig passes none. Under urunc it names the hypervisor Brig passes, or `urunc
 default` when Brig passes none. Brig passes one for a `genericBoot` profile:
-the monitor that `BRIG_HYPERVISOR` names, and `hvi` by default. A shim that
-`BRIG_CONTAINERD_RUNTIME` chose is printed with the variable.
+the monitor that `BRIG_HYPERVISOR` names, and `hvi` by default. When
+`BRIG_ROOTFS_MODE=overlay-block` asks urunc for an overlay root, the row names
+that rootfs mode too. A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed
+with the variable.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write.
 Name a project on the run line and that project is a second host directory,
