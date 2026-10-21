@@ -468,6 +468,22 @@ CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "the same project restarted the sandbox" \
   || ok "the same project reuses the sandbox"
+
+# git on the host runs a hook the guest writes into the project's .git, and
+# git diff does not show it (#413). The next command for the session names it,
+# here a stop, and the one after has nothing new to say.
+mkdir -p "$PROJ/.git/hooks"
+printf '#!/bin/sh\necho planted\n' > "$PROJ/.git/hooks/post-checkout"
+chmod +x "$PROJ/.git/hooks/post-checkout"
+"$WORK/brig" stop claude > /dev/null 2> "$WORK/gitwatch.err"
+grep -q 'added .git/hooks/post-checkout' "$WORK/gitwatch.err" \
+  && ok "a hook planted in the project's .git is named on the next command" \
+  || bad "a hook planted in the project's .git is named -- got: $(cat "$WORK/gitwatch.err")"
+"$WORK/brig" stop claude > /dev/null 2> "$WORK/gitwatch.err"
+grep -q '\.git changed' "$WORK/gitwatch.err" \
+  && bad "a .git change already named is named again -- got: $(cat "$WORK/gitwatch.err")" \
+  || ok "a .git change is named once"
+rm -rf "$PROJ/.git"
 OTHER="$WORK/otherproject"
 mkdir -p "$OTHER"
 : > "$STUB_LOG"
