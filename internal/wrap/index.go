@@ -363,6 +363,7 @@ func RefOfSandbox(vmName string) string {
 // the runtime does not have needs it, since forgetting the session is all
 // that rm does.
 func ForgetSandbox(vmName string) (bool, error) {
+	forgetGitWatch(func(name string) bool { return name != vmName })
 	index := readSessionIndex()
 	dropped := false
 	for key, entry := range index {
@@ -391,13 +392,14 @@ func ForgetSandbox(vmName string) (bool, error) {
 // that a sandbox brig would not recognise still counts as present.
 func PruneSessions(live []string) {
 	dropLegacyWorkspaceIndex()
-	index := readSessionIndex()
-	if len(index) == 0 {
-		return
-	}
 	have := make(map[string]bool, len(live))
 	for _, name := range live {
 		have[name] = true
+	}
+	forgetGitWatch(func(name string) bool { return have[name] })
+	index := readSessionIndex()
+	if len(index) == 0 {
+		return
 	}
 	dropped := false
 	for key, entry := range index {
