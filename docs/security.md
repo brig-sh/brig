@@ -678,7 +678,43 @@ one of these:
   `git config --local --list` and `ls -la .git/hooks`.
 - Continue from a fresh clone, and leave the directory the agent worked in.
 
-Brig does not record these files or warn when they change.
+Brig warns when these files change. `brig run`, `create`, `sh`, `exec`,
+`stop` and `rm` record what the project's `.git/config`,
+`.git/config.worktree`, `.git/hooks` and `.git/info` hold, and the next of
+them for the same sandbox names each file that was added, changed or
+removed since:
+
+```console
+$ brig stop claude
+brig: /Users/alex/code/demo/.git changed while brig-claude-code could write to it
+  ↳ git on the host runs these files as you, at your next git command there
+  ↳ added .git/hooks/post-checkout
+  → read them with commands that run nothing:  git config --local --list; ls -la .git/hooks
+                                               ↳ or continue from a fresh clone
+```
+
+When stderr is not a terminal, every line starts with `brig:`.
+
+The warning is a look between two brig commands, not a guard:
+
+- A foreground run hands the terminal to the agent, so brig is not there
+  when it ends. Nothing is said until the next brig command for that
+  sandbox. A git command you run before that runs whatever is there.
+- It does not stop the write, and the guest can write again after the look.
+- It names a change, not who made it. A hook manager or a `git push -u` on
+  the host changes the same files.
+- `-q` and `--json` hide it, and the next command that prints warnings
+  names the change instead.
+- Submodules keep their hooks and config under `.git/modules`, which is not
+  looked at.
+- A file that `.git/config` already includes, with `include.path` or
+  `includeIf`, is not looked at unless it is one of the four above. The
+  guest can set `core.fsmonitor` there without `.git/config` changing.
+- The look is bounded, so a guest cannot make it stall every command. It
+  hashes the first 8 MiB of a file and 64 MiB in all. A file past the 64 MiB
+  is recorded by its mode and size only, so a change that keeps both is not
+  named, and neither is one past a file's first 8 MiB that keeps its size.
+  It stops after 4096 entries, and the entries past that are not looked at.
 
 ## Guest images
 
@@ -1176,10 +1212,11 @@ to lose if terminal output matters for your threat model.
 
 ### Files the host runs later
 
-Brig does not stop the agent from writing a file that the host runs later,
-and it does not warn when one changes. The project is mounted read-write,
-`.git` included, so a hook or a program named in `.git/config` runs on the
-host at your next git command there. See
+Brig does not stop the agent from writing a file that the host runs later.
+The project is mounted read-write, `.git` included, so a hook or a program
+named in `.git/config` runs on the host at your next git command there. Brig
+names a change to those files at the next brig command for the sandbox, and
+a git command run before that is not warned about. See
 [What the host runs from the project](#what-the-host-runs-from-the-project).
 
 ### The guest home

@@ -479,6 +479,15 @@ var osPathAllowlist = []osPathAllow{
 	{"fdroot.go", "rootFromFile", "os.OpenRoot", "fmt.Sprintf(\"%s/%d\", dir, f.Fd())",
 		"names a descriptor brig already holds, so no name is resolved again"},
 
+	// The look at a project's .git. Both ask only whether the project path is
+	// still there, to say nothing about one that was deleted; nothing is read
+	// through the path, and the look that follows reaches the project through
+	// openHeldDir, which refuses a link on the way.
+	{"gitwatch.go", "Config.CheckProjectGit", "os.Lstat", "prev.Project",
+		"asks only whether the path exists, and the look that follows refuses a link on the way"},
+	{"gitwatch.go", "Config.CheckProjectGit", "os.Lstat", "project",
+		"asks only whether the path exists, and the look that follows refuses a link on the way"},
+
 	// brig's own state under ~/.brig. The guest home is a child of homes/ and
 	// the guest sees nothing above it.
 	{"index.go", "readIndex", "os.ReadFile", "path", "an index file in brig's state directory"},

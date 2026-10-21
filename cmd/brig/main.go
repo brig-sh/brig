@@ -678,6 +678,13 @@ func dispatch(args []string) error {
 	if jsonRun != nil {
 		jsonRun.sandbox = cfg.VMName
 	}
+	// Before the verb does anything, so a change the guest made to the
+	// project's .git is named ahead of the stop or rm a user is likely to
+	// follow with git, and the look a boot compares against is taken before
+	// the guest can write. See (*Config).CheckProjectGit.
+	if checksProjectGit(verb) {
+		cfg.CheckProjectGit()
+	}
 
 	// Stopping and removing need nothing but the instance name, and are
 	// handled ahead of any credential resolution so they cannot raise the
@@ -803,6 +810,18 @@ func showsEnvelope(verb string, v wrap.Verbosity) bool {
 	switch verb {
 	case "run", "create":
 		return v >= wrap.Verbose
+	}
+	return false
+}
+
+// checksProjectGit reports whether this verb looks at the project's .git: the
+// ones that start, enter, stop or remove a session's sandbox. The previews,
+// info and plan, change nothing and record nothing, so a look they took would
+// move the baseline past a change nobody acted on.
+func checksProjectGit(verb string) bool {
+	switch verb {
+	case "run", "create", "sh", "exec", "stop", "rm":
+		return true
 	}
 	return false
 }
