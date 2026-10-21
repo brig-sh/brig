@@ -36,8 +36,8 @@ type nerdctl struct {
 
 // containerdRuntime is the shim that boots the sandbox as a microVM.
 // BRIG_CONTAINERD_RUNTIME overrides it, for a host with a different microVM
-// shim. A shim brig knows shares the host kernel -- runc, crun -- is refused;
-// see refuseSharedKernel.
+// shim. A shim brig knows shares the host kernel -- runc, crun, the runc
+// shim's own binary -- is refused; see refuseSharedKernel.
 func containerdRuntime() string {
 	if v := os.Getenv("BRIG_CONTAINERD_RUNTIME"); v != "" {
 		return v
@@ -51,9 +51,9 @@ func containerdRuntime() string {
 // assume a microVM; a plain container shares the host kernel, so brig will not
 // boot one. urunc is the default and needs nothing set. BRIG_CONTAINERD_RUNTIME
 // may still name a microVM shim brig cannot classify -- a kata shim, a urunc
-// fork -- which brig cannot prove is not a VM, so it allows those. runc and
-// crun it can identify, by name or by path, as it can a shim name that
-// containerd resolves to the runc shim. See shimBoundary.
+// fork -- which brig cannot prove is not a VM, so it allows those. runc, crun
+// and the runc shim's own binary it can identify, by name or by path, as it
+// can a shim name that containerd resolves to the runc shim. See shimBoundary.
 func refuseSharedKernel() error {
 	shim := containerdRuntime()
 	if sharesHostKernel(shim) {

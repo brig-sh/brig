@@ -277,10 +277,11 @@ attempt the run. `docker` does not pass the boot annotations that `urunc`
 needs through to the runtime.
 
 **`BRIG_CONTAINERD_RUNTIME`** can name another microVM shim, for a host that
-has one. Brig refuses a shim that it knows shares the host kernel: `runc` or
-`crun`, by name or by path. A container that shares the host kernel with the
-agent is not the boundary Brig provides. `brig info` still names the shim
-that a run resolves, and Brig refuses the run.
+has one. Brig refuses a shim that it knows shares the host kernel: `runc`,
+`crun` or the runc shim binaries `containerd-shim-runc-v1` and `-v2`, by name
+or by path. A container that shares the host kernel with the agent is not the
+boundary Brig provides. `brig info` still names the shim that a run resolves,
+and Brig refuses the run.
 
 ## Building from source
 
