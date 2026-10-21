@@ -80,8 +80,9 @@ The sandbox is a microVM on macOS and on Linux.
 
 On a Linux host that has another microVM shim, `BRIG_CONTAINERD_RUNTIME` can
 name that shim. Brig refuses a shim that it knows shares the host kernel:
-`runc` or `crun`, by name or by path. A container that shares the host kernel
-is not the boundary Brig provides.
+`runc`, `crun` or the runc shim binaries `containerd-shim-runc-v1` and `-v2`,
+by name or by path. A container that shares the host kernel is not the
+boundary Brig provides.
 
 The `ISOLATION` row of the execution envelope names the boundary that this
 run resolved. `brig info` prints the row and boots nothing. `brig --verbose

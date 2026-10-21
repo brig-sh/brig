@@ -122,6 +122,36 @@ func TestNerdctlReportsASharedKernelForAPathToRuncOrCrun(t *testing.T) {
 	}
 }
 
+// The runc shim's own binary, by name or by path, boots on io.containerd.runc.v2
+// as the bare runtimes do. It passed the refusal and created a container on the
+// runc shim (#468), so CanRun must refuse it and Run must not reach the runtime.
+func TestNerdctlRefusesTheRuncShimBinaryByNameOrPath(t *testing.T) {
+	for _, shim := range []string{
+		"containerd-shim-runc-v2",
+		"containerd-shim-runc-v1",
+		"/home/u/.local/share/brig/data/bin/containerd-shim-runc-v2",
+		"./containerd-shim-runc-v2",
+	} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		got := n.Isolation("")
+		if got.Boundary != BoundaryContainer {
+			t.Errorf("%s boots the runc shim, so this is a container: %s", shim, got.Line())
+		}
+		if !strings.Contains(got.Detail, shim+": the guest shares the host kernel") {
+			t.Errorf("the row does not name the value and what it costs: %s", got.Line())
+		}
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err == nil {
+			t.Errorf("%s: CanRun let the runc shim through", shim)
+		}
+		err := n.Run(RunSpec{Name: "brig-x", Image: "img"})
+		if err == nil || strings.Contains(err.Error(), "STUB RAN") {
+			t.Errorf("%s: Run reached the runtime instead of refusing: %v", shim, err)
+		}
+	}
+}
+
 // containerd starts a shim by the last two dot-separated parts of the runtime
 // name (BinaryName in containerd's pkg/shim), so the rest of the name says
 // nothing about what boots. Each name is placed by the shim it resolves to. A
