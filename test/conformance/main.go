@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"syscall"
 	"time"
 )
@@ -38,9 +39,10 @@ func mainErr(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	brig := fs.String("brig", "", "the brig binary to test (required)")
 	probe := fs.String("probe", "", "netprobe built for the guest (required)")
-	runtime := fs.String("runtime", "", "the runtime brig boots, whose version the record names (default $BRIG_RUNTIME_BIN, else hull)")
+	runtime := fs.String("runtime", "", "the runtime brig boots, whose version the record names (default $BRIG_RUNTIME_BIN, else hull on hvi and nerdctl on nerdctl)")
 	image := fs.String("image", defaultImage, "guest image; it needs curl for the proxy case")
-	backend := fs.String("backend", "hvi", "backend to boot on; the runner boots hvi only")
+	backend := fs.String("backend", defaultBackend(), "backend to boot on: "+backendNames())
+	brigCtl := fs.String("brig-ctl", "brig-ctl", "on nerdctl, the runtime bundle's brig-ctl, whose pins the record names")
 	record := fs.String("record", "", "where to write the record (default docs/manual-tests/egress-conformance-<backend>-<runtime version>.md)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -52,8 +54,13 @@ func mainErr(args []string, stdout, stderr io.Writer) int {
 	if *runtime == "" {
 		*runtime = os.Getenv("BRIG_RUNTIME_BIN")
 	}
+	be, ok := backends[*backend]
+	if !ok {
+		fmt.Fprintf(stderr, "conformance: backend %q: this runner boots %s\n", *backend, backendNames())
+		return 2
+	}
 	if *runtime == "" {
-		*runtime = "hull"
+		*runtime = be.runtime
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
@@ -63,6 +70,7 @@ func mainErr(args []string, stdout, stderr io.Writer) int {
 		exec: runCmd, now: time.Now, log: stdout,
 		hostAddr: outboundAddr, lookup: lookupV4,
 		hviPath: func() (string, error) { return exec.LookPath("hvi") },
+		brigCtl: *brigCtl,
 		env:     os.Environ(),
 	}
 	return runSuite(ctx, s, *record, stdout, stderr)
@@ -84,7 +92,7 @@ func runSuite(ctx context.Context, s *suite, path string, stdout, stderr io.Writ
 		return 1
 	}
 	if path == "" {
-		path = recordPath(s.backend, rep.runtime)
+		path = recordPath(s.backend, rep.version())
 	}
 	result := "PASS"
 	if rep.failed() {
@@ -137,4 +145,13 @@ func runCmd(ctx context.Context, env []string, name string, args ...string) (str
 		return out.String(), errb.String(), exitErr.ExitCode(), nil
 	}
 	return out.String(), errb.String(), -1, err
+}
+
+// defaultBackend is the one this host has: hvi is a macOS backend, and on
+// Linux brig enforces a policy with nerdctl.
+func defaultBackend() string {
+	if goruntime.GOOS == "linux" {
+		return "nerdctl"
+	}
+	return "hvi"
 }
