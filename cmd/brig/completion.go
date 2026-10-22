@@ -208,9 +208,11 @@ func complete(words []string) (string, []string) {
 		}
 		return names(cur, []string{"bash", "fish", "zsh"})
 	case verb == "ls":
-		// One flag, no operand.
+		// Two flags, no operand. ls reads them by hand rather than through a
+		// FlagSet, so TestGroupsTableCoversEveryGroupFlag cannot see them: keep
+		// this list in step with listSandboxes.
 		if strings.HasPrefix(cur, "-") {
-			return names(cur, []string{"--quiet", "-q"})
+			return names(cur, []string{"--quiet", "-q", "--json"})
 		}
 		return dirNone, nil
 	case verb == "version":
@@ -483,7 +485,7 @@ type sub struct {
 // do not.
 var groups = map[string][]sub{
 	"agent": {
-		{name: "ls"},
+		{name: "ls", flags: []string{"--json"}},
 		{name: "show", flags: []string{"--json"}, operands: []operand{opAgent}},
 		{
 			name:     "new",
@@ -537,7 +539,7 @@ var groups = map[string][]sub{
 			operands: []operand{opNothing},
 		},
 		{name: "delete", flags: []string{"--yes", "-y"}, operands: []operand{opNothing}},
-		{name: "ls"},
+		{name: "ls", flags: []string{"--json"}},
 		{
 			name:     "import",
 			flags:    []string{"--dry-run", "--yes", "-y"},
