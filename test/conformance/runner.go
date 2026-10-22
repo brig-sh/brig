@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	// defaultImage carries curl, which the proxy case needs, and boots on
-	// hvi as a plain OCI image.
+	// defaultImage carries curl, which the proxy case needs, and boots as a
+	// plain OCI image on hvi and under urunc on Linux.
 	defaultImage = "ghcr.io/brig-sh/claude-code-stock:root"
 	profileName  = "egress-conformance"
 	// sandboxName is the runtime's name for the profile's sandbox.
@@ -68,6 +68,9 @@ type suite struct {
 	// hviPath finds the hvi the runtime boots. hull runs the first one on
 	// PATH.
 	hviPath func() (string, error)
+	// brigCtl is the Linux runtime bundle's control command, which prints
+	// the bundle's pins. See (*suite).pins.
+	brigCtl string
 	env     []string
 
 	root     string
@@ -104,15 +107,25 @@ type report struct {
 	runtime string
 	brig    string
 	// brigBin and root are the brig binary and the suite's state, which the
-	// record leaves out.
+	// record leaves out, and brigCtl a path to brig-ctl, which it leaves out
+	// too: it can be under a home.
 	brigBin string
 	root    string
-	image   string
-	hvi     string
-	assets  string
-	date    time.Time
-	svc     string
-	host    string
+	brigCtl string
+	// probe is the brig verb the probes ran under. See probeArgv.
+	probe string
+	image string
+	// stack is what else booted, which depends on the backend: hvi on
+	// macOS, the runtime bundle's parts on Linux.
+	stack  []stackRow
+	assets string
+	// bundle is the Linux runtime bundle's version, and pins all it pins.
+	// Both are empty on hvi, and on a nerdctl the bundle did not install.
+	bundle string
+	pins   map[string]string
+	date   time.Time
+	svc    string
+	host   string
 	// problems are failures of the run as a whole, apart from any case.
 	problems []string
 	boots    map[string]*bootResult
@@ -138,13 +151,17 @@ func (s *suite) printf(format string, a ...any) {
 // do runs the whole suite. Every way it can go wrong ends in a report that
 // fails. There is no skip: a release checklist reads a skip as a pass.
 func (s *suite) do(ctx context.Context) *report {
-	rep := &report{backend: s.backend, image: s.image, date: s.now().UTC(), boots: map[string]*bootResult{}, brigBin: s.brig}
+	rep := &report{backend: s.backend, image: s.image, date: s.now().UTC(), boots: map[string]*bootResult{}, brigBin: s.brig,
+		probe: "brig " + s.probeArgv()[0]}
+	if strings.Contains(s.brigCtl, "/") {
+		rep.brigCtl = s.brigCtl
+	}
 	problem := func(format string, a ...any) *report {
 		rep.problems = append(rep.problems, fmt.Sprintf(format, a...))
 		return rep
 	}
-	if s.backend != "hvi" {
-		return problem("backend %q: this runner boots the hvi backend only", s.backend)
+	if _, ok := backends[s.backend]; !ok {
+		return problem("backend %q: this runner boots %s", s.backend, backendNames())
 	}
 
 	out, stderr, code, err := s.exec(ctx, s.env, s.runtime, "--version")
@@ -185,8 +202,14 @@ func (s *suite) do(ctx context.Context) *report {
 	if err != nil {
 		return problem("%v", err)
 	}
-	rep.hvi = s.hviLine(ctx)
-	rep.assets = s.assetsLine(ctx, env)
+	switch s.backend {
+	case "nerdctl":
+		rep.stack = s.nerdctlStack(ctx, env, rep)
+		rep.assets = s.nerdctlAssets(env, rep)
+	default:
+		rep.stack = []stackRow{{"hvi", s.hviLine(ctx)}}
+		rep.assets = s.assetsLine(ctx, env)
+	}
 
 	addr, err := s.hostAddr()
 	if err != nil {
@@ -273,6 +296,7 @@ func (s *suite) do(ctx context.Context) *report {
 		rep.problems = append(rep.problems, fmt.Sprintf("the host listener accepted %d connections under %s", n, denyPolicy))
 	}
 	for _, c := range cases {
+		c = c.on(s.backend)
 		b := rep.boots[c.policy]
 		r := row{c: c, with: b.obs[c.id], without: base.obs[c.id]}
 		r.verdict, r.why = judge(c, r.with, r.without, b.controlsOK)
@@ -340,18 +364,24 @@ func (s *suite) prepare(root string) ([]string, error) {
 	// guest. binary is never run, since the suite boots with -d. The profile
 	// is marshaled, so an -image value is one YAML string whatever it holds.
 	// Two vCPUs: on one, brig sh often reads the guest's share as stale and
-	// restarts it, and every restart starts the gateway over.
-	profile, err := yaml.Marshal(map[string]any{
+	// restarts it, and every restart starts the gateway over. No hypervisor on
+	// Linux: brig ignores the field there, and a profile that named one would
+	// read as if it mattered.
+	doc := map[string]any{
 		"name":        profileName,
 		"desc":        "network conformance suite guest",
 		"binary":      "sh",
 		"image":       s.image,
-		"hypervisor":  s.backend,
 		"genericBoot": true,
 		"guestHome":   "/root",
 		"mem":         1024,
 		"cpus":        2,
-	})
+	}
+	hypervisor := backends[s.backend].hypervisor
+	if hypervisor != "" {
+		doc["hypervisor"] = hypervisor
+	}
+	profile, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
@@ -371,15 +401,18 @@ func (s *suite) prepare(root string) ([]string, error) {
 		}
 		env = append(env, kv)
 	}
-	return append(env,
+	env = append(env,
 		"BRIG_PROFILE_DIR="+dirs["profiles"],
 		"BRIG_POLICY_DIR="+dirs["policies"],
 		"BRIG_STATE_DIR="+dirs["state"],
 		"BRIG_WORKSPACE="+dirs["home"],
-		"BRIG_HYPERVISOR="+s.backend,
 		// A bare name is a PATH lookup to brig too, the one --version ran.
 		"BRIG_RUNTIME_BIN="+s.runtime,
-	), nil
+	)
+	if hypervisor != "" {
+		env = append(env, "BRIG_HYPERVISOR="+hypervisor)
+	}
+	return env, nil
 }
 
 // hviLine names the hvi the runtime boots. hvi --version names no build, so
@@ -596,7 +629,11 @@ func (s *suite) boot(ctx context.Context, env []string, policy string) *bootResu
 	if err != nil || code != 0 {
 		return unrun("brig run: " + failure(stderr, code, err))
 	}
-	b.digest = s.imageDigest(ctx, env)
+	if s.backend == "nerdctl" {
+		b.digest = s.nerdctlDigest(ctx, env)
+	} else {
+		b.digest = s.imageDigest(ctx, env)
+	}
 
 	// probe runs c once and reports whether brig restarted the sandbox on
 	// the way. brig restarts a sandbox whose share went stale, or whose
@@ -609,7 +646,7 @@ func (s *suite) boot(ctx context.Context, env []string, policy string) *bootResu
 				return observation{invalid: "the host could not resolve " + a}, false
 			}
 		}
-		argv := []string{"sh", profileName}
+		argv := s.probeArgv()
 		if len(penv) > 0 {
 			argv = append(append(argv, "env"), penv...)
 		}
@@ -618,6 +655,9 @@ func (s *suite) boot(ctx context.Context, env []string, policy string) *bootResu
 		// which fails this one and passes none.
 		before := s.accepted.Load()
 		stdout, stderr, code, err := brig(probeTimeout, argv...)
+		if s.backend == "nerdctl" {
+			code = nerdctlExit(stderr, code)
+		}
 		b.hits[c.id] += int(s.accepted.Load() - before)
 		why, restarted := restartReason(stderr)
 		if restarted {
@@ -680,6 +720,19 @@ func (s *suite) boot(ctx context.Context, env []string, policy string) *bootResu
 		}
 	}
 	return b
+}
+
+// probeArgv is the brig command a probe runs under, up to the guest command.
+// brig sh runs a command on a guest pty whatever brig is attached to (#335),
+// and nerdctl refuses a pty with no terminal behind it: "provided file is not
+// a console". The suite has none, so on nerdctl every probe failed. brig exec
+// asks for one only from a terminal, and docs/migration.md keeps it for this
+// until sh can pipe. It runs no login shell, so the record says which it was.
+func (s *suite) probeArgv() []string {
+	if s.backend == "nerdctl" {
+		return []string{"exec", profileName, "--"}
+	}
+	return []string{"sh", profileName}
 }
 
 // restartReason reads brig's warning that it restarted the sandbox. Every

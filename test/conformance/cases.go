@@ -19,8 +19,9 @@ const (
 	// says so. It is recorded as a known gap when it opens.
 	expectGap
 	// expectNoRoute is the IPv6 literal. hull's gateway drops every IPv6
-	// frame, with or without a policy, so the run with no policy says
-	// whether the policy stopped it.
+	// frame, with or without a policy, and a guest on Linux has no IPv6
+	// route either, so the run with no policy says whether the policy
+	// stopped it.
 	expectNoRoute
 )
 
@@ -104,6 +105,10 @@ type testCase struct {
 	// other unproven case fails the run, so a run whose denied targets were
 	// all shut for some other reason cannot pass.
 	unprovenWhy string
+	// unprovenOn is the reason on one backend, where it is that backend's
+	// own doing rather than the host's. A record gives the reason for what
+	// its own run saw, not one from a runtime that did not run.
+	unprovenOn map[string]string
 }
 
 // cases are the cases from #264, in the order each boot runs them. Order
@@ -121,9 +126,9 @@ var cases = []testCase{
 	// dropped datagram gets, and this shows the boot's UDP path works.
 	{id: "allowed-resolver", policy: denyPolicy, title: "a resolver in an allowed range, over UDP",
 		args: []string{"dns", "-timeout", udpTimeout, "1.1.1.2", "example.com"}, want: expectReach},
-	// hull's gateway answers REFUSED for a name the policy denies. An
-	// NXDOMAIN is also what it answers when its own lookup failed, so only
-	// the REFUSED passes.
+	// hull's gateway, and brig's resolver on Linux, answer REFUSED for a
+	// name the policy denies. An NXDOMAIN is also what they answer when their
+	// own lookup failed, so only the REFUSED passes.
 	{id: "denied-name", policy: denyPolicy, title: "a name no rule allows",
 		args: []string{"tcp", "example.net:443"}, want: expectDeny, mode: resolveRefused},
 	{id: "ipv4-literal", policy: denyPolicy, title: "an IPv4 literal no cidr rule matches",
@@ -148,7 +153,10 @@ var cases = []testCase{
 		args: []string{"tcp", hostSvc}, want: expectDeny, mode: connectRefused},
 	{id: "metadata", policy: denyPolicy, title: "169.254.169.254",
 		args: []string{"tcp", "169.254.169.254:80"}, want: expectDeny, mode: connectRefused,
-		unprovenWhy: "hull's gateway resets every connection to 169.254.0.0/16, with a policy or without one"},
+		unprovenWhy: "a host outside a cloud has no metadata service",
+		unprovenOn: map[string]string{
+			"hvi": "hull's gateway resets every connection to 169.254.0.0/16, with a policy or without one",
+		}},
 
 	{id: "allow/allowed-name", policy: allowPolicy, title: "a name no rule denies",
 		args: []string{"tcp", "example.com:443"}, want: expectReach},
@@ -174,4 +182,13 @@ var cases = []testCase{
 // all, so two runs of one case read the same whatever the host's address.
 func (c testCase) command() string {
 	return strings.Join(append(append([]string{}, c.env...), append([]string{"netprobe"}, c.args...)...), " ")
+}
+
+// on is the case as a run on backend judges it, with that backend's reason
+// for an unproven target.
+func (c testCase) on(backend string) testCase {
+	if why, ok := c.unprovenOn[backend]; ok {
+		c.unprovenWhy = why
+	}
+	return c
 }
