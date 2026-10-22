@@ -33,6 +33,7 @@ other pages follow, in the order a new reader needs them.
 | [authentication.md](authentication.md) | How to log an agent in, and Git access inside the guest |
 | [secrets.md](secrets.md) | The secret store, profile secret fields, and `brig secret import` |
 | [policies.md](policies.md) | Networking modes and egress policy |
+| [moving-claude-sessions.md](moving-claude-sessions.md) | How to carry Claude Desktop and Claude Code sessions into a Brig sandbox |
 | [profiles.md](profiles.md) | The profile file format, and how to run your own agent |
 | [guest-image.md](guest-image.md) | The contract an image must meet to boot as a guest |
 | [completions.md](completions.md) | Shell completion for bash, zsh and fish |
