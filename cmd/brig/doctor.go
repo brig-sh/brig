@@ -248,13 +248,13 @@ func brokerCheck() check {
 			return check{Name: "broker", State: stateInfo, Finding: finding}
 		}
 		port := strings.TrimSpace(string(blob))
-		// A client of this port sends its tokens to it, so anything else
-		// listening there receives them.
+		// A host sandbox that ran with a route sends its tokens to this port,
+		// so anything else listening there receives them.
 		if holder, held := portHolder(port); held {
 			return check{Name: "broker", State: stateFail,
 				Finding: fmt.Sprintf("%s, and %s listens on its port %s", finding, holder, port),
-				Fix: "stop that process: a client of this port sends its session tokens to it, " +
-					"and brig refuses to start the broker while it is taken"}
+				Fix: "stop that process: a host sandbox that ran with a route sends its session tokens to " +
+					"this port, and brig refuses to start the broker while it is taken"}
 		}
 		return check{Name: "broker", State: stateInfo, Finding: finding + ", port " + port + " kept for the next start"}
 	}

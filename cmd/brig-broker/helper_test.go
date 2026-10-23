@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -42,9 +44,10 @@ const (
 // the credential.
 //
 // brig starts the broker with an environment of its own (brokerEnv), so the
-// switch reaches it through a wrapper script that BRIG_BROKER_BIN names.
-// script/smoke.sh writes that wrapper around a test binary of this package,
-// so its routed run reads no keychain and reaches no real upstream.
+// switch reaches it through the wrapper script that brokerHelperBin writes
+// and BRIG_BROKER_BIN names. script/smoke.sh writes the same wrapper around
+// a test binary of this package, so its routed run reads no keychain and
+// reaches no real upstream.
 func TestBrokerHelperProcess(t *testing.T) {
 	if os.Getenv(brokerHelperEnv) != "1" {
 		return
@@ -112,3 +115,45 @@ func loggingUpstream(path string) (*httptest.Server, error) {
 		_, _ = w.Write(saw)
 	})), nil
 }
+
+// readUpstreamLog reads the requests the helper broker's upstream logged.
+func readUpstreamLog(t *testing.T, path string) []upstreamRequest {
+	t.Helper()
+	blob, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	var out []upstreamRequest
+	for _, line := range strings.Split(strings.TrimSpace(string(blob)), "\n") {
+		if line == "" {
+			continue
+		}
+		var r upstreamRequest
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatalf("upstream log line %q: %v", line, err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// brokerHelperBin writes a brig-broker into dir that runs this test binary
+// as the helper broker, logging its upstream to upstreamLog, and returns its
+// path for BRIG_BROKER_BIN.
+func brokerHelperBin(t *testing.T, dir, upstreamLog string) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "brig-broker")
+	script := fmt.Sprintf("#!/bin/sh\n%s=1 %s=%s %s=%d exec %s -test.run='^TestBrokerHelperProcess$' -- \"$@\"\n",
+		brokerHelperEnv, upstreamLogEnv, shellQuote(upstreamLog), brokerParentEnv, os.Getpid(), shellQuote(self))
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// shellQuote quotes s as one word for sh.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

@@ -42,10 +42,69 @@ func vars(vs []runtime.Var) map[string]runtime.Var {
 	return out
 }
 
+// The host kind reaches a route over loopback, with no CA. The guest gets
+// the route URL and the token where each preset says, the token is marked
+// Secret, and git is pointed at the route through GIT_CONFIG_COUNT with a
+// helper that reads the token from the environment, never from the config.
+func TestGuestEnvOnLoopback(t *testing.T) {
+	ep := EndpointFor(runtime.HostKind, 40123)
+	if ep.Transport != TransportLoopback || ep.URL("brig-a", "anthropic") != "http://127.0.0.1:40123/brig-a/r/anthropic" {
+		t.Fatalf("endpoint %+v, URL %s", ep, ep.URL("brig-a", "anthropic"))
+	}
+	routes := []v1alpha1.Route{
+		presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token"),
+		presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "claude-credentials"),
+	}
+	got, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a", "github": "tok-g"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vars(got)
+	want := map[string]string{
+		"ANTHROPIC_BASE_URL":      "http://127.0.0.1:40123/brig-a/r/anthropic",
+		"CLAUDE_CODE_OAUTH_TOKEN": "tok-a",
+		"BRIG_ROUTE_GITHUB_TOKEN": "tok-g",
+		"GIT_CONFIG_COUNT":        "4",
+		"GIT_CONFIG_KEY_0":        "url.http://127.0.0.1:40123/brig-a/r/github/.insteadOf",
+		"GIT_CONFIG_VALUE_0":      "https://github.com/",
+		"GIT_CONFIG_KEY_1":        "url.http://127.0.0.1:40123/brig-a/r/github/.insteadOf",
+		"GIT_CONFIG_VALUE_1":      "git@github.com:",
+		"GIT_CONFIG_KEY_2":        "credential.http://127.0.0.1:40123/brig-a/r/github/.helper",
+		"GIT_CONFIG_VALUE_2":      "",
+	}
+	for name, value := range want {
+		if v, ok := env[name]; !ok || v.Value != value {
+			t.Errorf("%s = %q (present %v), want %q", name, v.Value, ok, value)
+		}
+	}
+	helper := env["GIT_CONFIG_VALUE_3"].Value
+	if !strings.Contains(helper, "$BRIG_ROUTE_GITHUB_TOKEN") || strings.Contains(helper, "tok-g") ||
+		!strings.Contains(helper, "username=x-access-token") {
+		t.Errorf("the credential helper is %q", helper)
+	}
+	for _, v := range got {
+		secret := v.Value == "tok-a" || v.Value == "tok-g"
+		if secret != v.Secret {
+			t.Errorf("%s: Secret = %v", v.Name, v.Secret)
+		}
+		if !v.Secret && (strings.Contains(v.Value, "tok-a") || strings.Contains(v.Value, "tok-g")) {
+			t.Errorf("%s carries a token outside a Secret variable", v.Name)
+		}
+	}
+	for _, name := range caEnv {
+		if _, ok := env[name]; ok {
+			t.Errorf("the loopback transport points %s at a CA", name)
+		}
+	}
+	if _, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a"}, nil); err == nil {
+		t.Error("a route without a token was handed to the guest")
+	}
+}
+
 // A microVM reaches brig.internal over TLS, and is pointed at the brig CA.
 func TestGuestEnvOnBrigInternal(t *testing.T) {
-	ep := HostEndpoint{Transport: TransportBrigInternal}
-	if ep.URL("brig-a", "anthropic") != "https://brig.internal/brig-a/r/anthropic" {
+	ep := EndpointFor("hull", 0)
+	if ep.URL("brig-a", "anthropic") != "https://brig.internal/brig-a/r/anthropic" || ep.LoopbackPorts() != nil {
 		t.Fatalf("endpoint %+v", ep)
 	}
 	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "anthropic", v1alpha1.PresetAnthropicAPIKey, "k")},
@@ -379,7 +438,7 @@ func TestConcurrentRegistrationsStartOneBroker(t *testing.T) {
 	t.Logf("%d concurrent registrations: one broker, pid %d, port %d", n, pids[0], ports[0])
 }
 
-// The recorded port is the one the broker binds at every start. When another process
+// The recorded port is the one host sandboxes allow. When another process
 // holds it, brig refuses the run, starts nothing, and says why.
 func TestRegisterRefusesWhenThePortIsHeld(t *testing.T) {
 	setBroker(t)
@@ -414,7 +473,7 @@ func TestRegisterRefusesWhenThePortIsHeld(t *testing.T) {
 }
 
 // brig refuses a host directory that is a link, before it writes anything
-// through it.
+// through it, as the host kind does.
 func TestRegisterRefusesALinkedHostDirectory(t *testing.T) {
 	tmp := setBroker(t)
 	target := filepath.Join(tmp, "elsewhere")
@@ -445,7 +504,7 @@ func TestRegisterRefusesALinkedHostDirectory(t *testing.T) {
 func TestTheGitHelperQuotesTheUsername(t *testing.T) {
 	r := presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token")
 	r.Inject.BasicAuth.Username = "x';touch planted;'"
-	got, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", []v1alpha1.Route{r},
+	got, err := EndpointFor(runtime.HostKind, 1).GuestEnv("brig-a", []v1alpha1.Route{r},
 		map[string]string{"github": "tok-g"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -472,7 +531,7 @@ func TestTheGitHelperQuotesTheUsername(t *testing.T) {
 func TestGitEntriesAddToTheGuestsOwn(t *testing.T) {
 	routes := []v1alpha1.Route{presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token")}
 	own := []runtime.Var{{Name: "GIT_CONFIG_COUNT", Value: "2"}, {Name: "GIT_CONFIG_KEY_0", Value: "core.editor"}}
-	got, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, own)
+	got, err := EndpointFor(runtime.HostKind, 1).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, own)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +544,7 @@ func TestGitEntriesAddToTheGuestsOwn(t *testing.T) {
 		t.Error("a route entry took the guest's own key 0")
 	}
 	bad := []runtime.Var{{Name: "GIT_CONFIG_COUNT", Value: "two"}}
-	if _, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, bad); err == nil {
+	if _, err := EndpointFor(runtime.HostKind, 1).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, bad); err == nil {
 		t.Error("a GIT_CONFIG_COUNT that is not a count was accepted")
 	}
 }
@@ -535,8 +594,9 @@ func TestForgetRevokesUnderAnotherLocale(t *testing.T) {
 	}
 }
 
-// A sandbox name can be longer than 64 bytes. A routed run under such a
-// name registers, mints and is forgotten like any other.
+// A sandbox name is a directory name of the host kind, so it can be longer
+// than 64 bytes. A routed run under such a name registers, mints and is
+// forgotten like any other.
 func TestALongSandboxNameRegisters(t *testing.T) {
 	setBroker(t)
 	dir, err := Dir()
@@ -657,7 +717,7 @@ func TestForgetAsksTheSocketWhateverThePidFileSays(t *testing.T) {
 func TestGuestEnvOfARouteInAnotherModeIsTheTokenAlone(t *testing.T) {
 	other := presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "claude-credentials")
 	other.Mode = "relay"
-	ep := HostEndpoint{Transport: TransportBrigInternal}
+	ep := EndpointFor("hull", 0)
 	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{other}, map[string]string{"anthropic": "tok-a"}, nil)
 	if err != nil {
 		t.Fatal(err)
