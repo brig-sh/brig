@@ -353,3 +353,41 @@ func TestBackendNamesReadAsAList(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+// The reason an unproven case gives is the one its own run's backend has, all
+// the way into the record. Taking it from the case alone would give the hvi
+// record the Linux reason, and lose the hull clause without anything failing.
+func TestRecordGivesTheBackendsOwnUnprovenReason(t *testing.T) {
+	for backend, want := range map[string]string{
+		"hvi":     "hull's gateway resets every connection to 169.254.0.0/16",
+		"nerdctl": "a host outside a cloud has no metadata service",
+	} {
+		t.Run(backend, func(t *testing.T) {
+			f, s := nerdctlSuite(t)
+			if backend == "hvi" {
+				f = newFake(t)
+				s = newSuite(t, f)
+			}
+			well := f.answer
+			f.answer = func(policy string, env, args []string, n int) outcome {
+				if policy == noPolicy && caseFor(t, s, policy, env, args).id == "metadata" {
+					return timedOut
+				}
+				return well(policy, env, args, n)
+			}
+			rep := run(t, s)
+			var row string
+			for _, line := range strings.Split(rep.markdown(), "\n") {
+				if strings.HasPrefix(line, "| `metadata` |") {
+					row = line
+				}
+			}
+			if !strings.Contains(row, "unproven") || !strings.Contains(row, want) {
+				t.Errorf("the metadata row does not give %q:\n%s", want, row)
+			}
+			if backend == "nerdctl" && strings.Contains(row, "hull") {
+				t.Errorf("the nerdctl record cites hull:\n%s", row)
+			}
+		})
+	}
+}
