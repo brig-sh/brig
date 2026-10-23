@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,23 @@ func TestTheRunPathCannotReachTheImporter(t *testing.T) {
 		}
 		if strings.Contains(string(out), "brig/internal/hostsrc") {
 			t.Errorf("%s depends on internal/hostsrc: a run can now reach a host source", pkg)
+		}
+	}
+}
+
+// The run path delivers what the store holds and never calls a provider.
+// internal/renew sends refresh tokens to a token endpoint, and a refresh
+// rotates a pair the host's own agent may share. So no run-path package
+// links it, and neither does cmd/brig: the CLI has no verb that refreshes.
+func TestTheRunPathCannotReachTheRefresher(t *testing.T) {
+	const refresher = "github.com/brig-sh/brig/internal/renew"
+	for _, pkg := range append(slices.Clone(runPathPackages), "github.com/brig-sh/brig/cmd/brig") {
+		out, err := exec.Command("go", "list", "-deps", pkg).Output()
+		if err != nil {
+			t.Fatalf("go list -deps %s: %v", pkg, err)
+		}
+		if slices.Contains(strings.Split(string(out), "\n"), refresher) {
+			t.Errorf("%s depends on %s: a run can now refresh a credential", pkg, refresher)
 		}
 	}
 }
