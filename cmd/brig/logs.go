@@ -127,7 +127,7 @@ func resolveSandbox(ref string) (*wrap.Config, runtime.Runtime, string, error) {
 	if !ok {
 		return nil, nil, "", notFoundf("unknown profile %q. `brig agent ls` lists them", r.Agent)
 	}
-	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin})
+	rt, err := runtime.DetectFor(runtime.Preference{Bin: t.RuntimeBin, Isolation: t.Isolation})
 	if err != nil {
 		return nil, nil, "", err
 	}

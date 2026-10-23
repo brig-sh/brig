@@ -16,6 +16,9 @@ import (
 var (
 	execHandover   = syscall.Exec
 	attachHandover = RunAttached
+	// attachStarted is RunAttached with a call once the child has a pid,
+	// for the host kind, which records it.
+	attachStarted = runAttached
 )
 
 // RunAttached runs argv as a child of brig, inheriting brig's own stdin, stdout
@@ -35,7 +38,11 @@ var (
 // A child killed by a signal is reported as 128 plus the signal number, the
 // convention a shell follows, so a caller mapping the status onto its own exit
 // returns the same number a shell would for the same death.
-func RunAttached(argv, env []string) (int, error) {
+func RunAttached(argv, env []string) (int, error) { return runAttached(argv, env, nil) }
+
+// runAttached is RunAttached, calling started with the child's pid when it
+// is not nil.
+func runAttached(argv, env []string, started func(pid int)) (int, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -49,6 +56,9 @@ func RunAttached(argv, env []string) (int, error) {
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
+	}
+	if started != nil {
+		started(cmd.Process.Pid)
 	}
 
 	// The child holds the terminal, so it sits in brig's own process group and a

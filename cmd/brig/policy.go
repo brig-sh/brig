@@ -1175,7 +1175,7 @@ func checkPolicy(args []string) error {
 	// endpoint route at brig.internal on its own gateway. See routeRefusal in
 	// internal/wrap.
 	if modes, byMode := routeModes(loaded); len(modes) > 0 {
-		rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
+		rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin, Isolation: p.Isolation})
 		for _, m := range modes {
 			err := detectErr
 			if err != nil {

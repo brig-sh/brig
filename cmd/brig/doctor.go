@@ -184,8 +184,11 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		hostCheck(),
 		virtualCheck(),
 		rtCheck,
-		brokerCheck(),
 	}
+	if goruntime.GOOS == "darwin" {
+		checks = append(checks, sandboxCheck())
+	}
+	checks = append(checks, brokerCheck())
 	for _, mc := range modeChecks {
 		checks = append(checks, mc(agent, rt))
 	}
@@ -197,6 +200,22 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		brigdCheck(),
 		imageCheck(agent, runtimeOK),
 	)
+}
+
+// lookSandboxExec is the seam a test replaces to take sandbox-exec away.
+var lookSandboxExec = func() (string, error) { return exec.LookPath("sandbox-exec") }
+
+// sandboxCheck reports whether the host kind can run on this Mac. It does not
+// gate the exit status: a microVM run never calls sandbox-exec.
+func sandboxCheck() check {
+	path, err := lookSandboxExec()
+	if err != nil {
+		return check{Name: "sandbox", State: stateFail,
+			Finding: "sandbox-exec is not on PATH, so the host kind (isolation: process) cannot run",
+			Fix:     "it ships with macOS as /usr/bin/sandbox-exec; put /usr/bin on PATH"}
+	}
+	return check{Name: "sandbox", State: statePass,
+		Finding: "sandbox-exec at " + path + ", for the host kind (isolation: process)"}
 }
 
 // brokerCheck reports on brig-broker, which serves the routes of a run:
@@ -346,9 +365,9 @@ func virtualCheck() check {
 // assets directory of a hull the run never asks.
 func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	detect := detectRuntime
-	if agent != nil && agent.RuntimeBin != "" {
+	if agent != nil && (agent.RuntimeBin != "" || agent.Isolation != "") {
 		detect = func() (runtime.Runtime, error) {
-			return detectRuntimeFor(runtime.Preference{Bin: agent.RuntimeBin})
+			return detectRuntimeFor(runtime.Preference{Bin: agent.RuntimeBin, Isolation: agent.Isolation})
 		}
 	}
 	// The binary came from the profile, so a broken one is the profile's to

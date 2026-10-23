@@ -170,6 +170,11 @@ type Profile struct {
 	// work rather than of the run: a formatter that only ever touches the
 	// workspace has no business holding a route to the internet.
 	Network string `json:"network,omitempty"`
+	// Isolation is the boundary this workload runs behind: microvm or
+	// process. Empty means microvm. process runs the agent as a host process
+	// under the operating system's sandbox, on the host runtime kind, and
+	// BRIG_RUNTIME beats it. See docs/runtimes.md.
+	Isolation string `json:"isolation,omitempty"`
 	// RuntimeBin is the runtime binary to drive instead of the one on PATH.
 	//
 	// Unlike every other field this one is about your machine rather than the
