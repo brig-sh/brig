@@ -188,7 +188,8 @@ func (c *Config) recordGitWatch(index map[string]gitWatchEntry, project string, 
 
 // forgetGitWatch drops the entries of every sandbox the keep function turns
 // down. A sandbox created again under a removed one's name would otherwise be
-// compared against a look at a project it never had.
+// compared against a look at a project it never had. rm calls it, and ls does
+// not: see PruneSessions.
 func forgetGitWatch(keep func(vmName string) bool) {
 	index := readIndex[gitWatchEntry](gitWatchIndexName)
 	dropped := false
