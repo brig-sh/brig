@@ -59,7 +59,11 @@ if [ "$(uname -s)" = Linux ] && [ -z "${CONTAINERD_ADDRESS:-}" ]; then
     echo "Install it with install.sh, or set CONTAINERD_ADDRESS and BRIG_RUNTIME_BIN for a nerdctl of your own" >&2
     exit 1
   fi
-  eval "$("$ctl" env)"
+  # Two steps, because eval returns its own status: a brig-ctl env that
+  # failed inside it would not stop the script under set -e, and the suite
+  # would run without the bundle's CONTAINERD_ADDRESS.
+  envs=$("$ctl" env)
+  eval "$envs"
 fi
 make -s netprobe NETPROBE_DIR="$BIN/netprobe"
 
