@@ -719,6 +719,14 @@ The warning is a look between two brig commands, not a guard:
   `includeIf`, is not looked at unless it is one of the paths above. The
   guest can set `core.fsmonitor` or `core.hooksPath` there without
   `.git/config` changing.
+- The first look at a sandbox has nothing to compare against. That is the
+  first command for it, and the first after an upgrade from a Brig that did
+  not look. Whatever the guest had planted by then is recorded as it is,
+  with no warning.
+- A hook that is a symlink is recorded by where it points, not by what that
+  file holds. After the first warning, the guest can change the file it
+  points to, an ignored one in the working tree for instance, and no second
+  warning comes.
 - The look is bounded, so a guest cannot make it stall every command. It
   hashes the first 8 MiB of a file and 64 MiB in all. A file past the 64 MiB
   is recorded by its mode and size only, so a change that keeps both is not
