@@ -521,6 +521,7 @@ func (l *gitLook) describe(root *os.Root, name string, info os.FileInfo) string 
 	if min(info.Size(), maxGitWatchHash) > l.left {
 		return l.notHashed(mode, info.Size())
 	}
+	gitWatchBeforeOpen(name)
 	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Sprintf("file %04o, unreadable", mode.Perm())
@@ -543,6 +544,10 @@ func (l *gitLook) describe(root *os.Root, name string, info os.FileInfo) string 
 	}
 	return fmt.Sprintf("file %04o %d %x", fi.Mode().Perm(), fi.Size(), h.Sum(nil))
 }
+
+// gitWatchBeforeOpen is called between the look at a file and its open, so a
+// test can swap the file for something else there, as a guest can.
+var gitWatchBeforeOpen = func(name string) {}
 
 // notHashed records a file the look's bytes cannot cover, and marks the look
 // as one that ran out.

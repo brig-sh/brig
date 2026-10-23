@@ -692,3 +692,43 @@ func TestCheckProjectGitGoesOnWithoutGit(t *testing.T) {
 		t.Error("the look without git recorded no config")
 	}
 }
+
+// The walk saw a regular file, and the guest swaps it for a fifo before the
+// open. A read of a fifo waits for a writer that never comes, so the look has
+// to see what it opened and leave it unread, and finish.
+func TestCheckProjectGitDoesNotBlockOnAFifoSwappedInBeforeTheOpen(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	hook := filepath.Join(project, ".git", "hooks", "post-checkout")
+	writeFileT(t, hook, "#!/bin/sh\n", 0o755)
+	saved := gitWatchBeforeOpen
+	gitWatchBeforeOpen = func(name string) {
+		if name != "hooks/post-checkout" {
+			return
+		}
+		if err := os.Remove(hook); err != nil {
+			t.Error(err)
+		}
+		if err := syscall.Mkfifo(hook, 0o644); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { gitWatchBeforeOpen = saved })
+
+	done := make(chan map[string]string, 1)
+	go func() {
+		files, err := snapshotProjectGit(project)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- files
+	}()
+	select {
+	case files := <-done:
+		if got := files[".git/hooks/post-checkout"]; !strings.HasPrefix(got, "replaced while brig read it") {
+			t.Errorf("the swapped-in fifo was recorded as %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the look blocked on a fifo swapped in before the open")
+	}
+}
