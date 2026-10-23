@@ -92,7 +92,7 @@ func runSuite(ctx context.Context, s *suite, path string, stdout, stderr io.Writ
 		return 1
 	}
 	if path == "" {
-		path = recordPath(s.backend, rep.version())
+		path = recordPath(s.backend, rep.version(), rep.variant())
 	}
 	result := "PASS"
 	if rep.failed() {
