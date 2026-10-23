@@ -433,9 +433,28 @@ func TestForgetSandboxDropsTheLookAtItsProject(t *testing.T) {
 		t.Error("rm of one sandbox dropped another's look")
 	}
 
+	// ls leaves the looks alone: see TestLsKeepsTheLookAFirstRunTook.
 	PruneSessions([]string{"brig-unrelated"})
-	if _, ok := readIndex[gitWatchEntry](gitWatchIndexName)["brig-other"]; ok {
-		t.Error("ls kept the look at a sandbox the runtime no longer has")
+	if _, ok := readIndex[gitWatchEntry](gitWatchIndexName)["brig-other"]; !ok {
+		t.Error("ls dropped the look at a sandbox; only rm drops one")
+	}
+}
+
+// run takes the look before the boot, and the runtime lists a sandbox only
+// once it created it. An ls in between, while a first run still pulls its
+// image, dropped that look, and the next command recorded whatever the guest
+// had planted in the meantime with no warning.
+func TestLsKeepsTheLookAFirstRunTook(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	c, errOut := watchConfig(project)
+	c.CheckProjectGit()
+
+	PruneSessions(nil)
+	writeFileT(t, filepath.Join(project, ".git", "hooks", "post-checkout"), "#!/bin/sh\n", 0o755)
+	c.CheckProjectGit()
+	if !strings.Contains(errOut.String(), "added .git/hooks/post-checkout") {
+		t.Errorf("a hook planted after an ls during the first run is not named:\n%s", errOut)
 	}
 }
 
