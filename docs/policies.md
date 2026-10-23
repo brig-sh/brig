@@ -881,6 +881,7 @@ lists from every bound policy.
 | --- | --- | --- | --- |
 | [Egress policy on `hvi`](manual-tests/egress-policy.md) | a real guest on `hvi` | a `default: deny` policy with one `host` allow. The allowed name reaches, a denied name fails to resolve, and an address dialed directly fails to connect | a `deny` rule that overrides an `allow` rule, and a `default: allow` policy |
 | [Egress policy on Linux](manual-tests/egress-policy-linux.md) | a urunc guest on rootless nerdctl | the cases of the network conformance suite under both defaults, including a `deny` glob inside an `allow` glob and a `deny` cidr inside an `allow` cidr | |
+| [Egress conformance on nerdctl, bundle v0.1.0-rc17](manual-tests/egress-conformance-nerdctl-v0.1.0-rc17.md) | a urunc guest on rootless nerdctl, from the runtime bundle | the network conformance suite run by `script/egress-conformance.sh`, every case against a guest with no policy | a rootful nerdctl, an arm64 host |
 
 **What a `host` rule covers depends on the default.** A `host` rule is
 enforced through the resolver that Brig puts in front of the sandbox. On
