@@ -344,7 +344,8 @@ func (r *kindRecorder) Kind() string { return r.kind }
 // brig.internal, which only a gateway brig owns can answer. A run whose path
 // has none is refused before anything boots, and never comes up without the
 // route on a network nobody chose: hull on vz, a runtime that cannot say
-// where its guest reaches the name, and a run with no network. The served
+// where its guest reaches the name, and a run with no network. The host
+// kind's run is TestAHostRunBoundToARouteGetsATokenAndThePort, and the served
 // run on hvi is TestAnEndpointRunOnHviReachesBrigInternal.
 func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
 	for _, c := range []struct{ name, kind, hv, net, spec, want string }{

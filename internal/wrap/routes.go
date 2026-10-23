@@ -106,11 +106,11 @@ func routesOf(bound []policy.Policy) ([]v1alpha1.Route, map[string]string, error
 }
 
 // routeRefusal is why this run cannot serve its routes, or nil. A route in a
-// mode besides endpoint is checked first (see modeRefusal). A microVM or a
-// container reaches an endpoint route at brig.internal, which hull on hvi and
-// nerdctl route to the broker; on any other run path, a run with a route is
-// refused rather than booted without the routes its policy names (see
-// endpointCheck).
+// mode besides endpoint is checked first (see modeRefusal). The host kind
+// reaches an endpoint route over loopback. A microVM or a container reaches it at
+// brig.internal, which hull on hvi and nerdctl route to the broker; on any
+// other run path, a run with a route is refused rather than booted without
+// the routes its policy names (see endpointCheck).
 //
 // Read-only, like sessionRefusal, which returns it.
 func (c *Config) routeRefusal() error {
@@ -137,9 +137,10 @@ func (c *Config) routeRefusal() error {
 }
 
 // brigInternal reports whether this run's guest reaches the broker at
-// brig.internal: a run with a route in mode endpoint.
+// brig.internal: a run with a route in mode endpoint, on a runtime other
+// than the host kind.
 func (c *Config) brigInternal() bool {
-	return c.Runtime != nil && len(c.endpointRoutes()) > 0
+	return c.Runtime != nil && c.Runtime.Kind() != runtime.HostKind && len(c.endpointRoutes()) > 0
 }
 
 // endpointRoutes are this run's routes in mode endpoint.
@@ -235,7 +236,7 @@ func (c *Config) serveRoutes(set creds.Set) error {
 		}
 		c.routeSetup = append(c.routeSetup, setup...)
 	}
-	_, added, err := b.Register(s)
+	port, added, err := b.Register(s)
 	if err != nil {
 		return fmt.Errorf("could not register the routes of %s with the credential broker: %w", c.VMName, err)
 	}
@@ -271,12 +272,13 @@ func (c *Config) serveRoutes(set creds.Set) error {
 		}
 		tokens[r.Name] = token
 	}
-	ep := injector.HostEndpoint{Transport: injector.TransportBrigInternal}
+	ep := injector.EndpointFor(c.Runtime.Kind(), port)
 	vars, err := ep.GuestEnv(c.VMName, c.routes, tokens, set.Vars)
 	if err != nil {
 		return err
 	}
 	c.routeVars = vars
+	c.routePorts = ep.LoopbackPorts()
 	return nil
 }
 
@@ -355,15 +357,24 @@ func namesBrokered(refs []string, brokered map[string]string) bool {
 // leaves the profile's secrets list, so brig does not read it. The broker
 // reads it on the host. skipped names each secret a route injects, whether
 // or not the profile delivers it.
-func withRoutes(t profile.Profile, bindings []profile.EnvBinding, routes []v1alpha1.Route) (
+//
+// On the host kind a tmpfs that held a dropped file is dropped too, with the
+// hostmounts under it: the host kind cannot mount one, and with the
+// credential gone it held nothing that has to stay off disk. The directory
+// in the guest home it stood for takes its place, and an env value naming
+// the tmpfs is rewritten to it, which is how CLAUDE_CONFIG_DIR reaches the
+// home's .claude.
+func withRoutes(t profile.Profile, bindings []profile.EnvBinding, routes []v1alpha1.Route, hostKind bool) (
 	profile.Profile, []profile.EnvBinding, []string) {
 	brokered := brokeredSecrets(routes)
 	if len(brokered) == 0 {
 		return t, bindings, nil
 	}
 	var files []profile.FileBinding
+	var dropped []profile.FileBinding
 	for _, b := range t.Files {
 		if namesBrokered([]string{b.Ref}, brokered) {
+			dropped = append(dropped, b)
 			continue
 		}
 		files = append(files, b)
@@ -387,5 +398,59 @@ func withRoutes(t profile.Profile, bindings []profile.EnvBinding, routes []v1alp
 	t.Files, t.Secrets = files, secrets
 	t.Env = keepBinding(t.Env)
 	bindings = keepBinding(bindings)
+	if hostKind {
+		t, bindings = dropCredentialTmpfs(t, bindings, dropped)
+	}
 	return t, bindings, slices.Sorted(maps.Keys(brokered))
+}
+
+// dropCredentialTmpfs drops each tmpfs that held one of the dropped files and
+// no file still delivered, with the hostmounts under it, and rewrites the env
+// values that name it. See withRoutes.
+func dropCredentialTmpfs(t profile.Profile, bindings []profile.EnvBinding, dropped []profile.FileBinding) (
+	profile.Profile, []profile.EnvBinding) {
+	under := func(p, dir string) bool { return p == dir || profile.Under(p, dir) }
+	rewrite := map[string]string{}
+	var gone []string
+	for _, v := range t.Tmpfs() {
+		held := slices.ContainsFunc(dropped, func(b profile.FileBinding) bool { return under(b.Path, v.Path) })
+		kept := slices.ContainsFunc(t.Files, func(b profile.FileBinding) bool { return under(b.Path, v.Path) })
+		if !held || kept {
+			continue
+		}
+		gone = append(gone, v.Path)
+		home := path(t.GuestHome, v.Path)
+		rewrite[home] = home
+		if v.At != "" {
+			rewrite[strings.TrimSuffix(v.At, "/")] = home
+		}
+	}
+	if len(gone) == 0 {
+		return t, bindings
+	}
+	var volumes []profile.Volume
+	for _, v := range t.Volumes {
+		if slices.ContainsFunc(gone, func(g string) bool { return under(v.Path, g) }) {
+			continue
+		}
+		volumes = append(volumes, v)
+	}
+	t.Volumes = volumes
+	fix := func(in []profile.EnvBinding) []profile.EnvBinding {
+		out := slices.Clone(in)
+		for i, b := range out {
+			if b.Value == "" {
+				continue
+			}
+			for from, to := range rewrite {
+				if b.Value == from || strings.HasPrefix(b.Value, from+"/") {
+					out[i].Value = to + strings.TrimPrefix(b.Value, from)
+					break
+				}
+			}
+		}
+		return out
+	}
+	t.Env = fix(t.Env)
+	return t, fix(bindings)
 }

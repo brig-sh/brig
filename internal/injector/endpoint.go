@@ -2,6 +2,7 @@ package injector
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,10 @@ import (
 type Transport string
 
 const (
+	// TransportLoopback is plain HTTP to the broker's loopback port. It
+	// serves the host kind, a process on this host under Seatbelt, whose
+	// profile allows that one port and no other address.
+	TransportLoopback Transport = "loopback"
 	// TransportBrigInternal is TLS to brig.internal, with a brig CA that
 	// signs only that name trusted in the guest. It serves a microVM or a
 	// container, which reaches the host through a gateway.
@@ -43,16 +48,40 @@ const GuestCABundlePath = "/brig/ca/bundle.pem"
 // a guest is handed to use a route.
 type HostEndpoint struct {
 	Transport Transport
+	// Port is the broker's loopback port, for the loopback transport.
+	Port int
+}
+
+// EndpointFor returns the endpoint of the runtime kind. The host kind
+// reaches the broker over loopback, and every other kind through
+// brig.internal.
+func EndpointFor(kind string, port int) HostEndpoint {
+	if kind == runtime.HostKind {
+		return HostEndpoint{Transport: TransportLoopback, Port: port}
+	}
+	return HostEndpoint{Transport: TransportBrigInternal}
 }
 
 // Base is the origin a route URL starts with.
 func (e HostEndpoint) Base() string {
+	if e.Transport == TransportLoopback {
+		return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(e.Port))
+	}
 	return "https://" + BrigInternal
 }
 
 // URL is the URL of one route of one sandbox.
 func (e HostEndpoint) URL(sandbox, route string) string {
 	return e.Base() + "/" + sandbox + "/r/" + route
+}
+
+// LoopbackPorts are the host loopback ports a sandbox of this endpoint must
+// reach.
+func (e HostEndpoint) LoopbackPorts() []int {
+	if e.Transport == TransportLoopback {
+		return []int{e.Port}
+	}
+	return nil
 }
 
 // shellQuote quotes s for sh as one word.

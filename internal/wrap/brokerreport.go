@@ -52,7 +52,11 @@ func (c *Config) routeTransport() injector.Transport {
 	if len(c.routes) > 0 && len(c.endpointRoutes()) == 0 {
 		return injector.TransportDivert
 	}
-	return injector.TransportBrigInternal
+	kind := ""
+	if c.Runtime != nil {
+		kind = c.Runtime.Kind()
+	}
+	return injector.EndpointFor(kind, 0).Transport
 }
 
 // brokerLine is the BROKER row: how the guest reaches the broker, which
@@ -73,8 +77,10 @@ func (c *Config) brokerLine() string {
 	switch st, ok := c.routeBroker().Status(); {
 	case c.modeRefusal() != nil:
 		parts = append(parts, "refused: a route is in a mode this run cannot serve; brig info --json says why")
-	case c.routeRefusal() != nil:
+	case c.routeRefusal() != nil && c.routeTransport() != injector.TransportLoopback:
 		parts = append(parts, "refused: this run cannot route brig.internal to the broker; brig info --json says why")
+	case c.routeRefusal() != nil:
+		parts = append(parts, "refused: this run has no network to reach them on")
 	case ok:
 		parts = append(parts, fmt.Sprintf("brig-broker pid %d on 127.0.0.1:%d", st.PID, st.Port))
 		if len(st.Pending) > 0 {
@@ -129,7 +135,7 @@ func (c *Config) servedModes() []string {
 // CheckBrigInternal has the last word.
 func (c *Config) endpointAnswer() runtime.ModeRecord {
 	r := runtime.ModeAnswer(v1alpha1.ModeEndpoint, c.routePath())
-	if r.State != runtime.Enforced {
+	if r.State != runtime.Enforced || c.Runtime.Kind() == runtime.HostKind {
 		return r
 	}
 	var ce *runtime.CapabilityError
@@ -212,9 +218,9 @@ type InfoBroker struct {
 	Missing    []string `json:"missing,omitempty"`
 	StoreError string   `json:"storeError,omitempty"`
 	Refused    string   `json:"refused,omitempty"`
-	// Modes are the route modes this run path serves: endpoint on hull on
-	// hvi and nerdctl on urunc when brig.internal is routed there, and none
-	// elsewhere.
+	// Modes are the route modes this run path serves: endpoint on the host
+	// kind, and on hull on hvi and nerdctl on urunc when brig.internal is
+	// routed there, and none elsewhere.
 	Modes []string `json:"modes"`
 	// Unavailable names each route mode this build serves that this run
 	// path does not, with the reason.

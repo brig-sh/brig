@@ -350,7 +350,8 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	c.sayVerified()
 	// Once the checks above have passed, so a refused run starts no broker.
 	// The broker has to know the sandbox before its agent sends a request,
-	// and the tokens of this exec are minted here.
+	// and the tokens of this exec are minted here. The port goes into the
+	// profile of a host sandbox booted below.
 	if err := c.serveRoutes(set); err != nil {
 		return err
 	}
@@ -449,10 +450,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		Shares: c.shares(ws.dir, project, volumeShares),
 		Tmpfs:  tmpfs,
 		// What the next run reads, which a host sandbox must not write.
-		Protect:  []string{profile.Dir(), policy.Dir()},
-		Env:      c.guestEnv(set),
-		GUI:      check.GUI,
-		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
+		Protect: []string{profile.Dir(), policy.Dir()},
+		// The broker's port, the one address a host sandbox with routes may
+		// reach. See serveRoutes.
+		LoopbackPorts: c.routePorts,
+		Env:           c.guestEnv(set),
+		GUI:           check.GUI,
+		GUITitle:      c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.

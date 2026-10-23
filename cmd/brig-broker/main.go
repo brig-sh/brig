@@ -11,7 +11,8 @@
 // its own: no package on brig's run path links it.
 //
 // Nothing it holds goes on a command line. The host key that signs the tokens
-// is a file in its directory that only it reads. docs/broker.md describes it.
+// is a file in its directory that only it reads, and the directory is denied
+// to a host sandbox. docs/broker.md describes it.
 package main
 
 import (

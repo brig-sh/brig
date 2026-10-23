@@ -449,8 +449,8 @@ func TestDoctorBrokerCheck(t *testing.T) {
 	if c := brokerCheck(); c.State != stateInfo || !strings.Contains(c.Finding, "port 40123") {
 		t.Errorf("a broker that is not running: %+v", c)
 	}
-	// Another process on the recorded port receives the tokens of every
-	// client of the port, so the row fails and names it.
+	// Another process on the recorded port receives the tokens of every host
+	// sandbox that ran with a route, so the row fails and names it.
 	squatter, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

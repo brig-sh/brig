@@ -30,9 +30,10 @@ func (e *portHeldError) Error() string {
 // listenRoutes listens on the port recorded in dir, or on a free port when
 // none is recorded, and then records it.
 //
-// A broker never moves to another port. If another process holds the
-// recorded one, it refuses to start, and that process is the one a client of
-// the port would send its tokens to.
+// The recorded port is a contract with every host sandbox that ran with a
+// route: its profile allows that port and no other. So a broker never moves
+// to another port. If another process holds the recorded one, it refuses to
+// start, and that process is the one a sandbox would send its tokens to.
 func listenRoutes(dir string) (net.Listener, error) {
 	path := filepath.Join(dir, injector.PortName)
 	blob, err := os.ReadFile(path)

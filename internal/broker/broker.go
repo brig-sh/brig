@@ -287,8 +287,8 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 }
 
 // maxID is the longest sandbox id the broker takes. A sandbox id is the
-// sandbox's name, which brig does not shorten, and a name brig keeps state
-// under is a directory name, at most 255 bytes.
+// sandbox's name, which brig does not shorten, and a host sandbox's name is
+// a directory name, at most 255 bytes.
 const maxID = 255
 
 // ValidID refuses a sandbox id that is not 1 to 255 letters, digits, dots,

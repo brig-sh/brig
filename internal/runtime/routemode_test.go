@@ -3,11 +3,59 @@ package runtime
 import (
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 )
+
+// The endpoint mode is served over loopback on the host kind alone. A guest
+// behind a gateway brig owns reaches the broker at brig.internal: hull on hvi
+// and nerdctl. hull on vz and qemu take their network from vmnet, and docker
+// manages its own bridges, so neither has a gateway to answer the name on,
+// and both are refused with the reason. (The name predates brig.internal.)
+func TestEndpointIsServedOnTheHostKindAlone(t *testing.T) {
+	host := ModeAnswer(v1alpha1.ModeEndpoint, RunPath{HostKind, anyBackend})
+	if host.State != Enforced || host.Transport != transportLoopback {
+		t.Errorf("the host kind: %+v", host)
+	}
+	if got := ServedModes(RunPath{HostKind, anyBackend}); len(got) == 0 || got[0] != v1alpha1.ModeEndpoint {
+		t.Errorf("the host kind serves %v", got)
+	}
+	for _, p := range []RunPath{{"hull", "hvi"}, {"nerdctl", uruncShim}} {
+		r := ModeAnswer(v1alpha1.ModeEndpoint, p)
+		if r.State != Enforced || r.Transport != transportBrigInternal {
+			t.Errorf("%s: %+v, want enforced over brig.internal", p, r)
+		}
+		if !strings.Contains(r.Line(), "transport: brig.internal") {
+			t.Errorf("%s: the row does not name the transport: %s", p, r.Line())
+		}
+	}
+	for p, want := range map[RunPath]string{
+		{"hull", "vz"}:                       "vz takes its network from vmnet",
+		{"hull", "qemu"}:                     "qemu takes its network from vmnet",
+		{"docker", anyBackend}:               "docker manages its own bridges",
+		{"nerdctl", "io.containerd.runc.v2"}: "brig boots no shim that gives the guest the host's own kernel",
+		{"nerdctl", "unknown1"}:              "brig holds no answer for this run path",
+	} {
+		err := RequireRouteMode(v1alpha1.ModeEndpoint, p)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: RequireRouteMode(endpoint) = %v, want %q", p, err, want)
+		}
+		if slices.Contains(ServedModes(p), v1alpha1.ModeEndpoint) {
+			t.Errorf("%s serves the endpoint mode", p)
+		}
+		if strings.Contains(ModeAnswer(v1alpha1.ModeEndpoint, p).Line(), "transport") {
+			t.Errorf("%s: a refused row names a transport", p)
+		}
+	}
+	for _, p := range []RunPath{{"hull", "hvi"}, {"nerdctl", uruncShim}} {
+		if got := ServedModes(p); len(got) == 0 || got[0] != v1alpha1.ModeEndpoint {
+			t.Errorf("%s serves %v", p, got)
+		}
+	}
+}
 
 // The endpoint mode is served over brig.internal on the run paths that give
 // the guest a gateway brig owns: hull on hvi and nerdctl on urunc. Every
@@ -111,6 +159,7 @@ func TestRoutePathNamesTheBackend(t *testing.T) {
 		{kindOnly{kind: "hull"}, "", RunPath{"hull", "vz"}},
 		{kindOnly{kind: "hull"}, "hvi", RunPath{"hull", "hvi"}},
 		{kindOnly{kind: "nerdctl"}, "", RunPath{"nerdctl", uruncShim}},
+		{kindOnly{kind: HostKind}, "hvi", RunPath{HostKind, anyBackend}},
 	} {
 		if got := RoutePath(c.rt, c.hv); got != c.want {
 			t.Errorf("RoutePath(%s, %q) = %v, want %v", c.rt.Kind(), c.hv, got, c.want)
