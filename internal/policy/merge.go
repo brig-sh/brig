@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/profile"
 )
 
@@ -16,12 +17,23 @@ import (
 // which is the failure this whole path exists to prevent. `brig policy check`
 // reports the same condition before a boot rather than during one.
 func Resolve(p profile.Profile, session, dir string) (Egress, []string, error) {
-	names, err := EffectivePolicies(p, session, dir)
+	policies, names, err := ResolvePolicies(p, session, dir)
 	if err != nil {
 		return Egress{}, nil, err
 	}
+	return Merge(policies), names, nil
+}
+
+// ResolvePolicies is Resolve before the merge: every policy bound to this
+// run, loaded, in binding order, with the names it came from. A boot reads
+// the routes from here, which Merge does not fold.
+func ResolvePolicies(p profile.Profile, session, dir string) ([]Policy, []string, error) {
+	names, err := EffectivePolicies(p, session, dir)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(names) == 0 {
-		return Egress{}, nil, nil
+		return nil, nil, nil
 	}
 	// LoadAll returns what it could read alongside its error: a file that does
 	// not parse, or two files claiming one name, is reported without stopping
@@ -53,11 +65,11 @@ func Resolve(p profile.Profile, session, dir string) (Egress, []string, error) {
 		if loadErr != nil {
 			because = ": " + loadErr.Error()
 		}
-		return Egress{}, nil, fmt.Errorf("policy %v is attached to %s but no document of that "+
+		return nil, nil, fmt.Errorf("policy %v is attached to %s but no document of that "+
 			"name loads from %s; `brig policy check %s` says which, and `brig policy ls` what "+
 			"is there%s", missing, p.Name, dir, p.Name, because)
 	}
-	return Merge(policies), names, nil
+	return policies, names, nil
 }
 
 // Merge folds every policy that applies to one run into a single rule set.
@@ -81,17 +93,27 @@ func Resolve(p profile.Profile, session, dir string) (Egress, []string, error) {
 // Deny still wins over Allow at the gateway, so a deny rule in any policy in
 // the set holds against an allow rule in any other. That ordering is the
 // enforcer's; this only decides what reaches it.
+//
+// A policy with no spec.egress adds no rule and no default. When none of the
+// set has one, the result is the empty Egress, which filters nothing.
 func Merge(ps []Policy) Egress {
 	if len(ps) == 0 {
 		return Egress{}
 	}
-	merged := Egress{Default: "allow"}
+	merged := Egress{}
 	for _, p := range ps {
-		if p.Egress.Default == "deny" {
-			merged.Default = "deny"
+		e := p.Spec.Egress
+		if e == nil {
+			continue
 		}
-		merged.Allow = append(merged.Allow, p.Egress.Allow...)
-		merged.Deny = append(merged.Deny, p.Egress.Deny...)
+		if merged.Default == "" {
+			merged.Default = v1alpha1.EgressAllow
+		}
+		if e.Default == v1alpha1.EgressDeny {
+			merged.Default = v1alpha1.EgressDeny
+		}
+		merged.Allow = append(merged.Allow, e.Allow...)
+		merged.Deny = append(merged.Deny, e.Deny...)
 	}
 	return dedupe(merged)
 }

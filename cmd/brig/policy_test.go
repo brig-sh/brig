@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -331,7 +332,7 @@ func TestCreatePolicyForceOverwritesFlagAfterName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	writePolicyFile(t, dir, "no-net", noNetBody)
-	stubEditor(t, `sed -i.bak 's/^desc:$/desc: replaced/' "$1"`)
+	stubEditor(t, `sed -i.bak 's/^  description:$/  description: replaced/' "$1"`)
 
 	if err := createPolicy([]string{"no-net", "--force"}); err != nil {
 		t.Fatalf("create --force after the name failed: %v", err)
@@ -518,7 +519,8 @@ func TestShowPolicyJSONFlagAfterName(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
 		t.Fatalf("show --json did not print valid JSON: %v\n%s", err, out)
 	}
-	if decoded["name"] != "no-net" {
+	meta, _ := decoded["metadata"].(map[string]any)
+	if meta["name"] != "no-net" {
 		t.Errorf("show --json printed the wrong policy: %v", decoded)
 	}
 }
@@ -2046,5 +2048,288 @@ func TestCheckCmdDispatch(t *testing.T) {
 	loadTestProfiles(t)
 	if err := policyCmd([]string{"check", "claude-code"}); err != nil {
 		t.Errorf("policy check dispatch failed: %v", err)
+	}
+}
+
+const noNetEnvelope = "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata:\n  name: no-net\n" +
+	"spec:\n  egress:\n    default: deny\n    allow:\n      - host: api.anthropic.com\n"
+
+// check is where a bound policy is inspected, so it is where the flat form is
+// reported as retired. The notice goes to stderr, and stdout stays one name
+// per line.
+func TestCheckReportsTheFlatFormAsRetired(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		retired    bool
+	}{
+		{"flat", noNetBody, true},
+		{"envelope", noNetEnvelope, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("BRIG_POLICY_DIR", dir)
+			writePolicyFile(t, dir, "no-net", c.body)
+			loadTestProfiles(t)
+			if err := attachPolicy([]string{"no-net", "claude-code"}); err != nil {
+				t.Fatal(err)
+			}
+			var out string
+			stderr := captureStderr(t, func() {
+				var err error
+				out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+			if strings.TrimSpace(out) != "no-net" {
+				t.Errorf("stdout is not just the policy name: %q", out)
+			}
+			said := strings.Contains(stderr, "flat policy form")
+			if said != c.retired {
+				t.Fatalf("flat-form notice printed = %v, want %v:\n%s", said, c.retired, stderr)
+			}
+			if !c.retired {
+				return
+			}
+			for _, want := range []string{flatPolicyGoesIn, "brig policy show no-net"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("the notice does not name %q:\n%s", want, stderr)
+				}
+			}
+		})
+	}
+}
+
+// create writes the current spelling, so a new policy never starts out
+// retired.
+func TestCreatePolicyWritesTheEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	stubEditor(t, `true`)
+	if err := createPolicy([]string{"no-net"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := policy.LoadAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := entries["no-net"]; !ok || e.Flat {
+		t.Errorf("the starter is not an envelope: %+v", e)
+	}
+}
+
+// The flat form outlives the other retired spellings by one release, and the
+// pages that say so name that release.
+func TestDocsNameTheFlatPolicyRemovalRelease(t *testing.T) {
+	for _, name := range []string{"docs/migration.md", "docs/stability.md", "docs/policies.md"} {
+		blob, err := os.ReadFile(filepath.Join("..", "..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(blob), flatPolicyGoesIn) {
+			t.Errorf("%s does not name %s, the release that removes the flat policy form", name, flatPolicyGoesIn)
+		}
+	}
+}
+
+// copyExample puts one of the spec's example policies into dir.
+func copyExample(t *testing.T, dir, name string) {
+	t.Helper()
+	blob, err := os.ReadFile(filepath.Join("..", "..", "api", "policy", "v1alpha1", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShowPolicyPrintsAPreset(t *testing.T) {
+	t.Setenv("BRIG_POLICY_DIR", t.TempDir())
+	out, err := captureStdout(t, func() error { return showPolicy([]string{"--preset", "claude-code"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "anthropic-oauth", "https://api.anthropic.com",
+		"oauth-2025-04-20", "mode: endpoint"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show --preset claude-code does not print %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "ANTHROPIC_AUTH_TOKEN") {
+		t.Errorf("the claude-code preset still sets ANTHROPIC_AUTH_TOKEN:\n%s", out)
+	}
+
+	out, err = captureStdout(t, func() error { return showPolicy([]string{"--preset", "github-token", "--json"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("show --preset --json did not print JSON: %v\n%s", err, out)
+	}
+	if decoded["upstream"] != "https://github.com" {
+		t.Errorf("show --preset github-token --json = %v", decoded)
+	}
+
+	for _, args := range [][]string{
+		{"--preset", "openai"},
+		{"--preset", ""},
+		{"no-net", "--preset", "claude-code"},
+	} {
+		if err := showPolicy(args); err == nil {
+			t.Errorf("policy show %q was accepted", args)
+		}
+	}
+}
+
+func TestShowPolicyExpandsPresets(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	copyExample(t, dir, "example3-github-brig-sh.yaml")
+	out, err := captureStdout(t, func() error { return showPolicy([]string{"github-brig-sh"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"upstream: https://github.com", "username: x-access-token",
+		"- Authorization", "brig-sh/*"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show does not print %q from the expanded preset:\n%s", want, out)
+		}
+	}
+}
+
+// Example 5 of the spec: two policies on one profile. The routes of both
+// apply, and a run with a route gets a network of its own. The rows and the
+// plan go to stderr, so stdout stays one policy name per line.
+func TestCheckListsRoutesAndPosture(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	copyExample(t, dir, "example1-claude-only.yaml")
+	copyExample(t, dir, "example3-github-brig-sh.yaml")
+	loadTestProfiles(t)
+	for _, name := range []string{"claude-only", "github-brig-sh"} {
+		if err := attachPolicy([]string{name, "claude-code"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out string
+	stderr := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if out != "claude-only\ngithub-brig-sh\n" {
+		t.Errorf("stdout is not one policy name per line:\n%s", out)
+	}
+	want := "  route anthropic  preset claude-code  mode endpoint\n" +
+		"  route github  preset github-token  mode endpoint\n" +
+		"posture: isolated\n"
+	if !strings.HasPrefix(stderr, want) {
+		t.Errorf("stderr printed:\n%s\nwant it to start with:\n%s", stderr, want)
+	}
+}
+
+func TestCheckRefusesTwoPoliciesWithOneRoute(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	copyExample(t, dir, "example1-claude-only.yaml")
+	copyExample(t, dir, "example2-claude-api-key.yaml")
+	loadTestProfiles(t)
+	for _, name := range []string{"claude-only", "claude-api-key"} {
+		if err := attachPolicy([]string{name, "claude-code"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var err error
+	stderr := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+	})
+	if err == nil || !strings.Contains(err.Error(), "route anthropic is declared by both") {
+		t.Errorf("check = %v, want the duplicate route refused", err)
+	}
+	if strings.Contains(stderr, "posture:") {
+		t.Errorf("check printed a plan for policies that cannot apply together:\n%s", stderr)
+	}
+}
+
+// show prints a policy with its presets expanded, and that output is a policy
+// brig reads back. credential.lifecycle is the one field a document cannot
+// name, so show says it in a comment.
+func TestShowPolicyOutputParsesBack(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	for _, name := range []string{"example1-claude-only.yaml", "example3-github-brig-sh.yaml",
+		"example4-inventory-api.yaml"} {
+		copyExample(t, dir, name)
+	}
+	for _, name := range []string{"claude-only", "github-brig-sh", "inventory-api"} {
+		for _, asJSON := range []bool{false, true} {
+			args := []string{name}
+			if asJSON {
+				args = append(args, "--json")
+			}
+			out, err := captureStdout(t, func() error { return showPolicy(args) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(out, "lifecycle: anthropic-oauth\n") || strings.Contains(out, `"lifecycle"`) {
+				t.Errorf("show %v prints credential.lifecycle as a field:\n%s", args, out)
+			}
+			reparsed, err := policy.Parse([]byte(out))
+			if err != nil {
+				t.Fatalf("show %v does not parse back: %v\n%s", args, err, out)
+			}
+			entries, err := policy.LoadAll(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, _ := policy.Expand(entries[name].Policy)
+			got, _ := policy.Expand(reparsed)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("show %v parses back to another policy:\n got %+v\nwant %+v", args, got, want)
+			}
+		}
+	}
+	out, err := captureStdout(t, func() error { return showPolicy([]string{"claude-only"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "      # lifecycle: anthropic-oauth, set by preset claude-code\n") {
+		t.Errorf("show does not say where the lifecycle comes from:\n%s", out)
+	}
+}
+
+// A metadata value can hold a line that reads like a route. show still puts
+// the lifecycle comment under the route, and leaves the value as it was.
+func TestShowPolicyCommentsTheRouteNotLookalikeMetadata(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	const note = "first line\n- credential:\n  - credential:\nlast line"
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata:\n  name: claude-only\n" +
+		"  annotations:\n    note: \"first line\\n- credential:\\n  - credential:\\nlast line\"\n" +
+		"spec:\n  routes:\n    - name: anthropic\n      preset: claude-code\n" +
+		"      credential:\n        secretRef: { name: claude-credentials }\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude-only.yaml"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureStdout(t, func() error { return showPolicy([]string{"claude-only"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out, "# lifecycle:"); n != 1 {
+		t.Fatalf("show printed %d lifecycle comments, want 1:\n%s", n, out)
+	}
+	if !strings.Contains(out, "  - credential:\n      # lifecycle: anthropic-oauth, set by preset claude-code\n") {
+		t.Errorf("the lifecycle comment is not under the route:\n%s", out)
+	}
+	reparsed, err := policy.Parse([]byte(out))
+	if err != nil {
+		t.Fatalf("show does not parse back: %v\n%s", err, out)
+	}
+	if got := reparsed.Metadata.Annotations["note"]; got != note {
+		t.Errorf("annotation round trip = %q, want %q", got, note)
 	}
 }

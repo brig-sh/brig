@@ -313,3 +313,76 @@ func writeTestPolicy(t *testing.T, dir, name string) {
 		t.Fatal(err)
 	}
 }
+
+// bootRecorder is a runtime that records whether a run asked it anything. Any
+// call it does not record reaches the nil Runtime inside fakeRuntime and
+// panics, which fails the test as loudly.
+type bootRecorder struct {
+	fakeRuntime
+	asked []string
+}
+
+func (r *bootRecorder) Running(string) (bool, error) {
+	r.asked = append(r.asked, "Running")
+	return false, nil
+}
+
+func (r *bootRecorder) Run(runtime.RunSpec) error {
+	r.asked = append(r.asked, "Run")
+	return errors.New("stub runtime: not booting")
+}
+
+// brig policy check prints a route and the isolated posture it plans for, and
+// this version serves no route. A run bound to one is refused before anything
+// boots, so it never comes up without the route on a network nobody chose.
+func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
+	for _, c := range []struct{ name, spec string }{
+		{"routes only", "  routes:\n    - name: github\n      preset: github-token\n" +
+			"      credential: {secretRef: {name: gh-token}}\n"},
+		{"routes and egress", "  egress: {default: deny}\n  routes:\n    - name: github\n      preset: github-token\n" +
+			"      credential: {secretRef: {name: gh-token}}\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: github-brig-sh}\nspec:\n" + c.spec
+			if err := os.WriteFile(filepath.Join(dir, "github-brig-sh.yaml"), []byte(doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("BRIG_POLICY_DIR", dir)
+
+			cfg := loadWithPolicy(t, "github-brig-sh")
+			rec := &bootRecorder{}
+			cfg.Runtime = rec
+			err := cfg.EnsureRunning(creds.Set{})
+			if err == nil {
+				t.Fatal("a run bound to a route went ahead")
+			}
+			for _, want := range []string{"does not serve routes", "github-brig-sh (route github)"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			if len(rec.asked) != 0 {
+				t.Errorf("the runtime was asked %v before the refusal", rec.asked)
+			}
+			// Plan reports the same refusal, so a plan cannot promise the run.
+			if d := cfg.Plan(); d.Refused == nil || !strings.Contains(d.Refused.Reason, "does not serve routes") {
+				t.Errorf("the plan does not carry the refusal: %+v", d.Refused)
+			}
+		})
+	}
+}
+
+// A policy with routes and no egress block sets no default, so the POLICY row
+// names it and stops there.
+func TestEnvelopeOmitsAnEmptyEgressDefault(t *testing.T) {
+	c := envelopeConfig()
+	c.Policies = []string{"github-brig-sh"}
+	if got := c.policyLine(); got != "github-brig-sh" {
+		t.Errorf("policyLine() = %q, want the name alone", got)
+	}
+	c.Egress = denyPolicy()
+	if got := c.policyLine(); !strings.Contains(got, "(egress default: deny)") {
+		t.Errorf("policyLine() = %q, want the default named", got)
+	}
+}

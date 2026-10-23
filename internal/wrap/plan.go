@@ -92,7 +92,7 @@ func (c *Config) Plan() PlanDocument {
 	sort.Strings(d.Policies)
 	if c.Egress.Default != "" {
 		d.Egress = &PlanEgress{
-			Default: c.Egress.Default,
+			Default: string(c.Egress.Default),
 			Allow:   sortedRules(c.Egress.Allow),
 			Deny:    sortedRules(c.Egress.Deny),
 		}
