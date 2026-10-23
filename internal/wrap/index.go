@@ -396,7 +396,12 @@ func PruneSessions(live []string) {
 	for _, name := range live {
 		have[name] = true
 	}
-	forgetGitWatch(func(name string) bool { return have[name] })
+	// The look at a sandbox's project is not pruned here, only by rm. run takes
+	// it before the boot, and the runtime lists a sandbox only once it created
+	// it, so an ls while a first run still pulls its image would drop the look
+	// that run just took, and the next command would record whatever the guest
+	// had planted by then with no warning. An entry left by a sandbox removed
+	// outside brig costs at most a warning about changes made since.
 	index := readSessionIndex()
 	if len(index) == 0 {
 		return
