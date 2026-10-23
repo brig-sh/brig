@@ -4,7 +4,8 @@
 # It builds brig from this checkout and the probe for the guest, then boots
 # three sandboxes in turn: no policy, a default: deny policy and a
 # default: allow one. The record lands in
-# docs/manual-tests/egress-conformance-<backend>-<runtime version>.md.
+# docs/manual-tests/egress-conformance-<backend>-<runtime version>.md, with
+# -rootless after the version for the rootless Linux bundle.
 #
 #   script/egress-conformance.sh [-image REF] [-record PATH]
 #
