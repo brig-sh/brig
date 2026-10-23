@@ -8,8 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/brig-sh/brig/internal/notice"
 )
@@ -114,8 +117,9 @@ func (c *Config) CheckProjectGit() {
 	if _, err := os.Lstat(prev.Project); had && prev.Project != "" && !errors.Is(err, fs.ErrNotExist) {
 		now, err := snapshotProjectGit(prev.Project)
 		if err != nil {
+			// The error can name a path under .git, which the guest chose.
 			c.warnf("%s", notice.Newf("could not read %s/.git to see what the sandbox changed there", prev.Project).
-				Note("%v", err))
+				Note("%s", guestText(err.Error())))
 			return
 		}
 		changes := diffGitWatch(prev.Files, now)
@@ -147,7 +151,7 @@ func (c *Config) CheckProjectGit() {
 	now, err := snapshotProjectGit(project)
 	if err != nil {
 		c.warnf("%s", notice.Newf("could not read %s/.git, so brig cannot say later what the sandbox changed there", project).
-			Note("%v", err))
+			Note("%s", guestText(err.Error())))
 		return
 	}
 	c.commondirNotice(project, now)
@@ -219,18 +223,33 @@ func diffGitWatch(before, after map[string]string) []string {
 		now, ok := after[p]
 		switch {
 		case !ok:
-			out = append(out, "removed "+p)
+			out = append(out, "removed "+guestText(p))
 		case now != was:
-			out = append(out, "changed "+p)
+			out = append(out, "changed "+guestText(p))
 		}
 	}
 	for p := range after {
 		if _, ok := before[p]; !ok {
-			out = append(out, "added "+p)
+			out = append(out, "added "+guestText(p))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return gitWatchPath(out[i]) < gitWatchPath(out[j]) })
 	return out
+}
+
+// guestText is s as brig prints it, when s is a name the guest chose. brig
+// prints the warning itself, so nothing filters it the way hull filters what
+// the guest prints: a hook named with an escape sequence would reach the
+// terminal as one, able to erase the lines above it or write the clipboard
+// with OSC 52, and a newline in a name would add a line that reads as brig's
+// own. A name that is not all printable is quoted, which shows every such
+// byte as an escape instead. Printable names, accented ones among them, are
+// left as they are.
+func guestText(s string) string {
+	if utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0 {
+		return s
+	}
+	return strconv.Quote(s)
 }
 
 // gitWatchPath is the path a diffGitWatch line is about, so the list sorts by
