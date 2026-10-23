@@ -1,16 +1,21 @@
 package wrap
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -318,7 +323,85 @@ func snapshotProjectGit(project string) (map[string]string, error) {
 			return nil, err
 		}
 	}
+	// A hooksPath the repository already had, pointing into the working tree,
+	// is where git runs hooks from instead of .git/hooks. husky sets one, and
+	// ignores everything in it, so git status shows a change there no more
+	// than one under .git. A hooksPath the guest sets changes .git/config,
+	// which is named already; this is the one that was there before.
+	if rel, ok := hooksPathInProject(git, held.dir); ok {
+		info, err := held.root.Lstat(rel)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			return nil, err
+		default:
+			look.files[rel] = look.describe(held.root, rel, info)
+			if info.IsDir() {
+				if err := look.walk(held.root, rel, rel); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	return look.files, nil
+}
+
+// maxGitConfig is the most of .git/config hooksPathInProject reads. A real one
+// is a few kilobytes.
+const maxGitConfig = 1 << 20
+
+// hooksPathInProject is the directory the repository's core.hooksPath names,
+// relative to project, when it names one inside the project and outside .git,
+// whose hooks are looked at already.
+//
+// .git/config is read through the root, the way every other path under .git
+// is, and git parses the bytes from stdin with includes off: git config would
+// otherwise read whatever file an include.path names, and a guest can name any
+// file of the user's. git runs in a directory with no repository, so it finds
+// none to read beside the bytes it is given, and it runs nothing it reads.
+//
+// A relative hooksPath is relative to the top of the working tree, which is
+// the project. One that leads out of the project is not the guest's to write.
+// Without git, or with a config git refuses, there is no hooksPath to watch,
+// and git on the host could not run one either.
+func hooksPathInProject(git *os.Root, project string) (string, bool) {
+	info, err := git.Lstat("config")
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	f, err := git.OpenFile("config", os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = f.Close() }()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	config, err := io.ReadAll(io.LimitReader(f, maxGitConfig))
+	if err != nil {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "config", "--no-includes", "--file", "-", "--type=path", "--get", "core.hooksPath")
+	cmd.Dir = os.TempDir()
+	cmd.Stdin = bytes.NewReader(config)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	dir := strings.TrimSpace(string(out))
+	if dir == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(project, dir)
+	}
+	rel, err := filepath.Rel(project, filepath.Clean(dir))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || rel == ".git" || rel == ".git/hooks" {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // gitLook is one look in progress: what it has recorded, and how many bytes
