@@ -681,6 +681,10 @@ A `.git/commondir` is named on every command that finds one. git then reads
 config, hooks and info from the directory it names, which Brig does not look
 at, and a repository's own `.git` has none.
 
+When `.git/config` sets `core.hooksPath` to a directory inside the project,
+Brig looks at that directory too. husky does this with `.husky/_`, and ignores
+everything in it, so `git status` does not show a hook changed there either.
+
 The warning is a look between two brig commands, not a guard:
 
 - A foreground run hands the terminal to the agent, so brig is not there
@@ -695,7 +699,8 @@ The warning is a look between two brig commands, not a guard:
   looked at.
 - A file that `.git/config` already includes, with `include.path` or
   `includeIf`, is not looked at unless it is one of the paths above. The
-  guest can set `core.fsmonitor` there without `.git/config` changing.
+  guest can set `core.fsmonitor` or `core.hooksPath` there without
+  `.git/config` changing.
 - The look is bounded, so a guest cannot make it stall every command. It
   hashes the first 8 MiB of a file and 64 MiB in all. A file past the 64 MiB
   is recorded by its mode and size only, so a change that keeps both is not
