@@ -314,8 +314,10 @@ nerdctl.
    The script boots three sandboxes on the host's backend, one at a time. It
    runs the network cases from #264 in each sandbox. Then it writes
    `docs/manual-tests/egress-conformance-hvi-<hull version>.md` on a Mac, or
-   `docs/manual-tests/egress-conformance-nerdctl-<bundle version>.md` on
-   Linux.
+   `docs/manual-tests/egress-conformance-nerdctl-<bundle version>-rootless.md`
+   on Linux. A node-wide install of the plain bundle writes the same name
+   without `-rootless`: the two bundles share a version and reach the network
+   on different paths, so each has a record of its own.
 
 3. Read the record:
 
