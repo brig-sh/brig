@@ -132,6 +132,7 @@ func TestSandboxProfileAlwaysDeniesTheSensitivePaths(t *testing.T) {
 	for _, net := range []string{"isolated", "none", "shared"} {
 		p := testPolicy(net, 48711)
 		p.Protect = []string{"/Users/me/.brig", "/Users/me/.config/brig"}
+		p.Homes = "/Users/me/.brig/homes"
 		p.Shares = []string{"/Users/me/.brig/homes/brig-x"}
 		p.Ancestors = []string{"/Users/me/.config"}
 		got, err := sandboxProfile(p)
@@ -172,12 +173,16 @@ func TestSandboxProfileAlwaysDeniesTheSensitivePaths(t *testing.T) {
 				t.Errorf("%s: missing %s:\n%s", net, want, got)
 			}
 		}
-		// The home is inside brig's state directory, so its allow has to come
-		// after the deny on that directory to win over it.
+		// The home is inside brig's state directory and the homes directory,
+		// so its allow has to come after the denies on both to win over them.
+		// The homes directory may be looked up, and nothing more.
 		protect := slices.Index(lines, `(deny file-write* (subpath "/Users/me/.brig"))`)
-		share := slices.Index(lines, `(allow file-write* (subpath "/Users/me/.brig/homes/brig-x"))`)
-		if protect < 0 || share < 0 || share < protect {
-			t.Errorf("%s: the state directory deny (%d) must come before the home allow (%d):\n%s", net, protect, share, got)
+		homes := slices.Index(lines, `(deny file-read* file-write* (subpath "/Users/me/.brig/homes"))`)
+		lookup := slices.Index(lines, `(allow file-read-metadata (literal "/Users/me/.brig/homes"))`)
+		share := slices.Index(lines, `(allow file-read* file-write* (subpath "/Users/me/.brig/homes/brig-x"))`)
+		if protect < 0 || homes < protect || lookup < homes || share < lookup {
+			t.Errorf("%s: want the state directory deny (%d), the homes deny (%d), its lookup (%d), then the "+
+				"home allow (%d):\n%s", net, protect, homes, lookup, share, got)
 		}
 	}
 }

@@ -35,15 +35,19 @@ echo "b-token-in-a-body:$(req "$CLAUDE_CODE_OAUTH_TOKEN" "$ANTHROPIC_BASE_URL/v1
 echo "a-token-in-a-body:$(req "$CLAUDE_CODE_OAUTH_TOKEN" "$ANTHROPIC_BASE_URL/v1/messages" "$CLAUDE_CODE_OAUTH_TOKEN")"
 `
 
-// filesScript tries B's guest home and B's sandbox record, and prints each
-// exit status with the error. It runs in A, and in B as the control: the
-// same commands on the same paths succeed there, so a refusal in A is the
-// profile and not a wrong path.
+// filesScript tries B's guest home, the directory of the homes and B's
+// sandbox record, and prints each exit status with the error. It runs in A,
+// and in B as the control: the same commands on B's home succeed there, so
+// a refusal in A is the profile and not a wrong path. Each sandbox also
+// enters its own home by its real path, and writes and reads a file there.
 const filesScript = `
 try() { name=$1; shift; err=$("$@" 2>&1 > /dev/null); echo "$name:$?:$(echo "$err" | tr '\n' ' ')"; }
 try write-b-home sh -c 'echo planted > "$1"' sh "$B_HOME/planted-by-$WHO"
 try read-b-home cat "$B_HOME/notes.txt"
+try list-homes ls "$(dirname "$B_HOME")"
 try read-b-record cat "$B_RECORD/profile.sb"
+try pwd-own sh -c 'cd "$1" && test "$(pwd -P)" = "$1"' sh "$OWN_HOME"
+try rw-own sh -c 'echo mine > "$1/own-$2" && cat "$1/own-$2"' sh "$OWN_HOME" "$WHO"
 `
 
 // fileCheck returns the exit status and the error that filesScript printed
@@ -71,12 +75,12 @@ const ownRouteScript = `printf 'header = "Authorization: Bearer %s"\n' "$CLAUDE_
 // From inside A: A's token on B's route is a 401, and the upstream is not
 // dialled. B's token in A's body passes, because the scan looks for A's own
 // tokens only (docs/broker.md, Placeholder detection). A's own token in A's
-// body is a 403, and the upstream is not dialled. A cannot write B's guest
-// home or read B's sandbox record. A can read B's guest home: the profile
-// denies writes there, not reads, as security.md says. B's token is in no
-// file under the state directory, so no file read yields it. The documented
-// way A gets it is B's environment, through sysctl, which this test stands
-// in for by handing it to A.
+// body is a 403, and the upstream is not dialled. A can neither read nor
+// write B's guest home, cannot list the homes directory, and cannot read B's
+// sandbox record, while its own home resolves and takes its files. B's token
+// is in no file under the state directory, so no file read yields it. The
+// documented way A gets it is B's environment, through sysctl, which this
+// test stands in for by handing it to A.
 //
 // /status counts the refusal against A alone. The upstream sees the stored
 // credential and no session token in a header. Neither token, the
@@ -182,10 +186,12 @@ func TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn(t *testing.T) {
 		runtime.Var{Name: "B_URL", Value: ep.URL(b, "anthropic")},
 		runtime.Var{Name: "B_HOME", Value: homes[b]},
 		runtime.Var{Name: "B_RECORD", Value: filepath.Join(state, "host", b)},
+		runtime.Var{Name: "OWN_HOME", Value: homes[a]},
 		runtime.Var{Name: "WHO", Value: "a"})
 	varsB := envOf(b, tokB,
 		runtime.Var{Name: "B_HOME", Value: homes[b]},
 		runtime.Var{Name: "B_RECORD", Value: filepath.Join(state, "host", b)},
+		runtime.Var{Name: "OWN_HOME", Value: homes[b]},
 		runtime.Var{Name: "WHO", Value: "b"})
 
 	out := inside(a, varsA, twoSandboxScript)
@@ -205,16 +211,21 @@ func TestTwoHostSandboxesAtOneBrokerKeepToTheirOwn(t *testing.T) {
 	}
 	filesB := inside(b, varsB, filesScript)
 	t.Logf("inside sandbox B, the control:\n%s", filesB)
-	for _, name := range []string{"write-b-home", "read-b-home"} {
+	for _, name := range []string{"write-b-home", "read-b-home", "pwd-own", "rw-own"} {
 		if status, msg := fileCheck(filesB, name); status != "0" {
 			t.Errorf("the control in B: %s exits %s (%s), want 0", name, status, msg)
 		}
 	}
 	filesA := inside(a, varsA, filesScript)
 	t.Logf("inside sandbox A:\n%s", filesA)
-	for _, name := range []string{"write-b-home", "read-b-record"} {
+	for _, name := range []string{"write-b-home", "read-b-home", "list-homes", "read-b-record"} {
 		if status, msg := fileCheck(filesA, name); status == "0" || !strings.Contains(msg, "Operation not permitted") {
 			t.Errorf("sandbox A: %s exits %s (%s), want a refusal by the profile", name, status, msg)
+		}
+	}
+	for _, name := range []string{"pwd-own", "rw-own"} {
+		if status, msg := fileCheck(filesA, name); status != "0" {
+			t.Errorf("sandbox A: %s exits %s (%s), want 0 in its own home", name, status, msg)
 		}
 	}
 	if _, err := os.Lstat(filepath.Join(homes[b], "planted-by-a")); !os.IsNotExist(err) {

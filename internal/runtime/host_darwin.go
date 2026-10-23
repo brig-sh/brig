@@ -250,6 +250,13 @@ func (h *host) Run(spec RunSpec) error {
 	if err != nil {
 		return err
 	}
+	// The real path, since Seatbelt matches the path the kernel resolved,
+	// and a homes directory that is a link would escape a deny on its name.
+	homes, err := realPath(filepath.Join(filepath.Dir(stateDir), HomesDirName))
+	if err != nil {
+		return err
+	}
+	own := filepath.Join(homes, spec.Name)
 	var shares []string
 	for _, s := range spec.Shares {
 		real, err := realShare(s.Host)
@@ -257,10 +264,16 @@ func (h *host) Run(spec RunSpec) error {
 			return err
 		}
 		for _, d := range append([]string{stateDir}, protect...) {
-			if real == d || strings.HasPrefix(d, real+"/") {
+			if pathIn(d, real) {
 				return fmt.Errorf("refusing the share %s: it holds %s, which brig reads and a "+
 					"host sandbox must not write. Name a directory that does not contain it", s.Host, d)
 			}
+		}
+		// The profile allows a share back after the deny on the homes, so a
+		// share of the homes, or of another sandbox's home, would open them.
+		if pathIn(real, homes) && !pathIn(real, own) {
+			return fmt.Errorf("refusing the share %s: it is in %s, which holds the guest homes of every "+
+				"sandbox. A host sandbox can share its own, %s, and no other", s.Host, homes, own)
 		}
 		rec.Shares = append(rec.Shares, hostShare{Guest: s.Guest, Host: real})
 		shares = append(shares, real)
@@ -272,8 +285,10 @@ func (h *host) Run(spec RunSpec) error {
 		StateDir:      stateDir,
 		SecretDir:     filepath.Join(inst.dir, "secret"),
 		Protect:       protect,
+		Homes:         homes,
 		Shares:        shares,
-		Ancestors:     renamableAncestors(append([]string{stateDir}, protect...)),
+		// The homes are in the list for a link that leads outside ~/.brig.
+		Ancestors: renamableAncestors(append([]string{stateDir, homes}, protect...)),
 	})
 	if err != nil {
 		return err
@@ -337,6 +352,14 @@ func realPath(p string) (string, error) {
 		}
 		rest = filepath.Join(filepath.Base(dir), rest)
 	}
+}
+
+// pathIn reports whether p is dir or a path inside it. APFS does not tell
+// names apart by case by default, and Seatbelt matches a path the same way,
+// so neither does this.
+func pathIn(p, dir string) bool {
+	p, dir = strings.ToLower(p), strings.ToLower(dir)
+	return p == dir || strings.HasPrefix(p, dir+"/")
 }
 
 // renamableAncestors lists the directories above dirs that you can rename,
