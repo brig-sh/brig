@@ -7,12 +7,14 @@ host, and forwards the request to the route's upstream. The guest never holds
 the credential.
 
 This page describes `internal/broker`, the request handler, and
-`brig-broker`, the process that hosts it. hull on `hvi` and nerdctl with
-urunc reach a route at `brig.internal`. A run bound to a policy with routes
-on any other runtime is refused before boot. See [Transports](#transports).
+`brig-broker`, the process that hosts it. The
+[host kind](runtimes.md#the-host-kind) reaches a route over loopback. hull on
+`hvi` and nerdctl with urunc reach it at `brig.internal`. A run bound to a
+policy with routes on any other runtime is refused before boot. See
+[Transports](#transports).
 
 <p align="center">
-  <img alt="A request from Claude Code through the claude-code route of the credential broker. The agent in the sandbox holds ANTHROPIC_BASE_URL, the route URL, and CLAUDE_CODE_OAUTH_TOKEN, a session token for the route. It sends its request to brig.internal on a microVM. brig-broker on the host checks the token and the route's request.allow, adds the credential from Brig's secret store, and sends the request to api.anthropic.com on a TLS connection of its own. The response comes back with the credential redacted. The credential stays on the host and never reaches the sandbox, and egress: default: deny refuses a direct connection from the sandbox." src="../assets/credential-broker.svg" width="820">
+  <img alt="A request from Claude Code through the claude-code route of the credential broker. The agent in the sandbox holds ANTHROPIC_BASE_URL, the route URL, and CLAUDE_CODE_OAUTH_TOKEN, a session token for the route. It sends its request to brig.internal on a microVM, or to a loopback port on the host kind. brig-broker on the host checks the token and the route's request.allow, adds the credential from Brig's secret store, and sends the request to api.anthropic.com on a TLS connection of its own. The response comes back with the credential redacted. The credential stays on the host and never reaches the sandbox, and egress: default: deny refuses a direct connection from the sandbox." src="../assets/credential-broker.svg" width="820">
 </p>
 
 ## Use it
@@ -47,8 +49,10 @@ spec:
 
 A route puts the run on the `isolated` posture. On hull on `hvi` that
 posture still reaches the internet, so `default: deny` is what keeps the
-guest to the broker. Add `allow` rules for anything else the agent needs.
-See [Policy fields](policies.md#policy-fields).
+guest to the broker. Add `allow` rules for anything else the agent needs on
+hull and nerdctl. The host kind refuses a `host` or `cidr` rule, and its
+sandbox reaches the broker's port alone. See
+[Policy fields](policies.md#policy-fields).
 
 Attach the policy and check it. `check` prints a row per run path, and
 refuses a route the run would refuse:
@@ -62,6 +66,7 @@ Then run the agent. The command depends on the runtime:
 
 | Runtime | Command | What it needs |
 | --- | --- | --- |
+| the host kind, on macOS | `BRIG_RUNTIME=host brig run claude-code` | nothing more. See [Brokered credentials](runtimes.md#brokered-credentials) |
 | hull on `hvi`, on macOS | `BRIG_HYPERVISOR=hvi brig run claude-code` | a hull whose `network-gateway --help` lists `--divert`. `vz` and `qemu` are refused |
 | nerdctl with urunc, on Linux | `brig run claude-code` | `nft` on the host. docker and runc are refused |
 
@@ -81,8 +86,8 @@ the store by name and reads no value: the broker reads it on the host.
 `brig info` and `brig plan` say so in the `BROKER` row, and the plan opens
 with a `REFUSED` row.
 
-The guest holds the route URL and the session token, in the variables of
-the preset:
+The transport is `loopback` on the host kind. The guest holds the route URL
+and the session token, in the variables of the preset:
 
 ```
 ANTHROPIC_BASE_URL=https://brig.internal/brig-claude-code/r/anthropic
@@ -93,7 +98,8 @@ On hull and nerdctl the guest also gets the brig CA, which it trusts for
 `brig.internal` alone. `/brig/ca/brig.pem` holds the CA, and
 `/brig/ca/bundle.pem` the image's own roots followed by it. `SSL_CERT_FILE`,
 `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `GIT_SSL_CAINFO` point at
-them. No `.credentials.json` is written into the guest.
+them. On the host kind the URL is `http://127.0.0.1:<port>/...`, and there
+is no CA. In every case, no `.credentials.json` is written into the guest.
 
 `brig stop claude-code` and `brig rm claude-code` revoke the sandbox's
 tokens. A token that leaked out of the guest is refused from then on. The
@@ -516,10 +522,10 @@ the routes are the same. An exec into a running sandbox whose policies no
 longer declare a route removes it too.
 
 `brig rm --all` then removes every sandbox the broker still has registered
-and stops it. That includes a sandbox of a runtime other than the detected
-one, and a run that was killed between its registration and its boot. A
-sandbox that is still running gets 404 on its routes until its next exec
-registers it again.
+and stops it. That includes a host sandbox the detected runtime does not
+list, and a run that was killed between its registration and its boot. A
+host sandbox that is still running gets 404 on its routes until its next
+exec registers it again.
 
 On a host where brig's secret store does not open, such as a Linux host with
 no Secret Service on its session bus, Brig refuses a run with a route before
@@ -540,18 +546,26 @@ answer on its control socket is named in the row by its pid, with
 ### The port
 
 The broker picks a free loopback port at first start and writes it to
-`port`. Every later start binds that port and no other. If another process
-holds it, the broker does not start, and Brig refuses the run and every exec
-of a routed sandbox:
+`port`. Every later start binds that port and no other, because the profile
+of each host sandbox that ran with a route allows that one port. If another
+process holds it, the broker does not start, and Brig refuses the run and
+every exec of a routed sandbox:
 
 ```
 brig: could not register the routes of brig-claude-code with the credential broker: another process holds the credential broker's port, 127.0.0.1:52546, so brig refuses the run. ...
 ```
 
 While the broker is down, its port is free. Any local process can bind it,
-another user's included on a host several people use. Brig refuses to start
-a broker beside such a process, and `brig doctor` fails its `broker` row and
-names the process that holds the port.
+another user's included on a host several people use. A host sandbox that is
+still running then sends its requests there, with its session token in
+`Authorization` and its request body. Measured: a listener on a dead broker's
+port received both, and the agent took its reply. The token works only
+through the broker, and Brig refuses to start a broker beside the squatter,
+so the token stops being useful once the sandbox is stopped. `brig doctor`
+fails its `broker` row and names the process that holds the port. TLS on the
+loopback leg with a certificate pinned in the sandbox, or a socket the
+sandbox inherits instead of a port, would close this. Both are left for
+later.
 
 `BRIG_BROKER_BIN` names a `brig-broker` to run instead of the one beside
 `brig`, then on `PATH`.
@@ -559,9 +573,10 @@ names the process that holds the port.
 ### Files
 
 Everything is in `~/.brig/host/broker`, or `host/broker` under
-`BRIG_STATE_DIR`. Brig and the broker refuse the directory when it is a
-link, belongs to another user, or is open to the group or to others. Every
-file is created `0600`.
+`BRIG_STATE_DIR`. A host sandbox can neither read nor write `~/.brig/host`.
+Brig and the broker refuse the directory when it is a link, belongs to
+another user, or is open to the group or to others. Every file is created
+`0600`.
 
 | File | What it holds |
 | --- | --- |
@@ -581,11 +596,12 @@ file is created `0600`.
 Brig talks to the broker over HTTP on `control.sock`, with JSON bodies. A
 request with a field the protocol does not have is refused with 400, and so
 is a sandbox id that is not 1 to 255 letters, digits, dots, dashes and
-underscores. 255 bytes is the longest name of a directory.
+underscores. 255 bytes is the longest name a host sandbox's directory can
+have.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca}`. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca}`. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to, and is left out on the host kind. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
 | `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read |
@@ -660,12 +676,22 @@ broker:
 
 ## Transports
 
-A guest reaches the broker at `brig.internal`. `brig info` names the
-transport in the `BROKER` row.
+A guest reaches the broker one of two ways. `brig info` names it in the
+`BROKER` row.
 
 | Transport | Runtime | Route URL |
 | --- | --- | --- |
+| `loopback` | the host kind | `http://127.0.0.1:<port>/<sandbox-id>/r/<route>` |
 | `brig.internal` | hull on `hvi`, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>` |
+
+**loopback.** Plain HTTP to the broker's port. The Seatbelt profile of the
+host sandbox allows that port and no other IP connection, so the request
+never leaves the host. There is no CA, and no TLS on this leg. Every host
+sandbox reaches the same port, so the token's sandbox claim is the only
+origin check. A host sandbox can read the session tokens of another one from
+its environment, through `sysctl` (`KERN_PROCARGS2`), and use them on that
+sandbox's routes over the same port, until they expire or that sandbox is
+stopped.
 
 **brig.internal.** TLS to a name only Brig serves, with the brig CA trusted
 in the guest. At first start the broker creates the CA, an ECDSA P-256 key in
@@ -685,12 +711,12 @@ broker through the sandbox's divert socket:
 The broker learns the address when Brig registers the sandbox. A diverted
 connection to it is served as `brig.internal` and never dialed. The broker
 completes the TLS handshake with the `brig.internal` certificate, offers
-HTTP/1.1, and hands the connection to the route handler of the loopback
-port. Each request carries the sandbox whose socket it arrived on. The
-arrival check refuses a request for another sandbox with `404` and
-`check=arrival`, before the sandbox is looked up or a token is read, so a
-guest cannot tell another sandbox from one that does not exist. A sandbox
-registered for `brig.internal` is refused on the loopback port the same way.
+HTTP/1.1, and hands the connection to the same handler as `loopback`. Each
+request carries the sandbox whose socket it arrived on. The arrival check
+refuses a request for another sandbox with `404` and `check=arrival`, before
+the sandbox is looked up or a token is read, so a guest cannot tell another
+sandbox from one that does not exist. A sandbox registered for
+`brig.internal` is refused on the loopback port the same way.
 
 Brig writes the CA certificate into the guest after the boot, and again on
 every exec, through stdin. The broker hands it over at registration, and Brig
@@ -738,7 +764,7 @@ once, and 512 of every sandbox together. A connection over either is closed.
 Brig mints a token per route on every exec and hands the guest the route's
 `guest.env`, with `{route.url}` and `{session.token}` filled in. A token is
 never on a command line. A guest that reaches `brig.internal` also gets the
-CA variables of [Transports](#transports). Per preset:
+CA variables of [Transports](#transports). On the host kind:
 
 | Preset | Guest environment |
 | --- | --- |
@@ -768,7 +794,16 @@ The secret a route injects stays on the host, whatever the profile binds:
   value cannot stand in for it
 - Brig does not read it. The broker does
 
-A run with a route runs isolated.
+On the host kind, a `tmpfs` volume that held a dropped file goes too, with the
+`hostmount` volumes under it. The host kind cannot mount one, and it held
+nothing else that had to stay off disk. An `env:` value that names the tmpfs
+names its directory in the guest home instead. For `claude-code` that is
+`CLAUDE_CONFIG_DIR=<guest home>/.claude`, which is on the host disk. No
+`.credentials.json` is written there.
+
+A run with a route runs isolated. On the host kind a policy with `host` or
+`cidr` rules is still refused, so a route with no `spec.egress` and a route
+with `default: deny` both reach the broker's port and nothing else.
 
 ## Audit line
 
