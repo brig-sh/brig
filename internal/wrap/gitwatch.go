@@ -300,9 +300,9 @@ func snapshotProjectGit(project string) (map[string]string, error) {
 		}
 	}
 	for _, dir := range gitWatchDirs {
-		// Looked at before the walk, because WalkDir stats its root and so
-		// follows a link there: .git/hooks swapped for a link would be walked as
-		// the directory it points at, and the swap itself never recorded.
+		// Looked at before the walk, because opening it follows a link there:
+		// .git/hooks swapped for a link would be walked as the directory it
+		// points at, and the swap itself never recorded.
 		info, err := git.Lstat(dir)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -310,36 +310,11 @@ func snapshotProjectGit(project string) (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		look.files[".git/"+dir] = look.describe(git, dir, info)
 		if !info.IsDir() {
-			look.files[".git/"+dir] = look.describe(git, dir, info)
 			continue
 		}
-		err = fs.WalkDir(git.FS(), dir, func(p string, d fs.DirEntry, err error) error {
-			// An entry removed between the listing and the look at it is not
-			// there to run, and failing the whole look over it would trade the
-			// changes this look did see for a "could not read".
-			if errors.Is(err, fs.ErrNotExist) && p != dir {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if len(look.files) >= maxGitWatchEntries {
-				look.files[gitWatchTruncated] = "truncated"
-				return fs.SkipAll
-			}
-			info, err := d.Info()
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			// WalkDir names paths with slashes on every platform.
-			look.files[".git/"+p] = look.describe(git, p, info)
-			return nil
-		})
-		if err != nil {
+		if err := look.walk(git, dir, ".git/"+dir); err != nil {
 			return nil, err
 		}
 	}
@@ -352,6 +327,88 @@ func snapshotProjectGit(project string) (map[string]string, error) {
 type gitLook struct {
 	files map[string]string
 	left  int64
+}
+
+// gitWatchBatch is how many entries walk reads from a directory at a time.
+const gitWatchBatch = 256
+
+// gitWatchReadBatch is called for each batch readDir reads, so a test can
+// count them.
+var gitWatchReadBatch = func() {}
+
+// walk records what is under dir in root, with key in place of dir in the
+// names it records them under, and stops at maxGitWatchEntries.
+//
+// A directory is read a batch at a time and no further than the entries a look
+// has left. fs.WalkDir read a whole directory before the bound applied, so a
+// guest that put 200k names in .git/hooks cost every command a second while
+// the look recorded 4096 of them. What a batch read is sorted before it is
+// looked at: the byte budget goes to files in the order they are looked at,
+// and the order a directory lists in is the filesystem's, so sorting is what
+// keeps two looks at the same files giving them the same budget.
+//
+// Each directory is opened non-blocking and as a directory, so one swapped for
+// a fifo after the walk saw it fails the open rather than hanging it. An entry
+// removed between the listing and the look at it is not there to run, and is
+// left out rather than failing the look.
+func (l *gitLook) walk(root *os.Root, dir, key string) error {
+	type pending struct{ dir, key string }
+	queue := []pending{{dir, key}}
+	for len(queue) > 0 {
+		d := queue[0]
+		queue = queue[1:]
+		entries, err := l.readDir(root, d.dir)
+		if errors.Is(err, fs.ErrNotExist) && d.dir != dir {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			p, k := d.dir+"/"+e.Name(), d.key+"/"+e.Name()
+			info, err := e.Info()
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if len(l.files) >= maxGitWatchEntries {
+				l.files[gitWatchTruncated] = "truncated"
+				return nil
+			}
+			l.files[k] = l.describe(root, p, info)
+			if info.IsDir() {
+				queue = append(queue, pending{p, k})
+			}
+		}
+	}
+	return nil
+}
+
+// readDir reads dir no further than the entries the look has left, and one
+// past them, so a directory that holds more is still seen to. The entries come
+// back sorted by name.
+func (l *gitLook) readDir(root *os.Root, dir string) ([]fs.DirEntry, error) {
+	f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	var entries []fs.DirEntry
+	for len(l.files)+len(entries) <= maxGitWatchEntries {
+		gitWatchReadBatch()
+		batch, err := f.ReadDir(gitWatchBatch)
+		entries = append(entries, batch...)
+		if errors.Is(err, io.EOF) || len(batch) == 0 {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return entries, nil
 }
 
 // describe is what a look records for one path: its type and mode, and for a
