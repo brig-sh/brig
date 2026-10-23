@@ -629,7 +629,7 @@ func dispatch(args []string) error {
 			"%s explains how to build one", t.Name, verb, t.Name, profile.BringYourOwnImageDoc)
 	}
 
-	rt, err := detectRuntimeFor(runtime.Preference{Bin: t.RuntimeBin})
+	rt, err := detectRuntimeFor(runtime.Preference{Bin: t.RuntimeBin, Isolation: t.Isolation})
 	if err != nil {
 		// brig info is the report worth giving when the runtime is the thing
 		// that is broken: only one of its lines comes from the runtime, and the

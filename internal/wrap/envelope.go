@@ -84,7 +84,7 @@ func (c *Config) envelope(set creds.Set) []envelopeRow {
 		// The pull policy, the same detail the full report prints beside the
 		// image. Whether the signature verified is a separate fact, and the row
 		// below carries the half of it that is knowable here.
-		envelopeRow{"IMAGE", fmt.Sprintf("%s (pull %s)", c.Image, c.Pull)},
+		envelopeRow{"IMAGE", c.imageLine()},
 		// Directly under the image, because it is the same subject: that row
 		// names what boots and this one names whether anything checks it first.
 		envelopeRow{"VERIFY", c.verifyLine()},
@@ -135,7 +135,23 @@ func (c *Config) policyLine() string {
 	if c.Egress.Default == "" {
 		return strings.Join(c.Policies, ", ")
 	}
-	return strings.Join(c.Policies, ", ") + " (egress default: " + string(c.Egress.Default) + ")"
+	line := strings.Join(c.Policies, ", ") + " (egress default: " + string(c.Egress.Default) + ")"
+	// A policy takes the posture to isolated, which the process sandbox
+	// holds to loopback whatever the default says.
+	if string(c.Egress.Default) == "allow" && !runtime.RunsImage(c.Runtime) && c.Network != NetOffline {
+		line += "; the process sandbox holds it as isolated, so only loopback is reachable"
+	}
+	return line
+}
+
+// imageLine is the IMAGE row. The host kind boots no image, so the row says
+// what runs in its place.
+func (c *Config) imageLine() string {
+	if !runtime.RunsImage(c.Runtime) {
+		return fmt.Sprintf("none: the host kind runs %s from PATH, which brig does not verify",
+			firstNonEmpty(c.Profile.Binary, "a shell"))
+	}
+	return fmt.Sprintf("%s (pull %s)", c.Image, c.Pull)
 }
 
 // isolationLine is the ISOLATION row: what the sandbox this run would boot
@@ -179,6 +195,8 @@ func (c *Config) isolationLine() string {
 // describe the same policy differently. See reportVerify.
 func (c *Config) verifyLine() string {
 	switch {
+	case !runtime.RunsImage(c.Runtime):
+		return "nothing to check: the host kind boots no image"
 	case c.Verify == verify.Off:
 		return "off (BRIG_VERIFY=off), so nothing is checked before it boots"
 	case c.VerifyPolicy.Replaced():
