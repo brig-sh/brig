@@ -523,3 +523,64 @@ func TestGuestTextQuotesOnlyWhatIsNotPrintable(t *testing.T) {
 		}
 	}
 }
+
+// A look reads a directory no further than its bound. fs.WalkDir read a whole
+// .git/hooks before the bound applied, so 200k names there cost every command
+// about a second while the look kept 4096 of them.
+func TestCheckProjectGitReadsABigDirectoryOnlyToItsBound(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	hooks := filepath.Join(project, ".git", "hooks")
+	const n = 5 * maxGitWatchEntries
+	for i := 0; i < n; i++ {
+		f, err := os.Create(filepath.Join(hooks, "h"+strconv.Itoa(i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+	}
+	batches := 0
+	saved := gitWatchReadBatch
+	gitWatchReadBatch = func() { batches++ }
+	t.Cleanup(func() { gitWatchReadBatch = saved })
+
+	files, err := snapshotProjectGit(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files[gitWatchTruncated] == "" {
+		t.Error("a look past its bound is not marked truncated")
+	}
+	// The bound, a batch to see there is more, and a batch for each other
+	// directory: info is not there, so hooks is the only one.
+	if most := maxGitWatchEntries/gitWatchBatch + 2; batches > most {
+		t.Errorf("read %d batches of %d for a bound of %d entries, want at most %d",
+			batches, gitWatchBatch, maxGitWatchEntries, most)
+	}
+	if len(files) > maxGitWatchEntries+1 {
+		t.Errorf("recorded %d entries past a bound of %d", len(files), maxGitWatchEntries)
+	}
+}
+
+// What a look gives a directory's entries does not depend on the order the
+// filesystem lists them in, so two looks at the same files record the same.
+func TestCheckProjectGitLooksAtEntriesInNameOrder(t *testing.T) {
+	isolateState(t)
+	saved := maxGitWatchBytes
+	maxGitWatchBytes = 700
+	t.Cleanup(func() { maxGitWatchBytes = saved })
+	project := gitProject(t)
+	for _, name := range []string{"zz", "mm", "aa"} {
+		writeFileT(t, filepath.Join(project, ".git", "hooks", name), strings.Repeat("x", 300), 0o755)
+	}
+	files, err := snapshotProjectGit(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// config takes about 20 bytes of 700, aa and mm 300 each, and zz is past it.
+	for name, hashed := range map[string]bool{"aa": true, "mm": true, "zz": false} {
+		if got := !strings.Contains(files[".git/hooks/"+name], "not hashed"); got != hashed {
+			t.Errorf("%s hashed %v, want %v: %q", name, got, hashed, files[".git/hooks/"+name])
+		}
+	}
+}
