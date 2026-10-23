@@ -50,12 +50,12 @@ func TestNerdctlRunIsFiledUnderTheBundle(t *testing.T) {
 	if rep.failed() {
 		t.Fatalf("a well-behaved guest failed on nerdctl: %v", rep.problems)
 	}
-	if got := recordPath(s.backend, rep.version()); got != "docs/manual-tests/egress-conformance-nerdctl-v0.1.0-rc17.md" {
+	if got := recordPath(s.backend, rep.version(), rep.variant()); got != "docs/manual-tests/egress-conformance-nerdctl-v0.1.0-rc17-rootless.md" {
 		t.Errorf("filed at %q", got)
 	}
 	out := rep.markdown()
 	for _, want := range []string{
-		"# Egress conformance: nerdctl, v0.1.0-rc17",
+		"# Egress conformance: nerdctl, v0.1.0-rc17, rootless\n",
 		"| backend | `nerdctl` |",
 		"| runtime | `" + fakeNerdctl + "` |",
 		"| runtime bundle | `v0.1.0-rc17, generic-boot, rootless` |",
@@ -389,5 +389,39 @@ func TestRecordGivesTheBackendsOwnUnprovenReason(t *testing.T) {
 				t.Errorf("the nerdctl record cites hull:\n%s", row)
 			}
 		})
+	}
+}
+
+// The rootless bundle and the plain one ship under one version, and their
+// guests reach the network on different paths. Each gets a record of its own,
+// so a run of one never overwrites the other's.
+func TestRootlessAndPlainBundlesAreFiledApart(t *testing.T) {
+	paths := map[string]string{}
+	for name, rootless := range map[string]string{"rootless": "true", "plain": "false"} {
+		f, s := nerdctlSuite(t)
+		f.pinsOut = strings.Replace(fakePins, "ROOTLESS=true", "ROOTLESS="+rootless, 1)
+		rep := run(t, s)
+		paths[name] = recordPath(s.backend, rep.version(), rep.variant())
+		if strings.Contains(rep.markdown(), "v0.1.0-rc17, rootless\n") != (name == "rootless") {
+			t.Errorf("%s: the title says rootless %v", name, name != "rootless")
+		}
+	}
+	if paths["rootless"] != "docs/manual-tests/egress-conformance-nerdctl-v0.1.0-rc17-rootless.md" ||
+		paths["plain"] != "docs/manual-tests/egress-conformance-nerdctl-v0.1.0-rc17.md" {
+		t.Errorf("filed at %v", paths)
+	}
+}
+
+// The variant goes into the file name, so only one this runner knows does.
+func TestRecordPathTakesOnlyAKnownVariant(t *testing.T) {
+	for variant, want := range map[string]string{
+		"rootless": "docs/manual-tests/egress-conformance-nerdctl-v0.1.0-rc17-rootless.md",
+		"rootful":  "",
+		"../x":     "",
+		"Rootless": "",
+	} {
+		if got := recordPath("nerdctl", "v0.1.0-rc17", variant); got != want {
+			t.Errorf("%q: %q, want %q", variant, got, want)
+		}
 	}
 }

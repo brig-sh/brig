@@ -670,7 +670,7 @@ func TestRecordPath(t *testing.T) {
 		"hull":                    "",
 		"hull ../../etc/passwd":   "",
 	} {
-		if got := recordPath("hvi", versionOf(line)); got != want {
+		if got := recordPath("hvi", versionOf(line), ""); got != want {
 			t.Errorf("%q: %q, want %q", line, got, want)
 		}
 	}
@@ -684,7 +684,7 @@ func TestRecordPath(t *testing.T) {
 		"v0.1.0 rc17":   "",
 		"v0.1.0-rc17\n": "",
 	} {
-		if got := recordPath("nerdctl", version); got != want {
+		if got := recordPath("nerdctl", version, ""); got != want {
 			t.Errorf("%q: %q, want %q", version, got, want)
 		}
 	}

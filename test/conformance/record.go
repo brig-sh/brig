@@ -22,12 +22,26 @@ func versionOf(line string) string {
 	return ""
 }
 
-// recordPath is where the record for a backend and runtime version lives.
-// One file per pair, so a new runtime version gets a new record and the old
-// one stays as the evidence for its release. The version is in the file name,
-// so anything that does not read as one gets no path.
-func recordPath(backend, version string) string {
+// recordPath is where the record for a backend, runtime version and variant
+// lives. One file per triple, so a new runtime version gets a new record and
+// the old one stays as the evidence for its release. The version and the
+// variant are in the file name, so a version that does not read as one, and a
+// variant this runner does not know, get no path.
+//
+// The variant is there because one bundle version ships twice: the rootless
+// bundle and the plain one carry the same tag, and their guests reach the
+// network on different paths, slirp4netns for one and a bridge on the host for
+// the other. Under the version alone a run of one would overwrite the record
+// of the other.
+func recordPath(backend, version, variant string) string {
 	if !versionRE.MatchString(version) {
+		return ""
+	}
+	switch variant {
+	case "":
+	case "rootless":
+		version += "-" + variant
+	default:
 		return ""
 	}
 	return fmt.Sprintf("docs/manual-tests/egress-conformance-%s-%s.md", backend, version)
@@ -42,6 +56,16 @@ func (r *report) version() string {
 		return r.bundle
 	}
 	return versionOf(r.runtime)
+}
+
+// variant is the build of the runtime bundle that ran, when there are two of
+// one version: "rootless" for the rootless bundle, and nothing for the plain
+// one, for hvi, and for a nerdctl the bundle did not install. See recordPath.
+func (r *report) variant() string {
+	if r.pins["ROOTLESS"] == "true" {
+		return "rootless"
+	}
+	return ""
 }
 
 func (r *report) counts() string {
@@ -124,7 +148,11 @@ func (r *report) markdown() string {
 	if r.failed() {
 		result = "FAIL"
 	}
-	w("# Egress conformance: %s, %s", r.backend, orNone(r.version()))
+	if v := r.variant(); v != "" {
+		w("# Egress conformance: %s, %s, %s", r.backend, orNone(r.version()), v)
+	} else {
+		w("# Egress conformance: %s, %s", r.backend, orNone(r.version()))
+	}
 	w("")
 	w("Written by `script/egress-conformance.sh`. To change it, run the suite again.")
 	w("")
