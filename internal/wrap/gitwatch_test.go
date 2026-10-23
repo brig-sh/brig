@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -478,5 +479,47 @@ func TestCheckProjectGitSaysNothingOfACommondirThatIsNotThere(t *testing.T) {
 	c.CheckProjectGit()
 	if strings.Contains(errOut.String(), "commondir") {
 		t.Errorf("a repository with no commondir was warned about one:\n%s", errOut)
+	}
+}
+
+// brig prints the names in the warning itself, so a name the guest chose
+// reaches the host terminal unfiltered unless brig quotes it. This one writes
+// the clipboard with OSC 52, then forges a line of brig's own.
+func TestCheckProjectGitQuotesANameWithControlCharacters(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	c, errOut := watchConfig(project)
+	c.CheckProjectGit()
+
+	name := "x\x1b]52;c;cHduZWQ=\x07\nbrig: all good"
+	writeFileT(t, filepath.Join(project, ".git", "hooks", name), "#!/bin/sh\n", 0o755)
+	c.CheckProjectGit()
+	got := errOut.String()
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Errorf("a control character from a name reached the terminal: %q", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.TrimSpace(strings.TrimPrefix(line, "brig:")) == "all good" {
+			t.Errorf("a name forged a line of brig's own: %q", got)
+		}
+	}
+	if want := "added " + strconv.Quote(".git/hooks/"+name); !strings.Contains(got, want) {
+		t.Errorf("the name is not shown quoted, want %s in:\n%s", want, got)
+	}
+}
+
+func TestGuestTextQuotesOnlyWhatIsNotPrintable(t *testing.T) {
+	for in, want := range map[string]string{
+		".git/hooks/pre-commit":   ".git/hooks/pre-commit",
+		".git/hooks/héllo":        ".git/hooks/héllo",
+		".git/hooks/a b":          ".git/hooks/a b",
+		".git/hooks/a\nb":         `".git/hooks/a\nb"`,
+		".git/hooks/\x1b[2J":      `".git/hooks/\x1b[2J"`,
+		".git/hooks/\u202eexe.sh": `".git/hooks/\u202eexe.sh"`,
+		".git/hooks/\xff":         `".git/hooks/\xff"`,
+	} {
+		if got := guestText(in); got != want {
+			t.Errorf("guestText(%q) = %s, want %s", in, got, want)
+		}
 	}
 }
