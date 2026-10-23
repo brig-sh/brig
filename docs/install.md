@@ -279,8 +279,10 @@ needs through to the runtime.
 **`BRIG_CONTAINERD_RUNTIME`** can name another microVM shim, for a host that
 has one. Brig refuses a shim that it knows shares the host kernel: `runc` or
 `crun`, by name or by path. A container that shares the host kernel with the
-agent is not the boundary Brig provides. `brig info` still names the shim
-that a run resolves, and Brig refuses the run.
+agent is not the boundary Brig provides through a container runtime. `brig
+info` still names the shim that a run resolves, and Brig refuses the run. The
+`host` kind on macOS shares the host kernel too, and you choose it by name.
+See [The process boundary](security.md#the-process-boundary).
 
 ## Building from source
 
