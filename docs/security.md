@@ -680,9 +680,9 @@ one of these:
 
 Brig warns when these files change. `brig run`, `create`, `sh`, `exec`,
 `stop` and `rm` record what the project's `.git/config`,
-`.git/config.worktree`, `.git/hooks` and `.git/info` hold, and the next of
-them for the same sandbox names each file that was added, changed or
-removed since:
+`.git/config.worktree`, `.git/commondir`, `.git/hooks` and `.git/info` hold,
+and the next of them for the same sandbox names each file that was added,
+changed or removed since:
 
 ```console
 $ brig stop claude
@@ -694,6 +694,10 @@ brig: /Users/alex/code/demo/.git changed while brig-claude-code could write to i
 ```
 
 When stderr is not a terminal, every line starts with `brig:`.
+
+A `.git/commondir` is named on every command that finds one. git then reads
+config, hooks and info from the directory it names, which Brig does not look
+at, and a repository's own `.git` has none.
 
 The warning is a look between two brig commands, not a guard:
 
@@ -708,7 +712,7 @@ The warning is a look between two brig commands, not a guard:
 - Submodules keep their hooks and config under `.git/modules`, which is not
   looked at.
 - A file that `.git/config` already includes, with `include.path` or
-  `includeIf`, is not looked at unless it is one of the four above. The
+  `includeIf`, is not looked at unless it is one of the paths above. The
   guest can set `core.fsmonitor` there without `.git/config` changing.
 - The look is bounded, so a guest cannot make it stall every command. It
   hashes the first 8 MiB of a file and 64 MiB in all. A file past the 64 MiB
