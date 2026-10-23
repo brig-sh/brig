@@ -436,3 +436,47 @@ func TestForgetSandboxDropsTheLookAtItsProject(t *testing.T) {
 		t.Error("ls kept the look at a sandbox the runtime no longer has")
 	}
 }
+
+// commondir points git at another directory for config, hooks and info, so
+// the guest can change what git runs while the four watched paths stay as
+// they were (the reproduction in #508). The commondir itself is named as
+// added, and every look that finds one says so, including the first, which
+// has nothing to compare against.
+func TestCheckProjectGitNamesACommondir(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	c, errOut := watchConfig(project)
+	c.CheckProjectGit()
+
+	other := filepath.Join(project, ".git", "c")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, filepath.Join(other, "config"), "[core]\n\tfsmonitor = \"echo PWNED >&2; false\"\n", 0o644)
+	writeFileT(t, filepath.Join(project, ".git", "commondir"), "c\n", 0o644)
+	c.CheckProjectGit()
+	got := errOut.String()
+	for _, want := range []string{"added .git/commondir", "has a commondir, so git reads its config and hooks from where that points", "cat .git/commondir"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the warning does not say %q:\n%s", want, got)
+		}
+	}
+
+	// A sandbox first seen with a commondir already there.
+	errOut.Reset()
+	fresh := &Config{Err: errOut, Verbosity: Normal, VMName: "brig-fresh", Project: project}
+	fresh.CheckProjectGit()
+	if !strings.Contains(errOut.String(), "has a commondir") {
+		t.Errorf("a commondir there at the first look is not named:\n%s", errOut)
+	}
+}
+
+func TestCheckProjectGitSaysNothingOfACommondirThatIsNotThere(t *testing.T) {
+	isolateState(t)
+	c, errOut := watchConfig(gitProject(t))
+	c.CheckProjectGit()
+	c.CheckProjectGit()
+	if strings.Contains(errOut.String(), "commondir") {
+		t.Errorf("a repository with no commondir was warned about one:\n%s", errOut)
+	}
+}

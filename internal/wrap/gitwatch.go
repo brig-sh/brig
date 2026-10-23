@@ -75,10 +75,12 @@ var maxGitWatchBytes int64 = 64 << 20
 
 // The paths git reads programs from. config.worktree joins config under
 // extensions.worktreeConfig, and info holds attributes, which select the
-// filter and diff drivers config names. Submodules keep theirs under
-// .git/modules and are not looked at.
+// filter and diff drivers config names. commondir moves the rest: git reads
+// config, hooks and info from the directory it names instead, which none of
+// the others would show. Submodules keep theirs under .git/modules and are
+// not looked at.
 var (
-	gitWatchFiles = []string{"config", "config.worktree"}
+	gitWatchFiles = []string{"config", "config.worktree", "commondir"}
 	gitWatchDirs  = []string{"hooks", "info"}
 )
 
@@ -123,6 +125,7 @@ func (c *Config) CheckProjectGit() {
 			}
 			c.warnf("%s", gitChangeNotice(c.VMName, prev.Project, changes))
 		}
+		c.commondirNotice(prev.Project, now)
 		if prev.Project == project {
 			if len(changes) > 0 {
 				c.recordGitWatch(index, project, now)
@@ -147,7 +150,23 @@ func (c *Config) CheckProjectGit() {
 			Note("%v", err))
 		return
 	}
+	c.commondirNotice(project, now)
 	c.recordGitWatch(index, project, now)
+}
+
+// commondirNotice says that a project's .git has a commondir, on every look
+// that finds one. git then reads config, hooks and info from the directory it
+// names, which brig does not look at, so the four paths it does look at can
+// stay the same while what git runs changes. A repository's own .git has no
+// commondir: git writes one only in a worktree's directory under
+// .git/worktrees, so one here is worth saying each time rather than once.
+func (c *Config) commondirNotice(project string, files map[string]string) {
+	if _, ok := files[".git/commondir"]; !ok {
+		return
+	}
+	c.warnf("%s", notice.Newf("%s/.git has a commondir, so git reads its config and hooks from where that points", project).
+		Note("brig does not look there, and a repository's own .git has no commondir").
+		Do("read where it points", "cat .git/commondir"))
 }
 
 func (c *Config) recordGitWatch(index map[string]gitWatchEntry, project string, files map[string]string) {
