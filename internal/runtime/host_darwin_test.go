@@ -430,6 +430,151 @@ func TestHostRunRefusesAShareHoldingBrigsDirectories(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "must not write") {
 		t.Fatalf("got %v", err)
 	}
+
+	// The profile allows a share back after the deny on the homes, so the
+	// homes directory and another sandbox's home are refused as shares. The
+	// sandbox's own home, and a directory in it, are not.
+	homes := filepath.Join(os.Getenv("BRIG_STATE_DIR"), HomesDirName)
+	for _, d := range []string{"brig-wide/sub", "brig-other/sub"} {
+		if err := os.MkdirAll(filepath.Join(homes, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		share  string
+		refuse bool
+	}{
+		{homes, true},
+		{filepath.Join(homes, "brig-other"), true},
+		{filepath.Join(homes, "brig-other", "sub"), true},
+		{filepath.Join(homes, "brig-wide"), false},
+		{filepath.Join(homes, "brig-wide", "sub"), false},
+	} {
+		err := h.Run(RunSpec{Name: "brig-wide", Net: "none", Shares: []Share{{Host: tt.share, Guest: "/root"}}})
+		switch {
+		case tt.refuse && (err == nil || !strings.Contains(err.Error(), "holds the guest homes")):
+			t.Errorf("the share %s: got %v, want a refusal", tt.share, err)
+		case !tt.refuse && err != nil:
+			t.Errorf("the share %s: %v", tt.share, err)
+		}
+	}
+}
+
+// APFS does not tell names apart by case by default, and Seatbelt matches a
+// path the same way, so a share that differs from brig's directories only in
+// case is refused as they are.
+func TestHostRunRefusesAShareThatDiffersOnlyInCase(t *testing.T) {
+	hostState(t)
+	state := os.Getenv("BRIG_STATE_DIR")
+	homes := filepath.Join(state, HomesDirName)
+	for _, d := range []string{"brig-wide", "brig-other"} {
+		if err := os.MkdirAll(filepath.Join(homes, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upper := filepath.Join(state, "HOMES")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skipf("%s is on a volume that tells names apart by case", state)
+	}
+	h := &host{bin: "/usr/bin/sandbox-exec"}
+	for _, tt := range []struct{ share, refusal string }{
+		{strings.ToUpper(filepath.Dir(state)), "must not write"},
+		{upper, "holds the guest homes"},
+		{filepath.Join(upper, "BRIG-OTHER"), "holds the guest homes"},
+		{filepath.Join(homes, "Brig-Other"), "holds the guest homes"},
+		{filepath.Join(upper, "BRIG-WIDE"), ""},
+	} {
+		err := h.Run(RunSpec{Name: "brig-wide", Net: "none", Shares: []Share{{Host: tt.share, Guest: "/root"}}})
+		switch {
+		case tt.refusal != "" && (err == nil || !strings.Contains(err.Error(), tt.refusal)):
+			t.Errorf("the share %s: got %v, want a refusal that says %q", tt.share, err, tt.refusal)
+		case tt.refusal == "" && err != nil:
+			t.Errorf("the share %s: %v", tt.share, err)
+		}
+	}
+}
+
+// A homes directory that is a link is denied where it leads. Seatbelt
+// matches the path the kernel resolved, so a deny on the link's own name
+// would leave every home open.
+func TestTheHomesDenyFollowsALinkedHomesDirectory(t *testing.T) {
+	hostState(t)
+	state := os.Getenv("BRIG_STATE_DIR")
+	elsewhere, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(elsewhere, "brig-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(state, HomesDirName)); err != nil {
+		t.Fatal(err)
+	}
+	h := &host{bin: "/usr/bin/sandbox-exec"}
+	if err := h.Run(RunSpec{Name: "brig-a", Net: "none",
+		Shares: []Share{{Host: filepath.Join(elsewhere, "brig-a"), Guest: "/root"}}}); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := os.ReadFile(filepath.Join(state, "host", "brig-a", "profile.sb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("(deny file-read* file-write* (subpath %q))", elsewhere); !strings.Contains(string(blob), want) {
+		t.Errorf("the profile does not hold %s:\n%s", want, blob)
+	}
+}
+
+// A homes directory that is a link leads elsewhere. Renaming a directory
+// above where it leads would move every home out from under the deny, which
+// matches the path at the time of each access.
+func TestALinkedHomesDirectoryCannotBeMovedAway(t *testing.T) {
+	bin := sandboxBin(t)
+	hostState(t)
+	state := os.Getenv("BRIG_STATE_DIR")
+	data, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	homes := filepath.Join(data, "store", "homes")
+	for _, d := range []string{"brig-a", "brig-d"} {
+		if err := os.MkdirAll(filepath.Join(homes, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(homes, "brig-d", "notes.txt"), []byte("D-SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(homes, filepath.Join(state, HomesDirName)); err != nil {
+		t.Fatal(err)
+	}
+	h := &host{bin: bin}
+	const name = "brig-a"
+	if err := h.Run(RunSpec{Name: name, Net: "none",
+		Shares: []Share{{Host: filepath.Join(homes, name), Guest: "/root"}}}); err != nil {
+		t.Fatal(err)
+	}
+	moves := []struct{ what, script string }{
+		{"read another home", `cat "$1/store/homes/brig-d/notes.txt"`},
+		{"move the directory above the homes, then read another home",
+			`mv "$1/store" "$1/store2"; cat "$1/store2/homes/brig-d/notes.txt"`},
+		{"move a directory higher up, then read another home",
+			`mv "$1" "$1-moved"; cat "$1-moved/store/homes/brig-d/notes.txt"`},
+	}
+	for _, tt := range moves {
+		out, err := h.Output(ExecSpec{Name: name, Cmd: []string{"/bin/sh", "-c", tt.script, "sh", data}})
+		t.Logf("inside: %s exits %d", tt.what, exitCode(err))
+		if err == nil || strings.Contains(out, "D-SECRET") {
+			t.Errorf("the sandbox could %s: %q", tt.what, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(homes, "brig-d", "notes.txt")); err != nil {
+		t.Errorf("the homes moved: %v", err)
+	}
+	// Outside the sandbox the same move works.
+	out, err := exec.Command("/bin/sh", "-c", moves[1].script+`; mv "$1/store2" "$1/store"`, "sh", data).CombinedOutput()
+	if err != nil || string(out) != "D-SECRET" {
+		t.Errorf("control: outside the sandbox the move and read gave %q, %v", out, err)
+	}
 }
 
 // listener counts the connections that reach it.
