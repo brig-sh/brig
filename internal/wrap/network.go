@@ -151,7 +151,7 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 		Name:       c.VMName,
 		Hypervisor: hypervisor,
 		Net:        c.Network.RuntimeNet(),
-		Egress:     runtimeEgress(c.Egress),
+		Egress:     c.runtimeEgress(),
 		Publish:    c.Publish,
 		GUI:        c.Profile.IsGUI(),
 	}
@@ -249,7 +249,7 @@ func (c *Config) networkStale() bool {
 	if !ok {
 		return false
 	}
-	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), runtimeEgress(c.Egress))
+	return checker.NetworkStale(c.VMName, c.hypervisor(), c.Network.RuntimeNet(), c.runtimeEgress())
 }
 
 // postureChanged reports whether this run asks for a different posture than

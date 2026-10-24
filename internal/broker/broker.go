@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,10 +67,12 @@ type Config struct {
 	// proxy.
 	Transport http.RoundTripper
 	// ArrivalCheck is optional. It reports whether a request for sandbox
-	// that arrived from remoteAddr came in on that sandbox's gateway. It
-	// defaults to accepting every address, which fits a runtime where all
-	// sandboxes share one gateway.
-	ArrivalCheck func(sandbox, remoteAddr string) bool
+	// that arrived from remoteAddr came in where that sandbox reaches the
+	// broker, and names the sandbox remoteAddr belongs to, or "" when it
+	// names none. A request that fails it is answered as one for a sandbox
+	// the broker does not serve. It defaults to accepting every address,
+	// which fits a runtime where all sandboxes share one gateway.
+	ArrivalCheck func(sandbox, remoteAddr string) (arrived string, ok bool)
 	// Sandboxes is optional. Each one is added as by AddSandbox.
 	Sandboxes []Sandbox
 	// ReplayBudget is optional, and defaults to 64 MiB. It bounds the bytes
@@ -108,6 +111,10 @@ type Sandbox struct {
 	Profile string
 	// Routes is the route table of the sandbox. Route names are unique.
 	Routes []Route
+	// Modes are the route modes besides endpoint that the host process
+	// serves for the sandbox. ServeHTTP serves endpoint routes alone, and a
+	// route in a mode not listed here is refused.
+	Modes []v1alpha1.RouteMode
 }
 
 // Route is one route of a sandbox.
@@ -135,7 +142,7 @@ type Handler struct {
 	audit     *slog.Logger
 	now       func() time.Time
 	transport http.RoundTripper
-	arrival   func(sandbox, remoteAddr string) bool
+	arrival   func(sandbox, remoteAddr string) (string, bool)
 	replay    *budget
 	bodyWait  time.Duration
 
@@ -216,7 +223,7 @@ func New(cfg Config) (*Handler, error) {
 		h.transport = defaultTransport()
 	}
 	if h.arrival == nil {
-		h.arrival = func(string, string) bool { return true }
+		h.arrival = func(string, string) (string, bool) { return "", true }
 	}
 	for _, s := range cfg.Sandboxes {
 		if err := h.AddSandbox(s); err != nil {
@@ -260,11 +267,18 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		if r.Route.Credential == nil || r.Route.Inject == nil {
 			return fmt.Errorf("sandbox %s: route %s is not expanded; pass it through policy.ExpandRoute", s.ID, name)
 		}
+		if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint && !slices.Contains(s.Modes, m) {
+			return fmt.Errorf("sandbox %s: route %s is mode %q, and the sandbox was registered with nothing "+
+				"to serve it", s.ID, name, m)
+		}
 		u, err := url.Parse(r.Route.Upstream)
 		if err != nil || u.Scheme != "https" || u.Host == "" {
 			return fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", s.ID, name, r.Route.Upstream)
 		}
 		sb.routes[name] = &route{policy: r.Policy, spec: *r.Route.DeepCopy(), upstream: u}
+	}
+	if err := checkDivertedRoutes(sb.routes); err != nil {
+		return fmt.Errorf("sandbox %s: %w", s.ID, err)
 	}
 	h.mu.Lock()
 	h.sandboxes[s.ID] = sb

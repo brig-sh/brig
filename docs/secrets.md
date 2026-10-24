@@ -481,8 +481,10 @@ check. Create or import the secret, and the next request finds it.
 
 ## Renewal on the host
 
-This section describes a part of the credential broker. No release uses it
-yet. A run still delivers `claude-credentials` as a file, and
+`brig-broker` renews a secret this way for a run whose
+[route](policies.md#routes) serves it, on hull with `hvi` and nerdctl with
+urunc ([Transports](broker.md#transports)). Every other run still delivers
+`claude-credentials` as a file, and
 [What file delivery buys](security.md#what-file-delivery-buys-and-what-it-costs)
 still describes that.
 

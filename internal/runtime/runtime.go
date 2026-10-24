@@ -13,11 +13,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/telemetry"
 )
 
@@ -127,6 +130,9 @@ type RunSpec struct {
 	// once, when that gateway starts, which is also why a sandbox carrying
 	// one needs a network of its own. See gateway.go.
 	Egress Egress
+	// Setup is the sandbox setup the run's route modes ask for besides the
+	// divert, or nil. Only a route mode registered in this build adds one.
+	Setup []Setup
 	// Publish are the guest ports this run offers on the host.
 	//
 	// Every one of them is a hole in the sandbox boundary, so they are named
@@ -191,7 +197,133 @@ type Egress struct {
 	Default string
 	Allow   []Rule
 	Deny    []Rule
+	// Divert is the connections handed to brig's injector instead of being
+	// routed. The zero value diverts nothing. A guest that reaches the
+	// broker at brig.internal needs one. It needs a network of the
+	// sandbox's own, like the rules. hull diverts at its gateway, and
+	// nerdctl at the sandbox's table.
+	Divert Divert
 }
+
+// Divert asks the runtime to hand a sandbox's TCP connections to some
+// destinations, unmodified, to the injector's unix socket. A destination it
+// cannot divert refuses the run. See internal/divert for the contract.
+type Divert struct {
+	// Routes are the diverted destinations.
+	Routes []DivertRoute
+	// Socket is the injector's unix socket for this sandbox, on the host.
+	Socket string
+	// BrigInternal asks the runtime to route brig.internal to the broker: to
+	// answer the name with the address of the sandbox's own gateway, which
+	// BrigInternalAddr reports, and to divert that address on
+	// BrigInternalPort to Socket. Every other port of it is refused.
+	BrigInternal bool
+}
+
+// The name a guest reaches the broker by, and the one port of it that is
+// served.
+const (
+	BrigInternalName = "brig.internal"
+	BrigInternalPort = 443
+)
+
+// BrigInternalRouter is a runtime that can route brig.internal from its
+// guest to the broker.
+type BrigInternalRouter interface {
+	// BrigInternalAddr returns the address the guest of sandbox name
+	// resolves brig.internal to: its own gateway's. The broker serves
+	// brig.internal on connections to it, and never dials it. It may create
+	// the sandbox's network, and never boots the sandbox.
+	BrigInternalAddr(name string) (netip.Addr, error)
+}
+
+// on returns the diverted destinations, with port BrigInternalPort of gw when
+// brig.internal is routed.
+func (d Divert) on(gw netip.Addr) []DivertRoute {
+	routes := slices.Clone(d.Routes)
+	if d.BrigInternal {
+		routes = append(routes, DivertRoute{Host: gw.String(), Port: BrigInternalPort})
+	}
+	return routes
+}
+
+// DivertRoute is one diverted destination: a host name or an IPv4 address,
+// and a TCP port.
+type DivertRoute struct {
+	Host string
+	Port int
+	// Mode is the route mode that asked for the divert, or "". A refusal of
+	// the divert names it.
+	Mode v1alpha1.RouteMode
+}
+
+// refusal is the property a refusal of d names, and how to do without it: the
+// route mode of its first destination that names one, or else the endpoint
+// mode, which diverts brig.internal.
+func (d Divert) refusal() (Property, string) {
+	for _, r := range d.Routes {
+		if r.Mode != "" {
+			return RouteModeProperty(r.Mode), "use mode: endpoint"
+		}
+	}
+	return RouteModeProperty(v1alpha1.ModeEndpoint), "detach the policy"
+}
+
+// requireDiverts refuses the destinations of d that path does not serve, by
+// the route mode of each, and any of them on a run with no network.
+func requireDiverts(spec RunSpec, path RunPath) error {
+	for _, r := range spec.Egress.Divert.Routes {
+		if r.Mode == "" {
+			continue
+		}
+		if err := RequireRouteMode(r.Mode, path); err != nil {
+			return err
+		}
+		if spec.Net == "none" {
+			return &CapabilityError{Property: RouteModeProperty(r.Mode), Path: path, State: CannotEnforce,
+				Why: "the runtime diverts the route's connections on the guest's network, and this run has none " +
+					"(BRIG_NETWORK=offline)", Remedy: otherModeRemedy}
+		}
+	}
+	return nil
+}
+
+// Setup is sandbox setup that a route mode registered in this build adds to a
+// run. The runtime asks it to check the run before anything boots, and adds
+// its arguments to the run command line.
+type Setup interface {
+	// Check refuses spec on path, or returns nil.
+	Check(path RunPath, spec RunSpec) error
+	// Args returns what the setup adds to the run command line of the
+	// runtime on path, in that runtime's spelling.
+	Args(path RunPath) ([]string, error)
+}
+
+// checkSetup refuses spec on path when any of its setup does.
+func checkSetup(spec RunSpec, path RunPath) error {
+	for _, s := range spec.Setup {
+		if err := s.Check(path, spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setupArgs returns the arguments spec's setup adds on path, in order.
+func setupArgs(spec RunSpec, path RunPath) ([]string, error) {
+	var args []string
+	for _, s := range spec.Setup {
+		a, err := s.Args(path)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, a...)
+	}
+	return args, nil
+}
+
+// Requested returns whether anything is diverted.
+func (d Divert) Requested() bool { return len(d.Routes) > 0 || d.BrigInternal }
 
 // Rule is one destination, by exactly one of the two spellings it can take: a
 // glob on the name the guest resolves, or a range the address is matched

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/session"
 	"github.com/brig-sh/brig/internal/wrap"
 	"sigs.k8s.io/yaml"
@@ -272,7 +274,14 @@ func showPolicy(args []string) error {
 		if err != nil {
 			return err
 		}
-		doc = r
+		modes, err := policy.PresetModes(v1alpha1.Preset(preset))
+		if err != nil {
+			return err
+		}
+		doc = struct {
+			v1alpha1.Route
+			Modes []v1alpha1.RouteMode `json:"modes"`
+		}{r, modes}
 	case len(words) == 0:
 		return errors.New("policy show needs a name, for example `brig policy show no-net`")
 	case len(words) > 1:
@@ -723,7 +732,9 @@ func howToUnbind(b []string) string {
 // printRoutes prints one indented row on stderr for each route of p, after
 // the policy name check has just printed on stdout. stdout stays one policy
 // name per line. A route as written can leave out its mode, so the row prints
-// the default.
+// the default. Each route gets a row per run path under it, from the route
+// mode table: where its mode is served, and the transport the guest reaches
+// the broker by there.
 func printRoutes(p policy.Policy) {
 	for _, r := range p.Spec.Routes {
 		preset := string(r.Preset)
@@ -735,7 +746,31 @@ func printRoutes(p policy.Policy) {
 			mode = v1alpha1.ModeEndpoint
 		}
 		fmt.Fprintf(os.Stderr, "  route %s  preset %s  mode %s\n", r.Name, preset, mode)
+		for _, rec := range runtime.ModeRecords(mode) {
+			fmt.Fprintf(os.Stderr, "    %s  %s\n", rec.Path, rec.Line())
+		}
 	}
+}
+
+// routeModes lists the modes of the routes of ps in the order a boot checks
+// them: the modes besides endpoint in name order, then endpoint. Each comes
+// with the routes that name it, the way a refusal names them.
+func routeModes(ps []policy.Policy) ([]v1alpha1.RouteMode, map[v1alpha1.RouteMode][]string) {
+	byMode := map[v1alpha1.RouteMode][]string{}
+	for _, p := range ps {
+		for _, r := range p.Spec.Routes {
+			m := r.Mode
+			if m == "" {
+				m = v1alpha1.ModeEndpoint
+			}
+			byMode[m] = append(byMode[m], fmt.Sprintf("%s (route %s)", p.Metadata.Name, r.Name))
+		}
+	}
+	modes := slices.Sorted(maps.Keys(byMode))
+	if i := slices.Index(modes, v1alpha1.ModeEndpoint); i >= 0 {
+		modes = append(slices.Delete(modes, i, i+1), v1alpha1.ModeEndpoint)
+	}
+	return modes, byMode
 }
 
 // flatPolicyGoesIn is the release that stops reading the flat policy form. The
@@ -1135,11 +1170,28 @@ func checkPolicy(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
 	}
+	// A boot refuses a route that its run path cannot serve, so check says
+	// so before one is tried. A microVM or a container guest reaches an
+	// endpoint route at brig.internal on its own gateway. See routeRefusal in
+	// internal/wrap.
+	if modes, byMode := routeModes(loaded); len(modes) > 0 {
+		rt, detectErr := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
+		for _, m := range modes {
+			err := detectErr
+			if err != nil {
+				err = fmt.Errorf("no runtime is here to serve it: %w", err)
+			} else {
+				err = wrap.RouteModeServed(p, rt, m)
+			}
+			if err != nil {
+				return fmt.Errorf("policy %s declares a route in mode %s, and brig refuses the run "+
+					"before boot: %w", strings.Join(byMode[m], ", "), m, err)
+			}
+		}
+	}
 	// A route is served on the sandbox's own gateway address, so a run with
 	// one needs a network of its own. The line states that plan, on stderr
-	// with the route rows, so stdout stays one policy name per line. A run
-	// refuses routes until a version serves them; see refuseRoutes in
-	// internal/wrap.
+	// with the route rows, so stdout stays one policy name per line.
 	if len(routes) > 0 {
 		fmt.Fprintf(os.Stderr, "posture: %s\n", wrap.NetIsolated)
 	}

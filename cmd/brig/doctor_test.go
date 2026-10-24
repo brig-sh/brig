@@ -441,6 +441,21 @@ func TestDoctorBrokerCheck(t *testing.T) {
 	t.Logf("doctor: %s", c.Finding)
 }
 
+// The report has a broker row on every host: nerdctl on Linux serves routes
+// through brig-broker as hull on macOS does. The row does not gate the exit
+// status.
+func TestDoctorHasABrokerRowOnEveryHost(t *testing.T) {
+	healthyHost(t)
+	t.Setenv("BRIG_STATE_DIR", t.TempDir())
+	checks := runDoctor(nil, nil)
+	if c := findCheck(t, checks, "broker"); c.State != stateInfo || c.err != nil {
+		t.Errorf("a broker that never started: %+v", c)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("the broker row gated the exit status: %v", err)
+	}
+}
+
 // A broker settling a refresh journal says so on the broker row, by name,
 // without failing it. A refresh that failed still fails the row.
 func TestDoctorBrokerRowNamesARecovery(t *testing.T) {
@@ -456,5 +471,40 @@ func TestDoctorBrokerRowNamesARecovery(t *testing.T) {
 		Recovering: []string{"claude-credentials"}, Failing: []string{"claude-credentials"}})
 	if c.State != stateFail {
 		t.Errorf("a broker whose recovery found the pair spent: %+v", c)
+	}
+}
+
+// A route mode registered in this build adds its row, after the host's own
+// rows and ahead of the boot. Its row informs and never fails the report.
+func TestDoctorCarriesTheRowOfARegisteredMode(t *testing.T) {
+	healthyHost(t)
+	saved := modeChecks
+	t.Cleanup(func() { modeChecks = saved })
+	var asked []runtime.Runtime
+	modeChecks = append(modeChecks, func(_ *profile.Profile, rt runtime.Runtime) check {
+		asked = append(asked, rt)
+		return check{Name: "relay", State: stateInfo, Finding: "relay is served"}
+	})
+	checks := runDoctor(nil, nil)
+	if c := findCheck(t, checks, "relay"); c.State != stateInfo || c.Finding != "relay is served" {
+		t.Errorf("the relay row is %+v", c)
+	}
+	if len(asked) != 1 || asked[0] == nil {
+		t.Errorf("the row was asked with %v", asked)
+	}
+	relay, boot := -1, -1
+	for i, c := range checks {
+		switch c.Name {
+		case "relay":
+			relay = i
+		case "boot":
+			boot = i
+		}
+	}
+	if relay < 0 || boot < 0 || relay > boot {
+		t.Errorf("the relay row is at %d and the boot row at %d", relay, boot)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("an informational row changed the exit: %v", err)
 	}
 }

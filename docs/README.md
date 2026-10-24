@@ -33,6 +33,7 @@ other pages follow, in the order a new reader needs them.
 | [authentication.md](authentication.md) | How to log an agent in, and Git access inside the guest |
 | [secrets.md](secrets.md) | The secret store, profile secret fields, and `brig secret import` |
 | [policies.md](policies.md) | Networking modes, egress policy and brokered routes |
+| [broker.md](broker.md#use-it) | Keep a login on the host, and give the guest a session token for it |
 | [profiles.md](profiles.md) | The profile file format, and how to run your own agent |
 | [guest-image.md](guest-image.md) | The contract an image must meet to boot as a guest |
 | [completions.md](completions.md) | Shell completion for bash, zsh and fish |
@@ -42,7 +43,7 @@ other pages follow, in the order a new reader needs them.
 | Page | What it gives you |
 | --- | --- |
 | [cli.md](cli.md) | Every verb and flag, the environment variables, the JSON output and the exit codes |
-| [broker.md](broker.md) | How the credential broker checks, edits and forwards a request on a route |
+| [broker.md](broker.md) | How the credential broker checks, edits and forwards a request on a route, and how a guest reaches it |
 | [migration.md](migration.md) | Every retired spelling and its replacement |
 | [stability.md](stability.md) | What you can script against, and what can change |
 | [telemetry.md](telemetry.md) | What Brig counts, and how to turn it off |

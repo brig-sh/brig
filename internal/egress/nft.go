@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/brig-sh/brig/internal/divert"
 )
 
 // The nftables side. Each sandbox under a policy gets a table of its own in
@@ -41,7 +43,13 @@ const (
 	// adds it again every HeartbeatEvery, and it times out after
 	// HeartbeatLapse.
 	setAlive = "alive"
+	// setDivertPrefix starts the name of each divert set, one per route. A
+	// divert set has no timeout. See divert.Set.
+	setDivertPrefix = "divert_"
 )
+
+// DivertPort is the relay's port on the bridge address.
+const DivertPort uint16 = 15443
 
 // The heartbeat. A table outlives a resolver that died, and without the
 // resolver the deny pins lapse while an allow default still admits whatever
@@ -84,9 +92,24 @@ type Network struct {
 	// Redirect is the resolvers the runtime writes into the guest's
 	// resolv.conf beside Gateway. DNS sent to them goes to the resolver.
 	// DNS sent to any other server is ordinary traffic under the policy, as
-	// it is on hull's gateway.
+	// it is on hull's gateway, unless Divert names a host: then all of the
+	// guest's DNS goes to the resolver (see Ruleset).
 	Redirect []netip.Addr
+	// Divert is the guest connections the table redirects to the relay.
+	// The zero value diverts nothing.
+	Divert Divert
 }
+
+// Divert is what a sandbox's table hands to the relay.
+type Divert struct {
+	// Routes are the diverted destinations, each with a set of its own.
+	Routes []divert.Route
+	// Port is the relay's port on the bridge address.
+	Port uint16
+}
+
+// DivertSet returns the name of the set of route i.
+func DivertSet(i int) string { return fmt.Sprintf("%s%d", setDivertPrefix, i) }
 
 var ifaceRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
 
@@ -97,6 +120,9 @@ var ifaceRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
 // conntrack mark. Only a connection with this boot's mark skips the rules. A
 // connection the kernel still tracks from an earlier boot of the sandbox is
 // judged again under the rules of this one.
+//
+// A policy with no default filters nothing, and the table then has no egress
+// chain. Only a divert asks for such a table.
 func Ruleset(table string, n Network, p *Policy, mark uint16) (string, error) {
 	if !ifaceRe.MatchString(n.Bridge) {
 		return "", fmt.Errorf("%q is not an interface name", n.Bridge)
@@ -109,6 +135,13 @@ func Ruleset(table string, n Network, p *Policy, mark uint16) (string, error) {
 	}
 	if mark == 0 {
 		return "", fmt.Errorf("the connection mark is zero, which every untagged connection carries")
+	}
+	diverts := len(n.Divert.Routes) > 0
+	if diverts && (n.Divert.Port == 0 || n.Divert.Port == 53) {
+		return "", fmt.Errorf("the relay cannot listen on port %d", n.Divert.Port)
+	}
+	if !p.Filters() && !diverts {
+		return "", fmt.Errorf("a table with no policy and no divert does nothing")
 	}
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -127,6 +160,12 @@ func Ruleset(table string, n Network, p *Policy, mark uint16) (string, error) {
 	w("\tset %s { type ipv4_addr; flags interval;%s }", setAllowNet, elements(p.allow.v4CIDRs()))
 	w("\tset %s { type ipv4_addr; flags interval;%s }", setDenyNet, elements(append([]netip.Prefix{linkLocal}, p.deny.v4CIDRs()...)))
 	w("\tset %s { type ifname; flags timeout; }", setAlive)
+	for i, r := range n.Divert.Routes {
+		if r.Port == 0 || r.Port == 53 {
+			return "", fmt.Errorf("divert %s: port %d cannot be diverted", r, r.Port)
+		}
+		w("\tset %s { type ipv4_addr; size %d; }", DivertSet(i), divert.MaxAddrs)
+	}
 
 	var redirect []string
 	for _, a := range n.Redirect {
@@ -134,11 +173,47 @@ func Ruleset(table string, n Network, p *Policy, mark uint16) (string, error) {
 			redirect = append(redirect, a.String())
 		}
 	}
-	if len(redirect) > 0 {
+	// A divert by host name learns the host's addresses from the guest's DNS
+	// answers. So all of the guest's DNS goes to the resolver, whatever
+	// server it names. A divert by address, such as brig.internal's, learns
+	// nothing there, and leaves the guest's DNS as a table with no divert
+	// does: the bridge address and the resolvers of Redirect reach the
+	// resolver, which answers brig.internal.
+	learns := slices.ContainsFunc(n.Divert.Routes, func(r divert.Route) bool {
+		_, err := netip.ParseAddr(r.Host)
+		return err != nil
+	})
+	switch {
+	case learns:
+		w("\tchain dns {")
+		w("\t\ttype nat hook prerouting priority dstnat - 10; policy accept;")
+		w("\t\tiifname %s ip daddr != %s meta l4proto { tcp, udp } th dport 53 dnat ip to %s:53", br, gw, gw)
+		w("\t}")
+	case len(redirect) > 0:
 		w("\tchain dns {")
 		w("\t\ttype nat hook prerouting priority dstnat - 10; policy accept;")
 		w("\t\tiifname %s ip daddr { %s } meta l4proto { tcp, udp } th dport 53 dnat ip to %s:53",
 			br, strings.Join(redirect, ", "), gw)
+		w("\t}")
+	}
+
+	// A connection to a diverted address and port goes to the relay. The
+	// same destination in the forward path is refused, so a connection
+	// tracked before its address joined the set, or a UDP flow such as
+	// QUIC, never reaches the upstream.
+	if diverts {
+		w("\tchain divert {")
+		w("\t\ttype nat hook prerouting priority dstnat - 10; policy accept;")
+		for i, r := range n.Divert.Routes {
+			w("\t\tiifname %s ip daddr @%s tcp dport %d dnat ip to %s:%d", br, DivertSet(i), r.Port, gw, n.Divert.Port)
+		}
+		w("\t}")
+		w("\tchain divert_fwd {")
+		w("\t\ttype filter hook forward priority filter - 10; policy accept;")
+		w("\t\tiifname != %s return", br)
+		for i, r := range n.Divert.Routes {
+			w("\t\tip daddr @%s meta l4proto { tcp, udp } th dport %d goto refuse", DivertSet(i), r.Port)
+		}
 		w("\t}")
 	}
 
@@ -150,9 +225,17 @@ func Ruleset(table string, n Network, p *Policy, mark uint16) (string, error) {
 	w("\tchain guest_in {")
 	w("\t\ttype filter hook input priority filter - 10; policy accept;")
 	w("\t\tiifname != %s ip daddr %s meta l4proto { tcp, udp } th dport 53 drop", br, gw)
+	if diverts {
+		w("\t\tiifname != %s ip daddr %s tcp dport %d drop", br, gw, n.Divert.Port)
+	}
 	w("\t\tiifname != %s return", br)
 	w("\t\tip saddr != %s drop", subnet)
 	w("\t\tip daddr %s meta l4proto { tcp, udp } th dport 53 accept", gw)
+	// The relay takes only what the divert chain redirected. A guest that
+	// dials the relay itself is refused here.
+	if diverts {
+		w("\t\tip daddr %s tcp dport %d ct status dnat accept", gw, n.Divert.Port)
+	}
 	w("\t\tip daddr %s icmp type echo-request accept", gw)
 	w("\t\tgoto refuse")
 	w("\t}")
@@ -161,26 +244,28 @@ func Ruleset(table string, n Network, p *Policy, mark uint16) (string, error) {
 	// beats the default. hull's gateway carries TCP and UDP, and answers
 	// ping. Here ping reaches an address the rules admit, and every other
 	// protocol is refused.
-	w("\tchain egress {")
-	w("\t\ttype filter hook forward priority filter - 10; policy accept;")
-	w("\t\tiifname != %s return", br)
-	w("\t\tmeta nfproto ipv6 goto refuse")
-	w("\t\tip saddr != %s drop", subnet)
-	w("\t\tct state established,related ct mark and 0xffff0000 == 0x%04x0000 accept", mark)
-	w("\t\tiifname != @%s goto refuse", setAlive)
-	w("\t\tmeta l4proto != { tcp, udp, icmp } goto refuse")
-	for _, set := range []string{setDenyNet, SetDenyIP, SetDenyHost} {
-		w("\t\tip daddr @%s goto refuse", set)
+	if p.Filters() {
+		w("\tchain egress {")
+		w("\t\ttype filter hook forward priority filter - 10; policy accept;")
+		w("\t\tiifname != %s return", br)
+		w("\t\tmeta nfproto ipv6 goto refuse")
+		w("\t\tip saddr != %s drop", subnet)
+		w("\t\tct state established,related ct mark and 0xffff0000 == 0x%04x0000 accept", mark)
+		w("\t\tiifname != @%s goto refuse", setAlive)
+		w("\t\tmeta l4proto != { tcp, udp, icmp } goto refuse")
+		for _, set := range []string{setDenyNet, SetDenyIP, SetDenyHost} {
+			w("\t\tip daddr @%s goto refuse", set)
+		}
+		for _, set := range []string{setAllowNet, SetAllowIP, SetAllowHost} {
+			w("\t\tip daddr @%s goto admit", set)
+		}
+		if p.Default == "allow" {
+			w("\t\tgoto admit")
+		} else {
+			w("\t\tgoto refuse")
+		}
+		w("\t}")
 	}
-	for _, set := range []string{setAllowNet, SetAllowIP, SetAllowHost} {
-		w("\t\tip daddr @%s goto admit", set)
-	}
-	if p.Default == "allow" {
-		w("\t\tgoto admit")
-	} else {
-		w("\t\tgoto refuse")
-	}
-	w("\t}")
 
 	// The mark keeps the lower 16 bits, which anything else in the namespace
 	// may use.
@@ -225,6 +310,22 @@ func PinScript(table, set string, addrs []netip.Addr, lifetime time.Duration) st
 		return ""
 	}
 	return refreshScript(table, set, "{ "+strings.Join(timed, ", ")+" }", "{ "+strings.Join(plain, ", ")+" }")
+}
+
+// DivertScript returns the nft script that adds the IPv4 addresses of addrs
+// to the set of divert route i. An add of an element already in the set
+// succeeds, and the element has no timeout.
+func DivertScript(table string, i int, addrs []netip.Addr) string {
+	var plain []string
+	for _, a := range addrs {
+		if a.Is4() && !slices.Contains(plain, a.String()) {
+			plain = append(plain, a.String())
+		}
+	}
+	if len(plain) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("add element inet %s %s { %s }\n", table, DivertSet(i), strings.Join(plain, ", "))
 }
 
 // HeartbeatScript returns the nft script that keeps bridge in the table's

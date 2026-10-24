@@ -50,6 +50,12 @@ const guestRootUser = "root"
 // write down.
 func (c *Config) deliverSecretFiles() error {
 	defer func() { c.secrets = creds.Resolution{} }()
+	// The brig CA first, for a guest that reaches its routes at
+	// brig.internal. It is no secret, and needs no tmpfs: see
+	// briginternal.go.
+	if err := c.deliverBrigCA(); err != nil {
+		return err
+	}
 	if len(c.Profile.Volumes) == 0 && len(c.Profile.Files) == 0 {
 		return nil
 	}
