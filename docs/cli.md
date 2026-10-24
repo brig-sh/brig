@@ -303,6 +303,8 @@ The plan reports these refusals:
 4. what the backend cannot honor: a policy or a published port it cannot
    enforce, an isolated network on `vz` or `qemu`, or a graphical profile on
    a backend with no display
+5. a [route](policies.md#routes) whose secret is not in the store, or a store
+   that does not open. The run stops with exit `6`
 
 With no runtime on PATH, Brig does not ask the backend, and
 `runtime.available` is `false`.
@@ -401,6 +403,7 @@ fields, in order:
 | `policies` | list of strings | every bound policy |
 | `noPolicy` | bool | `true` when no policy is bound |
 | `egress` | object, omitted when no policy is bound | `default` (`allow` or `deny`), and the `allow` and `deny` lists. Each rule has a `host` or a `cidr` |
+| `broker` | object, omitted for a run with no route | the `broker` of `brig info --json`, less what only a running broker knows: whether it runs, its pid and port, and the state of its refreshes. The text form prints it as the `BROKER` row, with `refused: see REFUSED` in place of that state |
 | `credentials` | list | one entry per credential, below |
 | `argvExposed` | list of strings, omitted when empty | the variables whose values `BRIG_ENV_ARGV=1` puts on the runtime's command line, by name, sorted |
 | `limits` | object | `mem` in MB and `cpus` |
@@ -1140,4 +1143,5 @@ satisfy the isolated posture of those profiles.
 | `BRIG_BOOT_ASSETS_REF` (global only) | `ghcr.io/nofireai/hull-assets:<os>-<arch>` | the bundle Brig fetches when the boot assets are missing |
 | `BRIG_GATEWAY_SOCK` (global only) | `<gateway dir>/gateway-<subnet>.sock` | control socket of the shared network gateway. Names matching `sandbox-*.sock` are reserved for isolated gateways and refused here |
 | `BRIG_GATEWAY_DIR` (global only) | the directory of `BRIG_GATEWAY_SOCK`, else `~/.brig` | where gateway sockets, logs and network records live, shared and per-sandbox alike |
+| `BRIG_BROKER_BIN` (global only) | `brig-broker` beside `brig`, else on `PATH` | the credential broker a run with a [route](policies.md#routes) starts. See [broker.md](broker.md#hosting) |
 

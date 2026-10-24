@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -75,6 +76,10 @@ func (c *Config) Plan() PlanDocument {
 	if refusal == nil && c.Runtime != nil {
 		refusal = c.backendRefusal(c.hypervisor())
 	}
+	routeStore := c.checkRouteStore()
+	if refusal == nil {
+		refusal = c.routeStoreRefusal(routeStore)
+	}
 	if refusal != nil {
 		d.Refused = &PlanRefusal{Reason: refusal.Error()}
 	}
@@ -97,6 +102,7 @@ func (c *Config) Plan() PlanDocument {
 			Deny:    sortedRules(c.Egress.Deny),
 		}
 	}
+	d.Broker = c.planBroker(routeStore)
 	d.Credentials = []PlanCredential{}
 	for _, p := range creds.Preview(c.Profile, c.Env, stored, os.LookupEnv, creds.Options{
 		AllowRefs:   c.AllowRefs,
@@ -201,6 +207,7 @@ type PlanDocument struct {
 	Policies    []string         `json:"policies"`
 	NoPolicy    bool             `json:"noPolicy"`
 	Egress      *PlanEgress      `json:"egress,omitempty"`
+	Broker      *PlanBroker      `json:"broker,omitempty"`
 	Credentials []PlanCredential `json:"credentials"`
 	// ArgvExposed names what the Info payload's field of the same name
 	// names: the values BRIG_ENV_ARGV would put on the runtime's command
@@ -242,6 +249,54 @@ type PlanEgress struct {
 	Default string        `json:"default"`
 	Allow   []policy.Rule `json:"allow"`
 	Deny    []policy.Rule `json:"deny"`
+}
+
+// PlanBroker is the credential broker of a run with routes, as the broker
+// of the Info payload reports it, less what only a running broker knows: its
+// pid, its port and the state of its refreshes.
+type PlanBroker struct {
+	Transport  string   `json:"transport"`
+	Routes     []string `json:"routes"`
+	KeptOnHost []string `json:"keptOnHost,omitempty"`
+	Missing    []string `json:"missing,omitempty"`
+	StoreError string   `json:"storeError,omitempty"`
+	Refused    string   `json:"refused,omitempty"`
+}
+
+// planBroker is the PlanBroker of this run, or nil for a run with no route.
+// st is what the store said, which the plan lists once.
+func (c *Config) planBroker(st routeStore) *PlanBroker {
+	if len(c.routes) == 0 && c.routesErr == nil {
+		return nil
+	}
+	b := &PlanBroker{Transport: string(c.routeTransport()), Routes: []string{}, KeptOnHost: c.routeSkipped}
+	for _, r := range c.routes {
+		b.Routes = append(b.Routes, r.Name)
+	}
+	sort.Strings(b.Routes)
+	b.Missing, b.StoreError, b.Refused = c.routeStoreFacts(st)
+	if err := c.routeRefusal(); err != nil {
+		b.Refused = err.Error()
+	}
+	return b
+}
+
+// planBrokerLine is the BROKER row of the plan: the row of `brig info`, with
+// REFUSED in place of the broker's state.
+func (c *Config) planBrokerLine(b *PlanBroker) string {
+	if c.routesErr != nil {
+		return "refused: " + c.routesErr.Error()
+	}
+	parts := []string{fmt.Sprintf("transport %s, routes %s", b.Transport, strings.Join(b.Routes, ", "))}
+	if c.routeRefusal() != nil {
+		parts = append(parts, "refused: see REFUSED")
+	}
+	st := routeStore{missing: b.Missing}
+	if b.StoreError != "" {
+		st.err = errors.New(b.StoreError)
+	}
+	parts = append(parts, c.routeStoreLine(st)...)
+	return strings.Join(parts, "; ")
 }
 
 // PlanLimits is what the guest is given: memory in MB and vCPUs.
@@ -353,6 +408,9 @@ func (c *Config) PrintPlan(d PlanDocument) {
 		for _, r := range d.Egress.Deny {
 			rows = append(rows, envelopeRow{"", "deny " + ruleText(r)})
 		}
+	}
+	if d.Broker != nil {
+		rows = append(rows, envelopeRow{"BROKER", c.planBrokerLine(d.Broker)})
 	}
 	if len(d.Credentials) == 0 {
 		rows = append(rows, envelopeRow{"CREDENTIALS", "(none)"})
