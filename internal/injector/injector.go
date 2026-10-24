@@ -164,4 +164,11 @@ type Status struct {
 	Pending []string `json:"pending,omitempty"`
 	// Failing are the secrets whose last refresh failed.
 	Failing []string `json:"failing,omitempty"`
+	// Placeholder counts, per sandbox id, the requests refused for a
+	// session token sent outside its carrier. A sandbox with none is left
+	// out.
+	Placeholder map[string]int64 `json:"placeholder,omitempty"`
+	// Recovering are the secrets with a renewal journal left by a broker
+	// that stopped, or held by another one, not yet settled.
+	Recovering []string `json:"recovering,omitempty"`
 }
