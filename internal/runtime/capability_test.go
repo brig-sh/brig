@@ -25,6 +25,9 @@ func TestEgressContractAnswersEveryRunPath(t *testing.T) {
 		{RunPath{"nerdctl", "io.containerd.kata.v2"}, Enforced},
 		{RunPath{"docker", "io.containerd.urunc.v2"}, CannotEnforce},
 		{RunPath{"docker", "runc"}, CannotEnforce},
+		{RunPath{"host", "offline"}, Enforced},
+		{RunPath{"host", "brokered"}, Enforced},
+		{RunPath{"host", anyBackend}, CannotEnforce},
 		// A backend brig was never taught about is not waved through.
 		{RunPath{"hull", "krun"}, Unknown},
 		{RunPath{"other", "vz"}, Unknown},
@@ -45,7 +48,8 @@ func TestEgressContractAnswersEveryRunPath(t *testing.T) {
 	for _, r := range Records(EgressPolicy) {
 		have = append(have, r.Path.String())
 	}
-	want := []string{"hull on hvi", "hull on vz", "hull on qemu", "nerdctl", "docker"}
+	want := []string{"hull on hvi", "hull on vz", "hull on qemu", "nerdctl", "docker",
+		"host on offline", "host on brokered", "host"}
 	if strings.Join(have, ",") != strings.Join(want, ",") {
 		t.Errorf("the egress records cover %q, want %q", have, want)
 	}

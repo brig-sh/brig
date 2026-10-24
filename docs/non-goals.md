@@ -78,10 +78,10 @@ token.
 
 The credential broker of [routes](policies.md#routes) is not this proxy. It
 terminates no TLS that the guest opens to an upstream. The guest sends its
-request to the broker's own endpoint, `brig.internal`, with a CA that signs
-only that name. The broker then opens its own TLS connection to the
-upstream, verified with the system roots. A route covers a tool that is
-pointed at it, and nothing else.
+request to the broker's own endpoint: a loopback port on the host kind, or
+`brig.internal`, with a CA that signs only that name. The broker then opens
+its own TLS connection to the upstream, verified with the system roots. A
+route covers a tool that is pointed at it, and nothing else.
 
 **Reopens when** one of these is true:
 

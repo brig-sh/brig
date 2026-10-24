@@ -23,7 +23,7 @@ import (
 // a release that put homes in ~/brig.
 
 // homesDirName is the directory under stateDir that holds ephemeral homes.
-const homesDirName = "homes"
+const homesDirName = runtime.HomesDirName
 
 // homesDir returns the absolute path of the directory brig creates ephemeral
 // guest homes in.

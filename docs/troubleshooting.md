@@ -101,7 +101,7 @@ The `runtime` line reads `ok` and names the binary that it found.
 ## unknown BRIG_RUNTIME
 
 ```
-brig: runtime unavailable: unknown BRIG_RUNTIME "podman" (want hull or nerdctl)
+brig: runtime unavailable: unknown BRIG_RUNTIME "podman" (want hull, nerdctl or host)
 ```
 
 **Exit code:** `4`

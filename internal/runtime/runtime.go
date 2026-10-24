@@ -142,6 +142,15 @@ type RunSpec struct {
 	// publication is part of a sandbox's configuration and outlives one run.
 	// See publish.go.
 	Publish []Publication
+	// LoopbackPorts are the host loopback ports a process sandbox may connect
+	// to when its network is isolated. Only the host kind reads it, and every
+	// other outbound IP connection from that sandbox is denied. A microVM
+	// runtime ignores it.
+	LoopbackPorts []int
+	// Protect are host directories of brig's own that a process sandbox must
+	// not write: the profiles and the policies the next run reads. Only the
+	// host kind reads it. A microVM never mounts them.
+	Protect []string
 	// Counted marks a user action, whose boot and lifetime hull's telemetry
 	// reports, rather than brig's own plumbing. See telemetryEnv.
 	Counted bool
@@ -496,6 +505,9 @@ type Runtime interface {
 type Preference struct {
 	// Bin is the runtime binary a profile named, if any.
 	Bin string
+	// Isolation is the boundary a profile asked for: microvm, process or
+	// empty. process selects the host kind when BRIG_RUNTIME is unset.
+	Isolation string
 }
 
 // Detect picks a runtime for this host, with nothing asked of it.
@@ -507,7 +519,7 @@ func Detect() (Runtime, error) { return DetectFor(Preference{}) }
 
 // DetectFor picks a runtime, honouring what a profile asked for.
 //
-// BRIG_RUNTIME forces the backend (hull | nerdctl) and BRIG_RUNTIME_BIN forces
+// BRIG_RUNTIME forces the backend (hull | nerdctl | host) and BRIG_RUNTIME_BIN forces
 // the executable, which is how you point brig at a build that is not on PATH.
 // A profile's runtimeBin does the same thing without a variable per shell, and
 // loses to the variable when both are set. Whichever named the binary, it is
@@ -518,6 +530,11 @@ func DetectFor(pref Preference) (Runtime, error) {
 	kind := os.Getenv("BRIG_RUNTIME")
 	if kind == "" {
 		kind = defaultKind()
+		if pref.Isolation == IsolationProcess {
+			kind = HostKind
+		}
+	} else if err := isolationConflict(kind, pref.Isolation); err != nil {
+		return nil, err
 	}
 	bin := os.Getenv("BRIG_RUNTIME_BIN")
 	switch {
@@ -541,14 +558,32 @@ func DetectFor(pref Preference) (Runtime, error) {
 		rt, err = newHull(bin)
 	case "nerdctl":
 		rt, err = newNerdctl(bin)
+	case HostKind:
+		rt, err = newHost(bin)
 	default:
-		return nil, fmt.Errorf("%w: unknown BRIG_RUNTIME %q (want hull or nerdctl)", ErrBadRuntime, kind)
+		return nil, fmt.Errorf("%w: unknown BRIG_RUNTIME %q (want hull, nerdctl or host)", ErrBadRuntime, kind)
 	}
 	if err != nil {
 		return nil, err
 	}
 	telemetry.SetRuntime(rt.Kind())
 	return rt, nil
+}
+
+// isolationConflict refuses a BRIG_RUNTIME that names the other boundary
+// than the profile's isolation field. Either one picked silently would run
+// the agent behind a boundary somebody did not ask for.
+func isolationConflict(kind, isolation string) error {
+	switch {
+	case isolation == IsolationMicroVM && kind == HostKind:
+		return fmt.Errorf("%w: BRIG_RUNTIME=host runs the agent as a process, and this profile "+
+			"sets isolation: microvm. Unset BRIG_RUNTIME, or set isolation: process in the profile",
+			ErrBadRuntime)
+	case isolation == IsolationProcess && kind != HostKind:
+		return fmt.Errorf("%w: BRIG_RUNTIME=%s boots a microVM, and this profile sets isolation: "+
+			"process. Unset BRIG_RUNTIME, or set BRIG_RUNTIME=host", ErrBadRuntime, kind)
+	}
+	return nil
 }
 
 // runtimeBinFromProfile resolves the path a profile named.

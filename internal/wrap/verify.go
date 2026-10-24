@@ -55,6 +55,11 @@ var (
 // would paper over -- and says so, because a user who reads "verified" on that
 // path is owed the difference. See runtime.Runtime.PinsDigest.
 func (c *Config) verifyImage() error {
+	// The host kind boots no image. It runs the profile's binary from PATH,
+	// which no signature here covers, and the IMAGE row says so.
+	if !runtime.RunsImage(c.Runtime) {
+		return nil
+	}
 	if c.Verify == verify.Off {
 		// Said out loud rather than passed over in silence. This was the only
 		// state no command mentioned: the check returned here, before any
@@ -365,7 +370,7 @@ func (c *Config) confirm(question string) bool {
 // compares the files with it once they are resolved. The summary names the
 // boot assets only after that comparison.
 func (c *Config) verifyBootAssets() error {
-	if c.Verify == verify.Off || !c.Profile.GenericBoot {
+	if c.Verify == verify.Off || !c.Profile.GenericBoot || !runtime.RunsImage(c.Runtime) {
 		return nil
 	}
 	// The Linux runtime bundle's kernel and initrd are its own, and the boot

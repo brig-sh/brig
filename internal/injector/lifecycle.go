@@ -259,9 +259,9 @@ type PortHeldError struct {
 
 func (e *PortHeldError) Error() string {
 	return fmt.Sprintf("%s, 127.0.0.1:%d, so brig refuses the run. brig does not move the broker to another "+
-		"port: a client of that port sends its session tokens to whatever listens there. Find the "+
-		"process with `lsof -nP -iTCP:%d -sTCP:LISTEN` and stop it, or remove %s so that the next run "+
-		"picks a new port",
+		"port: a host sandbox that ran with a route allows that port alone, and sends its session tokens "+
+		"to whatever listens there. Find the process with `lsof -nP -iTCP:%d -sTCP:LISTEN` and stop it. "+
+		"Once no host sandbox with a route is running, removing %s lets the next run pick a new port",
 		PortHeldMessage, e.Port, e.Port, filepath.Join(e.Dir, PortName))
 }
 

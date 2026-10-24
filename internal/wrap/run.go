@@ -10,6 +10,8 @@ import (
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/notice"
+	"github.com/brig-sh/brig/internal/policy"
+	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
@@ -336,7 +338,8 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	c.sayVerified()
 	// Once the checks above have passed, so a refused run starts no broker.
 	// The broker has to know the sandbox before its agent sends a request,
-	// and the tokens of this exec are minted here.
+	// and the tokens of this exec are minted here. The port goes into the
+	// profile of a host sandbox booted below.
 	if err := c.serveRoutes(set); err != nil {
 		return err
 	}
@@ -432,11 +435,16 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		// into the workspace rather than mounted, so it needs no share of its
 		// own -- see seedHostConfig. volumeShares is empty on hull and carries
 		// the profile's hostmounts on a container runtime.
-		Shares:   c.shares(ws.dir, project, volumeShares),
-		Tmpfs:    tmpfs,
-		Env:      c.guestEnv(set),
-		GUI:      check.GUI,
-		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
+		Shares: c.shares(ws.dir, project, volumeShares),
+		Tmpfs:  tmpfs,
+		// What the next run reads, which a host sandbox must not write.
+		Protect: []string{profile.Dir(), policy.Dir()},
+		// The broker's port, the one address a host sandbox with routes may
+		// reach. See serveRoutes.
+		LoopbackPorts: c.routePorts,
+		Env:           c.guestEnv(set),
+		GUI:           check.GUI,
+		GUITitle:      c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
 		// decided in the runtime adapter.

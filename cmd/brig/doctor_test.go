@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -391,6 +392,34 @@ func TestDoctorRuntimeFixNamesTheProfilesRuntimeBin(t *testing.T) {
 	}
 }
 
+// The sandbox row is the host kind's prerequisite. It is reported on macOS
+// only, and a Mac without sandbox-exec still exits 0: a microVM run never
+// calls it.
+func TestDoctorReportsSandboxExecWithoutGating(t *testing.T) {
+	healthyHost(t)
+	checks := runDoctor(nil, nil)
+	if goruntime.GOOS != "darwin" {
+		for _, c := range checks {
+			if c.Name == "sandbox" {
+				t.Errorf("a sandbox row off macOS: %+v", c)
+			}
+		}
+		return
+	}
+	if c := findCheck(t, checks, "sandbox"); c.State != statePass {
+		t.Errorf("sandbox row is %q on a Mac with sandbox-exec: %s", c.State, c.Finding)
+	}
+	swap(t, &lookSandboxExec, func() (string, error) { return "", errors.New("not found") })
+	checks = runDoctor(nil, nil)
+	c := findCheck(t, checks, "sandbox")
+	if c.State != stateFail || c.Fix == "" {
+		t.Errorf("a missing sandbox-exec is %q with fix %q, want !! with a fix", c.State, c.Fix)
+	}
+	if err := doctorExit(checks); err != nil {
+		t.Errorf("a missing sandbox-exec changed the exit status: %v", err)
+	}
+}
+
 // The broker row says whether brig-broker has started, and fails a broker
 // directory anyone else can enter, which holds the keys that sign tokens.
 // It never gates the exit status.
@@ -420,8 +449,8 @@ func TestDoctorBrokerCheck(t *testing.T) {
 	if c := brokerCheck(); c.State != stateInfo || !strings.Contains(c.Finding, "port 40123") {
 		t.Errorf("a broker that is not running: %+v", c)
 	}
-	// Another process on the recorded port receives the tokens of every
-	// client of the port, so the row fails and names it.
+	// Another process on the recorded port receives the tokens of every host
+	// sandbox that ran with a route, so the row fails and names it.
 	squatter, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
