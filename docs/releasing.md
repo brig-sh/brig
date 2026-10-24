@@ -287,13 +287,23 @@ pass.
    [docs/runtimes.md](runtimes.md), [docs/security.md](security.md), and the
    files under [docs/manual-tests/](manual-tests/).
 
-4. If the release is on a hull version with no conformance record, make the
-   record before the docs quote that version. See
+4. If the release is on a hull version, or on a Linux runtime bundle
+   (`RUNTIME_VERSION` in [install.sh](../install.sh)), with no conformance
+   record, make the record before the docs quote that version. See
    [Egress conformance record](#egress-conformance-record).
 
 ### Egress conformance record
 
-1. Use a Mac with that hull on `PATH`.
+There is one record for each backend that enforces a policy, and one for each
+version of what it runs on: hull for `hvi`, the Linux runtime bundle for
+nerdctl.
+
+1. Use a host with that runtime:
+
+   - For `hvi`, a Mac with that hull on `PATH`.
+   - For nerdctl, a Linux host with that runtime bundle installed by
+     [install.sh](../install.sh), so `brig-ctl` is on `PATH`. A rootless
+     install is enough.
 
 2. Run the script:
 
@@ -301,16 +311,20 @@ pass.
    script/egress-conformance.sh
    ```
 
-   The script boots three sandboxes on `hvi`, one at a time. It runs the
-   network cases from #264 in each sandbox. Then it writes
-   `docs/manual-tests/egress-conformance-hvi-<hull version>.md`.
+   The script boots three sandboxes on the host's backend, one at a time. It
+   runs the network cases from #264 in each sandbox. Then it writes
+   `docs/manual-tests/egress-conformance-hvi-<hull version>.md` on a Mac, or
+   `docs/manual-tests/egress-conformance-nerdctl-<bundle version>-rootless.md`
+   on Linux. A node-wide install of the plain bundle writes the same name
+   without `-rootless`: the two bundles share a version and reach the network
+   on different paths, so each has a record of its own.
 
 3. Read the record:
 
    | Result | Meaning | What to do |
    | --- | --- | --- |
    | `FAIL` | The egress claims in [docs/policies.md](policies.md) and [docs/security.md](security.md) do not hold on that hull, or the run proved nothing for a case. | Read the reason. Then fix the claims, run the script again or hold the release. |
-   | `unproven` | The case is no evidence for the claim: the guest got no further without a policy. | Only `metadata` can end there, because hull resets every connection to 169.254.0.0/16. Any other `unproven` case fails the run. |
+   | `unproven` | The case is no evidence for the claim: the guest got no further without a policy. | Only `metadata` can end there: on `hvi` hull resets every connection to 169.254.0.0/16, and on Linux a host outside a cloud has no metadata service. Any other `unproven` case fails the run. |
 
 4. Commit the record.
 
