@@ -16,13 +16,16 @@
 #   LEVEL           canary (default) or nightly, which boots more often
 #   E2E_OUT         where logs/ go (default $HOME/e2e-out)
 #   E2E_RESULTS     the results file (default $E2E_OUT/results.json)
-#   BRIG_BUILD_DIR  a directory holding brig and brigd built from this checkout
+#   BRIG_BUILD_DIR  a directory holding brig, brigd and brig-broker built from
+#                   this checkout
 #   E2E_GATEKEEPER  1 to run the Gatekeeper gate against the notarized channel
 #                   build of this commit. Otherwise the gate is skipped
 #   E2E_HULL_CHANNEL
 #                   a hull@main channel tag, such as
 #                   channel-main-0.1.0-rc31-main.20261025114854.94e458e, to
 #                   install in place of the newest one
+#   E2E_ECHO_ORIGIN the upstream of the broker's test route, a service that
+#                   echoes request headers (default https://postman-echo.com)
 #   GH_TOKEN        a token for the GitHub API, optional
 #
 # It exits 1 on a no-go verdict, after results.json is written. Written for
@@ -104,7 +107,12 @@ gsh() {
   local ref=$1 text=$2 out rc=0
   out="$(tmo "${GSH_TIMEOUT:-300}" script -q /dev/null brig sh "$ref" -c "$text" < /dev/null)" || rc=$?
   out="$(printf '%s' "$out" | tr -d '\r\b' | sed 's/^\^D//')"
-  printf '$ brig sh %s -c %q\n%s\n[exit %s]\n' "$ref" "$text" "$out" "$rc" >&2
+  # GSH_QUIET=1 keeps an answer that holds a session token out of the log.
+  if [ "${GSH_QUIET:-0}" = 1 ]; then
+    printf '$ brig sh %s -c <%d bytes>\n<%d bytes withheld>\n[exit %s]\n' "$ref" "${#text}" "${#out}" "$rc" >&2
+  else
+    printf '$ brig sh %s -c %q\n%s\n[exit %s]\n' "$ref" "$text" "$out" "$rc" >&2
+  fi
   printf '%s\n' "$out" | grep -v '^brig: ' || true
   return "$rc"
 }
@@ -130,9 +138,11 @@ leftovers() {
   [ -z "$out" ] || bad+="guest homes: $(echo "$out" | one_line 200); "
   out="$(ours)"
   [ -z "$out" ] || bad+="processes: $(echo "$out" | one_line 300); "
+  out="$(pgrep -fl '[b]rig-broker' 2> /dev/null | grep -F "$SCRATCH/" || true)"
+  [ -z "$out" ] || bad+="brig-broker: $(echo "$out" | one_line 200); "
   echo "leftovers after $tag: ${bad:-none}"
   if [ -z "$bad" ]; then
-    res check Leftovers "After $tag" pass "no sandbox, hull instance, guest home or monitor process"
+    res check Leftovers "After $tag" pass "no sandbox, hull instance, guest home, monitor or brig-broker process"
   else
     res check Leftovers "After $tag" fail "$bad"
     tmo 300 brig rm --all -y < /dev/null || true
@@ -250,7 +260,9 @@ for a in r["assets"]:
   [ -n "${BRIG_BUILD_DIR:-}" ] || { echo "BRIG_BUILD_DIR is not set"; return 1; }
   install -m 0755 "$BRIG_BUILD_DIR/brig" "$BIN/brig"
   install -m 0755 "$BRIG_BUILD_DIR/brigd" "$BIN/brigd"
-  command -v brig hull
+  # brig finds brig-broker beside itself.
+  install -m 0755 "$BRIG_BUILD_DIR/brig-broker" "$BIN/brig-broker"
+  command -v brig hull brig-broker
 
   local head version commit hull_version
   head="$(git -C "$REPO" rev-parse HEAD)"
@@ -1358,6 +1370,92 @@ check_boot_digests() {
 # shellcheck source=script/e2e/broker-checks.sh
 . "$HERE/broker-checks.sh"
 
+BROKER_RUN_ARGS=(--mem 2048)
+KEYCHAIN="$SCRATCH/Library/Keychains/login.keychain-db"
+
+# The secret store on macOS is the login keychain, which security(1) finds
+# under HOME. The scratch HOME has none, and a write with no keychain asks
+# for one in a window. So broker_store_up makes a keychain there, unlocked
+# with a random password nobody keeps, and writes nothing unless security
+# names it as the default. The account's own keychain is never touched.
+broker_store_up() {
+  local pw
+  if [ ! -e "$KEYCHAIN" ]; then
+    mkdir -p "$SCRATCH/Library/Keychains"
+    pw="$(rand_hex 16)"
+    if ! /usr/bin/security create-keychain -p "$pw" "$KEYCHAIN" >&2; then
+      echo "security could not create a keychain in the scratch HOME"
+      return 1
+    fi
+    /usr/bin/security set-keychain-settings "$KEYCHAIN" >&2 || true
+  fi
+  if ! /usr/bin/security default-keychain -d user 2> /dev/null | grep -q -F "\"$SCRATCH/"; then
+    echo "the default keychain is not the scratch HOME's, so no secret is written: $(/usr/bin/security default-keychain -d user 2>&1 | one_line 160)"
+    return 1
+  fi
+  echo "the scratch HOME's own keychain, $KEYCHAIN, is the default, unlocked"
+}
+
+broker_store_down() {
+  [ ! -e "$KEYCHAIN" ] || /usr/bin/security delete-keychain "$KEYCHAIN" || true
+}
+
+# broker_transport SANDBOX: the hull gateway that diverts SANDBOX's
+# brig.internal to the broker.
+broker_transport() {
+  local sock gw
+  sock="$(divert_sock "$1")"
+  gw="$(pgrep -fl 'network-gateway' 2> /dev/null | grep -F -- "=$sock" | grep -F -- '--host brig.internal=' || true)"
+  if [ -n "$gw" ]; then
+    echo "hull network-gateway pid $(echo "$gw" | awk '{ print $1 }' | head -n 1) runs with $(echo "$gw" | grep -o -- '--divert [^ =]*' | head -n 1)=<divert socket> and $(echo "$gw" | grep -o -- '--host brig.internal=[^ ]*' | head -n 1)"
+  fi
+}
+
+# check_broker_macos: a hull whose gateway takes no --divert is refused
+# before boot. Then the checks of broker-checks.sh.
+check_broker_macos() {
+  local rc=0 out bp="$SCRATCH/.e2e/nodivert"
+  local G="A routed run on a hull without --divert is refused with exit 7 before boot (#521)"
+  rm_route_state
+  put_policy e2e-route << 'EOF'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: e2e-route
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: anthropic-api-key
+      credential:
+        secretRef: { name: e2e-nodivert }
+EOF
+  # The real hull, with --divert taken out of its gateway's help.
+  mkdir -p "$bp"
+  cat > "$bp/hull" << EOS
+#!/bin/bash
+if [ "\$1" = network-gateway ] && [ "\${2:-}" = --help ]; then
+  "$BIN/hull" "\$@" 2>&1 | grep -v -E '^[[:space:]]*--divert'
+  exit 0
+fi
+exec "$BIN/hull" "\$@"
+EOS
+  chmod +x "$bp/hull"
+  run 60 brig policy attach e2e-route claude-code -n nodiv
+  out="$(tmo 300 env BRIG_RUNTIME_BIN="$bp/hull" brig run -d claude-code@nodiv --mem 2048 < /dev/null 2>&1)" || rc=$?
+  echo "a hull without --divert: exit $rc: $out"
+  if [ "$rc" = 7 ] && echo "$out" | grep -q 'has no --divert' && echo "$out" | grep -q 'Upgrade hull' &&
+     [ -z "$(hull_rows)" ] && [ -z "$(broker_pids)" ]; then
+    res check Broker "$G" pass "exit 7, no instance and no brig-broker: $(echo "$out" | grep 'no --divert' | one_line 240)"
+  else
+    res check Broker "$G" fail "exit $rc; hull ps: [$(hull_rows | one_line 120)]; brig-broker: [$(broker_pids | paste -s -d, -)]; $(echo "$out" | one_line 300)"
+  fi
+  rm -rf "$bp"
+  rm_route_state
+  check_broker
+}
+
 # ---------------------------------------------------------------- main
 
 say "brig e2e $LEVEL on macOS, results in $RESULTS"
@@ -1394,6 +1492,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block policy check_policy_refusals
   block posture-info check_posture_info
   block policy-docs check_policy_documents
+  block broker check_broker_macos
   block gateway check_shared_gateway
   block reach check_reach
   block cosign check_cosign_hang

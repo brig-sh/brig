@@ -2,7 +2,8 @@
 # Real-runtime checks for brig on a fresh GitHub-hosted ubuntu-24.04 runner.
 #
 # It installs brig the way a user does, with this checkout's install.sh as a
-# rootless user install, and swaps in brig and brigd built from this checkout.
+# rootless user install, and swaps in brig, brigd and brig-broker built from
+# this checkout.
 # Then it runs one gate per past release blocker and a set of checks, and
 # writes results.json (schema 1) for render-report.py.
 #
@@ -21,8 +22,11 @@
 #   E2E_OUT         where logs/ go
 #                   (default $RUNNER_TEMP/brig-e2e, else /tmp/brig-e2e)
 #   E2E_RESULTS     the results file (default $E2E_OUT/results.json)
-#   BRIG_BUILD_DIR  a directory holding brig and brigd built from this
-#                   checkout. Unset, the script runs make build itself
+#   BRIG_BUILD_DIR  a directory holding brig, brigd and brig-broker built
+#                   from this checkout. Unset, the script runs make build
+#                   itself
+#   E2E_ECHO_ORIGIN the upstream of the broker's test route, a service that
+#                   echoes request headers (default https://postman-echo.com)
 #   E2E_BASELINE    a results.json to compare with. The workflow compares
 #                   in its report job instead
 #
@@ -103,7 +107,12 @@ gsh() {
   out="$(timeout --kill-after=10 "${GSH_TIMEOUT:-300}" script -q -e -c "$f" /dev/null < /dev/null)" || rc=$?
   rm -f "$f"
   out="${out//$'\r'/}"
-  printf '$ brig sh %s -c %q\n%s\n[exit %s]\n' "$ref" "$text" "$out" "$rc" >&2
+  # GSH_QUIET=1 keeps an answer that holds a session token out of the log.
+  if [ "${GSH_QUIET:-0}" = 1 ]; then
+    printf '$ brig sh %s -c <%d bytes>\n<%d bytes withheld>\n[exit %s]\n' "$ref" "${#text}" "${#out}" "$rc" >&2
+  else
+    printf '$ brig sh %s -c %q\n%s\n[exit %s]\n' "$ref" "$text" "$out" "$rc" >&2
+  fi
   printf '%s\n' "$out"
   return "$rc"
 }
@@ -146,9 +155,11 @@ leftovers() {
   [ -z "$out" ] || bad+="guest homes: $(echo "$out" | one_line 200); "
   out="$(vmms)"
   [ -z "$out" ] || bad+="processes: $(echo "$out" | one_line 300); "
+  out="$(pgrep -a -f '[b]rig-broker' || true)"
+  [ -z "$out" ] || bad+="brig-broker: $(echo "$out" | one_line 200); "
   echo "leftovers after $tag: ${bad:-none}"
   if [ -z "$bad" ]; then
-    res check Leftovers "After $tag" pass "no sandbox, container, task, guest home or monitor process"
+    res check Leftovers "After $tag" pass "no sandbox, container, task, guest home, monitor or brig-broker process"
   else
     res check Leftovers "After $tag" fail "$bad"
     # The next block starts clean, so one leftover is reported once.
@@ -270,8 +281,9 @@ setup() {
   [ -x "$BUNDLE_DIR/bin/brig" ] || { echo "no brig at $BUNDLE_DIR/bin/brig"; return 1; }
   cat "$HOME/.local/bin/brig"
 
-  # Swap in this checkout's brig and brigd where the bundle's launchers
-  # exec them, as install.sh does with a release.
+  # Swap in this checkout's brig, brigd and brig-broker where the bundle's
+  # launchers exec them, as install.sh does with a release. brig finds
+  # brig-broker beside itself.
   local build="${BRIG_BUILD_DIR:-}"
   if [ -z "$build" ]; then
     build="$OUT/build"
@@ -280,7 +292,9 @@ setup() {
   fi
   install -m 0755 "$build/brig" "$BUNDLE_DIR/bin/brig"
   install -m 0755 "$build/brigd" "$BUNDLE_DIR/bin/brigd"
-  sha256sum "$build/brig" "$build/brigd" "$BUNDLE_DIR/bin/brig" "$BUNDLE_DIR/bin/brigd"
+  install -m 0755 "$build/brig-broker" "$BUNDLE_DIR/bin/brig-broker"
+  sha256sum "$build/brig" "$build/brigd" "$build/brig-broker" \
+    "$BUNDLE_DIR/bin/brig" "$BUNDLE_DIR/bin/brigd" "$BUNDLE_DIR/bin/brig-broker"
 
   local head version commit
   head="$(git -C "$REPO" rev-parse HEAD)"
@@ -331,9 +345,10 @@ check_version() {
   commit="$(timeout 30 brig version --json | field data.commit)"
   modified="$(timeout 30 brig version --json | field data.modified)"
   if [ "$commit" = "$(git -C "$REPO" rev-parse HEAD)" ] && [ "$modified" = false ] &&
-     cmp -s "$BUNDLE_DIR/bin/brigd" "${BRIG_BUILD_DIR:-$OUT/build}/brigd"; then
+     cmp -s "$BUNDLE_DIR/bin/brigd" "${BRIG_BUILD_DIR:-$OUT/build}/brigd" &&
+     cmp -s "$BUNDLE_DIR/bin/brig-broker" "${BRIG_BUILD_DIR:-$OUT/build}/brig-broker"; then
     res check Install "brig version names this commit" pass \
-      "$version; brigd is the same build ($(sha256sum "$BUNDLE_DIR/bin/brigd" | cut -c1-12))"
+      "$version; brigd and brig-broker are the same build ($(sha256sum "$BUNDLE_DIR/bin/brigd" | cut -c1-12), $(sha256sum "$BUNDLE_DIR/bin/brig-broker" | cut -c1-12))"
   else
     res check Install "brig version names this commit" fail "$version; commit $commit, modified $modified"
   fi
@@ -1681,6 +1696,98 @@ check_docker_fallback() {
 # shellcheck source=script/e2e/broker-checks.sh
 . "$HERE/broker-checks.sh"
 
+# claude-code boots at the profile's own size here.
+BROKER_RUN_ARGS=()
+
+# The hosted runner has a session bus from the lingering user manager, and no
+# Secret Service on it. broker_store_up starts gnome-keyring there, unlocked
+# with a random password nobody keeps, and broker_store_down stops it.
+broker_store_up() {
+  local pw i
+  if ! command -v gnome-keyring-daemon > /dev/null; then
+    timeout 300 sudo apt-get update -qq >&2 || true
+    if ! timeout 600 sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+         gnome-keyring >&2; then
+      echo "apt-get could not install gnome-keyring"
+      return 1
+    fi
+  fi
+  [ -d "$HOME/.local/share/keyrings" ] || touch "$OUT/keyrings.made"
+  pw="$(rand_hex 16)"
+  if ! printf '%s' "$pw" | timeout 30 gnome-keyring-daemon --replace --unlock --components=secrets --daemonize >&2; then
+    echo "gnome-keyring-daemon did not start"
+    return 1
+  fi
+  for i in $(seq 1 20); do
+    timeout 30 brig secret ls < /dev/null > /dev/null 2>&1 && break
+    sleep 0.5
+  done
+  if ! timeout 30 brig secret ls < /dev/null >&2; then
+    echo "gnome-keyring-daemon started, and brig secret ls still fails"
+    return 1
+  fi
+  echo "gnome-keyring-daemon answers as the Secret Service on $DBUS_SESSION_BUS_ADDRESS, unlocked"
+}
+
+broker_store_down() {
+  pgrep -u "$(id -u)" -f '^gnome-keyring-daemon --replace --unlock' | xargs -r kill 2> /dev/null || true
+  # The package also ships a socket unit, which would start a keyring of its
+  # own on the next call to the bus name.
+  timeout 30 systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2> /dev/null || true
+  if [ -e "$OUT/keyrings.made" ]; then
+    rm -rf "$HOME/.local/share/keyrings" "$OUT/keyrings.made"
+  fi
+}
+
+# broker_transport SANDBOX: the egress resolver that relays SANDBOX's
+# brig.internal to the broker, and the sandbox's table.
+broker_transport() {
+  local sock rsv table
+  sock="$(divert_sock "$1")"
+  rsv="$(pgrep -a -f -- '__egress-resolver' | grep -F -- "--divert-socket $sock" | grep -F -- '--host brig.internal=' || true)"
+  table="$(eg_tables | grep -x "brig_egress_${1#brig-}" || true)"
+  if [ -n "$rsv" ] && [ -n "$table" ]; then
+    echo "resolver pid $(echo "$rsv" | awk '{ print $1 }' | head -n 1) runs with $(echo "$rsv" | grep -o -- '--host brig.internal=[^ ]*' | head -n 1), a --divert of its port 443 and --divert-socket; table $table"
+  fi
+}
+
+# check_broker_linux: with no Secret Service, a run with a route is refused
+# before boot. Then the checks of broker-checks.sh, on a keyring.
+check_broker_linux() {
+  local rc=0 out ls
+  local G="With no Secret Service, a run with a route is refused with exit 6 (#519)"
+  rm_route_state
+  if timeout 30 brig secret ls < /dev/null > /dev/null 2>&1; then
+    res check Broker "$G" skip "a Secret Service already answers on this host's session bus"
+  else
+    put_policy e2e-route << 'EOF'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: e2e-route
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: anthropic
+      preset: anthropic-api-key
+      credential:
+        secretRef: { name: e2e-nostore }
+EOF
+    run 60 brig policy attach e2e-route claude-code -n nostore
+    out="$(timeout --kill-after=10 300 brig run -d claude-code@nostore < /dev/null 2>&1)" || rc=$?
+    echo "brig run -d claude-code@nostore: exit $rc: $out"
+    ls="$(timeout 60 brig ls -q < /dev/null 2> /dev/null | grep nostore || true)"
+    rm_route_state
+    if [ "$rc" = 6 ] && echo "$out" | grep -q 'the store is not available' && [ -z "$ls" ] && [ -z "$(broker_pids)" ]; then
+      res check Broker "$G" pass "exit 6, no sandbox and no brig-broker: $(echo "$out" | grep 'not available' | one_line 240)"
+    else
+      res check Broker "$G" fail "exit $rc; brig ls: [$ls]; brig-broker: [$(broker_pids | paste -s -d, -)]; $(echo "$out" | one_line 300)"
+    fi
+  fi
+  check_broker
+}
+
 # ---------------------------------------------------------------- main
 
 say "brig e2e $LEVEL, results in $RESULTS"
@@ -1719,6 +1826,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block files-mode check_files_mode
   block policy check_policy_enforced
   block policy-docs check_policy_documents
+  block broker check_broker_linux
   block cosign check_cosign_hang
   block record check_record_refusals
   block fallback check_docker_fallback

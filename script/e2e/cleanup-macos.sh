@@ -2,8 +2,8 @@
 # Leaves a shared Mac the way the macOS e2e job found it.
 #
 # Everything the job made lives under the scratch HOME named by E2E_SCRATCH:
-# hull's store, a mounted sparse image, ~/.brig with its gateway sockets,
-# ~/.config/brig, the Go caches. This stops every process whose command line
+# hull's store, a mounted sparse image, ~/.brig with its gateway sockets and
+# the broker's files, ~/.config/brig, a keychain, the Go caches. This stops every process whose command line
 # names that directory, detaches the store, and removes the directory. The
 # account's own ~/.hull and ~/.brig are never touched.
 #
@@ -53,6 +53,11 @@ remove() {
       [ -z "$dev" ] || hdiutil detach -force "$dev" || true
     done
 
+  # The keychain the broker checks made in the scratch HOME. It is in no
+  # search list of the account's own, and security forgets it here.
+  if [ -e "$dir/Library/Keychains/login.keychain-db" ]; then
+    HOME="$dir" /usr/bin/security delete-keychain "$dir/Library/Keychains/login.keychain-db" || true
+  fi
   # Go leaves its module cache read-only.
   chmod -R u+w "$dir" 2> /dev/null || true
   rm -rf "$dir"
