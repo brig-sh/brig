@@ -59,6 +59,22 @@ func TestHullRefusesBrigInternalOffTheGateway(t *testing.T) {
 	if err := supports(spec, "hvi"); err != nil {
 		t.Errorf("hvi: %v", err)
 	}
+	if err := hostSupports(spec); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Errorf("the host kind: %v", err)
+	}
+}
+
+// A spec that diverts is refused on the host kind, which has no network of
+// its own to divert from. Ignored, the connections would reach the
+// destination directly.
+func TestTheHostKindRefusesADivert(t *testing.T) {
+	err := hostSupports(RunSpec{Name: "brig-s", Net: "isolated", Egress: Egress{Divert: testDivert}})
+	if err == nil || !strings.Contains(err.Error(), "no network of its own to divert") {
+		t.Errorf("hostSupports = %v, want the divert refused", err)
+	}
+	if err := hostSupports(RunSpec{Name: "brig-s", Net: "isolated"}); err != nil {
+		t.Errorf("a plain host run is refused: %v", err)
+	}
 }
 
 // A boot that diverts and carries no policy is refused as the route mode that

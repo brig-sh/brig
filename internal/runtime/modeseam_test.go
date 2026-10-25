@@ -28,7 +28,7 @@ func relayRows() (unregister func()) {
 // answered by them. Its rows go when it is removed.
 func TestARegisteredModeAddsItsRows(t *testing.T) {
 	vz, hvi := RunPath{"hull", "vz"}, RunPath{"hull", "hvi"}
-	for _, p := range []RunPath{vz, hvi} {
+	for _, p := range []RunPath{vz, hvi, {HostKind, anyBackend}} {
 		err := RequireRouteMode("relay", p)
 		var ce *CapabilityError
 		if !errors.As(err, &ce) || ce.State != CannotEnforce || ce.Property != "route mode relay" ||
@@ -103,12 +103,16 @@ func TestASetupIsCheckedAndCarried(t *testing.T) {
 	if err != nil || !strings.Contains(strings.Join(args, " "), "--annotation relay=on") {
 		t.Errorf("the nerdctl run line does not carry the setup: %v, %v", args, err)
 	}
-	if len(s.asked) != 1 || s.asked[0] != (RunPath{"hull", "hvi"}) {
+	if err := hostSupports(spec); err != nil {
+		t.Errorf("the host kind: %v", err)
+	}
+	if len(s.asked) != 2 || s.asked[0] != (RunPath{"hull", "hvi"}) || s.asked[1] != (RunPath{HostKind, anyBackend}) {
 		t.Errorf("the setup was asked about %v", s.asked)
 	}
 	s.refuse = errors.New("relay is not here")
 	for name, err := range map[string]error{
 		"hull":    supports(spec, "hvi"),
+		"host":    hostSupports(spec),
 		"nerdctl": (&nerdctl{bin: "nerdctl"}).CanRun(spec),
 	} {
 		if !errors.Is(err, s.refuse) {
@@ -129,6 +133,9 @@ func TestADivertIsRefusedAsItsRouteMode(t *testing.T) {
 	if err := supports(spec, "vz"); !errors.As(err, &ce) || ce.Property != "route mode relay" ||
 		!strings.Contains(err.Error(), "vz has no gateway") {
 		t.Errorf("vz: %v", err)
+	}
+	if err := hostSupports(spec); !errors.As(err, &ce) || ce.Property != "route mode relay" {
+		t.Errorf("the host kind: %v", err)
 	}
 	offline := spec
 	offline.Net = "none"

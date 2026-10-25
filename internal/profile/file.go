@@ -171,6 +171,11 @@ func (p Profile) Validate() error {
 	default:
 		return fmt.Errorf("network %q is not one of shared, isolated or offline", p.Network)
 	}
+	switch p.Isolation {
+	case "", "microvm", "process":
+	default:
+		return fmt.Errorf("isolation %q is not one of microvm or process", p.Isolation)
+	}
 	switch p.RootfsType {
 	case "", "block", "virtiofs", "9pfs":
 	default:

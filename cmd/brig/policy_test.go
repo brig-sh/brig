@@ -2249,6 +2249,7 @@ func TestCheckListsRoutesAndPosture(t *testing.T) {
 	for _, want := range []string{
 		"    hull on hvi  enforced: " + runtime.EndpointHviWhy + "; transport: brig.internal\n",
 		"    nerdctl on io.containerd.urunc.v2  enforced: " + runtime.EndpointNerdctlWhy + "; transport: brig.internal\n",
+		"    host  enforced: the broker serves the route over loopback, on the one port the process sandbox may reach; transport: loopback\n",
 		"    hull on vz  cannot enforce: vz takes its network from vmnet",
 	} {
 		if !strings.Contains(stderr, want) {

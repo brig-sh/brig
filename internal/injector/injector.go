@@ -28,7 +28,8 @@ import (
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
-// The files in the broker directory. Every one is the broker's.
+// The files in the broker directory. Every one is the broker's, and the
+// directory is denied to a host sandbox for read and write.
 const (
 	// SocketName is the control socket.
 	SocketName = "control.sock"
@@ -41,7 +42,8 @@ const (
 	// one, so two runs started at once start one broker.
 	StartLockName = "start.lock"
 	// PortName holds the loopback port the broker listens on. The broker
-	// writes it once, and binds the same port at every later start.
+	// writes it once, and binds the same port at every later start, because
+	// a host sandbox's profile allows that port and no other.
 	PortName = "port"
 	// LogName is the broker's own output.
 	LogName = "broker.log"

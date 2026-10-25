@@ -629,7 +629,7 @@ func dispatch(args []string) error {
 			"%s explains how to build one", t.Name, verb, t.Name, profile.BringYourOwnImageDoc)
 	}
 
-	rt, err := detectRuntimeFor(runtime.Preference{Bin: t.RuntimeBin})
+	rt, err := detectRuntimeFor(runtime.Preference{Bin: t.RuntimeBin, Isolation: t.Isolation})
 	if err != nil {
 		// brig info is the report worth giving when the runtime is the thing
 		// that is broken: only one of its lines comes from the runtime, and the
@@ -2509,8 +2509,8 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 		fmt.Println(inst.Name)
 		removed++
 	}
-	// The broker can hold sandboxes the list above lacks: a sandbox of a
-	// runtime other than the detected one, or a run that registered and
+	// The broker can hold sandboxes the list above lacks: a host sandbox
+	// the detected runtime does not list, or a run that registered and
 	// failed before its sandbox existed. Their tokens go too.
 	if ids, err := revokeAllRoutes(); err != nil {
 		warnf("the credential broker could not revoke the session tokens it still holds: %v", err)

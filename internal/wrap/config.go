@@ -267,9 +267,11 @@ type Config struct {
 	// broker serves this run's routes. nil is brig-broker; a test sets its
 	// own.
 	broker routeServer
-	// routeVars are what serveRoutes got for this exec: the variables that
-	// point the guest at its routes.
-	routeVars []runtime.Var
+	// routeVars and routePorts are what serveRoutes got for this exec: the
+	// variables that point the guest at its routes, and the loopback port
+	// the host kind's profile allows.
+	routeVars  []runtime.Var
+	routePorts []int
 	// brigCA is the brig CA certificate the broker handed serveRoutes for a
 	// guest that reaches brig.internal, in PEM, or "". It is checked to be
 	// one certificate and no key. See briginternal.go.
@@ -624,7 +626,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	var routeDecls []profile.SecretDecl
 	if routesErr == nil && len(routes) > 0 {
 		routeDecls = t.Secrets
-		t, bindings, routeSkipped = withRoutes(t, bindings, routes)
+		t, bindings, routeSkipped = withRoutes(t, bindings, routes, rt != nil && rt.Kind() == runtime.HostKind)
 		if network != NetOffline {
 			network = NetIsolated
 		}

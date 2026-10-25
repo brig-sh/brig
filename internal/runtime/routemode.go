@@ -29,13 +29,14 @@ type ModeRecord struct {
 	// Remedy says what to do about a refusal on this path.
 	Remedy string
 	// Transport is how the guest reaches the broker on this path, where the
-	// mode is served: brig.internal.
+	// mode is served: loopback or brig.internal.
 	Transport string
 }
 
 // The transports a ModeRecord names. They are the transports of
 // internal/injector, which this package does not import.
 const (
+	transportLoopback     = "loopback"
 	transportBrigInternal = BrigInternalName
 )
 
@@ -65,10 +66,11 @@ const (
 		"nftables table diverts port 443 of it to the broker, which serves it with TLS under the brig CA"
 	endpointVmnetWhy = "%s takes its network from vmnet, and brig routes brig.internal at the user-mode network " +
 		"gateway that only the hvi backend uses"
-	endpointVmnetRemedy = "Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy"
-	endpointDockerWhy   = "brig routes brig.internal with nftables on nerdctl's bridge, and docker manages its own " +
+	endpointVmnetRemedy = "Run it on hvi (BRIG_HYPERVISOR=hvi), or under the host kind (BRIG_RUNTIME=host), " +
+		"or detach the policy"
+	endpointDockerWhy = "brig routes brig.internal with nftables on nerdctl's bridge, and docker manages its own " +
 		"bridges and firewall"
-	endpointGuestRemedy = "Detach the policy"
+	endpointGuestRemedy = "Run it under the host kind (BRIG_RUNTIME=host, or isolation: process), or detach the policy"
 	endpointOfflineWhy  = "the guest reaches brig.internal over its network, and this run has none " +
 		"(BRIG_NETWORK=offline)"
 	// otherModeRemedy is the remedy of a refused route in a mode other
@@ -81,10 +83,10 @@ const (
 const runcBackend = "runc"
 
 // modeRecords is the one table of route mode answers. The endpoint rows say
-// where a guest reaches the broker: a guest behind a gateway brig owns at
-// brig.internal, which hull on vz and qemu and docker do not have. brig boots
-// no runc guest at all. The hvi and urunc rows hold only when
-// CheckBrigInternal does.
+// where a guest reaches the broker: the host kind over loopback, and a guest
+// behind a gateway brig owns at brig.internal, which hull on vz and qemu and
+// docker do not have. brig boots no runc guest at all. The hvi and urunc rows
+// hold only when CheckBrigInternal does.
 var modeRecords = []ModeRecord{
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"hull", "hvi"}, State: Enforced, Why: EndpointHviWhy,
 		Transport: transportBrigInternal, Remedy: endpointVmnetRemedy},
@@ -99,7 +101,10 @@ var modeRecords = []ModeRecord{
 		Remedy: "Unset BRIG_CONTAINERD_RUNTIME to use urunc, or detach the policy"},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"docker", anyBackend}, State: CannotEnforce,
 		Why:    endpointDockerWhy,
-		Remedy: "Use nerdctl (BRIG_RUNTIME_BIN=nerdctl), or detach the policy"},
+		Remedy: "Use nerdctl (BRIG_RUNTIME_BIN=nerdctl), run it under the host kind (BRIG_RUNTIME=host), or detach the policy"},
+	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{HostKind, anyBackend}, State: Enforced,
+		Why:       "the broker serves the route over loopback, on the one port the process sandbox may reach",
+		Transport: transportLoopback},
 }
 
 // modeRecordsMu guards modeRecords against RegisterModeRecords.

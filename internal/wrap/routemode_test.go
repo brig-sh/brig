@@ -49,6 +49,7 @@ func TestARouteInAModeNotInThisBuildIsRefused(t *testing.T) {
 		{"hull on vz", "hull", "vz"},
 		{"hull on hvi", "hull", "hvi"},
 		{"nerdctl", "nerdctl", ""},
+		{"host", runtime.HostKind, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()

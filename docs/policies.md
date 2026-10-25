@@ -346,14 +346,15 @@ the credential itself.
 [broker.md](broker.md) describes how the broker handles each request.
 
 > [!NOTE]
-> A guest of hull on `hvi` or of nerdctl reaches a route at
+> The [host kind](runtimes.md#the-host-kind) reaches a route over loopback.
+> A guest of hull on `hvi` or of nerdctl reaches it at
 > `https://brig.internal`, with the brig CA (see
 > [Transports](broker.md#transports)). On hull on `vz` or `qemu`, and on
 > docker, Brig refuses a run bound to a policy with routes before anything
 > boots, with exit `7`:
 >
 > ```
-> brig: policy claude-only (route anthropic) declares a route in mode endpoint, which the guest reaches at brig.internal: a policy applies to this sandbox, and hull on vz cannot enforce the route mode endpoint: vz takes its network from vmnet, and brig routes brig.internal at the user-mode network gateway that only the hvi backend uses. Run it on hvi (BRIG_HYPERVISOR=hvi), or detach the policy. brig will not boot a sandbox under a policy nothing enforces
+> brig: policy claude-only (route anthropic) declares a route in mode endpoint, which the guest reaches at brig.internal: a policy applies to this sandbox, and hull on vz cannot enforce the route mode endpoint: vz takes its network from vmnet, and brig routes brig.internal at the user-mode network gateway that only the hvi backend uses. Run it on hvi (BRIG_HYPERVISOR=hvi), or under the host kind (BRIG_RUNTIME=host), or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 > ```
 >
 > [Use it](broker.md#use-it) walks through a first run.
@@ -542,6 +543,7 @@ claude-only
     hull on hvi  enforced: hull's gateway answers brig.internal with its own address and diverts port 443 of it to the broker, which serves it with TLS under the brig CA; transport: brig.internal
     hull on vz  cannot enforce: vz takes its network from vmnet, and brig routes brig.internal at the user-mode network gateway that only the hvi backend uses
     ...
+    host  enforced: the broker serves the route over loopback, on the one port the process sandbox may reach; transport: loopback
 github-brig-sh
   route github  preset github-token  mode endpoint
     ...
@@ -647,10 +649,10 @@ They do not change the policy or the profile.
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down claude-code -n refactor
 attached locked-down to claude-code -n refactor
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig policy attach locked-down ubuntu
 brig: cannot attach locked-down to ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into. Nothing was written
 ```
@@ -680,7 +682,7 @@ It also runs the same `CheckCoverage` refusal as `attach`:
 ```console
 $ brig policy check claude-code
 locked-down
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig policy check ubuntu
 no policy applies to ubuntu
 brig: cannot enforce any policy on ubuntu: ubuntu is kind: shell, which has no agent to hook an egress rule into
@@ -805,7 +807,7 @@ brig: no-net is recorded under "My Work", which no run reaches
   ↳ a session named "My Work" starts "my-work"
   → to remove it:  brig policy detach no-net claude-code -n "My Work"
 no-net
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 ```
 
 One gap remains. `attach -n` refuses a name that any reserved profile ends
@@ -913,7 +915,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `could not register the routes of brig-x with the credential broker: …` | `brig-broker` is not installed, did not start, or refused the routes. `broker.log` in `~/.brig/host/broker` says why |
 | `policy x (route y) injects a secret that brig's secret store does not hold: missing secret "s" …` | a run or `sh` of a profile bound to a route whose secret is not in the store. It exits `6`. The message names the import or create command |
 | `policy x (route y) injects s, which the broker reads from brig's secret store on the host, and the store is not available: …` | the same, on a host whose store does not open, such as Linux with no Secret Service. It exits `6` |
-| `… another process holds the credential broker's port, 127.0.0.1:N, so brig refuses the run. …` | another process listens on the broker's port. See [The port](broker.md#the-port) |
+| `… another process holds the credential broker's port, 127.0.0.1:N, so brig refuses the run. …` | another process listens on the port host sandboxes allow. See [The port](broker.md#the-port) |
 | `route x: inject takes headers.set or basicAuth, not both` | a route, or a route and its preset, set both |
 | `route x: credential.lifecycle is set by a preset, and a policy does not name it` | a policy names `credential.lifecycle` |
 | `route x is declared by both a and b; …` | two bound policies declare a route of the same name |
@@ -975,6 +977,8 @@ a probe at boot confirms the answer or overturns it.
 | hull on `vz` | `cannot enforce` | vmnet, which Brig does not filter | |
 | hull on `qemu` | `cannot enforce` | vmnet, which Brig does not filter | |
 | docker, on any shim | `cannot enforce` | docker's own bridges and firewall, which Brig does not filter | |
+| host (macOS), `offline` or `isolated`, with no `host` or `cidr` rule | `enforced` | the Seatbelt profile denies every IP connection but the ports Brig names on a local address, or every connection on `offline`. A `default: allow` policy is held the same way, so only loopback is reachable | `sandbox-exec` |
+| host (macOS), with a `host` or `cidr` rule | `cannot enforce` | Seatbelt matches addresses, not names, and of addresses only loopback | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 
 Enforcement on nerdctl is measured on rootless nerdctl. Brig treats nerdctl
@@ -1011,7 +1015,7 @@ policy applies to the run, Brig refuses a hull without those flags by name:
 ```console
 $ brig policy attach locked-down claude-code
 attached locked-down to claude-code
-note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own; a run on any other backend is refused rather than left unenforced
+note: enforced on the hvi backend and on Linux with nerdctl, which give the sandbox a network of its own, and by the host kind only for a policy with no host or cidr rule; a run on any other backend is refused rather than left unenforced
 $ brig run claude
 brig: a policy applies to this sandbox, and hull on hvi cannot enforce the egress policy: the network-gateway of /opt/homebrew/bin/hull has no --egress-default. Upgrade the runtime, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```

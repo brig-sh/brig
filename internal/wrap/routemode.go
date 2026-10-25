@@ -148,6 +148,11 @@ func RouteModeServed(p profile.Profile, rt runtime.Runtime, m v1alpha1.RouteMode
 	path := runtime.RoutePath(rt, env.String("HYPERVISOR", p.Hypervisor))
 	switch {
 	case m == "" || m == v1alpha1.ModeEndpoint:
+		// The host kind reaches the broker over loopback, which the table
+		// answers alone.
+		if rt.Kind() == runtime.HostKind {
+			return runtime.RequireRouteMode(v1alpha1.ModeEndpoint, path)
+		}
 		return runtime.CheckBrigInternal(rt, path, net)
 	default:
 		return checkMode(m, env, rt, path, net)

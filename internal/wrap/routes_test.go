@@ -3,6 +3,7 @@ package wrap
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -80,6 +81,27 @@ func (f *fakeBroker) Status() (injector.Status, bool) {
 	return st, true
 }
 
+// hostRunRecorder is the host kind as far as a boot goes: it records the spec
+// it was handed and boots nothing.
+type hostRunRecorder struct {
+	runtime.Runtime
+	spec *runtime.RunSpec
+}
+
+func (r *hostRunRecorder) Kind() string                          { return runtime.HostKind }
+func (r *hostRunRecorder) Bin() string                           { return "sandbox-exec" }
+func (r *hostRunRecorder) Running(string) (bool, error)          { return false, nil }
+func (r *hostRunRecorder) Remove(string) error                   { return nil }
+func (r *hostRunRecorder) Stop(string) error                     { return nil }
+func (r *hostRunRecorder) SandboxNetwork(string) (string, error) { return "", nil }
+func (r *hostRunRecorder) Isolation(string) runtime.Isolation {
+	return runtime.Isolation{Boundary: runtime.BoundaryProcess, Detail: "shared kernel"}
+}
+func (r *hostRunRecorder) Run(spec runtime.RunSpec) error {
+	r.spec = &spec
+	return errors.New("stub runtime: not booting")
+}
+
 // claudeAndGitHub binds claude-code to the Claude route and the GitHub route.
 const claudeAndGitHub = `apiVersion: brig.sh/v1alpha1
 kind: Policy
@@ -137,9 +159,84 @@ func envOf(vars []runtime.Var) map[string]runtime.Var {
 	return out
 }
 
+// The host kind serves routes over loopback. The run registers its routes,
+// mints a token per route for the exec, hands the guest the route URL and
+// the token in place of the credential, and allows the broker's port and no
+// other in the sandbox's profile. Claude Code needs no tmpfs there, so the
+// host kind takes the profile it refused before.
+func TestAHostRunBoundToARouteGetsATokenAndThePort(t *testing.T) {
+	rec := &hostRunRecorder{}
+	c := routedConfig(t, claudeAndGitHub, rec)
+	broker := &fakeBroker{}
+	c.broker = broker
+	set, err := c.BuildEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnsureRunning(set); err == nil || !strings.Contains(err.Error(), "not booting") {
+		t.Fatalf("the run did not reach the runtime: %v", err)
+	}
+	if rec.spec == nil {
+		t.Fatal("the runtime was never asked to run")
+	}
+	if len(broker.registered) != 1 || broker.registered[0].ID != c.VMName {
+		t.Fatalf("registered %+v, want the sandbox once", broker.registered)
+	}
+	var names []string
+	for _, r := range broker.registered[0].Routes {
+		names = append(names, r.Policy+"/"+r.Route.Name)
+	}
+	if !slices.Equal(names, []string{"brokered/anthropic", "brokered/github"}) {
+		t.Errorf("registered routes %v", names)
+	}
+	if !slices.Equal(rec.spec.LoopbackPorts, []int{fakeBrokerPort}) {
+		t.Errorf("LoopbackPorts = %v, want the broker's port alone", rec.spec.LoopbackPorts)
+	}
+	if len(rec.spec.Tmpfs) != 0 {
+		t.Errorf("the host kind was handed a tmpfs: %v", rec.spec.Tmpfs)
+	}
+	if rec.spec.Net != "isolated" {
+		t.Errorf("a run with routes runs %q, want isolated", rec.spec.Net)
+	}
+	env := envOf(c.execSpec(set, []string{"claude"}, false).Env)
+	base := "http://127.0.0.1:47821/" + c.VMName + "/r/"
+	for name, want := range map[string]string{
+		"ANTHROPIC_BASE_URL":      base + "anthropic",
+		"CLAUDE_CODE_OAUTH_TOKEN": "session-token-" + c.VMName + "-anthropic",
+		"BRIG_ROUTE_GITHUB_TOKEN": "session-token-" + c.VMName + "-github",
+		"CLAUDE_CONFIG_DIR":       "/root/.claude",
+		"IS_SANDBOX":              "1",
+	} {
+		if got := env[name].Value; got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "BRIG_ROUTE_GITHUB_TOKEN"} {
+		if !env[name].Secret {
+			t.Errorf("%s is not marked Secret, so it could reach argv", name)
+		}
+	}
+	// The GitHub token the profile binds is the brokered secret's, so the
+	// whole binding is gone, the ambient value with it.
+	for _, name := range []string{"GH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+		if v, ok := env[name]; ok {
+			t.Errorf("%s reached the guest: %q", name, v.Value)
+		}
+	}
+	for _, v := range rec.spec.Env {
+		if strings.Contains(v.Value, "ambient-gh-token-value") {
+			t.Errorf("the ambient GitHub token reached the guest as %s", v.Name)
+		}
+	}
+	if len(broker.minted) != 2 || broker.minted[0].TTLSeconds != int64(injector.TokenTTL.Seconds()) {
+		t.Errorf("minted %+v, want a 12h token per route", broker.minted)
+	}
+}
+
 // A secret a route injects stays on the host: its files: binding and every
-// env binding that names it are dropped, and brig does not read it. The
-// tmpfs that held the file stays, and CLAUDE_CONFIG_DIR with it.
+// env binding that names it are dropped, and brig does not read it. On the
+// host kind the tmpfs that held the file goes too, and CLAUDE_CONFIG_DIR
+// follows it into the home. A microVM keeps the tmpfs.
 func TestABrokeredSecretIsNeverDelivered(t *testing.T) {
 	p, ok := profile.Lookup("claude-code")
 	if !ok {
@@ -149,31 +246,42 @@ func TestABrokeredSecretIsNeverDelivered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, bindings, skipped := withRoutes(p, p.Env, routes)
-	if !slices.Equal(skipped, []string{"claude-credentials", "gh-token"}) {
-		t.Errorf("skipped %v", skipped)
-	}
-	if len(got.Files) != 0 {
-		t.Errorf("files still delivered: %+v", got.Files)
-	}
-	for _, d := range got.Secrets {
-		if d.Name == "claude-credentials" || d.Name == "gh-token" {
-			t.Errorf("brig still reads %s", d.Name)
+	for _, host := range []bool{false, true} {
+		got, bindings, skipped := withRoutes(p, p.Env, routes, host)
+		if !slices.Equal(skipped, []string{"claude-credentials", "gh-token"}) {
+			t.Errorf("host=%v: skipped %v", host, skipped)
 		}
-	}
-	for _, b := range append(slices.Clone(got.Env), bindings...) {
-		if b.Name == "GH_TOKEN" {
-			t.Errorf("GH_TOKEN is still bound: %+v", b)
+		if len(got.Files) != 0 {
+			t.Errorf("host=%v: files still delivered: %+v", host, got.Files)
 		}
-	}
-	dir := ""
-	for _, b := range bindings {
-		if b.Name == "CLAUDE_CONFIG_DIR" {
-			dir = b.Value
+		for _, d := range got.Secrets {
+			if d.Name == "claude-credentials" || d.Name == "gh-token" {
+				t.Errorf("host=%v: brig still reads %s", host, d.Name)
+			}
 		}
-	}
-	if len(got.Tmpfs()) != 1 || dir != "/brig/claude" {
-		t.Errorf("a microVM lost its tmpfs (%d) or its config dir %q", len(got.Tmpfs()), dir)
+		for _, b := range append(slices.Clone(got.Env), bindings...) {
+			if b.Name == "GH_TOKEN" {
+				t.Errorf("host=%v: GH_TOKEN is still bound: %+v", host, b)
+			}
+		}
+		dir := ""
+		for _, b := range bindings {
+			if b.Name == "CLAUDE_CONFIG_DIR" {
+				dir = b.Value
+			}
+		}
+		if host {
+			if len(got.Volumes) != 0 {
+				t.Errorf("the host kind keeps volumes %+v", got.Volumes)
+			}
+			if dir != "/root/.claude" {
+				t.Errorf("CLAUDE_CONFIG_DIR = %q on the host kind, want the home's .claude", dir)
+			}
+		} else {
+			if len(got.Tmpfs()) != 1 || dir != "/brig/claude" {
+				t.Errorf("a microVM lost its tmpfs (%d) or its config dir %q", len(got.Tmpfs()), dir)
+			}
+		}
 	}
 	// The profile the caller holds is not changed.
 	if len(p.Files) == 0 || len(p.Volumes) == 0 {
@@ -193,7 +301,7 @@ func mustPolicy(t *testing.T, doc string) policy.Policy {
 // Stopping or removing a sandbox revokes its tokens, whether or not the run
 // that stops it still has the policy.
 func TestStopAndRemoveRevokeTheSandboxTokens(t *testing.T) {
-	rec := &livenessRuntime{}
+	rec := &hostRunRecorder{}
 	c := routedConfig(t, claudeAndGitHub, rec)
 	broker := &fakeBroker{}
 	c.broker = broker
@@ -210,14 +318,13 @@ func TestStopAndRemoveRevokeTheSandboxTokens(t *testing.T) {
 // The envelope names the broker, its transport and the routes it serves, and
 // the credentials row names each session token by its route, never a value.
 func TestEnvelopeHasABrokerRow(t *testing.T) {
-	t.Setenv("BRIG_HYPERVISOR", "hvi")
-	c := routedConfig(t, claudeAndGitHub, &hullRecorder{})
+	c := routedConfig(t, claudeAndGitHub, &hostRunRecorder{})
 	c.broker = &fakeBroker{running: true}
 	block := &bytes.Buffer{}
 	c.renderEnvelope(block, creds.Set{})
 	got := block.String()
 	for _, want := range []string{
-		"BROKER       transport brig.internal, routes anthropic, github; brig-broker pid 4242 on 127.0.0.1:47821; " +
+		"BROKER       transport loopback, routes anthropic, github; brig-broker pid 4242 on 127.0.0.1:47821; " +
 			"kept on the host: claude-credentials, gh-token",
 		"CLAUDE_CODE_OAUTH_TOKEN(route: anthropic)",
 		"BRIG_ROUTE_GITHUB_TOKEN(route: github)",
@@ -227,7 +334,7 @@ func TestEnvelopeHasABrokerRow(t *testing.T) {
 		}
 	}
 	d := c.InfoData(creds.Set{})
-	if d.Broker == nil || d.Broker.Transport != "brig.internal" || !d.Broker.Running || d.Broker.Port != fakeBrokerPort {
+	if d.Broker == nil || d.Broker.Transport != "loopback" || !d.Broker.Running || d.Broker.Port != fakeBrokerPort {
 		t.Errorf("info --json broker = %+v", d.Broker)
 	}
 	var broker []InfoCredential
@@ -249,17 +356,16 @@ func TestEnvelopeHasABrokerRow(t *testing.T) {
 }
 
 // The BROKER row and info --json name the route modes the run path serves.
-// hull on hvi serves endpoint routes, and hull on vz serves none.
+// The host kind serves endpoint routes, and hull on vz serves none.
 func TestTheBrokerRowNamesTheModes(t *testing.T) {
-	t.Setenv("BRIG_HYPERVISOR", "hvi")
-	c := routedConfig(t, claudeAndGitHub, &hullRecorder{})
+	c := routedConfig(t, claudeAndGitHub, &hostRunRecorder{})
 	c.broker = &fakeBroker{running: true}
 	if got := c.brokerLine(); !strings.Contains(got, "; modes endpoint") {
-		t.Errorf("the BROKER row on hvi is %q", got)
+		t.Errorf("the BROKER row on the host kind is %q", got)
 	}
 	d := c.InfoData(creds.Set{})
 	if d.Broker == nil || !slices.Equal(d.Broker.Modes, []string{"endpoint"}) {
-		t.Errorf("info --json broker on hvi = %+v", d.Broker)
+		t.Errorf("info --json broker on the host kind = %+v", d.Broker)
 	}
 
 	t.Setenv("BRIG_HYPERVISOR", "vz")
@@ -355,7 +461,7 @@ func TestAnExecWithNoRouteLeftForgetsTheSandbox(t *testing.T) {
 // sandbox's count is not this run's to report, and a sandbox with none
 // shows nothing.
 func TestTheBrokerRowNamesRecoveryAndThisSandboxsRefusals(t *testing.T) {
-	c := routedConfig(t, claudeAndGitHub, nil)
+	c := routedConfig(t, claudeAndGitHub, &hostRunRecorder{})
 	fb := &fakeBroker{running: true, extra: injector.Status{
 		Recovering:  []string{"claude-credentials"},
 		Placeholder: map[string]int64{c.VMName: 3, "brig-other": 9},
@@ -391,7 +497,7 @@ func TestTheBrokerRowNamesRecoveryAndThisSandboxsRefusals(t *testing.T) {
 // is named by its pid. It is not reported as "not running", which would say
 // that the next run starts a broker, and the next run fails to.
 func TestABrokerThatDoesNotAnswerIsNamed(t *testing.T) {
-	c := routedConfig(t, claudeAndGitHub, nil)
+	c := routedConfig(t, claudeAndGitHub, &hostRunRecorder{})
 	c.broker = &fakeBroker{stuck: true}
 	if line := c.brokerLine(); !strings.Contains(line, "brig-broker pid 4242 is not answering on its control socket") ||
 		strings.Contains(line, "the run starts it") {
