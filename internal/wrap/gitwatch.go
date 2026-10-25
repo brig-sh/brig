@@ -163,6 +163,20 @@ func (c *Config) CheckProjectGit() {
 	c.recordGitWatch(index, project, now)
 }
 
+// CheckSandboxGit is CheckProjectGit for a sandbox known only by its name, the
+// way `brig rm --all` knows them: it works from the runtime's list and has no
+// Config to ask for a project. The project is the one the last look was taken
+// in. A sandbox with no look has nothing to compare against and is skipped.
+//
+// It exists because ForgetSandbox drops every look it holds. A removal that
+// forgot the baselines without comparing first ended the session with a hook
+// the guest had planted never named, on the one command that is a user's last
+// chance to hear about it before git runs there.
+func CheckSandboxGit(vmName string, v Verbosity) {
+	c := &Config{Err: os.Stderr, Verbosity: v, VMName: vmName}
+	c.CheckProjectGit()
+}
+
 // commondirNotice says that a project's .git has a commondir, on every look
 // that finds one. git then reads config, hooks and info from the directory it
 // names, which brig does not look at, so the four paths it does look at can
