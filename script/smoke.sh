@@ -496,6 +496,42 @@ grep -q 'added .git/hooks/pre-push' "$WORK/gitwatch.err" \
   && ok "rm --all names a hook planted since the last command" \
   || bad "rm --all names a hook planted since the last command -- got: $(cat "$WORK/gitwatch.err")"
 rm -rf "$PROJ/.git"
+# Every verb that acts on a sandbox looks, and info and plan, which only report,
+# do not, so the look they leave alone is still there for the next verb that can
+# name it. Each case starts from a fresh sandbox, with the project mounted, and
+# plants a hook of its own after the look that run takes.
+GP="$WORK/gitproject"
+mkdir -p "$GP/.git/hooks"
+for verb in create sh exec rm; do
+  "$WORK/brig" rm --all -y > /dev/null 2>&1
+  CLAUDE_CODE_OAUTH_TOKEN=env-token-secret "$WORK/brig" run claude "$GP" -d > /dev/null 2>&1
+  printf '#!/bin/sh\n' > "$GP/.git/hooks/pre-$verb"
+  chmod +x "$GP/.git/hooks/pre-$verb"
+  case "$verb" in
+    create) "$WORK/brig" create claude > /dev/null 2> "$WORK/gitwatch.err" ;;
+    sh)     "$WORK/brig" sh claude true > /dev/null 2> "$WORK/gitwatch.err" ;;
+    exec)   "$WORK/brig" exec claude true > /dev/null 2> "$WORK/gitwatch.err" ;;
+    rm)     "$WORK/brig" rm claude > /dev/null 2> "$WORK/gitwatch.err" ;;
+  esac
+  grep -q "added .git/hooks/pre-$verb" "$WORK/gitwatch.err" \
+    && ok "$verb names a hook planted in the project's .git" \
+    || bad "$verb names a hook planted in the project's .git -- got: $(cat "$WORK/gitwatch.err")"
+done
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret "$WORK/brig" run claude "$GP" -d > /dev/null 2>&1
+printf '#!/bin/sh\n' > "$GP/.git/hooks/pre-info"
+chmod +x "$GP/.git/hooks/pre-info"
+for verb in info plan; do
+  "$WORK/brig" "$verb" claude > /dev/null 2> "$WORK/gitwatch.err"
+  grep -q 'added .git/hooks/pre-info' "$WORK/gitwatch.err" \
+    && bad "$verb looked at the project's .git -- got: $(cat "$WORK/gitwatch.err")" \
+    || ok "$verb does not look at the project's .git"
+done
+"$WORK/brig" stop claude > /dev/null 2> "$WORK/gitwatch.err"
+grep -q 'added .git/hooks/pre-info' "$WORK/gitwatch.err" \
+  && ok "the change info and plan left alone is named by the next stop" \
+  || bad "the change info and plan left alone is named by the next stop -- got: $(cat "$WORK/gitwatch.err")"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
 OTHER="$WORK/otherproject"
 mkdir -p "$OTHER"
 : > "$STUB_LOG"
