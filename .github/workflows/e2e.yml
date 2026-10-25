@@ -39,6 +39,10 @@ on:
         description: "a brig-standalone-linux tag, such as v0.1.0-rc15, for one more Linux leg. Empty: the install.sh pin and the newest release"
         type: string
         default: ""
+      hull_channel:
+        description: "a hull@main channel tag for the macOS leg, such as channel-main-0.1.0-rc31-main.20261025114854.94e458e. Empty: the newest"
+        type: string
+        default: ""
   # A change to the checks, or to the installer they drive, proves itself on
   # real hosts before it merges.
   pull_request:
@@ -227,6 +231,11 @@ jobs:
           # A pull request has no notarized channel build to put through
           # Gatekeeper.
           E2E_GATEKEEPER: ${{ github.event_name != 'pull_request' && '1' || '0' }}
+          # Routes need a hull whose gateway takes --divert: the hull@main
+          # channel from 94e458e. The canary records the build it installed
+          # and checks the flag. The tag reaches the shell through the
+          # environment, and the canary checks its shape.
+          E2E_HULL_CHANNEL: ${{ inputs.hull_channel }}
           GH_TOKEN: ${{ github.token }}
         run: BRIG_BUILD_DIR="$E2E_SCRATCH/build" bash script/e2e/canary-macos.sh
 

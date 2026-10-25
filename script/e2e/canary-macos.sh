@@ -19,6 +19,10 @@
 #   BRIG_BUILD_DIR  a directory holding brig and brigd built from this checkout
 #   E2E_GATEKEEPER  1 to run the Gatekeeper gate against the notarized channel
 #                   build of this commit. Otherwise the gate is skipped
+#   E2E_HULL_CHANNEL
+#                   a hull@main channel tag, such as
+#                   channel-main-0.1.0-rc31-main.20261025114854.94e458e, to
+#                   install in place of the newest one
 #   GH_TOKEN        a token for the GitHub API, optional
 #
 # It exits 1 on a no-go verdict, after results.json is written. Written for
@@ -209,9 +213,24 @@ setup() {
   esac
   df -h "$HOME"
 
-  # hull, and hvi and vz-runner next to it, where hull looks for them.
+  # hull, and hvi and vz-runner next to it, where hull looks for them. The
+  # newest hull@main channel build, or the one E2E_HULL_CHANNEL names.
   local rel tag url sums
-  rel="$(channel_assets brig-sh/hull "")"
+  if [ -n "${E2E_HULL_CHANNEL:-}" ]; then
+    if ! printf '%s\n' "$E2E_HULL_CHANNEL" | grep -Eq '^channel-main-[0-9A-Za-z.-]+$'; then
+      echo "E2E_HULL_CHANNEL must name a channel-main- tag, not $E2E_HULL_CHANNEL"
+      return 1
+    fi
+    rel="$(api "repos/brig-sh/hull/releases/tags/$E2E_HULL_CHANNEL" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+print(r["tag_name"])
+for a in r["assets"]:
+    print(a["browser_download_url"])
+')"
+  else
+    rel="$(channel_assets brig-sh/hull "")"
+  fi
   tag="$(echo "$rel" | head -n 1)"
   url="$(echo "$rel" | grep -E '/hull-[^/]*-arm64\.tar\.gz$' | head -n 1)"
   sums="$(echo "$rel" | grep '/checksums.txt$' | head -n 1)"
@@ -246,6 +265,19 @@ setup() {
   res fact hull "$hull_version" "https://github.com/brig-sh/hull/releases/tag/$tag"
   res meta host_detail "$(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, macOS $(sw_vers -productVersion), SIP enabled. A scratch HOME, and hull from the hull@main channel on PATH."
   check_backends "${tag##*.}"
+  # A routed run diverts brig.internal with network-gateway --divert. The
+  # first hull@main channel build with it is 94e458e. rc31 does not have it.
+  # The help is read whole first: grep -q would close the pipe on hull, and
+  # pipefail would take its SIGPIPE for the answer.
+  local gwhelp
+  gwhelp="$(tmo 30 hull network-gateway --help < /dev/null 2>&1 || true)"
+  if printf '%s\n' "$gwhelp" | grep -Eq '^[[:space:]]*--divert([[:space:]=,]|$)'; then
+    res check Install "hull's network-gateway takes --divert, which routes need" pass \
+      "hull ${tag#channel-main-} lists --divert host:port=socket"
+  else
+    res check Install "hull's network-gateway takes --divert, which routes need" fail \
+      "hull ${tag#channel-main-} does not list --divert, so every routed run is refused with exit 7"
+  fi
   if [ "$commit" != "$head" ]; then
     res check Install "brig version names this commit" fail "$version; commit $commit, checkout $head"
     return 1
