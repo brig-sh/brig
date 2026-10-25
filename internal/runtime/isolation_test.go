@@ -152,6 +152,30 @@ func TestNerdctlRefusesTheRuncShimBinaryByNameOrPath(t *testing.T) {
 	}
 }
 
+// The refusal of the runc shim's binary is keyed on its file name, and the
+// microVM shim's binary sits one letter away from it. A urunc binary added to
+// the refused set, or a bare containerd-shim-urunc-v2 mistaken for the runc
+// shim, would stop brig booting the one shim it exists for. brig cannot see
+// nerdctl's PATH, so it does not credit the name with a microVM either: the row
+// stays unknown, and CanRun lets it through.
+func TestNerdctlKeepsTheUruncShimBinaryAllowedByNameOrPath(t *testing.T) {
+	for _, shim := range []string{
+		"containerd-shim-urunc-v2",
+		"/usr/local/bin/containerd-shim-urunc-v2",
+		"./containerd-shim-urunc-v2",
+	} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
+			t.Errorf("%s: CanRun refused the urunc shim binary: %v", shim, err)
+		}
+		if got := n.Isolation(RunSpec{}); got.Boundary != BoundaryUnknown {
+			t.Errorf("%s is neither the runc shim nor provably a microVM: %s", shim, got.Line())
+		}
+	}
+}
+
 // containerd starts a shim by the last two dot-separated parts of the runtime
 // name (BinaryName in containerd's pkg/shim), so the rest of the name says
 // nothing about what boots. Each name is placed by the shim it resolves to. A
