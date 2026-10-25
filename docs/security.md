@@ -727,11 +727,23 @@ The warning is a look between two brig commands, not a guard:
   file holds. After the first warning, the guest can change the file it
   points to, an ignored one in the working tree for instance, and no second
   warning comes.
-- The look is bounded, so a guest cannot make it stall every command. It
-  hashes the first 8 MiB of a file and 64 MiB in all. A file past the 64 MiB
+- The look is bounded in entries and bytes, but not in depth. It hashes the
+  first 8 MiB of a file and 64 MiB in all. A file past the 64 MiB
   is recorded by its mode and size only, so a change that keeps both is not
   named, and neither is one past a file's first 8 MiB that keeps its size.
   It stops after 4096 entries, and the entries past that are not looked at.
+  A guest can nest directories under `.git/info` thousands deep: the cost
+  of a look grows with the square of the depth, so a chain 4000 deep made
+  one command take about 8 seconds here. Brig does not cap the depth.
+- A `.git` that is a file, whose `gitdir:` names a directory inside the
+  project (`git init --separate-git-dir`), is watched as the file only. The
+  config and hooks in that directory are not looked at.
+- A symlinked `.git/hooks`, or a symlinked `core.hooksPath` directory, is
+  recorded by where it points. Edits to the directory it points to are not
+  seen, whether or not it is inside the project.
+- An entry under `.git` that Brig cannot read, a directory the guest made
+  mode 000 for instance, stops the look with an error. Until it is gone,
+  that command names no change at all.
 
 ## Guest images
 
