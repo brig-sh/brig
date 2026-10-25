@@ -1676,6 +1676,11 @@ check_docker_fallback() {
   fi
 }
 
+# ---------------------------------------------------------------- broker
+
+# shellcheck source=script/e2e/broker-checks.sh
+. "$HERE/broker-checks.sh"
+
 # ---------------------------------------------------------------- main
 
 say "brig e2e $LEVEL, results in $RESULTS"
@@ -1713,6 +1718,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block agent-rm check_agent_rm
   block files-mode check_files_mode
   block policy check_policy_enforced
+  block policy-docs check_policy_documents
   block cosign check_cosign_hang
   block record check_record_refusals
   block fallback check_docker_fallback

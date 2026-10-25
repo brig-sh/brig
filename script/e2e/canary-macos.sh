@@ -1353,6 +1353,11 @@ check_boot_digests() {
   fi
 }
 
+# ---------------------------------------------------------------- broker
+
+# shellcheck source=script/e2e/broker-checks.sh
+. "$HERE/broker-checks.sh"
+
 # ---------------------------------------------------------------- main
 
 say "brig e2e $LEVEL on macOS, results in $RESULTS"
@@ -1388,6 +1393,7 @@ if [ -f "$OUT/setup.ok" ]; then
   block files-mode check_files_mode
   block policy check_policy_refusals
   block posture-info check_posture_info
+  block policy-docs check_policy_documents
   block gateway check_shared_gateway
   block reach check_reach
   block cosign check_cosign_hang
