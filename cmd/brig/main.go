@@ -2504,6 +2504,14 @@ func removeAll(spelling string, args []string, o removeOpts) error {
 	if err := confirmRemoveAll(spelling, mine, o.yes != ""); err != nil {
 		return err
 	}
+	// Before anything is removed, and before the loop below forgets each
+	// sandbox's look at its project: the look is what a planted hook is
+	// compared against, and this is the last command that has it. -q hides the
+	// warning here as it does everywhere, and the removal then takes the
+	// baseline with it: there is no later command for this sandbox to say it.
+	for _, inst := range mine {
+		wrap.CheckSandboxGit(inst.Name, verbosity)
+	}
 	removed, homesGone := 0, 0
 	for _, inst := range mine {
 		// First, as brig stop does, so a sandbox that will not stop holds no

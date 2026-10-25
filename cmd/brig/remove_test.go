@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -485,5 +487,69 @@ func TestRemoveRevokesASandboxTheRuntimeDoesNotList(t *testing.T) {
 				t.Errorf("revoked %v, want %v", revoked, tt.want)
 			}
 		})
+	}
+}
+
+// plantHook takes a look at a project's .git for the sandbox, then plants a
+// hook in it, which is what the guest does between two brig commands.
+func plantHook(t *testing.T, vmName string) {
+	t.Helper()
+	project := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(filepath.Join(project, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".git", "config"), []byte("[core]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &wrap.Config{Err: &bytes.Buffer{}, Verbosity: wrap.Normal, VMName: vmName, Project: project}
+	c.CheckProjectGit()
+	if err := os.WriteFile(filepath.Join(project, ".git", "hooks", "post-checkout"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// `brig rm --all` and the retired `brig reset` forget every sandbox's look at
+// its project's .git, so a hook the guest planted was never named on the one
+// command that ends the session. They compare first.
+func TestRemoveAllNamesAHookPlantedInAProject(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		plantHook(t, "brig-faker")
+		stderr := captureStderr(t, func() {
+			if _, err := run2(t, args); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if !strings.Contains(stderr, "added .git/hooks/post-checkout") {
+			t.Errorf("brig %s did not name the planted hook:\n%s", strings.Join(args, " "), stderr)
+		}
+		if len(rt.removed) != 2 {
+			t.Errorf("brig %s removed %v, want both sandboxes", strings.Join(args, " "), rt.removed)
+		}
+	}
+}
+
+// A preview removes nothing and forgets nothing, so it names nothing and the
+// look is still there for the removal that follows. -q hides the warning.
+func TestRemoveAllDryRunAndQuietDoNotNameAHook(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	plantHook(t, "brig-faker")
+	stderr := captureStderr(t, func() {
+		if _, err := run2(t, []string{"rm", "--all", "--dry-run"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(stderr, ".git/hooks") {
+		t.Errorf("--dry-run named a hook:\n%s", stderr)
+	}
+	stderr = captureStderr(t, func() {
+		if _, err := run2(t, []string{"-q", "rm", "--all", "-y"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(stderr, ".git/hooks") {
+		t.Errorf("-q named a hook:\n%s", stderr)
 	}
 }

@@ -487,6 +487,14 @@ grep -q 'added .git/hooks/post-checkout' "$WORK/gitwatch.err" \
 grep -q '\.git changed' "$WORK/gitwatch.err" \
   && bad "a .git change already named is named again -- got: $(cat "$WORK/gitwatch.err")" \
   || ok "a .git change is named once"
+# rm --all forgets every sandbox's look, so it compares first, or a hook
+# planted since the last command is never named.
+printf '#!/bin/sh\necho planted\n' > "$PROJ/.git/hooks/pre-push"
+chmod +x "$PROJ/.git/hooks/pre-push"
+"$WORK/brig" rm --all -y > /dev/null 2> "$WORK/gitwatch.err"
+grep -q 'added .git/hooks/pre-push' "$WORK/gitwatch.err" \
+  && ok "rm --all names a hook planted since the last command" \
+  || bad "rm --all names a hook planted since the last command -- got: $(cat "$WORK/gitwatch.err")"
 rm -rf "$PROJ/.git"
 OTHER="$WORK/otherproject"
 mkdir -p "$OTHER"
