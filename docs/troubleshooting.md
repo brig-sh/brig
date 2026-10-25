@@ -900,9 +900,10 @@ it by name: stop it first with brig stop <ref>
 
 **Exit code:** `1`
 
-**Cause:** `BRIG_CONTAINERD_RUNTIME` names `runc` or `crun`, by name or by
-path, and those shims run the guest as a plain container on the host kernel.
-Brig puts a separate guest kernel between the agent and the host.
+**Cause:** `BRIG_CONTAINERD_RUNTIME` names `runc`, `crun` or the runc shim
+binaries `containerd-shim-runc-v1` and `-v2`, by name or by path, and those
+shims run the guest as a plain container on the host kernel. Brig puts a
+separate guest kernel between the agent and the host.
 
 **Fix:** Unset the variable. If an older Brig started this sandbox on such a
 shim, also stop the sandbox:
