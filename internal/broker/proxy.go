@@ -103,7 +103,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := sessionToken(rt.spec.Inject, r.Header)
+	token := sessionToken(&rt.spec, r.Header)
 	if token == "" {
 		a.check = errTokenMissing.Error()
 		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
@@ -153,7 +153,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
 		return
 	}
-	hit, partial, err := findPlaceholder(sb.matcher(now), r, p, rt.spec.Inject, token, held)
+	hit, partial, err := findPlaceholder(sb.matcher(now), r, p, &rt.spec, token, held)
 	if partial {
 		a.placeholder = "partial"
 	}
@@ -181,10 +181,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A route that vends has no upstream to confuse, and serves the route
+	// URL alone: any other path is a request for something it does not have.
+	vends := rt.spec.Vends()
+	if vends && p.rest != "/" {
+		a.check = "path"
+		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+		return
+	}
 	// request.allow matches the path the upstream serves, so a path that
 	// the upstream could resolve to another one is refused first.
 	repos := rt.spec.Request != nil && rt.spec.Request.Allow != nil && len(rt.spec.Request.Allow.Repos) > 0
-	if !canonical(p.rest, p.escapedRest, repos) {
+	if !vends && !canonical(p.rest, p.escapedRest, repos) {
 		a.check = "path"
 		http.Error(rec, "brig broker: the path has a dot segment, an empty segment or an escaped separator",
 			http.StatusBadRequest)
@@ -212,6 +220,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			msg += ": brig's secret store is not available on this host; see the broker log"
 		}
 		http.Error(rec, msg, http.StatusBadGateway)
+		return
+	}
+	if vends {
+		h.vend(rec, r, a, p, doc)
 		return
 	}
 	value, err := credentialValue(cred, doc)
@@ -556,6 +568,9 @@ type auditLine struct {
 	// found, and how it was spelled. placeholder is partial when only the
 	// start of the body was scanned.
 	where, encoding, placeholder string
+	// vended is the AccessKeyId a route that vends answered with. It is an
+	// identifier, never the secret key or the session token.
+	vended string
 }
 
 // The longest method and path an audit line carries. Anything that reaches
@@ -624,6 +639,9 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 	}
 	if a.placeholder != "" {
 		attrs = append(attrs, slog.String("placeholder", a.placeholder))
+	}
+	if a.vended != "" {
+		attrs = append(attrs, slog.String("vended", a.vended))
 	}
 	h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
 }
