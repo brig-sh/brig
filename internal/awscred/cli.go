@@ -200,6 +200,11 @@ func execRun(ctx context.Context, bin string, args, env []string) ([]byte, []byt
 		env = []string{}
 	}
 	cmd.Env = env
+	// CommandContext kills aws but not what aws started. A credential_process
+	// helper or an SSO browser flow can keep the output pipes open, and Run
+	// waits for them to close, so the timeout would not release the caller.
+	// After the kill, WaitDelay closes the pipes and Run returns.
+	cmd.WaitDelay = 2 * time.Second
 	out, errb := &capped{limit: maxOutput}, &capped{limit: maxOutput}
 	cmd.Stdout, cmd.Stderr = out, errb
 	err := cmd.Run()

@@ -206,4 +206,12 @@ func TestCacheRefetchesOnPointerChange(t *testing.T) {
 	if second.AccessKeyID != "ROLE" {
 		t.Errorf("served keys of %q after the pointer changed to a role", second.AccessKeyID)
 	}
+	// Ensure holds to the same rule: the held keys are the role's, so the
+	// self pointer must fetch again.
+	if err := c.Ensure(context.Background(), "a", "aws", self); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("fetches after Ensure with a changed pointer = %d, want 3", n)
+	}
 }

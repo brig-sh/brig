@@ -218,3 +218,30 @@ func TestFetchTimesOut(t *testing.T) {
 		t.Errorf("error carries stdout: %v", err)
 	}
 }
+
+// CommandContext kills aws, not what aws started. A credential_process
+// helper or an SSO browser flow can keep the pipes open, and Run waits for
+// them to close, so without a WaitDelay the timeout would not release the
+// single flight.
+func TestExecTimeoutWithChildHoldingPipes(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	bin := filepath.Join(t.TempDir(), "aws")
+	script := "#!/bin/sh\nsleep 30 &\nsleep 30\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := fetchTimeout
+	fetchTimeout = time.Second // long enough that the shell has forked its child
+	t.Cleanup(func() { fetchTimeout = old })
+	cli := CLI{Bin: bin, Env: []string{"PATH=/usr/bin:/bin"}}
+	start := time.Now()
+	_, err := cli.Fetch(context.Background(), Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeSelf}, "s")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("took %v: the timeout did not release the call", d)
+	}
+}
