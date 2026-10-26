@@ -740,9 +740,17 @@ The warning is a look between two brig commands, not a guard:
 - A symlinked `.git/hooks`, or a symlinked `core.hooksPath` directory, is
   recorded by where it points. Edits to the directory it points to are not
   seen, whether or not it is inside the project.
-- An entry under `.git` that Brig cannot read, a directory the guest made
-  mode 000 for instance, stops the look with an error. Until it is gone,
-  that command names no change at all.
+- An entry under `.git/hooks` or `.git/info` that Brig cannot read, a
+  directory the guest made mode 000 for instance, stops the look with an
+  error. Until it is gone, that command names no change at all. A
+  `core.hooksPath` that cannot be read does not do this: it is recorded as
+  unreadable and the look goes on.
+- `core.hooksPath` is read from `.git/config` with `git config --type=path`,
+  which needs git 2.18 or newer. With an older git, or any other git error,
+  the directory is not watched, and nothing says so. A `core.hooksPath` set
+  in `.git/config.worktree` is not read. An absolute one that reaches the
+  project by another name than the one Brig holds, `/private/var` for
+  `/var` on macOS, is not recognized as inside it and is not watched.
 
 ## Guest images
 
