@@ -343,17 +343,24 @@ func snapshotProjectGit(project string) (map[string]string, error) {
 	// ignores everything in it, so git status shows a change there no more
 	// than one under .git. A hooksPath the guest sets changes .git/config,
 	// which is named already; this is the one that was there before.
+	//
+	// What the guest names there is the guest's to break, so nothing here may
+	// end the look. A hooksPath through a link that leaves the project makes
+	// Lstat fail with "path escapes from parent", and returning that error
+	// would stop every command from naming the config change, a planted hook
+	// or a core.fsmonitor that came with it. It is recorded as unreadable, the
+	// way a hooksPath outside the project is left out, and the look goes on.
 	if rel, ok := hooksPathInProject(git, held.dir); ok {
 		info, err := held.root.Lstat(rel)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
-			return nil, err
+			look.files[rel] = "unreadable"
 		default:
 			look.files[rel] = look.describe(held.root, rel, info)
 			if info.IsDir() {
 				if err := look.walk(held.root, rel, rel); err != nil {
-					return nil, err
+					look.files[rel+"/…"] = "unreadable"
 				}
 			}
 		}

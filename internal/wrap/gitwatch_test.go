@@ -732,3 +732,34 @@ func TestCheckProjectGitDoesNotBlockOnAFifoSwappedInBeforeTheOpen(t *testing.T) 
 		t.Fatal("the look blocked on a fifo swapped in before the open")
 	}
 }
+
+// A hooksPath through a link that leaves the project made Lstat fail with
+// "path escapes from parent", and that error ended the whole look: every
+// command from then on printed only "could not read", and what else changed in
+// the same look, a planted hook or a core.fsmonitor, was never named. The guest
+// needs two commands to set it up, a link and a config line.
+func TestCheckProjectGitKeepsLookingPastAHooksPathThatEscapes(t *testing.T) {
+	needGit(t)
+	isolateState(t)
+	project := gitProject(t)
+	c, errOut := watchConfig(project)
+	c.CheckProjectGit()
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(project, "link")); err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, filepath.Join(project, ".git", "config"),
+		"[core]\n\tbare = false\n\thooksPath = link/hooks\n\tfsmonitor = echo PWNED\n", 0o644)
+	writeFileT(t, filepath.Join(project, ".git", "hooks", "post-checkout"), "#!/bin/sh\n", 0o755)
+	c.CheckProjectGit()
+	got := errOut.String()
+	for _, want := range []string{"changed .git/config", "added .git/hooks/post-checkout"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the look stopped before naming %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "could not read") {
+		t.Errorf("a hooksPath that escapes failed the whole look:\n%s", got)
+	}
+}
