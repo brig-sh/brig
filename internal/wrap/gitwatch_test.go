@@ -763,3 +763,81 @@ func TestCheckProjectGitKeepsLookingPastAHooksPathThatEscapes(t *testing.T) {
 		t.Errorf("a hooksPath that escapes failed the whole look:\n%s", got)
 	}
 }
+
+// os.Root resolves the whole path again at every level, so the cost of a look
+// grows with the square of the depth it follows. A guest that nests 4000
+// directories under .git/info, which the bound on entries allows, made one
+// command take 8 seconds, on every command. The look stops at a depth no real
+// .git comes near, says so, and still names what it saw above it.
+func TestCheckProjectGitStopsAtADepthAndSaysSo(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	deep := filepath.Join(project, ".git", "info")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// One level at a time from inside the last: the whole chain is far past the
+	// kernel's path length limit, so no single path names it.
+	root, err := os.OpenRoot(deep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4000; i++ {
+		if err := root.Mkdir("d", 0o755); err != nil {
+			t.Fatalf("level %d: %v", i, err)
+		}
+		next, err := root.OpenRoot("d")
+		if err != nil {
+			t.Fatalf("level %d: %v", i, err)
+		}
+		_ = root.Close()
+		root = next
+	}
+	_ = root.Close()
+	writeFileT(t, filepath.Join(deep, "attributes"), "* filter=x\n", 0o644)
+
+	start := time.Now()
+	files, err := snapshotProjectGit(project)
+	took := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took > 2*time.Second {
+		t.Errorf("a look at a chain 4000 directories deep took %v", took)
+	}
+	if files[gitWatchTruncated] == "" {
+		t.Error("a look that stopped at a depth is not marked truncated")
+	}
+	if files[".git/info/attributes"] == "" {
+		t.Error("the look lost what sits above the depth")
+	}
+	// The last directory read still lists its own entries, so the names go
+	// maxGitWatchDepth levels down and no further.
+	if files[".git/info/"+strings.Repeat("d/", maxGitWatchDepth-1)+"d"] == "" {
+		t.Errorf("the look stopped short of depth %d", maxGitWatchDepth)
+	}
+	if files[".git/info/"+strings.Repeat("d/", maxGitWatchDepth)+"d"] != "" {
+		t.Errorf("the look went past depth %d", maxGitWatchDepth)
+	}
+}
+
+// A hooks directory is flat and husky's is two deep. Nothing real is cut.
+func TestCheckProjectGitReadsADirectoryAsDeepAsARealOneGoes(t *testing.T) {
+	isolateState(t)
+	project := gitProject(t)
+	dir := filepath.Join(project, ".git", "hooks", "a", "b", "c")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, filepath.Join(dir, "hook"), "#!/bin/sh\n", 0o755)
+	files, err := snapshotProjectGit(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files[".git/hooks/a/b/c/hook"] == "" {
+		t.Error("a hook four levels down was not looked at")
+	}
+	if files[gitWatchTruncated] != "" {
+		t.Error("a look at ordinary depth is marked truncated")
+	}
+}
