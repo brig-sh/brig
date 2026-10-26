@@ -91,6 +91,22 @@ var runPathPackages = []string{
 	"github.com/brig-sh/brig/cmd/brigd",
 }
 
+// The AWS route vends credentials by running the host's aws CLI under the
+// host's own profiles. That is a host source, so no run-path package links
+// internal/awscred: only brig-broker and the verbs that import a pointer do.
+func TestTheRunPathCannotReachAWS(t *testing.T) {
+	const awscred = "github.com/brig-sh/brig/internal/awscred"
+	for _, pkg := range runPathPackages {
+		out, err := goList("-deps", pkg)
+		if err != nil {
+			t.Fatalf("go list -deps %s: %v", pkg, err)
+		}
+		if slices.Contains(strings.Split(string(out), "\n"), awscred) {
+			t.Errorf("%s depends on %s: a run can now call the host's aws CLI", pkg, awscred)
+		}
+	}
+}
+
 // brokerBinary is brig-broker, the one process that refreshes a credential
 // and signs session tokens. It is not on the run path, because it links the
 // refresher. It reads brig's own store and no host source.
