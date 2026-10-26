@@ -24,6 +24,10 @@ type entry struct {
 	mu    sync.Mutex
 	creds Credentials
 	have  bool
+	// ptr is what the held keys were fetched for. Re-importing the secret
+	// with another mode or role changes the pointer while a sandbox runs, and
+	// keys of the old identity must not be served for the new one.
+	ptr Pointer
 }
 
 // Cache holds fetched credentials per sandbox and route, in memory only.
@@ -79,14 +83,14 @@ func (c *Cache) get(ctx context.Context, sandboxID, route string, p Pointer, mar
 	// fresh, so a burst of requests from one sandbox is one STS call.
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.have && e.creds.Expiration.Sub(c.now()) >= margin {
+	if e.have && e.ptr == p && e.creds.Expiration.Sub(c.now()) >= margin {
 		return e.creds, nil
 	}
 	creds, err := c.cli.Fetch(ctx, p, SessionName(sandboxID))
 	if err != nil {
-		e.creds, e.have = Credentials{}, false
+		e.creds, e.have, e.ptr = Credentials{}, false, Pointer{}
 		return Credentials{}, err
 	}
-	e.creds, e.have = creds, true
+	e.creds, e.have, e.ptr = creds, true, p
 	return creds, nil
 }

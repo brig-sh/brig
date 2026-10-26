@@ -194,3 +194,27 @@ func TestExecFakeAWS(t *testing.T) {
 		t.Errorf("region %q, %v", r, err)
 	}
 }
+
+func TestFetchTimesOut(t *testing.T) {
+	old := fetchTimeout
+	fetchTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { fetchTimeout = old })
+	cli := CLI{run: func(ctx context.Context, _ string, _ []string, _ []string) ([]byte, []byte, error) {
+		<-ctx.Done()
+		return []byte("SECRET-STDOUT"), nil, ctx.Err()
+	}}
+	start := time.Now()
+	_, err := cli.Fetch(context.Background(), Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeSelf}, "s")
+	if err == nil {
+		t.Fatal("no error from a call that never returned")
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("took %v", time.Since(start))
+	}
+	if !strings.Contains(err.Error(), "timed out after 50ms") {
+		t.Errorf("error does not name the timeout: %v", err)
+	}
+	if strings.Contains(err.Error(), "SECRET-STDOUT") {
+		t.Errorf("error carries stdout: %v", err)
+	}
+}

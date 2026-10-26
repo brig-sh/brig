@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -172,5 +173,37 @@ func TestCacheForget(t *testing.T) {
 	c.Get(context.Background(), "b", "aws", rolePtr)
 	if n.Load() != 3 {
 		t.Errorf("fetches = %d, want 3", n.Load())
+	}
+}
+
+// Re-importing a secret with another mode while a sandbox runs changes what
+// the pointer asks for. Keys fetched for the old pointer must not outlive it.
+func TestCacheRefetchesOnPointerChange(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	var n int
+	cli := CLI{run: func(_ context.Context, _ string, args, _ []string) ([]byte, []byte, error) {
+		n++
+		id := "SELF"
+		if slices.Contains(args, "assume-role") {
+			id = "ROLE"
+		}
+		exp := clk.now().Add(time.Hour).Format(time.RFC3339)
+		return []byte(fmt.Sprintf(`{"Credentials":{"AccessKeyId":%q,"SecretAccessKey":"S","SessionToken":"T","Expiration":%q},"AccessKeyId":%q,"SecretAccessKey":"S","SessionToken":"T","Expiration":%q}`, id, exp, id, exp)), nil, nil
+	}}
+	c := NewCache(cli, clk.now)
+	self := Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeSelf}
+	first, err := c.Get(context.Background(), "a", "aws", self)
+	if err != nil || first.AccessKeyID != "SELF" {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	second, err := c.Get(context.Background(), "a", "aws", rolePtr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("fetches = %d, want 2", n)
+	}
+	if second.AccessKeyID != "ROLE" {
+		t.Errorf("served keys of %q after the pointer changed to a role", second.AccessKeyID)
 	}
 }

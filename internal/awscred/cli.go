@@ -38,6 +38,12 @@ const (
 	ssoLoginFmt = "aws sso login --profile %s"
 )
 
+// fetchTimeout bounds each aws call. A stalled aws (an SSO browser prompt, a
+// hung network) would otherwise hold the cache's single flight for its key
+// and queue every request from that sandbox behind it. It is a variable only
+// so a test can shorten it.
+var fetchTimeout = 30 * time.Second
+
 // ErrSSOExpired means the profile's SSO login has lapsed, which only the user
 // can fix, in a browser.
 type ErrSSOExpired struct{ Profile string }
@@ -154,9 +160,16 @@ func (c CLI) output(ctx context.Context, profile string, args []string) ([]byte,
 	if bin == "" {
 		bin = awsCommand
 	}
-	stdout, stderr, err := run(ctx, bin, args, c.Env)
+	tctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+	stdout, stderr, err := run(tctx, bin, args, c.Env)
 	if err == nil {
 		return stdout, nil
+	}
+	// Only the bound this function set: a caller that gave up first gets its
+	// own error. Stdout is dropped here as on every failure.
+	if ctx.Err() == nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
+		return nil, fmt.Errorf("%s %s timed out after %v", awsCommand, cmdName(args), fetchTimeout)
 	}
 	for _, m := range ssoMarkers {
 		if bytes.Contains(stderr, []byte(m)) {
