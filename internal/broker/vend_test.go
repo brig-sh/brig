@@ -79,6 +79,9 @@ func TestVendServesCredentials(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got[k], v)
 		}
 	}
+	if len(got) != 4 || strings.Contains(body, vendDoc) {
+		t.Errorf("body %q has %d keys or holds the stored document", body, len(got))
+	}
 	if _, err := time.Parse(time.RFC3339, got["Expiration"]); err != nil {
 		t.Errorf("Expiration: %v", err)
 	}
@@ -162,6 +165,9 @@ func TestVendErrorText(t *testing.T) {
 	if !strings.Contains(body, "see the broker log") || strings.Contains(body, "boom") {
 		t.Errorf("body %q", body)
 	}
+	if line := r.lastAudit(); !strings.Contains(line, "check=vend") || strings.Contains(line, "boom") {
+		t.Errorf("audit line %s", line)
+	}
 }
 
 func TestVendAuditHasNoSecret(t *testing.T) {
@@ -192,6 +198,44 @@ func TestRawAuthorizationOnlyOnVendRoutes(t *testing.T) {
 	r, _ := vendRig(t)
 	resp, _ := r.do("GET", "/brig-a/r/github/x", http.Header{"Authorization": {r.mint("brig-a", "github")}}, "")
 	wantStatus(t, resp, http.StatusUnauthorized)
+
+	// A proxying route that sets Authorization to {value}, as the aws preset
+	// does, has the shape of a vend route and must not gain its carrier.
+	up := newUpstream(t, nil)
+	custom := customRoute(t, "authz", up.URL, nil)
+	custom.Route.Inject = &v1alpha1.Inject{Headers: &v1alpha1.HeaderInject{
+		Set:    []v1alpha1.Header{{Name: "Authorization", Value: "{value}"}},
+		Remove: []string{"Authorization"},
+	}}
+	r = newRig(t, up, []Route{custom}, func(c *Config) { c.Transport = failTransport{t} })
+	resp, _ = r.do("GET", "/brig-a/r/authz/x", http.Header{"Authorization": {r.mint("brig-a", "authz")}}, "")
+	wantStatus(t, resp, http.StatusUnauthorized)
+	if up.count() != 0 {
+		t.Error("the upstream saw a request")
+	}
+}
+
+func TestAddSandboxRefusesVendInOtherMode(t *testing.T) {
+	h, err := New(Config{HostKey: testHostKey, Credentials: newFakeCreds()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := presetRoute(t, v1alpha1.PresetAWS, "aws", "aws", "", nil)
+	rt.Route.Mode = "relay"
+	err = h.AddSandbox(Sandbox{ID: "brig-a", Routes: []Route{rt}, Modes: []v1alpha1.RouteMode{"relay"}})
+	if err == nil || !strings.Contains(err.Error(), "aws") {
+		t.Fatalf("a vend route in another mode was accepted: %v", err)
+	}
+}
+
+func TestVendKeepsPlaceholderScan(t *testing.T) {
+	r, fv := vendRig(t)
+	tok := r.mint("brig-a", "aws")
+	resp, _ := r.do("GET", "/brig-a/r/aws?x="+tok, bearer(tok), "")
+	wantStatus(t, resp, http.StatusForbidden)
+	if fv.count() != 0 {
+		t.Error("the vendor was called for a request that held the token in its query")
+	}
 }
 
 func TestAddSandboxVendNeedsNoUpstream(t *testing.T) {

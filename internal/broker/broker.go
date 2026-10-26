@@ -280,7 +280,13 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		}
 		// A route that vends answers the guest itself and has no upstream.
 		var u *url.URL
-		if !r.Route.Vends() {
+		if r.Route.Vends() {
+			// checkDivertedRoutes reads the upstream of every route not in
+			// endpoint mode.
+			if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint {
+				return fmt.Errorf("sandbox %s: route %s vends credentials and cannot be mode %q", s.ID, name, m)
+			}
+		} else {
 			var err error
 			u, err = url.Parse(r.Route.Upstream)
 			if err != nil || u.Scheme != "https" || u.Host == "" {

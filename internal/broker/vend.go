@@ -54,7 +54,6 @@ func (h *Handler) vend(w http.ResponseWriter, r *http.Request, a *auditLine, p r
 			http.StatusBadGateway)
 		return
 	}
-	a.vended = creds.AccessKeyID
 	body, err := json.Marshal(struct {
 		AccessKeyID     string `json:"AccessKeyId"`
 		SecretAccessKey string
@@ -66,6 +65,7 @@ func (h *Handler) vend(w http.ResponseWriter, r *http.Request, a *auditLine, p r
 		http.Error(w, "brig broker: internal error", http.StatusInternalServerError)
 		return
 	}
+	a.vended = creds.AccessKeyID
 	// A cache between the guest's tool and the broker would keep keys that
 	// expire.
 	w.Header().Set("Content-Type", "application/json")
