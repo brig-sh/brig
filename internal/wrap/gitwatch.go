@@ -53,9 +53,13 @@ type gitWatchEntry struct {
 // The bounds of one look. A guest can make .git as large as it likes, and a
 // look that read all of it would let the guest stall every brig command.
 //
-// Three bounds, because any one of them alone leaves the stall: a count of
-// entries, the bytes hashed of one file, and the bytes hashed in the whole
-// look, which is what keeps 4096 files of 8 MiB from being 32 GiB a command.
+// Four bounds, because any one of them alone leaves the stall: a count of
+// entries, the bytes hashed of one file, the bytes hashed in the whole
+// look, which is what keeps 4096 files of 8 MiB from being 32 GiB a command,
+// and a depth. os.Root resolves the whole path again at every level, so the
+// cost of a look grows with the square of the depth it follows: a chain of
+// 4000 directories made one command take 8 seconds. A real .git is flat, and
+// husky's hooks directory is two deep.
 // Within them a change is seen. Past them a file is recorded by its mode and
 // size only, so a change that keeps both, or one past the first
 // maxGitWatchHash bytes of a file, is not; gitWatchTruncated marks a look that
@@ -73,6 +77,7 @@ type gitWatchEntry struct {
 const (
 	maxGitWatchEntries = 4096
 	maxGitWatchHash    = 8 << 20
+	maxGitWatchDepth   = 32
 	gitWatchTruncated  = ".git/…"
 )
 
@@ -457,8 +462,11 @@ var gitWatchReadBatch = func() {}
 // removed between the listing and the look at it is not there to run, and is
 // left out rather than failing the look.
 func (l *gitLook) walk(root *os.Root, dir, key string) error {
-	type pending struct{ dir, key string }
-	queue := []pending{{dir, key}}
+	type pending struct {
+		dir, key string
+		depth    int
+	}
+	queue := []pending{{dir, key, 0}}
 	for len(queue) > 0 {
 		d := queue[0]
 		queue = queue[1:]
@@ -483,9 +491,15 @@ func (l *gitLook) walk(root *os.Root, dir, key string) error {
 				return nil
 			}
 			l.files[k] = l.describe(root, p, info)
-			if info.IsDir() {
-				queue = append(queue, pending{p, k})
+			if !info.IsDir() {
+				continue
 			}
+			// A directory below the depth is not read, and the look says so.
+			if d.depth+1 >= maxGitWatchDepth {
+				l.files[gitWatchTruncated] = "truncated"
+				continue
+			}
+			queue = append(queue, pending{p, k, d.depth + 1})
 		}
 	}
 	return nil
