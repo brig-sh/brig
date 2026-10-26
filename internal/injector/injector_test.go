@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -764,5 +765,39 @@ func TestGuestEnvOfARouteInAnotherModeIsTheTokenAlone(t *testing.T) {
 	}
 	if env["NODE_EXTRA_CA_CERTS"] != GuestCAPath || env["SSL_CERT_FILE"] != GuestCABundlePath || env["BRIG_ROUTE_GITHUB_TOKEN"] != "tok-g" {
 		t.Errorf("the endpoint route beside it lost its CA or token: %v", env)
+	}
+}
+
+// A refusal the user fixes by fixing a credential on the host is marked, so
+// brig can exit with the credentials status. Any other refusal is not.
+func TestRefusedErrorKind(t *testing.T) {
+	dir, err := os.MkdirTemp("", "brk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("credential") {
+			w.Header().Set(RefusalHeader, RefusalCredential)
+		}
+		http.Error(w, "route aws: no", http.StatusFailedDependency)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	c := Client{Socket: sock}
+	for path, want := range map[string]string{"/sandboxes?credential": "credential", "/sandboxes": ""} {
+		err := c.call(http.MethodPost, path, Sandbox{ID: "brig-a"}, nil)
+		var ref *RefusedError
+		if !errors.As(err, &ref) {
+			t.Fatalf("%s: %v, want a refusal", path, err)
+		}
+		if ref.Kind != want || ref.Status != http.StatusFailedDependency || ref.Message != "route aws: no" {
+			t.Errorf("%s: %+v, want kind %q", path, ref, want)
+		}
 	}
 }

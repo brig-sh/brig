@@ -78,7 +78,11 @@ func (c Client) call(method, path string, body, out any) error {
 		if msg == "" {
 			msg = resp.Status
 		}
-		return &RefusedError{Status: resp.StatusCode, Message: msg}
+		ref := &RefusedError{Status: resp.StatusCode, Message: msg}
+		if resp.Header.Get(RefusalHeader) == RefusalCredential {
+			ref.Kind = RefusalCredential
+		}
+		return ref
 	}
 	// A broker older than the answer to add-sandbox sends none.
 	if out == nil || len(blob) == 0 {
@@ -91,7 +95,18 @@ func (c Client) call(method, path string, body, out any) error {
 type RefusedError struct {
 	Status  int
 	Message string
+	// Kind is "credential" for a refusal the user fixes by fixing a
+	// credential on the host, such as an expired AWS login.
+	Kind string
 }
+
+// RefusalHeader marks the kind of a refusal. The status alone cannot: a 424
+// from a proxy in between, or from a broker of another version, would read
+// as a credential to fix.
+const RefusalHeader = "X-Brig-Refusal"
+
+// RefusalCredential is the RefusalHeader value of a credential refusal.
+const RefusalCredential = "credential"
 
 func (e *RefusedError) Error() string { return "the credential broker refused: " + e.Message }
 

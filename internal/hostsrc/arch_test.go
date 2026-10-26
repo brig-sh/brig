@@ -149,6 +149,20 @@ func TestTheBrokerCannotReachTheImporter(t *testing.T) {
 	}
 }
 
+// brig-broker vends the credentials of an aws route through internal/awscred.
+// TestTheRunPathCannotReachAWS proves the run path does not link that
+// package; this proves the package it checks for is the one the broker
+// links, so a rename cannot turn that test into one that passes on nothing.
+func TestTheBrokerLinksAWS(t *testing.T) {
+	out, err := goList("-deps", brokerBinary)
+	if err != nil {
+		t.Fatalf("go list -deps %s: %v", brokerBinary, err)
+	}
+	if !slices.Contains(strings.Split(string(out), "\n"), "github.com/brig-sh/brig/internal/awscred") {
+		t.Errorf("%s does not link internal/awscred; the aws route has no vendor", brokerBinary)
+	}
+}
+
 // A run reads no host source. The dependency test above cannot say so on its
 // own: hostCredential: used to read the macOS keychain through a `security`
 // call inside internal/creds, a package the run path is allowed to link, so a

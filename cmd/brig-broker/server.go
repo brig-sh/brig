@@ -79,6 +79,11 @@ type serverConfig struct {
 	// dial dials an address from the host for a divert handler. nil dials
 	// TCP.
 	dial func(ctx context.Context, addr string) (net.Conn, error)
+	// awsBin is the aws binary the routes that vend run. "" looks up aws on
+	// PATH.
+	awsBin string
+	// now is the clock of the vended credentials. nil is time.Now.
+	now func() time.Time
 }
 
 // lifecycleRenewer returns the Renewer that keeps a credential of lifecycle
@@ -104,8 +109,12 @@ type server struct {
 	// sockets.
 	auditLog *slog.Logger
 	log      *rotatingFile
-	routes   net.Listener
-	control  net.Listener
+	// logger writes the broker's own lines, to log or to cfg.logTo.
+	logger  *log.Logger
+	routes  net.Listener
+	control net.Listener
+	// aws vends the credentials of the aws routes.
+	aws *awsVendor
 	// internal takes the brig.internal connections of every divert socket,
 	// through TLS, for the route server that serves them.
 	internal *connListener
@@ -119,7 +128,10 @@ type server struct {
 	mu        sync.Mutex
 	sandboxes map[string]string // id -> the registration, as canonical JSON
 	// diverts are the divert sockets, by sandbox id.
-	diverts  map[string]*divertSandbox
+	diverts map[string]*divertSandbox
+	// vends are the routes that vend of each sandbox, by sandbox id and
+	// route name, as the last registration checked them.
+	vends    map[string]map[string]vendRoute
 	stopping bool
 	stop     chan struct{}
 }
@@ -134,7 +146,8 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		return nil, err
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
-		stop: make(chan struct{}), internal: newConnListener(), resolve: cfg.resolve, dial: cfg.dial}
+		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
+		resolve: cfg.resolve, dial: cfg.dial}
 	if s.resolve == nil {
 		s.resolve = lookupHost
 	}
@@ -168,6 +181,12 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 			return nil, err
 		}
 	}
+	var out io.Writer = s.log
+	if cfg.logTo != nil {
+		out = cfg.logTo
+	}
+	s.logger = log.New(out, "brig-broker: ", log.LstdFlags)
+	s.aws = newAWSVendor(cfg.awsBin, cfg.now, s.logger)
 	// A store that does not open fails the routes that read it, not the
 	// broker: a host with no keyring still registers sandboxes and mints
 	// their tokens.
@@ -188,6 +207,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		Audit:        s.auditLog,
 		Transport:    cfg.transport,
 		ArrivalCheck: s.arrival,
+		Vendor:       s.aws,
 	})
 	clear(hostKey)
 	if err != nil {
@@ -224,11 +244,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 // serve serves routes and control requests until ctx ends or stop is asked
 // for, then closes both listeners and removes the socket and the pid file.
 func (s *server) serve(ctx context.Context) error {
-	var out io.Writer = s.log
-	if s.cfg.logTo != nil {
-		out = s.cfg.logTo
-	}
-	logger := log.New(out, "brig-broker: ", log.LstdFlags)
+	logger := s.logger
 	routes := &http.Server{
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -427,12 +443,30 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The routes that vend are checked on every registration, the same one
+	// again included, so a run on a lapsed login is refused at its start.
+	// The check runs aws, so s.mu is not held: one slow profile would hold
+	// every control call behind it.
+	vends, err := s.checkVends(r.Context(), sb)
+	if err != nil {
+		s.mu.Lock()
+		// A sandbox that was never registered leaves nothing behind. One
+		// that is keeps its routes, and status names the route that failed.
+		if _, ok := s.sandboxes[req.ID]; !ok {
+			s.aws.forget(req.ID)
+		}
+		s.mu.Unlock()
+		w.Header().Set(injector.RefusalHeader, injector.RefusalCredential)
+		http.Error(w, err.Error(), http.StatusFailedDependency)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.refuseStopping(w) {
 		return
 	}
 	if s.sandboxes[req.ID] == string(key) {
+		s.setVends(req.ID, vends)
 		reply(w, s.added(req.ID))
 		return
 	}
@@ -473,6 +507,8 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)
+			delete(s.vends, req.ID)
+			s.aws.forget(req.ID)
 			untrack()
 			http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusInternalServerError)
 			return
@@ -480,6 +516,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		s.diverts[req.ID] = l
 	}
 	s.sandboxes[req.ID] = string(key)
+	s.setVends(req.ID, vends)
 	for _, name := range tracked {
 		s.creds.recover(name)
 	}
@@ -490,15 +527,66 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 // sandbox that reaches brig.internal is handed the CA certificate to trust
 // it by, and never its key.
 func (s *server) added(id string) injector.AddResponse {
-	l := s.diverts[id]
-	if l == nil {
-		return injector.AddResponse{}
+	var resp injector.AddResponse
+	if l := s.diverts[id]; l != nil {
+		resp.DivertSocket = l.path
+		if l.internal.IsValid() {
+			resp.CA = string(s.ca.certPEM())
+		}
 	}
-	resp := injector.AddResponse{DivertSocket: l.path}
-	if l.internal.IsValid() {
-		resp.CA = string(s.ca.certPEM())
+	for name, v := range s.vends[id] {
+		if resp.Regions == nil {
+			resp.Regions, resp.Vends = map[string]string{}, map[string]injector.VendInfo{}
+		}
+		resp.Regions[name] = v.region
+		resp.Vends[name] = v.info
 	}
 	return resp
+}
+
+// vendRoute is what a registration's check learned of a route that vends.
+type vendRoute struct {
+	region string
+	info   injector.VendInfo
+}
+
+// checkVends checks each route of sb that vends, and returns what the
+// registration answers with. Its error is the refusal's text and names the
+// route. Nothing is registered here, and s.mu is not held.
+func (s *server) checkVends(ctx context.Context, sb broker.Sandbox) (map[string]vendRoute, error) {
+	var vends map[string]vendRoute
+	wl := secret.Workload{Sandbox: sb.ID, Profile: sb.Profile}
+	for _, rt := range sb.Routes {
+		if !rt.Route.Vends() {
+			continue
+		}
+		name := rt.Route.Name
+		// The aws preset sets no lifecycle, so the pointer's secret is never
+		// tracked, and Resolve reads the store as the handler does. Nothing
+		// is tracked before the check for that reason.
+		doc, err := s.creds.Resolve(ctx, rt.Route.Credential.SecretRef.Name, wl)
+		if err != nil {
+			return nil, fmt.Errorf("route %s: %w", name, err)
+		}
+		region, info, err := s.aws.check(ctx, sb.ID, name, doc)
+		if err != nil {
+			return nil, fmt.Errorf("route %s: %w", name, err)
+		}
+		if vends == nil {
+			vends = map[string]vendRoute{}
+		}
+		vends[name] = vendRoute{region: region, info: info}
+	}
+	return vends, nil
+}
+
+// setVends records the routes that vend of sandbox id. s.mu is held.
+func (s *server) setVends(id string, vends map[string]vendRoute) {
+	if len(vends) == 0 {
+		delete(s.vends, id)
+		return
+	}
+	s.vends[id] = vends
 }
 
 // brigInternalAddr reads the brig.internal address of a registration: "" for
@@ -526,6 +614,8 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	_, removed := s.sandboxes[id]
 	s.handler.RemoveSandbox(id)
 	delete(s.sandboxes, id)
+	delete(s.vends, id)
+	s.aws.forget(id)
 	if l := s.diverts[id]; l != nil {
 		l.close()
 		delete(s.diverts, id)
@@ -575,6 +665,9 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 		Pending: pending, Failing: failing, Recovering: recovering}
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
+	}
+	if v := s.aws.report(); len(v) > 0 {
+		st.Vending = v
 	}
 	reply(w, st)
 }
