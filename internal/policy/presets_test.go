@@ -49,7 +49,8 @@ func withSecret(name v1alpha1.Preset) v1alpha1.Route {
 func TestShippedPresetsValidate(t *testing.T) {
 	names := PresetNames()
 	want := []v1alpha1.Preset{
-		v1alpha1.PresetAnthropicAPIKey, v1alpha1.PresetClaudeCode, v1alpha1.PresetGitHubToken,
+		v1alpha1.PresetAnthropicAPIKey, v1alpha1.PresetAWS, v1alpha1.PresetClaudeCode,
+		v1alpha1.PresetGitHubToken,
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("PresetNames() = %v, want %v", names, want)
@@ -526,5 +527,33 @@ func TestPresetModesAreChecked(t *testing.T) {
 		Modes: []v1alpha1.RouteMode{v1alpha1.ModeEndpoint, "relay"}}
 	if err := both.checkModes(); err != nil {
 		t.Errorf("a registered mode in the list was refused: %v", err)
+	}
+}
+
+func TestAWSPresetExpands(t *testing.T) {
+	r, err := ExpandRoute(v1alpha1.Route{
+		Name:       "aws",
+		Preset:     "aws",
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "aws"}},
+	})
+	if err != nil {
+		t.Fatalf("the aws preset does not expand: %v", err)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("the expanded aws route does not validate: %v", err)
+	}
+	want := map[string]string{
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI": "{route.url}",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN":  "{session.token}",
+		"AWS_REGION":                         "{route.region}",
+	}
+	if !reflect.DeepEqual(r.Guest.Env, want) {
+		t.Errorf("guest.env = %v, want %v", r.Guest.Env, want)
+	}
+	if !reflect.DeepEqual(r.Request.Allow.Methods, []string{"GET"}) {
+		t.Errorf("request.allow.methods = %v, want [GET]", r.Request.Allow.Methods)
+	}
+	if r.Upstream != "" || !r.Vends() {
+		t.Errorf("upstream = %q, vends = %v", r.Upstream, r.Vends())
 	}
 }

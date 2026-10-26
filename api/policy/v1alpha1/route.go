@@ -15,6 +15,10 @@ const (
 	PresetAnthropicAPIKey Preset = "anthropic-api-key"
 	// PresetGitHubToken is git over HTTPS to github.com with a token.
 	PresetGitHubToken Preset = "github-token"
+	// PresetAWS is the AWS container credential provider. The route answers
+	// it with temporary keys, because AWS signs each request with the secret
+	// key and a stand-in cannot be injected on the way out.
+	PresetAWS Preset = "aws"
 )
 
 // RouteMode is how a route reaches the tool in the guest.
@@ -43,6 +47,9 @@ const (
 	// PlaceholderSessionToken is the session token of the route, in a
 	// guest.env value.
 	PlaceholderSessionToken = "{session.token}"
+	// PlaceholderRouteRegion is the region of a route that vends, in a
+	// guest.env value.
+	PlaceholderRouteRegion = "{route.region}"
 )
 
 // Route is one brokered endpoint. The guest is pointed at the route, and the
@@ -78,6 +85,10 @@ type Route struct {
 	// through SetLifecycleFromPreset. A decoded document cannot set it.
 	lifecycleFromPreset bool
 }
+
+// Vends reports whether the route answers the guest itself with credentials
+// it fetched, instead of forwarding the request upstream.
+func (r *Route) Vends() bool { return r.Preset == PresetAWS }
 
 // SetLifecycleFromPreset sets the credential lifecycle of a route that a
 // preset expansion produced. Validate accepts a lifecycle only when it was set

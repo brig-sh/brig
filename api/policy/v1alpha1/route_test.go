@@ -556,3 +556,83 @@ func TestRouteNameMapsToOneVariable(t *testing.T) {
 		}
 	}
 }
+
+// awsRoute is the aws preset's route as it is after expansion: it vends, so
+// it has no upstream.
+func awsRoute() Route {
+	return Route{
+		Name:       "aws",
+		Preset:     PresetAWS,
+		Mode:       ModeEndpoint,
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "aws"}},
+		Inject: &Inject{Headers: &HeaderInject{
+			Set:    []Header{{Name: "Authorization", Value: "{value}"}},
+			Remove: []string{"Authorization"},
+		}},
+		Guest: &Guest{Env: map[string]string{
+			"AWS_CONTAINER_CREDENTIALS_FULL_URI": "{route.url}",
+			"AWS_CONTAINER_AUTHORIZATION_TOKEN":  "{session.token}",
+			"AWS_REGION":                         "{route.region}",
+		}},
+		Request: &RequestPolicy{Allow: &RequestAllow{Methods: []string{"GET"}}},
+	}
+}
+
+func TestAWSRouteNeedsNoUpstream(t *testing.T) {
+	r := awsRoute()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("an aws route with no upstream was refused: %v", err)
+	}
+	if !r.Vends() {
+		t.Error("an aws route does not vend")
+	}
+	c := customRoute()
+	if c.Vends() {
+		t.Error("a route with no preset vends")
+	}
+}
+
+func TestAWSRouteRefusesAnUpstream(t *testing.T) {
+	r := awsRoute()
+	r.Upstream = "https://sts.amazonaws.com"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no upstream") {
+		t.Fatalf("an aws route with an upstream: err = %v", err)
+	}
+}
+
+func TestRouteRegionOnlyOnAWS(t *testing.T) {
+	r := Route{
+		Name:       "gh",
+		Preset:     PresetGitHubToken,
+		Mode:       ModeEndpoint,
+		Upstream:   "https://github.com",
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "gh"}},
+		Inject:     &Inject{BasicAuth: &BasicAuth{Username: "x-access-token"}, Headers: &HeaderInject{Remove: []string{"Authorization"}}},
+		Guest:      &Guest{Env: map[string]string{"AWS_REGION": "{route.region}"}},
+	}
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "{route.region} needs preset: aws") {
+		t.Fatalf("{route.region} on github-token: err = %v", err)
+	}
+	// A route with no preset is refused the same way.
+	c := customRoute()
+	c.Guest.Env["AWS_REGION"] = "{route.region}"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "{route.region} needs preset: aws") {
+		t.Fatalf("{route.region} on a custom route: err = %v", err)
+	}
+}
+
+// An aws route sets Authorization and also removes it, which no other route
+// may do with a header; the exception for Authorization must stay.
+func TestAuthorizationValueAllowedInSet(t *testing.T) {
+	r := awsRoute()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Authorization in set and remove was refused: %v", err)
+	}
+	r.Inject.Headers.Set = []Header{{Name: "X-Api-Key", Value: "{value}"}}
+	r.Inject.Headers.Remove = []string{"Authorization", "X-Api-Key"}
+	if err := r.Validate(); err == nil {
+		t.Error("a non-Authorization header in set and remove was accepted")
+	}
+}
