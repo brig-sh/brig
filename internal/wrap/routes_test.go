@@ -3,6 +3,7 @@ package wrap
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,11 +31,19 @@ type fakeBroker struct {
 	ca string
 	// calls are the registrations and removals, in order.
 	calls []string
+	// registerErr is what Register answers, or nil.
+	registerErr error
+	// regions and vends are what Register reports of the vending routes.
+	regions map[string]string
+	vends   map[string]injector.VendInfo
 }
 
 const fakeBrokerPort = 47821
 
 func (f *fakeBroker) Register(s injector.Sandbox) (int, injector.AddResponse, error) {
+	if f.registerErr != nil {
+		return 0, injector.AddResponse{}, f.registerErr
+	}
 	f.registered = append(f.registered, s)
 	f.calls = append(f.calls, "register "+s.ID)
 	f.running = true
@@ -54,6 +63,7 @@ func (f *fakeBroker) Register(s injector.Sandbox) (int, injector.AddResponse, er
 			added.CA = testBrigCA()
 		}
 	}
+	added.Regions, added.Vends = f.regions, f.vends
 	return fakeBrokerPort, added, nil
 }
 
@@ -438,5 +448,57 @@ func TestInfoJSONNamesABrokerThatDoesNotAnswer(t *testing.T) {
 	c.broker = &fakeBroker{}
 	if b := c.InfoData(creds.Set{}).Broker; b == nil || b.Running || b.PID != 0 {
 		t.Errorf("info --json broker with no broker = %+v, want running false and no pid", b)
+	}
+}
+
+// A credential the broker refused to vend, such as an expired AWS login, is a
+// credential failure with the broker's words, so it exits 6 with the fix.
+func TestServeRoutesMapsCredentialRefusal(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	shortStateDir(t)
+	msg := "route aws: the AWS login for profile p has expired; run: aws sso login --profile p"
+	c.broker = &fakeBroker{registerErr: &injector.RefusedError{Status: 424, Kind: injector.RefusalCredential, Message: msg}}
+	err := c.serveRoutes(creds.Set{})
+	var ce creds.CredentialError
+	if !errors.As(err, &ce) {
+		t.Fatalf("serveRoutes = %v, want a creds.CredentialError", err)
+	}
+	if !strings.Contains(err.Error(), "aws sso login --profile p") {
+		t.Errorf("the error lost the fix: %v", err)
+	}
+	var bce *creds.BrokerCredentialError
+	if !errors.As(err, &bce) || bce.Route != "aws" || bce.Sandbox != c.VMName {
+		t.Errorf("error = %+v", bce)
+	}
+	// A refusal that is not marked as a credential stays an ordinary failure.
+	c.broker = &fakeBroker{registerErr: &injector.RefusedError{Status: 424, Message: msg}}
+	if err := c.serveRoutes(creds.Set{}); err == nil || errors.As(err, &ce) {
+		t.Errorf("an unmarked refusal became a credential failure: %v", err)
+	}
+}
+
+// Each vending route is named once, with the identity the sandbox gets.
+func TestServeRoutesSaysWhoseAWSIdentity(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	shortStateDir(t)
+	c.broker = &fakeBroker{vends: map[string]injector.VendInfo{
+		"aws":  {Mode: "role", AWSProfile: "p", RoleARN: "arn:aws:iam::111122223333:role/r"},
+		"aws2": {Mode: "self", AWSProfile: "q"},
+	}}
+	if err := c.serveRoutes(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Err.(*bytes.Buffer).String()
+	for _, want := range []string{
+		"route aws: AWS role arn:aws:iam::111122223333:role/r, assumed from your profile p",
+		"route aws2: AWS as your own identity (profile q); the sandbox can do what you can",
+	} {
+		if strings.Count(got, want) != 1 {
+			t.Errorf("want %q once in:\n%s", want, got)
+		}
 	}
 }

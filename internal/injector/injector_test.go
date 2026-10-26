@@ -50,7 +50,7 @@ func TestGuestEnvOnBrigInternal(t *testing.T) {
 		t.Fatalf("endpoint %+v", ep)
 	}
 	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "anthropic", v1alpha1.PresetAnthropicAPIKey, "k")},
-		map[string]string{"anthropic": "tok"}, nil)
+		map[string]string{"anthropic": "tok"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestGuestEnvPointsGitAtBrigInternal(t *testing.T) {
 		presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token"),
 		presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "claude-credentials"),
 	}
-	got, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a", "github": "tok-g"}, nil)
+	got, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a", "github": "tok-g"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestGuestEnvPointsGitAtBrigInternal(t *testing.T) {
 			t.Errorf("%s carries a token outside a Secret variable", v.Name)
 		}
 	}
-	if _, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a"}, nil); err == nil {
+	if _, err := ep.GuestEnv("brig-a", routes, map[string]string{"anthropic": "tok-a"}, nil, nil); err == nil {
 		t.Error("a route without a token was handed to the guest")
 	}
 }
@@ -447,7 +447,7 @@ func TestTheGitHelperQuotesTheUsername(t *testing.T) {
 	r := presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token")
 	r.Inject.BasicAuth.Username = "x';touch planted;'"
 	got, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", []v1alpha1.Route{r},
-		map[string]string{"github": "tok-g"}, nil)
+		map[string]string{"github": "tok-g"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,12 +478,12 @@ func TestGuestEnvRefusesARouteNameThatIsNotOneVariable(t *testing.T) {
 	for _, name := range []string{"gh.x", "a_b", "Gh", "gh x"} {
 		r := presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token")
 		r.Name = name
-		if _, err := ep.GuestEnv("brig-a", []v1alpha1.Route{r}, map[string]string{name: "tok"}, nil); err == nil {
+		if _, err := ep.GuestEnv("brig-a", []v1alpha1.Route{r}, map[string]string{name: "tok"}, nil, nil); err == nil {
 			t.Errorf("GuestEnv accepted the route name %q", name)
 		}
 	}
 	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "gh-x", v1alpha1.PresetGitHubToken, "gh-token")},
-		map[string]string{"gh-x": "tok-g"}, nil)
+		map[string]string{"gh-x": "tok-g"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ func TestGuestEnvRefusesARouteNameThatIsNotOneVariable(t *testing.T) {
 func TestGitEntriesAddToTheGuestsOwn(t *testing.T) {
 	routes := []v1alpha1.Route{presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token")}
 	own := []runtime.Var{{Name: "GIT_CONFIG_COUNT", Value: "2"}, {Name: "GIT_CONFIG_KEY_0", Value: "core.editor"}}
-	got, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, own)
+	got, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, nil, own)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestGitEntriesAddToTheGuestsOwn(t *testing.T) {
 		t.Error("a route entry took the guest's own key 0")
 	}
 	bad := []runtime.Var{{Name: "GIT_CONFIG_COUNT", Value: "two"}}
-	if _, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, bad); err == nil {
+	if _, err := (HostEndpoint{Transport: TransportBrigInternal}).GuestEnv("brig-a", routes, map[string]string{"github": "t"}, nil, bad); err == nil {
 		t.Error("a GIT_CONFIG_COUNT that is not a count was accepted")
 	}
 }
@@ -737,7 +737,7 @@ func TestGuestEnvOfARouteInAnotherModeIsTheTokenAlone(t *testing.T) {
 	other := presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "claude-credentials")
 	other.Mode = "relay"
 	ep := HostEndpoint{Transport: TransportBrigInternal}
-	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{other}, map[string]string{"anthropic": "tok-a"}, nil)
+	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{other}, map[string]string{"anthropic": "tok-a"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,7 +747,7 @@ func TestGuestEnvOfARouteInAnotherModeIsTheTokenAlone(t *testing.T) {
 	gh := presetRoute(t, "github", v1alpha1.PresetGitHubToken, "gh-token")
 	other.Guest.Git = &v1alpha1.GitGuest{InsteadOf: []string{"https://example.com/"}}
 	got, err = ep.GuestEnv("brig-a", []v1alpha1.Route{other, gh},
-		map[string]string{"anthropic": "tok-a", "github": "tok-g"}, nil)
+		map[string]string{"anthropic": "tok-a", "github": "tok-g"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,5 +799,87 @@ func TestRefusedErrorKind(t *testing.T) {
 		if ref.Kind != want || ref.Status != http.StatusFailedDependency || ref.Message != "route aws: no" {
 			t.Errorf("%s: %+v, want kind %q", path, ref, want)
 		}
+	}
+}
+
+// The aws route is handed the container-credentials pointer, its token, the
+// region the broker read from the profile, and a CA bundle: the AWS SDKs
+// read one file in place of their roots, and only AWS_CA_BUNDLE names it.
+func TestGuestEnvAWSRoute(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "aws", v1alpha1.PresetAWS, "aws")},
+		map[string]string{"aws": "t"}, map[string]string{"aws": "eu-west-1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vars(got)
+	if env["AWS_CONTAINER_CREDENTIALS_FULL_URI"].Value != "https://brig.internal/brig-a/r/aws" {
+		t.Errorf("uri = %q", env["AWS_CONTAINER_CREDENTIALS_FULL_URI"].Value)
+	}
+	if tok := env["AWS_CONTAINER_AUTHORIZATION_TOKEN"]; tok.Value != "t" || !tok.Secret {
+		t.Errorf("token = %+v, want t marked Secret", tok)
+	}
+	if env["AWS_REGION"].Value != "eu-west-1" {
+		t.Errorf("region = %q", env["AWS_REGION"].Value)
+	}
+	if env["AWS_CA_BUNDLE"].Value != "/brig/ca/bundle.pem" {
+		t.Errorf("AWS_CA_BUNDLE = %q", env["AWS_CA_BUNDLE"].Value)
+	}
+}
+
+// A run without an aws route does not get AWS_CA_BUNDLE.
+func TestGuestEnvNoCABundleWithoutAWS(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "k")},
+		map[string]string{"anthropic": "t"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := vars(got)["AWS_CA_BUNDLE"]; ok {
+		t.Errorf("AWS_CA_BUNDLE is set for a run with no aws route: %+v", got)
+	}
+}
+
+// A broker that named no region leaves the guest with a pointer and no
+// region, which the SDKs refuse late and obscurely, so the run stops here.
+func TestGuestEnvAWSNeedsRegion(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	for name, regions := range map[string]map[string]string{"nil": nil, "empty": {"aws": ""}} {
+		_, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "aws", v1alpha1.PresetAWS, "aws")},
+			map[string]string{"aws": "t"}, regions, nil)
+		if err == nil || !strings.Contains(err.Error(), "named no AWS region") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+// Add runs the broker's aws calls, up to two per vending route and each
+// bounded at 30s, so it waits longer than a call answered from memory.
+func TestAddUsesLongerTimeout(t *testing.T) {
+	oldCall, oldAdd := callTimeout, addTimeout
+	callTimeout, addTimeout = 50*time.Millisecond, 2*time.Second
+	t.Cleanup(func() { callTimeout, addTimeout = oldCall, oldAdd })
+	dir, err := os.MkdirTemp("", "brk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte(`{}`))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	c := Client{Socket: sock}
+	if _, err := c.Add(Sandbox{ID: "brig-a"}); err != nil {
+		t.Errorf("Add with a slow broker: %v", err)
+	}
+	if _, err := c.Status(); err == nil {
+		t.Error("Status waited past callTimeout")
 	}
 }

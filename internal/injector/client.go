@@ -17,7 +17,15 @@ import (
 
 // callTimeout bounds one control call. The broker answers from memory, and a
 // call that takes longer than this is not coming back.
-const callTimeout = 10 * time.Second
+//
+// A variable so a test can shorten it.
+var callTimeout = 10 * time.Second
+
+// addTimeout bounds add-sandbox alone. The broker checks each aws route's
+// credentials before it answers, up to two aws calls per route at 30s each,
+// and a slow SSO refresh must come back as the broker's credential refusal,
+// not as "the broker did not answer". A variable so a test can shorten it.
+var addTimeout = 2 * time.Minute
 
 // maxReply bounds a control answer. The largest is a status listing every
 // sandbox on the host.
@@ -39,13 +47,18 @@ func ownedByMe(info os.FileInfo) bool {
 // nil. A broker that is not listening is ErrNotRunning. A refusal carries the
 // broker's own words.
 func (c Client) call(method, path string, body, out any) error {
+	return c.callWithin(callTimeout, method, path, body, out)
+}
+
+// callWithin is call with its own bound on the answer.
+func (c Client) callWithin(timeout time.Duration, method, path string, body, out any) error {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", c.Socket)
 		},
 	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: callTimeout}
+	client := &http.Client{Transport: transport, Timeout: timeout}
 	var payload io.Reader
 	if body != nil {
 		blob, err := json.Marshal(body)
@@ -130,7 +143,7 @@ func (c Client) AddSandbox(s Sandbox) error {
 // Add is AddSandbox, and returns the broker's answer.
 func (c Client) Add(s Sandbox) (AddResponse, error) {
 	var out AddResponse
-	err := c.call(http.MethodPost, "/sandboxes", s, &out)
+	err := c.callWithin(addTimeout, http.MethodPost, "/sandboxes", s, &out)
 	return out, err
 }
 

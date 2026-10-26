@@ -111,15 +111,18 @@ func TokenVar(route string) string {
 // gets its session token alone: no route URL, no git configuration and no
 // brig CA.
 //
+// regions maps a route name to the region {route.region} stands for; a route
+// that uses it and has none is refused.
+//
 // Nothing is written into the guest home. A session token is marked Secret,
 // so it never goes on a command line. tokens maps a route name to its token.
 // forwarded is what the guest already gets: git entries of its own through
 // GIT_CONFIG_COUNT are kept, and the routes' entries follow them.
 func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens map[string]string,
-	forwarded []runtime.Var) ([]runtime.Var, error) {
+	regions map[string]string, forwarded []runtime.Var) ([]runtime.Var, error) {
 	var vars []runtime.Var
 	var git [][2]string
-	endpoints := 0
+	endpoints, vends := 0, 0
 	sorted := append([]v1alpha1.Route(nil), routes...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, r := range sorted {
@@ -139,6 +142,9 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 		if endpoint {
 			endpoints++
 		}
+		if r.Vends() {
+			vends++
+		}
 		if r.Guest == nil {
 			continue
 		}
@@ -155,6 +161,13 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 				}
 			case v1alpha1.PlaceholderSessionToken:
 				vars = append(vars, runtime.Var{Name: name, Value: token, Secret: true})
+			case v1alpha1.PlaceholderRouteRegion:
+				// The SDKs refuse a pointer with no region late and
+				// obscurely, so the run stops here instead.
+				if regions[r.Name] == "" {
+					return nil, fmt.Errorf("route %s: the credential broker named no AWS region", r.Name)
+				}
+				vars = append(vars, runtime.Var{Name: name, Value: regions[r.Name]})
 			default:
 				// Validate refuses a literal; one here was not expanded.
 				return nil, fmt.Errorf("route %s: guest.env %s is %q, not a placeholder", r.Name, name, v)
@@ -200,6 +213,12 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 	if e.Transport == TransportBrigInternal && endpoints > 0 {
 		for _, name := range caEnv {
 			vars = append(vars, runtime.Var{Name: name, Value: caFile(name)})
+		}
+		// The AWS SDKs read AWS_CA_BUNDLE in place of their roots, and
+		// none of the variables above, so a route that vends names the
+		// bundle for them too.
+		if vends > 0 {
+			vars = append(vars, runtime.Var{Name: "AWS_CA_BUNDLE", Value: GuestCABundlePath})
 		}
 	}
 	return vars, nil

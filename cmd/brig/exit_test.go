@@ -416,3 +416,15 @@ func TestTheProfileIsolationRefusalWithNoPolicyExits1(t *testing.T) {
 		})
 	}
 }
+
+// A credential the broker refused to vend is a credential failure to a
+// script, as a missing secret is.
+func TestCredentialRefusalExits6(t *testing.T) {
+	err := &creds.BrokerCredentialError{Sandbox: "brig-a", Route: "aws", Message: "route aws: aws sso login --profile p"}
+	if got := exitCode(err); got != exitCredentials {
+		t.Errorf("exitCode = %d, want %d", got, exitCredentials)
+	}
+	if got := exitCode(fmt.Errorf("context: %w", err)); got != exitCredentials {
+		t.Errorf("wrapped exitCode = %d, want %d", got, exitCredentials)
+	}
+}
