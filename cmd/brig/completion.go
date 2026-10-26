@@ -548,9 +548,12 @@ var groups = map[string][]sub{
 		{name: "delete", flags: []string{"--yes", "-y"}, operands: []operand{opNothing}},
 		{name: "ls"},
 		{
-			name:     "import",
-			flags:    []string{"--dry-run", "--yes", "-y"},
-			values:   map[string]operand{"--from-command": opNothing},
+			name:  "import",
+			flags: []string{"--dry-run", "--yes", "-y"},
+			values: map[string]operand{
+				"--from-command": opNothing, "--aws-profile": opNothing, "--role-arn": opNothing,
+				"--identity": opNothing, "--source-identity": opNothing,
+			},
 			operands: []operand{opAgent},
 		},
 	},

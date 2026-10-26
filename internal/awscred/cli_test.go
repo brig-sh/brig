@@ -245,3 +245,14 @@ func TestExecTimeoutWithChildHoldingPipes(t *testing.T) {
 		t.Errorf("took %v: the timeout did not release the call", d)
 	}
 }
+
+func TestEnvironDropsAWSVariables(t *testing.T) {
+	got := Environ([]string{"PATH=/bin", "AWS_PROFILE=someone-else", "HOME=/h", "AWS_ACCESS_KEY_ID=x", "NOT_AWS_X=1"})
+	want := []string{"PATH=/bin", "HOME=/h", "NOT_AWS_X=1"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Environ = %v, want %v", got, want)
+	}
+	if got := Environ(nil); got == nil || len(got) != 0 {
+		t.Errorf("Environ(nil) = %#v, want an empty non-nil slice", got)
+	}
+}

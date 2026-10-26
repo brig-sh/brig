@@ -103,6 +103,14 @@ flags:
                     sources to check them
       --from-command '<sh>'
                     with import: take one secret's value from a command's stdout
+      --aws-profile NAME
+                    with import of a from: aws secret: the local AWS profile to
+                    point at. brig stores the pointer, never keys
+      --role-arn ARN    with import: the sandbox assumes this role (recommended)
+      --identity self   with import: the sandbox gets your own identity instead
+      --source-identity NAME
+                    with --role-arn: override the source identity, which is
+                    otherwise your login read from the profile's caller ARN
 
 The value is never an argument, so it stays out of ps and out of your shell
 history. Without -f the value is read from stdin, and one trailing line ending

@@ -44,6 +44,27 @@ const (
 // so a test can shorten it.
 var fetchTimeout = 30 * time.Second
 
+// InstallHint is the refusal of a host with no aws binary. Only the user can
+// install it, and neither the broker nor the import can work without it.
+const InstallHint = "the aws command was not found; install the AWS CLI v2: " +
+	"https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+
+// Environ is the environment of an aws subprocess: environ with every AWS_
+// variable dropped. An AWS_PROFILE or AWS_ACCESS_KEY_ID would decide which
+// identity a sandbox gets, over the pointer that names one. The import uses
+// the same rule as the broker so that the check it makes at import time sees
+// what the broker will see at run time: a profile that works only because of
+// a variable in the user's shell would pass the import and fail the run.
+func Environ(environ []string) []string {
+	env := []string{}
+	for _, kv := range environ {
+		if !strings.HasPrefix(kv, "AWS_") {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
 // ErrSSOExpired means the profile's SSO login has lapsed, which only the user
 // can fix, in a browser.
 type ErrSSOExpired struct{ Profile string }

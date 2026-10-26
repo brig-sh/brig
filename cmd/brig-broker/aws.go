@@ -17,11 +17,6 @@ import (
 	"github.com/brig-sh/brig/internal/injector"
 )
 
-// awsInstallHint is the refusal of a host with no aws binary. Only the user
-// can install it, and the broker cannot vend without it.
-const awsInstallHint = "the aws command was not found; install the AWS CLI v2: " +
-	"https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
-
 // awsVendor is the broker.Vendor of the aws routes. It fetches through the
 // host's aws CLI and holds the keys in memory, per sandbox and route.
 type awsVendor struct {
@@ -42,22 +37,8 @@ func newAWSVendor(bin string, now func() time.Time, logger *log.Logger) *awsVend
 	if now == nil {
 		now = time.Now
 	}
-	cli := awscred.CLI{Bin: bin, Env: awsEnv(os.Environ())}
+	cli := awscred.CLI{Bin: bin, Env: awscred.Environ(os.Environ())}
 	return &awsVendor{cli: cli, cache: awscred.NewCache(cli, now), log: logger, failing: map[string]bool{}}
-}
-
-// awsEnv is the environment of the aws subprocess: the broker's own, which
-// brig already cut to brokerEnv, with every AWS_ variable dropped. An
-// AWS_PROFILE or AWS_ACCESS_KEY_ID that reached the broker would decide
-// which identity a sandbox gets, over the pointer that names one.
-func awsEnv(environ []string) []string {
-	env := []string{}
-	for _, kv := range environ {
-		if !strings.HasPrefix(kv, "AWS_") {
-			env = append(env, kv)
-		}
-	}
-	return env
 }
 
 // Vend answers the guest's request on route with keys that have at least 20
@@ -114,7 +95,7 @@ func (v *awsVendor) failed(sandbox, route string, err error, ranAWS bool) error 
 	// the binary is looked up again here, and only on a failure of aws: a
 	// malformed pointer is not fixed by installing it.
 	if _, lerr := exec.LookPath(v.bin()); ranAWS && lerr != nil {
-		return &broker.VendError{Message: awsInstallHint}
+		return &broker.VendError{Message: awscred.InstallHint}
 	}
 	v.log.Printf("sandbox %s: route %s: fetching AWS credentials: %v", sandbox, route, err)
 	return err
