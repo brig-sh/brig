@@ -2,6 +2,7 @@ package awscred
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"slices"
@@ -213,5 +214,49 @@ func TestCacheRefetchesOnPointerChange(t *testing.T) {
 	}
 	if n != 3 {
 		t.Errorf("fetches after Ensure with a changed pointer = %d, want 3", n)
+	}
+}
+
+// The guest's SDK gives up on the endpoint after a second or two, and an
+// assume-role through SSO can take longer. If the guest's hang-up killed the
+// fetch, every retry would start it again and the guest would never get keys.
+// The fetch must finish and fill the cache for the next request.
+func TestCacheFetchOutlivesTheCaller(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	var n atomic.Int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	exp := clk.now().Add(time.Hour).Format(time.RFC3339)
+	c := NewCache(CLI{run: func(ctx context.Context, _ string, _, _ []string) ([]byte, []byte, error) {
+		n.Add(1)
+		started <- struct{}{}
+		// Like exec.CommandContext: a cancelled context kills aws.
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+		return []byte(fmt.Sprintf(`{"Credentials":{"AccessKeyId":"A","SecretAccessKey":"S","SessionToken":"T","Expiration":%q}}`, exp)), nil, nil
+	}}, clk.now)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Get(ctx, "a", "aws", rolePtr)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the caller that hung up got %v, want context.Canceled", err)
+	}
+	close(release)
+
+	got, err := c.Get(context.Background(), "a", "aws", rolePtr)
+	if err != nil || got.AccessKeyID != "A" {
+		t.Fatalf("after the hang-up: %+v, %v", got, err)
+	}
+	if n.Load() != 1 {
+		t.Errorf("fetches = %d, want 1: the hang-up restarted the fetch", n.Load())
 	}
 }

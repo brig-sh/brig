@@ -19,15 +19,25 @@ const (
 
 type key struct{ sandbox, route string }
 
-// entry serialises fetches for one key: its mutex is the single flight.
+// entry holds the keys of one sandbox and route, and the fetch running for
+// them, if any: that fetch is the single flight.
 type entry struct {
-	mu    sync.Mutex
-	creds Credentials
-	have  bool
+	mu     sync.Mutex
+	flight *flight
+	creds  Credentials
+	have   bool
 	// ptr is what the held keys were fetched for. Re-importing the secret
 	// with another mode or role changes the pointer while a sandbox runs, and
 	// keys of the old identity must not be served for the new one.
 	ptr Pointer
+}
+
+// flight is one fetch. done closes once creds and err are set.
+type flight struct {
+	ptr   Pointer
+	done  chan struct{}
+	creds Credentials
+	err   error
 }
 
 // Cache holds fetched credentials per sandbox and route, in memory only.
@@ -47,7 +57,8 @@ func NewCache(cli CLI, now func() time.Time) *Cache {
 // Get returns credentials with at least 20 minutes left, fetching when the
 // cached ones have less. A failed fetch is an error even when older keys are
 // cached: the keys still held are ones about to expire, and handing them out
-// would fail in the guest later and further from the cause.
+// would fail in the guest later and further from the cause. A caller whose
+// context ends gets its error back; the fetch goes on and fills the cache.
 func (c *Cache) Get(ctx context.Context, sandboxID, route string, p Pointer) (Credentials, error) {
 	return c.get(ctx, sandboxID, route, p, getMargin)
 }
@@ -79,18 +90,51 @@ func (c *Cache) get(ctx context.Context, sandboxID, route string, p Pointer, mar
 	}
 	c.mu.Unlock()
 
-	// Callers that arrive during a fetch wait here, then find its result
-	// fresh, so a burst of requests from one sandbox is one STS call.
+	for {
+		e.mu.Lock()
+		if e.flight == nil && e.have && e.ptr == p && e.creds.Expiration.Sub(c.now()) >= margin {
+			creds := e.creds
+			e.mu.Unlock()
+			return creds, nil
+		}
+		// Callers that arrive during a fetch wait for it, so a burst of
+		// requests from one sandbox is one STS call.
+		f := e.flight
+		if f == nil {
+			f = &flight{ptr: p, done: make(chan struct{})}
+			e.flight = f
+			go c.fetch(ctx, e, f, sandboxID)
+		}
+		e.mu.Unlock()
+
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			// The fetch goes on without this caller and fills the cache.
+			return Credentials{}, ctx.Err()
+		}
+		if f.ptr == p {
+			return f.creds, f.err
+		}
+		// The fetch was for another pointer: look again.
+	}
+}
+
+// fetch runs one flight. It does not end with the request that started it:
+// the guest's SDK gives up on the endpoint after one or two seconds, an
+// assume-role through SSO can take longer, and a fetch killed by every
+// hang-up would restart on every retry and never hand out keys. fetchTimeout
+// still bounds it.
+func (c *Cache) fetch(ctx context.Context, e *entry, f *flight, sandboxID string) {
+	creds, err := c.cli.Fetch(context.WithoutCancel(ctx), f.ptr, SessionName(sandboxID))
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.have && e.ptr == p && e.creds.Expiration.Sub(c.now()) >= margin {
-		return e.creds, nil
-	}
-	creds, err := c.cli.Fetch(ctx, p, SessionName(sandboxID))
 	if err != nil {
 		e.creds, e.have, e.ptr = Credentials{}, false, Pointer{}
-		return Credentials{}, err
+	} else {
+		e.creds, e.have, e.ptr = creds, true, f.ptr
 	}
-	e.creds, e.have, e.ptr = creds, true, p
-	return creds, nil
+	f.creds, f.err = creds, err
+	e.flight = nil
+	close(f.done)
 }
