@@ -238,6 +238,10 @@ names a profile can import and which names it cannot. See
 | `--dry-run` | preview the action: **read the sources** to check them, but write nothing |
 | `-y` | replace a value Brig did not write, without asking |
 | `--from-command '<sh>'` | take one named secret's value from a command's stdout instead of from its declared sources |
+| `--aws-profile <p>` | for a secret whose source is `aws`: the AWS profile on your host that the sandbox's keys come from. See [An AWS profile behind a route](#an-aws-profile-behind-a-route) |
+| `--role-arn <arn>` | with `--aws-profile`: the sandbox assumes this role. The recommended answer |
+| `--identity self` | with `--aws-profile`: the sandbox gets your own identity in that profile |
+| `--source-identity <id>` | with `--role-arn`: the source identity of the role session, in place of the one Brig reads from the profile |
 
 To import only some secrets, add their names (`[name...]`) after the profile.
 
@@ -246,7 +250,9 @@ Four rules apply:
 - **`import` reads the credential stores of your host when you run it, and
   never again.** A later run reads only the keychain item that Brig wrote.
   That item has the default ACL, so a run raises no approval dialog. Only
-  `import` raises that dialog, one time.
+  `import` raises that dialog, one time. The `aws` source is the exception:
+  `brig-broker` runs the host's `aws` CLI on every fetch, and `aws` reads
+  your AWS profile and its SSO login each time.
 - **The copy does not track its source.** If you renew the login on the host,
   the copy does not change. If you revoke the login on the host, the copy
   stays valid. To refresh the copy, import it again. `brig secret delete`
@@ -479,6 +485,68 @@ puts the secret there. A secret removed after the boot makes the route
 answer 502, and the audit line in `~/.brig/host/broker/audit.log` names the
 check. Create or import the secret, and the next request finds it.
 
+A secret behind an `aws` route holds a pointer to an AWS profile and no
+key. The broker reads it on each request and answers with keys it fetches
+through `aws`. See [An AWS profile behind a route](#an-aws-profile-behind-a-route).
+
+### An AWS profile behind a route
+
+The [aws preset](policies.md#the-aws-preset) hands the guest temporary AWS
+keys. Its secret names the AWS profile on your host that the keys come from.
+Declare the secret in a profile with an `aws` source:
+
+```yaml
+secrets:
+  - name: aws-creds
+    sources:
+      - from: aws
+```
+
+Then import it, and say how the sandbox gets AWS:
+
+```bash
+brig secret import <profile> aws-creds --aws-profile dev \
+  --role-arn arn:aws:iam::111122223333:role/brig-coding-agent
+```
+
+| Mode | Flag | What the sandbox gets |
+| --- | --- | --- |
+| role | `--role-arn <arn>` | keys of a session of that role, assumed with your profile for one hour at a time. The session is named after the sandbox, so CloudTrail shows which sandbox made a call |
+| self | `--identity self` | keys of your own identity in that profile. The sandbox can do what you can |
+
+`import` refuses a line that names neither mode, or both. Self mode is never
+what a missing flag falls back to. An `aws` flag on a secret whose source is
+not `aws` is refused too. On a profile with other secrets, name the `aws`
+secret on the line.
+
+In role mode the session carries a source identity. Brig reads it from the
+profile's caller ARN: its last path segment, which for an SSO login is your
+user name. `--source-identity` sets another. It is 2 to 64 of the characters
+`A-Za-z0-9+=,.@_-`.
+
+Before it stores anything, `import` checks the profile with `aws`:
+
+1. `sts get-caller-identity`, for the identity of the profile.
+2. The profile's region. The guest gets it as `AWS_REGION`, and a profile
+   with none is refused with the command that sets one.
+3. In role mode, one `sts assume-role` of the role. Its keys are discarded.
+
+Then it stores the pointer: the profile, the mode, the role and the source
+identity. `--dry-run` runs the same checks and stores nothing. In self mode,
+`import` prints the identity the sandbox will get. `brig secret ls` shows
+`aws:<profile>` in the `FROM` column.
+
+`aws` runs with every `AWS_` variable removed from its environment, at import
+and in the broker. A profile that works only because your shell exports
+`AWS_PROFILE`, `AWS_CONFIG_FILE` or a key fails at import, and not at the
+first run.
+
+At each registration, which every run and exec makes, the broker reads the
+region again and fetches keys when those it holds have less than 15 minutes
+left. A lapsed SSO login refuses the run with exit `6` and names
+`aws sso login --profile <profile>`. [The aws route](security.md#the-aws-route)
+lists what the guest holds and how to revoke it.
+
 ## Renewal on the host
 
 `brig-broker` renews a secret this way for a run whose
@@ -639,4 +707,7 @@ store to write into, so it does not replace a keyring.
 | `nothing to import for "x": … held no value` | the sources of the profile exist and none of them held a value. Usually: run the agent on the host once to log in |
 | `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. Pass `-y` if you want to replace it |
 | `--from-command fills one secret, so it needs one name` | `--from-command` supplies a value, and nothing in the command says which secret the value is for |
+| `say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self` | an import of an `aws` source that names neither mode |
+| `the AWS SSO session for profile x has expired; …` | the SSO login of the profile lapsed. Run the command on the host, then run again |
+| `the aws command was not found; install the AWS CLI v2: …` | the `aws` CLI is not on `PATH`. For the broker, that is the `PATH` of the `brig` that started it |
 | `the imported credential x (y) expired N ago`, followed by `renew it on the host, then:  brig secret import y` | a run found a stored, imported credential past its `expiryField:`. Log in on the host again and import again |

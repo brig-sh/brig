@@ -343,7 +343,8 @@ or a host-side proxy (see
 A [route](policies.md#routes) is the exception. There the sandbox sees a
 session token, which works through its route until it expires or the
 sandbox is stopped. On hull and nerdctl the guest also trusts the brig CA,
-for `brig.internal` alone.
+for `brig.internal` alone. The `aws` route is not such an exception: its
+guest holds temporary AWS keys. See [The aws route](#the-aws-route).
 
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
@@ -357,6 +358,63 @@ replaces the directory under `/brig/claude` there while the sandbox runs, the
 guest drops the `tmpfs`. A credential the agent writes before Brig's next
 command then lands in hull's store, and stays there until `brig rm`. Brig's
 next command mounts the `tmpfs` again.
+
+### The aws route
+
+The `aws` route hands the guest real AWS keys. Every other route keeps its
+credential on the host. AWS signs each request with the secret key, so the
+broker cannot add a credential on the way out. The route instead answers the
+guest's AWS SDK with temporary keys, and the guest calls AWS itself. See
+[The aws preset](policies.md#the-aws-preset).
+
+**What the guest holds.** An access key id, a secret access key and a
+session token. They work anywhere AWS answers, outside the sandbox too,
+until they expire. In role mode they last one hour. In self mode they expire
+when the credentials of your AWS profile do. The broker hands out keys with
+at least 20 minutes left, and fetches new ones below that. It refuses
+credentials with no expiry, such as the long-lived keys of an IAM user.
+
+The broker keeps the keys in memory and writes none of them to the secret
+store or to a file. The audit line names the access key id it handed out,
+and never the secret key or the session token.
+
+**What the keys can do.** The keys can do what the identity behind them can
+do. In role mode that is the role's policy, so give the sandbox a role with
+a narrow policy. In self mode it is your whole identity in that profile: the
+sandbox can do what you can. Self mode is never a default: `brig secret
+import` refuses an import that names neither mode, or both. Each run and
+exec prints a line that names the role, or says that the sandbox has your
+own identity.
+
+**Revocation.** `brig stop` revokes the sandbox's session tokens, so it can
+fetch no more keys. A secret you import again with another role or mode
+takes effect at the next fetch: the broker reads the secret on every
+request, and fetches again when it changed. Keys already handed out stay
+valid until they expire. To cut them off sooner, change the role's policy or
+revoke its sessions in AWS.
+
+**The SSO session.** Your SSO login bounds the route. When it expires, the
+broker cannot fetch keys. A run that starts then is refused with exit `6`,
+and a request from a running guest that needs new keys gets a 502. Both name the fix,
+`aws sso login --profile <profile>`, which you run on the host. The guest
+keeps the keys it holds until they expire, and its AWS calls fail after
+that.
+
+**The session token.** The guest fetches keys with its session token for the
+route. Brig mints one on every exec, and it lasts 12 hours. An agent process
+older than that cannot fetch keys again. The next exec gets a new token.
+
+**Named, not ambient.** You name the AWS profile when you run
+`brig secret import`. The secret holds that pointer and no key. Brig does
+not read `~/.aws` or the AWS SSO cache itself. `brig-broker` runs the host's
+`aws` CLI, which does, on every fetch. The broker runs `aws` with every
+`AWS_` variable removed from its environment, so a variable in your shell,
+such as `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`, never decides which identity a
+sandbox gets. The import applies the same rule, so its check sees what the
+broker will see. That also drops `AWS_CONFIG_FILE`, so keep your AWS
+configuration in its default place. No package on the run path links the
+code that runs `aws`. A run still reads no host credential source. The
+broker, a process of its own, reads one through `aws`.
 
 ## The secret store
 

@@ -392,7 +392,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `inject.headers.remove` | no | Guest headers dropped before the request goes upstream, and before `set` applies. `Authorization` is always in the list, because the guest's own `Authorization` carries a session token |
 | `inject.headers.allow` | no | `{name, values}` pairs. Brig keeps only the listed values of that guest header, and drops the rest |
 | `inject.basicAuth.username` | unless a preset sets it, or `headers.set` is set | Sends `Authorization: Basic base64(username:{value})` |
-| `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the two guest placeholders below |
+| `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
 | `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
@@ -414,15 +414,17 @@ that never reach upstream.
 
 ### Placeholders
 
-A route names values that the guest never holds through three placeholders:
+A route names values that the guest never holds through four placeholders:
 
 | Placeholder | Where | What it stands for |
 | --- | --- | --- |
 | `{value}` | an `inject.headers.set` value | the credential |
 | `{route.url}` | a `guest.env` value | the URL of the route |
 | `{session.token}` | a `guest.env` value | the session token of the route |
+| `{route.region}` | a `guest.env` value of a route on the `aws` preset | the region of the route's AWS profile, which the broker reads at every registration |
 
-A `guest.env` value is `{route.url}` or `{session.token}`, and nothing else.
+A `guest.env` value is one of the last three placeholders, and nothing else.
+Brig refuses `{route.region}` on a route that is not on the `aws` preset.
 Brig refuses a literal, so a route cannot put a value of its own into the
 guest's environment:
 
@@ -442,6 +444,7 @@ names one takes every field it does not set from the preset.
 | `claude-code` | `https://api.anthropic.com` | `Authorization: Bearer {value}` from `claudeAiOauth.accessToken`. Removes `X-Api-Key`. Keeps only the reviewed `Anthropic-Beta` values | `ANTHROPIC_BASE_URL={route.url}`, `CLAUDE_CODE_OAUTH_TOKEN={session.token}` | `anthropic-oauth`: the OAuth pair is refreshed on the host and written back to the store |
 | `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
 | `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
+| `aws` | none. The route answers the guest itself | none. The guest sends its session token as the whole `Authorization` value, as the AWS SDK does | `AWS_CONTAINER_CREDENTIALS_FULL_URI={route.url}`, `AWS_CONTAINER_AUTHORIZATION_TOKEN={session.token}`, `AWS_REGION={route.region}` | none. The broker fetches temporary keys through the host's `aws` CLI. See [The aws preset](#the-aws-preset) |
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
@@ -496,6 +499,49 @@ comment under `credential:`. Its output is a policy that Brig reads back:
       secretRef:
         name: claude-credentials
 ```
+
+### The aws preset
+
+A route on the `aws` preset vends credentials instead of forwarding a
+request. AWS signs each request with the secret key, so the broker cannot
+add a credential to a request on its way out. The route answers the AWS
+container credential provider with temporary keys, and the guest calls AWS
+with them itself. [The aws route](security.md#the-aws-route) states what
+that hands the guest.
+
+The route's secret holds a pointer, not keys: the AWS profile on your host,
+and whether the sandbox assumes a role or gets your own identity.
+`brig secret import` writes it. See
+[An AWS profile behind a route](secrets.md#an-aws-profile-behind-a-route).
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: aws-sandbox
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: "*.amazonaws.com"
+  routes:
+    - name: aws
+      preset: aws
+      credential:
+        secretRef: { name: aws-creds }
+```
+
+The guest calls AWS directly, so a `default: deny` policy needs an `allow`
+rule for the AWS endpoints the agent uses. A host rule does not make the
+access read-only. `*.amazonaws.com` lets the guest make every call the keys
+allow, writes included, and reach resources in other accounts, such as an
+S3 bucket that someone else owns. The role's policy is what limits the
+calls.
+
+The route takes no `upstream`, and Brig refuses one. It allows `GET` alone,
+and answers only the route URL itself. The guest gets the three variables of
+the preset and, on a run with this route, `AWS_CA_BUNDLE` for the brig CA.
+See [What the guest gets](broker.md#what-the-guest-gets).
 
 ### Several policies with routes
 

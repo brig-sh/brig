@@ -4,7 +4,8 @@ The broker serves the routes of [policies.md](policies.md#routes). A tool in
 the guest sends its requests to the route with a session token. The broker
 checks the token and the route's `request.allow`, adds the credential on the
 host, and forwards the request to the route's upstream. The guest never holds
-the credential.
+the credential. A route on the `aws` preset is the exception: it answers the
+guest with temporary AWS keys. See [Routes that vend](#routes-that-vend).
 
 This page describes `internal/broker`, the request handler, and
 `brig-broker`, the process that hosts it. hull on `hvi` and nerdctl with
@@ -124,6 +125,8 @@ error of that step, and the upstream is never dialed.
    `basicAuth` route it can also be the basic-auth password, which is what
    git's credential helper sends. On a route that sets the credential in
    another header, such as `x-api-key`, it can also come from that header.
+   On a route that vends, it can also be the whole `Authorization` value,
+   with no scheme.
 4. Verify the token: the signature with the sandbox key, the sandbox claim
    against the path, the route claim against the route, and the expiry.
    Any failure is a 401.
@@ -132,13 +135,15 @@ error of that step, and the upstream is never dialed.
    401. Then refuse a session token anywhere but its carrier. This is a
    403. See [Placeholder detection](#placeholder-detection).
 6. Refuse a `<rest>` that the upstream could read as another path. This is
-   a 400. See [Canonical paths](#canonical-paths).
+   a 400. See [Canonical paths](#canonical-paths). A route that vends serves
+   `/` alone, and any other `<rest>` is a 404.
 7. Check `request.allow`. A miss is a 403 with the refusal below. No
    credential has been read yet.
 8. Resolve the credential through the secret broker. A failure is a 502,
    and nothing is cached.
 9. Edit the headers and forward the request. The response streams back as
-   the upstream sends it, with the credential redacted.
+   the upstream sends it, with the credential redacted. A route that vends
+   answers with keys instead. See [Routes that vend](#routes-that-vend).
 10. Write the audit line.
 
 ### Canonical paths
@@ -276,8 +281,9 @@ body](#holding-the-body) has the limits on what all requests hold at once.
 
 The session token is the guest's handle on its route. The tool in the guest
 sends it in one place, the carrier: `Authorization: Bearer`, the basic-auth
-password on a `basicAuth` route, or a header the route sets with `{value}`,
-such as `x-api-key`. Anywhere else, the agent is leaking its handle: in a
+password on a `basicAuth` route, a header the route sets with `{value}`,
+such as `x-api-key`, or the whole `Authorization` value on a route that
+vends. Anywhere else, the agent is leaking its handle: in a
 prompt that echoes the environment, a path, a query, a header of its own. So
 after the token verifies, and before `request.allow` and the credential, the
 broker scans the request for every live token of the sandbox. A hit is a 403,
@@ -402,7 +408,7 @@ taken from the replay budget, 64 MiB for all requests at once, which
 | Status | When | `check=` on the audit line |
 | --- | --- | --- |
 | 400 | The request asks for a protocol upgrade, or is a `CONNECT` | `upgrade` |
-| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on | `path`, `arrival`, `sandbox`, `route` |
+| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on. On a route that vends, any `<rest>` but `/` | `path`, `arrival`, `sandbox`, `route` |
 | 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, or an expired token | `token`, `signature`, `token.sandbox`, `token.route`, `expired` |
 | 400 | The request body could not be read | `body` |
 | 408 | The part of the body the broker holds did not arrive within `BodyTimeout` | `body` |
@@ -414,6 +420,7 @@ taken from the replay budget, 64 MiB for all requests at once, which
 | 403 | `request.allow` does not cover the request | `request.allow.methods`, `request.allow.paths`, `request.allow.repos` |
 | 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open | `credential` |
 | 502 | The upstream cannot be reached, or its certificate does not verify | `upstream` |
+| 502 | A route that vends could not fetch keys. See [Routes that vend](#routes-that-vend) | `vend` |
 | 502 | The response body has a `Content-Encoding` the broker cannot read | `response.encoding` |
 | 500 | The broker failed on a bug. `broker.log` has the error. When the response had already started, the connection is closed and the line keeps its status | `panic` |
 
@@ -585,16 +592,18 @@ underscores. 255 bytes is the longest name of a directory.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca}`. The broker expands each route again, so a credential lifecycle comes only from a preset. The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits
 for it to exit and starts another. It does the same when the broker it found
 is gone by the time it registers, because another `brig` removed the last
-sandbox and stopped it. A token travels only on the control socket
+sandbox and stopped it. Brig waits 10 seconds for an answer, and 2 minutes
+for a registration, which runs up to two `aws` calls of 30 seconds each per
+route that vends. A token travels only on the control socket
 to Brig, and from Brig to the guest in the environment of one exec. Brig mints
 one per route on every exec.
 
@@ -622,6 +631,97 @@ The broker reads the keychain with `security`, from its own session. Measured
 on macOS 26: a process in a new session, whose parent had exited, read a
 keychain item of the login session with no prompt. A broker started from an
 SSH session can only read an unlocked keychain. A read that fails is a 502.
+
+A route that vends holds no credential in the store. Its secret points at an
+AWS profile, and the broker fetches keys by running the host's `aws` CLI.
+See [Routes that vend](#routes-that-vend).
+
+## Routes that vend
+
+A route on the `aws` preset answers the guest itself, and has no upstream.
+AWS signs each request with the secret key, so the broker cannot add a
+credential to a request on its way out. The guest's AWS SDK asks the route
+for keys, as the AWS container credential provider, and calls AWS with them.
+[The aws route](security.md#the-aws-route) states what that hands the guest.
+
+The request takes the steps of [Request path](#request-path), with these
+differences:
+
+- The session token can be the whole `Authorization` value, with no scheme.
+  The AWS SDK sends `AWS_CONTAINER_AUTHORIZATION_TOKEN` that way. Every other
+  route answers a token sent that way with 401.
+- The route serves its URL alone, with or without a trailing `/`. Any other
+  path is a 404 with `check=path`, before `request.allow`.
+- `request.allow` of the preset allows `GET` alone.
+- The broker resolves the route's secret, a pointer to an AWS profile, and
+  answers with keys. Nothing is forwarded.
+
+The answer is the document the AWS SDKs read, with `Cache-Control: no-store`
+so that nothing between keeps keys that expire:
+
+```json
+{"AccessKeyId":"ASIA…","SecretAccessKey":"…","Token":"…","Expiration":"2026-10-26T13:04:05Z"}
+```
+
+### Fetching keys
+
+The broker runs the host's `aws` CLI, found on its `PATH`:
+
+| Mode | Command |
+| --- | --- |
+| role | `aws sts assume-role --profile <p> --role-arn <arn> --role-session-name <sandbox-id> [--source-identity <id>] --duration-seconds 3600 --output json` |
+| self | `aws configure export-credentials --profile <p> --format process` |
+
+The session name is the sandbox id, cut to 64 bytes, with each character
+outside `A-Za-z0-9+=,.@_-` replaced by `-`. The keys come back on stdout. No
+key is on a command line, and no error repeats stdout. `aws` gets the
+broker's environment with every `AWS_` variable removed. Each call has 30
+seconds. A credential with no `Expiration` is refused.
+
+The broker holds the keys in memory, per sandbox and route. A request gets
+the keys held while they have at least 20 minutes left. Below that, the
+broker fetches new ones. Requests that arrive during a fetch wait for it, so
+a burst of requests is one call. A failed fetch is an error even when older
+keys are held, since those are about to expire. After the secret is
+imported again with another profile, mode or role, the next request fetches
+new keys. A sandbox removed from the broker takes its keys with it.
+
+A fetch that fails is a 502 with `check=vend`:
+
+| Failure | Body |
+| --- | --- |
+| The profile's SSO login has expired | names the fix, `aws sso login --profile <p>` |
+| No `aws` on the broker's `PATH` | names the AWS CLI v2 install page |
+| Anything else | `brig broker: the credentials of route <route> could not be fetched; see the broker log` |
+
+The error of the last row goes to `broker.log`, with the sandbox and the
+route, and never to the guest or to the audit log. It can name paths of the
+host.
+
+### Registration
+
+A registration checks every route that vends before the broker answers,
+also when it is the same registration again. The broker resolves the secret,
+fetches keys when those it holds have less than 15 minutes left, and reads
+the profile's region. So a run on a lapsed SSO login is refused at its
+start, and not at the agent's first AWS call.
+
+A check that fails is a 424 with `X-Brig-Refusal: credential`, and the body
+`route <name>: <message>`. Brig refuses the run or the exec with exit `6`
+and the broker's words. The header and not the status marks the refusal, so
+a 424 from anything else is not read as a credential to fix. A sandbox that
+was not registered before leaves nothing behind. One that was keeps its
+registration, and `GET /status` names the route in `vending` until a fetch
+works.
+
+The answer names, for each route that vends, the region and the identity.
+Brig hands the region to the guest as `AWS_REGION`, and refuses the run when
+the answer names none. It prints one line per route, which `-q` hides:
+
+```
+brig: route aws: AWS role arn:aws:iam::111122223333:role/brig-coding-agent, assumed from your profile dev
+brig: route aws: AWS as your own identity (profile dev); the sandbox can do what you can
+```
 
 ## Route modes
 
@@ -701,7 +801,7 @@ and its own trust store is left as it is:
 | File | What it holds | Variables |
 | --- | --- | --- |
 | `/brig/ca/brig.pem` | the CA certificate | `NODE_EXTRA_CA_CERTS`, which Node adds to its roots |
-| `/brig/ca/bundle.pem` | the image's own roots, then the CA | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, which replace a client's roots |
+| `/brig/ca/bundle.pem` | the image's own roots, then the CA | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, which replace a client's roots. `AWS_CA_BUNDLE` too, on a run with a route that vends |
 
 The bundle keeps every other site trusted for a client that reads one file.
 Brig takes the first of `/etc/ssl/certs/ca-certificates.crt`,
@@ -736,7 +836,8 @@ once, and 512 of every sandbox together. A connection over either is closed.
 ## What the guest gets
 
 Brig mints a token per route on every exec and hands the guest the route's
-`guest.env`, with `{route.url}` and `{session.token}` filled in. A token is
+`guest.env`, with `{route.url}`, `{session.token}` and `{route.region}`
+filled in. A token is
 never on a command line. A guest that reaches `brig.internal` also gets the
 CA variables of [Transports](#transports). Per preset:
 
@@ -745,6 +846,7 @@ CA variables of [Transports](#transports). Per preset:
 | `claude-code` | `ANTHROPIC_BASE_URL=<route URL>`, `CLAUDE_CODE_OAUTH_TOKEN=<token>` |
 | `anthropic-api-key` | `ANTHROPIC_BASE_URL=<route URL>`, `ANTHROPIC_API_KEY=<token>` |
 | `github-token` | `BRIG_ROUTE_GITHUB_TOKEN=<token>`, and git configuration in `GIT_CONFIG_COUNT` |
+| `aws` | `AWS_CONTAINER_CREDENTIALS_FULL_URI=<route URL>`, `AWS_CONTAINER_AUTHORIZATION_TOKEN=<token>`, `AWS_REGION=<the region of the AWS profile>`, and `AWS_CA_BUNDLE=/brig/ca/bundle.pem` |
 
 A route with `guest.git` points git at the route through the environment,
 and writes nothing into the guest home:
@@ -793,6 +895,7 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `renew` | After an upstream 401: `retried`, `failed`, `interval` when a renewal was forced for the secret less than a minute before, or `body` when the body was not kept for a retry |
 | `where`, `encoding` | Where a [placeholder](#placeholder-detection) was found and how it was spelled. The `path` field of that line is `[redacted]`, and so is `method` when the token was in it |
 | `placeholder` | `partial` when only the start of the body was scanned |
+| `vended` | The access key id a route that vends answered with. Never the secret key or the session token |
 
 The line never holds a credential, a token, a header value or a body.
 

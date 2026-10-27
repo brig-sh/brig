@@ -441,14 +441,16 @@ A bare string is the short form of a required, hand-created secret:
 - A secret with no `sources:` is hand-created. Its message names
   `brig secret create` instead of `brig secret import`.
 
-Three `from:` values exist, and each takes one locator and no other. For
-example, a `keychain` source that carries a `path:` is a parse error.
+Four `from:` values exist. `keychain`, `file` and `env` each take one
+locator and no other, and `aws` takes none. For example, a `keychain` source
+that carries a `path:` is a parse error.
 
 | `from:` | locator | what it reads |
 | --- | --- | --- |
 | `keychain` | `service:` | a macOS keychain generic-password item. macOS only: the Linux store is a Secret Service keyring ([secrets.md](secrets.md#linux)), and no source reads from it |
 | `file` | `path:` | a host file, verbatim. A leading `~` is expanded when it is read, so a profile carries no one host's home directory |
 | `env` | `var:` | a host environment variable, **copied once at import** |
+| `aws` | none | no file or keychain item. `import` checks the AWS profile you name with `--aws-profile` and stores a pointer to it, for a route on the `aws` preset. Each machine names its own AWS profile, so the profile you share carries none. See [An AWS profile behind a route](secrets.md#an-aws-profile-behind-a-route) |
 
 `from: env` and `ref: env.<name>` share a word and behave differently:
 
