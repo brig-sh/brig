@@ -393,6 +393,9 @@ func TestHeaderRules(t *testing.T) {
 		{"session.token in a header", func(r *Route) {
 			r.Inject.Headers.Set[0].Value = "{value} {session.token}"
 		}, "only guest.env takes"},
+		{"route.region in a header", func(r *Route) {
+			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "X-Region", Value: "{route.region}"})
+		}, "only guest.env takes"},
 		{"Host in set", func(r *Route) {
 			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "Host", Value: "evil.example.com"})
 		}, "the broker sets itself"},
@@ -626,6 +629,22 @@ func TestAWSRouteRefusesAnInject(t *testing.T) {
 	}
 	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "takes no inject") {
 		t.Errorf("a policy with an inject on an aws route: Validate = %v", err)
+	}
+}
+
+// The refusal of a literal is where a user learns what a guest.env value can
+// be, so it names every placeholder guest.env takes.
+func TestGuestLiteralRefusalNamesEveryPlaceholder(t *testing.T) {
+	r := awsRoute()
+	r.Guest.Env["AWS_REGION"] = "us-east-1"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "never a literal") {
+		t.Fatalf("a literal in guest.env: err = %v", err)
+	}
+	for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion} {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("the refusal %q does not name %s", err, p)
+		}
 	}
 }
 

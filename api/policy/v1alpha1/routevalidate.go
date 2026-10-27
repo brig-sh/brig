@@ -334,8 +334,8 @@ func (g *Guest) validate(complete bool, preset Preset) error {
 		default:
 			// The value is left out: a literal here is most often a pasted
 			// credential, and the error goes to a terminal or a CI log.
-			return fmt.Errorf("guest.env %s is a literal; a value is %s or %s, never a literal",
-				name, PlaceholderRouteURL, PlaceholderSessionToken)
+			return fmt.Errorf("guest.env %s is a literal; a value is %s, %s or %s, never a literal",
+				name, PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion)
 		}
 	}
 	if g.Git != nil {

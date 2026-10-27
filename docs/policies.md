@@ -430,7 +430,7 @@ guest's environment:
 
 ```console
 $ brig policy edit claude-only
-brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url} or {session.token}, never a literal
+brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
@@ -540,9 +540,10 @@ calls.
 
 The route takes no `upstream` and no `inject`, and Brig refuses either. The
 preset's `request.allow` allows `GET` alone. A route that sets its own
-`request.allow` replaces it. The route answers only the route URL itself. The guest gets the three variables of
-the preset and, on a run with this route, `AWS_CA_BUNDLE` for the brig CA.
-See [What the guest gets](broker.md#what-the-guest-gets).
+`request.allow` replaces it. The route answers only the route URL itself.
+The guest gets the three variables of the preset and, on a run with this
+route, `AWS_CA_BUNDLE` for the brig CA. See
+[What the guest gets](broker.md#what-the-guest-gets).
 
 ### Several policies with routes
 
@@ -948,7 +949,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
 | `route x: mode: name "…" may use only lowercase letters, …` | a route's `mode` is not a name |
 | `policy x (route y) declares a route in mode m, and brig refuses the run before boot: … route mode m is not part of this build of brig. …` | `check` on a profile bound to a route in a mode this build does not serve. A run, `sh` or plan refuses it the same way, and exits `7` |
-| `route x: guest.env NAME is a literal; a value is {route.url} or {session.token}, never a literal` | a `guest.env` value that is not one of the two placeholders. The error leaves the value out |
+| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
 | `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
 | `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |

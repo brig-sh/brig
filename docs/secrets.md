@@ -546,8 +546,9 @@ At each registration, which every run and exec makes, the broker reads the
 region again and fetches keys when those it holds have less than 15 minutes
 left. When `aws` can get no credentials, because the SSO login lapsed and
 no credentials it cached from it are left, a new run is refused with exit
-`6` and the message names `aws sso login --profile <profile>`. [The aws route](security.md#the-aws-route)
-lists what the guest holds and how to revoke it.
+`6` and the message names `aws sso login --profile <profile>`.
+[The aws route](security.md#the-aws-route) lists what the guest holds and
+how to revoke it.
 
 ## Renewal on the host
 
