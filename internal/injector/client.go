@@ -21,11 +21,31 @@ import (
 // A variable so a test can shorten it.
 var callTimeout = 10 * time.Second
 
-// addTimeout bounds add-sandbox alone. The broker checks each aws route's
-// credentials before it answers, up to two aws calls per route at 30s each,
-// and a slow SSO refresh must come back as the broker's credential refusal,
-// not as "the broker did not answer". A variable so a test can shorten it.
-var addTimeout = 2 * time.Minute
+// addTimeout bounds add-sandbox before the routes that vend: what the broker
+// does from memory, with room for a slow host.
+//
+// vendTimeout is what each route that vends adds. The broker checks those
+// routes one after another before it answers, up to two aws calls per route
+// at 30s each, and a slow SSO refresh must come back as the broker's
+// credential refusal, not as "the broker did not answer". One fixed bound
+// would cut off a run with two aws routes.
+//
+// Variables so a test can shorten them.
+var (
+	addTimeout  = 30 * time.Second
+	vendTimeout = 70 * time.Second
+)
+
+// addTimeoutFor is the bound of add-sandbox for s, never below callTimeout.
+func addTimeoutFor(s Sandbox) time.Duration {
+	d := addTimeout
+	for _, r := range s.Routes {
+		if r.Route.Vends() {
+			d += vendTimeout
+		}
+	}
+	return max(d, callTimeout)
+}
 
 // maxReply bounds a control answer. The largest is a status listing every
 // sandbox on the host.
@@ -143,7 +163,7 @@ func (c Client) AddSandbox(s Sandbox) error {
 // Add is AddSandbox, and returns the broker's answer.
 func (c Client) Add(s Sandbox) (AddResponse, error) {
 	var out AddResponse
-	err := c.callWithin(addTimeout, http.MethodPost, "/sandboxes", s, &out)
+	err := c.callWithin(addTimeoutFor(s), http.MethodPost, "/sandboxes", s, &out)
 	return out, err
 }
 

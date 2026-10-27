@@ -601,11 +601,11 @@ underscores. 255 bytes is the longest name of a directory.
 A broker on its way out answers 503 to a registration or a mint. Brig waits
 for it to exit and starts another. It does the same when the broker it found
 is gone by the time it registers, because another `brig` removed the last
-sandbox and stopped it. Brig waits 10 seconds for an answer, and 2 minutes
-for a registration, which runs up to two `aws` calls of 30 seconds each per
-route that vends. A token travels only on the control socket
-to Brig, and from Brig to the guest in the environment of one exec. Brig mints
-one per route on every exec.
+sandbox and stopped it. Brig waits 10 seconds for an answer. It waits 30
+seconds for a registration, and 70 seconds more for each route that vends:
+the broker runs up to two `aws` calls of 30 seconds each for every one. A
+token travels only on the control socket to Brig, and from Brig to the guest
+in the environment of one exec. Brig mints one per route on every exec.
 
 ### Server limits
 

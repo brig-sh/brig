@@ -883,3 +883,41 @@ func TestAddUsesLongerTimeout(t *testing.T) {
 		t.Error("Status waited past callTimeout")
 	}
 }
+
+// Each route that vends adds its own two aws calls to the broker's answer.
+// One fixed bound would cut off a run with two aws routes and a slow SSO
+// refresh as "the broker did not answer", where the broker would have
+// answered with keys or with the login to fix.
+func TestAddTimeoutScalesWithVendingRoutes(t *testing.T) {
+	oldCall, oldAdd, oldVend := callTimeout, addTimeout, vendTimeout
+	callTimeout, addTimeout, vendTimeout = 50*time.Millisecond, 100*time.Millisecond, 400*time.Millisecond
+	t.Cleanup(func() { callTimeout, addTimeout, vendTimeout = oldCall, oldAdd, oldVend })
+	dir, err := os.MkdirTemp("", "brk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Longer than one vending route is given, shorter than two.
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(700 * time.Millisecond)
+		_, _ = w.Write([]byte(`{}`))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	c := Client{Socket: sock}
+	aws := func(name string) Route {
+		return Route{Policy: "aws", Route: v1alpha1.Route{Name: name, Preset: v1alpha1.PresetAWS}}
+	}
+	plain := Route{Policy: "github", Route: v1alpha1.Route{Name: "github", Preset: v1alpha1.PresetGitHubToken}}
+	if _, err := c.Add(Sandbox{ID: "brig-a", Routes: []Route{aws("aws"), plain, aws("aws2")}}); err != nil {
+		t.Errorf("Add with two vending routes: %v", err)
+	}
+	if _, err := c.Add(Sandbox{ID: "brig-b", Routes: []Route{aws("aws"), plain}}); err == nil {
+		t.Error("Add with one vending route waited for two")
+	}
+}
