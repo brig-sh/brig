@@ -30,17 +30,26 @@ const tlsHandshakeTimeout = 10 * time.Second
 // loopback port has an IP address there, which never starts with it.
 const divertArrival = "divert:"
 
-// arrivalAddr is the remote address of a brig.internal connection. It names
-// the sandbox whose divert socket the connection arrived on, which the
-// arrival check compares with the sandbox the request names.
+// arrivalAddr is the remote address of a brig.internal or link-local
+// connection. It names the sandbox whose divert socket the connection arrived
+// on, which the arrival check compares with the sandbox the request names.
 type arrivalAddr struct {
+	// prefix is divertArrival, or linkLocalArrival for a connection in
+	// clear text. "" is divertArrival.
+	prefix  string
 	sandbox string
 	src     netip.AddrPort
 }
 
 func (a arrivalAddr) Network() string { return "brig-divert" }
 
-func (a arrivalAddr) String() string { return divertArrival + a.sandbox + "/" + a.src.String() }
+func (a arrivalAddr) String() string {
+	prefix := a.prefix
+	if prefix == "" {
+		prefix = divertArrival
+	}
+	return prefix + a.sandbox + "/" + a.src.String()
+}
 
 // arrivedConn is a brig.internal connection as the route server sees it. It
 // reports where it arrived, and closes done when the server is through with
@@ -100,14 +109,18 @@ func (l *connListener) Addr() net.Addr { return arrivalAddr{sandbox: "brig.inter
 
 // arrival is the arrival check of the route handler, and names the sandbox
 // whose divert socket the request arrived on. A request that arrived on a
-// divert socket is served only for the sandbox the socket belongs to. A
-// request on the loopback port is served only for a sandbox that reaches the
-// broker there: one registered with a brig.internal address reaches it on its
-// divert socket alone.
+// divert socket, over brig.internal or the link-local address, is served only
+// for the sandbox the socket belongs to. A request on the loopback port is
+// served only for a sandbox that reaches the broker there: one registered with
+// a brig.internal address reaches it on its divert socket alone.
 func (s *server) arrival(sandbox, remoteAddr string) (string, bool) {
-	if rest, ok := strings.CutPrefix(remoteAddr, divertArrival); ok {
-		id, _, _ := strings.Cut(rest, "/")
-		return id, id == sandbox
+	// Both prefixes are checked here. A link-local address that fell through
+	// to the loopback check would pass for any sandbox without brig.internal.
+	for _, prefix := range []string{divertArrival, linkLocalArrival} {
+		if rest, ok := strings.CutPrefix(remoteAddr, prefix); ok {
+			id, _, _ := strings.Cut(rest, "/")
+			return id, id == sandbox
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

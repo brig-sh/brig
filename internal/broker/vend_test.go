@@ -248,3 +248,53 @@ func TestAddSandboxVendNeedsNoUpstream(t *testing.T) {
 		t.Fatalf("an aws route with no upstream was refused: %v", err)
 	}
 }
+
+// A request that arrived where only routes that vend are served is answered
+// for another route as for a route the sandbox does not have: its token is
+// never checked, its credential never read, and nothing goes upstream. The
+// route that vends is served there as anywhere.
+func TestVendOnlyArrivalRefusesOtherRoutes(t *testing.T) {
+	fv := &fakeVendor{expiration: time.Date(2026, 10, 15, 13, 0, 0, 0, time.UTC)}
+	up := newUpstream(t, nil)
+	routes := []Route{
+		presetRoute(t, v1alpha1.PresetAWS, "aws", "aws", "", nil),
+		presetRoute(t, v1alpha1.PresetGitHubToken, "github", "gh-token", up.URL, nil),
+	}
+	var asked []string
+	var mu sync.Mutex
+	r := newRig(t, up, routes, func(c *Config) {
+		c.Vendor = fv
+		c.VendOnly = func(remoteAddr string) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			asked = append(asked, remoteAddr)
+			return true
+		}
+	})
+	r.creds.docs["aws"] = []byte(vendDoc)
+	tok := r.mint("brig-a", "github")
+	resp, body := r.do("GET", "/brig-a/r/github/user", bearer(tok), "")
+	wantStatus(t, resp, http.StatusNotFound)
+	line := r.lastAudit()
+	wantAudit(t, line, "check=route.cleartext")
+	if strings.Contains(line, tok) || strings.Contains(body, tok) {
+		t.Errorf("the refusal carries the token: %q %q", line, body)
+	}
+	r.creds.mu.Lock()
+	resolves := r.creds.resolves
+	r.creds.mu.Unlock()
+	if resolves != 0 || up.count() != 0 {
+		t.Fatalf("the refused route read its credential %d times and reached the upstream %d times",
+			resolves, up.count())
+	}
+	if n := r.h.sandbox("brig-a").placeholders.Load(); n != 0 {
+		t.Errorf("the refused route's token was looked for: %d placeholder hits", n)
+	}
+	resp, _ = r.do("GET", "/brig-a/r/aws", http.Header{"Authorization": {r.mint("brig-a", "aws")}}, "")
+	wantStatus(t, resp, http.StatusOK)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 1 || !strings.HasPrefix(asked[0], "127.0.0.1:") {
+		t.Errorf("VendOnly was asked %q", asked)
+	}
+}

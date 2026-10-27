@@ -31,6 +31,14 @@ const BrigInternal = runtime.BrigInternalName
 // diverts this port of the brig.internal address alone.
 const BrigInternalPort = runtime.BrigInternalPort
 
+// LinkLocalAddr is the address and port a guest reaches the routes that vend
+// at, in plain HTTP: the ECS container credentials address. The AWS SDKs'
+// container provider ignores AWS_CA_BUNDLE, so it cannot verify brig.internal,
+// and takes plain HTTP from loopback and a few link-local addresses alone. The
+// runtime diverts this destination to the sandbox's divert socket, and the
+// broker serves routes that vend on it and no other route.
+const LinkLocalAddr = "169.254.170.2:80"
+
 // GuestCAPath is where a guest that reaches brig.internal finds the brig CA,
 // and nothing else.
 const GuestCAPath = "/brig/ca/brig.pem"

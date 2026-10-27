@@ -89,6 +89,12 @@ type Config struct {
 	// Vendor is optional. It answers a route that vends. Without it such a
 	// route gets 502.
 	Vendor Vendor
+	// VendOnly is optional. It reports whether a request that arrived from
+	// remoteAddr came in clear text, where only a route that vends is
+	// served. Any other route's token there would cross the link readable,
+	// so such a request is answered as one for a route the sandbox does not
+	// have, before its token is checked or its credential read.
+	VendOnly func(remoteAddr string) bool
 }
 
 // DefaultReplayBudget is the default of Config.ReplayBudget.
@@ -150,6 +156,7 @@ type Handler struct {
 	replay    *budget
 	bodyWait  time.Duration
 	vendor    Vendor
+	vendOnly  func(remoteAddr string) bool
 
 	mu        sync.RWMutex
 	sandboxes map[string]*sandbox
@@ -204,6 +211,7 @@ func New(cfg Config) (*Handler, error) {
 		sandboxes: map[string]*sandbox{},
 		forced:    map[string]time.Time{},
 		vendor:    cfg.Vendor,
+		vendOnly:  cfg.VendOnly,
 	}
 	if cfg.ReplayBudget < 0 {
 		return nil, fmt.Errorf("the broker replay budget is %d bytes; it cannot be negative", cfg.ReplayBudget)

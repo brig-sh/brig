@@ -95,6 +95,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
+	// A route that does not vend is not served in clear text. The refusal
+	// comes before the token is read, so the token opens nothing there, and
+	// reads as for a route the sandbox does not have.
+	if h.vendOnly != nil && !rt.spec.Vends() && h.vendOnly(r.RemoteAddr) {
+		a.check = "route.cleartext"
+		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+		return
+	}
 	// A route in another mode is not served here. Its policy did not ask for
 	// an endpoint, so its token opens none.
 	if rt.spec.Mode != "" && rt.spec.Mode != v1alpha1.ModeEndpoint {

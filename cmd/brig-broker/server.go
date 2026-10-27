@@ -116,7 +116,8 @@ type server struct {
 	// aws vends the credentials of the aws routes.
 	aws *awsVendor
 	// internal takes the brig.internal connections of every divert socket,
-	// through TLS, for the route server that serves them.
+	// through TLS, and the link-local ones in plain HTTP, for the route
+	// server that serves them.
 	internal *connListener
 	port     int
 	// storeErr is why brig's secret store did not open at start.
@@ -208,6 +209,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		Transport:    cfg.transport,
 		ArrivalCheck: s.arrival,
 		Vendor:       s.aws,
+		VendOnly:     vendOnly,
 	})
 	clear(hostKey)
 	if err != nil {
@@ -253,8 +255,10 @@ func (s *server) serve(ctx context.Context) error {
 		ErrorLog:          logger,
 	}
 	// brig.internal is the same handler, on the connections the divert
-	// sockets hand over. Each request's remote address names the socket it
-	// arrived on. See briginternal.go.
+	// sockets hand over, and so is the link-local address of the routes
+	// that vend. Each request's remote address names the socket it arrived
+	// on, and whether it came in clear text. See briginternal.go and
+	// linklocal.go.
 	internal := &http.Server{
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
