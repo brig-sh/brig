@@ -538,8 +538,9 @@ allow, writes included, and reach resources in other accounts, such as an
 S3 bucket that someone else owns. The role's policy is what limits the
 calls.
 
-The route takes no `upstream`, and Brig refuses one. It allows `GET` alone,
-and answers only the route URL itself. The guest gets the three variables of
+The route takes no `upstream`, and Brig refuses one. The preset's
+`request.allow` allows `GET` alone. A route that sets its own
+`request.allow` replaces it. The route answers only the route URL itself. The guest gets the three variables of
 the preset and, on a run with this route, `AWS_CA_BUNDLE` for the brig CA.
 See [What the guest gets](broker.md#what-the-guest-gets).
 

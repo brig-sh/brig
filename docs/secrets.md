@@ -252,7 +252,7 @@ Four rules apply:
   That item has the default ACL, so a run raises no approval dialog. Only
   `import` raises that dialog, one time. The `aws` source is the exception:
   `brig-broker` runs the host's `aws` CLI on every fetch, and `aws` reads
-  your AWS profile and its SSO login each time.
+  your AWS profile, its SSO login and the credentials it cached each time.
 - **The copy does not track its source.** If you renew the login on the host,
   the copy does not change. If you revoke the login on the host, the copy
   stays valid. To refresh the copy, import it again. `brig secret delete`
@@ -543,8 +543,9 @@ first run.
 
 At each registration, which every run and exec makes, the broker reads the
 region again and fetches keys when those it holds have less than 15 minutes
-left. A lapsed SSO login refuses the run with exit `6` and names
-`aws sso login --profile <profile>`. [The aws route](security.md#the-aws-route)
+left. When `aws` can get no credentials, because the SSO login lapsed and
+no credentials it cached from it are left, a new run is refused with exit
+`6` and the message names `aws sso login --profile <profile>`. [The aws route](security.md#the-aws-route)
 lists what the guest holds and how to revoke it.
 
 ## Renewal on the host

@@ -680,8 +680,11 @@ seconds. A credential with no `Expiration` is refused.
 
 The broker holds the keys in memory, per sandbox and route. A request gets
 the keys held while they have at least 20 minutes left. Below that, the
-broker fetches new ones. Requests that arrive during a fetch wait for it, so
-a burst of requests is one call. A failed fetch is an error even when older
+broker fetches new ones, and the request gets them as `aws` returned them.
+Requests that arrive during a fetch wait for it, and take its keys when
+they have at least 20 minutes left. So a burst of requests is one call,
+unless `aws` returned keys with less time left. Then each request fetches
+again, which self mode can do. A failed fetch is an error even when older
 keys are held, since those are about to expire. After the secret is
 imported again with another profile, mode or role, the next request fetches
 new keys. A sandbox removed from the broker takes its keys with it.
@@ -690,7 +693,7 @@ A fetch that fails is a 502 with `check=vend`:
 
 | Failure | Body |
 | --- | --- |
-| The profile's SSO login has expired | names the fix, `aws sso login --profile <p>` |
+| `aws` reports that the profile's SSO login has expired | names the fix, `aws sso login --profile <p>` |
 | No `aws` on the broker's `PATH` | names the AWS CLI v2 install page |
 | Anything else | `brig broker: the credentials of route <route> could not be fetched; see the broker log` |
 
@@ -703,8 +706,10 @@ host.
 A registration checks every route that vends before the broker answers,
 also when it is the same registration again. The broker resolves the secret,
 fetches keys when those it holds have less than 15 minutes left, and reads
-the profile's region. So a run on a lapsed SSO login is refused at its
-start, and not at the agent's first AWS call.
+the profile's region. So a new run that cannot get AWS credentials is
+refused at its start, and not at the agent's first AWS call. An exec into a
+registered sandbox whose held keys have 15 minutes or more left fetches no
+keys, so a lapsed SSO login does not refuse it.
 
 A check that fails is a 424 with `X-Brig-Refusal: credential`, and the body
 `route <name>: <message>`. Brig refuses the run or the exec with exit `6`

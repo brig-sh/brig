@@ -370,9 +370,11 @@ guest's AWS SDK with temporary keys, and the guest calls AWS itself. See
 **What the guest holds.** An access key id, a secret access key and a
 session token. They work anywhere AWS answers, outside the sandbox too,
 until they expire. In role mode they last one hour. In self mode they expire
-when the credentials of your AWS profile do. The broker hands out keys with
-at least 20 minutes left, and fetches new ones below that. It refuses
-credentials with no expiry, such as the long-lived keys of an IAM user.
+when the credentials of your AWS profile do. The broker serves the keys it
+holds while they have at least 20 minutes left, and fetches new ones below
+that. Keys it has just fetched are served as `aws` returned them, and in
+self mode they can have less time left. It refuses credentials with no
+expiry, such as the long-lived keys of an IAM user.
 
 The broker keeps the keys in memory and writes none of them to the secret
 store or to a file. The audit line names the access key id it handed out,
@@ -388,17 +390,22 @@ own identity.
 
 **Revocation.** `brig stop` revokes the sandbox's session tokens, so it can
 fetch no more keys. A secret you import again with another role or mode
-takes effect at the next fetch: the broker reads the secret on every
-request, and fetches again when it changed. Keys already handed out stay
-valid until they expire. To cut them off sooner, change the role's policy or
+takes effect at the next fetch: the broker does not serve keys it fetched
+for the old secret, and fetches again. Keys already handed out stay valid
+until they expire. To cut them off sooner, change the role's policy or
 revoke its sessions in AWS.
 
-**The SSO session.** Your SSO login bounds the route. When it expires, the
-broker cannot fetch keys. A run that starts then is refused with exit `6`,
-and a request from a running guest that needs new keys gets a 502. Both name the fix,
-`aws sso login --profile <profile>`, which you run on the host. The guest
-keeps the keys it holds until they expire, and its AWS calls fail after
-that.
+**The SSO session.** The route works while your SSO login works, plus any
+credentials the `aws` CLI has cached from it in `~/.aws/cli/cache`. `aws`
+reuses those until they expire. A permission-set session lasts 1 to 12
+hours, so the route can keep working for hours after the SSO login lapses.
+When `aws` can get no credentials, the broker cannot fetch keys. A new run
+is then refused with exit `6`, and a request from a running guest that
+needs new keys gets a 502. Both name the fix:
+`aws sso login --profile <profile>`, run on the host. The guest keeps the
+keys it holds until they expire. To cut the route off sooner, run
+`aws sso logout` on the host, run `brig stop`, or revoke the sessions in
+AWS.
 
 **The session token.** The guest fetches keys with its session token for the
 route. Brig mints one on every exec, and it lasts 12 hours. An agent process
