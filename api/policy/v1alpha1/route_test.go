@@ -601,6 +601,34 @@ func TestAWSRouteRefusesAnUpstream(t *testing.T) {
 	}
 }
 
+// The aws route sets no credential on a request, and the preset's inject is
+// only where the broker reads the session token. An inject the policy writes
+// would be read as a credential that goes somewhere, and a header it sets
+// with {value} would become another place the guest's token is read from.
+func TestAWSRouteRefusesAnInject(t *testing.T) {
+	r := Route{
+		Name:       "aws",
+		Preset:     PresetAWS,
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "aws"}},
+		Inject: &Inject{Headers: &HeaderInject{
+			Set: []Header{{Name: "X-Token", Value: "{value}"}}}},
+	}
+	err := r.validateWritten()
+	if err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no inject") {
+		t.Fatalf("an aws route with an inject: err = %v", err)
+	}
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: a}\nspec:\n  routes:\n" +
+		"    - name: aws\n      preset: aws\n      credential: {secretRef: {name: aws}}\n" +
+		"      inject: {headers: {set: [{name: X-Token, value: \"{value}\"}]}}\n"
+	p, err := Decode([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "takes no inject") {
+		t.Errorf("a policy with an inject on an aws route: Validate = %v", err)
+	}
+}
+
 func TestRouteRegionOnlyOnAWS(t *testing.T) {
 	r := Route{
 		Name:       "gh",

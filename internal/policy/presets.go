@@ -153,6 +153,12 @@ func ExpandRoute(r v1alpha1.Route) (v1alpha1.Route, error) {
 	out := *r.DeepCopy()
 	var base presetFile
 	mode, registered := routemode.Lookup(r.Mode)
+	// Validate sees the route after the overlay, where the preset's inject
+	// is set, so the written route is checked here. The broker expands what
+	// brig sends it and does not rely on brig's policy check.
+	if r.Vends() && r.Inject != nil {
+		return v1alpha1.Route{}, fmt.Errorf("route %s: the %s preset vends credentials and takes no inject", r.Name, r.Preset)
+	}
 	if r.Preset != "" {
 		var err error
 		if base, err = decodePreset(r.Preset); err != nil {

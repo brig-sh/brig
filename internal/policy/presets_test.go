@@ -557,3 +557,20 @@ func TestAWSPresetExpands(t *testing.T) {
 		t.Errorf("upstream = %q, vends = %v", r.Upstream, r.Vends())
 	}
 }
+
+// The broker expands each route brig sends it again, so ExpandRoute refuses
+// an inject on a route that vends as policy validation does. Merged over the
+// preset's, a header set with {value} would be one more place the broker
+// reads the guest's session token from.
+func TestAWSPresetRefusesAnInject(t *testing.T) {
+	r := v1alpha1.Route{
+		Name:       "aws",
+		Preset:     v1alpha1.PresetAWS,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "aws"}},
+		Inject: &v1alpha1.Inject{Headers: &v1alpha1.HeaderInject{
+			Set: []v1alpha1.Header{{Name: "X-Token", Value: "{value}"}}}},
+	}
+	if _, err := ExpandRoute(r); err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no inject") {
+		t.Fatalf("ExpandRoute of an aws route with an inject: err = %v", err)
+	}
+}

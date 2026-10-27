@@ -67,6 +67,13 @@ func (r *Route) validate(expanded bool) error {
 		if r.Upstream != "" {
 			return fmt.Errorf("the %s preset vends credentials and takes no upstream", r.Preset)
 		}
+		// The route puts no credential on a request; the preset's inject
+		// only says where the broker reads the session token. One written
+		// in a policy would read as a credential that goes somewhere, and a
+		// header set with {value} would be one more place the token is read.
+		if !expanded && r.Inject != nil {
+			return fmt.Errorf("the %s preset vends credentials and takes no inject", r.Preset)
+		}
 	} else if r.Upstream != "" {
 		if err := checkOrigin(r.Upstream); err != nil {
 			return err
