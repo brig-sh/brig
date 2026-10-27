@@ -862,7 +862,9 @@ func TestGuestEnvAnEndpointRouteBesideAWSKeepsBrigInternal(t *testing.T) {
 	}
 }
 
-// A run without an aws route does not get AWS_CA_BUNDLE.
+// No run gets AWS_CA_BUNDLE: the AWS SDKs' container provider ignores it, and
+// the aws route is reached in plain HTTP. This guards against it coming back
+// for a run without an aws route; TestGuestEnvAWSRoute covers one with it.
 func TestGuestEnvNoCABundleWithoutAWS(t *testing.T) {
 	ep := HostEndpoint{Transport: TransportBrigInternal}
 	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "anthropic", v1alpha1.PresetClaudeCode, "k")},
