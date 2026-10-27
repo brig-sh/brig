@@ -8,8 +8,9 @@ on macOS, `nerdctl` on Linux), from cosign or from Homebrew. An entry says
 so when its message does not come from Brig.
 
 Run `brig doctor` first. It prints the build of `brig` that you run. Then it
-checks eight items, one line each: the host, the hypervisor, the runtime and
-its version, the boot assets, cosign, the profiles, the secret store and
+checks nine items, one line each: the host, the hypervisor, the runtime and
+its version, the boot assets, whether the runtime can give a guest nested
+virtualization, cosign, the profiles, the secret store and
 brigd. Under a line marked `!!` it prints the fix. `brig doctor <agent>`
 checks the image of that agent too. `--json` prints the same report as one
 document, for a script or a bug report.
@@ -855,6 +856,58 @@ On nerdctl, when Brig cannot put the rules in place, the refusal reads
 When the resolver did not start, the refusal quotes the start of its log,
 `~/.brig/egress/<sandbox>.log`.
 
+## nested virtualization (capability kvm) needs the hvi backend
+
+```
+brig: nested virtualization (capability kvm) needs the hvi backend
+(BRIG_HYPERVISOR is "vz"); run it on hvi, or drop the capability from the
+profile
+```
+
+The profile lists `capabilities: [kvm]` and the run resolved to another
+backend: `BRIG_HYPERVISOR` if set, otherwise the profile's `hypervisor:`,
+otherwise `vz`. Unset `BRIG_HYPERVISOR`, or set it to `hvi`, and give the
+profile `hypervisor: hvi`. Nothing was booted.
+
+## nested virtualization requested but not supported by this host
+
+```
+brig: could not start the sandbox: /opt/homebrew/bin/hull run: exit status 1
+  error: nested virtualization requested but not supported by this host: <reason>
+```
+
+hull refused `--nested-virt` because this Mac cannot give a guest EL2. It does
+so before it creates anything. There is no setting that works around it: drop
+the capability to run the profile without nesting. `brig doctor` shows the
+same answer on its `nested` row.
+
+When the profile gained the capability while its sandbox was running, Brig
+asks first and refuses before it stops anything, ending with
+`The running sandbox <name> was left as it is`.
+
+## this hull predates nested virtualization
+
+```
+brig: could not start the sandbox: /opt/homebrew/bin/hull run: this hull
+(0.1.0-rc29) predates nested virtualization; upgrade hull
+```
+
+The hull in use was released before `--nested-virt`. Upgrade hull, or point
+`BRIG_RUNTIME_BIN` at a build that has it. `brig doctor` says the same on its
+`nested` row.
+
+## this profile asks for the kvm capability
+
+Linux only:
+
+```
+brig: this profile asks for the kvm capability (nested virtualization), which
+brig provides only on macOS through hull's hvi backend; the Linux runtime does
+not pass /dev/kvm through
+```
+
+Run the profile on a Mac, or drop `capabilities: [kvm]` from it.
+
 ## docker does not carry annotations
 
 Linux only, for a profile that boots an unmodified image (six of the eight
@@ -925,7 +978,7 @@ Brig allows a shim that it cannot place, such as another microVM shim.
 
 ## Sandbox restarted on `brig sh`
 
-Brig warns and recreates the sandbox in the four cases below (see
+Brig warns and recreates the sandbox in the five cases below (see
 [Sessions, homes and projects](sessions.md)). Brig keeps the guest home on
 the host. Every other session on that sandbox disconnects at the restart.
 
@@ -983,6 +1036,21 @@ that names no posture never causes this restart. A `--network` or
 
 The warning names the posture that the sandbox runs with. A sandbox that a
 policy isolated is named `isolated`, even after the policy is detached.
+
+### Nested virtualization added to or removed
+
+```
+brig: this sandbox was started with nested virtualization and ubuntu-kvm no longer asks for it
+  ↳ a guest's virtualization is fixed when it boots, so brig restarts it
+  ↳ any other session using this sandbox will be disconnected
+```
+
+Whether a guest has EL2 is fixed at boot, and hull records it. A run of a
+profile that no longer matches that record restarts the sandbox, so the
+envelope's `CAPABILITIES` row describes the guest that runs. The opposite case
+reads `started without nested virtualization and <profile> now asks for it`,
+and happens only when this host can nest. Otherwise the run is refused and the
+sandbox keeps running.
 
 ### Different project
 

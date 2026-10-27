@@ -176,6 +176,21 @@ func (p Profile) Validate() error {
 	default:
 		return fmt.Errorf("rootfsType %q is not one of block, virtiofs or 9pfs", p.RootfsType)
 	}
+	// A capability widens the boundary, so a name brig does not know is
+	// refused here: a typo would otherwise read as a
+	// profile asking for something and boot a guest that quietly lacks it,
+	// and a future capability must not be granted by a brig too old to know
+	// what it grants.
+	seenCap := make(map[string]bool, len(p.Capabilities))
+	for _, c := range p.Capabilities {
+		if c != CapabilityKVM {
+			return fmt.Errorf("capability %q is not one of: %s", c, CapabilityKVM)
+		}
+		if seenCap[c] {
+			return fmt.Errorf("capabilities lists %q twice", c)
+		}
+		seenCap[c] = true
+	}
 	// A policy name ends up in a file path wherever it is resolved, so it
 	// has to be safe there.
 	for _, name := range p.Policy {
@@ -326,6 +341,11 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this 
 #              the image was never built to be a guest -- a plain OCI image
 #              with no kernel in it. The runtime supplies the kernel and
 #              initrd and boots it unmodified
+#   capabilities
+#              what the guest gets beyond an ordinary microVM. [kvm] is the
+#              only one: nested virtualization, a /dev/kvm in the guest so it
+#              can run VMs of its own. hvi backend on macOS only. Off unless
+#              listed; read docs/security.md before turning it on
 #   reserved   marks a profile that owns the workspace a session name could
 #              otherwise slug onto. The trailing word is reserved too, so
 #              claude-desktop reserves "desktop" as well as its own name

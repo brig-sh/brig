@@ -260,6 +260,22 @@ has the sandbox name, the isolation, the guest home, the image and the
 verification mode. It also has the network, every published port and the
 credentials by name. `brig --verbose run` prints the same envelope before it boots.
 
+A profile that lists `capabilities: [kvm]` adds a `CAPABILITIES` row. The row
+says that brig's view of the guest does not extend into the VMs it runs. See
+[security.md](security.md#nested-virtualization-opt-in).
+
+On macOS the report under the envelope also says whether this host can give a
+guest nested virtualization. It prints one of these:
+`nested virtualization: supported (backend hvi)`,
+`not supported on this host: <reason>` (the reason is hull's, or why hull
+could not answer), or `this hull (<version>) predates nested virtualization;
+upgrade hull`. When the sandbox is running, and it was booted with or without
+nested virtualization against what the profile now asks, one more line says so
+and that the next run restarts it. `--json` carries the same facts as
+`capabilities` and `nestedVirtualization`. The running guest's state is
+`nestedVirtualization.runningNested`. Each field is left out when there is
+nothing to report.
+
 The network row gives the posture of the running sandbox. When the posture of
 the next boot is different, the row gives that posture too.
 
@@ -481,8 +497,9 @@ brig doctor
 ```
 
 `brig doctor` examines these items, one line each: the Brig build, the host,
-the hypervisor, the runtime, the boot assets, cosign, the profile directory,
-the secret store and brigd.
+the hypervisor, the runtime, the boot assets, whether the runtime can give a
+guest nested virtualization, cosign, the profile directory, the secret store
+and brigd.
 
 The first line is the build that `brig version` prints. `doctor` asks a
 running brigd for its build. If that build differs from the `brig` binary,
@@ -506,8 +523,10 @@ brig doctor --json
 (`ok`, `!!` or `--`), `finding` and, when the check failed, `fix`.
 
 Only two checks set the exit status. A missing or broken runtime exits `4`,
-and a secret store that does not open exits `6`. Every other finding,
-including one marked `!!`, prints its fix and leaves the exit status at `0`.
+and a secret store that does not open exits `6`. The `nested` row is never
+`!!`: a host that cannot nest, or a hull that cannot answer, is reported with
+`--`. Every other finding, including one marked `!!`, prints its fix and
+leaves the exit status at `0`.
 
 ### `brig version`
 
