@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -572,5 +573,64 @@ func TestAWSPresetRefusesAnInject(t *testing.T) {
 	}
 	if _, err := ExpandRoute(r); err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no inject") {
 		t.Fatalf("ExpandRoute of an aws route with an inject: err = %v", err)
+	}
+}
+
+// brig sends the broker routes that Routes has expanded, the preset's inject
+// filled in, and the broker expands each one again. A second expansion must
+// accept what the first produced, also after the JSON of the control socket,
+// or every registration with an aws route is refused.
+func TestAWSPresetExpandsTwice(t *testing.T) {
+	first, err := ExpandRoute(v1alpha1.Route{
+		Name:       "aws",
+		Preset:     v1alpha1.PresetAWS,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "aws"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent v1alpha1.Route
+	if err := json.Unmarshal(blob, &sent); err != nil {
+		t.Fatal(err)
+	}
+	for name, r := range map[string]v1alpha1.Route{"as expanded": first, "through JSON": sent} {
+		second, err := ExpandRoute(r)
+		if err != nil {
+			t.Fatalf("%s: a second expansion was refused: %v", name, err)
+		}
+		if !reflect.DeepEqual(second, first) {
+			t.Errorf("%s: a second expansion changed the route:\n got %+v\nwant %+v", name, second, first)
+		}
+	}
+}
+
+// Accepting the preset's own inject on a second expansion must not let an
+// altered one through: a header set with {value} would be one more place the
+// broker reads the guest's session token from.
+func TestAWSPresetRefusesAnAlteredInjectOnAnExpandedRoute(t *testing.T) {
+	first, err := ExpandRoute(v1alpha1.Route{
+		Name:       "aws",
+		Preset:     v1alpha1.PresetAWS,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "aws"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, edit := range map[string]func(*v1alpha1.Inject){
+		"a header added": func(in *v1alpha1.Inject) {
+			in.Headers.Set = append(in.Headers.Set, v1alpha1.Header{Name: "X-Token", Value: "{value}"})
+		},
+		"the header renamed": func(in *v1alpha1.Inject) { in.Headers.Set[0].Name = "X-Token" },
+		"basic auth added":   func(in *v1alpha1.Inject) { in.BasicAuth = &v1alpha1.BasicAuth{Username: "x"} },
+	} {
+		r := *first.DeepCopy()
+		edit(r.Inject)
+		if _, err := ExpandRoute(r); err == nil || !strings.Contains(err.Error(), "takes no inject") {
+			t.Errorf("%s: err = %v, want the inject refused", name, err)
+		}
 	}
 }

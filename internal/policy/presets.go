@@ -3,6 +3,7 @@ package policy
 import (
 	"embed"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -154,10 +155,22 @@ func ExpandRoute(r v1alpha1.Route) (v1alpha1.Route, error) {
 	var base presetFile
 	mode, registered := routemode.Lookup(r.Mode)
 	// Validate sees the route after the overlay, where the preset's inject
-	// is set, so the written route is checked here. The broker expands what
-	// brig sends it and does not rely on brig's policy check.
+	// is set, so the inject the route arrives with is checked here: the
+	// broker expands what brig sends it and does not rely on brig's policy
+	// check. What brig sends is already expanded, so the preset's own inject
+	// is accepted and only one that differs is refused; refusing every
+	// inject refused every registration with a route that vends.
 	if r.Vends() && r.Inject != nil {
-		return v1alpha1.Route{}, fmt.Errorf("route %s: the %s preset vends credentials and takes no inject", r.Name, r.Preset)
+		bare := *r.DeepCopy()
+		bare.Inject = nil
+		e, err := ExpandRoute(bare)
+		if err != nil {
+			return v1alpha1.Route{}, err
+		}
+		if !reflect.DeepEqual(r.Inject, e.Inject) {
+			return v1alpha1.Route{}, fmt.Errorf("route %s: the %s preset vends credentials and takes no inject", r.Name, r.Preset)
+		}
+		return e, nil
 	}
 	if r.Preset != "" {
 		var err error

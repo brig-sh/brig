@@ -17,6 +17,7 @@ import (
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/secret"
 )
 
@@ -284,6 +285,34 @@ func TestRemoveForgetsVendCache(t *testing.T) {
 	}
 	if n := f.fetches(t); n != 2 {
 		t.Errorf("a registration after remove fetched %d times in all, want 2", n)
+	}
+}
+
+// brig registers the routes that policy.Routes expanded, with the preset's
+// inject filled in, and the broker expands them again. The broker tests that
+// register awsRoute() send the route as written, so this one takes the path
+// a real run takes: a policy document, parsed and expanded by brig.
+func TestRegisterAcceptsARouteBrigExpanded(t *testing.T) {
+	r, _ := startAWSBroker(t, serverConfig{logTo: io.Discard})
+	p, err := policy.Parse([]byte("apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: aws}\n" +
+		"spec:\n  routes:\n    - name: aws\n      preset: aws\n      credential: {secretRef: {name: aws}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := policy.Routes([]policy.Policy{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb := injector.Sandbox{ID: "brig-a", Profile: "claude-code"}
+	for _, rt := range routes {
+		sb.Routes = append(sb.Routes, injector.Route{Policy: "aws", Route: rt})
+	}
+	added, err := r.client.Add(sb)
+	if err != nil {
+		t.Fatalf("registering the route brig expanded: %v", err)
+	}
+	if got := added.Regions["aws"]; got != "us-east-1" {
+		t.Errorf("Regions[aws] = %q, want us-east-1", got)
 	}
 }
 
