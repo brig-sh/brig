@@ -414,7 +414,9 @@ older than that cannot fetch keys again. The next exec gets a new token.
 **Named, not ambient.** You name the AWS profile when you run
 `brig secret import`. The secret holds that pointer and no key. Brig does
 not read `~/.aws` or the AWS SSO cache itself. `brig-broker` runs the host's
-`aws` CLI, which does, on every fetch. The broker runs `aws` with every
+`aws` CLI, which does, on every fetch. The broker finds `aws` on its own
+`PATH`, the way Brig finds `hull` and `cosign`, so the first `aws` on that
+`PATH` is the one that reads your profile. The broker runs `aws` with every
 `AWS_` variable removed from its environment, so a variable in your shell,
 such as `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`, never decides which identity a
 sandbox gets. The import applies the same rule, so its check sees what the
