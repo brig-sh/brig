@@ -478,11 +478,20 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			s.creds.untrack(name)
 		}
 	}
+	// A refusal after the AWS check passed is still a refusal: a sandbox
+	// that was not registered before leaves no keys behind, or a later
+	// sandbox of the same id is served keys fetched for one that never ran.
+	refused := func() {
+		untrack()
+		if _, ok := s.sandboxes[req.ID]; !ok {
+			s.aws.forget(req.ID)
+		}
+	}
 	for _, rt := range sb.Routes {
 		name := rt.Route.Credential.SecretRef.Name
 		created, err := s.creds.track(name, rt.Route.Credential.Lifecycle)
 		if err != nil {
-			untrack()
+			refused()
 			http.Error(w, fmt.Sprintf("sandbox %s: route %s: %v", req.ID, rt.Route.Name, err), http.StatusBadRequest)
 			return
 		}
@@ -491,7 +500,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.handler.AddSandbox(sb); err != nil {
-		untrack()
+		refused()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

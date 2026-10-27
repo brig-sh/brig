@@ -17,6 +17,7 @@ import (
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/secret"
 )
 
 // Fake values only. TestNothingVendedOnDisk looks for these.
@@ -283,6 +284,49 @@ func TestRemoveForgetsVendCache(t *testing.T) {
 	}
 	if n := f.fetches(t); n != 2 {
 		t.Errorf("a registration after remove fetched %d times in all, want 2", n)
+	}
+}
+
+// A registration can pass the AWS check and still be refused after it: a
+// route's lifecycle with no renewer, or a sandbox the handler will not take.
+// A sandbox that was not registered before leaves no keys behind then
+// either, or a later sandbox of the same id would be served keys fetched for
+// a registration that never happened.
+func TestRegistrationRefusedAfterTheCheckForgetsTheKeys(t *testing.T) {
+	cases := map[string]struct {
+		cfg serverConfig
+		sb  injector.Sandbox
+	}{
+		"lifecycle with no renewer": {
+			cfg: serverConfig{logTo: io.Discard, renewerFor: func(v1alpha1.Lifecycle) (secret.Renewer, error) {
+				return nil, errors.New("no renewer in this test")
+			}},
+			sb: injector.Sandbox{ID: "brig-a", Profile: "claude-code",
+				Routes: []injector.Route{awsRoute(), claudeRoute()}},
+		},
+		"handler refuses the sandbox": {
+			cfg: serverConfig{logTo: io.Discard},
+			sb: injector.Sandbox{ID: "brig-a", Profile: "claude-code",
+				Routes: []injector.Route{awsRoute(), awsRoute()}},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r, f := startAWSBroker(t, tc.cfg)
+			_, err := r.client.Add(tc.sb)
+			if ref := refusal(t, err); ref.Status != http.StatusBadRequest {
+				t.Fatalf("refusal = %d %q, want 400", ref.Status, ref.Message)
+			}
+			if n := f.fetches(t); n != 1 {
+				t.Fatalf("the refused registration fetched %d times, want 1", n)
+			}
+			if _, err := r.client.Add(awsSandbox("brig-a")); err != nil {
+				t.Fatal(err)
+			}
+			if n := f.fetches(t); n != 2 {
+				t.Errorf("fetches = %d, want 2: keys of the refused registration were kept", n)
+			}
+		})
 	}
 }
 
