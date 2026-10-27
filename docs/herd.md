@@ -24,14 +24,15 @@ Host herd*+*
   ForwardAgent no
   StrictHostKeyChecking yes
   UserKnownHostsFile /dev/null
-  KnownHostsCommand /bin/sh -c 'r=$(echo "$1" | sed "s/+/@/") && k=$(brig -q exec "$r" -- cat /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null) && echo "$1 $k"' sh %n
+  KnownHostsCommand /bin/sh -c 'r=$(echo "$1" | sed "s/+/@/") && k=$(brig -q exec "$r" -- cat /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null) && [ -n "$k" ] && echo "$1 $k"' sh %n
   LogLevel ERROR
   ProxyCommand sh -c 'exec brig -q exec "${1%%+*}@${1#*+}" -- /usr/local/sbin/herd-sshd 2>/dev/null' sh %n
 ```
 
 A host is `<profile>+<sandbox>`: `herd+api` is the sandbox `herd@api`, and
-`herd-review+api` is `herd-review@api`. Brig names cannot contain `+`, so the
-split is never ambiguous. The block matches any profile whose name starts with
+`herd-review+api` is `herd-review@api`. Both commands split at the first `+`,
+and a profile name cannot contain one, so the profile is always what is left
+of it. The block matches any profile whose name starts with
 `herd`, so a profile made with `brig agent new <name> --from herd` needs no
 block of its own if you name it `herd-<something>`.
 
@@ -41,8 +42,9 @@ block of its own if you name it `herd-<something>`.
   image ships no host keys and the guest root does not survive `brig stop`, so
   a sandbox has new keys after every boot. herdr checks a machine with strict
   host key checking, which a known_hosts file could only pass until the next
-  boot. `KnownHostsCommand` cannot use `${...}`, which ssh expands itself, so
-  it splits the host name with `sed`.
+  boot. An empty key fails the check rather than passing a malformed line.
+  `KnownHostsCommand` cannot use `${...}`, which ssh expands itself, so it
+  splits the host name with `sed`.
 - No key. The image accepts root with an empty password. Whoever can run
   `brig exec` on your host is already root in the guest, and the guest has
   no open port, so a key would guard nothing that `brig exec` does not.
@@ -63,15 +65,17 @@ brig run -d herd@api ~/code/api
 herdr machine add herd+api --label api
 ```
 
-`herdr machine add` prints `Remote server is ready`. Open a pane on `api` in
-herdr and run `cd /work/api && claude`: a pane starts in `/root`, not in the
-project.
+`brig run -d` boots the sandbox and starts no agent: Claude Code runs only in
+the herdr panes, one per `claude` you start there. `herdr machine add` prints
+`Remote server is ready`. Open a pane on `api` in herdr and run
+`cd /work/api && claude`: a pane starts in `/root`, not in the project.
 
 Each SSH connection is a new `brig exec`, so it carries a new session token.
 `herd-sshd` writes what the exec received to `/run/herd/env`, and
-`/etc/bash.bashrc` reads it, because `sshd` starts every session with an
-empty environment. A pane keeps the values it started with. A pane that does
-not start `bash` gets none of them. See
+`/etc/bash.bashrc` reads it in an SSH session, because `sshd` starts every
+session with an empty environment. A `brig sh` does not read it, and keeps
+the token brig gave it. A pane keeps the values it started with. A pane that
+does not start `bash` gets none of them. See
 [What is still exposed](security.md#what-is-still-exposed).
 
 ## Remove a sandbox

@@ -20,12 +20,14 @@
 # the deprecation window and quotes the notice, and a changelog is allowed to
 # say what a release retired.
 #
-# docs/herd.md is exempt for a different reason: it has to teach `brig exec`.
-# Its ssh ProxyCommand carries an SSH stream over the exec, which needs a
-# command with no guest pty and no login shell -- `brig sh` asks for a pty
-# and runs `bash -lc`, whose startup output would corrupt the stream. `brig
-# exec` is the only verb that gives both until #335 lands, so removing it
-# breaks herd, and this entry is where that shows.
+# docs/herd.md is exempt from one pattern only, the exec one, because it has
+# to teach `brig exec`. Its ssh ProxyCommand carries an SSH stream over the
+# exec, which needs a command with no guest pty and no login shell -- `brig
+# sh` asks for a pty and runs `bash -lc`, whose startup output would corrupt
+# the stream. `brig exec` is the only verb that gives both until #335 lands,
+# so removing it breaks herd, and skips_pattern is where that shows. The
+# other patterns stay live on the page. The retired-ok marker cannot do this:
+# the ProxyCommand is in a fenced block.
 #
 # Elsewhere, a single PROSE line can opt out with a `retired-ok` marker in an
 # HTML comment, for a passage that names an old spelling to describe it rather
@@ -47,7 +49,15 @@ set -uo pipefail
 
 is_exempt() {
 	case "$1" in
-	docs/migration.md | docs/stability.md | CHANGELOG.md | docs/herd.md) return 0 ;;
+	docs/migration.md | docs/stability.md | CHANGELOG.md) return 0 ;;
+	esac
+	return 1
+}
+
+# skips_pattern <file> <pattern>: one pattern switched off for one file.
+skips_pattern() {
+	case "$1:$2" in
+	"docs/herd.md:brig (exec|shell)\b") return 0 ;;
 	esac
 	return 1
 }
@@ -124,6 +134,10 @@ while IFS= read -r f; do
 	[ -n "$commands" ] || continue
 	i=0
 	while [ "$i" -lt "${#patterns[@]}" ]; do
+		if skips_pattern "$f" "${patterns[$i]}"; then
+			i=$((i + 1))
+			continue
+		fi
 		hits=$(printf '%s\n' "$commands" | grep -E ":.*${patterns[$i]}" || true)
 		if [ -n "$hits" ]; then
 			while IFS= read -r hit; do
