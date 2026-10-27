@@ -137,6 +137,23 @@ func TestFetchBadOutputCarriesNoOutput(t *testing.T) {
 	}
 }
 
+// Long-lived IAM user keys come back with no Expiration. They cannot be
+// refreshed on a schedule, and a sandbox must not be handed them.
+func TestFetchRefusesNoExpiration(t *testing.T) {
+	var calls []call
+	cli := CLI{run: seam(&calls, `{"Version":1,"AccessKeyId":"AKIAX","SecretAccessKey":"S3CR3T"}`, "", nil)}
+	c, err := cli.Fetch(context.Background(), Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeSelf}, "s")
+	if err == nil || !strings.Contains(err.Error(), "printed no usable Expiration; long-lived keys cannot be brokered") {
+		t.Fatalf("err = %v, want the long-lived key refusal", err)
+	}
+	if c != (Credentials{}) {
+		t.Errorf("returned %+v with the refusal", c)
+	}
+	if strings.Contains(err.Error(), "S3CR3T") {
+		t.Errorf("the refusal carries the secret key: %v", err)
+	}
+}
+
 func TestRegionEmpty(t *testing.T) {
 	var calls []call
 	cli := CLI{run: seam(&calls, "\n", "", nil)}
