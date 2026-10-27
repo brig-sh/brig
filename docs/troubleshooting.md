@@ -142,7 +142,7 @@ With no runtime on PATH, `brig ls` reports no sandboxes and exits `0`.
           run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
 ```
 
-**Cause:** Six of the eight built-in profiles boot an unmodified OCI image,
+**Cause:** Seven of the nine built-in profiles boot an unmodified OCI image,
 which carries no kernel. They need a shared kernel and initrd (the boot
 assets), and nothing downloaded that bundle yet.
 
@@ -278,8 +278,8 @@ the warning is gone.
 Brig prints no error. The agent shows its login screen on a sandbox that you
 already logged in to.
 
-**Cause:** Only `claude-code` and `claude-desktop` keep the in-guest login
-in a memory-backed mount that never reaches host disk, and `brig stop`
+**Cause:** Only `claude-code`, `claude-desktop` and `herd` keep the in-guest
+login in a memory-backed mount that never reaches host disk, and `brig stop`
 removes it with the microVM. The other six profiles keep the whole guest
 home on host disk, so a login written there survives a stop.
 
@@ -745,7 +745,7 @@ interrupt controller does not exist here. Set BRIG_HYPERVISOR=vz BRIG_NETWORK=sh
 for this run, or upgrade macOS
 ```
 
-**Cause:** Six of the eight built-in profiles ask for the `hvi` hypervisor
+**Cause:** Seven of the nine built-in profiles ask for the `hvi` hypervisor
 backend. It uses Apple's in-kernel interrupt controller, the `hv_gic_*`
 calls, which arrived in macOS 15. Brig reads the macOS version before
 it asks the runtime for anything, and refuses an `hvi` run on an older
@@ -857,7 +857,7 @@ When the resolver did not start, the refusal quotes the start of its log,
 
 ## docker does not carry annotations
 
-Linux only, for a profile that boots an unmodified image (six of the eight
+Linux only, for a profile that boots an unmodified image (seven of the nine
 built-in profiles).
 
 ```

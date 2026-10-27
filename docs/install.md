@@ -248,7 +248,7 @@ boot as a guest.
 
 | Profiles | Need `oras` |
 | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `opencode`, `ubuntu` (six of the eight shipped profiles, all `genericBoot`) | Yes |
+| `claude-code`, `codex`, `gemini`, `grok`, `herd`, `opencode`, `ubuntu` (seven of the nine shipped profiles, all `genericBoot`) | Yes |
 | `claude-desktop`, `cursor` | No |
 
 Without `oras` on `PATH`, a `genericBoot` run fails. The error names the
@@ -371,7 +371,7 @@ depends on an in-kernel interrupt controller that Apple first shipped in
 macOS 15. On an older macOS, Brig refuses the run, so that the virtual
 machine monitor does not crash.
 
-Six of the eight shipped profiles ask for `hvi`, so a first run on macOS 14
+Seven of the nine shipped profiles ask for `hvi`, so a first run on macOS 14
 hits this minimum. To run them on macOS 14, set two variables:
 
 | Setting | Why |

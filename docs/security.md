@@ -351,6 +351,17 @@ A `claude` started without it, under `sudo -i`, `su -` or `env -i` for
 example, writes `.credentials.json` to `~/.claude` in the guest home. That
 directory is on the home share, so the file is on host disk.
 
+The `herd` profile writes the forwarded environment into the guest. An SSH
+session into a herd sandbox is a `brig exec`, and the image's `herd-sshd` <!-- retired-ok -->
+copies everything that exec received to `/run/herd/env`, so that a herdr pane
+gets it. That includes the route's session token and an exported `GH_TOKEN`.
+The file is on `tmpfs`, mode `0600`, owned by root, and never in the guest
+home, so it does not reach host disk. It holds the values of the latest
+connection until the next one or a stop. `/etc/bash.bashrc` reads it, so a
+pane that does not start `bash` has no `CLAUDE_CONFIG_DIR`, and a `claude`
+started there writes its credential to the home share as above. See
+[herd.md](herd.md).
+
 On hull with the `hvi` backend, the guest root is itself a share of the
 sandbox's directory in hull's store. If something on the host renames or
 replaces the directory under `/brig/claude` there while the sandbox runs, the
@@ -755,9 +766,9 @@ Two things are narrower on macOS than on Linux:
 
 ### The kernel, not only the image
 
-Six of the eight shipped profiles boot a kernel and an initrd that Brig
-downloads. They are `claude-code`, `codex`, `gemini`, `grok`, `opencode` and
-`ubuntu`. Brig checks that bundle too, under the same
+Seven of the nine shipped profiles boot a kernel and an initrd that Brig
+downloads. They are `claude-code`, `codex`, `gemini`, `grok`, `herd`,
+`opencode` and `ubuntu`. Brig checks that bundle too, under the same
 [`BRIG_VERIFY` mode](#verification-modes), as a second check with its own
 trust root.
 
