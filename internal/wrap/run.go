@@ -527,7 +527,7 @@ func (c *Config) hypervisor() string {
 // shipped first in macOS 15. On macOS 14 those symbols are absent and the VMM
 // dies at start with `dyld: missing symbol called` -- a failure with no name
 // on it, which reads like a brig bug rather than an OS floor. That is the
-// report in #4, seen on 14.5. Six of the eight shipped profiles ask for hvi,
+// report in #4, seen on 14.5. Seven of the nine shipped profiles ask for hvi,
 // so the default first run on macOS 14 hits this, and it is worth catching
 // here rather than leaving to an unnamed crash.
 //

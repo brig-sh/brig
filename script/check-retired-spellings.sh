@@ -20,6 +20,13 @@
 # the deprecation window and quotes the notice, and a changelog is allowed to
 # say what a release retired.
 #
+# docs/herd.md is exempt for a different reason: it has to teach `brig exec`.
+# Its ssh ProxyCommand carries an SSH stream over the exec, which needs a
+# command with no guest pty and no login shell -- `brig sh` asks for a pty
+# and runs `bash -lc`, whose startup output would corrupt the stream. `brig
+# exec` is the only verb that gives both until #335 lands, so removing it
+# breaks herd, and this entry is where that shows.
+#
 # Elsewhere, a single PROSE line can opt out with a `retired-ok` marker in an
 # HTML comment, for a passage that names an old spelling to describe it rather
 # than to teach it: explaining a limitation that only the retired spelling has,
@@ -40,7 +47,7 @@ set -uo pipefail
 
 is_exempt() {
 	case "$1" in
-	docs/migration.md | docs/stability.md | CHANGELOG.md) return 0 ;;
+	docs/migration.md | docs/stability.md | CHANGELOG.md | docs/herd.md) return 0 ;;
 	esac
 	return 1
 }

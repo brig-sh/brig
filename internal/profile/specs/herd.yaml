@@ -1,0 +1,100 @@
+name: herd
+desc: Claude Code with a herdr server, managed over SSH
+binary: claude
+# :latest, not :root as the other published profiles say. herd is built on
+# root only, so its default stock image is already the root one and there is
+# no separate :root tag.
+image: ghcr.io/brig-sh/herd-stock:latest
+
+# herd is claude-code plus sshd and a herdr server in the image, so one herdr
+# client on the host can manage many sandboxes as remote machines, one agent
+# each. Everything below is claude-code's, field for field, and
+# claude-code.yaml carries the reasoning for each. The fields are written out
+# rather than referenced because a spec has no way to inherit another, the
+# same trade claude-desktop makes for its secret.
+# TestHerdHandlesCredentialsLikeClaudeCode fails if the two drift.
+#
+# The host reaches the guest with an ssh ProxyCommand that runs the image's
+# herd-sshd through `brig exec`; docs/herd.md has the ssh config. herd-sshd
+# copies the exec's environment to /run/herd/env (guest tmpfs, root-only) so
+# herdr panes, which sshd starts with a clean environment, get the same broker
+# token and CA paths a `brig exec` does.
+
+hypervisor: hvi
+network: isolated
+genericBoot: true
+# Root, as claude-code. herd needs it in any case: sshd only starts a
+# session as root.
+guestHome: /root
+
+hostConfigDir: ~/.claude
+projectPaths: [skills, plugins]
+
+secrets:
+  - name: claude-credentials
+    required: false
+    expiryField: expiresAt              # found at any depth; drives the stale warning
+    sources:
+      - from: keychain
+        service: Claude Code-credentials    # macOS keeps it here
+      - from: file
+        path: ~/.claude/.credentials.json   # the documented Linux location
+        hint: run `claude` on the host once to log in
+
+  - name: gh-token
+    required: false
+    hint: "export GH_TOKEN before running brig, or store one: gh auth token | brig secret create gh-token"
+
+files:
+  - ref: secrets.claude-credentials
+    path: .claude/.credentials.json
+    mode: "0600"
+
+volumes:
+  - kind: tmpfs
+    path: .claude
+    at: /brig/claude
+    size: 512m
+  - kind: hostmount
+    path: .claude/.claude.json
+    file: true
+  - kind: hostmount
+    path: .claude/settings.json
+    file: true
+  - kind: hostmount
+    path: .claude/CLAUDE.md
+    file: true
+  - kind: hostmount
+    path: .claude/sessions
+  - kind: hostmount
+    path: .claude/projects
+  - kind: hostmount
+    path: .claude/plugins
+  - kind: hostmount
+    path: .claude/skills
+  - kind: hostmount
+    path: .claude/history.jsonl
+    file: true
+
+env:
+  - name: IS_SANDBOX
+    value: "1"
+  - name: CLAUDE_CONFIG_DIR
+    value: /brig/claude
+  - name: GH_TOKEN
+    refs: [env.GH_TOKEN, secrets.gh-token]
+
+deny: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN]
+
+staleCredentialFiles: [.claude/.credentials.json]
+
+headless: true
+mem: 4096
+cpus: 4
+
+onboarding:
+  file: .claude/.claude.json
+  seed:
+    hasCompletedOnboarding: true
+    hasTrustDialogAccepted: true
+  trustKey: [projects, hasTrustDialogAccepted]

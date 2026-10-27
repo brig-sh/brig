@@ -116,14 +116,14 @@ Four things can hold state for a session:
 - the sandbox
 - what Brig recorded about the session
 
-Only two of the eight built-in agents, `claude-code` and `claude-desktop`,
-declare a memory-backed mount. For the other six, `codex`, `cursor`,
+Only three of the nine built-in agents, `claude-code`, `claude-desktop` and
+`herd`, declare a memory-backed mount. For the other six, `codex`, `cursor`,
 `gemini`, `grok`, `opencode` and `ubuntu`, the whole guest home is the
 host-backed share. An in-guest login for those six agents lands on host disk
 and survives every stop. `brig rm` deletes it when Brig created the guest
 home.
 
-| Event | Guest home | Memory-backed mount (`claude-code`, `claude-desktop`) | The sandbox | What Brig recorded |
+| Event | Guest home | Memory-backed mount (`claude-code`, `claude-desktop`, `herd`) | The sandbox | What Brig recorded |
 | --- | --- | --- | --- | --- |
 | The agent exits | kept | kept, the sandbox is still up | still running | unchanged |
 | `brig stop` | kept | gone with the sandbox | stopped, still named in `brig ls` | kept |

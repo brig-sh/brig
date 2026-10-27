@@ -54,10 +54,10 @@ Not every profile needs every binary:
   the image must run on both, treat `sleep` as required.
 - **`bash`.** `brig sh` is how you look inside a misbehaving sandbox. You
   cannot inspect an image without `bash` that way.
-- **`volumes:` and `files:`.** Two of the eight shipped profiles declare them,
-  `claude-code` and `claude-desktop`. They are the two that deliver a
-  credential as a file. If your profile forwards everything as environment
-  variables, most of the table does not apply to it.
+- **`volumes:` and `files:`.** Three of the nine shipped profiles declare
+  them, `claude-code`, `claude-desktop` and `herd`. They are the three that
+  deliver a credential as a file. If your profile forwards everything as
+  environment variables, most of the table does not apply to it.
 
 > [!WARNING]
 > If you build against the narrower list, a `files:` binding added later brings
@@ -135,12 +135,12 @@ last path element: `/home/claude` means the user `claude` (`GuestUser` in
 
 | profiles | `guestHome` | guest user |
 | --- | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `opencode` | `/root` | root |
+| `claude-code`, `codex`, `gemini`, `grok`, `herd`, `opencode` | `/root` | root |
 | `cursor` | `/home/cursor` | `cursor` |
 | `ubuntu` | `/root/work` | The derived name is `work`, which is not an account in that image. Nothing reads it there, because the image already runs as `root` |
 
-- Five of the six shipped agent profiles set `guestHome: /root`. `cursor` is
-  the sixth.
+- Six of the seven shipped agent profiles set `guestHome: /root`. `cursor` is
+  the seventh.
 - A rootless Linux install maps container uid 0 to the invoking user. That
   lets a root guest open `/dev/kvm` and own the workspace that it writes.
 - The derivation only matters for a profile whose guest home sits inside a
@@ -186,7 +186,7 @@ guest: no kernel inside it, no urunc metadata. An image that carries its own
 kernel and urunc metadata leaves `genericBoot` off and needs none of this
 section.
 
-Six of the eight shipped profiles set it. `ubuntu` is one of them, and it
+Seven of the nine shipped profiles set it. `ubuntu` is one of them, and it
 boots `docker.io/library/ubuntu:latest` unmodified. `claude-desktop` and
 `cursor` leave it off.
 

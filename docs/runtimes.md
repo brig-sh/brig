@@ -54,11 +54,11 @@ passes `--hypervisor`, so the default of hull never decides the backend.
 | hull on `qemu` | see the hull documentation. The source of Brig does not say which framework `qemu` uses, or what it needs on the host | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | refused |
 | nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux | refused | yes. Brig creates a network for each sandbox |
 
-The eight shipped profiles divide as follows on macOS:
+The nine shipped profiles divide as follows on macOS:
 
 | profiles | backend | network |
 | --- | --- | --- |
-| six of the eight | `hypervisor: hvi` | `network: isolated`, so each new sandbox has a network of its own |
+| seven of the nine | `hypervisor: hvi` | `network: isolated`, so each new sandbox has a network of its own |
 | `claude-desktop` | none named, so `vz` | `shared` |
 | `cursor` | none named, so `vz` | none named, so `shared` |
 
@@ -348,7 +348,7 @@ On an old build, Brig drops one feature at a time:
   [Things Brig does not claim](security.md#things-brig-does-not-claim) for the
   answer per backend.
 
-The six `hvi` profiles also set `genericBoot: true`
+The seven `hvi` profiles also set `genericBoot: true`
 (`internal/profile/specs`). As a result, the default macOS path needs the
 `hvi` binary beside hull, a working gateway and the boot bundle.
 `BRIG_HYPERVISOR=vz` with `BRIG_NETWORK=shared` moves those profiles to `vz`.
