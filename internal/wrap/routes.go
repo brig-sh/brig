@@ -129,18 +129,19 @@ func (c *Config) routeRefusal() error {
 				c.endpointList(), injector.BrigInternal, err)
 		}
 	}
-	// A route that vends is reached on the link-local address, which an
-	// older hull's gateway refuses to divert only once the sandbox's
-	// gateway starts.
+	if c.Network == NetOffline {
+		return fmt.Errorf("policy %s declares routes, and this run has no network (BRIG_NETWORK=none) to "+
+			"reach them on; refusing the run rather than booting without them", c.routeList())
+	}
+	// After the network, so an offline run is refused for that first. A
+	// route that vends is reached on the link-local address, which an older
+	// hull's gateway refuses to divert only once the sandbox's gateway
+	// starts.
 	if p, ok := c.Runtime.(runtime.LinkLocalProber); ok && c.vends() {
 		if err := p.ProbeLinkLocal(); err != nil {
 			return fmt.Errorf("policy %s declares a route that vends, which the guest reaches at %s: %w",
 				c.vendList(), injector.LinkLocalAddr, err)
 		}
-	}
-	if c.Network == NetOffline {
-		return fmt.Errorf("policy %s declares routes, and this run has no network (BRIG_NETWORK=none) to "+
-			"reach them on; refusing the run rather than booting without them", c.routeList())
 	}
 	return nil
 }

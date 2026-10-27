@@ -586,3 +586,22 @@ func TestAVendingRunAllowsNoLinkLocalAddress(t *testing.T) {
 		})
 	}
 }
+
+// An offline run with a route that vends is refused for having no network,
+// which is the refusal the user acts on first, and does not ask the hull
+// whether it can divert the link-local address.
+func TestAnOfflineVendingRunIsRefusedForItsNetworkFirst(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	rec := &hullRecorder{linkLocal: errors.New("this hull cannot divert link-local")}
+	cfg := routedConfig(t, awsEndpoint, rec)
+	shortStateDir(t)
+	cfg.Network = NetOffline
+	err := cfg.routeRefusal()
+	if err == nil || !strings.Contains(err.Error(), "BRIG_NETWORK=") || strings.Contains(err.Error(), "Upgrade hull") {
+		t.Fatalf("routeRefusal = %v, want the offline refusal", err)
+	}
+	if rec.linkLocalProbes != 0 {
+		t.Errorf("an offline run probed for a link-local divert %d times", rec.linkLocalProbes)
+	}
+}
