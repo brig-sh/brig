@@ -357,8 +357,9 @@ copies everything that exec received to `/run/herd/env`, so that a herdr pane
 gets it. That includes the route's session token and an exported `GH_TOKEN`.
 The file is on `tmpfs`, mode `0600`, owned by root, and never in the guest
 home, so it does not reach host disk. It holds the values of the latest
-connection until the next one or a stop. `/etc/bash.bashrc` reads it, so a
-pane that does not start `bash` has no `CLAUDE_CONFIG_DIR`, and a `claude`
+connection until the next one or a stop. `/etc/bash.bashrc` reads it only in
+a shell sshd started, so `brig sh` keeps the token it was given, and a pane
+that does not start `bash` has no `CLAUDE_CONFIG_DIR`, and a `claude`
 started there writes its credential to the home share as above. See
 [herd.md](herd.md).
 
