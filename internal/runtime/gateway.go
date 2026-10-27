@@ -736,14 +736,19 @@ func gatewayDiverts(bin string) error {
 // binary. The run's refusal check and the gateway's start both ask.
 var linkLocalProbes sync.Map
 
-// probeLinkLocal is gatewayDivertsLinkLocal, asked once per binary.
+// probeLinkLocal is gatewayDivertsLinkLocal, asked once per binary for a yes
+// or a no. An unknown answer, such as a probe that timed out under load, is
+// not kept, so the next run asks again.
 func probeLinkLocal(bin string) error {
 	if err, ok := linkLocalProbes.Load(bin); ok {
 		err, _ := err.(error)
 		return err
 	}
 	err := gatewayDivertsLinkLocal(bin)
-	linkLocalProbes.Store(bin, err)
+	var ce *CapabilityError
+	if err == nil || errors.As(err, &ce) && ce.State == CannotEnforce {
+		linkLocalProbes.Store(bin, err)
+	}
 	return err
 }
 

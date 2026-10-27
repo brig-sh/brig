@@ -150,3 +150,28 @@ func TestABootWithNoLinkLocalDivertRunsNoLinkLocalProbe(t *testing.T) {
 		})
 	}
 }
+
+// An answer that confirms nothing, such as a probe that timed out under load,
+// is asked again on the next run. A yes and a no are kept.
+func TestHullProbeLinkLocalAsksAgainAfterAnUnknownAnswer(t *testing.T) {
+	calls := filepath.Join(t.TempDir(), "calls")
+	h := &hull{bin: answeringHull(t, calls, "flag provided but not defined: -divert", "1")}
+	for range 2 {
+		var ce *CapabilityError
+		if err := h.ProbeLinkLocal(); !errors.As(err, &ce) || ce.State != Unknown {
+			t.Fatalf("ProbeLinkLocal = %v, want unknown", err)
+		}
+	}
+	if blob, _ := os.ReadFile(calls); strings.Count(string(blob), "network-gateway") != 2 {
+		t.Errorf("the probe ran %d times, want 2: %q", strings.Count(string(blob), "network-gateway"), blob)
+	}
+	yes := &hull{bin: answeringHull(t, calls+"-yes", newHullAnswer, "1")}
+	for range 2 {
+		if err := yes.ProbeLinkLocal(); err != nil {
+			t.Fatalf("ProbeLinkLocal = %v", err)
+		}
+	}
+	if blob, _ := os.ReadFile(calls + "-yes"); strings.Count(string(blob), "network-gateway") != 1 {
+		t.Errorf("a yes was asked %d times, want 1", strings.Count(string(blob), "network-gateway"))
+	}
+}
