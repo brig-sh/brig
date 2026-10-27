@@ -13,6 +13,9 @@ import (
 const (
 	awsCaller = "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_Developer_x/someone@example.com"
 	awsSecret = "S3CR3T"
+	// awsSessionToken is the fake's SessionToken, distinct enough that its
+	// absence from the store means something.
+	awsSessionToken = "F4KE-SESSI0N-T0KEN"
 )
 
 // fakeAWS writes a stand-in aws binary into a temp dir and points newAWSCLI at
@@ -28,7 +31,7 @@ echo "$*" >> "` + log + `"
 case "$1 $2" in
 "sts get-caller-identity") echo '{"Arn":"` + awsCaller + `"}' ;;
 "configure get") echo '` + region + `' ;;
-"sts assume-role") echo '{"Credentials":{"AccessKeyId":"ASIAFAKE","SecretAccessKey":"` + awsSecret + `","SessionToken":"tok","Expiration":"2026-10-26T15:04:05+00:00"}}' ;;
+"sts assume-role") echo '{"Credentials":{"AccessKeyId":"ASIAFAKE","SecretAccessKey":"` + awsSecret + `","SessionToken":"` + awsSessionToken + `","Expiration":"2026-10-26T15:04:05+00:00"}}' ;;
 *) echo "fake aws: unexpected $*" >&2; exit 2 ;;
 esac
 `
@@ -255,6 +258,10 @@ func TestImportAWSStoresNoCredential(t *testing.T) {
 	}
 	if strings.Contains(string(store.items["aws-creds"]), awsSecret) || strings.Contains(out.String(), awsSecret) {
 		t.Error("the vended secret key reached the store or the output")
+	}
+	if strings.Contains(string(store.items["aws-creds"]), awsSessionToken) ||
+		strings.Contains(out.String(), awsSessionToken) {
+		t.Error("the vended session token reached the store or the output")
 	}
 }
 
