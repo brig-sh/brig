@@ -554,6 +554,10 @@ func (h *hull) ProbeBrigInternal() error {
 	return err
 }
 
+// ProbeLinkLocal reports whether this hull's network gateway takes a
+// --divert of LinkLocalDivert. See gatewayDivertsLinkLocal.
+func (h *hull) ProbeLinkLocal() error { return probeLinkLocal(h.bin) }
+
 // BrigInternalAddr is the address of the sandbox's own gateway, which hull
 // answers brig.internal with. A sandbox that reaches brig.internal has a
 // gateway of its own (see isolatedNet), on the network sandboxNet assigns it.

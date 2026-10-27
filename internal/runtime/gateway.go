@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -506,6 +507,11 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 			return "", err
 		}
 	}
+	if policy.Divert.linkLocal() {
+		if err := probeLinkLocal(bin); err != nil {
+			return "", err
+		}
+	}
 	// A gateway serving something else has to be gone before the replacement
 	// starts, and gone is not the same as asked to go. shutDownGateway is best
 	// effort: the record can be missing, the pid can belong to something else,
@@ -724,6 +730,72 @@ func gatewayDivert(r DivertRoute, socket string) string {
 // for the reason gatewayEnforces gives.
 func gatewayDiverts(bin string) error {
 	return helpLists(bin, "--divert", "network-gateway")
+}
+
+// linkLocalProbes holds the answer of gatewayDivertsLinkLocal per hull
+// binary. The run's refusal check and the gateway's start both ask.
+var linkLocalProbes sync.Map
+
+// probeLinkLocal is gatewayDivertsLinkLocal, asked once per binary.
+func probeLinkLocal(bin string) error {
+	if err, ok := linkLocalProbes.Load(bin); ok {
+		err, _ := err.(error)
+		return err
+	}
+	err := gatewayDivertsLinkLocal(bin)
+	linkLocalProbes.Store(bin, err)
+	return err
+}
+
+// gatewayDivertsLinkLocal checks that this runtime's gateway takes a --divert
+// of LinkLocalDivert. An older hull has --divert and refuses a link-local
+// address while it parses its flags, so its help cannot tell, and the run
+// would be refused only when the sandbox's gateway starts.
+//
+// The probe hands the gateway the same divert twice. A hull that takes the
+// address parses the first and refuses the second as "diverted twice"; one
+// that does not refuses the first as link-local. Either exits while it parses
+// its flags, before it opens a socket. A hull that got past them would serve
+// on the probe's own directory, which is removed after it, and never the
+// gateway directory. Any other answer, exit 0 among them, confirms nothing,
+// and refuses the run as unknown.
+func gatewayDivertsLinkLocal(bin string) error {
+	hvi := RunPath{"hull", "hvi"}
+	dir, err := os.MkdirTemp("", "brig-probe")
+	if err != nil {
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+			Why:    "brig could not make a directory for the probe of a link-local divert",
+			Remedy: "Fix the runtime, or detach the policy", Err: err}
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	sock := filepath.Join(dir, "p.sock")
+	d := gatewayDivert(LinkLocalDivert, sock)
+	args := []string{"network-gateway", "--socket", sock, "--divert", d, "--divert", d}
+	probe := bin + " " + strings.Join(args, " ")
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, bin, args...)
+	c.WaitDelay = time.Second
+	out, err := c.CombinedOutput()
+	var exit *exec.ExitError
+	switch {
+	case ctx.Err() == context.DeadlineExceeded:
+		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
+	case errors.As(err, &exit) && strings.Contains(string(out), "diverted twice"):
+		return nil
+	case errors.As(err, &exit) && strings.Contains(string(out), "link-local"):
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: CannotEnforce,
+			Why: fmt.Sprintf("a route that vends needs a hull whose gateway can divert %s, and the gateway of %s "+
+				"refuses it", LinkLocalDivert.Host, bin),
+			Remedy: "Upgrade hull, or detach the policy"}
+	case err == nil:
+		err = errors.New("the gateway took two identical diverts")
+	default:
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+		Why:    fmt.Sprintf("the probe `%s` failed", probe),
+		Remedy: "Fix the runtime, or detach the policy", Err: err}
 }
 
 // helpLists runs `bin <cmd...> --help` and refuses, as a capability of the

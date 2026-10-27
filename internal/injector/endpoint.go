@@ -63,6 +63,13 @@ func (e HostEndpoint) URL(sandbox, route string) string {
 	return e.Base() + "/" + sandbox + "/r/" + route
 }
 
+// LinkLocalURL is the URL of one route that vends, on LinkLocalAddr. Its port
+// is HTTP's own, so the URL names none.
+func LinkLocalURL(sandbox, route string) string {
+	host, _, _ := strings.Cut(LinkLocalAddr, ":")
+	return "http://" + host + "/" + sandbox + "/r/" + route
+}
+
 // shellQuote quotes s for sh as one word.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
@@ -119,6 +126,10 @@ func TokenVar(route string) string {
 // gets its session token alone: no route URL, no git configuration and no
 // brig CA.
 //
+// A route that vends is reached on LinkLocalAddr in plain HTTP, so its
+// {route.url} is LinkLocalURL. The AWS SDKs' container provider takes no CA
+// of brig's, so nothing names the brig CA for it.
+//
 // regions maps a route name to the region {route.region} stands for; a route
 // that uses it and has none is refused.
 //
@@ -130,7 +141,7 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 	regions map[string]string, forwarded []runtime.Var) ([]runtime.Var, error) {
 	var vars []runtime.Var
 	var git [][2]string
-	endpoints, vends := 0, 0
+	endpoints := 0
 	sorted := append([]v1alpha1.Route(nil), routes...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, r := range sorted {
@@ -146,12 +157,12 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 			return nil, fmt.Errorf("no session token for route %s", r.Name)
 		}
 		url := e.URL(sandbox, r.Name)
+		if r.Vends() {
+			url = LinkLocalURL(sandbox, r.Name)
+		}
 		endpoint := r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint
 		if endpoint {
 			endpoints++
-		}
-		if r.Vends() {
-			vends++
 		}
 		if r.Guest == nil {
 			continue
@@ -221,12 +232,6 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 	if e.Transport == TransportBrigInternal && endpoints > 0 {
 		for _, name := range caEnv {
 			vars = append(vars, runtime.Var{Name: name, Value: caFile(name)})
-		}
-		// The AWS SDKs read AWS_CA_BUNDLE in place of their roots, and
-		// none of the variables above, so a route that vends names the
-		// bundle for them too.
-		if vends > 0 {
-			vars = append(vars, runtime.Var{Name: "AWS_CA_BUNDLE", Value: GuestCABundlePath})
 		}
 	}
 	return vars, nil

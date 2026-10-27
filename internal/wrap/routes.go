@@ -129,6 +129,15 @@ func (c *Config) routeRefusal() error {
 				c.endpointList(), injector.BrigInternal, err)
 		}
 	}
+	// A route that vends is reached on the link-local address, which an
+	// older hull's gateway refuses to divert only once the sandbox's
+	// gateway starts.
+	if p, ok := c.Runtime.(runtime.LinkLocalProber); ok && c.vends() {
+		if err := p.ProbeLinkLocal(); err != nil {
+			return fmt.Errorf("policy %s declares a route that vends, which the guest reaches at %s: %w",
+				c.vendList(), injector.LinkLocalAddr, err)
+		}
+	}
 	if c.Network == NetOffline {
 		return fmt.Errorf("policy %s declares routes, and this run has no network (BRIG_NETWORK=none) to "+
 			"reach them on; refusing the run rather than booting without them", c.routeList())
@@ -140,6 +149,22 @@ func (c *Config) routeRefusal() error {
 // brig.internal: a run with a route in mode endpoint.
 func (c *Config) brigInternal() bool {
 	return c.Runtime != nil && len(c.endpointRoutes()) > 0
+}
+
+// vends reports whether this run has a route that vends.
+func (c *Config) vends() bool {
+	return slices.ContainsFunc(c.routes, func(r v1alpha1.Route) bool { return r.Vends() })
+}
+
+// vendList names each route that vends, with the policy that declares it.
+func (c *Config) vendList() string {
+	var names []string
+	for _, r := range c.routes {
+		if r.Vends() {
+			names = append(names, fmt.Sprintf("%s (route %s)", c.routePolicy[r.Name], r.Name))
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // endpointRoutes are this run's routes in mode endpoint.

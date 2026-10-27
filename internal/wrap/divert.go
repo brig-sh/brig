@@ -13,10 +13,11 @@ import (
 // diverts is the divert of this run, to the sandbox's divert socket: for
 // each route in a mode besides endpoint that this build serves, the host and
 // port of its upstream URL, whose connections the mode's divert handler in
-// the broker gets; and brig.internal for a guest that reaches an endpoint
-// route there. The socket path depends on the sandbox alone, so a run that
-// finds the sandbox up compares the same divert its gateway was started
-// with.
+// the broker gets; brig.internal for a guest that reaches an endpoint route
+// there; and the link-local address for a run with a route that vends, which
+// the guest reaches there in plain HTTP. The socket path depends on the
+// sandbox alone, so a run that finds the sandbox up compares the same divert
+// its gateway was started with.
 func (c *Config) diverts() runtime.Divert {
 	var routes []runtime.DivertRoute
 	for _, m := range c.otherModes() {
@@ -36,6 +37,11 @@ func (c *Config) diverts() runtime.Divert {
 		}
 	}
 	internal := c.brigInternal()
+	// A route that vends is in mode endpoint, so a run with one routes
+	// brig.internal too.
+	if internal && c.vends() {
+		routes = append(routes, runtime.LinkLocalDivert)
+	}
 	if len(routes) == 0 && !internal {
 		return runtime.Divert{}
 	}

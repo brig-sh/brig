@@ -802,9 +802,10 @@ func TestRefusedErrorKind(t *testing.T) {
 	}
 }
 
-// The aws route is handed the container-credentials pointer, its token, the
-// region the broker read from the profile, and a CA bundle: the AWS SDKs
-// read one file in place of their roots, and only AWS_CA_BUNDLE names it.
+// The aws route is handed the container-credentials pointer on the
+// link-local address in plain HTTP, its token, and the region the broker read
+// from the profile under both names the SDKs read. The SDKs' container
+// provider ignores AWS_CA_BUNDLE, so the guest is not handed one.
 func TestGuestEnvAWSRoute(t *testing.T) {
 	ep := HostEndpoint{Transport: TransportBrigInternal}
 	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{presetRoute(t, "aws", v1alpha1.PresetAWS, "aws")},
@@ -813,17 +814,51 @@ func TestGuestEnvAWSRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := vars(got)
-	if env["AWS_CONTAINER_CREDENTIALS_FULL_URI"].Value != "https://brig.internal/brig-a/r/aws" {
+	if env["AWS_CONTAINER_CREDENTIALS_FULL_URI"].Value != "http://169.254.170.2/brig-a/r/aws" {
 		t.Errorf("uri = %q", env["AWS_CONTAINER_CREDENTIALS_FULL_URI"].Value)
 	}
 	if tok := env["AWS_CONTAINER_AUTHORIZATION_TOKEN"]; tok.Value != "t" || !tok.Secret {
 		t.Errorf("token = %+v, want t marked Secret", tok)
 	}
-	if env["AWS_REGION"].Value != "eu-west-1" {
-		t.Errorf("region = %q", env["AWS_REGION"].Value)
+	for _, name := range []string{"AWS_REGION", "AWS_DEFAULT_REGION"} {
+		if env[name].Value != "eu-west-1" {
+			t.Errorf("%s = %q, want eu-west-1", name, env[name].Value)
+		}
 	}
-	if env["AWS_CA_BUNDLE"].Value != "/brig/ca/bundle.pem" {
-		t.Errorf("AWS_CA_BUNDLE = %q", env["AWS_CA_BUNDLE"].Value)
+	if v, ok := env["AWS_CA_BUNDLE"]; ok {
+		t.Errorf("AWS_CA_BUNDLE = %q, want it unset", v.Value)
+	}
+}
+
+// The link-local URL is for a route that vends alone. An endpoint route beside
+// it keeps its URL on brig.internal and the CA variables, and the aws route
+// is not handed a URL on brig.internal.
+func TestGuestEnvAnEndpointRouteBesideAWSKeepsBrigInternal(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("brig-a", []v1alpha1.Route{
+		presetRoute(t, "aws", v1alpha1.PresetAWS, "aws"),
+		presetRoute(t, "anthropic", v1alpha1.PresetAnthropicAPIKey, "k"),
+	}, map[string]string{"aws": "t", "anthropic": "u"}, map[string]string{"aws": "eu-west-1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vars(got)
+	if v := env["ANTHROPIC_BASE_URL"].Value; v != "https://brig.internal/brig-a/r/anthropic" {
+		t.Errorf("ANTHROPIC_BASE_URL = %q", v)
+	}
+	if env["SSL_CERT_FILE"].Value != GuestCABundlePath || env["NODE_EXTRA_CA_CERTS"].Value != GuestCAPath {
+		t.Errorf("the endpoint route lost the CA variables: %+v", got)
+	}
+	for name, v := range env {
+		if strings.Contains(v.Value, "169.254.170.2") && name != "AWS_CONTAINER_CREDENTIALS_FULL_URI" {
+			t.Errorf("%s = %q names the link-local address", name, v.Value)
+		}
+		if strings.Contains(v.Value, "/r/aws") && strings.HasPrefix(v.Value, "https://") {
+			t.Errorf("%s = %q reaches the aws route on brig.internal", name, v.Value)
+		}
+	}
+	if _, ok := env["AWS_CA_BUNDLE"]; ok {
+		t.Errorf("AWS_CA_BUNDLE is set: %+v", got)
 	}
 }
 

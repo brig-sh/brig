@@ -528,8 +528,9 @@ user name. `--source-identity` sets another. It is 2 to 64 of the characters
 Before it stores anything, `import` checks the profile with `aws`:
 
 1. `sts get-caller-identity`, for the identity of the profile.
-2. The profile's region. The guest gets it as `AWS_REGION`, and a profile
-   with none is refused with the command that sets one.
+2. The profile's region. The guest gets it as `AWS_REGION` and
+   `AWS_DEFAULT_REGION`, and a profile with none is refused with the
+   command that sets one.
 3. In role mode, one `sts assume-role` of the role. Its keys are discarded.
 
 Then it stores the pointer: the profile, the mode, the role and the source

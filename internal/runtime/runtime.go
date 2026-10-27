@@ -227,6 +227,20 @@ const (
 	BrigInternalPort = 443
 )
 
+// LinkLocalDivert is where a guest reaches the routes that vend: the ECS
+// container credentials address, in plain HTTP. The AWS SDKs' container
+// provider takes plain HTTP from loopback and a few link-local addresses
+// alone. A run with a route that vends diverts it beside brig.internal.
+var LinkLocalDivert = DivertRoute{Host: "169.254.170.2", Port: 80}
+
+// linkLocal reports whether d diverts an address in 169.254.0.0/16.
+func (d Divert) linkLocal() bool {
+	return slices.ContainsFunc(d.Routes, func(r DivertRoute) bool {
+		a, err := netip.ParseAddr(r.Host)
+		return err == nil && a.IsLinkLocalUnicast()
+	})
+}
+
 // BrigInternalRouter is a runtime that can route brig.internal from its
 // guest to the broker.
 type BrigInternalRouter interface {

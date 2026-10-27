@@ -520,9 +520,11 @@ spec:
 `
 
 // The region the broker reports for a vending route reaches the guest as
-// AWS_REGION. Every other wrap test routes a preset with no {route.region},
-// so without this one, dropping the regions from serveRoutes would keep them
-// green while a real aws run fails with "named no AWS region".
+// AWS_REGION and AWS_DEFAULT_REGION: boto3 reads the second alone. Every
+// other wrap test routes a preset with no {route.region}, so without this
+// one, dropping the regions from serveRoutes would keep them green while a
+// real aws run fails with "named no AWS region". The SDKs' container provider
+// ignores AWS_CA_BUNDLE, so the guest is not handed one.
 func TestServeRoutesHandsTheAWSRegionToTheGuest(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
 	shortStateDir(t)
@@ -535,10 +537,12 @@ func TestServeRoutesHandsTheAWSRegionToTheGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	vars := envOf(c.routeVars)
-	if got := vars["AWS_REGION"].Value; got != "eu-west-1" {
-		t.Errorf("AWS_REGION = %q, want eu-west-1", got)
+	for _, name := range []string{"AWS_REGION", "AWS_DEFAULT_REGION"} {
+		if got := vars[name].Value; got != "eu-west-1" {
+			t.Errorf("%s = %q, want eu-west-1", name, got)
+		}
 	}
-	if _, ok := vars["AWS_CA_BUNDLE"]; !ok {
-		t.Errorf("AWS_CA_BUNDLE is not in the guest env: %v", c.routeVars)
+	if v, ok := vars["AWS_CA_BUNDLE"]; ok {
+		t.Errorf("AWS_CA_BUNDLE = %q, want it unset", v.Value)
 	}
 }

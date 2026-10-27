@@ -720,7 +720,7 @@ registration, and `GET /status` names the route in `vending` until a fetch
 works.
 
 The answer names, for each route that vends, the region and the identity.
-Brig hands the region to the guest as `AWS_REGION`, and refuses the run when
+Brig hands the region to the guest as `AWS_REGION` and `AWS_DEFAULT_REGION`, and refuses the run when
 the answer names none. It prints one line per route, which `-q` hides:
 
 ```
@@ -806,7 +806,7 @@ and its own trust store is left as it is:
 | File | What it holds | Variables |
 | --- | --- | --- |
 | `/brig/ca/brig.pem` | the CA certificate | `NODE_EXTRA_CA_CERTS`, which Node adds to its roots |
-| `/brig/ca/bundle.pem` | the image's own roots, then the CA | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, which replace a client's roots. `AWS_CA_BUNDLE` too, on a run with a route that vends |
+| `/brig/ca/bundle.pem` | the image's own roots, then the CA | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, which replace a client's roots |
 
 The bundle keeps every other site trusted for a client that reads one file.
 Brig takes the first of `/etc/ssl/certs/ca-certificates.crt`,
@@ -851,7 +851,7 @@ CA variables of [Transports](#transports). Per preset:
 | `claude-code` | `ANTHROPIC_BASE_URL=<route URL>`, `CLAUDE_CODE_OAUTH_TOKEN=<token>` |
 | `anthropic-api-key` | `ANTHROPIC_BASE_URL=<route URL>`, `ANTHROPIC_API_KEY=<token>` |
 | `github-token` | `BRIG_ROUTE_GITHUB_TOKEN=<token>`, and git configuration in `GIT_CONFIG_COUNT` |
-| `aws` | `AWS_CONTAINER_CREDENTIALS_FULL_URI=<route URL>`, `AWS_CONTAINER_AUTHORIZATION_TOKEN=<token>`, `AWS_REGION=<the region of the AWS profile>`, and `AWS_CA_BUNDLE=/brig/ca/bundle.pem` |
+| `aws` | `AWS_CONTAINER_CREDENTIALS_FULL_URI=<route URL>`, `AWS_CONTAINER_AUTHORIZATION_TOKEN=<token>`, `AWS_REGION` and `AWS_DEFAULT_REGION=<the region of the AWS profile>`. The route URL is `http://169.254.170.2/<sandbox>/r/<route>` |
 
 A route with `guest.git` points git at the route through the environment,
 and writes nothing into the guest home:

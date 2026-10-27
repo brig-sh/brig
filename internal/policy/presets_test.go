@@ -547,6 +547,7 @@ func TestAWSPresetExpands(t *testing.T) {
 		"AWS_CONTAINER_CREDENTIALS_FULL_URI": "{route.url}",
 		"AWS_CONTAINER_AUTHORIZATION_TOKEN":  "{session.token}",
 		"AWS_REGION":                         "{route.region}",
+		"AWS_DEFAULT_REGION":                 "{route.region}",
 	}
 	if !reflect.DeepEqual(r.Guest.Env, want) {
 		t.Errorf("guest.env = %v, want %v", r.Guest.Env, want)

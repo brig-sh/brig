@@ -219,6 +219,14 @@ type BrigInternalProber interface {
 	ProbeBrigInternal() error
 }
 
+// LinkLocalProber is a runtime whose binaries may not divert
+// LinkLocalDivert, which a route that vends needs.
+type LinkLocalProber interface {
+	// ProbeLinkLocal returns a CapabilityError when they do not, or when it
+	// cannot tell.
+	ProbeLinkLocal() error
+}
+
 // CheckBrigInternal refuses a route in mode endpoint that rt cannot serve to
 // its guest at brig.internal on path, with a CapabilityError. The route mode
 // table answers first. Where it answers enforced, the run must have a
