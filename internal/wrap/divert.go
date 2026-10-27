@@ -74,10 +74,17 @@ func (c *Config) runtimeEgress() runtime.Egress {
 
 // allowDiverted returns allow with a rule for the host of each route of d
 // that it lacks: a host rule for a name, and a /32 for an IPv4 address.
+//
+// A link-local address gets none. Its divert names the address and learns
+// nothing from DNS, and an allow would cover every port of it, in the range
+// the cloud metadata service lives in.
 func allowDiverted(allow []runtime.Rule, d runtime.Divert) []runtime.Rule {
 	for _, r := range d.Routes {
 		rule := runtime.Rule{Host: r.Host}
 		if a, err := netip.ParseAddr(r.Host); err == nil {
+			if a.IsLinkLocalUnicast() {
+				continue
+			}
 			rule = runtime.Rule{CIDR: netip.PrefixFrom(a, a.BitLen()).String()}
 		}
 		if !slices.Contains(allow, rule) {

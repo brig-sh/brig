@@ -540,3 +540,49 @@ func TestAVendingRunIsRefusedOnAHullThatCannotDivertLinkLocal(t *testing.T) {
 		t.Errorf("the broker was asked to vend for a refused run: %+v", broker.registered)
 	}
 }
+
+// Under a deny default, the egress a vending run hands the runtime allows
+// nothing in 169.254.0.0/16. The divert of the link-local address names it,
+// and needs no DNS answer to learn it, so it needs no allow either; an allow
+// of it would admit every port of the address wherever the runtime's own
+// link-local refusal did not stand in the way.
+func TestAVendingRunAllowsNoLinkLocalAddress(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rt   runtime.Runtime
+		hv   string
+	}{
+		{"hull on hvi", &hullRecorder{}, "hvi"},
+		{"nerdctl", &nerdctlRecorder{}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("BRIG_HYPERVISOR", c.hv)
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+			shortStateDir(t)
+			cfg := routedConfig(t, awsBesideClaude+"  egress:\n    default: deny\n", c.rt)
+			shortStateDir(t)
+			cfg.Verify = verify.Off
+			cfg.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+			set, err := cfg.BuildEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.EnsureRunning(set); err == nil || !strings.Contains(err.Error(), "not booting") {
+				t.Fatalf("the run did not reach the runtime: %v", err)
+			}
+			e := recorded(c.rt).spec.Egress
+			if e.Default != "deny" || !slices.Contains(e.Divert.Routes, runtime.LinkLocalDivert) {
+				t.Fatalf("Egress = %+v, want a deny default that diverts the link-local address", e)
+			}
+			linkLocal := netip.MustParsePrefix("169.254.0.0/16")
+			for _, r := range e.Allow {
+				if r.CIDR == "" {
+					continue
+				}
+				if p, err := netip.ParsePrefix(r.CIDR); err != nil || p.Overlaps(linkLocal) {
+					t.Errorf("the egress allows %+v, which covers link-local", r)
+				}
+			}
+		})
+	}
+}
