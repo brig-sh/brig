@@ -158,8 +158,21 @@ func importSecrets(out io.Writer, args []string) error {
 	}
 
 	// An aws flag on a secret with no aws source would be dropped without a
-	// word, and the user would believe the import had used it.
+	// word, and the user would believe the import had used it. One set of
+	// flags names one profile and one role: applied to two aws secrets, it
+	// would store the same identity under both names, where the user meant
+	// a different one for each.
 	if o.anyAWSFlag() {
+		aws := 0
+		for _, d := range selected {
+			if hasAWSSource(d) {
+				aws++
+			}
+		}
+		if aws > 1 {
+			return fmt.Errorf("the AWS flags answer for one secret; name it: "+
+				"brig secret import %s <secret> %s ...", p.Name, o.awsFlagName())
+		}
 		for _, d := range selected {
 			if !hasAWSSource(d) {
 				return fmt.Errorf("%s is for a secret whose source is aws, and %q has none",

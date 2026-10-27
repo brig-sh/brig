@@ -517,7 +517,8 @@ brig secret import <profile> aws-creds --aws-profile dev \
 `import` refuses a line that names neither mode, or both. Self mode is never
 what a missing flag falls back to. An `aws` flag on a secret whose source is
 not `aws` is refused too. On a profile with other secrets, name the `aws`
-secret on the line.
+secret on the line. The flags answer for one secret, so a line that selects
+two `aws` secrets is refused: import each on its own line.
 
 In role mode the session carries a source identity. Brig reads it from the
 profile's caller ARN: its last path segment, which for an SSO login is your

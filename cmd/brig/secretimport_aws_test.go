@@ -361,3 +361,42 @@ func TestImportAWSExpiredSSOGivesTheLoginHint(t *testing.T) {
 		t.Errorf("stored %v", store.items)
 	}
 }
+
+// One set of aws flags names one profile and one role. Applied to every aws
+// secret of a profile, it would store the same identity under each name,
+// where the user meant a different one for each.
+func TestImportAWSFlagsAnswerForOneSecret(t *testing.T) {
+	loadProfiles(t, `
+name: devbox
+image: ghcr.io/brig-sh/devbox:latest
+guestHome: /home/devbox
+binary: devbox
+mem: 1024
+cpus: 1
+secrets:
+  - name: aws-dev
+    required: false
+    from: aws
+  - name: aws-ops
+    required: false
+    from: aws
+`)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	for _, args := range [][]string{
+		{"devbox", "--aws-profile", "dev", "--role-arn", roleARN},
+		{"devbox", "aws-dev", "aws-ops", "--aws-profile", "dev", "--role-arn", roleARN},
+	} {
+		err := importSecrets(&bytes.Buffer{}, args)
+		want := "the AWS flags answer for one secret; name it: brig secret import devbox <secret>"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%v: err = %v, want %q", args, err, want)
+		}
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+	if got := calls(t, log); got != "" {
+		t.Errorf("aws ran for a refused import:\n%s", got)
+	}
+}
