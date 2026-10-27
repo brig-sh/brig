@@ -241,3 +241,29 @@ func TestOnlyTheImportVerbReachesTheHostFromTheCLI(t *testing.T) {
 		}
 	}
 }
+
+// The same rule for the code that runs aws. The import verb checks an AWS
+// profile and role before it stores the pointer; nothing else in cmd/brig may
+// reach that code. A run that fetched keys itself would hand the guest keys
+// the broker never vended, outside the route, its cache and its audit line.
+func TestOnlyTheImportVerbReachesAWSFromTheCLI(t *testing.T) {
+	const allowed = "secretimport.go"
+	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd", "brig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || name == allowed ||
+			strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		blob, err := os.ReadFile(filepath.Join("..", "..", "cmd", "brig", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(blob), "brig/internal/awscred") {
+			t.Errorf("cmd/brig/%s reaches the code that runs aws; only %s may", name, allowed)
+		}
+	}
+}

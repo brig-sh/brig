@@ -149,7 +149,7 @@ the guest has none.
 | "A secret you import again with another role or mode takes effect at the next fetch: the broker does not serve keys it fetched for the old secret, and fetches again." | The aws route | `go:TestCacheRefetchesOnPointerChange` |
 | "The secret holds that pointer and no key." | The aws route | `go:TestImportAWSStoresNoCredential` |
 | "The broker runs `aws` with every `AWS_` variable removed from its environment, so a variable in your shell, such as `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`, never decides which identity a sandbox gets." | The aws route | `go:TestBrokerAWSEnvHasNoAWSVars` `go:TestFetchEnvIsExactlyCLIEnv` `go:TestEnvironDropsAWSVariables` `go:TestExecEmptyEnvIsEmpty` |
-| "No package on the run path links the code that runs `aws`." | The aws route | `go:TestTheRunPathCannotReachAWS` |
+| "No package on the run path links the code that runs `aws`." | The aws route | `go:TestTheRunPathCannotReachAWS` `go:TestOnlyTheImportVerbReachesAWSFromTheCLI` |
 | "Every other route answers a token sent that way with 401." | broker.md: Routes that vend | `go:TestRawAuthorizationOnlyOnVendRoutes` |
 | "The route serves its URL alone, with or without a trailing `/`." | broker.md: Routes that vend | `go:TestVendRefusesPostAndSubpaths` |
 | "No key is on a command line, and no error repeats stdout." | broker.md: Fetching keys | `go:TestExecFakeAWS` `go:TestFetchErrorCarriesNoStdout` `go:TestFetchBadOutputCarriesNoOutput` `go:TestFetchTimesOut` |
