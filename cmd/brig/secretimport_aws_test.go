@@ -32,6 +32,14 @@ case "$1 $2" in
 *) echo "fake aws: unexpected $*" >&2; exit 2 ;;
 esac
 `
+	installFakeAWS(t, dir, script)
+	return log
+}
+
+// installFakeAWS writes script as the aws binary in dir and points newAWSCLI
+// at it.
+func installFakeAWS(t *testing.T, dir, script string) {
+	t.Helper()
 	bin := filepath.Join(dir, "aws")
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -39,8 +47,10 @@ esac
 	old := newAWSCLI
 	newAWSCLI = func() awscred.CLI { return awscred.CLI{Bin: bin, Env: []string{}} }
 	t.Cleanup(func() { newAWSCLI = old })
-	return log
 }
+
+// realNewAWSCLI is the default seam, kept before any test replaces it.
+var realNewAWSCLI = newAWSCLI
 
 func calls(t *testing.T, log string) string {
 	t.Helper()
@@ -113,6 +123,13 @@ func TestImportAWSRole(t *testing.T) {
 	for _, w := range []string{"sts get-caller-identity", "configure get region", "sts assume-role", "--role-session-name brig-import-check"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("the fake aws never saw %q:\n%s", w, got)
+		}
+	}
+	// Every call names the profile: one without it would resolve whatever the
+	// CLI's default is, and the check would vouch for the wrong identity.
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if !strings.Contains(line, "--profile dev") {
+			t.Errorf("an aws call did not carry --profile dev: %q", line)
 		}
 	}
 	if from := store.prov["aws-creds"].From; from != "aws:dev" {
@@ -268,5 +285,72 @@ func TestImportAWSMissingBinaryGivesTheInstallHint(t *testing.T) {
 	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--role-arn", roleARN})
 	if err == nil || !strings.Contains(err.Error(), awscred.InstallHint) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// Self mode keeps no source identity, so a flag that asks for one is a
+// misunderstanding to refuse and not a value to drop.
+func TestImportAWSSelfRefusesASourceIdentity(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	fakeAWS(t, "eu-west-1")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--identity", "self", "--source-identity", "me"})
+	if err == nil || !strings.Contains(err.Error(), "--source-identity") {
+		t.Errorf("err = %v", err)
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+}
+
+// The import's aws subprocess must not see the user's AWS_ variables, or its
+// check would pass on an identity the broker never resolves.
+func TestDefaultAWSCLIDropsAWSVariables(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+	t.Setenv("AWS_PROFILE", "someone-else")
+	t.Setenv("BRIG_TEST_KEPT", "1")
+	env := realNewAWSCLI().Env
+	kept := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "AWS_") {
+			t.Errorf("Env carries %q", kv)
+		}
+		kept = kept || kv == "BRIG_TEST_KEPT=1"
+	}
+	if !kept {
+		t.Error("Env dropped a non-AWS variable")
+	}
+}
+
+// The pointer is validated before anything is stored, so a malformed value is
+// refused at import and not by the broker at the guest's first call.
+func TestImportAWSValidatesThePointer(t *testing.T) {
+	for _, args := range [][]string{
+		{"--role-arn", "not-an-arn"},
+		{"--role-arn", roleARN, "--source-identity", "a b"},
+	} {
+		awsProfiles(t)
+		store := newAnnotating(t)
+		fakeAWS(t, "eu-west-1")
+		err := importSecrets(&bytes.Buffer{}, append([]string{"devbox", "--aws-profile", "dev"}, args...))
+		if err == nil {
+			t.Errorf("%v accepted", args)
+		}
+		if len(store.items) != 0 {
+			t.Errorf("%v stored %v", args, store.items)
+		}
+	}
+}
+
+func TestImportAWSExpiredSSOGivesTheLoginHint(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	installFakeAWS(t, t.TempDir(), "#!/bin/sh\necho 'Error loading SSO Token: Token has expired' >&2\nexit 255\n")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--role-arn", roleARN})
+	if err == nil || !strings.Contains(err.Error(), "aws sso login --profile dev") {
+		t.Errorf("err = %v", err)
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
 	}
 }
