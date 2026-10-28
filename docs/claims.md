@@ -150,6 +150,10 @@ the guest has none.
 | "The secret holds that pointer and no key." | The aws route | `go:TestImportAWSStoresNoCredential` |
 | "The broker runs `aws` with every `AWS_` variable removed from its environment, so a variable in your shell, such as `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`, never decides which identity a sandbox gets." | The aws route | `go:TestBrokerAWSEnvHasNoAWSVars` `go:TestFetchEnvIsExactlyCLIEnv` `go:TestEnvironDropsAWSVariables` `go:TestExecEmptyEnvIsEmpty` |
 | "No package on the run path links the code that runs `aws`." | The aws route | `go:TestTheRunPathCannotReachAWS` `go:TestOnlyTheImportVerbReachesAWSFromTheCLI` |
+| "The broker serves only a route that vends on that path, and refuses any other route before it reads the token." | The aws route | `go:TestLinkLocalRefusesARouteThatDoesNotVend` `go:TestVendOnlyArrivalRefusesOtherRoutes` |
+| "Brig adds no `allow` rule for it." (the link-local address of a route that vends) | Host services | `go:TestAVendingRunAllowsNoLinkLocalAddress` `go:TestRulesetDivertsTheLinkLocalAddress` |
+| "A run without one diverts no link-local address." | broker.md: Transports | `go:TestARunWithoutAVendingRouteHasNoLinkLocalDivert` |
+| "The broker closes a connection to any other port of the address." | broker.md: Transports | `go:TestLinkLocalOtherPortIsClosed` |
 | "Every other route answers a token sent that way with 401." | broker.md: Routes that vend | `go:TestRawAuthorizationOnlyOnVendRoutes` |
 | "The route serves its URL alone, with or without a trailing `/`." | broker.md: Routes that vend | `go:TestVendRefusesPostAndSubpaths` |
 | "No key is on a command line, and no error repeats stdout." | broker.md: Fetching keys | `go:TestExecFakeAWS` `go:TestFetchErrorCarriesNoStdout` `go:TestFetchBadOutputCarriesNoOutput` `go:TestFetchTimesOut` |

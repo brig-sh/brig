@@ -9,8 +9,9 @@ guest with temporary AWS keys. See [Routes that vend](#routes-that-vend).
 
 This page describes `internal/broker`, the request handler, and
 `brig-broker`, the process that hosts it. hull on `hvi` and nerdctl with
-urunc reach a route at `brig.internal`. A run bound to a policy with routes
-on any other runtime is refused before boot. See [Transports](#transports).
+urunc reach a route at `brig.internal`, and a route that vends at
+`169.254.170.2`. A run bound to a policy with routes on any other runtime is
+refused before boot. See [Transports](#transports).
 
 <p align="center">
   <img alt="A request from Claude Code through the claude-code route of the credential broker. The agent in the sandbox holds ANTHROPIC_BASE_URL, the route URL, and CLAUDE_CODE_OAUTH_TOKEN, a session token for the route. It sends its request to brig.internal on a microVM. brig-broker on the host checks the token and the route's request.allow, adds the credential from Brig's secret store, and sends the request to api.anthropic.com on a TLS connection of its own. The response comes back with the credential redacted. The credential stays on the host and never reaches the sandbox, and egress: default: deny refuses a direct connection from the sandbox." src="../assets/credential-broker.svg" width="820">
@@ -109,7 +110,9 @@ https://brig.internal/<sandbox-id>/r/<route>/<rest>
 ```
 
 `<sandbox-id>` is the runtime's instance name, the one `brig info` prints.
-`<rest>` is the path the upstream receives, with the query kept.
+`<rest>` is the path the upstream receives, with the query kept. A route
+that vends is reached at `http://169.254.170.2/<sandbox-id>/r/<route>`
+instead. See [Transports](#transports).
 
 The broker runs these steps in order. A request that fails one step gets the
 error of that step, and the upstream is never dialed.
@@ -120,7 +123,9 @@ error of that step, and the upstream is never dialed.
    no later request on it would be checked.
 2. Split the path, and check where the request arrived: on a divert
    socket, only the sandbox of that socket is served. An unknown sandbox or
-   route, or another sandbox's path, is a 404.
+   route, or another sandbox's path, is a 404. A request on the link-local
+   address is served only for a route that vends. Any other route is a 404
+   there, before its token is read.
 3. Read the session token. It comes from `Authorization: Bearer`. On a
    `basicAuth` route it can also be the basic-auth password, which is what
    git's credential helper sends. On a route that sets the credential in
@@ -408,7 +413,7 @@ taken from the replay budget, 64 MiB for all requests at once, which
 | Status | When | `check=` on the audit line |
 | --- | --- | --- |
 | 400 | The request asks for a protocol upgrade, or is a `CONNECT` | `upgrade` |
-| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on. On a route that vends, any `<rest>` but `/` | `path`, `arrival`, `sandbox`, `route` |
+| 404 | The path is not `/<sandbox-id>/r/<route>/…`, names a sandbox or route the broker does not serve, or names a sandbox other than the one whose divert socket the request arrived on. On a route that vends, any `<rest>` but `/`. On the link-local address, a route that does not vend | `path`, `arrival`, `sandbox`, `route`, `route.cleartext` |
 | 401 | No token, a malformed token, a bad signature, a token of another sandbox or route, or an expired token | `token`, `signature`, `token.sandbox`, `token.route`, `expired` |
 | 400 | The request body could not be read | `body` |
 | 408 | The part of the body the broker holds did not arrive within `BodyTimeout` | `body` |
@@ -720,8 +725,9 @@ registration, and `GET /status` names the route in `vending` until a fetch
 works.
 
 The answer names, for each route that vends, the region and the identity.
-Brig hands the region to the guest as `AWS_REGION` and `AWS_DEFAULT_REGION`, and refuses the run when
-the answer names none. It prints one line per route, which `-q` hides:
+Brig hands the region to the guest as `AWS_REGION` and
+`AWS_DEFAULT_REGION`, and refuses the run when the answer names none. It
+prints one line per route, which `-q` hides:
 
 ```
 brig: route aws: AWS role arn:aws:iam::111122223333:role/brig-coding-agent, assumed from your profile dev
@@ -759,18 +765,20 @@ broker:
 | Where | What is refused |
 | --- | --- |
 | `brig policy check` | a route that the run would refuse, on the runtime and hypervisor the run would use. It prints a row per run path and exits non-zero |
-| `brig run`, `brig sh` and `brig plan` | a route on hull on `vz` or `qemu`, on docker, on nerdctl without `--network isolated`, on hull or nerdctl with no network, or on a hull whose gateway takes no `--divert`. Nothing is started, and Brig exits `7`. See [Route mode answers](runtimes.md#route-mode-answers) |
+| `brig run`, `brig sh` and `brig plan` | a route on hull on `vz` or `qemu`, on docker, on nerdctl without `--network isolated`, on hull or nerdctl with no network, or on a hull whose gateway takes no `--divert`. A route that vends on a hull whose gateway cannot divert `169.254.170.2`. Nothing is started, and Brig exits `7`. See [Route mode answers](runtimes.md#route-mode-answers) |
 
 `brig info` names the modes the run path serves in its `BROKER` row.
 
 ## Transports
 
-A guest reaches the broker at `brig.internal`. `brig info` names the
-transport in the `BROKER` row.
+A guest reaches the broker at `brig.internal`, the transport `brig info`
+names in the `BROKER` row. A route that vends is reached at the link-local
+address `169.254.170.2` instead.
 
 | Transport | Runtime | Route URL |
 | --- | --- | --- |
 | `brig.internal` | hull on `hvi`, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>` |
+| link-local | hull on `hvi`, nerdctl with urunc, for a route that vends | `http://169.254.170.2/<sandbox-id>/r/<route>` |
 
 **brig.internal.** TLS to a name only Brig serves, with the brig CA trusted
 in the guest. At first start the broker creates the CA, an ECDSA P-256 key in
@@ -819,10 +827,50 @@ isolated`. hull on `vz` and `qemu` takes its network from vmnet, and docker
 manages its own bridges, so neither has a gateway to answer the name on. A
 run with a route there is refused before boot, with exit `7`.
 
+**link-local.** Plain HTTP to `169.254.170.2` on port 80, the address of
+the AWS container credential provider. The AWS SDKs need it:
+
+- botocore, which boto3 and the AWS CLI v2 use, verifies HTTPS to a
+  container credential URL with its own CA list. It ignores
+  `AWS_CA_BUNDLE`, so it cannot trust the brig CA for `brig.internal`.
+- The SDKs take plain HTTP for that URL only to loopback, `localhost`,
+  `169.254.170.2`, `169.254.170.23` and `fd00:ec2::23`. They check the host
+  as it is written in the URL.
+
+A run with a route that vends diverts that address and port to the
+sandbox's divert socket, beside `brig.internal`. A run without one diverts
+no link-local address. The broker serves a diverted connection to it in
+plain HTTP, with the route handler of `brig.internal`, and never dials it.
+Each request carries the sandbox whose socket it arrived on, and the
+arrival check applies as on `brig.internal`. The broker closes a connection
+to any other port of the address.
+
+On this path the session token crosses the virtual link from the guest to
+the host in clear text. The broker serves only a route that vends there,
+and answers any other route with `404` and `check=route.cleartext`, before it
+reads the token or the credential. So a token of a route that forwards
+opens nothing on that path. [The aws route](security.md#the-aws-route)
+states the bounds of the token that does cross.
+
+| Runtime | Port 80 | Other ports, and the rest of `169.254.0.0/16` |
+| --- | --- | --- |
+| hull on `hvi` | a `--divert` of the address to the divert socket | reset by the gateway |
+| nerdctl | the sandbox's nftables table redirects it to the relay of the resolver. See [Routing brig.internal](policies.md#routing-briginternal) | refused by the table under a policy with a default |
+
+No `allow` rule is needed for the address, and Brig adds none under
+`default: deny`. On hull, the gateway must take a divert of a link-local
+address, which needs a hull with
+[brig-sh/hull#136](https://github.com/brig-sh/hull/pull/136). An older
+gateway refuses the divert only when it starts. So before it boots a run
+with a route that vends, Brig asks the gateway whether it takes the divert.
+It refuses an older hull with exit `7` and the remedy "Upgrade hull, or
+detach the policy", and a probe with any other answer as `unknown`. See
+[Every command Brig runs](runtimes.md#every-command-brig-runs).
+
 **The divert socket.** The runtime hands a guest connection to the
-`brig.internal` address to the divert socket of the sandbox, instead of
-dialing it. The diverter connects once per guest connection, and writes one
-line first:
+`brig.internal` address, or to the link-local address, to the divert socket
+of the sandbox, instead of dialing it. The diverter connects once per guest
+connection, and writes one line first:
 
 ```
 BRIG-DIVERT/1 <dst-ip> <dst-port> <src-ip> <src-port>\n
@@ -905,7 +953,8 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 The line never holds a credential, a token, a header value or a body.
 
 A diverted connection writes one line of its own when it ends. On
-`brig.internal`, the requests it carried have lines of their own beside it:
+`brig.internal` and `link-local`, the requests it carried have lines of their
+own beside it:
 
 ```
 msg=divert sandbox=brig-7f3a dst=198.18.1.1:443 transport=brig.internal dur=41s
@@ -915,8 +964,8 @@ msg=divert sandbox=brig-7f3a dst=198.18.1.1:443 transport=brig.internal dur=41s
 | --- | --- |
 | `sandbox` | The sandbox of the divert socket |
 | `dst` | The address and port the guest dialed |
-| `transport` | `brig.internal` for a connection to the sandbox's `brig.internal` address |
-| `check` | Why the connection was not served: `preamble`, `capacity`, `capacity.host` or `port`, and on `brig.internal`, `brig.internal.port`, `tls` or `stopping` |
+| `transport` | `brig.internal` for a connection to the sandbox's `brig.internal` address, `link-local` for one to `169.254.170.2` |
+| `check` | Why the connection was not served: `preamble`, `capacity`, `capacity.host` or `port`, on `brig.internal`, `brig.internal.port`, `tls` or `stopping`, and on `link-local`, `link-local.port` or `stopping` |
 
 Anything on the host that reaches the broker's port can send it a request.
 So the line of a request whose token has not verified carries only

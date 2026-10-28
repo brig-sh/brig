@@ -538,6 +538,12 @@ allow, writes included, and reach resources in other accounts, such as an
 S3 bucket that someone else owns. The role's policy is what limits the
 calls.
 
+The route itself needs no `allow` rule. The guest's AWS SDK fetches keys in
+plain HTTP from `169.254.170.2`, the address of the AWS container credential
+provider, which the runtime diverts to the broker. Brig adds no rule for
+that address, and the rest of `169.254.0.0/16` stays refused. See
+[Transports](broker.md#transports).
+
 The route takes no `upstream` and no `inject`, and Brig refuses either. The
 preset's `request.allow` allows `GET` alone. A route that sets its own
 `request.allow` replaces it. The route answers only the route URL itself.
@@ -1098,7 +1104,9 @@ that holds the bridge.
   reset, and anything else is dropped.
 - It carries TCP, UDP and ping, and refuses every other protocol.
 - It refuses IPv6, `169.254.0.0/16`, and a packet whose source is outside
-  the network of the sandbox.
+  the network of the sandbox. On a run with a route that vends, port 80 of
+  `169.254.170.2` is redirected to the relay before that check. See
+  [Routing brig.internal](#routing-briginternal).
 - Rootless nerdctl writes the resolver of slirp4netns into the guest's
   `resolv.conf` ahead of Brig's resolver. The table sends DNS for that
   address to Brig's resolver too.
@@ -1193,6 +1201,9 @@ resolver then answers every name, and the table filters nothing else.
 - The table redirects a TCP connection from the guest to the bridge address
   on port 443 to a relay. The same resolver process runs the relay on the
   bridge address, on port 15443.
+- On a run with a route that vends, the table redirects a TCP connection to
+  `169.254.170.2` on port 80 to the same relay. Under a policy with a
+  default, every other address and port of `169.254.0.0/16` stays refused.
 - The table refuses every other port of the bridge address, except DNS.
 - The relay reads the original destination with `SO_ORIGINAL_DST`. It resets
   a connection to any destination that is not diverted.

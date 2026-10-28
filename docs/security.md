@@ -191,7 +191,8 @@ A credential reaches the guest by one of two channels. The profile picks the
 channel for each secret. A third channel, `broker`, keeps the credential on
 the host. A policy's [route](policies.md#routes) names the secret, and the
 guest gets a session token for the route in its place. This release serves a
-route to hull on `hvi` and to nerdctl with urunc at `brig.internal`.
+route to hull on `hvi` and to nerdctl with urunc at `brig.internal`, and a
+route that vends at `169.254.170.2`.
 
 | Channel | What it does |
 | --- | --- |
@@ -410,6 +411,19 @@ AWS.
 **The session token.** The guest fetches keys with its session token for the
 route. Brig mints one on every exec, and it lasts 12 hours. An agent process
 older than that cannot fetch keys again. The next exec gets a new token.
+
+**The link to the broker.** The guest fetches keys in plain HTTP from
+`169.254.170.2`, and not over TLS at `brig.internal`. The AWS SDKs need
+that: botocore, which boto3 and the AWS CLI v2 use, verifies HTTPS to a
+container credential URL with its own CA list and ignores `AWS_CA_BUNDLE`,
+and the SDKs take plain HTTP there only to loopback and a few link-local
+addresses. So the session token of the route crosses the virtual link from
+the VM to the host in clear text. The token is bound to one sandbox and
+lasts 12 hours. Only the broker accepts it. The runtime diverts the address
+to the sandbox's divert socket, so the request never leaves the virtual link
+for a network. The broker serves only a route that vends on that path, and
+refuses any other route before it reads the token. See
+[Transports](broker.md#transports).
 
 **Named, not ambient.** You name the AWS profile when you run
 `brig secret import`. The secret holds that pointer and no key. Brig does
@@ -1101,8 +1115,11 @@ A run with a route reaches one host service by design: the credential
 broker, at `brig.internal` on port 443. On nerdctl that is port 443 of the
 bridge address, which the sandbox's table redirects to the relay of its
 resolver. On `hvi` it is port 443 of the sandbox's gateway address, which
-the gateway diverts. Either way the connection reaches only the broker,
-through the sandbox's divert socket. See
+the gateway diverts. A run with a route that vends also reaches the broker
+at `169.254.170.2` on port 80, diverted the same way. Brig adds no `allow`
+rule for it. The `hvi` gateway resets the rest of `169.254.0.0/16`, and the
+nerdctl table refuses it under a policy with a default. Either way the
+connection reaches only the broker, through the sandbox's divert socket. See
 [Transports](broker.md#transports).
 
 ### Sandbox to sandbox

@@ -113,6 +113,12 @@ transport where the mode is served.
 This build of Brig serves the `endpoint` mode alone. A route in any other
 mode is refused on every run path, with exit `7`.
 
+A route that vends is also reached at the link-local address
+`169.254.170.2` (see [Transports](broker.md#transports)). On hull on `hvi`
+its run also needs a gateway that diverts that address, which needs a hull
+with [brig-sh/hull#136](https://github.com/brig-sh/hull/pull/136). Brig asks
+the gateway before boot, and refuses an older hull with exit `7`.
+
 ## Where the boundary sits
 
 <p align="center">
@@ -176,6 +182,9 @@ hull stop <name>
 hull rm <name>
 hull network-gateway --help             # does this hull enforce a policy? (--egress-default)
                                         # does it route brig.internal? (--divert)
+hull network-gateway --socket <tmp>/p.sock      # does it divert 169.254.170.2? Asked
+     --divert 169.254.170.2:80=<tmp>/p.sock     # before a run with a route that vends.
+     --divert 169.254.170.2:80=<tmp>/p.sock     # "diverted twice" is yes, "link-local" no
 hull network-gateway --socket <path> --qemu-socket <path>.qemu   # internal/runtime/gateway.go
      --subnet 198.18.0.0/24 --gateway-ip 198.18.0.1 --api <api socket>
 hull network-gateway --socket <path> --qemu-socket <path>.qemu
@@ -185,6 +194,7 @@ hull network-gateway --socket <path> --qemu-socket <path>.qemu
      [--egress-allow <rule>]... [--egress-deny <rule>]...   # carrying a policy
      [--divert <gateway-ip>:443=<divert socket>           # a guest that reaches
       --host brig.internal=<gateway-ip>]                   # brig.internal
+     [--divert 169.254.170.2:80=<divert socket>]          # a route that vends
 ```
 
 Every exec goes through `hull exec`. The reachability probe, the captured
@@ -378,8 +388,9 @@ resolver installs the rules. See
 [How nerdctl enforces a policy](policies.md#how-nerdctl-enforces-a-policy).
 
 A guest that reaches `brig.internal` needs the same, with or without a
-policy, and the `isolated` posture. Brig refuses it on docker. See
-[Routing brig.internal](policies.md#routing-briginternal).
+policy, and the `isolated` posture. Brig refuses it on docker. The table
+redirects port 80 of `169.254.170.2` to the same relay on a run with a route
+that vends. See [Routing brig.internal](policies.md#routing-briginternal).
 
 That bridge is the Linux enforcement point. It is the first hop outside the
 guest that all of the traffic of the sandbox crosses, and Brig owns it. The
