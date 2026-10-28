@@ -236,7 +236,9 @@ func TestLinkLocalOtherPortIsClosed(t *testing.T) {
 }
 
 // A TLS client on port 80 gets no handshake and no credential, and the broker
-// goes on serving the next request.
+// goes on serving the next request. The broker answers the ClientHello at
+// once: a handshake that only times out would mean a stuck connection that
+// holds its slot.
 func TestLinkLocalRefusesATLSClientHello(t *testing.T) {
 	rig := newLinkLocalRig(t)
 	added := rig.add(t, "brig-a", internalA)
@@ -248,16 +250,42 @@ func TestLinkLocalRefusesATLSClientHello(t *testing.T) {
 	if _, err := fmt.Fprintf(raw, "BRIG-DIVERT/1 %s %s 10.100.0.2 40002\n", host, port); err != nil {
 		t.Fatal(err)
 	}
+	// Well under the broker's 10s header timeout, so a broker that waits for
+	// more bytes fails here rather than passing on its own timeout.
+	_ = raw.SetDeadline(time.Now().Add(2 * time.Second))
 	tc := tls.Client(raw, &tls.Config{ServerName: host, RootCAs: x509.NewCertPool()})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	err = tc.HandshakeContext(ctx)
-	cancel()
+	err = tc.Handshake()
 	_ = tc.Close()
 	if err == nil {
 		t.Fatal("a TLS handshake on port 80 of the link-local address completed")
 	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("the broker did not answer a TLS ClientHello on port 80: %v", err)
+	}
 	if code, body, err := linkLocalGet(linkLocalClient(added.DivertSocket), "/brig-a/r/aws",
 		rig.mint(t, "brig-a", "aws")); err != nil || code != http.StatusOK || !strings.Contains(body, fakeAWSAccess) {
 		t.Fatalf("the vend after a TLS client: %d %q %v", code, body, err)
+	}
+}
+
+// The clear-text refusal is for the link-local address alone. A sandbox that
+// reaches the broker on the loopback port, with no brig.internal address, is
+// served its endpoint route there as before.
+func TestLoopbackServesARouteThatDoesNotVend(t *testing.T) {
+	rig := newLinkLocalRig(t)
+	if _, err := rig.client.Add(injector.Sandbox{ID: "brig-c", Profile: "claude-code",
+		Routes: []injector.Route{awsRoute(), claudeRoute()}}); err != nil {
+		t.Fatal(err)
+	}
+	tok := rig.mint(t, "brig-c", "anthropic")
+	if code := rig.send(t, "brig-c", "anthropic", tok, "/v1/messages"); code != http.StatusOK {
+		t.Fatalf("anthropic on the loopback port: %d, want 200", code)
+	}
+	if n := len(rig.up.requests()); n != 1 {
+		t.Fatalf("the upstream saw %d requests, want 1", n)
+	}
+	if lines := auditWith(t, rig.dir, "msg=broker", "status=200", "route=anthropic"); len(lines) == 0 {
+		t.Error("no audit line names the loopback request as served")
 	}
 }
