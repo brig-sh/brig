@@ -430,7 +430,7 @@ func stopOldGateway(sock, own string) bool {
 	}
 	return signalGateway(g.pid, func() bool {
 		argv, ok := procArgv(g.pid)
-		return ok && servesSocket(argv, sock) && !startedWithAPI(argv)
+		return ok && servesSocket(argv, sock) && !startedWithAPI(argv) || listensOn(g.pid, sock)
 	})
 }
 
@@ -474,6 +474,20 @@ func listenerPID(path string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// listensOn reports whether pid is the process listening on the QEMU socket
+// of sock.
+//
+// A stop asks this beside the argv, because the argv goes first. On Linux an
+// exiting process reads with an empty /proc/<pid>/cmdline for a millisecond
+// or two before it closes its sockets. A gateway counted as gone in that
+// window still accepts, so the caller finds the socket answering and keeps a
+// gateway that is about to go. A pid that changed hands cannot be listening
+// on brig's socket, so the stop still signals only the gateway.
+func listensOn(pid int, sock string) bool {
+	got, ok := listenerPID(qemuGatewaySocket(sock))
+	return ok && got == pid
 }
 
 // ensureIsolatedGateway returns the control socket of the gateway serving this
@@ -873,7 +887,7 @@ func stopGatewayAt(sock string) bool {
 		clearGatewayRecord(sock)
 		return !gatewayReachable(sock)
 	}
-	if signalGateway(pid, func() bool { return ownsGateway(pid, sock) }) {
+	if signalGateway(pid, func() bool { return ownsGateway(pid, sock) || listensOn(pid, sock) }) {
 		clearGatewayRecord(sock)
 		return true
 	}
