@@ -417,13 +417,14 @@ older than that cannot fetch keys again. The next exec gets a new token.
 that: botocore, which boto3 and the AWS CLI v2 use, verifies HTTPS to a
 container credential URL with its own CA list and ignores `AWS_CA_BUNDLE`,
 and the SDKs take plain HTTP there only to loopback and a few link-local
-addresses. So the session token of the route crosses the virtual link from
-the VM to the host in clear text. The token is bound to one sandbox and
-lasts 12 hours. Only the broker accepts it. The runtime diverts the address
-to the sandbox's divert socket, so the request never leaves the virtual link
-for a network. The broker serves only a route that vends on that path, and
-refuses any other route before it reads the token. See
-[Transports](broker.md#transports).
+addresses. So the session token of the route, and the keys the broker
+answers with (the access key, the secret key and the AWS session token),
+cross the virtual link between the VM and the host in clear text. The token
+is bound to one sandbox and lasts 12 hours. Only the broker accepts it. The
+runtime diverts the address to the sandbox's divert socket, so the request
+never leaves the virtual link for a network. The broker serves only a route
+that vends on that path, and refuses any other route before it reads the
+token. See [Transports](broker.md#transports).
 
 **Named, not ambient.** You name the AWS profile when you run
 `brig secret import`. The secret holds that pointer and no key. Brig does
