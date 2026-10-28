@@ -35,7 +35,8 @@ const divertArrival = "divert:"
 // on, which the arrival check compares with the sandbox the request names.
 type arrivalAddr struct {
 	// prefix is divertArrival, or linkLocalArrival for a connection in
-	// clear text. "" is divertArrival.
+	// clear text. Every arrival names it: the handler's clear-text check
+	// reads it, so no transport is left to a default.
 	prefix  string
 	sandbox string
 	src     netip.AddrPort
@@ -43,13 +44,7 @@ type arrivalAddr struct {
 
 func (a arrivalAddr) Network() string { return "brig-divert" }
 
-func (a arrivalAddr) String() string {
-	prefix := a.prefix
-	if prefix == "" {
-		prefix = divertArrival
-	}
-	return prefix + a.sandbox + "/" + a.src.String()
-}
+func (a arrivalAddr) String() string { return a.prefix + a.sandbox + "/" + a.src.String() }
 
 // arrivedConn is a brig.internal connection as the route server sees it. It
 // reports where it arrived, and closes done when the server is through with
@@ -105,7 +100,9 @@ func (l *connListener) Close() error {
 	return nil
 }
 
-func (l *connListener) Addr() net.Addr { return arrivalAddr{sandbox: "brig.internal"} }
+func (l *connListener) Addr() net.Addr {
+	return arrivalAddr{prefix: divertArrival, sandbox: "brig.internal"}
+}
 
 // arrival is the arrival check of the route handler, and names the sandbox
 // whose divert socket the request arrived on. A request that arrived on a
@@ -147,7 +144,8 @@ func (l *divertSandbox) serveInternal(client net.Conn, pre preamble, a *divertAu
 		_ = client.Close()
 		return
 	}
-	conn := &arrivedConn{Conn: tc, remote: arrivalAddr{sandbox: l.id, src: pre.src}, done: make(chan struct{})}
+	conn := &arrivedConn{Conn: tc, remote: arrivalAddr{prefix: divertArrival, sandbox: l.id, src: pre.src},
+		done: make(chan struct{})}
 	if !l.srv.internal.hand(conn) {
 		a.check = "stopping"
 		_ = conn.Close()
