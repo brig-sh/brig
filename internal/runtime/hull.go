@@ -1206,7 +1206,7 @@ func (h *hull) PruneSharedNetwork() bool {
 	}
 	return signalGateway(g.pid, func() bool {
 		argv, ok := procArgv(g.pid)
-		return ok && servesSocket(argv, sock)
+		return ok && servesSocket(argv, sock) || listensOn(g.pid, sock)
 	})
 }
 
