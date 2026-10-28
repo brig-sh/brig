@@ -605,3 +605,49 @@ func TestAnOfflineVendingRunIsRefusedForItsNetworkFirst(t *testing.T) {
 		t.Errorf("an offline run probed for a link-local divert %d times", rec.linkLocalProbes)
 	}
 }
+
+// The BROKER row of a run with a route that vends names the link-local
+// address the guest fetches keys at, beside brig.internal where the run has an
+// endpoint route too. A run with no such route keeps its row.
+func TestTheBrokerRowNamesTheLinkLocalAddressOfAVendingRun(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	for _, c := range []struct {
+		name, policy, want string
+	}{
+		{"aws alone", awsEndpoint, "transport brig.internal and " + injector.LinkLocalAddr + ", routes aws"},
+		{"aws beside an endpoint route", awsBesideClaude, "transport brig.internal and " + injector.LinkLocalAddr + ", routes "},
+		{"an endpoint route alone", claudeEndpoint, "transport brig.internal, routes anthropic"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			shortStateDir(t)
+			cfg := routedConfig(t, c.policy, &hullRecorder{})
+			cfg.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+			got := cfg.brokerLine()
+			if !strings.HasPrefix(got, c.want) {
+				t.Errorf("BROKER row = %q, want it to start with %q", got, c.want)
+			}
+			if c.name == "an endpoint route alone" && strings.Contains(got, "169.254") {
+				t.Errorf("BROKER row of a run with no route that vends names a link-local address: %q", got)
+			}
+		})
+	}
+}
+
+// A run the link-local probe refused is not blamed on brig.internal, which
+// the run may not use at all.
+func TestTheBrokerRowDoesNotBlameBrigInternalForALinkLocalRefusal(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	refusal := &runtime.CapabilityError{Property: runtime.RouteModeProperty("endpoint"),
+		Path: runtime.RunPath{Runtime: "hull", Backend: "hvi"}, State: runtime.CannotEnforce,
+		Why: "this route needs a hull whose gateway can divert 169.254.170.2", Remedy: "Upgrade hull, or detach the policy"}
+	cfg := routedConfig(t, awsEndpoint, &hullRecorder{linkLocal: refusal})
+	cfg.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+	got := cfg.brokerLine()
+	if !strings.Contains(got, "refused: ") {
+		t.Fatalf("BROKER row of a refused run = %q", got)
+	}
+	if strings.Contains(got, "cannot route brig.internal") {
+		t.Errorf("BROKER row blames brig.internal for the link-local probe: %q", got)
+	}
+}

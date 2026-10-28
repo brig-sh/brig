@@ -69,12 +69,24 @@ func (c *Config) brokerLine() string {
 	for _, r := range c.routes {
 		names = append(names, r.Name)
 	}
-	parts := []string{fmt.Sprintf("transport %s, routes %s", c.routeTransport(), strings.Join(names, ", "))}
+	// A route that vends is fetched at the link-local address, which the
+	// SDK uses and brig.internal does not name.
+	transport := string(c.routeTransport())
+	if c.vends() {
+		transport += " and " + injector.LinkLocalAddr
+	}
+	parts := []string{fmt.Sprintf("transport %s, routes %s", transport, strings.Join(names, ", "))}
 	switch st, ok := c.routeBroker().Status(); {
 	case c.modeRefusal() != nil:
 		parts = append(parts, "refused: a route is in a mode this run cannot serve; brig info --json says why")
 	case c.routeRefusal() != nil:
-		parts = append(parts, "refused: this run cannot route brig.internal to the broker; brig info --json says why")
+		// A run that vends may be refused by the link-local probe, not by
+		// brig.internal, so it does not name one of them.
+		what := injector.BrigInternal
+		if c.vends() {
+			what = "this run's routes"
+		}
+		parts = append(parts, "refused: this run cannot route "+what+" to the broker; brig info --json says why")
 	case ok:
 		parts = append(parts, fmt.Sprintf("brig-broker pid %d on 127.0.0.1:%d", st.PID, st.Port))
 		if len(st.Pending) > 0 {

@@ -75,6 +75,13 @@ broker in its `BROKER` row:
 BROKER  transport brig.internal, routes anthropic; brig-broker pid 4242 on 127.0.0.1:52546; kept on the host: claude-credentials; modes endpoint
 ```
 
+A run with a route that vends names the link-local address in the transport,
+as `transport brig.internal and 169.254.170.2:80`. A run that Brig refuses
+says `refused: this run cannot route brig.internal to the broker`, or, when
+it has a route that vends, `this run's routes` in place of `brig.internal`,
+because the link-local check may be the one that refused it. `brig info
+--json` says why in either case.
+
 Brig refuses the run before boot, with exit `6`, when the store does not
 hold a route's secret, or does not open. The message names the command that
 puts the secret there. On Linux the store is a Secret Service, which needs a
