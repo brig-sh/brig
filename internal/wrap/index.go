@@ -363,6 +363,7 @@ func RefOfSandbox(vmName string) string {
 // the runtime does not have needs it, since forgetting the session is all
 // that rm does.
 func ForgetSandbox(vmName string) (bool, error) {
+	forgetGitWatch(func(name string) bool { return name != vmName })
 	index := readSessionIndex()
 	dropped := false
 	for key, entry := range index {
@@ -391,13 +392,19 @@ func ForgetSandbox(vmName string) (bool, error) {
 // that a sandbox brig would not recognise still counts as present.
 func PruneSessions(live []string) {
 	dropLegacyWorkspaceIndex()
-	index := readSessionIndex()
-	if len(index) == 0 {
-		return
-	}
 	have := make(map[string]bool, len(live))
 	for _, name := range live {
 		have[name] = true
+	}
+	// The look at a sandbox's project is not pruned here, only by rm. run takes
+	// it before the boot, and the runtime lists a sandbox only once it created
+	// it, so an ls while a first run still pulls its image would drop the look
+	// that run just took, and the next command would record whatever the guest
+	// had planted by then with no warning. An entry left by a sandbox removed
+	// outside brig costs at most a warning about changes made since.
+	index := readSessionIndex()
+	if len(index) == 0 {
+		return
 	}
 	dropped := false
 	for key, entry := range index {

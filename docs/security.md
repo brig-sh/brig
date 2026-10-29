@@ -646,6 +646,112 @@ run names `~/monorepo/frontend`. The guest home has the same gap, and so does
 a hostmount volume source. To close the gap, the runtime must accept a
 directory handle and not a path.
 
+### What the host runs from the project
+
+Brig mounts the whole project, `.git` included. Git on the host runs
+programs that the repository names, so a file the agent writes into `.git`
+runs on the host, as you, at your next git command in that directory:
+
+- a hook in `.git/hooks`, for example `post-checkout` at `git checkout .`
+- a program that `.git/config` names, for example `core.fsmonitor` at
+  `git status` and `git diff`. `core.hooksPath`, `core.pager`, filter, diff
+  and merge drivers, and aliases that start with `!` work the same way.
+
+`core.fsmonitor` runs before you have read anything: at the first
+`git diff`, or when an editor or a shell prompt runs `git status` in that
+directory.
+
+Reading the diff does not catch either one. `.git` is not part of the working
+tree, so neither `git diff` nor `git status` shows a new hook or a changed
+config. Git's `safe.directory` check does not apply, because you still own
+the repository. A setting in your global git config does not help, because
+the repository's config overrides it.
+
+Files in the working tree can run on the host later too: CI workflows,
+editor task files and package scripts. Those do show in the diff, but they
+run when a tool runs them, not when you read them.
+
+After a run, before any other git command in the project on the host, do
+one of these:
+
+- Read the repository's config and hooks with commands that run nothing:
+  `git config --local --list` and `ls -la .git/hooks`.
+- Continue from a fresh clone, and leave the directory the agent worked in.
+
+Brig warns when these files change. `brig run`, `create`, `sh`, `exec`,
+`stop` and `rm` record what the project's `.git/config`,
+`.git/config.worktree`, `.git/commondir`, `.git/hooks` and `.git/info` hold,
+and the next of them for the same sandbox names each file that was added,
+changed or removed since:
+
+```console
+$ brig stop claude
+brig: /Users/alex/code/demo/.git changed while brig-claude-code could write to it
+  ↳ git on the host runs these files as you, at your next git command there
+  ↳ added .git/hooks/post-checkout
+  → read them with commands that run nothing:  git config --local --list; ls -la .git/hooks
+                                               ↳ or continue from a fresh clone
+```
+
+When stderr is not a terminal, every line starts with `brig:`.
+
+A `.git/commondir` is named on every command that finds one. git then reads
+config, hooks and info from the directory it names, which Brig does not look
+at, and a repository's own `.git` has none.
+
+When `.git/config` sets `core.hooksPath` to a directory inside the project,
+Brig looks at that directory too. husky does this with `.husky/_`, and ignores
+everything in it, so `git status` does not show a hook changed there either.
+
+The warning is a look between two brig commands, not a guard:
+
+- A foreground run hands the terminal to the agent, so brig is not there
+  when it ends. Nothing is said until the next brig command for that
+  sandbox. A git command you run before that runs whatever is there.
+- It does not stop the write, and the guest can write again after the look.
+- It names a change, not who made it. A hook manager or a `git push -u` on
+  the host changes the same files.
+- `-q` and `--json` hide it, and the next command that prints warnings
+  names the change instead.
+- Submodules keep their hooks and config under `.git/modules`, which is not
+  looked at.
+- A file that `.git/config` already includes, with `include.path` or
+  `includeIf`, is not looked at unless it is one of the paths above. The
+  guest can set `core.fsmonitor` or `core.hooksPath` there without
+  `.git/config` changing.
+- The first look at a sandbox has nothing to compare against. That is the
+  first command for it, and the first after an upgrade from a Brig that did
+  not look. Whatever the guest had planted by then is recorded as it is,
+  with no warning.
+- A hook that is a symlink is recorded by where it points, not by what that
+  file holds. After the first warning, the guest can change the file it
+  points to, an ignored one in the working tree for instance, and no second
+  warning comes.
+- The look is bounded, so a guest cannot make it stall every command. It
+  hashes the first 8 MiB of a file and 64 MiB in all. A file that comes
+  after those 64 MiB are spent is recorded by its mode and size only, so a
+  change that keeps both is not named, and neither is one past a file's
+  first 8 MiB that keeps its size.
+  It stops after 4096 entries and 32 levels of directories, and what is past
+  either is not looked at. A look that stopped says so in the warning.
+- A `.git` that is a file, whose `gitdir:` names a directory inside the
+  project (`git init --separate-git-dir`), is watched as the file only. The
+  config and hooks in that directory are not looked at.
+- A symlinked `.git/hooks`, or a symlinked `core.hooksPath` directory, is
+  recorded by where it points. Edits to the directory it points to are not
+  seen, whether or not it is inside the project.
+- An entry under `.git/hooks` or `.git/info` that Brig cannot read, a
+  directory the guest made mode 000 for instance, stops the look with an
+  error. Until it is gone, that command names no change at all. A
+  `core.hooksPath` that cannot be read does not do this: it is recorded as
+  unreadable and the look goes on.
+- `core.hooksPath` is read from `.git/config` with `git config --type=path`,
+  which needs git 2.18 or newer. With an older git, or any other git error,
+  the directory is not watched, and nothing says so. A `core.hooksPath` set
+  in `.git/config.worktree` is not read. An absolute one that reaches the
+  project by another name than the one Brig holds, `/private/var` for
+  `/var` on macOS, is not recognized as inside it and is not watched.
+
 ## Guest images
 
 Brig checks where an image came from before it boots the image, because an
@@ -1139,6 +1245,15 @@ wrong thing to leave set.
 
 On Linux, or with the filter off, run Brig inside a terminal you are willing
 to lose if terminal output matters for your threat model.
+
+### Files the host runs later
+
+Brig does not stop the agent from writing a file that the host runs later.
+The project is mounted read-write, `.git` included, so a hook or a program
+named in `.git/config` runs on the host at your next git command there. Brig
+names a change to those files at the next brig command for the sandbox, and
+a git command run before that is not warned about. See
+[What the host runs from the project](#what-the-host-runs-from-the-project).
 
 ### The guest home
 

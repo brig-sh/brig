@@ -472,6 +472,66 @@ CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "the same project restarted the sandbox" \
   || ok "the same project reuses the sandbox"
+
+# git on the host runs a hook the guest writes into the project's .git, and
+# git diff does not show it (#413). The next command for the session names it,
+# here a stop, and the one after has nothing new to say.
+mkdir -p "$PROJ/.git/hooks"
+printf '#!/bin/sh\necho planted\n' > "$PROJ/.git/hooks/post-checkout"
+chmod +x "$PROJ/.git/hooks/post-checkout"
+"$WORK/brig" stop claude > /dev/null 2> "$WORK/gitwatch.err"
+grep -q 'added .git/hooks/post-checkout' "$WORK/gitwatch.err" \
+  && ok "a hook planted in the project's .git is named on the next command" \
+  || bad "a hook planted in the project's .git is named -- got: $(cat "$WORK/gitwatch.err")"
+"$WORK/brig" stop claude > /dev/null 2> "$WORK/gitwatch.err"
+grep -q '\.git changed' "$WORK/gitwatch.err" \
+  && bad "a .git change already named is named again -- got: $(cat "$WORK/gitwatch.err")" \
+  || ok "a .git change is named once"
+# rm --all forgets every sandbox's look, so it compares first, or a hook
+# planted since the last command is never named.
+printf '#!/bin/sh\necho planted\n' > "$PROJ/.git/hooks/pre-push"
+chmod +x "$PROJ/.git/hooks/pre-push"
+"$WORK/brig" rm --all -y > /dev/null 2> "$WORK/gitwatch.err"
+grep -q 'added .git/hooks/pre-push' "$WORK/gitwatch.err" \
+  && ok "rm --all names a hook planted since the last command" \
+  || bad "rm --all names a hook planted since the last command -- got: $(cat "$WORK/gitwatch.err")"
+rm -rf "$PROJ/.git"
+# Every verb that acts on a sandbox looks, and info and plan, which only report,
+# do not, so the look they leave alone is still there for the next verb that can
+# name it. Each case starts from a fresh sandbox, with the project mounted, and
+# plants a hook of its own after the look that run takes.
+GP="$WORK/gitproject"
+mkdir -p "$GP/.git/hooks"
+for verb in create sh exec rm; do
+  "$WORK/brig" rm --all -y > /dev/null 2>&1
+  CLAUDE_CODE_OAUTH_TOKEN=env-token-secret "$WORK/brig" run claude "$GP" -d > /dev/null 2>&1
+  printf '#!/bin/sh\n' > "$GP/.git/hooks/pre-$verb"
+  chmod +x "$GP/.git/hooks/pre-$verb"
+  case "$verb" in
+    create) "$WORK/brig" create claude > /dev/null 2> "$WORK/gitwatch.err" ;;
+    sh)     "$WORK/brig" sh claude true > /dev/null 2> "$WORK/gitwatch.err" ;;
+    exec)   "$WORK/brig" exec claude true > /dev/null 2> "$WORK/gitwatch.err" ;;
+    rm)     "$WORK/brig" rm claude > /dev/null 2> "$WORK/gitwatch.err" ;;
+  esac
+  grep -q "added .git/hooks/pre-$verb" "$WORK/gitwatch.err" \
+    && ok "$verb names a hook planted in the project's .git" \
+    || bad "$verb names a hook planted in the project's .git -- got: $(cat "$WORK/gitwatch.err")"
+done
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+CLAUDE_CODE_OAUTH_TOKEN=env-token-secret "$WORK/brig" run claude "$GP" -d > /dev/null 2>&1
+printf '#!/bin/sh\n' > "$GP/.git/hooks/pre-info"
+chmod +x "$GP/.git/hooks/pre-info"
+for verb in info plan; do
+  "$WORK/brig" "$verb" claude > /dev/null 2> "$WORK/gitwatch.err"
+  grep -q 'added .git/hooks/pre-info' "$WORK/gitwatch.err" \
+    && bad "$verb looked at the project's .git -- got: $(cat "$WORK/gitwatch.err")" \
+    || ok "$verb does not look at the project's .git"
+done
+"$WORK/brig" stop claude > /dev/null 2> "$WORK/gitwatch.err"
+grep -q 'added .git/hooks/pre-info' "$WORK/gitwatch.err" \
+  && ok "the change info and plan left alone is named by the next stop" \
+  || bad "the change info and plan left alone is named by the next stop -- got: $(cat "$WORK/gitwatch.err")"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
 OTHER="$WORK/otherproject"
 mkdir -p "$OTHER"
 : > "$STUB_LOG"
