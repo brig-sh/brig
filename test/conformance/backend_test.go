@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -423,5 +424,71 @@ func TestRecordPathTakesOnlyAKnownVariant(t *testing.T) {
 		if got := recordPath("nerdctl", "v0.1.0-rc17", variant); got != want {
 			t.Errorf("%q: %q, want %q", variant, got, want)
 		}
+	}
+}
+
+// The pins are the bundle brig-ctl names, and say nothing of which nerdctl
+// booted. A run whose nerdctl is not the one the bundle pins was filed under
+// that bundle anyway, and overwrote its record (the reproduction on #513: a
+// wrapper reporting nerdctl 2.9.9 over the bundle's 2.3.5). It now fails, and
+// leaves the default record path empty so nothing is written there.
+func TestARuntimeThatIsNotTheBundlesIsFiledUnderNoRecord(t *testing.T) {
+	for name, tc := range map[string]struct {
+		runtimeLine string
+		pins        string
+		want        string
+	}{
+		"another version":     {"nerdctl version 2.9.9", fakePins, `reports nerdctl "2.9.9"`},
+		"no pin to tie it to": {fakeNerdctl, strings.Replace(fakePins, "NERDCTL_VERSION=v2.3.5\n", "", 1), "pins no NERDCTL_VERSION"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, s := nerdctlSuite(t)
+			f.versionOut = tc.runtimeLine + "\n"
+			f.pinsOut = tc.pins
+			rep := run(t, s)
+			if !rep.failed() || rep.unfiled == "" {
+				t.Fatalf("the run was not refused: problems %v, unfiled %q", rep.problems, rep.unfiled)
+			}
+			if !strings.Contains(strings.Join(rep.problems, "\n"), tc.want) {
+				t.Errorf("no problem says %q: %v", tc.want, rep.problems)
+			}
+			if n := len(f.brigCalls("run")); n != 0 {
+				t.Errorf("booted %d sandboxes for a run that belongs under no record", n)
+			}
+			if rep.bundle != "" {
+				t.Errorf("the record would still name bundle %q", rep.bundle)
+			}
+			var out, errOut bytes.Buffer
+			f2, s2 := nerdctlSuite(t)
+			f2.versionOut, f2.pinsOut = tc.runtimeLine+"\n", tc.pins
+			dir := t.TempDir()
+			wd, _ := os.Getwd()
+			if err := os.Chdir(dir); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Chdir(wd) }()
+			if code := runSuite(context.Background(), s2, "", &out, &errOut); code != 1 {
+				t.Errorf("exit %d, want 1", code)
+			}
+			if !strings.Contains(out.String(), "no record written") {
+				t.Errorf("the run does not say it wrote nothing:\n%s", out.String())
+			}
+			if _, err := os.Stat(filepath.Join(dir, "docs")); err == nil {
+				t.Error("a record directory was written for a runtime that is not the bundle's")
+			}
+		})
+	}
+}
+
+// The versions are compared as versions, not as text: the pin carries a v and
+// the runtime's own line does not.
+func TestARuntimeThatIsTheBundlesIsFiledUnderIt(t *testing.T) {
+	_, s := nerdctlSuite(t)
+	rep := run(t, s)
+	if rep.unfiled != "" || rep.failed() {
+		t.Fatalf("the bundle's own nerdctl was refused: unfiled %q, problems %v", rep.unfiled, rep.problems)
+	}
+	if rep.bundle != "v0.1.0-rc17" {
+		t.Errorf("filed under %q", rep.bundle)
 	}
 }

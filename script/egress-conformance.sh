@@ -49,12 +49,15 @@ fi
 # for where install.sh puts it too: under the XDG data directory for a user,
 # and under /var/lib/brig for root. brig-env.sh then puts the bundle's bin on
 # PATH, which is where the runner finds brig-ctl for the bundle's pins.
-if [ "$(uname -s)" = Linux ] && [ -z "${CONTAINERD_ADDRESS:-}" ]; then
+ctl=""
+if [ "$(uname -s)" = Linux ]; then
   ctl=$(command -v brig-ctl || true)
   for c in "${XDG_DATA_HOME:-$HOME/.local/share}/brig/data/bin/brig-ctl" /var/lib/brig/data/bin/brig-ctl; do
     [ -n "$ctl" ] && break
     [ -x "$c" ] && ctl=$c
   done
+fi
+if [ "$(uname -s)" = Linux ] && [ -z "${CONTAINERD_ADDRESS:-}" ]; then
   if [ -z "$ctl" ]; then
     echo "egress-conformance: no brig-ctl, so no runtime bundle to boot." >&2
     echo "Install it with install.sh, or set CONTAINERD_ADDRESS and BRIG_RUNTIME_BIN for a nerdctl of your own" >&2
@@ -66,8 +69,16 @@ if [ "$(uname -s)" = Linux ] && [ -z "${CONTAINERD_ADDRESS:-}" ]; then
   envs=$("$ctl" env)
   eval "$envs"
 fi
+
 make -s netprobe NETPROBE_DIR="$BIN/netprobe"
 
 go build -o "$BIN/conformance" ./test/conformance
 
-"$BIN/conformance" -brig "$BIN/brig" -probe "$BIN/netprobe/linux-$arch/netprobe" "$@"
+# The brig-ctl found above goes to the runner, which would otherwise take the
+# first one on PATH, and the pins it reads name that bundle. The runner then
+# checks the nerdctl that boots is the one those pins ship. A flag of the
+# caller's own comes later and wins. The array expansion is written for bash
+# 3.2, where an empty one is an unbound variable under set -u.
+ctl_args=()
+[ -n "$ctl" ] && ctl_args=(-brig-ctl "$ctl")
+"$BIN/conformance" -brig "$BIN/brig" -probe "$BIN/netprobe/linux-$arch/netprobe" ${ctl_args[@]+"${ctl_args[@]}"} "$@"

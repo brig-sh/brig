@@ -126,6 +126,10 @@ type report struct {
 	date   time.Time
 	svc    string
 	host   string
+	// unfiled says why this run belongs under no record, when the runtime
+	// that booted cannot be tied to the version the record would name. The
+	// default record path is then left empty, and nothing is written there.
+	unfiled string
 	// problems are failures of the run as a whole, apart from any case.
 	problems []string
 	boots    map[string]*bootResult
@@ -205,6 +209,11 @@ func (s *suite) do(ctx context.Context) *report {
 	switch s.backend {
 	case "nerdctl":
 		rep.stack = s.nerdctlStack(ctx, env, rep)
+		// A runtime that is not the bundle's belongs under no record, so
+		// there is nothing to boot three sandboxes for.
+		if rep.unfiled != "" {
+			return rep
+		}
 		rep.assets = s.nerdctlAssets(env, rep)
 	default:
 		rep.stack = []stackRow{{"hvi", s.hviLine(ctx)}}
