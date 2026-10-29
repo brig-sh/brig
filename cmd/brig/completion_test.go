@@ -186,9 +186,26 @@ func TestCompletePositions(t *testing.T) {
 		directive: dirNames,
 		exactly:   []string{"mine"},
 	}, {
-		name:      "ls takes one flag and no operand",
+		name:      "ls takes no operand",
 		words:     []string{"ls", ""},
 		directive: dirNone,
+	}, {
+		// ls reads -q/--quiet and --json itself, with no FlagSet, so
+		// TestGroupsTableCoversEveryGroupFlag cannot see either of them.
+		name:      "ls offers --json beside --quiet",
+		words:     []string{"ls", "-"},
+		directive: dirNames,
+		exactly:   []string{"--quiet", "-q", "--json"},
+	}, {
+		name:      "agent ls offers --json",
+		words:     []string{"agent", "ls", "-"},
+		directive: dirNames,
+		exactly:   []string{"--json"},
+	}, {
+		name:      "secret ls offers --json",
+		words:     []string{"secret", "ls", "-"},
+		directive: dirNames,
+		exactly:   []string{"--json"},
 	}, {
 		name:      "a noun command offers its subcommands",
 		words:     []string{"agent", ""},
