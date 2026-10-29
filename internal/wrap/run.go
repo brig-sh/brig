@@ -468,6 +468,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		Notice:   c.runtimeNotice(),
 	}
 	if err := c.Runtime.Run(spec); err != nil {
+		// nerdctl may have made the container and its network before the
+		// boot failed, say when the shim won't start. Clear them, or the
+		// home stays and nothing later finds any of it. Remove leaves a
+		// running sandbox alone.
+		_ = c.Runtime.Remove(c.VMName)
 		return fmt.Errorf("could not start the sandbox: %w", err)
 	}
 	booted = true
