@@ -91,7 +91,7 @@ func runSuite(ctx context.Context, s *suite, path string, stdout, stderr io.Writ
 		fmt.Fprintf(stdout, "egress conformance: interrupted, no record written\n")
 		return 1
 	}
-	if path == "" {
+	if path == "" && rep.unfiled == "" {
 		path = recordPath(s.backend, rep.version(), rep.variant())
 	}
 	result := "PASS"
@@ -107,8 +107,9 @@ func runSuite(ctx context.Context, s *suite, path string, stdout, stderr io.Writ
 		}
 	}
 	if path == "" {
-		// No runtime version, so no record to file it under. The reason is
-		// printed above.
+		// No runtime version, or a runtime that cannot be tied to the bundle
+		// that names it, so no record to file it under. The reason is printed
+		// above.
 		fmt.Fprintf(stdout, "egress conformance: %s, no record written\n", result)
 		return 1
 	}
