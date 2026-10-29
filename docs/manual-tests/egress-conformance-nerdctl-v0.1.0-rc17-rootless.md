@@ -6,8 +6,8 @@ Written by `script/egress-conformance.sh`. To change it, run the suite again.
 | --- | --- |
 | backend | `nerdctl` |
 | runtime | `nerdctl version 2.3.5` |
-| brig | `brig v0.4.2-0.20261026090750-5e60f207e6d7 (5e60f20, 2026-10-26, go1.27.1, linux/amd64)` |
-| date | 2026-10-26 09:09 UTC |
+| brig | `brig v0.4.2-0.20261029105105-e45bbfb803d5 (e45bbfb, 2026-10-29, go1.27.1, linux/amd64)` |
+| date | 2026-10-29 10:52 UTC |
 | image | `ghcr.io/brig-sh/claude-code-stock:root` |
 | image digest | `sha256:516d784a18717e67240d415fbae57e5883854c25f8280716cb8591d63bbd76ec` |
 | runtime bundle | `v0.1.0-rc17, generic-boot, rootless` |
@@ -63,7 +63,7 @@ that says why its target may be shut can be unproven. Any other fails.
 
 ```console
 $ netprobe tcp example.com:443
-reached tcp example.com:443 connected to 172.66.147.243:443
+reached tcp example.com:443 connected to 104.20.23.154:443
 $ netprobe tcp deb.debian.org:443
 reached tcp deb.debian.org:443 connected to 146.75.118.132:443
 $ netprobe tcp 1.1.1.2:443
@@ -83,7 +83,7 @@ reached doh https://8.8.8.8/dns-query 8.8.8.8:443 answered NOERROR with 2 answer
 $ netprobe dot 8.8.8.8 example.net
 reached dot 8.8.8.8 8.8.8.8:853 answered NOERROR with 2 answers over TLS
 $ netprobe tcp www.debian.org:443
-reached tcp www.debian.org:443 connected to 130.89.148.77:443
+reached tcp www.debian.org:443 connected to 194.177.211.216:443
 $ netprobe tcp 1.1.1.1:443
 reached tcp 1.1.1.1:443 connected to 1.1.1.1:443
 $ https_proxy=http://{hostsvc} HTTPS_PROXY=http://{hostsvc} netprobe doh -client curl https://dns.google/dns-query example.com
@@ -148,7 +148,7 @@ connect-refused tcp 9.9.9.9:443 dial tcp 9.9.9.9:443: connect: connection refuse
 $ netprobe tcp [2606:4700:4700::1111]:443
 no-route tcp [2606:4700:4700::1111]:443 dial tcp [2606:4700:4700::1111]:443: connect: network is unreachable
 $ netprobe dns -timeout 15s 8.8.8.8 example.net
-timeout dns 8.8.8.8 read udp 10.4.5.3:35991->8.8.8.8:53: i/o timeout
+timeout dns 8.8.8.8 read udp 10.4.5.6:37421->8.8.8.8:53: i/o timeout
 $ netprobe doh https://8.8.8.8/dns-query example.net
 connect-refused doh https://8.8.8.8/dns-query dial tcp 8.8.8.8:443: connect: connection refused
 $ netprobe dot 8.8.8.8 example.net
@@ -158,7 +158,7 @@ resolve-refused tcp www.debian.org:443 lookup www.debian.org on 10.4.5.1:53: ser
 $ netprobe tcp 1.1.1.1:443
 connect-refused tcp 1.1.1.1:443 dial tcp 1.1.1.1:443: connect: connection refused
 $ https_proxy=http://{hostsvc} HTTPS_PROXY=http://{hostsvc} netprobe doh -client curl https://dns.google/dns-query example.com
-connect-refused doh https://dns.google/dns-query curl exit 7: curl: (7) Failed to connect to {host} port 45131 after 0 ms: Couldn't connect to server
+connect-refused doh https://dns.google/dns-query curl exit 7: curl: (7) Failed to connect to {host} port 42155 after 0 ms: Couldn't connect to server
 $ netprobe tcp {hostsvc}
 connect-refused tcp {hostsvc} dial tcp {hostsvc}: connect: connection refused
 $ netprobe tcp 169.254.169.254:80
@@ -184,13 +184,13 @@ egress:
 
 ```console
 $ netprobe tcp example.com:443
-reached tcp example.com:443 connected to 104.20.23.154:443
+reached tcp example.com:443 connected to 172.66.147.243:443
 $ netprobe tcp {addr:git.kernel.org}:443
 reached tcp 172.105.64.184:443 connected to 172.105.64.184:443
 $ netprobe tcp git.kernel.org:443
 connect-refused tcp git.kernel.org:443 dial tcp 172.105.64.184:443: connect: connection refused
 $ netprobe tcp example.net:443
-connect-refused tcp example.net:443 dial tcp 172.66.175.59:443: connect: connection refused
+connect-refused tcp example.net:443 dial tcp 104.20.21.8:443: connect: connection refused
 $ netprobe tcp {addr:example.net}:443
 connect-refused tcp 104.20.21.8:443 dial tcp 104.20.21.8:443: connect: connection refused
 $ netprobe tcp 9.9.9.9:443
