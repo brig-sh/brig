@@ -408,9 +408,10 @@ branch, and its `container-initrd` from the same commit.
 
 **containerd** must run with the urunc shim installed.
 `BRIG_CONTAINERD_RUNTIME` can point at another microVM shim. Brig refuses a
-shim that it knows shares the host kernel: `runc` or `crun`, by name or by
-path. [security.md](security.md) explains why a kernel of its own for the
-guest is the boundary that Brig provides.
+shim that it knows shares the host kernel: `runc`, `crun` or the runc shim
+binaries `containerd-shim-runc-v1` and `-v2`, by name or by path.
+[security.md](security.md) explains why a kernel of its own for the guest
+is the boundary that Brig provides.
 
 ### Versions and pins
 
@@ -467,7 +468,7 @@ These swaps need no code:
 | --- | --- |
 | a different build of the same runtime | `BRIG_RUNTIME_BIN`, or `runtimeBin` in a profile |
 | docker in place of nerdctl | docker is already in the PATH search. Brig refuses a `genericBoot` profile on it |
-| a different containerd shim | `BRIG_CONTAINERD_RUNTIME`. Any shim that reads the two boot annotations can replace urunc. Brig refuses `runc` and `crun` |
+| a different containerd shim | `BRIG_CONTAINERD_RUNTIME`. Any shim that reads the two boot annotations can replace urunc. Brig refuses `runc`, `crun` and the runc shim binaries `containerd-shim-runc-v1` and `-v2`, by name or by path |
 | a different hypervisor backend under hull | `BRIG_HYPERVISOR`, or `hypervisor:` in a profile |
 
 The `ISOLATION` row of the envelope names the shim that you set. For a shim

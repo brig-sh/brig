@@ -92,8 +92,12 @@ func shimBinary(name string) string {
 // looks any other value up with exec.LookPath first, and runs what it finds as
 // the runc shim's binary. A path or a bare name is that binary, so it is placed
 // by its file name: /usr/bin/crun boots the same plain container that crun
-// does. A dotted name is normally not found, so it reaches containerd as a
-// runtime name, and one that resolves to the runc shim is a plain container.
+// does. The runc shim's own binary is placed the same way:
+// containerd-shim-runc-v2, by name or by path, still boots on
+// io.containerd.runc.v2, and matching it against the runtimes alone let it
+// through (#468). A dotted name is normally not found, so it reaches
+// containerd as a runtime name, and one that resolves to the runc shim is a
+// plain container.
 // It is not credited with urunc, though: a binary of that name on PATH would
 // run instead, and brig cannot see nerdctl's PATH.
 func shimBoundary(shim string) Boundary {
@@ -106,7 +110,7 @@ func shimBoundary(shim string) Boundary {
 			return BoundaryContainer
 		}
 	case strings.Contains(shim, "/") || !strings.Contains(shim, "."):
-		if sharedKernelRuntimes[filepath.Base(shim)] {
+		if base := filepath.Base(shim); sharedKernelRuntimes[base] || sharedKernelShims[base] {
 			return BoundaryContainer
 		}
 	default:

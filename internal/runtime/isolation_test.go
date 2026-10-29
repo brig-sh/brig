@@ -122,6 +122,60 @@ func TestNerdctlReportsASharedKernelForAPathToRuncOrCrun(t *testing.T) {
 	}
 }
 
+// The runc shim's own binary, by name or by path, boots on io.containerd.runc.v2
+// as the bare runtimes do. It passed the refusal and created a container on the
+// runc shim (#468), so CanRun must refuse it and Run must not reach the runtime.
+func TestNerdctlRefusesTheRuncShimBinaryByNameOrPath(t *testing.T) {
+	for _, shim := range []string{
+		"containerd-shim-runc-v2",
+		"containerd-shim-runc-v1",
+		"/home/u/.local/share/brig/data/bin/containerd-shim-runc-v2",
+		"./containerd-shim-runc-v2",
+	} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		got := n.Isolation(RunSpec{})
+		if got.Boundary != BoundaryContainer {
+			t.Errorf("%s boots the runc shim, so this is a container: %s", shim, got.Line())
+		}
+		if !strings.Contains(got.Detail, shim+": the guest shares the host kernel") {
+			t.Errorf("the row does not name the value and what it costs: %s", got.Line())
+		}
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err == nil {
+			t.Errorf("%s: CanRun let the runc shim through", shim)
+		}
+		err := n.Run(RunSpec{Name: "brig-x", Image: "img"})
+		if err == nil || strings.Contains(err.Error(), "STUB RAN") {
+			t.Errorf("%s: Run reached the runtime instead of refusing: %v", shim, err)
+		}
+	}
+}
+
+// The refusal of the runc shim's binary is keyed on its file name, and the
+// microVM shim's binary sits one letter away from it. A urunc binary added to
+// the refused set, or a bare containerd-shim-urunc-v2 mistaken for the runc
+// shim, would stop brig booting the one shim it exists for. brig cannot see
+// nerdctl's PATH, so it does not credit the name with a microVM either: the row
+// stays unknown, and CanRun lets it through.
+func TestNerdctlKeepsTheUruncShimBinaryAllowedByNameOrPath(t *testing.T) {
+	for _, shim := range []string{
+		"containerd-shim-urunc-v2",
+		"/usr/local/bin/containerd-shim-urunc-v2",
+		"./containerd-shim-urunc-v2",
+	} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
+			t.Errorf("%s: CanRun refused the urunc shim binary: %v", shim, err)
+		}
+		if got := n.Isolation(RunSpec{}); got.Boundary != BoundaryUnknown {
+			t.Errorf("%s is neither the runc shim nor provably a microVM: %s", shim, got.Line())
+		}
+	}
+}
+
 // containerd starts a shim by the last two dot-separated parts of the runtime
 // name (BinaryName in containerd's pkg/shim), so the rest of the name says
 // nothing about what boots. Each name is placed by the shim it resolves to. A

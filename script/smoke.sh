@@ -2053,6 +2053,50 @@ case "$out" in
   *) ok "nerdctl found says nothing about docker" ;;
 esac
 
+echo "== runc shim refusal =="
+# BRIG_CONTAINERD_RUNTIME=containerd-shim-runc-v2 booted a plain container on
+# the host kernel (#468). The unit tests show the refusal; this shows it comes
+# first, before any image fetch or boot step reaches the runtime. The stub
+# nerdctl logs every call, so "nothing was started" is read from the log, and a
+# control run on the urunc shim proves the log would show a run if brig made
+# one. The nerdctl adapter's shim choice is Linux only.
+if [ "$(uname -s)" = Linux ]; then
+  nrc="$WORK/nrc"
+  mkdir -p "$nrc/ws" "$nrc/state" "$nrc/gw"
+  cat > "$nrc/nerdctl" <<'STUB'
+#!/bin/sh
+{ printf 'argv:'; printf ' %s' "$@"; printf '\n'; } >> "$NRC_LOG"
+exit 0
+STUB
+  chmod +x "$nrc/nerdctl"
+  nrc_brig() {
+    NRC_LOG="$nrc/argv.log" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrc/nerdctl" \
+      BRIG_WORKSPACE="$nrc/ws" BRIG_STATE_DIR="$nrc/state" BRIG_GATEWAY_DIR="$nrc/gw" \
+      BRIG_CONTAINERD_RUNTIME="$1" "$WORK/brig" run claude -p hi
+  }
+  for shim in containerd-shim-runc-v2 containerd-shim-runc-v1 /usr/bin/containerd-shim-runc-v2; do
+    : > "$nrc/argv.log"
+    nrc_brig "$shim" > /dev/null 2> "$nrc/refuse.err"; rc=$?
+    [ "$rc" != 0 ] && ok "$shim exits non-zero" \
+      || bad "$shim exits non-zero -- got $rc"
+    grep -q "refusing BRIG_CONTAINERD_RUNTIME=$shim" "$nrc/refuse.err" \
+      && ok "$shim is refused" \
+      || bad "$shim is refused -- got: $(cat "$nrc/refuse.err")"
+    if grep -E '^argv: (run|create|start|pull|exec|load|build|network create) ' "$nrc/argv.log" > "$nrc/started.log"; then
+      bad "$shim reached the runtime -- got: $(cat "$nrc/started.log")"
+    else
+      ok "$shim reaches no run, create or pull"
+    fi
+  done
+  : > "$nrc/argv.log"
+  nrc_brig io.containerd.urunc.v2 > /dev/null 2>&1
+  grep -q '^argv: run ' "$nrc/argv.log" \
+    && ok "the urunc shim does reach run, so the log can show one" \
+    || bad "the urunc shim reaches run -- got: $(cat "$nrc/argv.log")"
+else
+  echo "  --   not Linux, skipping the runc shim refusal"
+fi
+
 echo "== exit codes =="
 # The documented set, checked end to end so the numbers a script keys on cannot
 # drift from the README. Each verb here fails in a different way and the status
