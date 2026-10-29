@@ -440,6 +440,10 @@ func TestARuntimeThatIsNotTheBundlesIsFiledUnderNoRecord(t *testing.T) {
 	}{
 		"another version":     {"nerdctl version 2.9.9", fakePins, `reports nerdctl "2.9.9"`},
 		"no pin to tie it to": {fakeNerdctl, strings.Replace(fakePins, "NERDCTL_VERSION=v2.3.5\n", "", 1), "pins no NERDCTL_VERSION"},
+		// The variant is in the record's name, so a pin that is not true or
+		// false cannot be read as either.
+		"no rootless pin":         {fakeNerdctl, strings.Replace(fakePins, "ROOTLESS=true\n", "", 1), `ROOTLESS=""`},
+		"a rootless pin of maybe": {fakeNerdctl, strings.Replace(fakePins, "ROOTLESS=true", "ROOTLESS=maybe", 1), `ROOTLESS="maybe"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, s := nerdctlSuite(t)
