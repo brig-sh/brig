@@ -233,7 +233,8 @@ func envValue(env []string, key string) string {
 
 // nerdctlExitRE is nerdctl's report of a guest command that failed, which is
 // the only place the command's own status survives on this path.
-var nerdctlExitRE = regexp.MustCompile(`exec failed with exit code ([0-9]+)`)
+var nerdctlExitRE = regexp.MustCompile(
+	`(?m)^(?:time="[^"]*" level=fatal msg="exec failed with exit code ([0-9]+)"|FATA\[[0-9]+\] exec failed with exit code ([0-9]+))\r?$`)
 
 // nerdctlExit is the guest command's exit status. nerdctl exits 1 for any
 // command that failed (#469), and brig passes that on, so a probe that exited
@@ -241,6 +242,11 @@ var nerdctlExitRE = regexp.MustCompile(`exec failed with exit code ([0-9]+)`)
 // status in its error line, which is read when brig exited 1. A status the
 // line does not name is left as it is, and the probe line is still what
 // decides the outcome: this only puts back the check that it agrees.
+//
+// The line is matched whole, in the two forms nerdctl logs it in, so a stray
+// mention of the phrase, in what the guest printed for one, does not rewrite
+// the code. A guest can still print a whole line of its own. That cannot make
+// a case pass, since the probe line on stdout decides the outcome.
 func nerdctlExit(stderr string, code int) int {
 	if code != 1 {
 		return code
@@ -249,7 +255,8 @@ func nerdctlExit(stderr string, code int) int {
 	if len(m) == 0 {
 		return code
 	}
-	n, err := strconv.Atoi(m[len(m)-1][1])
+	last := m[len(m)-1]
+	n, err := strconv.Atoi(last[1] + last[2])
 	if err != nil {
 		return code
 	}

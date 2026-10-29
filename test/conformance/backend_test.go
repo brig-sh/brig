@@ -239,6 +239,11 @@ func TestNerdctlExitIsTheGuestCommands(t *testing.T) {
 		{line, 0, 0},
 		{line, 3, 3},
 		{"exec failed with exit code 99999999999999999999", 1, 1},
+		// The line is matched whole, in both forms nerdctl logs it in.
+		{`FATA[0000] exec failed with exit code 42`, 1, 42},
+		{"the guest said: exec failed with exit code 9", 1, 1},
+		{`curl: time="x" level=fatal msg="exec failed with exit code 9"`, 1, 1},
+		{`time="2026-10-23T01:48:44+03:00" level=fatal msg="exec failed with exit code 3 and more"`, 1, 1},
 	} {
 		if got := nerdctlExit(tc.stderr, tc.code); got != tc.want {
 			t.Errorf("nerdctlExit(%q, %d) = %d, want %d", tc.stderr, tc.code, got, tc.want)
