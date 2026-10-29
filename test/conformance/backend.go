@@ -84,6 +84,15 @@ func (s *suite) bundleMismatch(runtimeLine string, pins map[string]string) strin
 	if got := strings.TrimPrefix(versionOf(runtimeLine), "v"); got != pinned {
 		return fmt.Sprintf("the runtime that boots reports nerdctl %q and the bundle %s names pins nerdctl %q: that bundle is not the one under test", got, s.brigCtl, pinned)
 	}
+	// The record's name carries the variant, and only ROOTLESS=true gave it
+	// one: a missing key, or any other value, filed the run under the plain
+	// bundle's name. Both pins the bundle writes are true or false, so
+	// anything else is a pins.env this runner does not know how to read.
+	switch pins["ROOTLESS"] {
+	case "true", "false":
+	default:
+		return fmt.Sprintf("the bundle %s names pins ROOTLESS=%q, neither true nor false, so which bundle it is cannot be told", s.brigCtl, pins["ROOTLESS"])
+	}
 	return ""
 }
 
