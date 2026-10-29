@@ -73,6 +73,20 @@ func (s *suite) pins(ctx context.Context, env []string) (map[string]string, erro
 	return pins, nil
 }
 
+// bundleMismatch says why the runtime that reports runtimeLine is not the one
+// the bundle in pins ships, or "" when it is. The bundle pins NERDCTL_VERSION
+// beside every other part it carries.
+func (s *suite) bundleMismatch(runtimeLine string, pins map[string]string) string {
+	pinned := strings.TrimPrefix(pins["NERDCTL_VERSION"], "v")
+	if pinned == "" {
+		return fmt.Sprintf("the bundle %s names pins no NERDCTL_VERSION, so the runtime that boots cannot be tied to it", s.brigCtl)
+	}
+	if got := strings.TrimPrefix(versionOf(runtimeLine), "v"); got != pinned {
+		return fmt.Sprintf("the runtime that boots reports nerdctl %q and the bundle %s names pins nerdctl %q: that bundle is not the one under test", got, s.brigCtl, pinned)
+	}
+	return ""
+}
+
 // nerdctlStack is what the record says booted on Linux: the bundle and the
 // parts of it a boot goes through, from its pins, and the nft that enforces
 // the policy, which is the host's. Without pins it says why, and the record
@@ -81,6 +95,17 @@ func (s *suite) nerdctlStack(ctx context.Context, env []string, rep *report) []s
 	pins, err := s.pins(ctx, env)
 	if err != nil {
 		return []stackRow{{"runtime bundle", "none: " + err.Error()}, s.nftRow(ctx, env)}
+	}
+	// The pins are the bundle brig-ctl names, and they say nothing of which
+	// nerdctl booted. A record filed under a bundle that did not boot would
+	// pass for the evidence docs/releasing.md gates a release on, so the
+	// nerdctl that reports its version here has to be the one the bundle
+	// pins. Without the pin there is nothing to tie it to, and that is no
+	// reason to trust it.
+	if why := s.bundleMismatch(rep.runtime, pins); why != "" {
+		rep.problems = append(rep.problems, why)
+		rep.unfiled = why
+		return []stackRow{{"runtime bundle", "not used: " + why}, s.nftRow(ctx, env)}
 	}
 	rep.bundle = pins["BUNDLE_VERSION"]
 	rep.pins = pins
