@@ -20,11 +20,11 @@ The cases are the ones `test/conformance` runs, with its two policy
 documents unchanged. When this was measured that runner booted `hvi` only,
 so the cases were run by hand. It now boots nerdctl too:
 `script/egress-conformance.sh` on a Linux host with the runtime bundle
-writes `egress-conformance-nerdctl-<bundle version>-rootless.md` beside this
-file. The guest image was `ghcr.io/brig-sh/claude-code-stock:root`, which
-carries curl and a CA bundle, and the probe was `test/netprobe`, as the
-suite uses them. Each case ran under its policy and again in a sandbox with
-no policy.
+writes `egress-conformance-nerdctl-<bundle version>.md` beside this file,
+with `-rootless` after the version for the rootless bundle. The guest image
+was `ghcr.io/brig-sh/claude-code-stock:root`, which carries curl and a CA
+bundle, and the probe was `test/netprobe`, as the suite uses them. Each case
+ran under its policy and again in a sandbox with no policy.
 
 `conformance-deny`, `default: deny`:
 

@@ -302,8 +302,11 @@ nerdctl.
 
    - For `hvi`, a Mac with that hull on `PATH`.
    - For nerdctl, a Linux host with that runtime bundle installed by
-     [install.sh](../install.sh), so `brig-ctl` is on `PATH`. A rootless
-     install is enough.
+     [install.sh](../install.sh). A rootless install is enough. It does not
+     put `brig-ctl` on `PATH`, so the script looks under
+     `~/.local/share/brig/data/bin` and then `/var/lib/brig/data/bin`. The
+     nerdctl that boots has to be the one that bundle ships: the run fails,
+     and writes no record, when it is not.
 
 2. Run the script:
 
@@ -323,7 +326,7 @@ nerdctl.
 
    | Result | Meaning | What to do |
    | --- | --- | --- |
-   | `FAIL` | The egress claims in [docs/policies.md](policies.md) and [docs/security.md](security.md) do not hold on that hull, or the run proved nothing for a case. | Read the reason. Then fix the claims, run the script again or hold the release. |
+   | `FAIL` | The egress claims in [docs/policies.md](policies.md) and [docs/security.md](security.md) do not hold on that runtime, or the run proved nothing for a case. | Read the reason. Then fix the claims, run the script again or hold the release. |
    | `unproven` | The case is no evidence for the claim: the guest got no further without a policy. | Only `metadata` can end there: on `hvi` hull resets every connection to 169.254.0.0/16, and on Linux a host outside a cloud has no metadata service. Any other `unproven` case fails the run. |
 
 4. Commit the record.
