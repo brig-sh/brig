@@ -170,6 +170,8 @@ hull run --detach --name <name>
      [--shared-dir <host>:<guest>[:ro]]...
      [--gui [--gui-title <title>]]
      [--env <NAME>|<NAME>=<value>]... <image>
+                                        # HULL_ROOTFS_MODE=overlay-block in its environment
+                                        # on a generic boot with an overlay root
 hull exec [-t] [--cwd <dir>] [-u <user>] [--env <NAME>|<NAME>=<value>]... <name> -- <cmd>...
 hull logs [--follow] [--tail <n>] <name>
 hull stop <name>
@@ -219,7 +221,7 @@ nerdctl run --detach --name <name>
      [--annotation com.urunc.unikernel.bootKernel=<path>]
      [--annotation com.urunc.unikernel.bootInitrd=<path>]
      [--annotation com.urunc.unikernel.hypervisor=<hvi|cloud-hypervisor|qemu|firecracker>]
-     [--annotation com.urunc.unikernel.rootfsMode=overlay-block]   # BRIG_ROOTFS_MODE
+     [--annotation com.urunc.unikernel.rootfsMode=overlay-block]   # an overlay root
      [-v <host>:<guest>[:ro]]... [--tmpfs <path>:<options>]...
      [-e <NAME>|<NAME>=<value>]... <image> sleep infinity
 nerdctl exec -i [-t] [-w <dir>] [-u <user>] [-e <NAME>|<NAME>=<value>]... <name> <cmd>...
@@ -394,10 +396,10 @@ The user-mode gateway of hull does not build on Linux.
 the image with them. hull takes the same pair on its command line. Brig also
 passes `com.urunc.unikernel.hypervisor` on every `genericBoot` run: `hvi`
 unless `BRIG_HYPERVISOR` names another monitor urunc runs. So urunc must know
-that monitor and find its binary. `BRIG_ROOTFS_MODE=overlay-block` adds
+that monitor and find its binary. An overlay root adds
 `com.urunc.unikernel.rootfsMode=overlay-block`, which needs the urunc of the
-`feat/linux-overlay-block` branch, the overlayfs snapshotter and `mke2fs` on
-the host.
+`feat/linux-overlay-block` branch. See
+[The guest root of a generic boot](#the-guest-root-of-a-generic-boot).
 
 > [!WARNING]
 > No urunc release reads the pair, v0.8.0 included. On a host that brings its
@@ -416,6 +418,50 @@ branch, and its `container-initrd` from the same commit.
 shim that it knows shares the host kernel: `runc` or `crun`, by name or by
 path. [security.md](security.md) explains why a kernel of its own for the
 guest is the boundary that Brig provides.
+
+### The guest root of a generic boot
+
+A `genericBoot` profile boots an ordinary image. By default, Brig boots its
+root as an overlay on two disks wherever the host can build them. The lower
+disk is a read-only ext4 image of the image, built once per image. The upper
+disk is an ext4 disk of the sandbox's own, and it takes every write to the
+root. The upper is sparse with an apparent size of 16 GiB. It grows as the
+guest writes and never shrinks. It goes away when the sandbox is removed.
+
+Brig asks hull for it with `HULL_ROOTFS_MODE=overlay-block`, on `vz` and
+`hvi`. hull formats the disks with
+`/opt/homebrew/opt/e2fsprogs/sbin/mke2fs`, so the host needs
+`brew install e2fsprogs`. An exported `HULL_ROOTFS_MODE` or
+`HULL_HVI_ROOTFS_UPPER` chooses the layout of the root itself, so Brig asks
+hull for no overlay while either is set. Brig asks urunc for it with the
+`com.urunc.unikernel.rootfsMode` annotation, on `hvi`, `cloud-hypervisor` and
+`qemu`. urunc builds the disks from the overlayfs snapshot of the container
+and refuses any other snapshotter. So the host needs the overlayfs
+snapshotter and `mke2fs`, on `PATH` or in `/usr/sbin`. Brig reads the
+snapshotter the way nerdctl does: `CONTAINERD_SNAPSHOTTER`, then the
+`snapshotter` key of the `nerdctl.toml` that `NERDCTL_TOML` names, then
+overlayfs. The runtime bundle sets both to overlayfs, and
+`CONTAINERD_SNAPSHOTTER=devmapper` turns the overlay off.
+
+Where the host cannot build the overlay, Brig passes no mode, and the runtime
+boots its own root, which is virtio-fs under both. It does the same for a
+`rootfsType` of `block` or `9pfs`, for docker, for a shim other than urunc,
+and for a monitor that does not take the overlay (`qemu` under hull,
+`firecracker` under urunc). `brig doctor` says whether the overlay is available and, if not, what
+is missing. `BRIG_ROOTFS_MODE=overlay-block` insists on the overlay and
+refuses the run where it is not available. `BRIG_ROOTFS_MODE=virtiofs` keeps
+the runtime's own root.
+
+The `ISOLATION` row names the root that boots, for instance:
+
+```
+ISOLATION    microVM (hull, hvi backend, rootfs overlay-block)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
+```
+
+Writes to the guest root do not survive `brig stop` in either mode. A stopped
+sandbox is recreated on the next run. Brig does not checkpoint a sandbox, so
+hull's refusal to checkpoint an overlay root does not apply.
 
 ### Versions and pins
 

@@ -259,8 +259,10 @@ brig info claude
 has the sandbox name, the isolation, the guest home, the image and the
 verification mode. It also has the network, every published port and the
 credentials by name. `brig --verbose run` prints the same envelope before it boots.
-The isolation row names the hull backend and rootfs type on macOS, and the
-containerd shim and urunc hypervisor on Linux.
+The isolation row names the hull backend and the root on macOS, and the
+containerd shim, the urunc hypervisor and the root on Linux. The root is
+`overlay-block` when Brig boots an overlay root, and the runtime's own
+otherwise.
 
 The network row gives the posture of the running sandbox. When the posture of
 the next boot is different, the row gives that posture too.
@@ -483,8 +485,14 @@ brig doctor
 ```
 
 `brig doctor` examines these items, one line each: the Brig build, the host,
-the hypervisor, the runtime, the boot assets, cosign, the profile directory,
-the secret store and brigd.
+the hypervisor, the runtime, the boot assets, the overlay root, cosign, the
+profile directory, the secret store and brigd.
+
+The `rootfs` line says whether the runtime can build the overlay root that a
+`genericBoot` profile boots by default. When it cannot, the line names what
+is missing, and a run keeps the runtime's own root. It is marked `!!` only
+when `BRIG_ROOTFS_MODE=overlay-block` asks for an overlay the host cannot
+build, or when `BRIG_ROOTFS_MODE` is not a mode.
 
 The first line is the build that `brig version` prints. `doctor` asks a
 running brigd for its build. If that build differs from the `brig` binary,
@@ -1132,8 +1140,8 @@ does and does not catch.
 | `BRIG_RUNTIME` (global only) | `hull` on macOS, `nerdctl` on Linux | which runtime to drive |
 | `BRIG_RUNTIME_BIN` (global only) | `hull` on the `hull` runtime, `nerdctl` then `docker` on the `nerdctl` runtime, each found on `PATH` | path to that binary. `BRIG_RUNTIME` picks the runtime first, and this only overrides its executable |
 | `BRIG_HYPERVISOR` | the agent's own `hypervisor:` field, else `vz` on macOS and `hvi` on Linux | `vz`, `hvi` or `qemu` on macOS. On Linux, the urunc monitor of a `genericBoot` profile: `hvi`, `cloud-hypervisor`, `qemu` or `firecracker`, with `vz` and an empty value meaning `hvi`. Wins over the agent's own field when set |
-| `BRIG_ROOTFS_MODE` | unset | `overlay-block` boots a `genericBoot` profile's root from two disks: a read-only image of the image, built once per image, and a writable disk per sandbox for the sandbox's writes to its root. A stop and start through urunc itself keeps that disk. Guest-root writes do not survive `brig stop` with or without this mode, because the next run recreates a stopped sandbox. `hull` reads it as `HULL_ROOTFS_MODE` (`vz` and `hvi`), and urunc as the `com.urunc.unikernel.rootfsMode` annotation (`hvi`, `cloud-hypervisor` and `qemu`). The `ISOLATION` row names it under urunc. Refused on any other profile |
-| `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` ignores it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked |
+| `BRIG_ROOTFS_MODE` | unset: `overlay-block` where the host can build it, else the runtime's own root | The root of a `genericBoot` profile whose `rootfsType` is unset or `virtiofs`. `overlay-block` boots it from two disks: a read-only ext4 image of the image, built once per image, and a sparse 16 GiB ext4 disk per sandbox for its writes to the root. Unset, Brig uses `overlay-block` where the host can build it and keeps the runtime's own root elsewhere, without a message. Set to `overlay-block`, a host that cannot build it refuses the run and says why. `virtiofs` keeps the runtime's own root. Any other value is refused, as is `overlay-block` on another profile or next to a `block` or `9pfs` rootfs type. `hull` reads the mode as `HULL_ROOTFS_MODE` (`vz` and `hvi`) and needs `brew install e2fsprogs`. urunc reads it as the `com.urunc.unikernel.rootfsMode` annotation (`hvi`, `cloud-hypervisor` and `qemu`) and needs the overlayfs snapshotter and `mke2fs`. The `ISOLATION` row names the root that boots, and `brig doctor` says whether the overlay is available. See [The guest root of a generic boot](runtimes.md#the-guest-root-of-a-generic-boot) |
+| `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` passes no type. Under both, `block` and `9pfs` keep the runtime's own root, and unset or `virtiofs` takes the overlay root where `BRIG_ROOTFS_MODE` allows it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked |
 | `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. Another microVM shim is accepted. A shim Brig knows shares the host kernel (`runc` or `crun`, by name or by path, or a shim name containerd resolves to the runc shim, such as `io.containerd.runc.v2`) is refused. The `ISOLATION` row names the variable when it is set |
 
 On macOS, `hvi` is the only backend that enforces an attached egress policy
