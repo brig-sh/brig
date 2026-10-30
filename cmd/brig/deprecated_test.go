@@ -8,127 +8,73 @@ import (
 	"testing"
 )
 
-// The old spellings keep working until retiredGoesIn. Anyone who scripted
-// against brig template should get a working command and a note, not a
-// failure.
-func TestDeprecatedVerbsStillWork(t *testing.T) {
-	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-	for _, args := range [][]string{{"agents"}, {"template", "ls"}} {
-		if err := run(args); err != nil {
-			t.Errorf("brig %s: %v", strings.Join(args, " "), err)
-		}
-	}
-}
-
-// The whole retired vocabulary, in one table: every spelling this release
-// renames still runs, and every one says what replaces it.
-//
-// Both halves matter and neither is enough alone. A spelling that fails breaks
-// every script that has it; a spelling that works silently never teaches
-// anyone the new word, so the old one is still in those scripts at the release
-// that removes it.
+// v0.5.0 removed the spellings that had printed a notice since v0.2, and each
+// one is now a usage error that names its replacement, on every shape of the
+// line. Exit 2 rather than the 1 an unknown command gets, because the word was
+// brig's own, and nothing on stderr: the refusal is the whole of the answer.
 //
 // The replacement is asserted as a whole command line rather than as the noun,
-// because that is the thing a reader can paste. It also catches a notice
-// pointing at another retired spelling: `brig agents` used to say
-// "is now `brig profiles`", which after this change would have been one hop
-// short of an answer.
-func TestRetiredSpellingsWorkAndNameTheirReplacement(t *testing.T) {
-	noSandboxes(t)
+// because that is the thing a reader can paste.
+func TestRemovedSpellingsAreUsageErrorsNamingTheReplacement(t *testing.T) {
 	for _, c := range []struct {
 		args        []string
 		replacement string
 	}{
+		// Removed in v0.3.0.
+		{[]string{"shell"}, "brig sh <ref> [command...]"},
+		{[]string{"shell", "claude"}, "brig sh <ref> [command...]"},
+		{[]string{"shell", "claude", "echo", "hi"}, "brig sh <ref> [command...]"},
+		{[]string{"shell", "claude", "-c", "script.sh"}, "brig sh <ref> [command...]"},
+		{[]string{"--json", "shell", "claude"}, "brig sh <ref> [command...]"},
 		// The plural nouns.
 		{[]string{"profiles"}, "brig agent ls"},
+		{[]string{"agents"}, "brig agent ls"},
 		{[]string{"policies"}, "brig policy ls"},
-		// The whole profile group, verb by verb: they retire onto different
-		// words, so a notice naming only the group would leave the reader to
-		// work out which.
-		{[]string{"profile", "ls"}, "brig agent ls"},
-		{[]string{"profile", "export", "codex"}, "brig agent export"},
-		{[]string{"profile", "import", "-"}, "brig agent import"},
-		{[]string{"profile", "edit", "mine"}, "brig agent edit"},
-		{[]string{"profile", "rm", "mine", "-y"}, "brig agent rm"},
-		{[]string{"profile", "--help"}, "brig agent"},
+		// The renamed group, with and without a verb.
+		{[]string{"profile"}, "brig agent <verb>"},
+		{[]string{"profile", "ls"}, "brig agent <verb>"},
+		{[]string{"profile", "--help"}, "brig agent <verb>"},
+		{[]string{"template", "ls"}, "brig agent <verb>"},
+		{[]string{"template", "edit", "mine"}, "brig agent <verb>"},
 		// The top-level spellings of a noun command.
-		{[]string{"export", "codex"}, "brig agent export"},
 		{[]string{"import", "-"}, "brig agent import"},
-		// The undocumented second spellings. None of them were ever in the
-		// help text, so they were found by accident and then scripted.
-		{[]string{"profile", "list"}, "brig agent ls"},
-		{[]string{"profile", "save", "codex"}, "brig agent export"},
-		{[]string{"profile", "load", "-"}, "brig agent import"},
+		{[]string{"export", "codex"}, "brig agent export"},
+		// The lifecycle verbs. A runtime is never reached, so `brig reset` on a
+		// machine with sandboxes on it removes nothing.
+		{[]string{"create", "claude"}, "brig run -d <ref>"},
+		{[]string{"env", "claude"}, "brig info <ref>"},
+		{[]string{"--json", "env", "claude"}, "brig info <ref>"},
+		{[]string{"reset"}, "brig rm --all"},
+		{[]string{"reset", "-y"}, "brig rm --all"},
+		// The undocumented second spellings inside a group.
 		{[]string{"agent", "list"}, "brig agent ls"},
 		{[]string{"agent", "save", "codex"}, "brig agent export"},
 		{[]string{"agent", "load", "-"}, "brig agent import"},
 		{[]string{"policy", "list"}, "brig policy ls"},
+		{[]string{"secret", "list"}, "brig secret ls"},
+		{[]string{"secret", "rm", "gh-token", "-y"}, "brig secret delete"},
 	} {
 		line := "brig " + strings.Join(c.args, " ")
-		dir := t.TempDir()
-		t.Setenv("BRIG_PROFILE_DIR", dir)
+		scratchHost(t)
 		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
-		// A profile of the caller's own, for the verbs that need one to work
-		// on. import reads stdin, so it gets the same profile down the pipe.
-		blob := "name: mine\nimage: i\nguestHome: /home/mine\nbinary: m\nmem: 1\ncpus: 1\n"
-		if err := os.WriteFile(filepath.Join(dir, "mine.yaml"), []byte(blob), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		stubEditor(t, "true")
-		pipeStdin(t, blob)
-
+		f := newFake(t)
+		f.seed("gh-token", "value")
 		var err error
-		notice := captureStderr(t, func() {
+		stderr := captureStderr(t, func() {
 			_, err = captureStdout(t, func() error { return run(c.args) })
 		})
-		if err != nil {
-			t.Errorf("%s stopped working: %v", line, err)
+		if code := exitCode(err); code != exitUsage {
+			t.Errorf("%s exited %d, want %d: %v", line, code, exitUsage, err)
 		}
-		if !strings.Contains(notice, c.replacement) {
-			t.Errorf("%s does not name %q as its replacement:\n%s", line, c.replacement, notice)
+		if err == nil || !strings.Contains(err.Error(), "was removed; use `"+c.replacement+"`") {
+			t.Errorf("%s does not name %q as its replacement: %v", line, c.replacement, err)
 		}
-		// The notice is the deprecation notice and not some other line of
-		// stderr that happens to contain the words.
-		if !strings.Contains(notice, "brig: `") {
-			t.Errorf("%s printed no deprecation notice:\n%s", line, notice)
+		if stderr != "" {
+			t.Errorf("%s printed on stderr:\n%s", line, stderr)
 		}
-		// A deadline the reader can plan for is a version number.
-		if !strings.Contains(notice, retiredGoesIn) {
-			t.Errorf("%s does not name %s as the release that removes it:\n%s", line, retiredGoesIn, notice)
+		if _, ok := f.items["gh-token"]; !ok {
+			t.Errorf("%s removed a secret", line)
 		}
-	}
-}
-
-// `brig secret rm` is the one retired spelling inside a group whose verb set
-// is otherwise staying: delete is the documented word, rm was the accident.
-// Kept separate from the table above because it needs a store rather than a
-// profile directory.
-func TestSecretRmIsRetiredButStillWorks(t *testing.T) {
-	f := newFake(t)
-	f.seed("gh-token", "value")
-	var err error
-	notice := captureStderr(t, func() {
-		err = secretCmd(&bytes.Buffer{}, []string{"rm", "gh-token", "-y"})
-	})
-	if err != nil {
-		t.Errorf("brig secret rm stopped working: %v", err)
-	}
-	if _, ok := f.items["gh-token"]; ok {
-		t.Error("brig secret rm did not remove the secret")
-	}
-	if !strings.Contains(notice, "brig secret delete") {
-		t.Errorf("brig secret rm does not name what replaces it:\n%s", notice)
-	}
-	// And the documented spelling says nothing.
-	f.seed("gh-token", "value")
-	notice = captureStderr(t, func() {
-		err = secretCmd(&bytes.Buffer{}, []string{"delete", "gh-token", "-y"})
-	})
-	if err != nil {
-		t.Errorf("brig secret delete: %v", err)
-	}
-	if strings.Contains(notice, "is now") {
-		t.Errorf("the documented spelling printed a deprecation notice:\n%s", notice)
 	}
 }
 
@@ -154,148 +100,131 @@ func TestCurrentSpellingsPrintNoNotice(t *testing.T) {
 	}
 }
 
-// There is no brig template edit: the deprecated group carries only the verbs
-// it already had. A command that never existed under the old name does not
-// need a deprecated spelling, and adding one would extend the vocabulary this
-// change is retiring.
-func TestNoDeprecatedEditVerb(t *testing.T) {
-	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-	if err := run([]string{"template", "edit", "mine"}); err == nil {
-		t.Error("brig template edit exists")
+// `brig secret delete` is what `brig secret rm` became, and it still removes
+// the secret and says nothing about it.
+func TestSecretDeleteIsTheSpelling(t *testing.T) {
+	f := newFake(t)
+	f.seed("gh-token", "value")
+	var err error
+	notice := captureStderr(t, func() {
+		err = secretCmd(&bytes.Buffer{}, []string{"delete", "gh-token", "-y"})
+	})
+	if err != nil {
+		t.Errorf("brig secret delete: %v", err)
+	}
+	if _, ok := f.items["gh-token"]; ok {
+		t.Error("brig secret delete did not remove the secret")
+	}
+	if strings.Contains(notice, "is now") {
+		t.Errorf("the documented spelling printed a deprecation notice:\n%s", notice)
 	}
 }
 
-// -t and -m keep working until retiredGoesIn and say what replaces them. They
-// are two of the four short flags #47 retires, and the notice is the same
-// one the retiring verbs print: a working command and a line about it, not a
-// failure.
-func TestDeprecatedShortFlagsStillWork(t *testing.T) {
+// The run-line flags v0.5.0 removed went back to the agents, which is why #47
+// retired them: after the ref each is the agent's word, forwarded untouched.
+// Before the ref there is no agent to own one, so it is a usage error naming
+// its replacement, the inline form included. -q names the position it moved
+// to, because its spelling is still current left of the verb.
+func TestRemovedFlagsAreRefusedBeforeTheRefAndTheAgentsAfterIt(t *testing.T) {
 	for _, c := range []struct {
-		args        []string
-		replacement string
-		check       func(options) bool
+		args       []string
+		was, using string
 	}{
-		{[]string{"claude", "-t", "img:1"}, "--image", func(o options) bool { return o.load.Image == "img:1" }},
-		{[]string{"claude", "-m", "2048"}, "--mem", func(o options) bool { return o.load.Mem == 2048 }},
-		// The inline form is the same flag, so it hears the same notice.
-		{[]string{"claude", "-t=img:1"}, "--image", func(o options) bool { return o.load.Image == "img:1" }},
+		{[]string{"-t", "img:1", "claude"}, "-t", "--image"},
+		{[]string{"-t=img:1", "claude"}, "-t", "--image"},
+		{[]string{"-m", "2048", "claude"}, "-m", "--mem"},
+		{[]string{"-n", "refactor", "claude"}, "-n", "<agent>@<label>"},
+		{[]string{"--name", "refactor", "claude"}, "--name", "<agent>@<label>"},
+		{[]string{"--name=refactor", "claude"}, "--name", "<agent>@<label>"},
+		{[]string{"-w", "/tmp/h", "claude"}, "-w", "--home"},
+		{[]string{"--workspace", "/tmp/h", "claude"}, "--workspace", "--home"},
+		{[]string{"-q", "claude"}, "brig <verb> <ref> -q", "brig -q <verb> <ref>"},
+		{[]string{"--quiet", "claude"}, "brig <verb> <ref> --quiet", "brig --quiet <verb> <ref>"},
 	} {
-		var (
-			o   options
-			err error
-		)
-		warning := captureStderr(t, func() { o, _, _, err = parse("run", c.args) })
-		if err != nil {
-			t.Errorf("parse(%q): %v", c.args, err)
+		var err error
+		warning := captureStderr(t, func() { _, _, _, err = parse("run", c.args) })
+		if code := exitCode(err); code != exitUsage {
+			t.Errorf("parse(%q) exited %d, want %d: %v", c.args, code, exitUsage, err)
 			continue
 		}
-		if !c.check(o) {
-			t.Errorf("parse(%q) stopped working: %+v", c.args, o.load)
+		want := "`" + c.was + "` was removed; use `" + c.using + "`"
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("parse(%q) = %v, want it to say %s", c.args, err, want)
 		}
-		// The notice names the spelling, not the token: the inline form's
-		// value is no part of what is being deprecated.
-		spelling, _, _ := strings.Cut(c.args[1], "=")
-		if !strings.Contains(warning, spelling) || !strings.Contains(warning, c.replacement) {
-			t.Errorf("parse(%q) did not point %s at %s:\n%s",
-				c.args, spelling, c.replacement, warning)
+		if warning != "" {
+			t.Errorf("parse(%q) printed on stderr:\n%s", c.args, warning)
+		}
+	}
+	// After the ref, brig reads none of them: they are the agent's, and so
+	// is everything after them.
+	for _, args := range [][]string{
+		{"claude", "-t", "img:1"},
+		{"claude", "-m", "2048"},
+		{"claude", "-n", "refactor"},
+		{"claude", "--name", "refactor"},
+		{"claude", "--name=refactor"},
+		{"claude", "-w", "/tmp/h"},
+		{"claude", "--workspace", "/tmp/h"},
+	} {
+		var (
+			o    options
+			tail []string
+			err  error
+		)
+		warning := captureStderr(t, func() { o, _, tail, err = parse("run", args) })
+		if err != nil {
+			t.Errorf("parse(%q): %v", args, err)
+			continue
+		}
+		if strings.Join(tail, " ") != strings.Join(args[1:], " ") {
+			t.Errorf("parse(%q) tail = %q, want the agent to get it all", args, tail)
+		}
+		if o.load.Image != "" || o.load.Mem != 0 || o.load.Name != "" || o.load.Workspace != "" {
+			t.Errorf("parse(%q) read the agent's flag: %+v", args, o.load)
+		}
+		if warning != "" {
+			t.Errorf("parse(%q) printed on stderr:\n%s", args, warning)
 		}
 	}
 	// The long spellings are current, so they say nothing.
 	warning := captureStderr(t, func() {
-		if _, _, _, err := parse("run", []string{"claude", "--image", "img:1", "--mem", "8"}); err != nil {
+		o, _, _, err := parse("run", []string{"claude", "--image", "img:1", "--mem", "8", "--memory", "9", "--home", "/h"})
+		if err != nil {
 			t.Errorf("parse: %v", err)
+		}
+		if o.load.Image != "img:1" || o.load.Mem != 9 || o.load.Workspace != "/h" {
+			t.Errorf("the current spellings did not land: %+v", o.load)
 		}
 	})
 	if warning != "" {
-		t.Errorf("the current spellings printed a deprecation notice:\n%s", warning)
+		t.Errorf("the current spellings printed a notice:\n%s", warning)
 	}
-	// A value that happens to be spelled like a deprecated flag is a value.
-	// Warning on it would send the reader looking for a flag they did not type.
-	warning = captureStderr(t, func() {
-		if _, _, _, err := parse("run", []string{"claude", "--name", "-t"}); err != nil {
-			t.Errorf("parse: %v", err)
-		}
+	// A value spelled like a removed flag is a value.
+	if o, _, _, err := parse("run", []string{"--image", "-t", "claude"}); err != nil || o.load.Image != "-t" {
+		t.Errorf("--image -t: image %q, err %v", o.load.Image, err)
+	}
+}
+
+// brig exec is the one retired spelling left. It still works, names brig sh,
+// and names no release: it stays until brig sh can pipe a command's output
+// (#335), and a date it cannot keep is the promise v0.3 broke.
+func TestExecStillWorksAndNamesNoRelease(t *testing.T) {
+	scratchHost(t)
+	var err error
+	notice := captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"exec", "claude", "--", "true"}) })
 	})
-	if strings.Contains(warning, "--image") {
-		t.Errorf("a --name value read as a deprecated flag:\n%s", warning)
+	if !took(err) {
+		t.Errorf("brig exec stopped working: %v", err)
 	}
-}
-
-// The retired lifecycle spellings: still working, and each naming the one that
-// replaces it. Kept apart from the table above because these verbs need a
-// runtime to finish their work, and the tests must not have one -- `brig reset`
-// on a machine with sandboxes on it removes every one of them.
-//
-// So what is asserted is the half that is about vocabulary: brig recognised the
-// spelling, said what it is now, and did not refuse the line. Everything after
-// that is the same code path the current spelling takes, and script/smoke.sh
-// drives it against a stub runtime.
-func TestRetiredLifecycleSpellingsWorkAndNameTheirReplacement(t *testing.T) {
-	for _, c := range []struct {
-		args        []string
-		replacement string
-	}{
-		{[]string{"create", "claude"}, "brig run -d"},
-		{[]string{"exec", "claude", "--", "true"}, "brig sh"},
-		{[]string{"reset"}, "brig rm --all"},
-		{[]string{"env", "claude"}, "brig info"},
-	} {
-		line := "brig " + strings.Join(c.args, " ")
-		scratchHost(t)
-		var err error
-		notice := captureStderr(t, func() {
-			_, err = captureStdout(t, func() error { return run(c.args) })
-		})
-		if !took(err) {
-			t.Errorf("%s stopped working: %v", line, err)
-		}
-		if !strings.Contains(notice, c.replacement) {
-			t.Errorf("%s does not name %q as its replacement:\n%s", line, c.replacement, notice)
-		}
-		if !strings.Contains(notice, "brig: `") {
-			t.Errorf("%s printed no deprecation notice:\n%s", line, notice)
-		}
-		// exec names no release: it stays until brig sh can pipe a command's
-		// output (#335), and a date it cannot keep is the promise v0.3 broke.
-		// Every other spelling names the release that removes it.
-		dated := strings.Contains(notice, retiredGoesIn)
-		if c.args[0] == "exec" && dated {
-			t.Errorf("%s names %s, but it stays until brig sh can pipe:\n%s", line, retiredGoesIn, notice)
-		}
-		if c.args[0] != "exec" && !dated {
-			t.Errorf("%s does not name %s as the release that removes it:\n%s", line, retiredGoesIn, notice)
-		}
+	if !strings.Contains(notice, "brig: `brig exec` is now `brig sh`") {
+		t.Errorf("brig exec does not name brig sh:\n%s", notice)
 	}
-}
-
-// A removed verb is a usage error that names its replacement, on every shape
-// of the line, and it says nothing on stderr: the refusal is the whole of the
-// answer. Exit 2 rather than the 1 an unknown command gets, because the word
-// was brig's own. --json in the global position gets the same refusal, not the
-// one for a verb with no JSON form.
-func TestRemovedVerbsAreUsageErrorsNamingTheReplacement(t *testing.T) {
-	for _, args := range [][]string{
-		{"shell"},
-		{"shell", "claude"},
-		{"shell", "claude", "echo", "hi"},
-		{"shell", "claude", "-c", "script.sh"},
-		{"--json", "shell", "claude"},
-	} {
-		line := "brig " + strings.Join(args, " ")
-		scratchHost(t)
-		var err error
-		stderr := captureStderr(t, func() {
-			_, err = captureStdout(t, func() error { return run(args) })
-		})
-		if code := exitCode(err); code != exitUsage {
-			t.Errorf("%s exited %d, want %d: %v", line, code, exitUsage, err)
-		}
-		if err == nil || !strings.Contains(err.Error(), "`brig sh <ref> [command...]`") {
-			t.Errorf("%s does not name brig sh: %v", line, err)
-		}
-		if stderr != "" {
-			t.Errorf("%s printed on stderr:\n%s", line, stderr)
-		}
+	if !strings.Contains(notice, "stays until `brig sh` can pipe") {
+		t.Errorf("brig exec does not say what it waits for:\n%s", notice)
+	}
+	if strings.Contains(notice, "removed in") {
+		t.Errorf("brig exec names a release:\n%s", notice)
 	}
 }
 
@@ -327,42 +256,15 @@ func TestCurrentLifecycleSpellingsPrintNoNotice(t *testing.T) {
 	}
 }
 
-// -n and --name are mapped onto the label rather than aliased to it, and the
-// mapping is said out loud. Both halves are deliberate: the flag is Claude
-// Code's own as well as brig's, so a line that carries it keeps working, and
-// silently reinterpreting it would be worse than either failing or saying so.
-func TestNameFlagRetiresOntoTheLabel(t *testing.T) {
-	for _, c := range []struct{ args []string }{
-		{[]string{"claude", "-n", "refactor"}},
-		{[]string{"claude", "--name", "refactor"}},
-		{[]string{"claude", "--name=refactor"}},
-	} {
-		var (
-			o   options
-			err error
-		)
-		notice := captureStderr(t, func() { o, _, _, err = parse("run", c.args) })
-		if err != nil {
-			t.Errorf("parse(%q): %v", c.args, err)
-			continue
-		}
-		// Mapped: the label the flag carried is the label the run uses.
-		if o.load.Name != "refactor" || !o.nameGiven {
-			t.Errorf("parse(%q) stopped naming the session: %+v", c.args, o.load)
-		}
-		spelling, _, _ := strings.Cut(c.args[1], "=")
-		if !strings.Contains(notice, spelling) || !strings.Contains(notice, "@") {
-			t.Errorf("parse(%q) did not point %s at the label form:\n%s",
-				c.args, spelling, notice)
-		}
-	}
-	// The label form is the current spelling, so it says nothing.
+// The label is the session, and it lands where everything downstream reads
+// the session name, with nothing said about it.
+func TestTheLabelNamesTheSession(t *testing.T) {
 	notice := captureStderr(t, func() {
 		o, _, _, err := parse("run", []string{"claude@refactor"})
 		if err != nil {
 			t.Errorf("parse: %v", err)
 		}
-		if o.load.Name != "refactor" {
+		if o.load.Name != "refactor" || !o.nameGiven {
 			t.Errorf("the label did not land as the session name: %+v", o.load)
 		}
 	})
@@ -371,37 +273,23 @@ func TestNameFlagRetiresOntoTheLabel(t *testing.T) {
 	}
 }
 
-// The release in the notices is the one the docs, the help text and the
-// exported profile header name too. The date was typed in each of them once,
-// and v0.3.0 shipped with every one of them saying v0.3. One constant and this
-// test mean that moving the date is one edit, and a place that still names the
-// old one fails here.
-func TestDocsNameTheRemovalRelease(t *testing.T) {
-	for _, name := range []string{
-		"docs/stability.md",
-		"docs/migration.md",
-		"docs/cli.md",
-		"docs/secrets.md",
-		"docs/profiles.md",
-		"script/check-retired-spellings.sh",
-	} {
-		blob, err := os.ReadFile(filepath.Join("..", "..", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(blob), retiredGoesIn) {
-			t.Errorf("%s does not name %s, the release that removes the retired spellings", name, retiredGoesIn)
-		}
-	}
-	if !strings.Contains(usage, retiredGoesIn) {
-		t.Errorf("the help text does not name %s for the retired spellings it mentions", retiredGoesIn)
-	}
-	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-	out, err := captureStdout(t, func() error { return run([]string{"agent", "export", "codex"}) })
+// Every removed spelling has a row in docs/migration.md, which is where the
+// refusal sends a reader who wants more than the one line, and where
+// script/check-retired-spellings.sh points.
+func TestMigrationListsEveryRemovedSpelling(t *testing.T) {
+	blob, err := os.ReadFile(filepath.Join("..", "..", "docs", "migration.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, retiredGoesIn) {
-		t.Errorf("the exported profile header does not name %s for forward: and statePaths:", retiredGoesIn)
+	doc := string(blob)
+	for verb := range removedVerbs {
+		if !strings.Contains(doc, "`brig "+verb) {
+			t.Errorf("docs/migration.md does not list `brig %s`", verb)
+		}
+	}
+	for spelling := range removedFlags {
+		if !strings.Contains(doc, "`"+spelling) && !strings.Contains(doc, spelling+"`") {
+			t.Errorf("docs/migration.md does not list %s", spelling)
+		}
 	}
 }

@@ -46,8 +46,9 @@ func TestVerbsThatForwardNoTailWarnOnlyViaRejectTail(t *testing.T) {
 // The warning still exists for the verbs that do forward a tail, which is the
 // case it is for: `brig run claude foo bar -q` runs the agent with -q and
 // leaves the envelope printed, so brig says which token it did not read. -q is
-// read on run's line, so that is the position the advice names.
-func TestRunWarnsAboutQuietInTailNamingTheRunLine(t *testing.T) {
+// read only left of the verb since v0.5.0, so that is the position the advice
+// names.
+func TestRunWarnsAboutQuietInTailNamingTheGlobalPosition(t *testing.T) {
 	var tail []string
 	warning := captureStderr(t, func() {
 		_, _, tail, _ = parse("run", []string{"claude", "foo", "bar", "-q"})
@@ -60,8 +61,8 @@ func TestRunWarnsAboutQuietInTailNamingTheRunLine(t *testing.T) {
 	if !strings.Contains(warning, "-q") {
 		t.Errorf("run said nothing about -q in the tail:\n%s", warning)
 	}
-	if !strings.Contains(warning, "before the profile") {
-		t.Errorf("run did not name the run-line position for -q:\n%s", warning)
+	if !strings.Contains(warning, "before the command") {
+		t.Errorf("run did not name the global position for -q:\n%s", warning)
 	}
 }
 

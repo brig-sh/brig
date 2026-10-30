@@ -62,13 +62,13 @@ func TestParse(t *testing.T) {
 		tail     string
 	}{
 		{[]string{"claude"}, "", false, "claude", ""},
-		{[]string{"claude", "--name", "foo"}, "foo", true, "claude", ""},
-		{[]string{"claude", "-n", "foo"}, "foo", true, "claude", ""},
-		{[]string{"claude", "--name=foo"}, "foo", true, "claude", ""},
-		{[]string{"--name", "foo", "claude"}, "foo", true, "claude", ""},
+		{[]string{"claude@foo"}, "foo", true, "claude", ""},
 		// Everything from the first agent argument onwards passes through.
 		{[]string{"claude", "-p", "hi"}, "", false, "claude", "-p hi"},
-		{[]string{"claude", "-n", "foo", "-p", "hi"}, "foo", true, "claude", "-p hi"},
+		{[]string{"claude@foo", "-p", "hi"}, "foo", true, "claude", "-p hi"},
+		// v0.5.0 gave -n and --name back to the agent.
+		{[]string{"claude", "--name", "foo"}, "", false, "claude", "--name foo"},
+		{[]string{"claude", "-n", "foo", "-p", "hi"}, "", false, "claude", "-n foo -p hi"},
 		// A -- ends brig's own parsing, so an agent argument spelled like one
 		// of brig's flags still reaches the agent.
 		{[]string{"claude", "--", "--name", "notasession"}, "", false, "claude", "--name notasession"},
@@ -95,8 +95,8 @@ func TestParse(t *testing.T) {
 
 func TestParseSandboxFlags(t *testing.T) {
 	o, template, tail, err := parse("run", []string{
-		"claude", "-t", "ghcr.io/me/img:latest", "-w", "/tmp/ws",
-		"-m", "8192", "--cpus", "2", "-d", "-p", "hi",
+		"claude", "--image", "ghcr.io/me/img:latest", "--home", "/tmp/ws",
+		"--mem", "8192", "--cpus", "2", "-d", "-p", "hi",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestParseSandboxFlags(t *testing.T) {
 		t.Errorf("tail = %q", tail)
 	}
 	// The inline form works for every value flag.
-	o, _, _, err = parse("run", []string{"claude", "--image=x", "--workspace=/w", "--memory=1024", "--cpus=1"})
+	o, _, _, err = parse("run", []string{"claude", "--image=x", "--home=/w", "--memory=1024", "--cpus=1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,40 +127,27 @@ func TestParseSandboxFlags(t *testing.T) {
 	}
 }
 
-// --quiet is brig's own flag, read off the run line like the other bare flags
-// and never handed to the agent. It suppresses the execution envelope.
-func TestParseReadsQuiet(t *testing.T) {
-	for _, args := range [][]string{{"claude", "--quiet"}, {"claude", "-q"}} {
-		o, name, tail, err := parse("run", args)
-		if err != nil {
-			t.Fatalf("parse(%q): %v", args, err)
+// --quiet is global, and v0.5.0 removed its run-line spelling. After the ref
+// it is the agent's word, forwarded untouched, wherever on the line it stands.
+func TestParseLeavesQuietAfterTheRefToTheAgent(t *testing.T) {
+	for _, args := range [][]string{
+		{"claude", "--quiet"}, {"claude", "-q"}, {"claude", "-p", "hi", "--quiet"},
+	} {
+		var tail []string
+		var err error
+		captureStderr(t, func() { _, _, tail, err = parse("run", args) })
+		if err != nil || strings.Join(tail, " ") != strings.Join(args[1:], " ") {
+			t.Errorf("parse(%q): tail %q, err %v; want it forwarded", args, tail, err)
 		}
-		if !o.quiet || name != "claude" || len(tail) != 0 {
-			t.Errorf("parse(%q) = quiet %v, name %q, tail %q", args, o.quiet, name, tail)
-		}
-	}
-	// Absent by default, and after the agent's arguments begin it is the
-	// agent's word rather than brig's.
-	if o, _, _, _ := parse("run", []string{"claude"}); o.quiet {
-		t.Error("quiet defaulted to on")
-	}
-	if o, _, _, _ := parse("run", []string{"claude", "-p", "hi", "--quiet"}); o.quiet {
-		t.Error("--quiet was read out of the agent's own arguments")
 	}
 }
 
 func TestParseRejectsBadValues(t *testing.T) {
 	cases := [][]string{
-		{"claude", "--name"},     // nothing after it
-		{"claude", "--name", ""}, // empty reads like no flag at all
-		// Still refused with the agent's own arguments after it, where an
-		// accepted empty name would quietly run the unnamed sandbox.
-		{"claude", "--name", "", "-p", "hi"},
-		{"claude", "--name", "", "--", "hi"},
-		{"claude", "-m", "lots"},  // not a number
-		{"claude", "--cpus", "0"}, // not a useful one
-		{"claude", "-m", "-4"},    //
-		{"claude", "--image"},     // value flag with nothing after it
+		{"claude", "--mem", "lots"}, // not a number
+		{"claude", "--cpus", "0"},   // not a useful one
+		{"claude", "--mem", "-4"},   //
+		{"claude", "--image"},       // value flag with nothing after it
 	}
 	for _, args := range cases {
 		if _, _, _, err := parse("run", args); err == nil {
@@ -187,13 +174,12 @@ func TestParseErrorsNameTheFlagAsTyped(t *testing.T) {
 		want string
 	}{
 		{[]string{"claude", "--memory", "lots"}, "--memory"},
-		{[]string{"claude", "-m", "lots"}, "-m"},
+		{[]string{"claude", "--mem", "lots"}, "--mem"},
 		{[]string{"claude", "--image"}, "--image"},
-		{[]string{"claude", "-t"}, "-t"},
 		// With both spellings on the line, the one carrying the bad value is
 		// the token to go and fix, whichever of the two it happens to be.
-		{[]string{"claude", "--memory=8", "-m", "0"}, "-m needs"},
-		{[]string{"claude", "-m", "8", "--memory", "0"}, "--memory needs"},
+		{[]string{"claude", "--memory=8", "--mem", "0"}, "--mem needs"},
+		{[]string{"claude", "--mem", "8", "--memory", "0"}, "--memory needs"},
 	}
 	for _, c := range cases {
 		_, _, _, err := parse("run", c.args)
@@ -218,7 +204,7 @@ func TestParseErrorsQuoteTheValueAsTyped(t *testing.T) {
 		{[]string{"claude", "--memory", "-0"}, `not "-0"`},
 		{[]string{"claude", "--memory", "0x0"}, `not "0x0"`},
 		{[]string{"claude", "--cpus=1_0"}, `not "1_0"`},
-		{[]string{"claude", "-m", "lots"}, `not "lots"`},
+		{[]string{"claude", "--mem", "lots"}, `not "lots"`},
 		// The value is quoted into the flag package's message ahead of the
 		// separator brig splits on, so one containing that text has to survive.
 		{[]string{"claude", "--memory", "4 for flag x"}, `not "4 for flag x"`},
@@ -324,19 +310,19 @@ func TestParseBoolsTakeAnInlineValue(t *testing.T) {
 	}
 }
 
-// A value is taken as given. `--name -p` is a session called -p, and guessing
+// A value is taken as given. `--image -p` is an image called -p, and guessing
 // otherwise would make what a flag means depend on what its value looks like.
 //
 // Which leaves "hi" as the second bare word on the line, and that is the
 // project: the flag swallowed -p, so nothing has ended brig's parsing before
 // it.
 func TestParseTakesAValueThatLooksLikeAFlag(t *testing.T) {
-	o, name, tail, err := parse("run", []string{"claude", "--name", "-p", "hi"})
+	o, name, tail, err := parse("run", []string{"claude", "--image", "-p", "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.load.Name != "-p" || !o.nameGiven {
-		t.Errorf("name = %q, given = %v", o.load.Name, o.nameGiven)
+	if o.load.Image != "-p" {
+		t.Errorf("image = %q", o.load.Image)
 	}
 	if name != "claude" || len(tail) != 0 {
 		t.Errorf("profile = %q, tail = %q", name, tail)

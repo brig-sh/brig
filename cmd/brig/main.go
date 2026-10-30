@@ -96,7 +96,6 @@ global flags (left of the command, as in: brig -q run claude):
                          brig's warnings; with ls it prints the refs, one per
                          line. A verification that did not hold is printed
                          even here
-                         (-q after the verb works until v0.5.0)
       --json             machine-readable output, for the read verbs: ls, info,
                          plan, agent ls, secret ls, doctor, version and the
                          network verbs. Also accepted after the verb (brig ls
@@ -111,7 +110,6 @@ keeps parsing, and a machine-readable dump stays a place a secret cannot leak.
 flags (before the agent's own arguments; -- ends brig's parsing):
       --image IMAGE      guest image to boot
       --home PATH        host directory to mount as the guest home
-                         (-w and --workspace still work, with a note)
       --no-project       with run or plan: this session's project is not
                          mounted, whatever it ran with last
       --mem MB           guest memory
@@ -269,10 +267,7 @@ func dispatch(args []string) error {
 	}
 	// And how much this invocation says, before anything says it. That is what
 	// the global position buys: `brig -q run claude` is quiet from the first
-	// line, the notices about profiles below included. The run-line spelling of
-	// -q is read much later -- it sits on the far side of the ref -- so those
-	// notices have already printed by the time it is known, which is one more
-	// reason the flag has moved.
+	// line, the notices about profiles below included.
 	verbosity = g.verbosity()
 	globalJSON = g.json
 	if len(verbLine) == 0 {
@@ -319,7 +314,7 @@ func dispatch(args []string) error {
 	// starts nothing. A usage error rather than an unknown command: the word
 	// was brig's own, and the reader needs the one that replaced it.
 	if now, ok := removedVerbs[verb]; ok {
-		return usagef("`brig %s` was removed; use `%s`", verb, now)
+		return removedf("brig "+verb, now)
 	}
 
 	// Profiles are read before anything looks a name up, so a file can stand
@@ -376,71 +371,12 @@ func dispatch(args []string) error {
 		return completionCmd(os.Stdout, rest)
 	case "logs":
 		return logsCmd(rest)
-	// Deprecated spellings, absent from the usage text.
-	//
-	// The three grammars this release settles are all here: a plural noun that
-	// is a command of its own, a noun command spelled again at the top level,
-	// and a group renamed. Each keeps working and says the one word that
-	// replaces it, because a spelling has to survive the commit that renames it
-	// or that commit breaks every script anyone has written.
-	case "profiles":
-		deprecated("brig profiles", "brig agent ls")
-		return listProfiles(globalJSON)
-	case "profile":
-		return deprecatedProfileCmd(rest)
-	case "policies":
-		deprecated("brig policies", "brig policy ls")
-		// Routed onto the verb the notice just named, the way
-		// deprecatedProfileCmd routes onto agentCmd, so the retired spelling
-		// answers a stray word and a --help exactly as `brig policy ls` does
-		// rather than keeping a second copy of either answer.
-		return policyCmd(append([]string{"ls"}, rest...))
-	case "import":
-		deprecated("brig import", "brig agent import")
-		return importProfile(rest)
-	case "export":
-		// Named onto `brig agent export` rather than onto show or new, because
-		// this is the same command: it prints with no destination and writes
-		// with one, and the reader's line keeps working word for word. show and
-		// new are the taught spellings of those two halves, and the usage text
-		// is where someone meets them.
-		deprecated("brig export", "brig agent export")
-		return exportProfile(rest)
-	// There is deliberately no `brig template edit`: the old group carries only
-	// the verbs it already had, so a command that never existed under that name
-	// does not gain one.
-	case "agents":
-		deprecated("brig agents", "brig agent ls")
-		return listProfiles(globalJSON)
-	case "template":
-		deprecated("brig template", "brig agent")
-		if len(rest) > 0 && rest[0] == "edit" {
-			return fmt.Errorf("there is no `brig template edit`; use `brig agent edit`")
-		}
-		return agentCmd(rest)
 	case "ls":
 		// The global -q reaches ls as its own meaning: refs and nothing else.
 		// The two readings agree -- bare refs ARE identifiers only -- and ls
 		// still reads -q after the verb itself, which is the spelling the
 		// round-trip test consumes.
 		return listSandboxes(rest, verbosity <= wrap.Quiet, globalJSON)
-	case "reset":
-		// reset was the one verb whose name did not say what it acts on, which
-		// is the whole of its problem: it removes every sandbox brig has, and it
-		// was spelled as if it were a setting being restored. --all is that
-		// word, on the verb that already removes one.
-		deprecated("brig reset", "brig rm --all")
-		others, o, err := takeRemoveFlags(rest)
-		if err != nil {
-			return err
-		}
-		// reset already means every sandbox, so --all on it is the new
-		// spelling half-typed onto the old verb. Refused with the whole of the
-		// new line rather than read past, so the migration finishes here.
-		if o.all {
-			return usagef("`brig reset` takes no --all; the command is now `brig rm --all`")
-		}
-		return removeAll("brig reset", others, o)
 	case "rm":
 		// rm's own flags are read here rather than on the run line. --all names
 		// no session, so split would refuse it as a brig flag standing where
@@ -476,28 +412,12 @@ func dispatch(args []string) error {
 			return err
 		}
 		verb, rest = "network "+sub, rest[1:]
-	case "create":
-		// create is `run -d`: start the sandbox, print its name, attach to
-		// nothing. It keeps a branch of its own below rather than being
-		// rewritten into run here, because run hands a trailing word to the
-		// agent and create has no agent to hand one to -- a word after the ref
-		// is still a mistake, and translating the verb would have swallowed it.
-		deprecated("brig create", "brig run -d")
 	case "exec":
 		// exec keeps its own branch below. sh runs its argv under a login
 		// shell, and exec runs it directly, with no profile sourced first. A
 		// script that relies on that environment keeps it -- a rename must not
 		// change what a working line does.
 		deprecated("brig exec", "brig sh")
-	case "env":
-		// Kept until retiredGoesIn as a spelling of `brig info`. The bug report
-		// template used to send reporters to `brig status`, which was never a
-		// command; info is the name that work settled on.
-		//
-		// Said here rather than beside the report it prints, so the notice
-		// arrives whether or not the profile behind it resolves. What is retired
-		// is the word, and the word is known before anything is looked up.
-		deprecated("brig env", "brig info")
 	default:
 		// A bare ref with no verb, and it is tried last on purpose. A token
 		// becomes a ref only once it has matched no verb, so a verb is always a
@@ -555,7 +475,7 @@ func dispatch(args []string) error {
 	if err != nil {
 		return err
 	}
-	// --json on a run-line verb. info and env answer it with a report; run and
+	// --json on a run-line verb. info and plan answer it with a report; run and
 	// sh answer it by running the agent as a child and printing a Run object
 	// after it (see #110 and runAgent); every other verb here has no JSON form
 	// and refuses it by name. The global position was already refused above for
@@ -565,7 +485,7 @@ func dispatch(args []string) error {
 	wantJSON := globalJSON || opts.json
 	switch {
 	case !wantJSON:
-	case verb == "info" || verb == "env" || verb == "plan":
+	case verb == "info" || verb == "plan":
 	// All three answer with what the sandbox publishes.
 	case onPortLine(verb):
 	case verb == "run" || verb == "sh":
@@ -592,12 +512,6 @@ func dispatch(args []string) error {
 	if opts.load.NoProject && !readsProject(verb) {
 		return usagef("--no-project belongs to `brig run` and `brig plan`, not `brig %s`. "+
 			"A session runs without its project from the next `brig run --no-project` onwards", verb)
-	}
-	// The run-line spelling of -q, which works until retiredGoesIn. It
-	// is read here rather than in the global position, so everything above has
-	// already printed: that asymmetry is the notice's point, not a gap in it.
-	if opts.quiet {
-		verbosity = wrap.Quiet
 	}
 	if err := rejectTail(verb, tail); err != nil {
 		return err
@@ -638,9 +552,8 @@ func dispatch(args []string) error {
 		// that is broken: only one of its lines comes from the runtime, and the
 		// person most likely to run it is the one whose runtime is not on PATH.
 		// So it carries on without one, and the report marks that single line
-		// unavailable. env is the old spelling of the same command and gets the
-		// same treatment, or the spelling brig recommends would be the one that
-		// fails. plan is a preview of the same kind and answers the same way.
+		// unavailable. plan is a preview of the same kind and answers the same
+		// way.
 		// Every other verb needs the runtime to do its work, so they
 		// still fail here, naming what is missing.
 		//
@@ -650,7 +563,7 @@ func dispatch(args []string) error {
 		// surface here as they do for run, naming the real cause. Match the
 		// sentinel, not any error, or a future error type silently rejoins the
 		// swallow.
-		reports := verb == "info" || verb == "env" || verb == "plan"
+		reports := verb == "info" || verb == "plan"
 		if !reports || !errors.Is(err, runtime.ErrNoRuntime) {
 			return err
 		}
@@ -732,7 +645,7 @@ func dispatch(args []string) error {
 	// every level, and one that did prints above -q. See alertf and
 	// sayVerified.
 	//
-	// Only run and create, as before. sh continues an existing session, and
+	// Only run. sh continues an existing session, and
 	// when there is no sandbox yet it lets EnsureRunning start one without
 	// printing the block, so a scripted `brig sh` is not interrupted.
 	if showsEnvelope(verb, verbosity) {
@@ -748,20 +661,6 @@ func dispatch(args []string) error {
 			return writeJSONDocument(cfg.Out, "Info", cfg.InfoData(set))
 		}
 		cfg.Info(set)
-		return nil
-	case "env":
-		// The retired spelling of the same report; the notice for it is printed
-		// by the dispatch above.
-		if wantJSON {
-			return writeJSONDocument(cfg.Out, "Info", cfg.InfoData(set))
-		}
-		cfg.Info(set)
-		return nil
-	case "create":
-		if err := cfg.EnsureRunning(set); err != nil {
-			return err
-		}
-		fmt.Println(cfg.VMName)
 		return nil
 	case "sh":
 		// One command or none, which is the whole of sh's grammar: Shell runs
@@ -801,7 +700,7 @@ func dispatch(args []string) error {
 // nobody was reading, and the level moved after that.
 func showsEnvelope(verb string, v wrap.Verbosity) bool {
 	switch verb {
-	case "run", "create":
+	case "run":
 		return v >= wrap.Verbose
 	}
 	return false
@@ -877,7 +776,6 @@ type options struct {
 	load      wrap.Options
 	nameGiven bool
 	detach    bool
-	quiet     bool
 	offline   bool
 	json      bool
 	// all is `brig network unpublish --all`, which withdraws every port this
@@ -951,16 +849,6 @@ var brigFlags = []struct {
 	short    string
 	value    bool // takes a value, so the next argument may belong to it
 	position position
-	// retiredAs and retiredTo are the notice for a flag whose POSITION is
-	// going, rather than its spelling: what to stop writing, and what to write
-	// instead. Empty on a flag that is not retiring here.
-	//
-	// On the entry rather than in deprecatedFlags because that map is keyed by
-	// spelling and cannot say this: -q is not going anywhere, its place on the
-	// line is, and the same spelling in the other position is the replacement.
-	// The table already carries a position per flag, so this is a field on the
-	// row rather than a case in split.
-	retiredAs, retiredTo string
 	// undocumented marks a spelling the help text does not teach, so that
 	// completion does not offer it. It is not deprecated and not retiring:
 	// --memory is the older name of --mem and still writes the same value, and
@@ -974,19 +862,16 @@ var brigFlags = []struct {
 	// declared and honorsRunLine cannot fall behind it.
 	runOnly bool
 }{
-	{long: "name", short: "n", value: true, position: posRun},
-	{long: "image", short: "t", value: true, position: posRun},
-	// --home is the guest home; -w and --workspace are the spellings it
-	// replaces, and all three write one value. The home and the project are
-	// two directories on one line now, and "workspace" could not say which of
-	// them it meant.
+	{long: "image", value: true, position: posRun},
+	// --home is the guest home. The home and the project are two directories
+	// on one line, and "workspace", the word it replaced, could not say which
+	// of them it meant.
 	{long: "home", value: true, position: posRun},
-	{long: "workspace", short: "w", value: true, position: posRun},
 	// --mem is the spelling; --memory is what it was called first and still
 	// answers, because a line that works today keeps working. Both write one
 	// value in parse, so the last one on the line wins.
 	{long: "mem", value: true, position: posRun},
-	{long: "memory", short: "m", value: true, position: posRun, undocumented: true},
+	{long: "memory", value: true, position: posRun, undocumented: true},
 	{long: "cpus", value: true, position: posRun},
 	// --no-project detaches the project a session is carrying. It takes no
 	// value: a directory is what the positional says, and this says the
@@ -1019,15 +904,9 @@ var brigFlags = []struct {
 	// reader has ever typed it at. Do not add it back as an obvious
 	// convenience.
 	{long: "verbose", position: posGlobal},
-	// -q is global from this release. It was on the run line, and `brig run
-	// claude -q` is a line people have written, so the run-line spelling below
-	// keeps working until retiredGoesIn and says where the flag went -- the same
-	// window every other retiring spelling has. Global-only would
-	// have sent that -q to the agent, silently changing what a working command
-	// does.
+	// -q is global. It was on the run line too, until v0.5.0; see
+	// removedFlags for what that spelling gets now.
 	{long: "quiet", short: "q", position: posGlobal},
-	{long: "quiet", short: "q", position: posRun, runOnly: true,
-		retiredAs: "brig <verb> <ref> -q", retiredTo: "brig -q <verb> <ref>"},
 	// --json asks the read verbs -- ls, info, agent ls, secret ls, doctor -- for
 	// machine-readable output rather than aligned text. Global, because which
 	// form the whole invocation prints is a fact about the invocation, and left
@@ -1048,29 +927,29 @@ var brigFlags = []struct {
 	{long: "json", position: posPublish},
 }
 
-// deprecatedFlags are the spellings on their way out, and what replaces each.
-// #47 shipped both grammars in v0.2, and these go in retiredGoesIn, so they
-// keep working and say so -- the same contract the retiring verbs have.
+// removedFlags are the run-line spellings brig no longer reads, each with what
+// to write instead. #47 shipped both grammars in v0.2, the old one printed a
+// notice from then on, and v0.5.0 removed it.
 //
-// -n and --name retire onto the label rather than onto another flag: the ref is
-// what names a session now, and `brig run claude@refactor` is what `brig run
-// claude --name refactor` was. Both spellings are mapped and both are named,
-// rather than the long one being aliased quietly, because --name is also Claude
-// Code's own flag -- `brig run claude -- --name x` is the agent's --name today
-// -- and silently reinterpreting a flag two programs share is worse than saying
-// which of them read it.
+// The letters went back to the agents, which is why #47 retired them: -n,
+// -m and -w are claude's, codex's, gemini's or opencode's own flags. So after
+// the ref a removed spelling is the agent's, like any flag brig does not own,
+// and -q there hears agentTail's notice that brig reads it left of the verb.
+// Before the ref there is no agent to own it, and it is refused as a usage
+// error naming its replacement rather than as an unknown flag.
 //
-// -w and --workspace retire onto --home, both spellings named. The long one is
-// mapped and said out loud rather than aliased quietly because the word itself
-// is what is being retired: with a project on the same line there are two host
-// directories to talk about, and "workspace" never said which one it was.
-var deprecatedFlags = map[string]string{
-	"-t":          "--image",
-	"-m":          "--mem",
-	"-n":          "<agent>@<label>",
-	"--name":      "<agent>@<label>",
-	"-w":          "--home",
-	"--workspace": "--home",
+// was is what the refusal names. It is the spelling, except for -q, whose
+// spelling is current in the global position and only its place on the run
+// line is gone.
+var removedFlags = map[string]struct{ was, now string }{
+	"-t":          {"-t", "--image"},
+	"-m":          {"-m", "--mem"},
+	"-n":          {"-n", "<agent>@<label>"},
+	"--name":      {"--name", "<agent>@<label>"},
+	"-w":          {"-w", "--home"},
+	"--workspace": {"--workspace", "--home"},
+	"-q":          {"brig <verb> <ref> -q", "brig -q <verb> <ref>"},
+	"--quiet":     {"brig <verb> <ref> --quiet", "brig --quiet <verb> <ref>"},
 }
 
 // ours reports whether a token is one of brig's flags in the position it was
@@ -1100,22 +979,6 @@ func oursAt(arg string, at position) (mine bool, takesValue bool, found position
 		}
 	}
 	return false, false, 0
-}
-
-// retiredAt reports the notice for a flag written in a position it is leaving:
-// the spelling to stop writing and the one that replaces it, or two empty
-// strings when the flag is not retiring here. See brigFlags.
-func retiredAt(arg string, at position) (was, now string) {
-	name, _, _ := strings.Cut(arg, "=")
-	for _, f := range brigFlags {
-		if f.position != at || f.retiredTo == "" {
-			continue
-		}
-		if name == "--"+f.long || (f.short != "" && name == "-"+f.short) {
-			return f.retiredAs, f.retiredTo
-		}
-	}
-	return "", ""
 }
 
 // splitGlobal finds the verb and refuses anything standing left of it.
@@ -1328,6 +1191,16 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 			}
 			return mine, ref, word, agentTail(verb, args[i:]), nil
 		default:
+			// A removed spelling before the ref is refused naming its
+			// replacement, off the spelling rather than the whole token, so
+			// the inline form is the same flag. After the ref it is the
+			// agent's; see removedFlags. A value that reads like one never
+			// gets here: `--image -t` is an image called -t.
+			if spelling, _, _ := strings.Cut(a, "="); at == posRun && !passed {
+				if r, ok := removedFlags[spelling]; ok {
+					return nil, session.Ref{}, "", nil, removedf(r.was, r.now)
+				}
+			}
 			isOurs, takesValue := ours(a, at)
 			if !isOurs {
 				// An unknown flag once the ref is named is the agent's:
@@ -1353,23 +1226,9 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				}
 				return mine, ref, word, agentTail(verb, args[i:]), nil
 			}
-			// Read off the spelling rather than the whole token, so the
-			// inline form is the same flag here as it is everywhere else, and
-			// named before the value is taken, so the notice is never about a
-			// value that reads like a flag: `--name -t` is a session called -t
-			// and reaches this loop as a value, not as a token.
-			if spelling, _, _ := strings.Cut(a, "="); deprecatedFlags[spelling] != "" {
-				deprecated(spelling, deprecatedFlags[spelling])
-			} else if was, now := retiredAt(a, at); now != "" {
-				// A flag whose place on the line is what retires, not its
-				// spelling. Said here, where the position is known, rather than
-				// after the flag package has read it and forgotten where it
-				// stood.
-				deprecated(was, now)
-			}
 			mine = append(mine, a)
 			if takesValue && i+1 < len(args) {
-				// Taken without inspection: `--name -p` means a session
+				// Taken without inspection: `--image -p` means an image
 				// called -p, and second-guessing that would make the
 				// value of a flag depend on what it happens to look like.
 				i++
@@ -1389,9 +1248,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 // the verbs it excludes, and agentTail warns about brig's own flags in a tail
 // only on the verbs it includes: reading the same predicate, they cannot come
 // to disagree about whether a verb has an agent to hand a token to -- which is
-// the two-message contradiction #123 was. create is excluded with the others
-// rather than grouped with run because it does not attach: split hands it the
-// same tail run gets, but there is no agent here to receive it.
+// the two-message contradiction #123 was.
 func forwardsTail(verb string) bool {
 	switch verb {
 	case "run", "sh", "exec":
@@ -1509,14 +1366,13 @@ func agentTail(verb string, tail []string) []string {
 // tailAdvice names the position where verb would read a flag found in its tail,
 // or reports that verb reads it in no position at all.
 //
-// A flag can hold more than one position -- -q is global and, for one more
-// release, run-line -- so every entry for the spelling is consulted rather than
-// the first the table lists. A global flag stands left of the verb and belongs
-// to every invocation, so it is always readable there. A run-line flag stands
-// between the verb and the ref, but only the verb that acts on it reads it there
-// (see honorsRunLine): -q shapes nothing on sh, so sh is sent to the global
-// position, and a run-only flag on sh is read in no position and gets no
-// position to move to.
+// A flag can hold more than one position -- --json is global and run-line --
+// so every entry for the spelling is consulted rather than the first the
+// table lists. A global flag stands left of the verb and belongs to every
+// invocation, so it is always readable there. A run-line flag stands between
+// the verb and the ref, but only the verb that acts on it reads it there (see
+// honorsRunLine): -d is run-only, so on sh it is read in no position and gets
+// no position to move to.
 func tailAdvice(verb, arg string) (where string, readable bool) {
 	name, _, _ := strings.Cut(arg, "=")
 	runLine, global := false, false
@@ -1616,19 +1472,14 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		long, short string
 		fn          func(name string)
 	}{
-		{"name", "n", func(n string) { fs.StringVar(&o.load.Name, n, "", "") }},
-		{"image", "t", func(n string) { fs.StringVar(&o.load.Image, n, "", "") }},
-		// Three spellings of the guest home: --home is the one, -w and
-		// --workspace are what it replaces. They share the value, so the last
-		// one on the line wins.
+		{"image", "", func(n string) { fs.StringVar(&o.load.Image, n, "", "") }},
 		{"home", "", func(n string) { fs.StringVar(&o.load.Workspace, n, "", "") }},
-		{"workspace", "w", func(n string) { fs.StringVar(&o.load.Workspace, n, "", "") }},
 		// Two long spellings of one value: --mem is the one the usage text
 		// gives, --memory is what it was called first. They share mem, so the
 		// last one on the line wins and the error names the one that carried
 		// the bad value.
 		{"mem", "", func(n string) { fs.Var(numberFlag{spell(n), &mem}, n, "") }},
-		{"memory", "m", func(n string) { fs.Var(numberFlag{spell(n), &mem}, n, "") }},
+		{"memory", "", func(n string) { fs.Var(numberFlag{spell(n), &mem}, n, "") }},
 		{"cpus", "", func(n string) { fs.Var(numberFlag{spell(n), &cpus}, n, "") }},
 		{"detach", "d", func(n string) { fs.BoolVar(&o.detach, n, false, "") }},
 		// Opt-in, and only ever opt-in: this hands the guest the user's real
@@ -1642,9 +1493,6 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// Sugar for --network offline, which is the word the request is usually
 		// phrased in.
 		{"offline", "", func(n string) { fs.BoolVar(&o.offline, n, false, "") }},
-		// Suppresses the execution envelope on run and create, for a script or
-		// a returning session that has already seen it.
-		{"quiet", "q", func(n string) { fs.BoolVar(&o.quiet, n, false, "") }},
 		// The run-line spelling of --json. info answers it; every other run-line
 		// verb refuses it by name -- see the run() dispatch. Its being brig's own
 		// token here rather than the agent's is what makes that refusal possible.
@@ -1687,13 +1535,6 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		}
 		*c.dst = n
 	}
-	// An empty name is tracked apart from the value, because `--name ''`
-	// otherwise reads exactly like passing no flag and would quietly run the
-	// unnamed sandbox.
-	o.nameGiven = seen(fs, "name", "n")
-	if o.nameGiven && o.load.Name == "" {
-		return options{}, "", nil, errors.New("--name needs a session name, for example `--name foo`")
-	}
 	// --offline is shorthand for one --network value, so the two agreeing is
 	// fine and the two disagreeing is a mistake worth naming: a silent winner
 	// would leave the run with a posture the line does not read like.
@@ -1705,20 +1546,10 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		}
 		o.load.Network = "offline"
 	}
-	// The label is the session, so it lands where --name lands rather than
-	// becoming a second way to hold one: `brig run claude@refactor` is `brig
-	// run claude --name refactor`, and everything downstream -- the slug, the
-	// workspace, the sandbox name, the display name the agent is given -- is
-	// reached by the one path it always was.
-	//
-	// Both on one line is two different sessions asked for at once. A silent
-	// winner would run one of them with the other still written on the command,
-	// so name them and stop.
+	// The label is the session, and it lands in the session name, the one
+	// path everything downstream reads -- the slug, the workspace, the sandbox
+	// name, the display name the agent is given.
 	if ref.Label != "" {
-		if o.nameGiven {
-			return options{}, "", nil, usagef("%s names the session %q and --name names %q. "+
-				"Use one or the other", ref, ref.Label, o.load.Name)
-		}
 		o.load.Name, o.nameGiven = ref.Label, true
 	}
 	return o, ref.Agent, tail, nil
@@ -2438,15 +2269,13 @@ func noSandboxf(ref string) error {
 // that cannot be stopped, so it refuses and names -y -- the shape confirmDelete
 // uses, for the same reason. --dry-run prints the same list and stops there.
 //
-// spelling is the command as it was typed, for the messages: this is reached as
-// `brig rm --all` and as the retired `brig reset`, and an error about the wrong
-// one of those sends the reader to fix a line they did not write.
-// revokeRoutes is the seam a test replaces to see which sandboxes rm, rm
-// --all and reset revoke.
+// spelling is the command as it was typed, for the messages.
+// revokeRoutes is the seam a test replaces to see which sandboxes rm and rm
+// --all revoke.
 var revokeRoutes = wrap.RevokeRoutes
 
-// revokeAllRoutes is the seam a test replaces to see that rm --all and
-// reset revoke what the broker still holds.
+// revokeAllRoutes is the seam a test replaces to see that rm --all revokes
+// what the broker still holds.
 var revokeAllRoutes = wrap.RevokeAllRoutes
 
 func removeAll(spelling string, args []string, o removeOpts) error {
@@ -2871,8 +2700,8 @@ an image for one is documented at
 // was called profile and its listing was also a top-level `brig profiles`,
 // while show and new were two shapes of one `brig export` -- three ways of
 // spelling the same group, none of which told a reader which of the three the
-// next command would want. deprecatedProfileCmd keeps every old spelling
-// working; this is the only one the help text teaches.
+// next command would want. v0.5.0 removed the old spellings, and each is
+// refused naming the one here that replaced it.
 //
 // The noun is the CLI's alone. internal/profile, BRIG_PROFILE_DIR and
 // ~/.brig/profiles/ keep their names: renaming them is a mechanical diff
@@ -2905,25 +2734,15 @@ func agentCmd(args []string) error {
 		err = editProfile(args[1:])
 	case "rm":
 		err = removeProfile(args[1:])
-	// The undocumented second spellings, kept until retiredGoesIn. They were never
-	// in the help text, so they were found by accident and then written into
-	// scripts, which is exactly why they cannot simply disappear.
+	// The undocumented second spellings, removed in v0.5.0 after a release
+	// of notices. Refused by name, so a script that still has one is told
+	// the word to type instead.
 	case "list":
-		deprecated("brig agent list", "brig agent ls")
-		// The retired spelling behaves exactly like the verb it maps onto, the
-		// refusal of a stray word and the reading of --json included, so it
-		// names `brig agent ls` too: the notice above already pointed there.
-		jsonOut, err := agentLsJSON(args[1:])
-		if err != nil {
-			return err
-		}
-		return listProfiles(jsonOut || globalJSON)
+		return removedf("brig agent list", "brig agent ls")
 	case "save":
-		deprecated("brig agent save", "brig agent export")
-		err = exportProfile(args[1:])
+		return removedf("brig agent save", "brig agent export")
 	case "load":
-		deprecated("brig agent load", "brig agent import")
-		err = importProfile(args[1:])
+		return removedf("brig agent load", "brig agent import")
 	default:
 		return fmt.Errorf("unknown agent subcommand %q "+
 			"(ls, show, new, edit, rm, import, export)", args[0])
@@ -2937,44 +2756,6 @@ func agentCmd(args []string) error {
 		return nil
 	}
 	return err
-}
-
-// deprecatedProfileCmd is `brig profile <verb>`, which is now
-// `brig agent <verb>`.
-//
-// The notice names the subcommand rather than the group, because the verbs do
-// not all retire onto the same word: export splits into show and new for the
-// two lines people actually type, and a notice reading "`brig profile` is now
-// `brig agent`" would leave the reader to work out which of the two theirs
-// became. Whatever they typed still runs -- agentCmd does the work -- so the
-// notice is the only difference between the old spelling and the new one.
-func deprecatedProfileCmd(args []string) error {
-	if len(args) == 0 {
-		deprecated("brig profile", "brig agent")
-		return agentCmd(args)
-	}
-	// The verb the old spelling maps onto, for the notice. Anything not listed
-	// is a mistake rather than a retired spelling, and agentCmd names the real
-	// verbs for it -- so it hears no notice, which is right: there is nothing
-	// to stop typing.
-	now := map[string]string{
-		"ls": "ls", "list": "ls",
-		"export": "export", "save": "export",
-		"import": "import", "load": "import",
-		"edit": "edit",
-		"rm":   "rm",
-	}
-	verb, known := now[args[0]]
-	if !known {
-		if isHelp(args[0]) {
-			deprecated("brig profile", "brig agent")
-		}
-		return agentCmd(args)
-	}
-	deprecated("brig profile "+args[0], "brig agent "+verb)
-	// Translated to the current verb, so `brig profile save` does not go on to
-	// hear agentCmd's notice for save as well: one command, one notice.
-	return agentCmd(append([]string{verb}, args[1:]...))
 }
 
 // rejectAgentTail refuses a word a brig agent subcommand has no place for,
@@ -3637,33 +3418,42 @@ func confirmRemoveProfile(arg, resolved string, files []string, yes bool) (asked
 	return true, errors.New("aborted: nothing was removed")
 }
 
-// retiredGoesIn is the release that removes the retired spellings. Every
-// notice names it, so a script's author plans for a version number rather than
-// for "the next release". The date was v0.3, then v0.4, and both releases
-// shipped with the spellings still in, which is why it lives in one place and
-// TestDocsNameTheRemovalRelease holds the docs to it.
-const retiredGoesIn = "v0.5.0"
-
 // deprecated notes an old spelling once, on stderr so it never lands in
-// something being piped, and names the release that removes it.
+// something being piped.
 //
-// brig exec names no release. It runs its command without a guest pty, and
-// until brig sh can do the same (#335) it is the only way to pipe a command's
-// output cleanly. A date it could not keep would repeat what v0.3 did.
+// brig exec is the one retired spelling left, and it names no release. It runs
+// its command without a guest pty, and until brig sh can do the same (#335) it
+// is the only way to pipe a command's output cleanly. A date it could not keep
+// would repeat what v0.3 and v0.4 did. When #335 lands, its notice names a
+// release at least one release ahead.
 func deprecated(old, replacement string) {
-	until := "is removed in " + retiredGoesIn
-	if old == "brig exec" {
-		until = "stays until `brig sh` can pipe a command's output"
-	}
-	warnf("%s", notice.Newf("`%s` is now `%s`", old, replacement).Note("the old spelling %s", until))
+	warnf("%s", notice.Newf("`%s` is now `%s`", old, replacement).
+		Note("the old spelling stays until `brig sh` can pipe a command's output"))
 }
 
 // removedVerbs are verbs brig no longer runs, each with the line that replaced
-// it. Every one spent a release as a retired spelling first, so a script that
-// still has one is told what to type instead of that the command does not
-// exist.
+// it. Every one spent at least a release as a retired spelling first, so a
+// script that still has one is told what to type instead of that the command
+// does not exist. shell went in v0.3.0 and the rest in v0.5.0.
 var removedVerbs = map[string]string{
-	"shell": "brig sh <ref> [command...]",
+	"shell":    "brig sh <ref> [command...]",
+	"profiles": "brig agent ls",
+	"agents":   "brig agent ls",
+	"profile":  "brig agent <verb>",
+	"template": "brig agent <verb>",
+	"import":   "brig agent import",
+	"export":   "brig agent export",
+	"policies": "brig policy ls",
+	"create":   "brig run -d <ref>",
+	"env":      "brig info <ref>",
+	"reset":    "brig rm --all",
+}
+
+// removedf is the refusal of a removed spelling: a usage error, exit 2, that
+// names the spelling and the one that replaced it. The removed verbs and
+// subverbs all say it the same way.
+func removedf(old, now string) error {
+	return usagef("`%s` was removed; use `%s`", old, now)
 }
 
 // verbosity is how much this invocation says about itself, read off the global
@@ -3694,7 +3484,7 @@ var globalJSON bool
 // --json left of it is a usage error rather than a flag dropped on the floor.
 func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
-	case "ls", "info", "plan", "env", "doctor", "version", "--version", "run", "sh":
+	case "ls", "info", "plan", "doctor", "version", "--version", "run", "sh":
 		return true
 	case "agent", "secret":
 		return len(rest) > 0 && rest[0] == "ls"
@@ -3706,15 +3496,11 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 
 // jsonUnsupportedf is the refusal a verb with no JSON form gives to --json: a
 // usage error (exit 2) that names the verbs that do have one, so the reader
-// moves the flag rather than guessing which command it belongs on. env takes
-// it too, because a deprecated spelling keeps working until it is removed,
-// but it is named as deprecated rather than listed, so nobody lands on it
-// from here.
+// moves the flag rather than guessing which command it belongs on.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, plan, agent ls, secret ls, doctor, version and the network verbs "+
-		"(env takes it too, but env is deprecated; prefer info), and for run "+
-		"and sh", verb)
+		"ls, info, plan, agent ls, secret ls, doctor, version and the network verbs, "+
+		"and for run and sh", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run

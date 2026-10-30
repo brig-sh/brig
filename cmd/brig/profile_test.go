@@ -262,15 +262,16 @@ func TestListProfilesReportsBindingsAndRequiredSecrets(t *testing.T) {
 	}
 }
 
-// ls and list are the same listing. list is retiring and says so -- see
-// TestRetiredSpellingsWorkAndNameTheirReplacement -- but it still lists, which
-// is the half this test is about.
-func TestAgentLsAndListAreSynonyms(t *testing.T) {
+// ls is the listing. v0.5.0 removed list, its undocumented second spelling,
+// and it is refused naming ls -- see
+// TestRemovedSpellingsAreUsageErrorsNamingTheReplacement.
+func TestAgentLsListsAndListIsRemoved(t *testing.T) {
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-	for _, verb := range []string{"ls", "list"} {
-		if err := agentCmd([]string{verb}); err != nil {
-			t.Errorf("brig agent %s: %v", verb, err)
-		}
+	if err := agentCmd([]string{"ls"}); err != nil {
+		t.Errorf("brig agent ls: %v", err)
+	}
+	if err := agentCmd([]string{"list"}); exitCode(err) != exitUsage {
+		t.Errorf("brig agent list = %v, want a usage error", err)
 	}
 	if err := agentCmd([]string{"nonsense"}); err == nil {
 		t.Error("an unknown subcommand was accepted")

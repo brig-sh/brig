@@ -160,7 +160,6 @@ func TestTelemetryCommandNeverSendsAStrayWord(t *testing.T) {
 	}{
 		{"run", "run", true},
 		{"sh", "sh", true},
-		{"create", "create", false},
 		{"exec", "exec", false},
 		{"ls", "ls", false},
 		{"--version", "version", false},
