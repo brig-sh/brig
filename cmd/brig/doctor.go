@@ -200,6 +200,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	}
 	checks = append(checks,
 		bootCheck(rt),
+		rootfsCheck(agent, rt),
 		verifyCheck(name, policy),
 	)
 	if policy.Replaced() {
@@ -422,6 +423,84 @@ func shortVersion(out string) string {
 		fields = fields[1:]
 	}
 	return strings.Join(fields, " ")
+}
+
+// overlayRootFor is the seam a test replaces to give the runtime an overlay
+// root, or take it away.
+var overlayRootFor = runtime.OverlayRootFor
+
+// overlayMonitorFor is the seam a test replaces to say whether the monitor
+// takes the overlay root.
+var overlayMonitorFor = runtime.OverlayMonitorFor
+
+// rootfsCheck reports whether the runtime can build the overlay root that a
+// profile booting an ordinary image takes by default. Not reached without a
+// runtime. It reads BRIG_ROOTFS_MODE and BRIG_ROOTFS_TYPE the way a run of the
+// agent reads them.
+//
+// A host without the overlay is not a failure: a run keeps the runtime's own
+// root. It fails when BRIG_ROOTFS_MODE is not a mode brig knows, or when it
+// is overlay-block on a host that cannot build the overlay or for a profile
+// that cannot take it. A run refuses all three. A monitor that takes no
+// overlay, or a HULL_* variable that chooses the root, is reported as such. None touches the exit status,
+// as for the boot row.
+func rootfsCheck(agent *profile.Profile, rt runtime.Runtime) check {
+	if rt == nil {
+		return notReached("rootfs")
+	}
+	name := ""
+	if agent != nil {
+		name = agent.Name
+	}
+	env := wrap.NewEnv(name, nil)
+	mode := env.String("ROOTFS_MODE", "")
+	switch mode {
+	case "", runtime.RootfsModeOverlayBlock, runtime.RootfsModeVirtiofs:
+	default:
+		return check{Name: "rootfs", State: stateFail,
+			Finding: fmt.Sprintf("BRIG_ROOTFS_MODE=%s is not a rootfs mode", mode),
+			Fix:     "set it to overlay-block or virtiofs, or unset it"}
+	}
+	// The profile conditions of the run's own decision, so the row does not
+	// say "available" for a profile whose run refuses or skips the overlay.
+	if agent != nil {
+		why := ""
+		if rootfsType := env.String("ROOTFS_TYPE", agent.RootfsType); !agent.GenericBoot {
+			why = name + " is not a genericBoot profile"
+		} else if rootfsType != "" && rootfsType != runtime.RootfsModeVirtiofs {
+			why = name + " boots with rootfs type " + rootfsType
+		}
+		switch {
+		case why != "" && mode == runtime.RootfsModeOverlayBlock:
+			return check{Name: "rootfs", State: stateFail,
+				Finding: "BRIG_ROOTFS_MODE=overlay-block, but " + why,
+				Fix:     "unset BRIG_ROOTFS_MODE to boot on the profile's own root"}
+		case why != "":
+			return check{Name: "rootfs", State: stateInfo, Finding: "no overlay root: " + why}
+		}
+	}
+	// The monitor half of the decision. An explicit overlay-block is passed to
+	// the runtime whatever the monitor, so only the default is skipped here.
+	hv := ""
+	if agent != nil {
+		hv = agent.Hypervisor
+	}
+	if ok, why := overlayMonitorFor(rt, env.String("HYPERVISOR", hv)); !ok && why != "" && mode != runtime.RootfsModeOverlayBlock {
+		return check{Name: "rootfs", State: stateInfo, Finding: "no overlay root: " + why}
+	}
+	o := overlayRootFor(rt)
+	switch {
+	case o.Available && mode == runtime.RootfsModeVirtiofs:
+		return check{Name: "rootfs", State: stateInfo,
+			Finding: "overlay root available, and BRIG_ROOTFS_MODE=virtiofs keeps the runtime's own root"}
+	case o.Available:
+		return check{Name: "rootfs", State: statePass, Finding: "overlay root available"}
+	case mode == runtime.RootfsModeOverlayBlock:
+		return check{Name: "rootfs", State: stateFail,
+			Finding: "overlay root not available, and BRIG_ROOTFS_MODE=overlay-block asks for it: " + o.Why,
+			Fix:     "fix the above, or unset BRIG_ROOTFS_MODE to boot on the runtime's own root"}
+	}
+	return check{Name: "rootfs", State: stateInfo, Finding: "overlay root not available: " + o.Why}
 }
 
 // bootCheck reports whether the kernel and initrd an unmodified image boots on

@@ -71,6 +71,8 @@ func healthyHost(t *testing.T) string {
 	}
 	swap(t, &detectRuntime, func() (runtime.Runtime, error) { return doctorRuntime{bin: bin}, nil })
 	swap(t, &openStore, func() (secret.Store, error) { return doctorStore{}, nil })
+	swap(t, &overlayRootFor, func(runtime.Runtime) runtime.OverlayRoot { return runtime.OverlayRoot{Available: true} })
+	t.Setenv("BRIG_ROOTFS_MODE", "")
 	return assets
 }
 
@@ -106,7 +108,7 @@ func TestDoctorAllChecksPass(t *testing.T) {
 			t.Errorf("check %q failed on a healthy host: %s", c.Name, c.Finding)
 		}
 	}
-	for _, name := range []string{"host", "virtual", "runtime", "boot", "verify", "profiles", "secrets"} {
+	for _, name := range []string{"host", "virtual", "runtime", "boot", "rootfs", "verify", "profiles", "secrets"} {
 		if got := findCheck(t, checks, name).State; got != statePass {
 			t.Errorf("check %q is %q on a healthy host, want ok", name, got)
 		}
@@ -129,7 +131,7 @@ func TestDoctorMissingRuntimeExits4(t *testing.T) {
 	if rt.State != stateFail || rt.Fix == "" {
 		t.Errorf("a missing runtime is %q with fix %q, want !! with a fix", rt.State, rt.Fix)
 	}
-	for _, name := range []string{"boot", "image"} {
+	for _, name := range []string{"boot", "rootfs", "image"} {
 		c := findCheck(t, checks, name)
 		if c.State != stateInfo || c.Finding != "not reached" {
 			t.Errorf("%q after a missing runtime is %q/%q, want -- / not reached", name, c.State, c.Finding)
@@ -506,5 +508,89 @@ func TestDoctorCarriesTheRowOfARegisteredMode(t *testing.T) {
 	}
 	if err := doctorExit(checks); err != nil {
 		t.Errorf("an informational row changed the exit: %v", err)
+	}
+}
+
+// A host without the overlay root keeps the runtime's own, so the row is
+// informational and names what to install. It fails only where a run would
+// refuse: BRIG_ROOTFS_MODE=overlay-block on that host, or a mode brig does not
+// know. Neither changes the exit status.
+func TestDoctorRootfsRow(t *testing.T) {
+	healthyHost(t)
+	row := func() check {
+		t.Helper()
+		checks := runDoctor(nil, nil)
+		if err := doctorExit(checks); err != nil {
+			t.Errorf("the rootfs row changed the exit status: %v", err)
+		}
+		return findCheck(t, checks, "rootfs")
+	}
+
+	if c := row(); c.State != statePass || c.Finding != "overlay root available" {
+		t.Errorf("available: %q %q", c.State, c.Finding)
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "virtiofs")
+	if c := row(); c.State != stateInfo || !strings.Contains(c.Finding, "BRIG_ROOTFS_MODE=virtiofs") {
+		t.Errorf("opted out: %q %q", c.State, c.Finding)
+	}
+
+	t.Setenv("BRIG_ROOTFS_MODE", "")
+	why := "install e2fsprogs (brew install e2fsprogs): hull formats the disks with /x/mke2fs"
+	swap(t, &overlayRootFor, func(runtime.Runtime) runtime.OverlayRoot { return runtime.OverlayRoot{Why: why} })
+	if c := row(); c.State != stateInfo || c.Finding != "overlay root not available: "+why {
+		t.Errorf("not available: %q %q", c.State, c.Finding)
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "overlay-block")
+	if c := row(); c.State != stateFail || !strings.Contains(c.Finding, why) || c.Fix == "" {
+		t.Errorf("asked and not available: %q %q fix %q", c.State, c.Finding, c.Fix)
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "overlay")
+	if c := row(); c.State != stateFail || !strings.Contains(c.Finding, "not a rootfs mode") {
+		t.Errorf("no such mode: %q %q", c.State, c.Finding)
+	}
+}
+
+// The row follows the profile as the run does. A profile that is not a
+// genericBoot, or one booting with a rootfs type other than virtiofs, never
+// takes the overlay, so overlay-block fails there even on a host that can
+// build it.
+func TestDoctorRootfsRowFollowsTheProfile(t *testing.T) {
+	healthyHost(t)
+	rt := doctorRuntime{}
+	block := &profile.Profile{Name: "pkgs", GenericBoot: true, RootfsType: "block"}
+	plain := &profile.Profile{Name: "own", GenericBoot: false}
+	generic := &profile.Profile{Name: "gen", GenericBoot: true}
+
+	if c := rootfsCheck(generic, rt); c.State != statePass {
+		t.Errorf("generic boot on an overlay host: %q %q", c.State, c.Finding)
+	}
+	for _, p := range []*profile.Profile{block, plain} {
+		if c := rootfsCheck(p, rt); c.State != stateInfo || !strings.Contains(c.Finding, p.Name) {
+			t.Errorf("%s, mode unset: %q %q", p.Name, c.State, c.Finding)
+		}
+	}
+	t.Setenv("BRIG_ROOTFS_MODE", "overlay-block")
+	for _, p := range []*profile.Profile{block, plain} {
+		if c := rootfsCheck(p, rt); c.State != stateFail || c.Fix == "" {
+			t.Errorf("%s, overlay-block asked: %q %q", p.Name, c.State, c.Finding)
+		}
+	}
+	// BRIG_ROOTFS_TYPE wins over the profile's field, as in a run.
+	t.Setenv("BRIG_ROOTFS_TYPE", "virtiofs")
+	if c := rootfsCheck(block, rt); c.State != statePass {
+		t.Errorf("block profile with BRIG_ROOTFS_TYPE=virtiofs: %q %q", c.State, c.Finding)
+	}
+}
+
+// The row follows the monitor as the run does: qemu under hull, firecracker
+// under urunc, or a HULL_* variable that chooses the root, keeps the default
+// overlay off.
+func TestDoctorRootfsRowFollowsTheMonitor(t *testing.T) {
+	healthyHost(t)
+	why := "hull's qemu backend takes no overlay root"
+	swap(t, &overlayMonitorFor, func(runtime.Runtime, string) (bool, string) { return false, why })
+	generic := &profile.Profile{Name: "gen", GenericBoot: true, Hypervisor: "qemu"}
+	if c := rootfsCheck(generic, doctorRuntime{}); c.State != stateInfo || !strings.Contains(c.Finding, why) {
+		t.Errorf("a monitor without the overlay: %q %q", c.State, c.Finding)
 	}
 }

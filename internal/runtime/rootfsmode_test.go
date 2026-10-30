@@ -160,3 +160,30 @@ func TestContainerdSnapshotter(t *testing.T) {
 		t.Errorf("the variable does not win over the file: %q from %q", got, from)
 	}
 }
+
+// The monitor half of the default, as doctor reports it and the run decides it.
+func TestOverlayMonitorFor(t *testing.T) {
+	overlayHost(t)
+	h, n := &hull{}, &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	for _, c := range []struct {
+		rt   Runtime
+		hv   string
+		want bool
+	}{
+		{h, "", true}, {h, "vz", true}, {h, "hvi", true}, {h, "qemu", false},
+		{n, "", true}, {n, "hvi", true}, {n, "cloud-hypervisor", true}, {n, "firecracker", false},
+	} {
+		if ok, why := OverlayMonitorFor(c.rt, c.hv); ok != c.want || (!ok && why == "") {
+			t.Errorf("%T %q: %v %q, want %v with a reason when false", c.rt, c.hv, ok, why, c.want)
+		}
+	}
+	t.Setenv("HULL_ROOTFS_MODE", "overlay-block")
+	if ok, why := OverlayMonitorFor(h, "vz"); ok || !strings.Contains(why, "HULL_ROOTFS_MODE") {
+		t.Errorf("HULL_ROOTFS_MODE set: %v %q", ok, why)
+	}
+	t.Setenv("HULL_ROOTFS_MODE", "")
+	t.Setenv("HULL_HVI_ROOTFS_UPPER", "/x")
+	if ok, why := OverlayMonitorFor(h, "hvi"); ok || !strings.Contains(why, "HULL_HVI_ROOTFS_UPPER") {
+		t.Errorf("HULL_HVI_ROOTFS_UPPER set: %v %q", ok, why)
+	}
+}
