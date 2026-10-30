@@ -261,15 +261,14 @@ func TestDefaultPolicyPinsRepoAndWorkflow(t *testing.T) {
 // applies to the first, and the second is a setting the reader can correct.
 func TestCosignMissingSeparatesAnAbsentToolFromAWrongPath(t *testing.T) {
 	shipped := DefaultPolicy().CosignMissing()
-	hint := "docs.sigstore.dev"
-	if goruntime.GOOS == "darwin" {
-		hint = "brew install cosign"
-	}
-	if !strings.Contains(shipped, "not installed") || !strings.Contains(shipped, hint) {
+	if shipped != cosignNotInstalled(goruntime.GOOS) {
 		t.Errorf("the default name loses the install hint: %q", shipped)
 	}
-	if goruntime.GOOS != "darwin" && strings.Contains(shipped, "brew") {
-		t.Errorf("a host with no brew is told to use it: %q", shipped)
+	if got := cosignNotInstalled("darwin"); !strings.Contains(got, "not installed") || !strings.Contains(got, "brew install cosign") {
+		t.Errorf("macOS loses brew: %q", got)
+	}
+	if got := cosignNotInstalled("linux"); !strings.Contains(got, "not installed") || !strings.Contains(got, "docs.sigstore.dev") || strings.Contains(got, "brew") {
+		t.Errorf("a host with no brew is told to use it: %q", got)
 	}
 
 	pointed := Policy{Cosign: "/opt/nowhere/cosign"}.CosignMissing()

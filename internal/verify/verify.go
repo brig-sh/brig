@@ -557,10 +557,16 @@ func (p Policy) CosignMissing() string {
 		return fmt.Sprintf("cosign was not found at %s, where BRIG_COSIGN_BIN points",
 			p.Cosign)
 	}
-	if goruntime.GOOS == "darwin" {
+	return cosignNotInstalled(goruntime.GOOS)
+}
+
+// cosignNotInstalled takes the platform so that a test on one host covers both.
+func cosignNotInstalled(goos string) string {
+	if goos == "darwin" {
 		return "cosign is not installed (`brew install cosign`)"
 	}
-	return "cosign is not installed (use your distribution's package, or https://docs.sigstore.dev/cosign/system_config/installation/)"
+	return "cosign is not installed (use your distribution's package, or " +
+		"https://docs.sigstore.dev/cosign/system_config/installation/)"
 }
 
 // lookPath and run are variables so tests can drive the decision table
