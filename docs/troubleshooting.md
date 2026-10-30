@@ -932,7 +932,7 @@ Brig allows a shim that it cannot place, such as another microVM shim.
 
 ## Sandbox restarted on `brig sh`
 
-Brig warns and recreates the sandbox in the four cases below (see
+Brig warns and recreates the sandbox in the five cases below (see
 [Sessions, homes and projects](sessions.md)). Brig keeps the guest home on
 the host. Every other session on that sandbox disconnects at the restart.
 
@@ -1020,6 +1020,23 @@ brig sh claude
 
 `brig ls` lists the ref as `running` again, and a second `brig sh` on it
 prints no restart warning.
+
+### The guest is not answering
+
+```
+brig: the log of the sandbox ends with
+  ↳ exec sleep failed: No such file or directory
+brig: the running sandbox is not answering
+  ↳ its guest may have failed while booting
+  ↳ brig restarts it, and any other session using this sandbox will be disconnected
+```
+
+**Cause:** The runtime reports the sandbox as running, and the guest did not
+answer within `BRIG_READY_TIMEOUT`. The lines above the warning are the end of
+its log, and the restart removes that log.
+
+**Fix:** Read those lines. If the guest fails again on the restart, see
+[The sandbox never became ready](#the-sandbox-never-became-ready).
 
 ## Unknown command: trust
 
