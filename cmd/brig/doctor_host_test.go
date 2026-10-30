@@ -99,15 +99,62 @@ func TestUidmapCheckRefusesAPlainBinary(t *testing.T) {
 	}
 }
 
-func TestDevicesCheckNamesTheDevice(t *testing.T) {
-	ok := writeFile(t, "")
+// A missing device is an unloaded module. A device this user cannot open is not,
+// and the module advice would do nothing for it.
+func TestDevicesCheckFitsTheFixToTheFailure(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "vhost-vsock")
-	c := devicesCheck(ok, missing)
+	c := devicesCheck(missing)
 	if c.State != stateFail || !strings.Contains(c.Finding, missing) || !strings.Contains(c.Fix, "vhost_vsock") {
-		t.Errorf("%+v", c)
+		t.Errorf("a missing device: %+v", c)
 	}
-	if c := devicesCheck(ok); c.State != statePass {
+	if os.Geteuid() != 0 {
+		denied := writeFile(t, "")
+		if err := os.Chmod(denied, 0); err != nil {
+			t.Fatal(err)
+		}
+		c = devicesCheck(denied)
+		if c.State != stateFail || strings.Contains(c.Fix, "modprobe") || !strings.Contains(c.Fix, "install.sh") {
+			t.Errorf("a denied device: %+v", c)
+		}
+	}
+	if c := devicesCheck(writeFile(t, "")); c.State != statePass {
 		t.Errorf("an openable device: %+v", c)
+	}
+}
+
+// The virtual line reports /dev/kvm, and a second line for one cause is what
+// doctor exists to stop.
+func TestLinuxHostRowsLeaveKVMToTheVirtualLine(t *testing.T) {
+	swap(t, &hostOS, "linux")
+	swap(t, &userNamespaces, func() error { return nil })
+	for _, c := range linuxHostRows(nerdctlDoctorRuntime{}) {
+		if strings.Contains(c.Finding, "/dev/kvm") {
+			t.Errorf("a host row reports /dev/kvm: %+v", c)
+		}
+	}
+}
+
+// BRIG_BOOT_ASSETS names a kernel, and says nothing about whether the tools are
+// there. Only the launcher's variable may take the row away.
+func TestToolsRowDependsOnTheLauncherAlone(t *testing.T) {
+	swap(t, &hostOS, "linux")
+	swap(t, &userNamespaces, func() error { return nil })
+	has := func() bool {
+		for _, c := range linuxHostRows(nerdctlDoctorRuntime{}) {
+			if c.Name == "tools" {
+				return true
+			}
+		}
+		return false
+	}
+	t.Setenv("BRIG_RUNTIME_BIN", "")
+	t.Setenv("BRIG_BOOT_ASSETS", t.TempDir())
+	if !has() {
+		t.Error("BRIG_BOOT_ASSETS took the tools row away")
+	}
+	t.Setenv("BRIG_RUNTIME_BIN", "/somewhere/nerdctl")
+	if has() {
+		t.Error("a tools row on a host with the launcher's environment")
 	}
 }
 
@@ -115,10 +162,20 @@ func TestDevicesCheckNamesTheDevice(t *testing.T) {
 // its run failed with `needs CNI plugin "bridge"`.
 func TestCNICheckFollowsWhereNerdctlLooks(t *testing.T) {
 	withBridge := t.TempDir()
-	if err := os.WriteFile(filepath.Join(withBridge, "bridge"), nil, 0o755); err != nil {
-		t.Fatal(err)
+	for _, plugin := range cniPlugins {
+		if err := os.WriteFile(filepath.Join(withBridge, plugin), nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	empty := t.TempDir()
+	half := t.TempDir()
+	if err := os.WriteFile(filepath.Join(half, "bridge"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CNI_PATH", half)
+	if c := cniCheck(); c.State != stateFail || !strings.Contains(c.Finding, "host-local") || strings.Contains(c.Finding, "bridge,") {
+		t.Errorf("a half-installed directory: %+v", c)
+	}
 
 	t.Setenv("CNI_PATH", empty)
 	if c := cniCheck(); c.State != stateFail || !strings.Contains(c.Finding, empty) {
