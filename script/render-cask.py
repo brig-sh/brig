@@ -163,9 +163,8 @@ def render(args):
 
     for binary in args.binary:
         lines.append(f'  binary "{binary}"')
-    # bash, fish, zsh: brew style enforces this order, not the order the
-    # flags were written in.
-    for shell in ("bash", "fish", "zsh"):
+    # brew style enforces bash, zsh, fish, whatever the flag order.
+    for shell in ("bash", "zsh", "fish"):
         if shell in args.completion:
             lines.append(f'  {shell}_completion "completions/{args.project}.{shell}"')
     if args.binary or args.completion:
