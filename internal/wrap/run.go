@@ -624,7 +624,7 @@ func (c *Config) warnBundleEnv() {
 		return
 	}
 	c.warnf("%s", notice.New("this brig is inside the runtime bundle, and its launcher did not run").
-		Note("without it, brig does not find the bundle's CNI plugins or boot assets, and this run will likely fail").
+		Note("without it, brig does not find the bundle's CNI plugins or boot assets, and this run may fail").
 		Do("run brig from "+env.Launchers, env.Fix()).
 		Do("or load the environment", ". "+env.File))
 }
