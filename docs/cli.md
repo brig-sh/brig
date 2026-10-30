@@ -511,6 +511,12 @@ A `bundle` line appears when `brig` runs from the bin directory of the runtime
 bundle without its launcher. See
 [Started without the launcher](troubleshooting.md#started-without-the-launcher).
 
+On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run needs
+from the host. For a user other than root: `subids`, `userns` and `uidmap`. For
+every user: `devices` and `cni`. With no `BRIG_BOOT_ASSETS` set, it adds `tools`
+(`oras` and `cloud-hypervisor`). These lines do not change the exit status.
+`doctor` does not tell whether a `urunc` reads the boot annotations.
+
 Doctor checks the image against the trust policy a run of that agent uses,
 with `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
 applied, per-agent spelling first. The verify line reads `BRIG_VERIFY` the
