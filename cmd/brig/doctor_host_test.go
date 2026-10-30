@@ -134,27 +134,42 @@ func TestLinuxHostRowsLeaveKVMToTheVirtualLine(t *testing.T) {
 	}
 }
 
-// BRIG_BOOT_ASSETS names a kernel, and says nothing about whether the tools are
-// there. Only the launcher's variable may take the row away.
-func TestToolsRowDependsOnTheLauncherAlone(t *testing.T) {
+// bundleNerdctl is a nerdctl in a runtime bundle's tree.
+func bundleNerdctl(t *testing.T) nerdctlDoctorRuntime {
+	t.Helper()
+	prefix := t.TempDir()
+	for _, dir := range []string{"bin", "etc"} {
+		if err := os.Mkdir(filepath.Join(prefix, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "etc", "brig-env.sh"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return nerdctlDoctorRuntime{doctorRuntime{bin: filepath.Join(prefix, "bin", "nerdctl")}}
+}
+
+// The tree says whether the tools are there. A host that names its own kernel or
+// its own nerdctl still lacks them.
+func TestToolsRowDependsOnTheBundleTree(t *testing.T) {
 	swap(t, &hostOS, "linux")
 	swap(t, &userNamespaces, func() error { return nil })
-	has := func() bool {
-		for _, c := range linuxHostRows(nerdctlDoctorRuntime{}) {
+	has := func(rt nerdctlDoctorRuntime) bool {
+		for _, c := range linuxHostRows(rt) {
 			if c.Name == "tools" {
 				return true
 			}
 		}
 		return false
 	}
-	t.Setenv("BRIG_RUNTIME_BIN", "")
+	own := nerdctlDoctorRuntime{doctorRuntime{bin: filepath.Join(t.TempDir(), "nerdctl")}}
 	t.Setenv("BRIG_BOOT_ASSETS", t.TempDir())
-	if !has() {
-		t.Error("BRIG_BOOT_ASSETS took the tools row away")
+	t.Setenv("BRIG_RUNTIME_BIN", own.bin)
+	if !has(own) {
+		t.Error("setting BRIG_BOOT_ASSETS and BRIG_RUNTIME_BIN took the tools row away")
 	}
-	t.Setenv("BRIG_RUNTIME_BIN", "/somewhere/nerdctl")
-	if has() {
-		t.Error("a tools row on a host with the launcher's environment")
+	if has(bundleNerdctl(t)) {
+		t.Error("a tools row for the bundle's own nerdctl")
 	}
 }
 
@@ -239,22 +254,22 @@ func (nerdctlDoctorRuntime) Kind() string { return "nerdctl" }
 
 func TestRuntimeRowSaysWhenItIsNotTheBundle(t *testing.T) {
 	swap(t, &hostOS, "linux")
-	t.Setenv("BRIG_RUNTIME_BIN", "")
-	if got := notTheBundle(nerdctlDoctorRuntime{}); !strings.Contains(got, "not the runtime bundle") {
+	own := nerdctlDoctorRuntime{doctorRuntime{bin: filepath.Join(t.TempDir(), "nerdctl")}}
+	if got := notTheBundle(own); !strings.Contains(got, "not the runtime bundle") {
 		t.Errorf("notTheBundle = %q", got)
 	}
-	t.Setenv("BRIG_RUNTIME_BIN", "/somewhere/nerdctl")
-	if got := notTheBundle(nerdctlDoctorRuntime{}); got != "" {
-		t.Errorf("the launcher's runtime was called foreign: %q", got)
+	// Naming it by hand does not make it the bundle's.
+	t.Setenv("BRIG_RUNTIME_BIN", own.bin)
+	if got := notTheBundle(own); !strings.Contains(got, "not the runtime bundle") {
+		t.Errorf("with BRIG_RUNTIME_BIN set, notTheBundle = %q", got)
 	}
 }
 
-// Inside the bundle's tree the runtime may be the bundle's own, and the bundle
-// line already says what is wrong.
+// With or without the launcher, the bundle's nerdctl is the bundle's.
 func TestRuntimeRowDefersToTheBundleLine(t *testing.T) {
 	bypassedBundle(t)
 	swap(t, &hostOS, "linux")
-	if got := notTheBundle(nerdctlDoctorRuntime{}); got != "" {
-		t.Errorf("a bypassed launcher's runtime was called foreign: %q", got)
+	if got := notTheBundle(bundleNerdctl(t)); got != "" {
+		t.Errorf("the bundle's runtime was called foreign: %q", got)
 	}
 }
