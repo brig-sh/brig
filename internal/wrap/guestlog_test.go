@@ -167,3 +167,21 @@ func (s *stderrOnly) Logs(spec runtime.LogsSpec) error {
 	_, err := io.WriteString(spec.Err, "[2026-10-30T09:45:05Z WARN  virtiofsd::limits] Failure\nCannot create virtio-fs device\n")
 	return err
 }
+
+// From a real guest whose init could not start its command. The last five lines
+// are registers, and the reason is above them.
+func TestGuestLogTailStopsAtThePanic(t *testing.T) {
+	log := "No application execute\n" +
+		"Could not spawn app\n" +
+		"[    0.259707] Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000100\n" +
+		"[    0.262924] CPU: 0 UID: 0 PID: 1 Comm: urunit\n" +
+		"[    0.267788] Call Trace:\n" +
+		"[    0.284507] RBP: 00007ffe3295aee8 R08: 0000000000000000\n" +
+		"[    0.292911] Kernel Offset: 0x30c00000 from 0xffffffff81000000\n"
+	got := guestLogTail(log, 5)
+	want := []string{"No application execute", "Could not spawn app",
+		"[    0.259707] Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000100"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("guestLogTail = %q, want %q", got, want)
+	}
+}

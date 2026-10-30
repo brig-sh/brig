@@ -695,6 +695,14 @@ func guestLogTail(log string, n int) []string {
 			lines = append(lines, line)
 		}
 	}
+	// A panic ends in a stack and a register dump. The guest's last words come
+	// before it, so the log is read up to the panic line.
+	for i, line := range lines {
+		if strings.Contains(line, "Kernel panic") {
+			lines = lines[:i+1]
+			break
+		}
+	}
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
