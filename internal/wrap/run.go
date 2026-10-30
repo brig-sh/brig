@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/notice"
@@ -247,6 +249,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// force on this sandbox -- and returning here would print a POLICY
 			// row for rules nothing is applying.
 			c.warnf("%s", c.networkRestart())
+		case !c.waitReady():
+			// A guest that cannot be reached has said nothing about its mount.
+			// Its log goes with the restart, so it is read here.
+			c.warnGuestLog()
+			c.warnf("%s", notice.New("the running sandbox is not answering").
+				Note("its guest may have failed while booting").
+				Note("brig restarts it, and %s", disconnects))
 		case !c.guestMountsWorkspace():
 			c.warnf("%s", notice.New("the running sandbox is not mounting "+c.Workspace+": its share went stale").
 				Note("the directory was renamed or replaced, or the workspace changed").
@@ -490,6 +499,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// to find out.
 	c.rememberSession()
 	if !c.waitReady() {
+		c.warnGuestLog()
 		return fmt.Errorf("sandbox did not become ready; check '%s'", c.logHint())
 	}
 	if c.Profile.IsGUI() {
@@ -608,6 +618,77 @@ func (c *Config) waitReady() bool {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+}
+
+// guestLogLines is how much of the log warnGuestLog shows, and guestLogBytes how
+// much of it brig holds to find them.
+const (
+	guestLogLines = 5
+	guestLogBytes = 64 << 10
+)
+
+// virtiofsdRecord is one log record of virtiofsd. Its stream and the guest's
+// console share the log, and a record can start in the middle of a guest's line.
+var virtiofsdRecord = regexp.MustCompile(`\[[0-9TZ:.-]+ +[A-Z]+ +virtiofsd[^\]]*\].*`)
+
+// tailBuffer keeps the last limit bytes written to it.
+type tailBuffer struct {
+	data  []byte
+	limit int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.data = append(b.data, p...)
+	if extra := len(b.data) - b.limit; extra > 0 {
+		b.data = b.data[extra:]
+	}
+	return len(p), nil
+}
+
+// warnGuestLog prints the end of the log of a sandbox that did not answer.
+//
+// The reason is usually there, and the line that gives it may carry no level
+// while virtiofsd's harmless warnings do: readers have blamed its open file
+// limit for a guest that failed to exec. So virtiofsd's own lines are left out.
+// This goes out as a warning, and not in the error, because errors reach
+// telemetry and a guest's output must not.
+func (c *Config) warnGuestLog() {
+	raw := &tailBuffer{limit: guestLogBytes}
+	// The whole log, cut here: nerdctl 2.3.5's --tail 40 returned a fragment of
+	// the last line and lost the line that said why the guest died. Best effort,
+	// since a runtime with no log leaves the message that follows as it was.
+	_ = c.Runtime.Logs(runtime.LogsSpec{Name: c.VMName, Tail: -1, Out: raw, Err: raw})
+	lines := guestLogTail(string(raw.data), guestLogLines)
+	if len(lines) == 0 {
+		return
+	}
+	block := notice.New("the log of the sandbox ends with")
+	for _, line := range lines {
+		block.Note("%s", line)
+	}
+	c.warnf("%s", block)
+}
+
+// guestLogTail takes the last n lines worth reading. The text comes from the
+// guest, so anything a terminal would act on goes.
+func guestLogTail(log string, n int) []string {
+	var lines []string
+	for _, line := range strings.Split(log, "\n") {
+		line = virtiofsdRecord.ReplaceAllString(line, "")
+		line = strings.TrimSpace(strings.Map(func(r rune) rune {
+			if unicode.IsPrint(r) {
+				return r
+			}
+			return -1
+		}, line))
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
 }
 
 // guestMountsWorkspace asks the guest which workspace it actually has.

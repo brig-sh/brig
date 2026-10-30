@@ -629,6 +629,10 @@ On Linux the second half names `nerdctl logs`.
 it never answered. The guest binds its listener a few seconds after the
 microVM starts, and Brig stopped waiting for that listener.
 
+Brig prints the last lines of the log above this message. It leaves out the
+lines that `virtiofsd` writes. A `virtiofsd::limits` warning about open file
+descriptors is harmless.
+
 **Fix:**
 
 1. Read the log that the message names. The errors of the guest are in that
