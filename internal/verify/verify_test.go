@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -260,8 +261,15 @@ func TestDefaultPolicyPinsRepoAndWorkflow(t *testing.T) {
 // applies to the first, and the second is a setting the reader can correct.
 func TestCosignMissingSeparatesAnAbsentToolFromAWrongPath(t *testing.T) {
 	shipped := DefaultPolicy().CosignMissing()
-	if !strings.Contains(shipped, "not installed") || !strings.Contains(shipped, "brew install cosign") {
+	hint := "docs.sigstore.dev"
+	if goruntime.GOOS == "darwin" {
+		hint = "brew install cosign"
+	}
+	if !strings.Contains(shipped, "not installed") || !strings.Contains(shipped, hint) {
 		t.Errorf("the default name loses the install hint: %q", shipped)
+	}
+	if goruntime.GOOS != "darwin" && strings.Contains(shipped, "brew") {
+		t.Errorf("a host with no brew is told to use it: %q", shipped)
 	}
 
 	pointed := Policy{Cosign: "/opt/nowhere/cosign"}.CosignMissing()
@@ -276,7 +284,7 @@ func TestCosignMissingSeparatesAnAbsentToolFromAWrongPath(t *testing.T) {
 func TestMessagesNameTheImageAndTheRemedy(t *testing.T) {
 	cases := map[Outcome]string{
 		NotOurs:   "not published by brig-sh",
-		NoTooling: "brew install cosign",
+		NoTooling: "cosign is not installed",
 		Failed:    "DID NOT VERIFY",
 	}
 	for outcome, want := range cases {
@@ -432,7 +440,7 @@ func TestVerifiedWithoutADigestNamesTheTag(t *testing.T) {
 func TestRefusalSaysItRefusedAndNamesTheWayOut(t *testing.T) {
 	for outcome, remedy := range map[Outcome]string{
 		NotOurs:   "BRIG_VERIFY_REGISTRY",
-		NoTooling: "brew install cosign",
+		NoTooling: "cosign is not installed",
 	} {
 		got := Result{Policy: DefaultPolicy(), Outcome: outcome, Image: "img"}.Refusal()
 		if !strings.Contains(got, "refusing to boot") {
