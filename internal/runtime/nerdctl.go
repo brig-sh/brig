@@ -800,16 +800,59 @@ func (n *nerdctl) Logs(spec LogsSpec) error {
 	args := []string{"logs"}
 	if spec.Follow {
 		args = append(args, "--follow")
-	}
-	if spec.Tail >= 0 {
-		args = append(args, "--tail", strconv.Itoa(spec.Tail))
+		if spec.Tail >= 0 {
+			args = append(args, "--tail", strconv.Itoa(spec.Tail))
+		}
 	}
 	args = append(args, spec.Name)
 	cmd := logsCommand(spec, n.bin, args)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	cmd.Stdout = spec.Out
 	cmd.Stderr = spec.Err
-	return cmd.Run()
+	if spec.Follow || spec.Tail < 0 {
+		return cmd.Run()
+	}
+	// Cut here: nerdctl 2.3.5's --tail printed a lone carriage return, or a
+	// fragment of the last line, for a log it holds in full. Each stream is cut
+	// apart, as --tail would.
+	out, errOut := &logTail{n: spec.Tail}, &logTail{n: spec.Tail}
+	cmd.Stdout, cmd.Stderr = out, errOut
+	err := cmd.Run()
+	if _, werr := spec.Out.Write(out.buf); err == nil {
+		err = werr
+	}
+	if _, werr := spec.Err.Write(errOut.buf); err == nil {
+		err = werr
+	}
+	return err
+}
+
+// logTail keeps the last n lines written to it.
+type logTail struct {
+	n   int
+	buf []byte
+}
+
+func (l *logTail) Write(p []byte) (int, error) {
+	l.buf = append(l.buf, p...)
+	end := len(l.buf)
+	if end > 0 && l.buf[end-1] == '\n' {
+		end--
+	}
+	seen := 0
+	for i := end; i > 0; i-- {
+		if l.buf[i-1] != '\n' {
+			continue
+		}
+		if seen++; seen == l.n {
+			l.buf = l.buf[i:]
+			return len(p), nil
+		}
+	}
+	if l.n == 0 {
+		l.buf = l.buf[:0]
+	}
+	return len(p), nil
 }
 
 func (n *nerdctl) LogsHint(name string) string {
