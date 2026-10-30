@@ -94,12 +94,12 @@ name: mine
 image: docker.io/me/mine:latest
 guestHome: /home/mine
 binary: mine
-forward: [GH_TOKEN]      # inline lists work too
+deny: [GH_TOKEN]         # inline lists work too
 mem: 2048
 cpus: 2
 `)
 	jsonBlob := []byte(`{"name":"mine","image":"docker.io/me/mine:latest",
-		"guestHome":"/home/mine","binary":"mine","forward":["GH_TOKEN"],
+		"guestHome":"/home/mine","binary":"mine","deny":["GH_TOKEN"],
 		"mem":2048,"cpus":2}`)
 
 	fromYAML, err := Parse(yamlBlob)
@@ -111,7 +111,7 @@ cpus: 2
 		t.Fatalf("JSON did not parse: %v", err)
 	}
 	if fromYAML.Name != fromJSON.Name || fromYAML.Image != fromJSON.Image ||
-		fromYAML.Mem != fromJSON.Mem || len(fromYAML.Env) != len(fromJSON.Env) {
+		fromYAML.Mem != fromJSON.Mem || len(fromYAML.Deny) != 1 || len(fromJSON.Deny) != 1 {
 		t.Errorf("the two spellings disagree:\n%+v\n%+v", fromYAML, fromJSON)
 	}
 }

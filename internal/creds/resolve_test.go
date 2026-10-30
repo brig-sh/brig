@@ -88,7 +88,7 @@ func TestTheErrorDoesNotCarryTheBrigPrefix(t *testing.T) {
 // secrets raises no keychain prompt. The store is not merely unread: it is
 // never opened, which is where the prompt would come from.
 func TestResolveSecretsWithNoRequirementsNeverReads(t *testing.T) {
-	p := profileWith(t, "forward:\n  - GH_TOKEN\n")
+	p := profileWith(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
 	res, err := ResolveSecrets(p, "brig-x", func() (SecretReader, error) {
 		panic("the store was opened for a profile that declares no secrets")
 	}, noEnv)

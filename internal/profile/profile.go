@@ -77,15 +77,6 @@ type Profile struct {
 	// GuestHome is where the workspace is mounted. The agent's state lands
 	// here, which is what makes the workspace the unit of persistence.
 	GuestHome string `json:"guestHome"`
-	// Forward names the environment variables carried into the guest when set
-	// and non-empty in brig's own environment.
-	//
-	// Deprecated: use Env with `ref: env.<name>`, which says the same thing and
-	// leaves room for a value from somewhere other than the environment. Parse
-	// translates each entry and zeroes this, the same way it folds the shell
-	// and gui booleans into Kind -- so this field is empty on any profile that
-	// came through Parse, and reading it is a bug.
-	Forward []string `json:"forward,omitempty"`
 	// Secrets is the requirement list: the names this profile needs out of the
 	// store brig owns, and for each one whether a run without it should stop
 	// and where `brig secret import` may find it. A bare string in YAML is
@@ -99,12 +90,9 @@ type Profile struct {
 	// Env is what the guest actually sees. Each entry has exactly one of
 	// value: (a literal, for non-secret configuration) or ref: (resolved --
 	// secrets.<name> from the store, env.<name> from brig's own environment).
-	//
-	// Parse folds Forward into this, so nothing below the parser ever reads
-	// two mechanisms for the same thing.
 	Env []EnvBinding `json:"env,omitempty"`
 	// Deny names variables that are never forwarded, even if a caller puts
-	// them in the Forward override. These are the ones that flip billing: an
+	// them in the BRIG_FORWARD_ENV override. These are the ones that flip billing: an
 	// API key that outranks a subscription token would move the sandbox onto
 	// metered usage without saying so. Overriding a deny is deliberate and
 	// needs BRIG_ALLOW_DENIED=1.
@@ -123,30 +111,14 @@ type Profile struct {
 	// written there can, and a hostmount names an exception worth keeping
 	// across boots. See Volume.
 	//
-	// This is StatePaths made load-bearing. The two must not both be
-	// declared: one list that is documentation and one that is enforced can
-	// disagree about what persists, which is the failure worth removing
-	// rather than the duplication.
+	// It replaced statePaths:, a list that documented what persists and
+	// enforced nothing. v0.5.0 removed that key.
 	Volumes []Volume `json:"volumes,omitempty"`
-	// StatePaths are the paths under GuestHome holding the agent's persistent
-	// state.
-	//
-	// Deprecated: use Volumes, which says the same thing and is acted on.
-	// Still read, so every profile written before Volumes existed keeps
-	// parsing; a profile declaring both is an error rather than a merge.
-	StatePaths []string `json:"statePaths,omitempty"`
 	// Headless is whether the agent supports a non-interactive run.
 	Headless bool `json:"headless,omitempty"`
 	// Kind is what sort of workload this is: agent (the default), shell or
 	// gui. See Kind.
 	Kind Kind `json:"kind,omitempty"`
-	// Shell and GUI are the older spellings of Kind, still decoded so that a
-	// profile using them keeps working -- the decoder is strict, so an unknown
-	// field is an error rather than something ignored.
-	// Parse folds them into Kind and zeroes them, so nothing below this line
-	// ever reads two sources of truth.
-	Shell bool `json:"shell,omitempty"`
-	GUI   bool `json:"gui,omitempty"`
 	// GUITitle is the window title for a GUI profile.
 	GUITitle string `json:"guiTitle,omitempty"`
 	// Mem is the guest memory in MB, CPUs the vCPU count.
@@ -223,7 +195,7 @@ type Profile struct {
 //
 // The registry hands profiles out by value, which copies the struct but not
 // what its slices and pointers point at. Without this, a caller that appended
-// to Forward, sorted StatePaths or cleared Deny would be editing the
+// to Env, sorted Volumes or cleared Deny would be editing the
 // registry's own profile for every later caller in the process -- and brigd
 // loads the registry once and serves many requests from it. Deny is the
 // billing guard: an entry dropped there moves a sandbox onto metered API
@@ -233,7 +205,6 @@ type Profile struct {
 // it holds the handful of non-secret first-run flags an agent's state file
 // needs, never a nested document.
 func (p Profile) clone() Profile {
-	p.Forward = slices.Clone(p.Forward)
 	// A SecretDecl holds a []Source and a *bool, so a shallow element copy is
 	// not a full one: a caller flipping Required through a clone would be
 	// editing the registry's own answer for every later caller.
@@ -260,7 +231,6 @@ func (p Profile) clone() Profile {
 	// declared.
 	p.Files = slices.Clone(p.Files)
 	p.Volumes = slices.Clone(p.Volumes)
-	p.StatePaths = slices.Clone(p.StatePaths)
 	p.ProjectPaths = slices.Clone(p.ProjectPaths)
 	p.StaleCredentialFiles = slices.Clone(p.StaleCredentialFiles)
 	p.Policy = slices.Clone(p.Policy)
@@ -314,31 +284,9 @@ func (p Profile) kind() Kind {
 	return p.Kind
 }
 
-// normaliseKind folds the deprecated shell and gui booleans into Kind and
-// applies the default, so that an in-memory profile read from a file always
-// carries a concrete kind.
-//
-// A conflict is an error rather than a silent precedence rule: either answer
-// would surprise whoever wrote both spellings.
+// normaliseKind applies the default, so that an in-memory profile read from a
+// file always carries a concrete kind, and refuses a kind brig does not know.
 func (p *Profile) normaliseKind() error {
-	if p.Shell && p.GUI {
-		return fmt.Errorf("shell and gui are both set; a profile is one kind")
-	}
-	deprecated := Kind("")
-	switch {
-	case p.Shell:
-		deprecated = KindShell
-	case p.GUI:
-		deprecated = KindGUI
-	}
-	if deprecated != "" {
-		if p.Kind != "" && p.Kind != deprecated {
-			return fmt.Errorf("kind is %q but %s: true says %q; "+
-				"drop the deprecated field", p.Kind, deprecated, deprecated)
-		}
-		p.Kind = deprecated
-	}
-	p.Shell, p.GUI = false, false
 	if p.Kind == "" {
 		p.Kind = KindAgent
 	}

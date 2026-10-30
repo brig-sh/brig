@@ -170,12 +170,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The daemon builds the registry from the same sources the CLI does. It
-	// looks profiles up by name, so without this it would know only the names
-	// the CLI happens to have loaded -- which is none of them, the two being
-	// separate processes. A broken file is reported and skipped.
-	if err := profile.Load(profile.Dir()); err != nil {
+	if err := loadProfiles(); err != nil {
 		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
+		os.Exit(1)
 	}
 
 	// The answer on file decides whether the sandboxes brigd boots report
@@ -855,4 +852,20 @@ func (d *daemon) status() []Session {
 		out = append(out, e.Session)
 	}
 	return out
+}
+
+// loadProfiles builds the registry from the same sources the CLI does. The
+// daemon looks profiles up by name, so without this it would know only the
+// names the CLI happens to have loaded -- which is none of them, the two being
+// separate processes. A broken file is reported and skipped. A directory brig
+// no longer reads is refused, as the CLI refuses it, rather than replaced with
+// the built-ins in silence.
+func loadProfiles() error {
+	if err := profile.RemovedDirSetting(); err != nil {
+		return err
+	}
+	if err := profile.Load(profile.Dir()); err != nil {
+		fmt.Fprintln(os.Stderr, "brigd: "+err.Error())
+	}
+	return nil
 }

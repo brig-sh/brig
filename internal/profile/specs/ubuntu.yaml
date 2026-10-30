@@ -16,6 +16,8 @@ genericBoot: true
 # calculation needs.
 guestHome: /root/work
 
-forward: [GH_TOKEN]
+env:
+  - name: GH_TOKEN
+    ref: env.GH_TOKEN
 mem: 2048
 cpus: 2

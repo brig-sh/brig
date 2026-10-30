@@ -208,10 +208,9 @@ func profileLine(t *testing.T, out, prefix string) string {
 }
 
 // The listing reports what a run actually needs: bindings by name and
-// secrets by name, with the command that creates a missing one. forward: is
-// what this replaces -- C1 folds every forward: entry into env: at parse
-// time, so a listing that still looked at Forward would go blank the moment
-// that lands.
+// secrets by name, with the command that creates a missing one. env: is the
+// one binding list since v0.5.0 removed forward:, so this is the list the
+// listing reads.
 func TestListProfilesReportsBindingsAndRequiredSecrets(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
