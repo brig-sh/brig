@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -52,9 +54,11 @@ func linuxHostRows(rt runtime.Runtime) []check {
 	if os.Geteuid() != 0 {
 		rows = append(rows, subIDCheck("/etc/subuid", "/etc/subgid"), userNSCheck(), uidmapCheck())
 	}
-	rows = append(rows, devicesCheck("/dev/kvm", "/dev/vhost-vsock"), cniCheck())
-	// The launcher sets BRIG_BOOT_ASSETS, and the bundle carries these tools.
-	if os.Getenv("BRIG_BOOT_ASSETS") == "" {
+	// /dev/kvm has the virtual line already.
+	rows = append(rows, devicesCheck("/dev/vhost-vsock"), cniCheck())
+	// The launcher sets BRIG_RUNTIME_BIN, and the bundle carries these tools.
+	// BRIG_BOOT_ASSETS says nothing about them: a host names its own kernel with it.
+	if os.Getenv("BRIG_RUNTIME_BIN") == "" {
 		rows = append(rows, toolsCheck())
 	}
 	return rows
@@ -120,18 +124,18 @@ func uidmapCheck() check {
 	return check{Name: "uidmap", State: statePass, Finding: "newuidmap and newgidmap are usable"}
 }
 
-func devicesCheck(devices ...string) check {
-	for _, dev := range devices {
-		f, err := os.OpenFile(dev, os.O_RDWR, 0)
-		if err != nil {
-			return check{Name: "devices", State: stateFail,
-				Finding: dev + " could not be opened: " + oneLine(err.Error()),
-				Fix:     "add yourself to the kvm group, and load the module: sudo modprobe vhost_vsock",
-			}
+func devicesCheck(dev string) check {
+	f, err := os.OpenFile(dev, os.O_RDWR, 0)
+	if err != nil {
+		fix := "run install.sh, whose setup gives this user the device"
+		if errors.Is(err, fs.ErrNotExist) {
+			fix = "load the module: sudo modprobe vhost_vsock"
 		}
-		_ = f.Close()
+		return check{Name: "devices", State: stateFail,
+			Finding: dev + " could not be opened: " + oneLine(err.Error()), Fix: fix}
 	}
-	return check{Name: "devices", State: statePass, Finding: strings.Join(devices, " and ") + " are openable"}
+	_ = f.Close()
+	return check{Name: "devices", State: statePass, Finding: dev + " is openable"}
 }
 
 var cniPathLine = regexp.MustCompile(`(?m)^\s*cni_path\s*=\s*"([^"]+)"`)
@@ -159,17 +163,33 @@ func cniDirs() []string {
 	return []string{"/opt/cni/bin"}
 }
 
+// cniPlugins are what a nerdctl bridge network calls. A directory with some of
+// them passes nerdctl's own check on bridge and fails later.
+var cniPlugins = []string{"bridge", "host-local", "loopback", "portmap"}
+
 func cniCheck() check {
 	dirs := cniDirs()
-	for _, dir := range dirs {
-		if _, err := os.Stat(filepath.Join(dir, "bridge")); err == nil {
-			return check{Name: "cni", State: statePass, Finding: "the bridge plugin is in " + dir}
+	var missing []string
+	for _, plugin := range cniPlugins {
+		found := false
+		for _, dir := range dirs {
+			if _, err := os.Stat(filepath.Join(dir, plugin)); err == nil {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, plugin)
 		}
 	}
-	return check{Name: "cni", State: stateFail,
-		Finding: "no bridge plugin in " + strings.Join(dirs, ":") + ", and every isolated run needs it",
-		Fix:     "run install.sh for the runtime bundle, or install the distro's CNI plugins",
+	joined := strings.Join(dirs, ":")
+	if len(missing) > 0 {
+		return check{Name: "cni", State: stateFail,
+			Finding: "no " + strings.Join(missing, ", ") + " plugin in " + joined + ", and every isolated run needs them",
+			Fix:     "run install.sh for the runtime bundle, or install the distro's CNI plugins",
+		}
 	}
+	return check{Name: "cni", State: statePass, Finding: "the CNI plugins are in " + joined}
 }
 
 func toolsCheck() check {

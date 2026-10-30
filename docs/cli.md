@@ -513,9 +513,11 @@ bundle without its launcher. See
 
 On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run needs
 from the host. For a user other than root: `subids`, `userns` and `uidmap`. For
-every user: `devices` and `cni`. With no `BRIG_BOOT_ASSETS` set, it adds `tools`
-(`oras` and `cloud-hypervisor`). These lines do not change the exit status.
-`doctor` does not tell whether a `urunc` reads the boot annotations.
+every user: `devices` (`/dev/vhost-vsock`) and `cni`. Without the launcher of the
+runtime bundle, it adds `tools` (`oras` and `cloud-hypervisor`), and the `runtime`
+line ends with `(not the runtime bundle; see install.sh)`. That runtime may work,
+as long as its `urunc` reads the boot annotations, which `doctor` cannot tell.
+These lines do not change the exit status.
 
 Doctor checks the image against the trust policy a run of that agent uses,
 with `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
