@@ -663,12 +663,11 @@ func (c *Config) warnGuestLog() {
 	// Best effort, since a runtime with no log leaves the message that follows as
 	// it was.
 	_ = c.Runtime.Logs(runtime.LogsSpec{Name: c.VMName, Tail: -1, Out: raw, Err: rawErr})
-	// The guest's console is the log's stdout on nerdctl, and virtiofsd is its
-	// stderr. Read together they interleave mid-line.
-	lines := guestLogTail(string(raw.data), guestLogLines)
-	if len(lines) == 0 {
-		lines = guestLogTail(string(rawErr.data), guestLogLines)
-	}
+	// The guest's console is the log's stdout on nerdctl, and virtiofsd and the
+	// monitor are its stderr. Read together they interleave mid-line, so each is
+	// cut apart. The deciding line can be in either.
+	lines := append(guestLogTail(string(raw.data), guestLogLines),
+		guestLogTail(string(rawErr.data), guestLogLines)...)
 	if len(lines) == 0 {
 		return
 	}
@@ -697,8 +696,9 @@ func guestLogTail(log string, n int) []string {
 	}
 	// A panic ends in a stack and a register dump. The guest's last words come
 	// before it, so the log is read up to the panic line.
-	for i, line := range lines {
-		if strings.Contains(line, "Kernel panic") {
+	// The last one, since the guest's own output can quote the words.
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "Kernel panic") {
 			lines = lines[:i+1]
 			break
 		}
