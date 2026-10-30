@@ -275,6 +275,9 @@ export BRIG_GATEWAY_DIR="$WORK/gw"
 # --all stops the gateway on it. One exported by the caller is not the
 # script's to stop.
 unset BRIG_GATEWAY_SOCK
+# Either one turns the default overlay root off, which the ISOLATION check
+# below does not expect.
+unset HULL_ROOTFS_MODE HULL_HVI_ROOTFS_UPPER
 # The image checks get their own cases below, with a stub cosign. Everywhere
 # else they are off: a CI runner has no cosign and must not reach a registry.
 export BRIG_VERIFY=off
@@ -380,9 +383,15 @@ grep -q '^WORKSPACE ' "$WORK/env.err" \
 # What the sandbox stands on, not only what drives it. The stub is a hull
 # stand-in and BRIG_HYPERVISOR is pinned to vz above, so the row names that
 # backend; which containerd shim maps to which boundary is settled in the
-# runtime package's own tests, there being no containerd here to ask. No
-# rootfs type is set, so brig passes none and the row says hull picks.
-grep -q '^ISOLATION .*microVM (hull, vz backend, rootfs hull default)' "$WORK/env.err" \
+# runtime package's own tests, there being no containerd here to ask. With
+# no rootfs mode set, brig asks for the overlay root where hull's mke2fs is
+# installed and passes no mode where it is not.
+if [ -x /opt/homebrew/opt/e2fsprogs/sbin/mke2fs ]; then
+  want_rootfs="rootfs overlay-block"
+else
+  want_rootfs="rootfs hull default"
+fi
+grep -q "^ISOLATION .*microVM (hull, vz backend, $want_rootfs)" "$WORK/env.err" \
   && ok "the envelope names the isolation boundary" \
   || bad "the envelope names the isolation boundary -- got: $(grep '^ISOLATION' "$WORK/env.err")"
 # A value must never reach the block, the same promise argv keeps. Scan the

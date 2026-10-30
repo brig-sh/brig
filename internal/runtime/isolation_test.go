@@ -265,7 +265,8 @@ func TestNerdctlNamesTheSettingBehindTheShim(t *testing.T) {
 
 // On a generic boot brig tells urunc which monitor to use, so the row names
 // that one: the same value runArgs puts in the annotation. hvi is the default
-// on Linux, and vz, which exists on macOS only, boots on hvi too.
+// on Linux, and vz, which exists on macOS only, boots on hvi too. This host
+// builds no overlay root, so the root is urunc's own.
 func TestNerdctlNamesTheMonitorItPassesOnAGenericBoot(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
 
@@ -279,7 +280,7 @@ func TestNerdctlNamesTheMonitorItPassesOnAGenericBoot(t *testing.T) {
 	} {
 		spec := RunSpec{GenericBoot: true, Hypervisor: asked}
 		got := n.Isolation(spec).Line()
-		if !strings.HasSuffix(got, ", hypervisor "+want+")") {
+		if !strings.HasSuffix(got, ", hypervisor "+want+", rootfs urunc default)") {
 			t.Errorf("%q: the row does not name the monitor brig passes, %s: %s", asked, want, got)
 		}
 		if m, err := n.monitor(spec); err != nil || m != want {
@@ -288,23 +289,35 @@ func TestNerdctlNamesTheMonitorItPassesOnAGenericBoot(t *testing.T) {
 	}
 }
 
-// BRIG_ROOTFS_MODE reaches urunc as an annotation on a generic boot, so the row
-// names it there. Anywhere else brig passes no mode, and the row names none.
+// The row names the rootfs mode brig hands urunc on a generic boot, which is
+// overlay-block by default where the host builds it, and urunc's own root
+// where it does not or BRIG_ROOTFS_MODE=virtiofs asks for that. Any other
+// boot brings its own root, and the row names none.
 func TestNerdctlNamesTheRootfsModeItPasses(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
-
 	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
-	got := n.Isolation(RunSpec{GenericBoot: true, RootfsMode: RootfsModeOverlayBlock}).Line()
-	if want := "hypervisor hvi, rootfs overlay-block)"; !strings.HasSuffix(got, want) {
-		t.Errorf("the row does not name the default monitor and the rootfs mode, want %q: %s", want, got)
+
+	if got := n.Isolation(RunSpec{GenericBoot: true}).Line(); !strings.HasSuffix(got, "hypervisor hvi, rootfs urunc default)") {
+		t.Errorf("a host with no overlay root: the row does not name urunc's own root: %s", got)
 	}
 
+	overlayHost(t)
 	for _, spec := range []RunSpec{
 		{GenericBoot: true},
-		{RootfsMode: RootfsModeOverlayBlock},
+		{GenericBoot: true, RootfsMode: RootfsModeOverlayBlock},
 	} {
-		if got := n.Isolation(spec).Line(); strings.Contains(got, "overlay-block") || strings.Contains(got, "rootfs") {
-			t.Errorf("%+v: the row names a rootfs mode brig does not pass: %s", spec, got)
+		got := n.Isolation(spec).Line()
+		if want := "hypervisor hvi, rootfs overlay-block)"; !strings.HasSuffix(got, want) {
+			t.Errorf("%q: the row does not name the default monitor and the rootfs mode, want %q: %s", spec.RootfsMode, want, got)
+		}
+	}
+	got := n.Isolation(RunSpec{GenericBoot: true, RootfsMode: RootfsModeVirtiofs}).Line()
+	if !strings.HasSuffix(got, "rootfs urunc default)") {
+		t.Errorf("BRIG_ROOTFS_MODE=virtiofs: the row does not name urunc's own root: %s", got)
+	}
+	for _, spec := range []RunSpec{{}, {RootfsMode: RootfsModeOverlayBlock}} {
+		if got := n.Isolation(spec).Line(); strings.Contains(got, "rootfs") {
+			t.Errorf("%+v: the row names a rootfs on a boot that brings its own: %s", spec, got)
 		}
 	}
 
@@ -321,7 +334,7 @@ func TestNerdctlNamesAnUnknownMonitorAsAsked(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
 
 	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{GenericBoot: true, Hypervisor: "bhyve"}).Line()
-	if !strings.HasSuffix(got, ", hypervisor bhyve)") {
+	if !strings.Contains(got, ", hypervisor bhyve,") {
 		t.Errorf("the row does not name the monitor asked for: %s", got)
 	}
 }

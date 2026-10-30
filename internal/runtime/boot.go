@@ -45,12 +45,6 @@ const (
 	annotationRootfsMode = "com.urunc.unikernel.rootfsMode"
 )
 
-// RootfsModeOverlayBlock boots the guest root from two disks: a read-only
-// ext4 image of the image, built once per image, and a writable ext4 upper
-// per sandbox. hull reads it as HULL_ROOTFS_MODE and urunc as the rootfsMode
-// annotation.
-const RootfsModeOverlayBlock = "overlay-block"
-
 // linuxMonitor returns the urunc monitor a Linux generic boot runs on for the
 // hypervisor a profile or BRIG_HYPERVISOR asked for. Empty and vz, which
 // exists on macOS only, keep the bundle's hvi, so that a profile written for
@@ -64,21 +58,6 @@ func linuxMonitor(hv string) (string, error) {
 	}
 	return "", fmt.Errorf("hypervisor %q (BRIG_HYPERVISOR or the profile's hypervisor field) is not one urunc runs on Linux: "+
 		"use hvi, cloud-hypervisor, qemu or firecracker", hv)
-}
-
-// checkRootfsMode refuses a RootfsMode the runtimes do not know, and one on a
-// profile that is not a generic boot, which brings its own root.
-func checkRootfsMode(spec RunSpec) error {
-	switch spec.RootfsMode {
-	case "":
-		return nil
-	case RootfsModeOverlayBlock:
-		if !spec.GenericBoot {
-			return fmt.Errorf("BRIG_ROOTFS_MODE=%s needs a profile that boots an ordinary image (genericBoot)", spec.RootfsMode)
-		}
-		return nil
-	}
-	return fmt.Errorf("BRIG_ROOTFS_MODE=%q is not a rootfs mode: the one there is is %s", spec.RootfsMode, RootfsModeOverlayBlock)
 }
 
 // bootInitrdName is the same on every platform: the initrd is a cpio built for
