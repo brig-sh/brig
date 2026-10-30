@@ -115,13 +115,39 @@ func hullOverlayRoot() OverlayRoot {
 	return OverlayRoot{Available: true}
 }
 
-// hullRootfsMode is the rootfs mode hull is handed on hv. vz and hvi take an
-// overlay root. HULL_ROOTFS_MODE, which hull inherits, and
+// OverlayMonitorFor reports whether a generic boot asking for hv under rt
+// runs on a monitor that takes the default overlay root, and why not when it
+// does not, for brig doctor. It is the monitor half of the run's decision. A
+// runtime brig does not drive itself reports false with no reason.
+func OverlayMonitorFor(rt Runtime, hv string) (bool, string) {
+	switch r := rt.(type) {
+	case *hull:
+		return hullOverlayMonitor(hypervisorOrDefault(hv))
+	case *nerdctl:
+		return r.overlayMonitor(RunSpec{GenericBoot: true, Hypervisor: hv})
+	}
+	return false, ""
+}
+
+// hullOverlayMonitor is whether hull takes the default overlay root on hv.
+// vz and hvi take one. HULL_ROOTFS_MODE, which hull inherits, and
 // HULL_HVI_ROOTFS_UPPER choose the layout of the root themselves, and hull
 // refuses the second next to an overlay, so either keeps the default off.
+func hullOverlayMonitor(hv string) (bool, string) {
+	switch {
+	case hv != "vz" && hv != "hvi":
+		return false, "hull's " + hv + " backend takes no overlay root"
+	case os.Getenv("HULL_ROOTFS_MODE") != "":
+		return false, "HULL_ROOTFS_MODE is set and chooses the root itself"
+	case os.Getenv("HULL_HVI_ROOTFS_UPPER") != "":
+		return false, "HULL_HVI_ROOTFS_UPPER is set and chooses the root itself"
+	}
+	return true, ""
+}
+
+// hullRootfsMode is the rootfs mode hull is handed on hv.
 func hullRootfsMode(spec RunSpec, hv string) (string, error) {
-	monitor := (hv == "vz" || hv == "hvi") &&
-		os.Getenv("HULL_ROOTFS_MODE") == "" && os.Getenv("HULL_HVI_ROOTFS_UPPER") == ""
+	monitor, _ := hullOverlayMonitor(hv)
 	return rootfsModeFor(spec, monitor, hullOverlayRoot())
 }
 
@@ -153,8 +179,21 @@ func (n *nerdctl) overlayRoot() OverlayRoot {
 // it hands none. Like monitor, only a generic boot on nerdctl carries one. A
 // monitor urunc does not run is CanRun's to refuse, and takes no default here.
 func (n *nerdctl) rootfsMode(spec RunSpec) (string, error) {
+	monitor, _ := n.overlayMonitor(spec)
+	return rootfsModeFor(spec, monitor, n.overlayRoot())
+}
+
+// overlayMonitor is whether the urunc monitor spec runs on takes the overlay
+// root, and why not when it does not.
+func (n *nerdctl) overlayMonitor(spec RunSpec) (bool, string) {
 	m, err := n.monitor(spec)
-	return rootfsModeFor(spec, err == nil && uruncOverlayMonitors[m], n.overlayRoot())
+	switch {
+	case err != nil:
+		return false, err.Error()
+	case !uruncOverlayMonitors[m]:
+		return false, "urunc's " + orDefault(m, "default") + " monitor takes no overlay root"
+	}
+	return true, ""
 }
 
 // isUruncShim reports whether a BRIG_CONTAINERD_RUNTIME value is a runtime
