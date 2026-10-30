@@ -232,7 +232,9 @@ nerdctl rm <name>
 
 The container runs `sleep infinity`, because a container exits when its
 command exits. The sandbox must outlive the exec that used it.
-`brig logs <ref>` runs `nerdctl logs <name>`.
+`brig logs <ref>` runs `nerdctl logs <name>`. Brig passes `--tail` to `nerdctl`
+only with `--follow`. Otherwise it reads the whole log and cuts the tail itself,
+because nerdctl 2.3.5 returned a fragment of the last line.
 
 Two more tools run on the same paths:
 

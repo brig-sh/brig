@@ -794,8 +794,8 @@ func (n *nerdctl) quiet(verb, name string) error {
 // Logs streams the container's log. nerdctl documents --follow, --tail,
 // --since and --timestamps, but brig drives it against --follow and --tail
 // only, so the two runtimes offer brig the same thing and brig does not promise
-// what only one of them has. nerdctl has no negative tail -- its default is
-// already all -- so a -1 is passed as an absent flag rather than the literal.
+// what only one of them has. --tail goes to nerdctl only with --follow, and
+// otherwise brig reads the whole log and cuts it here.
 func (n *nerdctl) Logs(spec LogsSpec) error {
 	args := []string{"logs"}
 	if spec.Follow {
@@ -815,14 +815,18 @@ func (n *nerdctl) Logs(spec LogsSpec) error {
 	// Cut here: nerdctl 2.3.5's --tail printed a lone carriage return, or a
 	// fragment of the last line, for a log it holds in full. Each stream is cut
 	// apart, as --tail would.
-	out, errOut := &logTail{n: spec.Tail}, &logTail{n: spec.Tail}
+	out, errOut := &logTail{n: spec.Tail}, &logTail{n: max(spec.Tail, 1)}
 	cmd.Stdout, cmd.Stderr = out, errOut
 	err := cmd.Run()
 	if _, werr := spec.Out.Write(out.buf); err == nil {
 		err = werr
 	}
-	if _, werr := spec.Err.Write(errOut.buf); err == nil {
-		err = werr
+	// nerdctl's own error is the last thing on stderr, and a failure must keep it
+	// even at --tail 0.
+	if spec.Tail > 0 || err != nil {
+		if _, werr := spec.Err.Write(errOut.buf); err == nil {
+			err = werr
+		}
 	}
 	return err
 }
