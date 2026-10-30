@@ -268,6 +268,10 @@ artifact to fetch by hand and the directory to put it in.
   [What Brig requires of each](runtimes.md#what-brig-requires-of-each).
 - A `genericBoot` profile also needs `oras` and `cloud-hypervisor`, which the
   bundle carries.
+- A `genericBoot` profile needs `BRIG_BOOT_ASSETS` to name a kernel and initrd
+  that fit that `urunc`. The boot bundle that `oras` fetches has an init that
+  mounts a block root, so it does not boot a root shared over virtiofs. See
+  [assets missing](troubleshooting.md#assets-missing-at-).
 - [runtimes.md](runtimes.md) covers the full command surface each runtime
   needs.
 

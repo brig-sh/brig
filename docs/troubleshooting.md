@@ -153,6 +153,23 @@ the bundle.
 A run does not download into a directory that `BRIG_BOOT_ASSETS` names. The
 fix line then says so.
 
+<details><summary>Linux: a host without the runtime bundle</summary>
+
+On Linux, install the runtime bundle or set `BRIG_BOOT_ASSETS`. Do not let a
+run fetch the boot bundle. The boot bundle that is published now has an init
+that mounts a block root, and `urunc` shares the root of the guest over
+virtiofs. The run ends with `sandbox did not become ready`, and the log says:
+
+```
+exec sleep failed: No such file or directory
+```
+
+```bash
+curl -fsSL https://brig.sh/install | sh
+```
+
+</details>
+
 **Confirm:**
 
 ```bash

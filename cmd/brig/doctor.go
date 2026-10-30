@@ -451,6 +451,14 @@ func bootCheck(rt runtime.Runtime) check {
 		return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
 			Fix: fmt.Sprintf("put %s and %s in %s, or unset BRIG_BOOT_ASSETS so brig fetches them", kernel, initrd, dir)}
 	}
+	// On a container runtime the fetch brings a bundle whose init mounts a block
+	// root, and urunc shares a virtiofs one. The guest then fails to exec its
+	// command, so doctor does not suggest it there.
+	if rt.Kind() != "hull" {
+		return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
+			Fix: "run install.sh for the runtime bundle, which carries assets that fit its urunc, " +
+				"or set BRIG_BOOT_ASSETS to a directory that has them"}
+	}
 	return check{Name: "boot", State: stateFail, Finding: "assets missing at " + dir,
 		Fix: "run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them"}
 }
