@@ -88,10 +88,11 @@ run resolved. `brig info` prints the row and boots nothing. `brig --verbose
 run` prints it before the boot:
 
 ```
-ISOLATION    microVM (hull, hvi backend, rootfs hull default)
+ISOLATION    microVM (hull, hvi backend, rootfs overlay-block)
 ISOLATION    microVM (hull, vz backend, rootfs block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
 ISOLATION    container (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=runc: the guest shares the host kernel)
 ISOLATION    unknown (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
 ```
@@ -103,13 +104,16 @@ name alone, so the row says that Brig cannot tell. For a shim that Brig
 recognises as sharing the host kernel, `brig info` names it and the run is
 refused.
 
-On hull the row names the rootfs type Brig passes, or `hull default` when
-Brig passes none. Under urunc it names the hypervisor Brig passes, or `urunc
+On hull the row names `overlay-block` when Brig boots an overlay root.
+Otherwise it names the rootfs type Brig passes, or `hull default` when Brig
+passes none. Under urunc it names the hypervisor Brig passes, or `urunc
 default` when Brig passes none. Brig passes one for a `genericBoot` profile:
-the monitor that `BRIG_HYPERVISOR` names, and `hvi` by default. When
-`BRIG_ROOTFS_MODE=overlay-block` asks urunc for an overlay root, the row names
-that rootfs mode too. A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed
-with the variable.
+the monitor that `BRIG_HYPERVISOR` names, and `hvi` by default. For that
+profile the row also names the root: `overlay-block`, or `urunc default` when
+Brig passes no rootfs mode. A `genericBoot` profile boots an overlay root
+wherever the host can build one. See
+[The guest root of a generic boot](runtimes.md#the-guest-root-of-a-generic-boot).
+A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed with the variable.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write.
 Name a project on the run line and that project is a second host directory,
