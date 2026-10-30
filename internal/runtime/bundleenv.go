@@ -27,11 +27,12 @@ func (e BundleEnv) Fix() string {
 //
 // The binary works without it, far enough to fail somewhere else. nerdctl then
 // has no configuration of the bundle's, so it looks for CNI plugins in
-// /opt/cni/bin. BRIG_BOOT_ASSETS is unset, so brig fetches the boot bundle, whose
-// init mounts a block root and cannot mount the virtiofs root the bundle's urunc
-// hands it. The guest then fails with "exec sleep failed", which says nothing
-// about any of this. The bundle's own bin directory is an easy thing to put on
-// PATH, because its installer names brig-ctl there.
+// /opt/cni/bin, and keeps networks in a configuration of its own, which collide
+// with the launcher's on the bridge device. BRIG_BOOT_ASSETS is unset, so brig
+// boots whatever boot bundle it has fetched. Up to 0.1.10 that init cannot mount
+// the virtiofs root urunc hands it, and the guest fails with "exec sleep failed".
+// None of these errors names the launcher. The bundle's own bin directory is an
+// easy thing to put on PATH, because its installer names brig-ctl there.
 //
 // The launcher exports both variables, so one that is set means the launcher
 // ran or someone took charge of this by hand.

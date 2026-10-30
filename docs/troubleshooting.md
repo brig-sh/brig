@@ -178,21 +178,21 @@ that binary needs. Without it, the run can fail in either of these ways:
 - `needs CNI plugin "bridge" to be installed in CNI_PATH ("/opt/cni/bin")`,
   because nerdctl does not read the configuration of the bundle.
 - `sandbox did not become ready`, with `exec sleep failed: No such file or
-  directory` in the log, because Brig fetched the boot bundle and did not use
-  the kernel and initrd of the runtime bundle.
+  directory` in the log, because Brig used a boot bundle it fetched earlier
+  (0.1.10 or older) and not the kernel and initrd of the runtime bundle.
 
-**Fix:** Put the launcher directory on `PATH`, and take the bundle's `bin`
-directory off it. The failed run left its sandbox in a namespace that the
-launcher does not see, so remove that one with the bundle's nerdctl:
+**Fix:** Remove the sandbox while the bundle's `bin` directory is first on
+`PATH`, then put the launcher directory first:
 
 ```bash
+PATH="$HOME/.local/share/brig/data/bin:$PATH" brig rm ubuntu
 export PATH="$HOME/.local/bin:$PATH"
-~/.local/share/brig/data/bin/nerdctl -n default rm -f brig-ubuntu
-brig rm ubuntu
 ```
 
-The first run after this can fail with `failed to read from init socket: EOF`.
-Run it again.
+Do this in that order. Without the launcher, nerdctl keeps a network of the same
+name in a configuration of its own, and both use one bridge device. If that
+network stays, the next run through the launcher fails with `failed to read from
+init socket: EOF`.
 
 **Confirm:**
 
