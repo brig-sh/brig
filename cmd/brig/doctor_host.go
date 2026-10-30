@@ -56,9 +56,9 @@ func linuxHostRows(rt runtime.Runtime) []check {
 	}
 	// /dev/kvm has the virtual line already.
 	rows = append(rows, devicesCheck("/dev/vhost-vsock"), cniCheck())
-	// The launcher sets BRIG_RUNTIME_BIN, and the bundle carries these tools.
-	// BRIG_BOOT_ASSETS says nothing about them: a host names its own kernel with it.
-	if os.Getenv("BRIG_RUNTIME_BIN") == "" {
+	// The bundle carries these tools. Its tree is the evidence and not a variable:
+	// a host can name its own kernel or its own nerdctl and still lack them.
+	if rt == nil || !runtime.InBundleTree(rt.Bin()) {
 		rows = append(rows, toolsCheck())
 	}
 	return rows
@@ -127,7 +127,7 @@ func uidmapCheck() check {
 func devicesCheck(dev string) check {
 	f, err := os.OpenFile(dev, os.O_RDWR, 0)
 	if err != nil {
-		fix := "run install.sh, whose setup gives this user the device"
+		fix := "this user needs the device: run install.sh, whose rootless setup adds a udev rule with sudo, or ask root to grant it"
 		if errors.Is(err, fs.ErrNotExist) {
 			fix = "load the module: sudo modprobe vhost_vsock"
 		}
@@ -163,9 +163,10 @@ func cniDirs() []string {
 	return []string{"/opt/cni/bin"}
 }
 
-// cniPlugins are what a nerdctl bridge network calls. A directory with some of
-// them passes nerdctl's own check on bridge and fails later.
-var cniPlugins = []string{"bridge", "host-local", "loopback", "portmap"}
+// cniPlugins are what a nerdctl bridge network calls: the chain of a brig sandbox
+// network, its IPAM and the loopback. A directory with some of them passes
+// nerdctl's own check on bridge and fails later.
+var cniPlugins = []string{"bridge", "firewall", "host-local", "loopback", "portmap", "tuning"}
 
 func cniCheck() check {
 	dirs := cniDirs()
@@ -209,18 +210,10 @@ func toolsCheck() check {
 }
 
 // notTheBundle says when the runtime is not the bundle's, which is what a host
-// that took the release archive alone has. The launcher always sets this
-// variable, so an unset one means the launcher did not run.
+// that took the release archive alone has.
 func notTheBundle(rt runtime.Runtime) string {
-	if hostOS != "linux" || rt == nil || rt.Kind() != "nerdctl" || os.Getenv("BRIG_RUNTIME_BIN") != "" {
+	if hostOS != "linux" || rt == nil || rt.Kind() != "nerdctl" || runtime.InBundleTree(rt.Bin()) {
 		return ""
-	}
-	// The bundle line covers a brig that skipped its launcher, and that runtime
-	// may well be the bundle's.
-	if exe, err := doctorExecutable(); err == nil {
-		if _, bypassed := runtime.MissingBundleEnv(exe); bypassed {
-			return ""
-		}
 	}
 	return " (not the runtime bundle; see install.sh)"
 }
