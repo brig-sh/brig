@@ -513,10 +513,11 @@ bundle without its launcher. See
 
 On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run needs
 from the host. For a user other than root: `subids`, `userns` and `uidmap`. For
-every user: `devices` (`/dev/vhost-vsock`) and `cni`. Without the launcher of the
-runtime bundle, it adds `tools` (`oras` and `cloud-hypervisor`), and the `runtime`
-line ends with `(not the runtime bundle; see install.sh)`. That runtime may work,
-as long as its `urunc` reads the boot annotations, which `doctor` cannot tell.
+every user: `devices` (`/dev/vhost-vsock`) and `cni`. For a `nerdctl` from outside
+the runtime bundle, it adds `tools` (`oras` and `cloud-hypervisor`), and the
+`runtime` line ends with `(not the runtime bundle; see install.sh)`. That runtime
+may work, as long as its `urunc` reads the boot annotations, which `doctor` cannot
+tell.
 These lines do not change the exit status.
 
 Doctor checks the image against the trust policy a run of that agent uses,

@@ -56,12 +56,21 @@ func MissingBundleEnv(exe string) (BundleEnv, bool) {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	prefix := filepath.Dir(filepath.Dir(exe))
-	file := filepath.Join(prefix, "etc", "brig-env.sh")
-	if info, err := os.Stat(file); err != nil || !info.Mode().IsRegular() {
+	if !InBundleTree(exe) {
 		return BundleEnv{}, false
 	}
-	return BundleEnv{File: file, Launchers: bundleLaunchers(prefix), Program: filepath.Base(exe)}, true
+	prefix := filepath.Dir(filepath.Dir(exe))
+	return BundleEnv{File: filepath.Join(prefix, "etc", "brig-env.sh"), Launchers: bundleLaunchers(prefix), Program: filepath.Base(exe)}, true
+}
+
+// InBundleTree says whether a binary sits in the bin directory of a runtime
+// bundle's tree.
+func InBundleTree(bin string) bool {
+	if resolved, err := filepath.EvalSymlinks(bin); err == nil {
+		bin = resolved
+	}
+	info, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(bin)), "etc", "brig-env.sh"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // bundleLaunchers is where the bundle's install.sh puts them: /usr/local/bin for
