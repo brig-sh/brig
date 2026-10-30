@@ -61,14 +61,17 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 #
 # v0.1.0-rc7 is the floor: it is the first release carrying the rootless
 # bundle, so BRIG_INSTALL_ROOTLESS against anything older fails naming the
-# asset it wanted. rc17 is the pin. It records the sha256 of its kernel and
+# asset it wanted. rc19 is the pin. It records the sha256 of its kernel and
 # initrd, and keeps that record with the release's signed checksums.txt where
 # brig checks it before a boot. Its guest kernel is the 6.18 LTS with Landlock,
 # its amd64 kernel brings up every vCPU --cpus asks for, and its urunc boots
 # arm64 guests under cloud-hypervisor. Its cloud-hypervisor is v54.0, which
-# keeps the virtio-net offloads off by default.
+# keeps the virtio-net offloads off by default. It ships hvi, the monitor brig
+# names for a generic boot on Linux, and a urunc that runs it. Its initrd is
+# the one hull-assets signs for that urunc, and its uninstaller removes the
+# bridge's CNI firewall rules.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc17
+RUNTIME_VERSION=v0.1.0-rc19
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 
