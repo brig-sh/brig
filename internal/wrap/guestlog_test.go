@@ -63,6 +63,9 @@ func (d *deadGuest) Logs(spec runtime.LogsSpec) error {
 		_, err := io.WriteString(spec.Out, "  0.333049] reboot: Restarting system\n")
 		return err
 	}
+	if _, err := io.WriteString(spec.Err, "[2026-10-30T09:45:05Z WARN  virtiofsd::limits] Failure\n"); err != nil {
+		return err
+	}
 	_, err := io.WriteString(spec.Out, d.logged)
 	return err
 }
@@ -140,4 +143,27 @@ func TestTailBufferKeepsTheEnd(t *testing.T) {
 	if got := string(b.data); got != "defg" {
 		t.Errorf("kept %q, want defg", got)
 	}
+}
+
+// Nothing on the console, so what the runtime and the monitor said is all there
+// is. virtiofsd's own lines stay out of that too.
+func TestWarnGuestLogFallsBackToStderr(t *testing.T) {
+	c, rt := deadGuestConfig(t, false)
+	rt.logged = ""
+	c.Runtime = &stderrOnly{rt}
+	_ = c.EnsureRunning(creds.Set{})
+	said := c.Err.(*bytes.Buffer).String()
+	if !strings.Contains(said, "Cannot create virtio-fs device") {
+		t.Errorf("the monitor's error is missing:\n%s", said)
+	}
+	if strings.Contains(said, "virtiofsd::limits") {
+		t.Errorf("virtiofsd's warning was shown:\n%s", said)
+	}
+}
+
+type stderrOnly struct{ *deadGuest }
+
+func (s *stderrOnly) Logs(spec runtime.LogsSpec) error {
+	_, err := io.WriteString(spec.Err, "[2026-10-30T09:45:05Z WARN  virtiofsd::limits] Failure\nCannot create virtio-fs device\n")
+	return err
 }

@@ -1106,7 +1106,7 @@ func TestImageIsOneYAMLString(t *testing.T) {
 	}
 }
 
-// brig restarts a running sandbox for three reasons, each with its own
+// brig restarts a running sandbox for four reasons, each with its own
 // warning. Every one of them starts the gateway over.
 func TestRestartIsSeenWhateverTheReason(t *testing.T) {
 	for want, warning := range map[string]string{
@@ -1116,6 +1116,11 @@ func TestRestartIsSeenWhateverTheReason(t *testing.T) {
 		"its project changed": "brig: the running sandbox has /a mounted as its project and this run names /b\n" +
 			"brig:   ↳ a share cannot be attached to a live sandbox, so brig restarts it\n" +
 			"brig:   ↳ any other session using this sandbox will be disconnected\n",
+		"its guest was not answering": "brig: the log of the sandbox ends with\n" +
+			"brig:   ↳ a line from the guest about what went stale\n" +
+			"brig: the running sandbox is not answering\n" +
+			"brig:   ↳ its guest may have failed while booting\n" +
+			"brig:   ↳ brig restarts it, and any other session using this sandbox will be disconnected\n",
 	} {
 		f := newFake(t)
 		f.restartOn = "doh https://8.8.8.8/dns-query git.kernel.org"

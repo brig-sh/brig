@@ -627,8 +627,8 @@ const (
 	guestLogBytes = 64 << 10
 )
 
-// virtiofsdRecord is one log record of virtiofsd. Its stream and the guest's
-// console share the log, and a record can start in the middle of a guest's line.
+// virtiofsdRecord is one log record of virtiofsd. A runtime that merges the
+// streams can start one in the middle of a guest's line.
 var virtiofsdRecord = regexp.MustCompile(`\[[0-9TZ:.-]+ +[A-Z]+ +virtiofsd[^\]]*\].*`)
 
 // tailBuffer keeps the last limit bytes written to it.
@@ -653,12 +653,22 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 // This goes out as a warning, and not in the error, because errors reach
 // telemetry and a guest's output must not.
 func (c *Config) warnGuestLog() {
-	raw := &tailBuffer{limit: guestLogBytes}
+	if c.Verbosity < Normal {
+		return
+	}
+	raw, rawErr := &tailBuffer{limit: guestLogBytes}, &tailBuffer{limit: guestLogBytes}
 	// The whole log, cut here: nerdctl 2.3.5's --tail 40 returned a fragment of
-	// the last line and lost the line that said why the guest died. Best effort,
-	// since a runtime with no log leaves the message that follows as it was.
-	_ = c.Runtime.Logs(runtime.LogsSpec{Name: c.VMName, Tail: -1, Out: raw, Err: raw})
+	// the last line and lost the line that said why the guest died. That costs a
+	// long read on a sandbox that ran for days, and only on the way to a failure.
+	// Best effort, since a runtime with no log leaves the message that follows as
+	// it was.
+	_ = c.Runtime.Logs(runtime.LogsSpec{Name: c.VMName, Tail: -1, Out: raw, Err: rawErr})
+	// The guest's console is the log's stdout on nerdctl, and virtiofsd is its
+	// stderr. Read together they interleave mid-line.
 	lines := guestLogTail(string(raw.data), guestLogLines)
+	if len(lines) == 0 {
+		lines = guestLogTail(string(rawErr.data), guestLogLines)
+	}
 	if len(lines) == 0 {
 		return
 	}
@@ -693,9 +703,10 @@ func guestLogTail(log string, n int) []string {
 
 // guestMountsWorkspace asks the guest which workspace it actually has.
 //
-// Only a reachable guest can answer for its own share. An exec that cannot
-// land says nothing about the mount, and treating that silence as "stale" is
-// how a second invocation would destroy a VM the first one is still booting.
+// Only a reachable guest can answer for its own share, so the caller waits for
+// one first. An exec that cannot land says nothing about the mount, and treating
+// that silence as "stale" is how a second invocation would destroy a VM the first
+// one is still booting.
 func (c *Config) guestMountsWorkspace() bool {
 	// Through the root like every other workspace access: the marker is read
 	// back out of the guest's own home, and following a symlink there would
@@ -707,9 +718,6 @@ func (c *Config) guestMountsWorkspace() bool {
 	defer func() { _ = r.Close() }()
 	want, err := r.readFile(markerFile)
 	if err != nil {
-		return false
-	}
-	if !c.waitReady() {
 		return false
 	}
 	seen, err := c.Runtime.Output(runtime.ExecSpec{

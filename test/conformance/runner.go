@@ -689,10 +689,11 @@ func restartReason(stderr string) (string, bool) {
 		return "", false
 	}
 	switch {
+	// First, because this warning can follow lines of the guest's own log.
+	case strings.Contains(stderr, "the running sandbox is not answering"):
+		return "its guest was not answering", true
 	case strings.Contains(stderr, "went stale"):
 		return "its share went stale", true
-	case strings.Contains(stderr, "not answering"):
-		return "its guest was not answering", true
 	case strings.Contains(stderr, "as its project"), strings.Contains(stderr, "no project mounted"):
 		return "its project changed", true
 	}
