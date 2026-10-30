@@ -52,8 +52,8 @@ A `brig` line has three positions, and completion follows them.
 | `-q`/`--quiet` | Before the verb. `-q` also completes after `ls`, which has its own `-q`. |
 | `--json` | Before the verb, and after every verb that accepts it except `ls`, `agent ls` and `secret ls` |
 
-`-q` after any other verb still works. That position is retiring, so
-completion does not offer it.
+v0.5.0 removed `-q` after any other verb, so completion does not offer it
+there.
 
 ### Run-line flags
 
@@ -92,9 +92,10 @@ subcommands complete, and so do the names they take.
   a list of secret names opens your keyring. On macOS, that means
   `security dump-keychain`. On Linux, a secret-service backend can raise an
   unlock prompt.
-- **Retired spellings.** Completion offers only the current spelling. Each
-  retired spelling still works and prints a notice that names its
-  replacement. See [migration.md](migration.md) for the full old-to-new list.
+- **Retired spellings.** Completion offers only the current spelling. The
+  one retired verb left still works and prints a notice that names its
+  replacement, and the spellings v0.5.0 removed are refused. See
+  [migration.md](migration.md) for the full old-to-new list.
 
 ## Session names can be stale
 

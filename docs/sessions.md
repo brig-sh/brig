@@ -165,9 +165,9 @@ The `<agent>@<label>` form is strict. Brig refuses each of these:
 - a label with no usable characters
 - a label that names the default session of another agent
 
-The retiring `--name` flag is lenient. It sanitizes the name and warns which
-directory it used. For example, `--name "Refactor Sprint"` becomes
-`refactor-sprint` with a warning.
+The `--name` flag that v0.5.0 removed was lenient. It sanitized the name and
+warned which directory it used. For example, `--name "Refactor Sprint"`
+became `refactor-sprint` with a warning.
 
 ## Printing the ref
 
