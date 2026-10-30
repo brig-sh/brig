@@ -161,6 +161,47 @@ brig doctor
 
 The `boot` line reads `ok  boot      assets present at /Users/alex/.hull/store/assets`.
 
+## Started without the launcher
+
+```
+  !!  bundle    this brig is inside the runtime bundle, and its launcher did not run, so brig will not find the bundle's CNI plugins or boot assets
+          run brig from /home/alex/.local/bin: export PATH="/home/alex/.local/bin:$PATH", or load the environment: . /home/alex/.local/share/brig/data/etc/brig-env.sh
+```
+
+`brig run` prints the same warning before it boots.
+
+**Cause:** The `brig` you ran is the binary inside the runtime bundle, usually
+because the bundle's `bin` directory is on `PATH`. The launcher in
+`~/.local/bin` (`/usr/local/bin` on a node-wide install) sets the environment
+that binary needs. Without it, the run can fail in either of these ways:
+
+- `needs CNI plugin "bridge" to be installed in CNI_PATH ("/opt/cni/bin")`,
+  because nerdctl does not read the configuration of the bundle.
+- `sandbox did not become ready`, with `exec sleep failed: No such file or
+  directory` in the log, because Brig fetched the boot bundle and did not use
+  the kernel and initrd of the runtime bundle.
+
+**Fix:** Put the launcher directory on `PATH`, and take the bundle's `bin`
+directory off it. The failed run left its sandbox in a namespace that the
+launcher does not see, so remove that one with the bundle's nerdctl:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+~/.local/share/brig/data/bin/nerdctl -n default rm -f brig-ubuntu
+brig rm ubuntu
+```
+
+The first run after this can fail with `failed to read from init socket: EOF`.
+Run it again.
+
+**Confirm:**
+
+```bash
+brig doctor
+```
+
+The `bundle` line is gone, and the `boot` line reads `ok`.
+
 ## Secret store did not answer
 
 ```

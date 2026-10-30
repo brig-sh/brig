@@ -185,7 +185,10 @@ As a result, `BRIG_VERSION` selects the Brig version on Linux too. The
 runtime and Brig are versioned separately.
 
 The `brig` on `PATH` is the launcher of the bundle. The launcher sets the
-environment that points Brig at the private containerd.
+environment that points Brig at the private containerd. Do not put the bin
+directory of the bundle on `PATH`: a `brig` from there runs without that
+environment, and Brig warns about it. See
+[Started without the launcher](troubleshooting.md#started-without-the-launcher).
 
 With the bundle, `install.sh` ignores `BRIG_INSTALL_DIR` and says so. The
 binaries go into the tree of the bundle.

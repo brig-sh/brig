@@ -326,6 +326,9 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		}
 	}()
 
+	// Before anything is fetched, since the assets a fetch brings are part of
+	// what goes wrong.
+	c.warnBundleEnv()
 	// Verify before boot, not after: the point is to decide whether to run
 	// this image at all.
 	if err := c.verifyImage(); err != nil {
@@ -601,6 +604,29 @@ func (c *Config) logHint() string {
 		ref = c.Profile.Name
 	}
 	return fmt.Sprintf("brig logs %s (or the runtime's own, %s)", ref, c.Runtime.LogsHint(c.VMName))
+}
+
+// selfExecutable says where this brig runs from, and a test puts it in a runtime
+// bundle's tree.
+var selfExecutable = os.Executable
+
+// warnBundleEnv says so when this brig is the runtime bundle's own, started
+// without its launcher. A warning and not a refusal: someone may have set up the
+// rest by hand. The failures it precedes name CNI plugins or a missing sleep in
+// the guest, and neither names the launcher.
+func (c *Config) warnBundleEnv() {
+	exe, err := selfExecutable()
+	if err != nil {
+		return
+	}
+	env, missing := runtime.MissingBundleEnv(exe)
+	if !missing {
+		return
+	}
+	c.warnf("%s", notice.New("this brig is inside the runtime bundle, and its launcher did not run").
+		Note("without it, brig does not find the bundle's CNI plugins or boot assets, and this run will likely fail").
+		Do("run brig from "+env.Launchers, env.Fix()).
+		Do("or load the environment", ". "+env.File))
 }
 
 // waitReady waits for the in-guest agent.

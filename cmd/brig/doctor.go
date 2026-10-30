@@ -78,6 +78,10 @@ type check struct {
 // openStore in secret.go -- and the BRIG_* variables cover the rest.
 var virtualization = probeVirtualization
 
+// doctorExecutable says where this brig runs from, and a test puts it in a
+// runtime bundle's tree.
+var doctorExecutable = os.Executable
+
 // doctorCmd is `brig doctor [<agent>]`, with an optional --json flag of its own.
 func doctorCmd(out io.Writer, args []string) error {
 	jsonOut, agentName, err := parseDoctorArgs(args)
@@ -193,13 +197,23 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		hostCheck(),
 		virtualCheck(),
 		rtCheck,
-		brokerCheck(),
 	}
+	bundle, bypassed := bundleCheck()
+	if bypassed {
+		checks = append(checks, bundle)
+	}
+	checks = append(checks, brokerCheck())
 	for _, mc := range modeChecks {
 		checks = append(checks, mc(agent, rt))
 	}
+	boot := bootCheck(rt)
+	if bypassed && boot.State == stateFail {
+		// The usual advice is to let a run fetch them. Those are not the assets
+		// this tree boots: see runtime.MissingBundleEnv.
+		boot.Fix = "the runtime bundle carries them; see the bundle line above"
+	}
 	checks = append(checks,
-		bootCheck(rt),
+		boot,
 		rootfsCheck(agent, rt),
 		verifyCheck(name, policy),
 	)
@@ -501,6 +515,24 @@ func rootfsCheck(agent *profile.Profile, rt runtime.Runtime) check {
 			Fix:     "fix the above, or unset BRIG_ROOTFS_MODE to boot on the runtime's own root"}
 	}
 	return check{Name: "rootfs", State: stateInfo, Finding: "overlay root not available: " + o.Why}
+}
+
+// bundleCheck reports a brig inside a runtime bundle's tree that was started
+// without the launcher. There is no line on any other host, and it leaves the
+// exit status alone, as doctor's other host findings do.
+func bundleCheck() (check, bool) {
+	exe, err := doctorExecutable()
+	if err != nil {
+		return check{}, false
+	}
+	env, missing := runtime.MissingBundleEnv(exe)
+	if !missing {
+		return check{}, false
+	}
+	return check{Name: "bundle", State: stateFail,
+		Finding: "this brig is inside the runtime bundle, and its launcher did not run, so brig will not find the bundle's CNI plugins or boot assets",
+		Fix:     fmt.Sprintf("run brig from %s: %s, or load the environment: . %s", env.Launchers, env.Fix(), env.File),
+	}, true
 }
 
 // bootCheck reports whether the kernel and initrd an unmodified image boots on
