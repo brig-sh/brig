@@ -145,16 +145,18 @@ func TestTailBufferKeepsTheEnd(t *testing.T) {
 	}
 }
 
-// Nothing on the console, so what the runtime and the monitor said is all there
-// is. virtiofsd's own lines stay out of that too.
-func TestWarnGuestLogFallsBackToStderr(t *testing.T) {
+// A console with lines on it must not hide the monitor's error. virtiofsd's own
+// lines stay out of that too.
+func TestWarnGuestLogShowsBothStreams(t *testing.T) {
 	c, rt := deadGuestConfig(t, false)
-	rt.logged = ""
 	c.Runtime = &stderrOnly{rt}
 	_ = c.EnsureRunning(creds.Set{})
 	said := c.Err.(*bytes.Buffer).String()
 	if !strings.Contains(said, "Cannot create virtio-fs device") {
 		t.Errorf("the monitor's error is missing:\n%s", said)
+	}
+	if !strings.Contains(said, "exec sleep failed") {
+		t.Errorf("the guest's console is missing:\n%s", said)
 	}
 	if strings.Contains(said, "virtiofsd::limits") {
 		t.Errorf("virtiofsd's warning was shown:\n%s", said)
@@ -164,6 +166,9 @@ func TestWarnGuestLogFallsBackToStderr(t *testing.T) {
 type stderrOnly struct{ *deadGuest }
 
 func (s *stderrOnly) Logs(spec runtime.LogsSpec) error {
+	if _, err := io.WriteString(spec.Out, s.logged); err != nil {
+		return err
+	}
 	_, err := io.WriteString(spec.Err, "[2026-10-30T09:45:05Z WARN  virtiofsd::limits] Failure\nCannot create virtio-fs device\n")
 	return err
 }
@@ -181,6 +186,20 @@ func TestGuestLogTailStopsAtThePanic(t *testing.T) {
 	got := guestLogTail(log, 5)
 	want := []string{"No application execute", "Could not spawn app",
 		"[    0.259707] Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000100"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("guestLogTail = %q, want %q", got, want)
+	}
+}
+
+// The guest's own output can quote a panic, and the log goes on after it.
+func TestGuestLogTailTakesTheLastPanic(t *testing.T) {
+	log := "a build log says Kernel panic\n" +
+		"more work\n" +
+		"Could not spawn app\n" +
+		"[    9.0] Kernel panic - not syncing: Attempted to kill init!\n" +
+		"[    9.1] RBP: 00007ffe3295aee8\n"
+	got := guestLogTail(log, 2)
+	want := []string{"Could not spawn app", "[    9.0] Kernel panic - not syncing: Attempted to kill init!"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("guestLogTail = %q, want %q", got, want)
 	}
