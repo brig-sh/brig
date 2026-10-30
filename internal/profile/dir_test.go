@@ -3,6 +3,7 @@ package profile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,18 +45,35 @@ func TestDirFollowsXDG(t *testing.T) {
 
 // BRIG_PROFILE_DIR is brig's own variable, so it is taken as given: an
 // explicit override is a deliberate act and is not second-guessed for
-// absoluteness. BRIG_TEMPLATE_DIR is the older spelling and still works.
+// absoluteness. BRIG_TEMPLATE_DIR, the older spelling, was removed in v0.5.0:
+// Dir reads it nowhere, and RemovedDirSetting refuses it whenever it is the
+// setting that would have decided where profiles come from.
 func TestDirOverrides(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("BRIG_PROFILE_DIR", "")
 
 	t.Setenv("BRIG_TEMPLATE_DIR", "/legacy/dir")
-	if got := Dir(); got != "/legacy/dir" {
-		t.Errorf("BRIG_TEMPLATE_DIR ignored: Dir() = %q", got)
+	if got, want := Dir(), filepath.Join(xdg, "brig"); got != want {
+		t.Errorf("BRIG_TEMPLATE_DIR was read: Dir() = %q, want %q", got, want)
+	}
+	err := RemovedDirSetting()
+	if err == nil || !strings.Contains(err.Error(), "BRIG_PROFILE_DIR") {
+		t.Errorf("RemovedDirSetting() = %v, want a refusal naming BRIG_PROFILE_DIR", err)
 	}
 	t.Setenv("BRIG_PROFILE_DIR", "/new/dir")
 	if got := Dir(); got != "/new/dir" {
 		t.Errorf("BRIG_PROFILE_DIR does not win: Dir() = %q", got)
+	}
+	// Beside BRIG_PROFILE_DIR it never decided anything, so nothing changes.
+	if err := RemovedDirSetting(); err != nil {
+		t.Errorf("RemovedDirSetting() with BRIG_PROFILE_DIR set = %v", err)
+	}
+	t.Setenv("BRIG_TEMPLATE_DIR", "")
+	t.Setenv("BRIG_PROFILE_DIR", "")
+	if err := RemovedDirSetting(); err != nil {
+		t.Errorf("RemovedDirSetting() with neither set = %v", err)
 	}
 }
 

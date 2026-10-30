@@ -159,8 +159,6 @@ func TestVolumeAndFileValidation(t *testing.T) {
 		// already guestHome, so this mounts a path onto itself.
 		{"hostmount under no tmpfs", Profile{Volumes: []Volume{
 			{Kind: VolumeHostMount, Path: ".claude/sessions"}}}, "onto itself"},
-		{"volumes and statePaths together", Profile{
-			Volumes: []Volume{tmpfs}, StatePaths: []string{".claude"}}, "statePaths"},
 		{"the reference shape is accepted", Profile{Volumes: []Volume{
 			{Kind: VolumeHostMount, Path: ".claude/sessions"}, tmpfs}}, ""},
 

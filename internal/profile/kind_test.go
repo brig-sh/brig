@@ -47,47 +47,6 @@ func TestBinaryIsRequiredOnlyForAgents(t *testing.T) {
 	}
 }
 
-// shell: true and gui: true are the pre-kind spellings. The decoder is strict,
-// so without this an existing profile using them would fail to parse rather
-// than being carried forward.
-func TestDeprecatedShellAndGUIStillParse(t *testing.T) {
-	base := "name: x\nimage: i\nguestHome: /home/x\nmem: 1\ncpus: 1\n"
-
-	p, err := Parse([]byte(base + "shell: true\n"))
-	if err != nil {
-		t.Fatalf("shell: true no longer parses: %v", err)
-	}
-	if p.Kind != KindShell || !p.IsShell() {
-		t.Errorf("shell: true did not become kind: shell (%+v)", p)
-	}
-	// Zeroed after normalising, so nothing downstream reads two sources of
-	// truth and marshalling does not re-emit the old spelling.
-	if p.Shell {
-		t.Error("the deprecated field survived normalisation")
-	}
-
-	p, err = Parse([]byte(base + "gui: true\n"))
-	if err != nil {
-		t.Fatalf("gui: true no longer parses: %v", err)
-	}
-	if p.Kind != KindGUI || !p.IsGUI() {
-		t.Errorf("gui: true did not become kind: gui (%+v)", p)
-	}
-
-	// A conflict is an error rather than a silent precedence rule, because
-	// either answer would surprise whoever wrote both.
-	if _, err := Parse([]byte(base + "kind: shell\ngui: true\n")); err == nil {
-		t.Error("a conflicting kind and gui were accepted")
-	}
-	if _, err := Parse([]byte(base + "shell: true\ngui: true\n")); err == nil {
-		t.Error("both deprecated flags at once were accepted")
-	}
-	// Agreeing with the new spelling is fine.
-	if _, err := Parse([]byte(base + "kind: shell\nshell: true\n")); err != nil {
-		t.Errorf("a redundant but consistent pair was rejected: %v", err)
-	}
-}
-
 // Every built-in states a kind that matches what it is.
 func TestBuiltInKinds(t *testing.T) {
 	reset(t)

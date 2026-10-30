@@ -60,16 +60,26 @@ const BringYourOwnImageDoc = "https://github.com/brig-sh/community-images/blob/m
 //
 // BRIG_PROFILE_DIR is brig's own variable rather than an XDG one, so it is
 // taken as given: an explicit override is a deliberate act and does not get
-// second-guessed for absoluteness. BRIG_TEMPLATE_DIR is the older spelling,
-// honoured until v0.5.0.
+// second-guessed for absoluteness. BRIG_TEMPLATE_DIR, the older spelling, is
+// read by nothing since v0.5.0; see RemovedDirSetting.
 func Dir() string {
 	if dir := os.Getenv("BRIG_PROFILE_DIR"); dir != "" {
 		return dir
 	}
-	if dir := os.Getenv("BRIG_TEMPLATE_DIR"); dir != "" {
-		return dir
-	}
 	return filepath.Join(configHome(), "brig")
+}
+
+// RemovedDirSetting reports the refusal for a BRIG_TEMPLATE_DIR that v0.5.0
+// stopped reading, or nil. Ignoring it would put the built-in profiles back
+// in place of the files it named, silently, with whatever image and
+// credentials those differ by. Set beside BRIG_PROFILE_DIR it never decided
+// anything, so it is let through.
+func RemovedDirSetting() error {
+	if os.Getenv("BRIG_TEMPLATE_DIR") == "" || os.Getenv("BRIG_PROFILE_DIR") != "" {
+		return nil
+	}
+	return fmt.Errorf("BRIG_TEMPLATE_DIR was removed in v0.5.0, and brig no longer reads " +
+		"your profiles from it. Set BRIG_PROFILE_DIR to the same directory")
 }
 
 // configHome resolves $XDG_CONFIG_HOME per the spec cited on Dir.
@@ -118,15 +128,39 @@ func Read(path string) (Profile, error) {
 func Parse(blob []byte) (Profile, error) {
 	var p Profile
 	if err := yaml.UnmarshalStrict(blob, &p); err != nil {
-		return Profile{}, err
+		return Profile{}, removedKeyHint(err, blob)
 	}
 	if err := p.normaliseKind(); err != nil {
 		return Profile{}, err
 	}
-	if err := p.normaliseForward(); err != nil {
-		return Profile{}, err
-	}
 	return p, p.Validate()
+}
+
+// removedKeys are the profile keys v0.5.0 removed, each with what replaced it.
+// The strict decoder already refuses them as fields it does not know; this
+// adds the one thing the reader needs next.
+var removedKeys = map[string]string{
+	"forward":    "env:, with ref: env.<name>",
+	"statePaths": "volumes:",
+	"shell":      "kind: shell",
+	"gui":        "kind: gui",
+}
+
+// removedKeyHint names the replacement when err is the decoder refusing a key
+// v0.5.0 removed, and returns err unchanged otherwise. The decoder does not say
+// how deep the field sat, so the key must also be a top-level key of blob: a
+// field of the same name inside volumes: gets no advice about kind:.
+func removedKeyHint(err error, blob []byte) error {
+	var top map[string]any
+	if yaml.Unmarshal(blob, &top) != nil {
+		return err
+	}
+	for key, now := range removedKeys {
+		if _, ok := top[key]; ok && strings.Contains(err.Error(), `unknown field "`+key+`"`) {
+			return fmt.Errorf("%w: %s: was removed in v0.5.0; use %s", err, key, now)
+		}
+	}
+	return err
 }
 
 // Validate checks a profile is usable and safe.
@@ -150,8 +184,8 @@ func (p Profile) Validate() error {
 		return fmt.Errorf("binary is required for kind: agent " +
 			"(a shell or gui profile has nothing to pass arguments to)")
 	}
-	// validateBindings checks the new keys (env, secrets); the deprecated
-	// forward: has already been folded into Env by Parse before Validate runs.
+	// validateBindings checks env, secrets, files and volumes against each
+	// other.
 	if err := p.validateBindings(); err != nil {
 		return err
 	}
@@ -306,14 +340,9 @@ const exportHeader = firstHeaderLine + ` Edit it, then: brig agent import <this 
 #              hits as ENOSPC, so size it for what the mount holds. Parents
 #              mount before children by path depth, so the order you write
 #              them in is taste
-#   forward    deprecated: forward: [X] now means env: [{name: X, ref: env.X}],
-#              which says the same thing. Still read until v0.5.0
-#   deny       variables never bound, whatever env or forward says. This is the
+#   deny       variables never bound, whatever env says. This is the
 #              billing guard: a metered API key that outranks a subscription
 #              token belongs here
-#   statePaths deprecated: volumes: above says the same thing and is acted on.
-#              A profile may declare one or the other, never both. Still
-#              read until v0.5.0
 #   hypervisor macOS backend to boot on: vz (the default, the one with a
 #              graphical console), hvi or qemu. BRIG_HYPERVISOR wins over it
 #   runtimeBin the runtime binary to drive instead of the one on PATH. About

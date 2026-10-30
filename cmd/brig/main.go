@@ -160,7 +160,6 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off: guest image signature
   BRIG_PROFILE_DIR     where your own profiles live
-                       (BRIG_TEMPLATE_DIR works until v0.5.0)
   BRIG_RUNTIME         hull | nerdctl
   BRIG_CONTAINERD_RUNTIME
                        Linux: the containerd shim, io.containerd.urunc.v2
@@ -317,6 +316,12 @@ func dispatch(args []string) error {
 		return removedf("brig "+verb, now)
 	}
 
+	// Before the profiles are read, because it decides where they are read
+	// from: a directory brig no longer reads is refused rather than replaced
+	// with the built-ins in silence.
+	if err := profile.RemovedDirSetting(); err != nil {
+		return err
+	}
 	// Profiles are read before anything looks a name up, so a file can stand
 	// in for a built-in. A broken file is reported and skipped rather than
 	// taking down the profile you were actually asking for.

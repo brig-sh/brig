@@ -293,3 +293,27 @@ func TestMigrationListsEveryRemovedSpelling(t *testing.T) {
 		}
 	}
 }
+
+// BRIG_TEMPLATE_DIR went in v0.5.0. Set without BRIG_PROFILE_DIR it was the
+// setting that said where profiles live, so it is refused before any profile
+// is read, naming the replacement, rather than ignored in favour of the
+// built-ins. Beside BRIG_PROFILE_DIR it never decided anything and is let
+// through.
+func TestTemplateDirIsRefusedWhereItWouldHaveDecided(t *testing.T) {
+	t.Setenv("BRIG_PROFILE_DIR", "")
+	t.Setenv("BRIG_TEMPLATE_DIR", t.TempDir())
+	var err error
+	captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"agent", "ls"}) })
+	})
+	if err == nil || !strings.Contains(err.Error(), "BRIG_PROFILE_DIR") {
+		t.Errorf("brig agent ls with BRIG_TEMPLATE_DIR = %v, want a refusal naming BRIG_PROFILE_DIR", err)
+	}
+	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
+	captureStderr(t, func() {
+		_, err = captureStdout(t, func() error { return run([]string{"agent", "ls"}) })
+	})
+	if err != nil {
+		t.Errorf("brig agent ls with both set: %v", err)
+	}
+}
