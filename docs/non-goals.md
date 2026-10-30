@@ -109,7 +109,6 @@ covers:
   `version` and the `network` verbs.
 - `run` and `sh`, which under `--json` report the exit status of the agent
   on one line.
-- `env`, the deprecated spelling of `info`.
 
 More verbs get `--json` as callers need them. Open an issue to ask for one.
 

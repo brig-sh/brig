@@ -202,8 +202,8 @@ route to hull on `hvi` and to nerdctl with urunc at `brig.internal`.
 `brig info --json` names the channel of each credential as its `source`:
 `environment`, `secret`, `file` or `broker`.
 
-For an `env.<name>` binding, or the deprecated `forward:` spelling of one,
-Brig still reads the named variable from its own environment. Whatever
+For an `env.<name>` binding, Brig still reads the named variable from its
+own environment. Whatever
 populates that environment remains a usable backend for those bindings.
 
 Brig reads values again on every exec, so the sandbox picks up a rotated

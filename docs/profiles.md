@@ -90,7 +90,8 @@ be named after the profile inside it. Two files with one name is a mistake:
 <details>
 <summary>Locations from older versions</summary>
 
-- The older `BRIG_TEMPLATE_DIR` works until v0.5.0.
+- v0.5.0 removed the older `BRIG_TEMPLATE_DIR`. Brig refuses to start while
+  it is set and `BRIG_PROFILE_DIR` is not.
 - Brig does not read the old `~/.config/brig/templates` default, and it
   migrates nothing. If files remain there, Brig says so on every invocation.
   Move them across with `brig agent import`.
@@ -205,8 +206,8 @@ and Brig refuses an explicit request for it.
 - A `kind: shell` or `kind: gui` profile cannot carry `policy:`. Neither has
   an agent process to hook an egress rule into, so Brig refuses the profile at
   parse time.
-- The older `shell:` and `gui:` booleans still parse, and Brig folds them into
-  `kind:` when it reads the file. See
+- v0.5.0 removed the older `shell:` and `gui:` booleans. A profile that
+  still has one fails to parse, and the error names `kind:`. See
   [migration.md](migration.md#profile-keys).
 
 ## `brig info`
@@ -355,11 +356,9 @@ one, import a profile of the same name.
 | `desc` | no | One line, shown by `brig agent ls` |
 | `secrets` | no | Names this profile wants out of Brig's own secret store, checked before the sandbox is created. Each entry says whether a run without it stops, and where `brig secret import` can find it. See [`secrets` and `env`](#secrets-and-env-for-a-credential-brig-resolves-itself) |
 | `env` | no | The variables the guest sees, and where the value of each comes from: a literal, a stored secret, or Brig's own environment. See [`secrets` and `env`](#secrets-and-env-for-a-credential-brig-resolves-itself) |
-| `forward` | no | Deprecated. It still works, and Brig folds it into an equivalent `env` binding when it reads the file. See [migration.md](migration.md#profile-keys) |
 | `files` | no | Credential files the guest sees: which stored secret fills each one, and where under `guestHome` it is written. See [`files`](#files) |
 | `volumes` | no | What is mounted inside `guestHome`, or at a fixed guest path with `at:`: a `tmpfs` whose contents never reach host disk, how big it can grow, and the `hostmount` exceptions kept across boots. See [`volumes`](#volumes) |
-| `deny` | no | Variables Brig does not forward unless `BRIG_ALLOW_DENIED=1` is set. Brig refuses a profile that also binds one in `env` or `forward`. See [`deny`](#deny-is-the-billing-guard) |
-| `statePaths` | no | Deprecated, superseded by `volumes:`. It still parses. If you declare it alongside `volumes:`, Brig reports an error and does not merge them. See [migration.md](migration.md#profile-keys) |
+| `deny` | no | Variables Brig does not forward unless `BRIG_ALLOW_DENIED=1` is set. Brig refuses a profile that also binds one in `env`. See [`deny`](#deny-is-the-billing-guard) |
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. Brig never does. It warns when it finds one and does not delete it |
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
@@ -374,12 +373,12 @@ one, import a profile of the same name.
 | `unpublished` | no | Brig ships the profile but no image for it. `brig run` says so and stops before the pull, which otherwise fails with a registry 404. Pass `--image` with one you built. `brig agent ls` marks the profile, and `cursor` is the one that carries it |
 | `policy` | no | Names of policies attached to this profile inline: every run carries all of them, unioned with whatever is attached separately by name |
 
-Brig refuses a misspelled field, such as `forwards:` in place of `forward:`.
+Brig refuses a misspelled field, such as `volume:` in place of `volumes:`.
+It refuses a key that v0.5.0 removed the same way, and the error names the
+key that replaced it. See [migration.md](migration.md#profile-keys).
 
-`brig agent show --json` always prints the `env:` form, even for a profile
-written with `forward:`. JSON export marshals the parsed profile, and the
-parser folds `forward:` into `env:`. Plain YAML export gives back the file as
-written.
+`brig agent show --json` marshals the parsed profile. Plain YAML export gives
+back the file as written.
 
 ## `secrets` and `env`, for a credential Brig resolves itself
 
@@ -549,7 +548,7 @@ env:
 | form | what it reads |
 | --- | --- |
 | `ref: secrets.<name>` | The named secret, out of Brig's own store |
-| `ref: env.<name>` | The named variable, out of Brig's own environment. `forward:` reads from the same place |
+| `ref: env.<name>` | The named variable, out of Brig's own environment |
 
 Limits:
 
@@ -734,8 +733,7 @@ Shipped profiles:
 | profiles | what they declare | where state lives |
 | --- | --- | --- |
 | `claude-code`, `claude-desktop`, `herd` | `volumes:` | In-guest state can live in memory and stay off host disk |
-| `codex`, `cursor`, `gemini`, `grok`, `opencode` | Only the deprecated `statePaths:` | Everything under `guestHome` persists to host disk, with nothing memory-only |
-| `ubuntu` | Neither | Everything under `guestHome` persists to host disk, with nothing memory-only |
+| `codex`, `cursor`, `gemini`, `grok`, `opencode`, `ubuntu` | No `volumes:` | Everything under `guestHome` persists to host disk, with nothing memory-only |
 
 ### State lost at `brig stop`
 

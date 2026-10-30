@@ -786,8 +786,8 @@ shows how each way to name a session reaches the slug `refactor`:
 | `claude@refactor` | Accepted. `ParseRef` applies the same slug rule to the `<agent>@<label>` form |
 | `claude@Refactor` | Refused. A ref can only name a session whose stored name is `refactor` |
 
-The `-n` rule is stricter than the retired <!-- retired-ok -->`brig run --name`, which sanitizes a name and reports the directory it landed on.
-A session opened with `brig run claude --name Refactor` <!-- retired-ok --> gets the same policy.
+The `-n` rule is stricter than <!-- retired-ok -->`brig run --name`, removed in v0.5.0, which sanitized a name and reported the directory it landed on.
+A session opened before v0.5.0 with `brig run claude --name Refactor` <!-- retired-ok --> gets the same policy.
 Brig sanitizes `Refactor` to the slug `refactor`, and it looks up the policy
 under that slug. As a result,
 `brig policy attach locked-down claude-code -n refactor` covers that session

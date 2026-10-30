@@ -1,26 +1,26 @@
 # Moving off the retired spellings
 
-Every retired Brig spelling still works today, except the ones marked
-removed. Each retired command and flag prints a notice on stderr. The notice names the
-replacement and the release that removes the old spelling:
-
-```
-brig: `brig profiles` is now `brig agent ls`
-  ↳ the old spelling is removed in v0.5.0
-```
-
-When stderr is not a terminal, both lines start with `brig:`.
-
-Brig removes the old spellings in v0.5.0, with two exceptions. `brig exec`
+Brig v0.5.0 removed the retired spellings, with two exceptions. `brig exec`
 stays until `brig sh` can pipe the output of a command, and its notice says
 that instead of a release. The flat form of a
-[policy document](#policy-documents) is removed in v0.6.0. `brig run` is
-never removed.
+[policy document](#policy-documents) still parses, prints a notice, and is
+removed in v0.6.0. `brig run` is never removed.
 [Stability](stability.md#retired-spellings) has the rule.
 
-To find retired spellings in a script, run
+Brig refuses a removed command or subcommand as a usage error, with exit code
+2. The refusal names the replacement, and nothing runs:
+
+```
+brig: `brig profiles` was removed; use `brig agent ls`
+```
+
+A removed [flag](#flags) is refused the same way before the ref, and after
+the ref it is the agent's own. A removed [profile key](#profile-keys) fails
+the profile, and the error names the key that replaced it.
+
+To find removed spellings in a script, run
 [`script/check-retired-spellings.sh`](../script/check-retired-spellings.sh)
-over it, or watch stderr for the notice.
+over it.
 
 Three changes are not spellings:
 
@@ -34,86 +34,102 @@ Three changes are not spellings:
 
 ## Verbs
 
+| Removed in | Spelling | Current |
+| --- | --- | --- |
+| 0.3.0 | `brig shell <ref>` | `brig sh <ref>` |
+| 0.5.0 | `brig profiles`, `brig agents` | `brig agent ls` |
+| 0.5.0 | `brig profile <verb>` | `brig agent <verb>` |
+| 0.5.0 | `brig template <verb>` | `brig agent <verb>` |
+| 0.5.0 | `brig import` | `brig agent import` |
+| 0.5.0 | `brig export` | `brig agent export` |
+| 0.5.0 | `brig policies` | `brig policy ls` |
+| 0.5.0 | `brig create <ref>` | `brig run -d <ref>` |
+| 0.5.0 | `brig env <ref>` | `brig info <ref>` |
+| 0.5.0 | `brig reset` | `brig rm --all` |
+
+`brig rm --all` asks before it removes anything. Without a terminal to answer
+on, it refuses unless you pass `-y`. A script that ran `brig reset`
+unattended needs `brig rm --all -y`.
+
+### The one retired verb left
+
 | Retired | Current |
 | --- | --- |
-| `brig profiles`, `brig agents` | `brig agent ls` |
-| `brig profile <verb>` | `brig agent <verb>` |
-| `brig template` | `brig agent` |
-| `brig import` | `brig agent import` |
-| `brig export` | `brig agent export` |
-| `brig policies` | `brig policy ls` |
-| `brig create <ref>` | `brig run -d <ref>` |
 | `brig exec <ref> -- <cmd>` | `brig sh <ref> <cmd>` |
-| `brig env <ref>` | `brig info <ref>` |
-| `brig reset` | `brig rm --all` |
 
-`brig rm --all` and `brig reset` both ask before they remove anything.
-Without a terminal to answer on, both refuse unless you pass `-y`. A script
-that ran `brig reset` unattended needs `brig rm --all -y`.
+`brig exec` still works, and prints a notice on stderr that names its
+replacement:
+
+```
+brig: `brig exec` is now `brig sh`
+  ↳ the old spelling stays until `brig sh` can pipe a command's output
+```
+
+When stderr is not a terminal, both lines start with `brig:`.
 
 `brig exec` runs its command without a guest pty, and `brig sh` does not yet
 ([#335](https://github.com/brig-sh/brig/issues/335)). Until it does, use
 `brig exec` to pipe the output of a command cleanly.
 
-`brig template edit` does not exist. The retired group has only the verbs
-that it had before. That line prints the notice and then fails, and the
-failure names `brig agent edit`.
-
-### Removed
-
-Brig refuses each removed spelling as a usage error, with exit code 2. The
-refusal names the replacement:
-
-```
-brig: `brig shell` was removed; use `brig sh <ref> [command...]`
-```
+## Subverbs
 
 | Removed in | Spelling | Current |
 | --- | --- | --- |
-| 0.3.0 | `brig shell <ref>` | `brig sh <ref>` |
-
-## Subverbs
-
-| Retired | Current |
-| --- | --- |
-| `brig agent list` | `brig agent ls` |
-| `brig agent save` | `brig agent export` |
-| `brig agent load` | `brig agent import` |
-| `brig policy list` | `brig policy ls` |
-| `brig secret list` | `brig secret ls` |
-| `brig secret rm` | `brig secret delete` |
+| 0.5.0 | `brig agent list` | `brig agent ls` |
+| 0.5.0 | `brig agent save` | `brig agent export` |
+| 0.5.0 | `brig agent load` | `brig agent import` |
+| 0.5.0 | `brig policy list` | `brig policy ls` |
+| 0.5.0 | `brig secret list` | `brig secret ls` |
+| 0.5.0 | `brig secret rm` | `brig secret delete` |
 
 ## Flags
 
-| Retired | Current |
-| --- | --- |
-| `-t IMAGE` | `--image IMAGE` |
-| `-m MB` | `--mem MB` |
-| `-n NAME`, `--name NAME` | `<agent>@<label>` |
-| `-w PATH`, `--workspace PATH` | `--home PATH` |
+| Removed in | Spelling | Current |
+| --- | --- | --- |
+| 0.5.0 | `-t IMAGE` | `--image IMAGE` |
+| 0.5.0 | `-m MB` | `--mem MB` |
+| 0.5.0 | `-n NAME`, `--name NAME` | `<agent>@<label>` |
+| 0.5.0 | `-w PATH`, `--workspace PATH` | `--home PATH` |
 
-Each retired flag still sets the same value. The inline form
-(`-t=myimage:1`) also prints the notice. Brig leaves alone a value that looks
-like a retired flag. For example, `brig run claude --name -t` warns about
-`--name` and not about `-t`.
+These letters went back to the agents: `-n`, `-m` and `-w` are flags of
+Claude Code, Codex, Gemini or opencode. After the ref, each is the agent's
+own, as any flag that Brig does not own is. `brig run claude -w x` passes
+`-w x` to Claude Code.
+
+Before the ref there is no agent to own one, and Brig refuses it as a usage
+error that names its replacement. The inline form (`-t=myimage:1`) is the
+same flag:
+
+```
+brig: `-t` was removed; use `--image`
+```
 
 `--memory` is a current spelling of `--mem`. The help text does not show it,
 and completion does not offer it.
 
 ## One flag whose position changed
 
-`-q` and `--quiet` moved to the global position, left of the verb:
+`-q` and `--quiet` moved to the global position, left of the verb. v0.5.0
+removed the run-line spelling:
 
 ```bash
 brig -q run claude      # current
-brig run claude -q      # still works, prints a notice
+brig run -q claude      # refused
+brig run claude -q      # -q goes to the agent
 ```
 
-The notice names the move:
+Before the ref, Brig refuses it and names where it went:
 
 ```
-brig: `brig <verb> <ref> -q` is now `brig -q <verb> <ref>`
-  ↳ the old spelling is removed in v0.5.0
+brig: `brig <verb> <ref> -q` was removed; use `brig -q <verb> <ref>`
+```
+
+After the ref it is the agent's, and Brig says that it did not read it:
+
+```
+brig: -q is one of brig's own flags, but here it is the agent's
+  ↳ brig stopped reading the line at the argument before it
+  → for brig to read it, put -q before the command
 ```
 
 `--json` is accepted on both sides of the verb and prints no notice.
@@ -217,11 +233,11 @@ call. See [Guest image](guest-image.md).
 
 ## Session names
 
-A session is part of the ref, which replaces `--name`:
+A session is part of the ref, which replaced `--name`:
 
 ```bash
 brig run claude@refactor          # current
-brig run claude --name refactor   # still works, prints a notice
+brig run --name refactor claude   # refused
 ```
 
 `brig run claude` is the default session of the `claude-code` agent.
@@ -229,33 +245,36 @@ brig run claude --name refactor   # still works, prints a notice
 guest home. [Sessions](sessions.md) explains what each session keeps
 separate.
 
-`--name` is also Claude Code's own flag. Until v0.5.0, Brig still reads a
-`--name` that stands before the agent's own arguments. To pass it to the
-agent, put it after `--`: `brig run claude -- --name x` sends `--name x` to
-Claude Code.
+`--name` is also Claude Code's own flag. Since v0.5.0, Brig does not read a
+`--name` after the ref, so `brig run claude --name x` sends `--name x` to
+Claude Code, as `brig run claude -- --name x` does.
 
 ## Profile keys
 
-`shell:`, `gui:`, `forward:` and `statePaths:` still parse in a profile file
-until v0.5.0, and print no notice at run time. Brig refuses a profile that
-still has `hostCredential:`, as it refuses any field that it does not know.
+v0.5.0 removed `shell:`, `gui:`, `forward:` and `statePaths:`. Brig refuses a
+profile that still has one, as it refuses any field that it does not know,
+and the error names the key that replaced it.
 `brig agent export claude-code` prints a current profile, and its header
 comment documents every field.
 
-| Retired key | Current |
-| --- | --- |
-| `hostCredential:` | removed in 0.3.0: declare the credential under `secrets:` and run `brig secret import <agent>` |
-| `shell:`, `gui:` booleans | `kind:` |
-| `forward:` | `env:`, with `ref: env.<name>` |
-| `statePaths:` | `volumes:` |
+| Removed in | Key | Current |
+| --- | --- | --- |
+| 0.3.0 | `hostCredential:` | declare the credential under `secrets:` and run `brig secret import <agent>` |
+| 0.5.0 | `shell:`, `gui:` booleans | `kind:` |
+| 0.5.0 | `forward:` | `env:`, with `ref: env.<name>` |
+| 0.5.0 | `statePaths:` | `volumes:` |
 
-A retired key beside its replacement is an error:
+`forward: [GH_TOKEN]` is this `env:` entry, which reads the variable from
+Brig's own environment when it is set:
 
-| Keys | Refused |
-| --- | --- |
-| `kind:` beside `shell:` or `gui:` | only when the two disagree |
-| `forward:` beside an `env:` entry of the same name | whatever their values |
-| `statePaths:` beside `volumes:` | whatever their values |
+```yaml
+env:
+  - name: GH_TOKEN
+    ref: env.GH_TOKEN
+```
+
+`statePaths:` named what persists and enforced nothing, so a profile that
+drops it persists what it did before. `volumes:` is the list Brig acts on.
 
 ## Network defaults
 
@@ -372,19 +391,21 @@ spec:
 `brig policy show <name>` prints any policy in the envelope form. For a
 policy in the flat form, its output is a valid policy file.
 
-The flat form outlives the other retired spellings by one release, because
+The flat form outlives the spellings v0.5.0 removed by one release, because
 v0.5.0 is the first release that prints its notice.
 
 ## Settings
 
-| Retired | Current |
-| --- | --- |
-| `BRIG_TEMPLATE_DIR` | `BRIG_PROFILE_DIR` |
-| `BRIG_CREDENTIALS_CMD` | removed: declare the credential under `secrets:`, then run `brig secret import <agent> <name> --from-command '<command>'` |
+| Removed in | Setting | Current |
+| --- | --- | --- |
+| 0.2.0 | `BRIG_CREDENTIALS_CMD` | declare the credential under `secrets:`, then run `brig secret import <agent> <name> --from-command '<command>'` |
+| 0.5.0 | `BRIG_TEMPLATE_DIR` | `BRIG_PROFILE_DIR` |
 
-`BRIG_TEMPLATE_DIR` still works until v0.5.0, and prints no notice.
-`BRIG_PROFILE_DIR` wins when both are set. Brig refuses a run that still sets
-`BRIG_CREDENTIALS_CMD`.
+Brig refuses to start while `BRIG_TEMPLATE_DIR` is set and
+`BRIG_PROFILE_DIR` is not, rather than read the built-in profiles in place of
+the directory it named. Set `BRIG_PROFILE_DIR` to the same directory. Beside
+`BRIG_PROFILE_DIR`, which always won, it is ignored. Brig refuses a run that
+still sets `BRIG_CREDENTIALS_CMD`.
 
 ## The words `agent` and `profile`
 

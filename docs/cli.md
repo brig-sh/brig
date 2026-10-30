@@ -2,7 +2,7 @@
 
 For a walkthrough of a first run, see [Quickstart](quickstart.md).
 
-Most retired spellings still work until v0.5.0.
+v0.5.0 removed the retired spellings, with two exceptions.
 [Retired spellings](migration.md) has the old-to-new table and the
 exceptions. [Stability](stability.md) lists what you can write a script
 against.
@@ -789,7 +789,7 @@ the agent.
 | Position | Flags |
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
-| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish`, `-q`/`--quiet` and `--json` |
+| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish` and `--json` |
 
 The global position takes only those three flags. Brig refuses any other
 flag there by name:
@@ -800,12 +800,10 @@ brig: unknown flag "--nope" before the command. brig takes a command first:
 profile
 ```
 
-Both positions accept two flags:
-
-| Flag | After the verb, on the run line |
-| --- | --- |
-| `-q`/`--quiet` | still works until v0.5.0, and prints one deprecation notice moving it left. See [Retired spellings](migration.md) |
-| `--json` | a permanent peer spelling. No notice, either position |
+Both positions accept `--json`, a permanent peer spelling with no notice in
+either position. v0.5.0 removed `-q`/`--quiet` after the verb: before the
+ref it is refused, and after the ref it is the agent's. See
+[One flag whose position changed](migration.md#one-flag-whose-position-changed).
 
 ```bash
 brig info claude --json
@@ -888,8 +886,8 @@ global position refuses `agent show` and `policy show`:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, plan, agent ls, secret ls, doctor, version and the network verbs (env
-takes it too, but env is deprecated; prefer info), and for run and sh
+info, plan, agent ls, secret ls, doctor, version and the network verbs, and
+for run and sh
 ```
 
 Put the flag after the subcommand, where each of the two accepts it.
@@ -982,8 +980,8 @@ agent's, and anything else means that it is one of the classes in the table.
 
 ### Exit 7 cases
 
-An egress policy is one such property. `brig run`, `brig sh` and the retired
-spellings that stand for them refuse a policy with `7`:
+An egress policy is one such property. `brig run` and `brig sh`, and the
+retired spelling of `brig sh`, refuse a policy with `7`:
 
 - on hull's `vz` or `qemu`
 - on docker
@@ -1062,7 +1060,7 @@ one "global only".
 | --- | --- | --- |
 | `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set. A sandbox that a release before 0.3.0 started on `~/brig/<agent>` keeps that home, and Brig does not delete it |
 | `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A named session appends `-<slug>` |
-| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. `BRIG_TEMPLATE_DIR` still works until v0.5.0 |
+| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. Brig refuses to start while `BRIG_TEMPLATE_DIR`, removed in v0.5.0, is set and this is not |
 | `BRIG_POLICY_DIR` (global only) | `$XDG_CONFIG_HOME/brig/policies` | where policy files live |
 | `BRIG_STATE_DIR` (global only) | `~/.brig` | where Brig keeps what has to outlive one command, including the project each sandbox last ran with |
 
