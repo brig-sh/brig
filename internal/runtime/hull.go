@@ -80,12 +80,23 @@ func (h *hull) Bin() string  { return h.bin }
 // The default is applied here rather than reported as blank, so the row names
 // the backend that will actually boot rather than the absence of a setting.
 //
-// The rootfs type is the value runArgs hands --rootfs-type. With none, brig
-// passes no flag and hull picks per backend. The row says that and names no
-// type, because hull's default is hull's to change.
+// The rootfs is overlay-block when runArgs hands hull that mode, read from
+// hullRootfsMode, the same call runArgs makes. Otherwise it is the value
+// runArgs hands --rootfs-type. With none, brig passes no flag and hull picks
+// per backend. The row says that and names no type, because hull's default is
+// hull's to change.
 func (h *hull) Isolation(spec RunSpec) Isolation {
-	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s",
-		hypervisor(spec), orDefault(spec.RootfsType, "hull default"))}
+	hv := hypervisor(spec)
+	rootfs := orDefault(spec.RootfsType, "hull default")
+	mode, err := hullRootfsMode(spec, hv)
+	if err != nil {
+		// CanRun refuses this run. The row names the mode asked for.
+		mode = spec.RootfsMode
+	}
+	if mode != "" {
+		rootfs = mode
+	}
+	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
 }
 
 // PinsDigest asks the hull on this machine whether it can boot a digest
@@ -575,9 +586,6 @@ func (h *hull) CanRun(spec RunSpec) error { return supports(spec, hypervisor(spe
 // naming the variable that caused it -- and the user who set BRIG_HYPERVISOR
 // is the only one who can undo it.
 func supports(spec RunSpec, hv string) error {
-	if err := checkRootfsMode(spec); err != nil {
-		return err
-	}
 	if spec.GUI && hv != "vz" {
 		return fmt.Errorf("this profile opens a graphical window, which only the vz backend provides "+
 			"(BRIG_HYPERVISOR is %q); unset it to run this profile", hv)
@@ -606,6 +614,9 @@ func supports(spec RunSpec, hv string) error {
 			"backend uses, and this run asks for %s. Run it on hvi (BRIG_HYPERVISOR=hvi)", hv)
 	}
 	if err := checkSetup(spec, RunPath{"hull", hv}); err != nil {
+		return err
+	}
+	if _, err := hullRootfsMode(spec, hv); err != nil {
 		return err
 	}
 	// brig.internal is a record and a divert on the gateway too. wrap
@@ -745,11 +756,12 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	}
 	args = append(args, envArgs...)
 	// hull takes the layout of the root from its environment, not a flag.
-	if spec.RootfsMode != "" {
-		if err := checkRootfsMode(spec); err != nil {
-			return nil, nil, err
-		}
-		envVals = append(envVals, "HULL_ROOTFS_MODE="+spec.RootfsMode)
+	mode, err := hullRootfsMode(spec, hv)
+	if err != nil {
+		return nil, nil, err
+	}
+	if mode != "" {
+		envVals = append(envVals, "HULL_ROOTFS_MODE="+mode)
 	}
 	// The verified digest when one was resolved, so the bytes that boot are the
 	// bytes cosign checked; hull resolves it against its store from rc23.

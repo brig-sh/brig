@@ -119,30 +119,58 @@ func TestNerdctlRunsTheHypervisorAsked(t *testing.T) {
 	}
 }
 
-// BRIG_ROOTFS_MODE=overlay-block reaches urunc as the rootfsMode annotation,
-// only on a generic boot, and only with a mode urunc knows.
+// The rootfsMode annotation reaches urunc on a generic boot: by default where
+// the host builds an overlay root, and when BRIG_ROOTFS_MODE=overlay-block
+// asks. virtiofs, and a host that cannot build one, pass none.
 func TestNerdctlPassesTheRootfsMode(t *testing.T) {
 	stageBootAssets(t)
-
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	const annotation = "--annotation com.urunc.unikernel.rootfsMode=overlay-block"
 	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
-	spec := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true, RootfsMode: RootfsModeOverlayBlock}
-	if err := n.CanRun(spec); err != nil {
-		t.Fatal(err)
+	argv := func(spec RunSpec) string {
+		t.Helper()
+		if err := n.CanRun(spec); err != nil {
+			t.Fatalf("%+v: %v", spec, err)
+		}
+		args, _, err := n.runArgs(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(args, " ")
 	}
-	args, _, err := n.runArgs(spec)
-	if err != nil {
-		t.Fatal(err)
+	generic := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true}
+	explicit := generic
+	explicit.RootfsMode = RootfsModeOverlayBlock
+
+	if got := argv(generic); strings.Contains(got, "rootfsMode") {
+		t.Errorf("no mke2fs: a mode passed by default: %s", got)
 	}
-	if got := strings.Join(args, " "); !strings.Contains(got, "--annotation com.urunc.unikernel.rootfsMode=overlay-block") {
-		t.Errorf("rootfs mode not passed: %s", got)
+	if err := n.CanRun(explicit); err == nil || !strings.Contains(err.Error(), "e2fsprogs") {
+		t.Errorf("BRIG_ROOTFS_MODE=overlay-block with no mke2fs: want a refusal naming e2fsprogs, got %v", err)
 	}
 
-	args, _, err = n.runArgs(RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true})
-	if err != nil {
-		t.Fatal(err)
+	overlayHost(t)
+	for _, spec := range []RunSpec{generic, explicit} {
+		if got := argv(spec); !strings.Contains(got, annotation) {
+			t.Errorf("%q: rootfs mode not passed: %s", spec.RootfsMode, got)
+		}
 	}
-	if got := strings.Join(args, " "); strings.Contains(got, "rootfsMode") {
-		t.Errorf("no mode asked, none passed: %s", got)
+	optOut := generic
+	optOut.RootfsMode = RootfsModeVirtiofs
+	firecracker := generic
+	firecracker.Hypervisor = "firecracker"
+	for _, spec := range []RunSpec{optOut, firecracker} {
+		if got := argv(spec); strings.Contains(got, "rootfsMode") {
+			t.Errorf("%+v: a mode passed: %s", spec, got)
+		}
+	}
+
+	t.Setenv("CONTAINERD_SNAPSHOTTER", "devmapper")
+	if got := argv(generic); strings.Contains(got, "rootfsMode") {
+		t.Errorf("devmapper: a mode passed by default: %s", got)
+	}
+	if err := n.CanRun(explicit); err == nil || !strings.Contains(err.Error(), "devmapper") {
+		t.Errorf("BRIG_ROOTFS_MODE=overlay-block on devmapper: want a refusal naming it, got %v", err)
 	}
 
 	for _, bad := range []RunSpec{
