@@ -8,9 +8,9 @@ on macOS, `nerdctl` on Linux), from cosign or from Homebrew. An entry says
 so when its message does not come from Brig.
 
 Run `brig doctor` first. It prints the build of `brig` that you run. Then it
-checks eight items, one line each: the host, the hypervisor, the runtime and
-its version, the boot assets, cosign, the profiles, the secret store and
-brigd. Under a line marked `!!` it prints the fix. `brig doctor <agent>`
+checks these items, one line each: the host, the hypervisor, the runtime and
+its version, the broker, the boot assets, cosign, the profiles, the secret store
+and brigd. Under a line marked `!!` it prints the fix. `brig doctor <agent>`
 checks the image of that agent too. `--json` prints the same report as one
 document, for a script or a bug report.
 

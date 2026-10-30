@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// BundleEnvMissing says what MissingBundleEnv found. doctor and a run's warning
+// both open with it.
+const BundleEnvMissing = "this brig is inside the runtime bundle, and its launcher did not run"
+
 // BundleEnv is the environment of a runtime bundle's tree, and where the
 // launchers that load it are.
 type BundleEnv struct {

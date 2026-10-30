@@ -530,7 +530,7 @@ func bundleCheck() (check, bool) {
 		return check{}, false
 	}
 	return check{Name: "bundle", State: stateFail,
-		Finding: "this brig is inside the runtime bundle, and its launcher did not run, so brig will not find the bundle's CNI plugins or boot assets",
+		Finding: runtime.BundleEnvMissing + ", so brig will not find the bundle's CNI plugins or boot assets",
 		Fix:     fmt.Sprintf("run brig from %s: %s, or load the environment: . %s", env.Launchers, env.Fix(), env.File),
 	}, true
 }
