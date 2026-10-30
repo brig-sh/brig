@@ -503,13 +503,13 @@ across an upgrade still serves the old code.
 brig doctor claude
 ```
 
-A `bundle` line appears when `brig` runs from the bin directory of the runtime
-bundle without its launcher. See
-[Started without the launcher](troubleshooting.md#started-without-the-launcher).
-
 With an agent, `doctor` adds the image check. When the profile of the agent
 names a `runtimeBin`, the runtime and boot lines report on that binary and
 not on the one on `PATH`. An unknown agent exits `3`.
+
+A `bundle` line appears when `brig` runs from the bin directory of the runtime
+bundle without its launcher. See
+[Started without the launcher](troubleshooting.md#started-without-the-launcher).
 
 Doctor checks the image against the trust policy a run of that agent uses,
 with `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
