@@ -202,6 +202,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	if bypassed {
 		checks = append(checks, bundle)
 	}
+	checks = append(checks, linuxHostChecks(rt)...)
 	checks = append(checks, brokerCheck())
 	for _, mc := range modeChecks {
 		checks = append(checks, mc(agent, rt))
@@ -422,7 +423,7 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	if v, verr := runtime.Version(bin); verr == nil && v != "" {
 		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), bin)
 	}
-	return check{Name: "runtime", State: statePass, Finding: finding}, rt
+	return check{Name: "runtime", State: statePass, Finding: finding + notTheBundle(rt)}, rt
 }
 
 // shortVersion is the version out of a `--version` line, read the way
