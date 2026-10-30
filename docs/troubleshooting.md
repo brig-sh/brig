@@ -309,6 +309,9 @@ brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign is not 
   ↳ booting it unchecked
 ```
 
+On Linux the parentheses read `use your distribution's package, or
+https://docs.sigstore.dev/cosign/system_config/installation/`.
+
 The result depends on `BRIG_VERIFY`:
 
 | `BRIG_VERIFY` | Result |
@@ -344,8 +347,8 @@ check its signature with.
 brew install cosign         # macOS
 ```
 
-On Linux, no package covers every distro. Install a release from
-[sigstore/cosign](https://github.com/sigstore/cosign) and put it on PATH.
+On Linux, install your distribution's package, or follow the
+[cosign install page](https://docs.sigstore.dev/cosign/system_config/installation/).
 
 To boot without the check and stop the warning, set `BRIG_VERIFY=off`. It is
 safer to keep cosign installed.
