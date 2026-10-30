@@ -396,7 +396,7 @@ grep -q 'env-token-secret\|gh-secret\|host-token' "$WORK/env.err" \
 # prints none. Kept as the guard that asking for less never yields more.
 : > "$STUB_LOG"
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret GH_TOKEN=gh-secret \
-  "$WORK/brig" run claude --quiet -p hi > /dev/null 2> "$WORK/quiet.err"
+  "$WORK/brig" -q run claude -p hi > /dev/null 2> "$WORK/quiet.err"
 grep -q '^SANDBOX ' "$WORK/quiet.err" \
   && bad "--quiet printed the envelope" || ok "--quiet prints no envelope"
 
@@ -490,7 +490,7 @@ grep -q -- "--shared-dir $OTHER:/work/otherproject" "$STUB_LOG" \
 # the other direction.
 : > "$STUB_LOG"
 CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
-  "$WORK/brig" run claude --quiet -- --version > /dev/null 2> "$WORK/dashdash.err"
+  "$WORK/brig" -q run claude -- --version > /dev/null 2> "$WORK/dashdash.err"
 grep -q -- '-- claude --version' "$STUB_LOG" \
   && ok "a word after -- still reaches the agent" \
   || bad "a word after -- still reaches the agent -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1) $(cat "$WORK/dashdash.err")"
@@ -569,9 +569,9 @@ grep -q -- '--cwd /work/otherproject' "$STUB_LOG" \
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== the home flag =="
-# --home is what sets the guest home now. -w and --workspace keep working and
-# each say the one word that replaces them: a line that works today has to keep
-# working, and a spelling that works silently never teaches anyone the new one.
+# --home is what sets the guest home. v0.5.0 removed -w and --workspace: after
+# the ref they are the agent's, and before it they are refused naming --home,
+# with nothing booted.
 HOMEDIR="$WORK/named-home"
 : > "$STUB_LOG"
 env -u BRIG_WORKSPACE "$WORK/brig" run claude --home "$HOMEDIR" -d \
@@ -585,14 +585,18 @@ grep -q 'is now' "$WORK/home.err" \
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 for spelling in -w --workspace; do
   : > "$STUB_LOG"
-  env -u BRIG_WORKSPACE "$WORK/brig" run claude "$spelling" "$HOMEDIR" -d \
+  env -u BRIG_WORKSPACE "$WORK/brig" run "$spelling" "$HOMEDIR" claude -d \
     > /dev/null 2> "$WORK/oldhome.err"
-  grep -q -- "--shared-dir $HOMEDIR:$GUEST_HOME" "$STUB_LOG" \
-    && ok "$spelling still sets the guest home" \
-    || bad "$spelling still sets the guest home -- got: $(grep '^argv: run' "$STUB_LOG")"
-  grep -q "is now \`--home\`" "$WORK/oldhome.err" \
+  rc=$?
+  [ "$rc" = 2 ] \
+    && ok "$spelling before the ref is a usage error" \
+    || bad "$spelling before the ref is a usage error -- got $rc: $(cat "$WORK/oldhome.err")"
+  grep -q "\`$spelling\` was removed; use \`--home\`" "$WORK/oldhome.err" \
     && ok "$spelling names --home as its replacement" \
     || bad "$spelling names --home -- got: $(cat "$WORK/oldhome.err")"
+  grep -q '^argv: run ' "$STUB_LOG" \
+    && bad "$spelling before the ref booted a sandbox" \
+    || ok "$spelling before the ref boots nothing"
   "$WORK/brig" rm --all -y > /dev/null 2>&1
 done
 
@@ -1259,7 +1263,7 @@ case "$out" in
 esac
 
 echo "== info =="
-# The full report: the envelope, then everything env has always printed.
+# The full report: the envelope, then everything env used to print.
 "$WORK/brig" info claude > "$WORK/info.out" 2> "$WORK/info.err"
 grep -q '^SANDBOX .*brig-claude-code' "$WORK/info.out" \
   && ok "info prints the envelope" || bad "info prints the envelope: $(cat "$WORK/info.out")"
@@ -1286,13 +1290,6 @@ else
   bad "info and run disagree about the envelope:
 $(diff "$WORK/rows.info" "$WORK/rows.run")"
 fi
-
-# env is the old spelling: the same output plus one line naming the new one.
-"$WORK/brig" env claude > "$WORK/env.out" 2> "$WORK/env.err"
-grep -q 'is now `brig info`' "$WORK/env.err" \
-  && ok "env names the new spelling" || bad "env names the new spelling: $(cat "$WORK/env.err")"
-grep -q '^SANDBOX .*brig-claude-code' "$WORK/env.out" \
-  && ok "env still prints the report" || bad "env still prints the report: $(cat "$WORK/env.out")"
 
 echo "== plan =="
 # The permission view, read without opening a secret. It boots nothing, so the
@@ -1344,41 +1341,38 @@ grep -Eq '^argv: run ' "$STUB_LOG" \
 
 echo "== named session =="
 : > "$STUB_LOG"
-"$WORK/brig" run claude --name 'My Big Refactor' -p hi > /dev/null 2>&1
+"$WORK/brig" run claude@my-big-refactor -p hi > /dev/null 2>&1
 grep -q -- "--shared-dir $WS-my-big-refactor:$GUEST_HOME" "$STUB_LOG" \
   && ok "a named session gets its own workspace" || bad "named session gets its own workspace"
 grep -q -- '--name brig-claude-code-my-big-refactor' "$STUB_LOG" \
   && ok "a named session gets its own sandbox" || bad "named session gets its own sandbox"
-grep -q -- "-- claude --name My Big Refactor -p hi" "$STUB_LOG" \
-  && ok "the raw name reaches the agent" || bad "the raw name reaches the agent"
+grep -q -- "-- claude --name my-big-refactor -p hi" "$STUB_LOG" \
+  && ok "the label reaches the agent" || bad "the label reaches the agent"
 
 echo "== session collision =="
 # Two names whose slugs land on one sandbox must not share it: brig used to drop
 # the second into the first's home with its own credentials and only warn. Now
 # the second is refused. See issue #26.
 #
-# The collision is sanitisation, which is the class that survives a slug no
-# longer being cut to ten characters: the space and the case both go, so these
-# two names are one slug however long they are.
+# A label is already its own slug, so since v0.5.0 removed --name no line
+# typed today can collide. A claim an older release wrote under a raw name
+# still can, and it is refused the same way.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
-"$WORK/brig" run claude --name acme-corp-prod -d > /dev/null 2>&1
-out="$("$WORK/brig" run claude --name 'Acme Corp Prod' -d 2>&1)"; rc=$?
-[ "$rc" != 0 ] && ok "a colliding session name is refused" \
-  || bad "a colliding session name started anyway -- got rc $rc"
+rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
+printf '{"brig-claude-code-acme-corp-prod": "Acme Corp Prod"}' > "$BRIG_STATE_DIR/slug-claims.json"
+out="$("$WORK/brig" run claude@acme-corp-prod -d 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "a session colliding with an older claim is refused" \
+  || bad "a session colliding with an older claim started anyway -- got rc $rc"
 case "$out" in
-  *acme-corp-prod*) ok "the refusal names the session already holding the sandbox" ;;
+  *"Acme Corp Prod"*) ok "the refusal names the session already holding the sandbox" ;;
   *) bad "the refusal names the other session -- got: $out" ;;
 esac
-# The same name returning is the ordinary repeat run, not a collision.
-"$WORK/brig" run claude --name acme-corp-prod -d > /dev/null 2>&1 \
+# A label with no older claim against it is the ordinary run, and running it
+# again is the repeat run, not a collision.
+"$WORK/brig" run claude@acme-corp-dev -d > /dev/null 2>&1 \
+  && "$WORK/brig" run claude@acme-corp-dev -d > /dev/null 2>&1 \
   && ok "the owning name runs again without complaint" \
   || bad "the owning name was refused its own sandbox"
-# rm releases the claim, so the name that was refused can take the sandbox once
-# the first is gone.
-"$WORK/brig" rm claude --name acme-corp-prod > /dev/null 2>&1
-"$WORK/brig" run claude --name 'Acme Corp Prod' -d > /dev/null 2>&1 \
-  && ok "rm frees the sandbox for the other name" \
-  || bad "the sandbox stayed claimed after rm"
 
 # The claims an older release wrote under sessions.json are carried across to
 # slug-claims.json rather than dropped: the two files have the same shape, so
@@ -1387,10 +1381,10 @@ esac
 # cannot be read back into a ref at all.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
-printf '{"brig-claude-code-acme-corp-prod": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
-out="$("$WORK/brig" run claude --name 'Acme Corp Prod' -d 2>&1)"
+printf '{"brig-claude-code-acme-corp-prod": "Acme Corp Prod"}' > "$BRIG_STATE_DIR/sessions.json"
+out="$("$WORK/brig" run claude@acme-corp-prod -d 2>&1)"
 case "$out" in
-  *acme-corp-prod*) ok "a claim written under the old file name still refuses" ;;
+  *"Acme Corp Prod"*) ok "a claim written under the old file name still refuses" ;;
   *) bad "the old claim was dropped -- got: $out" ;;
 esac
 grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
@@ -1404,7 +1398,7 @@ grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
 # them.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
-printf '{"brig-claude-code-acme-corp-prod": "acme-corp-prod"}' > "$BRIG_STATE_DIR/sessions.json"
+printf '{"brig-claude-code-acme-corp-prod": "Acme Corp Prod"}' > "$BRIG_STATE_DIR/sessions.json"
 "$WORK/brig" run claude -d > /dev/null 2>&1
 grep -q 'acme-corp-prod' "$BRIG_STATE_DIR/slug-claims.json" \
   && ok "an unnamed run carries the old claims across" \
@@ -1426,7 +1420,7 @@ rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
 # session in it loses its home.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 rm -f "$BRIG_STATE_DIR/slug-claims.json" "$BRIG_STATE_DIR/sessions.json"
-"$WORK/brig" run claude --name rc23guard -d > /dev/null 2>&1
+"$WORK/brig" run claude@rc23guard -d > /dev/null 2>&1
 if [ -s "$BRIG_STATE_DIR/sessions.json" ]; then
   cp "$BRIG_STATE_DIR/sessions.json" "$WORK/sessions.before"
   # Cleared after the session exists, not before: a named run claims its own
@@ -1436,7 +1430,7 @@ if [ -s "$BRIG_STATE_DIR/sessions.json" ]; then
   # rm of some other session is the instrument: it reads the claim index, which
   # is where the migration lives, and writes neither index -- so anything that
   # changes below changed because the migration fired.
-  "$WORK/brig" rm claude --name rc23other > /dev/null 2>&1
+  "$WORK/brig" rm claude@rc23other > /dev/null 2>&1
   cmp -s "$WORK/sessions.before" "$BRIG_STATE_DIR/sessions.json" \
     && ok "a current session index is not mistaken for claims" \
     || bad "the session index was rewritten by a migration that must not fire"
@@ -1449,7 +1443,7 @@ fi
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== the slug migration =="
-# A --name longer than ten characters used to be cut to that, so it had a
+# A session name longer than ten characters used to be cut to that, so it had a
 # shorter sandbox and a shorter home than it gets now. Both come off the slug on
 # every run, so such a session boots a new pair and the old one is orphaned: the
 # work in the old workspace is on the host and is still there, state inside the
@@ -1457,7 +1451,7 @@ echo "== the slug migration =="
 # moved or deleted.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 mkdir -p "$WS-refactorin"
-"$WORK/brig" run claude --name refactoring -d > /dev/null 2> "$WORK/moved.err"
+"$WORK/brig" run claude@refactoring -d > /dev/null 2> "$WORK/moved.err"
 grep -q -- "nothing reads the old ones now: $WS-refactorin (brig-claude-code-refactorin)" "$WORK/moved.err" \
   && ok "the migration notice names the home that was left behind" \
   || bad "the notice does not name the old home -- got: $(cat "$WORK/moved.err")"
@@ -1471,7 +1465,7 @@ grep -q -- "its new home and sandbox: $WS-refactoring (brig-claude-code-refactor
 # one they learn to skip.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 rm -rf "$WS-benchmarkin"
-"$WORK/brig" run claude --name benchmarking -d > /dev/null 2> "$WORK/fresh.err"
+"$WORK/brig" run claude@benchmarking -d > /dev/null 2> "$WORK/fresh.err"
 grep -q 'used to be shortened' "$WORK/fresh.err" \
   && bad "a session with nothing orphaned was warned -- got: $(cat "$WORK/fresh.err")" \
   || ok "a session with nothing orphaned is not warned"
@@ -1481,7 +1475,7 @@ grep -q 'used to be shortened' "$WORK/fresh.err" \
 # is on the silent side of it.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 mkdir -p "$WS-exactlyten"
-"$WORK/brig" run claude --name exactlyten -d > /dev/null 2> "$WORK/short.err"
+"$WORK/brig" run claude@exactlyten -d > /dev/null 2> "$WORK/short.err"
 grep -q 'used to be shortened' "$WORK/short.err" \
   && bad "a name that was never cut was warned -- got: $(cat "$WORK/short.err")" \
   || ok "a name the old budget left alone is not warned"
@@ -1734,7 +1728,7 @@ grep -q '^NETWORK .*shared' "$WORK/lost.out" && grep -q -- '--net shared' "$STUB
 rm -f "$BRIG_PROFILE_DIR/vz-lost.yaml"
 
 echo "== remembered workspace =="
-# A session created with -w used to be restarted by the next verb that left the
+# A session created with --home used to be restarted by the next verb that left the
 # flag off: the workspace resolved back to the default, the running sandbox was
 # mounting something else, and that read as a stale share. The workspace
 # survives a restart because it is on the host; the guest's memory-only state
@@ -1744,12 +1738,12 @@ echo "== remembered workspace =="
 # setting that names a directory and this is about the case where nothing does.
 RC="$WORK/ws-rc23"
 brig_bare() { env -u BRIG_WORKSPACE "$WORK/brig" "$@"; }
-brig_bare run claude --name rc23 -w "$RC" -d > /dev/null 2>&1
+brig_bare run claude@rc23 --home "$RC" -d > /dev/null 2>&1
 : > "$STUB_LOG"
-brig_bare sh claude --name rc23 -- uname -a > /dev/null 2>&1
+brig_bare sh claude@rc23 -- uname -a > /dev/null 2>&1
 grep -q '^argv: run ' "$STUB_LOG" \
-  && bad "exec without -w restarted the session" \
-  || ok "exec without -w finds the workspace the session was created with"
+  && bad "sh without --home restarted the session" \
+  || ok "sh without --home finds the workspace the session was created with"
 
 # The listing says what the sandbox is mounting, so the remembered directory
 # wins there over the one the sandbox name would derive -- and over the
@@ -1763,10 +1757,10 @@ esac
 # An explicit directory is a request rather than a guess, so it still wins and
 # still restarts: a share cannot be moved on a live guest.
 : > "$STUB_LOG"
-brig_bare sh claude --name rc23 -w "$WORK/ws-other" -- uname -a > /dev/null 2>&1
+brig_bare sh claude@rc23 --home "$WORK/ws-other" -- uname -a > /dev/null 2>&1
 grep -q '^argv: run ' "$STUB_LOG" \
-  && ok "a -w naming a different directory still restarts the sandbox" \
-  || bad "a -w naming a different directory still restarts the sandbox"
+  && ok "a --home naming a different directory still restarts the sandbox" \
+  || bad "a --home naming a different directory still restarts the sandbox"
 
 # The index is keyed by the ref, so a session started under one spelling of the
 # profile is the entry the other spelling reads -- claude and claude-code are
@@ -1776,27 +1770,27 @@ grep -q '"claude-code@rc23"' "$BRIG_STATE_DIR/sessions.json" \
   && ok "the session is filed under its ref" \
   || bad "the session is not filed under claude-code@rc23 -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 : > "$STUB_LOG"
-brig_bare sh claude-code --name rc23 -- uname -a > /dev/null 2>&1
+brig_bare sh claude-code@rc23 -- uname -a > /dev/null 2>&1
 grep -q '^argv: run ' "$STUB_LOG" \
   && bad "the alias did not find the session's workspace" \
   || ok "the alias finds the workspace the session was created with"
 
-brig_bare rm claude --name rc23 > /dev/null 2>&1
+brig_bare rm claude@rc23 > /dev/null 2>&1
 grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/sessions.json" \
   && bad "rm left the sandbox in the session index" \
   || ok "rm drops the remembered workspace"
 
-brig_bare run claude --name rc23 -w "$RC" -d > /dev/null 2>&1
+brig_bare run claude@rc23 --home "$RC" -d > /dev/null 2>&1
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 grep -q 'brig-claude-code-rc23' "$BRIG_STATE_DIR/sessions.json" \
-  && bad "reset left a sandbox in the session index" \
-  || ok "reset drops the remembered workspaces"
+  && bad "rm --all left a sandbox in the session index" \
+  || ok "rm --all drops the remembered workspaces"
 
 # A session with no label is filed under the bare agent name -- the ref's own
 # spelling for a session that has no label, rather than a trailing '@' or an
 # invented default one, either of which would be a key no ref types.
 rm -f "$BRIG_STATE_DIR/sessions.json"
-brig_bare run claude -w "$WORK/ws-bare" -d > /dev/null 2>&1
+brig_bare run claude --home "$WORK/ws-bare" -d > /dev/null 2>&1
 grep -q '"claude-code":' "$BRIG_STATE_DIR/sessions.json" \
   && ok "an unlabelled session is filed under the bare agent name" \
   || bad "the unlabelled session is not keyed claude-code -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
@@ -1806,15 +1800,14 @@ grep -q 'claude-code@' "$BRIG_STATE_DIR/sessions.json" \
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 # And the '@' form on the command line reaches the file: a session created as
-# claude@label is filed exactly as --name label files it, key and value both,
-# so the two spellings address one entry rather than two.
+# claude@label is filed under that ref, key and value both.
 rm -f "$BRIG_STATE_DIR/sessions.json"
-brig_bare run claude@rc23ref -w "$WORK/ws-ref" -d > /dev/null 2>&1
+brig_bare run claude@rc23ref --home "$WORK/ws-ref" -d > /dev/null 2>&1
 grep -q '"claude-code@rc23ref":' "$BRIG_STATE_DIR/sessions.json" \
   && ok "a session created as a ref is filed under that ref" \
   || bad "the ref form is not keyed claude-code@rc23ref -- got: $(cat "$BRIG_STATE_DIR/sessions.json" 2>&1)"
 grep -q '"sandbox": "brig-claude-code-rc23ref"' "$BRIG_STATE_DIR/sessions.json" \
-  && ok "the ref form records the sandbox --name would have named" \
+  && ok "the ref form records the sandbox its label names" \
   || bad "the ref form's sandbox is not brig-claude-code-rc23ref -- got: $(cat "$BRIG_STATE_DIR/sessions.json")"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
@@ -1823,7 +1816,7 @@ grep -q '"sandbox": "brig-claude-code-rc23ref"' "$BRIG_STATE_DIR/sessions.json" 
 # separated the agent from its label. One restart per session in it, which is
 # what an absent entry has always cost.
 printf '{"brig-claude-code-rc23": "%s"}' "$WORK/ws-legacy" > "$BRIG_STATE_DIR/workspaces.json"
-brig_bare run claude --name rc23 -w "$RC" -d > /dev/null 2>&1
+brig_bare run claude@rc23 --home "$RC" -d > /dev/null 2>&1
 [ -e "$BRIG_STATE_DIR/workspaces.json" ] \
   && bad "the old sandbox-keyed index was left behind" \
   || ok "the old sandbox-keyed index is deleted on sight"
@@ -1951,14 +1944,10 @@ grep -q '^-  *brig-mystery ' "$WORK/mystery.out" \
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== no runtime =="
-# With no runtime on PATH, env still reports what is knowable and marks only the
-# runtime line unavailable, and ls answers that there is nothing to list. Both
-# exit 0: the person most likely to run them is the one whose runtime is broken.
-out="$(PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" env claude 2>&1)"; rc=$?
-[ "$rc" = 0 ] && ok "env with no runtime exits 0" || bad "env with no runtime exits 0 -- got $rc: $out"
-# info is the new spelling of the same report, so it degrades the same way. A
-# recommended spelling that failed where the deprecated one worked would send
-# the person whose runtime is broken to the wrong command.
+# With no runtime on PATH, info still reports what is knowable and marks only
+# the runtime line unavailable, and ls answers that there is nothing to list.
+# Both exit 0: the person most likely to run them is the one whose runtime is
+# broken.
 out="$(PATH="" BRIG_RUNTIME_BIN= "$WORK/brig" info claude 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "info with no runtime exits 0" || bad "info with no runtime exits 0 -- got $rc: $out"
 # plan is the same kind of preview and answers the same way. Its own variable,
@@ -2153,14 +2142,14 @@ esac
 
 echo "== flags =="
 : > "$STUB_LOG"
-"$WORK/brig" run claude -t ghcr.io/me/img:latest -w "$WORK/other" -m 8192 --cpus 2 -d \
+"$WORK/brig" run claude --image ghcr.io/me/img:latest --home "$WORK/other" --mem 8192 --cpus 2 -d \
   > /dev/null 2>&1
 grep -q -- '--mem 8192 --cpus 2' "$STUB_LOG" \
-  && ok "-m and --cpus reach the runtime" || bad "-m and --cpus reach the runtime"
+  && ok "--mem and --cpus reach the runtime" || bad "--mem and --cpus reach the runtime"
 grep -q -- "--shared-dir $WORK/other:$GUEST_HOME" "$STUB_LOG" \
-  && ok "-w overrides the workspace" || bad "-w overrides the workspace"
+  && ok "--home overrides the workspace" || bad "--home overrides the workspace"
 grep -q 'ghcr.io/me/img:latest' "$STUB_LOG" \
-  && ok "-t overrides the image" || bad "-t overrides the image"
+  && ok "--image overrides the image" || bad "--image overrides the image"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== ubuntu =="
@@ -2412,7 +2401,7 @@ EDITOR="$WORK/bin/fake-editor" "$WORK/brig" agent edit mytool > /dev/null 2>&1 \
   && ok "the copy edits under the name it was given" \
   || bad "the copy edits under the name it was given"
 : > "$STUB_LOG"
-"$WORK/brig" run mytool -w "$WORK/ws-mytool" -p hi > /dev/null 2>&1
+"$WORK/brig" run mytool --home "$WORK/ws-mytool" -p hi > /dev/null 2>&1
 grep -q -- '--name brig-mytool' "$STUB_LOG" \
   && ok "the copy runs under the name it was given" \
   || bad "the copy runs under the name it was given"
@@ -2440,66 +2429,53 @@ grep -q 'brig rm mytool' "$WORK/rm-busy.out" \
   || ok "rm removes the copy under the name it was given, asking nothing"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
-# Every spelling this release retires keeps working, and says the one that
-# replaces it. Both halves matter: a spelling that fails breaks every script
-# that has it, and one that works silently never teaches anyone the new word.
+# v0.5.0 removed the spellings that had printed a notice since v0.2. Each is
+# now a usage error, exit 2, that names the spelling to use instead and does
+# nothing else.
 #
-# The replacement is matched as a whole command line, which also catches a
-# notice pointing at another retired spelling -- `brig agents` used to say
-# "is now `brig profiles`", one hop short of an answer.
+# The replacement is matched as a whole command line, because that is what a
+# reader pastes.
 "$WORK/brig" agent new dep --from codex > /dev/null 2>&1
 while IFS='|' read -r line replacement; do
   [ -n "$line" ] || continue
   # shellcheck disable=SC2086 -- the table holds whole command lines.
   "$WORK/brig" $line < /dev/null > "$WORK/dep.out" 2>&1
   rc=$?
-  [ "$rc" = 0 ] \
-    && ok "brig $line still works" \
-    || bad "brig $line still works -- exit $rc: $(cat "$WORK/dep.out")"
-  grep -q "is now \`$replacement\`" "$WORK/dep.out" \
+  [ "$rc" = 2 ] \
+    && ok "brig $line is a usage error" \
+    || bad "brig $line is a usage error -- exit $rc: $(cat "$WORK/dep.out")"
+  grep -q "was removed; use \`$replacement\`" "$WORK/dep.out" \
     && ok "brig $line names $replacement" \
     || bad "brig $line names $replacement -- got: $(cat "$WORK/dep.out")"
 done <<'TABLE'
 profiles|brig agent ls
 policies|brig policy ls
 agents|brig agent ls
-profile ls|brig agent ls
-profile list|brig agent ls
-profile export codex|brig agent export
-profile save codex|brig agent export
+profile ls|brig agent <verb>
+profile list|brig agent <verb>
+profile export codex|brig agent <verb>
+profile import codex.yaml|brig agent <verb>
+profile edit dep|brig agent <verb>
+profile rm dep -y|brig agent <verb>
+template ls|brig agent <verb>
+template edit mine|brig agent <verb>
 agent list|brig agent ls
 agent save codex|brig agent export
+agent load codex.yaml|brig agent import
 policy list|brig policy ls
+secret list|brig secret ls
+secret rm dep -y|brig secret delete
 export codex|brig agent export
-template ls|brig agent
+import codex.yaml|brig agent import
+create claude|brig run -d <ref>
+env claude|brig info <ref>
+reset -y|brig rm --all
 TABLE
-# import reads a file rather than stdin, so it is spelled out rather than
-# driven from the table above.
-for spelling in "import" "profile import" "profile load" "agent load"; do
-  # shellcheck disable=SC2086 -- $spelling is a command line, not a word.
-  "$WORK/brig" $spelling "$WORK/codex.yaml" > "$WORK/dep.out" 2>&1 \
-    && ok "brig $spelling still works" \
-    || bad "brig $spelling still works: $(cat "$WORK/dep.out")"
-  grep -q 'is now `brig agent import`' "$WORK/dep.out" \
-    && ok "brig $spelling names brig agent import" \
-    || bad "brig $spelling names brig agent import -- got: $(cat "$WORK/dep.out")"
-done
-# The verbs that need a file of their own to work on, so they run last: edit
-# and rm each take the copy made above.
-EDITOR=true "$WORK/brig" profile edit dep > "$WORK/dep.out" 2>&1 \
-  && ok "brig profile edit still works" \
-  || bad "brig profile edit still works: $(cat "$WORK/dep.out")"
-grep -q 'is now `brig agent edit`' "$WORK/dep.out" \
-  && ok "brig profile edit names brig agent edit" \
-  || bad "brig profile edit names brig agent edit -- got: $(cat "$WORK/dep.out")"
-"$WORK/brig" profile rm dep -y < /dev/null > "$WORK/dep.out" 2>&1 \
-  && ok "brig profile rm still works" \
-  || bad "brig profile rm still works: $(cat "$WORK/dep.out")"
-grep -q 'is now `brig agent rm`' "$WORK/dep.out" \
-  && ok "brig profile rm names brig agent rm" \
-  || bad "brig profile rm names brig agent rm -- got: $(cat "$WORK/dep.out")"
-"$WORK/brig" template edit mine > /dev/null 2>&1 \
-  && bad "brig template edit exists" || ok "there is no brig template edit"
+# The refusals did nothing: the copy the table tried to remove is still there.
+[ -f "$BRIG_PROFILE_DIR/dep.yaml" ] \
+  && ok "the removed spellings removed no profile" \
+  || bad "the removed spellings removed no profile"
+"$WORK/brig" agent rm dep -y < /dev/null > /dev/null 2>&1
 
 # And the current spellings say nothing. A notice on a command that is not
 # going anywhere is how a reader learns to ignore the ones that are.
@@ -2786,13 +2762,9 @@ grep -q -- '-- bash -l$' "$STUB_LOG" \
   || bad "sh with no command opens a login shell -- got: $(grep '^argv: exec' "$STUB_LOG" | tail -1)"
 
 echo "== retired spellings =="
-# Every spelling this release retires still works and says what replaces it. An
-# old spelling has to survive the commit that renames it, or that commit breaks
-# every script anyone has written.
-#
-# Both halves are asserted, and neither is enough alone: a spelling that fails
-# breaks those scripts, and one that works silently never teaches anyone the new
-# word, so the old one is still in them at the release that removes it.
+# brig exec is the one retired spelling left: it still works and says what
+# replaces it, and names no release, because it stays until brig sh can pipe a
+# command's output (#335).
 retired() {
   local want="$1"; shift
   local line="brig $*"
@@ -2808,10 +2780,9 @@ retired() {
 }
 "$WORK/brig" run claude -d > /dev/null 2>&1
 retired 'brig sh' exec claude -- true
-retired 'brig info' env claude
-retired 'brig run -d' create claude
-retired '<agent>@<label>' run claude --name retn -d
-retired '<agent>@<label>' run claude -n retn -d
+grep -q 'removed in' "$WORK/retired.out" \
+  && bad "brig exec names a release -- got: $(cat "$WORK/retired.out")" \
+  || ok "brig exec names no release"
 # A removed spelling is the other end of that: refused as a usage error that
 # names its replacement, with nothing asked of the runtime.
 removed() {
@@ -2831,8 +2802,14 @@ removed() {
     || ok "$line starts nothing"
 }
 removed 'brig sh <ref> [command...]' shell claude echo hi
-# Last of the group: it removes what the others were acting on.
-retired 'brig rm --all' reset
+removed 'brig info <ref>' env claude
+removed 'brig run -d <ref>' create claude
+removed 'brig rm --all' reset -y
+removed '<agent>@<label>' run --name retn claude -d
+removed '<agent>@<label>' run -n retn claude -d
+removed '--image' run -t ghcr.io/me/img:latest claude -d
+removed '--mem' run -m 8192 claude -d
+"$WORK/brig" rm --all -y > /dev/null 2>&1
 
 echo "== what a run says =="
 # By default, print what the user has to act on. brig's own progress and the
@@ -2922,16 +2899,20 @@ grep -q 'no space left on device' "$WORK/qfail.err" \
   && ok "brig -q still quotes what the runtime said" \
   || bad "brig -q still quotes what the runtime said -- got: $(cat "$WORK/qfail.err")"
 
-# The same flag after the verb, which is where it used to live. It keeps
-# working until v0.5.0 and names the position it moved to.
+# The same flag after the verb, which is where it used to live. v0.5.0
+# removed that spelling: before the ref it is a usage error naming the global
+# position, and nothing boots.
 "$WORK/brig" rm --all -y > /dev/null 2>&1
-CLAUDE_CODE_OAUTH_TOKEN=env-token-secret \
-  "$WORK/brig" run claude -q -d > /dev/null 2> "$WORK/runq.err"
-grep -q '^SANDBOX ' "$WORK/runq.err" \
-  && bad "run -q printed the envelope" || ok "-q after the verb still means quiet"
-grep -q 'is now `brig -q <verb> <ref>`' "$WORK/runq.err" \
+: > "$STUB_LOG"
+"$WORK/brig" run -q claude -d > /dev/null 2> "$WORK/runq.err"
+rc=$?
+[ "$rc" = 2 ] && ok "-q after the verb is a usage error" \
+  || bad "-q after the verb is a usage error -- got $rc: $(cat "$WORK/runq.err")"
+grep -q 'was removed; use `brig -q <verb> <ref>`' "$WORK/runq.err" \
   && ok "-q after the verb names the global position" \
   || bad "-q after the verb names the global position -- got: $(cat "$WORK/runq.err")"
+grep -q '^argv: run ' "$STUB_LOG" \
+  && bad "-q after the verb booted a sandbox" || ok "-q after the verb boots nothing"
 
 # -v is not brig's. It is Claude Code's version flag, codex's verbose flag and
 # Docker's volume flag, so brig claims neither reading: left of the verb it is

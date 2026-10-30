@@ -50,7 +50,7 @@ func twoSandboxes() *removeRuntime {
 // and making the scripted case the one that cannot be stopped. The test binary
 // has no terminal on stdin, which is exactly that case.
 func TestRemoveAllRefusesWithoutTerminalOrYes(t *testing.T) {
-	for _, args := range [][]string{{"rm", "--all"}, {"reset"}} {
+	for _, args := range [][]string{{"rm", "--all"}} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		_, err := captureStdout(t, func() error { return run(args) })
@@ -66,11 +66,14 @@ func TestRemoveAllRefusesWithoutTerminalOrYes(t *testing.T) {
 	}
 }
 
-// `brig reset` already means every sandbox, so --all on it is the new spelling
-// half-typed onto the old verb. Refused by name, with the whole of `brig rm
-// --all` in the message, rather than read past.
+// v0.5.0 removed `brig reset`. Every shape of it is refused by name, with the
+// whole of `brig rm --all` in the message, and removes nothing: the old verb
+// removed every sandbox, so a line that still has it must stop here.
 func TestResetRefusesAll(t *testing.T) {
-	for _, args := range [][]string{{"reset", "--all"}, {"reset", "--all", "-y"}, {"reset", "--dry-run", "--all"}} {
+	for _, args := range [][]string{
+		{"reset"}, {"reset", "-y"}, {"reset", "--dry-run"},
+		{"reset", "--all"}, {"reset", "--all", "-y"}, {"reset", "--dry-run", "--all"},
+	} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		_, err := captureStdout(t, func() error { return run(args) })
@@ -94,7 +97,6 @@ func TestRemoveAllWithYesRemovesEverySandbox(t *testing.T) {
 		{"rm", "--all", "-y"},
 		{"rm", "-y", "--all"},
 		{"rm", "--all", "--yes"},
-		{"reset", "-y"},
 	} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
@@ -121,7 +123,6 @@ func TestRemoveAllDryRunListsAndRemovesNothing(t *testing.T) {
 		{"rm", "--all", "--dry-run"},
 		{"rm", "--dry-run", "--all"},
 		{"rm", "--all", "--dry-run", "-y"},
-		{"reset", "--dry-run"},
 	} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
@@ -398,10 +399,10 @@ func TestRemoveAllRemovesASandboxWhoseProfileIsGone(t *testing.T) {
 	}
 }
 
-// rm --all and reset remove sandboxes without a Config, so they revoke each
-// sandbox's session tokens themselves, as brig stop and brig rm do.
+// rm --all removes sandboxes without a Config, so it revokes each sandbox's
+// session tokens itself, as brig stop and brig rm do.
 func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
-	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		var revoked []string
@@ -418,11 +419,11 @@ func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
 	}
 }
 
-// rm --all and reset also revoke what the broker still holds after their
-// own removals: a sandbox the detected runtime does not list keeps no token
-// that still works.
+// rm --all also revokes what the broker still holds after its own removals:
+// a sandbox the detected runtime does not list keeps no token that still
+// works.
 func TestRemoveAllRevokesWhatTheBrokerStillHolds(t *testing.T) {
-	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		swap(t, &revokeRoutes, func(string) error { return nil })

@@ -55,17 +55,15 @@ func secretCmd(out io.Writer, args []string) error {
 		err = deleteSecret(out, args[1:])
 	case "ls":
 		err = listSecrets(out, args[1:])
-	// The undocumented second spellings, kept until retiredGoesIn. delete and ls
-	// are the words this group settled on -- see the note on secretUsage about
-	// why the verb set here is not the one the other nouns use -- and rm and
-	// list were never in the help text, so they were found by accident and then
-	// written into scripts.
+	// The undocumented second spellings, removed in v0.5.0. delete and ls are
+	// the words this group settled on -- see the note on secretUsage about why
+	// the verb set here is not the one the other nouns use -- and rm and list
+	// were never in the help text, so they were found by accident and then
+	// written into scripts. Refused naming the word to type instead.
 	case "rm":
-		deprecated("brig secret rm", "brig secret delete")
-		err = deleteSecret(out, args[1:])
+		return removedf("brig secret rm", "brig secret delete")
 	case "list":
-		deprecated("brig secret list", "brig secret ls")
-		err = listSecrets(out, args[1:])
+		return removedf("brig secret list", "brig secret ls")
 	case "import":
 		err = importSecrets(out, args[1:])
 	default:

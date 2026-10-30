@@ -446,19 +446,6 @@ func TestReadAndDeleteRefuseAJournalName(t *testing.T) {
 	}
 }
 
-// rm is the spelling brig uses elsewhere -- `brig rm`, `brig profile rm` --
-// so it works here too.
-func TestDeleteAndRmAreSynonyms(t *testing.T) {
-	f := newFake(t)
-	f.seed("gh", "v")
-	if err := secretCmd(&bytes.Buffer{}, []string{"rm", "gh", "-y"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := f.items["gh"]; ok {
-		t.Error("rm did not delete")
-	}
-}
-
 // A deleted secret cannot be recovered, so a delete nobody confirmed must not
 // go through. Without a terminal there is nobody to ask, which is the shape a
 // script has -- and a script that means it says so with -y.
