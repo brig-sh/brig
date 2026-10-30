@@ -64,7 +64,8 @@ func MissingBundleEnv(exe string) (BundleEnv, bool) {
 }
 
 // InBundleTree says whether a binary sits in the bin directory of a runtime
-// bundle's tree.
+// bundle's tree. brig and nerdctl both live there: the bundle's brig-env.sh sets
+// BRIG_RUNTIME_BIN to $prefix/bin/nerdctl.
 func InBundleTree(bin string) bool {
 	if resolved, err := filepath.EvalSymlinks(bin); err == nil {
 		bin = resolved
