@@ -350,8 +350,10 @@ brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign is not 
   ↳ booting it unchecked
 ```
 
-On Linux the parentheses read `use your distribution's package, or
-https://docs.sigstore.dev/cosign/system_config/installation/`.
+On Linux the parentheses read `Brig's install.sh brings one, or see
+https://docs.sigstore.dev/cosign/system_config/installation/`. Brig's
+installer puts one in the runtime bundle, or next to `brig` when it installs no
+bundle.
 
 The result depends on `BRIG_VERIFY`:
 

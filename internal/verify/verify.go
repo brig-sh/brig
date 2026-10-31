@@ -561,13 +561,19 @@ func (p Policy) CosignMissing() string {
 }
 
 // cosignNotInstalled takes the platform so that a test on one host covers both.
+// Brig's installer brings a cosign on Linux, the runtime bundle's or a pinned
+// one, and distributions do not all package it, so the installer comes first.
 func cosignNotInstalled(goos string) string {
-	if goos == "darwin" {
+	switch goos {
+	case "darwin":
 		return "cosign is not installed (`brew install cosign`)"
+	case "linux":
+		return "cosign is not installed (Brig's install.sh brings one, or see " + cosignInstallDocs + ")"
 	}
-	return "cosign is not installed (use your distribution's package, or " +
-		"https://docs.sigstore.dev/cosign/system_config/installation/)"
+	return "cosign is not installed (see " + cosignInstallDocs + ")"
 }
+
+const cosignInstallDocs = "https://docs.sigstore.dev/cosign/system_config/installation/"
 
 // lookPath and run are variables so tests can drive the decision table
 // without a cosign on PATH.
