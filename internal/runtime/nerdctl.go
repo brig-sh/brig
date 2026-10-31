@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brig-sh/brig/internal/telemetry"
@@ -813,50 +814,105 @@ func (n *nerdctl) Logs(spec LogsSpec) error {
 		return cmd.Run()
 	}
 	// Cut here: nerdctl 2.3.5's --tail printed a lone carriage return, or a
-	// fragment of the last line, for a log it holds in full. Each stream is cut
-	// apart, as --tail would.
-	out, errOut := &logTail{n: spec.Tail}, &logTail{n: max(spec.Tail, 1)}
-	cmd.Stdout, cmd.Stderr = out, errOut
+	// fragment of the last line, for a log it holds in full. Its log is one file
+	// that holds both streams, and its --tail counts the lines of that file, so
+	// this counts the two together too.
+	tail := &logTail{n: spec.Tail}
+	cmd.Stdout, cmd.Stderr = tail.stream(0), tail.stream(1)
 	err := cmd.Run()
-	if _, werr := spec.Out.Write(out.buf); err == nil {
+	if werr := tail.replay(spec.Out, spec.Err, err != nil); err == nil {
 		err = werr
-	}
-	// nerdctl's own error is the last thing on stderr, and a failure must keep it
-	// even at --tail 0.
-	if spec.Tail > 0 || err != nil {
-		if _, werr := spec.Err.Write(errOut.buf); err == nil {
-			err = werr
-		}
 	}
 	return err
 }
 
-// logTail keeps the last n lines written to it.
+// logTail keeps the last n lines of a log that arrives on two streams, in the
+// order they arrived, and gives each line back to its own stream. The order is
+// the order nerdctl wrote them, as near as two pipes read apart can keep it.
 type logTail struct {
-	n   int
-	buf []byte
+	n  int
+	mu sync.Mutex
+	// lines holds up to 2n lines, and is cut back to n when full, so a long log
+	// costs a copy every n lines and not on every write.
+	lines []logLine
+	// open is the line each stream has not ended yet.
+	open [2][]byte
+	// lastErr is the last line on stderr. nerdctl's own error is there, and a
+	// failure must keep it even at --tail 0.
+	lastErr []byte
 }
 
-func (l *logTail) Write(p []byte) (int, error) {
-	l.buf = append(l.buf, p...)
-	end := len(l.buf)
-	if end > 0 && l.buf[end-1] == '\n' {
-		end--
-	}
-	seen := 0
-	for i := end; i > 0; i-- {
-		if l.buf[i-1] != '\n' {
-			continue
-		}
-		if seen++; seen == l.n {
-			l.buf = l.buf[i:]
-			return len(p), nil
-		}
-	}
-	if l.n == 0 {
-		l.buf = l.buf[:0]
-	}
+type logLine struct {
+	stream int
+	text   []byte
+}
+
+func (t *logTail) stream(i int) io.Writer { return logStream{t, i} }
+
+type logStream struct {
+	t *logTail
+	i int
+}
+
+func (s logStream) Write(p []byte) (int, error) {
+	s.t.add(s.i, p)
 	return len(p), nil
+}
+
+func (t *logTail) add(i int, p []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for len(p) > 0 {
+		nl := bytes.IndexByte(p, '\n')
+		if nl < 0 {
+			t.open[i] = append(t.open[i], p...)
+			return
+		}
+		line := append(t.open[i], p[:nl+1]...)
+		t.open[i] = nil
+		t.push(i, line)
+		p = p[nl+1:]
+	}
+}
+
+func (t *logTail) push(i int, line []byte) {
+	if i == 1 {
+		t.lastErr = line
+	}
+	if t.n <= 0 {
+		return
+	}
+	t.lines = append(t.lines, logLine{i, line})
+	if len(t.lines) >= 2*t.n {
+		t.lines = append([]logLine(nil), t.lines[len(t.lines)-t.n:]...)
+	}
+}
+
+// replay writes the tail out once the log has ended. A line left without its
+// newline still counts.
+func (t *logTail) replay(out, errOut io.Writer, failed bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for i := range t.open {
+		if len(t.open[i]) > 0 {
+			t.push(i, t.open[i])
+			t.open[i] = nil
+		}
+	}
+	lines := t.lines
+	if len(lines) > t.n {
+		lines = lines[len(lines)-t.n:]
+	}
+	if t.n <= 0 && failed && t.lastErr != nil {
+		lines = []logLine{{1, t.lastErr}}
+	}
+	to := [2]io.Writer{out, errOut}
+	for _, line := range lines {
+		if _, err := to[line.stream].Write(line.text); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (n *nerdctl) LogsHint(name string) string {

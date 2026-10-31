@@ -225,7 +225,7 @@ nerdctl run --detach --name <name>
      [-v <host>:<guest>[:ro]]... [--tmpfs <path>:<options>]...
      [-e <NAME>|<NAME>=<value>]... <image> sleep infinity
 nerdctl exec -i [-t] [-w <dir>] [-u <user>] [-e <NAME>|<NAME>=<value>]... <name> <cmd>...
-nerdctl logs [--follow] [--tail <n>] <name>
+nerdctl logs [--follow [--tail <n>]] <name>
 nerdctl stop <name>
 nerdctl rm <name>
 ```
@@ -234,7 +234,8 @@ The container runs `sleep infinity`, because a container exits when its
 command exits. The sandbox must outlive the exec that used it.
 `brig logs <ref>` runs `nerdctl logs <name>`. Brig passes `--tail` to `nerdctl`
 only with `--follow`. Otherwise it reads the whole log and cuts the tail itself,
-because nerdctl 2.3.5 returned a fragment of the last line.
+because nerdctl 2.3.5 returned a fragment of the last line. The tail counts the
+lines of both streams together, as nerdctl does.
 
 Two more tools run on the same paths:
 
