@@ -136,9 +136,11 @@ ok "a user install with /usr/local/bin first gets the PATH change"
   || { cat "$T/out.log" >&2; fail "the release's brig-broker was not installed beside brig"; }
 ok "a user install puts brig-broker beside brig"
 pins="$T/home/.local/share/brig/data/pins.env"
-grep -qx 'BRIG_VERSION=v9.9.9' "$pins" && grep -qx 'BRIG_BROKER_INSTALLED=true' "$pins" \
-  && [ "$(grep -c '^BRIG_BROKER_INSTALLED=' "$pins")" = 1 ] \
-  || { cat "$pins" >&2; fail "pins.env does not name the brig and broker installed"; }
+if ! grep -qx 'BRIG_VERSION=v9.9.9' "$pins" || ! grep -qx 'BRIG_BROKER_INSTALLED=true' "$pins" \
+  || [ "$(grep -c '^BRIG_BROKER_INSTALLED=' "$pins")" != 1 ]; then
+  cat "$pins" >&2
+  fail "pins.env does not name the brig and broker installed"
+fi
 ok "pins.env names the brig and broker installed"
 
 # 2. The same with ~/.local/bin off PATH altogether.
