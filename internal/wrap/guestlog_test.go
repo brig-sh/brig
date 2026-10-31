@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -203,4 +204,111 @@ func TestGuestLogTailTakesTheLastPanic(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("guestLogTail = %q, want %q", got, want)
 	}
+}
+
+// A colour code must go whole. Dropping only ESC prints the rest of it.
+func TestGuestLogTailDropsWholeSequences(t *testing.T) {
+	got := guestLogTail("\x1b[0;32m  OK  \x1b[0m Started\n\x1b]0;title\x07done\n", 5)
+	want := []string{"OK   Started", "done"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("guestLogTail = %q, want %q", got, want)
+	}
+}
+
+// One log line can hold thousands of progress updates. What a terminal would
+// show is the last, and a tab separates words.
+func TestGuestLogTailReadsALineAsATerminalWould(t *testing.T) {
+	got := guestLogTail(strings.Repeat("pulling 10%\r", 2000)+"pulling 100%\r\na\tb\n", 5)
+	want := []string{"pulling 100%", "a b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("guestLogTail = %q, want %q", got, want)
+	}
+}
+
+// A guest can write one very long line, and the start of it says what it is.
+func TestGuestLogTailCapsALine(t *testing.T) {
+	got := guestLogTail(strings.Repeat("é", guestLogLineRunes+50)+"\n", 5)
+	want := []string{strings.Repeat("é", guestLogLineRunes) + "..."}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("guestLogTail = %q, want %q", got, want)
+	}
+}
+
+// The runtime's own failure must not read as something the guest said.
+func TestWarnGuestLogHeadsEachStream(t *testing.T) {
+	c, rt := deadGuestConfig(t, false)
+	c.Runtime = &stderrOnly{rt}
+	c.warnGuestLog()
+	said := c.Err.(*bytes.Buffer).String()
+	guest := strings.Index(said, "the log of the sandbox ends with")
+	own := strings.Index(said, "the runtime's error output ends with")
+	if guest < 0 || own < 0 {
+		t.Fatalf("a heading is missing:\n%s", said)
+	}
+	if got := strings.Index(said, "exec sleep failed"); got < guest || got > own {
+		t.Errorf("the guest's line is not under its heading:\n%s", said)
+	}
+	if got := strings.Index(said, "Cannot create virtio-fs device"); got < own {
+		t.Errorf("the runtime's line is not under its heading:\n%s", said)
+	}
+}
+
+// With nothing on one stream, its heading has nothing to introduce.
+func TestWarnGuestLogSkipsAnEmptyStream(t *testing.T) {
+	c, _ := deadGuestConfig(t, false)
+	c.warnGuestLog()
+	said := c.Err.(*bytes.Buffer).String()
+	if strings.Contains(said, "the runtime's error output") {
+		t.Errorf("a heading with nothing under it (virtiofsd's lines are left out):\n%s", said)
+	}
+}
+
+// -q asks for no warnings, and this one is only a warning.
+func TestWarnGuestLogHonoursQuiet(t *testing.T) {
+	c, rt := deadGuestConfig(t, false)
+	c.Verbosity = Quiet
+	c.warnGuestLog()
+	if said := c.Err.(*bytes.Buffer).String(); strings.Contains(said, rt.logged[:20]) {
+		t.Errorf("-q printed the guest's log:\n%s", said)
+	}
+}
+
+// A runtime that fails partway has still said something, and the log it wrote is
+// the only account there will be, since the restart removes it.
+func TestWarnGuestLogKeepsWhatArrivedBeforeAFailure(t *testing.T) {
+	c, rt := deadGuestConfig(t, false)
+	c.Runtime = &failingLogs{rt}
+	c.warnGuestLog()
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, rt.logged[:20]) {
+		t.Errorf("the lines before the failure are missing:\n%s", said)
+	}
+}
+
+type failingLogs struct{ *deadGuest }
+
+func (f *failingLogs) Logs(spec runtime.LogsSpec) error {
+	_, _ = io.WriteString(spec.Out, f.logged)
+	return errors.New("exit status 1")
+}
+
+// A run on its way to a failure must not hang on the runtime, and a read cut off
+// partway says nothing about how the log ends.
+func TestWarnGuestLogGivesUpOnAStuckRuntime(t *testing.T) {
+	was := guestLogTimeout
+	guestLogTimeout = time.Millisecond
+	t.Cleanup(func() { guestLogTimeout = was })
+	c, rt := deadGuestConfig(t, false)
+	c.Runtime = &stuckLogs{rt}
+	c.warnGuestLog()
+	if said := c.Err.(*bytes.Buffer).String(); strings.Contains(said, "partway") {
+		t.Errorf("a read cut off was shown as the end of the log:\n%s", said)
+	}
+}
+
+type stuckLogs struct{ *deadGuest }
+
+func (s *stuckLogs) Logs(spec runtime.LogsSpec) error {
+	_, _ = io.WriteString(spec.Out, "partway through\n")
+	<-spec.Ctx.Done()
+	return spec.Ctx.Err()
 }

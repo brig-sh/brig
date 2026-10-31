@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/termfilter"
 )
 
 // BuildEnv resolves everything the guest is handed for this invocation.
@@ -620,15 +622,22 @@ func (c *Config) waitReady() bool {
 	}
 }
 
-// guestLogLines is how much of the log warnGuestLog shows, and guestLogBytes how
-// much of it brig holds to find them.
+// guestLogLines is how much of the log warnGuestLog shows, guestLogBytes how
+// much of it brig holds to find them, and guestLogLineRunes how much of one line
+// it prints.
 const (
-	guestLogLines = 5
-	guestLogBytes = 64 << 10
+	guestLogLines     = 5
+	guestLogBytes     = 64 << 10
+	guestLogLineRunes = 200
 )
 
-// virtiofsdRecord is one log record of virtiofsd. A runtime that merges the
-// streams can start one in the middle of a guest's line.
+// guestLogTimeout bounds the read of a log. The runtime may be why the guest is
+// not answering, and a run on its way to a failure must not hang on it. A var for
+// tests.
+var guestLogTimeout = 10 * time.Second
+
+// virtiofsdRecord is one log record of virtiofsd, which runs to the end of its
+// line.
 var virtiofsdRecord = regexp.MustCompile(`\[[0-9TZ:.-]+ +[A-Z]+ +virtiofsd[^\]]*\].*`)
 
 // tailBuffer keeps the last limit bytes written to it.
@@ -657,21 +666,33 @@ func (c *Config) warnGuestLog() {
 		return
 	}
 	raw, rawErr := &tailBuffer{limit: guestLogBytes}, &tailBuffer{limit: guestLogBytes}
+	ctx, cancel := context.WithTimeout(context.Background(), guestLogTimeout)
+	defer cancel()
 	// The whole log, cut here: nerdctl 2.3.5's --tail 40 returned a fragment of
 	// the last line and lost the line that said why the guest died. That costs a
 	// long read on a sandbox that ran for days, and only on the way to a failure.
 	// Best effort, since a runtime with no log leaves the message that follows as
 	// it was.
-	_ = c.Runtime.Logs(runtime.LogsSpec{Name: c.VMName, Tail: -1, Out: raw, Err: rawErr})
+	_ = c.Runtime.Logs(runtime.LogsSpec{Name: c.VMName, Tail: -1, Out: raw, Err: rawErr, Ctx: ctx})
+	// A read that ran out of time stopped partway, and "ends with" would be false
+	// of what it holds.
+	if ctx.Err() != nil {
+		return
+	}
 	// The guest's console is the log's stdout on nerdctl, and virtiofsd and the
-	// monitor are its stderr. Read together they interleave mid-line, so each is
-	// cut apart. The deciding line can be in either.
-	lines := append(guestLogTail(string(raw.data), guestLogLines),
-		guestLogTail(string(rawErr.data), guestLogLines)...)
+	// monitor are its stderr. On hull, stderr is hull's own. Read together they
+	// interleave mid-line, and the runtime's words would read as the guest's, so
+	// each has its own heading. The deciding line can be in either.
+	c.warnLogLines("the log of the sandbox ends with", raw)
+	c.warnLogLines("the runtime's error output ends with", rawErr)
+}
+
+func (c *Config) warnLogLines(heading string, log *tailBuffer) {
+	lines := guestLogTail(string(log.data), guestLogLines)
 	if len(lines) == 0 {
 		return
 	}
-	block := notice.New("the log of the sandbox ends with")
+	block := notice.New(heading)
 	for _, line := range lines {
 		block.Note("%s", line)
 	}
@@ -682,15 +703,8 @@ func (c *Config) warnGuestLog() {
 // guest, so anything a terminal would act on goes.
 func guestLogTail(log string, n int) []string {
 	var lines []string
-	for _, line := range strings.Split(log, "\n") {
-		line = virtiofsdRecord.ReplaceAllString(line, "")
-		line = strings.TrimSpace(strings.Map(func(r rune) rune {
-			if unicode.IsPrint(r) {
-				return r
-			}
-			return -1
-		}, line))
-		if line != "" {
+	for _, line := range strings.Split(string(termfilter.Strip([]byte(log))), "\n") {
+		if line = guestLogLine(line); line != "" {
 			lines = append(lines, line)
 		}
 	}
@@ -707,6 +721,29 @@ func guestLogTail(log string, n int) []string {
 		lines = lines[len(lines)-n:]
 	}
 	return lines
+}
+
+// guestLogLine is one line of a log as a notice prints it, control sequences
+// already gone.
+func guestLogLine(line string) string {
+	line = virtiofsdRecord.ReplaceAllString(line, "")
+	// A progress bar rewrites its line with carriage returns, thousands of times
+	// in one line of the log. A terminal shows the text after the last.
+	line = strings.TrimRight(line, "\r")
+	line = line[strings.LastIndexByte(line, '\r')+1:]
+	line = strings.TrimSpace(strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			return ' '
+		case unicode.IsPrint(r):
+			return r
+		}
+		return -1
+	}, line))
+	if runes := []rune(line); len(runes) > guestLogLineRunes {
+		return string(runes[:guestLogLineRunes]) + "..."
+	}
+	return line
 }
 
 // guestMountsWorkspace asks the guest which workspace it actually has.

@@ -1033,7 +1033,9 @@ brig: the running sandbox is not answering
 
 **Cause:** The runtime reports the sandbox as running, and the guest did not
 answer within `BRIG_READY_TIMEOUT`. The lines above the warning are the end of
-its log, and the restart removes that log.
+its log, and the restart removes that log. A second block, `the runtime's error
+output ends with`, holds what the runtime or its monitor wrote, when there is
+any.
 
 **Fix:** Read those lines. If the guest fails again on the restart, see
 [The sandbox never became ready](#the-sandbox-never-became-ready).

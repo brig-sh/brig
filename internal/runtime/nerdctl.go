@@ -805,7 +805,7 @@ func (n *nerdctl) Logs(spec LogsSpec) error {
 		args = append(args, "--tail", strconv.Itoa(spec.Tail))
 	}
 	args = append(args, spec.Name)
-	cmd := exec.Command(n.bin, args...)
+	cmd := logsCommand(spec, n.bin, args)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	cmd.Stdout = spec.Out
 	cmd.Stderr = spec.Err
