@@ -258,7 +258,38 @@ func cniDirs() []string {
 			return []string{string(m[1]) + string(m[2])}
 		}
 	}
-	return []string{"/opt/cni/bin"}
+	return []string{defaultCNIDir()}
+}
+
+// defaultCNIDir is nerdctl's defaults.CNIPath: the first of these directories
+// that exists, with a rootless user's own ones ahead of the rest. A distro
+// nerdctl with the distro's plugins uses /usr/lib/cni or /usr/libexec/cni, and
+// a row that knew only /opt/cni/bin told that host to install what it had. It
+// takes the first that exists and does not merge them, so neither does this.
+func defaultCNIDir() string {
+	candidates := []string{
+		"/opt/cni/bin",
+		"/usr/local/libexec/cni",
+		"/usr/local/lib/cni",
+		"/home/linuxbrew/.linuxbrew/opt/cni-plugins/bin",
+		"/usr/libexec/cni",
+		"/usr/lib/cni",
+	}
+	if geteuid() != 0 {
+		if home := os.Getenv("HOME"); home != "" {
+			candidates = append([]string{
+				filepath.Join(home, "opt/cni/bin"),
+				filepath.Join(home, ".local/libexec/cni"),
+				filepath.Join(home, ".local/lib/cni"),
+			}, candidates...)
+		}
+	}
+	for _, dir := range candidates {
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+	}
+	return "/opt/cni/bin"
 }
 
 // cniPlugins are what a nerdctl bridge network calls: the chain of a brig sandbox
