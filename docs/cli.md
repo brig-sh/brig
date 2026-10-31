@@ -516,8 +516,10 @@ from the host. For a user other than root: `subids`, `userns` and `uidmap`. For
 every user: `devices` (`/dev/vhost-vsock`) and `cni`. Where AppArmor restricts
 user namespaces, as on Ubuntu 24.04 and later, `userns` looks for the profile of
 the `rootlesskit` a run starts. For a `nerdctl` from outside the runtime bundle,
-or when no runtime is found, it adds `tools`: `cloud-hypervisor`, and `oras` when
-the boot assets are missing. For such a `nerdctl`, the `runtime` line ends with
+or when no runtime is found, it adds `tools`: the monitor a run boots on, and
+`oras` when the boot assets are missing. The monitor is `hvi` unless
+`BRIG_HYPERVISOR` or the agent's `hypervisor:` field names another; `qemu` is
+looked up as `qemu-system-` and the host architecture, as urunc does. For such a `nerdctl`, the `runtime` line ends with
 `(not the runtime bundle; see install.sh)`. That runtime
 may work, as long as its `urunc` reads the boot annotations, which `doctor` cannot
 tell.

@@ -202,7 +202,12 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	if bypassed {
 		checks = append(checks, bundle)
 	}
-	host := linuxHostChecks(rt)
+	hypervisor := ""
+	if agent != nil {
+		hypervisor = agent.Hypervisor
+	}
+	// A run reads the same setting the same way; see wrap.Config.hypervisor.
+	host := linuxHostChecks(rt, wrap.NewEnv(name, nil).String("HYPERVISOR", hypervisor))
 	if bypassed {
 		// install.sh ran already. This brig does not see what it installed.
 		for i := range host {

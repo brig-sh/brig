@@ -58,7 +58,10 @@ const bundleCarriesThem = "the runtime bundle carries them; see the bundle line 
 // none of them changes the exit status.
 //
 // A run as root uses the node-wide install and maps no subordinate IDs.
-func linuxHostRows(rt runtime.Runtime) []check {
+//
+// hypervisor is what a run would ask for: BRIG_HYPERVISOR, or the agent's own
+// field. The tools row looks for the monitor it picks.
+func linuxHostRows(rt runtime.Runtime, hypervisor string) []check {
 	if hostOS != "linux" || (rt != nil && rt.Kind() != "nerdctl") {
 		return nil
 	}
@@ -73,7 +76,7 @@ func linuxHostRows(rt runtime.Runtime) []check {
 	if rt == nil || !runtime.InBundleTree(rt.Bin()) {
 		// oras only fetches boot assets, so a host that has them does not need it.
 		_, present, _, err := runtime.BootAssetsDir(rt)
-		rows = append(rows, toolsCheck(err != nil || !present))
+		rows = append(rows, toolsCheck(err != nil || !present, hypervisor))
 	}
 	return rows
 }
@@ -288,8 +291,16 @@ func cniCheck() check {
 	return check{Name: "cni", State: statePass, Finding: "the CNI plugins are in " + joined}
 }
 
-func toolsCheck(needOras bool) check {
-	tools := []string{"cloud-hypervisor"}
+// toolsCheck looks for the monitor binary urunc runs for this hypervisor. The
+// default moved to hvi, and a row that still asked for cloud-hypervisor passed a
+// host that cannot boot and failed one that can.
+func toolsCheck(needOras bool, hypervisor string) check {
+	monitor, err := runtime.LinuxMonitorBinary(hypervisor)
+	if err != nil {
+		return check{Name: "tools", State: stateFail, Finding: oneLine(err.Error()),
+			Fix: "set BRIG_HYPERVISOR, or the profile's hypervisor field, to a monitor urunc runs"}
+	}
+	tools := []string{monitor}
 	if needOras {
 		tools = append([]string{"oras"}, tools...)
 	}
@@ -300,8 +311,12 @@ func toolsCheck(needOras bool) check {
 		}
 	}
 	if len(missing) > 0 {
+		pronoun := "it"
+		if len(missing) > 1 {
+			pronoun = "them"
+		}
 		return check{Name: "tools", State: stateFail,
-			Finding: strings.Join(missing, " and ") + " not on PATH, and a genericBoot profile needs them",
+			Finding: strings.Join(missing, " and ") + " not on PATH, and a genericBoot run needs " + pronoun,
 			Fix:     "run install.sh for the runtime bundle",
 		}
 	}
