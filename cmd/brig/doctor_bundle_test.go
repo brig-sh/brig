@@ -91,7 +91,7 @@ func TestDoctorSaysFetchedAssetsAreNotTheBundles(t *testing.T) {
 // bundle line instead, and the ones about the host itself keep their advice.
 func TestDoctorHostLinesDeferToTheBundleLine(t *testing.T) {
 	bypassedBundle(t)
-	swap(t, &linuxHostChecks, func(runtime.Runtime) []check {
+	swap(t, &linuxHostChecks, func(runtime.Runtime, string) []check {
 		return []check{
 			{Name: "cni", State: stateFail, Fix: "run install.sh for the runtime bundle"},
 			{Name: "tools", State: stateFail, Fix: "run install.sh for the runtime bundle"},

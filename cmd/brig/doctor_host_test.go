@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 func writeFile(t *testing.T, content string) string {
@@ -127,7 +130,7 @@ func TestSubIDFixOffersAFreeRange(t *testing.T) {
 func TestLinuxHostRowsForRoot(t *testing.T) {
 	swap(t, &hostOS, "linux")
 	swap(t, &geteuid, func() int { return 0 })
-	for _, c := range linuxHostRows(nerdctlDoctorRuntime{}) {
+	for _, c := range linuxHostRows(nerdctlDoctorRuntime{}, "") {
 		switch c.Name {
 		case "subids", "userns", "uidmap":
 			t.Errorf("a %s row for root: %+v", c.Name, c)
@@ -203,7 +206,7 @@ func TestDevicesCheckFitsTheFixToTheFailure(t *testing.T) {
 func TestLinuxHostRowsLeaveKVMToTheVirtualLine(t *testing.T) {
 	swap(t, &hostOS, "linux")
 	swap(t, &userNamespaces, func() error { return nil })
-	for _, c := range linuxHostRows(nerdctlDoctorRuntime{}) {
+	for _, c := range linuxHostRows(nerdctlDoctorRuntime{}, "") {
 		if strings.Contains(c.Finding, "/dev/kvm") {
 			t.Errorf("a host row reports /dev/kvm: %+v", c)
 		}
@@ -231,7 +234,7 @@ func TestToolsRowDependsOnTheBundleTree(t *testing.T) {
 	swap(t, &hostOS, "linux")
 	swap(t, &userNamespaces, func() error { return nil })
 	has := func(rt nerdctlDoctorRuntime) bool {
-		for _, c := range linuxHostRows(rt) {
+		for _, c := range linuxHostRows(rt, "") {
 			if c.Name == "tools" {
 				return true
 			}
@@ -313,21 +316,72 @@ func TestCNICheckFollowsWhereNerdctlLooks(t *testing.T) {
 
 func TestToolsCheckNamesWhatIsMissing(t *testing.T) {
 	fakeTools(t, 0, "oras")
-	c := toolsCheck(true)
-	if c.State != stateFail || !strings.Contains(c.Finding, "cloud-hypervisor") || strings.Contains(c.Finding, "oras") {
+	c := toolsCheck(true, "")
+	if c.State != stateFail || !strings.Contains(c.Finding, "hvi not on PATH") || strings.Contains(c.Finding, "oras") ||
+		!strings.HasSuffix(c.Finding, "needs it") {
 		t.Errorf("%+v", c)
 	}
-	fakeTools(t, 0, "oras", "cloud-hypervisor")
-	if c := toolsCheck(true); c.State != statePass {
+	fakeTools(t, 0, "oras", "hvi")
+	if c := toolsCheck(true, ""); c.State != statePass {
 		t.Errorf("%+v", c)
 	}
 	// oras fetches boot assets, and a host that has them runs without it.
-	fakeTools(t, 0, "cloud-hypervisor")
-	if c := toolsCheck(false); c.State != statePass {
+	fakeTools(t, 0, "hvi")
+	if c := toolsCheck(false, ""); c.State != statePass {
 		t.Errorf("oras asked for with the assets present: %+v", c)
 	}
-	if c := toolsCheck(true); c.State != stateFail || !strings.Contains(c.Finding, "oras") {
+	if c := toolsCheck(true, ""); c.State != stateFail || !strings.Contains(c.Finding, "oras") {
 		t.Errorf("oras not asked for with the assets missing: %+v", c)
+	}
+	fakeTools(t, 0)
+	if c := toolsCheck(true, ""); c.State != stateFail || !strings.HasSuffix(c.Finding, "needs them") {
+		t.Errorf("two tools missing: %+v", c)
+	}
+}
+
+// The two hosts from the review. A run boots on hvi unless something names
+// another monitor, so the host with hvi alone boots and the host with
+// cloud-hypervisor alone does not.
+func TestToolsCheckAsksForTheMonitorARunBootsOn(t *testing.T) {
+	fakeTools(t, 0, "hvi")
+	if c := toolsCheck(false, ""); c.State != statePass {
+		t.Errorf("hvi on PATH, no cloud-hypervisor: %+v", c)
+	}
+	fakeTools(t, 0, "cloud-hypervisor")
+	if c := toolsCheck(false, ""); c.State != stateFail || !strings.Contains(c.Finding, "hvi") {
+		t.Errorf("cloud-hypervisor on PATH, no hvi: %+v", c)
+	}
+	if c := toolsCheck(false, "cloud-hypervisor"); c.State != statePass {
+		t.Errorf("cloud-hypervisor asked for and on PATH: %+v", c)
+	}
+	if c := toolsCheck(false, "bhyve"); c.State != stateFail || !strings.Contains(c.Finding, "bhyve") {
+		t.Errorf("a monitor urunc does not run: %+v", c)
+	}
+}
+
+// Doctor reads BRIG_HYPERVISOR the way a run does: per agent first, then
+// global, then the profile's own field.
+func TestDoctorPassesTheRunsHypervisorToTheHostRows(t *testing.T) {
+	healthyHost(t)
+	var got string
+	swap(t, &linuxHostChecks, func(_ runtime.Runtime, hv string) []check {
+		got = hv
+		return nil
+	})
+	t.Setenv("BRIG_HYPERVISOR", "firecracker")
+	runDoctor(nil, nil)
+	if got != "firecracker" {
+		t.Errorf("BRIG_HYPERVISOR=firecracker reached the host rows as %q", got)
+	}
+	t.Setenv("BRIG_HYPERVISOR", "")
+	runDoctor(&profile.Profile{Name: "demo", Hypervisor: "qemu"}, nil)
+	if got != "qemu" {
+		t.Errorf("the profile's qemu reached the host rows as %q", got)
+	}
+	t.Setenv("BRIG_DEMO_HYPERVISOR", "cloud-hypervisor")
+	runDoctor(&profile.Profile{Name: "demo", Hypervisor: "qemu"}, nil)
+	if got != "cloud-hypervisor" {
+		t.Errorf("BRIG_DEMO_HYPERVISOR reached the host rows as %q", got)
 	}
 }
 
@@ -335,11 +389,11 @@ func TestToolsCheckNamesWhatIsMissing(t *testing.T) {
 // exit status.
 func TestLinuxHostRowsStayOffElsewhere(t *testing.T) {
 	swap(t, &hostOS, "darwin")
-	if rows := linuxHostRows(nil); rows != nil {
+	if rows := linuxHostRows(nil, ""); rows != nil {
 		t.Errorf("rows on macOS: %+v", rows)
 	}
 	swap(t, &hostOS, "linux")
-	if rows := linuxHostRows(doctorRuntime{}); rows != nil {
+	if rows := linuxHostRows(doctorRuntime{}, ""); rows != nil {
 		t.Errorf("rows for hull: %+v", rows)
 	}
 }
@@ -349,7 +403,7 @@ func TestLinuxHostRowsLeaveTheExitStatusAlone(t *testing.T) {
 	swap(t, &userNamespaces, func() error { return errors.New("no") })
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("BRIG_BOOT_ASSETS", "")
-	if err := doctorExit(linuxHostRows(nerdctlDoctorRuntime{})); err != nil {
+	if err := doctorExit(linuxHostRows(nerdctlDoctorRuntime{}, "")); err != nil {
 		t.Errorf("a host row changed the exit status: %v", err)
 	}
 }
