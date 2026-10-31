@@ -168,7 +168,7 @@ The `boot` line reads `ok  boot      assets present at /Users/alex/.hull/store/a
           run brig from /home/alex/.local/bin: export PATH="/home/alex/.local/bin:$PATH", or load the environment: . /home/alex/.local/share/brig/data/etc/brig-env.sh
 ```
 
-`brig run` prints the same warning before anything else.
+`brig run` prints the same warning before it checks or boots the sandbox.
 
 **Cause:** The `brig` you ran is the binary inside the runtime bundle, usually
 because the bundle's `bin` directory is on `PATH`. The launcher in
