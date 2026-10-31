@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 )
@@ -375,5 +376,30 @@ func TestARelativeBootAssetsDirectoryIsMadeAbsolute(t *testing.T) {
 	}
 	if explicit != "guest" {
 		t.Errorf("explicit is %q, want the variable's value", explicit)
+	}
+}
+
+// The monitor a run boots on is the one doctor asks for. A host with
+// cloud-hypervisor and no hvi boots nothing by default.
+func TestLinuxMonitorBinaryFollowsTheRun(t *testing.T) {
+	qemu := map[string]string{"amd64": "qemu-system-x86_64", "arm64": "qemu-system-aarch64"}[goruntime.GOARCH]
+	for hv, want := range map[string]string{
+		"":                 "hvi",
+		"vz":               "hvi",
+		"hvi":              "hvi",
+		"cloud-hypervisor": "cloud-hypervisor",
+		"firecracker":      "firecracker",
+	} {
+		if got, err := LinuxMonitorBinary(hv); err != nil || got != want {
+			t.Errorf("LinuxMonitorBinary(%q) = %q, %v; want %q", hv, got, err, want)
+		}
+	}
+	if qemu != "" {
+		if got, err := LinuxMonitorBinary("qemu"); err != nil || got != qemu {
+			t.Errorf("LinuxMonitorBinary(qemu) = %q, %v; want %q", got, err, qemu)
+		}
+	}
+	if got, err := LinuxMonitorBinary("bhyve"); err == nil {
+		t.Errorf("LinuxMonitorBinary(bhyve) = %q, want the error a run gives", got)
 	}
 }
