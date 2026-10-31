@@ -44,6 +44,9 @@ func TestStripControl(t *testing.T) {
 		{"a bare escape pair goes", "a\x1bcb", "ab"},
 		{"stray control bytes are dropped", "a\x00\x07b", "ab"},
 		{"DEL is dropped", "a\x7fb", "ab"},
+		{"an unterminated OSC ends at the newline", "a\x1b]0;cut off\nnext\n", "a\nnext\n"},
+		{"an unterminated CSI ends at the newline", "a\x1b[31\nnext", "a\nnext"},
+		{"a lone escape before a newline", "a\x1b\nb", "a\nb"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

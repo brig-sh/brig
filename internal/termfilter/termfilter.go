@@ -47,6 +47,14 @@ type filter struct {
 func (f *filter) Write(p []byte) (int, error) {
 	out := make([]byte, 0, len(p))
 	for _, b := range p {
+		// A newline is no part of any sequence here, so it ends whichever one is
+		// open and stays. An OSC a program was killed in the middle of writing
+		// would otherwise take the rest of the log with it.
+		if b == '\n' && f.st != fText {
+			f.st = fText
+			out = append(out, b)
+			continue
+		}
 		switch f.st {
 		case fText:
 			switch {
