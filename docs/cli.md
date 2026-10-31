@@ -513,7 +513,9 @@ bundle without its launcher. See
 
 On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run needs
 from the host. For a user other than root: `subids`, `userns` and `uidmap`. For
-every user: `devices` (`/dev/vhost-vsock`) and `cni`. Where AppArmor restricts
+every user: `devices` (`/dev/vhost-vsock`) and `cni`. `cni` looks where
+nerdctl looks: `CNI_PATH`, the `cni_path` of its configuration, or the first of
+nerdctl's default directories that exists. Where AppArmor restricts
 user namespaces, as on Ubuntu 24.04 and later, `userns` looks for the profile of
 the `rootlesskit` a run starts. For a `nerdctl` from outside the runtime bundle,
 or when no runtime is found, it adds `tools`: the monitor a run boots on, and
