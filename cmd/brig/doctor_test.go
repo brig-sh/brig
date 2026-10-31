@@ -65,6 +65,7 @@ func healthyHost(t *testing.T) string {
 	t.Setenv("BRIG_BOOT_ASSETS", assets)
 
 	swap(t, &virtualization, func() (bool, string) { return true, "virtualization available" })
+	swap(t, &rootlessDeviceDenied, func(string) string { return "" })
 	swap(t, &linuxHostChecks, func(runtime.Runtime, string) []check { return nil })
 	bin := filepath.Join(t.TempDir(), "hull")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho hull version 0.0.0-test\n"), 0o755); err != nil {

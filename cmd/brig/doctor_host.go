@@ -72,7 +72,7 @@ func linuxHostRows(rt runtime.Runtime, hypervisor string) []check {
 	if geteuid() != 0 {
 		rows = append(rows, subIDCheck("/etc/subuid", "/etc/subgid"), userNSCheck(rt), uidmapCheck())
 	}
-	// /dev/kvm has the virtual line already.
+	// /dev/kvm has the virtual line already, which asks what a rootless run keeps.
 	rows = append(rows, devicesCheck("/dev/vhost-vsock"), cniCheck())
 	// The bundle carries these tools. Its tree is the evidence and not a variable:
 	// a host can name its own kernel or its own nerdctl and still lack them.
@@ -270,7 +270,7 @@ func uidmapCheck() check {
 func devicesCheck(dev string) check {
 	f, err := os.OpenFile(dev, os.O_RDWR, 0)
 	if err != nil {
-		fix := "this user needs the device: run install.sh, whose rootless setup adds a udev rule with sudo, or ask root to grant it"
+		fix := rootlessGrantFix
 		if errors.Is(err, fs.ErrNotExist) {
 			fix = "load the module: sudo modprobe vhost_vsock"
 		}
@@ -278,7 +278,25 @@ func devicesCheck(dev string) check {
 			Finding: dev + " could not be opened: " + oneLine(err.Error()), Fix: fix}
 	}
 	_ = f.Close()
+	if geteuid() != 0 {
+		if why := rootlessDeviceDenied(dev); why != "" {
+			return check{Name: "devices", State: stateFail, Finding: why, Fix: rootlessGrantFix}
+		}
+	}
 	return check{Name: "devices", State: statePass, Finding: dev + " is openable"}
+}
+
+// rootlessKVM is the virtual line for a run that starts the monitor rootless.
+// Opening /dev/kvm from here passes through the kvm group, which the run
+// drops, so a pass is asked again about what the run keeps.
+func rootlessKVM(virtual check, rt runtime.Runtime) check {
+	if virtual.State != statePass || hostOS != "linux" || geteuid() == 0 || (rt != nil && rt.Kind() != "nerdctl") {
+		return virtual
+	}
+	if why := rootlessDeviceDenied("/dev/kvm"); why != "" {
+		return check{Name: "virtual", State: stateFail, Finding: why, Fix: rootlessGrantFix}
+	}
+	return virtual
 }
 
 var cniPathLine = regexp.MustCompile(`(?m)^\s*cni_path\s*=\s*(?:"([^"]+)"|'([^']+)')`)

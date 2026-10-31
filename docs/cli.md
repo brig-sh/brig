@@ -513,18 +513,26 @@ bundle without its launcher. See
 
 On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run needs
 from the host. For a user other than root: `subids`, `userns` and `uidmap`. For
-every user: `devices` (`/dev/vhost-vsock`) and `cni`. `cni` looks where
-nerdctl looks: `CNI_PATH`, the `cni_path` of its configuration, or the first of
-nerdctl's default directories that exists. Where AppArmor restricts
-user namespaces, as on Ubuntu 24.04 and later, `userns` looks among the loaded
-profiles for one that covers the `rootlesskit` a run starts. For a `nerdctl` from outside the runtime bundle,
-or when no runtime is found, it adds `tools`: the monitor a run boots on, and
-`oras` when the boot assets are missing. The monitor is `hvi` unless
-`BRIG_HYPERVISOR` or the agent's `hypervisor:` field names another; `qemu` is
-looked up as `qemu-system-` and the host architecture, as urunc does. For such a `nerdctl`, the `runtime` line ends with
-`(not the runtime bundle; see install.sh)`. That runtime
-may work, as long as its `urunc` reads the boot annotations, which `doctor` cannot
-tell.
+every user: `devices` (`/dev/vhost-vsock`) and `cni`.
+
+- `cni` looks where nerdctl looks: `CNI_PATH`, the `cni_path` of its
+  configuration, or the first of nerdctl's default directories that exists.
+- For a user other than root, `devices` and `virtual` also ask whether the
+  device reaches a rootless run, which drops supplementary groups. The device
+  has to be this user's, carry an ACL entry for this user, or be open to
+  everyone. Access through the `kvm` group alone reads `!!`.
+- Where AppArmor restricts user namespaces, as on Ubuntu 24.04 and later,
+  `userns` looks among the loaded profiles for one that covers the
+  `rootlesskit` a run starts.
+- For a `nerdctl` from outside the runtime bundle, or when no runtime is found,
+  `doctor` adds `tools`: the monitor a run boots on, and `oras` when the boot
+  assets are missing. The monitor is `hvi` unless `BRIG_HYPERVISOR` or the
+  agent's `hypervisor:` field names another. `qemu` is looked up as
+  `qemu-system-` and the host architecture, as urunc does. For such a
+  `nerdctl`, the `runtime` line ends with
+  `(not the runtime bundle; see install.sh)`. That runtime may work, as long as
+  its `urunc` reads the boot annotations, which `doctor` cannot tell.
+
 These lines do not change the exit status.
 
 Doctor checks the image against the trust policy a run of that agent uses,
