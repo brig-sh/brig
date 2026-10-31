@@ -44,6 +44,9 @@ var (
 		return err == nil && strings.TrimSpace(string(raw)) == "1"
 	}
 	apparmorDir = "/etc/apparmor.d"
+	// apparmorLoaded lists the profiles the kernel has loaded. Its name and
+	// attach files are mode 0444, so any user can read them.
+	apparmorLoaded = "/sys/kernel/security/apparmor/policy/profiles"
 )
 
 // bundleCarriesThem is the fix on a row whose usual advice is to install or
@@ -166,12 +169,25 @@ func userNSCheck(rt runtime.Runtime) check {
 }
 
 // rootlesskitPath is the rootlesskit a run starts: the bundle's, beside its
-// nerdctl, or the one on PATH. Empty when there is none.
+// nerdctl, or the one on PATH. Empty when there is none. AppArmor attaches a
+// profile by the resolved path of the program, so both are resolved: through a
+// symlinked nerdctl the bundle's rootlesskit is beside the target, not the link.
 func rootlesskitPath(rt runtime.Runtime) string {
+	path := ""
 	if rt != nil && runtime.InBundleTree(rt.Bin()) {
-		return filepath.Join(filepath.Dir(rt.Bin()), "rootlesskit")
+		bin := rt.Bin()
+		if resolved, err := filepath.EvalSymlinks(bin); err == nil {
+			bin = resolved
+		}
+		path = filepath.Join(filepath.Dir(bin), "rootlesskit")
+	} else if found, err := exec.LookPath("rootlesskit"); err == nil {
+		path = found
+	} else {
+		return ""
 	}
-	path, _ := exec.LookPath("rootlesskit")
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	return path
 }
 
@@ -182,24 +198,53 @@ func rootlesskitProfileCheck(rootlesskit string) check {
 	}
 	if !apparmorNames(rootlesskit) {
 		return check{Name: "userns", State: stateFail,
-			Finding: "AppArmor restricts user namespaces, and no profile in " + apparmorDir + " names " + rootlesskit,
-			Fix:     "run install.sh for the runtime bundle, which prints the profile for root to add",
+			Finding: "AppArmor restricts user namespaces, and no loaded profile covers " + rootlesskit,
+			Fix:     "run install.sh for the runtime bundle, which prints the profile for root to add and load",
 		}
 	}
 	return check{Name: "userns", State: statePass, Finding: "AppArmor has a profile for " + rootlesskit}
 }
 
-// apparmorNames says whether a file under the profile directory names the path.
-// A profile names the binary it covers by path.
+// apparmorNames says whether a loaded profile covers the path: the path is its
+// name, or what it attaches to. A profile written under /etc/apparmor.d and
+// never loaded covers nothing, so the kernel's list is the one to ask. Where
+// that list cannot be read, the profile files are the next best answer.
 func apparmorNames(path string) bool {
+	entries, err := os.ReadDir(apparmorLoaded)
+	if err != nil {
+		return apparmorFilesName(path)
+	}
+	for _, e := range entries {
+		for _, file := range []string{"name", "attach"} {
+			raw, err := os.ReadFile(filepath.Join(apparmorLoaded, e.Name(), file))
+			if err == nil && strings.TrimSpace(string(raw)) == path {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// apparmorFilesName says whether a profile file names the path as a whole word
+// outside a comment. A longer path that starts with it, such as a backup copy
+// of the binary, is another program.
+func apparmorFilesName(path string) bool {
+	word := regexp.MustCompile(`(^|[\s"])` + regexp.QuoteMeta(path) + `($|[\s"{])`)
 	found := false
 	_ = filepath.WalkDir(apparmorDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || found || !d.Type().IsRegular() {
 			return nil
 		}
-		if raw, rerr := os.ReadFile(p); rerr == nil && strings.Contains(string(raw), path) {
-			found = true
-			return filepath.SkipAll
+		raw, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "#") && word.MatchString(line) {
+				found = true
+				return filepath.SkipAll
+			}
 		}
 		return nil
 	})
