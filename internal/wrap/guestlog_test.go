@@ -312,3 +312,13 @@ func (s *stuckLogs) Logs(spec runtime.LogsSpec) error {
 	<-spec.Ctx.Done()
 	return spec.Ctx.Err()
 }
+
+// A guest killed while it wrote a title leaves an OSC with no end. The lines
+// after it are still the end of the log.
+func TestGuestLogTailSurvivesAnUnterminatedSequence(t *testing.T) {
+	got := guestLogTail("\x1b]0;half a title\nexec sleep failed\nreboot\n", 5)
+	want := []string{"exec sleep failed", "reboot"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("guestLogTail = %q, want %q", got, want)
+	}
+}
