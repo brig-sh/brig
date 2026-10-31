@@ -270,6 +270,13 @@ func TestCosignMissingSeparatesAnAbsentToolFromAWrongPath(t *testing.T) {
 	if got := cosignNotInstalled("linux"); !strings.Contains(got, "not installed") || !strings.Contains(got, "docs.sigstore.dev") || strings.Contains(got, "brew") {
 		t.Errorf("a host with no brew is told to use it: %q", got)
 	}
+	// The installer brings a cosign on Linux, and only there.
+	if got := cosignNotInstalled("linux"); !strings.Contains(got, "install.sh") {
+		t.Errorf("Linux is not pointed at Brig's installer: %q", got)
+	}
+	if got := cosignNotInstalled("freebsd"); strings.Contains(got, "install.sh") || strings.Contains(got, "brew") || !strings.Contains(got, "docs.sigstore.dev") {
+		t.Errorf("another platform is told to use what it does not have: %q", got)
+	}
 
 	pointed := Policy{Cosign: "/opt/nowhere/cosign"}.CosignMissing()
 	if !strings.Contains(pointed, "/opt/nowhere/cosign") || !strings.Contains(pointed, "BRIG_COSIGN_BIN") {
@@ -282,8 +289,9 @@ func TestCosignMissingSeparatesAnAbsentToolFromAWrongPath(t *testing.T) {
 
 func TestMessagesNameTheImageAndTheRemedy(t *testing.T) {
 	cases := map[Outcome]string{
-		NotOurs:   "not published by brig-sh",
-		NoTooling: "cosign is not installed",
+		NotOurs: "not published by brig-sh",
+		// Whole, so a message that loses the remedy fails here on any host.
+		NoTooling: DefaultPolicy().CosignMissing(),
 		Failed:    "DID NOT VERIFY",
 	}
 	for outcome, want := range cases {
@@ -439,7 +447,7 @@ func TestVerifiedWithoutADigestNamesTheTag(t *testing.T) {
 func TestRefusalSaysItRefusedAndNamesTheWayOut(t *testing.T) {
 	for outcome, remedy := range map[Outcome]string{
 		NotOurs:   "BRIG_VERIFY_REGISTRY",
-		NoTooling: "cosign is not installed",
+		NoTooling: DefaultPolicy().CosignMissing(),
 	} {
 		got := Result{Policy: DefaultPolicy(), Outcome: outcome, Image: "img"}.Refusal()
 		if !strings.Contains(got, "refusing to boot") {
