@@ -376,13 +376,22 @@ install_runtime() {
     || die "the runtime installer left no brig at $prefix/bin/brig to replace"
   install -m 0755 "$tmp/brig/brig" "$prefix/bin/brig"
   install -m 0755 "$tmp/brig/brigd" "$prefix/bin/brigd"
+  # The broker goes with the brig it came with. One from the bundle's own brig
+  # release, beside an older brig from a release that has none, is a version
+  # this brig was not built against, so it goes.
   if [ -f "$tmp/brig/brig-broker" ]; then
     install -m 0755 "$tmp/brig/brig-broker" "$prefix/bin/brig-broker"
+    broker=true
+  else
+    rm -f "$prefix/bin/brig-broker"
+    broker=false
   fi
   # pins.env is what `brig-ctl version` reports, so it names the brig that is
-  # there now.
+  # there now, and whether its broker is.
   if [ -f "$prefix/pins.env" ]; then
-    sed -i "s/^BRIG_VERSION=.*/BRIG_VERSION=$brig_version/" "$prefix/pins.env"
+    sed -i -e "s/^BRIG_VERSION=.*/BRIG_VERSION=$brig_version/" \
+      -e '/^BRIG_BROKER_INSTALLED=/d' "$prefix/pins.env"
+    echo "BRIG_BROKER_INSTALLED=$broker" >> "$prefix/pins.env"
   fi
   say "installed brig $brig_version into the runtime at $prefix/bin"
 
