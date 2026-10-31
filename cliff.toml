@@ -101,6 +101,15 @@ filter_unconventional = true
 protect_breaking_commits = true
 filter_commits = false
 tag_pattern = "v[0-9].*"
+# A footer line that starts with a lowercase word and a colon, such as
+# "gui: are removed" inside a BREAKING CHANGE footer, parses as a footer of
+# its own and cuts the one above it short. Trailer tokens here are
+# capitalised (BREAKING CHANGE, Fixes, Refs, Signed-off-by), so such a line
+# is joined to the line above it. A line after a blank line starts a
+# paragraph or a footer, and stays.
+commit_preprocessors = [
+  { pattern = '([^\n])\n([a-z][A-Za-z0-9-]*: )', replace = '${1} ${2}' },
+]
 sort_commits = "oldest"
 
 # First match wins, so the breaking-change rules come before the type rules:
