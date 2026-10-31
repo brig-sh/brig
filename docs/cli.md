@@ -764,7 +764,9 @@ line. It identifies each one by position:
 1. The first bare word is the ref.
 2. On `run` and `plan`, the second bare word is a project directory. Brig
    mounts it read-write at `/work/<basename>` and starts the agent there.
-   `plan` shows that run and does not start it.
+   Every process Brig starts in that sandbox, `brig sh` included, gets
+   `BRIG_PROJECT` set to that path. Without a project the variable is
+   unset. `plan` shows that run and does not start it.
 3. The next bare word, or anything after `--`, is the agent's own argument.
 
 The second bare word is the project even when no directory of that name
