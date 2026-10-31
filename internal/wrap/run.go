@@ -795,8 +795,11 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 	}
 }
 
+// projectVar names the guest variable that carries GuestProject.
+const projectVar = "BRIG_PROJECT"
+
 // guestEnv is the environment brig hands every process in the sandbox: the
-// resolved variables, and HOME set to the profile's guest home.
+// resolved variables, BRIG_PROJECT, and HOME set to the profile's guest home.
 //
 // HOME is set here because the runtime cannot be relied on for it. runc fills
 // it in from the guest's /etc/passwd when the spec has none, but an exec
@@ -804,8 +807,23 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 //
 // The route variables come last, so a route value replaces a profile value of
 // the same name, as the spec of guest.env says.
+//
+// BRIG_PROJECT is where the project is mounted, set only when one is. A
+// process the sandbox did not start through brig -- an SSH session, whose
+// sshd starts in HOME with an empty environment -- has no other way to find
+// it. brig owns the name: a value the set carries is dropped, so the variable
+// never names a directory brig did not mount, and its absence means no
+// project.
 func (c *Config) guestEnv(set creds.Set) []runtime.Var {
-	vars := append(append([]runtime.Var(nil), set.Vars...), c.routeVars...)
+	vars := make([]runtime.Var, 0, len(set.Vars)+len(c.routeVars)+1)
+	for _, v := range append(append([]runtime.Var(nil), set.Vars...), c.routeVars...) {
+		if v.Name != projectVar {
+			vars = append(vars, v)
+		}
+	}
+	if c.GuestProject != "" {
+		vars = append(vars, runtime.Var{Name: projectVar, Value: c.GuestProject})
+	}
 	if c.Profile.GuestHome == "" {
 		return vars
 	}
