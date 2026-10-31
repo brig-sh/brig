@@ -202,7 +202,16 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	if bypassed {
 		checks = append(checks, bundle)
 	}
-	checks = append(checks, linuxHostChecks(rt)...)
+	host := linuxHostChecks(rt)
+	if bypassed {
+		// install.sh ran already. This brig does not see what it installed.
+		for i := range host {
+			if host[i].State == stateFail && (host[i].Name == "cni" || host[i].Name == "tools") {
+				host[i].Fix = bundleCarriesThem
+			}
+		}
+	}
+	checks = append(checks, host...)
 	checks = append(checks, brokerCheck())
 	for _, mc := range modeChecks {
 		checks = append(checks, mc(agent, rt))
@@ -214,7 +223,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		// runtime.MissingBundleEnv.
 		switch boot.State {
 		case stateFail:
-			boot.Fix = "the runtime bundle carries them; see the bundle line above"
+			boot.Fix = bundleCarriesThem
 		case statePass:
 			boot.Finding += ", which are not the runtime bundle's; see the bundle line above"
 		}

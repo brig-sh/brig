@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -52,10 +54,84 @@ func TestSubIDCheckFailsOnAShortRange(t *testing.T) {
 }
 
 func TestUserNSCheckNamesTheRefusal(t *testing.T) {
+	swap(t, &apparmorRestrictsUserNS, func() bool { return false })
 	swap(t, &userNamespaces, func() error { return errors.New("unshare: Operation not permitted") })
-	c := userNSCheck()
-	if c.State != stateFail || !strings.Contains(c.Finding, "not permitted") {
+	c := userNSCheck(nil)
+	if c.State != stateFail || !strings.Contains(c.Finding, "not permitted") || !strings.Contains(c.Fix, "max_user_namespaces") {
 		t.Errorf("%+v", c)
+	}
+}
+
+// No unshare is no answer, not a refusal.
+func TestUserNSCheckWithoutUnshare(t *testing.T) {
+	swap(t, &apparmorRestrictsUserNS, func() bool { return false })
+	swap(t, &userNamespaces, func() error { return fmt.Errorf("unshare: %w", exec.ErrNotFound) })
+	if c := userNSCheck(nil); c.State != stateInfo {
+		t.Errorf("%+v", c)
+	}
+}
+
+// On Ubuntu 24.04 and later a probe from doctor fails on a host set up right, so
+// the row asks for the profile of the rootlesskit a run starts, never the probe.
+func TestUserNSCheckAsksAppArmorForTheProfile(t *testing.T) {
+	swap(t, &apparmorRestrictsUserNS, func() bool { return true })
+	swap(t, &userNamespaces, func() error {
+		t.Error("probed a host where AppArmor restricts user namespaces")
+		return nil
+	})
+	rt := bundleNerdctl(t)
+	rootlesskit := filepath.Join(filepath.Dir(rt.bin), "rootlesskit")
+	swap(t, &apparmorDir, t.TempDir())
+	if err := os.MkdirAll(filepath.Join(apparmorDir, "local"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := "/var/lib/brig/data/bin/rootlesskit flags=(unconfined) { userns, }\n"
+	if err := os.WriteFile(filepath.Join(apparmorDir, "var.lib.brig.data.bin.rootlesskit"), []byte(other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := userNSCheck(rt)
+	if c.State != stateFail || !strings.Contains(c.Finding, rootlesskit) || !strings.Contains(c.Fix, "install.sh") {
+		t.Errorf("another tree's profile covered this one: %+v", c)
+	}
+	mine := rootlesskit + " flags=(unconfined) { userns, }\n"
+	if err := os.WriteFile(filepath.Join(apparmorDir, "local", "mine"), []byte(mine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := userNSCheck(rt); c.State != statePass {
+		t.Errorf("with the profile: %+v", c)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if c := userNSCheck(nil); c.State != stateInfo {
+		t.Errorf("no rootlesskit anywhere: %+v", c)
+	}
+}
+
+// A range already handed out is not offered again, to this user or another.
+func TestSubIDFixOffersAFreeRange(t *testing.T) {
+	me, err := user.Current()
+	if err != nil {
+		t.Skip(err)
+	}
+	uids := writeFile(t, "first:100000:65536\nsecond:165536:65536\n")
+	gids := writeFile(t, "first:100000:65536\nthird:300000:1000\n")
+	c := subIDCheck(uids, gids)
+	if want := "--add-subuids 301000-366535 --add-subgids 301000-366535 " + me.Username; !strings.Contains(c.Fix, want) {
+		t.Errorf("fix %q, want %q", c.Fix, want)
+	}
+	if got := nextSubIDStart(filepath.Join(t.TempDir(), "absent")); got != 100000 {
+		t.Errorf("a host with no ranges starts at %d", got)
+	}
+}
+
+// Root uses the node-wide install, which maps no subordinate IDs.
+func TestLinuxHostRowsForRoot(t *testing.T) {
+	swap(t, &hostOS, "linux")
+	swap(t, &geteuid, func() int { return 0 })
+	for _, c := range linuxHostRows(nerdctlDoctorRuntime{}) {
+		switch c.Name {
+		case "subids", "userns", "uidmap":
+			t.Errorf("a %s row for root: %+v", c.Name, c)
+		}
 	}
 }
 
@@ -210,17 +286,48 @@ func TestCNICheckFollowsWhereNerdctlLooks(t *testing.T) {
 	if c := cniCheck(); c.State != stateFail || !strings.Contains(c.Fix, "install.sh") {
 		t.Errorf("a cni_path with no plugin: %+v", c)
 	}
+	t.Setenv("NERDCTL_TOML", writeFile(t, "cni_path = '"+withBridge+"'\n"))
+	if c := cniCheck(); c.State != statePass {
+		t.Errorf("a single-quoted cni_path: %+v", c)
+	}
+
+	// With no NERDCTL_TOML, a user's nerdctl reads its own configuration.
+	swap(t, &geteuid, func() int { return 1000 })
+	t.Setenv("NERDCTL_TOML", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "nerdctl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nerdctl", "nerdctl.toml"), []byte("cni_path = \""+withBridge+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := cniCheck(); c.State != statePass {
+		t.Errorf("the user's own configuration: %+v", c)
+	}
 }
 
 func TestToolsCheckNamesWhatIsMissing(t *testing.T) {
 	fakeTools(t, 0, "oras")
-	c := toolsCheck()
+	c := toolsCheck(true)
 	if c.State != stateFail || !strings.Contains(c.Finding, "cloud-hypervisor") || strings.Contains(c.Finding, "oras") {
 		t.Errorf("%+v", c)
 	}
 	fakeTools(t, 0, "oras", "cloud-hypervisor")
-	if c := toolsCheck(); c.State != statePass {
+	if c := toolsCheck(true); c.State != statePass {
 		t.Errorf("%+v", c)
+	}
+	// oras fetches boot assets, and a host that has them runs without it.
+	fakeTools(t, 0, "cloud-hypervisor")
+	if c := toolsCheck(false); c.State != statePass {
+		t.Errorf("oras asked for with the assets present: %+v", c)
+	}
+	if c := toolsCheck(true); c.State != stateFail || !strings.Contains(c.Finding, "oras") {
+		t.Errorf("oras not asked for with the assets missing: %+v", c)
 	}
 }
 
