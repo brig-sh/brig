@@ -13,10 +13,11 @@ import (
 // diverts is the divert of this run, to the sandbox's divert socket: for
 // each route in a mode besides endpoint that this build serves, the host and
 // port of its upstream URL, whose connections the mode's divert handler in
-// the broker gets; and brig.internal for a guest that reaches an endpoint
-// route there. The socket path depends on the sandbox alone, so a run that
-// finds the sandbox up compares the same divert its gateway was started
-// with.
+// the broker gets; brig.internal for a guest that reaches an endpoint route
+// there; and the link-local address for a run with a route that vends, which
+// the guest reaches there in plain HTTP. The socket path depends on the
+// sandbox alone, so a run that finds the sandbox up compares the same divert
+// its gateway was started with.
 func (c *Config) diverts() runtime.Divert {
 	var routes []runtime.DivertRoute
 	for _, m := range c.otherModes() {
@@ -36,6 +37,11 @@ func (c *Config) diverts() runtime.Divert {
 		}
 	}
 	internal := c.brigInternal()
+	// A route that vends is in mode endpoint, so a run with one routes
+	// brig.internal too.
+	if internal && c.vends() {
+		routes = append(routes, runtime.LinkLocalDivert)
+	}
 	if len(routes) == 0 && !internal {
 		return runtime.Divert{}
 	}
@@ -68,10 +74,17 @@ func (c *Config) runtimeEgress() runtime.Egress {
 
 // allowDiverted returns allow with a rule for the host of each route of d
 // that it lacks: a host rule for a name, and a /32 for an IPv4 address.
+//
+// A link-local address gets none. Its divert names the address and learns
+// nothing from DNS, and an allow would cover every port of it, in the range
+// the cloud metadata service lives in.
 func allowDiverted(allow []runtime.Rule, d runtime.Divert) []runtime.Rule {
 	for _, r := range d.Routes {
 		rule := runtime.Rule{Host: r.Host}
 		if a, err := netip.ParseAddr(r.Host); err == nil {
+			if a.IsLinkLocalUnicast() {
+				continue
+			}
 			rule = runtime.Rule{CIDR: netip.PrefixFrom(a, a.BitLen()).String()}
 		}
 		if !slices.Contains(allow, rule) {

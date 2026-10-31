@@ -11,10 +11,13 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -72,11 +75,14 @@ func testBrigCA() string {
 }
 
 // hullRecorder is hull on hvi as far as a boot goes: its probe answers
-// probe, and it records the spec it was handed and boots nothing.
+// probe, its link-local probe answers linkLocal and counts linkLocalProbes,
+// and it records the spec it was handed and boots nothing.
 type hullRecorder struct {
 	runtime.Runtime
-	probe error
-	spec  *runtime.RunSpec
+	probe           error
+	linkLocal       error
+	linkLocalProbes int
+	spec            *runtime.RunSpec
 }
 
 func (r *hullRecorder) Kind() string                          { return "hull" }
@@ -86,6 +92,10 @@ func (r *hullRecorder) Remove(string) error                   { return nil }
 func (r *hullRecorder) Stop(string) error                     { return nil }
 func (r *hullRecorder) SandboxNetwork(string) (string, error) { return "", nil }
 func (r *hullRecorder) ProbeBrigInternal() error              { return r.probe }
+func (r *hullRecorder) ProbeLinkLocal() error {
+	r.linkLocalProbes++
+	return r.linkLocal
+}
 func (r *hullRecorder) BrigInternalAddr(string) (netip.Addr, error) {
 	return netip.MustParseAddr("198.18.1.1"), nil
 }
@@ -392,5 +402,252 @@ func TestAShortCADeliveryIsRefused(t *testing.T) {
 	}
 	if _, ok := g.files[injector.GuestCABundlePath]; ok {
 		t.Error("a bundle was written from a short CA")
+	}
+}
+
+// awsBesideClaude binds claude-code to a route that vends and an endpoint
+// route beside it.
+const awsBesideClaude = `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata: {name: brokered}
+spec:
+  routes:
+    - name: anthropic
+      preset: claude-code
+      credential: {secretRef: {name: claude-credentials}}
+    - name: aws
+      preset: aws
+      credential: {secretRef: {name: aws-credentials}}
+`
+
+// recorded is the spec a recording runtime was handed, and its recorder.
+func recorded(rt runtime.Runtime) *hullRecorder {
+	switch r := rt.(type) {
+	case *hullRecorder:
+		return r
+	case *nerdctlRecorder:
+		return &r.hullRecorder
+	}
+	return nil
+}
+
+// A run with a route that vends diverts the link-local address to the
+// broker's socket beside brig.internal, on hull on hvi and on nerdctl. The
+// aws route's pointer is plain HTTP to that address, and the endpoint route
+// beside it keeps brig.internal.
+func TestAVendingRunDivertsTheLinkLocalAddress(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rt   runtime.Runtime
+		hv   string
+	}{
+		{"hull on hvi", &hullRecorder{}, "hvi"},
+		{"nerdctl", &nerdctlRecorder{}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("BRIG_HYPERVISOR", c.hv)
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+			shortStateDir(t)
+			cfg := routedConfig(t, awsBesideClaude, c.rt)
+			shortStateDir(t)
+			cfg.Verify = verify.Off
+			cfg.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+			set, err := cfg.BuildEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.EnsureRunning(set); err == nil || !strings.Contains(err.Error(), "not booting") {
+				t.Fatalf("the run did not reach the runtime: %v", err)
+			}
+			rec := recorded(c.rt)
+			if rec.spec == nil {
+				t.Fatal("the runtime was never asked to run")
+			}
+			dir, _ := injector.Dir()
+			sock, _ := injector.DivertSocket(dir, cfg.VMName)
+			d := rec.spec.Egress.Divert
+			want := []runtime.DivertRoute{runtime.LinkLocalDivert}
+			if !d.BrigInternal || d.Socket != sock || !slices.Equal(d.Routes, want) {
+				t.Errorf("Divert = %+v, want brig.internal and %v to %s", d, want, sock)
+			}
+			if got := net.JoinHostPort(runtime.LinkLocalDivert.Host, strconv.Itoa(runtime.LinkLocalDivert.Port)); got != injector.LinkLocalAddr {
+				t.Errorf("the runtime diverts %s, and the broker serves %s", got, injector.LinkLocalAddr)
+			}
+			env := envOf(cfg.execSpec(set, []string{"claude"}, false).Env)
+			if v := env["AWS_CONTAINER_CREDENTIALS_FULL_URI"].Value; v != "http://169.254.170.2/"+cfg.VMName+"/r/aws" {
+				t.Errorf("AWS_CONTAINER_CREDENTIALS_FULL_URI = %q", v)
+			}
+			if v := env["ANTHROPIC_BASE_URL"].Value; v != "https://brig.internal/"+cfg.VMName+"/r/anthropic" {
+				t.Errorf("ANTHROPIC_BASE_URL = %q", v)
+			}
+			if v, ok := env["AWS_CA_BUNDLE"]; ok {
+				t.Errorf("AWS_CA_BUNDLE = %q, want it unset", v.Value)
+			}
+		})
+	}
+}
+
+// A run with no route that vends has no link-local divert, and does not ask
+// the runtime whether it can divert one.
+func TestARunWithoutAVendingRouteHasNoLinkLocalDivert(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	rec := &hullRecorder{linkLocal: errors.New("this hull cannot divert link-local")}
+	cfg := routedConfig(t, claudeEndpoint, rec)
+	shortStateDir(t)
+	cfg.Verify = verify.Off
+	cfg.broker = &fakeBroker{}
+	if err := cfg.EnsureRunning(creds.Set{}); err == nil || !strings.Contains(err.Error(), "not booting") {
+		t.Fatalf("the run did not reach the runtime: %v", err)
+	}
+	if rec.linkLocalProbes != 0 {
+		t.Errorf("a run with no route that vends probed for a link-local divert %d times", rec.linkLocalProbes)
+	}
+	for _, r := range rec.spec.Egress.Divert.Routes {
+		if a, err := netip.ParseAddr(r.Host); err == nil && a.IsLinkLocalUnicast() {
+			t.Errorf("a run with no route that vends diverts %s:%d", r.Host, r.Port)
+		}
+	}
+}
+
+// A hull whose gateway cannot divert the link-local address refuses a run
+// with a route that vends before anything boots, as a capability (exit 7).
+// The broker is never asked to vend for it.
+func TestAVendingRunIsRefusedOnAHullThatCannotDivertLinkLocal(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	refusal := &runtime.CapabilityError{Property: runtime.RouteModeProperty("endpoint"),
+		Path: runtime.RunPath{Runtime: "hull", Backend: "hvi"}, State: runtime.CannotEnforce,
+		Why: "this route needs a hull whose gateway can divert 169.254.170.2", Remedy: "Upgrade hull, or detach the policy"}
+	rec := &hullRecorder{linkLocal: refusal}
+	cfg := routedConfig(t, awsEndpoint, rec)
+	shortStateDir(t)
+	cfg.Verify = verify.Off
+	broker := &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+	cfg.broker = broker
+	err := cfg.EnsureRunning(creds.Set{})
+	var ce *runtime.CapabilityError
+	if !errors.As(err, &ce) || ce != refusal {
+		t.Fatalf("EnsureRunning = %v, want the runtime's refusal", err)
+	}
+	if !strings.Contains(err.Error(), "route aws") || !strings.Contains(err.Error(), "Upgrade hull") {
+		t.Errorf("the refusal does not name the route and the remedy: %v", err)
+	}
+	if rec.spec != nil {
+		t.Error("a run the runtime cannot serve booted")
+	}
+	if len(broker.registered) != 0 {
+		t.Errorf("the broker was asked to vend for a refused run: %+v", broker.registered)
+	}
+}
+
+// Under a deny default, the egress a vending run hands the runtime allows
+// nothing in 169.254.0.0/16. The divert of the link-local address names it,
+// and needs no DNS answer to learn it, so it needs no allow either; an allow
+// of it would admit every port of the address wherever the runtime's own
+// link-local refusal did not stand in the way.
+func TestAVendingRunAllowsNoLinkLocalAddress(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rt   runtime.Runtime
+		hv   string
+	}{
+		{"hull on hvi", &hullRecorder{}, "hvi"},
+		{"nerdctl", &nerdctlRecorder{}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("BRIG_HYPERVISOR", c.hv)
+			t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+			shortStateDir(t)
+			cfg := routedConfig(t, awsBesideClaude+"  egress:\n    default: deny\n", c.rt)
+			shortStateDir(t)
+			cfg.Verify = verify.Off
+			cfg.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+			set, err := cfg.BuildEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.EnsureRunning(set); err == nil || !strings.Contains(err.Error(), "not booting") {
+				t.Fatalf("the run did not reach the runtime: %v", err)
+			}
+			e := recorded(c.rt).spec.Egress
+			if e.Default != "deny" || !slices.Contains(e.Divert.Routes, runtime.LinkLocalDivert) {
+				t.Fatalf("Egress = %+v, want a deny default that diverts the link-local address", e)
+			}
+			linkLocal := netip.MustParsePrefix("169.254.0.0/16")
+			for _, r := range e.Allow {
+				if r.CIDR == "" {
+					continue
+				}
+				if p, err := netip.ParsePrefix(r.CIDR); err != nil || p.Overlaps(linkLocal) {
+					t.Errorf("the egress allows %+v, which covers link-local", r)
+				}
+			}
+		})
+	}
+}
+
+// An offline run with a route that vends is refused for having no network,
+// which is the refusal the user acts on first, and does not ask the hull
+// whether it can divert the link-local address.
+func TestAnOfflineVendingRunIsRefusedForItsNetworkFirst(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	rec := &hullRecorder{linkLocal: errors.New("this hull cannot divert link-local")}
+	cfg := routedConfig(t, awsEndpoint, rec)
+	shortStateDir(t)
+	cfg.Network = NetOffline
+	err := cfg.routeRefusal()
+	if err == nil || !strings.Contains(err.Error(), "BRIG_NETWORK=") || strings.Contains(err.Error(), "Upgrade hull") {
+		t.Fatalf("routeRefusal = %v, want the offline refusal", err)
+	}
+	if rec.linkLocalProbes != 0 {
+		t.Errorf("an offline run probed for a link-local divert %d times", rec.linkLocalProbes)
+	}
+}
+
+// The BROKER row of a run with a route that vends names the link-local
+// address the guest fetches keys at, beside brig.internal where the run has an
+// endpoint route too. A run with no such route keeps its row.
+func TestTheBrokerRowNamesTheLinkLocalAddressOfAVendingRun(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	for _, c := range []struct {
+		name, policy, want string
+	}{
+		{"aws alone", awsEndpoint, "transport brig.internal and " + injector.LinkLocalAddr + ", routes aws"},
+		{"aws beside an endpoint route", awsBesideClaude, "transport brig.internal and " + injector.LinkLocalAddr + ", routes "},
+		{"an endpoint route alone", claudeEndpoint, "transport brig.internal, routes anthropic"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			shortStateDir(t)
+			cfg := routedConfig(t, c.policy, &hullRecorder{})
+			cfg.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+			got := cfg.brokerLine()
+			if !strings.HasPrefix(got, c.want) {
+				t.Errorf("BROKER row = %q, want it to start with %q", got, c.want)
+			}
+			if c.name == "an endpoint route alone" && strings.Contains(got, "169.254") {
+				t.Errorf("BROKER row of a run with no route that vends names a link-local address: %q", got)
+			}
+		})
+	}
+}
+
+// A run the link-local probe refused is not blamed on brig.internal, which
+// the run may not use at all.
+func TestTheBrokerRowDoesNotBlameBrigInternalForALinkLocalRefusal(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	refusal := &runtime.CapabilityError{Property: runtime.RouteModeProperty("endpoint"),
+		Path: runtime.RunPath{Runtime: "hull", Backend: "hvi"}, State: runtime.CannotEnforce,
+		Why: "this route needs a hull whose gateway can divert 169.254.170.2", Remedy: "Upgrade hull, or detach the policy"}
+	cfg := routedConfig(t, awsEndpoint, &hullRecorder{linkLocal: refusal})
+	cfg.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+	got := cfg.brokerLine()
+	if !strings.Contains(got, "refused: ") {
+		t.Fatalf("BROKER row of a refused run = %q", got)
+	}
+	if strings.Contains(got, "cannot route brig.internal") {
+		t.Errorf("BROKER row blames brig.internal for the link-local probe: %q", got)
 	}
 }

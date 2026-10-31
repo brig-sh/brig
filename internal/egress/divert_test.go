@@ -499,3 +499,48 @@ func TestRulesetDivertsBrigInternalOnPort443Alone(t *testing.T) {
 		t.Errorf("DivertScript = %q", s)
 	}
 }
+
+// A route that vends is reached at the ECS credentials address, which is in
+// 169.254.0.0/16. The divert chain redirects its port 80 to the relay, and
+// the forward path still refuses link-local: the deny set holds the whole
+// range, and it is checked before any allow, so even an allow of the address
+// itself does not let a connection to the host's own 169.254.170.2 out.
+func TestRulesetDivertsTheLinkLocalAddress(t *testing.T) {
+	n := testNet
+	n.Divert = Divert{Routes: []divert.Route{{Host: n.Gateway.String(), Port: 443}, {Host: "169.254.170.2", Port: 80}},
+		Port: DivertPort}
+	for _, p := range []*Policy{mustParse(t, "deny", []string{"cidr=169.254.170.2/32"}, nil),
+		mustParse(t, "allow", nil, nil)} {
+		script, err := Ruleset("t", n, p, testMark)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := chain(t, script, "divert"); !strings.Contains(got,
+			`iifname "br-ebd625d78bb2" ip daddr @divert_1 tcp dport 80 dnat ip to 10.4.1.1:15443`) {
+			t.Errorf("default %q: divert chain lacks the link-local DNAT:\n%s", p.Default, got)
+		}
+		if !strings.Contains(script, "set deny_net { type ipv4_addr; flags interval; elements = { 169.254.0.0/16") {
+			t.Errorf("default %q: link-local left the deny set:\n%s", p.Default, script)
+		}
+		egress := chain(t, script, "egress")
+		deny, admit := strings.Index(egress, "ip daddr @deny_net goto refuse"), strings.Index(egress, "goto admit")
+		if deny < 0 || admit < 0 || deny > admit {
+			t.Errorf("default %q: the forward path does not refuse link-local before it admits:\n%s", p.Default, egress)
+		}
+		if !strings.Contains(chain(t, script, "divert_fwd"), "ip daddr @divert_1 meta l4proto { tcp, udp } th dport 80 goto refuse") {
+			t.Errorf("default %q: a link-local flow the divert missed is not refused:\n%s", p.Default, script)
+		}
+	}
+	// The address is the one set member. Another link-local address, or
+	// another port of it, is not diverted.
+	set := divert.NewSet(n.Divert.Routes)
+	for dst, want := range map[string]bool{"169.254.170.2:80": true, "169.254.170.2:443": false,
+		"169.254.169.254:80": false, "169.254.170.23:80": false} {
+		if got := set.Match(netip.MustParseAddrPort(dst)); got != want {
+			t.Errorf("Match(%s) = %v, want %v", dst, got, want)
+		}
+	}
+	if s := DivertScript("t", 1, set.Addrs(1)); s != "add element inet t divert_1 { 169.254.170.2 }\n" {
+		t.Errorf("DivertScript = %q", s)
+	}
+}

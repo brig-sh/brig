@@ -23,9 +23,10 @@ import (
 // guest connection to a diverted destination to a unix socket of the
 // sandbox, with a one-line preamble that names where the guest was going.
 // The broker reads the preamble and serves the connection. A connection to
-// the sandbox's brig.internal address is served in briginternal.go. Any other
-// connection goes to the divert handler of a route mode that claims it, and
-// is closed when none does. The contract with the diverter is in
+// the sandbox's brig.internal address is served in briginternal.go, and one
+// to the link-local address of the routes that vend in linklocal.go. Any
+// other connection goes to the divert handler of a route mode that claims it,
+// and is closed when none does. The contract with the diverter is in
 // docs/broker.md ("Transports").
 
 const (
@@ -251,6 +252,12 @@ func (l *divertSandbox) handle(client net.Conn) {
 		l.serveInternal(client, pre, a)
 		return
 	}
+	// The link-local address is the broker's own for the routes that vend,
+	// never an upstream, on every port: a divert handler never claims it.
+	if pre.dst.Addr().Unmap() == linkLocal.Addr() {
+		l.serveLinkLocal(client, pre, a)
+		return
+	}
 	for _, h := range l.handlers {
 		if h.claims(pre.dst) {
 			h.serve(l.ctx, client, pre.dst, a)
@@ -269,11 +276,13 @@ type divertAudit struct {
 	// dst is the address the guest dialed.
 	dst string
 	// transport is brig.internal for a connection to the sandbox's
-	// brig.internal address.
+	// brig.internal address, and link-local for one to the link-local
+	// address.
 	transport string
 	// check names why the connection was not served: preamble, capacity,
-	// capacity.host or port, and on brig.internal brig.internal.port, tls
-	// or stopping. A divert handler names its own.
+	// capacity.host or port, on brig.internal brig.internal.port, tls or
+	// stopping, and on link-local link-local.port or stopping. A divert
+	// handler names its own.
 	check string
 	// msg is the message of the line, or "" for divert. A divert handler
 	// sets it, with the attributes it adds in attrs.

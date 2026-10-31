@@ -452,7 +452,7 @@ const maxWhere = 64
 // scanned too.
 //
 // partial reports that only the start of a body above the cap was scanned.
-func findPlaceholder(m *matcher, r *http.Request, p routePath, in *v1alpha1.Inject, tok string,
+func findPlaceholder(m *matcher, r *http.Request, p routePath, spec *v1alpha1.Route, tok string,
 	held *heldBody) (_ *placeholder, partial bool, _ error) {
 	at := func(where string, h *hit) *placeholder {
 		return &placeholder{route: h.route, where: where, encoding: h.encoding}
@@ -469,7 +469,7 @@ func findPlaceholder(m *matcher, r *http.Request, p routePath, in *v1alpha1.Inje
 	if h := m.findString(r.Host); h != nil {
 		return at("header Host", h), false, nil
 	}
-	if ph := findInHeader(m, r.Header, "header", carrierRests(in, r.Header, tok)); ph != nil {
+	if ph := findInHeader(m, r.Header, "header", carrierRests(spec, r.Header, tok)); ph != nil {
 		return ph, false, nil
 	}
 	if held == nil {
@@ -558,7 +558,8 @@ func findInHeader(m *matcher, h http.Header, kind string, rests map[string]strin
 // bearer value, the username of a basic one, and the prefix and suffix of a
 // header the route sets. A tool can send the same token in two carriers of
 // one route. Another token, or the same one twice, is not taken out.
-func carrierRests(in *v1alpha1.Inject, h http.Header, tok string) map[string]string {
+func carrierRests(spec *v1alpha1.Route, h http.Header, tok string) map[string]string {
+	in := spec.Inject
 	rests := map[string]string{}
 	auth := h.Get("Authorization")
 	if scheme, t, ok := strings.Cut(auth, " "); ok && strings.EqualFold(scheme, "Bearer") && strings.TrimSpace(t) == tok {
@@ -573,7 +574,14 @@ func carrierRests(in *v1alpha1.Inject, h http.Header, tok string) map[string]str
 		for _, s := range in.Headers.Set {
 			name := http.CanonicalHeaderKey(s.Name)
 			prefix, suffix, ok := strings.Cut(s.Value, v1alpha1.PlaceholderValue)
-			if !ok || name == "Authorization" {
+			if !ok {
+				continue
+			}
+			if name == "Authorization" {
+				// The token of a route that vends is the whole value.
+				if spec.Vends() && s.Value == v1alpha1.PlaceholderValue && auth == tok {
+					rests["Authorization"] = ""
+				}
 				continue
 			}
 			if h.Get(name) == prefix+tok+suffix {

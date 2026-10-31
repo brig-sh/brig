@@ -392,7 +392,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `inject.headers.remove` | no | Guest headers dropped before the request goes upstream, and before `set` applies. `Authorization` is always in the list, because the guest's own `Authorization` carries a session token |
 | `inject.headers.allow` | no | `{name, values}` pairs. Brig keeps only the listed values of that guest header, and drops the rest |
 | `inject.basicAuth.username` | unless a preset sets it, or `headers.set` is set | Sends `Authorization: Basic base64(username:{value})` |
-| `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the two guest placeholders below |
+| `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
 | `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
@@ -414,21 +414,23 @@ that never reach upstream.
 
 ### Placeholders
 
-A route names values that the guest never holds through three placeholders:
+A route names values that the guest never holds through four placeholders:
 
 | Placeholder | Where | What it stands for |
 | --- | --- | --- |
 | `{value}` | an `inject.headers.set` value | the credential |
 | `{route.url}` | a `guest.env` value | the URL of the route |
 | `{session.token}` | a `guest.env` value | the session token of the route |
+| `{route.region}` | a `guest.env` value of a route on the `aws` preset | the region of the route's AWS profile, which the broker reads at every registration |
 
-A `guest.env` value is `{route.url}` or `{session.token}`, and nothing else.
+A `guest.env` value is one of the last three placeholders, and nothing else.
+Brig refuses `{route.region}` on a route that is not on the `aws` preset.
 Brig refuses a literal, so a route cannot put a value of its own into the
 guest's environment:
 
 ```console
 $ brig policy edit claude-only
-brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url} or {session.token}, never a literal
+brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
@@ -442,6 +444,7 @@ names one takes every field it does not set from the preset.
 | `claude-code` | `https://api.anthropic.com` | `Authorization: Bearer {value}` from `claudeAiOauth.accessToken`. Removes `X-Api-Key`. Keeps only the reviewed `Anthropic-Beta` values | `ANTHROPIC_BASE_URL={route.url}`, `CLAUDE_CODE_OAUTH_TOKEN={session.token}` | `anthropic-oauth`: the OAuth pair is refreshed on the host and written back to the store |
 | `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
 | `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
+| `aws` | none. The route answers the guest itself | none. The guest sends its session token as the whole `Authorization` value, as the AWS SDK does | `AWS_CONTAINER_CREDENTIALS_FULL_URI={route.url}`, `AWS_CONTAINER_AUTHORIZATION_TOKEN={session.token}`, `AWS_REGION={route.region}`, `AWS_DEFAULT_REGION={route.region}` | none. The broker fetches temporary keys through the host's `aws` CLI. See [The aws preset](#the-aws-preset) |
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
@@ -496,6 +499,56 @@ comment under `credential:`. Its output is a policy that Brig reads back:
       secretRef:
         name: claude-credentials
 ```
+
+### The aws preset
+
+A route on the `aws` preset vends credentials instead of forwarding a
+request. AWS signs each request with the secret key, so the broker cannot
+add a credential to a request on its way out. The route answers the AWS
+container credential provider with temporary keys, and the guest calls AWS
+with them itself. [The aws route](security.md#the-aws-route) states what
+that hands the guest.
+
+The route's secret holds a pointer, not keys: the AWS profile on your host,
+and whether the sandbox assumes a role or gets your own identity.
+`brig secret import` writes it. See
+[An AWS profile behind a route](secrets.md#an-aws-profile-behind-a-route).
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: aws-sandbox
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: "*.amazonaws.com"
+  routes:
+    - name: aws
+      preset: aws
+      credential:
+        secretRef: { name: aws-creds }
+```
+
+The guest calls AWS directly, so a `default: deny` policy needs an `allow`
+rule for the AWS endpoints the agent uses. A host rule does not make the
+access read-only. `*.amazonaws.com` lets the guest make every call the keys
+allow, writes included, and reach resources in other accounts, such as an
+S3 bucket that someone else owns. The role's policy is what limits the
+calls.
+
+The route itself needs no `allow` rule. The guest's AWS SDK fetches keys in
+plain HTTP from `169.254.170.2`, the address of the AWS container credential
+provider, which the runtime diverts to the broker. Brig adds no rule for
+that address, and the rest of `169.254.0.0/16` stays refused. See
+[Transports](broker.md#transports).
+
+The route takes no `upstream` and no `inject`, and Brig refuses either. The
+preset's `request.allow` allows `GET` alone. A route that sets its own
+`request.allow` replaces it. The route answers only the route URL itself.
+The guest gets the four variables of the preset. See
+[What the guest gets](broker.md#what-the-guest-gets).
 
 ### Several policies with routes
 
@@ -901,7 +954,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
 | `route x: mode: name "…" may use only lowercase letters, …` | a route's `mode` is not a name |
 | `policy x (route y) declares a route in mode m, and brig refuses the run before boot: … route mode m is not part of this build of brig. …` | `check` on a profile bound to a route in a mode this build does not serve. A run, `sh` or plan refuses it the same way, and exits `7` |
-| `route x: guest.env NAME is a literal; a value is {route.url} or {session.token}, never a literal` | a `guest.env` value that is not one of the two placeholders. The error leaves the value out |
+| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
 | `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
 | `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |
@@ -1051,7 +1104,9 @@ that holds the bridge.
   reset, and anything else is dropped.
 - It carries TCP, UDP and ping, and refuses every other protocol.
 - It refuses IPv6, `169.254.0.0/16`, and a packet whose source is outside
-  the network of the sandbox.
+  the network of the sandbox. On a run with a route that vends, port 80 of
+  `169.254.170.2` is redirected to the relay before that check. See
+  [Routing brig.internal](#routing-briginternal).
 - Rootless nerdctl writes the resolver of slirp4netns into the guest's
   `resolv.conf` ahead of Brig's resolver. The table sends DNS for that
   address to Brig's resolver too.
@@ -1146,6 +1201,9 @@ resolver then answers every name, and the table filters nothing else.
 - The table redirects a TCP connection from the guest to the bridge address
   on port 443 to a relay. The same resolver process runs the relay on the
   bridge address, on port 15443.
+- On a run with a route that vends, the table redirects a TCP connection to
+  `169.254.170.2` on port 80 to the same relay. Under a policy with a
+  default, every other address and port of `169.254.0.0/16` stays refused.
 - The table refuses every other port of the bridge address, except DNS.
 - The relay reads the original destination with `SO_ORIGINAL_DST`. It resets
   a connection to any destination that is not diverted.

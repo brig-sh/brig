@@ -142,3 +142,22 @@ the guest has none.
 | "A broker counts as running when a process of yours has that id and that start time." | secrets.md: The renewal journal | `go:TestAJournalOwnerIsThisUsersProcessWithItsStartTime` |
 | "`brig secret delete` removes the journal with the secret." | secrets.md: The renewal journal | `go:TestDeleteAlsoRemovesTheRenewalJournal` `go:TestADeletedSecretTakesItsJournal` |
 | "`brig secret read` and `delete` refuse a journal's own name, because a journal can hold the only valid copy of a renewed credential." | secrets.md: The renewal journal | `go:TestReadAndDeleteRefuseAJournalName` |
+| "The broker keeps the keys in memory and writes none of them to the secret store or to a file." | The aws route | `go:TestNothingVendedOnDisk` |
+| "The audit line names the access key id it handed out, and never the secret key or the session token." | The aws route | `go:TestVendAuditHasNoSecret` |
+| "It refuses credentials with no expiry, such as the long-lived keys of an IAM user." | The aws route | `go:TestFetchRefusesNoExpiration` |
+| "Self mode is never a default: `brig secret import` refuses an import that names neither mode, or both." | The aws route | `go:TestImportAWSNeedsAnAnswer` |
+| "A secret you import again with another role or mode takes effect at the next fetch: the broker does not serve keys it fetched for the old secret, and fetches again." | The aws route | `go:TestCacheRefetchesOnPointerChange` |
+| "The secret holds that pointer and no key." | The aws route | `go:TestImportAWSStoresNoCredential` |
+| "The broker runs `aws` with every `AWS_` variable removed from its environment, so a variable in your shell, such as `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`, never decides which identity a sandbox gets." | The aws route | `go:TestBrokerAWSEnvHasNoAWSVars` `go:TestFetchEnvIsExactlyCLIEnv` `go:TestEnvironDropsAWSVariables` `go:TestExecEmptyEnvIsEmpty` |
+| "No package on the run path links the code that runs `aws`." | The aws route | `go:TestTheRunPathCannotReachAWS` `go:TestOnlyTheImportVerbReachesAWSFromTheCLI` |
+| "The broker serves only a route that vends on that path, and refuses any other route before it reads the token." | The aws route | `go:TestLinkLocalRefusesARouteThatDoesNotVend` `go:TestVendOnlyArrivalRefusesOtherRoutes` |
+| "Brig adds no `allow` rule for it." (the link-local address of a route that vends) | Host services | `go:TestAVendingRunAllowsNoLinkLocalAddress` `go:TestRulesetDivertsTheLinkLocalAddress` |
+| "A run without one diverts no link-local address." | broker.md: Transports | `go:TestARunWithoutAVendingRouteHasNoLinkLocalDivert` |
+| "The broker closes a connection to any other port of the address." | broker.md: Transports | `go:TestLinkLocalOtherPortIsClosed` |
+| "Every other route answers a token sent that way with 401." | broker.md: Routes that vend | `go:TestRawAuthorizationOnlyOnVendRoutes` |
+| "The route serves its URL alone, with or without a trailing `/`." | broker.md: Routes that vend | `go:TestVendRefusesPostAndSubpaths` |
+| "No key is on a command line, and no error repeats stdout." | broker.md: Fetching keys | `go:TestExecFakeAWS` `go:TestFetchErrorCarriesNoStdout` `go:TestFetchBadOutputCarriesNoOutput` `go:TestFetchTimesOut` |
+| "A failed fetch is an error even when older keys are held, since those are about to expire." | broker.md: Fetching keys | `go:TestCacheNeverServesExpired` |
+| "The error of the last row goes to `broker.log`, with the sandbox and the route, and never to the guest or to the audit log." | broker.md: Fetching keys | `go:TestAWSFailureGoesToTheBrokerLog` `go:TestVendErrorText` |
+| "So a new run that cannot get AWS credentials is refused at its start, and not at the agent's first AWS call." | broker.md: Registration | `go:TestIdenticalRegistrationStillChecks` `go:TestServeRoutesMapsCredentialRefusal` `go:TestCredentialRefusalExits6` |
+| "A sandbox that was not registered before leaves nothing behind." | broker.md: Registration | `go:TestRefusedRegistrationLeavesNoState` |

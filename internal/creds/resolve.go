@@ -43,6 +43,36 @@ type CredentialError interface {
 	credentialFailure()
 }
 
+// BrokerCredentialError is a credential the broker refused to vend for a
+// route, such as an expired AWS login. The user fixes it on the host, so it
+// is a CredentialError and exits like a missing secret does.
+type BrokerCredentialError struct {
+	// Sandbox is the sandbox named as the user knows it.
+	Sandbox string
+	// Route is the route the broker named, or "" when its message named none.
+	Route string
+	// Message is the broker's own words, which carry the fix.
+	Message string
+}
+
+func (e *BrokerCredentialError) credentialFailure() {}
+
+func (e *BrokerCredentialError) Error() string {
+	return fmt.Sprintf("the credential broker could not vend for the %s sandbox: %s", e.Sandbox, e.Message)
+}
+
+// NewBrokerCredentialError builds the error from a refusal message, which the
+// broker writes as "route <name>: <message>".
+func NewBrokerCredentialError(sandbox, message string) *BrokerCredentialError {
+	route := ""
+	if rest, ok := strings.CutPrefix(message, "route "); ok {
+		if name, _, ok := strings.Cut(rest, ": "); ok && !strings.ContainsAny(name, " \n") {
+			route = name
+		}
+	}
+	return &BrokerCredentialError{Sandbox: sandbox, Route: route, Message: message}
+}
+
 // MissingSecretsError is every REQUIRED secret a run could not resolve,
 // collected into one error.
 //

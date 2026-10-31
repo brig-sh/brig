@@ -31,6 +31,14 @@ const BrigInternal = runtime.BrigInternalName
 // diverts this port of the brig.internal address alone.
 const BrigInternalPort = runtime.BrigInternalPort
 
+// LinkLocalAddr is the address and port a guest reaches the routes that vend
+// at, in plain HTTP: the ECS container credentials address. The AWS SDKs'
+// container provider ignores AWS_CA_BUNDLE, so it cannot verify brig.internal,
+// and takes plain HTTP from loopback and a few link-local addresses alone. The
+// runtime diverts this destination to the sandbox's divert socket, and the
+// broker serves routes that vend on it and no other route.
+const LinkLocalAddr = "169.254.170.2:80"
+
 // GuestCAPath is where a guest that reaches brig.internal finds the brig CA,
 // and nothing else.
 const GuestCAPath = "/brig/ca/brig.pem"
@@ -53,6 +61,13 @@ func (e HostEndpoint) Base() string {
 // URL is the URL of one route of one sandbox.
 func (e HostEndpoint) URL(sandbox, route string) string {
 	return e.Base() + "/" + sandbox + "/r/" + route
+}
+
+// LinkLocalURL is the URL of one route that vends, on LinkLocalAddr. Its port
+// is HTTP's own, so the URL names none.
+func LinkLocalURL(sandbox, route string) string {
+	host, _, _ := strings.Cut(LinkLocalAddr, ":")
+	return "http://" + host + "/" + sandbox + "/r/" + route
 }
 
 // shellQuote quotes s for sh as one word.
@@ -111,12 +126,19 @@ func TokenVar(route string) string {
 // gets its session token alone: no route URL, no git configuration and no
 // brig CA.
 //
+// A route that vends is reached on LinkLocalAddr in plain HTTP, so its
+// {route.url} is LinkLocalURL. The AWS SDKs' container provider takes no CA
+// of brig's, so nothing names the brig CA for it.
+//
+// regions maps a route name to the region {route.region} stands for; a route
+// that uses it and has none is refused.
+//
 // Nothing is written into the guest home. A session token is marked Secret,
 // so it never goes on a command line. tokens maps a route name to its token.
 // forwarded is what the guest already gets: git entries of its own through
 // GIT_CONFIG_COUNT are kept, and the routes' entries follow them.
 func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens map[string]string,
-	forwarded []runtime.Var) ([]runtime.Var, error) {
+	regions map[string]string, forwarded []runtime.Var) ([]runtime.Var, error) {
 	var vars []runtime.Var
 	var git [][2]string
 	endpoints := 0
@@ -135,6 +157,9 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 			return nil, fmt.Errorf("no session token for route %s", r.Name)
 		}
 		url := e.URL(sandbox, r.Name)
+		if r.Vends() {
+			url = LinkLocalURL(sandbox, r.Name)
+		}
 		endpoint := r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint
 		if endpoint {
 			endpoints++
@@ -155,6 +180,13 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 				}
 			case v1alpha1.PlaceholderSessionToken:
 				vars = append(vars, runtime.Var{Name: name, Value: token, Secret: true})
+			case v1alpha1.PlaceholderRouteRegion:
+				// The SDKs refuse a pointer with no region late and
+				// obscurely, so the run stops here instead.
+				if regions[r.Name] == "" {
+					return nil, fmt.Errorf("route %s: the credential broker named no AWS region", r.Name)
+				}
+				vars = append(vars, runtime.Var{Name: name, Value: regions[r.Name]})
 			default:
 				// Validate refuses a literal; one here was not expanded.
 				return nil, fmt.Errorf("route %s: guest.env %s is %q, not a placeholder", r.Name, name, v)

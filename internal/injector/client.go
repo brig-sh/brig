@@ -17,7 +17,35 @@ import (
 
 // callTimeout bounds one control call. The broker answers from memory, and a
 // call that takes longer than this is not coming back.
-const callTimeout = 10 * time.Second
+//
+// A variable so a test can shorten it.
+var callTimeout = 10 * time.Second
+
+// addTimeout bounds add-sandbox before the routes that vend: what the broker
+// does from memory, with room for a slow host.
+//
+// vendTimeout is what each route that vends adds. The broker checks those
+// routes one after another before it answers, up to two aws calls per route
+// at 30s each, and a slow SSO refresh must come back as the broker's
+// credential refusal, not as "the broker did not answer". One fixed bound
+// would cut off a run with two aws routes.
+//
+// Variables so a test can shorten them.
+var (
+	addTimeout  = 30 * time.Second
+	vendTimeout = 70 * time.Second
+)
+
+// addTimeoutFor is the bound of add-sandbox for s, never below callTimeout.
+func addTimeoutFor(s Sandbox) time.Duration {
+	d := addTimeout
+	for _, r := range s.Routes {
+		if r.Route.Vends() {
+			d += vendTimeout
+		}
+	}
+	return max(d, callTimeout)
+}
 
 // maxReply bounds a control answer. The largest is a status listing every
 // sandbox on the host.
@@ -39,13 +67,18 @@ func ownedByMe(info os.FileInfo) bool {
 // nil. A broker that is not listening is ErrNotRunning. A refusal carries the
 // broker's own words.
 func (c Client) call(method, path string, body, out any) error {
+	return c.callWithin(callTimeout, method, path, body, out)
+}
+
+// callWithin is call with its own bound on the answer.
+func (c Client) callWithin(timeout time.Duration, method, path string, body, out any) error {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", c.Socket)
 		},
 	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: callTimeout}
+	client := &http.Client{Transport: transport, Timeout: timeout}
 	var payload io.Reader
 	if body != nil {
 		blob, err := json.Marshal(body)
@@ -78,7 +111,11 @@ func (c Client) call(method, path string, body, out any) error {
 		if msg == "" {
 			msg = resp.Status
 		}
-		return &RefusedError{Status: resp.StatusCode, Message: msg}
+		ref := &RefusedError{Status: resp.StatusCode, Message: msg}
+		if resp.Header.Get(RefusalHeader) == RefusalCredential {
+			ref.Kind = RefusalCredential
+		}
+		return ref
 	}
 	// A broker older than the answer to add-sandbox sends none.
 	if out == nil || len(blob) == 0 {
@@ -91,7 +128,18 @@ func (c Client) call(method, path string, body, out any) error {
 type RefusedError struct {
 	Status  int
 	Message string
+	// Kind is "credential" for a refusal the user fixes by fixing a
+	// credential on the host, such as an expired AWS login.
+	Kind string
 }
+
+// RefusalHeader marks the kind of a refusal. The status alone cannot: a 424
+// from a proxy in between, or from a broker of another version, would read
+// as a credential to fix.
+const RefusalHeader = "X-Brig-Refusal"
+
+// RefusalCredential is the RefusalHeader value of a credential refusal.
+const RefusalCredential = "credential"
 
 func (e *RefusedError) Error() string { return "the credential broker refused: " + e.Message }
 
@@ -115,7 +163,7 @@ func (c Client) AddSandbox(s Sandbox) error {
 // Add is AddSandbox, and returns the broker's answer.
 func (c Client) Add(s Sandbox) (AddResponse, error) {
 	var out AddResponse
-	err := c.call(http.MethodPost, "/sandboxes", s, &out)
+	err := c.callWithin(addTimeoutFor(s), http.MethodPost, "/sandboxes", s, &out)
 	return out, err
 }
 

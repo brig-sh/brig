@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brig-sh/brig/internal/awscred"
 	"github.com/brig-sh/brig/internal/hostsrc"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/secret"
@@ -20,6 +23,20 @@ import (
 // hostsrc, which reads the host itself -- and which nothing on the run path
 // may import (see internal/hostsrc/arch_test.go).
 var newHostReader = func() hostReader { return hostsrc.NewReader() }
+
+// newAWSCLI is the seam the tests replace. The environment is awscred.Environ's,
+// the rule the broker applies, so the check an import makes sees the identity
+// the broker will resolve at run time and not whatever the user's shell
+// exports.
+var newAWSCLI = func() awscred.CLI { return awscred.CLI{Env: awscred.Environ(os.Environ())} }
+
+// importStderr is where an import says what a pointer will do, apart from the
+// report on stdout. It is a variable so a test can read it.
+var importStderr io.Writer = os.Stderr
+
+// awsCheckSession is the session name of the one assume-role an import makes
+// to prove the role can be assumed. Its keys are discarded.
+const awsCheckSession = "brig-import-check"
 
 // hostReader is the slice of hostsrc the importer uses, named here so a test
 // double does not have to embed the concrete type.
@@ -52,6 +69,38 @@ type importOptions struct {
 	command     bool
 	fromCommand string
 	yes         bool
+
+	// The aws source stores a pointer, never keys: it names the local AWS
+	// profile and how the sandbox gets credentials from it. identity is
+	// "self" or empty.
+	awsProfile, roleARN, identity, sourceIdentity string
+}
+
+// anyAWSFlag is whether the line carried a flag only an aws source takes.
+func (o importOptions) anyAWSFlag() bool {
+	return o.awsProfile != "" || o.roleARN != "" || o.identity != "" || o.sourceIdentity != ""
+}
+
+// awsFlagName is the first aws flag given, for the refusal that names it.
+func (o importOptions) awsFlagName() string {
+	switch {
+	case o.awsProfile != "":
+		return "--aws-profile"
+	case o.roleARN != "":
+		return "--role-arn"
+	case o.identity != "":
+		return "--identity"
+	}
+	return "--source-identity"
+}
+
+func hasAWSSource(d profile.SecretDecl) bool {
+	for _, s := range d.SourceList() {
+		if s.From == profile.SourceAWS {
+			return true
+		}
+	}
+	return false
 }
 
 // importSecrets fills a profile's secrets from where the host already keeps
@@ -106,6 +155,30 @@ func importSecrets(out io.Writer, args []string) error {
 		fmt.Fprintf(out, "%s declares no secret brig can read from your host\n", p.Name)
 		reportHandCreated(out, p)
 		return nil
+	}
+
+	// An aws flag on a secret with no aws source would be dropped without a
+	// word, and the user would believe the import had used it. One set of
+	// flags names one profile and one role: applied to two aws secrets, it
+	// would store the same identity under both names, where the user meant
+	// a different one for each.
+	if o.anyAWSFlag() {
+		aws := 0
+		for _, d := range selected {
+			if hasAWSSource(d) {
+				aws++
+			}
+		}
+		if aws > 1 {
+			return fmt.Errorf("the AWS flags answer for one secret; name it: "+
+				"brig secret import %s <secret> %s ...", p.Name, o.awsFlagName())
+		}
+		for _, d := range selected {
+			if !hasAWSSource(d) {
+				return fmt.Errorf("%s is for a secret whose source is aws, and %q has none",
+					o.awsFlagName(), d.Name)
+			}
+		}
 	}
 
 	store, err := openStore()
@@ -244,6 +317,15 @@ func readFor(reader hostReader, d profile.SecretDecl, o importOptions) (hostsrc.
 		return hostsrc.Value{Bytes: blob, From: commandLocator}, true, nil
 	}
 	for _, s := range d.SourceList() {
+		// The aws source reads no file or keychain item, so it does not go
+		// through the host reader and its one-read-per-locator memo.
+		if s.From == profile.SourceAWS {
+			v, err := readAWS(o)
+			if err != nil {
+				return hostsrc.Value{}, false, err
+			}
+			return v, true, nil
+		}
 		v, ok, err := reader.Read(s)
 		// A refusal is not absence: falling through to the next source after a
 		// denied dialog ends with "run the agent on the host once to log in"
@@ -256,6 +338,75 @@ func readFor(reader hostReader, d profile.SecretDecl, o importOptions) (hostsrc.
 		}
 	}
 	return hostsrc.Value{}, false, nil
+}
+
+// readAWS checks the user's AWS profile and returns the pointer to store.
+//
+// The pointer is the whole value: the profile name, the mode, the role and the
+// source identity. The checks run here, at import, so a lapsed SSO login, a
+// role the profile cannot assume or a missing region is refused now rather
+// than at the guest's first AWS call. The one assume-role in role mode proves
+// the role; its keys are dropped on the floor and never reach the store, the
+// output or an error.
+func readAWS(o importOptions) (hostsrc.Value, error) {
+	switch {
+	case o.roleARN != "" && o.identity != "":
+		return hostsrc.Value{}, errors.New("--role-arn and --identity self are two answers; pass one")
+	case o.roleARN == "" && o.identity == "":
+		// Self mode exports the user's own keys, so it is never what a
+		// forgotten flag falls back to.
+		return hostsrc.Value{}, errors.New("say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self")
+	case o.awsProfile == "":
+		return hostsrc.Value{}, errors.New("--aws-profile is required: name the local AWS profile the sandbox's credentials come from")
+	case o.identity != "" && o.sourceIdentity != "":
+		return hostsrc.Value{}, errors.New("--source-identity goes with --role-arn; self mode keeps no source identity")
+	}
+	cli := newAWSCLI()
+	ctx := context.Background()
+	fail := func(err error) (hostsrc.Value, error) {
+		// aws reports a failed start in words, not as exec.ErrNotFound, so the
+		// binary is looked up again, and only after a failure.
+		bin := cli.Bin
+		if bin == "" {
+			bin = "aws"
+		}
+		if _, lerr := exec.LookPath(bin); lerr != nil {
+			return hostsrc.Value{}, errors.New(awscred.InstallHint)
+		}
+		return hostsrc.Value{}, err
+	}
+	caller, err := cli.CallerARN(ctx, o.awsProfile)
+	if err != nil {
+		return fail(err)
+	}
+	ptr := awscred.Pointer{Kind: "aws", AWSProfile: o.awsProfile, Mode: awscred.ModeSelf}
+	if o.roleARN != "" {
+		ptr.Mode, ptr.RoleARN = awscred.ModeRole, o.roleARN
+		ptr.SourceIdentity = o.sourceIdentity
+		if ptr.SourceIdentity == "" {
+			if ptr.SourceIdentity, err = awscred.SourceIdentityFrom(caller); err != nil {
+				return hostsrc.Value{}, err
+			}
+		}
+	}
+	if err := ptr.Validate(); err != nil {
+		return hostsrc.Value{}, err
+	}
+	if _, err := cli.Region(ctx, o.awsProfile); err != nil {
+		return fail(err)
+	}
+	if ptr.Mode == awscred.ModeRole {
+		if _, err := cli.Fetch(ctx, ptr, awsCheckSession); err != nil {
+			return fail(err)
+		}
+	} else {
+		fmt.Fprintf(importStderr, "aws: the sandbox will get your own identity %s\n", caller)
+	}
+	doc, err := json.Marshal(ptr)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	return hostsrc.Value{Bytes: doc, From: "aws:" + o.awsProfile}, nil
 }
 
 // capped is an io.Writer that stops at a limit and says so, which is what
@@ -531,6 +682,10 @@ func parseImport(args []string) (importOptions, error) {
 	fs.StringVar(&o.fromCommand, "from-command", "", "")
 	fs.BoolVar(&o.yes, "y", false, "")
 	fs.BoolVar(&o.yes, "yes", false, "")
+	fs.StringVar(&o.awsProfile, "aws-profile", "", "")
+	fs.StringVar(&o.roleARN, "role-arn", "", "")
+	fs.StringVar(&o.identity, "identity", "", "")
+	fs.StringVar(&o.sourceIdentity, "source-identity", "", "")
 
 	var words []string
 	for rest := args; ; {
@@ -544,7 +699,7 @@ func parseImport(args []string) (importOptions, error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return o, fmt.Errorf("%s (import takes --dry-run, --from-command and -y)", msg)
+			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity and --source-identity)", msg)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -553,6 +708,11 @@ func parseImport(args []string) (importOptions, error) {
 		rest = fs.Args()[1:]
 	}
 	o.command = seen(fs, "from-command")
+	// Only "self" is an identity: it is the one non-role answer, and a
+	// misspelling must not fall through to the role path.
+	if o.identity != "" && o.identity != "self" {
+		return o, fmt.Errorf("--identity accepts only self, got %q; for a role use --role-arn", o.identity)
+	}
 	if len(words) == 0 {
 		return o, errors.New("import needs a profile, for example " +
 			"`brig secret import claude-code`")
