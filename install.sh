@@ -362,7 +362,7 @@ install_runtime() {
   INSTALL_BRIG_RELEASE_VERSION="$version" \
   INSTALL_BRIG_REQUIRE_SIGCHECK="$require_sig" \
   INSTALL_BRIG_ROOTLESS="$rootless" \
-    sh "$tmp/install.sh" || die "the runtime installer failed"
+    sh "$tmp/install.sh" || die "the runtime installer stopped. Do what it says above, and then run this same install command again"
 
   # The bundle's launchers exec $PREFIX/bin/brig and $PREFIX/bin/brigd. It
   # picks PREFIX from its euid, the same way it picks where to install:
