@@ -591,6 +591,13 @@ Brig refuses a binding for one of them that resolves from the secret store. It
 does so when the sandbox boots or execs, because a stored secret never goes on
 the command line.
 
+### `BRIG_PROJECT`
+
+Brig sets `BRIG_PROJECT` itself, to the guest path of the run's project, and
+leaves it unset when there is no project. It ignores a binding of that name,
+including one from `BRIG_FORWARD_ENV`, and prints a warning. The guest gets
+Brig's value, and the CREDENTIALS row does not name the binding.
+
 ### `BRIG_FORWARD_ENV`
 
 `BRIG_FORWARD_ENV` overrides which variables Brig carries in from its own
