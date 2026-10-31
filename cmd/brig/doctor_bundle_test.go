@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // bypassedBundle is healthyHost with this brig inside a runtime bundle's tree and
@@ -53,6 +55,34 @@ func TestDoctorNamesABypassedBundleLauncher(t *testing.T) {
 	boot := findCheck(t, checks, "boot")
 	if strings.Contains(boot.Fix, "fetch") {
 		t.Errorf("the boot row still offers the fetch: %q", boot.Fix)
+	}
+}
+
+// The reporter's host had already fetched assets, and an "ok" beside the bundle
+// row says they will do. The row stays ok, since the files are there, and says
+// whose they are.
+func TestDoctorSaysFetchedAssetsAreNotTheBundles(t *testing.T) {
+	bypassedBundle(t)
+	dir, _, _, err := runtime.BootAssetsDir(doctorRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kernel, initrd := runtime.BootAssetNames()
+	for _, name := range []string{kernel, initrd} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("stand-in\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	boot := findCheck(t, runDoctor(nil, nil), "boot")
+	if boot.State != statePass {
+		t.Fatalf("boot row state = %q, want ok", boot.State)
+	}
+	if !strings.Contains(boot.Finding, "not the runtime bundle's") {
+		t.Errorf("the boot row does not say whose assets these are: %q", boot.Finding)
 	}
 }
 

@@ -164,7 +164,11 @@ func (c *Config) backendRefusal(hypervisor string) error {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) (err error) {
-	// First of all. See sessionRefusal.
+	// Before every refusal below, and before the runtime is asked anything: a
+	// nerdctl with no configuration of the bundle's cannot reach its containerd,
+	// and that failure stops the run without naming the launcher.
+	c.warnBundleEnv()
+	// The first refusal. See sessionRefusal.
 	if err := c.sessionRefusal(); err != nil {
 		return err
 	}
@@ -326,9 +330,6 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		}
 	}()
 
-	// Before anything is fetched, since the assets a fetch brings are part of
-	// what goes wrong.
-	c.warnBundleEnv()
 	// Verify before boot, not after: the point is to decide whether to run
 	// this image at all.
 	if err := c.verifyImage(); err != nil {
@@ -623,9 +624,9 @@ func (c *Config) warnBundleEnv() {
 	if !missing {
 		return
 	}
-	c.warnf("%s", notice.New(runtime.BundleEnvMissing).
-		Note("without it, brig does not find the bundle's CNI plugins or boot assets, and this run may fail").
-		Do("run brig from "+env.Launchers, env.Fix()).
+	c.warnf("%s", notice.New(env.Missing()).
+		Note("without it, %s does not find the bundle's CNI plugins or boot assets, and this run may fail", env.Program).
+		Do("run "+env.Program+" from "+env.Launchers, env.Fix()).
 		Do("or load the environment", ". "+env.File))
 }
 

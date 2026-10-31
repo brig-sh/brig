@@ -207,10 +207,16 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		checks = append(checks, mc(agent, rt))
 	}
 	boot := bootCheck(rt)
-	if bypassed && boot.State == stateFail {
-		// The usual advice is to let a run fetch them. Those are not the assets
-		// this tree boots: see runtime.MissingBundleEnv.
-		boot.Fix = "the runtime bundle carries them; see the bundle line above"
+	if bypassed {
+		// Fetched assets are not the ones this tree boots, whether they are here
+		// already or the usual advice would fetch them: see
+		// runtime.MissingBundleEnv.
+		switch boot.State {
+		case stateFail:
+			boot.Fix = "the runtime bundle carries them; see the bundle line above"
+		case statePass:
+			boot.Finding += ", which are not the runtime bundle's; see the bundle line above"
+		}
 	}
 	checks = append(checks,
 		boot,
@@ -530,7 +536,7 @@ func bundleCheck() (check, bool) {
 		return check{}, false
 	}
 	return check{Name: "bundle", State: stateFail,
-		Finding: runtime.BundleEnvMissing + ", so brig will not find the bundle's CNI plugins or boot assets",
+		Finding: env.Missing() + ", so brig will not find the bundle's CNI plugins or boot assets",
 		Fix:     fmt.Sprintf("run brig from %s: %s, or load the environment: . %s", env.Launchers, env.Fix(), env.File),
 	}, true
 }
