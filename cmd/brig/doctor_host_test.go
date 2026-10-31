@@ -84,6 +84,7 @@ func TestUserNSCheckAsksAppArmorForTheProfile(t *testing.T) {
 	})
 	rt := bundleNerdctl(t)
 	rootlesskit := filepath.Join(filepath.Dir(rt.bin), "rootlesskit")
+	swap(t, &apparmorLoaded, filepath.Join(t.TempDir(), "unreadable"))
 	swap(t, &apparmorDir, t.TempDir())
 	if err := os.MkdirAll(filepath.Join(apparmorDir, "local"), 0o755); err != nil {
 		t.Fatal(err)
@@ -106,6 +107,94 @@ func TestUserNSCheckAsksAppArmorForTheProfile(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if c := userNSCheck(nil); c.State != stateInfo {
 		t.Errorf("no rootlesskit anywhere: %+v", c)
+	}
+}
+
+// loadProfile adds a loaded profile to the kernel's list as securityfs shows it.
+func loadProfile(t *testing.T, name, attach string) {
+	t.Helper()
+	dir, err := os.MkdirTemp(apparmorLoaded, "profile.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for file, value := range map[string]string{"name": name, "attach": attach} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(value+"\n"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A profile written to /etc/apparmor.d and never loaded covers nothing, and a
+// profile for a longer path covers another program.
+func TestAppArmorAsksTheLoadedProfiles(t *testing.T) {
+	const rootlesskit = "/home/alex/.local/share/brig/bin/rootlesskit"
+	swap(t, &apparmorLoaded, t.TempDir())
+	swap(t, &apparmorDir, t.TempDir())
+	written := rootlesskit + " flags=(unconfined) { userns, }\n"
+	if err := os.WriteFile(filepath.Join(apparmorDir, "written"), []byte(written), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if apparmorNames(rootlesskit) {
+		t.Error("a profile on disk that was never loaded covered rootlesskit")
+	}
+	loadProfile(t, rootlesskit+"-old", rootlesskit+"-old")
+	if apparmorNames(rootlesskit) {
+		t.Error("the profile of a longer path covered rootlesskit")
+	}
+	loadProfile(t, "brig-rootlesskit", rootlesskit)
+	if !apparmorNames(rootlesskit) {
+		t.Error("a loaded profile that attaches to rootlesskit did not cover it")
+	}
+	swap(t, &apparmorLoaded, t.TempDir())
+	loadProfile(t, rootlesskit, rootlesskit)
+	if !apparmorNames(rootlesskit) {
+		t.Error("a loaded profile named by the path did not cover it")
+	}
+}
+
+// Where the kernel's list cannot be read, a profile file has to name the whole
+// path outside a comment.
+func TestAppArmorFilesNameTheWholePath(t *testing.T) {
+	const rootlesskit = "/opt/brig/bin/rootlesskit"
+	swap(t, &apparmorLoaded, filepath.Join(t.TempDir(), "unreadable"))
+	for content, want := range map[string]bool{
+		"# " + rootlesskit + " flags=(unconfined) { userns, }\n":                 false,
+		rootlesskit + ".bak flags=(unconfined) { userns, }\n":                    false,
+		"/opt/brig/bin/rootlesskit-old flags=(unconfined) { userns, }\n":         false,
+		rootlesskit + " flags=(unconfined) { userns, }\n":                        true,
+		"profile brig-rootlesskit " + rootlesskit + " flags=(unconfined) {\n}\n": true,
+		"\"" + rootlesskit + "\" flags=(unconfined) {\n}\n":                      true,
+	} {
+		swap(t, &apparmorDir, t.TempDir())
+		if err := os.WriteFile(filepath.Join(apparmorDir, "profile"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := apparmorNames(rootlesskit); got != want {
+			t.Errorf("%q covers rootlesskit: %v, want %v", content, got, want)
+		}
+	}
+}
+
+// AppArmor attaches by the resolved path. Through a symlinked nerdctl, the
+// bundle's rootlesskit sits beside the target.
+func TestRootlesskitPathFollowsASymlinkedNerdctl(t *testing.T) {
+	rt := bundleNerdctl(t)
+	rootlesskit := filepath.Join(filepath.Dir(rt.bin), "rootlesskit")
+	for _, path := range []string{rt.bin, rootlesskit} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(t.TempDir(), "nerdctl")
+	if err := os.Symlink(rt.bin, link); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(rootlesskit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rootlesskitPath(nerdctlDoctorRuntime{doctorRuntime{bin: link}}); got != want {
+		t.Errorf("rootlesskitPath through a link = %q, want %q", got, want)
 	}
 }
 
