@@ -247,6 +247,55 @@ install_hull() {
   say "installed $("$DEST/hull" --version) to $DEST"
 }
 
+# fetch_cosign puts the pinned cosign for this platform at $tmp/cosign, checked
+# against the hash above, and fails when there is none to fetch.
+#
+# A verified copy is kept in the user's cache, so a second run does not fetch
+# 130 MB again. That second run is common: a rootless install that stops for
+# host setup is run again once an admin has prepared the host. The kept copy is
+# copied into $tmp and checked by the same pinned hash before it runs. A copy
+# that fails the check is dropped and fetched again. The cache is skipped when
+# HOME belongs to someone else, as under a sudo that keeps HOME: a root-owned
+# directory there would stop the user's own brig later.
+fetch_cosign() {
+  case "$os/$arch" in
+    darwin/arm64) cosign_sha=$COSIGN_SHA_DARWIN_ARM64 ;;
+    linux/amd64)  cosign_sha=$COSIGN_SHA_LINUX_AMD64 ;;
+    linux/arm64)  cosign_sha=$COSIGN_SHA_LINUX_ARM64 ;;
+    *) return 1 ;;
+  esac
+  printf '%s  cosign\n' "$cosign_sha" > "$tmp/cosign-checksums.txt"
+
+  cache=""
+  if [ -n "${HOME:-}" ] \
+     && [ -n "$(find "$HOME" -maxdepth 0 -user "$(id -u)" 2> /dev/null)" ]; then
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/brig/cosign-$COSIGN_VERSION-$os-$arch"
+  fi
+  if [ -n "$cache" ] && [ -f "$cache" ]; then
+    cp "$cache" "$tmp/cosign"
+    if ( cd "$tmp" && sha256_check < cosign-checksums.txt > /dev/null 2>&1 ); then
+      chmod 0755 "$tmp/cosign"
+      say "using cosign $COSIGN_VERSION from $cache"
+      return 0
+    fi
+    say "the cosign in $cache does not match the pinned hash; fetching it again"
+    rm -f "$cache" "$tmp/cosign"
+  fi
+
+  # Worth saying out loud: this is a 130 MB download for one subprocess, and it
+  # is the largest thing this script pulls by an order of magnitude.
+  say "downloading cosign $COSIGN_VERSION${1:+ $1} (about 130 MB)"
+  curl -fsSL -o "$tmp/cosign" \
+    "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-${os}-${arch}" \
+    || return 1
+  verify "$tmp" cosign cosign-checksums.txt
+  chmod 0755 "$tmp/cosign"
+  if [ -n "$cache" ]; then
+    { mkdir -p "${cache%/*}" && cp "$tmp/cosign" "$cache.$$" && mv "$cache.$$" "$cache"; } \
+      2> /dev/null || rm -f "$cache.$$"
+  fi
+}
+
 # cosign, as a tool rather than as an install. install_runtime needs one to
 # check the runtime release's signature, and it needs it before that release is
 # trusted, so the bundle's own cosign is too late to use. On Linux nothing else
@@ -261,19 +310,7 @@ resolve_cosign() {
     return 0
   fi
   [ "${BRIG_INSTALL_COSIGN:-1}" != 0 ] || return 1
-  case "$os/$arch" in
-    darwin/arm64) cosign_sha=$COSIGN_SHA_DARWIN_ARM64 ;;
-    linux/amd64)  cosign_sha=$COSIGN_SHA_LINUX_AMD64 ;;
-    linux/arm64)  cosign_sha=$COSIGN_SHA_LINUX_ARM64 ;;
-    *) return 1 ;;
-  esac
-  say "downloading cosign $COSIGN_VERSION to check the runtime release (about 130 MB)"
-  curl -fsSL -o "$tmp/cosign" \
-    "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-${os}-${arch}" \
-    || return 1
-  printf '%s  cosign\n' "$cosign_sha" > "$tmp/cosign-checksums.txt"
-  verify "$tmp" cosign cosign-checksums.txt
-  chmod 0755 "$tmp/cosign"
+  fetch_cosign "to check the runtime release" || return 1
   COSIGN_BIN="$tmp/cosign"
 }
 
@@ -356,8 +393,12 @@ install_runtime() {
   # untouched.
   fetch_brig
 
+  # A host that needs root's setup first makes the runtime installer print the
+  # commands for it and stop. It then names this command as the one to run
+  # again, since the user never ran the runtime installer by hand.
   say "running the runtime installer"
   PATH="$runtime_path" \
+  INSTALL_BRIG_RERUN="curl -fsSL https://brig.sh/install | sh" \
   INSTALL_BRIG_RELEASE_REPO="$RUNTIME_REPO" \
   INSTALL_BRIG_RELEASE_VERSION="$version" \
   INSTALL_BRIG_REQUIRE_SIGCHECK="$require_sig" \
@@ -429,20 +470,10 @@ install_cosign() {
   fi
 
   case "$os/$arch" in
-    darwin/arm64) cosign_sha=$COSIGN_SHA_DARWIN_ARM64 ;;
-    linux/amd64)  cosign_sha=$COSIGN_SHA_LINUX_AMD64 ;;
-    linux/arm64)  cosign_sha=$COSIGN_SHA_LINUX_ARM64 ;;
+    darwin/arm64 | linux/amd64 | linux/arm64) ;;
     *) say "no pinned cosign for $os/$arch, skipping it"; return ;;
   esac
-
-  # Worth saying out loud: this is a 130 MB download for one subprocess, and it
-  # is the largest thing this script pulls by an order of magnitude.
-  say "downloading cosign $COSIGN_VERSION (about 130 MB)"
-  curl -fsSL -o "$tmp/cosign" \
-    "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-${os}-${arch}" \
-    || die "could not fetch cosign $COSIGN_VERSION for ${os}/${arch}"
-  printf '%s  cosign\n' "$cosign_sha" > "$tmp/cosign-checksums.txt"
-  verify "$tmp" cosign cosign-checksums.txt
+  fetch_cosign || die "could not fetch cosign $COSIGN_VERSION for ${os}/${arch}"
   install_from "$tmp" cosign
   say "installed cosign $COSIGN_VERSION to $DEST"
   if [ "$os" = darwin ]; then

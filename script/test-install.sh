@@ -50,8 +50,8 @@ release() {
 release brig brigd brig-broker
 
 # The runtime installer. As a user it puts a launcher in ~/.local/bin and a
-# brig in the tree, as the bundle's does. As root it fails: the node-wide
-# checks run before it.
+# brig in the tree, as the bundle's does, and keeps the INSTALL_BRIG_RERUN it
+# was given. As root it fails: the node-wide checks run before it.
 rt="$T/srv/NOFireAI/brig-standalone-linux/releases/download/v0.0.0-test"
 mkdir -p "$rt"
 cat > "$rt/install.sh" <<'RT'
@@ -59,6 +59,7 @@ cat > "$rt/install.sh" <<'RT'
 set -eu
 [ "$(id -u)" != 0 ] || exit 1
 mkdir -p "$HOME/.local/share/brig/data/bin" "$HOME/.local/bin"
+printf '%s\n' "${INSTALL_BRIG_RERUN:-}" > "$HOME/rerun"
 printf '#!/bin/sh\nexit 0\n' > "$HOME/.local/share/brig/data/bin/brig"
 printf '#!/bin/sh\nexec "$HOME/.local/share/brig/data/bin/brig" "$@"\n' > "$HOME/.local/bin/brig"
 chmod 0755 "$HOME/.local/share/brig/data/bin/brig" "$HOME/.local/bin/brig"
@@ -132,6 +133,10 @@ ok "a user install with /usr/local/bin first gets the PATH change"
 [ -x "$T/home/.local/share/brig/data/bin/brig-broker" ] \
   || { cat "$T/out.log" >&2; fail "the release's brig-broker was not installed beside brig"; }
 ok "a user install puts brig-broker beside brig"
+# The runtime installer prints this when the host needs root's setup first.
+[ "$(cat "$T/home/rerun")" = "curl -fsSL https://brig.sh/install | sh" ] \
+  || fail "the runtime installer was not told how to run the install again: '$(cat "$T/home/rerun")'"
+ok "the runtime installer is told how to run the install again"
 
 # 2. The same with ~/.local/bin off PATH altogether.
 run_install "$T/stub:$T/usrlocal/bin:$base"
