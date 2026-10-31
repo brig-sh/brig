@@ -314,6 +314,51 @@ func TestCNICheckFollowsWhereNerdctlLooks(t *testing.T) {
 	}
 }
 
+// With no setting, nerdctl takes the first of its default directories that
+// exists. A rootless user's own come first. A later directory with every plugin
+// does not rescue an earlier one that has only bridge, since nerdctl never
+// looks there.
+func TestCNICheckTakesNerdctlsFirstDefault(t *testing.T) {
+	t.Setenv("CNI_PATH", "")
+	t.Setenv("NERDCTL_TOML", filepath.Join(t.TempDir(), "absent.toml"))
+	swap(t, &geteuid, func() int { return 1000 })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	full := filepath.Join(home, ".local/lib/cni")
+	if err := os.MkdirAll(full, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, plugin := range cniPlugins {
+		if err := os.WriteFile(filepath.Join(full, plugin), nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := defaultCNIDir(); got != full {
+		t.Fatalf("defaultCNIDir = %q, want the user's %q", got, full)
+	}
+	if c := cniCheck(); c.State != statePass || !strings.Contains(c.Finding, full) {
+		t.Errorf("the user's own plugins: %+v", c)
+	}
+
+	first := filepath.Join(home, "opt/cni/bin")
+	if err := os.MkdirAll(first, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first, "bridge"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if c := cniCheck(); c.State != stateFail || !strings.Contains(c.Finding, first) || strings.Contains(c.Finding, full) {
+		t.Errorf("a later full directory covered an earlier half one: %+v", c)
+	}
+
+	// Root does not look in a home.
+	swap(t, &geteuid, func() int { return 0 })
+	if got := defaultCNIDir(); strings.HasPrefix(got, home) {
+		t.Errorf("root's default is in the home: %q", got)
+	}
+}
+
 func TestToolsCheckNamesWhatIsMissing(t *testing.T) {
 	fakeTools(t, 0, "oras")
 	c := toolsCheck(true, "")
