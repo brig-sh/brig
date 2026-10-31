@@ -153,6 +153,12 @@ run_install "$T/root-stub:$T/stub:$T/usrlocal/bin:$base"
 grep -qF "$T/usrlocal/bin/brig is from an earlier install, and may run instead of the bundle's launcher; remove it" "$T/out.log" \
   || { cat "$T/out.log" >&2; fail "a node-wide install lost the advice to remove it"; }
 ok "a node-wide install is still told to remove it"
+# The runtime installer stops here, as it does on a host that needs root's
+# setup first. Its own words say "run this installer again", and through this
+# one that means the command the user typed.
+grep -qF "run this same install command again" "$T/out.log" \
+  || { cat "$T/out.log" >&2; fail "a stopped runtime install does not say to run this one again"; }
+ok "a stopped runtime install says to run this install again"
 
 # 5. A release from before the credential broker carries no brig-broker, and
 #    still installs.
