@@ -10,6 +10,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -371,6 +372,10 @@ type LogsSpec struct {
 	// expects to still see on the terminal. The caller wraps this one too, so
 	// the control-sequence filter covers both halves of the stream.
 	Err io.Writer
+	// Ctx bounds the read when set, for a caller on its way to a failure that
+	// must not wait on a runtime that may be the reason for it. Nil is no bound,
+	// which is what a reader following a log wants.
+	Ctx context.Context
 }
 
 // Instance is one sandbox as the runtime sees it.

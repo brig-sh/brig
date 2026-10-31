@@ -1329,11 +1329,23 @@ func (h *hull) Logs(spec LogsSpec) error {
 	}
 	// hull's own default is -1 (all), so spec.Tail passes straight through.
 	args = append(args, "--tail", strconv.Itoa(spec.Tail), spec.Name)
-	cmd := exec.Command(h.bin, args...)
+	cmd := logsCommand(spec, h.bin, args)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	cmd.Stdout = spec.Out
 	cmd.Stderr = spec.Err
 	return cmd.Run()
+}
+
+// logsCommand is a runtime's logs command, on spec.Ctx when it has one. The wait
+// delay is agentCall's, for the same reason: a child that outlives the runtime
+// holds the pipes open, and Run would wait on them past the deadline.
+func logsCommand(spec LogsSpec, bin string, args []string) *exec.Cmd {
+	if spec.Ctx == nil {
+		return exec.Command(bin, args...)
+	}
+	cmd := exec.CommandContext(spec.Ctx, bin, args...)
+	cmd.WaitDelay = agentCallWaitDelay
+	return cmd
 }
 
 func (h *hull) LogsHint(name string) string {
