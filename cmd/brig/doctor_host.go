@@ -27,8 +27,9 @@ var (
 	linuxHostChecks = linuxHostRows
 )
 
-// fileCapsOf and userNamespaces are seams for the same reason.
+// These are seams for the same reason.
 var (
+	geteuid        = os.Geteuid
 	fileCapsOf     = hasFileCaps
 	userNamespaces = func() error {
 		out, err := exec.Command("unshare", "-Ur", "true").CombinedOutput()
@@ -37,7 +38,18 @@ var (
 		}
 		return nil
 	}
+	// apparmorRestrictsUserNS is Ubuntu's switch since 24.04, on by default.
+	apparmorRestrictsUserNS = func() bool {
+		raw, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+		return err == nil && strings.TrimSpace(string(raw)) == "1"
+	}
+	apparmorDir = "/etc/apparmor.d"
 )
+
+// bundleCarriesThem is the fix on a row whose usual advice is to install or
+// fetch what the runtime bundle already has, when the bundle line says why this
+// brig cannot see it.
+const bundleCarriesThem = "the runtime bundle carries them; see the bundle line above"
 
 // linuxHostRows reports what a Linux run needs from the host. The installer of
 // the runtime bundle checks most of these, which misses a host that took the
@@ -51,15 +63,17 @@ func linuxHostRows(rt runtime.Runtime) []check {
 		return nil
 	}
 	var rows []check
-	if os.Geteuid() != 0 {
-		rows = append(rows, subIDCheck("/etc/subuid", "/etc/subgid"), userNSCheck(), uidmapCheck())
+	if geteuid() != 0 {
+		rows = append(rows, subIDCheck("/etc/subuid", "/etc/subgid"), userNSCheck(rt), uidmapCheck())
 	}
 	// /dev/kvm has the virtual line already.
 	rows = append(rows, devicesCheck("/dev/vhost-vsock"), cniCheck())
 	// The bundle carries these tools. Its tree is the evidence and not a variable:
 	// a host can name its own kernel or its own nerdctl and still lack them.
 	if rt == nil || !runtime.InBundleTree(rt.Bin()) {
-		rows = append(rows, toolsCheck())
+		// oras only fetches boot assets, so a host that has them does not need it.
+		_, present, _, err := runtime.BootAssetsDir(rt)
+		rows = append(rows, toolsCheck(err != nil || !present))
 	}
 	return rows
 }
@@ -83,6 +97,31 @@ func subIDCount(path, name, uid string) int {
 	return total
 }
 
+// nextSubIDStart is where a new range starts: past every range either file hands
+// out, since a range that overlaps another user's maps both users' containers
+// onto the same host uids. The bundle's installer offers the same one.
+func nextSubIDStart(paths ...string) int {
+	next := 100000
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			f := strings.Split(strings.TrimSpace(line), ":")
+			if len(f) != 3 {
+				continue
+			}
+			start, serr := strconv.Atoi(f[1])
+			count, cerr := strconv.Atoi(f[2])
+			if serr == nil && cerr == nil && start+count > next {
+				next = start + count
+			}
+		}
+	}
+	return next
+}
+
 func subIDCheck(subuid, subgid string) check {
 	me, err := user.Current()
 	if err != nil {
@@ -90,22 +129,78 @@ func subIDCheck(subuid, subgid string) check {
 	}
 	uids, gids := subIDCount(subuid, me.Username, me.Uid), subIDCount(subgid, me.Username, me.Uid)
 	if uids < minSubIDs || gids < minSubIDs {
+		start := nextSubIDStart(subuid, subgid)
 		return check{Name: "subids", State: stateFail,
 			Finding: fmt.Sprintf("%s has %d subordinate uids and %d gids, and a rootless run needs %d of each", me.Username, uids, gids, minSubIDs),
-			Fix:     fmt.Sprintf("sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 %s", me.Username),
+			Fix: fmt.Sprintf("sudo usermod --add-subuids %[1]d-%[2]d --add-subgids %[1]d-%[2]d %[3]s",
+				start, start+minSubIDs-1, me.Username),
 		}
 	}
 	return check{Name: "subids", State: statePass, Finding: fmt.Sprintf("%d subordinate uids, %d gids", uids, gids)}
 }
 
-func userNSCheck() check {
-	if err := userNamespaces(); err != nil {
+// userNSCheck asks whether the rootless setup can create its user namespace.
+//
+// Where AppArmor restricts them, a probe from here fails on a host that is set up
+// right: the profile that allows them names the rootlesskit binary, and covers
+// nothing else. So that host is asked for the profile, as the bundle's installer
+// asks.
+func userNSCheck(rt runtime.Runtime) check {
+	if apparmorRestrictsUserNS() {
+		return rootlesskitProfileCheck(rootlesskitPath(rt))
+	}
+	err := userNamespaces()
+	if errors.Is(err, exec.ErrNotFound) {
+		return check{Name: "userns", State: stateInfo, Finding: "unshare is not on PATH, so doctor cannot try to create a user namespace"}
+	}
+	if err != nil {
 		return check{Name: "userns", State: stateFail,
 			Finding: "cannot create a user namespace: " + oneLine(err.Error()),
-			Fix:     "allow unprivileged user namespaces: the kernel.unprivileged_userns_clone sysctl, or the rootlesskit AppArmor profile on Ubuntu",
+			Fix:     "allow unprivileged user namespaces: user.max_user_namespaces above 0, and kernel.unprivileged_userns_clone=1 on a kernel that has it",
 		}
 	}
 	return check{Name: "userns", State: statePass, Finding: "this user can create a user namespace"}
+}
+
+// rootlesskitPath is the rootlesskit a run starts: the bundle's, beside its
+// nerdctl, or the one on PATH. Empty when there is none.
+func rootlesskitPath(rt runtime.Runtime) string {
+	if rt != nil && runtime.InBundleTree(rt.Bin()) {
+		return filepath.Join(filepath.Dir(rt.Bin()), "rootlesskit")
+	}
+	path, _ := exec.LookPath("rootlesskit")
+	return path
+}
+
+func rootlesskitProfileCheck(rootlesskit string) check {
+	if rootlesskit == "" {
+		return check{Name: "userns", State: stateInfo,
+			Finding: "AppArmor restricts user namespaces, and there is no rootlesskit to look for a profile of"}
+	}
+	if !apparmorNames(rootlesskit) {
+		return check{Name: "userns", State: stateFail,
+			Finding: "AppArmor restricts user namespaces, and no profile in " + apparmorDir + " names " + rootlesskit,
+			Fix:     "run install.sh for the runtime bundle, which prints the profile for root to add",
+		}
+	}
+	return check{Name: "userns", State: statePass, Finding: "AppArmor has a profile for " + rootlesskit}
+}
+
+// apparmorNames says whether a file under the profile directory names the path.
+// A profile names the binary it covers by path.
+func apparmorNames(path string) bool {
+	found := false
+	_ = filepath.WalkDir(apparmorDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || found || !d.Type().IsRegular() {
+			return nil
+		}
+		if raw, rerr := os.ReadFile(p); rerr == nil && strings.Contains(string(raw), path) {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 func uidmapCheck() check {
@@ -138,7 +233,7 @@ func devicesCheck(dev string) check {
 	return check{Name: "devices", State: statePass, Finding: dev + " is openable"}
 }
 
-var cniPathLine = regexp.MustCompile(`(?m)^\s*cni_path\s*=\s*"([^"]+)"`)
+var cniPathLine = regexp.MustCompile(`(?m)^\s*cni_path\s*=\s*(?:"([^"]+)"|'([^']+)')`)
 
 // cniDirs is where nerdctl looks for CNI plugins: CNI_PATH, or the cni_path of
 // its configuration, or its default.
@@ -149,7 +244,7 @@ func cniDirs() []string {
 	config := os.Getenv("NERDCTL_TOML")
 	if config == "" {
 		config = "/etc/nerdctl/nerdctl.toml"
-		if os.Geteuid() != 0 {
+		if geteuid() != 0 {
 			if dir, err := os.UserConfigDir(); err == nil {
 				config = filepath.Join(dir, "nerdctl", "nerdctl.toml")
 			}
@@ -157,7 +252,7 @@ func cniDirs() []string {
 	}
 	if raw, err := os.ReadFile(config); err == nil {
 		if m := cniPathLine.FindSubmatch(raw); m != nil {
-			return []string{string(m[1])}
+			return []string{string(m[1]) + string(m[2])}
 		}
 	}
 	return []string{"/opt/cni/bin"}
@@ -193,9 +288,13 @@ func cniCheck() check {
 	return check{Name: "cni", State: statePass, Finding: "the CNI plugins are in " + joined}
 }
 
-func toolsCheck() check {
+func toolsCheck(needOras bool) check {
+	tools := []string{"cloud-hypervisor"}
+	if needOras {
+		tools = append([]string{"oras"}, tools...)
+	}
 	var missing []string
-	for _, tool := range []string{"oras", "cloud-hypervisor"} {
+	for _, tool := range tools {
 		if _, err := exec.LookPath(tool); err != nil {
 			missing = append(missing, tool)
 		}
@@ -206,7 +305,7 @@ func toolsCheck() check {
 			Fix:     "run install.sh for the runtime bundle",
 		}
 	}
-	return check{Name: "tools", State: statePass, Finding: "oras and cloud-hypervisor are on PATH"}
+	return check{Name: "tools", State: statePass, Finding: strings.Join(tools, " and ") + " on PATH"}
 }
 
 // notTheBundle says when the runtime is not the bundle's, which is what a host

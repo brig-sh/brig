@@ -86,6 +86,29 @@ func TestDoctorSaysFetchedAssetsAreNotTheBundles(t *testing.T) {
 	}
 }
 
+// The bypassed host has the bundle's plugins and tools, and install.sh ran
+// already. The host lines that would send the reader back to it point at the
+// bundle line instead, and the ones about the host itself keep their advice.
+func TestDoctorHostLinesDeferToTheBundleLine(t *testing.T) {
+	bypassedBundle(t)
+	swap(t, &linuxHostChecks, func(runtime.Runtime) []check {
+		return []check{
+			{Name: "cni", State: stateFail, Fix: "run install.sh for the runtime bundle"},
+			{Name: "tools", State: stateFail, Fix: "run install.sh for the runtime bundle"},
+			{Name: "devices", State: stateFail, Fix: "load the module: sudo modprobe vhost_vsock"},
+		}
+	})
+	checks := runDoctor(nil, nil)
+	for _, name := range []string{"cni", "tools"} {
+		if c := findCheck(t, checks, name); c.Fix != bundleCarriesThem {
+			t.Errorf("the %s line sends the reader to install.sh again: %q", name, c.Fix)
+		}
+	}
+	if c := findCheck(t, checks, "devices"); !strings.Contains(c.Fix, "modprobe") {
+		t.Errorf("a line about the host lost its advice: %q", c.Fix)
+	}
+}
+
 // Through the launcher the same tree is healthy, and there is no row at all.
 func TestDoctorNoBundleRowWithTheLauncherEnv(t *testing.T) {
 	bypassedBundle(t)
