@@ -496,6 +496,11 @@ brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: 
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
+A route does not set `BRIG_PROJECT`. Brig sets that name itself to the guest
+path of the project, so it ignores a `guest.env` entry of that name with a
+warning, and the CREDENTIALS row does not name it. See
+[profiles.md](profiles.md#brig_project).
+
 ### Presets
 
 A preset is a route written in full, and shipped with Brig. A route that
