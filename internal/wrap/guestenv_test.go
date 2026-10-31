@@ -54,3 +54,52 @@ func TestAHomeTheSetCarriesIsKept(t *testing.T) {
 		t.Errorf("the exec carried HOME %q, want exactly [/somewhere]", got)
 	}
 }
+
+// values returns every value of the variable name in env, in order.
+func values(env []runtime.Var, name string) []string {
+	var out []string
+	for _, v := range env {
+		if v.Name == name {
+			out = append(out, v.Value)
+		}
+	}
+	return out
+}
+
+// An SSH session into the guest starts in HOME with nothing that says where
+// the project is mounted. BRIG_PROJECT is what a shell hook reads to go there.
+func TestAnExecCarriesTheProject(t *testing.T) {
+	c := livenessConfig(t, &livenessRuntime{})
+	c.GuestProject = "/work/api"
+	spec := c.execSpec(creds.Set{}, []string{"true"}, false)
+	if got := values(spec.Env, "BRIG_PROJECT"); len(got) != 1 || got[0] != "/work/api" {
+		t.Errorf("the exec carried BRIG_PROJECT %q, want exactly [/work/api]", got)
+	}
+}
+
+// Without a project the variable is absent, so a hook that reads it can tell
+// "a project is mounted here" from "nothing is". A value the set carries does
+// not stand in for one: it would name a directory brig never mounted.
+func TestNoProjectCarriesNoProjectVariable(t *testing.T) {
+	c := livenessConfig(t, &livenessRuntime{})
+	set := creds.Set{Vars: []runtime.Var{{Name: "BRIG_PROJECT", Value: "/elsewhere"}}}
+	spec := c.execSpec(set, []string{"true"}, false)
+	if got := values(spec.Env, "BRIG_PROJECT"); len(got) != 0 {
+		t.Errorf("a run with no project carried BRIG_PROJECT %q, want none", got)
+	}
+}
+
+// brig owns the name: a value the set carries is replaced by the mount brig
+// made, not sent beside it.
+func TestTheProjectReplacesOneTheSetCarries(t *testing.T) {
+	c := livenessConfig(t, &livenessRuntime{})
+	c.GuestProject = "/work/api"
+	set := creds.Set{Vars: []runtime.Var{{Name: "BRIG_PROJECT", Value: "/elsewhere"}}}
+	spec := c.execSpec(set, []string{"true"}, false)
+	if got := values(spec.Env, "BRIG_PROJECT"); len(got) != 1 || got[0] != "/work/api" {
+		t.Errorf("the exec carried BRIG_PROJECT %q, want exactly [/work/api]", got)
+	}
+	if len(set.Vars) != 1 || set.Vars[0].Value != "/elsewhere" {
+		t.Errorf("replacing BRIG_PROJECT changed the caller's set: %v", set.Vars)
+	}
+}
