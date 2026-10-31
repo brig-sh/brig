@@ -50,8 +50,9 @@ release() {
 release brig brigd brig-broker
 
 # The runtime installer. As a user it puts a launcher in ~/.local/bin and a
-# brig in the tree, as the bundle's does. As root it fails: the node-wide
-# checks run before it.
+# brig in the tree, as the bundle's does, with the broker of the bundle's own brig
+# release and a pins.env that names both. As root it fails: the node-wide checks
+# run before it.
 rt="$T/srv/NOFireAI/brig-standalone-linux/releases/download/v0.0.0-test"
 mkdir -p "$rt"
 cat > "$rt/install.sh" <<'RT'
@@ -61,7 +62,9 @@ set -eu
 mkdir -p "$HOME/.local/share/brig/data/bin" "$HOME/.local/bin"
 printf '#!/bin/sh\nexit 0\n' > "$HOME/.local/share/brig/data/bin/brig"
 printf '#!/bin/sh\nexec "$HOME/.local/share/brig/data/bin/brig" "$@"\n' > "$HOME/.local/bin/brig"
-chmod 0755 "$HOME/.local/share/brig/data/bin/brig" "$HOME/.local/bin/brig"
+printf '#!/bin/sh\nexit 0\n' > "$HOME/.local/share/brig/data/bin/brig-broker"
+printf 'BUNDLE_VERSION=v0.0.0-test\nBRIG_VERSION=v0.0.1\nBRIG_BROKER_INSTALLED=true\n' > "$HOME/.local/share/brig/data/pins.env"
+chmod 0755 "$HOME/.local/share/brig/data/bin/brig" "$HOME/.local/bin/brig" "$HOME/.local/share/brig/data/bin/brig-broker"
 RT
 echo "$(sha "$rt/install.sh")  install.sh" > "$rt/checksums.txt"
 
@@ -132,6 +135,13 @@ ok "a user install with /usr/local/bin first gets the PATH change"
 [ -x "$T/home/.local/share/brig/data/bin/brig-broker" ] \
   || { cat "$T/out.log" >&2; fail "the release's brig-broker was not installed beside brig"; }
 ok "a user install puts brig-broker beside brig"
+pins="$T/home/.local/share/brig/data/pins.env"
+if ! grep -qx 'BRIG_VERSION=v9.9.9' "$pins" || ! grep -qx 'BRIG_BROKER_INSTALLED=true' "$pins" \
+  || [ "$(grep -c '^BRIG_BROKER_INSTALLED=' "$pins")" != 1 ]; then
+  cat "$pins" >&2
+  fail "pins.env does not name the brig and broker installed"
+fi
+ok "pins.env names the brig and broker installed"
 
 # 2. The same with ~/.local/bin off PATH altogether.
 run_install "$T/stub:$T/usrlocal/bin:$base"
@@ -160,5 +170,7 @@ release brig brigd
 run_install "$T/stub:$user_bin:$T/usrlocal/bin:$base"
 [ "$rc" = 0 ] || { cat "$T/out.log" >&2; fail "a release without brig-broker did not install"; }
 [ ! -e "$T/home/.local/share/brig/data/bin/brig-broker" ] \
-  || fail "a brig-broker appeared from a release that has none"
-ok "a release without brig-broker still installs"
+  || fail "the bundle's brig-broker stayed beside a brig from a release that has none"
+grep -qx 'BRIG_BROKER_INSTALLED=false' "$T/home/.local/share/brig/data/pins.env" \
+  || { cat "$T/home/.local/share/brig/data/pins.env" >&2; fail "pins.env still names a broker"; }
+ok "a release without brig-broker still installs, and leaves no broker"
