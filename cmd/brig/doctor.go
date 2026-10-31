@@ -195,7 +195,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	checks := []check{
 		brigCheck(),
 		hostCheck(),
-		virtualCheck(),
+		rootlessKVM(virtualCheck(), rt),
 		rtCheck,
 	}
 	bundle, bypassed := bundleCheck()
