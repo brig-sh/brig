@@ -123,6 +123,10 @@ boots the assets, and prints a warning. With `cosign` installed, you can use
 pins it by version and by hash, because a cosign release cannot be verified
 without cosign. The `brig` and `hull` archives are not pinned that way.
 
+`install.sh` keeps the verified download in `~/.cache/brig`, so running it
+again does not fetch cosign again. It checks the kept copy against the same
+pinned hash before each use. A copy that does not match is fetched again.
+
 The macOS build of `cosign` is ad-hoc signed upstream, so Gatekeeper rejects
 it. Gatekeeper accepts everything else that `install.sh` installs. `cosign`
 runs because a `curl` download carries no quarantine attribute.
@@ -220,12 +224,17 @@ install. Each user can then run `brig-ctl rootless` against the shared tree.
 For either rootless route, someone with root must prepare the host once:
 
 - a subuid range
-- access to `/dev/kvm` and `/dev/vhost-vsock`
-- the `uidmap` package
+- the `uidmap` and `acl` packages
+- access to `/dev/kvm` and `/dev/vhost-vsock`, granted to the user by name
+- the `vhost_vsock` module, loaded now and at boot
 - an AppArmor profile, on Ubuntu 24.04 and later
 
-The installer reports the missing items before it unpacks anything. The
-bundle's `docs/rootless.md` explains what each item is for.
+A fresh Ubuntu 26.04 server has none of these but the subuid range. The
+installer reports the missing items before it fetches the bundle, and prints
+the root commands that make them. Run those, then run the installer again.
+The bundle's
+[rootless guide](https://github.com/NOFireAI/brig-standalone-linux/blob/main/docs/rootless.md)
+explains what each item is for.
 
 <details>
 <summary>A host that also has a node-wide install</summary>
