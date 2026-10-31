@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,51 @@ func TestEnsureRunningWarnsOfABypassedBundleLauncher(t *testing.T) {
 	}
 	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "export PATH=") {
 		t.Errorf("the warning does not give the line to type:\n%s", said)
+	}
+}
+
+// A runtime that cannot reach the bundle's containerd stops the run at its first
+// question, and that error does not name the launcher.
+func TestEnsureRunningWarnsBeforeTheRuntimeFails(t *testing.T) {
+	bundleExecutable(t)
+	rr := &resolvingRuntime{assets: givenAssets(t), kind: "nerdctl"}
+	c := resolvingConfig(t, verify.Warn, rr)
+	c.Runtime = &unreachableRuntime{rr}
+
+	if err := c.EnsureRunning(creds.Set{}); err == nil {
+		t.Fatal("the run went on past a runtime that cannot answer")
+	}
+
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "export PATH=") {
+		t.Errorf("the run stopped without the warning:\n%s", said)
+	}
+}
+
+type unreachableRuntime struct{ *resolvingRuntime }
+
+func (*unreachableRuntime) Running(string) (bool, error) {
+	return false, errors.New("cannot connect to containerd")
+}
+
+// brigd takes this path too, and has a launcher of its own to name.
+func TestEnsureRunningWarnsInTheWordsOfBrigd(t *testing.T) {
+	file := bundleExecutable(t)
+	selfExecutable = func() (string, error) {
+		return filepath.Join(filepath.Dir(filepath.Dir(file)), "bin", "brigd"), nil
+	}
+	rr := &resolvingRuntime{assets: givenAssets(t), kind: "nerdctl"}
+	c := resolvingConfig(t, verify.Warn, rr)
+
+	_ = c.EnsureRunning(creds.Set{})
+
+	said := c.Err.(*bytes.Buffer).String()
+	for _, want := range []string{"this brigd is inside", "run brigd from"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the warning is missing %q:\n%s", want, said)
+		}
+	}
+	if strings.Contains(said, "this brig is") {
+		t.Errorf("the warning calls brigd brig:\n%s", said)
 	}
 }
 

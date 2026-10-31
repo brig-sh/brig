@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-// BundleEnvMissing says what MissingBundleEnv found. doctor and a run's warning
-// both open with it.
-const BundleEnvMissing = "this brig is inside the runtime bundle, and its launcher did not run"
+// nodeWidePrefix is where the bundle's install.sh unpacks as root. A var for
+// tests.
+var nodeWidePrefix = "/var/lib/brig/data"
 
 // BundleEnv is the environment of a runtime bundle's tree, and where the
 // launchers that load it are.
@@ -18,6 +17,15 @@ type BundleEnv struct {
 	File string
 	// Launchers is the directory the bundle's installer writes them to.
 	Launchers string
+	// Program is the binary that was run: brig, or brigd, which has a launcher
+	// too and reaches the same warning.
+	Program string
+}
+
+// Missing says what MissingBundleEnv found. doctor and a run's warning both open
+// with it.
+func (e BundleEnv) Missing() string {
+	return fmt.Sprintf("this %s is inside the runtime bundle, and its launcher did not run", e.Program)
 }
 
 // Fix is what to type, in the words both the doctor row and the run's warning
@@ -53,20 +61,21 @@ func MissingBundleEnv(exe string) (BundleEnv, bool) {
 	if info, err := os.Stat(file); err != nil || !info.Mode().IsRegular() {
 		return BundleEnv{}, false
 	}
-	return BundleEnv{File: file, Launchers: bundleLaunchers(prefix)}, true
+	return BundleEnv{File: file, Launchers: bundleLaunchers(prefix), Program: filepath.Base(exe)}, true
 }
 
-// bundleLaunchers is where the bundle's install.sh puts them: a user install is
-// under the home, and a node-wide one is not.
+// bundleLaunchers is where the bundle's install.sh puts them: /usr/local/bin for
+// the one tree it unpacks as root, and the home's .local/bin for any other. A
+// user's tree can be anywhere, since it follows XDG_DATA_HOME, and the launchers
+// do not follow it.
 func bundleLaunchers(prefix string) string {
-	home, err := os.UserHomeDir()
-	if err == nil {
-		if resolved, rerr := filepath.EvalSymlinks(home); rerr == nil {
-			home = resolved
-		}
-		if strings.HasPrefix(prefix, home+string(filepath.Separator)) {
-			return filepath.Join(home, ".local", "bin")
-		}
+	nodeWide := nodeWidePrefix
+	if resolved, err := filepath.EvalSymlinks(nodeWide); err == nil {
+		nodeWide = resolved
 	}
-	return "/usr/local/bin"
+	home, err := os.UserHomeDir()
+	if err != nil || prefix == nodeWide {
+		return "/usr/local/bin"
+	}
+	return filepath.Join(home, ".local", "bin")
 }

@@ -3,6 +3,7 @@ package runtime
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,12 +63,48 @@ func TestMissingBundleEnvFindsTheBypassedLauncher(t *testing.T) {
 func TestMissingBundleEnvNodeWideLaunchers(t *testing.T) {
 	noBundleEnv(t)
 	t.Setenv("HOME", t.TempDir())
-	env, missing := MissingBundleEnv(bundleTree(t, t.TempDir()))
+	prefix := t.TempDir()
+	was := nodeWidePrefix
+	nodeWidePrefix = prefix
+	t.Cleanup(func() { nodeWidePrefix = was })
+	env, missing := MissingBundleEnv(bundleTree(t, prefix))
 	if !missing {
 		t.Fatal("a node-wide tree with no environment was not reported")
 	}
 	if env.Launchers != "/usr/local/bin" {
 		t.Errorf("Launchers = %q, want /usr/local/bin", env.Launchers)
+	}
+}
+
+// A user's tree follows XDG_DATA_HOME out of the home, and install.sh still writes
+// the launchers to the home.
+func TestMissingBundleEnvUserTreeOutsideTheHome(t *testing.T) {
+	noBundleEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	env, missing := MissingBundleEnv(bundleTree(t, t.TempDir()))
+	if !missing {
+		t.Fatal("a tree outside the home with no environment was not reported")
+	}
+	if want := filepath.Join(home, ".local", "bin"); env.Launchers != want {
+		t.Errorf("Launchers = %q, want %q", env.Launchers, want)
+	}
+}
+
+// brigd has a launcher too, and the words name the binary that was run.
+func TestMissingBundleEnvNamesTheProgram(t *testing.T) {
+	noBundleEnv(t)
+	exe := bundleTree(t, t.TempDir())
+	brigd := filepath.Join(filepath.Dir(exe), "brigd")
+	if err := os.Rename(exe, brigd); err != nil {
+		t.Fatal(err)
+	}
+	env, missing := MissingBundleEnv(brigd)
+	if !missing {
+		t.Fatal("a brigd in the bundle's tree with no environment was not reported")
+	}
+	if want := "this brigd is inside the runtime bundle"; !strings.Contains(env.Missing(), want) {
+		t.Errorf("Missing() = %q, want it to contain %q", env.Missing(), want)
 	}
 }
 
