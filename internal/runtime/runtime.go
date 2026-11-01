@@ -360,7 +360,8 @@ type LogsSpec struct {
 	// runtimes' own default; a container runtime with no notion of a negative
 	// count reads it as "all" rather than passing it through.
 	Tail int
-	// Out is where the log is written, as it arrives. The caller wraps it to
+	// Out is where the log is written, as it arrives, or at the end where the
+	// adapter has to cut the tail itself. The caller wraps it to
 	// filter the terminal control sequences a runtime may have captured, unless
 	// asked for the raw bytes.
 	Out io.Writer
