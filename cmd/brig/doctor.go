@@ -195,13 +195,28 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	checks := []check{
 		brigCheck(),
 		hostCheck(),
-		virtualCheck(),
+		rootlessKVM(virtualCheck(), rt),
 		rtCheck,
 	}
 	bundle, bypassed := bundleCheck()
 	if bypassed {
 		checks = append(checks, bundle)
 	}
+	hypervisor := ""
+	if agent != nil {
+		hypervisor = agent.Hypervisor
+	}
+	// A run reads the same setting the same way; see wrap.Config.hypervisor.
+	host := linuxHostChecks(rt, wrap.NewEnv(name, nil).String("HYPERVISOR", hypervisor))
+	if bypassed {
+		// install.sh ran already. This brig does not see what it installed.
+		for i := range host {
+			if host[i].State == stateFail && (host[i].Name == "cni" || host[i].Name == "tools") {
+				host[i].Fix = bundleCarriesThem
+			}
+		}
+	}
+	checks = append(checks, host...)
 	checks = append(checks, brokerCheck())
 	for _, mc := range modeChecks {
 		checks = append(checks, mc(agent, rt))
@@ -213,7 +228,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 		// runtime.MissingBundleEnv.
 		switch boot.State {
 		case stateFail:
-			boot.Fix = "the runtime bundle carries them; see the bundle line above"
+			boot.Fix = bundleCarriesThem
 		case statePass:
 			boot.Finding += ", which are not the runtime bundle's; see the bundle line above"
 		}
@@ -422,7 +437,7 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	if v, verr := runtime.Version(bin); verr == nil && v != "" {
 		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), bin)
 	}
-	return check{Name: "runtime", State: statePass, Finding: finding}, rt
+	return check{Name: "runtime", State: statePass, Finding: finding + notTheBundle(rt)}, rt
 }
 
 // shortVersion is the version out of a `--version` line, read the way

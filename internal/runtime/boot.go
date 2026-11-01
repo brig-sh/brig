@@ -60,6 +60,27 @@ func linuxMonitor(hv string) (string, error) {
 		"use hvi, cloud-hypervisor, qemu or firecracker", hv)
 }
 
+// LinuxMonitorBinary is the program urunc looks up on PATH for the monitor
+// that linuxMonitor picks. brig doctor asks for it, so a host that has the
+// monitor a run boots on reads ok and a host that has some other one does not.
+// qemu's name carries the host architecture, spelled as urunc spells it.
+func LinuxMonitorBinary(hv string) (string, error) {
+	monitor, err := linuxMonitor(hv)
+	if err != nil {
+		return "", err
+	}
+	if monitor != "qemu" {
+		return monitor, nil
+	}
+	switch goruntime.GOARCH {
+	case "amd64":
+		return "qemu-system-x86_64", nil
+	case "arm64":
+		return "qemu-system-aarch64", nil
+	}
+	return "qemu-system-" + goruntime.GOARCH, nil
+}
+
 // bootInitrdName is the same on every platform: the initrd is a cpio built for
 // the guest, not for the host running brig.
 const bootInitrdName = "container-initrd"
