@@ -77,6 +77,7 @@ func (c *Config) Plan() PlanDocument {
 		refusal = c.backendRefusal(c.hypervisor())
 	}
 	routeStore := c.checkRouteStore()
+	c.warnExpiringCertificates(routeStore)
 	if refusal == nil {
 		refusal = c.routeStoreRefusal(routeStore)
 	}

@@ -20,6 +20,10 @@ type routeStore struct {
 	missing []string
 	// err is why the store could not be opened or listed.
 	err error
+	// certExpiry maps each clientCertificate secret to the expiry the store
+	// recorded for it, in epoch milliseconds; 0 when none. It comes from the
+	// same listing as missing: no value is read.
+	certExpiry map[string]int64
 }
 
 // checkRouteStore lists the store for the secrets this run's routes inject,
@@ -48,10 +52,20 @@ func (c *Config) checkRouteStore() routeStore {
 		return routeStore{err: err}
 	}
 	held := map[string]bool{}
+	expiry := map[string]int64{}
 	for _, s := range list {
 		held[s.Name] = true
+		expiry[s.Name] = s.Provenance.ExpiresAt
 	}
 	var st routeStore
+	for name := range clientCertificateSecrets(c.routes) {
+		if held[name] {
+			if st.certExpiry == nil {
+				st.certExpiry = map[string]int64{}
+			}
+			st.certExpiry[name] = expiry[name]
+		}
+	}
 	for _, name := range c.routeSkipped {
 		if !held[name] {
 			st.missing = append(st.missing, name)
