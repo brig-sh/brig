@@ -36,9 +36,9 @@ protects and what it does not protect.
 
 | verb | what it does |
 | --- | --- |
-| `brig secret create <name>` | store a new secret. Refuses if the name is taken |
+| `brig secret create <name> [--type tls\|ca]` | store a new secret. Refuses if the name is taken. `--type` checks the value first |
 | `brig secret read <name>` | print the value |
-| `brig secret update <name>` | replace an existing value. Refuses if the name is not there |
+| `brig secret update <name> [--type tls\|ca]` | replace an existing value. Refuses if the name is not there. `--type` checks the value first |
 | `brig secret delete <name>` | remove it, after asking. `-y` answers in advance |
 | `brig secret ls` | names, dates and where each value came from. Never values |
 | `brig secret import <profile>` | fill that profile's secrets from your host, once |
@@ -129,6 +129,20 @@ brig: the imported credential claude-credentials (claude-code) expired 3h ago
 A secret with no `sources:` that you filled with `--from-command` gets a
 different second line, because the profile-wide `import` cannot refill it:
 `renew it, then store it again:  brig secret import <profile> <name> --from-command '<command>'`.
+
+A certificate stored with `--type tls` gets a warning when it is within three
+days of its expiry, and once it has expired. The expiry is the one recorded
+when the certificate was stored, so a plan or a run decrypts nothing to find
+it. Brig prints the warning once per `brig plan`, and once when `brig run` or
+`brig sh` starts a sandbox or attaches to one, whether `brig sh` opens a shell
+or runs a command. The first line reads `the client certificate <name> (route <route>) expires in <time>`, or
+`expired <time> ago`. When several routes present the same secret, the line
+names all of them: `(routes <route>, <route>)`. It names the command that
+stores the renewed copy: `brig secret update <name> --type tls`. A certificate
+stored without `--type` gets no warning, because nothing recorded its expiry.
+A plain `brig secret update <name>` without `--type tls` replaces the value and
+clears the recorded expiry, so the warning stops too. Store the renewed copy
+with `--type tls` to keep it.
 
 ### Delete a secret
 
@@ -299,6 +313,7 @@ never an argument, which keeps it out of `ps` and out of your shell history.
 | stdin, the default (`--stdin` if you like it spelled out) | the bytes, less one trailing line ending |
 | `-f FILE` | the file's bytes, verbatim |
 | `-f -` | stdin, spelled out. Same stripping as above |
+| `-f` more than once | the files appended in the order given. A `-` among them is stdin, stripped the same way and refused at a terminal the same way |
 
 Each source has a limit of 65536 bytes. `create` and `update` read no more
 than that, and they refuse a longer value before it reaches the store:
@@ -349,6 +364,97 @@ The two most common commands:
 printf %s "$TOKEN" | brig secret create gh-token
 brig secret create deploy-key -f ~/.ssh/id_ed25519
 ```
+
+### Certificates and CA bundles
+
+With `--type tls` or `--type ca`, Brig checks the value before it stores it. A
+value that fails the check is refused, and nothing is written. The refusal
+reads `<verb> <name>: the value is not a client certificate: <reason>` for
+`tls`, and `<verb> <name>: the value is not a CA bundle: <reason>` for `ca`,
+where `<verb>` is `create` or `update`. For example,
+`create inventory-client: the value is not a client certificate: no private key block`.
+The reason is in the right column:
+
+| The value | The refusal says |
+| --- | --- |
+| no `CERTIFICATE` block | no usable CERTIFICATE block |
+| a `CERTIFICATE` block that does not parse | for `tls`, no usable CERTIFICATE block: a certificate block does not parse; for `ca`, a CERTIFICATE block does not parse (block N) |
+| no private key block | no private key block |
+| more than one private key block | more than one private key block |
+| a key of type `ENCRYPTED PRIVATE KEY`, or with `Proc-Type: 4,ENCRYPTED` | the private key is encrypted |
+| a key block of another type that ends in `PRIVATE KEY`, such as `OPENSSH PRIVATE KEY` or `DSA PRIVATE KEY` | unsupported key block "OPENSSH PRIVATE KEY", with the type of the block in quotes |
+| a `PRIVATE KEY`, `RSA PRIVATE KEY` or `EC PRIVATE KEY` block that does not parse | the private key block does not parse |
+| a key that parses and is not RSA, ECDSA or Ed25519, such as RSA-PSS or X25519 | unsupported private key type |
+| no certificate whose public key matches the key | the private key does not match the certificate |
+| more than one different certificate that matches the key | more than one certificate matches the private key |
+| a leaf past its `notAfter` | the certificate has expired on 2026-11-02T12:00:00Z, with the date of the `notAfter` |
+| a leaf before its `notBefore` | the certificate is not yet valid: it is valid from 2026-11-02T12:00:00Z, with the date of the `notBefore` |
+| a leaf with an extended key usage that holds neither `clientAuth` nor `anyExtendedKeyUsage`, such as a certificate for `serverAuth` alone. A leaf with no extended key usage is accepted | the certificate's extended key usage does not allow client authentication |
+
+The same certificate twice, byte for byte, such as a `fullchain.pem` that
+repeats its leaf, counts as one. Two different certificates for one key do not.
+
+For `--type ca`, the first two rows are the refusals too, because a CA bundle
+needs at least one `CERTIFICATE` block and every block must parse. It also
+needs one certificate that is a CA (basic constraints `CA:TRUE`), and the
+refusal says no CERTIFICATE block is a CA. Only the CA certificates in the
+bundle become roots.
+
+A PKI hands out a client certificate in one of two layouts, and both work:
+
+```bash
+# one bundle: the certificate, its chain and the key in one file
+brig secret create inventory-client --type tls -f bundle.pem
+
+# separate files, appended one after the other, in any order
+brig secret create inventory-client --type tls -f client.crt -f client.key -f ca.crt
+cat client.crt intermediate.crt client.key | brig secret create inventory-client --type tls
+
+brig secret create example-root-ca --type ca -f root-ca.pem
+```
+
+`-f` may be given more than once. The files are appended in the order given,
+with a line break between two when the first does not end in one, and the
+result is stored as given. That is what `cat` of the same files gives, plus
+the line break.
+
+A `tls` value holds `CERTIFICATE` blocks and exactly one private key block
+(`PRIVATE KEY`, `RSA PRIVATE KEY` or `EC PRIVATE KEY`), in any order. Those
+three are the only blocks that count as a key. Any other block whose type ends
+in `PRIVATE KEY` is refused by name, not read as a missing key. Text outside
+the blocks, such as the `Bag Attributes` lines that `openssl pkcs12` writes, is
+ignored. Brig reads it in four steps:
+
+1. The leaf is the one certificate whose public key matches the private key.
+   A certificate that appears twice, byte for byte, counts once. Brig refuses
+   a value with no matching certificate, and a value with two different ones.
+2. The chain is built from the leaf up. The next certificate is one that
+   signed the one before and is a CA (basic constraints `CA:TRUE`), so a
+   matching name is not enough. A certificate that is not self-signed comes
+   before a self-signed copy, and a matching authority and subject key
+   identifier breaks a tie. A CA that was re-keyed under one name, or an
+   intermediate that was cross-signed, sends the one that signed the leaf. A
+   certificate that does not continue the chain is not sent.
+3. A self-signed root at the top of the chain is not sent either, because the
+   upstream holds its own roots.
+4. The broker sends the leaf and then the chain in the handshake.
+
+So the order of the blocks never matters, and a bundle that also carries the
+CA works as it is. On success `create` and `update` print to stderr the
+certificate's subject, issuer and expiry, the length of the chain, and the
+subject of each certificate that will not be sent, and never the key. They
+print it after the value is stored, so a `create` that is refused because the
+name exists prints nothing.
+
+A `ca` value holds one or more `CERTIFICATE` blocks. `inject.tls.ca` may name
+the same secret as `inject.tls.clientCertificate`, for a PKI whose root signs
+both the client certificate and the certificate of the upstream. The roots are
+then the certificates in that bundle that are CAs (basic constraints
+`CA:TRUE`), and the broker does not read the private key in it for that.
+
+The type is not kept beside the value, and `brig secret ls` does not show it.
+The expiry of a `tls` certificate is kept as its provenance, which is what the
+[expiry warning](#expiry-warnings) reads.
 
 ## Getting a value out
 
@@ -484,6 +590,9 @@ not open, is refused with exit `6`, and the message names the command that
 puts the secret there. A secret removed after the boot makes the route
 answer 502, and the audit line in `~/.brig/host/broker/audit.log` names the
 check. Create or import the secret, and the next request finds it.
+
+A `clientCertificate` or `ca` secret of [`inject.tls`](policies.md#client-certificates)
+is read the same way, on each request. The guest never gets it.
 
 A secret behind an `aws` route holds a pointer to an AWS profile and no
 key. The broker reads it on each request and answers with keys it fetches
