@@ -152,7 +152,8 @@ error of that step, and the upstream is never dialed.
 7. Check `request.allow`. A miss is a 403 with the refusal below. No
    credential has been read yet.
 8. Resolve the credential through the secret broker. A failure is a 502,
-   and nothing is cached.
+   and nothing is cached. A route with no `credential`, such as a
+   [certificate-only](policies.md#client-certificates) route, skips this step.
 9. Edit the headers and forward the request. The response streams back as
    the upstream sends it, with the credential redacted. A route that vends
    answers with keys instead. See [Routes that vend](#routes-that-vend).
@@ -236,8 +237,53 @@ upstream's.
 ### Upstream
 
 The broker dials the route's upstream over TLS, verified with the system
-roots. It does not use a proxy from the environment. A TLS failure is a 502,
-and there is no retry without verification.
+roots, except where a route's `inject.tls.ca` replaces them. It does not use a
+proxy from the environment. A TLS failure is a 502, and there is no retry
+without verification.
+
+A route with `inject.tls` has a transport of its own for each sandbox. The
+broker builds it from the transport that the routes without `inject.tls` use,
+so the dial and timeout settings are the same. It takes over no TLS session
+cache, key log or setting that skips verification, so no TLS session is shared
+across sandboxes or certificates. Two sandboxes never share a connection, even
+when they name the same route and the same upstream. On a route with
+`inject.tls.ca`, the `ca` certificates replace the system roots. The
+upstream's certificate must chain to one of them, and a certificate that
+chains only to a system root is refused with a 502. A route with
+`inject.tls.clientCertificate` and no `ca` still verifies the upstream with
+the system roots. Only `ca` replaces them.
+
+The `clientCertificate` secret and the `ca` secret are resolved on each
+request, the way a header credential is, and neither reaches the guest. The
+broker caches each one by its bytes, so a changed secret is read again on the
+next request. The client key stays in the broker, which presents the
+certificate and signs the handshake with the key.
+
+The transport of a route is bound to the CA bundle and the certificate chain
+it was built with, and it presents that certificate and no other. Rotating the
+secret needs no restart of the sandbox or the broker. When the
+`clientCertificate` secret or the `ca` secret changes, the next request builds
+a new transport, and every new connection carries the new certificate and
+trusts the new CA. This holds for an upstream that speaks HTTP/2 too, although
+HTTP/2 keeps one connection open for many requests. A request that was already
+in flight finishes on the connection it started on, with the old certificate,
+and that connection closes after it. A sandbox that is removed or replaced
+closes its connections the same way.
+
+A request on a route with `inject.tls` that fails a check before the dial does
+not reach the upstream. An expired certificate is `tls.expired`. A certificate
+that cannot be read, that is not yet valid, or whose key does not match is
+`tls.certificate`, and a CA that cannot be read is `tls.ca`. A handshake that
+fails is `tls.handshake`. That one happens after the dial: the upstream may
+have seen a connection. Under TLS 1.3 an upstream that refuses the client
+certificate says so on the first read, so the request may already have been
+written on that connection. An upstream that speaks HTTP/2 reports the refusal
+as a failure to establish the client connection. The upstream also closes
+the connection after its refusal. If the broker writes before it reads the
+refusal, the write fails with a broken pipe or a reset. On a new connection
+the broker counts both as `tls.handshake`. On a connection that served
+requests before, the handshake finished long ago, and a reset there is
+`upstream`.
 
 The broker does not follow a redirect. A 3xx goes back to the guest as the
 upstream sent it.
@@ -431,8 +477,12 @@ taken from the replay budget, 64 MiB for all requests at once, which
 | 400 | `<rest>` is not in canonical form | `path` |
 | 403 | `request.allow` does not cover the request | `request.allow.methods`, `request.allow.paths`, `request.allow.repos` |
 | 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open | `credential` |
-| 502 | The upstream cannot be reached, or its certificate does not verify | `upstream` |
+| 502 | The upstream cannot be reached, or on a route without `inject.tls` its certificate does not verify | `upstream` |
 | 502 | A route that vends could not fetch keys. See [Routes that vend](#routes-that-vend) | `vend` |
+| 502 | The upstream's certificate does not verify on a route with `inject.tls`, or the TLS handshake with it fails. The upstream refused the client certificate, over HTTP/1.1 or HTTP/2, on a route that presents one | `tls.handshake` |
+| 502 | The `ca` secret cannot be resolved, or holds no CA certificate | `tls.ca` |
+| 502 | The `clientCertificate` secret cannot be resolved, does not parse, is not yet valid, or its key does not match | `tls.certificate` |
+| 502 | The `clientCertificate` has expired | `tls.expired` |
 | 502 | The response body has a `Content-Encoding` the broker cannot read | `response.encoding` |
 | 500 | The broker failed on a bug. `broker.log` has the error. When the response had already started, the connection is closed and the line keeps its status | `panic` |
 
@@ -961,12 +1011,16 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `arrived` | The sandbox whose divert socket the request arrived on. A request on the loopback port has none |
 | `policy`, `rule`, `reason` | The refusal of a `request.allow` miss |
 | `dropped.<header>` | The number of values that `inject.headers.allow` dropped |
+| `cert` | The fingerprint of the client certificate that the connection of the request presented, `sha256:` and 16 hex digits. Only on a route with `inject.tls.clientCertificate` |
+| `cert.notAfter` | The expiry of that certificate, in UTC. Written with `cert` |
 | `renew` | After an upstream 401: `retried`, `failed`, `interval` when a renewal was forced for the secret less than a minute before, or `body` when the body was not kept for a retry |
 | `where`, `encoding` | Where a [placeholder](#placeholder-detection) was found and how it was spelled. The `path` field of that line is `[redacted]`, and so is `method` when the token was in it |
 | `placeholder` | `partial` when only the start of the body was scanned |
 | `vended` | The access key id a route that vends answered with. Never the secret key or the session token |
 
 The line never holds a credential, a token, a header value or a body.
+
+The line never holds the client key.
 
 A diverted connection writes one line of its own when it ends. On
 `brig.internal` and `link-local`, the requests it carried have lines of their
