@@ -410,13 +410,31 @@ func RevokeAllRoutes() ([]string, error) {
 	return injector.ForgetAll(dir)
 }
 
-// brokeredSecrets are the secrets the routes inject. Each stays on the host,
-// whatever the profile binds it to.
+// routeSecretNames are the secrets a route names: its credential and the
+// client certificate and CA of inject.tls.
+func routeSecretNames(r v1alpha1.Route) []string {
+	var out []string
+	if r.Credential != nil && r.Credential.SecretRef.Name != "" {
+		out = append(out, r.Credential.SecretRef.Name)
+	}
+	if r.Inject != nil && r.Inject.TLS != nil {
+		for _, ref := range []*v1alpha1.CertificateRef{r.Inject.TLS.ClientCertificate, r.Inject.TLS.CA} {
+			if ref != nil && ref.SecretRef.Name != "" {
+				out = append(out, ref.SecretRef.Name)
+			}
+		}
+	}
+	return out
+}
+
+// brokeredSecrets are the secrets the routes inject, with the certificate
+// and CA secrets of inject.tls. Each stays on the host, whatever the
+// profile binds it to: a private key in the guest would defeat the broker.
 func brokeredSecrets(routes []v1alpha1.Route) map[string]string {
 	out := map[string]string{}
 	for _, r := range routes {
-		if r.Credential != nil && r.Credential.SecretRef.Name != "" {
-			out[r.Credential.SecretRef.Name] = r.Name
+		for _, name := range routeSecretNames(r) {
+			out[name] = r.Name
 		}
 	}
 	return out

@@ -3,6 +3,7 @@ package wrap
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -151,11 +152,9 @@ func (c *Config) routeSecretFix(names []string) string {
 func (c *Config) routedBy(names []string) string {
 	var out []string
 	for _, r := range c.routes {
-		if r.Credential == nil {
-			continue
-		}
+		routed := routeSecretNames(r)
 		for _, name := range names {
-			if r.Credential.SecretRef.Name == name {
+			if slices.Contains(routed, name) {
 				out = append(out, fmt.Sprintf("%s (route %s)", c.routePolicy[r.Name], r.Name))
 				break
 			}
