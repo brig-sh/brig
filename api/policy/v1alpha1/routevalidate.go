@@ -45,10 +45,10 @@ func (r *Route) validate(expanded bool) error {
 		return err
 	}
 	switch r.Preset {
-	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken:
+	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS:
 	default:
-		return fmt.Errorf("preset %q is not one of %s, %s or %s",
-			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken)
+		return fmt.Errorf("preset %q is not one of %s, %s, %s or %s",
+			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS)
 	}
 	// Whether this build serves a mode other than endpoint is the run's to
 	// say, so a policy reads the same in every build.
@@ -61,7 +61,20 @@ func (r *Route) validate(expanded bool) error {
 	// held to the required fields too.
 	complete := expanded || r.Preset == ""
 
-	if r.Upstream != "" {
+	if r.Vends() {
+		// The route answers locally, so an upstream would be a host the
+		// broker never dials and a reader would take it to be one it does.
+		if r.Upstream != "" {
+			return fmt.Errorf("the %s preset vends credentials and takes no upstream", r.Preset)
+		}
+		// The route puts no credential on a request; the preset's inject
+		// only says where the broker reads the session token. One written
+		// in a policy would read as a credential that goes somewhere, and a
+		// header set with {value} would be one more place the token is read.
+		if !expanded && r.Inject != nil {
+			return fmt.Errorf("the %s preset vends credentials and takes no inject", r.Preset)
+		}
+	} else if r.Upstream != "" {
 		if err := checkOrigin(r.Upstream); err != nil {
 			return err
 		}
@@ -88,7 +101,7 @@ func (r *Route) validate(expanded bool) error {
 	}
 
 	if r.Guest != nil {
-		if err := r.Guest.validate(complete); err != nil {
+		if err := r.Guest.validate(complete, r.Preset); err != nil {
 			return err
 		}
 	} else if complete {
@@ -252,7 +265,7 @@ func (h *HeaderInject) validate(needsValue bool) error {
 			return fmt.Errorf("inject.headers.set names %s, which inject.headers.remove drops first; "+
 				"name it in one list", hd.Name)
 		}
-		for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken} {
+		for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion} {
 			if strings.Contains(hd.Value, p) {
 				return fmt.Errorf("inject.headers.set %s holds %s, which only guest.env takes", hd.Name, p)
 			}
@@ -303,7 +316,7 @@ func (h *HeaderInject) validate(needsValue bool) error {
 	return nil
 }
 
-func (g *Guest) validate(complete bool) error {
+func (g *Guest) validate(complete bool, preset Preset) error {
 	if complete && len(g.Env) == 0 && g.Git == nil {
 		return fmt.Errorf("guest needs env, git or both")
 	}
@@ -313,11 +326,16 @@ func (g *Guest) validate(complete bool) error {
 		}
 		switch value {
 		case PlaceholderRouteURL, PlaceholderSessionToken:
+		case PlaceholderRouteRegion:
+			if preset != PresetAWS {
+				return fmt.Errorf("guest.env %s: %s needs preset: %s",
+					name, PlaceholderRouteRegion, PresetAWS)
+			}
 		default:
 			// The value is left out: a literal here is most often a pasted
 			// credential, and the error goes to a terminal or a CI log.
-			return fmt.Errorf("guest.env %s is a literal; a value is %s or %s, never a literal",
-				name, PlaceholderRouteURL, PlaceholderSessionToken)
+			return fmt.Errorf("guest.env %s is a literal; a value is %s, %s or %s, never a literal",
+				name, PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion)
 		}
 	}
 	if g.Git != nil {

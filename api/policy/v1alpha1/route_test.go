@@ -393,6 +393,9 @@ func TestHeaderRules(t *testing.T) {
 		{"session.token in a header", func(r *Route) {
 			r.Inject.Headers.Set[0].Value = "{value} {session.token}"
 		}, "only guest.env takes"},
+		{"route.region in a header", func(r *Route) {
+			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "X-Region", Value: "{route.region}"})
+		}, "only guest.env takes"},
 		{"Host in set", func(r *Route) {
 			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "Host", Value: "evil.example.com"})
 		}, "the broker sets itself"},
@@ -554,5 +557,129 @@ func TestRouteNameMapsToOneVariable(t *testing.T) {
 		if err := r.Validate(); err != nil {
 			t.Errorf("route name %q was refused: %v", name, err)
 		}
+	}
+}
+
+// awsRoute is the aws preset's route as it is after expansion: it vends, so
+// it has no upstream.
+func awsRoute() Route {
+	return Route{
+		Name:       "aws",
+		Preset:     PresetAWS,
+		Mode:       ModeEndpoint,
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "aws"}},
+		Inject: &Inject{Headers: &HeaderInject{
+			Set:    []Header{{Name: "Authorization", Value: "{value}"}},
+			Remove: []string{"Authorization"},
+		}},
+		Guest: &Guest{Env: map[string]string{
+			"AWS_CONTAINER_CREDENTIALS_FULL_URI": "{route.url}",
+			"AWS_CONTAINER_AUTHORIZATION_TOKEN":  "{session.token}",
+			"AWS_REGION":                         "{route.region}",
+		}},
+		Request: &RequestPolicy{Allow: &RequestAllow{Methods: []string{"GET"}}},
+	}
+}
+
+func TestAWSRouteNeedsNoUpstream(t *testing.T) {
+	r := awsRoute()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("an aws route with no upstream was refused: %v", err)
+	}
+	if !r.Vends() {
+		t.Error("an aws route does not vend")
+	}
+	c := customRoute()
+	if c.Vends() {
+		t.Error("a route with no preset vends")
+	}
+}
+
+func TestAWSRouteRefusesAnUpstream(t *testing.T) {
+	r := awsRoute()
+	r.Upstream = "https://sts.amazonaws.com"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no upstream") {
+		t.Fatalf("an aws route with an upstream: err = %v", err)
+	}
+}
+
+// The aws route sets no credential on a request, and the preset's inject is
+// only where the broker reads the session token. An inject the policy writes
+// would be read as a credential that goes somewhere, and a header it sets
+// with {value} would become another place the guest's token is read from.
+func TestAWSRouteRefusesAnInject(t *testing.T) {
+	r := Route{
+		Name:       "aws",
+		Preset:     PresetAWS,
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "aws"}},
+		Inject: &Inject{Headers: &HeaderInject{
+			Set: []Header{{Name: "X-Token", Value: "{value}"}}}},
+	}
+	err := r.validateWritten()
+	if err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no inject") {
+		t.Fatalf("an aws route with an inject: err = %v", err)
+	}
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: a}\nspec:\n  routes:\n" +
+		"    - name: aws\n      preset: aws\n      credential: {secretRef: {name: aws}}\n" +
+		"      inject: {headers: {set: [{name: X-Token, value: \"{value}\"}]}}\n"
+	p, err := Decode([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "takes no inject") {
+		t.Errorf("a policy with an inject on an aws route: Validate = %v", err)
+	}
+}
+
+// The refusal of a literal is where a user learns what a guest.env value can
+// be, so it names every placeholder guest.env takes.
+func TestGuestLiteralRefusalNamesEveryPlaceholder(t *testing.T) {
+	r := awsRoute()
+	r.Guest.Env["AWS_REGION"] = "us-east-1"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "never a literal") {
+		t.Fatalf("a literal in guest.env: err = %v", err)
+	}
+	for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion} {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("the refusal %q does not name %s", err, p)
+		}
+	}
+}
+
+func TestRouteRegionOnlyOnAWS(t *testing.T) {
+	r := Route{
+		Name:       "gh",
+		Preset:     PresetGitHubToken,
+		Mode:       ModeEndpoint,
+		Upstream:   "https://github.com",
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "gh"}},
+		Inject:     &Inject{BasicAuth: &BasicAuth{Username: "x-access-token"}, Headers: &HeaderInject{Remove: []string{"Authorization"}}},
+		Guest:      &Guest{Env: map[string]string{"AWS_REGION": "{route.region}"}},
+	}
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "{route.region} needs preset: aws") {
+		t.Fatalf("{route.region} on github-token: err = %v", err)
+	}
+	// A route with no preset is refused the same way.
+	c := customRoute()
+	c.Guest.Env["AWS_REGION"] = "{route.region}"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "{route.region} needs preset: aws") {
+		t.Fatalf("{route.region} on a custom route: err = %v", err)
+	}
+}
+
+// An aws route sets Authorization and also removes it, which no other route
+// may do with a header; the exception for Authorization must stay.
+func TestAuthorizationValueAllowedInSet(t *testing.T) {
+	r := awsRoute()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Authorization in set and remove was refused: %v", err)
+	}
+	r.Inject.Headers.Set = []Header{{Name: "X-Api-Key", Value: "{value}"}}
+	r.Inject.Headers.Remove = []string{"Authorization", "X-Api-Key"}
+	if err := r.Validate(); err == nil {
+		t.Error("a non-Authorization header in set and remove was accepted")
 	}
 }
