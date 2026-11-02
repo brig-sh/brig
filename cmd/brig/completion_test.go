@@ -325,7 +325,7 @@ func TestCompletePositions(t *testing.T) {
 		name:      "a secret write takes a file, and says so",
 		words:     []string{"secret", "create", "gh-token", "-"},
 		directive: dirNames,
-		exactly:   []string{"--file", "--stdin", "-f"},
+		exactly:   []string{"--file", "--stdin", "--type", "-f"},
 	}, {
 		name:      "and the file is the shell's to complete",
 		words:     []string{"secret", "create", "gh-token", "-f", ""},
@@ -697,4 +697,22 @@ func globalFlagSpellings() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func TestCompletionKnowsSecretType(t *testing.T) {
+	for _, verb := range []string{"create", "update"} {
+		found := false
+		for _, sb := range groups["secret"] {
+			if sb.name == verb {
+				_, found = sb.values["--type"]
+			}
+		}
+		if !found {
+			t.Errorf("secret %s does not complete --type", verb)
+		}
+	}
+	dir, cands := operandCandidates(opType, "")
+	if dir != dirNames || len(cands) != 2 {
+		t.Errorf("--type candidates = %v %v, want tls and ca", dir, cands)
+	}
 }

@@ -29,6 +29,10 @@ type Missing struct {
 	// message is built, because only the profile knows what makes its
 	// credential appear and the message is built from Missing alone.
 	Hint string
+	// Create is the command that stores this secret, when plain
+	// "brig secret create NAME" would store a value the run cannot use: a
+	// certificate needs --type tls or --type ca to be checked.
+	Create string
 }
 
 // CredentialError is the class of run-stopping credential failures: a required
@@ -139,6 +143,9 @@ func (e *MissingSecretsError) fix(m Missing) string {
 	}
 	if m.Importable {
 		return fmt.Sprintf("import it from your host with: brig secret import %s", e.Profile)
+	}
+	if m.Create != "" {
+		return "create it first with: " + m.Create
 	}
 	return fmt.Sprintf("create it first with: brig secret create %s", m.Name)
 }
