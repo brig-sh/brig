@@ -14,6 +14,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/tlspem"
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
@@ -84,8 +85,8 @@ func secretCmd(out io.Writer, args []string) error {
 const secretUsage = `brig secret -- keep secrets in your keyring
 
 usage:
-  brig secret create <name> [-f FILE]   store a new secret
-  brig secret update <name> [-f FILE]   replace an existing one
+  brig secret create <name> [-f FILE] [--type tls|ca]   store a new secret
+  brig secret update <name> [-f FILE] [--type tls|ca]   replace an existing one
   brig secret read   <name>             print the value
   brig secret delete <name> [-y]        remove it, after asking
   brig secret ls                        list names and dates, never values
@@ -95,6 +96,9 @@ usage:
 flags:
   -f, --file FILE   read the value from a file, verbatim. ` + "`-`" + ` is stdin
       --stdin       read the value from stdin, which is the default
+      --type tls    check the value as a client certificate chain with its key,
+                    refuse an expired one, and remember when it expires
+      --type ca     check the value as a bundle of CA certificates
   -y, --yes         with delete: the answer, given in advance
                     with import: replace a hand-created secret without asking
       --dry-run     with import: report what would be imported, and read the
@@ -128,7 +132,7 @@ is stripped from it.
 // "no value on stdin. Pipe one in", and only admitted there was nowhere to put
 // it once they had.
 func writeSecret(args []string, verb string) error {
-	name, file, err := nameAndFile(args, verb)
+	name, files, typ, err := nameAndFile(args, verb)
 	if err != nil {
 		return err
 	}
@@ -139,7 +143,7 @@ func writeSecret(args []string, verb string) error {
 	if err != nil {
 		return err
 	}
-	value, err := readValue(file)
+	value, err := readValue(files)
 	if err != nil {
 		return err
 	}
@@ -151,10 +155,38 @@ func writeSecret(args []string, verb string) error {
 			"variables when it forwards them, so it would never reach a sandbox", verb, name)
 	}
 
-	if verb == "create" {
-		err = store.Create(name, value)
-	} else {
-		err = store.Update(name, value)
+	// summary prints what the check found, once the value is stored.
+	summary := func() {}
+	// The checks name the case and never echo the value: a refused key is
+	// still a key.
+	switch typ {
+	case "tls":
+		cc, perr := tlspem.ParseClientCertificate(value, time.Now())
+		if perr != nil {
+			return fmt.Errorf("%s %s: the value is not a client certificate: %w", verb, name, perr)
+		}
+		// Said after the write, so a create that the store refuses does not
+		// print a summary of a certificate it did not keep.
+		summary = func() {
+			fmt.Fprintln(os.Stderr, "brig: "+name+": "+tlspem.Summary(cc.Leaf))
+			fmt.Fprintf(os.Stderr, "brig: %s: %d certificate(s) will be sent, %d will not (a root or a certificate off the chain)\n",
+				name, cc.Chain(), cc.NotSent)
+		}
+		err = secret.WriteWithProvenance(store, name, value, secret.Provenance{
+			V:         secret.ProvenanceVersion,
+			ExpiresAt: cc.Leaf.NotAfter.UnixMilli(),
+		}, verb == "update")
+	case "ca":
+		if _, _, perr := tlspem.ParseCA(value); perr != nil {
+			return fmt.Errorf("%s %s: the value is not a CA bundle: %w", verb, name, perr)
+		}
+		fallthrough
+	default:
+		if verb == "create" {
+			err = store.Create(name, value)
+		} else {
+			err = store.Update(name, value)
+		}
 	}
 	// Both sentinels name the command that does what the user evidently meant.
 	// The two mistakes are each other's mirror, and either one on its own is a
@@ -165,6 +197,9 @@ func writeSecret(args []string, verb string) error {
 			name, name)
 	case errors.Is(err, secret.ErrNotFound):
 		return fmt.Errorf("no secret named %q. To create it: brig secret create %s", name, name)
+	}
+	if err == nil {
+		summary()
 	}
 	return err
 }
@@ -496,22 +531,23 @@ func onlyName(args []string, verb string) (string, error) {
 // it outright. Parse stops at the first bare word, so the name -- which comes
 // before the flag in `create gh -f key.pem` -- is lifted out and parsing
 // continues, exactly as exportProfile does.
-func nameAndFile(args []string, verb string) (name, file string, err error) {
+func nameAndFile(args []string, verb string) (name string, files []string, typ string, err error) {
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
-	fs.StringVar(&file, "f", "", "")
-	fs.StringVar(&file, "file", "", "")
+	fs.Var((*fileList)(&files), "f", "")
+	fs.Var((*fileList)(&files), "file", "")
 	// --stdin is the default, and is accepted so that writing it out loud
 	// works rather than failing on a flag the docs describe.
 	var stdin bool
 	fs.BoolVar(&stdin, "stdin", false, "")
+	fs.StringVar(&typ, "type", "", "")
 
 	var words []string
 	for rest := args; ; {
 		if err := fs.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				return "", "", err
+				return "", nil, "", err
 			}
 			msg := err.Error()
 			if flagName, ok := strings.CutPrefix(msg, "flag provided but not defined: "); ok {
@@ -519,7 +555,7 @@ func nameAndFile(args []string, verb string) (name, file string, err error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return "", "", fmt.Errorf("%s (%s takes -f and --stdin)", msg, verb)
+			return "", nil, "", fmt.Errorf("%s (%s takes -f, --stdin and --type)", msg, verb)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -527,28 +563,31 @@ func nameAndFile(args []string, verb string) (name, file string, err error) {
 		words = append(words, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
+	if seen(fs, "type") && typ != "tls" && typ != "ca" {
+		return "", nil, "", fmt.Errorf("--type %q is not tls or ca", typ)
+	}
 	switch len(words) {
 	case 0:
-		return "", "", fmt.Errorf("%s needs a name, for example `brig secret %s gh-token`", verb, verb)
+		return "", nil, "", fmt.Errorf("%s needs a name, for example `brig secret %s gh-token`", verb, verb)
 	case 1:
 		name = words[0]
 	default:
-		return "", "", fmt.Errorf("%s takes one name, not %q", verb, words[1])
+		return "", nil, "", fmt.Errorf("%s takes one name, not %q", verb, words[1])
 	}
 	// An empty -f is not the same line as no -f at all, which is what seen
 	// distinguishes. `-f "$KEYFILE"` with the variable unset is how it gets
 	// typed, and falling through to stdin there stores whatever the script had
 	// on it under the name and reports success.
-	if seen(fs, "f", "file") && file == "" {
-		return "", "", errors.New("-f was given an empty path. Leave it out to read stdin, " +
+	if hasValue(files, "") {
+		return "", nil, "", errors.New("-f was given an empty path. Leave it out to read stdin, " +
 			"or pass `-f -` to say so")
 	}
 	// Two sources named at once is a line whose meaning cannot be guessed, and
 	// guessing it would silently store the wrong one of them.
-	if stdin && file != "" && file != "-" {
-		return "", "", errors.New("--stdin and -f name two different sources; pass one")
+	if stdin && hasOtherThanStdin(files) {
+		return "", nil, "", errors.New("--stdin and -f name two different sources; pass one")
 	}
-	return name, file, nil
+	return name, files, typ, nil
 }
 
 // readValue reads the secret from a file, or from stdin by default.
@@ -563,18 +602,21 @@ func nameAndFile(args []string, verb string) (name, file string, err error) {
 // A file is taken verbatim: its bytes are what it holds, and a PEM key's final
 // newline belongs to it. `printf` covers wanting exact bytes from stdin, so
 // there is no flag for that.
-func readValue(file string) ([]byte, error) {
-	if file != "" && file != "-" {
-		f, err := os.Open(file)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = f.Close() }()
-		return readCapped(f, file)
+func readValue(files []string) ([]byte, error) {
+	if len(files) > 1 || (len(files) == 1 && files[0] != "-") {
+		return readFiles(files)
 	}
+	return readStdin()
+}
+
+// readStdin reads the value from stdin and strips one trailing line ending,
+// the way `echo tok | brig secret create x` expects. A -f - among several
+// files reads it the same way, so the stored value does not depend on whether
+// stdin came alone.
+func readStdin() ([]byte, error) {
 	// Without this, `brig secret create x` at a prompt looks like a hang, and
 	// the way out of it -- typing the secret, then Ctrl-D -- leaves the value
-	// in the terminal scrollback.
+	// in the terminal scrollback. It holds for `-f -` beside other files too.
 	if wrap.IsTerminal(os.Stdin) {
 		return nil, errors.New("no value on stdin. Pipe one in, or pass -f <file>:\n" +
 			"  printf %s \"$TOKEN\" | brig secret create gh-token\n" +
@@ -588,6 +630,72 @@ func readValue(file string) ([]byte, error) {
 		return bytes.TrimSuffix(v, []byte("\r")), nil
 	}
 	return value, nil
+}
+
+// fileList collects every -f, in the order given. A flag.Value that keeps the
+// last one would store `-f client.crt -f client.key` as the key alone.
+type fileList []string
+
+func (l *fileList) String() string { return strings.Join(*l, ",") }
+
+func (l *fileList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
+}
+
+func hasValue(files []string, v string) bool {
+	for _, f := range files {
+		if f == v {
+			return true
+		}
+	}
+	return false
+}
+
+func hasOtherThanStdin(files []string) bool {
+	for _, f := range files {
+		if f != "-" {
+			return true
+		}
+	}
+	return false
+}
+
+// readFiles appends the files in the order given, as `cat` would, with a line
+// break between two when the first does not end in one. Each is taken verbatim
+// and the whole is held to the same cap as one value. `-` names stdin.
+func readFiles(files []string) ([]byte, error) {
+	var out []byte
+	for _, name := range files {
+		var part []byte
+		var err error
+		if name == "-" {
+			part, err = readStdin()
+		} else {
+			part, err = readFile(name)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(out) > 0 && len(part) > 0 && out[len(out)-1] != '\n' {
+			out = append(out, '\n')
+		}
+		out = append(out, part...)
+		if len(out) > maxValueBytes {
+			return nil, fmt.Errorf("the files are over %d bytes together, which is larger than "+
+				"any secret brig can store", maxValueBytes)
+		}
+	}
+	return out, nil
+}
+
+func readFile(name string) ([]byte, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return readCapped(f, name)
 }
 
 // maxValueBytes is where reading a secret stops.

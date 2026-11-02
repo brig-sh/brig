@@ -436,6 +436,8 @@ const (
 	opNetwork
 	// opPreset is a route preset brig ships, which --preset takes.
 	opPreset
+	// opType is the kind of value `brig secret create --type` checks.
+	opType
 )
 
 func operandCandidates(kind operand, cur string) (string, []string) {
@@ -456,6 +458,8 @@ func operandCandidates(kind operand, cur string) (string, []string) {
 		return names(cur, networkModes)
 	case opPreset:
 		return names(cur, presetNames())
+	case opType:
+		return names(cur, []string{"tls", "ca"})
 	}
 	return dirNone, nil
 }
@@ -534,14 +538,14 @@ var groups = map[string][]sub{
 		{
 			name:     "create",
 			flags:    []string{"--stdin"},
-			values:   map[string]operand{"--file": opFile, "-f": opFile},
+			values:   map[string]operand{"--file": opFile, "-f": opFile, "--type": opType},
 			operands: []operand{opNothing},
 		},
 		{name: "read", operands: []operand{opNothing}},
 		{
 			name:     "update",
 			flags:    []string{"--stdin"},
-			values:   map[string]operand{"--file": opFile, "-f": opFile},
+			values:   map[string]operand{"--file": opFile, "-f": opFile, "--type": opType},
 			operands: []operand{opNothing},
 		},
 		{name: "delete", flags: []string{"--yes", "-y"}, operands: []operand{opNothing}},

@@ -84,7 +84,7 @@ func (c *Config) routeStoreRefusal(st routeStore) error {
 	for _, name := range st.missing {
 		d := c.routeDecl(name)
 		missing = append(missing, creds.Missing{Name: name, Required: true, Importable: d.Importable(),
-			Reason: secret.ErrNotFound, Hint: d.HintText()})
+			Reason: secret.ErrNotFound, Hint: d.HintText(), Create: c.routeCreateCommand(name)})
 	}
 	return fmt.Errorf("policy %s injects a secret that brig's secret store does not hold: %w",
 		c.routedBy(st.missing), &creds.MissingSecretsError{Sandbox: c.VMName, Profile: c.Profile.Name, Missing: missing})
@@ -138,13 +138,38 @@ func (c *Config) routeSecretFix(names []string) string {
 	for _, name := range names {
 		switch {
 		case !c.routeDecl(name).Importable():
-			cmds = append(cmds, "brig secret create "+name)
+			cmds = append(cmds, c.routeCreateCommand(name))
 		case !imported:
 			imported = true
 			cmds = append(cmds, "brig secret import "+c.Profile.Name)
 		}
 	}
 	return strings.Join(cmds, ", ")
+}
+
+// routeCreateCommand is the command that stores the secret name. A client
+// certificate and a CA bundle are stored with --type, which checks them
+// before they are written, so a missing one is not hinted as a plain
+// secret: stored without --type, a certificate is only found wrong at the
+// first request.
+func (c *Config) routeCreateCommand(name string) string {
+	typ := ""
+	for _, r := range c.routes {
+		if r.Inject == nil || r.Inject.TLS == nil {
+			continue
+		}
+		t := r.Inject.TLS
+		switch {
+		case t.ClientCertificate != nil && t.ClientCertificate.SecretRef.Name == name:
+			return "brig secret create " + name + " --type tls -f <file>"
+		case t.CA != nil && t.CA.SecretRef.Name == name:
+			typ = "ca"
+		}
+	}
+	if typ != "" {
+		return "brig secret create " + name + " --type " + typ + " -f <file>"
+	}
+	return "brig secret create " + name
 }
 
 // routedBy names each route that injects one of names, with the policy that

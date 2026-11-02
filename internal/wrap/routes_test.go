@@ -577,6 +577,28 @@ func TestBrokeredSecretsIncludeCertificates(t *testing.T) {
 	}
 }
 
+// A missing certificate secret is hinted with the --type that checks it. A
+// plain "brig secret create" would store a value the run cannot use, and the
+// first request would find out.
+func TestMissingCertificateSecretsAreHintedWithTheirType(t *testing.T) {
+	c := &Config{routes: certRoutes(), routePolicy: map[string]string{"inventory": "pol", "rootonly": "pol"}}
+	for name, want := range map[string]string{
+		"inv-client": "brig secret create inv-client --type tls -f <file>",
+		"inv-ca":     "brig secret create inv-ca --type ca -f <file>",
+		"only-ca":    "brig secret create only-ca --type ca -f <file>",
+		"tok":        "brig secret create tok",
+	} {
+		if got := c.routeSecretFix([]string{name}); got != want {
+			t.Errorf("routeSecretFix(%s) = %q, want %q", name, got, want)
+		}
+	}
+	err := c.routeStoreRefusal(routeStore{missing: []string{"inv-client", "only-ca"}})
+	if err == nil || !strings.Contains(err.Error(), "create it first with: brig secret create inv-client --type tls -f <file>") ||
+		!strings.Contains(err.Error(), "create it first with: brig secret create only-ca --type ca -f <file>") {
+		t.Errorf("the refusal does not give the typed commands: %v", err)
+	}
+}
+
 func TestRoutedByNamesACertificateRoute(t *testing.T) {
 	c := &Config{routes: certRoutes(), routePolicy: map[string]string{"inventory": "pol", "rootonly": "pol"}}
 	if got := c.routedBy([]string{"inv-client"}); got != "pol (route inventory)" {
