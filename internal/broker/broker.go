@@ -65,7 +65,8 @@ type Config struct {
 	Now func() time.Time
 	// Transport is optional. It carries the upstream requests, and defaults
 	// to one that verifies upstream TLS with the system roots and uses no
-	// proxy.
+	// proxy. When it is an *http.Transport it is also the base that a route
+	// with inject.tls clones its own transport from.
 	Transport http.RoundTripper
 	// ArrivalCheck is optional. It reports whether a request for sandbox
 	// that arrived from remoteAddr came in where that sandbox reaches the
@@ -137,8 +138,10 @@ type Sandbox struct {
 //
 // Route must be a route that policy.ExpandRoute returned, and the broker does
 // not validate it again. It depends on what Route.Validate guarantees: the
-// upstream is a canonical https:// origin, a credential is named, inject
-// carries the credential in headers.set or basicAuth, Authorization is in
+// upstream is a canonical https:// origin, a credential is named (a route
+// whose inject.tls has a clientCertificate and sets no header needs none),
+// inject carries the credential in headers.set or basicAuth or names the
+// secrets of inject.tls, Authorization is in
 // headers.remove, no header list names a header the broker owns, and
 // request.allow.repos appears only on a github-token route.
 type Route struct {
@@ -171,6 +174,13 @@ type Handler struct {
 	renewMu sync.Mutex
 	// forced is when an upstream 401 last forced a renewal, per secret.
 	forced map[string]time.Time
+
+	certMu sync.Mutex
+	// certs and cas are the parsed client certificates and CA bundles of the
+	// routes with inject.tls, by secret name, with the digest of the bytes
+	// they were parsed from.
+	certs map[string]*certEntry
+	cas   map[string]*caEntry
 }
 
 // sandbox is a registered sandbox, ready to serve.
@@ -198,6 +208,13 @@ type route struct {
 	policy   string
 	spec     v1alpha1.Route
 	upstream *url.URL
+
+	// tr is the transport of a route with inject.tls, built on first use for
+	// this sandbox alone, and caSum the digest of the CA bundle it was built
+	// with. tlsMu guards both.
+	tlsMu sync.Mutex
+	tr    *http.Transport
+	caSum [32]byte
 }
 
 // New returns a Handler built from cfg.
@@ -220,6 +237,8 @@ func New(cfg Config) (*Handler, error) {
 		vendor:    cfg.Vendor,
 		vendOnly:  cfg.VendOnly,
 		vendDoc:   cfg.VendDoc,
+		certs:     map[string]*certEntry{},
+		cas:       map[string]*caEntry{},
 	}
 	if cfg.ReplayBudget < 0 {
 		return nil, fmt.Errorf("the broker replay budget is %d bytes; it cannot be negative", cfg.ReplayBudget)
@@ -260,9 +279,7 @@ func New(cfg Config) (*Handler, error) {
 // verification, and no proxy from the environment. An HTTPS_PROXY set on the
 // host would otherwise see every upstream request the broker makes.
 func defaultTransport() http.RoundTripper {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.Proxy = nil
-	return t
+	return defaultHTTPTransport()
 }
 
 // AddSandbox registers s, or replaces the sandbox registered under s.ID.
@@ -315,8 +332,12 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		return fmt.Errorf("sandbox %s: %w", s.ID, err)
 	}
 	h.mu.Lock()
+	old := h.sandboxes[s.ID]
 	h.sandboxes[s.ID] = sb
 	h.mu.Unlock()
+	if old != nil {
+		old.closeTransports()
+	}
 	return nil
 }
 
@@ -344,8 +365,12 @@ func ValidID(id string) error {
 // placeholder count go with it.
 func (h *Handler) RemoveSandbox(id string) {
 	h.mu.Lock()
+	old := h.sandboxes[id]
 	delete(h.sandboxes, id)
 	h.mu.Unlock()
+	if old != nil {
+		old.closeTransports()
+	}
 }
 
 func (h *Handler) sandbox(id string) *sandbox {
