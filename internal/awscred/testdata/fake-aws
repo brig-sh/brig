@@ -1,0 +1,22 @@
+#!/bin/sh
+# A stand-in for the aws CLI: it logs its argv, one argument per line, to the
+# file named by FAKE_AWS_LOG and prints a fixed document per subcommand.
+for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_AWS_LOG"; done
+case "$1 $2" in
+"sts assume-role")
+  printf '%s\n' '{"Credentials":{"AccessKeyId":"ASIAFAKE","SecretAccessKey":"fake-secret-value","SessionToken":"fake-token-value","Expiration":"2026-10-26T15:04:05+00:00"}}'
+  ;;
+"configure export-credentials")
+  printf '%s\n' '{"Version":1,"AccessKeyId":"ASIAFAKE","SecretAccessKey":"fake-secret-value","SessionToken":"fake-token-value","Expiration":"2026-10-26T15:04:05+00:00"}'
+  ;;
+"configure get")
+  echo eu-west-1
+  ;;
+"sts get-caller-identity")
+  printf '%s\n' '{"Arn":"arn:aws:sts::000000000000:assumed-role/Fake/someone@example.com"}'
+  ;;
+*)
+  echo "fake-aws: unexpected $*" >&2
+  exit 2
+  ;;
+esac
