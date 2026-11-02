@@ -87,7 +87,7 @@ boot_id=""
 # guest that did not answer apart from a guest that leaked.
 guest() {
 	local out last id
-	out="$("$BRIG" -q sh "$REF" -c "$1; echo $SENTINEL boot=\$(cat $(quote "$BOOT_ID_FILE") 2>/dev/null)" 2>&1 | tr -d '\r')"
+	out="$("$BRIG" -q sh "${GUEST_REF:-$REF}" -c "$1; echo $SENTINEL boot=\$(cat $(quote "$BOOT_ID_FILE") 2>/dev/null)" 2>&1 | tr -d '\r')"
 	last="$(printf '%s\n' "$out" | tail -1)"
 	case "$last" in
 	"$SENTINEL boot="*) id="${last#"$SENTINEL boot="}" ;;
@@ -108,6 +108,46 @@ guest() {
 # space split in two names two paths that do not exist. A negative check
 # then passes with the real path reachable.
 quote() { printf '%q ' "$@"; }
+
+# mtls_nokey_script prints the script of the mtls-nokey probe for the guest's
+# bash. The search lists the files under every directory the guest can write
+# or read that hold the marker, binary files included (-a: a key stored as a
+# binary blob, or in a file grep takes for one, still shows), and each
+# readable /proc/PID/environ. Before the search counts for anything, the same
+# search has to find a canary file and a canary environment that the script
+# plants itself, then removes. A search that finds nothing because it cannot
+# see, say a grep that does not take -a or a guest with no /proc, fails the
+# check by saying so. The template is read into a variable by read, which
+# bash 3.2 takes where a heredoc inside $( ) is not safe.
+mtls_nokey_script() {
+	local tpl
+	IFS= read -r -d '' tpl <<'GUEST' || true
+[ -n "$INVENTORY_URL" ] || echo 'no INVENTORY_URL in the guest: the route is not there'
+command -v grep >/dev/null || echo 'no grep in the guest'
+[ -d /proc/self ] || echo 'no /proc in the guest'
+search() {
+	grep -raFl -e @MARKER@ "$HOME" /work /brig /etc /tmp /run /var /dev/shm /opt /srv /mnt 2>/dev/null
+	for e in /proc/[0-9]*/environ; do
+		[ -r "$e" ] && grep -qaF -e @MARKER@ "$e" 2>/dev/null && echo "$e"
+	done
+}
+canary=/tmp/.claims-vm-canary.$$
+printf '%s\n' @MARKER@ >"$canary" 2>/dev/null
+CLAIMS_VM_CANARY=@MARKER@ sleep 30 &
+cpid=$!
+disown "$cpid" 2>/dev/null
+found="$(search)"
+rm -f "$canary"
+kill "$cpid" 2>/dev/null
+printf '%s\n' "$found" | grep -qxF "$canary" || echo 'the search did not find the canary file that holds the marker: it is blind to the places it names'
+printf '%s\n' "$found" | grep -qxF "/proc/$cpid/environ" || echo 'the search did not find the marker in the environment of a process'
+search
+true
+GUEST
+	# No final line break: guest appends "; echo ..." to the script.
+	tpl="${tpl%$'\n'}"
+	printf '%s' "${tpl//@MARKER@/$(quote "$mtls_marker")}"
+}
 
 # probe NAME asks the guest one question. The checks below judge the answer.
 # The self-test answers the same names from a fake guest, so a check that
@@ -150,6 +190,21 @@ probe() {
 	# bus, and gnome-keyring keeps its files under ~/.local/share/keyrings.
 	secret-service)
 		guest "printenv DBUS_SESSION_BUS_ADDRESS; for p in /run/user/*/bus /run/user/*/keyring \"\$HOME/.local/share/keyrings\" $(quote "$HOST_HOME/.local/share/keyrings"); do [ -e \"\$p\" ] && echo \"\$p\"; done"
+		;;
+	# The client certificate route runs in a sandbox of its own, with its
+	# own boot_id. The guest asks the broker for the route at INVENTORY_URL
+	# with the session token, and the mTLS echo server on the host names the
+	# certificate it was shown.
+	mtls-get)
+		BRIG_POLICY_DIR="$mtls_policies" boot_id="$mtls_boot_id" GUEST_REF="$MTLS_REF" host_bus guest "curl -sS --max-time 20 --cacert /brig/ca/bundle.pem -H \"Authorization: Bearer \$INVENTORY_TOKEN\" -w '\\nHTTP %{http_code}\\n' \"\$INVENTORY_URL/v1/items\" 2>&1"
+		;;
+	# One line of the private key's base64, searched for in every place the
+	# guest can write or read, binary files included, and in the environment
+	# of every process it can read. The controls come first: a guest with no
+	# route or no grep, and a search that cannot find a marker planted in a
+	# file and in an environment, would find nothing anywhere.
+	mtls-nokey)
+		BRIG_POLICY_DIR="$mtls_policies" boot_id="$mtls_boot_id" GUEST_REF="$MTLS_REF" host_bus guest "$(mtls_nokey_script)"
 		;;
 	*)
 		echo "claims-vm: no probe named $1" >&2
@@ -256,6 +311,55 @@ check_no_agent_socket() { listed sockets; }
 check_keychain() { listed keychain; }
 check_secret_service() { listed secret-service; }
 
+# The client certificate checks need the route in place first. mtls_ready is
+# set by the setup further down, and a setup that failed says why here, so a
+# check never passes on a guest that was not asked.
+MTLS_NAME=claims-vm-mtls
+MTLS_REF=claude@claims-vm-mtls
+mtls_ready=0
+mtls_why="not set up"
+
+# HOST_BUS is the session bus the harness was started with. fixture points
+# DBUS_SESSION_BUS_ADDRESS at a bus that does not exist, so that the guest has
+# a host bus to fail to reach. On Linux brig reaches the secret store over the
+# real one, and so does the broker that the run of the client certificate case
+# starts. Every brig call of that case goes through host_bus.
+HOST_BUS="${DBUS_SESSION_BUS_ADDRESS-}"
+host_bus() { DBUS_SESSION_BUS_ADDRESS="$HOST_BUS" "$@"; }
+mtls_boot_id=""
+mtls_marker=""
+
+mtls_ready_or_fail() {
+	[ "$mtls_ready" = 1 ] && return 0
+	echo "  the client certificate route is not up: $mtls_why"
+	return 1
+}
+
+# The broker, on the host, presents the client certificate that the mTLS echo
+# server asks for, and the echo server names the certificate it was shown. The
+# guest holds only the session token, so what it reads back is the proof that
+# the handshake happened on the host.
+check_client_certificate_presented() {
+	local out
+	mtls_ready_or_fail || return 1
+	out="$(probe mtls-get)" || return 1
+	case "$out" in
+	*'"peer":"claims-vm-client"'*"HTTP 200"*) ;;
+	*)
+		printf '  the echo server did not name claims-vm-client: %s\n' "$out"
+		return 1
+		;;
+	esac
+}
+
+# The key is a secret of the host. The guest is searched for a line of it in
+# every place it can read, and in its environment, and the probe says so when
+# it has no route or no grep to search with.
+check_client_key_not_in_guest() {
+	mtls_ready_or_fail || return 1
+	listed mtls-nokey
+}
+
 vm_check() {
 	local name="$1"
 	shift
@@ -287,7 +391,10 @@ other-host-directory:mounts/nfs
 ssh-agent-not-forwarded:ssh-env
 no-agent-socket:sockets
 keychain-not-reachable:keychain
-secret-service-not-reachable:secret-service"
+secret-service-not-reachable:secret-service
+client-certificate-presented:mtls-get
+client-key-not-in-guest:mtls-nokey
+client-key-not-in-guest:mtls-nokey/blind"
 
 # fake_answer NAME answers a probe as a clean guest does, or as a leaking one
 # when FAKE is leak:NAME or leak:NAME/KIND. A leak in home or project is the
@@ -335,6 +442,24 @@ fake_answer() {
 	sockets) [ -n "$leak" ] && printf '/tmp/ssh-XXXX/agent.1\n' ;;
 	keychain) [ -n "$leak" ] && printf '/Users\n' ;;
 	secret-service) [ -n "$leak" ] && printf '/run/user/501/bus\n' ;;
+	# The echo server names the certificate it was shown. A leak is a guest
+	# the broker did not serve with it.
+	mtls-get)
+		if [ -n "$leak" ]; then
+			printf '\nHTTP 502\n'
+		else
+			printf '{"peer":"claims-vm-client","path":"/v1/items"}\nHTTP 200\n'
+		fi
+		;;
+	# A leak is the marker found in a file. A blind search is one that cannot
+	# find the canary it planted, which must fail the check as well.
+	mtls-nokey)
+		case "$leak" in
+		"") ;;
+		blind) printf 'the search did not find the canary file that holds the marker: it is blind to the places it names\n' ;;
+		*) printf '/home/claude/.cache/client.key\n' ;;
+		esac
+		;;
 	*) return 1 ;;
 	esac
 	return 0
@@ -345,6 +470,9 @@ self_test() {
 	tmp="$(mktemp -d)" && [ -n "$tmp" ] || return 1
 	fixture "$tmp/work" || return 1
 	guest_home=/home/claude
+	mtls_ready=1
+	mtls_policies=""
+	mtls_marker=marker
 
 	# The fake guest below stands in for probe, so guest and the probe
 	# commands never run under it. These cases run them through a stub brig
@@ -370,6 +498,12 @@ nofind)
 	# A guest with bash and nothing else on its PATH.
 	mkdir -p "${0%/*}/nofind" && ln -sf /bin/bash "${0%/*}/nofind/bash"
 	PATH="${0%/*}/nofind" /bin/bash -c '"$@"' bash "$@" | sed 's/$/\r/'
+	exit
+	;;
+blindgrep)
+	# A guest whose grep finds nothing, wherever it looks.
+	mkdir -p "${0%/*}/blind" && printf '#!/bin/sh\nexit 1\n' >"${0%/*}/blind/grep" && chmod +x "${0%/*}/blind/grep"
+	PATH="${0%/*}/blind:$PATH" /bin/bash -c '"$@"' bash "$@" | sed 's/$/\r/'
 	exit
 	;;
 esac
@@ -439,6 +573,30 @@ STUB
 	*"found no find in the guest"*) echo "self-test: ok   stub brig: a guest with no find says so" ;;
 	*)
 		echo "self-test: FAIL stub brig: a guest with no find did not say so: $out"
+		bad=1
+		;;
+	esac
+	# The key search is only evidence when it can find a marker. A guest
+	# with no grep, and one whose grep finds nothing anywhere, must fail the
+	# check and say why. The blind grep answers at once, so the host's own
+	# directories are never walked here.
+	no_grep() { (CLAIMS_VM_STUB=nofind check_client_key_not_in_guest); }
+	blind_grep() { (CLAIMS_VM_STUB=blindgrep check_client_key_not_in_guest); }
+	stub_case "a guest with no grep, client-key-not-in-guest" fail no_grep
+	case "$out" in
+	*"found no grep in the guest"*) echo "self-test: ok   stub brig: a guest with no grep says so" ;;
+	*)
+		echo "self-test: FAIL stub brig: a guest with no grep did not say so: $out"
+		bad=1
+		;;
+	esac
+	stub_case "a search that finds nothing, client-key-not-in-guest" fail blind_grep
+	case "$out" in
+	*"the search did not find the canary file that holds the marker"*"the search did not find the marker in the environment of a process"*)
+		echo "self-test: ok   stub brig: a blind search says so"
+		;;
+	*)
+		echo "self-test: FAIL stub brig: a blind search did not say so: $out"
 		bad=1
 		;;
 	esac
@@ -572,8 +730,165 @@ WORK="$(mktemp -d)" && [ -n "$WORK" ] || exit 1
 # macOS hands out /var/folders, which is a link to /private/var/folders.
 # brig refuses a link on the way to the guest home, so name the real path.
 WORK="$(cd "$WORK" && pwd -P)" || exit 1
-trap '"$BRIG" rm "$REF" >/dev/null 2>&1; rm -rf "$WORK"' EXIT
+mtls_policies=""
+mtls_echo_pid=""
+mtls_secrets=""
+
+# cleanup removes what the run made: both sandboxes, the policy binding, the
+# echo server, the two secrets in your store, and the scratch directory.
+cleanup() {
+	local s
+	"$BRIG" rm "$REF" >/dev/null 2>&1
+	if [ -n "$mtls_policies" ]; then
+		BRIG_POLICY_DIR="$mtls_policies" host_bus "$BRIG" rm "$MTLS_REF" >/dev/null 2>&1
+		BRIG_POLICY_DIR="$mtls_policies" host_bus "$BRIG" policy detach "$MTLS_NAME" "${REF%@*}" -n "${MTLS_REF#*@}" >/dev/null 2>&1
+	fi
+	[ -n "$mtls_echo_pid" ] && kill "$mtls_echo_pid" >/dev/null 2>&1
+	for s in $mtls_secrets; do
+		host_bus "$BRIG" secret delete "$s" -y >/dev/null 2>&1
+	done
+	rm -rf "$WORK"
+}
+trap cleanup EXIT
 fixture "$WORK" || exit 1
+
+# mtls_fail WHY records why the client certificate route is not up, and
+# fails. The two checks that need it then fail with that reason.
+mtls_fail() {
+	mtls_why="$1"
+	return 1
+}
+
+# mtls_setup brings up what the two client certificate checks need: a CA, a
+# server certificate for localhost and a client certificate, all minted here
+# and good for two days; an mTLS echo server on a loopback port that names the
+# certificate it was shown; the two secrets in your store, checked by --type
+# on the way in; a policy with one inject.tls route to that server, bound to a
+# session of its own; and a second sandbox booted under it. The files live in
+# $WORK, which the trap removes, and the secrets are deleted there too.
+mtls_setup() {
+	local d="$WORK/mtls" i port
+	if ! command -v openssl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+		mtls_fail "the host needs openssl and python3 for the mTLS echo server"
+		return 1
+	fi
+	mkdir -p "$d/policies" "$WORK/mtlshome-${MTLS_REF#*@}" || { mtls_fail "mkdir failed"; return 1; }
+	if ! (
+		set -e
+		cd "$d"
+		printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=keyCertSign,cRLSign\n' >ca.ext
+		printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' >server.ext
+		printf 'extendedKeyUsage=clientAuth\n' >client.ext
+		openssl ecparam -name prime256v1 -genkey -noout -out ca.key
+		openssl req -new -key ca.key -subj '/CN=claims-vm CA' -out ca.csr
+		openssl x509 -req -in ca.csr -signkey ca.key -days 2 -extfile ca.ext -out ca.pem
+		for who in server client; do
+			cn=localhost
+			[ "$who" = client ] && cn=claims-vm-client
+			openssl ecparam -name prime256v1 -genkey -noout -out "$who.key"
+			openssl req -new -key "$who.key" -subj "/CN=$cn" -out "$who.csr"
+			openssl x509 -req -in "$who.csr" -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
+				-extfile "$who.ext" -out "$who.crt"
+		done
+	) >"$d/pki.log" 2>&1; then
+		mtls_fail "openssl could not mint the test PKI: $(tail -3 "$d/pki.log")"
+		return 1
+	fi
+	# One base64 line of the client key: what the guest must never hold.
+	mtls_marker="$(sed -n 2p "$d/client.key")"
+	[ "${#mtls_marker}" -ge 20 ] || { mtls_fail "the client key has no base64 line to search for"; return 1; }
+
+	cat >"$d/echo.py" <<'PY'
+import http.server, json, ssl, sys
+
+port_file, cert, key, ca = sys.argv[1:5]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        cn = ""
+        for rdn in self.connection.getpeercert().get("subject", ()):
+            for k, v in rdn:
+                if k == "commonName":
+                    cn = v
+        body = json.dumps({"peer": cn, "path": self.path}, separators=(",", ":")).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(cert, key)
+ctx.verify_mode = ssl.CERT_REQUIRED
+ctx.load_verify_locations(ca)
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+with open(port_file, "w") as f:
+    f.write(str(srv.server_address[1]))
+srv.serve_forever()
+PY
+	python3 "$d/echo.py" "$d/port" "$d/server.crt" "$d/server.key" "$d/ca.pem" >"$d/echo.log" 2>&1 &
+	mtls_echo_pid=$!
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+		[ -s "$d/port" ] && break
+		sleep 0.25
+	done
+	port="$(cat "$d/port" 2>/dev/null)"
+	case "$port" in
+	"" | *[!0-9]*) mtls_fail "the echo server did not start: $(tail -3 "$d/echo.log")"; return 1 ;;
+	esac
+
+	# A leftover of a run that was killed would make create refuse.
+	for i in client ca; do
+		host_bus "$BRIG" secret delete "$MTLS_NAME-$i" -y >/dev/null 2>&1
+	done
+	mtls_secrets="$MTLS_NAME-client $MTLS_NAME-ca"
+	if ! {
+		host_bus "$BRIG" secret create "$MTLS_NAME-client" --type tls -f "$d/client.crt" -f "$d/client.key" &&
+			host_bus "$BRIG" secret create "$MTLS_NAME-ca" --type ca -f "$d/ca.pem"
+	} >"$d/secret.log" 2>&1; then
+		mtls_fail "brig secret create failed: $(tail -3 "$d/secret.log")"
+		return 1
+	fi
+
+	cat >"$d/policies/$MTLS_NAME.yaml" <<YAML
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: $MTLS_NAME
+spec:
+  routes:
+    - name: inventory
+      upstream: https://localhost:$port
+      inject:
+        tls:
+          clientCertificate: { secretRef: { name: $MTLS_NAME-client } }
+          ca: { secretRef: { name: $MTLS_NAME-ca } }
+      guest:
+        env:
+          INVENTORY_URL: "{route.url}"
+          INVENTORY_TOKEN: "{session.token}"
+      request:
+        allow:
+          methods: [GET]
+          paths: ["/v1/items"]
+YAML
+	mtls_policies="$d/policies"
+	BRIG_POLICY_DIR="$mtls_policies" host_bus "$BRIG" policy attach "$MTLS_NAME" "${REF%@*}" -n "${MTLS_REF#*@}" >"$d/attach.log" 2>&1 ||
+		{ mtls_fail "brig policy attach failed: $(tail -3 "$d/attach.log")"; return 1; }
+	BRIG_POLICY_DIR="$mtls_policies" host_bus "$BRIG" -q run -d --home "$WORK/mtlshome" "$MTLS_REF" "$PROJECT" >"$d/boot.log" 2>&1 ||
+		{ mtls_fail "the boot failed: $(tail -3 "$d/boot.log")"; return 1; }
+	mtls_boot_id="$(BRIG_POLICY_DIR="$mtls_policies" boot_id="" GUEST_REF="$MTLS_REF" host_bus guest "cat $(quote "$BOOT_ID_FILE")")"
+	case "$mtls_boot_id" in
+	"" | *[!0-9a-f-]*) mtls_fail "could not read the boot_id of $MTLS_REF, got: $mtls_boot_id"; return 1 ;;
+	esac
+	mtls_ready=1
+}
 
 # The guest home comes from the profile, which a file of yours can override.
 # The home check then holds the guest to what the profile says.
@@ -608,6 +923,12 @@ vm_check ssh-agent-not-forwarded check_ssh_agent
 vm_check no-agent-socket check_no_agent_socket
 vm_check keychain-not-reachable check_keychain
 vm_check secret-service-not-reachable check_secret_service
+
+# The client certificate checks run in a sandbox of their own, set up once.
+# A setup that fails leaves mtls_why for the two checks to print.
+mtls_setup
+vm_check client-certificate-presented check_client_certificate_presented
+vm_check client-key-not-in-guest check_client_key_not_in_guest
 
 if [ "$fail" = 0 ]; then
 	echo "claims-vm: PASS"
