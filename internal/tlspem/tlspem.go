@@ -51,8 +51,10 @@ type ClientCertificate struct {
 	Leaf *x509.Certificate
 	// NotSent counts the certificates in the value that stay out of the
 	// handshake: a self-signed root and anything that does not continue the
-	// chain.
+	// chain. Unsent names them by subject, in the order the value holds them,
+	// so the person storing the value sees what the broker will leave out.
 	NotSent int
+	Unsent  []string
 }
 
 // Chain is the number of certificates the handshake carries, the leaf
@@ -154,10 +156,17 @@ func ParseClientCertificate(data []byte, now time.Time) (ClientCertificate, erro
 	for i, c := range chain {
 		der[i] = c.Raw
 	}
+	var unsent []string
+	for _, c := range certs {
+		if !inChain(chain, c) {
+			unsent = append(unsent, c.Subject.String())
+		}
+	}
 	return ClientCertificate{
 		Cert:    tls.Certificate{Certificate: der, PrivateKey: signer, Leaf: leaf},
 		Leaf:    leaf,
 		NotSent: len(certs) - len(chain),
+		Unsent:  unsent,
 	}, nil
 }
 

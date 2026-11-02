@@ -171,6 +171,9 @@ func writeSecret(args []string, verb string) error {
 			fmt.Fprintln(os.Stderr, "brig: "+name+": "+tlspem.Summary(cc.Leaf))
 			fmt.Fprintf(os.Stderr, "brig: %s: %d certificate(s) will be sent, %d will not (a root or a certificate off the chain)\n",
 				name, cc.Chain(), cc.NotSent)
+			for _, subject := range cc.Unsent {
+				fmt.Fprintf(os.Stderr, "brig: %s: not sent: %s\n", name, subject)
+			}
 		}
 		err = secret.WriteWithProvenance(store, name, value, secret.Provenance{
 			V:         secret.ProvenanceVersion,
