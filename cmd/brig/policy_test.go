@@ -2257,6 +2257,44 @@ func TestCheckListsRoutesAndPosture(t *testing.T) {
 	}
 }
 
+// A route with inject.tls gets a tls row naming its secrets, between the
+// route line and the run-path rows; a route without one gets none.
+func TestCheckPrintsATLSRow(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+		return routingRuntime{doctorRuntime{bin: "hull"}, nil}, nil
+	})
+	copyExample(t, dir, "example1-claude-only.yaml")
+	copyExample(t, dir, "example8-inventory-mtls.yaml")
+	loadTestProfiles(t)
+	for _, name := range []string{"claude-only", "inventory-mtls"} {
+		if err := attachPolicy([]string{name, "claude-code"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out string
+	stderr := captureStderr(t, func() {
+		var err error
+		out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if out != "claude-only\ninventory-mtls\n" {
+		t.Errorf("stdout is not one policy name per line:\n%s", out)
+	}
+	want := "  route inventory  preset (none)  mode endpoint\n" +
+		"    tls  clientCertificate inventory-client  ca example-root-ca\n"
+	if !strings.Contains(stderr, want) {
+		t.Errorf("stderr does not carry %q:\n%s", want, stderr)
+	}
+	if n := strings.Count(stderr, "    tls  "); n != 1 {
+		t.Errorf("stderr has %d tls rows, want 1 (anthropic has none):\n%s", n, stderr)
+	}
+}
+
 // routingRuntime is hull that routes brig.internal, and probes with err.
 type routingRuntime struct {
 	doctorRuntime
@@ -2382,10 +2420,10 @@ func TestShowPolicyOutputParsesBack(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
 	for _, name := range []string{"example1-claude-only.yaml", "example3-github-brig-sh.yaml",
-		"example4-inventory-api.yaml"} {
+		"example4-inventory-api.yaml", "example8-inventory-mtls.yaml"} {
 		copyExample(t, dir, name)
 	}
-	for _, name := range []string{"claude-only", "github-brig-sh", "inventory-api"} {
+	for _, name := range []string{"claude-only", "github-brig-sh", "inventory-api", "inventory-mtls"} {
 		for _, asJSON := range []bool{false, true} {
 			args := []string{name}
 			if asJSON {
