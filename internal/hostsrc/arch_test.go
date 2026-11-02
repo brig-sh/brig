@@ -91,6 +91,22 @@ var runPathPackages = []string{
 	"github.com/brig-sh/brig/cmd/brigd",
 }
 
+// The AWS route vends credentials by running the host's aws CLI under the
+// host's own profiles. That is a host source, so no run-path package links
+// internal/awscred: only brig-broker and the verbs that import a pointer do.
+func TestTheRunPathCannotReachAWS(t *testing.T) {
+	const awscred = "github.com/brig-sh/brig/internal/awscred"
+	for _, pkg := range runPathPackages {
+		out, err := goList("-deps", pkg)
+		if err != nil {
+			t.Fatalf("go list -deps %s: %v", pkg, err)
+		}
+		if slices.Contains(strings.Split(string(out), "\n"), awscred) {
+			t.Errorf("%s depends on %s: a run can now call the host's aws CLI", pkg, awscred)
+		}
+	}
+}
+
 // brokerBinary is brig-broker, the one process that refreshes a credential
 // and signs session tokens. It is not on the run path, because it links the
 // refresher. It reads brig's own store and no host source.
@@ -130,6 +146,20 @@ func TestTheBrokerCannotReachTheImporter(t *testing.T) {
 	// refresher, so a check that found nothing there would prove nothing.
 	if !slices.Contains(deps, "github.com/brig-sh/brig/internal/renew") {
 		t.Errorf("%s does not link internal/renew; this test checks the wrong package", brokerBinary)
+	}
+}
+
+// brig-broker vends the credentials of an aws route through internal/awscred.
+// TestTheRunPathCannotReachAWS proves the run path does not link that
+// package; this proves the package it checks for is the one the broker
+// links, so a rename cannot turn that test into one that passes on nothing.
+func TestTheBrokerLinksAWS(t *testing.T) {
+	out, err := goList("-deps", brokerBinary)
+	if err != nil {
+		t.Fatalf("go list -deps %s: %v", brokerBinary, err)
+	}
+	if !slices.Contains(strings.Split(string(out), "\n"), "github.com/brig-sh/brig/internal/awscred") {
+		t.Errorf("%s does not link internal/awscred; the aws route has no vendor", brokerBinary)
 	}
 }
 
@@ -208,6 +238,32 @@ func TestOnlyTheImportVerbReachesTheHostFromTheCLI(t *testing.T) {
 		}
 		if strings.Contains(string(blob), "brig/internal/hostsrc") {
 			t.Errorf("cmd/brig/%s reads a host source; only %s may", name, allowed)
+		}
+	}
+}
+
+// The same rule for the code that runs aws. The import verb checks an AWS
+// profile and role before it stores the pointer; nothing else in cmd/brig may
+// reach that code. A run that fetched keys itself would hand the guest keys
+// the broker never vended, outside the route, its cache and its audit line.
+func TestOnlyTheImportVerbReachesAWSFromTheCLI(t *testing.T) {
+	const allowed = "secretimport.go"
+	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd", "brig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || name == allowed ||
+			strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		blob, err := os.ReadFile(filepath.Join("..", "..", "cmd", "brig", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(blob), "brig/internal/awscred") {
+			t.Errorf("cmd/brig/%s reaches the code that runs aws; only %s may", name, allowed)
 		}
 	}
 }
