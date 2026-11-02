@@ -1,0 +1,23 @@
+# Example 8 of the broker spec: an internal API that asks for a client
+# certificate. The key stays in the broker; the guest never sees it.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: inventory-mtls
+  description: read-only access to the inventory service, which wants a client certificate
+spec:
+  routes:
+    - name: inventory
+      upstream: https://inventory.internal.example.com
+      inject:
+        tls:
+          clientCertificate: { secretRef: { name: inventory-client } }
+          ca: { secretRef: { name: example-root-ca } }
+      guest:
+        env:
+          INVENTORY_URL: "{route.url}"
+          INVENTORY_TOKEN: "{session.token}"
+      request:
+        allow:
+          methods: [GET]
+          paths: ["/v2/items/*", "/v2/search"]
