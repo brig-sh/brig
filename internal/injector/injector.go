@@ -164,6 +164,21 @@ type AddResponse struct {
 	// BrigInternal address. The guest trusts it for brig.internal. Its key
 	// never leaves the broker.
 	CA string `json:"ca,omitempty"`
+	// Regions maps each vending route to the AWS region the guest gets as
+	// {route.region}. The broker reads it from the route's AWS profile when
+	// it checks the route's credentials, at every registration.
+	Regions map[string]string `json:"regions,omitempty"`
+	// Vends describes each vending route for the run to print: mode, local
+	// profile, role.
+	Vends map[string]VendInfo `json:"vends,omitempty"`
+}
+
+// VendInfo is what a run prints of a vending route: whose credentials the
+// sandbox gets. It names the identity and holds no key.
+type VendInfo struct {
+	Mode       string `json:"mode"`
+	AWSProfile string `json:"awsProfile"`
+	RoleARN    string `json:"roleArn,omitempty"`
 }
 
 // MintRequest is the body of mint.
@@ -219,4 +234,6 @@ type Status struct {
 	// Recovering are the secrets with a renewal journal left by a broker
 	// that stopped, or held by another one, not yet settled.
 	Recovering []string `json:"recovering,omitempty"`
+	// Vending lists "<sandbox>/<route>" whose last fetch failed.
+	Vending []string `json:"vending,omitempty"`
 }
