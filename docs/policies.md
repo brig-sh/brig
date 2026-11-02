@@ -386,12 +386,14 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
 | `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
-| `credential.secretRef.name` | yes | A secret in Brig's store. It is never delivered to the guest |
+| `credential.secretRef.name` | yes, unless the route is certificate-only | A secret in Brig's store. It is never delivered to the guest. A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
-| `inject.headers.set` | unless a preset sets it, or `basicAuth` is set | `{name, value}` pairs. Each replaces a guest header of the same name. A value holds `{value}` at most once, and at least one value holds it. A value never holds `{route.url}` or `{session.token}` |
+| `inject.headers.set` | unless a preset sets it, `basicAuth` is set, or the route is certificate-only | `{name, value}` pairs. Each replaces a guest header of the same name. A value holds `{value}` at most once, and at least one value holds it. A value never holds `{route.url}` or `{session.token}` |
 | `inject.headers.remove` | no | Guest headers dropped before the request goes upstream, and before `set` applies. `Authorization` is always in the list, because the guest's own `Authorization` carries a session token |
 | `inject.headers.allow` | no | `{name, values}` pairs. Brig keeps only the listed values of that guest header, and drops the rest |
-| `inject.basicAuth.username` | unless a preset sets it, or `headers.set` is set | Sends `Authorization: Basic base64(username:{value})` |
+| `inject.basicAuth.username` | unless a preset sets it, `headers.set` is set, or the route is certificate-only | Sends `Authorization: Basic base64(username:{value})` |
+| `inject.tls.clientCertificate.secretRef.name` | no | A secret in Brig's store that holds a client certificate chain and its one private key, in PEM. The broker presents it to the upstream, and the key never reaches the guest. See [Client certificates](#client-certificates) |
+| `inject.tls.ca.secretRef.name` | no | A secret in Brig's store that holds the CA certificates of the upstream. On this route they replace the system roots. See [Client certificates](#client-certificates) |
 | `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
@@ -402,8 +404,14 @@ Each `request.allow` list that is set must match. Brig refuses an empty
 list, such as `repos: []`, rather than read it as unset and allow every
 repository. Leave the key out to allow any.
 
-`inject` sets exactly one of `headers.set` and `basicAuth`. Brig refuses a
-route that sets both.
+`inject` sets one of `headers.set` and `basicAuth`, unless `tls.clientCertificate`
+stands alone. `tls` may also sit beside one of them. Brig refuses a route that
+sets both `headers.set` and `basicAuth`. A route with a `credential` carries it
+in `headers.set` or `basicAuth`, whatever `tls` says: a client certificate
+identifies the caller on the connection, and does not carry the credential.
+Brig refuses a route with a `credential` and neither, rather than resolve a
+credential it never sends. A route with a `preset` cannot carry `tls`, because
+the preset sets its `inject` itself, and Brig refuses it.
 
 `remove` applies before `set`, so Brig refuses a header named in both. The
 exception is `Authorization`, which is always removed and which a route may
@@ -411,6 +419,60 @@ set. No header list names `Host`, `Connection`, `Content-Length`,
 `Transfer-Encoding`, `Upgrade`, `Keep-Alive`, `TE`, `Trailer` or a `Proxy-`
 header. The broker sets those itself, or drops them as hop-by-hop headers
 that never reach upstream.
+
+### Client certificates
+
+An upstream that asks for a client certificate is served by a route with
+`inject.tls`. This policy serves a read-only inventory API that wants one:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: inventory-mtls
+  description: read-only access to the inventory service, which wants a client certificate
+spec:
+  routes:
+    - name: inventory
+      upstream: https://inventory.internal.example.com
+      inject:
+        tls:
+          clientCertificate: { secretRef: { name: inventory-client } }
+          ca: { secretRef: { name: example-root-ca } }
+      guest:
+        env:
+          INVENTORY_URL: "{route.url}"
+          INVENTORY_TOKEN: "{session.token}"
+      request:
+        allow:
+          methods: [GET]
+          paths: ["/v2/items/*", "/v2/search"]
+```
+
+Store the two secrets from the files that hold them:
+
+```bash
+brig secret create inventory-client --type tls -f inventory-client.pem
+brig secret create example-root-ca --type ca -f example-root-ca.pem
+```
+
+`--type tls` reads one or more PEM files, in any order: the client
+certificate, any intermediates and its one private key. Brig checks that the
+key matches the certificate, and that the certificate is neither expired nor
+not yet valid. `--type ca` reads one or more CA certificates.
+[Getting a value in](secrets.md#getting-a-value-in) lists each refusal.
+
+`clientCertificate` names the secret that the broker presents to the upstream.
+`ca` names the certificates that the upstream's certificate must chain to. On
+this route, `ca` replaces the system roots, so a certificate that chains only
+to a system root is refused. Other routes keep the system roots.
+
+The key stays in the broker. The guest gets the route URL and a session token,
+and never the certificate or its key.
+
+A user keeps one client certificate for each route. Brig does not choose
+between certificates, so a route names one secret for `clientCertificate`, and
+every sandbox of the user presents that certificate.
 
 ### Placeholders
 
@@ -604,6 +666,17 @@ note: enforced on the hvi backend and on Linux with nerdctl, which give the sand
 
 A route is served on the sandbox's own gateway address, so a run with a route
 needs the `isolated` posture. The `posture:` line is that plan.
+
+A route with `inject.tls` has a `tls` row under its route row. The row names
+the secrets the route uses. Brig reads no value for it:
+
+```console
+$ brig policy check inventory-mtls
+inventory-mtls
+  route inventory  preset (none)  mode endpoint
+    tls  clientCertificate inventory-client  ca example-root-ca
+    ...
+```
 
 `check` then asks the runtime and hypervisor the run would use. Where the
 run would refuse a route, `check` exits non-zero with the reason on stderr,
