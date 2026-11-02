@@ -162,6 +162,10 @@ func (c *Config) PrepareWorkspace() error {
 	}
 	defer func() { _ = r.Close() }()
 
+	// Before anything is seeded, so a refused run writes nothing.
+	if err := c.awsWorkspaceRefusal(r); err != nil {
+		return err
+	}
 	if err := c.seedHostConfig(r); err != nil {
 		return err
 	}

@@ -129,9 +129,25 @@ func (c *Config) routeRefusal() error {
 				c.endpointList(), injector.BrigInternal, err)
 		}
 	}
+	if err := c.awsShadowRefusal(); err != nil {
+		return err
+	}
+	if err := c.awsHomeRefusal(); err != nil {
+		return err
+	}
 	if c.Network == NetOffline {
 		return fmt.Errorf("policy %s declares routes, and this run has no network (BRIG_NETWORK=none) to "+
 			"reach them on; refusing the run rather than booting without them", c.routeList())
+	}
+	// After the network, so an offline run is refused for that first. A
+	// route that vends is reached on the link-local address, which an older
+	// hull's gateway refuses to divert only once the sandbox's gateway
+	// starts.
+	if p, ok := c.Runtime.(runtime.LinkLocalProber); ok && c.vends() {
+		if err := p.ProbeLinkLocal(); err != nil {
+			return fmt.Errorf("policy %s declares a route that vends, which the guest reaches at %s: %w",
+				c.vendList(), injector.LinkLocalAddr, err)
+		}
 	}
 	return nil
 }
@@ -140,6 +156,54 @@ func (c *Config) routeRefusal() error {
 // brig.internal: a run with a route in mode endpoint.
 func (c *Config) brigInternal() bool {
 	return c.Runtime != nil && len(c.endpointRoutes()) > 0
+}
+
+// awsShadowVars are the variables an AWS SDK reads before the container
+// credential provider, or that point it elsewhere. A guest that gets one
+// runs as that identity while the run prints the route's.
+var awsShadowVars = []string{
+	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+	"AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE",
+	"AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN",
+	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	"AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+}
+
+// awsShadowRefusal refuses a run with a route that vends when the guest
+// would also get a variable from awsShadowVars, from the profile or
+// BRIG_FORWARD_ENV.
+func (c *Config) awsShadowRefusal() error {
+	if !c.vends() {
+		return nil
+	}
+	var shadow []string
+	for _, name := range bindingNames(c.Env) {
+		if slices.Contains(awsShadowVars, name) && !slices.Contains(shadow, name) {
+			shadow = append(shadow, name)
+		}
+	}
+	if len(shadow) == 0 {
+		return nil
+	}
+	return fmt.Errorf("policy %s declares a route that vends AWS keys, and %s also hands the guest %s, "+
+		"which the AWS SDKs read before the route; remove it from the profile and BRIG_FORWARD_ENV, "+
+		"or detach the policy", c.vendList(), c.Profile.Name, strings.Join(shadow, ", "))
+}
+
+// vends reports whether this run has a route that vends.
+func (c *Config) vends() bool {
+	return slices.ContainsFunc(c.routes, func(r v1alpha1.Route) bool { return r.Vends() })
+}
+
+// vendList names each route that vends, with the policy that declares it.
+func (c *Config) vendList() string {
+	var names []string
+	for _, r := range c.routes {
+		if r.Vends() {
+			names = append(names, fmt.Sprintf("%s (route %s)", c.routePolicy[r.Name], r.Name))
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // endpointRoutes are this run's routes in mode endpoint.
@@ -237,8 +301,16 @@ func (c *Config) serveRoutes(set creds.Set) error {
 	}
 	_, added, err := b.Register(s)
 	if err != nil {
+		// A credential the broker could not vend is the user's to fix on
+		// the host, so it exits as a credential failure and keeps the
+		// broker's words, which carry the fix.
+		var ref *injector.RefusedError
+		if errors.As(err, &ref) && ref.Kind == injector.RefusalCredential {
+			return creds.NewBrokerCredentialError(c.VMName, ref.Message)
+		}
 		return fmt.Errorf("could not register the routes of %s with the credential broker: %w", c.VMName, err)
 	}
+	c.sayVends(added.Vends)
 	// The gateway is handed the socket before the broker answers, from the
 	// same function. A broker that listens elsewhere would leave the route's
 	// connections reset.
@@ -272,12 +344,27 @@ func (c *Config) serveRoutes(set creds.Set) error {
 		tokens[r.Name] = token
 	}
 	ep := injector.HostEndpoint{Transport: injector.TransportBrigInternal}
-	vars, err := ep.GuestEnv(c.VMName, c.routes, tokens, set.Vars)
+	vars, err := ep.GuestEnv(c.VMName, c.routes, tokens, added.Regions, set.Vars)
 	if err != nil {
 		return err
 	}
 	c.routeVars = vars
 	return nil
+}
+
+// sayVends names the AWS identity each vending route hands the sandbox, so
+// the user sees whose power it gets before the agent runs. Sorted, so the
+// lines do not move between runs.
+func (c *Config) sayVends(vends map[string]injector.VendInfo) {
+	for _, name := range slices.Sorted(maps.Keys(vends)) {
+		v := vends[name]
+		if v.RoleARN != "" {
+			c.warnf("route %s: AWS role %s, assumed from your profile %s", name, v.RoleARN, v.AWSProfile)
+			continue
+		}
+		c.warnf("route %s: AWS as your own identity (profile %s); the sandbox can do what you can", name,
+			v.AWSProfile)
+	}
 }
 
 // forgetRoutes revokes this sandbox's session tokens: the broker stops
