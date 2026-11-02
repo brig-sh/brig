@@ -1,7 +1,8 @@
 // Package broker is the credential broker of brokered routes: it verifies the
 // session token a guest sends, refuses a request that holds a token anywhere
 // but its carrier, applies the route's request.allow, injects the credential
-// and forwards the request to the route's upstream.
+// and forwards the request to the route's upstream. A route that vends
+// answers the guest with credentials from a Vendor instead of forwarding.
 //
 // A guest holds a session token per route and no credential. A request names
 // its sandbox and route in the path, /<sandbox-id>/r/<route>/<rest>, and the
@@ -85,6 +86,21 @@ type Config struct {
 	// a request may take to send the part of its body the broker holds. A
 	// body waits a tenth of it for the budget to hold it.
 	BodyTimeout time.Duration
+	// Vendor is optional. It answers a route that vends. Without it such a
+	// route gets 502.
+	Vendor Vendor
+	// VendOnly is optional. It reports whether the request came in clear
+	// text, where only a route that vends is served. Any other route's token
+	// there would cross the link readable, so such a request is answered as
+	// one for a route the sandbox does not have, before its token is checked
+	// or its credential read. The host process decides from the connection
+	// the request arrived on, not from its remote address string.
+	VendOnly func(r *http.Request) bool
+	// VendDoc is optional. It reports whether a secret document is one only
+	// a route that vends takes, such as an AWS pointer. A route that does not
+	// vend would send it upstream as a header, which names the user's AWS
+	// profile and role, so such a route answers 502 and sends nothing.
+	VendDoc func(doc []byte) bool
 }
 
 // DefaultReplayBudget is the default of Config.ReplayBudget.
@@ -145,6 +161,9 @@ type Handler struct {
 	arrival   func(sandbox, remoteAddr string) (string, bool)
 	replay    *budget
 	bodyWait  time.Duration
+	vendor    Vendor
+	vendOnly  func(r *http.Request) bool
+	vendDoc   func(doc []byte) bool
 
 	mu        sync.RWMutex
 	sandboxes map[string]*sandbox
@@ -173,7 +192,8 @@ type sandbox struct {
 	match *matcher
 }
 
-// route is a registered route with its upstream parsed.
+// route is a registered route with its upstream parsed, or nil for a route
+// that vends.
 type route struct {
 	policy   string
 	spec     v1alpha1.Route
@@ -197,6 +217,9 @@ func New(cfg Config) (*Handler, error) {
 		arrival:   cfg.ArrivalCheck,
 		sandboxes: map[string]*sandbox{},
 		forced:    map[string]time.Time{},
+		vendor:    cfg.Vendor,
+		vendOnly:  cfg.VendOnly,
+		vendDoc:   cfg.VendDoc,
 	}
 	if cfg.ReplayBudget < 0 {
 		return nil, fmt.Errorf("the broker replay budget is %d bytes; it cannot be negative", cfg.ReplayBudget)
@@ -271,9 +294,20 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 			return fmt.Errorf("sandbox %s: route %s is mode %q, and the sandbox was registered with nothing "+
 				"to serve it", s.ID, name, m)
 		}
-		u, err := url.Parse(r.Route.Upstream)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
-			return fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", s.ID, name, r.Route.Upstream)
+		// A route that vends answers the guest itself and has no upstream.
+		var u *url.URL
+		if r.Route.Vends() {
+			// checkDivertedRoutes reads the upstream of every route not in
+			// endpoint mode.
+			if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint {
+				return fmt.Errorf("sandbox %s: route %s vends credentials and cannot be mode %q", s.ID, name, m)
+			}
+		} else {
+			var err error
+			u, err = url.Parse(r.Route.Upstream)
+			if err != nil || u.Scheme != "https" || u.Host == "" {
+				return fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", s.ID, name, r.Route.Upstream)
+			}
 		}
 		sb.routes[name] = &route{policy: r.Policy, spec: *r.Route.DeepCopy(), upstream: u}
 	}

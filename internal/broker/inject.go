@@ -132,8 +132,12 @@ func collect(node any, name string, found *[]any) {
 // The tool in the guest sends the token where it would send the credential.
 // So the broker reads Authorization: Bearer, the basic-auth password on a
 // basicAuth route (git's credential helper answers with the token), and each
-// header the route sets with {value}, such as x-api-key.
-func sessionToken(in *v1alpha1.Inject, h http.Header) string {
+// header the route sets with {value}, such as x-api-key. On a route that
+// vends, an Authorization value of one word is the token too: the AWS SDK
+// sends the container authorization token as it is, with no scheme. No other
+// route reads it, so a token sent that way to a proxying route is refused.
+func sessionToken(spec *v1alpha1.Route, h http.Header) string {
+	in, vends := spec.Inject, spec.Vends()
 	auth := h.Get("Authorization")
 	if scheme, tok, ok := strings.Cut(auth, " "); ok && strings.EqualFold(scheme, "Bearer") {
 		return strings.TrimSpace(tok)
@@ -147,6 +151,9 @@ func sessionToken(in *v1alpha1.Inject, h http.Header) string {
 	if in.Headers != nil {
 		for _, s := range in.Headers.Set {
 			if strings.EqualFold(s.Name, "Authorization") {
+				if vends && s.Value == v1alpha1.PlaceholderValue && auth != "" && !strings.Contains(auth, " ") {
+					return auth
+				}
 				continue
 			}
 			prefix, suffix, ok := strings.Cut(s.Value, v1alpha1.PlaceholderValue)
