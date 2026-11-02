@@ -109,6 +109,8 @@ case "$verb" in
     printf 'env-base-url:%s\n' "${ANTHROPIC_BASE_URL:-<unset>}" >> "$STUB_LOG"
     printf 'env-node-ca:%s\n' "${NODE_EXTRA_CA_CERTS:-<unset>}" >> "$STUB_LOG"
     printf 'env-home:%s\n' "${HOME:-<unset>}" >> "$STUB_LOG"
+    printf 'env-inventory-token:%s\n' "${INVENTORY_TOKEN:-<unset>}" >> "$STUB_LOG"
+    printf 'env-nocert-token:%s\n' "${NOCERT_TOKEN:-<unset>}" >> "$STUB_LOG"
     ;;
   exec)
     # Everything after -- is the guest command. /bin/true is the readiness
@@ -191,6 +193,8 @@ case "$verb" in
       *)
         printf 'env-token:%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}" >> "$STUB_LOG"
         printf 'env-home:%s\n' "${HOME:-<unset>}" >> "$STUB_LOG"
+        printf 'env-inventory-token:%s\n' "${INVENTORY_TOKEN:-<unset>}" >> "$STUB_LOG"
+        printf 'env-nocert-token:%s\n' "${NOCERT_TOKEN:-<unset>}" >> "$STUB_LOG"
         # The agent (or login shell) exec. STUB_EXEC_EXIT makes it exit non-zero,
         # which is how the --json case drives the child path: brig runs this as a
         # child rather than replacing itself, so it survives to report the status.
@@ -1059,6 +1063,12 @@ go test -c -o "$WORK/brig-broker-helper.test" ./cmd/brig-broker || { echo "build
 printf '#!/bin/sh\nBRIG_TEST_BROKER_HELPER=1 BRIG_TEST_UPSTREAM_LOG=%q exec %q -test.run=%q -- "$@"\n' \
   "$WORK/helper-upstream.log" "$WORK/brig-broker-helper.test" '^TestBrokerHelperProcess$' > "$WORK/brig-broker-helper"
 chmod +x "$WORK/brig-broker-helper"
+# The same test binary, with an upstream that demands a client certificate.
+# brig's broker environment forwards no BRIG_TEST_* variable, so the switch
+# is baked into a second wrapper.
+printf '#!/bin/sh\nBRIG_TEST_BROKER_HELPER=1 BRIG_TEST_UPSTREAM_LOG=%q BRIG_TEST_MTLS_HOST=inventory.internal.example.com exec %q -test.run=%q -- "$@"\n' \
+  "$WORK/helper-upstream.log" "$WORK/brig-broker-helper.test" '^TestBrokerHelperProcess$' > "$WORK/brig-broker-helper-mtls"
+chmod +x "$WORK/brig-broker-helper-mtls"
 # brig refuses a routed run whose secret is not in its store, and the store of
 # whoever runs this is not the test's to fill. A routed run goes through
 # brig-stored instead: a test binary of cmd/brig that is brig itself, with a
@@ -1195,6 +1205,161 @@ done
 "$WORK/brig" policy detach claude-only claude-code > /dev/null 2>&1
 rm -f "$WORK/policies/claude-only.yaml"
 rm -rf "$ep_state"
+
+# A route with a client certificate. The broker presents inventory-client to
+# an upstream that requires one, and the upstream logs its subject. A route
+# with the same upstream and no client certificate is refused by that
+# upstream, and the broker answers 502. The key stays in the broker's store:
+# neither its audit log nor its log holds a PRIVATE KEY block.
+cat > "$WORK/policies/inventory-mtls.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: inventory-mtls
+spec:
+  routes:
+    - name: inventory
+      upstream: https://inventory.internal.example.com
+      inject:
+        tls:
+          clientCertificate: { secretRef: { name: inventory-client } }
+          ca: { secretRef: { name: example-root-ca } }
+      guest:
+        env:
+          INVENTORY_URL: "{route.url}"
+          INVENTORY_TOKEN: "{session.token}"
+      request:
+        allow:
+          methods: [GET]
+          paths: ["/v1/items", "/v1/items/*"]
+    - name: inventory-nocert
+      upstream: https://inventory.internal.example.com
+      credential:
+        secretRef: { name: claude-credentials }
+        field: claudeAiOauth.accessToken
+      inject:
+        headers:
+          set:
+            - { name: Authorization, value: "Bearer {value}" }
+        tls:
+          ca: { secretRef: { name: example-root-ca } }
+      guest:
+        env:
+          NOCERT_URL: "{route.url}"
+          NOCERT_TOKEN: "{session.token}"
+      request:
+        allow:
+          methods: [GET]
+          paths: ["/v1/items", "/v1/items/*"]
+YAML
+"$WORK/brig" policy attach inventory-mtls claude-code > /dev/null 2>&1
+mtls_state="$(mktemp -d "${TMPDIR:-/tmp}/bs.XXXXXX")"
+mtls_env=(BRIG_STATE_DIR="$mtls_state" BRIG_HYPERVISOR=hvi BRIG_BROKER_BIN="$WORK/brig-broker-helper-mtls"
+  BRIG_TEST_SECRETS='claude-credentials inventory-client example-root-ca')
+: > "$STUB_LOG"
+rm -f "$STUB_STATE".fed.*
+env "${mtls_env[@]}" "$WORK/brig-stored" run claude -d > "$WORK/mtls-on.out" 2>&1
+mtlsrc=$?
+mtlsgw="$(grep '^argv: network-gateway --socket' "$STUB_LOG")"
+mtlsaddr="$(printf '%s' "$mtlsgw" | sed -n 's/.*--host brig\.internal=\([0-9.]*\).*/\1/p')"
+mtlssock="$(printf '%s' "$mtlsgw" | sed -n "s/.*--divert ${mtlsaddr}:443=\\([^ ]*\\).*/\\1/p")"
+mtlsca="$STUB_STATE.fed._brig_ca_brig.pem"
+mtlstoken="$(sed -n 's/^env-inventory-token://p' "$STUB_LOG" | head -1)"
+mtlsnotoken="$(sed -n 's/^env-nocert-token://p' "$STUB_LOG" | head -1)"
+ep_mtls='import socket, ssl, sys
+sock, addr, port, ca, token, method, path = sys.argv[1:8]
+s = socket.socket(socket.AF_UNIX); s.connect(sock)
+s.sendall(("BRIG-DIVERT/1 %s %s 198.18.1.2 40000\n" % (addr, port)).encode())
+ctx = ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+try:
+    t = ctx.wrap_socket(s, server_hostname="brig.internal")
+except (ssl.SSLError, OSError) as e:
+    print("tls-failed", type(e).__name__); sys.exit(0)
+t.sendall(("%s %s HTTP/1.1\r\nHost: brig.internal\r\nAuthorization: Bearer %s\r\n"
+           "Connection: close\r\n\r\n" % (method, path, token)).encode())
+print(t.recv(64).decode(errors="replace").split("\r\n")[0])'
+if [ "$mtlsrc" != 0 ] || [ -z "$mtlssock" ] || [ ! -S "$mtlssock" ] || [ -z "$mtlstoken" ] || [ -z "$mtlsnotoken" ]; then
+  bad "a run with a client certificate route did not start: rc $mtlsrc: $(cat "$WORK/mtls-on.out"); gateway: $mtlsgw"
+else
+  : > "$WORK/helper-upstream.log"
+  mtlsown="$(python3 -c "$ep_mtls" "$mtlssock" "$mtlsaddr" 443 "$mtlsca" "$mtlstoken" GET /brig-claude-code/r/inventory/v1/items 2>&1)"
+  mtlsown_log="$(cat "$WORK/helper-upstream.log")"
+  : > "$WORK/helper-upstream.log"
+  mtlsno="$(python3 -c "$ep_mtls" "$mtlssock" "$mtlsaddr" 443 "$mtlsca" "$mtlsnotoken" GET /brig-claude-code/r/inventory-nocert/v1/items 2>&1)"
+  mtlsno_log="$(cat "$WORK/helper-upstream.log")"
+  case "$mtlsown" in
+    "HTTP/1.1 200 "*)
+      if printf '%s\n' "$mtlsown_log" | grep '"peer":"inventory-client"' | grep -q '/v1/items'; then
+        ok "an endpoint run presents the route's client certificate, and the mTLS upstream sees its subject"
+      else
+        bad "the mTLS upstream did not log the subject inventory-client: $mtlsown_log"
+      fi
+      # The route has a certificate and no credential, so the broker sets no
+      # header, and the guest's Authorization, which carries the session
+      # token, has to be dropped. The log holds each request's headers.
+      if [ -z "$mtlstoken" ] || [ -z "$mtlsown_log" ]; then
+        bad "no session token or no upstream log for the certificate-only route, so nothing shows the token stayed away"
+      elif printf '%s\n' "$mtlsown_log" | grep -qF -e '"Authorization"' -e "$mtlstoken"; then
+        bad "the upstream of a certificate-only route got an Authorization or the session token: $mtlsown_log"
+      else
+        ok "the upstream of a certificate-only route gets no Authorization and no session token"
+      fi ;;
+    *) bad "an endpoint run presents the route's client certificate, and the mTLS upstream sees its subject -- got: $mtlsown: $mtlsown_log" ;;
+  esac
+  mtlsaudit="$mtls_state/host/broker/audit.log"
+  mtlsblog="$mtls_state/host/broker/broker.log"
+  # The audit line of a request is written after its response is sent.
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    grep -s 'route=inventory-nocert' "$mtlsaudit" | grep -q 'status=502' && break
+    sleep 0.2
+  done
+  case "$mtlsno" in
+    "HTTP/1.1 502 "*)
+      if printf '%s' "$mtlsno_log" | grep -q '/v1/items'; then
+        bad "the mTLS upstream logged a request from a route with no client certificate: $mtlsno_log"
+      elif ! grep -s 'route=inventory-nocert' "$mtlsaudit" | grep -q 'check=tls\.handshake'; then
+        bad "the audit line of the route with no client certificate does not carry check=tls.handshake -- $(grep -s 'route=inventory-nocert' "$mtlsaudit")"
+      else
+        ok "a route with no client certificate is refused by the mTLS upstream with 502 and check=tls.handshake"
+      fi ;;
+    *) bad "a route with no client certificate is refused by the mTLS upstream with 502 -- got: $mtlsno: $mtlsno_log" ;;
+  esac
+  # What the runtime was fed holds nothing of the client certificate secret:
+  # no private key, and no mention of the secret. The CA the guest is handed
+  # is fed, so an empty listing would mean the capture is broken, and not
+  # that the key stayed on the host.
+  mtlsfed_bad=""
+  mtlsfed_n=0
+  for mtlsfed in "$STUB_STATE".fed.*; do
+    [ -e "$mtlsfed" ] || continue
+    mtlsfed_n=$((mtlsfed_n + 1))
+    if grep -qs -e 'PRIVATE KEY' -e 'inventory-client' -e 'example-root-ca' "$mtlsfed"; then
+      mtlsfed_bad="$mtlsfed_bad ${mtlsfed##*/}"
+    fi
+  done
+  if [ ! -s "$mtlsca" ] || [ "$mtlsfed_n" = 0 ]; then
+    bad "the runtime was fed no files in the client certificate run, so nothing shows the key stayed on the host"
+  elif [ -n "$mtlsfed_bad" ]; then
+    bad "the runtime was fed the client certificate secret:$mtlsfed_bad"
+  else
+    ok "the runtime is fed nothing of the client certificate secret"
+  fi
+  if grep -qs 'PRIVATE KEY' "$mtlsaudit" "$mtlsblog"; then
+    bad "the client key reached the broker's audit or log"
+  elif ! grep 'inventory' "$mtlsaudit" 2>/dev/null | grep -q 'cert=sha256:'; then
+    bad "the broker's audit has no line for route inventory carrying cert=sha256: -- $(cat "$mtlsaudit" 2>&1)"
+  else
+    ok "the client key never reaches the broker's audit or log"
+  fi
+fi
+env "${mtls_env[@]}" "$WORK/brig" rm --all -y > /dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -e "$mtls_state/host/broker/broker.pid" ] || break
+  sleep 0.3
+done
+"$WORK/brig" policy detach inventory-mtls claude-code > /dev/null 2>&1
+rm -f "$WORK/policies/inventory-mtls.yaml"
+rm -rf "$mtls_state"
 
 # Whatever a failed case above left behind outlives this script otherwise.
 pkill -f "$BRIG_GATEWAY_DIR/" > /dev/null 2>&1
