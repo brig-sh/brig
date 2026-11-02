@@ -209,12 +209,13 @@ type route struct {
 	spec     v1alpha1.Route
 	upstream *url.URL
 
-	// tr is the transport of a route with inject.tls, built on first use for
-	// this sandbox alone, and caSum the digest of the CA bundle it was built
-	// with. tlsMu guards both.
-	tlsMu sync.Mutex
-	tr    *http.Transport
-	caSum [32]byte
+	// cur is the transport of a route with inject.tls, built on first use for
+	// this sandbox alone and replaced when the CA bundle or the certificate
+	// it was built for changes. closed is set when the sandbox goes, and no
+	// transport is built after it. tlsMu guards both.
+	tlsMu  sync.Mutex
+	cur    *tlsTransport
+	closed bool
 }
 
 // New returns a Handler built from cfg.
@@ -304,7 +305,7 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		if _, dup := sb.routes[name]; dup {
 			return fmt.Errorf("sandbox %s: route %s is registered twice", s.ID, name)
 		}
-		if r.Route.Credential == nil || r.Route.Inject == nil {
+		if r.Route.Inject == nil || (r.Route.Credential == nil && !r.Route.Inject.CertificateOnly()) {
 			return fmt.Errorf("sandbox %s: route %s is not expanded; pass it through policy.ExpandRoute", s.ID, name)
 		}
 		if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint && !slices.Contains(s.Modes, m) {
@@ -337,6 +338,7 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 	h.mu.Unlock()
 	if old != nil {
 		old.closeTransports()
+		h.pruneCerts()
 	}
 	return nil
 }
@@ -370,6 +372,7 @@ func (h *Handler) RemoveSandbox(id string) {
 	h.mu.Unlock()
 	if old != nil {
 		old.closeTransports()
+		h.pruneCerts()
 	}
 }
 
