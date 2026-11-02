@@ -1810,3 +1810,29 @@ func TestUnicodeLookalikesAreRefused(t *testing.T) {
 	resp, _ := r.do("GET", "/brig-a/r/inventory/v2/public/caf%C3%A9", bearer(r.mint("brig-a", "inventory")), "")
 	wantStatus(t, resp, http.StatusOK)
 }
+
+// git's libcurl sends credentials only after a Basic challenge, so a 401 on
+// a route that carries the token as a basic-auth password must carry one.
+// A header route gets none.
+func TestRefusedTokenOnABasicAuthRouteChallenges(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, claudeRoutes(t, up))
+	for _, h := range []http.Header{nil, {"Authorization": {"Basic eC1hY2Nlc3MtdG9rZW46bm90LWEtdG9rZW4="}}} {
+		resp, body := r.do("GET", "/brig-a/r/github/brig-sh/brig.git/info/refs", h, "")
+		wantStatus(t, resp, http.StatusUnauthorized)
+		if got := resp.Header.Get("WWW-Authenticate"); got != `Basic realm="brig"` {
+			t.Errorf("WWW-Authenticate = %q, want a Basic challenge", got)
+		}
+		if body != "brig broker: the session token was refused\n" {
+			t.Errorf("body = %q", body)
+		}
+	}
+	resp, _ := r.do("POST", "/brig-a/r/anthropic/v1/messages", nil, "{}")
+	wantStatus(t, resp, http.StatusUnauthorized)
+	if got := resp.Header.Get("WWW-Authenticate"); got != "" {
+		t.Errorf("a bearer route sent WWW-Authenticate %q", got)
+	}
+	if n := up.count(); n != 0 {
+		t.Fatalf("the upstream saw %d requests", n)
+	}
+}

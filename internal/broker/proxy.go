@@ -106,13 +106,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	token := sessionToken(rt.spec.Inject, r.Header)
 	if token == "" {
 		a.check = errTokenMissing.Error()
-		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
+		refuseToken(rec, rt)
 		return
 	}
 	c, err := verify(sb.key, token, p.sandbox, p.route, h.now())
 	if err != nil {
 		a.check = err.Error()
-		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
+		refuseToken(rec, rt)
 		return
 	}
 	wl := sb.workload(c.Session)
@@ -150,7 +150,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	if !now.Before(time.Unix(c.Exp, 0)) {
 		a.check = errTokenExpired.Error()
-		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
+		refuseToken(rec, rt)
 		return
 	}
 	hit, partial, err := findPlaceholder(sb.matcher(now), r, p, rt.spec.Inject, token, held)
@@ -494,6 +494,19 @@ func canonical(rest, escapedRest string, repos bool) bool {
 		}
 	}
 	return true
+}
+
+// refuseToken answers 401 for a session token that is missing, forged or
+// expired. A route that carries the token as a basic-auth password also
+// sends a Basic challenge: git's libcurl offers credentials only after one,
+// so without it the client never sends the token and fails with
+// "Authentication failed". A route that carries the token in a header gets
+// no challenge, since its client sends the header up front.
+func refuseToken(w http.ResponseWriter, rt *route) {
+	if rt.spec.Inject != nil && rt.spec.Inject.BasicAuth != nil {
+		w.Header().Set("WWW-Authenticate", `Basic realm="brig"`)
+	}
+	http.Error(w, "brig broker: the session token was refused", http.StatusUnauthorized)
 }
 
 // recorder keeps the status a response was sent with, for the audit line.
