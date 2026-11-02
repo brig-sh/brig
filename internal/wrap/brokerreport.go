@@ -77,6 +77,10 @@ func (c *Config) brokerLine() string {
 	}
 	parts := []string{fmt.Sprintf("transport %s, routes %s", transport, strings.Join(names, ", "))}
 	switch st, ok := c.routeBroker().Status(); {
+	case c.tlsRefusal() != nil:
+		// inject.tls is refused until the broker serves it; say that, not a
+		// transport fault the run does not have.
+		parts = append(parts, "refused: "+c.tlsRefusal().Error())
 	case c.modeRefusal() != nil:
 		parts = append(parts, "refused: a route is in a mode this run cannot serve; brig info --json says why")
 	case c.routeRefusal() != nil:
