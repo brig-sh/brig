@@ -49,6 +49,9 @@ func TestParseClientCertificateBuildsTheChainInAnyOrder(t *testing.T) {
 			if want := strings.Count(string(value), "BEGIN CERTIFICATE") - 2; cc.NotSent != want {
 				t.Errorf("NotSent %d, want %d", cc.NotSent, want)
 			}
+			if len(cc.Unsent) != cc.NotSent || (cc.NotSent == 1 && cc.Unsent[0] != root.Cert.Subject.String()) {
+				t.Errorf("Unsent %v, want the root alone or nothing", cc.Unsent)
+			}
 		})
 	}
 }
