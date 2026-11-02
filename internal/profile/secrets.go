@@ -16,6 +16,10 @@ const (
 	SourceKeychain = "keychain"
 	SourceFile     = "file"
 	SourceEnv      = "env"
+	// SourceAWS imports a pointer at the host's own AWS profile, never keys.
+	// It carries no locator: the profile is shared, and which local AWS
+	// profile to use is for each machine to say at import.
+	SourceAWS = "aws"
 )
 
 // Source is one place a secret's value can be imported from.
@@ -61,6 +65,7 @@ func (s Source) locatorValue() string {
 	case SourceEnv:
 		return s.Var
 	}
+	// SourceAWS has none: its Locator is "aws:".
 	return ""
 }
 

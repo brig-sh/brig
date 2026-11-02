@@ -158,3 +158,30 @@ func TestFilesParsesNowThatItIsDelivered(t *testing.T) {
 		t.Errorf("got %+v", p.Files)
 	}
 }
+
+// The pointer a `from: aws` import stores names the machine's own AWS
+// profile, which a shared profile cannot, so the source carries no locator of
+// its own. One that did would read as a working chain and resolve nothing.
+func TestAWSSourceTakesNoLocator(t *testing.T) {
+	for _, field := range []string{"service", "path", "var"} {
+		p := Profile{Secrets: []SecretDecl{{Name: "aws-creds"}}}
+		switch field {
+		case "service":
+			p.Secrets[0].Sources = []Source{{From: SourceAWS, Service: "x"}}
+		case "path":
+			p.Secrets[0].Sources = []Source{{From: SourceAWS, Path: "/x"}}
+		case "var":
+			p.Secrets[0].Sources = []Source{{From: SourceAWS, Var: "X"}}
+		}
+		if err := p.validateBindings(); err == nil || !strings.Contains(err.Error(), field) {
+			t.Errorf("from: aws with %s: = %v; want a refusal naming it", field, err)
+		}
+	}
+	bare := Profile{Secrets: []SecretDecl{{Name: "aws-creds", From: SourceAWS}}}
+	if err := bare.validateBindings(); err != nil {
+		t.Fatalf("bare from: aws refused: %v", err)
+	}
+	if got := bare.Secrets[0].SourceList()[0].Locator(); got != "aws:" {
+		t.Errorf("Locator() = %q, want %q", got, "aws:")
+	}
+}
