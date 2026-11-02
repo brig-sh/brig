@@ -419,6 +419,11 @@ taken from the replay budget, 64 MiB for all requests at once, which
 
 A 401 body does not say which check failed. The audit line does.
 
+On a `basicAuth` route, such as `github-token`, a 401 for the session token
+also carries `WWW-Authenticate: Basic realm="brig"`. git offers credentials
+only after a challenge, so without it a clone through the route fails. A route
+that carries the token in a header gets no challenge.
+
 A 502 body does not carry the error of the secret backend.
 
 ## `request.allow`
