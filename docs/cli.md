@@ -706,14 +706,18 @@ brig secret create gh-token
 name in your keyring.
 
 ```
-brig secret create <name> [-f FILE]
-brig secret update <name> [-f FILE]
+brig secret create <name> [-f FILE] [--type tls|ca]
+brig secret update <name> [-f FILE] [--type tls|ca]
 brig secret read <name>
 brig secret delete <name> [-y]
 brig secret ls
 brig secret import <agent>
 brig secret import <agent> <name>
 ```
+
+`--type tls` checks the value as a client certificate with its key, and
+`--type ca` as a bundle of CA certificates. See
+[Getting a value in](secrets.md#getting-a-value-in).
 
 Fill every secret that the profile of an agent declares, from your host,
 once:
