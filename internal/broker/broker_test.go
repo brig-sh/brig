@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -28,9 +30,16 @@ import (
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/testpki"
+	"github.com/brig-sh/brig/internal/tlspem"
 )
 
 var testHostKey = bytes.Repeat([]byte{7}, 32)
+
+// rigStart is the time of the clock of a test broker. A client certificate a
+// test stores is valid around it, because the broker checks the certificate
+// against that clock.
+var rigStart = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
 // Fake values only. The audit test looks for each of them.
 const (
@@ -63,7 +72,59 @@ func newFakeCreds() *fakeCreds {
 		"anthropic-api-key":  []byte(fakeAPIKey),
 		"gh-token":           []byte(fakeGHToken),
 		"inventory-token":    []byte(`{"token":"fake-inventory-token","expires":1}`),
+		"inventory-client":   append(bytes.Clone(pki().clientCert), pki().clientKey...),
+		"example-root-ca":    pki().ca.PEM,
 	}, renewTo: oauthDoc(fakeFresh)}
+}
+
+// set replaces the bytes of the secret name, as a rotation does.
+func (f *fakeCreds) set(name string, doc []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.docs[name] = doc
+}
+
+// drop removes the secret name.
+func (f *fakeCreds) drop(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.docs, name)
+}
+
+// testPKI is one CA, a server certificate for the mTLS upstreams, and the
+// client certificate the fake store holds as inventory-client.
+type testPKI struct {
+	ca         *testpki.CA
+	server     tls.Certificate
+	clientCert []byte
+	clientKey  []byte
+}
+
+var pki = sync.OnceValue(func() *testPKI {
+	ca, err := testpki.NewCA("brig test root")
+	if err != nil {
+		panic(err)
+	}
+	srv, err := ca.Server()
+	if err != nil {
+		panic(err)
+	}
+	c, k, err := ca.Client("inventory-client", rigStart.Add(-time.Hour), rigStart.AddDate(1, 0, 0))
+	if err != nil {
+		panic(err)
+	}
+	return &testPKI{ca: ca, server: srv, clientCert: c, clientKey: k}
+})
+
+// clientChain returns the stored form of a client certificate: the leaf and
+// then the key.
+func clientChain(t *testing.T, ca *testpki.CA, cn string, notBefore, notAfter time.Time) []byte {
+	t.Helper()
+	c, k, err := ca.Client(cn, notBefore, notAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(bytes.Clone(c), k...)
 }
 
 func (f *fakeCreds) Resolve(_ context.Context, name string, _ secret.Workload) ([]byte, error) {
@@ -106,6 +167,10 @@ type seen struct {
 	method, path, rawQuery, host string
 	header                       http.Header
 	body                         string
+	// peer is the common name of the client certificate the request came
+	// with, or "". peerFP is its audit fingerprint, and proto the protocol
+	// the request arrived in.
+	peer, peerFP, proto string
 }
 
 // upstream is an httptest TLS server that records every request.
@@ -113,9 +178,52 @@ type upstream struct {
 	*httptest.Server
 	mu   sync.Mutex
 	reqs []seen
+	// opened and closed count the connections the server accepted and saw
+	// closed. They are set only on an mTLS upstream.
+	opened, closed atomic.Int64
 }
 
+// conns is the number of connections the server accepted, handshake failures
+// included.
+func (u *upstream) conns() int { return int(u.opened.Load()) }
+
 func newUpstream(t *testing.T, h http.HandlerFunc) *upstream {
+	return startUpstream(t, h, nil)
+}
+
+// newMTLSUpstream is an upstream that takes only a client certificate that
+// clientCAs vouches for, and counts its connections.
+func newMTLSUpstream(t *testing.T, serverCert tls.Certificate, clientCAs *x509.CertPool, h http.HandlerFunc) *upstream {
+	return newMTLSUpstreamProto(t, serverCert, clientCAs, h, false)
+}
+
+// newMTLSUpstreamH2 is newMTLSUpstream for an upstream that speaks HTTP/2, as
+// most of the APIs behind a company PKI do. With TLS 1.3 it reports a refused
+// client certificate differently from an HTTP/1.1 one.
+func newMTLSUpstreamH2(t *testing.T, serverCert tls.Certificate, clientCAs *x509.CertPool, h http.HandlerFunc) *upstream {
+	return newMTLSUpstreamProto(t, serverCert, clientCAs, h, true)
+}
+
+func newMTLSUpstreamProto(t *testing.T, serverCert tls.Certificate, clientCAs *x509.CertPool, h http.HandlerFunc, http2 bool) *upstream {
+	return startUpstream(t, h, func(u *upstream) {
+		u.EnableHTTP2 = http2
+		u.TLS = &tls.Config{
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			ClientCAs:    clientCAs,
+			Certificates: []tls.Certificate{serverCert},
+		}
+		u.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+			switch st {
+			case http.StateNew:
+				u.opened.Add(1)
+			case http.StateClosed:
+				u.closed.Add(1)
+			}
+		}
+	})
+}
+
+func startUpstream(t *testing.T, h http.HandlerFunc, tune func(*upstream)) *upstream {
 	t.Helper()
 	u := &upstream{}
 	if h == nil {
@@ -124,13 +232,21 @@ func newUpstream(t *testing.T, h http.HandlerFunc) *upstream {
 	u.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		u.mu.Lock()
-		u.reqs = append(u.reqs, seen{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, r.Host, r.Header.Clone(), string(body)})
+		var peer, peerFP string
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			peer = r.TLS.PeerCertificates[0].Subject.CommonName
+			peerFP = tlspem.Fingerprint(r.TLS.PeerCertificates[0])
+		}
+		u.reqs = append(u.reqs, seen{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, r.Host, r.Header.Clone(), string(body), peer, peerFP, r.Proto})
 		u.mu.Unlock()
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		h(w, r)
 	}))
 	// The TLS failure test makes the server log a refused handshake.
 	u.Config.ErrorLog = log.New(io.Discard, "", 0)
+	if tune != nil {
+		tune(u)
+	}
 	u.StartTLS()
 	t.Cleanup(u.Close)
 	return u
@@ -254,13 +370,52 @@ type rig struct {
 
 type rigOption func(*Config)
 
+// withTransport sets the base transport of the broker.
+func withTransport(tr http.RoundTripper) rigOption {
+	return func(c *Config) { c.Transport = tr }
+}
+
+// withSandboxes replaces the sandboxes of the rig.
+func withSandboxes(sbs ...Sandbox) rigOption {
+	return func(c *Config) { c.Sandboxes = sbs }
+}
+
+// certRoute is an expanded route to upstream that presents the client
+// certificate in the secret certSecret and, when caSecret is set, trusts the
+// CA in that secret alone. withCredential gives it the inventory token as
+// well.
+func certRoute(t *testing.T, name, upstream, certSecret, caSecret string, withCredential bool) Route {
+	t.Helper()
+	in := v1alpha1.Route{
+		Name:     name,
+		Upstream: upstream,
+		Inject:   &v1alpha1.Inject{TLS: &v1alpha1.TLSInject{}},
+		Guest:    &v1alpha1.Guest{Env: map[string]string{"INVENTORY_URL": "{route.url}", "INVENTORY_TOKEN": "{session.token}"}},
+	}
+	if certSecret != "" {
+		in.Inject.TLS.ClientCertificate = &v1alpha1.CertificateRef{SecretRef: v1alpha1.SecretRef{Name: certSecret}}
+	}
+	if caSecret != "" {
+		in.Inject.TLS.CA = &v1alpha1.CertificateRef{SecretRef: v1alpha1.SecretRef{Name: caSecret}}
+	}
+	if withCredential {
+		in.Credential = &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "inventory-token"}, Field: "token"}
+		in.Inject.Headers = &v1alpha1.HeaderInject{Set: []v1alpha1.Header{{Name: "X-Api-Key", Value: "{value}"}}}
+	}
+	r, err := policy.ExpandRoute(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Route{Policy: "inventory-mtls", Route: r}
+}
+
 func newRig(t *testing.T, up *upstream, routes []Route, opts ...rigOption) *rig {
 	t.Helper()
 	r := &rig{
 		t:     t,
 		up:    up,
 		creds: newFakeCreds(),
-		clock: &fakeClock{t: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)},
+		clock: &fakeClock{t: rigStart},
 		audit: &syncBuffer{},
 	}
 	cfg := Config{

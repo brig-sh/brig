@@ -1180,21 +1180,6 @@ func checkPolicy(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", p.Name, err)
 	}
-	// inject.tls parses and validates, but this build presents no
-	// certificate and pins no CA. A boot refuses it (see TLSRefusal), and so
-	// does check.
-	if err := wrap.TLSRefusal(routes, func(route string) string {
-		for _, lp := range loaded {
-			for _, r := range lp.Spec.Routes {
-				if r.Name == route {
-					return lp.Metadata.Name
-				}
-			}
-		}
-		return route
-	}, runtime.RunPath{}); err != nil {
-		return fmt.Errorf("brig refuses the run before boot: %w", err)
-	}
 	// A boot refuses a route that its run path cannot serve, so check says
 	// so before one is tried. A microVM or a container guest reaches an
 	// endpoint route at brig.internal on its own gateway. See routeRefusal in

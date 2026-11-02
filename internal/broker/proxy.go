@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -10,14 +11,17 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/tlspem"
 )
 
 // maxReplay is the largest request body held before the request goes
@@ -218,33 +222,43 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cred := rt.spec.Credential
-	doc, err := h.creds.Resolve(r.Context(), cred.SecretRef.Name, wl)
-	if err != nil {
-		a.check = "credential"
-		msg := "brig broker: the credential of route " + p.route + " could not be resolved"
-		if errors.Is(err, secret.ErrUnsupported) {
-			// The one reason the guest can act on: the host has no store.
-			msg += ": brig's secret store is not available on this host; see the broker log"
+	// A route that presents a client certificate and sets no header has no
+	// credential: the certificate is its identity, and it is read when the
+	// request goes upstream.
+	var (
+		doc   []byte
+		value string
+	)
+	if cred := rt.spec.Credential; cred != nil {
+		doc, err = h.creds.Resolve(r.Context(), cred.SecretRef.Name, wl)
+		if err != nil {
+			a.check = "credential"
+			msg := "brig broker: the credential of route " + p.route + " could not be resolved"
+			if errors.Is(err, secret.ErrUnsupported) {
+				// The one reason the guest can act on: the host has no store.
+				msg += ": brig's secret store is not available on this host; see the broker log"
+			}
+			http.Error(rec, msg, http.StatusBadGateway)
+			return
 		}
-		http.Error(rec, msg, http.StatusBadGateway)
-		return
-	}
-	if vends {
-		h.vend(rec, r, a, p, doc)
-		return
-	}
-	if h.vendDoc != nil && h.vendDoc(doc) {
-		a.check = "credential.vendonly"
-		http.Error(rec, "brig broker: the credential of route "+p.route+" is for a route that vends, "+
-			"such as one on the aws preset", http.StatusBadGateway)
-		return
-	}
-	value, err := credentialValue(cred, doc)
-	if err != nil {
-		a.check = "credential"
-		http.Error(rec, "brig broker: the credential of route "+p.route+" could not be resolved", http.StatusBadGateway)
-		return
+		// A route that vends always has a credential: the aws preset takes
+		// no inject, so it cannot be a route with a certificate alone.
+		if vends {
+			h.vend(rec, r, a, p, doc)
+			return
+		}
+		if h.vendDoc != nil && h.vendDoc(doc) {
+			a.check = "credential.vendonly"
+			http.Error(rec, "brig broker: the credential of route "+p.route+" is for a route that vends, "+
+				"such as one on the aws preset", http.StatusBadGateway)
+			return
+		}
+		value, err = credentialValue(cred, doc)
+		if err != nil {
+			a.check = "credential"
+			http.Error(rec, "brig broker: the credential of route "+p.route+" could not be resolved", http.StatusBadGateway)
+			return
+		}
 	}
 	h.forward(rec, r, a, p, rt, token, wl, doc, value, held)
 }
@@ -254,8 +268,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, p routePath, rt *route,
 	token string, wl secret.Workload, doc []byte, value string, held *heldBody) {
 	in := rt.spec.Inject
-	trip := &upstreamTrip{h: h, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
+	trip := &upstreamTrip{h: h, route: rt, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
 	trip.addSecret(value)
+	// After the response has been copied: a transport that a rotation retired
+	// while this request was on it closes its connections now.
+	defer trip.done()
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = &url.URL{
@@ -289,6 +306,21 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 				a.check = "response.encoding"
 				http.Error(w, "brig broker: the upstream of route "+p.route+" sent a body in an encoding the broker cannot read",
 					http.StatusBadGateway)
+				return
+			}
+			// The sandbox went between the lookup of the route and the dial.
+			// It is answered as a sandbox the broker no longer serves.
+			if errors.Is(err, errRouteClosed) {
+				a.check = "sandbox"
+				http.Error(w, "brig broker: no such route", http.StatusNotFound)
+				return
+			}
+			// A failure of the TLS side names its check and a fixed body,
+			// and leaves the cause out of both.
+			var tf *tlsFailure
+			if errors.As(err, &tf) {
+				a.check = tf.check
+				http.Error(w, tlsBody(p.route, tf.check), http.StatusBadGateway)
 				return
 			}
 			a.check = "upstream"
@@ -327,6 +359,7 @@ func upgrade(h http.Header) bool {
 // more.
 type upstreamTrip struct {
 	h        *Handler
+	route    *route
 	cred     *v1alpha1.CredentialRef
 	inject   *v1alpha1.Inject
 	workload secret.Workload
@@ -338,11 +371,30 @@ type upstreamTrip struct {
 	// secrets are the exact strings the broker put on the upstream request
 	// that carry a credential. The response is redacted of each.
 	secrets []string
+	// tt is the transport of a route with inject.tls, with the certificate it
+	// presents, picked on the first round trip. A retry after a 401 uses the
+	// same one, and the audit line names the certificate of this transport:
+	// the one the connection carried.
+	tt *tlsTransport
+}
+
+// done ends the request's use of its transport. A transport that a rotation
+// retired meanwhile closes its connections after the last request that held
+// it.
+func (u *upstreamTrip) done() {
+	if u.tt != nil {
+		u.route.release(u.tt)
+	}
 }
 
 // addSecret records the strings that injecting value puts on the request:
 // value itself and, on a basicAuth route, the base64 the header carries.
 func (u *upstreamTrip) addSecret(value string) {
+	// A route without a credential injects nothing, and an empty string
+	// would match every position of a body.
+	if value == "" {
+		return
+	}
 	u.secrets = append(u.secrets, value)
 	if u.inject.BasicAuth != nil {
 		raw := u.inject.BasicAuth.Username + ":" + value
@@ -351,11 +403,77 @@ func (u *upstreamTrip) addSecret(value string) {
 }
 
 func (u *upstreamTrip) renewable() bool {
-	return u.h.renewer != nil && u.cred.Lifecycle != ""
+	return u.cred != nil && u.h.renewer != nil && u.cred.Lifecycle != ""
+}
+
+// prepareTLS resolves the CA and the client certificate of the route, and
+// picks its transport. Both are read for every request, like a header
+// credential, and cached by their bytes.
+func (u *upstreamTrip) prepareTLS(ctx context.Context) error {
+	t := u.inject.TLS
+	var (
+		pool *x509.CertPool
+		sum  [32]byte
+	)
+	if t.CA != nil {
+		var err error
+		if pool, sum, err = u.h.caPool(ctx, t.CA.SecretRef.Name, u.workload); err != nil {
+			return &tlsFailure{check: "tls.ca", cause: err}
+		}
+	}
+	var cc *tlspem.ClientCertificate
+	if t.ClientCertificate != nil {
+		var err error
+		cc, err = u.h.clientCertificate(ctx, t.ClientCertificate.SecretRef.Name, u.workload)
+		if err != nil {
+			return &tlsFailure{check: certCheck(err), cause: err}
+		}
+	}
+	tt, err := u.h.routeTransport(u.route, pool, sum, cc)
+	if err != nil {
+		return err
+	}
+	u.tt = tt
+	// The audit line names the certificate of the transport. That is the one
+	// the connection presents, since a transport is built for one chain.
+	if tt.leaf != nil {
+		u.audit.cert = tt.leaf.fingerprint
+		u.audit.certNotAfter = tt.leaf.notAfter
+	}
+	return nil
+}
+
+// send makes one upstream round trip. A route with inject.tls goes through
+// the transport of its sandbox and route, which presents the certificate it
+// was built with; any other goes through the shared one.
+func (u *upstreamTrip) send(req *http.Request) (*http.Response, error) {
+	if u.inject.TLS == nil {
+		return u.h.transport.RoundTrip(req)
+	}
+	if u.tt == nil {
+		if err := u.prepareTLS(req.Context()); err != nil {
+			return nil, err
+		}
+	}
+	resp, newConn, err := roundTrip(u.tt.tr, req)
+	if err != nil && tlsHandshakeFailed(err, newConn) {
+		return nil, &tlsFailure{check: "tls.handshake", cause: err}
+	}
+	return resp, err
+}
+
+// roundTrip sends req on tr and reports whether the request rode a new
+// connection. A request that failed before it got a connection counts as on a
+// new one, since the failure was in setting one up.
+func roundTrip(tr http.RoundTripper, req *http.Request) (resp *http.Response, newConn bool, err error) {
+	var reused atomic.Bool
+	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { reused.Store(i.Reused) }}
+	resp, err = tr.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	return resp, !reused.Load(), err
 }
 
 func (u *upstreamTrip) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := u.h.transport.RoundTrip(req)
+	resp, err := u.send(req)
 	if err != nil || resp.StatusCode != http.StatusUnauthorized || !u.renewable() {
 		return resp, err
 	}
@@ -391,7 +509,7 @@ func (u *upstreamTrip) RoundTrip(req *http.Request) (*http.Response, error) {
 	injectCredential(u.inject, retry.Header, value)
 	u.addSecret(value)
 	u.audit.renew = "retried"
-	return u.h.transport.RoundTrip(retry)
+	return u.send(retry)
 }
 
 // renewed returns the document to retry with after an upstream 401. It
@@ -598,6 +716,9 @@ type auditLine struct {
 	// vended is the AccessKeyId a route that vends answered with. It is an
 	// identifier, never the secret key or the session token.
 	vended string
+	// cert and certNotAfter name the client certificate a request presented:
+	// a short digest of the leaf and its expiry. Never the certificate.
+	cert, certNotAfter string
 }
 
 // The longest method and path an audit line carries. Anything that reaches
@@ -669,6 +790,9 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 	}
 	if a.vended != "" {
 		attrs = append(attrs, slog.String("vended", a.vended))
+	}
+	if a.cert != "" {
+		attrs = append(attrs, slog.String("cert", a.cert), slog.String("cert.notAfter", a.certNotAfter))
 	}
 	h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
 }

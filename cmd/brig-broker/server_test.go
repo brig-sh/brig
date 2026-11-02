@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,7 @@ import (
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/renew"
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/testpki"
 )
 
 // Fake values only. Each test that looks for a leak looks for these.
@@ -1169,5 +1171,86 @@ func TestStatusNamesARecoveringSecret(t *testing.T) {
 	}
 	if _, err := r.store.Read(secret.JournalName("claude-credentials")); err != nil {
 		t.Errorf("the journal of a live broker was touched: %v", err)
+	}
+}
+
+// A route whose inject.tls holds a client certificate and no credential
+// registers over the control socket, and a request through it reaches an
+// upstream that takes no client without that certificate.
+func TestATLSOnlyRouteRegisters(t *testing.T) {
+	ca, err := testpki.NewCA("brig test root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverCert, err := ca.Server("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var peers []string
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		peers = append(peers, r.TLS.PeerCertificates[0].Subject.CommonName)
+		mu.Unlock()
+		_, _ = io.WriteString(w, "ok")
+	}))
+	srv.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: ca.Pool(),
+		Certificates: []tls.Certificate{serverCert}}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	// The base trusts the test CA alone and sends every origin to srv.
+	addr := srv.Listener.Addr().String()
+	base := &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+		TLSClientConfig: &tls.Config{RootCAs: ca.Pool(), ServerName: "example.com"},
+	}
+	r := startBrokerWith(t, serverConfig{dir: shortDir(t), renewerFor: noRenewer(t), logTo: io.Discard, transport: base}, nil)
+	certPEM, keyPEM, err := ca.Client("inventory-client", time.Now().Add(-time.Hour), time.Now().AddDate(1, 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.Create("inventory-client", append(certPEM, keyPEM...)); err != nil {
+		t.Fatal(err)
+	}
+
+	route := injector.Route{Policy: "inventory-mtls", Route: v1alpha1.Route{
+		Name:     "inventory",
+		Upstream: "https://inventory.internal.example.com",
+		Inject: &v1alpha1.Inject{TLS: &v1alpha1.TLSInject{
+			ClientCertificate: &v1alpha1.CertificateRef{SecretRef: v1alpha1.SecretRef{Name: "inventory-client"}},
+		}},
+		Guest: &v1alpha1.Guest{Env: map[string]string{"INVENTORY_URL": "{route.url}", "INVENTORY_TOKEN": "{session.token}"}},
+	}}
+	if err := r.client.AddSandbox(injector.Sandbox{ID: "brig-a", Profile: "x", Routes: []injector.Route{route}}); err != nil {
+		t.Fatalf("a certificate-only route was refused: %v", err)
+	}
+	token := r.mint(t, "brig-a", "inventory")
+	if got := r.send(t, "brig-a", "inventory", token, "/items"); got != http.StatusOK {
+		t.Fatalf("a request through the certificate-only route got %d", got)
+	}
+	mu.Lock()
+	got := slices.Clone(peers)
+	mu.Unlock()
+	if !slices.Equal(got, []string{"inventory-client"}) {
+		t.Fatalf("the upstream saw clients %v, want inventory-client", got)
+	}
+
+	// With the certificate gone from the store, the route is refused and the
+	// upstream sees nothing more.
+	if err := r.store.Delete("inventory-client"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.send(t, "brig-a", "inventory", token, "/items"); got != http.StatusBadGateway {
+		t.Fatalf("a request without its certificate got %d, want 502", got)
+	}
+	mu.Lock()
+	n := len(peers)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the upstream saw %d requests, want the one with a certificate", n)
 	}
 }

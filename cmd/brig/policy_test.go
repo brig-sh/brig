@@ -2258,9 +2258,7 @@ func TestCheckListsRoutesAndPosture(t *testing.T) {
 }
 
 // A route with inject.tls gets a tls row naming its secrets, between the
-// route line and the run-path rows; a route without one gets none. This build
-// does not serve inject.tls yet, so check prints the row and then refuses the
-// policy with exit 7, the code of a policy a run cannot enforce.
+// route line and the run-path rows; a route without one gets none.
 func TestCheckPrintsATLSRow(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_POLICY_DIR", dir)
@@ -2280,9 +2278,8 @@ func TestCheckPrintsATLSRow(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		var err error
 		out, err = captureStdout(t, func() error { return checkPolicy([]string{"claude-code"}) })
-		if exitCode(err) != exitCapability || err == nil ||
-			!strings.Contains(err.Error(), "inject.tls is not served by this build of brig") {
-			t.Fatalf("check exits %d (%v), want %d and the inject.tls refusal", exitCode(err), err, exitCapability)
+		if err != nil {
+			t.Fatal(err)
 		}
 	})
 	if out != "claude-only\ninventory-mtls\n" {
