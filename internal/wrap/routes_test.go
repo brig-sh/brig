@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/policy"
@@ -544,5 +546,43 @@ func TestServeRoutesHandsTheAWSRegionToTheGuest(t *testing.T) {
 	}
 	if v, ok := vars["AWS_CA_BUNDLE"]; ok {
 		t.Errorf("AWS_CA_BUNDLE = %q, want it unset", v.Value)
+	}
+}
+
+func certRoutes() []v1alpha1.Route {
+	ref := func(n string) *v1alpha1.CertificateRef {
+		return &v1alpha1.CertificateRef{SecretRef: v1alpha1.SecretRef{Name: n}}
+	}
+	return []v1alpha1.Route{
+		{Name: "inventory", Inject: &v1alpha1.Inject{TLS: &v1alpha1.TLSInject{
+			ClientCertificate: ref("inv-client"), CA: ref("inv-ca")}}},
+		{Name: "rootonly", Inject: &v1alpha1.Inject{TLS: &v1alpha1.TLSInject{CA: ref("only-ca")}}},
+		{Name: "plain", Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "tok"}}},
+	}
+}
+
+func TestBrokeredSecretsIncludeCertificates(t *testing.T) {
+	got := brokeredSecrets(certRoutes())
+	want := map[string]string{"inv-client": "inventory", "inv-ca": "inventory", "only-ca": "rootonly", "tok": "plain"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("brokeredSecrets = %v, want %v", got, want)
+	}
+	prof := profile.Profile{Files: []profile.FileBinding{{Ref: "secrets.inv-client"}}}
+	out, _, skipped := withRoutes(prof, nil, certRoutes())
+	if len(out.Files) != 0 {
+		t.Errorf("the certificate file binding stays: %+v", out.Files)
+	}
+	if !slices.Equal(skipped, []string{"inv-ca", "inv-client", "only-ca", "tok"}) {
+		t.Errorf("skipped = %v", skipped)
+	}
+}
+
+func TestRoutedByNamesACertificateRoute(t *testing.T) {
+	c := &Config{routes: certRoutes(), routePolicy: map[string]string{"inventory": "pol", "rootonly": "pol"}}
+	if got := c.routedBy([]string{"inv-client"}); got != "pol (route inventory)" {
+		t.Errorf("client certificate: %q", got)
+	}
+	if got := c.routedBy([]string{"only-ca"}); got != "pol (route rootonly)" {
+		t.Errorf("ca: %q", got)
 	}
 }
