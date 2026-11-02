@@ -187,9 +187,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// Before anything is prepared, and on the path that finds the sandbox up
 	// as well: a route whose secret the broker cannot read answers 502 to
 	// every request of the agent. The store is listed, never read.
-	if err := c.routeStoreRefusal(c.checkRouteStore()); err != nil {
+	routeStore := c.checkRouteStore()
+	if err := c.routeStoreRefusal(routeStore); err != nil {
 		return err
 	}
+	c.warnExpiringCertificates(routeStore)
 	// Said on the run, not in BuildEnv: BuildEnv resolves the set for every
 	// verb, brig env included, so a warning from there prints on a preview that
 	// spawns nothing and lands twice on env next to reportArgv. Here it is the
