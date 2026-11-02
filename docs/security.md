@@ -206,7 +206,7 @@ route that vends at `169.254.170.2`.
 | --- | --- |
 | `files:` | Writes the credential into the guest at the path the agent already reads |
 | `env:` | Binds the credential as an environment variable, for a credential whose consumer offers no file interface |
-| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
+| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The secrets of a route's `inject.tls`, a client certificate with its private key and a CA bundle, stay there too: the broker presents the certificate in its own TLS connection to the upstream. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
 
 `brig info --json` names the channel of each credential as its `source`:
 `environment`, `secret`, `file` or `broker`.
@@ -354,6 +354,12 @@ session token, which works through its route until it expires or the
 sandbox is stopped. On hull and nerdctl the guest also trusts the brig CA,
 for `brig.internal` alone. The `aws` route is not such an exception: its
 guest holds temporary AWS keys. See [The aws route](#the-aws-route).
+
+A route with a client certificate gives the token the certificate's
+identity. The guest never holds the key, but whoever holds the route's
+session token can send requests that the upstream sees as the certificate
+holder's. Only the route's `request.allow` limits which requests those are.
+Give such a route a `request.allow` as narrow as the certificate's purpose.
 
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
@@ -1418,3 +1424,8 @@ resolved credential is in its process memory as plaintext for the run's
 lifetime. Brig clears that memory on the way out. That is defence in depth,
 not a control. Brig does not claim to protect against a process that already
 holds your credentials in memory.
+
+**brig-broker.** The broker runs as you, on the host. It holds the private
+key of a route's client certificate in its process memory, parsed, while a
+registered route names the secret, and drops it when the last such route
+goes. A process that can read the broker's memory can read the key.

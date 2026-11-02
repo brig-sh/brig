@@ -256,7 +256,7 @@ the system roots. Only `ca` replaces them.
 The `clientCertificate` secret and the `ca` secret are resolved on each
 request, the way a header credential is, and neither reaches the guest. The
 broker caches each one by its bytes, so a changed secret is read again on the
-next request. The client key stays in the broker, which presents the
+next request. The client key never leaves the broker. The broker presents the
 certificate and signs the handshake with the key.
 
 The transport of a route is bound to the CA bundle and the certificate chain
