@@ -57,6 +57,11 @@ func (r *Route) validate(expanded bool) error {
 			return fmt.Errorf("mode: %w", err)
 		}
 	}
+	// A preset fills the route's inject, so a document cannot add a client
+	// certificate to it.
+	if r.Preset != "" && r.Inject != nil && r.Inject.TLS != nil {
+		return fmt.Errorf("a route with inject.tls takes no preset")
+	}
 	// A route as written without a preset has nothing to fill it, so it is
 	// held to the required fields too.
 	complete := expanded || r.Preset == ""
@@ -82,14 +87,39 @@ func (r *Route) validate(expanded bool) error {
 		return fmt.Errorf("upstream is required")
 	}
 
+	// inject.tls is checked first, so an empty block is named as such
+	// rather than as a missing credential.
+	if r.Inject != nil && r.Inject.TLS != nil {
+		if err := r.Inject.TLS.validate(); err != nil {
+			return err
+		}
+	}
+	// A route that injects only a client certificate has no credential to
+	// resolve; every other route needs one.
 	if r.Credential == nil {
-		return fmt.Errorf("credential.secretRef.name is required")
-	}
-	if r.Credential.Lifecycle != "" && !r.lifecycleFromPreset {
-		return fmt.Errorf("credential.lifecycle is set by a preset, and a policy does not name it")
-	}
-	if err := r.Credential.validate(); err != nil {
-		return err
+		if r.Inject == nil || !r.Inject.CertificateOnly() {
+			return fmt.Errorf("credential.secretRef.name is required")
+		}
+	} else {
+		if r.Credential.Lifecycle != "" && !r.lifecycleFromPreset {
+			return fmt.Errorf("credential.lifecycle is set by a preset, and a policy does not name it")
+		}
+		if err := r.Credential.validate(); err != nil {
+			return err
+		}
+		// A client certificate authenticates the connection; it does not
+		// carry the credential. Whatever inject.tls says, the credential
+		// needs a header or basicAuth, or it is resolved and never sent.
+		if complete && r.Inject != nil && !r.Inject.carriesCredential() {
+			switch {
+			case r.Inject.TLS != nil && r.Inject.TLS.ClientCertificate != nil:
+				return fmt.Errorf("credential is set, and inject.tls.clientCertificate does not carry it; "+
+					"add inject.headers.set with %s or inject.basicAuth, or drop credential", PlaceholderValue)
+			case r.Inject.TLS != nil:
+				return fmt.Errorf("credential is set, and inject.tls with only ca does not carry it; "+
+					"add inject.headers.set with %s or inject.basicAuth", PlaceholderValue)
+			}
+		}
 	}
 
 	if r.Inject != nil {
@@ -97,7 +127,7 @@ func (r *Route) validate(expanded bool) error {
 			return err
 		}
 	} else if complete {
-		return fmt.Errorf("inject is required: headers.set or basicAuth")
+		return fmt.Errorf("inject is required: headers.set, basicAuth or tls")
 	}
 
 	if r.Guest != nil {
@@ -174,7 +204,7 @@ func (c *CredentialRef) validate() error {
 	if c.SecretRef.Name == "" {
 		return fmt.Errorf("credential.secretRef.name is required")
 	}
-	if err := checkSecretName(c.SecretRef.Name); err != nil {
+	if err := checkSecretName("credential.secretRef.name", c.SecretRef.Name); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.Field) != c.Field {
@@ -194,9 +224,9 @@ const maxSecretName = 128
 // checkSecretName applies the grammar of a secret name. It is a copy of
 // internal/secret.ValidName, because a package under api/ does not import
 // internal/.
-func checkSecretName(name string) error {
+func checkSecretName(field, name string) error {
 	if len(name) > maxSecretName {
-		return fmt.Errorf("credential.secretRef.name %q is longer than %d characters", name, maxSecretName)
+		return fmt.Errorf("%s %q is longer than %d characters", field, name, maxSecretName)
 	}
 	for i := 0; i < len(name); i++ {
 		c := name[i]
@@ -204,11 +234,17 @@ func checkSecretName(name string) error {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
 		case (c >= '0' && c <= '9' || c == '_' || c == '-') && i > 0:
 		default:
-			return fmt.Errorf("credential.secretRef.name %q may use only letters, digits, - and _, "+
-				"and must start with a letter", name)
+			return fmt.Errorf("%s %q may use only letters, digits, - and _, "+
+				"and must start with a letter", field, name)
 		}
 	}
 	return nil
+}
+
+// carriesCredential reports whether a header or basicAuth is there to send
+// the route's credential upstream.
+func (in *Inject) carriesCredential() bool {
+	return (in.Headers != nil && len(in.Headers.Set) > 0) || in.BasicAuth != nil
 }
 
 // validate checks where the credential goes. complete requires that
@@ -216,11 +252,17 @@ func checkSecretName(name string) error {
 func (in *Inject) validate(complete, expanded bool) error {
 	h := in.Headers
 	setsHeaders := h != nil && len(h.Set) > 0
+	hasCert := in.TLS != nil && in.TLS.ClientCertificate != nil
 	switch {
 	case setsHeaders && in.BasicAuth != nil:
 		return fmt.Errorf("inject takes headers.set or basicAuth, not both")
-	case !setsHeaders && in.BasicAuth == nil && complete:
-		return fmt.Errorf("inject needs headers.set or basicAuth")
+	case !setsHeaders && in.BasicAuth == nil && !hasCert && complete:
+		return fmt.Errorf("inject needs headers.set, basicAuth or tls")
+	}
+	if in.TLS != nil {
+		if err := in.TLS.validate(); err != nil {
+			return err
+		}
 	}
 	if in.BasicAuth != nil {
 		u := in.BasicAuth.Username
@@ -238,6 +280,31 @@ func (in *Inject) validate(complete, expanded bool) error {
 	}
 	if expanded && (h == nil || !containsFold(h.Remove, "Authorization")) {
 		return fmt.Errorf("inject.headers.remove must hold Authorization")
+	}
+	return nil
+}
+
+// validate checks the secrets inject.tls names. Either one alone is enough
+// for the block to say something, and the names follow the grammar of every
+// secret name.
+func (t *TLSInject) validate() error {
+	if t.ClientCertificate == nil && t.CA == nil {
+		return fmt.Errorf("inject.tls needs clientCertificate or ca")
+	}
+	for _, ref := range []struct {
+		field string
+		ref   *CertificateRef
+	}{{"clientCertificate", t.ClientCertificate}, {"ca", t.CA}} {
+		if ref.ref == nil {
+			continue
+		}
+		field := "inject.tls." + ref.field + ".secretRef.name"
+		if ref.ref.SecretRef.Name == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+		if err := checkSecretName(field, ref.ref.SecretRef.Name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

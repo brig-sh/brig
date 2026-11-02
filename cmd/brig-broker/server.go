@@ -495,6 +495,10 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, rt := range sb.Routes {
+		if rt.Route.Credential == nil {
+			// A certificate-only route has no lifecycle to track.
+			continue
+		}
 		name := rt.Route.Credential.SecretRef.Name
 		created, err := s.creds.track(name, rt.Route.Credential.Lifecycle)
 		if err != nil {
