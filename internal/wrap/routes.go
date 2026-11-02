@@ -117,6 +117,9 @@ func (c *Config) routeRefusal() error {
 	if c.routesErr != nil {
 		return fmt.Errorf("the policies bound to %s cannot apply together: %w", c.Profile.Name, c.routesErr)
 	}
+	if err := c.tlsRefusal(); err != nil {
+		return err
+	}
 	if err := c.modeRefusal(); err != nil {
 		return err
 	}
