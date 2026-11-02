@@ -744,6 +744,18 @@ func printRoutes(p policy.Policy) {
 			mode = v1alpha1.ModeEndpoint
 		}
 		fmt.Fprintf(os.Stderr, "  route %s  preset %s  mode %s\n", r.Name, preset, mode)
+		// The row names the secrets so a reader can check the store holds
+		// them; it never reads a value.
+		if r.Inject != nil && r.Inject.TLS != nil {
+			row := "    tls"
+			if c := r.Inject.TLS.ClientCertificate; c != nil {
+				row += "  clientCertificate " + c.SecretRef.Name
+			}
+			if c := r.Inject.TLS.CA; c != nil {
+				row += "  ca " + c.SecretRef.Name
+			}
+			fmt.Fprintln(os.Stderr, row)
+		}
 		for _, rec := range runtime.ModeRecords(mode) {
 			fmt.Fprintf(os.Stderr, "    %s  %s\n", rec.Path, rec.Line())
 		}
