@@ -683,3 +683,111 @@ func TestAuthorizationValueAllowedInSet(t *testing.T) {
 		t.Error("a non-Authorization header in set and remove was accepted")
 	}
 }
+
+// inject.tls names two secrets. Decode keeps both names, and a key under tls
+// that is not one of the two is refused, as everywhere else in a route, so a
+// misspelt clientCertificate is never read as a route without one.
+func TestDecodeTLSFieldsStrictly(t *testing.T) {
+	head := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: a}\nspec:\n  routes:\n" +
+		"    - name: inventory\n      upstream: https://inventory.internal.example.com\n"
+	doc := head + "      inject:\n        tls:\n" +
+		"          clientCertificate: {secretRef: {name: inventory-client}}\n" +
+		"          ca: {secretRef: {name: example-root-ca}}\n"
+	p, err := Decode([]byte(doc))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	in := p.Spec.Routes[0].Inject
+	if in == nil || in.TLS == nil {
+		t.Fatalf("inject.tls was dropped: %+v", in)
+	}
+	if c := in.TLS.ClientCertificate; c == nil || c.SecretRef.Name != "inventory-client" {
+		t.Errorf("clientCertificate = %+v, want inventory-client", c)
+	}
+	if c := in.TLS.CA; c == nil || c.SecretRef.Name != "example-root-ca" {
+		t.Errorf("ca = %+v, want example-root-ca", c)
+	}
+
+	// encoding/json refuses a key that names no field. A key that folds onto
+	// a field name gets past it, and the exact-key pass names its path.
+	for _, c := range []struct{ name, tls, want string }{
+		{"an unknown key", "        tls: {cert: {secretRef: {name: a}}}\n",
+			`unknown field "cert"`},
+		{"a key in the wrong case", "        tls: {clientcertificate: {secretRef: {name: a}}}\n",
+			`unknown field "spec.routes[0].inject.tls.clientcertificate"`},
+		{"a key beside secretRef", "        tls: {ca: {secretRef: {name: a}, key: b}}\n",
+			`unknown field "key"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Decode([]byte(head + "      inject:\n" + c.tls))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("Decode = %v, want %q", err, c.want)
+			}
+		})
+	}
+}
+
+// A run expands and keeps its own copy of a route, so a copy that shared
+// inject.tls with the original would let an edit of one move the
+// certificate of the other.
+func TestRouteDeepCopyClonesTLS(t *testing.T) {
+	r := customRoute()
+	r.Inject.TLS = &TLSInject{
+		ClientCertificate: &CertificateRef{SecretRef: SecretRef{Name: "inventory-client"}},
+		CA:                &CertificateRef{SecretRef: SecretRef{Name: "example-root-ca"}},
+	}
+	c := r.DeepCopy()
+	if c.Inject.TLS == r.Inject.TLS {
+		t.Fatal("the copy shares inject.tls")
+	}
+	if c.Inject.TLS.ClientCertificate == r.Inject.TLS.ClientCertificate {
+		t.Fatal("the copy shares inject.tls.clientCertificate")
+	}
+	if c.Inject.TLS.CA == r.Inject.TLS.CA {
+		t.Fatal("the copy shares inject.tls.ca")
+	}
+	c.Inject.TLS.ClientCertificate.SecretRef.Name = "other-client"
+	c.Inject.TLS.CA.SecretRef.Name = "other-ca"
+	c.Inject.TLS.CA = nil
+	if got := r.Inject.TLS.ClientCertificate.SecretRef.Name; got != "inventory-client" {
+		t.Errorf("an edit of the copy moved the original's certificate to %q", got)
+	}
+	if r.Inject.TLS.CA == nil || r.Inject.TLS.CA.SecretRef.Name != "example-root-ca" {
+		t.Errorf("an edit of the copy moved the original's ca to %+v", r.Inject.TLS.CA)
+	}
+
+	// A route with only one of the two keeps the other unset.
+	r.Inject.TLS.CA = nil
+	if c := r.DeepCopy(); c.Inject.TLS.CA != nil || c.Inject.TLS.ClientCertificate == nil {
+		t.Errorf("DeepCopy of a certificate-only tls = %+v", c.Inject.TLS)
+	}
+}
+
+// CertificateOnly is what lets a route go without a credential, so it is
+// false whenever headers.set or basicAuth still carries one.
+func TestInjectCertificateOnly(t *testing.T) {
+	cert := &TLSInject{ClientCertificate: &CertificateRef{SecretRef: SecretRef{Name: "c"}}}
+	ca := &TLSInject{CA: &CertificateRef{SecretRef: SecretRef{Name: "ca"}}}
+	for _, c := range []struct {
+		name string
+		in   *Inject
+		want bool
+	}{
+		{"nil inject", nil, false},
+		{"no tls", &Inject{Headers: &HeaderInject{Remove: []string{"Authorization"}}}, false},
+		{"a client certificate alone", &Inject{TLS: cert}, true},
+		{"a client certificate and headers.remove", &Inject{
+			TLS: cert, Headers: &HeaderInject{Remove: []string{"Authorization"}},
+		}, true},
+		{"a client certificate and headers.set", &Inject{
+			TLS: cert, Headers: &HeaderInject{Set: []Header{{Name: "X-Api-Key", Value: "{value}"}}},
+		}, false},
+		{"a client certificate and basicAuth", &Inject{TLS: cert, BasicAuth: &BasicAuth{Username: "u"}}, false},
+		{"a ca alone", &Inject{TLS: ca}, false},
+		{"an empty tls", &Inject{TLS: &TLSInject{}}, false},
+	} {
+		if got := c.in.CertificateOnly(); got != c.want {
+			t.Errorf("%s: CertificateOnly = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
