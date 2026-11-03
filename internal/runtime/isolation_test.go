@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -466,5 +467,61 @@ func TestIsolationNamesTheSettingBehindAWeakerBoundary(t *testing.T) {
 func TestHullNamesNoSettingBehindItsBoundary(t *testing.T) {
 	if got := (&hull{bin: "hull"}).Isolation(RunSpec{Hypervisor: "hvi"}); got.Setting != "" {
 		t.Errorf("hull names a setting: %q", got.Setting)
+	}
+}
+
+// A run that requires a microVM is refused for anything the row does not
+// establish as one: a plain container, and a shim brig cannot place, which the
+// row calls unknown. Unknown is refused because the requirement is for what
+// brig can show, not for what it cannot rule out.
+func TestRequireMicroVMRefusesEverythingTheRowDoesNotEstablish(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		iso  Isolation
+		want bool
+	}{
+		{"a microVM", Isolation{Boundary: BoundaryVM, Detail: "hull, hvi backend"}, false},
+		{"a container", Isolation{Boundary: BoundaryContainer, Detail: "nerdctl over containerd, runc"}, true},
+		{"an unknown boundary", Isolation{Boundary: BoundaryUnknown, Detail: "kata"}, true},
+		{"an unset boundary", Isolation{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RequireMicroVM(tc.iso)
+			if (err != nil) != tc.want {
+				t.Fatalf("RequireMicroVM = %v, want refusal %v", err, tc.want)
+			}
+			var refusal *IsolationError
+			if tc.want && !errors.As(err, &refusal) {
+				t.Errorf("the refusal is %T, which a caller cannot tell from any other failure", err)
+			}
+		})
+	}
+}
+
+// The refusal names the row it read and the setting to change, so the reader
+// does not have to work out which of the three things put them there.
+func TestIsolationRefusalNamesTheBoundaryAndTheSetting(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.kata.v2")
+	iso := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{})
+
+	msg := RequireMicroVM(iso).Error()
+	for _, want := range []string{
+		"--isolation microvm",
+		"io.containerd.kata.v2",
+		"cannot tell whether that shim boots a kernel of its own",
+		"BRIG_CONTAINERD_RUNTIME",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, msg)
+		}
+	}
+}
+
+// With no setting to name the refusal says nothing about one, rather than
+// sending the reader after a variable nobody set.
+func TestIsolationRefusalNamesNoSettingWhenThereIsNone(t *testing.T) {
+	msg := RequireMicroVM(Isolation{Boundary: BoundaryUnknown, Detail: "no runtime"}).Error()
+	if strings.Contains(msg, "Change") {
+		t.Errorf("the refusal names a setting it has none for:\n%s", msg)
 	}
 }
