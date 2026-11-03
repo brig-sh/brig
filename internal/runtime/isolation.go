@@ -37,6 +37,13 @@ type Isolation struct {
 	// runtime, which backend or shim, and for anything short of a microVM what
 	// that costs them.
 	Detail string
+	// Setting is what to change to get a microVM when the boundary is
+	// anything less: the variable or the choice of binary that decided it. It
+	// is empty on a microVM, where there is nothing to undo, and it is not
+	// printed in the row, which already names the cause in its detail. A
+	// refusal reads it, so it can say which setting to change and not only
+	// that the boundary was too weak (#30).
+	Setting string
 }
 
 // Line is the isolation as the envelope prints it: the boundary, then the
@@ -146,19 +153,30 @@ func sharesHostKernel(shim string) bool { return shimBoundary(shim) == BoundaryC
 // urunc reads either, so only the urunc row names them.
 func containerdIsolation(driver, shim, named, monitor, rootfs string) Isolation {
 	over := driver + " over containerd"
-	switch shimBoundary(shim) {
+	boundary := shimBoundary(shim)
+	// docker is told to use the shim, and brig cannot see whether docker has
+	// it registered. The name alone made this row say microVM for a docker
+	// that might boot a plain container with the default shim named in the
+	// row, which is the guess toward the stronger boundary this type must not
+	// make. A shim brig knows shares the host kernel stays that.
+	if driver == dockerDriver && boundary == BoundaryVM {
+		return Isolation{Boundary: BoundaryUnknown, Detail: fmt.Sprintf(
+			"%s, %s: brig cannot tell whether docker has that shim, so it cannot tell whether the guest gets a kernel of its own",
+			over, named)}
+	}
+	switch boundary {
 	case BoundaryVM:
 		detail := fmt.Sprintf("%s, %s, hypervisor %s",
 			over, named, orDefault(monitor, "urunc default"))
 		if rootfs != "" {
 			detail += ", rootfs " + rootfs
 		}
-		return Isolation{BoundaryVM, detail}
+		return Isolation{Boundary: BoundaryVM, Detail: detail}
 	case BoundaryContainer:
-		return Isolation{BoundaryContainer, fmt.Sprintf(
+		return Isolation{Boundary: BoundaryContainer, Detail: fmt.Sprintf(
 			"%s, %s: the guest shares the host kernel", over, named)}
 	default:
-		return Isolation{BoundaryUnknown, fmt.Sprintf(
+		return Isolation{Boundary: BoundaryUnknown, Detail: fmt.Sprintf(
 			"%s, %s: brig cannot tell whether that shim boots a kernel of its own", over, named)}
 	}
 }
