@@ -81,7 +81,8 @@ func (v *awsVendor) check(ctx context.Context, sandbox, route string, doc []byte
 		return "", injector.VendInfo{}, v.failed(sandbox, route, err, true)
 	}
 	v.succeeded(sandbox, route)
-	return region, injector.VendInfo{Mode: string(p.Mode), AWSProfile: p.AWSProfile, RoleARN: p.RoleARN}, nil
+	return region, injector.VendInfo{Mode: string(p.Mode), AWSProfile: p.AWSProfile, RoleARN: p.RoleARN,
+		PolicyARNs: p.PolicyARNs}, nil
 }
 
 // failed records the failure and returns the error to answer with. ranAWS
