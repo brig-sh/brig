@@ -972,7 +972,49 @@ brig plan claude
 The plan has no `REFUSED` row, and its `ISOLATION` row names
 `io.containerd.urunc.v2`.
 
-Brig allows a shim that it cannot place, such as another microVM shim.
+Brig allows a shim that it cannot place, such as another microVM shim, unless
+the run names `--isolation microvm`. See
+[A run that requires a microVM is refused](#a-run-that-requires-a-microvm-is-refused).
+
+## A run that requires a microVM is refused
+
+```
+brig: --isolation microvm: this run would stand on unknown (nerdctl over
+containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell
+whether that shim boots a kernel of its own), and brig will not boot a sandbox
+it cannot establish as a microVM. Change BRIG_CONTAINERD_RUNTIME to get one, or
+drop --isolation microvm
+```
+
+**Exit code:** `7`
+
+**Cause:** The run named `--isolation microvm`, and its `ISOLATION` row does not
+say `microVM`. Three things put it there. A shim that shares the host kernel
+gives `container`. A shim that Brig cannot place gives `unknown`. docker also
+gives `unknown`, because Brig tells docker to use the shim and cannot see
+whether docker has it. The last sentence of the refusal names the setting: the
+shim variable, or the docker binary in use (`BRIG_RUNTIME_BIN`, a profile's
+`runtimeBin`, or the fallback taken when nerdctl is not on `PATH`).
+
+**Fix:** Change the setting the refusal names. For the shim, unset the
+variable. For docker, install nerdctl, or point `BRIG_RUNTIME_BIN` at it.
+
+```bash
+unset BRIG_CONTAINERD_RUNTIME
+brig plan --isolation microvm claude
+```
+
+**Confirm:** The plan has no `REFUSED` row, and its `ISOLATION` row says
+`microVM`.
+
+If the shim is a microVM that Brig has no way to recognise, there is no way
+to satisfy the flag today. Run without it, and the `ISOLATION` row still says
+what Brig can and cannot tell.
+
+The flag stands before the profile, or before the first word that is the
+agent's. A line such as `brig run claude -p hi --isolation microvm` exits `2`
+and says where to put it, because Brig would otherwise leave the flag to the
+agent and boot without the requirement.
 
 ## Sandbox restarted on `brig sh`
 

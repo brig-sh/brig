@@ -2150,6 +2150,39 @@ STUB
   grep -q '^argv: run ' "$nrc/argv.log" \
     && ok "the urunc shim does reach run, so the log can show one" \
     || bad "the urunc shim reaches run -- got: $(cat "$nrc/argv.log")"
+
+  # --isolation microvm (#30) refuses every way of not getting a microVM, with
+  # exit 7, and a shim brig cannot place is one of them: without the flag it
+  # boots, which the control below shows, so the refusal is the flag's.
+  nrc_iso() {
+    NRC_LOG="$nrc/argv.log" BRIG_RUNTIME=nerdctl BRIG_RUNTIME_BIN="$nrc/nerdctl" \
+      BRIG_WORKSPACE="$nrc/ws" BRIG_STATE_DIR="$nrc/state" BRIG_GATEWAY_DIR="$nrc/gw" \
+      BRIG_CONTAINERD_RUNTIME="$1" "$WORK/brig" run --isolation microvm claude -p hi
+  }
+  for shim in io.containerd.kata.v2 runc containerd-shim-runc-v2; do
+    : > "$nrc/argv.log"
+    nrc_iso "$shim" > /dev/null 2> "$nrc/iso.err"; rc=$?
+    [ "$rc" = 7 ] && ok "--isolation microvm on $shim exits 7" \
+      || bad "--isolation microvm on $shim exits 7 -- got $rc: $(cat "$nrc/iso.err")"
+    grep -q 'BRIG_CONTAINERD_RUNTIME' "$nrc/iso.err" \
+      && ok "the refusal for $shim names the setting" \
+      || bad "the refusal for $shim names the setting -- got: $(cat "$nrc/iso.err")"
+    if grep -E '^argv: (run|create|start|pull|exec|load|build|network create) ' "$nrc/argv.log" > "$nrc/started.log"; then
+      bad "--isolation microvm on $shim reached the runtime -- got: $(cat "$nrc/started.log")"
+    else
+      ok "--isolation microvm on $shim reaches no run, create or pull"
+    fi
+  done
+  : > "$nrc/argv.log"
+  nrc_brig io.containerd.kata.v2 > /dev/null 2>&1
+  grep -q '^argv: run ' "$nrc/argv.log" \
+    && ok "a shim brig cannot place boots without the flag" \
+    || bad "a shim brig cannot place boots without the flag -- got: $(cat "$nrc/argv.log")"
+  : > "$nrc/argv.log"
+  nrc_iso io.containerd.urunc.v2 > /dev/null 2>&1; rc=$?
+  grep -q '^argv: run ' "$nrc/argv.log" \
+    && ok "--isolation microvm on the urunc shim reaches run" \
+    || bad "--isolation microvm on the urunc shim reaches run -- got $rc: $(cat "$nrc/argv.log")"
 else
   echo "  --   not Linux, skipping the runc shim refusal"
 fi
