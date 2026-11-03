@@ -180,3 +180,33 @@ func containerdIsolation(driver, shim, named, monitor, rootfs string) Isolation 
 			"%s, %s: brig cannot tell whether that shim boots a kernel of its own", over, named)}
 	}
 }
+
+// IsolationError refuses a run that required a microVM and would not get one
+// the row can establish. It carries the isolation the run resolved, so the
+// message names the same boundary and the same cause the ISOLATION row does,
+// and a caller can tell this refusal from any other failure by its type. The
+// exit code is 7, the class for a run path that cannot give what the run asks
+// for (#300).
+type IsolationError struct {
+	Got Isolation
+}
+
+func (e *IsolationError) Error() string {
+	msg := fmt.Sprintf("--isolation microvm: this run would stand on %s, and brig will not "+
+		"boot a sandbox it cannot establish as a microVM", e.Got.Line())
+	if e.Got.Setting != "" {
+		msg += ". Change " + e.Got.Setting + " to get one, or drop --isolation microvm"
+	}
+	return msg
+}
+
+// RequireMicroVM is the refusal for a run that asked for a microVM, or nil
+// when the isolation says it gets one. Unknown is refused with a container:
+// the requirement is for a boundary brig can show, not for one it cannot rule
+// out, and a shim brig cannot place is the case the unknown value exists for.
+func RequireMicroVM(i Isolation) error {
+	if i.Boundary == BoundaryVM {
+		return nil
+	}
+	return &IsolationError{Got: i}
+}
