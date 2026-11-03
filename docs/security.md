@@ -81,6 +81,13 @@ name that shim. Brig refuses a shim that it knows shares the host kernel:
 by name or by path. A container that shares the host kernel is not the
 boundary Brig provides.
 
+`--isolation microvm` goes further and refuses every run whose `ISOLATION` row
+is not `microVM`, with exit `7`. That includes a shim that Brig cannot place,
+and docker: Brig tells docker to use the shim and cannot see whether docker
+has it, so docker reads `unknown`. The flag is the only way to state the
+requirement. No variable sets it, so none can weaken it. A profile cannot
+name it yet, because the profile format has no schema version to name it in.
+
 The `ISOLATION` row of the execution envelope names the boundary this run
 resolved. `brig info` prints it and boots nothing. `brig --verbose run`
 prints it before the boot:
@@ -93,6 +100,7 @@ ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hyperviso
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
 ISOLATION    container (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=runc: the guest shares the host kernel)
 ISOLATION    unknown (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
+ISOLATION    unknown (docker over containerd, io.containerd.urunc.v2: brig cannot tell whether docker has that shim, so it cannot tell whether the guest gets a kernel of its own)
 ```
 
 Brig can boot with a shim it does not recognise, but cannot tell from the
