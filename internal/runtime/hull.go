@@ -193,7 +193,7 @@ func (h *hull) Isolation(spec RunSpec) Isolation {
 	if mode != "" {
 		rootfs = mode
 	}
-	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
+	return Isolation{Boundary: BoundaryVM, Detail: fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
 }
 
 // linuxHullIsolation is the ISOLATION row of hull on Linux. See Isolation.
