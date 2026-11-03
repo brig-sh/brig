@@ -122,6 +122,9 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
+      --isolation MODE   microvm: refuse the run unless brig can show the guest
+                         gets a kernel of its own. No variable sets it, so
+                         none can weaken it
       --publish PORT     open a guest port on the host. Repeatable. No short
                          form: -p belongs to the agents
 
@@ -908,6 +911,12 @@ var brigFlags = []struct {
 	{long: "skills", position: posRun},
 	{long: "network", value: true, position: posRun},
 	{long: "offline", position: posRun},
+	// --isolation microvm requires a boundary brig can establish, and refuses
+	// the run when the ISOLATION row would say less. It is read on every verb
+	// that boots or joins a sandbox, as --network is, and nowhere else, so it
+	// is not runOnly: sh and exec reach the same refusal. A flag past the end
+	// of brig's own is refused, not forwarded; see refuseRequirementInTail.
+	{long: "isolation", value: true, position: posRun},
 	// --publish opens a guest port on the host. Repeatable.
 	//
 	// It has NO short form, for the reason --verbose has none. -p is Claude
@@ -1219,6 +1228,9 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				tail = append(tail, a)
 				continue
 			}
+			if err := refuseRequirementInTail(verb, args[i:]); err != nil {
+				return nil, session.Ref{}, "", nil, err
+			}
 			return mine, ref, word, agentTail(verb, args[i:]), nil
 		default:
 			// A removed spelling before the ref is refused naming its
@@ -1253,6 +1265,9 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				if takesPorts(verb) {
 					return nil, session.Ref{}, "", nil, usagef("unknown flag %q; `brig %s` takes "+
 						"a ref, the ports, and nothing else", a, verb)
+				}
+				if err := refuseRequirementInTail(verb, args[i:]); err != nil {
+					return nil, session.Ref{}, "", nil, err
 				}
 				return mine, ref, word, agentTail(verb, args[i:]), nil
 			}
@@ -1333,6 +1348,48 @@ func networkSub(rest []string) (string, error) {
 		return rest[0], nil
 	}
 	return "", usagef("unknown network subcommand %q (ls, publish or unpublish)", rest[0])
+}
+
+// checkIsolation is the refusal of an --isolation value brig does not offer.
+// Only microvm is: a shim that shares the host kernel is refused without being
+// asked, so container would accept the flag and refuse the one thing it could
+// mean. It is added when something can use it. Anything else is refused by name
+// and never read as no requirement.
+func checkIsolation(v string) error {
+	switch v {
+	case wrap.IsolationMicroVM:
+		return nil
+	case "container":
+		return usagef("--isolation %q is not offered: brig already refuses a shim that "+
+			"shares the host kernel without being asked, so there is nothing for it to allow. "+
+			"The one value is %s", v, wrap.IsolationMicroVM)
+	}
+	return usagef("--isolation needs %s, not %q", wrap.IsolationMicroVM, v)
+}
+
+// refuseRequirementInTail refuses --isolation in the tail brig ended itself.
+//
+// A flag there is the agent's, and agentTail says so in a notice that -q
+// drops. That is right for --network, where the run goes on with the posture
+// the line did not get. It is wrong for a requirement: the run would boot
+// without the thing it required and say so only where a script is not
+// looking. So the flag is refused, and the line says where it goes.
+//
+// The tail on sh is the guest's command from its first word, and a tail after
+// -- is the agent's by the typist's own word, so neither is read here.
+func refuseRequirementInTail(verb string, tail []string) error {
+	if !forwardsTail(verb) || verb == "sh" {
+		return nil
+	}
+	for _, a := range tail {
+		if name, _, _ := strings.Cut(a, "="); name == "--isolation" {
+			return usagef("--isolation is brig's flag and stands here in the agent's arguments, "+
+				"where brig would not read it and the run would boot without the requirement. "+
+				"Put it before the profile: brig %s --isolation %s <profile> ...",
+				verb, wrap.IsolationMicroVM)
+		}
+	}
+	return nil
 }
 
 // agentTail hands the tail back as the agent's, saying so for any of brig's own
@@ -1498,6 +1555,10 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 	fs.Usage = func() {}
 
 	var mem, cpus number
+	var isolation struct {
+		set   bool
+		value string
+	}
 	for _, f := range []struct {
 		long, short string
 		fn          func(name string)
@@ -1520,6 +1581,13 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// The posture this run takes: shared or offline. Refused by name later
 		// if it is neither, in the one place every source of it is resolved.
 		{"network", "", func(n string) { fs.StringVar(&o.load.Network, n, "", "") }},
+		// Recorded rather than stored, so that --isolation= and --isolation ""
+		// are a flag that was set to nothing and not a flag that was not set:
+		// a requirement dropped by an empty value is the failure this flag is
+		// for. Validated once the line is read, below.
+		{"isolation", "", func(n string) {
+			fs.Func(n, "", func(v string) error { isolation.set, isolation.value = true, v; return nil })
+		}},
 		// Sugar for --network offline, which is the word the request is usually
 		// phrased in.
 		{"offline", "", func(n string) { fs.BoolVar(&o.offline, n, false, "") }},
@@ -1564,6 +1632,12 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 				c.got.as, c.got.raw)
 		}
 		*c.dst = n
+	}
+	if isolation.set {
+		if err := checkIsolation(isolation.value); err != nil {
+			return options{}, "", nil, err
+		}
+		o.load.Isolation = isolation.value
 	}
 	// --offline is shorthand for one --network value, so the two agreeing is
 	// fine and the two disagreeing is a mistake worth naming: a silent winner
