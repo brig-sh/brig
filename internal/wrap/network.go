@@ -175,6 +175,23 @@ func (c *Config) backendSpec(hypervisor string) runtime.RunSpec {
 // run and waved through on every one after, printing a POLICY row over a
 // sandbox filtering nothing. A runtime with no opinion is not asked.
 func (c *Config) checkBackend(hypervisor string) error {
+	// First, so a run that required a microVM gets this refusal and its code
+	// for everything short of one. CanRun refuses a shim brig knows shares the
+	// host kernel on its own, as exit 1, and a script that asked for a microVM
+	// reads 7 for every way of not getting one. It reads what the ISOLATION
+	// row reads, so the row and the refusal cannot disagree. A run with no
+	// runtime in hand establishes nothing, and is refused too: this check is
+	// the one that must not be waved through on a missing answer.
+	if c.needMicroVM {
+		got := runtime.Isolation{Boundary: runtime.BoundaryUnknown,
+			Detail: "no runtime, so brig cannot tell what a sandbox here would stand on"}
+		if c.Runtime != nil {
+			got = c.Runtime.Isolation(c.backendSpec(hypervisor))
+		}
+		if err := runtime.RequireMicroVM(got); err != nil {
+			return err
+		}
+	}
 	var err error
 	if checker, ok := c.Runtime.(runtime.RunChecker); ok {
 		err = checker.CanRun(c.backendSpec(hypervisor))
