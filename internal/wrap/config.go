@@ -169,6 +169,9 @@ type Config struct {
 	netExplicit    bool
 	netFromProfile bool
 	netFallback    string
+	// needMicroVM is set when the run requires a microVM, and checkBackend
+	// refuses a run that would stand on less. See Options.Isolation.
+	needMicroVM bool
 	// Publish is every guest port this sandbox offers on the host: what
 	// --publish asked for on this line, and what the sandbox was already
 	// publishing. PublishAsked is the first half alone.
@@ -312,6 +315,13 @@ type Config struct {
 	env Env
 }
 
+// IsolationMicroVM is the one boundary a run can require: a kernel of its own,
+// which is what the ISOLATION row calls a microVM. It is the only value because
+// it is the only one with something to enforce. A shim brig knows shares the
+// host kernel is already refused without being asked, so a value that allowed
+// one would accept the flag and then refuse the thing it meant (#30).
+const IsolationMicroVM = "microvm"
+
 // Options are the per-invocation overrides a command line can supply. Each
 // one outranks the corresponding setting, which outranks the profile.
 type Options struct {
@@ -338,6 +348,15 @@ type Options struct {
 	// Network is the posture asked for on the command line, and beats both the
 	// setting and the profile. Empty means nothing was asked for.
 	Network string
+	// Isolation is the boundary this run requires, from --isolation on the
+	// command line: IsolationMicroVM, or empty for no requirement. It has no
+	// other source on purpose. A variable could be set in a shell profile and
+	// lift the requirement for a run that wrote it down, and the requirement
+	// exists so that nothing a run inherits can weaken it. A profile will name
+	// one when the profile schema has a version to name it in (#19). Load
+	// refuses a value it does not know, since a typo read as no requirement
+	// would boot the sandbox the requirement was written to stop.
+	Isolation string
 	// Publish are the --publish values on the command line, unparsed. Each opens
 	// a guest port on the host; see runtime.ParsePublication for the grammar.
 	Publish []string
@@ -351,6 +370,10 @@ type Options struct {
 // Load resolves the configuration for one invocation.
 func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	env := NewEnv(t.Name, os.LookupEnv)
+
+	if o.Isolation != "" && o.Isolation != IsolationMicroVM {
+		return nil, fmt.Errorf("unknown isolation %q: the only requirement brig can enforce is %s", o.Isolation, IsolationMicroVM)
+	}
 
 	// BRIG_CREDENTIALS_CMD is gone, and a run that still sets it fails here
 	// rather than proceeding. The variable named a command brig ran on every
@@ -656,6 +679,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		GitIdentity:    env.Bool("GIT_IDENTITY", true),
 		TrustWorkspace: strict("TRUST_WORKSPACE", true),
 		Network:        network,
+		needMicroVM:    o.Isolation == IsolationMicroVM,
 		askedNetwork:   askedNet,
 		networkSource:  netSource,
 		recordedNet:    recordedNet,
