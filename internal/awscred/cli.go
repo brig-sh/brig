@@ -94,6 +94,14 @@ func (c CLI) Fetch(ctx context.Context, p Pointer, sessionName string) (Credenti
 		if p.SourceIdentity != "" {
 			args = append(args, "--source-identity", p.SourceIdentity)
 		}
+		// The CLI takes a list of structures here, so each ARN goes in its
+		// shorthand, arn=<value>. A bare ARN does not parse.
+		if len(p.PolicyARNs) > 0 {
+			args = append(args, "--policy-arns")
+			for _, a := range p.PolicyARNs {
+				args = append(args, "arn="+a)
+			}
+		}
 		args = append(args, "--duration-seconds", strconv.Itoa(p.Session()), "--output", "json")
 	default:
 		args = []string{"configure", "export-credentials", "--profile", p.AWSProfile, "--format", "process"}

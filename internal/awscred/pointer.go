@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -44,6 +45,17 @@ type Pointer struct {
 	// SessionSeconds is the role session lifetime, or 0 for
 	// DefaultSessionSeconds. Pointers stored before this field get 0.
 	SessionSeconds int `json:"sessionSeconds,omitempty"`
+	// PolicyARNs are managed policies passed as session policies. The keys
+	// get only what both the role and these policies allow, so the list can
+	// narrow the session and never widen it.
+	PolicyARNs []string `json:"policyArns,omitempty"`
+}
+
+// Equal is whether p and q name the same credentials. Pointer holds a slice,
+// so == does not compile. DeepEqual covers every field, so a field added
+// later cannot be left out of the comparison the cache relies on.
+func (p Pointer) Equal(q Pointer) bool {
+	return reflect.DeepEqual(p, q)
 }
 
 // Role session bounds. A leaked key works until its session ends. IAM cannot

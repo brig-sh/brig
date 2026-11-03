@@ -119,7 +119,7 @@ func TestImportAWSRole(t *testing.T) {
 		t.Fatalf("stored doc: %v", err)
 	}
 	want := awscred.Pointer{Kind: "aws", AWSProfile: "dev", Mode: awscred.ModeRole, RoleARN: roleARN, SourceIdentity: "someone@example.com"}
-	if p != want {
+	if !p.Equal(want) {
 		t.Errorf("pointer = %+v, want %+v", p, want)
 	}
 	got := calls(t, log)
