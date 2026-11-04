@@ -142,6 +142,7 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 	var vars []runtime.Var
 	var git [][2]string
 	endpoints := 0
+	gcloud := false
 	sorted := append([]v1alpha1.Route(nil), routes...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, r := range sorted {
@@ -163,6 +164,24 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 		endpoint := r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint
 		if endpoint {
 			endpoints++
+		}
+		// gcloud reads one endpoint override per service, and it joins
+		// request paths onto the value, so each ends in a slash. Without
+		// them it would call the public endpoints, which hold no
+		// credential and are not on the route. They come from the
+		// services, not from guest.env, so a route without a guest block
+		// still gets them.
+		if endpoint {
+			for _, svc := range r.Services {
+				path, ok := v1alpha1.GCPServicePath(svc.Name)
+				if !ok {
+					return nil, fmt.Errorf("route %s: service %q is not one brig wires", r.Name, svc.Name)
+				}
+				vars = append(vars, runtime.Var{
+					Name:  v1alpha1.GCPEndpointOverrideName(svc.Name),
+					Value: url + "/" + svc.Name + "/" + path})
+				gcloud = true
+			}
 		}
 		if r.Guest == nil {
 			continue
@@ -232,6 +251,11 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 	if e.Transport == TransportBrigInternal && endpoints > 0 {
 		for _, name := range caEnv {
 			vars = append(vars, runtime.Var{Name: name, Value: caFile(name)})
+		}
+		// gcloud reads none of the variables above. Written once here, so
+		// a second route with services does not repeat it.
+		if gcloud {
+			vars = append(vars, runtime.Var{Name: v1alpha1.GCPCACertsVar, Value: GuestCABundlePath})
 		}
 	}
 	return vars, nil
