@@ -253,9 +253,11 @@ names a profile can import and which names it cannot. See
 | `--from-command '<sh>'` | take one named secret's value from a command's stdout instead of from its declared sources |
 | `--aws-profile <p>` | for a secret whose source is `aws`: the AWS profile on your host that the sandbox's keys come from. See [An AWS profile behind a route](#an-aws-profile-behind-a-route) |
 | `--role-arn <arn>` | with `--aws-profile`: the sandbox assumes this role. The recommended answer |
-| `--identity self` | with `--aws-profile`: the sandbox gets your own identity in that profile |
+| `--identity self` | with `--aws-profile` or `--gcloud-configuration`: the sandbox gets your own identity |
 | `--source-identity <id>` | with `--role-arn`: the source identity of the role session, in place of the one Brig reads from the profile |
 | `--session-duration <d>` | with `--role-arn`: the lifetime of the role session, `25m` to `1h`. Default `30m` |
+| `--gcloud-configuration <c>` | for a secret whose source is `gcloud`: the gcloud configuration on your host that the sandbox's tokens come from. See [A gcloud login behind a route](#a-gcloud-login-behind-a-route) |
+| `--impersonate-service-account <email>` | with `--gcloud-configuration`: the sandbox acts as this service account. The recommended answer |
 
 To import only some secrets, add their names (`[name...]`) after the profile.
 
@@ -264,9 +266,11 @@ Four rules apply:
 - **`import` reads the credential stores of your host when you run it, and
   never again.** A later run reads only the keychain item that Brig wrote.
   That item has the default ACL, so a run raises no approval dialog. Only
-  `import` raises that dialog, one time. The `aws` source is the exception:
-  `brig-broker` runs the host's `aws` CLI on every fetch, and `aws` reads
-  your AWS profile, its SSO login and the credentials it cached each time.
+  `import` raises that dialog, one time. The `aws` and `gcloud` sources are
+  the exceptions: `brig-broker` runs the host's `aws` CLI on every fetch, and
+  `aws` reads your AWS profile, its SSO login and the credentials it cached
+  each time. It runs the host's `gcloud` CLI on every mint, and `gcloud` reads
+  your gcloud configuration and its login each time.
 - **The copy does not track its source.** If you renew the login on the host,
   the copy does not change. If you revoke the login on the host, the copy
   stays valid. To refresh the copy, import it again. `brig secret delete`
@@ -601,6 +605,14 @@ A route that proxies does not send such a pointer upstream: it answers 502
 with `check=credential.vendonly`, since the pointer names your AWS profile
 and role.
 
+A secret behind a `gcp` route can hold a pointer to a gcloud configuration
+in place of an access token. The broker reads it on each request and injects
+a token it mints through `gcloud`. See
+[A gcloud login behind a route](#a-gcloud-login-behind-a-route). A route
+without `services` does not send such a pointer upstream: it answers 502 with
+`check=credential.gcponly`, since the pointer names your gcloud configuration
+and service account.
+
 ### An AWS profile behind a route
 
 The [aws preset](policies.md#the-aws-preset) hands the guest temporary AWS
@@ -671,6 +683,96 @@ no credentials it cached from it are left, a new run is refused with exit
 `6` and the message names `aws sso login --profile <profile>`.
 [The aws route](security.md#the-aws-route) lists what the guest holds and
 how to revoke it.
+
+### A gcloud login behind a route
+
+The [gcp preset](policies.md#the-gcp-preset) injects a Google access token
+into each request. Its secret can name the gcloud configuration on your host
+that the token comes from. Declare the secret in a profile with a `gcloud`
+source:
+
+```yaml
+secrets:
+  - name: gcp-creds
+    sources:
+      - from: gcloud
+```
+
+Then import it, and say how the sandbox gets GCP:
+
+```bash
+brig secret import <profile> gcp-creds --gcloud-configuration default \
+  --impersonate-service-account brig-readonly@my-project.iam.gserviceaccount.com
+```
+
+| Mode | Flag | What the sandbox gets |
+| --- | --- | --- |
+| impersonate | `--impersonate-service-account <email>` | tokens of that service account, minted with your gcloud login. The service account's IAM roles limit what the sandbox can do. Your account needs `roles/iam.serviceAccountTokenCreator` on it |
+| self | `--identity self` | tokens of your own gcloud login, the account the configuration names at import. The sandbox can do what you can |
+
+`import` refuses a line that names neither mode, or both. Self mode is never
+what a missing flag falls back to. `--gcloud-configuration` is required. A
+`gcloud` flag on a secret whose source is not `gcloud` is refused, and so is
+a line that selects two `gcloud` secrets. `--identity` is shared with the
+`aws` source. A line with an `aws`-only flag and a `gcloud` flag is refused:
+import each secret on its own line.
+
+The configuration name is a lowercase letter followed by up to 62 lowercase
+letters, digits and `-`. The service account is a `*.gserviceaccount.com`
+address. `import` checks both before it runs `gcloud`.
+
+In self mode, `import` first reads the account of the configuration with
+`gcloud config get-value account --configuration <c>`, and records it. A
+configuration with no account is refused. Every later mint names that
+account, so if you change the configuration's account, with
+`gcloud config set account` or a `gcloud auth login` as another user, mints
+fail until you import the secret again. The sandbox does not get the other
+identity.
+
+Before it stores anything, `import` mints one token, as the broker will:
+
+1. `gcloud auth print-access-token --configuration <c>`, with
+   `--impersonate-service-account <email>` in impersonate mode and with the
+   recorded account in self mode.
+2. A POST of the token to Google's tokeninfo endpoint,
+   `https://oauth2.googleapis.com/tokeninfo`, for its expiry and the
+   identity it belongs to. A token that tokeninfo says belongs to another
+   identity is refused. In self mode, so is a token for which tokeninfo
+   names no account.
+
+The token is discarded. A lapsed login or a missing
+`serviceAccountTokenCreator` grant is refused here, and not at the guest's
+first Google call. Then `import` stores the pointer: the configuration, the
+mode, and the service account or, in self mode, the account. `--dry-run` runs the same check and stores
+nothing. `import` prints the identity the sandbox will act as:
+
+```
+gcp: the sandbox will act as brig-readonly@my-project.iam.gserviceaccount.com (impersonated by you@example.com)
+gcp: the sandbox will get your own identity you@example.com
+```
+
+`brig secret ls` shows `gcloud:<configuration>` in the `FROM` column.
+
+`gcloud` runs without `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_CONFIG`,
+`CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, any `CLOUDSDK_AUTH_*`
+variable, and the variables that set HTTP logging or the log level, at
+import and in the broker. A variable in your shell does not decide which
+identity the sandbox gets. Both read your logins from
+`$HOME/.config/gcloud`. `import` refuses while `CLOUDSDK_CONFIG` is set,
+since the broker would not read the logins it names. Unset it, or log in
+under `$HOME/.config/gcloud` with `gcloud auth login --configuration <c>`.
+
+At each registration, which every run and exec makes, the broker mints a
+token when the one it holds has less than 2 minutes left. When the login of
+the configuration has lapsed, a new run is refused with exit `6` and the
+message names `gcloud auth login --configuration <c>`, or in self mode
+`gcloud auth login <account> --configuration <c>`, since the pointer mints
+only as its account.
+[The gcp route](security.md#the-gcp-route) lists what the guest holds and
+the limits of this version.
+
+A static token still works as the secret of a `gcp` route, for a quick try
+without a `gcloud` source. See [The gcp preset](policies.md#the-gcp-preset).
 
 ## Renewal on the host
 
@@ -835,4 +937,13 @@ store to write into, so it does not replace a keyring.
 | `say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self` | an import of an `aws` source that names neither mode |
 | `the AWS SSO session for profile x has expired; …` | the SSO login of the profile lapsed. Run the command on the host, then run again |
 | `the aws command was not found; install the AWS CLI v2: …` | the `aws` CLI is not on `PATH`. For the broker, that is the `PATH` of the `brig` that started it |
+| `say how the sandbox gets GCP: --impersonate-service-account <email> (recommended) or --identity self` | an import of a `gcloud` source that names neither mode |
+| `--impersonate-service-account and --identity self are two answers; pass one` | an import of a `gcloud` source that names both modes |
+| `--gcloud-configuration is required: …` | an import of a `gcloud` source with a mode and no configuration |
+| `the gcloud configuration x has no account; run gcloud auth login --configuration x` | a self-mode import of a configuration that is not logged in |
+| `the gcloud configuration x minted a token for y, not z, the account it was imported with; …` | the configuration's account changed after a self-mode import. Import the secret again to use the new account |
+| `the aws and gcloud flags fill different secrets; import each on its own line` | one import line carries an `aws`-only flag and a `gcloud` flag |
+| `the gcloud login of configuration x has expired; …` | the gcloud login lapsed. Run the command on the host, then run again |
+| `your gcloud account cannot impersonate x; it needs roles/iam.serviceAccountTokenCreator on that service account` | your account has no grant to mint tokens for the service account. Grant the role in IAM |
+| `the gcloud command was not found; install the Google Cloud CLI: …` | the `gcloud` CLI is not on `PATH`. For the broker, that is the `PATH` of the `brig` that started it |
 | `the imported credential x (y) expired N ago`, followed by `renew it on the host, then:  brig secret import y` | a run found a stored, imported credential past its `expiryField:`. Log in on the host again and import again |

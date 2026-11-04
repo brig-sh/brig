@@ -500,9 +500,56 @@ sandbox, and the broker checks each request against the `request.allow` of
 the service it names.
 
 **What the route can do.** The reach is the IAM of the identity behind the
-access token, narrowed by each service's `request.allow`. In this version the
-secret is a static access token that you store, so the sandbox can do what
-that token can do. The access token expires, usually in an hour.
+access token, narrowed by each service's `request.allow`. With a gcloud
+pointer imported with `--impersonate-service-account`, that identity is the
+service account, so its IAM roles cap what the sandbox can do. With
+`--identity self`, or with a static access token that you store, it is your
+own identity: the sandbox can do what you can, and Google's audit logs cannot
+tell its calls from yours. Self mode is never a default: `brig secret import`
+refuses a `gcloud` import that names neither mode, or both. A static token
+expires, usually in an hour, and is not replaced.
+
+**Minted on the host.** For a gcloud pointer, `brig-broker` runs the host's
+`gcloud` CLI to mint the access token, and POSTs the token to Google's
+tokeninfo endpoint, `oauth2.googleapis.com`, from the host to learn its
+expiry. It holds minted tokens in memory, per sandbox and route, and writes
+none of them to the secret store, to a file, to a log or to a command line.
+A token lives as long as `gcloud` makes it, about an hour, and the broker
+mints a new one when it has less than 2 minutes left. A minted token is sent
+only on a route with `services`, to its Google APIs. A pointer on any other
+route is refused with `check=credential.gcponly`. See
+[Minted tokens](broker.md#minted-tokens).
+
+**Named, not ambient.** You name the gcloud configuration and the service
+account when you run `brig secret import`. A self-mode pointer also names
+the account of the login, and a token for any other account is refused. The
+secret holds that pointer and no token. Brig does not read `~/.config/gcloud` itself. `brig-broker` runs
+the host's `gcloud`, which does, on every mint. The broker finds `gcloud` on
+its own `PATH`. It runs `gcloud` without `GOOGLE_APPLICATION_CREDENTIALS`,
+`CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME` and every
+`CLOUDSDK_AUTH_*` variable, so a variable in its environment does not decide
+which identity a sandbox gets. The import applies the same rule. Neither
+keeps `CLOUDSDK_CONFIG`, so both read the logins under
+`$HOME/.config/gcloud`, and the import refuses while `CLOUDSDK_CONFIG` is
+set. No package on the run path links the code that runs `gcloud`.
+
+**Revocation.** `brig stop` revokes the sandbox's session tokens, so its
+requests get no more Google tokens. A secret you import again with another
+configuration, mode or service account takes effect at the next request.
+The guest never holds a Google token, so nothing it holds outlives the
+session token. A token the broker has minted stays valid at Google until it
+expires. To cut a service account off sooner, remove its roles or the
+`serviceAccountTokenCreator` grant in IAM.
+
+**The gcloud login.** The route works while the login of the configuration
+works. When `gcloud` can mint no token, a new run is refused with exit `6`,
+and a request from a running guest gets a 502. Both name the fix:
+`gcloud auth login --configuration <c>`, run on the host, with the
+pointer's account named in self mode. An upstream 401 to
+a minted token goes back to the guest, with no new mint and no retry.
+The broker's `gcloud` runs with the broker's `PATH` and `HOME`, and with no
+other variable of your shell, such as `CLOUDSDK_PYTHON`. A `gcloud` that
+needs one of them works at import and can fail in the broker.
 
 **What `request.allow` does not narrow.**
 
@@ -535,7 +582,10 @@ file that `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` names itself. A
 list is refused on another route's `guest.env`, but not when it comes in
 through the variables you forward. Brig's own overrides win for the services
 it lists. The session token works only through the broker, so an override
-that points elsewhere sends gcloud a token that no other host takes.
+that points elsewhere sends gcloud a token that no other host takes. A run
+does not print which Google identity the sandbox acts as, as the aws route
+does. `brig secret import` prints it. Brig does not set a minted token's
+lifetime.
 
 ## The secret store
 

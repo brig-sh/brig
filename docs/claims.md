@@ -157,6 +157,22 @@ the guest has none.
 | "The guest holds only the session token of the route." | The gcp route | `go:TestGuestEnvGCPRouteHoldsNoSecret` `go:TestServicesRouteForwardsToTheService` `go:TestServicesRouteGuestNeverSeesTheGoogleToken` |
 | "A service that allows `POST` has to list paths that name their verb exactly, such as `/v2/entries:list`." | The gcp route | `go:TestServicesRouteVerbPathIsExact` `go:TestServicesRouteWildcardMatchesAVerb` `go:TestServicesRouteLoggingPostRead` |
 | "The broker refuses the method-override headers `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`, the query parameters `$httpMethod` and `httpMethod`, and batch requests." | The gcp route | `go:TestServicesRouteRefusesMethodOverride` `go:TestServicesRouteRefusesBatch` |
+| "Self mode is never a default: `brig secret import` refuses a `gcloud` import that names neither mode, or both." | The gcp route | `go:TestGCloudImportNeedsAMode` `go:TestGCloudImportRefusesTwoModes` |
+| "A token lives as long as `gcloud` makes it, about an hour, and the broker mints a new one when it has less than 2 minutes left." (the 2 minutes) | The gcp route | `go:TestGetMintsAgainUnderTheMargin` `go:TestAMintCloseToExpiryIsServedForTheFloor` |
+| "A minted token is sent only on a route with `services`, to its Google APIs." | The gcp route | `go:TestAGCPRouteInjectsTheMintedToken` `go:TestAPointerOnARouteWithoutServicesIsRefused` |
+| "A pointer on any other route is refused with `check=credential.gcponly`." | The gcp route | `go:TestAPointerOnARouteWithoutServicesIsRefused` |
+| "A self-mode pointer also names the account of the login, and a token for any other account is refused." | The gcp route | `go:TestMintSelfRefusesAnotherAccount` `go:TestGCloudImportSelfNeedsAnAccount` |
+| "The secret holds that pointer and no token." | The gcp route | `go:TestGCloudImportStoresAPointerNotAToken` |
+| "It runs `gcloud` without `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME` and every `CLOUDSDK_AUTH_*` variable, so a variable in its environment does not decide which identity a sandbox gets." | The gcp route | `go:TestEnvironDropsIdentityVariables` `go:TestTheBrokersEnvironmentDoesNotPickTheIdentity` |
+| "The import applies the same rule." | The gcp route | `go:TestDefaultGCloudCLIDropsIdentityVariables` |
+| "Neither keeps `CLOUDSDK_CONFIG`, so both read the logins under `$HOME/.config/gcloud`, and the import refuses while `CLOUDSDK_CONFIG` is set." | The gcp route | `go:TestEnvironDropsIdentityVariables` `go:TestGCloudImportRefusesWhileCloudSDKConfigIsSet` |
+| "No package on the run path links the code that runs `gcloud`." | The gcp route | `go:TestTheRunPathCannotReachGCloud` |
+| "A secret you import again with another configuration, mode or service account takes effect at the next request." | The gcp route | `go:TestAPointerChangeIsNotServedTheOldToken` |
+| "When `gcloud` can mint no token, a new run is refused with exit `6`, and a request from a running guest gets a 502." | The gcp route | `go:TestRegistrationIsRefusedWhenTheMintFails` `go:TestCredentialRefusalExits6` `go:TestAFailedMintSendsNothing` |
+| "An upstream 401 to a minted token goes back to the guest, with no new mint and no retry." | The gcp route | `go:TestAMintedTokenPassesA401Through` `go:TestAMintedTokenIsNotRenewedOnARouteWithALifecycle` |
+| "No token is on a command line, and no error repeats stdout." | broker.md: Minting a token | `go:TestMintArgvPerMode` `go:TestMintNeverEchoesStdout` |
+| "So a new run on a lapsed gcloud login is refused at its start, and not at the agent's first Google call." | broker.md: Registration of a gcp route | `go:TestRegistrationIsRefusedWhenTheMintFails` `go:TestRegistrationMintsOnceForAPointer` |
+| "A sandbox that was not registered before leaves no tokens behind." | broker.md: Registration of a gcp route | `go:TestRegistrationIsRefusedWhenTheMintFails` |
 | "The broker serves only a route that vends on that path, and refuses any other route before it reads the token." | The aws route | `go:TestLinkLocalRefusesARouteThatDoesNotVend` `go:TestVendOnlyArrivalRefusesOtherRoutes` |
 | "Brig adds no `allow` rule for it." (the link-local address of a route that vends) | Host services | `go:TestAVendingRunAllowsNoLinkLocalAddress` `go:TestRulesetDivertsTheLinkLocalAddress` |
 | "A run without one diverts no link-local address." | broker.md: Transports | `go:TestARunWithoutAVendingRouteHasNoLinkLocalDivert` |

@@ -628,8 +628,22 @@ The guest gets the four variables of the preset. See
 A route on the `gcp` preset forwards the requests of one sandbox to several
 Google APIs with one session token. Each service has its own
 `request.allow`, because the paths of one API mean nothing to another. The
-broker replaces the guest's session token with the host's OAuth access token,
-so the guest never holds a Google token.
+broker replaces the guest's session token with a Google access token, so the
+guest never holds a Google token.
+
+The route's secret holds a pointer, not a token: the gcloud configuration on
+your host, and the service account the sandbox acts as. `brig-broker` mints
+the token with the host's `gcloud` and mints a new one before it expires.
+Impersonate a service account whose IAM roles are what the sandbox needs:
+
+```bash
+brig secret import <profile> gcp-creds --gcloud-configuration default \
+  --impersonate-service-account brig-readonly@my-project.iam.gserviceaccount.com
+```
+
+`--identity self` in place of `--impersonate-service-account` hands the
+sandbox your own identity, so it can do what you can. See
+[A gcloud login behind a route](secrets.md#a-gcloud-login-behind-a-route).
 
 ```yaml
 apiVersion: brig.sh/v1alpha1
@@ -722,21 +736,22 @@ gcp route does not list. The session token has to
 reach gcloud as its access token, so the guest writes `$BRIG_GCP_TOKEN` to a
 file and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its path.
 
-This version takes a static access token as the secret. Store your own, which
-expires in about an hour:
+The secret can also be a static access token, which is quicker to try.
+It is your own identity, and it expires in about an hour, after which you
+store a new one:
 
 ```bash
 gcloud auth print-access-token | brig secret create gcp-creds
 ```
 
-Brig does not yet import a gcloud configuration, refresh the token, deliver
-the token file to the guest, or refuse before boot a guest variable that
-picks another identity, such as `GOOGLE_APPLICATION_CREDENTIALS`. A Cloud
-Storage object whose name holds a `/` cannot be read or written through the
-route: the JSON API sends the name as `o/dir%2Ffile`, and the broker refuses
-an encoded slash in any path. Listing with a prefix works. The
-preset serves HTTP/1.1 REST APIs only. A gRPC client, such as Pub/Sub or
-Firestore, does not work through it.
+Brig does not yet deliver the token file to the guest, refuse before boot a
+guest variable that picks another identity, such as
+`GOOGLE_APPLICATION_CREDENTIALS`, or print at run time which Google identity
+the sandbox acts as. A Cloud Storage object whose name holds a `/` cannot be
+read or written through the route: the JSON API sends the name as
+`o/dir%2Ffile`, and the broker refuses an encoded slash in any path. Listing
+with a prefix works. The preset serves HTTP/1.1 REST APIs only. A gRPC
+client, such as Pub/Sub or Firestore, does not work through it.
 
 ### Several policies with routes
 
