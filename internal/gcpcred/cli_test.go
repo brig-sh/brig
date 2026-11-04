@@ -403,3 +403,34 @@ func TestEnvironDropsIdentityVariables(t *testing.T) {
 		t.Errorf("Environ = %v", got)
 	}
 }
+
+// Account names the login a configuration mints with, for the import to say
+// who impersonates. The configuration is on the argv, so the active one is
+// never what answers.
+func TestAccountReadsTheConfiguration(t *testing.T) {
+	var calls []call
+	cli := CLI{run: seam(&calls, "someone@example.com\n", "", nil)}
+	got, err := cli.Account(context.Background(), "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "someone@example.com" {
+		t.Errorf("Account = %q", got)
+	}
+	want := []string{"config", "get-value", "account", "--configuration", "default", "--verbosity=error"}
+	if !slices.Equal(calls[0].args, want) {
+		t.Errorf("argv = %v, want %v", calls[0].args, want)
+	}
+}
+
+// A configuration name that gcloud would read as a flag never reaches argv.
+func TestAccountRefusesAnInvalidConfiguration(t *testing.T) {
+	var calls []call
+	cli := CLI{run: seam(&calls, "", "", nil)}
+	if _, err := cli.Account(context.Background(), "--verbosity=debug"); err == nil {
+		t.Error("accepted a configuration that is a flag")
+	}
+	if len(calls) != 0 {
+		t.Errorf("gcloud ran: %v", calls)
+	}
+}

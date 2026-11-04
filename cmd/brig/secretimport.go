@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/awscred"
+	"github.com/brig-sh/brig/internal/gcpcred"
 	"github.com/brig-sh/brig/internal/hostsrc"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/secret"
@@ -29,6 +30,11 @@ var newHostReader = func() hostReader { return hostsrc.NewReader() }
 // the broker will resolve at run time and not whatever the user's shell
 // exports.
 var newAWSCLI = func() awscred.CLI { return awscred.CLI{Env: awscred.Environ(os.Environ())} }
+
+// newGCloudCLI is the seam the tests replace. The environment is
+// gcpcred.Environ's for newAWSCLI's reason: the import's check must see the
+// login the broker will use, not one the user's shell chose.
+var newGCloudCLI = func() gcpcred.CLI { return gcpcred.CLI{Env: gcpcred.Environ(os.Environ())} }
 
 // importStderr is where an import says what a pointer will do, apart from the
 // report on stdout. It is a variable so a test can read it.
@@ -72,17 +78,39 @@ type importOptions struct {
 
 	// The aws source stores a pointer, never keys: it names the local AWS
 	// profile and how the sandbox gets credentials from it. identity is
-	// "self" or empty.
+	// "self" or empty, and the gcloud source takes it too.
 	awsProfile, roleARN, identity, sourceIdentity string
+	// The gcloud source stores a pointer, never a token: the local gcloud
+	// configuration and the service account the sandbox acts as.
+	gcloudConfiguration, serviceAccount string
 	// session is --session-duration, and sessionSet whether it was given:
 	// `--session-duration 0` is a mistake to refuse, not the default.
 	session    time.Duration
 	sessionSet bool
 }
 
-// anyAWSFlag is whether the line carried a flag only an aws source takes.
-func (o importOptions) anyAWSFlag() bool {
-	return o.awsProfile != "" || o.roleARN != "" || o.identity != "" || o.sourceIdentity != "" || o.sessionSet
+// awsOnlyFlag is whether the line carried a flag that only an aws source
+// takes: --identity is the gcloud source's too.
+func (o importOptions) awsOnlyFlag() bool {
+	return o.awsProfile != "" || o.roleARN != "" || o.sourceIdentity != "" || o.sessionSet
+}
+
+// anyGCloudFlag is whether the line carried a flag only a gcloud source
+// takes.
+func (o importOptions) anyGCloudFlag() bool {
+	return o.gcloudConfiguration != "" || o.serviceAccount != ""
+}
+
+// gcloudFlagName is the first gcloud flag given, for the refusal that names
+// it.
+func (o importOptions) gcloudFlagName() string {
+	switch {
+	case o.gcloudConfiguration != "":
+		return "--gcloud-configuration"
+	case o.serviceAccount != "":
+		return "--impersonate-service-account"
+	}
+	return "--identity"
 }
 
 // awsFlagName is the first aws flag given, for the refusal that names it.
@@ -103,6 +131,15 @@ func (o importOptions) awsFlagName() string {
 func hasAWSSource(d profile.SecretDecl) bool {
 	for _, s := range d.SourceList() {
 		if s.From == profile.SourceAWS {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGCloudSource(d profile.SecretDecl) bool {
+	for _, s := range d.SourceList() {
+		if s.From == profile.SourceGCloud {
 			return true
 		}
 	}
@@ -168,23 +205,13 @@ func importSecrets(out io.Writer, args []string) error {
 	// flags names one profile and one role: applied to two aws secrets, it
 	// would store the same identity under both names, where the user meant
 	// a different one for each.
-	if o.anyAWSFlag() {
-		aws := 0
-		for _, d := range selected {
-			if hasAWSSource(d) {
-				aws++
-			}
-		}
-		if aws > 1 {
-			return fmt.Errorf("the AWS flags answer for one secret; name it: "+
-				"brig secret import %s <secret> %s ...", p.Name, o.awsFlagName())
-		}
-		for _, d := range selected {
-			if !hasAWSSource(d) {
-				return fmt.Errorf("%s is for a secret whose source is aws, and %q has none",
-					o.awsFlagName(), d.Name)
-			}
-		}
+	// The gcloud flags follow the same rules. The two sets never share a
+	// line: each names one secret, so a line with both names two.
+	if o.awsOnlyFlag() && o.anyGCloudFlag() {
+		return errors.New("the aws and gcloud flags fill different secrets; import each on its own line")
+	}
+	if err := checkCloudFlags(p, selected, o); err != nil {
+		return err
 	}
 
 	store, err := openStore()
@@ -223,6 +250,56 @@ func importSecrets(out io.Writer, args []string) error {
 	reportOtherProfiles(out, p, selected)
 
 	return importFailure(failures, len(selected))
+}
+
+// checkCloudFlags refuses aws and gcloud flags that would not reach the
+// secret the user meant them for.
+//
+// --identity is both sources' flag, so on its own it belongs to the kind of
+// source the selected secrets have. With neither, it falls to the aws rule
+// and is refused in its words, as before the gcloud source existed; with
+// both, one --identity would answer for two secrets.
+func checkCloudFlags(p profile.Profile, selected []profile.SecretDecl, o importOptions) error {
+	aws, gcloud := 0, 0
+	for _, d := range selected {
+		if hasAWSSource(d) {
+			aws++
+		}
+		if hasGCloudSource(d) {
+			gcloud++
+		}
+	}
+	switch {
+	case o.awsOnlyFlag():
+		return checkSourceFlags(p, selected, o.awsFlagName(), "AWS", profile.SourceAWS, aws, hasAWSSource)
+	case o.anyGCloudFlag():
+		return checkSourceFlags(p, selected, o.gcloudFlagName(), "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+	case o.identity == "":
+		return nil
+	case aws > 0 && gcloud > 0:
+		return fmt.Errorf("--identity answers for one secret; name it: "+
+			"brig secret import %s <secret> --identity ...", p.Name)
+	case gcloud > 0:
+		return checkSourceFlags(p, selected, "--identity", "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+	}
+	return checkSourceFlags(p, selected, "--identity", "AWS", profile.SourceAWS, aws, hasAWSSource)
+}
+
+// checkSourceFlags is the rule for one source's flags: they answer for
+// exactly one secret, and it has that source.
+func checkSourceFlags(p profile.Profile, selected []profile.SecretDecl, flagName, kind, source string,
+	n int, has func(profile.SecretDecl) bool) error {
+	if n > 1 {
+		return fmt.Errorf("the %s flags answer for one secret; name it: "+
+			"brig secret import %s <secret> %s ...", kind, p.Name, flagName)
+	}
+	for _, d := range selected {
+		if !has(d) {
+			return fmt.Errorf("%s is for a secret whose source is %s, and %q has none",
+				flagName, source, d.Name)
+		}
+	}
+	return nil
 }
 
 // reportHandCreated lists the secrets no importer covers, each with the
@@ -332,6 +409,14 @@ func readFor(reader hostReader, d profile.SecretDecl, o importOptions) (hostsrc.
 			}
 			return v, true, nil
 		}
+		// Nor does the gcloud source.
+		if s.From == profile.SourceGCloud {
+			v, err := readGCloud(o)
+			if err != nil {
+				return hostsrc.Value{}, false, err
+			}
+			return v, true, nil
+		}
 		v, ok, err := reader.Read(s)
 		// A refusal is not absence: falling through to the next source after a
 		// denied dialog ends with "run the agent on the host once to log in"
@@ -420,6 +505,89 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 		return hostsrc.Value{}, err
 	}
 	return hostsrc.Value{Bytes: doc, From: "aws:" + o.awsProfile}, nil
+}
+
+// readGCloud checks the user's gcloud login and returns the pointer to store.
+//
+// The pointer is the whole value: the configuration, the mode, and the
+// service account or, in self mode, the account. The check is one mint, here
+// at import, so a lapsed login or a missing serviceAccountTokenCreator grant
+// is refused now rather than at the guest's first Google call. The token it
+// mints is dropped on the floor and never reaches the store, the output or an
+// error.
+func readGCloud(o importOptions) (hostsrc.Value, error) {
+	switch {
+	case o.serviceAccount != "" && o.identity != "":
+		return hostsrc.Value{}, errors.New("--impersonate-service-account and --identity self are two answers; pass one")
+	case o.serviceAccount == "" && o.identity == "":
+		// Self mode hands the sandbox the user's own token, so it is never
+		// what a forgotten flag falls back to.
+		return hostsrc.Value{}, errors.New("say how the sandbox gets GCP: --impersonate-service-account <email> (recommended) or --identity self")
+	case o.gcloudConfiguration == "":
+		return hostsrc.Value{}, errors.New("--gcloud-configuration is required: name the local gcloud configuration the sandbox's tokens come from")
+	case os.Getenv("CLOUDSDK_CONFIG") != "":
+		// gcpcred.Environ drops it, so the check below would not fail; it
+		// would pass or fail on $HOME/.config/gcloud while the user believes
+		// it read the other directory. Refusing says which one counts.
+		return hostsrc.Value{}, errors.New("CLOUDSDK_CONFIG is set; brig-broker reads gcloud logins from $HOME/.config/gcloud, so the import would check a different login than the sandbox gets. Unset it, or log in there with gcloud auth login --configuration <c>")
+	}
+	cli := newGCloudCLI()
+	ctx := context.Background()
+	fail := func(err error) (hostsrc.Value, error) {
+		// gcpcred reports a failed start in words, so the binary is looked
+		// up again, and only after a failure.
+		bin := cli.Bin
+		if bin == "" {
+			bin = "gcloud"
+		}
+		if _, lerr := exec.LookPath(bin); lerr != nil {
+			return hostsrc.Value{}, errors.New(gcpcred.InstallHint)
+		}
+		return hostsrc.Value{}, err
+	}
+	ptr := gcpcred.Pointer{Kind: "gcloud", Configuration: o.gcloudConfiguration, Mode: gcpcred.ModeSelf}
+	if o.serviceAccount != "" {
+		ptr.Mode, ptr.ServiceAccount = gcpcred.ModeImpersonate, o.serviceAccount
+	} else {
+		// Self mode records the account, so a later change of the
+		// configuration's login makes mints fail instead of handing the
+		// sandbox another identity. Account checks the configuration name
+		// before it reaches argv.
+		account, err := cli.Account(ctx, ptr.Configuration)
+		if err != nil {
+			return fail(err)
+		}
+		if account == "" {
+			return hostsrc.Value{}, fmt.Errorf("the gcloud configuration %s has no account; run gcloud auth login --configuration %s",
+				ptr.Configuration, ptr.Configuration)
+		}
+		ptr.Account = account
+	}
+	// Before the mint: the configuration and the accounts go on its argv.
+	if err := ptr.Validate(); err != nil {
+		return hostsrc.Value{}, err
+	}
+	// The token is dropped here; the mint has proved the login and, in self
+	// mode, that it is ptr.Account.
+	if _, err := cli.Mint(ctx, ptr); err != nil {
+		return fail(err)
+	}
+	if ptr.Mode == gcpcred.ModeImpersonate {
+		// The account is a courtesy in the message: the mint has already
+		// proved the login, so failing to read it does not fail the import.
+		by := ""
+		if account, err := cli.Account(ctx, ptr.Configuration); err == nil && account != "" {
+			by = " (impersonated by " + account + ")"
+		}
+		fmt.Fprintf(importStderr, "gcp: the sandbox will act as %s%s\n", ptr.ServiceAccount, by)
+	} else {
+		fmt.Fprintf(importStderr, "gcp: the sandbox will get your own identity %s\n", ptr.Account)
+	}
+	doc, err := json.Marshal(ptr)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	return hostsrc.Value{Bytes: doc, From: "gcloud:" + o.gcloudConfiguration}, nil
 }
 
 // sessionSeconds is the session --session-duration asks for, or 0 for the
@@ -718,6 +886,8 @@ func parseImport(args []string) (importOptions, error) {
 	fs.StringVar(&o.identity, "identity", "", "")
 	fs.StringVar(&o.sourceIdentity, "source-identity", "", "")
 	fs.DurationVar(&o.session, "session-duration", 0, "")
+	fs.StringVar(&o.gcloudConfiguration, "gcloud-configuration", "", "")
+	fs.StringVar(&o.serviceAccount, "impersonate-service-account", "", "")
 
 	var words []string
 	for rest := args; ; {
@@ -731,7 +901,7 @@ func parseImport(args []string) (importOptions, error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity and --session-duration)", msg)
+			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity and --session-duration, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -744,7 +914,7 @@ func parseImport(args []string) (importOptions, error) {
 	// Only "self" is an identity: it is the one non-role answer, and a
 	// misspelling must not fall through to the role path.
 	if o.identity != "" && o.identity != "self" {
-		return o, fmt.Errorf("--identity accepts only self, got %q; for a role use --role-arn", o.identity)
+		return o, fmt.Errorf("--identity accepts only self, got %q; for a role use --role-arn, for a service account --impersonate-service-account", o.identity)
 	}
 	if len(words) == 0 {
 		return o, errors.New("import needs a profile, for example " +

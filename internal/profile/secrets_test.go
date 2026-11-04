@@ -185,3 +185,35 @@ func TestAWSSourceTakesNoLocator(t *testing.T) {
 		t.Errorf("Locator() = %q, want %q", got, "aws:")
 	}
 }
+
+// The pointer a `from: gcloud` import stores names the machine's own gcloud
+// configuration, which a shared profile cannot, so the source carries no
+// locator of its own, as `from: aws` does not.
+func TestGCloudSourceTakesNoLocator(t *testing.T) {
+	for _, field := range []string{"service", "path", "var"} {
+		p := Profile{Secrets: []SecretDecl{{Name: "gcp-creds"}}}
+		switch field {
+		case "service":
+			p.Secrets[0].Sources = []Source{{From: SourceGCloud, Service: "x"}}
+		case "path":
+			p.Secrets[0].Sources = []Source{{From: SourceGCloud, Path: "/x"}}
+		case "var":
+			p.Secrets[0].Sources = []Source{{From: SourceGCloud, Var: "X"}}
+		}
+		if err := p.validateBindings(); err == nil || !strings.Contains(err.Error(), field) {
+			t.Errorf("from: gcloud with %s: = %v; want a refusal naming it", field, err)
+		}
+	}
+	bare := Profile{Secrets: []SecretDecl{{Name: "gcp-creds", From: SourceGCloud}}}
+	if err := bare.validateBindings(); err != nil {
+		t.Fatalf("bare from: gcloud refused: %v", err)
+	}
+	if got := bare.Secrets[0].SourceList()[0].Locator(); got != "gcloud:" {
+		t.Errorf("Locator() = %q, want %q", got, "gcloud:")
+	}
+	// The refusal of an unknown source lists every source, gcloud included.
+	bad := Profile{Secrets: []SecretDecl{{Name: "x", From: "vault"}}}
+	if err := bad.validateBindings(); err == nil || !strings.Contains(err.Error(), SourceGCloud) {
+		t.Errorf("unknown source: err = %v, want the list to name gcloud", err)
+	}
+}
