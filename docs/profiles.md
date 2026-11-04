@@ -43,7 +43,7 @@ profile of your own.
 
 ## Where profiles live
 
-`brig run claude` needs no profile setup, because the eight profiles that Brig
+`brig run claude` needs no profile setup, because the nine profiles that Brig
 ships are embedded in the binary.
 
 Your own profiles live as one file per profile, with no subdirectories:
@@ -90,14 +90,15 @@ be named after the profile inside it. Two files with one name is a mistake:
 <details>
 <summary>Locations from older versions</summary>
 
-- The older `BRIG_TEMPLATE_DIR` works until v0.5.0.
+- v0.5.0 removed the older `BRIG_TEMPLATE_DIR`. Brig refuses to start while
+  it is set and `BRIG_PROFILE_DIR` is not.
 - Brig does not read the old `~/.config/brig/templates` default, and it
   migrates nothing. If files remain there, Brig says so on every invocation.
   Move them across with `brig agent import`.
 
 </details>
 
-## The eight built-in profiles
+## The nine built-in profiles
 
 | profile | alias | kind | image |
 | --- | --- | --- | --- |
@@ -107,18 +108,21 @@ be named after the profile inside it. Two files with one name is a mistake:
 | `cursor` |  | agent, example profile | `ghcr.io/brig-sh/cursor:latest` |
 | `gemini` |  | agent, example profile | `ghcr.io/brig-sh/gemini-stock:root` |
 | `grok` |  | agent, example profile | `ghcr.io/brig-sh/grok-stock:root` |
+| `herd` |  | agent | `ghcr.io/brig-sh/herd-stock:latest` |
 | `opencode` |  | agent, example profile | `ghcr.io/brig-sh/opencode-stock:root` |
 | `ubuntu` |  | shell | `docker.io/library/ubuntu:latest` |
 
 - "example profile" is the profile's own `desc:`, and `brig agent ls` prints
-  it. `claude-code` and `codex` have no such marker.
+  it. `claude-code`, `codex` and `herd` have no such marker.
 - `claude-desktop` is the one shipped `kind: gui` profile, and `ubuntu` is the
-  one shipped `kind: shell` profile. The other six are `kind: agent`, the
+  one shipped `kind: shell` profile. The other seven are `kind: agent`, the
   default. See [`kind`](#kind).
+- `herd` is `claude-code` with sshd and a herdr server in the image. See
+  [herd.md](herd.md).
 - The table states what each profile declares. It does not say whether the
   registry serves the image today.
 
-Seven of the eight profiles name an image that Brig expects you can pull.
+Eight of the nine profiles name an image that Brig expects you can pull.
 `cursor` declares `unpublished: true`:
 
 - `brig run` refuses it before it reaches the registry.
@@ -130,7 +134,7 @@ Signature verification depends on the registry
 
 | profiles | registry | signature |
 | --- | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `opencode` | `ghcr.io/brig-sh`, Brig's own builds | Brig can verify a signature against this registry |
+| `claude-code`, `codex`, `gemini`, `grok`, `herd`, `opencode` | `ghcr.io/brig-sh`, Brig's own builds | Brig can verify a signature against this registry |
 | `claude-desktop` | `ghcr.io/nofireai/` | Brig cannot verify the signature and warns on every boot. The image is single-architecture, `aarch64` only |
 | `ubuntu` | Docker Hub | Brig cannot verify the signature and warns on every boot |
 
@@ -139,7 +143,7 @@ Each profile sets the network default for a new sandbox. See
 
 | case | network |
 | --- | --- |
-| The six shipped `hvi` profiles | `network: isolated` |
+| The seven shipped `hvi` profiles | `network: isolated` |
 | `claude-desktop` | `network: shared`, because its GUI requires `vz` |
 | `cursor` | Unset. Linux and `hvi` isolate. `vz` and `qemu` fall back to `shared` |
 | An existing session | Keeps its recorded posture |
@@ -197,13 +201,13 @@ and Brig refuses an explicit request for it.
 - `brig sh` always execs `bash -l`, or runs the command or script under
   `bash -lc`. It never runs `binary:`. `ubuntu` sets `binary: bash` anyway,
   which documents the shell, and Brig does not act on it.
-- `brig agent ls` lists `claude-desktop` and `ubuntu` with the other six
+- `brig agent ls` lists `claude-desktop` and `ubuntu` with the other seven
   profiles, but a run of one opens a window or a shell.
 - A `kind: shell` or `kind: gui` profile cannot carry `policy:`. Neither has
   an agent process to hook an egress rule into, so Brig refuses the profile at
   parse time.
-- The older `shell:` and `gui:` booleans still parse, and Brig folds them into
-  `kind:` when it reads the file. See
+- v0.5.0 removed the older `shell:` and `gui:` booleans. A profile that
+  still has one fails to parse, and the error names `kind:`. See
   [migration.md](migration.md#profile-keys).
 
 ## `brig info`
@@ -238,9 +242,9 @@ brig: guest git over HTTPS: off (BRIG_GIT_CONFIG=1 to enable)
 `BRIG_ENV_ARGV=1` still puts an ordinary forwarded variable on the runtime's
 own command line. It is for a runtime build that does not take a bare
 `--env KEY`. It has no effect on a value bound from the secret store, because
-the host durably logs the argv of every exec. On a runtime build that needs
-`BRIG_ENV_ARGV=1`, such a credential does not arrive at all, so it never
-reaches the log.
+the guest agent logs the argv of every exec, and on some backends that log
+is a file on host disk. On a runtime build that needs
+`BRIG_ENV_ARGV=1`, such a credential does not arrive at all.
 
 ## `reserved`
 
@@ -352,31 +356,29 @@ one, import a profile of the same name.
 | `desc` | no | One line, shown by `brig agent ls` |
 | `secrets` | no | Names this profile wants out of Brig's own secret store, checked before the sandbox is created. Each entry says whether a run without it stops, and where `brig secret import` can find it. See [`secrets` and `env`](#secrets-and-env-for-a-credential-brig-resolves-itself) |
 | `env` | no | The variables the guest sees, and where the value of each comes from: a literal, a stored secret, or Brig's own environment. See [`secrets` and `env`](#secrets-and-env-for-a-credential-brig-resolves-itself) |
-| `forward` | no | Deprecated. It still works, and Brig folds it into an equivalent `env` binding when it reads the file. See [migration.md](migration.md#profile-keys) |
 | `files` | no | Credential files the guest sees: which stored secret fills each one, and where under `guestHome` it is written. See [`files`](#files) |
 | `volumes` | no | What is mounted inside `guestHome`, or at a fixed guest path with `at:`: a `tmpfs` whose contents never reach host disk, how big it can grow, and the `hostmount` exceptions kept across boots. See [`volumes`](#volumes) |
-| `deny` | no | Variables Brig does not forward unless `BRIG_ALLOW_DENIED=1` is set. Brig refuses a profile that also binds one in `env` or `forward`. See [`deny`](#deny-is-the-billing-guard) |
-| `statePaths` | no | Deprecated, superseded by `volumes:`. It still parses. If you declare it alongside `volumes:`, Brig reports an error and does not merge them. See [migration.md](migration.md#profile-keys) |
+| `deny` | no | Variables Brig does not forward unless `BRIG_ALLOW_DENIED=1` is set. Brig refuses a profile that also binds one in `env`. See [`deny`](#deny-is-the-billing-guard) |
 | `staleCredentialFiles` | no | Paths an older wrapper used to write a credential into. Brig never does. It warns when it finds one and does not delete it |
 | `headless` | no | The agent supports a non-interactive run |
 | `guiTitle` | no | Window title, for a `kind: gui` profile |
 | `network` | no | The network posture of the sandbox: `shared` (one network for sandboxes using it), `isolated` (a network for this sandbox alone) or `offline` (no route out at all). A new sandbox defaults to `isolated`. When no posture is named, hull's `vz` and `qemu` backends fall back to `shared` and report it. Brig refuses an explicit `isolated` on `vz` and `qemu`. An existing sandbox keeps its recorded or runtime-inspected posture. `BRIG_NETWORK`, `--network` and `--offline` win over both |
-| `hypervisor` | no | macOS backend to boot on: `vz` (the default when the field is absent, and the only one with a graphical console), `hvi` or `qemu`. Six of the eight shipped profiles say `hvi`. `BRIG_HYPERVISOR` wins over it. Ignored on Linux, where the shim decides |
+| `hypervisor` | no | macOS backend to boot on: `vz` (the default when the field is absent, and the only one with a graphical console), `hvi` or `qemu`. Seven of the nine shipped profiles say `hvi`. `BRIG_HYPERVISOR` wins over it. On Linux it names the urunc monitor of a `genericBoot` profile, with `vz` and an absent field meaning `hvi`. `qemu` asks urunc for qemu, which the runtime bundle does not ship. See [`BRIG_HYPERVISOR`](cli.md#environment-variables) |
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. It describes your machine and not the workload, so it is of no use to a person you share the profile with. Use it to pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
-| `rootfsType` | no | How the guest root reaches the microVM: `block`, `virtiofs` or `9pfs`. Left unset, the runtime picks its own default, which suits a profile that only runs an agent. Set `block` when the sandbox installs packages and needs a writable disk instead of a share sized to the image |
+| `rootfsType` | no | How the guest root reaches the microVM: `block`, `virtiofs` or `9pfs`. Left unset or set to `virtiofs`, a `genericBoot` profile boots an overlay root where the host can build one, and the runtime's own root elsewhere. See [the guest root of a generic boot](runtimes.md#the-guest-root-of-a-generic-boot). A profile cannot opt out of the overlay; `BRIG_ROOTFS_MODE=virtiofs` does. Set `block` when the sandbox installs packages and needs a writable disk instead of a share sized to the image |
 | `genericBoot` | no | The image was never built to be a guest: a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See [`genericBoot`](#genericboot) |
-| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the guest home. Brig seeds them only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both must be set for either to take effect. Only `claude-code` declares them, so `--skills` does nothing on the other seven |
+| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the guest home. Brig seeds them only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both must be set for either to take effect. Only `claude-code` and `herd` declare them, so `--skills` does nothing on the other seven |
 | `onboarding` | no | A first-run state file to seed. See [`onboarding`](#onboarding) |
 | `reserved` | no | Marks a profile that owns the guest home a session name can otherwise slug onto. See [`reserved`](#reserved) |
 | `unpublished` | no | Brig ships the profile but no image for it. `brig run` says so and stops before the pull, which otherwise fails with a registry 404. Pass `--image` with one you built. `brig agent ls` marks the profile, and `cursor` is the one that carries it |
 | `policy` | no | Names of policies attached to this profile inline: every run carries all of them, unioned with whatever is attached separately by name |
 
-Brig refuses a misspelled field, such as `forwards:` in place of `forward:`.
+Brig refuses a misspelled field, such as `volume:` in place of `volumes:`.
+It refuses a key that v0.5.0 removed the same way, and the error names the
+key that replaced it. See [migration.md](migration.md#profile-keys).
 
-`brig agent show --json` always prints the `env:` form, even for a profile
-written with `forward:`. JSON export marshals the parsed profile, and the
-parser folds `forward:` into `env:`. Plain YAML export gives back the file as
-written.
+`brig agent show --json` marshals the parsed profile. Plain YAML export gives
+back the file as written.
 
 ## `secrets` and `env`, for a credential Brig resolves itself
 
@@ -441,14 +443,16 @@ A bare string is the short form of a required, hand-created secret:
 - A secret with no `sources:` is hand-created. Its message names
   `brig secret create` instead of `brig secret import`.
 
-Three `from:` values exist, and each takes one locator and no other. For
-example, a `keychain` source that carries a `path:` is a parse error.
+Four `from:` values exist. `keychain`, `file` and `env` each take one
+locator and no other, and `aws` takes none. For example, a `keychain` source
+that carries a `path:` is a parse error.
 
 | `from:` | locator | what it reads |
 | --- | --- | --- |
 | `keychain` | `service:` | a macOS keychain generic-password item. macOS only: the Linux store is a Secret Service keyring ([secrets.md](secrets.md#linux)), and no source reads from it |
 | `file` | `path:` | a host file, verbatim. A leading `~` is expanded when it is read, so a profile carries no one host's home directory |
 | `env` | `var:` | a host environment variable, **copied once at import** |
+| `aws` | none | no file or keychain item. `import` checks the AWS profile you name with `--aws-profile` and stores a pointer to it, for a route on the `aws` preset. Each machine names its own AWS profile, so the profile you share carries none. See [An AWS profile behind a route](secrets.md#an-aws-profile-behind-a-route) |
 
 `from: env` and `ref: env.<name>` share a word and behave differently:
 
@@ -546,7 +550,7 @@ env:
 | form | what it reads |
 | --- | --- |
 | `ref: secrets.<name>` | The named secret, out of Brig's own store |
-| `ref: env.<name>` | The named variable, out of Brig's own environment. `forward:` reads from the same place |
+| `ref: env.<name>` | The named variable, out of Brig's own environment |
 
 Limits:
 
@@ -586,6 +590,13 @@ runtime's command line as `NAME=value`. See
 Brig refuses a binding for one of them that resolves from the secret store. It
 does so when the sandbox boots or execs, because a stored secret never goes on
 the command line.
+
+### `BRIG_PROJECT`
+
+Brig sets `BRIG_PROJECT` itself, to the guest path of the run's project, and
+leaves it unset when there is no project. It ignores a binding of that name,
+including one from `BRIG_FORWARD_ENV`, and prints a warning. The guest gets
+Brig's value, and the CREDENTIALS row does not name the binding.
 
 ### `BRIG_FORWARD_ENV`
 
@@ -730,9 +741,8 @@ Shipped profiles:
 
 | profiles | what they declare | where state lives |
 | --- | --- | --- |
-| `claude-code`, `claude-desktop` | `volumes:` | In-guest state can live in memory and stay off host disk |
-| `codex`, `cursor`, `gemini`, `grok`, `opencode` | Only the deprecated `statePaths:` | Everything under `guestHome` persists to host disk, with nothing memory-only |
-| `ubuntu` | Neither | Everything under `guestHome` persists to host disk, with nothing memory-only |
+| `claude-code`, `claude-desktop`, `herd` | `volumes:` | In-guest state can live in memory and stay off host disk |
+| `codex`, `cursor`, `gemini`, `grok`, `opencode`, `ubuntu` | No `volumes:` | Everything under `guestHome` persists to host disk, with nothing memory-only |
 
 ### State lost at `brig stop`
 

@@ -145,3 +145,20 @@ func TestInfoUsageNamesTheFlagsThatChangeTheEnvelope(t *testing.T) {
 		}
 	}
 }
+
+// #475: sh's help names the -c form and says the words arrive as arguments,
+// and no longer says the command is run through the shell.
+func TestShHelpDescribesArgvAndScript(t *testing.T) {
+	out, err := captureStdout(t, func() error { return run([]string{"sh", "--help"}) })
+	if err != nil {
+		t.Fatalf("brig sh --help: %v", err)
+	}
+	for _, want := range []string{"-c '<script>'", "one argument"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("brig sh --help does not mention %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "through the shell") {
+		t.Errorf("brig sh --help still describes the removed shell form:\n%s", out)
+	}
+}

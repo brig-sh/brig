@@ -1,7 +1,8 @@
 // Package broker is the credential broker of brokered routes: it verifies the
 // session token a guest sends, refuses a request that holds a token anywhere
 // but its carrier, applies the route's request.allow, injects the credential
-// and forwards the request to the route's upstream.
+// and forwards the request to the route's upstream. A route that vends
+// answers the guest with credentials from a Vendor instead of forwarding.
 //
 // A guest holds a session token per route and no credential. A request names
 // its sandbox and route in the path, /<sandbox-id>/r/<route>/<rest>, and the
@@ -64,7 +65,8 @@ type Config struct {
 	Now func() time.Time
 	// Transport is optional. It carries the upstream requests, and defaults
 	// to one that verifies upstream TLS with the system roots and uses no
-	// proxy.
+	// proxy. When it is an *http.Transport it is also the base that a route
+	// with inject.tls clones its own transport from.
 	Transport http.RoundTripper
 	// ArrivalCheck is optional. It reports whether a request for sandbox
 	// that arrived from remoteAddr came in where that sandbox reaches the
@@ -85,6 +87,21 @@ type Config struct {
 	// a request may take to send the part of its body the broker holds. A
 	// body waits a tenth of it for the budget to hold it.
 	BodyTimeout time.Duration
+	// Vendor is optional. It answers a route that vends. Without it such a
+	// route gets 502.
+	Vendor Vendor
+	// VendOnly is optional. It reports whether the request came in clear
+	// text, where only a route that vends is served. Any other route's token
+	// there would cross the link readable, so such a request is answered as
+	// one for a route the sandbox does not have, before its token is checked
+	// or its credential read. The host process decides from the connection
+	// the request arrived on, not from its remote address string.
+	VendOnly func(r *http.Request) bool
+	// VendDoc is optional. It reports whether a secret document is one only
+	// a route that vends takes, such as an AWS pointer. A route that does not
+	// vend would send it upstream as a header, which names the user's AWS
+	// profile and role, so such a route answers 502 and sends nothing.
+	VendDoc func(doc []byte) bool
 }
 
 // DefaultReplayBudget is the default of Config.ReplayBudget.
@@ -121,8 +138,10 @@ type Sandbox struct {
 //
 // Route must be a route that policy.ExpandRoute returned, and the broker does
 // not validate it again. It depends on what Route.Validate guarantees: the
-// upstream is a canonical https:// origin, a credential is named, inject
-// carries the credential in headers.set or basicAuth, Authorization is in
+// upstream is a canonical https:// origin, a credential is named (a route
+// whose inject.tls has a clientCertificate and sets no header needs none),
+// inject carries the credential in headers.set or basicAuth or names the
+// secrets of inject.tls, Authorization is in
 // headers.remove, no header list names a header the broker owns, and
 // request.allow.repos appears only on a github-token route.
 type Route struct {
@@ -145,6 +164,9 @@ type Handler struct {
 	arrival   func(sandbox, remoteAddr string) (string, bool)
 	replay    *budget
 	bodyWait  time.Duration
+	vendor    Vendor
+	vendOnly  func(r *http.Request) bool
+	vendDoc   func(doc []byte) bool
 
 	mu        sync.RWMutex
 	sandboxes map[string]*sandbox
@@ -152,6 +174,13 @@ type Handler struct {
 	renewMu sync.Mutex
 	// forced is when an upstream 401 last forced a renewal, per secret.
 	forced map[string]time.Time
+
+	certMu sync.Mutex
+	// certs and cas are the parsed client certificates and CA bundles of the
+	// routes with inject.tls, by secret name, with the digest of the bytes
+	// they were parsed from.
+	certs map[string]*certEntry
+	cas   map[string]*caEntry
 }
 
 // sandbox is a registered sandbox, ready to serve.
@@ -173,11 +202,20 @@ type sandbox struct {
 	match *matcher
 }
 
-// route is a registered route with its upstream parsed.
+// route is a registered route with its upstream parsed, or nil for a route
+// that vends.
 type route struct {
 	policy   string
 	spec     v1alpha1.Route
 	upstream *url.URL
+
+	// cur is the transport of a route with inject.tls, built on first use for
+	// this sandbox alone and replaced when the CA bundle or the certificate
+	// it was built for changes. closed is set when the sandbox goes, and no
+	// transport is built after it. tlsMu guards both.
+	tlsMu  sync.Mutex
+	cur    *tlsTransport
+	closed bool
 }
 
 // New returns a Handler built from cfg.
@@ -197,6 +235,11 @@ func New(cfg Config) (*Handler, error) {
 		arrival:   cfg.ArrivalCheck,
 		sandboxes: map[string]*sandbox{},
 		forced:    map[string]time.Time{},
+		vendor:    cfg.Vendor,
+		vendOnly:  cfg.VendOnly,
+		vendDoc:   cfg.VendDoc,
+		certs:     map[string]*certEntry{},
+		cas:       map[string]*caEntry{},
 	}
 	if cfg.ReplayBudget < 0 {
 		return nil, fmt.Errorf("the broker replay budget is %d bytes; it cannot be negative", cfg.ReplayBudget)
@@ -237,9 +280,7 @@ func New(cfg Config) (*Handler, error) {
 // verification, and no proxy from the environment. An HTTPS_PROXY set on the
 // host would otherwise see every upstream request the broker makes.
 func defaultTransport() http.RoundTripper {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.Proxy = nil
-	return t
+	return defaultHTTPTransport()
 }
 
 // AddSandbox registers s, or replaces the sandbox registered under s.ID.
@@ -264,16 +305,27 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		if _, dup := sb.routes[name]; dup {
 			return fmt.Errorf("sandbox %s: route %s is registered twice", s.ID, name)
 		}
-		if r.Route.Credential == nil || r.Route.Inject == nil {
+		if r.Route.Inject == nil || (r.Route.Credential == nil && !r.Route.Inject.CertificateOnly()) {
 			return fmt.Errorf("sandbox %s: route %s is not expanded; pass it through policy.ExpandRoute", s.ID, name)
 		}
 		if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint && !slices.Contains(s.Modes, m) {
 			return fmt.Errorf("sandbox %s: route %s is mode %q, and the sandbox was registered with nothing "+
 				"to serve it", s.ID, name, m)
 		}
-		u, err := url.Parse(r.Route.Upstream)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
-			return fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", s.ID, name, r.Route.Upstream)
+		// A route that vends answers the guest itself and has no upstream.
+		var u *url.URL
+		if r.Route.Vends() {
+			// checkDivertedRoutes reads the upstream of every route not in
+			// endpoint mode.
+			if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint {
+				return fmt.Errorf("sandbox %s: route %s vends credentials and cannot be mode %q", s.ID, name, m)
+			}
+		} else {
+			var err error
+			u, err = url.Parse(r.Route.Upstream)
+			if err != nil || u.Scheme != "https" || u.Host == "" {
+				return fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", s.ID, name, r.Route.Upstream)
+			}
 		}
 		sb.routes[name] = &route{policy: r.Policy, spec: *r.Route.DeepCopy(), upstream: u}
 	}
@@ -281,8 +333,13 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		return fmt.Errorf("sandbox %s: %w", s.ID, err)
 	}
 	h.mu.Lock()
+	old := h.sandboxes[s.ID]
 	h.sandboxes[s.ID] = sb
 	h.mu.Unlock()
+	if old != nil {
+		old.closeTransports()
+		h.pruneCerts()
+	}
 	return nil
 }
 
@@ -310,8 +367,13 @@ func ValidID(id string) error {
 // placeholder count go with it.
 func (h *Handler) RemoveSandbox(id string) {
 	h.mu.Lock()
+	old := h.sandboxes[id]
 	delete(h.sandboxes, id)
 	h.mu.Unlock()
+	if old != nil {
+		old.closeTransports()
+		h.pruneCerts()
+	}
 }
 
 func (h *Handler) sandbox(id string) *sandbox {

@@ -85,6 +85,33 @@ func TestReplacingAGatewayThatCannotBeStoppedIsRefused(t *testing.T) {
 	}
 }
 
+// Negative: an isolated gateway that is replaced counts as stopped only once
+// it no longer listens. Its argv goes before its sockets do. A stop that took
+// the argv as the answer found the socket still accepting, and refused the
+// boot as one whose old gateway could not be stopped.
+func TestAnIsolatedGatewayThatIsSlowToExitIsStillReplaced(t *testing.T) {
+	scratchIsolatedDir(t)
+	const name = "brig-slow"
+	sock := mustSocket(t, name)
+	t.Cleanup(func() { killGatewaysOn(sock) })
+	old := startSlowExitGateway(t, sock, true)
+	writeGatewayRecord(sock, old, gatewaySpec(0, Egress{Default: "deny"}))
+	bin, _ := fakeRuntime(t)
+
+	if _, err := ensureIsolatedGateway(bin, name, 0, Egress{}); err != nil {
+		t.Fatalf("replacing a gateway that was exiting failed: %v", err)
+	}
+	if got, want := recordedSpec(sock), gatewaySpec(0, Egress{}); got != want {
+		t.Errorf("the record says %q, want %q", got, want)
+	}
+	if pid, ok := gatewayPID(sock); !ok || pid == old {
+		t.Errorf("the record names pid %d (ok=%t), want the new gateway", pid, ok)
+	}
+	if gws := gatewaysOn(t, sock); len(gws) != 1 {
+		t.Fatalf("want one gateway on the socket, got %q", gws)
+	}
+}
+
 // Remove frees the sandbox's address and its /30 only when the removal
 // succeeded. A `hull rm` that failed leaves a sandbox that may still be
 // running, and putting its network back in the pool hands it to the next

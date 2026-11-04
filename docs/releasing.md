@@ -64,10 +64,11 @@ with full history. Without the tag, the output changes:
 2. If a subject reads badly or sits in the wrong section, fix the commit
    now, before the tag exists.
 
-3. If this release is the one that `retiredGoesIn` in `cmd/brig/main.go`
-   names, remove the retired spellings first. As an alternative, move that
-   constant and the docs to a later release. v0.3.0 shipped with the retired
-   spellings still in, because no step checked.
+3. If this release is the one that a retired spelling's notice names, such
+   as `flatPolicyGoesIn` in `cmd/brig/policy.go`, remove that spelling first.
+   As an alternative, move that constant and the docs to a later release.
+   v0.3.0 shipped with the retired spellings still in, because no step
+   checked.
 
 4. Tag the release commit and push the tag:
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/testpki"
 	"github.com/brig-sh/brig/internal/ttytest"
 )
 
@@ -446,19 +447,6 @@ func TestReadAndDeleteRefuseAJournalName(t *testing.T) {
 	}
 }
 
-// rm is the spelling brig uses elsewhere -- `brig rm`, `brig profile rm` --
-// so it works here too.
-func TestDeleteAndRmAreSynonyms(t *testing.T) {
-	f := newFake(t)
-	f.seed("gh", "v")
-	if err := secretCmd(&bytes.Buffer{}, []string{"rm", "gh", "-y"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := f.items["gh"]; ok {
-		t.Error("rm did not delete")
-	}
-}
-
 // A deleted secret cannot be recovered, so a delete nobody confirmed must not
 // go through. Without a terminal there is nobody to ask, which is the shape a
 // script has -- and a script that means it says so with -y.
@@ -795,5 +783,161 @@ func TestASecondNameIsRefused(t *testing.T) {
 	pipeStdin(t, "v")
 	if err := secretCmd(&bytes.Buffer{}, []string{"create", "gh", "token"}); err == nil {
 		t.Error("a second bare word was accepted")
+	}
+}
+
+// tlsFixture mints a client chain (certificate then key) valid across now.
+func tlsFixture(t *testing.T, notBefore, notAfter time.Time) (chain, keyPEM []byte) {
+	t.Helper()
+	ca, err := testpki.NewCA("test-ca")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, k, err := ca.Client("inventory-client", notBefore, notAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(append([]byte{}, c...), k...), k
+}
+
+func writeTemp(t *testing.T, data []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "value.pem")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestSecretCreateTypeTLSRefusesEachBadValue(t *testing.T) {
+	now := time.Now()
+	good, key := tlsFixture(t, now.Add(-time.Hour), now.Add(24*time.Hour))
+	certOnly := bytes.TrimSuffix(good, key)
+	expired, _ := tlsFixture(t, now.Add(-48*time.Hour), now.Add(-time.Hour))
+	_, otherKey := tlsFixture(t, now.Add(-time.Hour), now.Add(24*time.Hour))
+	cases := []struct {
+		name  string
+		value []byte
+		want  string
+	}{
+		{"no certificate", key, "no usable CERTIFICATE"},
+		{"no key", certOnly, "no private key"},
+		{"two keys", append(append([]byte{}, good...), key...), "more than one private key"},
+		{"encrypted key", []byte(string(certOnly) + "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n"), "encrypted"},
+		{"key mismatch", append(append([]byte{}, certOnly...), otherKey...), "does not match"},
+		{"expired", expired, "expired"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFake(t)
+			err := secretCmd(&bytes.Buffer{}, []string{"create", "mtls", "--type", "tls", "-f", writeTemp(t, c.value)})
+			if err == nil {
+				t.Fatal("a bad certificate was accepted")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error %q does not name the case %q", err, c.want)
+			}
+			if strings.Contains(err.Error(), "BEGIN") || strings.Contains(err.Error(), string(otherKey[40:60])) {
+				t.Errorf("error echoes the value: %v", err)
+			}
+			if len(f.items) != 0 {
+				t.Errorf("a refused value was written: %v", f.items)
+			}
+		})
+	}
+}
+
+func TestSecretCreateTypeTLSNeverPrintsTheKey(t *testing.T) {
+	now := time.Now()
+	good, key := tlsFixture(t, now.Add(-time.Hour), now.Add(24*time.Hour))
+	newAnnotating(t)
+	var out bytes.Buffer
+	errOut := captureStderr(t, func() {
+		// Flag before the name here; the other order is used elsewhere.
+		if err := secretCmd(&out, []string{"create", "--type", "tls", "mtls", "-f", writeTemp(t, good)}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", out.String())
+	}
+	for _, want := range []string{"subject", "issuer", "expires"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr lacks %q: %q", want, errOut)
+		}
+	}
+	if strings.Contains(errOut, "PRIVATE KEY") || strings.Contains(errOut, strings.TrimSpace(string(key))) {
+		t.Errorf("stderr carries the key: %q", errOut)
+	}
+}
+
+func TestSecretCreateTypeTLSRecordsTheExpiry(t *testing.T) {
+	now := time.Now()
+	good, _ := tlsFixture(t, now.Add(-time.Hour), now.Add(24*time.Hour))
+	f := newAnnotating(t)
+	captureStderr(t, func() {
+		if err := secretCmd(&bytes.Buffer{}, []string{"create", "mtls", "--type", "tls", "-f", writeTemp(t, good)}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !bytes.Equal(f.items["mtls"], good) {
+		t.Error("the value was not stored verbatim")
+	}
+	p := f.provenance["mtls"]
+	want := now.Add(24 * time.Hour).UnixMilli()
+	if d := p.ExpiresAt - want; d < -5000 || d > 5000 {
+		t.Errorf("ExpiresAt = %d, want about %d", p.ExpiresAt, want)
+	}
+	if p.From != "" || p.V != secret.ProvenanceVersion {
+		t.Errorf("provenance = %+v", p)
+	}
+
+	// update goes through the same check against an existing name.
+	renewed, _ := tlsFixture(t, now.Add(-time.Hour), now.Add(72*time.Hour))
+	captureStderr(t, func() {
+		if err := secretCmd(&bytes.Buffer{}, []string{"update", "mtls", "--type", "tls", "-f", writeTemp(t, renewed)}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !bytes.Equal(f.items["mtls"], renewed) || f.provenance["mtls"].ExpiresAt <= p.ExpiresAt {
+		t.Error("update did not replace the value and its expiry")
+	}
+}
+
+func TestSecretCreateTypeCARefusesNoCertificate(t *testing.T) {
+	f := newAnnotating(t)
+	if err := secretCmd(&bytes.Buffer{}, []string{"create", "root", "--type", "ca", "-f", writeTemp(t, []byte("not a pem\n"))}); err == nil {
+		t.Fatal("a value with no certificate was accepted")
+	}
+	if len(f.items) != 0 {
+		t.Errorf("a refused value was written: %v", f.items)
+	}
+	ca, err := testpki.NewCA("root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secretCmd(&bytes.Buffer{}, []string{"create", "root", "--type=ca", "-f", writeTemp(t, ca.PEM)}); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(f.items["root"], ca.PEM) {
+		t.Error("the bundle was not stored verbatim")
+	}
+	if p := f.provenance["root"]; p != (secret.Provenance{}) {
+		t.Errorf("a CA bundle recorded provenance %+v", p)
+	}
+}
+
+func TestSecretCreateRefusesAnUnknownType(t *testing.T) {
+	f := newFake(t)
+	err := secretCmd(&bytes.Buffer{}, []string{"create", "x", "--type", "foo", "-f", writeTemp(t, []byte("v"))})
+	if err == nil || !strings.Contains(err.Error(), "tls or ca") {
+		t.Fatalf("err = %v, want one naming tls and ca", err)
+	}
+	err = secretCmd(&bytes.Buffer{}, []string{"create", "x", "--bogus"})
+	if err == nil || !strings.Contains(err.Error(), "-f, --stdin and --type") {
+		t.Fatalf("err = %v, want the flag list", err)
+	}
+	if len(f.items) != 0 {
+		t.Errorf("something was written: %v", f.items)
 	}
 }

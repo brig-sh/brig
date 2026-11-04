@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -50,7 +52,7 @@ func twoSandboxes() *removeRuntime {
 // and making the scripted case the one that cannot be stopped. The test binary
 // has no terminal on stdin, which is exactly that case.
 func TestRemoveAllRefusesWithoutTerminalOrYes(t *testing.T) {
-	for _, args := range [][]string{{"rm", "--all"}, {"reset"}} {
+	for _, args := range [][]string{{"rm", "--all"}} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		_, err := captureStdout(t, func() error { return run(args) })
@@ -66,11 +68,14 @@ func TestRemoveAllRefusesWithoutTerminalOrYes(t *testing.T) {
 	}
 }
 
-// `brig reset` already means every sandbox, so --all on it is the new spelling
-// half-typed onto the old verb. Refused by name, with the whole of `brig rm
-// --all` in the message, rather than read past.
+// v0.5.0 removed `brig reset`. Every shape of it is refused by name, with the
+// whole of `brig rm --all` in the message, and removes nothing: the old verb
+// removed every sandbox, so a line that still has it must stop here.
 func TestResetRefusesAll(t *testing.T) {
-	for _, args := range [][]string{{"reset", "--all"}, {"reset", "--all", "-y"}, {"reset", "--dry-run", "--all"}} {
+	for _, args := range [][]string{
+		{"reset"}, {"reset", "-y"}, {"reset", "--dry-run"},
+		{"reset", "--all"}, {"reset", "--all", "-y"}, {"reset", "--dry-run", "--all"},
+	} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		_, err := captureStdout(t, func() error { return run(args) })
@@ -94,7 +99,6 @@ func TestRemoveAllWithYesRemovesEverySandbox(t *testing.T) {
 		{"rm", "--all", "-y"},
 		{"rm", "-y", "--all"},
 		{"rm", "--all", "--yes"},
-		{"reset", "-y"},
 	} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
@@ -121,7 +125,6 @@ func TestRemoveAllDryRunListsAndRemovesNothing(t *testing.T) {
 		{"rm", "--all", "--dry-run"},
 		{"rm", "--dry-run", "--all"},
 		{"rm", "--all", "--dry-run", "-y"},
-		{"reset", "--dry-run"},
 	} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
@@ -398,10 +401,10 @@ func TestRemoveAllRemovesASandboxWhoseProfileIsGone(t *testing.T) {
 	}
 }
 
-// rm --all and reset remove sandboxes without a Config, so they revoke each
-// sandbox's session tokens themselves, as brig stop and brig rm do.
+// rm --all removes sandboxes without a Config, so it revokes each sandbox's
+// session tokens itself, as brig stop and brig rm do.
 func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
-	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		var revoked []string
@@ -418,11 +421,11 @@ func TestRemoveAllRevokesEverySandboxsTokens(t *testing.T) {
 	}
 }
 
-// rm --all and reset also revoke what the broker still holds after their
-// own removals: a sandbox the detected runtime does not list keeps no token
-// that still works.
+// rm --all also revokes what the broker still holds after its own removals:
+// a sandbox the detected runtime does not list keeps no token that still
+// works.
 func TestRemoveAllRevokesWhatTheBrokerStillHolds(t *testing.T) {
-	for _, args := range [][]string{{"rm", "--all", "-y"}, {"reset", "-y"}} {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
 		rt := twoSandboxes()
 		removeHost(t, rt)
 		swap(t, &revokeRoutes, func(string) error { return nil })
@@ -485,5 +488,69 @@ func TestRemoveRevokesASandboxTheRuntimeDoesNotList(t *testing.T) {
 				t.Errorf("revoked %v, want %v", revoked, tt.want)
 			}
 		})
+	}
+}
+
+// plantHook takes a look at a project's .git for the sandbox, then plants a
+// hook in it, which is what the guest does between two brig commands.
+func plantHook(t *testing.T, vmName string) {
+	t.Helper()
+	project := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(filepath.Join(project, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".git", "config"), []byte("[core]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &wrap.Config{Err: &bytes.Buffer{}, Verbosity: wrap.Normal, VMName: vmName, Project: project}
+	c.CheckProjectGit()
+	if err := os.WriteFile(filepath.Join(project, ".git", "hooks", "post-checkout"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// `brig rm --all` forgets every sandbox's look at its project's .git, so a
+// hook the guest planted was never named on the one command that ends the
+// session. It compares first.
+func TestRemoveAllNamesAHookPlantedInAProject(t *testing.T) {
+	for _, args := range [][]string{{"rm", "--all", "-y"}} {
+		rt := twoSandboxes()
+		removeHost(t, rt)
+		plantHook(t, "brig-faker")
+		stderr := captureStderr(t, func() {
+			if _, err := run2(t, args); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if !strings.Contains(stderr, "added .git/hooks/post-checkout") {
+			t.Errorf("brig %s did not name the planted hook:\n%s", strings.Join(args, " "), stderr)
+		}
+		if len(rt.removed) != 2 {
+			t.Errorf("brig %s removed %v, want both sandboxes", strings.Join(args, " "), rt.removed)
+		}
+	}
+}
+
+// A preview removes nothing and forgets nothing, so it names nothing and the
+// look is still there for the removal that follows. -q hides the warning.
+func TestRemoveAllDryRunAndQuietDoNotNameAHook(t *testing.T) {
+	rt := twoSandboxes()
+	removeHost(t, rt)
+	plantHook(t, "brig-faker")
+	stderr := captureStderr(t, func() {
+		if _, err := run2(t, []string{"rm", "--all", "--dry-run"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(stderr, ".git/hooks") {
+		t.Errorf("--dry-run named a hook:\n%s", stderr)
+	}
+	stderr = captureStderr(t, func() {
+		if _, err := run2(t, []string{"-q", "rm", "--all", "-y"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(stderr, ".git/hooks") {
+		t.Errorf("-q named a hook:\n%s", stderr)
 	}
 }

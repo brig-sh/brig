@@ -1,16 +1,20 @@
 package wrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/termfilter"
 )
 
 // BuildEnv resolves everything the guest is handed for this invocation.
@@ -160,7 +164,11 @@ func (c *Config) backendRefusal(hypervisor string) error {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) (err error) {
-	// First of all. See sessionRefusal.
+	// Before every refusal below, and before the runtime is asked anything: a
+	// nerdctl with no configuration of the bundle's cannot reach its containerd,
+	// and that failure stops the run without naming the launcher.
+	c.warnBundleEnv()
+	// The first refusal. See sessionRefusal.
 	if err := c.sessionRefusal(); err != nil {
 		return err
 	}
@@ -179,9 +187,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// Before anything is prepared, and on the path that finds the sandbox up
 	// as well: a route whose secret the broker cannot read answers 502 to
 	// every request of the agent. The store is listed, never read.
-	if err := c.routeStoreRefusal(c.checkRouteStore()); err != nil {
+	routeStore := c.checkRouteStore()
+	if err := c.routeStoreRefusal(routeStore); err != nil {
 		return err
 	}
+	c.warnExpiringCertificates(routeStore)
 	// Said on the run, not in BuildEnv: BuildEnv resolves the set for every
 	// verb, brig env included, so a warning from there prints on a preview that
 	// spawns nothing and lands twice on env next to reportArgv. Here it is the
@@ -247,6 +257,13 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 			// force on this sandbox -- and returning here would print a POLICY
 			// row for rules nothing is applying.
 			c.warnf("%s", c.networkRestart())
+		case !c.waitReady():
+			// A guest that cannot be reached has said nothing about its mount.
+			// Its log goes with the restart, so it is read here.
+			c.warnGuestLog()
+			c.warnf("%s", notice.New("the running sandbox is not answering").
+				Note("its guest may have failed while booting").
+				Note("brig restarts it, and %s", disconnects))
 		case !c.guestMountsWorkspace():
 			c.warnf("%s", notice.New("the running sandbox is not mounting "+c.Workspace+": its share went stale").
 				Note("the directory was renamed or replaced, or the workspace changed").
@@ -451,9 +468,11 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		GUITitle: c.env.String("TITLE", c.Profile.GUITitle),
 		// How the root is shared and whether the image needs a kernel are
 		// facts about the profile, so they travel with it rather than being
-		// decided in the runtime adapter.
-		RootfsType:  c.env.String("ROOTFS_TYPE", c.Profile.RootfsType),
-		GenericBoot: c.Profile.GenericBoot,
+		// decided in the runtime adapter. Taken from check, which the
+		// ISOLATION row read, so the row names what boots.
+		RootfsType:  check.RootfsType,
+		RootfsMode:  check.RootfsMode,
+		GenericBoot: check.GenericBoot,
 		BootAssets:  bootAssets,
 		// Resolved once at the top of EnsureRunning, where the preflight also
 		// read it, so the backend this spec boots is the one that was checked.
@@ -488,6 +507,7 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 	// to find out.
 	c.rememberSession()
 	if !c.waitReady() {
+		c.warnGuestLog()
 		return fmt.Errorf("sandbox did not become ready; check '%s'", c.logHint())
 	}
 	if c.Profile.IsGUI() {
@@ -526,7 +546,7 @@ func (c *Config) hypervisor() string {
 // shipped first in macOS 15. On macOS 14 those symbols are absent and the VMM
 // dies at start with `dyld: missing symbol called` -- a failure with no name
 // on it, which reads like a brig bug rather than an OS floor. That is the
-// report in #4, seen on 14.5. Six of the eight shipped profiles ask for hvi,
+// report in #4, seen on 14.5. Seven of the nine shipped profiles ask for hvi,
 // so the default first run on macOS 14 hits this, and it is worth catching
 // here rather than leaving to an unnamed crash.
 //
@@ -535,8 +555,9 @@ func (c *Config) hypervisor() string {
 // BRIG_HYPERVISOR=vz leaves that choice with the person who can weigh it.
 //
 // The version is read through c.MacOSVersion, a seam a test can pin. Off macOS
-// it reports "", and there is nothing to refuse: hvi is a macOS backend, and
-// the Linux runtime ignores the field entirely. A version brig cannot parse
+// it reports "", and there is nothing to refuse: the macOS version is the only
+// floor here, and the Linux runtime refuses a monitor urunc does not run
+// itself. A version brig cannot parse
 // also proceeds -- blocking a run over a version string we could not read
 // would trade the boot crash for a refusal that is just as opaque.
 func (c *Config) preflightHypervisor(hv string) error {
@@ -588,6 +609,29 @@ func (c *Config) logHint() string {
 	return fmt.Sprintf("brig logs %s (or the runtime's own, %s)", ref, c.Runtime.LogsHint(c.VMName))
 }
 
+// selfExecutable says where this brig runs from, and a test puts it in a runtime
+// bundle's tree.
+var selfExecutable = os.Executable
+
+// warnBundleEnv says so when this brig is the runtime bundle's own, started
+// without its launcher. A warning and not a refusal: someone may have set up the
+// rest by hand. The failures it precedes name CNI plugins or a missing sleep in
+// the guest, and neither names the launcher.
+func (c *Config) warnBundleEnv() {
+	exe, err := selfExecutable()
+	if err != nil {
+		return
+	}
+	env, missing := runtime.MissingBundleEnv(exe)
+	if !missing {
+		return
+	}
+	c.warnf("%s", notice.New(env.Missing()).
+		Note("without it, %s does not find the bundle's CNI plugins or boot assets, and this run may fail", env.Program).
+		Do("run "+env.Program+" from "+env.Launchers, env.Fix()).
+		Do("or load the environment", ". "+env.File))
+}
+
 // waitReady waits for the in-guest agent.
 //
 // A running instance is not yet a reachable one: the runtime marks an
@@ -607,11 +651,136 @@ func (c *Config) waitReady() bool {
 	}
 }
 
+// guestLogLines is how much of the log warnGuestLog shows, guestLogBytes how
+// much of it brig holds to find them, and guestLogLineRunes how much of one line
+// it prints.
+const (
+	guestLogLines     = 5
+	guestLogBytes     = 64 << 10
+	guestLogLineRunes = 200
+)
+
+// guestLogTimeout bounds the read of a log. The runtime may be why the guest is
+// not answering, and a run on its way to a failure must not hang on it. A var for
+// tests.
+var guestLogTimeout = 10 * time.Second
+
+// virtiofsdRecord is one log record of virtiofsd, which runs to the end of its
+// line.
+var virtiofsdRecord = regexp.MustCompile(`\[[0-9TZ:.-]+ +[A-Z]+ +virtiofsd[^\]]*\].*`)
+
+// tailBuffer keeps the last limit bytes written to it.
+type tailBuffer struct {
+	data  []byte
+	limit int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.data = append(b.data, p...)
+	if extra := len(b.data) - b.limit; extra > 0 {
+		b.data = b.data[extra:]
+	}
+	return len(p), nil
+}
+
+// warnGuestLog prints the end of the log of a sandbox that did not answer.
+//
+// The reason is usually there, and the line that gives it may carry no level
+// while virtiofsd's harmless warnings do: readers have blamed its open file
+// limit for a guest that failed to exec. So virtiofsd's own lines are left out.
+// This goes out as a warning, and not in the error, because errors reach
+// telemetry and a guest's output must not.
+func (c *Config) warnGuestLog() {
+	if c.Verbosity < Normal {
+		return
+	}
+	raw, rawErr := &tailBuffer{limit: guestLogBytes}, &tailBuffer{limit: guestLogBytes}
+	ctx, cancel := context.WithTimeout(context.Background(), guestLogTimeout)
+	defer cancel()
+	// The whole log, cut here: nerdctl 2.3.5's --tail 40 returned a fragment of
+	// the last line and lost the line that said why the guest died. That costs a
+	// long read on a sandbox that ran for days, and only on the way to a failure.
+	// Best effort, since a runtime with no log leaves the message that follows as
+	// it was.
+	_ = c.Runtime.Logs(runtime.LogsSpec{Name: c.VMName, Tail: -1, Out: raw, Err: rawErr, Ctx: ctx})
+	// A read that ran out of time stopped partway, and "ends with" would be false
+	// of what it holds.
+	if ctx.Err() != nil {
+		return
+	}
+	// The guest's console is the log's stdout on nerdctl, and virtiofsd and the
+	// monitor are its stderr. On hull, stderr is hull's own. Read together they
+	// interleave mid-line, and the runtime's words would read as the guest's, so
+	// each has its own heading. The deciding line can be in either.
+	c.warnLogLines("the log of the sandbox ends with", raw)
+	c.warnLogLines("the runtime's error output ends with", rawErr)
+}
+
+func (c *Config) warnLogLines(heading string, log *tailBuffer) {
+	lines := guestLogTail(string(log.data), guestLogLines)
+	if len(lines) == 0 {
+		return
+	}
+	block := notice.New(heading)
+	for _, line := range lines {
+		block.Note("%s", line)
+	}
+	c.warnf("%s", block)
+}
+
+// guestLogTail takes the last n lines worth reading. The text comes from the
+// guest, so anything a terminal would act on goes.
+func guestLogTail(log string, n int) []string {
+	var lines []string
+	for _, line := range strings.Split(string(termfilter.Strip([]byte(log))), "\n") {
+		if line = guestLogLine(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	// A panic ends in a stack and a register dump. The guest's last words come
+	// before it, so the log is read up to the panic line.
+	// The last one, since the guest's own output can quote the words.
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "Kernel panic") {
+			lines = lines[:i+1]
+			break
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
+
+// guestLogLine is one line of a log as a notice prints it, control sequences
+// already gone.
+func guestLogLine(line string) string {
+	line = virtiofsdRecord.ReplaceAllString(line, "")
+	// A progress bar rewrites its line with carriage returns, thousands of times
+	// in one line of the log. A terminal shows the text after the last.
+	line = strings.TrimRight(line, "\r")
+	line = line[strings.LastIndexByte(line, '\r')+1:]
+	line = strings.TrimSpace(strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			return ' '
+		case unicode.IsPrint(r):
+			return r
+		}
+		return -1
+	}, line))
+	if runes := []rune(line); len(runes) > guestLogLineRunes {
+		return string(runes[:guestLogLineRunes]) + "..."
+	}
+	return line
+}
+
 // guestMountsWorkspace asks the guest which workspace it actually has.
 //
-// Only a reachable guest can answer for its own share. An exec that cannot
-// land says nothing about the mount, and treating that silence as "stale" is
-// how a second invocation would destroy a VM the first one is still booting.
+// Only a reachable guest can answer for its own share, so the caller waits for
+// one first. An exec that cannot land says nothing about the mount, and treating
+// that silence as "stale" is how a second invocation would destroy a VM the first
+// one is still booting.
 func (c *Config) guestMountsWorkspace() bool {
 	// Through the root like every other workspace access: the marker is read
 	// back out of the guest's own home, and following a symlink there would
@@ -623,9 +792,6 @@ func (c *Config) guestMountsWorkspace() bool {
 	defer func() { _ = r.Close() }()
 	want, err := r.readFile(markerFile)
 	if err != nil {
-		return false
-	}
-	if !c.waitReady() {
 		return false
 	}
 	seen, err := c.Runtime.Output(runtime.ExecSpec{
@@ -794,8 +960,11 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 	}
 }
 
+// projectVar names the guest variable that carries GuestProject.
+const projectVar = "BRIG_PROJECT"
+
 // guestEnv is the environment brig hands every process in the sandbox: the
-// resolved variables, and HOME set to the profile's guest home.
+// resolved variables, BRIG_PROJECT, and HOME set to the profile's guest home.
 //
 // HOME is set here because the runtime cannot be relied on for it. runc fills
 // it in from the guest's /etc/passwd when the spec has none, but an exec
@@ -803,8 +972,30 @@ func (c *Config) execSpec(set creds.Set, argv []string, tty bool) runtime.ExecSp
 //
 // The route variables come last, so a route value replaces a profile value of
 // the same name, as the spec of guest.env says.
+//
+// BRIG_PROJECT is where the project is mounted, set only when one is. A
+// process the sandbox did not start through brig -- an SSH session, whose
+// sshd starts in HOME with an empty environment -- has no other way to find
+// it. brig owns the name: a value the set carries is dropped, so the variable
+// never names a directory brig did not mount, and its absence means no
+// project. Load already drops a binding or route of that name with a warning
+// (withoutProjectVar); the filter here is what holds the promise for a set
+// built any other way.
 func (c *Config) guestEnv(set creds.Set) []runtime.Var {
-	vars := append(append([]runtime.Var(nil), set.Vars...), c.routeVars...)
+	vars := make([]runtime.Var, 0, len(set.Vars)+len(c.routeVars)+1)
+	for _, v := range set.Vars {
+		if v.Name != projectVar {
+			vars = append(vars, v)
+		}
+	}
+	for _, v := range c.routeVars {
+		if v.Name != projectVar {
+			vars = append(vars, v)
+		}
+	}
+	if c.GuestProject != "" {
+		vars = append(vars, runtime.Var{Name: projectVar, Value: c.GuestProject})
+	}
 	if c.Profile.GuestHome == "" {
 		return vars
 	}

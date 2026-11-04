@@ -54,11 +54,11 @@ passes `--hypervisor`, so the default of hull never decides the backend.
 | hull on `qemu` | see the hull documentation. The source of Brig does not say which framework `qemu` uses, or what it needs on the host | macOS, when the profile or `BRIG_HYPERVISOR` names it | refused | refused |
 | nerdctl with urunc | the containerd shim `io.containerd.urunc.v2`, which boots the container as a microVM | Linux | refused | yes. Brig creates a network for each sandbox |
 
-The eight shipped profiles divide as follows on macOS:
+The nine shipped profiles divide as follows on macOS:
 
 | profiles | backend | network |
 | --- | --- | --- |
-| six of the eight | `hypervisor: hvi` | `network: isolated`, so each new sandbox has a network of its own |
+| seven of the nine | `hypervisor: hvi` | `network: isolated`, so each new sandbox has a network of its own |
 | `claude-desktop` | none named, so `vz` | `shared` |
 | `cursor` | none named, so `vz` | none named, so `shared` |
 
@@ -112,6 +112,12 @@ transport where the mode is served.
 
 This build of Brig serves the `endpoint` mode alone. A route in any other
 mode is refused on every run path, with exit `7`.
+
+A route that vends is also reached at the link-local address
+`169.254.170.2` (see [Transports](broker.md#transports)). On hull on `hvi`
+its run also needs a gateway that diverts that address, which needs hull
+[v0.1.0](https://github.com/brig-sh/hull/releases/tag/v0.1.0) or later. Brig asks
+the gateway before boot, and refuses an older hull with exit `7`.
 
 ## Where the boundary sits
 
@@ -170,12 +176,17 @@ hull run --detach --name <name>
      [--shared-dir <host>:<guest>[:ro]]...
      [--gui [--gui-title <title>]]
      [--env <NAME>|<NAME>=<value>]... <image>
+                                        # HULL_ROOTFS_MODE=overlay-block in its environment
+                                        # on a generic boot with an overlay root
 hull exec [-t] [--cwd <dir>] [-u <user>] [--env <NAME>|<NAME>=<value>]... <name> -- <cmd>...
 hull logs [--follow] [--tail <n>] <name>
 hull stop <name>
 hull rm <name>
 hull network-gateway --help             # does this hull enforce a policy? (--egress-default)
                                         # does it route brig.internal? (--divert)
+hull network-gateway --socket <tmp>/p.sock      # does it divert 169.254.170.2? Asked
+     --divert 169.254.170.2:80=<tmp>/p.sock     # before a run with a route that vends.
+     --divert 169.254.170.2:80=<tmp>/p.sock     # "diverted twice" is yes, "link-local" no
 hull network-gateway --socket <path> --qemu-socket <path>.qemu   # internal/runtime/gateway.go
      --subnet 198.18.0.0/24 --gateway-ip 198.18.0.1 --api <api socket>
 hull network-gateway --socket <path> --qemu-socket <path>.qemu
@@ -185,6 +196,7 @@ hull network-gateway --socket <path> --qemu-socket <path>.qemu
      [--egress-allow <rule>]... [--egress-deny <rule>]...   # carrying a policy
      [--divert <gateway-ip>:443=<divert socket>           # a guest that reaches
       --host brig.internal=<gateway-ip>]                   # brig.internal
+     [--divert 169.254.170.2:80=<divert socket>]          # a route that vends
 ```
 
 Every exec goes through `hull exec`. The reachability probe, the captured
@@ -218,7 +230,8 @@ nerdctl run --detach --name <name>
      [--publish <addr>:<host port>:<guest port>/<proto>]...
      [--annotation com.urunc.unikernel.bootKernel=<path>]
      [--annotation com.urunc.unikernel.bootInitrd=<path>]
-     [--annotation com.urunc.unikernel.hypervisor=cloud-hypervisor]
+     [--annotation com.urunc.unikernel.hypervisor=<hvi|cloud-hypervisor|qemu|firecracker>]
+     [--annotation com.urunc.unikernel.rootfsMode=overlay-block]   # an overlay root
      [-v <host>:<guest>[:ro]]... [--tmpfs <path>:<options>]...
      [-e <NAME>|<NAME>=<value>]... <image> sleep infinity
 nerdctl exec -i [-t] [-w <dir>] [-u <user>] [-e <NAME>|<NAME>=<value>]... <name> <cmd>...
@@ -348,7 +361,7 @@ On an old build, Brig drops one feature at a time:
   [Things Brig does not claim](security.md#things-brig-does-not-claim) for the
   answer per backend.
 
-The six `hvi` profiles also set `genericBoot: true`
+The seven `hvi` profiles also set `genericBoot: true`
 (`internal/profile/specs`). As a result, the default macOS path needs the
 `hvi` binary beside hull, a working gateway and the boot bundle.
 `BRIG_HYPERVISOR=vz` with `BRIG_NETWORK=shared` moves those profiles to `vz`.
@@ -378,8 +391,9 @@ resolver installs the rules. See
 [How nerdctl enforces a policy](policies.md#how-nerdctl-enforces-a-policy).
 
 A guest that reaches `brig.internal` needs the same, with or without a
-policy, and the `isolated` posture. Brig refuses it on docker. See
-[Routing brig.internal](policies.md#routing-briginternal).
+policy, and the `isolated` posture. Brig refuses it on docker. The table
+redirects port 80 of `169.254.170.2` to the same relay on a run with a route
+that vends. See [Routing brig.internal](policies.md#routing-briginternal).
 
 That bridge is the Linux enforcement point. It is the first hop outside the
 guest that all of the traffic of the sandbox crosses, and Brig owns it. The
@@ -391,8 +405,12 @@ The user-mode gateway of hull does not build on Linux.
 **urunc** must read `com.urunc.unikernel.bootKernel` and
 `com.urunc.unikernel.bootInitrd` from the OCI spec of the container, and boot
 the image with them. hull takes the same pair on its command line. Brig also
-passes `com.urunc.unikernel.hypervisor=cloud-hypervisor` on every
-`genericBoot` run, so urunc must find a `cloud-hypervisor` binary.
+passes `com.urunc.unikernel.hypervisor` on every `genericBoot` run: `hvi`
+unless `BRIG_HYPERVISOR` names another monitor urunc runs. So urunc must know
+that monitor and find its binary. An overlay root adds
+`com.urunc.unikernel.rootfsMode=overlay-block`, which needs the urunc of the
+`feat/linux-overlay-block` branch. See
+[The guest root of a generic boot](#the-guest-root-of-a-generic-boot).
 
 > [!WARNING]
 > No urunc release reads the pair, v0.8.0 included. On a host that brings its
@@ -408,9 +426,54 @@ branch, and its `container-initrd` from the same commit.
 
 **containerd** must run with the urunc shim installed.
 `BRIG_CONTAINERD_RUNTIME` can point at another microVM shim. Brig refuses a
-shim that it knows shares the host kernel: `runc` or `crun`, by name or by
-path. [security.md](security.md) explains why a kernel of its own for the
-guest is the boundary that Brig provides.
+shim that it knows shares the host kernel: `runc`, `crun` or the runc shim
+binaries `containerd-shim-runc-v1` and `-v2`, by name or by path.
+[security.md](security.md) explains why a kernel of its own for the guest
+is the boundary that Brig provides.
+
+### The guest root of a generic boot
+
+A `genericBoot` profile boots an ordinary image. By default, Brig boots its
+root as an overlay on two disks wherever the host can build them. The lower
+disk is a read-only ext4 image of the image, built once per image. The upper
+disk is an ext4 disk of the sandbox's own, and it takes every write to the
+root. The upper is sparse with an apparent size of 16 GiB. It grows as the
+guest writes and never shrinks. It goes away when the sandbox is removed.
+
+Brig asks hull for it with `HULL_ROOTFS_MODE=overlay-block`, on `vz` and
+`hvi`. hull formats the disks with
+`/opt/homebrew/opt/e2fsprogs/sbin/mke2fs`, so the host needs
+`brew install e2fsprogs`. An exported `HULL_ROOTFS_MODE` or
+`HULL_HVI_ROOTFS_UPPER` chooses the layout of the root itself, so Brig asks
+hull for no overlay while either is set. Brig asks urunc for it with the
+`com.urunc.unikernel.rootfsMode` annotation, on `hvi`, `cloud-hypervisor` and
+`qemu`. urunc builds the disks from the overlayfs snapshot of the container
+and refuses any other snapshotter. So the host needs the overlayfs
+snapshotter and `mke2fs`, on `PATH` or in `/usr/sbin`. Brig reads the
+snapshotter the way nerdctl does: `CONTAINERD_SNAPSHOTTER`, then the
+`snapshotter` key of the `nerdctl.toml` that `NERDCTL_TOML` names, then
+overlayfs. The runtime bundle sets both to overlayfs, and
+`CONTAINERD_SNAPSHOTTER=devmapper` turns the overlay off.
+
+Where the host cannot build the overlay, Brig passes no mode, and the runtime
+boots its own root, which is virtio-fs under both. It does the same for a
+`rootfsType` of `block` or `9pfs`, for docker, for a shim other than urunc,
+and for a monitor that does not take the overlay (`qemu` under hull,
+`firecracker` under urunc). `brig doctor` says whether the overlay is available and, if not, what
+is missing. `BRIG_ROOTFS_MODE=overlay-block` insists on the overlay and
+refuses the run where it is not available. `BRIG_ROOTFS_MODE=virtiofs` keeps
+the runtime's own root.
+
+The `ISOLATION` row names the root that boots, for instance:
+
+```
+ISOLATION    microVM (hull, hvi backend, rootfs overlay-block)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
+```
+
+Writes to the guest root do not survive `brig stop` in either mode. A stopped
+sandbox is recreated on the next run. Brig does not checkpoint a sandbox, so
+hull's refusal to checkpoint an overlay root does not apply.
 
 ### Versions and pins
 
@@ -467,7 +530,7 @@ These swaps need no code:
 | --- | --- |
 | a different build of the same runtime | `BRIG_RUNTIME_BIN`, or `runtimeBin` in a profile |
 | docker in place of nerdctl | docker is already in the PATH search. Brig refuses a `genericBoot` profile on it |
-| a different containerd shim | `BRIG_CONTAINERD_RUNTIME`. Any shim that reads the two boot annotations can replace urunc. Brig refuses `runc` and `crun` |
+| a different containerd shim | `BRIG_CONTAINERD_RUNTIME`. Any shim that reads the two boot annotations can replace urunc. Brig refuses `runc`, `crun` and the runc shim binaries `containerd-shim-runc-v1` and `-v2`, by name or by path |
 | a different hypervisor backend under hull | `BRIG_HYPERVISOR`, or `hypervisor:` in a profile |
 
 The `ISOLATION` row of the envelope names the shim that you set. For a shim

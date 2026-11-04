@@ -86,12 +86,10 @@ func policyCmd(args []string) error {
 			err = listPolicies()
 		}
 	// list was never in the help text, so it was found by accident and then
-	// scripted. Kept until retiredGoesIn, saying which spelling to keep.
+	// scripted. Removed in v0.5.0 after a release of notices, and refused
+	// naming the spelling to keep.
 	case "list":
-		deprecated("brig policy list", "brig policy ls")
-		if err = rejectPolicyTail(args[1:]); err == nil {
-			err = listPolicies()
-		}
+		return removedf("brig policy list", "brig policy ls")
 	case "create":
 		err = createPolicy(args[1:])
 	case "edit":
@@ -746,6 +744,18 @@ func printRoutes(p policy.Policy) {
 			mode = v1alpha1.ModeEndpoint
 		}
 		fmt.Fprintf(os.Stderr, "  route %s  preset %s  mode %s\n", r.Name, preset, mode)
+		// The row names the secrets so a reader can check the store holds
+		// them; it never reads a value.
+		if r.Inject != nil && r.Inject.TLS != nil {
+			row := "    tls"
+			if c := r.Inject.TLS.ClientCertificate; c != nil {
+				row += "  clientCertificate " + c.SecretRef.Name
+			}
+			if c := r.Inject.TLS.CA; c != nil {
+				row += "  ca " + c.SecretRef.Name
+			}
+			fmt.Fprintln(os.Stderr, row)
+		}
 		for _, rec := range runtime.ModeRecords(mode) {
 			fmt.Fprintf(os.Stderr, "    %s  %s\n", rec.Path, rec.Line())
 		}
@@ -774,9 +784,9 @@ func routeModes(ps []policy.Policy) ([]v1alpha1.RouteMode, map[v1alpha1.RouteMod
 }
 
 // flatPolicyGoesIn is the release that stops reading the flat policy form. The
-// form is retired in the release after v0.4.0, and stability.md removes a
-// spelling at least one release after its first notice, so it outlives
-// retiredGoesIn by one minor release.
+// form is retired in v0.5.0, and stability.md removes a spelling at least one
+// release after its first notice, so it outlives the spellings v0.5.0 removed
+// by one minor release.
 const flatPolicyGoesIn = "v0.6.0"
 
 // warnFlat prints the retired-spelling notice for each loaded policy in names

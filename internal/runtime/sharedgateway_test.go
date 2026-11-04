@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // The shared gateway outlives the brig that started it. A brig from before
@@ -43,6 +45,9 @@ func TestGatewayHelperProcess(t *testing.T) {
 			}
 		}
 		return ""
+	}
+	if os.Getenv("BRIG_TEST_GATEWAY_SLOW_EXIT") != "" {
+		exitSlowly()
 	}
 	// A stale file is removed before the bind, the way hull claims a path
 	// nothing listens on. The gateway this one replaces left its socket behind.
@@ -80,6 +85,28 @@ func TestGatewayHelperProcess(t *testing.T) {
 	// for long.
 	time.Sleep(60 * time.Second)
 	os.Exit(0)
+}
+
+// exitSlowly makes the helper a gateway that is slow to exit. At SIGTERM its
+// argv stops reading as a gateway, and its sockets stay open for another
+// second. On Linux an exiting process reads with an empty cmdline for a
+// millisecond or two before it closes its sockets. This makes that window
+// long enough for a test to land in it every time.
+func exitSlowly() {
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
+	go func() {
+		<-term
+		// os.Args holds the memory that /proc and ps read the argv from.
+		for _, a := range os.Args {
+			b := unsafe.Slice(unsafe.StringData(a), len(a))
+			for i := range b {
+				b[i] = 'x'
+			}
+		}
+		time.Sleep(time.Second)
+		os.Exit(0)
+	}()
 }
 
 // scratchSharedGateway points the gateway directory somewhere short and
@@ -120,6 +147,22 @@ func helperArgs(sock string, api bool) []string {
 // which is a gateway brig started a moment ago, or the smoke stub.
 func startHelperGateway(t *testing.T, sock string, api, deaf bool) int {
 	t.Helper()
+	var env []string
+	if deaf {
+		env = append(env, "BRIG_TEST_GATEWAY_DEAF=1")
+	}
+	return runHelperGateway(t, sock, api, env...)
+}
+
+// startSlowExitGateway runs a gateway on sock that is slow to exit, and
+// returns its pid once it answers. See exitSlowly.
+func startSlowExitGateway(t *testing.T, sock string, api bool) int {
+	t.Helper()
+	return runHelperGateway(t, sock, api, "BRIG_TEST_GATEWAY_SLOW_EXIT=1")
+}
+
+func runHelperGateway(t *testing.T, sock string, api bool, env ...string) int {
+	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -128,10 +171,7 @@ func startHelperGateway(t *testing.T, sock string, api, deaf bool) int {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(self, helperArgs(sock, api)...)
-	cmd.Env = append(os.Environ(), "BRIG_TEST_GATEWAY_HELPER=1")
-	if deaf {
-		cmd.Env = append(cmd.Env, "BRIG_TEST_GATEWAY_DEAF=1")
-	}
+	cmd.Env = append(append(os.Environ(), "BRIG_TEST_GATEWAY_HELPER=1"), env...)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -290,6 +330,32 @@ func TestARunThatPublishesGetsPastAnUnusedOldGateway(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), bootKernelName()) {
 		t.Fatalf("the run did not fail on the missing boot assets: %v", err)
+	}
+}
+
+// Negative: an old gateway counts as stopped only once it no longer listens.
+// Its argv goes before its sockets do. A boot that took the argv as the answer
+// found the socket still accepting, kept the dying gateway, and was left with
+// no gateway a moment later.
+func TestAnOldSharedGatewayThatIsSlowToExitIsStillReplaced(t *testing.T) {
+	sock := scratchSharedGateway(t)
+	startSlowExitGateway(t, sock, false)
+	bin, marker := fakeRuntime(t)
+
+	got, release, err := ensureGateway(bin)
+	if err != nil || got != sock {
+		t.Fatalf("ensureGateway = %s, %v; want %s", got, err, sock)
+	}
+	release()
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the boot kept an old gateway that was exiting, and started none")
+	}
+	gws := gatewaysOn(t, sock)
+	if len(gws) != 1 || !strings.Contains(gws[0], "--api "+gatewayAPISocket(sock)) {
+		t.Fatalf("want one gateway with --api on the socket, got %q", gws)
+	}
+	if _, err := gatewayForwards(sock); err != nil {
+		t.Fatalf("the new gateway's API does not answer: %v", err)
 	}
 }
 
@@ -529,6 +595,21 @@ func TestPruneSharedNetworkStopsAGatewayNothingIsOn(t *testing.T) {
 				t.Errorf("the shared gateway's log went with it: %v", err)
 			}
 		})
+	}
+}
+
+// Negative: `brig rm --all` reports the shared gateway stopped only once it no
+// longer listens. A boot right after it would otherwise find the socket still
+// accepting and keep a gateway that is about to go.
+func TestPruneSharedNetworkWaitsForAGatewayThatIsSlowToExit(t *testing.T) {
+	sock := scratchSharedGateway(t)
+	startSlowExitGateway(t, sock, true)
+
+	if !(&hull{bin: "hull"}).PruneSharedNetwork() {
+		t.Fatal("PruneSharedNetwork reported nothing stopped")
+	}
+	if gatewayReachable(sock) {
+		t.Fatal("PruneSharedNetwork reported the gateway stopped while it still accepts")
 	}
 }
 

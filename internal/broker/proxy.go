@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -10,14 +11,17 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/secret"
+	"github.com/brig-sh/brig/internal/tlspem"
 )
 
 // maxReplay is the largest request body held before the request goes
@@ -95,6 +99,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
+	// A route that does not vend is not served in clear text. The refusal
+	// comes before the token is read, so the token opens nothing there, and
+	// reads as for a route the sandbox does not have.
+	if h.vendOnly != nil && !rt.spec.Vends() && h.vendOnly(r) {
+		a.check = "route.cleartext"
+		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+		return
+	}
 	// A route in another mode is not served here. Its policy did not ask for
 	// an endpoint, so its token opens none.
 	if rt.spec.Mode != "" && rt.spec.Mode != v1alpha1.ModeEndpoint {
@@ -103,16 +115,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := sessionToken(rt.spec.Inject, r.Header)
+	token := sessionToken(&rt.spec, r.Header)
 	if token == "" {
 		a.check = errTokenMissing.Error()
-		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
+		refuseToken(rec, rt)
 		return
 	}
 	c, err := verify(sb.key, token, p.sandbox, p.route, h.now())
 	if err != nil {
 		a.check = err.Error()
-		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
+		refuseToken(rec, rt)
 		return
 	}
 	wl := sb.workload(c.Session)
@@ -150,10 +162,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	if !now.Before(time.Unix(c.Exp, 0)) {
 		a.check = errTokenExpired.Error()
-		http.Error(rec, "brig broker: the session token was refused", http.StatusUnauthorized)
+		refuseToken(rec, rt)
 		return
 	}
-	hit, partial, err := findPlaceholder(sb.matcher(now), r, p, rt.spec.Inject, token, held)
+	hit, partial, err := findPlaceholder(sb.matcher(now), r, p, &rt.spec, token, held)
 	if partial {
 		a.placeholder = "partial"
 	}
@@ -181,10 +193,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A route that vends has no upstream to confuse, and serves the route
+	// URL alone: any other path is a request for something it does not have.
+	vends := rt.spec.Vends()
+	if vends && p.rest != "/" {
+		a.check = "path"
+		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+		return
+	}
 	// request.allow matches the path the upstream serves, so a path that
 	// the upstream could resolve to another one is refused first.
 	repos := rt.spec.Request != nil && rt.spec.Request.Allow != nil && len(rt.spec.Request.Allow.Repos) > 0
-	if !canonical(p.rest, p.escapedRest, repos) {
+	if !vends && !canonical(p.rest, p.escapedRest, repos) {
 		a.check = "path"
 		http.Error(rec, "brig broker: the path has a dot segment, an empty segment or an escaped separator",
 			http.StatusBadRequest)
@@ -202,23 +222,43 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cred := rt.spec.Credential
-	doc, err := h.creds.Resolve(r.Context(), cred.SecretRef.Name, wl)
-	if err != nil {
-		a.check = "credential"
-		msg := "brig broker: the credential of route " + p.route + " could not be resolved"
-		if errors.Is(err, secret.ErrUnsupported) {
-			// The one reason the guest can act on: the host has no store.
-			msg += ": brig's secret store is not available on this host; see the broker log"
+	// A route that presents a client certificate and sets no header has no
+	// credential: the certificate is its identity, and it is read when the
+	// request goes upstream.
+	var (
+		doc   []byte
+		value string
+	)
+	if cred := rt.spec.Credential; cred != nil {
+		doc, err = h.creds.Resolve(r.Context(), cred.SecretRef.Name, wl)
+		if err != nil {
+			a.check = "credential"
+			msg := "brig broker: the credential of route " + p.route + " could not be resolved"
+			if errors.Is(err, secret.ErrUnsupported) {
+				// The one reason the guest can act on: the host has no store.
+				msg += ": brig's secret store is not available on this host; see the broker log"
+			}
+			http.Error(rec, msg, http.StatusBadGateway)
+			return
 		}
-		http.Error(rec, msg, http.StatusBadGateway)
-		return
-	}
-	value, err := credentialValue(cred, doc)
-	if err != nil {
-		a.check = "credential"
-		http.Error(rec, "brig broker: the credential of route "+p.route+" could not be resolved", http.StatusBadGateway)
-		return
+		// A route that vends always has a credential: the aws preset takes
+		// no inject, so it cannot be a route with a certificate alone.
+		if vends {
+			h.vend(rec, r, a, p, doc)
+			return
+		}
+		if h.vendDoc != nil && h.vendDoc(doc) {
+			a.check = "credential.vendonly"
+			http.Error(rec, "brig broker: the credential of route "+p.route+" is for a route that vends, "+
+				"such as one on the aws preset", http.StatusBadGateway)
+			return
+		}
+		value, err = credentialValue(cred, doc)
+		if err != nil {
+			a.check = "credential"
+			http.Error(rec, "brig broker: the credential of route "+p.route+" could not be resolved", http.StatusBadGateway)
+			return
+		}
 	}
 	h.forward(rec, r, a, p, rt, token, wl, doc, value, held)
 }
@@ -228,8 +268,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, p routePath, rt *route,
 	token string, wl secret.Workload, doc []byte, value string, held *heldBody) {
 	in := rt.spec.Inject
-	trip := &upstreamTrip{h: h, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
+	trip := &upstreamTrip{h: h, route: rt, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
 	trip.addSecret(value)
+	// After the response has been copied: a transport that a rotation retired
+	// while this request was on it closes its connections now.
+	defer trip.done()
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = &url.URL{
@@ -263,6 +306,21 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 				a.check = "response.encoding"
 				http.Error(w, "brig broker: the upstream of route "+p.route+" sent a body in an encoding the broker cannot read",
 					http.StatusBadGateway)
+				return
+			}
+			// The sandbox went between the lookup of the route and the dial.
+			// It is answered as a sandbox the broker no longer serves.
+			if errors.Is(err, errRouteClosed) {
+				a.check = "sandbox"
+				http.Error(w, "brig broker: no such route", http.StatusNotFound)
+				return
+			}
+			// A failure of the TLS side names its check and a fixed body,
+			// and leaves the cause out of both.
+			var tf *tlsFailure
+			if errors.As(err, &tf) {
+				a.check = tf.check
+				http.Error(w, tlsBody(p.route, tf.check), http.StatusBadGateway)
 				return
 			}
 			a.check = "upstream"
@@ -301,6 +359,7 @@ func upgrade(h http.Header) bool {
 // more.
 type upstreamTrip struct {
 	h        *Handler
+	route    *route
 	cred     *v1alpha1.CredentialRef
 	inject   *v1alpha1.Inject
 	workload secret.Workload
@@ -312,11 +371,30 @@ type upstreamTrip struct {
 	// secrets are the exact strings the broker put on the upstream request
 	// that carry a credential. The response is redacted of each.
 	secrets []string
+	// tt is the transport of a route with inject.tls, with the certificate it
+	// presents, picked on the first round trip. A retry after a 401 uses the
+	// same one, and the audit line names the certificate of this transport:
+	// the one the connection carried.
+	tt *tlsTransport
+}
+
+// done ends the request's use of its transport. A transport that a rotation
+// retired meanwhile closes its connections after the last request that held
+// it.
+func (u *upstreamTrip) done() {
+	if u.tt != nil {
+		u.route.release(u.tt)
+	}
 }
 
 // addSecret records the strings that injecting value puts on the request:
 // value itself and, on a basicAuth route, the base64 the header carries.
 func (u *upstreamTrip) addSecret(value string) {
+	// A route without a credential injects nothing, and an empty string
+	// would match every position of a body.
+	if value == "" {
+		return
+	}
 	u.secrets = append(u.secrets, value)
 	if u.inject.BasicAuth != nil {
 		raw := u.inject.BasicAuth.Username + ":" + value
@@ -325,11 +403,77 @@ func (u *upstreamTrip) addSecret(value string) {
 }
 
 func (u *upstreamTrip) renewable() bool {
-	return u.h.renewer != nil && u.cred.Lifecycle != ""
+	return u.cred != nil && u.h.renewer != nil && u.cred.Lifecycle != ""
+}
+
+// prepareTLS resolves the CA and the client certificate of the route, and
+// picks its transport. Both are read for every request, like a header
+// credential, and cached by their bytes.
+func (u *upstreamTrip) prepareTLS(ctx context.Context) error {
+	t := u.inject.TLS
+	var (
+		pool *x509.CertPool
+		sum  [32]byte
+	)
+	if t.CA != nil {
+		var err error
+		if pool, sum, err = u.h.caPool(ctx, t.CA.SecretRef.Name, u.workload); err != nil {
+			return &tlsFailure{check: "tls.ca", cause: err}
+		}
+	}
+	var cc *tlspem.ClientCertificate
+	if t.ClientCertificate != nil {
+		var err error
+		cc, err = u.h.clientCertificate(ctx, t.ClientCertificate.SecretRef.Name, u.workload)
+		if err != nil {
+			return &tlsFailure{check: certCheck(err), cause: err}
+		}
+	}
+	tt, err := u.h.routeTransport(u.route, pool, sum, cc)
+	if err != nil {
+		return err
+	}
+	u.tt = tt
+	// The audit line names the certificate of the transport. That is the one
+	// the connection presents, since a transport is built for one chain.
+	if tt.leaf != nil {
+		u.audit.cert = tt.leaf.fingerprint
+		u.audit.certNotAfter = tt.leaf.notAfter
+	}
+	return nil
+}
+
+// send makes one upstream round trip. A route with inject.tls goes through
+// the transport of its sandbox and route, which presents the certificate it
+// was built with; any other goes through the shared one.
+func (u *upstreamTrip) send(req *http.Request) (*http.Response, error) {
+	if u.inject.TLS == nil {
+		return u.h.transport.RoundTrip(req)
+	}
+	if u.tt == nil {
+		if err := u.prepareTLS(req.Context()); err != nil {
+			return nil, err
+		}
+	}
+	resp, newConn, err := roundTrip(u.tt.tr, req)
+	if err != nil && tlsHandshakeFailed(err, newConn) {
+		return nil, &tlsFailure{check: "tls.handshake", cause: err}
+	}
+	return resp, err
+}
+
+// roundTrip sends req on tr and reports whether the request rode a new
+// connection. A request that failed before it got a connection counts as on a
+// new one, since the failure was in setting one up.
+func roundTrip(tr http.RoundTripper, req *http.Request) (resp *http.Response, newConn bool, err error) {
+	var reused atomic.Bool
+	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { reused.Store(i.Reused) }}
+	resp, err = tr.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	return resp, !reused.Load(), err
 }
 
 func (u *upstreamTrip) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := u.h.transport.RoundTrip(req)
+	resp, err := u.send(req)
 	if err != nil || resp.StatusCode != http.StatusUnauthorized || !u.renewable() {
 		return resp, err
 	}
@@ -365,7 +509,7 @@ func (u *upstreamTrip) RoundTrip(req *http.Request) (*http.Response, error) {
 	injectCredential(u.inject, retry.Header, value)
 	u.addSecret(value)
 	u.audit.renew = "retried"
-	return u.h.transport.RoundTrip(retry)
+	return u.send(retry)
 }
 
 // renewed returns the document to retry with after an upstream 401. It
@@ -496,6 +640,19 @@ func canonical(rest, escapedRest string, repos bool) bool {
 	return true
 }
 
+// refuseToken answers 401 for a session token that is missing, forged or
+// expired. A route that carries the token as a basic-auth password also
+// sends a Basic challenge: git's libcurl offers credentials only after one,
+// so without it the client never sends the token and fails with
+// "Authentication failed". A route that carries the token in a header gets
+// no challenge, since its client sends the header up front.
+func refuseToken(w http.ResponseWriter, rt *route) {
+	if rt.spec.Inject != nil && rt.spec.Inject.BasicAuth != nil {
+		w.Header().Set("WWW-Authenticate", `Basic realm="brig"`)
+	}
+	http.Error(w, "brig broker: the session token was refused", http.StatusUnauthorized)
+}
+
 // recorder keeps the status a response was sent with, for the audit line.
 // Unwrap lets ReverseProxy flush and hijack through it.
 type recorder struct {
@@ -556,6 +713,12 @@ type auditLine struct {
 	// found, and how it was spelled. placeholder is partial when only the
 	// start of the body was scanned.
 	where, encoding, placeholder string
+	// vended is the AccessKeyId a route that vends answered with. It is an
+	// identifier, never the secret key or the session token.
+	vended string
+	// cert and certNotAfter name the client certificate a request presented:
+	// a short digest of the leaf and its expiry. Never the certificate.
+	cert, certNotAfter string
 }
 
 // The longest method and path an audit line carries. Anything that reaches
@@ -624,6 +787,12 @@ func (h *Handler) writeAudit(ctx context.Context, a *auditLine, status int, dur 
 	}
 	if a.placeholder != "" {
 		attrs = append(attrs, slog.String("placeholder", a.placeholder))
+	}
+	if a.vended != "" {
+		attrs = append(attrs, slog.String("vended", a.vended))
+	}
+	if a.cert != "" {
+		attrs = append(attrs, slog.String("cert", a.cert), slog.String("cert.notAfter", a.certNotAfter))
 	}
 	h.audit.LogAttrs(ctx, slog.LevelInfo, "broker", attrs...)
 }

@@ -8,9 +8,7 @@ import (
 )
 
 // validateBindings checks the requirement list and the two binding channels
-// against each other. The deprecated forward: list needs no arm of its own:
-// Parse folds it into Env before Validate runs, so by the time this sees a
-// profile there is exactly one mechanism per channel to check.
+// against each other.
 func (p Profile) validateBindings() error {
 	declared, err := p.validateSecrets()
 	if err != nil {
@@ -32,11 +30,6 @@ func (p Profile) validateBindings() error {
 // plausible, and the ones that do nothing are indistinguishable from the ones
 // that work unless brig says so at parse time.
 func (p Profile) validateVolumes() error {
-	if len(p.Volumes) > 0 && len(p.StatePaths) > 0 {
-		return fmt.Errorf("volumes: and statePaths: are both set; volumes: is statePaths: " +
-			"made load-bearing, so drop statePaths: -- two lists that can disagree about " +
-			"what persists is worse than either")
-	}
 	seen := make(map[string]bool, len(p.Volumes))
 	var tmpfs []Volume
 	for _, v := range p.Volumes {
@@ -245,12 +238,15 @@ func validateSource(name string, s Source) error {
 		want, extra = "path", []string{"service", "var"}
 	case SourceEnv:
 		want, extra = "var", []string{"service", "path"}
+	case SourceAWS:
+		// No locator to want; all three are misplaced.
+		extra = []string{"service", "path", "var"}
 	case "":
-		return fmt.Errorf("a source of secret %q has no from: (%s, %s or %s)",
-			name, SourceKeychain, SourceFile, SourceEnv)
+		return fmt.Errorf("a source of secret %q has no from: (%s, %s, %s or %s)",
+			name, SourceKeychain, SourceFile, SourceEnv, SourceAWS)
 	default:
-		return fmt.Errorf("secret %q names source %q, which is not %s, %s or %s",
-			name, s.From, SourceKeychain, SourceFile, SourceEnv)
+		return fmt.Errorf("secret %q names source %q, which is not %s, %s, %s or %s",
+			name, s.From, SourceKeychain, SourceFile, SourceEnv, SourceAWS)
 	}
 	// The misplaced locator is reported before the missing one, because a
 	// source carrying the wrong key is missing the right one by construction
@@ -275,7 +271,7 @@ func validateSource(name string, s Source) error {
 			}
 		}
 	}
-	if s.locatorValue() == "" {
+	if want != "" && s.locatorValue() == "" {
 		return fmt.Errorf("secret %q has a %s source with no %s:", name, s.From, want)
 	}
 	return nil

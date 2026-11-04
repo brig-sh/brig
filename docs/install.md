@@ -185,7 +185,10 @@ As a result, `BRIG_VERSION` selects the Brig version on Linux too. The
 runtime and Brig are versioned separately.
 
 The `brig` on `PATH` is the launcher of the bundle. The launcher sets the
-environment that points Brig at the private containerd.
+environment that points Brig at the private containerd. Do not put the bin
+directory of the bundle on `PATH`: a `brig` from there runs without that
+environment, and Brig warns about it. See
+[Started without the launcher](troubleshooting.md#started-without-the-launcher).
 
 With the bundle, `install.sh` ignores `BRIG_INSTALL_DIR` and says so. The
 binaries go into the tree of the bundle.
@@ -248,7 +251,7 @@ boot as a guest.
 
 | Profiles | Need `oras` |
 | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `opencode`, `ubuntu` (six of the eight shipped profiles, all `genericBoot`) | Yes |
+| `claude-code`, `codex`, `gemini`, `grok`, `herd`, `opencode`, `ubuntu` (seven of the nine shipped profiles, all `genericBoot`) | Yes |
 | `claude-desktop`, `cursor` | No |
 
 Without `oras` on `PATH`, a `genericBoot` run fails. The error names the
@@ -266,8 +269,8 @@ artifact to fetch by hand and the directory to put it in.
   release reads the boot annotations, so a `genericBoot` profile never
   becomes ready on a urunc release. See
   [What Brig requires of each](runtimes.md#what-brig-requires-of-each).
-- A `genericBoot` profile also needs `oras` and `cloud-hypervisor`, which the
-  bundle carries.
+- A `genericBoot` profile also needs `oras` and `hvi`, which the bundle
+  carries.
 - [runtimes.md](runtimes.md) covers the full command surface each runtime
   needs.
 
@@ -277,10 +280,11 @@ attempt the run. `docker` does not pass the boot annotations that `urunc`
 needs through to the runtime.
 
 **`BRIG_CONTAINERD_RUNTIME`** can name another microVM shim, for a host that
-has one. Brig refuses a shim that it knows shares the host kernel: `runc` or
-`crun`, by name or by path. A container that shares the host kernel with the
-agent is not the boundary Brig provides. `brig info` still names the shim
-that a run resolves, and Brig refuses the run.
+has one. Brig refuses a shim that it knows shares the host kernel: `runc`,
+`crun` or the runc shim binaries `containerd-shim-runc-v1` and `-v2`, by name
+or by path. A container that shares the host kernel with the agent is not the
+boundary Brig provides. `brig info` still names the shim that a run resolves,
+and Brig refuses the run.
 
 ## Building from source
 
@@ -371,7 +375,7 @@ depends on an in-kernel interrupt controller that Apple first shipped in
 macOS 15. On an older macOS, Brig refuses the run, so that the virtual
 machine monitor does not crash.
 
-Six of the eight shipped profiles ask for `hvi`, so a first run on macOS 14
+Seven of the nine shipped profiles ask for `hvi`, so a first run on macOS 14
 hits this minimum. To run them on macOS 14, set two variables:
 
 | Setting | Why |

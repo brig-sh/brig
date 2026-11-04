@@ -10,6 +10,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -67,10 +68,10 @@ type Var struct {
 	Value string
 	// Secret marks a value brig resolved on the user's behalf from the store
 	// it owns, so that BRIG_ENV_ARGV never puts it in argv whatever it says:
-	// hull durably logs every exec's argv to a host file, and an ambient shell
-	// value put there deliberately is one thing, but a stored credential
-	// outliving the sandbox in a file the user never sees is a different
-	// severity of leak.
+	// the guest agent logs every exec's argv, and on some backends that log is
+	// a host file that outlives the sandbox. An ambient shell value put there
+	// deliberately is one thing, but a stored credential in a file the user
+	// never sees is a different severity of leak.
 	Secret bool
 }
 
@@ -102,6 +103,12 @@ type RunSpec struct {
 	// when the sandbox installs packages and needs a real writable disk.
 	// Meaningless to a container runtime, which ignores it.
 	RootfsType string
+	// RootfsMode is BRIG_ROOTFS_MODE, the layout of a generic boot's guest
+	// root as asked. Empty takes RootfsModeOverlayBlock where the host can
+	// build it and the runtime's own root elsewhere. RootfsModeOverlayBlock
+	// insists on the overlay, and RootfsModeVirtiofs keeps the runtime's own.
+	// The runtime decides the mode it is handed; see rootfsModeFor.
+	RootfsMode string
 	// Tmpfs are tmpfs mounts to create with the sandbox, as
 	// "<path>:<options>". Only the container runtimes take these: hull has no
 	// create-time tmpfs, so brig mounts one there with a privileged exec
@@ -176,9 +183,9 @@ type ExecSpec struct {
 	Env     []Var
 	Counted bool
 	// Stdin, when set, is fed to the command inside the guest. It is how a
-	// credential reaches the guest without appearing in argv: hull durably
-	// logs every exec's argv to a host file, so a value there outlives the
-	// sandbox in a file the user never sees. Only Feed reads it.
+	// credential reaches the guest without appearing in argv: the guest agent
+	// logs every exec's argv, and on some backends that log is a host file
+	// that outlives the sandbox. Only Feed reads it.
 	Stdin io.Reader
 	// User runs the command as a guest user other than the image's own --
 	// "root", for the one privileged exec that mounts the tmpfs. Empty leaves
@@ -226,6 +233,20 @@ const (
 	BrigInternalName = "brig.internal"
 	BrigInternalPort = 443
 )
+
+// LinkLocalDivert is where a guest reaches the routes that vend: the ECS
+// container credentials address, in plain HTTP. The AWS SDKs' container
+// provider takes plain HTTP from loopback and a few link-local addresses
+// alone. A run with a route that vends diverts it beside brig.internal.
+var LinkLocalDivert = DivertRoute{Host: "169.254.170.2", Port: 80}
+
+// linkLocal reports whether d diverts an address in 169.254.0.0/16.
+func (d Divert) linkLocal() bool {
+	return slices.ContainsFunc(d.Routes, func(r DivertRoute) bool {
+		a, err := netip.ParseAddr(r.Host)
+		return err == nil && a.IsLinkLocalUnicast()
+	})
+}
 
 // BrigInternalRouter is a runtime that can route brig.internal from its
 // guest to the broker.
@@ -365,6 +386,10 @@ type LogsSpec struct {
 	// expects to still see on the terminal. The caller wraps this one too, so
 	// the control-sequence filter covers both halves of the stream.
 	Err io.Writer
+	// Ctx bounds the read when set, for a caller on its way to a failure that
+	// must not wait on a runtime that may be the reason for it. Nil is no bound,
+	// which is what a reader following a log wants.
+	Ctx context.Context
 }
 
 // Instance is one sandbox as the runtime sees it.
@@ -413,17 +438,19 @@ type Runtime interface {
 	// Isolation reports what a sandbox this runtime boots actually stands on:
 	// a kernel of its own, the host's, or something brig cannot establish.
 	//
-	// hypervisor is the macOS backend the run resolved to, or "" for the
-	// runtime's own default; a container runtime ignores it, the way it already
-	// ignores RootfsType. It is a parameter rather than a field because the
-	// backend is a property of the run and not of the binary in hand, and
-	// because the envelope is printed before any RunSpec exists.
+	// spec is the part of the run the answer turns on: the backend, the
+	// rootfs type and whether the image boots on a kernel brig supplies. The
+	// caller passes the same values it later boots with, so the row names the
+	// hypervisor and the rootfs the runtime is handed. The spec is partial,
+	// because the envelope prints before the rest of the run is resolved. A
+	// field the runtime has no flag for, like RootfsType on nerdctl, is left
+	// out of the answer.
 	//
 	// On the interface rather than an optional one asserted for, unlike
 	// NetworkPruner: every runtime knows what it gives a guest, and a backend
 	// that silently reported nothing would be read as a sandbox with no
 	// boundary worth naming.
-	Isolation(hypervisor string) Isolation
+	Isolation(spec RunSpec) Isolation
 	// Running reports whether a sandbox of this name is up, and returns an
 	// error when it could not find out at all.
 	//
@@ -689,7 +716,7 @@ func ArgvExposed(vars []Var) []string {
 // environment that carry them. See inArgv for which values go in argv.
 //
 // A Var marked Secret with a name the runtime reads for itself is refused. It
-// cannot go in argv, where the host durably logs it, and it cannot go in the
+// cannot go in argv, which the guest agent logs, and it cannot go in the
 // runtime's environment, where it would redirect the runtime.
 func splitEnv(flag string, vars []Var) (args []string, env []string, err error) {
 	for _, v := range vars {
@@ -814,6 +841,17 @@ const sandboxPrefix = "brig-"
 type RunChecker interface {
 	// CanRun reports what this backend cannot honour about the run, or nil.
 	CanRun(spec RunSpec) error
+}
+
+// BackendNamer is a runtime that can name the backend a run boots on, when
+// that is not always the one asked for. The Linux runtime is one: vz exists on
+// macOS only, and a generic boot asking for it boots on the bundle's hvi there.
+// A run that names no backend to the runtime reports "".
+//
+// Optional: a runtime without it boots what was asked for, and brig plan
+// reports that.
+type BackendNamer interface {
+	Backend(spec RunSpec) string
 }
 
 // NetworkChecker is a runtime that can say whether a sandbox already running

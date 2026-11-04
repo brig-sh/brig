@@ -132,7 +132,7 @@ func (c *Config) claimSlug() error {
 	if taken && owner != c.RawName {
 		return fmt.Errorf("session %q becomes %q, the sandbox session %q already "+
 			"uses (%s). Sharing it would put both agents in one home directory with "+
-			"whichever credentials arrived last, so run one under a different --name",
+			"whichever credentials arrived last, so run one under a different label, as <agent>@<label>",
 			c.RawName, c.Slug, owner, c.VMName)
 	}
 	if owner == c.RawName {

@@ -693,3 +693,34 @@ func TestPlanTextKeepsAReasonInItsColumn(t *testing.T) {
 		t.Errorf("(required) is not beside the name: %q", required)
 	}
 }
+
+// backendNamer is a runtime that boots another backend than the one asked for
+// under one name, as the Linux runtime boots hvi for vz.
+type backendNamer struct{ runtime.Runtime }
+
+func (backendNamer) Backend(spec runtime.RunSpec) string {
+	if spec.Hypervisor == "vz" {
+		return "hvi"
+	}
+	return spec.Hypervisor
+}
+
+// The plan names the backend that boots, as the runtime names it, not the one
+// the setting asked for.
+func TestPlanNamesTheBackendThatBoots(t *testing.T) {
+	c := testConfig(t, t.TempDir(), t.TempDir())
+	c.env = NewEnv(c.Profile.Name, func(k string) (string, bool) {
+		if k == "BRIG_HYPERVISOR" {
+			return "vz", true
+		}
+		return "", false
+	})
+	c.Runtime = backendNamer{}
+	if got := c.planBackend(); got != "hvi" {
+		t.Errorf("plan backend = %q, want the hvi that boots", got)
+	}
+	c.Runtime = nil
+	if got := c.planBackend(); got != "vz" {
+		t.Errorf("a runtime that cannot name it reports what was asked: got %q", got)
+	}
+}

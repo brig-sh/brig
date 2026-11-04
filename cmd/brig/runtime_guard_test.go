@@ -11,30 +11,11 @@ import (
 
 // emptyPath points PATH at a directory with no runtime in it, so LookPath finds
 // neither hull nor nerdctl and DetectFor returns the not-found sentinel. This
-// is the only detection failure env and ls are allowed to paper over.
+// is the only detection failure info and ls are allowed to paper over.
 func emptyPath(t *testing.T) {
 	t.Helper()
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("BRIG_RUNTIME_BIN", "")
-}
-
-// env touches the runtime for one line of its report, so with no runtime on
-// PATH it degrades: exit 0, that line marked unavailable. But an unknown
-// BRIG_RUNTIME is a mistake to fix, not a missing install, and env is the verb
-// people run to diagnose exactly that -- so it must surface the same message
-// run gives, with a non-zero (here non-nil) result, not swallow it as "no
-// runtime found".
-func TestEnvSurfacesUnknownRuntime(t *testing.T) {
-	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-	t.Setenv("BRIG_RUNTIME", "podman")
-
-	err := run([]string{"env", "claude-code"})
-	if err == nil {
-		t.Fatal("brig env with an unknown BRIG_RUNTIME was accepted")
-	}
-	if want := `unknown BRIG_RUNTIME "podman" (want hull or nerdctl)`; !strings.Contains(err.Error(), want) {
-		t.Errorf("env error = %v, want it to name the bad value: %q", err, want)
-	}
 }
 
 // ls asks the runtime what exists, and with none installed the honest answer is
@@ -55,10 +36,10 @@ func TestLsSurfacesUnknownRuntime(t *testing.T) {
 }
 
 // A profile whose runtimeBin points nowhere is a misconfiguration, not a
-// missing runtime. env is the verb run to find that out, so it names the bad
+// missing runtime. info is the verb run to find that out, so it names the bad
 // path rather than exiting 0 with the runtime line marked unavailable, which
 // would blame the wrong cause.
-func TestEnvSurfacesMissingRuntimeBin(t *testing.T) {
+func TestInfoSurfacesMissingRuntimeBin(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BRIG_PROFILE_DIR", dir)
 	t.Setenv("BRIG_RUNTIME", "hull")
@@ -75,12 +56,12 @@ func TestEnvSurfacesMissingRuntimeBin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := run([]string{"env", "pinned"})
+	err := run([]string{"info", "pinned"})
 	if err == nil {
-		t.Fatal("brig env with a missing runtimeBin was accepted")
+		t.Fatal("brig info with a missing runtimeBin was accepted")
 	}
 	if !strings.Contains(err.Error(), "runtimeBin") || !strings.Contains(err.Error(), missing) {
-		t.Errorf("env error = %v, want it to name the bad runtimeBin %q", err, missing)
+		t.Errorf("info error = %v, want it to name the bad runtimeBin %q", err, missing)
 	}
 }
 

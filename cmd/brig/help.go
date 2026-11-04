@@ -39,10 +39,17 @@ const shUsage = `brig sh -- a login shell or one command inside the sandbox
 
 usage:
   brig sh <ref> [command...]
+  brig sh <ref> -c '<script>' [args...]
 
 With no command brig starts the sandbox if it is not running and opens a login
-shell. With a command it runs that through the shell instead. The first bare
-word after the ref is the guest command, so brig's own flags come before it.
+shell. With a command it runs the command under a login shell, and each word
+after the ref reaches the guest as one argument, as you typed it. No shell
+parses the words again, so a pipe, a ; or a glob is not shell syntax there.
+The first bare word after the ref is the guest command, so brig's own flags
+come before it.
+
+To run a script, put -c in front of it, as with sh -c. The login shell parses
+the script in the guest. -ec, -xc and -uc work as they do with sh -c.
 
 flags:
       --image IMAGE   guest image to boot

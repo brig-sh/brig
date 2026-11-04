@@ -40,6 +40,12 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
+	// Whether this host can build an overlay root decides the rootfs mode of
+	// every generic boot, so the answer is the test's and not the machine's.
+	// A host that cannot build one is the default here, and a case that wants
+	// one says so with overlayHost.
+	hullMke2fs = filepath.Join(home, "no-mke2fs")
+	lookMke2fs = func() bool { return false }
 	code := m.Run()
 	var reached []string
 	_ = filepath.WalkDir(home, func(path string, _ fs.DirEntry, err error) error {

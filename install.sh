@@ -61,14 +61,20 @@ DEST="${BRIG_INSTALL_DIR:-/usr/local/bin}"
 #
 # v0.1.0-rc7 is the floor: it is the first release carrying the rootless
 # bundle, so BRIG_INSTALL_ROOTLESS against anything older fails naming the
-# asset it wanted. rc17 is the pin. It records the sha256 of its kernel and
+# asset it wanted. rc21 is the pin. It records the sha256 of its kernel and
 # initrd, and keeps that record with the release's signed checksums.txt where
 # brig checks it before a boot. Its guest kernel is the 6.18 LTS with Landlock,
 # its amd64 kernel brings up every vCPU --cpus asks for, and its urunc boots
 # arm64 guests under cloud-hypervisor. Its cloud-hypervisor is v54.0, which
-# keeps the virtio-net offloads off by default.
+# keeps the virtio-net offloads off by default. It ships hvi, the monitor brig
+# names for a generic boot on Linux, and a urunc that runs it. Its initrd is
+# the one hull-assets signs for that urunc, and its uninstaller removes the
+# bridge's CNI firewall rules. Its hvi passes the host's RDRAND and RDSEED
+# through, so a guest boots on a CPU without them, as a VM with a generic CPU
+# model is. A user install makes the host packages and the subuid range itself
+# when the user has sudo.
 RUNTIME_REPO=NOFireAI/brig-standalone-linux
-RUNTIME_VERSION=v0.1.0-rc17
+RUNTIME_VERSION=v0.1.0-rc21
 RUNTIME_SIG_IDENTITY='^https://github.com/NOFireAI/brig-standalone-linux/.github/workflows/release.yml@refs/tags/'
 RUNTIME_SIG_ISSUER=https://token.actions.githubusercontent.com
 
@@ -359,7 +365,7 @@ install_runtime() {
   INSTALL_BRIG_RELEASE_VERSION="$version" \
   INSTALL_BRIG_REQUIRE_SIGCHECK="$require_sig" \
   INSTALL_BRIG_ROOTLESS="$rootless" \
-    sh "$tmp/install.sh" || die "the runtime installer failed"
+    sh "$tmp/install.sh" || die "the runtime installer stopped. Do what it says above, and then run this same install command again"
 
   # The bundle's launchers exec $PREFIX/bin/brig and $PREFIX/bin/brigd. It
   # picks PREFIX from its euid, the same way it picks where to install:
@@ -373,13 +379,22 @@ install_runtime() {
     || die "the runtime installer left no brig at $prefix/bin/brig to replace"
   install -m 0755 "$tmp/brig/brig" "$prefix/bin/brig"
   install -m 0755 "$tmp/brig/brigd" "$prefix/bin/brigd"
+  # The broker goes with the brig it came with. One from the bundle's own brig
+  # release, beside an older brig from a release that has none, is a version
+  # this brig was not built against, so it goes.
   if [ -f "$tmp/brig/brig-broker" ]; then
     install -m 0755 "$tmp/brig/brig-broker" "$prefix/bin/brig-broker"
+    broker=true
+  else
+    rm -f "$prefix/bin/brig-broker"
+    broker=false
   fi
   # pins.env is what `brig-ctl version` reports, so it names the brig that is
-  # there now.
+  # there now, and whether its broker is.
   if [ -f "$prefix/pins.env" ]; then
-    sed -i "s/^BRIG_VERSION=.*/BRIG_VERSION=$brig_version/" "$prefix/pins.env"
+    sed -i -e "s/^BRIG_VERSION=.*/BRIG_VERSION=$brig_version/" \
+      -e '/^BRIG_BROKER_INSTALLED=/d' "$prefix/pins.env"
+    echo "BRIG_BROKER_INSTALLED=$broker" >> "$prefix/pins.env"
   fi
   say "installed brig $brig_version into the runtime at $prefix/bin"
 

@@ -8,9 +8,9 @@ on macOS, `nerdctl` on Linux), from cosign or from Homebrew. An entry says
 so when its message does not come from Brig.
 
 Run `brig doctor` first. It prints the build of `brig` that you run. Then it
-checks eight items, one line each: the host, the hypervisor, the runtime and
-its version, the boot assets, cosign, the profiles, the secret store and
-brigd. Under a line marked `!!` it prints the fix. `brig doctor <agent>`
+checks these items, one line each: the host, the hypervisor, the runtime and
+its version, the broker, the boot assets, cosign, the profiles, the secret store
+and brigd. Under a line marked `!!` it prints the fix. `brig doctor <agent>`
 checks the image of that agent too. `--json` prints the same report as one
 document, for a script or a bug report.
 
@@ -142,7 +142,7 @@ With no runtime on PATH, `brig ls` reports no sandboxes and exits `0`.
           run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them
 ```
 
-**Cause:** Six of the eight built-in profiles boot an unmodified OCI image,
+**Cause:** Seven of the nine built-in profiles boot an unmodified OCI image,
 which carries no kernel. They need a shared kernel and initrd (the boot
 assets), and nothing downloaded that bundle yet.
 
@@ -160,6 +160,47 @@ brig doctor
 ```
 
 The `boot` line reads `ok  boot      assets present at /Users/alex/.hull/store/assets`.
+
+## Started without the launcher
+
+```
+  !!  bundle    this brig is inside the runtime bundle, and its launcher did not run, so brig will not find the bundle's CNI plugins or boot assets
+          run brig from /home/alex/.local/bin: export PATH="/home/alex/.local/bin:$PATH", or load the environment: . /home/alex/.local/share/brig/data/etc/brig-env.sh
+```
+
+`brig run` prints the same warning before it checks or boots the sandbox.
+
+**Cause:** The `brig` you ran is the binary inside the runtime bundle, usually
+because the bundle's `bin` directory is on `PATH`. The launcher in
+`~/.local/bin` (`/usr/local/bin` on a node-wide install) sets the environment
+that binary needs. Without it, the run can fail in either of these ways:
+
+- `needs CNI plugin "bridge" to be installed in CNI_PATH ("/opt/cni/bin")`,
+  because nerdctl does not read the configuration of the bundle.
+- `sandbox did not become ready`, with `exec sleep failed: No such file or
+  directory` in the log, because Brig used a boot bundle it fetched earlier
+  (0.1.10 or older) and not the kernel and initrd of the runtime bundle.
+
+**Fix:** Remove the sandbox while the bundle's `bin` directory is first on
+`PATH`, then put the launcher directory first:
+
+```bash
+PATH="$HOME/.local/share/brig/data/bin:$PATH" brig rm ubuntu
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Do this in that order. Without the launcher, nerdctl keeps a network of the same
+name in a configuration of its own, and both use one bridge device. If that
+network stays, the next run through the launcher fails with `failed to read from
+init socket: EOF`.
+
+**Confirm:**
+
+```bash
+brig doctor
+```
+
+The `bundle` line is gone, and the `boot` line reads `ok`.
 
 ## Secret store did not answer
 
@@ -278,8 +319,8 @@ the warning is gone.
 Brig prints no error. The agent shows its login screen on a sandbox that you
 already logged in to.
 
-**Cause:** Only `claude-code` and `claude-desktop` keep the in-guest login
-in a memory-backed mount that never reaches host disk, and `brig stop`
+**Cause:** Only `claude-code`, `claude-desktop` and `herd` keep the in-guest
+login in a memory-backed mount that never reaches host disk, and `brig stop`
 removes it with the microVM. The other six profiles keep the whole guest
 home on host disk, so a login written there survives a stop.
 
@@ -308,6 +349,11 @@ The agent starts logged in and does not show its login screen.
 brig: cannot verify image ghcr.io/brig-sh/claude-code-stock:root: cosign is not installed (`brew install cosign`)
   ↳ booting it unchecked
 ```
+
+On Linux the parentheses read `Brig's install.sh brings one, or see
+https://docs.sigstore.dev/cosign/system_config/installation/`. Brig's
+installer puts one in the runtime bundle, or next to `brig` when it installs no
+bundle.
 
 The result depends on `BRIG_VERIFY`:
 
@@ -344,8 +390,8 @@ check its signature with.
 brew install cosign         # macOS
 ```
 
-On Linux, no package covers every distro. Install a release from
-[sigstore/cosign](https://github.com/sigstore/cosign) and put it on PATH.
+On Linux, install your distribution's package, or follow the
+[cosign install page](https://docs.sigstore.dev/cosign/system_config/installation/).
 
 To boot without the check and stop the warning, set `BRIG_VERIFY=off`. It is
 safer to keep cosign installed.
@@ -626,6 +672,10 @@ On Linux the second half names `nerdctl logs`.
 it never answered. The guest binds its listener a few seconds after the
 microVM starts, and Brig stopped waiting for that listener.
 
+Brig prints the last lines of the log above this message. It leaves out the
+lines that `virtiofsd` writes. A `virtiofsd::limits` warning about open file
+descriptors is harmless.
+
 **Fix:**
 
 1. Read the log that the message names. The errors of the guest are in that
@@ -745,7 +795,7 @@ interrupt controller does not exist here. Set BRIG_HYPERVISOR=vz BRIG_NETWORK=sh
 for this run, or upgrade macOS
 ```
 
-**Cause:** Six of the eight built-in profiles ask for the `hvi` hypervisor
+**Cause:** Seven of the nine built-in profiles ask for the `hvi` hypervisor
 backend. It uses Apple's in-kernel interrupt controller, the `hv_gic_*`
 calls, which arrived in macOS 15. Brig reads the macOS version before
 it asks the runtime for anything, and refuses an `hvi` run on an older
@@ -857,7 +907,7 @@ When the resolver did not start, the refusal quotes the start of its log,
 
 ## docker does not carry annotations
 
-Linux only, for a profile that boots an unmodified image (six of the eight
+Linux only, for a profile that boots an unmodified image (seven of the nine
 built-in profiles).
 
 ```
@@ -900,9 +950,10 @@ it by name: stop it first with brig stop <ref>
 
 **Exit code:** `1`
 
-**Cause:** `BRIG_CONTAINERD_RUNTIME` names `runc` or `crun`, by name or by
-path, and those shims run the guest as a plain container on the host kernel.
-Brig puts a separate guest kernel between the agent and the host.
+**Cause:** `BRIG_CONTAINERD_RUNTIME` names `runc`, `crun` or the runc shim
+binaries `containerd-shim-runc-v1` and `-v2`, by name or by path, and those
+shims run the guest as a plain container on the host kernel. Brig puts a
+separate guest kernel between the agent and the host.
 
 **Fix:** Unset the variable. If an older Brig started this sandbox on such a
 shim, also stop the sandbox:
@@ -925,7 +976,7 @@ Brig allows a shim that it cannot place, such as another microVM shim.
 
 ## Sandbox restarted on `brig sh`
 
-Brig warns and recreates the sandbox in the four cases below (see
+Brig warns and recreates the sandbox in the five cases below (see
 [Sessions, homes and projects](sessions.md)). Brig keeps the guest home on
 the host. Every other session on that sandbox disconnects at the restart.
 
@@ -1013,6 +1064,25 @@ brig sh claude
 
 `brig ls` lists the ref as `running` again, and a second `brig sh` on it
 prints no restart warning.
+
+### The guest is not answering
+
+```
+brig: the log of the sandbox ends with
+  ↳ exec sleep failed: No such file or directory
+brig: the running sandbox is not answering
+  ↳ its guest may have failed while booting
+  ↳ brig restarts it, and any other session using this sandbox will be disconnected
+```
+
+**Cause:** The runtime reports the sandbox as running, and the guest did not
+answer within `BRIG_READY_TIMEOUT`. The lines above the warning are the end of
+its log, and the restart removes that log. A second block, `the runtime's error
+output ends with`, holds what the runtime or its monitor wrote, when there is
+any.
+
+**Fix:** Read those lines. If the guest fails again on the restart, see
+[The sandbox never became ready](#the-sandbox-never-became-ready).
 
 ## Unknown command: trust
 

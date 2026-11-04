@@ -376,8 +376,9 @@ func (c *Config) verifyVolumes() error {
 // writeSecretFiles puts each resolved secret where its binding says.
 //
 // An ordinary file, owned by the guest user, with the binding's mode, and the
-// value on stdin -- never in argv, because hull durably logs every exec's argv
-// to a host file that outlives the sandbox.
+// value on stdin -- never in argv, because the guest agent logs every exec's
+// argv, and on some backends that log is a host file that outlives the
+// sandbox.
 func (c *Config) writeSecretFiles() (err error) {
 	var pending []profile.FileBinding
 	for _, b := range c.Profile.Files {
@@ -709,6 +710,18 @@ func (c *Config) createTimeVolumes(home string) (tmpfs []string, shares []runtim
 		case profile.VolumeTmpfs:
 			tmpfs = append(tmpfs, c.mountTarget(v.Path)+":"+v.TmpfsOptions())
 		case profile.VolumeHostMount:
+			// The host side is a bare path, and nothing checks that it still
+			// names the directory prepareVolumeTargets made. The workspace gets
+			// that check from verifyStillOurs, and a hostmount gets none. On a
+			// restart the guest is still running while brig prepares these
+			// paths, so that is the window a swapped component has.
+			//
+			// The tmpfs cover is the only thing between the guest and that
+			// gap. It hides the host directories under it from the guest's
+			// view of its home, and every hostmount in a shipped profile sits
+			// under the .claude cover. Nothing in this code adds a check of its
+			// own, so a new profile's volumes: get read against this comment
+			// before the profile ships.
 			shares = append(shares, runtime.Share{
 				Host:  filepath.Join(home, filepath.FromSlash(v.Path)),
 				Guest: c.mountTarget(v.Path),

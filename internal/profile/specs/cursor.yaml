@@ -12,8 +12,11 @@ image: ghcr.io/brig-sh/cursor:latest
 # falls back to shared because it cannot isolate networks.
 
 guestHome: /home/cursor
-forward: [CURSOR_API_KEY, GH_TOKEN]
-statePaths: [.cursor, .local/share/cursor-agent]
+env:
+  - name: CURSOR_API_KEY
+    ref: env.CURSOR_API_KEY
+  - name: GH_TOKEN
+    ref: env.GH_TOKEN
 headless: true
 mem: 4096
 cpus: 4

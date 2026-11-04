@@ -15,6 +15,10 @@ const (
 	PresetAnthropicAPIKey Preset = "anthropic-api-key"
 	// PresetGitHubToken is git over HTTPS to github.com with a token.
 	PresetGitHubToken Preset = "github-token"
+	// PresetAWS is the AWS container credential provider. The route answers
+	// it with temporary keys, because AWS signs each request with the secret
+	// key and a stand-in cannot be injected on the way out.
+	PresetAWS Preset = "aws"
 )
 
 // RouteMode is how a route reaches the tool in the guest.
@@ -43,6 +47,9 @@ const (
 	// PlaceholderSessionToken is the session token of the route, in a
 	// guest.env value.
 	PlaceholderSessionToken = "{session.token}"
+	// PlaceholderRouteRegion is the region of a route that vends, in a
+	// guest.env value.
+	PlaceholderRouteRegion = "{route.region}"
 )
 
 // Route is one brokered endpoint. The guest is pointed at the route, and the
@@ -78,6 +85,10 @@ type Route struct {
 	// through SetLifecycleFromPreset. A decoded document cannot set it.
 	lifecycleFromPreset bool
 }
+
+// Vends reports whether the route answers the guest itself with credentials
+// it fetched, instead of forwarding the request upstream.
+func (r *Route) Vends() bool { return r.Preset == PresetAWS }
 
 // SetLifecycleFromPreset sets the credential lifecycle of a route that a
 // preset expansion produced. Validate accepts a lifecycle only when it was set
@@ -118,6 +129,18 @@ func (r *Route) DeepCopy() *Route {
 		if r.Inject.BasicAuth != nil {
 			b := *r.Inject.BasicAuth
 			in.BasicAuth = &b
+		}
+		if r.Inject.TLS != nil {
+			tls := TLSInject{}
+			if r.Inject.TLS.ClientCertificate != nil {
+				c := *r.Inject.TLS.ClientCertificate
+				tls.ClientCertificate = &c
+			}
+			if r.Inject.TLS.CA != nil {
+				c := *r.Inject.TLS.CA
+				tls.CA = &c
+			}
+			in.TLS = &tls
 		}
 		out.Inject = &in
 	}
@@ -178,6 +201,44 @@ type Inject struct {
 	// BasicAuth is optional. It sends the credential as the password of an
 	// Authorization: Basic header.
 	BasicAuth *BasicAuth `json:"basicAuth,omitempty"`
+	// TLS is optional. It names the client certificate that the broker
+	// presents to the upstream, the CA that the upstream's certificate must
+	// chain to, or both. It stands on its own or beside one of Headers.Set
+	// and BasicAuth.
+	TLS *TLSInject `json:"tls,omitempty"`
+}
+
+// CertificateOnly reports whether a client certificate is all that a route
+// presents: TLS sets ClientCertificate, and neither Headers.Set nor
+// BasicAuth carries a credential. Such a route needs no credential, because
+// the upstream knows the caller by its certificate alone. It is false on a
+// nil Inject.
+func (in *Inject) CertificateOnly() bool {
+	if in == nil || in.TLS == nil || in.TLS.ClientCertificate == nil {
+		return false
+	}
+	return (in.Headers == nil || len(in.Headers.Set) == 0) && in.BasicAuth == nil
+}
+
+// TLSInject is the TLS that a route speaks to its upstream. At least one of
+// ClientCertificate and CA is set.
+type TLSInject struct {
+	// ClientCertificate is optional. It names the secret that holds the
+	// client certificate chain, leaf first, and its unencrypted private key.
+	// The broker presents it in the handshake with the upstream. The key
+	// stays in the broker process and never reaches the guest.
+	ClientCertificate *CertificateRef `json:"clientCertificate,omitempty"`
+	// CA is optional. It names the secret that holds the PEM bundle that the
+	// upstream's certificate must chain to. It replaces the system roots for
+	// the route, so an upstream with a certificate from a public CA is
+	// refused on a route that names a private one.
+	CA *CertificateRef `json:"ca,omitempty"`
+}
+
+// CertificateRef names the secret that holds a certificate or a CA bundle.
+type CertificateRef struct {
+	// SecretRef is required. The secret is never delivered to the guest.
+	SecretRef SecretRef `json:"secretRef"`
 }
 
 // HeaderInject edits the headers of the upstream request. Remove applies

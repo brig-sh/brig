@@ -36,8 +36,8 @@ type nerdctl struct {
 
 // containerdRuntime is the shim that boots the sandbox as a microVM.
 // BRIG_CONTAINERD_RUNTIME overrides it, for a host with a different microVM
-// shim. A shim brig knows shares the host kernel -- runc, crun -- is refused;
-// see refuseSharedKernel.
+// shim. A shim brig knows shares the host kernel -- runc, crun, the runc
+// shim's own binary -- is refused; see refuseSharedKernel.
 func containerdRuntime() string {
 	if v := os.Getenv("BRIG_CONTAINERD_RUNTIME"); v != "" {
 		return v
@@ -51,9 +51,9 @@ func containerdRuntime() string {
 // assume a microVM; a plain container shares the host kernel, so brig will not
 // boot one. urunc is the default and needs nothing set. BRIG_CONTAINERD_RUNTIME
 // may still name a microVM shim brig cannot classify -- a kata shim, a urunc
-// fork -- which brig cannot prove is not a VM, so it allows those. runc and
-// crun it can identify, by name or by path, as it can a shim name that
-// containerd resolves to the runc shim. See shimBoundary.
+// fork -- which brig cannot prove is not a VM, so it allows those. runc, crun
+// and the runc shim's own binary it can identify, by name or by path, as it
+// can a shim name that containerd resolves to the runc shim. See shimBoundary.
 func refuseSharedKernel() error {
 	shim := containerdRuntime()
 	if sharesHostKernel(shim) {
@@ -108,10 +108,59 @@ func (n *nerdctl) Fallback() string {
 // does not. containerdRuntime is the same call runArgs makes, so the row names
 // the shim the run will actually name.
 //
-// The hypervisor is nothing to this runtime: the backend is hull's business,
-// and what boots a microVM here is the shim.
-func (n *nerdctl) Isolation(string) Isolation {
-	return containerdIsolation(n.driver(), containerdRuntime())
+// The hypervisor named is the monitor brig hands urunc, read from monitor, the
+// same call runArgs makes. The rootfs is named on a generic boot: the rootfs
+// mode brig hands urunc, read from rootfsMode, or urunc's own root when it
+// hands none. RootfsType has no nerdctl flag, so it is not read here.
+//
+// The variable is named beside the shim only when it is set. That is when it
+// decided the boundary, and a reader has to know which setting to undo.
+func (n *nerdctl) Isolation(spec RunSpec) Isolation {
+	shim := containerdRuntime()
+	named := shim
+	if os.Getenv("BRIG_CONTAINERD_RUNTIME") != "" {
+		named = "BRIG_CONTAINERD_RUNTIME=" + shim
+	}
+	monitor, err := n.monitor(spec)
+	if err != nil {
+		// CanRun refuses this run. The row names the monitor asked for, as
+		// Backend does.
+		monitor = spec.Hypervisor
+	}
+	rootfs := ""
+	if spec.GenericBoot && !n.isDocker() {
+		mode, err := n.rootfsMode(spec)
+		if err != nil {
+			// CanRun refuses this run. The row names the mode asked for.
+			mode = spec.RootfsMode
+		}
+		rootfs = orDefault(mode, "urunc default")
+	}
+	return containerdIsolation(n.driver(), shim, named, monitor, rootfs)
+}
+
+// monitor is the hypervisor brig tells urunc to boot with, or "" when brig
+// names none and urunc picks. Only a generic boot names one, and never on
+// docker, which refuses that boot. It is the monitor BRIG_HYPERVISOR or the
+// profile names, and hvi when neither does; see linuxMonitor. runArgs writes
+// this value into the annotation, so the boot and the ISOLATION row read it
+// from one place.
+func (n *nerdctl) monitor(spec RunSpec) (string, error) {
+	if !spec.GenericBoot || n.isDocker() {
+		return "", nil
+	}
+	return linuxMonitor(spec.Hypervisor)
+}
+
+// Backend names the monitor the run boots on, which is what brig plan
+// reports. It reads monitor, so it is "" where brig names no monitor and urunc
+// picks. A name urunc does not run reports as asked, and the run refuses it.
+func (n *nerdctl) Backend(spec RunSpec) string {
+	m, err := n.monitor(spec)
+	if err != nil {
+		return spec.Hypervisor
+	}
+	return m
 }
 
 // driver is the binary in hand, by name. newNerdctl takes either.
@@ -324,6 +373,14 @@ func (n *nerdctl) CanRun(spec RunSpec) error {
 	}
 	if err := checkSetup(spec, RunPath{n.driver(), containerdRuntime()}); err != nil {
 		return err
+	}
+	if _, err := n.rootfsMode(spec); err != nil {
+		return err
+	}
+	if spec.GenericBoot {
+		if _, err := linuxMonitor(spec.Hypervisor); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -539,7 +596,18 @@ func (n *nerdctl) runArgs(spec RunSpec) (args, env []string, err error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		annotations = append(annotations, annotationHypervisor+"="+monitorCloudHypervisor)
+		monitor, err := n.monitor(spec)
+		if err != nil {
+			return nil, nil, err
+		}
+		annotations = append(annotations, annotationHypervisor+"="+monitor)
+		mode, err := n.rootfsMode(spec)
+		if err != nil {
+			return nil, nil, err
+		}
+		if mode != "" {
+			annotations = append(annotations, annotationRootfsMode+"="+mode)
+		}
 		for _, kv := range annotations {
 			args = append(args, "--annotation", kv)
 		}
@@ -665,6 +733,11 @@ func (n *nerdctl) Replace(spec ExecSpec) error {
 	// brig's process ends at the exec: its command event is queued, and
 	// a process of its own uploads it.
 	telemetry.Handover()
+	// The pending EOF is read as late as brig can manage, while the terminal is
+	// still canonical. The part of the race left is nerdctl's own.
+	if spec.TTY {
+		consumePendingEOF(os.Stdin)
+	}
 	if err := execHandover(n.bin, argv, env); err != nil {
 		telemetry.HandoverFailed()
 		return err
@@ -679,6 +752,11 @@ func (n *nerdctl) Attach(spec ExecSpec) (int, error) {
 	argv, env, err := n.replaceCmd(spec)
 	if err != nil {
 		return 0, err
+	}
+	// Same reason as in Replace: the mark is read before nerdctl can switch the
+	// terminal to raw.
+	if spec.TTY {
+		consumePendingEOF(os.Stdin)
 	}
 	return attachHandover(argv, env)
 }
@@ -727,7 +805,7 @@ func (n *nerdctl) Logs(spec LogsSpec) error {
 		args = append(args, "--tail", strconv.Itoa(spec.Tail))
 	}
 	args = append(args, spec.Name)
-	cmd := exec.Command(n.bin, args...)
+	cmd := logsCommand(spec, n.bin, args)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	cmd.Stdout = spec.Out
 	cmd.Stderr = spec.Err

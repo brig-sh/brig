@@ -629,6 +629,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			network = NetIsolated
 		}
 	}
+	// Dropped here rather than only where the guest env is built, so the run's
+	// own reports -- the CREDENTIALS row, plan, info -- never name a variable
+	// the guest does not get. See projectVar.
+	bindings, routes, projectWarnings := withoutProjectVar(bindings, routes)
+	envWarnings = append(envWarnings, projectWarnings...)
 
 	c := &Config{
 		Profile:        t,
@@ -881,6 +886,38 @@ func envOverride(bindings []profile.EnvBinding, names []string) ([]profile.EnvBi
 		})
 	}
 	return kept, warnings
+}
+
+// withoutProjectVar drops every profile binding and route guest.env entry
+// named BRIG_PROJECT, with a warning for each. brig sets that variable itself
+// (see guestEnv), so a value from either would be replaced in the guest while
+// the run reported it as delivered. Dropping something the user asked for is
+// worth saying. A route that names it is copied rather than edited, because
+// the route came from a bound policy that other code still reads.
+func withoutProjectVar(bindings []profile.EnvBinding, routes []v1alpha1.Route) (
+	[]profile.EnvBinding, []v1alpha1.Route, []string) {
+	var warnings []string
+	const why = "brig sets it to where the project is mounted in the guest"
+	kept := make([]profile.EnvBinding, 0, len(bindings))
+	for _, b := range bindings {
+		if b.Name == projectVar {
+			warnings = append(warnings, fmt.Sprintf("ignoring %s from the profile: %s", projectVar, why))
+			continue
+		}
+		kept = append(kept, b)
+	}
+	out := make([]v1alpha1.Route, 0, len(routes))
+	for _, r := range routes {
+		if r.Guest != nil {
+			if _, ok := r.Guest.Env[projectVar]; ok {
+				r = *r.DeepCopy()
+				delete(r.Guest.Env, projectVar)
+				warnings = append(warnings, fmt.Sprintf("ignoring %s from route %s: %s", projectVar, r.Name, why))
+			}
+		}
+		out = append(out, r)
+	}
+	return kept, out, warnings
 }
 
 // bindingNames is what a run could hand the guest, for reporting. Names only,

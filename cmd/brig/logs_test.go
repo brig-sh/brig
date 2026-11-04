@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/termfilter"
 )
 
 // logRuntime records the one request `brig logs` makes of the runtime. The
@@ -43,11 +44,14 @@ func TestStripControl(t *testing.T) {
 		{"a bare escape pair goes", "a\x1bcb", "ab"},
 		{"stray control bytes are dropped", "a\x00\x07b", "ab"},
 		{"DEL is dropped", "a\x7fb", "ab"},
+		{"an unterminated OSC ends at the newline", "a\x1b]0;cut off\nnext\n", "a\nnext\n"},
+		{"an unterminated CSI ends at the newline", "a\x1b[31\nnext", "a\nnext"},
+		{"a lone escape before a newline", "a\x1b\nb", "a\nb"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := string(stripControl([]byte(c.in))); got != c.want {
-				t.Errorf("stripControl(%q) = %q, want %q", c.in, got, c.want)
+			if got := string(termfilter.Strip([]byte(c.in))); got != c.want {
+				t.Errorf("termfilter.Strip(%q) = %q, want %q", c.in, got, c.want)
 			}
 		})
 	}
@@ -57,7 +61,7 @@ func TestStripControl(t *testing.T) {
 // still filtered whole: the state rides on the writer, not on one Write.
 func TestControlFilterAcrossWrites(t *testing.T) {
 	var buf bytes.Buffer
-	f := &controlFilter{w: &buf}
+	f := termfilter.New(&buf)
 	if _, err := f.Write([]byte("a\x1b[")); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +77,7 @@ func TestControlFilterAcrossWrites(t *testing.T) {
 // io.Copy from a runtime's pipe reports ErrShortWrite.
 func TestControlFilterReportsFullWrite(t *testing.T) {
 	in := []byte("a\x1b[31mb")
-	n, err := (&controlFilter{w: io.Discard}).Write(in)
+	n, err := termfilter.New(io.Discard).Write(in)
 	if err != nil || n != len(in) {
 		t.Errorf("Write(%q) = %d, %v; want %d, nil", in, n, err, len(in))
 	}

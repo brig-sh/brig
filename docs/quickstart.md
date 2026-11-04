@@ -126,7 +126,7 @@ without booting anything. `brig --verbose run` prints it before the boot:
 ```
 PROFILE      claude-code
 SANDBOX      brig-claude-code (hull)
-ISOLATION    microVM (hull, hvi backend)
+ISOLATION    microVM (hull, hvi backend, rootfs hull default)
 WORKSPACE    /Users/you/.brig/homes/brig-claude-code (read-write)
 IMAGE        ghcr.io/brig-sh/claude-code-stock:root (pull missing)
 VERIFY       warn, against brig's own trust policy

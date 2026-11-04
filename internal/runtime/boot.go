@@ -26,22 +26,60 @@ const (
 
 	// The monitor is named too, on Linux only, because urunc's default for an
 	// image booted this way is qemu -- and the runtime bundle does not ship
-	// qemu. It ships cloud-hypervisor, and a guest kernel built for it. Left
-	// unsaid, a host without a system qemu gets "vmm not found" from the shim,
-	// three layers from anything that mentions a monitor, while brig doctor
-	// reports the runtime and the boot assets as fine. urunc validates the
-	// pair, and cloud-hypervisor with a Linux guest is one it accepts.
+	// qemu. It ships hvi, and a guest kernel with the virtio-mmio devices hvi
+	// presents. Left unsaid, a host without a system qemu gets "vmm not found"
+	// from the shim, three layers from anything that mentions a monitor, while
+	// brig doctor reports the runtime and the boot assets as fine. urunc
+	// validates the pair, and hvi with a Linux guest is one it accepts.
 	//
 	// hull does not read this: it takes its backend as --hypervisor, from a
 	// different set of names entirely (vz, hvi), which is why this is appended
 	// on the Linux path rather than added to the pair below.
 	//
-	// TODO: appended on every Linux generic boot, so a host that installed
-	// containerd and urunc itself and runs qemu fails where it booted before.
-	// Make it conditional on the bundle once hvi reaches parity on Linux.
-	annotationHypervisor   = "com.urunc.unikernel.hypervisor"
-	monitorCloudHypervisor = "cloud-hypervisor"
+	// BRIG_HYPERVISOR names another monitor urunc runs, for a host that
+	// installed it; see linuxMonitor.
+	annotationHypervisor = "com.urunc.unikernel.hypervisor"
+	monitorHvi           = "hvi"
+
+	// annotationRootfsMode carries RunSpec.RootfsMode to urunc on Linux.
+	annotationRootfsMode = "com.urunc.unikernel.rootfsMode"
 )
+
+// linuxMonitor returns the urunc monitor a Linux generic boot runs on for the
+// hypervisor a profile or BRIG_HYPERVISOR asked for. Empty and vz, which
+// exists on macOS only, keep the bundle's hvi, so that a profile written for
+// both platforms boots on both. A name urunc does not run is an error.
+func linuxMonitor(hv string) (string, error) {
+	switch hv {
+	case "", "vz":
+		return monitorHvi, nil
+	case "hvi", "cloud-hypervisor", "qemu", "firecracker":
+		return hv, nil
+	}
+	return "", fmt.Errorf("hypervisor %q (BRIG_HYPERVISOR or the profile's hypervisor field) is not one urunc runs on Linux: "+
+		"use hvi, cloud-hypervisor, qemu or firecracker", hv)
+}
+
+// LinuxMonitorBinary is the program urunc looks up on PATH for the monitor
+// that linuxMonitor picks. brig doctor asks for it, so a host that has the
+// monitor a run boots on reads ok and a host that has some other one does not.
+// qemu's name carries the host architecture, spelled as urunc spells it.
+func LinuxMonitorBinary(hv string) (string, error) {
+	monitor, err := linuxMonitor(hv)
+	if err != nil {
+		return "", err
+	}
+	if monitor != "qemu" {
+		return monitor, nil
+	}
+	switch goruntime.GOARCH {
+	case "amd64":
+		return "qemu-system-x86_64", nil
+	case "arm64":
+		return "qemu-system-aarch64", nil
+	}
+	return "qemu-system-" + goruntime.GOARCH, nil
+}
 
 // bootInitrdName is the same on every platform: the initrd is a cpio built for
 // the guest, not for the host running brig.

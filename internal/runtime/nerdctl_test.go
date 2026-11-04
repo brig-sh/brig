@@ -47,9 +47,9 @@ func TestNerdctlPassesBootAnnotations(t *testing.T) {
 }
 
 // urunc defaults an image booted this way to qemu, which the runtime bundle
-// does not ship -- it ships cloud-hypervisor and a kernel built for it. Naming
-// the monitor is what keeps a host without a system qemu from failing at the
-// shim with "vmm not found".
+// does not ship -- it ships hvi and a kernel built for it. Naming the monitor
+// is what keeps a host without a system qemu from failing at the shim with
+// "vmm not found".
 func TestNerdctlNamesTheMonitor(t *testing.T) {
 	stageBootAssets(t)
 
@@ -59,8 +59,127 @@ func TestNerdctlNamesTheMonitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Join(args, " ")
-	if !strings.Contains(got, "--annotation com.urunc.unikernel.hypervisor=cloud-hypervisor") {
+	if !strings.Contains(got, "--annotation com.urunc.unikernel.hypervisor=hvi") {
 		t.Errorf("monitor annotation not passed: %s", got)
+	}
+}
+
+// BRIG_HYPERVISOR reaches urunc on Linux. vz exists on macOS only, so a
+// profile written for both keeps the bundle's hvi here, and a name urunc does
+// not run is refused before anything boots.
+func TestNerdctlRunsTheHypervisorAsked(t *testing.T) {
+	stageBootAssets(t)
+
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	for asked, want := range map[string]string{
+		"":                 "hvi",
+		"vz":               "hvi",
+		"hvi":              "hvi",
+		"cloud-hypervisor": "cloud-hypervisor",
+		"qemu":             "qemu",
+		"firecracker":      "firecracker",
+	} {
+		spec := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true, Hypervisor: asked}
+		if err := n.CanRun(spec); err != nil {
+			t.Errorf("%q: CanRun refused it: %v", asked, err)
+		}
+		args, _, err := n.runArgs(spec)
+		if err != nil {
+			t.Fatalf("%q: %v", asked, err)
+		}
+		got := strings.Join(args, " ")
+		if !strings.Contains(got, "--annotation com.urunc.unikernel.hypervisor="+want+" ") {
+			t.Errorf("%q: want monitor %s: %s", asked, want, got)
+		}
+		if strings.Count(got, "com.urunc.unikernel.hypervisor=") != 1 {
+			t.Errorf("%q: the monitor must be named once: %s", asked, got)
+		}
+		if b := n.Backend(spec); b != want {
+			t.Errorf("%q: Backend says %q, the run boots %q", asked, b, want)
+		}
+	}
+
+	// brig passes no monitor off a generic boot or on docker, so the plan must
+	// name none either.
+	plain := RunSpec{Name: "s", Image: "ubuntu:latest", Hypervisor: "vz"}
+	if b := n.Backend(plain); b != "" {
+		t.Errorf("not a generic boot: Backend says %q, the run passes no monitor", b)
+	}
+	d := &nerdctl{bin: "/usr/bin/docker"}
+	if b := d.Backend(RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true}); b != "" {
+		t.Errorf("docker: Backend says %q, the run passes no monitor", b)
+	}
+
+	spec := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true, Hypervisor: "bhyve"}
+	if err := n.CanRun(spec); err == nil || !strings.Contains(err.Error(), "bhyve") {
+		t.Errorf("an unknown monitor must be refused by name: %v", err)
+	}
+	if _, _, err := n.runArgs(spec); err == nil {
+		t.Error("runArgs must refuse an unknown monitor too")
+	}
+}
+
+// The rootfsMode annotation reaches urunc on a generic boot: by default where
+// the host builds an overlay root, and when BRIG_ROOTFS_MODE=overlay-block
+// asks. virtiofs, and a host that cannot build one, pass none.
+func TestNerdctlPassesTheRootfsMode(t *testing.T) {
+	stageBootAssets(t)
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	const annotation = "--annotation com.urunc.unikernel.rootfsMode=overlay-block"
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	argv := func(spec RunSpec) string {
+		t.Helper()
+		if err := n.CanRun(spec); err != nil {
+			t.Fatalf("%+v: %v", spec, err)
+		}
+		args, _, err := n.runArgs(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(args, " ")
+	}
+	generic := RunSpec{Name: "s", Image: "ubuntu:latest", GenericBoot: true}
+	explicit := generic
+	explicit.RootfsMode = RootfsModeOverlayBlock
+
+	if got := argv(generic); strings.Contains(got, "rootfsMode") {
+		t.Errorf("no mke2fs: a mode passed by default: %s", got)
+	}
+	if err := n.CanRun(explicit); err == nil || !strings.Contains(err.Error(), "e2fsprogs") {
+		t.Errorf("BRIG_ROOTFS_MODE=overlay-block with no mke2fs: want a refusal naming e2fsprogs, got %v", err)
+	}
+
+	overlayHost(t)
+	for _, spec := range []RunSpec{generic, explicit} {
+		if got := argv(spec); !strings.Contains(got, annotation) {
+			t.Errorf("%q: rootfs mode not passed: %s", spec.RootfsMode, got)
+		}
+	}
+	optOut := generic
+	optOut.RootfsMode = RootfsModeVirtiofs
+	firecracker := generic
+	firecracker.Hypervisor = "firecracker"
+	for _, spec := range []RunSpec{optOut, firecracker} {
+		if got := argv(spec); strings.Contains(got, "rootfsMode") {
+			t.Errorf("%+v: a mode passed: %s", spec, got)
+		}
+	}
+
+	t.Setenv("CONTAINERD_SNAPSHOTTER", "devmapper")
+	if got := argv(generic); strings.Contains(got, "rootfsMode") {
+		t.Errorf("devmapper: a mode passed by default: %s", got)
+	}
+	if err := n.CanRun(explicit); err == nil || !strings.Contains(err.Error(), "devmapper") {
+		t.Errorf("BRIG_ROOTFS_MODE=overlay-block on devmapper: want a refusal naming it, got %v", err)
+	}
+
+	for _, bad := range []RunSpec{
+		{Name: "s", Image: "img", RootfsMode: RootfsModeOverlayBlock},
+		{Name: "s", Image: "ubuntu:latest", GenericBoot: true, RootfsMode: "overlay"},
+	} {
+		if err := n.CanRun(bad); err == nil || !strings.Contains(err.Error(), "BRIG_ROOTFS_MODE") {
+			t.Errorf("%+v: want a refusal naming BRIG_ROOTFS_MODE, got %v", bad, err)
+		}
 	}
 }
 
@@ -406,7 +525,7 @@ func TestNerdctlLeavesAPathToAnUnknownBinaryUnplaced(t *testing.T) {
 		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
 			t.Errorf("CanRun refused %q, a path to a binary brig cannot place: %v", shim, err)
 		}
-		if got := n.Isolation(""); got.Boundary != BoundaryUnknown {
+		if got := n.Isolation(RunSpec{}); got.Boundary != BoundaryUnknown {
 			t.Errorf("%q is not established either way, but the row says: %s", shim, got.Line())
 		}
 	}

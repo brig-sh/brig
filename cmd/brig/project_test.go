@@ -19,11 +19,11 @@ func TestRunTakesTheProjectAsAPositional(t *testing.T) {
 	}{
 		{[]string{"claude", "/tmp/p"}, "/tmp/p", ""},
 		{[]string{"claude", "/tmp/p", "-p", "hi"}, "/tmp/p", "-p hi"},
-		{[]string{"claude", "-q", "/tmp/p"}, "/tmp/p", ""},
+		{[]string{"claude", "-d", "/tmp/p"}, "/tmp/p", ""},
 		// brig reads past the project, which is its own operand, and stops
 		// at the next bare word: that is where the agent's argv starts.
 		{[]string{"claude", "/tmp/p", "status"}, "/tmp/p", "status"},
-		{[]string{"claude", "/tmp/p", "-q", "status"}, "/tmp/p", "status"},
+		{[]string{"claude", "/tmp/p", "-d", "status"}, "/tmp/p", "status"},
 		// An explicit -- declares the rest the agent's, project included: the
 		// line has already said which reading it wants.
 		{[]string{"claude", "--", "/tmp/p"}, "", "/tmp/p"},
@@ -174,38 +174,37 @@ func TestAProjectRunsWithoutANotice(t *testing.T) {
 	}
 }
 
-// --home is what sets the guest home now. Both older spellings keep working --
-// a line that works today has to keep working -- and each says the one word
-// that replaces it.
+// --home is what sets the guest home. v0.5.0 removed -w and --workspace, the
+// spellings it replaced: after the ref they are the agent's -- cursor's
+// --workspace, claude's and gemini's -w -- and set no home.
 func TestHomeReplacesWorkspace(t *testing.T) {
 	for _, c := range []struct {
-		args   []string
-		notice string
+		args []string
+		home string
+		tail string
 	}{
-		{[]string{"claude", "--home", "/h"}, ""},
-		{[]string{"claude", "--home=/h"}, ""},
-		{[]string{"claude", "-w", "/h"}, "`-w` is now `--home`"},
-		{[]string{"claude", "--workspace", "/h"}, "`--workspace` is now `--home`"},
-		{[]string{"claude", "--workspace=/h"}, "`--workspace` is now `--home`"},
+		{[]string{"claude", "--home", "/h"}, "/h", ""},
+		{[]string{"claude", "--home=/h"}, "/h", ""},
+		{[]string{"claude", "-w", "/h"}, "", "-w /h"},
+		{[]string{"claude", "--workspace", "/h"}, "", "--workspace /h"},
+		{[]string{"claude", "--workspace=/h"}, "", "--workspace=/h"},
 	} {
-		var o options
-		var err error
-		notice := captureStderr(t, func() { o, _, _, err = parse("run", c.args) })
+		var (
+			o    options
+			tail []string
+			err  error
+		)
+		notice := captureStderr(t, func() { o, _, tail, err = parse("run", c.args) })
 		if err != nil {
 			t.Errorf("parse(%q): %v", c.args, err)
 			continue
 		}
-		if o.load.Workspace != "/h" {
-			t.Errorf("parse(%q) set the home to %q, want /h", c.args, o.load.Workspace)
+		if o.load.Workspace != c.home || strings.Join(tail, " ") != c.tail {
+			t.Errorf("parse(%q) = home %q, tail %q; want %q and %q",
+				c.args, o.load.Workspace, tail, c.home, c.tail)
 		}
-		if c.notice == "" {
-			if strings.Contains(notice, "is now") {
-				t.Errorf("parse(%q) printed a notice:\n%s", c.args, notice)
-			}
-			continue
-		}
-		if !strings.Contains(notice, c.notice) {
-			t.Errorf("parse(%q) does not say %q:\n%s", c.args, c.notice, notice)
+		if notice != "" {
+			t.Errorf("parse(%q) printed a notice:\n%s", c.args, notice)
 		}
 	}
 }

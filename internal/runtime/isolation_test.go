@@ -11,7 +11,7 @@ import (
 func TestNerdctlReportsAMicroVMOnTheUruncShim(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
 
-	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation("")
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{})
 	if got.Boundary != BoundaryVM {
 		t.Errorf("the default shim is urunc, so the boundary is a microVM: %s", got.Line())
 	}
@@ -28,7 +28,7 @@ func TestNerdctlReportsAMicroVMOnTheUruncShim(t *testing.T) {
 func TestNerdctlReportsASharedKernelWhenTheShimIsReplaced(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "runc")
 
-	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation("")
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{})
 	if got.Boundary != BoundaryContainer {
 		t.Errorf("runc shares the host kernel, so this is a container: %s", got.Line())
 	}
@@ -46,7 +46,7 @@ func TestNerdctlReportsASharedKernelWhenTheShimIsReplaced(t *testing.T) {
 func TestNerdctlWillNotGuessAtAnUnknownShim(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.kata.v2")
 
-	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation("")
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{})
 	if got.Boundary != BoundaryUnknown {
 		t.Errorf("an unrecognised shim is not established either way: %s", got.Line())
 	}
@@ -68,7 +68,7 @@ func TestDockerIsReportedAsDocker(t *testing.T) {
 	if got := d.Kind(); got != "docker" {
 		t.Errorf("Kind() = %q, want docker", got)
 	}
-	if got := d.Isolation("").Detail; !strings.HasPrefix(got, "docker over containerd") {
+	if got := d.Isolation(RunSpec{}).Detail; !strings.HasPrefix(got, "docker over containerd") {
 		t.Errorf("the isolation row does not name docker: %s", got)
 	}
 	if got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Kind(); got != "nerdctl" {
@@ -86,7 +86,7 @@ func TestHullReportsAMicroVMAndTheBackendUnderIt(t *testing.T) {
 		{"hvi", "hvi"},
 		{"qemu", "qemu"},
 	} {
-		got := (&hull{bin: "hull"}).Isolation(tc.asked)
+		got := (&hull{bin: "hull"}).Isolation(RunSpec{Hypervisor: tc.asked})
 		if got.Boundary != BoundaryVM {
 			t.Errorf("hull on %q is a microVM: %s", tc.asked, got.Line())
 		}
@@ -112,12 +112,66 @@ func TestNerdctlReportsASharedKernelForAPathToRuncOrCrun(t *testing.T) {
 	for _, shim := range []string{"/usr/bin/runc", "/usr/bin/crun", "./crun"} {
 		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
 
-		got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation("")
+		got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{})
 		if got.Boundary != BoundaryContainer {
 			t.Errorf("%s shares the host kernel, so this is a container: %s", shim, got.Line())
 		}
 		if !strings.Contains(got.Detail, shim+": the guest shares the host kernel") {
 			t.Errorf("the row does not name the path and what it costs: %s", got.Line())
+		}
+	}
+}
+
+// The runc shim's own binary, by name or by path, boots on io.containerd.runc.v2
+// as the bare runtimes do. It passed the refusal and created a container on the
+// runc shim (#468), so CanRun must refuse it and Run must not reach the runtime.
+func TestNerdctlRefusesTheRuncShimBinaryByNameOrPath(t *testing.T) {
+	for _, shim := range []string{
+		"containerd-shim-runc-v2",
+		"containerd-shim-runc-v1",
+		"/home/u/.local/share/brig/data/bin/containerd-shim-runc-v2",
+		"./containerd-shim-runc-v2",
+	} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		got := n.Isolation(RunSpec{})
+		if got.Boundary != BoundaryContainer {
+			t.Errorf("%s boots the runc shim, so this is a container: %s", shim, got.Line())
+		}
+		if !strings.Contains(got.Detail, shim+": the guest shares the host kernel") {
+			t.Errorf("the row does not name the value and what it costs: %s", got.Line())
+		}
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err == nil {
+			t.Errorf("%s: CanRun let the runc shim through", shim)
+		}
+		err := n.Run(RunSpec{Name: "brig-x", Image: "img"})
+		if err == nil || strings.Contains(err.Error(), "STUB RAN") {
+			t.Errorf("%s: Run reached the runtime instead of refusing: %v", shim, err)
+		}
+	}
+}
+
+// The refusal of the runc shim's binary is keyed on its file name, and the
+// microVM shim's binary sits one letter away from it. A urunc binary added to
+// the refused set, or a bare containerd-shim-urunc-v2 mistaken for the runc
+// shim, would stop brig booting the one shim it exists for. brig cannot see
+// nerdctl's PATH, so it does not credit the name with a microVM either: the row
+// stays unknown, and CanRun lets it through.
+func TestNerdctlKeepsTheUruncShimBinaryAllowedByNameOrPath(t *testing.T) {
+	for _, shim := range []string{
+		"containerd-shim-urunc-v2",
+		"/usr/local/bin/containerd-shim-urunc-v2",
+		"./containerd-shim-urunc-v2",
+	} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
+
+		if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err != nil {
+			t.Errorf("%s: CanRun refused the urunc shim binary: %v", shim, err)
+		}
+		if got := n.Isolation(RunSpec{}); got.Boundary != BoundaryUnknown {
+			t.Errorf("%s is neither the runc shim nor provably a microVM: %s", shim, got.Line())
 		}
 	}
 }
@@ -160,7 +214,7 @@ func TestNerdctlPlacesAShimNameByTheShimContainerdStarts(t *testing.T) {
 		t.Setenv("BRIG_CONTAINERD_RUNTIME", tc.shim)
 		n := &nerdctl{bin: stubRuntimeBin(t, "STUB RAN", 0)}
 
-		got := n.Isolation("")
+		got := n.Isolation(RunSpec{})
 		if got.Boundary != tc.want {
 			t.Errorf("%s: the row says %s, want %s", tc.shim, got.Line(), tc.want)
 		}
@@ -188,10 +242,172 @@ func TestNerdctlDoesNotCallARuncShimUnderAUruncPrefixAMicroVM(t *testing.T) {
 	t.Setenv("BRIG_CONTAINERD_RUNTIME", "io.containerd.urunc.runc.v2")
 
 	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
-	if got := n.Isolation(""); got.Boundary != BoundaryContainer {
+	if got := n.Isolation(RunSpec{}); got.Boundary != BoundaryContainer {
 		t.Errorf("the name resolves to the runc shim, so this is a container: %s", got.Line())
 	}
 	if err := n.CanRun(RunSpec{Name: "brig-x", Image: "img"}); err == nil {
 		t.Error("CanRun let a runc shim through under a urunc prefix")
+	}
+}
+
+// The row names only a hypervisor brig hands urunc. Outside a generic boot brig
+// passes none, so urunc picks, and BRIG_HYPERVISOR is not passed either: only
+// a generic boot carries the annotation.
+func TestNerdctlNamesNoHypervisorItDidNotPass(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{Hypervisor: "hvi"}).Line()
+	for _, never := range []string{monitorHvi, "cloud-hypervisor"} {
+		if strings.Contains(got, never) {
+			t.Errorf("the row names %s, which brig did not pass: %s", never, got)
+		}
+	}
+	if !strings.Contains(got, "hypervisor urunc default") {
+		t.Errorf("the row does not say urunc picks the hypervisor: %s", got)
+	}
+}
+
+// docker cannot carry the annotation, so brig refuses the generic boot there
+// and passes no monitor. The row must not name the one a nerdctl boot passes.
+func TestDockerNamesNoHypervisorOnAGenericBoot(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	got := (&nerdctl{bin: "/usr/bin/docker"}).Isolation(RunSpec{GenericBoot: true}).Line()
+	if strings.Contains(got, monitorHvi) {
+		t.Errorf("the row names a monitor docker is never handed: %s", got)
+	}
+}
+
+// RootfsType has no nerdctl flag, so it never reaches urunc. Naming it here
+// reports a setting the run ignores.
+func TestNerdctlNamesNoRootfsType(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{RootfsType: "block"}).Line()
+	if strings.Contains(got, "rootfs") || strings.Contains(got, "block") {
+		t.Errorf("the row names a rootfs type nerdctl ignores: %s", got)
+	}
+}
+
+// The variable is named only when it is the reason for the shim. On a default
+// install it is unset, and naming it there sends the reader after a setting
+// nobody made.
+func TestNerdctlNamesNoSettingWhenUnset(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{}).Line()
+	if strings.Contains(got, "BRIG_CONTAINERD_RUNTIME") {
+		t.Errorf("the row names a setting that is not set: %s", got)
+	}
+}
+
+// Set, the variable is what decided the boundary, so the row names it with the
+// value. A shared-kernel shim takes no hypervisor, so none is named.
+func TestNerdctlNamesTheSettingBehindTheShim(t *testing.T) {
+	for _, shim := range []string{"runc", uruncShim, "io.containerd.kata.v2"} {
+		t.Setenv("BRIG_CONTAINERD_RUNTIME", shim)
+
+		got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{GenericBoot: true}).Line()
+		if !strings.Contains(got, "BRIG_CONTAINERD_RUNTIME="+shim) {
+			t.Errorf("the row does not name the setting behind %s: %s", shim, got)
+		}
+		if shim != uruncShim && strings.Contains(got, "hypervisor") {
+			t.Errorf("the row names a hypervisor for %s, which is not urunc: %s", shim, got)
+		}
+	}
+}
+
+// On a generic boot brig tells urunc which monitor to use, so the row names
+// that one: the same value runArgs puts in the annotation. hvi is the default
+// on Linux, and vz, which exists on macOS only, boots on hvi too. This host
+// builds no overlay root, so the root is urunc's own.
+func TestNerdctlNamesTheMonitorItPassesOnAGenericBoot(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+	for asked, want := range map[string]string{
+		"":                 monitorHvi,
+		"vz":               monitorHvi,
+		"hvi":              monitorHvi,
+		"cloud-hypervisor": "cloud-hypervisor",
+		"qemu":             "qemu",
+	} {
+		spec := RunSpec{GenericBoot: true, Hypervisor: asked}
+		got := n.Isolation(spec).Line()
+		if !strings.HasSuffix(got, ", hypervisor "+want+", rootfs urunc default)") {
+			t.Errorf("%q: the row does not name the monitor brig passes, %s: %s", asked, want, got)
+		}
+		if m, err := n.monitor(spec); err != nil || m != want {
+			t.Errorf("%q: monitor() = %q, %v, want %q, the value the annotation carries", asked, m, err, want)
+		}
+	}
+}
+
+// The row names the rootfs mode brig hands urunc on a generic boot, which is
+// overlay-block by default where the host builds it, and urunc's own root
+// where it does not or BRIG_ROOTFS_MODE=virtiofs asks for that. Any other
+// boot brings its own root, and the row names none.
+func TestNerdctlNamesTheRootfsModeItPasses(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+	n := &nerdctl{bin: "/usr/local/bin/nerdctl"}
+
+	if got := n.Isolation(RunSpec{GenericBoot: true}).Line(); !strings.HasSuffix(got, "hypervisor hvi, rootfs urunc default)") {
+		t.Errorf("a host with no overlay root: the row does not name urunc's own root: %s", got)
+	}
+
+	overlayHost(t)
+	for _, spec := range []RunSpec{
+		{GenericBoot: true},
+		{GenericBoot: true, RootfsMode: RootfsModeOverlayBlock},
+	} {
+		got := n.Isolation(spec).Line()
+		if want := "hypervisor hvi, rootfs overlay-block)"; !strings.HasSuffix(got, want) {
+			t.Errorf("%q: the row does not name the default monitor and the rootfs mode, want %q: %s", spec.RootfsMode, want, got)
+		}
+	}
+	got := n.Isolation(RunSpec{GenericBoot: true, RootfsMode: RootfsModeVirtiofs}).Line()
+	if !strings.HasSuffix(got, "rootfs urunc default)") {
+		t.Errorf("BRIG_ROOTFS_MODE=virtiofs: the row does not name urunc's own root: %s", got)
+	}
+	for _, spec := range []RunSpec{{}, {RootfsMode: RootfsModeOverlayBlock}} {
+		if got := n.Isolation(spec).Line(); strings.Contains(got, "rootfs") {
+			t.Errorf("%+v: the row names a rootfs on a boot that brings its own: %s", spec, got)
+		}
+	}
+
+	got = (&nerdctl{bin: "/usr/bin/docker"}).Isolation(RunSpec{GenericBoot: true, RootfsMode: RootfsModeOverlayBlock}).Line()
+	if strings.Contains(got, "overlay-block") {
+		t.Errorf("the row names a rootfs mode docker is never handed: %s", got)
+	}
+}
+
+// A monitor urunc does not run is refused by CanRun. brig info boots nothing,
+// so its row names what was asked for, as brig plan does, and not hvi or
+// urunc's default.
+func TestNerdctlNamesAnUnknownMonitorAsAsked(t *testing.T) {
+	t.Setenv("BRIG_CONTAINERD_RUNTIME", "")
+
+	got := (&nerdctl{bin: "/usr/local/bin/nerdctl"}).Isolation(RunSpec{GenericBoot: true, Hypervisor: "bhyve"}).Line()
+	if !strings.Contains(got, ", hypervisor bhyve,") {
+		t.Errorf("the row does not name the monitor asked for: %s", got)
+	}
+}
+
+// hull takes --rootfs-type, so the row names the value brig passes. With none
+// passed, hull picks per backend, and the row says so without guessing which.
+func TestHullNamesTheRootfsTypeItPasses(t *testing.T) {
+	got := (&hull{bin: "hull"}).Isolation(RunSpec{Hypervisor: "hvi", RootfsType: "block"}).Line()
+	if !strings.Contains(got, "rootfs block") {
+		t.Errorf("the row does not name the rootfs type brig passes: %s", got)
+	}
+
+	got = (&hull{bin: "hull"}).Isolation(RunSpec{}).Line()
+	if !strings.Contains(got, "rootfs hull default") {
+		t.Errorf("the row does not say hull picks the rootfs: %s", got)
+	}
+	for _, never := range []string{"block", "virtiofs", "9pfs"} {
+		if strings.Contains(got, never) {
+			t.Errorf("the row names %s, which brig did not pass: %s", never, got)
+		}
 	}
 }

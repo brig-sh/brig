@@ -66,7 +66,7 @@ script/check-claims.sh
 
 | Script | Fails when |
 | --- | --- |
-| `script/check-retired-spellings.sh` | A doc teaches a command spelling scheduled for removal. [docs/migration.md](docs/migration.md) lists the current spellings. |
+| `script/check-retired-spellings.sh` | A doc teaches a command spelling that is retired or removed. [docs/migration.md](docs/migration.md) lists the current spellings. |
 | `script/check-claims.sh` | A sentence that [docs/claims.md](docs/claims.md) quotes from [docs/security.md](docs/security.md), or from a page beside it, no longer matches. |
 
 The local gates cannot catch these:

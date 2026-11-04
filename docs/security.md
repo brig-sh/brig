@@ -80,19 +80,22 @@ The sandbox is a microVM on macOS and on Linux.
 
 On a Linux host that has another microVM shim, `BRIG_CONTAINERD_RUNTIME` can
 name that shim. Brig refuses a shim that it knows shares the host kernel:
-`runc` or `crun`, by name or by path. A container that shares the host kernel
-is not the boundary Brig provides.
+`runc`, `crun` or the runc shim binaries `containerd-shim-runc-v1` and `-v2`,
+by name or by path. A container that shares the host kernel is not the
+boundary Brig provides.
 
 The `ISOLATION` row of the execution envelope names the boundary that this
 run resolved. `brig info` prints the row and boots nothing. `brig --verbose
 run` prints it before the boot:
 
 ```
-ISOLATION    microVM (hull, hvi backend)
-ISOLATION    microVM (hull, vz backend)
-ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2)
-ISOLATION    container (nerdctl over containerd, runc: the guest shares the host kernel)
-ISOLATION    unknown (nerdctl over containerd, io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
+ISOLATION    microVM (hull, hvi backend, rootfs overlay-block)
+ISOLATION    microVM (hull, vz backend, rootfs block)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
+ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
+ISOLATION    container (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=runc: the guest shares the host kernel)
+ISOLATION    unknown (nerdctl over containerd, BRIG_CONTAINERD_RUNTIME=io.containerd.kata.v2: brig cannot tell whether that shim boots a kernel of its own)
 ```
 
 The row reports the binary in hand, the backend the run settled on, and the
@@ -101,6 +104,17 @@ recognise. Brig cannot establish the isolation of that sandbox from a shim
 name alone, so the row says that Brig cannot tell. For a shim that Brig
 recognises as sharing the host kernel, `brig info` names it and the run is
 refused.
+
+On hull the row names `overlay-block` when Brig boots an overlay root.
+Otherwise it names the rootfs type Brig passes, or `hull default` when Brig
+passes none. Under urunc it names the hypervisor Brig passes, or `urunc
+default` when Brig passes none. Brig passes one for a `genericBoot` profile:
+the monitor that `BRIG_HYPERVISOR` names, and `hvi` by default. For that
+profile the row also names the root: `overlay-block`, or `urunc default` when
+Brig passes no rootfs mode. A `genericBoot` profile boots an overlay root
+wherever the host can build one. See
+[The guest root of a generic boot](runtimes.md#the-guest-root-of-a-generic-boot).
+A shim that `BRIG_CONTAINERD_RUNTIME` chose is printed with the variable.
 
 Inside Brig, the guest has your guest home mounted as its home, read-write.
 Name a project on the run line and that project is a second host directory,
@@ -185,19 +199,20 @@ A credential reaches the guest by one of two channels. The profile picks the
 channel for each secret. A third channel, `broker`, keeps the credential on
 the host. A policy's [route](policies.md#routes) names the secret, and the
 guest gets a session token for the route in its place. This release serves a
-route to hull on `hvi` and to nerdctl with urunc at `brig.internal`.
+route to hull on `hvi` and to nerdctl with urunc at `brig.internal`, and a
+route that vends at `169.254.170.2`.
 
 | Channel | What it does |
 | --- | --- |
 | `files:` | Writes the credential into the guest at the path the agent already reads |
 | `env:` | Binds the credential as an environment variable, for a credential whose consumer offers no file interface |
-| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
+| `broker` | Keeps the credential in `brig-broker`, which adds it to each request the guest sends through the route. The secrets of a route's `inject.tls`, a client certificate with its private key and a CA bundle, stay there too: the broker presents the certificate in its own TLS connection to the upstream. The guest gets a session token and the route URL. A `files:` or `env:` binding of the same secret is dropped |
 
 `brig info --json` names the channel of each credential as its `source`:
 `environment`, `secret`, `file` or `broker`.
 
-For an `env.<name>` binding, or the deprecated `forward:` spelling of one,
-Brig still reads the named variable from its own environment. Whatever
+For an `env.<name>` binding, Brig still reads the named variable from its
+own environment. Whatever
 populates that environment remains a usable backend for those bindings.
 
 Brig reads values again on every exec, so the sandbox picks up a rotated
@@ -319,8 +334,9 @@ of these names. The `BRIG_ENV_ARGV` warning does not list them.
 runtime build that does not accept a bare `--env KEY`. A value read from the
 environment then loses this guarantee. A value Brig resolved from its own
 secret store stays off the command line with or without `BRIG_ENV_ARGV`. The
-host durably logs the argv of every exec, so a value on the command line
-stays in that log.
+guest agent logs the argv of every exec. On some backends that log is a
+file on host disk, and a value on the command line stays in it after the
+exec ends.
 
 ### What is still exposed
 
@@ -336,7 +352,14 @@ or a host-side proxy (see
 A [route](policies.md#routes) is the exception. There the sandbox sees a
 session token, which works through its route until it expires or the
 sandbox is stopped. On hull and nerdctl the guest also trusts the brig CA,
-for `brig.internal` alone.
+for `brig.internal` alone. The `aws` route is not such an exception: its
+guest holds temporary AWS keys. See [The aws route](#the-aws-route).
+
+A route with a client certificate gives the token the certificate's
+identity. The guest never holds the key, but whoever holds the route's
+session token can send requests that the upstream sees as the certificate
+holder's. Only the route's `request.allow` limits which requests those are.
+Give such a route a `request.allow` as narrow as the certificate's purpose.
 
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
@@ -344,12 +367,126 @@ A `claude` started without it, under `sudo -i`, `su -` or `env -i` for
 example, writes `.credentials.json` to `~/.claude` in the guest home. That
 directory is on the home share, so the file is on host disk.
 
+The `herd` profile writes the forwarded environment into the guest. An SSH
+session into a herd sandbox is a `brig exec`, and the image's `herd-sshd` <!-- retired-ok -->
+copies everything that exec received to `/run/herd/env`, so that a herdr pane
+gets it. That includes the route's session token and an exported `GH_TOKEN`.
+The file is on `tmpfs`, mode `0600`, owned by root, and never in the guest
+home, so it does not reach host disk. It holds the values of the latest
+connection until the next one or a stop. `/etc/bash.bashrc` reads it only in
+a shell sshd started, so `brig sh` keeps the token it was given, and a pane
+that does not start `bash` has no `CLAUDE_CONFIG_DIR`, and a `claude`
+started there writes its credential to the home share as above. See
+[herd.md](herd.md).
+
 On hull with the `hvi` backend, the guest root is itself a share of the
 sandbox's directory in hull's store. If something on the host renames or
 replaces the directory under `/brig/claude` there while the sandbox runs, the
 guest drops the `tmpfs`. A credential the agent writes before Brig's next
 command then lands in hull's store, and stays there until `brig rm`. Brig's
 next command mounts the `tmpfs` again.
+
+### The aws route
+
+The `aws` route hands the guest real AWS keys. Every other route keeps its
+credential on the host. AWS signs each request with the secret key, so the
+broker cannot add a credential on the way out. The route instead answers the
+guest's AWS SDK with temporary keys, and the guest calls AWS itself. See
+[The aws preset](policies.md#the-aws-preset).
+
+**What the guest holds.** An access key id, a secret access key and a
+session token. They work anywhere AWS answers, outside the sandbox too,
+until they expire. In role mode they last 30 minutes, or 25 minutes to an
+hour with `brig secret import --session-duration`. In self mode they expire
+when the credentials of your AWS profile do. The broker serves the keys it
+holds while they have at least 20 minutes left, and fetches new ones below
+that. Keys it has just fetched are served as `aws` returned them, and in
+self mode they can have less time left; the broker serves those for one
+minute after the fetch, never past their expiry. It refuses credentials
+with no expiry, such as the long-lived keys of an IAM user.
+
+The broker keeps the keys in memory and writes none of them to the secret
+store or to a file. The audit line names the access key id it handed out,
+and never the secret key or the session token.
+
+**What the keys can do.** The keys can do what the identity behind them can
+do. In role mode that is the role's policy, so give the sandbox a role with
+a narrow policy. In self mode it is your whole identity in that profile: the
+sandbox can do what you can. Self mode is never a default: `brig secret
+import` refuses an import that names neither mode, or both. Each run and
+exec prints a line that names the role, or says that the sandbox has your
+own identity.
+
+**Credentials that win over the route.** An AWS SDK reads its environment
+and `~/.aws` before the container credential provider. A run with a route
+that vends is refused when the profile or `BRIG_FORWARD_ENV` also hands the
+guest `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+`AWS_PROFILE`, `AWS_DEFAULT_PROFILE`, `AWS_CONFIG_FILE`,
+`AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`,
+`AWS_ROLE_ARN`, or an `AWS_CONTAINER_*` variable. It is also refused when
+`~/.aws` would be in the guest: a guest home that already holds
+`.aws/credentials` or `.aws/config` (for example `--home ~`), or a profile
+volume, `files:` binding or host config seed at `.aws`, or a seed copied
+from your own `~/.aws`. The CLI's own cache in `~/.aws/cli`, which the
+`aws` CLI in the guest writes itself, is allowed. Brig does not check the
+image: an `AWS_*` variable baked into it wins over the route.
+
+**Self mode.** The keys are the role credentials that the `aws` CLI caches
+from your SSO login in `~/.aws/cli/cache`, the same ones your host uses.
+Every self-mode sandbox shares them with you, so CloudTrail cannot tell the
+sandbox's calls from yours. They last as long as the permission set's
+session, up to 12 hours. Revoking them revokes your own host session too.
+
+**Revocation.** `brig stop` revokes the sandbox's session tokens, so it can
+fetch no more keys. A secret you import again with another role or mode
+takes effect at the next fetch: the broker does not serve keys it fetched
+for the old secret, and fetches again. Keys already handed out stay valid
+until they expire. To cut them off sooner, change the role's policy or
+revoke its sessions in AWS.
+
+**The SSO session.** The route works while your SSO login works, plus any
+credentials the `aws` CLI has cached from it in `~/.aws/cli/cache`. `aws`
+reuses those until they expire. A permission-set session lasts 1 to 12
+hours, so the route can keep working for hours after the SSO login lapses.
+When `aws` can get no credentials, the broker cannot fetch keys. A new run
+is then refused with exit `6`, and a request from a running guest that
+needs new keys gets a 502. Both name the fix:
+`aws sso login --profile <profile>`, run on the host. The guest keeps the
+keys it holds until they expire. To cut the route off sooner, run
+`aws sso logout` on the host, run `brig stop`, or revoke the sessions in
+AWS.
+
+**The session token.** The guest fetches keys with its session token for the
+route. Brig mints one on every exec, and it lasts 12 hours. An agent process
+older than that cannot fetch keys again. The next exec gets a new token.
+
+**The link to the broker.** The guest fetches keys in plain HTTP from
+`169.254.170.2`, and not over TLS at `brig.internal`. The AWS SDKs need
+that: botocore, which boto3 and the AWS CLI v2 use, verifies HTTPS to a
+container credential URL with its own CA list and ignores `AWS_CA_BUNDLE`,
+and the SDKs take plain HTTP there only to loopback and a few link-local
+addresses. So the session token of the route, and the keys the broker
+answers with (the access key, the secret key and the AWS session token),
+cross the virtual link between the VM and the host in clear text. The token
+is bound to one sandbox and lasts 12 hours. Only the broker accepts it. The
+runtime diverts the address to the sandbox's divert socket, so the request
+never leaves the virtual link for a network. The broker serves only a route
+that vends on that path, and refuses any other route before it reads the
+token. See [Transports](broker.md#transports).
+
+**Named, not ambient.** You name the AWS profile when you run
+`brig secret import`. The secret holds that pointer and no key. Brig does
+not read `~/.aws` or the AWS SSO cache itself. `brig-broker` runs the host's
+`aws` CLI, which does, on every fetch. The broker finds `aws` on its own
+`PATH`, the way Brig finds `hull` and `cosign`, so the first `aws` on that
+`PATH` is the one that reads your profile. The broker runs `aws` with every
+`AWS_` variable removed from its environment, so a variable in your shell,
+such as `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`, never decides which identity a
+sandbox gets. The import applies the same rule, so its check sees what the
+broker will see. That also drops `AWS_CONFIG_FILE`, so keep your AWS
+configuration in its default place. No package on the run path links the
+code that runs `aws`. A run still reads no host credential source. The
+broker, a process of its own, reads one through `aws`.
 
 ## The secret store
 
@@ -639,6 +776,112 @@ run names `~/monorepo/frontend`. The guest home has the same gap, and so does
 a hostmount volume source. To close the gap, the runtime must accept a
 directory handle and not a path.
 
+### What the host runs from the project
+
+Brig mounts the whole project, `.git` included. Git on the host runs
+programs that the repository names, so a file the agent writes into `.git`
+runs on the host, as you, at your next git command in that directory:
+
+- a hook in `.git/hooks`, for example `post-checkout` at `git checkout .`
+- a program that `.git/config` names, for example `core.fsmonitor` at
+  `git status` and `git diff`. `core.hooksPath`, `core.pager`, filter, diff
+  and merge drivers, and aliases that start with `!` work the same way.
+
+`core.fsmonitor` runs before you have read anything: at the first
+`git diff`, or when an editor or a shell prompt runs `git status` in that
+directory.
+
+Reading the diff does not catch either one. `.git` is not part of the working
+tree, so neither `git diff` nor `git status` shows a new hook or a changed
+config. Git's `safe.directory` check does not apply, because you still own
+the repository. A setting in your global git config does not help, because
+the repository's config overrides it.
+
+Files in the working tree can run on the host later too: CI workflows,
+editor task files and package scripts. Those do show in the diff, but they
+run when a tool runs them, not when you read them.
+
+After a run, before any other git command in the project on the host, do
+one of these:
+
+- Read the repository's config and hooks with commands that run nothing:
+  `git config --local --list` and `ls -la .git/hooks`.
+- Continue from a fresh clone, and leave the directory the agent worked in.
+
+Brig warns when these files change. `brig run`, `sh`, `exec`, `stop` and
+`rm` record what the project's `.git/config`,
+`.git/config.worktree`, `.git/commondir`, `.git/hooks` and `.git/info` hold,
+and the next of them for the same sandbox names each file that was added,
+changed or removed since:
+
+```console
+$ brig stop claude
+brig: /Users/alex/code/demo/.git changed while brig-claude-code could write to it
+  ↳ git on the host runs these files as you, at your next git command there
+  ↳ added .git/hooks/post-checkout
+  → read them with commands that run nothing:  git config --local --list; ls -la .git/hooks
+                                               ↳ or continue from a fresh clone
+```
+
+When stderr is not a terminal, every line starts with `brig:`.
+
+A `.git/commondir` is named on every command that finds one. git then reads
+config, hooks and info from the directory it names, which Brig does not look
+at, and a repository's own `.git` has none.
+
+When `.git/config` sets `core.hooksPath` to a directory inside the project,
+Brig looks at that directory too. husky does this with `.husky/_`, and ignores
+everything in it, so `git status` does not show a hook changed there either.
+
+The warning is a look between two brig commands, not a guard:
+
+- A foreground run hands the terminal to the agent, so brig is not there
+  when it ends. Nothing is said until the next brig command for that
+  sandbox. A git command you run before that runs whatever is there.
+- It does not stop the write, and the guest can write again after the look.
+- It names a change, not who made it. A hook manager or a `git push -u` on
+  the host changes the same files.
+- `-q` and `--json` hide it, and the next command that prints warnings
+  names the change instead.
+- Submodules keep their hooks and config under `.git/modules`, which is not
+  looked at.
+- A file that `.git/config` already includes, with `include.path` or
+  `includeIf`, is not looked at unless it is one of the paths above. The
+  guest can set `core.fsmonitor` or `core.hooksPath` there without
+  `.git/config` changing.
+- The first look at a sandbox has nothing to compare against. That is the
+  first command for it, and the first after an upgrade from a Brig that did
+  not look. Whatever the guest had planted by then is recorded as it is,
+  with no warning.
+- A hook that is a symlink is recorded by where it points, not by what that
+  file holds. After the first warning, the guest can change the file it
+  points to, an ignored one in the working tree for instance, and no second
+  warning comes.
+- The look is bounded, so a guest cannot make it stall every command. It
+  hashes the first 8 MiB of a file and 64 MiB in all. A file that comes
+  after those 64 MiB are spent is recorded by its mode and size only, so a
+  change that keeps both is not named, and neither is one past a file's
+  first 8 MiB that keeps its size.
+  It stops after 4096 entries and 32 levels of directories, and what is past
+  either is not looked at. A look that stopped says so in the warning.
+- A `.git` that is a file, whose `gitdir:` names a directory inside the
+  project (`git init --separate-git-dir`), is watched as the file only. The
+  config and hooks in that directory are not looked at.
+- A symlinked `.git/hooks`, or a symlinked `core.hooksPath` directory, is
+  recorded by where it points. Edits to the directory it points to are not
+  seen, whether or not it is inside the project.
+- An entry under `.git/hooks` or `.git/info` that Brig cannot read, a
+  directory the guest made mode 000 for instance, stops the look with an
+  error. Until it is gone, that command names no change at all. A
+  `core.hooksPath` that cannot be read does not do this: it is recorded as
+  unreadable and the look goes on.
+- `core.hooksPath` is read from `.git/config` with `git config --type=path`,
+  which needs git 2.18 or newer. With an older git, or any other git error,
+  the directory is not watched, and nothing says so. A `core.hooksPath` set
+  in `.git/config.worktree` is not read. An absolute one that reaches the
+  project by another name than the one Brig holds, `/private/var` for
+  `/var` on macOS, is not recognized as inside it and is not watched.
+
 ## Guest images
 
 Brig checks where an image came from before it boots the image, because an
@@ -748,9 +991,9 @@ Two things are narrower on macOS than on Linux:
 
 ### The kernel, not only the image
 
-Six of the eight shipped profiles boot a kernel and an initrd that Brig
-downloads. They are `claude-code`, `codex`, `gemini`, `grok`, `opencode` and
-`ubuntu`. Brig checks that bundle too, under the same
+Seven of the nine shipped profiles boot a kernel and an initrd that Brig
+downloads. They are `claude-code`, `codex`, `gemini`, `grok`, `herd`,
+`opencode` and `ubuntu`. Brig checks that bundle too, under the same
 [`BRIG_VERIFY` mode](#verification-modes), as a second check with its own
 trust root.
 
@@ -1027,8 +1270,11 @@ A run with a route reaches one host service by design: the credential
 broker, at `brig.internal` on port 443. On nerdctl that is port 443 of the
 bridge address, which the sandbox's table redirects to the relay of its
 resolver. On `hvi` it is port 443 of the sandbox's gateway address, which
-the gateway diverts. Either way the connection reaches only the broker,
-through the sandbox's divert socket. See
+the gateway diverts. A run with a route that vends also reaches the broker
+at `169.254.170.2` on port 80, diverted the same way. Brig adds no `allow`
+rule for it. The `hvi` gateway resets the rest of `169.254.0.0/16`, and the
+nerdctl table refuses it under a policy with a default. Either way the
+connection reaches only the broker, through the sandbox's divert socket. See
 [Transports](broker.md#transports).
 
 ### Sandbox to sandbox
@@ -1133,6 +1379,15 @@ wrong thing to leave set.
 On Linux, or with the filter off, run Brig inside a terminal you are willing
 to lose if terminal output matters for your threat model.
 
+### Files the host runs later
+
+Brig does not stop the agent from writing a file that the host runs later.
+The project is mounted read-write, `.git` included, so a hook or a program
+named in `.git/config` runs on the host at your next git command there. Brig
+names a change to those files at the next brig command for the sandbox, and
+a git command run before that is not warned about. See
+[What the host runs from the project](#what-the-host-runs-from-the-project).
+
 ### The guest home
 
 Brig does not protect the guest home from the agent. Everything in there is
@@ -1169,3 +1424,8 @@ resolved credential is in its process memory as plaintext for the run's
 lifetime. Brig clears that memory on the way out. That is defence in depth,
 not a control. Brig does not claim to protect against a process that already
 holds your credentials in memory.
+
+**brig-broker.** The broker runs as you, on the host. It holds the private
+key of a route's client certificate in its process memory, parsed, while a
+registered route names the secret, and drops it when the last such route
+goes. A process that can read the broker's memory can read the key.

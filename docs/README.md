@@ -36,6 +36,7 @@ other pages follow, in the order a new reader needs them.
 | [broker.md](broker.md#use-it) | Keep a login on the host, and give the guest a session token for it |
 | [moving-claude-sessions.md](moving-claude-sessions.md) | How to carry Claude Desktop and Claude Code sessions into a Brig sandbox |
 | [profiles.md](profiles.md) | The profile file format, and how to run your own agent |
+| [herd.md](herd.md) | Many sandboxes, one agent each, managed from one herdr client over SSH |
 | [guest-image.md](guest-image.md) | The contract an image must meet to boot as a guest |
 | [completions.md](completions.md) | Shell completion for bash, zsh and fish |
 

@@ -146,13 +146,11 @@ var countedVerbs = map[string]struct {
 	command string
 	asks    bool
 }{
-	"run": {"run", true}, "sh": {"sh", true}, "create": {"create", false}, "exec": {"exec", false},
-	"stop": {"stop", false}, "rm": {"rm", false}, "reset": {"reset", false}, "ls": {"ls", false},
-	"logs": {"logs", false}, "info": {"info", false}, "env": {"env", false}, "plan": {"plan", false},
-	"network": {"network", false}, "agent": {"agent", false}, "agents": {"agents", false},
-	"profile": {"profile", false}, "profiles": {"profiles", false}, "template": {"template", false},
-	"import": {"import", false}, "export": {"export", false}, "policy": {"policy", false},
-	"policies": {"policies", false}, "secret": {"secret", false}, "doctor": {"doctor", false},
+	"run": {"run", true}, "sh": {"sh", true}, "exec": {"exec", false},
+	"stop": {"stop", false}, "rm": {"rm", false}, "ls": {"ls", false},
+	"logs": {"logs", false}, "info": {"info", false}, "plan": {"plan", false},
+	"network": {"network", false}, "agent": {"agent", false}, "policy": {"policy", false},
+	"secret": {"secret", false}, "doctor": {"doctor", false},
 	"version": {"version", false}, "--version": {"version", false},
 	"help": {"help", false}, "-h": {"help", false}, "--help": {"help", false},
 }

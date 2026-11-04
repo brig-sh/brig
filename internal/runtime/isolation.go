@@ -92,8 +92,12 @@ func shimBinary(name string) string {
 // looks any other value up with exec.LookPath first, and runs what it finds as
 // the runc shim's binary. A path or a bare name is that binary, so it is placed
 // by its file name: /usr/bin/crun boots the same plain container that crun
-// does. A dotted name is normally not found, so it reaches containerd as a
-// runtime name, and one that resolves to the runc shim is a plain container.
+// does. The runc shim's own binary is placed the same way:
+// containerd-shim-runc-v2, by name or by path, still boots on
+// io.containerd.runc.v2, and matching it against the runtimes alone let it
+// through (#468). A dotted name is normally not found, so it reaches
+// containerd as a runtime name, and one that resolves to the runc shim is a
+// plain container.
 // It is not credited with urunc, though: a binary of that name on PATH would
 // run instead, and brig cannot see nerdctl's PATH.
 func shimBoundary(shim string) Boundary {
@@ -106,7 +110,7 @@ func shimBoundary(shim string) Boundary {
 			return BoundaryContainer
 		}
 	case strings.Contains(shim, "/") || !strings.Contains(shim, "."):
-		if sharedKernelRuntimes[filepath.Base(shim)] {
+		if base := filepath.Base(shim); sharedKernelRuntimes[base] || sharedKernelShims[base] {
 			return BoundaryContainer
 		}
 	default:
@@ -133,16 +137,28 @@ func sharesHostKernel(shim string) bool { return shimBoundary(shim) == BoundaryC
 // Anything else -- a kata shim, a gVisor shim, a fork of urunc under another
 // name -- may well be a VM, and brig has no way to establish that from a shim
 // name, so it says so instead of picking the answer the reader would prefer.
-func containerdIsolation(driver, shim string) Isolation {
+//
+// shim decides the boundary and named is how the row prints it, which is the
+// shim with the setting that chose it when one did. monitor is the hypervisor
+// brig passed urunc, or "" for urunc's own default. rootfs is the root of a
+// generic boot: the rootfs mode brig passed urunc, or "urunc default" when it
+// passed none. It is "" on any other boot, which brings its own root. Only
+// urunc reads either, so only the urunc row names them.
+func containerdIsolation(driver, shim, named, monitor, rootfs string) Isolation {
 	over := driver + " over containerd"
 	switch shimBoundary(shim) {
 	case BoundaryVM:
-		return Isolation{BoundaryVM, fmt.Sprintf("%s, %s", over, shim)}
+		detail := fmt.Sprintf("%s, %s, hypervisor %s",
+			over, named, orDefault(monitor, "urunc default"))
+		if rootfs != "" {
+			detail += ", rootfs " + rootfs
+		}
+		return Isolation{BoundaryVM, detail}
 	case BoundaryContainer:
 		return Isolation{BoundaryContainer, fmt.Sprintf(
-			"%s, %s: the guest shares the host kernel", over, shim)}
+			"%s, %s: the guest shares the host kernel", over, named)}
 	default:
 		return Isolation{BoundaryUnknown, fmt.Sprintf(
-			"%s, %s: brig cannot tell whether that shim boots a kernel of its own", over, shim)}
+			"%s, %s: brig cannot tell whether that shim boots a kernel of its own", over, named)}
 	}
 }

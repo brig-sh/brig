@@ -15,8 +15,8 @@ func TestSpecExamplesDecodeAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 5 {
-		t.Fatalf("found %d examples, want 5: %v", len(paths), paths)
+	if len(paths) != 6 {
+		t.Fatalf("found %d examples, want 6: %v", len(paths), paths)
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
@@ -139,7 +139,7 @@ func TestRouteValidate(t *testing.T) {
 		{"two injects", func(r *Route) {
 			r.Inject.BasicAuth = &BasicAuth{Username: "x"}
 		}, "not both"},
-		{"nothing injected", func(r *Route) { r.Inject.Headers.Set = nil }, "needs headers.set or basicAuth"},
+		{"nothing injected", func(r *Route) { r.Inject.Headers.Set = nil }, "needs headers.set, basicAuth or tls"},
 		{"{value} twice in one header", func(r *Route) {
 			r.Inject.Headers.Set[0].Value = "{value}:{value}"
 		}, "more than once"},
@@ -393,6 +393,9 @@ func TestHeaderRules(t *testing.T) {
 		{"session.token in a header", func(r *Route) {
 			r.Inject.Headers.Set[0].Value = "{value} {session.token}"
 		}, "only guest.env takes"},
+		{"route.region in a header", func(r *Route) {
+			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "X-Region", Value: "{route.region}"})
+		}, "only guest.env takes"},
 		{"Host in set", func(r *Route) {
 			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "Host", Value: "evil.example.com"})
 		}, "the broker sets itself"},
@@ -554,5 +557,369 @@ func TestRouteNameMapsToOneVariable(t *testing.T) {
 		if err := r.Validate(); err != nil {
 			t.Errorf("route name %q was refused: %v", name, err)
 		}
+	}
+}
+
+// awsRoute is the aws preset's route as it is after expansion: it vends, so
+// it has no upstream.
+func awsRoute() Route {
+	return Route{
+		Name:       "aws",
+		Preset:     PresetAWS,
+		Mode:       ModeEndpoint,
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "aws"}},
+		Inject: &Inject{Headers: &HeaderInject{
+			Set:    []Header{{Name: "Authorization", Value: "{value}"}},
+			Remove: []string{"Authorization"},
+		}},
+		Guest: &Guest{Env: map[string]string{
+			"AWS_CONTAINER_CREDENTIALS_FULL_URI": "{route.url}",
+			"AWS_CONTAINER_AUTHORIZATION_TOKEN":  "{session.token}",
+			"AWS_REGION":                         "{route.region}",
+		}},
+		Request: &RequestPolicy{Allow: &RequestAllow{Methods: []string{"GET"}}},
+	}
+}
+
+func TestAWSRouteNeedsNoUpstream(t *testing.T) {
+	r := awsRoute()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("an aws route with no upstream was refused: %v", err)
+	}
+	if !r.Vends() {
+		t.Error("an aws route does not vend")
+	}
+	c := customRoute()
+	if c.Vends() {
+		t.Error("a route with no preset vends")
+	}
+}
+
+func TestAWSRouteRefusesAnUpstream(t *testing.T) {
+	r := awsRoute()
+	r.Upstream = "https://sts.amazonaws.com"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no upstream") {
+		t.Fatalf("an aws route with an upstream: err = %v", err)
+	}
+}
+
+// The aws route sets no credential on a request, and the preset's inject is
+// only where the broker reads the session token. An inject the policy writes
+// would be read as a credential that goes somewhere, and a header it sets
+// with {value} would become another place the guest's token is read from.
+func TestAWSRouteRefusesAnInject(t *testing.T) {
+	r := Route{
+		Name:       "aws",
+		Preset:     PresetAWS,
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "aws"}},
+		Inject: &Inject{Headers: &HeaderInject{
+			Set: []Header{{Name: "X-Token", Value: "{value}"}}}},
+	}
+	err := r.validateWritten()
+	if err == nil || !strings.Contains(err.Error(), "the aws preset vends credentials and takes no inject") {
+		t.Fatalf("an aws route with an inject: err = %v", err)
+	}
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: a}\nspec:\n  routes:\n" +
+		"    - name: aws\n      preset: aws\n      credential: {secretRef: {name: aws}}\n" +
+		"      inject: {headers: {set: [{name: X-Token, value: \"{value}\"}]}}\n"
+	p, err := Decode([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "takes no inject") {
+		t.Errorf("a policy with an inject on an aws route: Validate = %v", err)
+	}
+}
+
+// The refusal of a literal is where a user learns what a guest.env value can
+// be, so it names every placeholder guest.env takes.
+func TestGuestLiteralRefusalNamesEveryPlaceholder(t *testing.T) {
+	r := awsRoute()
+	r.Guest.Env["AWS_REGION"] = "us-east-1"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "never a literal") {
+		t.Fatalf("a literal in guest.env: err = %v", err)
+	}
+	for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion} {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("the refusal %q does not name %s", err, p)
+		}
+	}
+}
+
+func TestRouteRegionOnlyOnAWS(t *testing.T) {
+	r := Route{
+		Name:       "gh",
+		Preset:     PresetGitHubToken,
+		Mode:       ModeEndpoint,
+		Upstream:   "https://github.com",
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "gh"}},
+		Inject:     &Inject{BasicAuth: &BasicAuth{Username: "x-access-token"}, Headers: &HeaderInject{Remove: []string{"Authorization"}}},
+		Guest:      &Guest{Env: map[string]string{"AWS_REGION": "{route.region}"}},
+	}
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "{route.region} needs preset: aws") {
+		t.Fatalf("{route.region} on github-token: err = %v", err)
+	}
+	// A route with no preset is refused the same way.
+	c := customRoute()
+	c.Guest.Env["AWS_REGION"] = "{route.region}"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "{route.region} needs preset: aws") {
+		t.Fatalf("{route.region} on a custom route: err = %v", err)
+	}
+}
+
+// An aws route sets Authorization and also removes it, which no other route
+// may do with a header; the exception for Authorization must stay.
+func TestAuthorizationValueAllowedInSet(t *testing.T) {
+	r := awsRoute()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Authorization in set and remove was refused: %v", err)
+	}
+	r.Inject.Headers.Set = []Header{{Name: "X-Api-Key", Value: "{value}"}}
+	r.Inject.Headers.Remove = []string{"Authorization", "X-Api-Key"}
+	if err := r.Validate(); err == nil {
+		t.Error("a non-Authorization header in set and remove was accepted")
+	}
+}
+
+// inject.tls names two secrets. Decode keeps both names, and a key under tls
+// that is not one of the two is refused, as everywhere else in a route, so a
+// misspelt clientCertificate is never read as a route without one.
+func TestDecodeTLSFieldsStrictly(t *testing.T) {
+	head := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: a}\nspec:\n  routes:\n" +
+		"    - name: inventory\n      upstream: https://inventory.internal.example.com\n"
+	doc := head + "      inject:\n        tls:\n" +
+		"          clientCertificate: {secretRef: {name: inventory-client}}\n" +
+		"          ca: {secretRef: {name: example-root-ca}}\n"
+	p, err := Decode([]byte(doc))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	in := p.Spec.Routes[0].Inject
+	if in == nil || in.TLS == nil {
+		t.Fatalf("inject.tls was dropped: %+v", in)
+	}
+	if c := in.TLS.ClientCertificate; c == nil || c.SecretRef.Name != "inventory-client" {
+		t.Errorf("clientCertificate = %+v, want inventory-client", c)
+	}
+	if c := in.TLS.CA; c == nil || c.SecretRef.Name != "example-root-ca" {
+		t.Errorf("ca = %+v, want example-root-ca", c)
+	}
+
+	// encoding/json refuses a key that names no field. A key that folds onto
+	// a field name gets past it, and the exact-key pass names its path.
+	for _, c := range []struct{ name, tls, want string }{
+		{"an unknown key", "        tls: {cert: {secretRef: {name: a}}}\n",
+			`unknown field "cert"`},
+		{"a key in the wrong case", "        tls: {clientcertificate: {secretRef: {name: a}}}\n",
+			`unknown field "spec.routes[0].inject.tls.clientcertificate"`},
+		{"a key beside secretRef", "        tls: {ca: {secretRef: {name: a}, key: b}}\n",
+			`unknown field "key"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Decode([]byte(head + "      inject:\n" + c.tls))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("Decode = %v, want %q", err, c.want)
+			}
+		})
+	}
+}
+
+// A run expands and keeps its own copy of a route, so a copy that shared
+// inject.tls with the original would let an edit of one move the
+// certificate of the other.
+func TestRouteDeepCopyClonesTLS(t *testing.T) {
+	r := customRoute()
+	r.Inject.TLS = &TLSInject{
+		ClientCertificate: &CertificateRef{SecretRef: SecretRef{Name: "inventory-client"}},
+		CA:                &CertificateRef{SecretRef: SecretRef{Name: "example-root-ca"}},
+	}
+	c := r.DeepCopy()
+	if c.Inject.TLS == r.Inject.TLS {
+		t.Fatal("the copy shares inject.tls")
+	}
+	if c.Inject.TLS.ClientCertificate == r.Inject.TLS.ClientCertificate {
+		t.Fatal("the copy shares inject.tls.clientCertificate")
+	}
+	if c.Inject.TLS.CA == r.Inject.TLS.CA {
+		t.Fatal("the copy shares inject.tls.ca")
+	}
+	c.Inject.TLS.ClientCertificate.SecretRef.Name = "other-client"
+	c.Inject.TLS.CA.SecretRef.Name = "other-ca"
+	c.Inject.TLS.CA = nil
+	if got := r.Inject.TLS.ClientCertificate.SecretRef.Name; got != "inventory-client" {
+		t.Errorf("an edit of the copy moved the original's certificate to %q", got)
+	}
+	if r.Inject.TLS.CA == nil || r.Inject.TLS.CA.SecretRef.Name != "example-root-ca" {
+		t.Errorf("an edit of the copy moved the original's ca to %+v", r.Inject.TLS.CA)
+	}
+
+	// A route with only one of the two keeps the other unset.
+	r.Inject.TLS.CA = nil
+	if c := r.DeepCopy(); c.Inject.TLS.CA != nil || c.Inject.TLS.ClientCertificate == nil {
+		t.Errorf("DeepCopy of a certificate-only tls = %+v", c.Inject.TLS)
+	}
+}
+
+// CertificateOnly is what lets a route go without a credential, so it is
+// false whenever headers.set or basicAuth still carries one.
+func TestInjectCertificateOnly(t *testing.T) {
+	cert := &TLSInject{ClientCertificate: &CertificateRef{SecretRef: SecretRef{Name: "c"}}}
+	ca := &TLSInject{CA: &CertificateRef{SecretRef: SecretRef{Name: "ca"}}}
+	for _, c := range []struct {
+		name string
+		in   *Inject
+		want bool
+	}{
+		{"nil inject", nil, false},
+		{"no tls", &Inject{Headers: &HeaderInject{Remove: []string{"Authorization"}}}, false},
+		{"a client certificate alone", &Inject{TLS: cert}, true},
+		{"a client certificate and headers.remove", &Inject{
+			TLS: cert, Headers: &HeaderInject{Remove: []string{"Authorization"}},
+		}, true},
+		{"a client certificate and headers.set", &Inject{
+			TLS: cert, Headers: &HeaderInject{Set: []Header{{Name: "X-Api-Key", Value: "{value}"}}},
+		}, false},
+		{"a client certificate and basicAuth", &Inject{TLS: cert, BasicAuth: &BasicAuth{Username: "u"}}, false},
+		{"a ca alone", &Inject{TLS: ca}, false},
+		{"an empty tls", &Inject{TLS: &TLSInject{}}, false},
+	} {
+		if got := c.in.CertificateOnly(); got != c.want {
+			t.Errorf("%s: CertificateOnly = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func certRef(name string) *CertificateRef {
+	return &CertificateRef{SecretRef: SecretRef{Name: name}}
+}
+
+// certOnlyRoute injects a client certificate and nothing else, as written.
+func certOnlyRoute() Route {
+	r := customRoute()
+	r.Credential = nil
+	r.Inject = &Inject{TLS: &TLSInject{ClientCertificate: certRef("inventory-client")}}
+	return r
+}
+
+func TestRouteValidateTLS(t *testing.T) {
+	withCred := func(r *Route) {
+		r.Credential = &CredentialRef{SecretRef: SecretRef{Name: "inventory-token"}, Field: "token"}
+		r.Inject.Headers = &HeaderInject{Set: []Header{{Name: "X-Api-Key", Value: "{value}"}}}
+	}
+	for _, c := range []struct {
+		name string
+		edit func(*Route)
+		want string // empty: valid
+	}{
+		{"certificate only", func(r *Route) {}, ""},
+		{"certificate with credential and headers", withCred, ""},
+		{"certificate and ca", func(r *Route) { r.Inject.TLS.CA = certRef("example-root-ca") }, ""},
+		{"ca only with credential and headers", func(r *Route) {
+			withCred(r)
+			r.Inject.TLS = &TLSInject{CA: certRef("example-root-ca")}
+		}, ""},
+		{"ca only without credential", func(r *Route) {
+			r.Inject.TLS = &TLSInject{CA: certRef("example-root-ca")}
+		}, "credential.secretRef.name is required"},
+		{"certificate with credential and no header", func(r *Route) {
+			r.Credential = &CredentialRef{SecretRef: SecretRef{Name: "inventory-token"}, Field: "token"}
+		}, "inject.tls.clientCertificate does not carry it"},
+		{"certificate with credential and basicAuth", func(r *Route) {
+			r.Credential = &CredentialRef{SecretRef: SecretRef{Name: "inventory-token"}, Field: "token"}
+			r.Inject.BasicAuth = &BasicAuth{Username: "svc"}
+		}, ""},
+		{"ca only with credential and no header", func(r *Route) {
+			r.Credential = &CredentialRef{SecretRef: SecretRef{Name: "inventory-token"}, Field: "token"}
+			r.Inject.TLS = &TLSInject{CA: certRef("example-root-ca")}
+		}, "inject.tls with only ca does not carry it"},
+		{"empty tls", func(r *Route) { r.Inject.TLS = &TLSInject{} }, "inject.tls needs clientCertificate or ca"},
+		{"empty certificate name", func(r *Route) { r.Inject.TLS.ClientCertificate = certRef("") },
+			"inject.tls.clientCertificate.secretRef.name is required"},
+		{"empty ca name", func(r *Route) { r.Inject.TLS.CA = certRef("") },
+			"inject.tls.ca.secretRef.name is required"},
+		{"bad certificate name", func(r *Route) { r.Inject.TLS.ClientCertificate = certRef("1bad") },
+			"inject.tls.clientCertificate.secretRef.name"},
+		{"bad ca name", func(r *Route) { r.Inject.TLS.CA = certRef("a/b") },
+			"inject.tls.ca.secretRef.name"},
+		{"bad credential name keeps its field", func(r *Route) {
+			withCred(r)
+			r.Credential.SecretRef.Name = "a/b"
+		}, "credential.secretRef.name"},
+		{"preset with tls", func(r *Route) {
+			r.Preset = PresetGitHubToken
+			r.Credential = &CredentialRef{SecretRef: SecretRef{Name: "gh-token"}}
+		}, "a route with inject.tls takes no preset"},
+	} {
+		for _, expanded := range []bool{false, true} {
+			name := c.name + " as written"
+			if expanded {
+				name = c.name + " expanded"
+			}
+			t.Run(name, func(t *testing.T) {
+				r := certOnlyRoute()
+				c.edit(&r)
+				if expanded {
+					// setDefaults adds Authorization to headers.remove.
+					if r.Inject.Headers == nil {
+						r.Inject.Headers = &HeaderInject{}
+					}
+					r.Inject.Headers.Remove = []string{"Authorization"}
+					r.Mode = ModeEndpoint
+				}
+				var err error
+				if expanded {
+					err = r.Validate()
+				} else {
+					err = r.validateWritten()
+				}
+				if c.want == "" {
+					if err != nil {
+						t.Fatalf("refused: %v", err)
+					}
+					return
+				}
+				if err == nil || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("error %v, want %q", err, c.want)
+				}
+			})
+		}
+	}
+
+	t.Run("expanded certificate only without Authorization in remove", func(t *testing.T) {
+		r := certOnlyRoute()
+		err := r.Validate()
+		if err == nil || !strings.Contains(err.Error(), "inject.headers.remove must hold Authorization") {
+			t.Fatalf("error %v", err)
+		}
+	})
+}
+
+func TestPolicyValidateTLSAsWritten(t *testing.T) {
+	blob, err := os.ReadFile(filepath.Join("testdata", "example8-inventory-mtls.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Decode(blob)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("example 8 refused: %v", err)
+	}
+
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: a}\nspec:\n  routes:\n" +
+		"    - name: github\n      preset: github-token\n" +
+		"      credential: {secretRef: {name: gh-token}}\n" +
+		"      inject:\n        tls:\n          clientCertificate: {secretRef: {name: c}}\n"
+	p, err = Decode([]byte(doc))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	err = p.Validate()
+	if err == nil || !strings.Contains(err.Error(), "a route with inject.tls takes no preset") {
+		t.Fatalf("Validate = %v", err)
 	}
 }

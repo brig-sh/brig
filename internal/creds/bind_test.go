@@ -144,8 +144,9 @@ func TestBindWarnsOnUnparsableRef(t *testing.T) {
 }
 
 // A secrets.-sourced binding must never travel in argv, whatever
-// BRIG_ENV_ARGV says: the host durably logs every exec's argv. A literal or an
-// env. ref is not held to that -- it was never in the keychain to begin with.
+// BRIG_ENV_ARGV says: the guest agent logs every exec's argv, on some backends
+// to a host file. A literal or an env. ref is not held to that -- it was never
+// in the keychain to begin with.
 func TestBindMarksOnlySecretsSourcedVarsSecret(t *testing.T) {
 	p := profileWith(t, "secrets:\n  - gh\nenv:\n"+
 		"  - name: GH_TOKEN\n    ref: secrets.gh\n"+

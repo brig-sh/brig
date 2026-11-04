@@ -95,35 +95,6 @@ func TestAgentEditAndImportRefuseTheSecondWord(t *testing.T) {
 	}
 }
 
-// A retired spelling behaves exactly like the verb it maps onto -- the refusal
-// of a stray word included -- and still prints its one deprecation notice. Both
-// halves matter: a spelling that stopped refusing would drop the tail again,
-// and one that stopped notifying would never teach the reader the new word.
-func TestDeprecatedAgentSpellingRefusesTailAndStillNotifies(t *testing.T) {
-	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-	var err error
-	notice := captureStderr(t, func() {
-		_, err = captureStdout(t, func() error { return run([]string{"agent", "list", "extra"}) })
-	})
-	if err == nil {
-		t.Fatal("brig agent list extra was accepted")
-	}
-	if got := exitCode(err); got != 2 {
-		t.Errorf("brig agent list extra exits %d, want 2", got)
-	}
-	if !strings.Contains(err.Error(), `"extra"`) {
-		t.Errorf("the error does not name the stray word: %v", err)
-	}
-	// It refuses in the new verb's words, which is where the notice just sent
-	// the reader.
-	if !strings.Contains(err.Error(), "brig agent ls") {
-		t.Errorf("the refusal does not name the current spelling: %v", err)
-	}
-	if !strings.Contains(notice, "brig: `") || !strings.Contains(notice, "brig agent ls") {
-		t.Errorf("brig agent list printed no deprecation notice:\n%s", notice)
-	}
-}
-
 // The other side of the change: the right number of operands still works and
 // still exits 0. A refusal that fired one word too early would be as much a bug
 // as the drop it replaces.
@@ -171,10 +142,6 @@ func TestPolicyListingAndVersionRefuseAWordTooMany(t *testing.T) {
 		names string // the command the refusal must name
 	}{
 		{[]string{"policy", "ls", "extra"}, "brig policy ls"},
-		// The retired spellings refuse in the current verb's words, which is
-		// where their notice has just sent the reader.
-		{[]string{"policy", "list", "extra"}, "brig policy ls"},
-		{[]string{"policies", "extra"}, "brig policy ls"},
 		{[]string{"version", "extra"}, "brig version"},
 		{[]string{"--version", "extra"}, "brig --version"},
 	} {
@@ -220,42 +187,12 @@ func TestPolicyListingRefusesBeforeItPrints(t *testing.T) {
 	}
 }
 
-// The retired spellings still say which word replaces them. Both halves matter:
-// a spelling that stopped refusing would drop the tail again, and one that
-// stopped notifying would never teach the reader the current word.
-func TestRetiredPolicyListingSpellingsRefuseTailAndStillNotify(t *testing.T) {
-	for _, c := range []struct {
-		args   []string
-		notice string
-	}{
-		{[]string{"policy", "list", "extra"}, "brig policy list"},
-		{[]string{"policies", "extra"}, "brig policies"},
-	} {
-		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
-		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-		typed := strings.Join(c.args, " ")
-		var err error
-		notice := captureStderr(t, func() {
-			_, err = captureStdout(t, func() error { return run(c.args) })
-		})
-		if err == nil {
-			t.Errorf("brig %s was accepted", typed)
-			continue
-		}
-		if !strings.Contains(notice, c.notice) || !strings.Contains(notice, "brig policy ls") {
-			t.Errorf("brig %s printed no deprecation notice:\n%s", typed, notice)
-		}
-	}
-}
-
 // The other side of the change: the right number of operands still works and
 // still exits 0. A refusal one word too early would be as much a bug as the
 // drop it replaces.
 func TestPolicyListingAndVersionStillAcceptNoArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"policy", "ls"},
-		{"policy", "list"},
-		{"policies"},
 		{"version"},
 		{"--version"},
 	} {
@@ -277,13 +214,11 @@ func TestPolicyListingAndVersionStillAcceptNoArguments(t *testing.T) {
 // verb's flag.ErrHelp into the group's usage and exit 0 -- policy.go says so
 // where it does it -- and ls is not an exception to that, so it is asserted
 // against a sibling rather than in isolation: whatever `brig policy show
-// --help` answers, ls and both retired spellings answer the same.
+// --help` answers, ls answers the same.
 func TestPolicyListingAnswersHelpLikeTheRestOfTheGroup(t *testing.T) {
 	for _, args := range [][]string{
 		{"policy", "ls", "--help"},
 		{"policy", "ls", "-h"},
-		{"policy", "list", "--help"},
-		{"policies", "--help"},
 	} {
 		t.Setenv("BRIG_POLICY_DIR", t.TempDir())
 		t.Setenv("BRIG_PROFILE_DIR", t.TempDir())

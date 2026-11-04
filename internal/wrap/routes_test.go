@@ -3,12 +3,15 @@ package wrap
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/policy"
@@ -30,11 +33,19 @@ type fakeBroker struct {
 	ca string
 	// calls are the registrations and removals, in order.
 	calls []string
+	// registerErr is what Register answers, or nil.
+	registerErr error
+	// regions and vends are what Register reports of the vending routes.
+	regions map[string]string
+	vends   map[string]injector.VendInfo
 }
 
 const fakeBrokerPort = 47821
 
 func (f *fakeBroker) Register(s injector.Sandbox) (int, injector.AddResponse, error) {
+	if f.registerErr != nil {
+		return 0, injector.AddResponse{}, f.registerErr
+	}
 	f.registered = append(f.registered, s)
 	f.calls = append(f.calls, "register "+s.ID)
 	f.running = true
@@ -54,6 +65,7 @@ func (f *fakeBroker) Register(s injector.Sandbox) (int, injector.AddResponse, er
 			added.CA = testBrigCA()
 		}
 	}
+	added.Regions, added.Vends = f.regions, f.vends
 	return fakeBrokerPort, added, nil
 }
 
@@ -438,5 +450,161 @@ func TestInfoJSONNamesABrokerThatDoesNotAnswer(t *testing.T) {
 	c.broker = &fakeBroker{}
 	if b := c.InfoData(creds.Set{}).Broker; b == nil || b.Running || b.PID != 0 {
 		t.Errorf("info --json broker with no broker = %+v, want running false and no pid", b)
+	}
+}
+
+// A credential the broker refused to vend, such as an expired AWS login, is a
+// credential failure with the broker's words, so it exits 6 with the fix.
+func TestServeRoutesMapsCredentialRefusal(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	// routedConfig points BRIG_STATE_DIR at a long path again, and the divert
+	// socket under it must fit a unix socket path.
+	shortStateDir(t)
+	msg := "route aws: the AWS login for profile p has expired; run: aws sso login --profile p"
+	c.broker = &fakeBroker{registerErr: &injector.RefusedError{Status: 424, Kind: injector.RefusalCredential, Message: msg}}
+	err := c.serveRoutes(creds.Set{})
+	var ce creds.CredentialError
+	if !errors.As(err, &ce) {
+		t.Fatalf("serveRoutes = %v, want a creds.CredentialError", err)
+	}
+	if !strings.Contains(err.Error(), "aws sso login --profile p") {
+		t.Errorf("the error lost the fix: %v", err)
+	}
+	var bce *creds.BrokerCredentialError
+	if !errors.As(err, &bce) || bce.Route != "aws" || bce.Sandbox != c.VMName {
+		t.Errorf("error = %+v", bce)
+	}
+	// A refusal that is not marked as a credential stays an ordinary failure.
+	c.broker = &fakeBroker{registerErr: &injector.RefusedError{Status: 424, Message: msg}}
+	if err := c.serveRoutes(creds.Set{}); err == nil || errors.As(err, &ce) {
+		t.Errorf("an unmarked refusal became a credential failure: %v", err)
+	}
+}
+
+// Each vending route is named once, with the identity the sandbox gets.
+func TestServeRoutesSaysWhoseAWSIdentity(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	// routedConfig points BRIG_STATE_DIR at a long path again, and the divert
+	// socket under it must fit a unix socket path.
+	shortStateDir(t)
+	c.broker = &fakeBroker{vends: map[string]injector.VendInfo{
+		"aws":  {Mode: "role", AWSProfile: "p", RoleARN: "arn:aws:iam::111122223333:role/r"},
+		"aws2": {Mode: "self", AWSProfile: "q"},
+	}}
+	if err := c.serveRoutes(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Err.(*bytes.Buffer).String()
+	for _, want := range []string{
+		"route aws: AWS role arn:aws:iam::111122223333:role/r, assumed from your profile p",
+		"route aws2: AWS as your own identity (profile q); the sandbox can do what you can",
+	} {
+		if strings.Count(got, want) != 1 {
+			t.Errorf("want %q once in:\n%s", want, got)
+		}
+	}
+}
+
+// awsEndpoint binds claude-code to the aws preset, whose guest env names
+// {route.region}.
+const awsEndpoint = `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata: {name: brokered}
+spec:
+  routes:
+    - name: aws
+      preset: aws
+      credential: {secretRef: {name: aws-credentials}}
+`
+
+// The region the broker reports for a vending route reaches the guest as
+// AWS_REGION and AWS_DEFAULT_REGION: boto3 reads the second alone. Every
+// other wrap test routes a preset with no {route.region}, so without this
+// one, dropping the regions from serveRoutes would keep them green while a
+// real aws run fails with "named no AWS region". The SDKs' container provider
+// ignores AWS_CA_BUNDLE, so the guest is not handed one.
+func TestServeRoutesHandsTheAWSRegionToTheGuest(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, awsEndpoint, &hullRecorder{})
+	// routedConfig points BRIG_STATE_DIR at a long path again, and the divert
+	// socket under it must fit a unix socket path.
+	shortStateDir(t)
+	c.broker = &fakeBroker{regions: map[string]string{"aws": "eu-west-1"}}
+	if err := c.serveRoutes(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	vars := envOf(c.routeVars)
+	for _, name := range []string{"AWS_REGION", "AWS_DEFAULT_REGION"} {
+		if got := vars[name].Value; got != "eu-west-1" {
+			t.Errorf("%s = %q, want eu-west-1", name, got)
+		}
+	}
+	if v, ok := vars["AWS_CA_BUNDLE"]; ok {
+		t.Errorf("AWS_CA_BUNDLE = %q, want it unset", v.Value)
+	}
+}
+
+func certRoutes() []v1alpha1.Route {
+	ref := func(n string) *v1alpha1.CertificateRef {
+		return &v1alpha1.CertificateRef{SecretRef: v1alpha1.SecretRef{Name: n}}
+	}
+	return []v1alpha1.Route{
+		{Name: "inventory", Inject: &v1alpha1.Inject{TLS: &v1alpha1.TLSInject{
+			ClientCertificate: ref("inv-client"), CA: ref("inv-ca")}}},
+		{Name: "rootonly", Inject: &v1alpha1.Inject{TLS: &v1alpha1.TLSInject{CA: ref("only-ca")}}},
+		{Name: "plain", Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "tok"}}},
+	}
+}
+
+func TestBrokeredSecretsIncludeCertificates(t *testing.T) {
+	got := brokeredSecrets(certRoutes())
+	want := map[string]string{"inv-client": "inventory", "inv-ca": "inventory", "only-ca": "rootonly", "tok": "plain"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("brokeredSecrets = %v, want %v", got, want)
+	}
+	prof := profile.Profile{Files: []profile.FileBinding{{Ref: "secrets.inv-client"}}}
+	out, _, skipped := withRoutes(prof, nil, certRoutes())
+	if len(out.Files) != 0 {
+		t.Errorf("the certificate file binding stays: %+v", out.Files)
+	}
+	if !slices.Equal(skipped, []string{"inv-ca", "inv-client", "only-ca", "tok"}) {
+		t.Errorf("skipped = %v", skipped)
+	}
+}
+
+// A missing certificate secret is hinted with the --type that checks it. A
+// plain "brig secret create" would store a value the run cannot use, and the
+// first request would find out.
+func TestMissingCertificateSecretsAreHintedWithTheirType(t *testing.T) {
+	c := &Config{routes: certRoutes(), routePolicy: map[string]string{"inventory": "pol", "rootonly": "pol"}}
+	for name, want := range map[string]string{
+		"inv-client": "brig secret create inv-client --type tls -f <file>",
+		"inv-ca":     "brig secret create inv-ca --type ca -f <file>",
+		"only-ca":    "brig secret create only-ca --type ca -f <file>",
+		"tok":        "brig secret create tok",
+	} {
+		if got := c.routeSecretFix([]string{name}); got != want {
+			t.Errorf("routeSecretFix(%s) = %q, want %q", name, got, want)
+		}
+	}
+	err := c.routeStoreRefusal(routeStore{missing: []string{"inv-client", "only-ca"}})
+	if err == nil || !strings.Contains(err.Error(), "create it first with: brig secret create inv-client --type tls -f <file>") ||
+		!strings.Contains(err.Error(), "create it first with: brig secret create only-ca --type ca -f <file>") {
+		t.Errorf("the refusal does not give the typed commands: %v", err)
+	}
+}
+
+func TestRoutedByNamesACertificateRoute(t *testing.T) {
+	c := &Config{routes: certRoutes(), routePolicy: map[string]string{"inventory": "pol", "rootonly": "pol"}}
+	if got := c.routedBy([]string{"inv-client"}); got != "pol (route inventory)" {
+		t.Errorf("client certificate: %q", got)
+	}
+	if got := c.routedBy([]string{"only-ca"}); got != "pol (route rootonly)" {
+		t.Errorf("ca: %q", got)
 	}
 }

@@ -1,0 +1,24 @@
+# The aws preset: the route answers the AWS container credential provider
+# with temporary keys instead of forwarding. AWS signs each request with the
+# secret key, so a stand-in cannot be injected on the way out; the guest gets
+# short-lived keys and calls AWS itself.
+name: aws
+mode: endpoint
+modes: [endpoint]
+inject:
+  headers:
+    set:
+      - name: Authorization
+        value: "{value}"
+    remove:
+      - Authorization
+guest:
+  env:
+    AWS_CONTAINER_CREDENTIALS_FULL_URI: "{route.url}"
+    AWS_CONTAINER_AUTHORIZATION_TOKEN: "{session.token}"
+    AWS_REGION: "{route.region}"
+    # boto3 reads AWS_DEFAULT_REGION and not AWS_REGION.
+    AWS_DEFAULT_REGION: "{route.region}"
+request:
+  allow:
+    methods: [GET]

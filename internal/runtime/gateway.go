@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -430,7 +431,7 @@ func stopOldGateway(sock, own string) bool {
 	}
 	return signalGateway(g.pid, func() bool {
 		argv, ok := procArgv(g.pid)
-		return ok && servesSocket(argv, sock) && !startedWithAPI(argv)
+		return ok && servesSocket(argv, sock) && !startedWithAPI(argv) || listensOn(g.pid, sock)
 	})
 }
 
@@ -476,6 +477,20 @@ func listenerPID(path string) (int, bool) {
 	return 0, false
 }
 
+// listensOn reports whether pid is the process listening on the QEMU socket
+// of sock.
+//
+// A stop asks this beside the argv, because the argv goes first. On Linux an
+// exiting process reads with an empty /proc/<pid>/cmdline for a millisecond
+// or two before it closes its sockets. A gateway counted as gone in that
+// window still accepts, so the caller finds the socket answering and keeps a
+// gateway that is about to go. A pid that changed hands cannot be listening
+// on brig's socket, so the stop still signals only the gateway.
+func listensOn(pid int, sock string) bool {
+	got, ok := listenerPID(qemuGatewaySocket(sock))
+	return ok && got == pid
+}
+
 // ensureIsolatedGateway returns the control socket of the gateway serving this
 // sandbox alone, starting one if nothing answers on it.
 //
@@ -503,6 +518,11 @@ func ensureIsolatedGateway(bin, name string, index int, policy Egress) (string, 
 	}
 	if policy.Divert.Requested() {
 		if err := gatewayDiverts(bin); err != nil {
+			return "", err
+		}
+	}
+	if policy.Divert.linkLocal() {
+		if err := probeLinkLocal(bin); err != nil {
 			return "", err
 		}
 	}
@@ -726,6 +746,77 @@ func gatewayDiverts(bin string) error {
 	return helpLists(bin, "--divert", "network-gateway")
 }
 
+// linkLocalProbes holds the answer of gatewayDivertsLinkLocal per hull
+// binary. The run's refusal check and the gateway's start both ask.
+var linkLocalProbes sync.Map
+
+// probeLinkLocal is gatewayDivertsLinkLocal, asked once per binary for a yes
+// or a no. An unknown answer, such as a probe that timed out under load, is
+// not kept, so the next run asks again.
+func probeLinkLocal(bin string) error {
+	if err, ok := linkLocalProbes.Load(bin); ok {
+		err, _ := err.(error)
+		return err
+	}
+	err := gatewayDivertsLinkLocal(bin)
+	var ce *CapabilityError
+	if err == nil || errors.As(err, &ce) && ce.State == CannotEnforce {
+		linkLocalProbes.Store(bin, err)
+	}
+	return err
+}
+
+// gatewayDivertsLinkLocal checks that this runtime's gateway takes a --divert
+// of LinkLocalDivert. An older hull has --divert and refuses a link-local
+// address while it parses its flags, so its help cannot tell, and the run
+// would be refused only when the sandbox's gateway starts.
+//
+// The probe hands the gateway the same divert twice. A hull that takes the
+// address parses the first and refuses the second as "diverted twice"; one
+// that does not refuses the first as link-local. Either exits while it parses
+// its flags, before it opens a socket. A hull that got past them would serve
+// on the probe's own directory, which is removed after it, and never the
+// gateway directory. Any other answer, exit 0 among them, confirms nothing,
+// and refuses the run as unknown.
+func gatewayDivertsLinkLocal(bin string) error {
+	hvi := RunPath{"hull", "hvi"}
+	dir, err := os.MkdirTemp("", "brig-probe")
+	if err != nil {
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+			Why:    "brig could not make a directory for the probe of a link-local divert",
+			Remedy: "Fix the runtime, or detach the policy", Err: err}
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	sock := filepath.Join(dir, "p.sock")
+	d := gatewayDivert(LinkLocalDivert, sock)
+	args := []string{"network-gateway", "--socket", sock, "--divert", d, "--divert", d}
+	probe := bin + " " + strings.Join(args, " ")
+	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, bin, args...)
+	c.WaitDelay = time.Second
+	out, err := c.CombinedOutput()
+	var exit *exec.ExitError
+	switch {
+	case ctx.Err() == context.DeadlineExceeded:
+		err = fmt.Errorf("no answer within %s", gatewayProbeTimeout)
+	case errors.As(err, &exit) && strings.Contains(string(out), "diverted twice"):
+		return nil
+	case errors.As(err, &exit) && strings.Contains(string(out), "link-local"):
+		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: CannotEnforce,
+			Why: fmt.Sprintf("a route that vends needs a hull whose gateway can divert %s, and the gateway of %s "+
+				"refuses it", LinkLocalDivert.Host, bin),
+			Remedy: "Upgrade hull, or detach the policy"}
+	case err == nil:
+		err = errors.New("the gateway took two identical diverts")
+	default:
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: Unknown,
+		Why:    fmt.Sprintf("the probe `%s` failed", probe),
+		Remedy: "Fix the runtime, or detach the policy", Err: err}
+}
+
 // helpLists runs `bin <cmd...> --help` and refuses, as a capability of the
 // endpoint mode on hvi, a binary whose help does not list flag.
 func helpLists(bin, flag string, cmd ...string) error {
@@ -873,7 +964,7 @@ func stopGatewayAt(sock string) bool {
 		clearGatewayRecord(sock)
 		return !gatewayReachable(sock)
 	}
-	if signalGateway(pid, func() bool { return ownsGateway(pid, sock) }) {
+	if signalGateway(pid, func() bool { return ownsGateway(pid, sock) || listensOn(pid, sock) }) {
 		clearGatewayRecord(sock)
 		return true
 	}

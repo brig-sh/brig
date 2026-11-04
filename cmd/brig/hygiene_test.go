@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -158,10 +157,10 @@ func TestBrigFlagsDeclareAPosition(t *testing.T) {
 // through.
 //
 // The overlaps below are what that costs today, one map per shipped profile.
-// They are the reason #47 retires -n, -t, -w and -m in retiredGoesIn, and the
-// maps are expected to shrink as it does; a spelling that starts colliding, or
-// one whose collision has gone, fails here first so a map cannot outlive what
-// it records.
+// They are the reason #47 retired -n, -t, -w and -m, and the maps shrank when
+// v0.5.0 removed them; a spelling that starts colliding, or one whose
+// collision has gone, fails here first so a map cannot outlive what it
+// records.
 //
 // The flag lists are hand-maintained. No profile spec declares its agent's
 // flags -- internal/profile carries the image, the binary and the credentials
@@ -209,10 +208,7 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 				"-c", "-d", "-h", "-n", "-p", "-r", "-v", "-w",
 			},
 			knownOverlaps: map[string]string{
-				"--name": "claude-code's own --name; brig's retires onto the ref in #47",
-				"-n":     "claude-code -n; brig's retires onto the ref in #47",
-				"-w":     "claude-code -w/--worktree; brig's --workspace retires onto --home in #47",
-				"-d":     "claude-code -d/--debug; brig's --detach keeps -d, so this one stays",
+				"-d": "claude-code -d/--debug; brig's --detach keeps -d, so this one stays",
 			},
 		},
 		{
@@ -228,7 +224,6 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 			},
 			knownOverlaps: map[string]string{
 				"--image": "codex's own --image; brig keeps --image, so this one stays",
-				"-m":      "codex -m/--model; brig's -m/--memory retires onto --mem in #47",
 			},
 		},
 		{
@@ -242,10 +237,7 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 				"--stream-partial-output", "--trust", "--version", "--workspace", "--worktree",
 				"--yolo", "-c", "-f", "-h", "-H", "-p", "-v", "-w",
 			},
-			knownOverlaps: map[string]string{
-				"--workspace": "cursor's own --workspace; brig's retires onto --home in #47",
-				"-w":          "cursor -w/--worktree; brig's --workspace retires onto --home in #47",
-			},
+			knownOverlaps: map[string]string{},
 		},
 		{
 			// Local capture from `grok --help`.
@@ -259,7 +251,6 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 			},
 			knownOverlaps: map[string]string{
 				"-d": "grok -d/--directory; brig's --detach keeps -d, so this one stays",
-				"-m": "grok -m/--model; brig's -m/--memory retires onto --mem in #47",
 			},
 		},
 		{
@@ -277,8 +268,6 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 			},
 			knownOverlaps: map[string]string{
 				"-d": "gemini -d/--debug; brig's --detach keeps -d, so this one stays",
-				"-m": "gemini -m/--model; brig's -m/--memory retires onto --mem in #47",
-				"-w": "gemini -w/--worktree; brig's --workspace retires onto --home in #47",
 			},
 		},
 		{
@@ -299,10 +288,7 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 				"--username", "--variant", "--verbose", "--version",
 				"-c", "-f", "-h", "-m", "-n", "-p", "-s", "-u", "-v",
 			},
-			knownOverlaps: map[string]string{
-				"-n": "opencode -n; brig's retires onto the ref in #47",
-				"-m": "opencode -m/--model; brig's -m/--memory retires onto --mem in #47",
-			},
+			knownOverlaps: map[string]string{},
 		},
 		{
 			// claude-desktop is kind: gui. The app owns the console and brig execs
@@ -433,8 +419,8 @@ func TestGlobalPositionPassesTheVerbLineThrough(t *testing.T) {
 }
 
 // A ref names the session inline: `brig run claude@refactor` is what `brig run
-// claude --name refactor` already does, so the label lands on the same path
-// rather than becoming a second way to hold a session.
+// claude --name refactor` did until v0.5.0, and the label lands on the path the
+// flag wrote.
 func TestParseReadsASessionRef(t *testing.T) {
 	o, profileName, tail, err := parse("run", []string{"claude@refactor", "-p", "hi"})
 	if err != nil {
@@ -448,14 +434,6 @@ func TestParseReadsASessionRef(t *testing.T) {
 	}
 	if strings.Join(tail, " ") != "-p hi" {
 		t.Errorf("tail = %q, want the agent's own arguments untouched", tail)
-	}
-	// The two spellings of one session agree.
-	viaFlag, _, _, err := parse("run", []string{"claude", "--name", "refactor"})
-	if err != nil {
-		t.Fatalf("parse --name: %v", err)
-	}
-	if !reflect.DeepEqual(viaFlag.load, o.load) || viaFlag.nameGiven != o.nameGiven {
-		t.Errorf("claude@refactor = %+v, claude --name refactor = %+v", o.load, viaFlag.load)
 	}
 }
 
@@ -483,18 +461,19 @@ func TestParseRefusesABadRef(t *testing.T) {
 	}
 }
 
-// Both spellings of the session on one line is a line that asks for two
-// different sessions. A silent winner would run one of them with the other
-// still written on the command.
-func TestParseRefusesARefAndNameTogether(t *testing.T) {
-	_, _, _, err := parse("run", []string{"claude@refactor", "--name", "other"})
-	if err == nil {
-		t.Fatal("claude@refactor --name other was accepted")
+// v0.5.0 removed brig's --name, so after a ref it is the agent's own flag and
+// names no session: the ref's label is the session, and --name reaches the
+// agent untouched.
+func TestParseHandsNameAfterARefToTheAgent(t *testing.T) {
+	o, _, tail, err := parse("run", []string{"claude@refactor", "--name", "other"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
 	}
-	for _, want := range []string{"refactor", "other"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("%v, want it to name %q", err, want)
-		}
+	if o.load.Name != "refactor" {
+		t.Errorf("session = %q, want the label, refactor", o.load.Name)
+	}
+	if strings.Join(tail, " ") != "--name other" {
+		t.Errorf("tail = %q, want --name other forwarded", tail)
 	}
 }
 
@@ -519,8 +498,8 @@ func TestParseWarnsAboutItsOwnFlagsInTheAgentTail(t *testing.T) {
 	if strings.Join(tail, " ") != "-p hi --quiet --cpus=2" {
 		t.Errorf("tail = %q, want it forwarded untouched", tail)
 	}
-	if o.quiet || o.load.CPUs != 0 {
-		t.Errorf("brig read the agent's arguments: quiet %v, cpus %d", o.quiet, o.load.CPUs)
+	if o.load.CPUs != 0 {
+		t.Errorf("brig read the agent's arguments: cpus %d", o.load.CPUs)
 	}
 	for _, want := range []string{"--quiet", "--cpus"} {
 		if !strings.Contains(warning, want) {
@@ -578,12 +557,12 @@ func TestParseKeepsTodaysLines(t *testing.T) {
 		name string
 		tail string
 	}{
-		{[]string{"claude", "--name", "x"}, "x", ""},
-		{[]string{"claude", "-q"}, "", ""},
+		{[]string{"claude@x"}, "x", ""},
+		{[]string{"claude", "-d"}, "", ""},
 		{[]string{"claude", "-p", "hi"}, "", "-p hi"},
 		{[]string{"claude", "--", "--name"}, "", "--name"},
 		{[]string{"claude", "--", "ls"}, "", "ls"},
-		{[]string{"--name", "x", "claude"}, "x", ""},
+		{[]string{"-d", "claude@x"}, "x", ""},
 	} {
 		o, profileName, tail, err := parse("run", c.args)
 		if err != nil {

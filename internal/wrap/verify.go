@@ -349,8 +349,8 @@ func (c *Config) confirm(question string) bool {
 // verifyBootAssets checks the kernel and initrd a genericBoot profile starts.
 //
 // brig verified the guest image and not the kernel that runs it, which is the
-// more privileged of the two: the initrd carries the in-guest agent, and six
-// of the eight shipped profiles boot a bundle rather than their own image, so
+// more privileged of the two: the initrd carries the in-guest agent, and seven
+// of the nine shipped profiles boot a bundle rather than their own image, so
 // this is the ordinary path rather than an edge case. The bundle is signed;
 // the check was simply never made.
 //

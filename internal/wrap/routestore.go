@@ -3,6 +3,7 @@ package wrap
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/brig-sh/brig/internal/creds"
@@ -19,6 +20,10 @@ type routeStore struct {
 	missing []string
 	// err is why the store could not be opened or listed.
 	err error
+	// certExpiry maps each clientCertificate secret to the expiry the store
+	// recorded for it, in epoch milliseconds; 0 when none. It comes from the
+	// same listing as missing: no value is read.
+	certExpiry map[string]int64
 }
 
 // checkRouteStore lists the store for the secrets this run's routes inject,
@@ -47,10 +52,20 @@ func (c *Config) checkRouteStore() routeStore {
 		return routeStore{err: err}
 	}
 	held := map[string]bool{}
+	expiry := map[string]int64{}
 	for _, s := range list {
 		held[s.Name] = true
+		expiry[s.Name] = s.Provenance.ExpiresAt
 	}
 	var st routeStore
+	for name := range clientCertificateSecrets(c.routes) {
+		if held[name] {
+			if st.certExpiry == nil {
+				st.certExpiry = map[string]int64{}
+			}
+			st.certExpiry[name] = expiry[name]
+		}
+	}
 	for _, name := range c.routeSkipped {
 		if !held[name] {
 			st.missing = append(st.missing, name)
@@ -83,7 +98,7 @@ func (c *Config) routeStoreRefusal(st routeStore) error {
 	for _, name := range st.missing {
 		d := c.routeDecl(name)
 		missing = append(missing, creds.Missing{Name: name, Required: true, Importable: d.Importable(),
-			Reason: secret.ErrNotFound, Hint: d.HintText()})
+			Reason: secret.ErrNotFound, Hint: d.HintText(), Create: c.routeCreateCommand(name)})
 	}
 	return fmt.Errorf("policy %s injects a secret that brig's secret store does not hold: %w",
 		c.routedBy(st.missing), &creds.MissingSecretsError{Sandbox: c.VMName, Profile: c.Profile.Name, Missing: missing})
@@ -137,7 +152,7 @@ func (c *Config) routeSecretFix(names []string) string {
 	for _, name := range names {
 		switch {
 		case !c.routeDecl(name).Importable():
-			cmds = append(cmds, "brig secret create "+name)
+			cmds = append(cmds, c.routeCreateCommand(name))
 		case !imported:
 			imported = true
 			cmds = append(cmds, "brig secret import "+c.Profile.Name)
@@ -146,16 +161,39 @@ func (c *Config) routeSecretFix(names []string) string {
 	return strings.Join(cmds, ", ")
 }
 
+// routeCreateCommand is the command that stores the secret name. A client
+// certificate and a CA bundle are stored with --type, which checks them
+// before they are written, so a missing one is not hinted as a plain
+// secret: stored without --type, a certificate is only found wrong at the
+// first request.
+func (c *Config) routeCreateCommand(name string) string {
+	typ := ""
+	for _, r := range c.routes {
+		if r.Inject == nil || r.Inject.TLS == nil {
+			continue
+		}
+		t := r.Inject.TLS
+		switch {
+		case t.ClientCertificate != nil && t.ClientCertificate.SecretRef.Name == name:
+			return "brig secret create " + name + " --type tls -f <file>"
+		case t.CA != nil && t.CA.SecretRef.Name == name:
+			typ = "ca"
+		}
+	}
+	if typ != "" {
+		return "brig secret create " + name + " --type " + typ + " -f <file>"
+	}
+	return "brig secret create " + name
+}
+
 // routedBy names each route that injects one of names, with the policy that
 // declares it, the way a refusal does.
 func (c *Config) routedBy(names []string) string {
 	var out []string
 	for _, r := range c.routes {
-		if r.Credential == nil {
-			continue
-		}
+		routed := routeSecretNames(r)
 		for _, name := range names {
-			if r.Credential.SecretRef.Name == name {
+			if slices.Contains(routed, name) {
 				out = append(out, fmt.Sprintf("%s (route %s)", c.routePolicy[r.Name], r.Name))
 				break
 			}

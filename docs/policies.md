@@ -95,7 +95,7 @@ needs the `hvi` backend.
 | Case | Posture |
 | --- | --- |
 | A new sandbox on `hvi` or Linux | `isolated`. On Linux, nerdctl creates a network for each sandbox |
-| The six built-in `hvi` profiles | `isolated`. Each profile names that posture |
+| The seven built-in `hvi` profiles | `isolated`. Each profile names that posture |
 | `claude-desktop` | `shared`. The profile names that posture, because its GUI requires `vz`, where Brig cannot give a sandbox its own network |
 | The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on Linux and `hvi`, and the `shared` fallback on `vz` and `qemu` |
 | A custom profile with no `network:` field, on `vz` or `qemu` | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
@@ -386,13 +386,15 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
 | `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
-| `credential.secretRef.name` | yes | A secret in Brig's store. It is never delivered to the guest |
+| `credential.secretRef.name` | yes, unless the route is certificate-only | A secret in Brig's store. It is never delivered to the guest. A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
-| `inject.headers.set` | unless a preset sets it, or `basicAuth` is set | `{name, value}` pairs. Each replaces a guest header of the same name. A value holds `{value}` at most once, and at least one value holds it. A value never holds `{route.url}` or `{session.token}` |
+| `inject.headers.set` | unless a preset sets it, `basicAuth` is set, or the route is certificate-only | `{name, value}` pairs. Each replaces a guest header of the same name. A value holds `{value}` at most once, and at least one value holds it. A value never holds `{route.url}` or `{session.token}` |
 | `inject.headers.remove` | no | Guest headers dropped before the request goes upstream, and before `set` applies. `Authorization` is always in the list, because the guest's own `Authorization` carries a session token |
 | `inject.headers.allow` | no | `{name, values}` pairs. Brig keeps only the listed values of that guest header, and drops the rest |
-| `inject.basicAuth.username` | unless a preset sets it, or `headers.set` is set | Sends `Authorization: Basic base64(username:{value})` |
-| `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the two guest placeholders below |
+| `inject.basicAuth.username` | unless a preset sets it, `headers.set` is set, or the route is certificate-only | Sends `Authorization: Basic base64(username:{value})` |
+| `inject.tls.clientCertificate.secretRef.name` | no | A secret in Brig's store that holds a client certificate chain and its one private key, in PEM. The broker presents it to the upstream, and the key never reaches the guest. See [Client certificates](#client-certificates) |
+| `inject.tls.ca.secretRef.name` | no | A secret in Brig's store that holds the CA certificates of the upstream. On this route they replace the system roots. See [Client certificates](#client-certificates) |
+| `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
 | `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
@@ -402,8 +404,14 @@ Each `request.allow` list that is set must match. Brig refuses an empty
 list, such as `repos: []`, rather than read it as unset and allow every
 repository. Leave the key out to allow any.
 
-`inject` sets exactly one of `headers.set` and `basicAuth`. Brig refuses a
-route that sets both.
+`inject` sets one of `headers.set` and `basicAuth`, unless `tls.clientCertificate`
+stands alone. `tls` may also sit beside one of them. Brig refuses a route that
+sets both `headers.set` and `basicAuth`. A route with a `credential` carries it
+in `headers.set` or `basicAuth`, whatever `tls` says: a client certificate
+identifies the caller on the connection, and does not carry the credential.
+Brig refuses a route with a `credential` and neither, rather than resolve a
+credential it never sends. A route with a `preset` cannot carry `tls`, because
+the preset sets its `inject` itself, and Brig refuses it.
 
 `remove` applies before `set`, so Brig refuses a header named in both. The
 exception is `Authorization`, which is always removed and which a route may
@@ -412,25 +420,86 @@ set. No header list names `Host`, `Connection`, `Content-Length`,
 header. The broker sets those itself, or drops them as hop-by-hop headers
 that never reach upstream.
 
+### Client certificates
+
+An upstream that asks for a client certificate is served by a route with
+`inject.tls`. This policy serves a read-only inventory API that wants one:
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: inventory-mtls
+  description: read-only access to the inventory service, which wants a client certificate
+spec:
+  routes:
+    - name: inventory
+      upstream: https://inventory.internal.example.com
+      inject:
+        tls:
+          clientCertificate: { secretRef: { name: inventory-client } }
+          ca: { secretRef: { name: example-root-ca } }
+      guest:
+        env:
+          INVENTORY_URL: "{route.url}"
+          INVENTORY_TOKEN: "{session.token}"
+      request:
+        allow:
+          methods: [GET]
+          paths: ["/v2/items/*", "/v2/search"]
+```
+
+Store the two secrets from the files that hold them:
+
+```bash
+brig secret create inventory-client --type tls -f inventory-client.pem
+brig secret create example-root-ca --type ca -f example-root-ca.pem
+```
+
+`--type tls` reads one or more PEM files, in any order: the client
+certificate, any intermediates and its one private key. Brig checks that the
+key matches the certificate, and that the certificate is neither expired nor
+not yet valid. `--type ca` reads one or more CA certificates.
+[Getting a value in](secrets.md#getting-a-value-in) lists each refusal.
+
+`clientCertificate` names the secret that the broker presents to the upstream.
+`ca` names the certificates that the upstream's certificate must chain to. On
+this route, `ca` replaces the system roots, so a certificate that chains only
+to a system root is refused. Other routes keep the system roots.
+
+The key stays in the broker. The guest gets the route URL and a session token,
+and never the certificate or its key.
+
+A user keeps one client certificate for each route. Brig does not choose
+between certificates, so a route names one secret for `clientCertificate`, and
+every sandbox of the user presents that certificate.
+
 ### Placeholders
 
-A route names values that the guest never holds through three placeholders:
+A route names values that the guest never holds through four placeholders:
 
 | Placeholder | Where | What it stands for |
 | --- | --- | --- |
 | `{value}` | an `inject.headers.set` value | the credential |
 | `{route.url}` | a `guest.env` value | the URL of the route |
 | `{session.token}` | a `guest.env` value | the session token of the route |
+| `{route.region}` | a `guest.env` value of a route on the `aws` preset | the region of the route's AWS profile, which the broker reads at every registration |
 
-A `guest.env` value is `{route.url}` or `{session.token}`, and nothing else.
+A `guest.env` value is one of the last three placeholders, and nothing else.
+Brig refuses `{route.region}` on a route that is not on the `aws` preset.
 Brig refuses a literal, so a route cannot put a value of its own into the
 guest's environment:
 
 ```console
 $ brig policy edit claude-only
-brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url} or {session.token}, never a literal
+brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
+
+A route does not set `BRIG_PROJECT`. Brig sets that name itself to the guest
+path of the project, so it ignores a `guest.env` entry of that name with a
+warning, and the CREDENTIALS row does not name it. See
+[profiles.md](profiles.md#brig_project).
 
 ### Presets
 
@@ -442,6 +511,7 @@ names one takes every field it does not set from the preset.
 | `claude-code` | `https://api.anthropic.com` | `Authorization: Bearer {value}` from `claudeAiOauth.accessToken`. Removes `X-Api-Key`. Keeps only the reviewed `Anthropic-Beta` values | `ANTHROPIC_BASE_URL={route.url}`, `CLAUDE_CODE_OAUTH_TOKEN={session.token}` | `anthropic-oauth`: the OAuth pair is refreshed on the host and written back to the store |
 | `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
 | `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
+| `aws` | none. The route answers the guest itself | none. The guest sends its session token as the whole `Authorization` value, as the AWS SDK does | `AWS_CONTAINER_CREDENTIALS_FULL_URI={route.url}`, `AWS_CONTAINER_AUTHORIZATION_TOKEN={session.token}`, `AWS_REGION={route.region}`, `AWS_DEFAULT_REGION={route.region}` | none. The broker fetches temporary keys through the host's `aws` CLI. See [The aws preset](#the-aws-preset) |
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
@@ -497,6 +567,56 @@ comment under `credential:`. Its output is a policy that Brig reads back:
         name: claude-credentials
 ```
 
+### The aws preset
+
+A route on the `aws` preset vends credentials instead of forwarding a
+request. AWS signs each request with the secret key, so the broker cannot
+add a credential to a request on its way out. The route answers the AWS
+container credential provider with temporary keys, and the guest calls AWS
+with them itself. [The aws route](security.md#the-aws-route) states what
+that hands the guest.
+
+The route's secret holds a pointer, not keys: the AWS profile on your host,
+and whether the sandbox assumes a role or gets your own identity.
+`brig secret import` writes it. See
+[An AWS profile behind a route](secrets.md#an-aws-profile-behind-a-route).
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: aws-sandbox
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: "*.amazonaws.com"
+  routes:
+    - name: aws
+      preset: aws
+      credential:
+        secretRef: { name: aws-creds }
+```
+
+The guest calls AWS directly, so a `default: deny` policy needs an `allow`
+rule for the AWS endpoints the agent uses. A host rule does not make the
+access read-only. `*.amazonaws.com` lets the guest make every call the keys
+allow, writes included, and reach resources in other accounts, such as an
+S3 bucket that someone else owns. The role's policy is what limits the
+calls.
+
+The route itself needs no `allow` rule. The guest's AWS SDK fetches keys in
+plain HTTP from `169.254.170.2`, the address of the AWS container credential
+provider, which the runtime diverts to the broker. Brig adds no rule for
+that address, and the rest of `169.254.0.0/16` stays refused. See
+[Transports](broker.md#transports).
+
+The route takes no `upstream` and no `inject`, and Brig refuses either. The
+preset's `request.allow` allows `GET` alone. A route that sets its own
+`request.allow` replaces it. The route answers only the route URL itself.
+The guest gets the four variables of the preset. See
+[What the guest gets](broker.md#what-the-guest-gets).
+
 ### Several policies with routes
 
 Every route of every policy bound to a run applies to that run, as every
@@ -551,6 +671,17 @@ note: enforced on the hvi backend and on Linux with nerdctl, which give the sand
 
 A route is served on the sandbox's own gateway address, so a run with a route
 needs the `isolated` posture. The `posture:` line is that plan.
+
+A route with `inject.tls` has a `tls` row under its route row. The row names
+the secrets the route uses. Brig reads no value for it:
+
+```console
+$ brig policy check inventory-mtls
+inventory-mtls
+  route inventory  preset (none)  mode endpoint
+    tls  clientCertificate inventory-client  ca example-root-ca
+    ...
+```
 
 `check` then asks the runtime and hypervisor the run would use. Where the
 run would refuse a route, `check` exits non-zero with the reason on stderr,
@@ -786,8 +917,8 @@ shows how each way to name a session reaches the slug `refactor`:
 | `claude@refactor` | Accepted. `ParseRef` applies the same slug rule to the `<agent>@<label>` form |
 | `claude@Refactor` | Refused. A ref can only name a session whose stored name is `refactor` |
 
-The `-n` rule is stricter than the retired <!-- retired-ok -->`brig run --name`, which sanitizes a name and reports the directory it landed on.
-A session opened with `brig run claude --name Refactor` <!-- retired-ok --> gets the same policy.
+The `-n` rule is stricter than <!-- retired-ok -->`brig run --name`, removed in v0.5.0, which sanitized a name and reported the directory it landed on.
+A session opened before v0.5.0 with `brig run claude --name Refactor` <!-- retired-ok --> gets the same policy.
 Brig sanitizes `Refactor` to the slug `refactor`, and it looks up the policy
 under that slug. As a result,
 `brig policy attach locked-down claude-code -n refactor` covers that session
@@ -901,7 +1032,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
 | `route x: mode: name "…" may use only lowercase letters, …` | a route's `mode` is not a name |
 | `policy x (route y) declares a route in mode m, and brig refuses the run before boot: … route mode m is not part of this build of brig. …` | `check` on a profile bound to a route in a mode this build does not serve. A run, `sh` or plan refuses it the same way, and exits `7` |
-| `route x: guest.env NAME is a literal; a value is {route.url} or {session.token}, never a literal` | a `guest.env` value that is not one of the two placeholders. The error leaves the value out |
+| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
 | `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
 | `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |
@@ -1051,7 +1182,9 @@ that holds the bridge.
   reset, and anything else is dropped.
 - It carries TCP, UDP and ping, and refuses every other protocol.
 - It refuses IPv6, `169.254.0.0/16`, and a packet whose source is outside
-  the network of the sandbox.
+  the network of the sandbox. On a run with a route that vends, port 80 of
+  `169.254.170.2` is redirected to the relay before that check. See
+  [Routing brig.internal](#routing-briginternal).
 - Rootless nerdctl writes the resolver of slirp4netns into the guest's
   `resolv.conf` ahead of Brig's resolver. The table sends DNS for that
   address to Brig's resolver too.
@@ -1146,6 +1279,9 @@ resolver then answers every name, and the table filters nothing else.
 - The table redirects a TCP connection from the guest to the bridge address
   on port 443 to a relay. The same resolver process runs the relay on the
   bridge address, on port 15443.
+- On a run with a route that vends, the table redirects a TCP connection to
+  `169.254.170.2` on port 80 to the same relay. Under a policy with a
+  default, every other address and port of `169.254.0.0/16` stays refused.
 - The table refuses every other port of the bridge address, except DNS.
 - The relay reads the original destination with `SO_ORIGINAL_DST`. It resets
   a connection to any destination that is not diverted.

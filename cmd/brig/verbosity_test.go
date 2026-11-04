@@ -76,24 +76,31 @@ func TestVerboseAndQuietTogetherAreRefused(t *testing.T) {
 	}
 }
 
-// -q moved to the global position, and moving it must not break the line it
-// works on today: `brig run claude -q` still means quiet, and says where the
-// flag lives now. The run-line spelling goes in retiredGoesIn.
-func TestQuietOnTheRunLineStillWorksAndSaysWhereItMoved(t *testing.T) {
+// -q moved to the global position, and v0.5.0 removed the run-line spelling.
+// Before the ref it is a usage error that says where the flag lives now. After
+// the ref it is the agent's, and brig says it did not read it and where it
+// would have.
+func TestQuietOnTheRunLineSaysWhereItMoved(t *testing.T) {
 	atLevel(t, wrap.Normal)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-q", "claude"}, "brig -q <verb> <ref>"},
+		{[]string{"--quiet", "claude"}, "brig --quiet <verb> <ref>"},
+	} {
+		_, _, _, err := parse("run", c.args)
+		if exitCode(err) != exitUsage || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("parse(%q) = %v, want a usage error naming %s", c.args, err, c.want)
+		}
+	}
 	for _, args := range [][]string{{"claude", "-q"}, {"claude", "--quiet"}} {
-		var o options
 		said := captureStderr(t, func() {
-			var err error
-			o, _, _, err = parse("run", args)
-			if err != nil {
-				t.Fatalf("parse(%q): %v", args, err)
+			if _, _, _, err := parse("run", args); err != nil {
+				t.Errorf("parse(%q): %v", args, err)
 			}
 		})
-		if !o.quiet {
-			t.Errorf("parse(%q) did not read the flag", args)
-		}
-		if !strings.Contains(said, "brig -q") {
+		if !strings.Contains(said, "before the command") {
 			t.Errorf("parse(%q) said %q, want a notice naming the global position", args, said)
 		}
 	}
@@ -142,7 +149,6 @@ func TestTheEnvelopeIsBehindVerbose(t *testing.T) {
 		{"run", wrap.Quiet, false},
 		{"run", wrap.Normal, false},
 		{"run", wrap.Verbose, true},
-		{"create", wrap.Verbose, true},
 		// sh continues a session whose boundary the reader has already met, and
 		// a scripted one on a cold sandbox must not be interrupted by a block.
 		{"sh", wrap.Verbose, false},

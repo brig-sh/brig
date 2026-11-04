@@ -16,7 +16,9 @@ genericBoot: true
 #
 # brig takes the guest account from the last element of this path.
 guestHome: /root
-forward: [GH_TOKEN]
+env:
+  - name: GH_TOKEN
+    ref: env.GH_TOKEN
 
 # Codex signs in with `codex login --device-auth` and keeps the result in
 # ~/.codex/auth.json, inside the persisted home. A forwarded OPENAI_API_KEY is
@@ -25,7 +27,6 @@ forward: [GH_TOKEN]
 # with BRIG_ALLOW_DENIED=1 if metered billing is what you want.
 deny: [OPENAI_API_KEY]
 
-statePaths: [.codex]
 headless: true
 mem: 4096
 cpus: 4

@@ -63,8 +63,8 @@ func (s *Set) Add(name, value, reportAs string) {
 
 // AddSecret appends a variable whose value brig resolved on the user's behalf
 // from the store it owns. It is reported like any other credential, but it
-// never travels in argv: the host durably logs every exec's argv, so such a
-// value there would outlive the sandbox in a file the user never sees.
+// never travels in argv: the guest agent logs every exec's argv, and on some
+// backends that log is a host file that outlives the sandbox.
 func (s *Set) AddSecret(name, value, reportAs string) {
 	s.Vars = append(s.Vars, runtime.Var{Name: name, Value: value, Secret: true})
 	if reportAs == "" {

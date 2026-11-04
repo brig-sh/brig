@@ -29,6 +29,10 @@ type Missing struct {
 	// message is built, because only the profile knows what makes its
 	// credential appear and the message is built from Missing alone.
 	Hint string
+	// Create is the command that stores this secret, when plain
+	// "brig secret create NAME" would store a value the run cannot use: a
+	// certificate needs --type tls or --type ca to be checked.
+	Create string
 }
 
 // CredentialError is the class of run-stopping credential failures: a required
@@ -41,6 +45,36 @@ type Missing struct {
 type CredentialError interface {
 	error
 	credentialFailure()
+}
+
+// BrokerCredentialError is a credential the broker refused to vend for a
+// route, such as an expired AWS login. The user fixes it on the host, so it
+// is a CredentialError and exits like a missing secret does.
+type BrokerCredentialError struct {
+	// Sandbox is the sandbox named as the user knows it.
+	Sandbox string
+	// Route is the route the broker named, or "" when its message named none.
+	Route string
+	// Message is the broker's own words, which carry the fix.
+	Message string
+}
+
+func (e *BrokerCredentialError) credentialFailure() {}
+
+func (e *BrokerCredentialError) Error() string {
+	return fmt.Sprintf("the credential broker could not vend for the %s sandbox: %s", e.Sandbox, e.Message)
+}
+
+// NewBrokerCredentialError builds the error from a refusal message, which the
+// broker writes as "route <name>: <message>".
+func NewBrokerCredentialError(sandbox, message string) *BrokerCredentialError {
+	route := ""
+	if rest, ok := strings.CutPrefix(message, "route "); ok {
+		if name, _, ok := strings.Cut(rest, ": "); ok && !strings.ContainsAny(name, " \n") {
+			route = name
+		}
+	}
+	return &BrokerCredentialError{Sandbox: sandbox, Route: route, Message: message}
 }
 
 // MissingSecretsError is every REQUIRED secret a run could not resolve,
@@ -109,6 +143,9 @@ func (e *MissingSecretsError) fix(m Missing) string {
 	}
 	if m.Importable {
 		return fmt.Sprintf("import it from your host with: brig secret import %s", e.Profile)
+	}
+	if m.Create != "" {
+		return "create it first with: " + m.Create
 	}
 	return fmt.Sprintf("create it first with: brig secret create %s", m.Name)
 }

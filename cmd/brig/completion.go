@@ -124,10 +124,9 @@ func completeCmd(out io.Writer, words []string) {
 
 // verbs are the commands completion offers: the documented set only.
 //
-// The retired spellings -- exec, env, create, reset, profiles, policies -- are
-// excluded. They still work and print what replaced them, but they are
-// on their way out, so completion does not teach them. shell is already
-// removed.
+// exec is excluded. It still works and prints what replaces it, but it is on
+// its way out, so completion does not teach it. The spellings v0.3.0 and
+// v0.5.0 removed are not verbs at all.
 var verbs = []string{
 	"agent",
 	"completion",
@@ -437,6 +436,8 @@ const (
 	opNetwork
 	// opPreset is a route preset brig ships, which --preset takes.
 	opPreset
+	// opType is the kind of value `brig secret create --type` checks.
+	opType
 )
 
 func operandCandidates(kind operand, cur string) (string, []string) {
@@ -457,6 +458,8 @@ func operandCandidates(kind operand, cur string) (string, []string) {
 		return names(cur, networkModes)
 	case opPreset:
 		return names(cur, presetNames())
+	case opType:
+		return names(cur, []string{"tls", "ca"})
 	}
 	return dirNone, nil
 }
@@ -535,22 +538,25 @@ var groups = map[string][]sub{
 		{
 			name:     "create",
 			flags:    []string{"--stdin"},
-			values:   map[string]operand{"--file": opFile, "-f": opFile},
+			values:   map[string]operand{"--file": opFile, "-f": opFile, "--type": opType},
 			operands: []operand{opNothing},
 		},
 		{name: "read", operands: []operand{opNothing}},
 		{
 			name:     "update",
 			flags:    []string{"--stdin"},
-			values:   map[string]operand{"--file": opFile, "-f": opFile},
+			values:   map[string]operand{"--file": opFile, "-f": opFile, "--type": opType},
 			operands: []operand{opNothing},
 		},
 		{name: "delete", flags: []string{"--yes", "-y"}, operands: []operand{opNothing}},
 		{name: "ls"},
 		{
-			name:     "import",
-			flags:    []string{"--dry-run", "--yes", "-y"},
-			values:   map[string]operand{"--from-command": opNothing},
+			name:  "import",
+			flags: []string{"--dry-run", "--yes", "-y"},
+			values: map[string]operand{
+				"--from-command": opNothing, "--aws-profile": opNothing, "--role-arn": opNothing,
+				"--identity": opNothing, "--source-identity": opNothing, "--session-duration": opNothing,
+			},
 			operands: []operand{opAgent},
 		},
 	},
@@ -710,9 +716,9 @@ func qualify(flag string, directive string, candidates []string) (string, []stri
 // only closed set; the rest take a host path or a number.
 func flagValue(flag string) operand {
 	switch flag {
-	case "--home", "-w", "--workspace":
+	case "--home":
 		return opDir
-	case "--image", "-t":
+	case "--image":
 		return opFile
 	case "--network":
 		return opNetwork
@@ -727,15 +733,11 @@ var networkModes = []string{"isolated", "offline", "shared"}
 // flagSpellings returns brig's own flags legal at one position, as typed.
 //
 // Read from brigFlags, so a flag added there needs no change here. Excluded:
-// deprecated spellings, positions being retired (retiredAs), and undocumented
-// spellings -- all still accepted, none of them taught.
+// undocumented spellings, which are accepted and not taught.
 func flagSpellings(at position, verb string) []string {
 	var out []string
 	for _, f := range brigFlags {
-		if f.position != at || f.retiredAs != "" || f.undocumented {
-			continue
-		}
-		if deprecatedFlags["--"+f.long] != "" {
+		if f.position != at || f.undocumented {
 			continue
 		}
 		if at == posRun && verb != "" && !honorsRunLine(verb, f.long) {
@@ -745,7 +747,7 @@ func flagSpellings(at position, verb string) []string {
 			continue
 		}
 		out = append(out, "--"+f.long)
-		if f.short != "" && deprecatedFlags["-"+f.short] == "" {
+		if f.short != "" {
 			out = append(out, "-"+f.short)
 		}
 	}

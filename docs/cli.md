@@ -2,7 +2,7 @@
 
 For a walkthrough of a first run, see [Quickstart](quickstart.md).
 
-Most retired spellings still work until v0.5.0.
+v0.5.0 removed the retired spellings, with two exceptions.
 [Retired spellings](migration.md) has the old-to-new table and the
 exceptions. [Stability](stability.md) lists what you can write a script
 against.
@@ -259,6 +259,10 @@ brig info claude
 has the sandbox name, the isolation, the guest home, the image and the
 verification mode. It also has the network, every published port and the
 credentials by name. `brig --verbose run` prints the same envelope before it boots.
+The isolation row names the hull backend and the root on macOS, and the
+containerd shim, the urunc hypervisor and the root on Linux. The root is
+`overlay-block` when Brig boots an overlay root, and the runtime's own
+otherwise.
 
 The network row gives the posture of the running sandbox. When the posture of
 the next boot is different, the row gives that posture too.
@@ -481,8 +485,14 @@ brig doctor
 ```
 
 `brig doctor` examines these items, one line each: the Brig build, the host,
-the hypervisor, the runtime, the boot assets, cosign, the profile directory,
-the secret store and brigd.
+the hypervisor, the runtime, the boot assets, the overlay root, cosign, the
+profile directory, the secret store and brigd.
+
+The `rootfs` line says whether the runtime can build the overlay root that a
+`genericBoot` profile boots by default. When it cannot, the line names what
+is missing, and a run keeps the runtime's own root. It is marked `!!` only
+when `BRIG_ROOTFS_MODE=overlay-block` asks for an overlay the host cannot
+build, or when `BRIG_ROOTFS_MODE` is not a mode.
 
 The first line is the build that `brig version` prints. `doctor` asks a
 running brigd for its build. If that build differs from the `brig` binary,
@@ -496,6 +506,41 @@ brig doctor claude
 With an agent, `doctor` adds the image check. When the profile of the agent
 names a `runtimeBin`, the runtime and boot lines report on that binary and
 not on the one on `PATH`. An unknown agent exits `3`.
+
+A `bundle` line appears when `brig` runs from the bin directory of the runtime
+bundle without its launcher. See
+[Started without the launcher](troubleshooting.md#started-without-the-launcher).
+
+On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run needs
+from the host. For a user other than root: `subids`, `userns` and `uidmap`. For
+every user: `devices` (`/dev/vhost-vsock`) and `cni`.
+
+- `cni` looks where nerdctl looks: `CNI_PATH`, the `cni_path` of its
+  configuration, or the first of nerdctl's default directories that exists.
+- For a user other than root, `devices` and `virtual` also ask whether the
+  device reaches a rootless run, which drops supplementary groups. The device
+  has to be this user's, carry an ACL entry for this user, or be open to
+  everyone. Access through the `kvm` group alone reads `!!`.
+- Where AppArmor restricts user namespaces, as on Ubuntu 24.04 and later,
+  `userns` looks among the loaded profiles for one that covers the
+  `rootlesskit` a run starts.
+- For a `nerdctl` from outside the runtime bundle, or when no runtime is found,
+  `doctor` adds `tools`: the monitor a run boots on, and `oras` when the boot
+  assets are missing. The monitor is `hvi` unless `BRIG_HYPERVISOR` or the
+  agent's `hypervisor:` field names another. `qemu` is looked up as
+  `qemu-system-` and the host architecture, as urunc does. For such a
+  `nerdctl`, the `runtime` line ends with
+  `(not the runtime bundle; see install.sh)`. That runtime may work, as long as
+  its `urunc` reads the boot annotations, which `doctor` cannot tell.
+
+These lines do not change the exit status.
+
+Doctor checks the image against the trust policy a run of that agent uses,
+with `BRIG_VERIFY_REGISTRY`, `BRIG_VERIFY_IDENTITY` and `BRIG_VERIFY_ISSUER`
+applied, per-agent spelling first. The verify line reads `BRIG_VERIFY` the
+same way and names the variable its mode came from. When any of the three
+replaces the shipped policy, a `trust` line names the registry, identity and
+issuer in use. With no agent named, only the global variables count.
 
 ```bash
 brig doctor --json
@@ -685,14 +730,18 @@ brig secret create gh-token
 name in your keyring.
 
 ```
-brig secret create <name> [-f FILE]
-brig secret update <name> [-f FILE]
+brig secret create <name> [-f FILE] [--type tls|ca]
+brig secret update <name> [-f FILE] [--type tls|ca]
 brig secret read <name>
 brig secret delete <name> [-y]
 brig secret ls
 brig secret import <agent>
 brig secret import <agent> <name>
 ```
+
+`--type tls` checks the value as a client certificate with its key, and
+`--type ca` as a bundle of CA certificates. See
+[Getting a value in](secrets.md#getting-a-value-in).
 
 Fill every secret that the profile of an agent declares, from your host,
 once:
@@ -755,7 +804,9 @@ line. It identifies each one by position:
 1. The first bare word is the ref.
 2. On `run` and `plan`, the second bare word is a project directory. Brig
    mounts it read-write at `/work/<basename>` and starts the agent there.
-   `plan` shows that run and does not start it.
+   Every process you start in that sandbox, `brig sh` included, gets
+   `BRIG_PROJECT` set to that path. Without a project the variable is
+   unset. `plan` shows that run and does not start it.
 3. The next bare word, or anything after `--`, is the agent's own argument.
 
 The second bare word is the project even when no directory of that name
@@ -780,7 +831,7 @@ the agent.
 | Position | Flags |
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
-| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish`, `-q`/`--quiet` and `--json` |
+| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish` and `--json` |
 
 The global position takes only those three flags. Brig refuses any other
 flag there by name:
@@ -791,12 +842,10 @@ brig: unknown flag "--nope" before the command. brig takes a command first:
 profile
 ```
 
-Both positions accept two flags:
-
-| Flag | After the verb, on the run line |
-| --- | --- |
-| `-q`/`--quiet` | still works until v0.5.0, and prints one deprecation notice moving it left. See [Retired spellings](migration.md) |
-| `--json` | a permanent peer spelling. No notice, either position |
+Both positions accept `--json`, a permanent peer spelling with no notice in
+either position. v0.5.0 removed `-q`/`--quiet` after the verb: before the
+ref it is refused, and after the ref it is the agent's. See
+[One flag whose position changed](migration.md#one-flag-whose-position-changed).
 
 ```bash
 brig info claude --json
@@ -879,8 +928,8 @@ global position refuses `agent show` and `policy show`:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, plan, agent ls, secret ls, doctor, version and the network verbs (env
-takes it too, but env is deprecated; prefer info), and for run and sh
+info, plan, agent ls, secret ls, doctor, version and the network verbs, and
+for run and sh
 ```
 
 Put the flag after the subcommand, where each of the two accepts it.
@@ -973,8 +1022,8 @@ agent's, and anything else means that it is one of the classes in the table.
 
 ### Exit 7 cases
 
-An egress policy is one such property. `brig run`, `brig sh` and the retired
-spellings that stand for them refuse a policy with `7`:
+An egress policy is one such property. `brig run` and `brig sh`, and the
+retired spelling of `brig sh`, refuse a policy with `7`:
 
 - on hull's `vz` or `qemu`
 - on docker
@@ -1053,7 +1102,7 @@ one "global only".
 | --- | --- | --- |
 | `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set. A sandbox that a release before 0.3.0 started on `~/brig/<agent>` keeps that home, and Brig does not delete it |
 | `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A named session appends `-<slug>` |
-| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. `BRIG_TEMPLATE_DIR` still works until v0.5.0 |
+| `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. Brig refuses to start while `BRIG_TEMPLATE_DIR`, removed in v0.5.0, is set and this is not |
 | `BRIG_POLICY_DIR` (global only) | `$XDG_CONFIG_HOME/brig/policies` | where policy files live |
 | `BRIG_STATE_DIR` (global only) | `~/.brig` | where Brig keeps what has to outlive one command, including the project each sandbox last ran with |
 
@@ -1124,9 +1173,10 @@ does and does not catch.
 | --- | --- | --- |
 | `BRIG_RUNTIME` (global only) | `hull` on macOS, `nerdctl` on Linux | which runtime to drive |
 | `BRIG_RUNTIME_BIN` (global only) | `hull` on the `hull` runtime, `nerdctl` then `docker` on the `nerdctl` runtime, each found on `PATH` | path to that binary. `BRIG_RUNTIME` picks the runtime first, and this only overrides its executable |
-| `BRIG_HYPERVISOR` | the agent's own `hypervisor:` field, else `vz` | macOS only: `vz`, `hvi` or `qemu`. Wins over the agent's own field when set |
-| `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` ignores it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked |
-| `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. Another microVM shim is accepted. A shim Brig knows shares the host kernel (`runc` or `crun`, by name or by path, or a shim name containerd resolves to the runc shim, such as `io.containerd.runc.v2`) is refused |
+| `BRIG_HYPERVISOR` | the agent's own `hypervisor:` field, else `vz` on macOS and `hvi` on Linux | `vz`, `hvi` or `qemu` on macOS. On Linux, the urunc monitor of a `genericBoot` profile: `hvi`, `cloud-hypervisor`, `qemu` or `firecracker`, with `vz` and an empty value meaning `hvi`. Wins over the agent's own field when set |
+| `BRIG_ROOTFS_MODE` | unset: `overlay-block` where the host can build it, else the runtime's own root | The root of a `genericBoot` profile whose `rootfsType` is unset or `virtiofs`. `overlay-block` boots it from two disks: a read-only ext4 image of the image, built once per image, and a sparse 16 GiB ext4 disk per sandbox for its writes to the root. Unset, Brig uses `overlay-block` where the host can build it and keeps the runtime's own root elsewhere, without a message. Set to `overlay-block`, a host that cannot build it refuses the run and says why. `virtiofs` keeps the runtime's own root. Any other value is refused, as is `overlay-block` on another profile or next to a `block` or `9pfs` rootfs type. `hull` reads the mode as `HULL_ROOTFS_MODE` (`vz` and `hvi`) and needs `brew install e2fsprogs`. urunc reads it as the `com.urunc.unikernel.rootfsMode` annotation (`hvi`, `cloud-hypervisor` and `qemu`) and needs the overlayfs snapshotter and `mke2fs`. The `ISOLATION` row names the root that boots, and `brig doctor` says whether the overlay is available. See [The guest root of a generic boot](runtimes.md#the-guest-root-of-a-generic-boot) |
+| `BRIG_ROOTFS_TYPE` | the agent's own `rootfsType:` field | `block`, `virtiofs` or `9pfs`, how the guest root reaches the microVM under `hull`. `nerdctl` passes no type. Under both, `block` and `9pfs` keep the runtime's own root, and unset or `virtiofs` takes the overlay root where `BRIG_ROOTFS_MODE` allows it. A profile's own `rootfsType:` outside that set is refused when the profile loads, but this variable is passed to `hull` unchecked |
+| `BRIG_CONTAINERD_RUNTIME` (global only) | `io.containerd.urunc.v2` | Linux only, on the `nerdctl` runtime: the containerd shim that boots the sandbox as a microVM. Another microVM shim is accepted. A shim Brig knows shares the host kernel (`runc`, `crun` or the runc shim binaries `containerd-shim-runc-v1` and `-v2`, by name or by path, or a shim name containerd resolves to the runc shim, such as `io.containerd.runc.v2`) is refused. The `ISOLATION` row names the variable when it is set |
 
 On macOS, `hvi` is the only backend that enforces an attached egress policy
 or `--network isolated`. It needs macOS 15 or newer. Linux also supports the

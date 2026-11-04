@@ -79,8 +79,24 @@ func (h *hull) Bin() string  { return h.bin }
 //
 // The default is applied here rather than reported as blank, so the row names
 // the backend that will actually boot rather than the absence of a setting.
-func (h *hull) Isolation(hv string) Isolation {
-	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend", hypervisorOrDefault(hv))}
+//
+// The rootfs is overlay-block when runArgs hands hull that mode, read from
+// hullRootfsMode, the same call runArgs makes. Otherwise it is the value
+// runArgs hands --rootfs-type. With none, brig passes no flag and hull picks
+// per backend. The row says that and names no type, because hull's default is
+// hull's to change.
+func (h *hull) Isolation(spec RunSpec) Isolation {
+	hv := hypervisor(spec)
+	rootfs := orDefault(spec.RootfsType, "hull default")
+	mode, err := hullRootfsMode(spec, hv)
+	if err != nil {
+		// CanRun refuses this run. The row names the mode asked for.
+		mode = spec.RootfsMode
+	}
+	if mode != "" {
+		rootfs = mode
+	}
+	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
 }
 
 // PinsDigest asks the hull on this machine whether it can boot a digest
@@ -549,6 +565,10 @@ func (h *hull) ProbeBrigInternal() error {
 	return err
 }
 
+// ProbeLinkLocal reports whether this hull's network gateway takes a
+// --divert of LinkLocalDivert. See gatewayDivertsLinkLocal.
+func (h *hull) ProbeLinkLocal() error { return probeLinkLocal(h.bin) }
+
 // BrigInternalAddr is the address of the sandbox's own gateway, which hull
 // answers brig.internal with. A sandbox that reaches brig.internal has a
 // gateway of its own (see isolatedNet), on the network sandboxNet assigns it.
@@ -598,6 +618,9 @@ func supports(spec RunSpec, hv string) error {
 			"backend uses, and this run asks for %s. Run it on hvi (BRIG_HYPERVISOR=hvi)", hv)
 	}
 	if err := checkSetup(spec, RunPath{"hull", hv}); err != nil {
+		return err
+	}
+	if _, err := hullRootfsMode(spec, hv); err != nil {
 		return err
 	}
 	// brig.internal is a record and a divert on the gateway too. wrap
@@ -736,6 +759,14 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 		return nil, nil, err
 	}
 	args = append(args, envArgs...)
+	// hull takes the layout of the root from its environment, not a flag.
+	mode, err := hullRootfsMode(spec, hv)
+	if err != nil {
+		return nil, nil, err
+	}
+	if mode != "" {
+		envVals = append(envVals, "HULL_ROOTFS_MODE="+mode)
+	}
 	// The verified digest when one was resolved, so the bytes that boot are the
 	// bytes cosign checked; hull resolves it against its store from rc23.
 	args = append(args, withDigest(spec.Image, spec.Digest))
@@ -1201,7 +1232,7 @@ func (h *hull) PruneSharedNetwork() bool {
 	}
 	return signalGateway(g.pid, func() bool {
 		argv, ok := procArgv(g.pid)
-		return ok && servesSocket(argv, sock)
+		return ok && servesSocket(argv, sock) || listensOn(g.pid, sock)
 	})
 }
 
@@ -1302,11 +1333,23 @@ func (h *hull) Logs(spec LogsSpec) error {
 	}
 	// hull's own default is -1 (all), so spec.Tail passes straight through.
 	args = append(args, "--tail", strconv.Itoa(spec.Tail), spec.Name)
-	cmd := exec.Command(h.bin, args...)
+	cmd := logsCommand(spec, h.bin, args)
 	cmd.Env = mergeEnv(telemetryEnv(false))
 	cmd.Stdout = spec.Out
 	cmd.Stderr = spec.Err
 	return cmd.Run()
+}
+
+// logsCommand is a runtime's logs command, on spec.Ctx when it has one. The wait
+// delay is agentCall's, for the same reason: a child that outlives the runtime
+// holds the pipes open, and Run would wait on them past the deadline.
+func logsCommand(spec LogsSpec, bin string, args []string) *exec.Cmd {
+	if spec.Ctx == nil {
+		return exec.Command(bin, args...)
+	}
+	cmd := exec.CommandContext(spec.Ctx, bin, args...)
+	cmd.WaitDelay = agentCallWaitDelay
+	return cmd
 }
 
 func (h *hull) LogsHint(name string) string {

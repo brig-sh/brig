@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -556,8 +557,23 @@ func (p Policy) CosignMissing() string {
 		return fmt.Sprintf("cosign was not found at %s, where BRIG_COSIGN_BIN points",
 			p.Cosign)
 	}
-	return "cosign is not installed (`brew install cosign`)"
+	return cosignNotInstalled(goruntime.GOOS)
 }
+
+// cosignNotInstalled takes the platform so that a test on one host covers both.
+// Brig's installer brings a cosign on Linux, the runtime bundle's or a pinned
+// one, and distributions do not all package it, so the installer comes first.
+func cosignNotInstalled(goos string) string {
+	switch goos {
+	case "darwin":
+		return "cosign is not installed (`brew install cosign`)"
+	case "linux":
+		return "cosign is not installed (Brig's install.sh brings one, or see " + cosignInstallDocs + ")"
+	}
+	return "cosign is not installed (see " + cosignInstallDocs + ")"
+}
+
+const cosignInstallDocs = "https://docs.sigstore.dev/cosign/system_config/installation/"
 
 // lookPath and run are variables so tests can drive the decision table
 // without a cosign on PATH.

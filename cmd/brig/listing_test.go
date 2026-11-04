@@ -143,12 +143,12 @@ func TestListingRefsRoundTripThroughEveryVerb(t *testing.T) {
 	}
 
 	// Every verb that takes a session, in the spelling the help text teaches
-	// and in the spellings it retires, plus the verbless form. exec is the one
-	// that needs a command of its own.
+	// and in exec, the one retired spelling left, plus the verbless form. exec
+	// is the one that needs a command of its own.
 	lines := func(ref string) [][]string {
 		return [][]string{
 			{"run", ref}, {"sh", ref}, {"stop", ref}, {"rm", ref}, {"info", ref},
-			{"create", ref}, {"env", ref}, {"exec", ref, "--", "true"},
+			{"exec", ref, "--", "true"},
 			{ref},
 		}
 	}

@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -136,6 +137,9 @@ func TestPublishedImagesMatchProfileNames(t *testing.T) {
 		"gemini":      "ghcr.io/brig-sh/gemini-stock:root",
 		"grok":        "ghcr.io/brig-sh/grok-stock:root",
 		"opencode":    "ghcr.io/brig-sh/opencode-stock:root",
+		// herd is built on root only, so its default stock image is the root
+		// one and there is no separate :root tag.
+		"herd": "ghcr.io/brig-sh/herd-stock:latest",
 	}
 	for name, image := range published {
 		tmpl, ok := Lookup(name)
@@ -221,5 +225,30 @@ func TestCloneDoesNotSharePolicy(t *testing.T) {
 	c.Policy[0] = "CLOBBERED"
 	if p.Policy[0] != "no-net" {
 		t.Error("a clone shares the original's policy list")
+	}
+}
+
+// herd is claude-code with a different image. Its spec repeats claude-code's
+// fields because a spec cannot inherit another, so this is what keeps the two
+// from drifting: a change to how claude-code delivers or withholds a
+// credential -- a secret source, the tmpfs, the denylist -- that is not made
+// to herd as well would leave herd handling the same login differently.
+//
+// The whole profile is compared, not a list of credential fields, so a field
+// added to one spec and forgotten in the other fails here too.
+func TestHerdHandlesCredentialsLikeClaudeCode(t *testing.T) {
+	reset(t)
+	claude, ok := Lookup("claude-code")
+	if !ok {
+		t.Fatal("claude-code profile is missing")
+	}
+	herd, ok := Lookup("herd")
+	if !ok {
+		t.Fatal("herd profile is missing")
+	}
+	// What herd is meant to differ in.
+	herd.Name, herd.Desc, herd.Image = claude.Name, claude.Desc, claude.Image
+	if !reflect.DeepEqual(claude, herd) {
+		t.Errorf("herd differs from claude-code beyond name, desc and image:\nclaude-code: %+v\nherd:        %+v", claude, herd)
 	}
 }

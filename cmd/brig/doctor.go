@@ -78,6 +78,10 @@ type check struct {
 // openStore in secret.go -- and the BRIG_* variables cover the rest.
 var virtualization = probeVirtualization
 
+// doctorExecutable says where this brig runs from, and a test puts it in a
+// runtime bundle's tree.
+var doctorExecutable = os.Executable
+
 // doctorCmd is `brig doctor [<agent>]`, with an optional --json flag of its own.
 func doctorCmd(out io.Writer, args []string) error {
 	jsonOut, agentName, err := parseDoctorArgs(args)
@@ -176,26 +180,72 @@ func doctorExit(checks []check) error {
 // which is a dependency inside the runtime check rather than between two of
 // them. Everything else -- the host, virtualization, the signature tooling, the
 // profiles, the secret store, the daemon -- stands on its own.
+//
+// The trust policy is built once, the way a run of the agent builds it, so the
+// verify row, the image check and the trust row all describe the one policy.
+// The verify row reads the mode the run reads for the same reason.
 func runDoctor(agent *profile.Profile, loadErr error) []check {
 	rtCheck, rt := runtimeCheck(agent)
 	runtimeOK := rtCheck.State == statePass
+	name := ""
+	if agent != nil {
+		name = agent.Name
+	}
+	policy := wrap.HostVerifyPolicy(name)
 	checks := []check{
 		brigCheck(),
 		hostCheck(),
-		virtualCheck(),
+		rootlessKVM(virtualCheck(), rt),
 		rtCheck,
-		brokerCheck(),
 	}
+	bundle, bypassed := bundleCheck()
+	if bypassed {
+		checks = append(checks, bundle)
+	}
+	hypervisor := ""
+	if agent != nil {
+		hypervisor = agent.Hypervisor
+	}
+	// A run reads the same setting the same way; see wrap.Config.hypervisor.
+	host := linuxHostChecks(rt, wrap.NewEnv(name, nil).String("HYPERVISOR", hypervisor))
+	if bypassed {
+		// install.sh ran already. This brig does not see what it installed.
+		for i := range host {
+			if host[i].State == stateFail && (host[i].Name == "cni" || host[i].Name == "tools") {
+				host[i].Fix = bundleCarriesThem
+			}
+		}
+	}
+	checks = append(checks, host...)
+	checks = append(checks, brokerCheck())
 	for _, mc := range modeChecks {
 		checks = append(checks, mc(agent, rt))
 	}
+	boot := bootCheck(rt)
+	if bypassed {
+		// Fetched assets are not the ones this tree boots, whether they are here
+		// already or the usual advice would fetch them: see
+		// runtime.MissingBundleEnv.
+		switch boot.State {
+		case stateFail:
+			boot.Fix = bundleCarriesThem
+		case statePass:
+			boot.Finding += ", which are not the runtime bundle's; see the bundle line above"
+		}
+	}
+	checks = append(checks,
+		boot,
+		rootfsCheck(agent, rt),
+		verifyCheck(name, policy),
+	)
+	if policy.Replaced() {
+		checks = append(checks, trustCheck(policy))
+	}
 	return append(checks,
-		bootCheck(rt),
-		verifyCheck(),
 		profilesCheck(loadErr),
 		secretsCheck(),
 		brigdCheck(),
-		imageCheck(agent, runtimeOK),
+		imageCheck(agent, runtimeOK, policy),
 	)
 }
 
@@ -387,7 +437,7 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	if v, verr := runtime.Version(bin); verr == nil && v != "" {
 		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), bin)
 	}
-	return check{Name: "runtime", State: statePass, Finding: finding}, rt
+	return check{Name: "runtime", State: statePass, Finding: finding + notTheBundle(rt)}, rt
 }
 
 // shortVersion is the version out of a `--version` line, read the way
@@ -408,6 +458,102 @@ func shortVersion(out string) string {
 		fields = fields[1:]
 	}
 	return strings.Join(fields, " ")
+}
+
+// overlayRootFor is the seam a test replaces to give the runtime an overlay
+// root, or take it away.
+var overlayRootFor = runtime.OverlayRootFor
+
+// overlayMonitorFor is the seam a test replaces to say whether the monitor
+// takes the overlay root.
+var overlayMonitorFor = runtime.OverlayMonitorFor
+
+// rootfsCheck reports whether the runtime can build the overlay root that a
+// profile booting an ordinary image takes by default. Not reached without a
+// runtime. It reads BRIG_ROOTFS_MODE and BRIG_ROOTFS_TYPE the way a run of the
+// agent reads them.
+//
+// A host without the overlay is not a failure: a run keeps the runtime's own
+// root. It fails when BRIG_ROOTFS_MODE is not a mode brig knows, or when it
+// is overlay-block on a host that cannot build the overlay or for a profile
+// that cannot take it. A run refuses all three. A monitor that takes no
+// overlay, or a HULL_* variable that chooses the root, is reported as such. None touches the exit status,
+// as for the boot row.
+func rootfsCheck(agent *profile.Profile, rt runtime.Runtime) check {
+	if rt == nil {
+		return notReached("rootfs")
+	}
+	name := ""
+	if agent != nil {
+		name = agent.Name
+	}
+	env := wrap.NewEnv(name, nil)
+	mode := env.String("ROOTFS_MODE", "")
+	switch mode {
+	case "", runtime.RootfsModeOverlayBlock, runtime.RootfsModeVirtiofs:
+	default:
+		return check{Name: "rootfs", State: stateFail,
+			Finding: fmt.Sprintf("BRIG_ROOTFS_MODE=%s is not a rootfs mode", mode),
+			Fix:     "set it to overlay-block or virtiofs, or unset it"}
+	}
+	// The profile conditions of the run's own decision, so the row does not
+	// say "available" for a profile whose run refuses or skips the overlay.
+	if agent != nil {
+		why := ""
+		if rootfsType := env.String("ROOTFS_TYPE", agent.RootfsType); !agent.GenericBoot {
+			why = name + " is not a genericBoot profile"
+		} else if rootfsType != "" && rootfsType != runtime.RootfsModeVirtiofs {
+			why = name + " boots with rootfs type " + rootfsType
+		}
+		switch {
+		case why != "" && mode == runtime.RootfsModeOverlayBlock:
+			return check{Name: "rootfs", State: stateFail,
+				Finding: "BRIG_ROOTFS_MODE=overlay-block, but " + why,
+				Fix:     "unset BRIG_ROOTFS_MODE to boot on the profile's own root"}
+		case why != "":
+			return check{Name: "rootfs", State: stateInfo, Finding: "no overlay root: " + why}
+		}
+	}
+	// The monitor half of the decision. An explicit overlay-block is passed to
+	// the runtime whatever the monitor, so only the default is skipped here.
+	hv := ""
+	if agent != nil {
+		hv = agent.Hypervisor
+	}
+	if ok, why := overlayMonitorFor(rt, env.String("HYPERVISOR", hv)); !ok && why != "" && mode != runtime.RootfsModeOverlayBlock {
+		return check{Name: "rootfs", State: stateInfo, Finding: "no overlay root: " + why}
+	}
+	o := overlayRootFor(rt)
+	switch {
+	case o.Available && mode == runtime.RootfsModeVirtiofs:
+		return check{Name: "rootfs", State: stateInfo,
+			Finding: "overlay root available, and BRIG_ROOTFS_MODE=virtiofs keeps the runtime's own root"}
+	case o.Available:
+		return check{Name: "rootfs", State: statePass, Finding: "overlay root available"}
+	case mode == runtime.RootfsModeOverlayBlock:
+		return check{Name: "rootfs", State: stateFail,
+			Finding: "overlay root not available, and BRIG_ROOTFS_MODE=overlay-block asks for it: " + o.Why,
+			Fix:     "fix the above, or unset BRIG_ROOTFS_MODE to boot on the runtime's own root"}
+	}
+	return check{Name: "rootfs", State: stateInfo, Finding: "overlay root not available: " + o.Why}
+}
+
+// bundleCheck reports a brig inside a runtime bundle's tree that was started
+// without the launcher. There is no line on any other host, and it leaves the
+// exit status alone, as doctor's other host findings do.
+func bundleCheck() (check, bool) {
+	exe, err := doctorExecutable()
+	if err != nil {
+		return check{}, false
+	}
+	env, missing := runtime.MissingBundleEnv(exe)
+	if !missing {
+		return check{}, false
+	}
+	return check{Name: "bundle", State: stateFail,
+		Finding: env.Missing() + ", so brig will not find the bundle's CNI plugins or boot assets",
+		Fix:     fmt.Sprintf("run brig from %s: %s, or load the environment: . %s", env.Launchers, env.Fix(), env.File),
+	}, true
 }
 
 // bootCheck reports whether the kernel and initrd an unmodified image boots on
@@ -442,34 +588,44 @@ func bootCheck(rt runtime.Runtime) check {
 }
 
 // verifyCheck names the signature tooling and the mode it runs under. It reads
-// BRIG_VERIFY through the same strict parser a run does, so a typo in it is
-// named here rather than swallowed. Diagnostic throughout: doctor boots
-// nothing, so even require-with-no-cosign -- which would refuse every real boot
-// -- is reported for the reader to act on rather than made this command's exit
-// code.
-func verifyCheck() check {
-	mode, err := verify.ParseModeStrict(os.Getenv("BRIG_VERIFY"))
+// the mode the way a run of the agent does, per-agent first and through the
+// same strict parser, so a typo in it is named here rather than swallowed, and
+// BRIG_<AGENT>_VERIFY=require is not reported as warn. The row quotes the
+// variable the mode came from. Diagnostic throughout: doctor boots nothing, so
+// even require-with-no-cosign -- which would refuse every real boot -- is
+// reported for the reader to act on rather than made this command's exit code.
+func verifyCheck(agent string, policy verify.Policy) check {
+	mode, from, err := wrap.HostVerifyMode(agent)
 	if err != nil {
 		return check{Name: "verify", State: stateFail, Finding: err.Error(),
-			Fix: "set BRIG_VERIFY to off, warn or require"}
-	}
-	policy := verify.DefaultPolicy()
-	if bin := os.Getenv("BRIG_COSIGN_BIN"); bin != "" {
-		policy.Cosign = bin
+			Fix: "set " + from + " to off, warn or require"}
 	}
 	switch path, ok := policy.Tooling(); {
 	case ok:
 		return check{Name: "verify", State: statePass,
-			Finding: fmt.Sprintf("cosign at %s, BRIG_VERIFY=%s", path, mode)}
+			Finding: fmt.Sprintf("cosign at %s, %s=%s", path, from, mode)}
 	case mode == verify.Require:
 		return check{Name: "verify", State: stateFail,
-			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s", policy.CosignMissing(), mode),
-			Fix:     "supply cosign, or set BRIG_VERIFY=warn"}
+			Finding: fmt.Sprintf("%s, %s=%s", policy.CosignMissing(), from, mode),
+			Fix:     "supply cosign, or set " + from + "=warn"}
 	default:
 		return check{Name: "verify", State: statePass,
-			Finding: fmt.Sprintf("%s, BRIG_VERIFY=%s (images boot unchecked)",
-				policy.CosignMissing(), mode)}
+			Finding: fmt.Sprintf("%s, %s=%s (images boot unchecked)",
+				policy.CosignMissing(), from, mode)}
 	}
+}
+
+// trustCheck names the image trust policy when the host replaced the shipped
+// one. Only then: on a host that sets nothing the row says the same thing
+// every time, and readers learn to skip a line like that. Informational, since
+// a replaced policy is the host owner's choice. It still gets its own row with
+// all three settings, because an image check that says ok means ok against
+// this policy, and an identity regexp that matches every certificate passes
+// everything.
+func trustCheck(policy verify.Policy) check {
+	return check{Name: "trust", State: stateInfo,
+		Finding: fmt.Sprintf("image trust policy replaced: registry %s, identity %s, issuer %s",
+			policy.Registry, policy.Identity, policy.Issuer)}
 }
 
 // profilesCheck reports how many profiles loaded and from where, and names any
@@ -622,7 +778,7 @@ func brigdHolder(socket string) (running bool, pid string) {
 // the image. Diagnostic: a check that reaches a registry and a signature is not
 // one to hang an exit code on, so a mismatch prints !! and its fix and leaves
 // the status alone.
-func imageCheck(agent *profile.Profile, runtimeOK bool) check {
+func imageCheck(agent *profile.Profile, runtimeOK bool, policy verify.Policy) check {
 	if agent == nil {
 		return check{Name: "image", State: stateInfo,
 			Finding: "pass an agent to check its image: brig doctor claude"}
@@ -633,10 +789,6 @@ func imageCheck(agent *profile.Profile, runtimeOK bool) check {
 	if agent.Image == "" {
 		return check{Name: "image", State: stateInfo,
 			Finding: fmt.Sprintf("no image is published for %s -- build it yourself and pass --image", agent.Name)}
-	}
-	policy := verify.DefaultPolicy()
-	if bin := os.Getenv("BRIG_COSIGN_BIN"); bin != "" {
-		policy.Cosign = bin
 	}
 	// No local digest: doctor has no runtime store to compare against here, and
 	// the question it asks is what the registry serves for this reference, not

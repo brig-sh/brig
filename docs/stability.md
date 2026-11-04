@@ -94,19 +94,25 @@ spelling with its replacement.
 A spelling is removed only in a minor release, and at least one release after
 its first notice. `brig run` is never removed.
 
-The retired spellings that still work today are removed in v0.5.0. v0.3.0
-removed only `brig shell` and the `hostCredential:` profile key, and v0.4.0
-removed none.
+A removed spelling is refused rather than ignored. A removed command or
+subcommand is a usage error, with exit code 2, that names its replacement. A
+removed run-line flag is refused the same way before the ref, and after the
+ref it is the agent's own. A removed profile key fails the profile, and a
+removed setting stops the run, each naming its replacement.
+[migration.md](migration.md) lists each one with the release that removed
+it.
 
-Three exceptions:
+v0.3.0 removed `brig shell` and the `hostCredential:` profile key, and v0.4.0
+removed none. v0.5.0 removed the rest of the retired spellings. Among them
+are the profile keys `forward:`, `statePaths:`, `shell:` and `gui:`, and the
+`BRIG_TEMPLATE_DIR` setting, which printed no notice at run time.
+
+Two exceptions:
 
 - `brig exec` names no release. It stays until `brig sh` can pipe a command's
   output ([#335](https://github.com/brig-sh/brig/issues/335)). Its notice says
   so. When that lands, its notice will name a release at least one release
   ahead.
-- The profile keys `forward:`, `statePaths:`, `shell:` and `gui:`, and the
-  `BRIG_TEMPLATE_DIR` setting, print no notice at run time. They are also
-  removed in v0.5.0, and [migration.md](migration.md) says so for each.
 - The flat form of a policy document is removed in v0.6.0. v0.5.0 is the
   first release that prints its notice, from `brig policy check`. See
   [Policy documents](migration.md#policy-documents).

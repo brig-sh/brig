@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Refuse documentation that teaches a command spelling brig is about to remove.
+# Refuse documentation that teaches a command spelling brig retired or removed.
 #
-# brig renamed most of its verbs during the 0.1 series. Every old spelling still
-# works and prints one line naming its replacement, and all of them but
-# `brig exec` are removed in v0.5.0. That grace period is exactly what makes the
-# problem invisible: a doc teaching `brig profiles` is not broken today, so
-# nothing fails and no reader complains, and it becomes wrong on the release
-# that drops the alias. Issue #111 asks for this to be checked rather than
-# reviewed by eye, so it does not rot the first time a doc is edited.
+# brig renamed most of its verbs during the 0.1 series. Each old spelling
+# worked for a while and printed one line naming its replacement, and v0.5.0
+# removed all of them but `brig exec`, which still works. That grace period
+# was what made the problem invisible: a doc teaching `brig profiles` was not
+# broken while the alias worked, so nothing failed and no reader complained,
+# and it became wrong on the release that dropped the alias. Issue #111 asks
+# for this to be checked rather than reviewed by eye, so it does not rot the
+# first time a doc is edited.
 #
 # Only COMMANDS are checked, not prose. A retired spelling is reported when it
 # appears inside inline code or in a fenced code block, because that is where a
@@ -17,8 +18,17 @@
 #
 # Three files are exempt, because naming the retired spellings is their job:
 # docs/migration.md holds the old-to-new mapping, docs/stability.md documents
-# the deprecation window and quotes the notice, and a changelog is allowed to
-# say what a release retired.
+# the deprecation window, and a changelog is allowed to say what a release
+# retired or removed.
+#
+# docs/herd.md is exempt from one pattern only, the exec one, because it has
+# to teach `brig exec`. Its ssh ProxyCommand carries an SSH stream over the
+# exec, which needs a command with no guest pty and no login shell -- `brig
+# sh` asks for a pty and runs `bash -lc`, whose startup output would corrupt
+# the stream. `brig exec` is the only verb that gives both until #335 lands,
+# so removing it breaks herd, and skips_pattern is where that shows. The
+# other patterns stay live on the page. The retired-ok marker cannot do this:
+# the ProxyCommand is in a fenced block.
 #
 # Elsewhere, a single PROSE line can opt out with a `retired-ok` marker in an
 # HTML comment, for a passage that names an old spelling to describe it rather
@@ -27,9 +37,9 @@
 # old spelling defeats the check. The marker does not work inside a fenced
 # block, where it would become part of the code a reader copies.
 #
-# Short flags are scoped to the run line. `-n` is retired on `brig run`, where
-# it became `<agent>@<label>`, and is current on `brig policy attach`, so the
-# verb has to be part of the pattern.
+# Short flags are scoped to the run line. `-n` was removed from `brig run`,
+# where it became `<agent>@<label>`, and is current on `brig policy attach`,
+# so the verb has to be part of the pattern.
 #
 # Usage: check-retired-spellings.sh [file...]
 #        With no argument, every tracked Markdown file is checked.
@@ -41,6 +51,14 @@ set -uo pipefail
 is_exempt() {
 	case "$1" in
 	docs/migration.md | docs/stability.md | CHANGELOG.md) return 0 ;;
+	esac
+	return 1
+}
+
+# skips_pattern <file> <pattern>: one pattern switched off for one file.
+skips_pattern() {
+	case "$1:$2" in
+	"docs/herd.md:brig (exec|shell)\b") return 0 ;;
 	esac
 	return 1
 }
@@ -117,6 +135,10 @@ while IFS= read -r f; do
 	[ -n "$commands" ] || continue
 	i=0
 	while [ "$i" -lt "${#patterns[@]}" ]; do
+		if skips_pattern "$f" "${patterns[$i]}"; then
+			i=$((i + 1))
+			continue
+		fi
 		hits=$(printf '%s\n' "$commands" | grep -E ":.*${patterns[$i]}" || true)
 		if [ -n "$hits" ]; then
 			while IFS= read -r hit; do
@@ -138,8 +160,8 @@ EOF
 if [ "$status" -ne 0 ]; then
 	cat <<'EOF'
 
-The commands above teach a spelling that brig removes in v0.5.0, or, for
-`brig exec`, once `brig sh` can pipe a command's output.
+The commands above teach a spelling that brig removed in v0.5.0, or, for
+`brig exec`, one it removes once `brig sh` can pipe a command's output.
 Every current spelling, and the whole mapping, is in docs/migration.md.
 
 If a passage legitimately needs to name a retired spelling, put that discussion

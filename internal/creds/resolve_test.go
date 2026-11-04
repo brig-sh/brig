@@ -88,7 +88,7 @@ func TestTheErrorDoesNotCarryTheBrigPrefix(t *testing.T) {
 // secrets raises no keychain prompt. The store is not merely unread: it is
 // never opened, which is where the prompt would come from.
 func TestResolveSecretsWithNoRequirementsNeverReads(t *testing.T) {
-	p := profileWith(t, "forward:\n  - GH_TOKEN\n")
+	p := profileWith(t, "env:\n  - name: GH_TOKEN\n    ref: env.GH_TOKEN\n")
 	res, err := ResolveSecrets(p, "brig-x", func() (SecretReader, error) {
 		panic("the store was opened for a profile that declares no secrets")
 	}, noEnv)
@@ -426,5 +426,21 @@ func TestMissingSecretsBlockLinesUpTheCommands(t *testing.T) {
 		"                          ↳ run `claude` on the host once to log in"
 	if len(res.Warnings) != 1 || res.Warnings[0] != want {
 		t.Errorf("warnings = %q\nwant one block:\n%s", res.Warnings, want)
+	}
+}
+
+// The route comes from the broker's "route <name>: " prefix, and is empty
+// when the message has none.
+func TestBrokerCredentialErrorRoute(t *testing.T) {
+	for msg, want := range map[string]string{
+		"route aws: expired":   "aws",
+		"route my-aws: x: y":   "my-aws",
+		"the broker is down":   "",
+		"route : empty name":   "",
+		"route a b: two words": "",
+	} {
+		if got := NewBrokerCredentialError("s", msg).Route; got != want {
+			t.Errorf("%q: route %q, want %q", msg, got, want)
+		}
 	}
 }
