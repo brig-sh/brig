@@ -256,6 +256,7 @@ names a profile can import and which names it cannot. See
 | `--identity self` | with `--aws-profile`: the sandbox gets your own identity in that profile |
 | `--source-identity <id>` | with `--role-arn`: the source identity of the role session, in place of the one Brig reads from the profile |
 | `--session-duration <d>` | with `--role-arn`: the lifetime of the role session, `25m` to `1h`. Default `30m` |
+| `--policy-arns <arn>[,<arn>...]` | with `--role-arn`: managed policies that narrow the role session |
 
 To import only some secrets, add their names (`[name...]`) after the profile.
 
@@ -646,6 +647,18 @@ A role session lasts 30 minutes. This bounds how long a leaked key works.
 IAM has no condition key on session length, so the role cannot enforce it.
 Brig requests it.
 
+`--policy-arns` narrows the role session with managed policies. The keys get
+only what both the role and the policies allow, never more than the role.
+One role can then serve sandboxes that need different access. The policies
+must be in the role's account, or be AWS managed policies. Self mode
+refuses the flag: `export-credentials` cannot narrow a session.
+
+```bash
+brig secret import <profile> aws-creds --aws-profile dev \
+  --role-arn arn:aws:iam::111122223333:role/brig-coding-agent \
+  --policy-arns arn:aws:iam::111122223333:policy/brig-read-ec2
+```
+
 Before it stores anything, `import` checks the profile with `aws`:
 
 1. `sts get-caller-identity`, for the identity of the profile.
@@ -654,8 +667,9 @@ Before it stores anything, `import` checks the profile with `aws`:
    command that sets one.
 3. In role mode, one `sts assume-role` of the role. Its keys are discarded.
 
-Then it stores the pointer: the profile, the mode, the role and the source
-identity. `--dry-run` runs the same checks and stores nothing. In self mode,
+Then it stores the pointer: the profile, the mode, the role, the source
+identity and any session policies. The check in step 3 passes the session
+policies too, so a policy that does not exist fails at import. `--dry-run` runs the same checks and stores nothing. In self mode,
 `import` prints the identity the sandbox will get. `brig secret ls` shows
 `aws:<profile>` in the `FROM` column.
 

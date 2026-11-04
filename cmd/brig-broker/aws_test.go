@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -159,7 +160,7 @@ func TestRegisterReturnsRegion(t *testing.T) {
 		t.Errorf("Regions[aws] = %q, want us-east-1", got)
 	}
 	want := injector.VendInfo{Mode: "role", AWSProfile: "dev", RoleARN: "arn:aws:iam::111122223333:role/brig-sandbox"}
-	if got := added.Vends["aws"]; got != want {
+	if got := added.Vends["aws"]; !reflect.DeepEqual(got, want) {
 		t.Errorf("Vends[aws] = %+v, want %+v", got, want)
 	}
 	// A sandbox with no route that vends is answered with neither.

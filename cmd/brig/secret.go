@@ -116,6 +116,9 @@ flags:
       --session-duration D
                     with --role-arn: role session lifetime, 25m to 1h
                     (default 30m)
+      --policy-arns ARN[,ARN...]
+                    with --role-arn: managed policies that narrow the role
+                    session. The keys get what both allow
 
 The value is never an argument, so it stays out of ps and out of your shell
 history. Without -f the value is read from stdin, and one trailing line ending

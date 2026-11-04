@@ -1,6 +1,8 @@
 package awscred
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -88,5 +90,33 @@ func TestPointerSessionBounds(t *testing.T) {
 	self := Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeSelf, SessionSeconds: 2700}
 	if err := self.Validate(); err == nil {
 		t.Error("self mode with a session was accepted")
+	}
+}
+
+// A pointer stored before session policies existed has no policyArns, and
+// must come back as one with none, and marshal as it did, so it fetches as
+// before.
+func TestPointerPolicyARNsRoundTrip(t *testing.T) {
+	old := `{"kind":"aws","awsProfile":"p","mode":"role","roleArn":"arn:aws:iam::0:role/r"}`
+	p, err := ParsePointer([]byte(old))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PolicyARNs != nil {
+		t.Errorf("PolicyARNs = %v, want nil", p.PolicyARNs)
+	}
+	doc, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(doc), "policyArns") {
+		t.Errorf("a pointer with no session policies marshals with the key: %s", doc)
+	}
+	p, err = ParsePointer([]byte(`{"kind":"aws","awsProfile":"p","mode":"role","roleArn":"arn:aws:iam::0:role/r","policyArns":["arn:aws:iam::0:policy/a"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.PolicyARNs, []string{"arn:aws:iam::0:policy/a"}) {
+		t.Errorf("PolicyARNs = %v", p.PolicyARNs)
 	}
 }

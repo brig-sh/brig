@@ -509,6 +509,28 @@ func TestServeRoutesSaysWhoseAWSIdentity(t *testing.T) {
 	}
 }
 
+// A role narrowed by session policies is named with them. Without them the
+// line would claim more than the sandbox can do.
+func TestServeRoutesNamesSessionPolicies(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	c := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	shortStateDir(t)
+	c.broker = &fakeBroker{vends: map[string]injector.VendInfo{
+		"aws": {Mode: "role", AWSProfile: "p", RoleARN: "arn:aws:iam::111122223333:role/r",
+			PolicyARNs: []string{"arn:aws:iam::111122223333:policy/a", "arn:aws:iam::111122223333:policy/b"}},
+	}}
+	if err := c.serveRoutes(creds.Set{}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Err.(*bytes.Buffer).String()
+	want := "route aws: AWS role arn:aws:iam::111122223333:role/r with session policies " +
+		"arn:aws:iam::111122223333:policy/a, arn:aws:iam::111122223333:policy/b, assumed from your profile p"
+	if strings.Count(got, want) != 1 {
+		t.Errorf("want %q once in:\n%s", want, got)
+	}
+}
+
 // awsEndpoint binds claude-code to the aws preset, whose guest env names
 // {route.region}.
 const awsEndpoint = `apiVersion: brig.sh/v1alpha1

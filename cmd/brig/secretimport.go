@@ -78,11 +78,15 @@ type importOptions struct {
 	// `--session-duration 0` is a mistake to refuse, not the default.
 	session    time.Duration
 	sessionSet bool
+	// policyARNs is --policy-arns as typed, and policyARNsSet whether it was
+	// given: an empty value is a mistake to refuse, not "no policies".
+	policyARNs    string
+	policyARNsSet bool
 }
 
 // anyAWSFlag is whether the line carried a flag only an aws source takes.
 func (o importOptions) anyAWSFlag() bool {
-	return o.awsProfile != "" || o.roleARN != "" || o.identity != "" || o.sourceIdentity != "" || o.sessionSet
+	return o.awsProfile != "" || o.roleARN != "" || o.identity != "" || o.sourceIdentity != "" || o.sessionSet || o.policyARNsSet
 }
 
 // awsFlagName is the first aws flag given, for the refusal that names it.
@@ -96,6 +100,8 @@ func (o importOptions) awsFlagName() string {
 		return "--identity"
 	case o.sourceIdentity != "":
 		return "--source-identity"
+	case o.policyARNsSet:
+		return "--policy-arns"
 	}
 	return "--session-duration"
 }
@@ -368,8 +374,14 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 		return hostsrc.Value{}, errors.New("--source-identity goes with --role-arn; self mode keeps no source identity")
 	case o.identity != "" && o.sessionSet:
 		return hostsrc.Value{}, errors.New("--session-duration goes with --role-arn; self mode keys expire when your profile's do")
+	case o.identity != "" && o.policyARNsSet:
+		return hostsrc.Value{}, errors.New("--policy-arns goes with --role-arn; self mode exports your keys and cannot narrow them")
 	}
 	sessionSeconds, err := sessionSeconds(o)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	policies, err := policyARNs(o)
 	if err != nil {
 		return hostsrc.Value{}, err
 	}
@@ -395,6 +407,7 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 	if o.roleARN != "" {
 		ptr.Mode, ptr.RoleARN = awscred.ModeRole, o.roleARN
 		ptr.SessionSeconds = sessionSeconds
+		ptr.PolicyARNs = policies
 		ptr.SourceIdentity = o.sourceIdentity
 		if ptr.SourceIdentity == "" {
 			if ptr.SourceIdentity, err = awscred.SourceIdentityFrom(caller); err != nil {
@@ -420,6 +433,23 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 		return hostsrc.Value{}, err
 	}
 	return hostsrc.Value{Bytes: doc, From: "aws:" + o.awsProfile}, nil
+}
+
+// policyARNs is the list --policy-arns names, or nil when it was not given.
+// An empty entry is refused rather than skipped: a list that came out empty
+// would store no policies, and the sandbox would get the whole role.
+func policyARNs(o importOptions) ([]string, error) {
+	if !o.policyARNsSet {
+		return nil, nil
+	}
+	list := strings.Split(o.policyARNs, ",")
+	for i, a := range list {
+		list[i] = strings.TrimSpace(a)
+		if list[i] == "" {
+			return nil, fmt.Errorf("--policy-arns has an empty entry in %q; give one or more policy ARNs separated by commas", o.policyARNs)
+		}
+	}
+	return list, nil
 }
 
 // sessionSeconds is the session --session-duration asks for, or 0 for the
@@ -718,6 +748,7 @@ func parseImport(args []string) (importOptions, error) {
 	fs.StringVar(&o.identity, "identity", "", "")
 	fs.StringVar(&o.sourceIdentity, "source-identity", "", "")
 	fs.DurationVar(&o.session, "session-duration", 0, "")
+	fs.StringVar(&o.policyARNs, "policy-arns", "", "")
 
 	var words []string
 	for rest := args; ; {
@@ -731,7 +762,7 @@ func parseImport(args []string) (importOptions, error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity and --session-duration)", msg)
+			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity, --session-duration and --policy-arns)", msg)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -741,6 +772,7 @@ func parseImport(args []string) (importOptions, error) {
 	}
 	o.command = seen(fs, "from-command")
 	o.sessionSet = seen(fs, "session-duration")
+	o.policyARNsSet = seen(fs, "policy-arns")
 	// Only "self" is an identity: it is the one non-role answer, and a
 	// misspelling must not fall through to the role path.
 	if o.identity != "" && o.identity != "self" {
