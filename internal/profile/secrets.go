@@ -20,6 +20,10 @@ const (
 	// It carries no locator: the profile is shared, and which local AWS
 	// profile to use is for each machine to say at import.
 	SourceAWS = "aws"
+	// SourceGCloud imports a pointer at the host's own gcloud login, never a
+	// token. It carries no locator, for SourceAWS's reason: which local
+	// gcloud configuration to use is for each machine to say at import.
+	SourceGCloud = "gcloud"
 )
 
 // Source is one place a secret's value can be imported from.
@@ -65,7 +69,8 @@ func (s Source) locatorValue() string {
 	case SourceEnv:
 		return s.Var
 	}
-	// SourceAWS has none: its Locator is "aws:".
+	// SourceAWS and SourceGCloud have none: their Locators are "aws:" and
+	// "gcloud:".
 	return ""
 }
 

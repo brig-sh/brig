@@ -208,6 +208,23 @@ func (c CLI) Mint(ctx context.Context, p Pointer) (Token, error) {
 	return Token{Value: doc.Token, Expiry: now().Add(life), Email: email}, nil
 }
 
+// Account is the account configuration logs in as, or "" when it has none.
+// The import names it beside the service account it impersonates, so the user
+// sees which of their logins the sandbox's access rests on, and records it in
+// a self pointer. An account is an email address, not a credential.
+func (c CLI) Account(ctx context.Context, configuration string) (string, error) {
+	// The name goes on argv, so it must not read as a flag.
+	if !configurationRE.MatchString(configuration) {
+		return "", fmt.Errorf("the gcloud configuration name %q is not usable: use a lowercase letter first, then lowercase letters, digits and -", configuration)
+	}
+	args := []string{"config", "get-value", "account", "--configuration", configuration, "--verbosity=error"}
+	out, err := c.output(ctx, Pointer{Configuration: configuration}, args)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // tokenInfo returns the remaining life of token and the identity it belongs
 // to. No error it returns carries the token or the response body.
 func (c CLI) tokenInfo(ctx context.Context, token string) (time.Duration, string, error) {

@@ -238,15 +238,15 @@ func validateSource(name string, s Source) error {
 		want, extra = "path", []string{"service", "var"}
 	case SourceEnv:
 		want, extra = "var", []string{"service", "path"}
-	case SourceAWS:
+	case SourceAWS, SourceGCloud:
 		// No locator to want; all three are misplaced.
 		extra = []string{"service", "path", "var"}
 	case "":
-		return fmt.Errorf("a source of secret %q has no from: (%s, %s, %s or %s)",
-			name, SourceKeychain, SourceFile, SourceEnv, SourceAWS)
+		return fmt.Errorf("a source of secret %q has no from: (%s, %s, %s, %s or %s)",
+			name, SourceKeychain, SourceFile, SourceEnv, SourceAWS, SourceGCloud)
 	default:
-		return fmt.Errorf("secret %q names source %q, which is not %s, %s, %s or %s",
-			name, s.From, SourceKeychain, SourceFile, SourceEnv, SourceAWS)
+		return fmt.Errorf("secret %q names source %q, which is not %s, %s, %s, %s or %s",
+			name, s.From, SourceKeychain, SourceFile, SourceEnv, SourceAWS, SourceGCloud)
 	}
 	// The misplaced locator is reported before the missing one, because a
 	// source carrying the wrong key is missing the right one by construction

@@ -556,6 +556,7 @@ var groups = map[string][]sub{
 			values: map[string]operand{
 				"--from-command": opNothing, "--aws-profile": opNothing, "--role-arn": opNothing,
 				"--identity": opNothing, "--source-identity": opNothing, "--session-duration": opNothing,
+				"--gcloud-configuration": opNothing, "--impersonate-service-account": opNothing,
 			},
 			operands: []operand{opAgent},
 		},
