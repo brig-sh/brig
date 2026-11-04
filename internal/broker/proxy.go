@@ -212,12 +212,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if rt.spec.Request != nil {
 		if ref := allow(rt.spec.Request.Allow, r.Method, p.rest); ref != nil {
-			a.check = "request.allow." + ref.field
-			a.policy, a.rule, a.reason = rt.policy, ref.rule(p.route), ref.reason
-			rec.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			rec.Header().Set("X-Content-Type-Options", "nosniff")
-			rec.WriteHeader(http.StatusForbidden)
-			_, _ = io.WriteString(rec, ref.body(rt.policy, p.route, p.sandbox))
+			refuseRule(rec, a, rt, p, "request.allow."+ref.field, ref.rule(routeRule(p.route)), ref.reason)
+			return
+		}
+	}
+	// A route with services forwards to the host of the service its path
+	// names, the path after the service.
+	upstream, out := rt.upstream, p
+	if rt.services != nil {
+		var ok bool
+		if upstream, out, ok = serviceTarget(rec, r, a, rt, p); !ok {
 			return
 		}
 	}
@@ -260,13 +264,147 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.forward(rec, r, a, p, rt, token, wl, doc, value, held)
+	h.forward(rec, r, a, out, rt, upstream, token, wl, doc, value, held)
 }
 
-// forward sends the request to the route's upstream with the credential
-// injected, and streams the response back with the credential redacted.
+// refuseRule answers 403 for a request that a rule of the policy refused,
+// with a body that names the rule, and puts the rule on the audit line.
+func refuseRule(w http.ResponseWriter, a *auditLine, rt *route, p routePath, check, rule, reason string) {
+	a.check = check
+	a.policy, a.rule, a.reason = rt.policy, rule, reason
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w, refusalBody(rt.policy, p.route, rule, reason, p.sandbox))
+}
+
+// methodOverrides are the headers that tell a server to serve a request as
+// another method. Google APIs honour X-HTTP-Method-Override, so a GET that
+// request.allow.methods let through would be served as the DELETE it names.
+// The other two cost nothing to refuse, and some servers read them.
+var methodOverrides = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"}
+
+// queryOverrides are the query parameters that Google APIs read as the
+// method to serve. They are matched in any case: whether every Google
+// front end reads them case-sensitively is not something brig can check,
+// and refusing a parameter that differs only in case costs a client
+// nothing.
+var queryOverrides = []string{"$httpMethod", "httpMethod"}
+
+// queryOverride returns the method-override parameter rawQuery names, or "".
+// It reads the query itself instead of through url.ParseQuery, which drops a
+// pair it cannot parse, such as one after a semicolon, while the upstream
+// gets the query as the guest wrote it. Any pair that names the parameter
+// counts, whatever its value and however often it appears, and a key that
+// does not decode is compared as written.
+func queryOverride(rawQuery string) string {
+	for _, pair := range strings.FieldsFunc(rawQuery, func(c rune) bool { return c == '&' || c == ';' }) {
+		key, _, _ := strings.Cut(pair, "=")
+		if k, err := url.QueryUnescape(key); err == nil {
+			key = k
+		}
+		for _, name := range queryOverrides {
+			if strings.EqualFold(key, name) {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+// serviceTarget applies the checks of a route with services, and returns the
+// origin of the service the path names and the path with the service cut
+// off. It answers the request itself and returns false when a check refuses
+// it. Every check runs before the credential is read.
+func serviceTarget(w http.ResponseWriter, r *http.Request, a *auditLine, rt *route,
+	p routePath) (*url.URL, routePath, bool) {
+	// The service is read from the decoded path and the path is sent as the
+	// guest escaped it, so the two must name the same service. canonical
+	// has refused an escaped slash already; this refuses any other escape in
+	// the service segment.
+	name, rest := cutService(p.rest)
+	ename, erest := cutService(p.escapedRest)
+	if name != ename {
+		a.check = "path"
+		http.Error(w, "brig broker: the service in the path is escaped", http.StatusBadRequest)
+		return nil, p, false
+	}
+	// The override is refused rather than dropped: a client that sends it
+	// asked for the other method, and sending the request as the method it
+	// was checked as would do something the client did not ask for.
+	// The refusal names the route, not a service: the route refuses an
+	// override whatever service the path names.
+	for _, hdr := range methodOverrides {
+		if len(r.Header.Values(hdr)) > 0 {
+			refuseRule(w, a, rt, p, "request.method-override", routeRule(p.route),
+				"header "+hdr+" names another method; send the request with the method it is for")
+			return nil, p, false
+		}
+	}
+	if param := queryOverride(r.URL.RawQuery); param != "" {
+		refuseRule(w, a, rt, p, "request.method-override", routeRule(p.route),
+			"query parameter "+param+" names another method; send the request with the method it is for")
+		return nil, p, false
+	}
+	u := rt.services[name]
+	if u == nil {
+		reason := fmt.Sprintf("service %q is not in the list %s", name, list(rt.serviceNames))
+		if name == "" {
+			reason = "the path names no service of the list " + list(rt.serviceNames)
+		}
+		refuseRule(w, a, rt, p, "request.services", routeRule(p.route)+".services", reason)
+		return nil, p, false
+	}
+	// A batch request carries many requests in its body, each with its own
+	// method and path, and request.allow sees only the outer one.
+	if seg, _, _ := strings.Cut(strings.TrimPrefix(rest, "/"), "/"); isBatch(seg) {
+		refuseRule(w, a, rt, p, "request.batch", routeRule(p.route)+".services["+name+"]",
+			"a batch request is not taken; send each request on its own")
+		return nil, p, false
+	}
+	if svc := serviceSpec(&rt.spec, name); svc != nil && svc.Request != nil {
+		if ref := allow(svc.Request.Allow, r.Method, rest); ref != nil {
+			owner := routeRule(p.route) + ".services[" + name + "]"
+			refuseRule(w, a, rt, p, "request.allow."+ref.field, ref.rule(owner), ref.reason)
+			return nil, p, false
+		}
+	}
+	p.rest, p.escapedRest = rest, erest
+	return u, p, true
+}
+
+// serviceSpec returns the service name of spec, or nil.
+func serviceSpec(spec *v1alpha1.Route, name string) *v1alpha1.Service {
+	for i := range spec.Services {
+		if spec.Services[i].Name == name {
+			return &spec.Services[i]
+		}
+	}
+	return nil
+}
+
+// cutService splits /<service>/<rest> into the service and /<rest>. The path
+// of the bare route, /, names no service.
+func cutService(path string) (service, rest string) {
+	service, rest, _ = strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	return service, "/" + rest
+}
+
+// isBatch reports whether seg, the first segment after the service, is the
+// batch endpoint. Its case and any ;parameter are ignored, since a server
+// may ignore them too.
+func isBatch(seg string) bool {
+	if i := strings.IndexAny(seg, semicolons); i >= 0 {
+		seg = seg[:i]
+	}
+	return strings.EqualFold(seg, "batch")
+}
+
+// forward sends the request to upstream with the credential injected, and
+// streams the response back with the credential redacted. p.rest is the path
+// the upstream gets.
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, p routePath, rt *route,
-	token string, wl secret.Workload, doc []byte, value string, held *heldBody) {
+	upstream *url.URL, token string, wl secret.Workload, doc []byte, value string, held *heldBody) {
 	in := rt.spec.Inject
 	trip := &upstreamTrip{h: h, route: rt, cred: rt.spec.Credential, inject: in, workload: wl, doc: doc, audit: a, body: held}
 	trip.addSecret(value)
@@ -276,8 +414,8 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, a *auditLine, 
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = &url.URL{
-				Scheme:   rt.upstream.Scheme,
-				Host:     rt.upstream.Host,
+				Scheme:   upstream.Scheme,
+				Host:     upstream.Host,
 				Path:     p.rest,
 				RawPath:  p.escapedRest,
 				RawQuery: r.URL.RawQuery,
