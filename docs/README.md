@@ -10,6 +10,7 @@ New to Brig? Read [the README](../README.md), then follow the
 | Install Brig, or check a download | [Install](install.md) |
 | Run a first agent on a throwaway project | [Quickstart](quickstart.md) |
 | Run a second session, keep a guest home, or change the project | [Sessions, homes and projects](sessions.md) |
+| Move my Claude Desktop or Claude Code sessions into a sandbox | [Moving Claude sessions](moving-claude-sessions.md) |
 | Start an agent logged in | [Authentication](authentication.md) |
 | Give the agent Git access over HTTPS | [Git access in the guest](authentication.md#git-access-in-the-guest) |
 | Store a token or a certificate for an agent | [Secrets](secrets.md) |
