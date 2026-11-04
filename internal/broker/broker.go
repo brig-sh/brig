@@ -1,8 +1,10 @@
 // Package broker is the credential broker of brokered routes: it verifies the
 // session token a guest sends, refuses a request that holds a token anywhere
 // but its carrier, applies the route's request.allow, injects the credential
-// and forwards the request to the route's upstream. A route that vends
-// answers the guest with credentials from a Vendor instead of forwarding.
+// and forwards the request to the route's upstream. A gcp route has no
+// upstream: the first segment of its path names a service, and the request
+// goes to that service's host. A route that vends answers the guest with
+// credentials from a Vendor instead of forwarding.
 //
 // A guest holds a session token per route and no credential. A request names
 // its sandbox and route in the path, /<sandbox-id>/r/<route>/<rest>, and the
@@ -102,6 +104,11 @@ type Config struct {
 	// vend would send it upstream as a header, which names the user's AWS
 	// profile and role, so such a route answers 502 and sends nothing.
 	VendDoc func(doc []byte) bool
+
+	// serviceUpstream returns the origin a service of a gcp route is
+	// forwarded to. It is nil outside tests, where every service goes to
+	// https://<service>.googleapis.com. A test points it at its own server.
+	serviceUpstream func(name string) string
 }
 
 // DefaultReplayBudget is the default of Config.ReplayBudget.
@@ -138,12 +145,15 @@ type Sandbox struct {
 //
 // Route must be a route that policy.ExpandRoute returned, and the broker does
 // not validate it again. It depends on what Route.Validate guarantees: the
-// upstream is a canonical https:// origin, a credential is named (a route
+// upstream is a canonical https:// origin, or the route is a gcp route with
+// no upstream and at least one service, a credential is named (a route
 // whose inject.tls has a clientCertificate and sets no header needs none),
 // inject carries the credential in headers.set or basicAuth or names the
 // secrets of inject.tls, Authorization is in
-// headers.remove, no header list names a header the broker owns, and
-// request.allow.repos appears only on a github-token route.
+// headers.remove, no header list names a header the broker owns,
+// request.allow.repos appears only on a github-token route, and a gcp route
+// has no request of its own, only one per service. AddSandbox still checks
+// each service name, since it becomes part of a host name.
 type Route struct {
 	// Policy is the name of the policy that declares the route. A refusal
 	// names it.
@@ -167,6 +177,8 @@ type Handler struct {
 	vendor    Vendor
 	vendOnly  func(r *http.Request) bool
 	vendDoc   func(doc []byte) bool
+	// serviceUpstream is Config.serviceUpstream, defaulted.
+	serviceUpstream func(name string) string
 
 	mu        sync.RWMutex
 	sandboxes map[string]*sandbox
@@ -208,6 +220,11 @@ type route struct {
 	policy   string
 	spec     v1alpha1.Route
 	upstream *url.URL
+	// services is the origin of each service of a gcp route, by name, and
+	// nil on any other route. Such a route has no upstream.
+	services map[string]*url.URL
+	// serviceNames are the keys of services, sorted, for a refusal to list.
+	serviceNames []string
 
 	// cur is the transport of a route with inject.tls, built on first use for
 	// this sandbox alone and replaced when the CA bundle or the certificate
@@ -238,8 +255,11 @@ func New(cfg Config) (*Handler, error) {
 		vendor:    cfg.Vendor,
 		vendOnly:  cfg.VendOnly,
 		vendDoc:   cfg.VendDoc,
-		certs:     map[string]*certEntry{},
-		cas:       map[string]*caEntry{},
+		// The default names the host from a service brig wires, and
+		// AddSandbox refuses any other, so a route cannot name a host.
+		serviceUpstream: cfg.serviceUpstream,
+		certs:           map[string]*certEntry{},
+		cas:             map[string]*caEntry{},
 	}
 	if cfg.ReplayBudget < 0 {
 		return nil, fmt.Errorf("the broker replay budget is %d bytes; it cannot be negative", cfg.ReplayBudget)
@@ -267,6 +287,9 @@ func New(cfg Config) (*Handler, error) {
 	}
 	if h.arrival == nil {
 		h.arrival = func(string, string) (string, bool) { return "", true }
+	}
+	if h.serviceUpstream == nil {
+		h.serviceUpstream = func(name string) string { return "https://" + name + ".googleapis.com" }
 	}
 	for _, s := range cfg.Sandboxes {
 		if err := h.AddSandbox(s); err != nil {
@@ -312,9 +335,19 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 			return fmt.Errorf("sandbox %s: route %s is mode %q, and the sandbox was registered with nothing "+
 				"to serve it", s.ID, name, m)
 		}
-		// A route that vends answers the guest itself and has no upstream.
-		var u *url.URL
-		if r.Route.Vends() {
+		// A route that vends answers the guest itself and has no upstream,
+		// and a route with services has one per service instead.
+		var (
+			u        *url.URL
+			services map[string]*url.URL
+			names    []string
+		)
+		if len(r.Route.Services) > 0 {
+			var err error
+			if services, names, err = h.serviceUpstreams(r.Route); err != nil {
+				return fmt.Errorf("sandbox %s: route %s: %w", s.ID, name, err)
+			}
+		} else if r.Route.Vends() {
 			// checkDivertedRoutes reads the upstream of every route not in
 			// endpoint mode.
 			if m := r.Route.Mode; m != "" && m != v1alpha1.ModeEndpoint {
@@ -327,7 +360,8 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 				return fmt.Errorf("sandbox %s: route %s: upstream %q is not an https:// origin", s.ID, name, r.Route.Upstream)
 			}
 		}
-		sb.routes[name] = &route{policy: r.Policy, spec: *r.Route.DeepCopy(), upstream: u}
+		sb.routes[name] = &route{policy: r.Policy, spec: *r.Route.DeepCopy(), upstream: u,
+			services: services, serviceNames: names}
 	}
 	if err := checkDivertedRoutes(sb.routes); err != nil {
 		return fmt.Errorf("sandbox %s: %w", s.ID, err)
@@ -341,6 +375,39 @@ func (h *Handler) AddSandbox(s Sandbox) error {
 		h.pruneCerts()
 	}
 	return nil
+}
+
+// serviceUpstreams returns the origin of each service of r, and their names
+// sorted. Route.Validate already holds a gcp route to the services brig wires,
+// in endpoint mode. They are checked again because the name becomes part of
+// a host name, and because checkDivertedRoutes reads the upstream of a route
+// in any other mode, which a route with services does not have.
+func (h *Handler) serviceUpstreams(r v1alpha1.Route) (map[string]*url.URL, []string, error) {
+	if m := r.Mode; m != "" && m != v1alpha1.ModeEndpoint {
+		return nil, nil, fmt.Errorf("a route with services cannot be mode %q", m)
+	}
+	if r.Upstream != "" {
+		return nil, nil, fmt.Errorf("a route with services takes no upstream")
+	}
+	services := make(map[string]*url.URL, len(r.Services))
+	names := make([]string, 0, len(r.Services))
+	for _, svc := range r.Services {
+		if _, ok := v1alpha1.GCPServicePath(svc.Name); !ok {
+			return nil, nil, fmt.Errorf("service %q is not one brig wires", svc.Name)
+		}
+		if _, dup := services[svc.Name]; dup {
+			return nil, nil, fmt.Errorf("service %s is listed twice", svc.Name)
+		}
+		raw := h.serviceUpstream(svc.Name)
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return nil, nil, fmt.Errorf("service %s: upstream %q is not an https:// origin", svc.Name, raw)
+		}
+		services[svc.Name] = u
+		names = append(names, svc.Name)
+	}
+	slices.Sort(names)
+	return services, names, nil
 }
 
 // maxID is the longest sandbox id the broker takes. A sandbox id is the

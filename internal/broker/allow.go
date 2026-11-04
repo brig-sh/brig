@@ -70,16 +70,24 @@ func list(items []string) string {
 	return "[" + strings.Join(items, ", ") + "]"
 }
 
-// body renders the refusal as the 403 body.
-func (r *refusal) body(policy, route, sandbox string) string {
+// refusalBody renders a refusal of rule as the 403 body.
+func refusalBody(policy, route, rule, reason, sandbox string) string {
 	return fmt.Sprintf("brig broker refused this request\n"+
 		"policy:  %s\n"+
 		"route:   %s\n"+
 		"rule:    %s\n"+
 		"reason:  %s\n"+
-		"sandbox: %s\n", policy, route, r.rule(route), r.reason, sandbox)
+		"sandbox: %s\n", policy, route, rule, reason, sandbox)
 }
 
-func (r *refusal) rule(route string) string {
-	return "spec.routes[" + route + "].request.allow." + r.field
+// rule names the list that missed under owner, the spec path of the
+// request.allow it belongs to: spec.routes[<route>], or
+// spec.routes[<route>].services[<service>] for a service of a gcp route.
+func (r *refusal) rule(owner string) string {
+	return owner + ".request.allow." + r.field
+}
+
+// routeRule is the spec path of route.
+func routeRule(route string) string {
+	return "spec.routes[" + route + "]"
 }
