@@ -958,3 +958,141 @@ func TestAddTimeoutScalesWithVendingRoutes(t *testing.T) {
 		t.Error("Add with one vending route waited for two")
 	}
 }
+
+func gcpRoute(t *testing.T, services ...string) v1alpha1.Route {
+	r := v1alpha1.Route{Name: "gcp", Preset: v1alpha1.PresetGCP,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "gcp-secret"}}}
+	for _, s := range services {
+		r.Services = append(r.Services, v1alpha1.Service{Name: s})
+	}
+	return expand(t, r)
+}
+
+// gcloud reads one endpoint override per service, so each service the route
+// names is pointed at its own path under the route URL. The trailing slash is
+// required: gcloud joins request paths onto it.
+func TestGuestEnvGCPRoute(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("sb", []v1alpha1.Route{gcpRoute(t, "storage", "cloudresourcemanager")},
+		map[string]string{"gcp": "tok"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vars(got)
+	want := map[string]string{
+		"BRIG_GCP_URL":   "https://brig.internal/sb/r/gcp",
+		"BRIG_GCP_TOKEN": "tok",
+		"CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE":              "https://brig.internal/sb/r/gcp/storage/storage/v1/",
+		"CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDRESOURCEMANAGER": "https://brig.internal/sb/r/gcp/cloudresourcemanager/",
+		"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE":                   GuestCABundlePath,
+	}
+	for k, v := range want {
+		if env[k].Value != v {
+			t.Errorf("%s = %q, want %q", k, env[k].Value, v)
+		}
+	}
+	if _, ok := env["CLOUDSDK_API_ENDPOINT_OVERRIDES_COMPUTE"]; ok {
+		t.Error("compute is not a service of the route but has an override")
+	}
+}
+
+// The overrides come from the route's services, not from its guest block. A
+// route with services and no guest block, which the preset does not make
+// today, still points gcloud at the broker; without the overrides gcloud
+// would call the public endpoints and fail with a DNS error that names no
+// route.
+func TestGuestEnvGCPRouteWithoutAGuestBlock(t *testing.T) {
+	r := gcpRoute(t, "storage")
+	r.Guest = nil
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("sb", []v1alpha1.Route{r}, map[string]string{"gcp": "tok"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "https://brig.internal/sb/r/gcp/storage/storage/v1/"
+	if v := vars(got)["CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE"].Value; v != want {
+		t.Errorf("CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE = %q, want %q", v, want)
+	}
+}
+
+func TestGuestEnvGCPRouteAllServices(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("sb", []v1alpha1.Route{gcpRoute(t, "storage", "cloudresourcemanager", "compute", "logging", "iam")},
+		map[string]string{"gcp": "tok"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vars(got)
+	for k, v := range map[string]string{
+		"COMPUTE": "https://brig.internal/sb/r/gcp/compute/compute/v1/",
+		"LOGGING": "https://brig.internal/sb/r/gcp/logging/",
+		"IAM":     "https://brig.internal/sb/r/gcp/iam/",
+	} {
+		if env["CLOUDSDK_API_ENDPOINT_OVERRIDES_"+k].Value != v {
+			t.Errorf("%s = %q, want %q", k, env["CLOUDSDK_API_ENDPOINT_OVERRIDES_"+k].Value, v)
+		}
+	}
+}
+
+// Promise 2: the generated variables are URLs. Only the token variable
+// carries the session token, and no value carries the credential behind it.
+// GuestEnv sees the name of the route's secret and never its value, so this
+// shows only that the name stays out of the guest. The broker test
+// TestServicesRouteGuestNeverSeesTheGoogleToken is the one that proves the
+// value never reaches the guest.
+func TestGuestEnvGCPRouteHoldsNoSecret(t *testing.T) {
+	const secret = "s3cret-gcp-credential"
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	r := gcpRoute(t, "storage", "iam")
+	r.Credential = &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: secret}}
+	got, err := ep.GuestEnv("sb", []v1alpha1.Route{r}, map[string]string{"gcp": "tok"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range got {
+		if strings.Contains(v.Value, secret) {
+			t.Errorf("%s holds the credential", v.Name)
+		}
+		if v.Value == "tok" && v.Name != "BRIG_GCP_TOKEN" {
+			t.Errorf("%s carries the session token", v.Name)
+		}
+	}
+}
+
+// A route with no services gets no override and no gcloud CA variable.
+func TestGuestEnvRouteWithoutServicesHasNoOverrides(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportBrigInternal}
+	got, err := ep.GuestEnv("sb", []v1alpha1.Route{presetRoute(t, "anthropic", v1alpha1.PresetAnthropicAPIKey, "k")},
+		map[string]string{"anthropic": "tok"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range got {
+		if strings.HasPrefix(v.Name, "CLOUDSDK_") {
+			t.Errorf("unexpected %s", v.Name)
+		}
+	}
+}
+
+// The gcloud CA variable names the brig CA, which the guest is handed for
+// brig.internal alone. On another transport the overrides are still written
+// and the CA variable, like the other CA variables, is not. wrap picks the
+// divert only for a run with no endpoint route, so this pins the guard on
+// GuestEnv's own input rather than a path a run takes today.
+func TestGuestEnvGCPRouteNoCAOffBrigInternal(t *testing.T) {
+	ep := HostEndpoint{Transport: TransportDivert}
+	got, err := ep.GuestEnv("sb", []v1alpha1.Route{gcpRoute(t, "storage")},
+		map[string]string{"gcp": "tok"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vars(got)
+	if _, ok := env["CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE"]; !ok {
+		t.Error("the storage override is missing")
+	}
+	for _, name := range append([]string{"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"}, caEnv...) {
+		if v, ok := env[name]; ok {
+			t.Errorf("%s = %q off brig.internal", name, v.Value)
+		}
+	}
+}
