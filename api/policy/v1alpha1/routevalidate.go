@@ -45,10 +45,15 @@ func (r *Route) validate(expanded bool) error {
 		return err
 	}
 	switch r.Preset {
-	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS:
+	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS, PresetGCP:
 	default:
-		return fmt.Errorf("preset %q is not one of %s, %s, %s or %s",
-			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS)
+		return fmt.Errorf("preset %q is not one of %s, %s, %s, %s or %s",
+			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS, PresetGCP)
+	}
+	// Services are what the gcp preset forwards to. On another route they
+	// would read as a restriction that nothing enforces.
+	if len(r.Services) > 0 && r.Preset != PresetGCP {
+		return fmt.Errorf("services needs preset: %s", PresetGCP)
 	}
 	// Whether this build serves a mode other than endpoint is the run's to
 	// say, so a policy reads the same in every build.
@@ -78,6 +83,16 @@ func (r *Route) validate(expanded bool) error {
 		// header set with {value} would be one more place the token is read.
 		if !expanded && r.Inject != nil {
 			return fmt.Errorf("the %s preset vends credentials and takes no inject", r.Preset)
+		}
+	} else if r.Preset == PresetGCP {
+		// Each service has its own host, so one upstream would be a second
+		// destination that the services never use.
+		if r.Upstream != "" {
+			return fmt.Errorf("the %s preset takes no upstream; each service is forwarded to <service>.googleapis.com",
+				r.Preset)
+		}
+		if err := r.validateServices(); err != nil {
+			return err
 		}
 	} else if r.Upstream != "" {
 		if err := checkOrigin(r.Upstream); err != nil {
@@ -141,6 +156,37 @@ func (r *Route) validate(expanded bool) error {
 	if r.Request != nil && r.Request.Allow != nil {
 		if err := r.Request.Allow.validate(r.Preset); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateServices checks the services of a gcp route.
+func (r *Route) validateServices() error {
+	if len(r.Services) == 0 {
+		return fmt.Errorf("the %s preset needs at least one service", PresetGCP)
+	}
+	// The allow list of a service is the only one that binds, because the
+	// broker routes by service. A route-level list would read as covering
+	// every service while covering none.
+	if r.Request != nil && r.Request.Allow != nil {
+		return fmt.Errorf("request.allow belongs to each service on a %s route", PresetGCP)
+	}
+	seen := map[string]bool{}
+	for _, svc := range r.Services {
+		if _, ok := GCPServicePath(svc.Name); !ok {
+			return fmt.Errorf("service %q is not one brig wires; known: %s",
+				svc.Name, strings.Join(GCPServiceNames(), ", "))
+		}
+		if seen[svc.Name] {
+			return fmt.Errorf("service %q is listed twice", svc.Name)
+		}
+		seen[svc.Name] = true
+		if svc.Request != nil && svc.Request.Allow != nil {
+			// No preset is passed, so repos is refused as it is on a custom route.
+			if err := svc.Request.Allow.validate(""); err != nil {
+				return fmt.Errorf("service %s: %w", svc.Name, err)
+			}
 		}
 	}
 	return nil
@@ -390,6 +436,16 @@ func (g *Guest) validate(complete bool, preset Preset) error {
 	for name, value := range g.Env {
 		if !isEnvName(name) {
 			return fmt.Errorf("guest.env name %q is not an environment variable name", name)
+		}
+		// brig writes one override for each service. One written here would
+		// point an API at the route without the service's request policy.
+		if preset == PresetGCP && strings.HasPrefix(name, GCPEndpointOverridePrefix) {
+			return fmt.Errorf("guest.env %s: brig writes the gcloud endpoint overrides itself", name)
+		}
+		// brig writes the CA variable beside the overrides. One written here
+		// would name a second bundle for gcloud to trust.
+		if preset == PresetGCP && name == GCPCACertsVar {
+			return fmt.Errorf("guest.env %s: brig writes the gcloud CA variable itself", name)
 		}
 		switch value {
 		case PlaceholderRouteURL, PlaceholderSessionToken:

@@ -1,0 +1,19 @@
+# The gcp preset: the route forwards each service's requests to its own
+# <service>.googleapis.com host, replacing the guest's session token with the
+# host's OAuth access token. Google APIs take that token as a bearer header, so
+# it can be injected on the way out. There is no upstream because each service
+# has its own host, and one upstream would be a destination no service uses.
+name: gcp
+mode: endpoint
+modes: [endpoint]
+inject:
+  headers:
+    set:
+      - name: Authorization
+        value: "Bearer {value}"
+    remove:
+      - Authorization
+guest:
+  env:
+    BRIG_GCP_URL: "{route.url}"
+    BRIG_GCP_TOKEN: "{session.token}"
