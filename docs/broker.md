@@ -150,7 +150,14 @@ error of that step, and the upstream is never dialed.
    a 400. See [Canonical paths](#canonical-paths). A route that vends serves
    `/` alone, and any other `<rest>` is a 404.
 7. Check `request.allow`. A miss is a 403 with the refusal below. No
-   credential has been read yet.
+   credential has been read yet. On a route with `services`, the first
+   segment of `<rest>` names the service. A service segment with any
+   escape in it is a 400 with `check=path`, since the broker reads the
+   service decoded and forwards the path as written. The broker refuses a
+   method override and an unlisted service, then a batch request, then
+   checks the service's `request.allow` against the path after the
+   service, and sends the request to the service's host. See [The gcp
+   preset](policies.md#the-gcp-preset).
 8. Resolve the credential through the secret broker. A failure is a 502,
    and nothing is cached. A route with no `credential`, such as a
    [certificate-only](policies.md#client-certificates) route, skips this step.
@@ -474,8 +481,11 @@ taken from the replay budget, 64 MiB for all requests at once, which
 | 413 | A compressed body read whole decompresses to more than 8 MiB | `body` |
 | 403 | A session token of the sandbox is in the request outside its carrier | `placeholder` |
 | 415 | The request body has a `Content-Encoding` other than gzip or deflate, more than one, does not decompress, or has bytes after its compressed stream | `content-encoding` |
-| 400 | `<rest>` is not in canonical form | `path` |
-| 403 | `request.allow` does not cover the request | `request.allow.methods`, `request.allow.paths`, `request.allow.repos` |
+| 400 | `<rest>` is not in canonical form, or on a route with `services` its service segment holds an escape | `path` |
+| 403 | `request.allow` does not cover the request. On a `gcp` route the rule is `spec.routes[<route>].services[<service>].request.allow.<field>` | `request.allow.methods`, `request.allow.paths`, `request.allow.repos` |
+| 403 | On a route with `services`, the path names no listed service | `request.services` |
+| 403 | On a route with `services`, the request has a header `X-HTTP-Method-Override`, `X-HTTP-Method` or `X-Method-Override`, or a query parameter `$httpMethod` or `httpMethod` in any case. The rule is `spec.routes[<route>]` | `request.method-override` |
+| 403 | On a route with `services`, the first path segment after the service is `batch`, in any case and with or without `;parameters`. A segment such as `batchGet` is not refused. The rule is `spec.routes[<route>].services[<service>]` | `request.batch` |
 | 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open | `credential` |
 | 502 | The upstream cannot be reached, or on a route without `inject.tls` its certificate does not verify | `upstream` |
 | 502 | A route that vends could not fetch keys. See [Routes that vend](#routes-that-vend) | `vend` |
@@ -506,12 +516,17 @@ set must match.
 | `paths` | `<rest>`, without the query. `*` does not match a `/` |
 | `repos` | The `owner/name` that the first two segments of `<rest>` name, with a `.git` suffix removed. A path with fewer than two segments is refused |
 
+On a route with `services` each service has its own lists, and the route has
+none. The broker does not read request bodies for this, so a method override
+in a form-encoded body is not refused.
+
 The `models` and `tools` lists that the Anthropic presets will take read the
 request body. The policy type does not carry them yet, so the broker does not
 enforce them.
 
-A miss returns 403 with this body. The same rule and reason go to the audit
-line:
+A miss returns 403 with this body, as do the refusals of an unlisted
+service, a method override and a batch request on a route with `services`.
+The same rule and reason go to the audit line:
 
 ```
 brig broker refused this request
@@ -966,6 +981,7 @@ CA variables of [Transports](#transports). Per preset:
 | `anthropic-api-key` | `ANTHROPIC_BASE_URL=<route URL>`, `ANTHROPIC_API_KEY=<token>` |
 | `github-token` | `BRIG_ROUTE_GITHUB_TOKEN=<token>`, and git configuration in `GIT_CONFIG_COUNT` |
 | `aws` | `AWS_CONTAINER_CREDENTIALS_FULL_URI=<route URL>`, `AWS_CONTAINER_AUTHORIZATION_TOKEN=<token>`, `AWS_REGION` and `AWS_DEFAULT_REGION=<the region of the AWS profile>`. The route URL is `http://169.254.170.2/<sandbox>/r/<route>` |
+| `gcp` | `BRIG_GCP_URL=<route URL>`, `BRIG_GCP_TOKEN=<token>`, `CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>=<route URL>/<service>/<path>` for each service, and, on the `brig.internal` transport, `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` |
 
 A route with `guest.git` points git at the route through the environment,
 and writes nothing into the guest home:

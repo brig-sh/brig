@@ -154,6 +154,9 @@ the guest has none.
 | "The secret holds that pointer and no key." | The aws route | `go:TestImportAWSStoresNoCredential` |
 | "The broker runs `aws` with every `AWS_` variable removed from its environment, so a variable in your shell, such as `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`, never decides which identity a sandbox gets." | The aws route | `go:TestBrokerAWSEnvHasNoAWSVars` `go:TestFetchEnvIsExactlyCLIEnv` `go:TestEnvironDropsAWSVariables` `go:TestExecEmptyEnvIsEmpty` |
 | "No package on the run path links the code that runs `aws`." | The aws route | `go:TestTheRunPathCannotReachAWS` `go:TestOnlyTheImportVerbReachesAWSFromTheCLI` |
+| "The guest holds only the session token of the route." | The gcp route | `go:TestGuestEnvGCPRouteHoldsNoSecret` `go:TestServicesRouteForwardsToTheService` `go:TestServicesRouteGuestNeverSeesTheGoogleToken` |
+| "A service that allows `POST` has to list paths that name their verb exactly, such as `/v2/entries:list`." | The gcp route | `go:TestServicesRouteVerbPathIsExact` `go:TestServicesRouteWildcardMatchesAVerb` `go:TestServicesRouteLoggingPostRead` |
+| "The broker refuses the method-override headers `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`, the query parameters `$httpMethod` and `httpMethod`, and batch requests." | The gcp route | `go:TestServicesRouteRefusesMethodOverride` `go:TestServicesRouteRefusesBatch` |
 | "The broker serves only a route that vends on that path, and refuses any other route before it reads the token." | The aws route | `go:TestLinkLocalRefusesARouteThatDoesNotVend` `go:TestVendOnlyArrivalRefusesOtherRoutes` |
 | "Brig adds no `allow` rule for it." (the link-local address of a route that vends) | Host services | `go:TestAVendingRunAllowsNoLinkLocalAddress` `go:TestRulesetDivertsTheLinkLocalAddress` |
 | "A run without one diverts no link-local address." | broker.md: Transports | `go:TestARunWithoutAVendingRouteHasNoLinkLocalDivert` |

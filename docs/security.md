@@ -488,6 +488,55 @@ configuration in its default place. No package on the run path links the
 code that runs `aws`. A run still reads no host credential source. The
 broker, a process of its own, reads one through `aws`.
 
+### The gcp route
+
+The `gcp` route forwards requests to several Google APIs with one session
+token. See [The gcp preset](policies.md#the-gcp-preset).
+
+**What the guest holds.** The guest holds only the session token of the
+route. The Google access token stays on the host, and the broker injects it
+on the way out. The session token works only through the broker, for this
+sandbox, and the broker checks each request against the `request.allow` of
+the service it names.
+
+**What the route can do.** The reach is the IAM of the identity behind the
+access token, narrowed by each service's `request.allow`. In this version the
+secret is a static access token that you store, so the sandbox can do what
+that token can do. The access token expires, usually in an hour.
+
+**What `request.allow` does not narrow.**
+
+- `request.allow` matches methods and paths, and `*` also matches a `:verb`
+  suffix. A service that allows `POST` has to list paths that name their verb
+  exactly, such as `/v2/entries:list`. `methods: [GET, POST]` with
+  `/v1/projects/*` also allows `POST /v1/projects/x:setIamPolicy`.
+- The logging read names its project in the JSON body, so only the IAM of the
+  credential narrows which project's logs are read.
+- The broker does not read request bodies, so a method override in a
+  form-encoded body is not refused.
+- The broker serves HTTP/1.1 REST APIs. gRPC clients are not supported.
+- A Cloud Storage object whose name holds a `/` is unreachable. The JSON API
+  sends it as `o/dir%2Ffile`, and the broker refuses an encoded slash in any
+  path before the service check, since an upstream could read it as a
+  separator that `request.allow` did not see. This fails closed: the request
+  gets a 400.
+
+**Refused outright.** The broker refuses the method-override headers
+`X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`, the query
+parameters `$httpMethod` and `httpMethod`, and batch requests. Google APIs
+serve a request as the method an override names, and a batch carries many
+requests that `request.allow` does not see.
+
+**Not yet done.** Brig does not refuse before boot a guest variable that
+picks another identity, such as `GOOGLE_APPLICATION_CREDENTIALS`, or a guest
+home that holds `.config/gcloud`. The guest writes the session token to the
+file that `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` names itself. A
+`CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>` for a service the route does not
+list is refused on another route's `guest.env`, but not when it comes in
+through the variables you forward. Brig's own overrides win for the services
+it lists. The session token works only through the broker, so an override
+that points elsewhere sends gcloud a token that no other host takes.
+
 ## The secret store
 
 `brig secret` is the **only** store a run reads, and the one place where Brig
