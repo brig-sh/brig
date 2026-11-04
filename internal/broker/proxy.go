@@ -257,10 +257,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"such as one on the aws preset", http.StatusBadGateway)
 			return
 		}
-		value, err = credentialValue(cred, doc)
-		if err != nil {
-			a.check = "credential"
-			http.Error(rec, "brig broker: the credential of route "+p.route+" could not be resolved", http.StatusBadGateway)
+		if value, err = h.credential(r, p, rt, cred, doc); err != nil {
+			credentialRefusal(rec, a, p, err)
 			return
 		}
 	}
@@ -540,8 +538,14 @@ func (u *upstreamTrip) addSecret(value string) {
 	}
 }
 
+// renewable reports whether a 401 renews the credential and retries. A
+// minted token is not, and the mints clause is defence in depth: the gcp
+// preset has no lifecycle today, so no gcp route retries without it. If a
+// lifecycle is added to that preset later, the clause still keeps a retry
+// from renewing the pointer or sending it as the credential, and gcloud
+// would hand back the same cached token anyway.
 func (u *upstreamTrip) renewable() bool {
-	return u.cred != nil && u.h.renewer != nil && u.cred.Lifecycle != ""
+	return u.cred != nil && u.h.renewer != nil && u.cred.Lifecycle != "" && !u.h.mints(u.doc)
 }
 
 // prepareTLS resolves the CA and the client certificate of the route, and

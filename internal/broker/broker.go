@@ -104,6 +104,17 @@ type Config struct {
 	// vend would send it upstream as a header, which names the user's AWS
 	// profile and role, so such a route answers 502 and sends nothing.
 	VendDoc func(doc []byte) bool
+	// Minter is optional. It turns a secret that MintDoc reports into the
+	// token a gcp route injects. It and MintDoc are set together or not at
+	// all.
+	Minter Minter
+	// MintDoc is optional. It reports whether a secret document is one the
+	// Minter takes, such as a gcloud pointer, valid or not. A route without
+	// services would send it upstream as a header, which names the user's
+	// account and service account, so such a route answers 502 and sends
+	// nothing. A malformed pointer still counts, so that it reaches the
+	// Minter and is refused there instead of being sent as a token.
+	MintDoc func(doc []byte) bool
 
 	// serviceUpstream returns the origin a service of a gcp route is
 	// forwarded to. It is nil outside tests, where every service goes to
@@ -177,6 +188,8 @@ type Handler struct {
 	vendor    Vendor
 	vendOnly  func(r *http.Request) bool
 	vendDoc   func(doc []byte) bool
+	minter    Minter
+	mintDoc   func(doc []byte) bool
 	// serviceUpstream is Config.serviceUpstream, defaulted.
 	serviceUpstream func(name string) string
 
@@ -243,6 +256,11 @@ func New(cfg Config) (*Handler, error) {
 	if cfg.Credentials == nil {
 		return nil, errors.New("the broker needs a secret.Broker to resolve credentials")
 	}
+	// One without the other would mint nothing, or send a pointer upstream
+	// as the token.
+	if (cfg.Minter == nil) != (cfg.MintDoc == nil) {
+		return nil, errors.New("the broker needs both a Minter and a MintDoc, or neither")
+	}
 	h := &Handler{
 		hostKey:   append([]byte(nil), cfg.HostKey...),
 		creds:     cfg.Credentials,
@@ -255,6 +273,8 @@ func New(cfg Config) (*Handler, error) {
 		vendor:    cfg.Vendor,
 		vendOnly:  cfg.VendOnly,
 		vendDoc:   cfg.VendDoc,
+		minter:    cfg.Minter,
+		mintDoc:   cfg.MintDoc,
 		// The default names the host from a service brig wires, and
 		// AddSandbox refuses any other, so a route cannot name a host.
 		serviceUpstream: cfg.serviceUpstream,
