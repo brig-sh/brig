@@ -394,11 +394,15 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `inject.basicAuth.username` | unless a preset sets it, `headers.set` is set, or the route is certificate-only | Sends `Authorization: Basic base64(username:{value})` |
 | `inject.tls.clientCertificate.secretRef.name` | no | A secret in Brig's store that holds a client certificate chain and its one private key, in PEM. The broker presents it to the upstream, and the key never reaches the guest. See [Client certificates](#client-certificates) |
 | `inject.tls.ca.secretRef.name` | no | A secret in Brig's store that holds the CA certificates of the upstream. On this route they replace the system roots. See [Client certificates](#client-certificates) |
+| `services` | on the `gcp` preset | The Google APIs the route reaches. Each is `{name, request.allow}`, with a `name` from the table in [The gcp preset](#the-gcp-preset), listed once. Only the `gcp` preset takes it |
 | `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
 | `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
 | `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them |
+
+On a `gcp` route `request.allow` belongs to each entry of `services`, and
+Brig refuses one on the route itself.
 
 Each `request.allow` list that is set must match. Brig refuses an empty
 list, such as `repos: []`, rather than read it as unset and allow every
@@ -512,6 +516,7 @@ names one takes every field it does not set from the preset.
 | `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
 | `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
 | `aws` | none. The route answers the guest itself | none. The guest sends its session token as the whole `Authorization` value, as the AWS SDK does | `AWS_CONTAINER_CREDENTIALS_FULL_URI={route.url}`, `AWS_CONTAINER_AUTHORIZATION_TOKEN={session.token}`, `AWS_REGION={route.region}`, `AWS_DEFAULT_REGION={route.region}` | none. The broker fetches temporary keys through the host's `aws` CLI. See [The aws preset](#the-aws-preset) |
+| `gcp` | none. Each service is forwarded to `https://<service>.googleapis.com` | `Authorization: Bearer {value}` | `BRIG_GCP_URL={route.url}`, `BRIG_GCP_TOKEN={session.token}`, and the gcloud variables of [The gcp preset](#the-gcp-preset) | none, the access token is static. See [The gcp preset](#the-gcp-preset) |
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
@@ -548,7 +553,8 @@ A field that the route sets overrides the value of the preset:
 - `guest.env` merges name by name.
 - `inject.headers.remove` is the union of both lists, so a route cannot stop
   a preset from dropping a header.
-- Any other list, such as `inject.headers.set`, is replaced whole.
+- Any other list, such as `inject.headers.set` or `services`, is replaced
+  whole.
 
 `credential.lifecycle` comes from the preset alone. Brig refuses a policy
 that names it. A preset with a lifecycle, such as `claude-code`, keeps its
@@ -617,16 +623,136 @@ preset's `request.allow` allows `GET` alone. A route that sets its own
 The guest gets the four variables of the preset. See
 [What the guest gets](broker.md#what-the-guest-gets).
 
+### The gcp preset
+
+A route on the `gcp` preset forwards the requests of one sandbox to several
+Google APIs with one session token. Each service has its own
+`request.allow`, because the paths of one API mean nothing to another. The
+broker replaces the guest's session token with the host's OAuth access token,
+so the guest never holds a Google token.
+
+```yaml
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: gcp-readonly
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: gcp
+      preset: gcp
+      credential:
+        secretRef: { name: gcp-creds }
+      services:
+        - name: storage
+          request:
+            allow:
+              methods: [GET]
+              paths: [/storage/v1/b, /storage/v1/b/*, /storage/v1/b/*/o, /storage/v1/b/*/o/*]
+        - name: cloudresourcemanager
+          request:
+            allow:
+              methods: [GET]
+              paths: [/v1/projects/*, /v3/projects/*]
+        - name: compute
+          request:
+            allow:
+              methods: [GET]
+              paths: [/compute/v1/projects/*/zones/*/instances, /compute/v1/projects/*/aggregated/instances]
+        - name: logging
+          request:
+            allow:
+              methods: [POST]
+              paths: [/v2/entries:list]
+        - name: iam
+          request:
+            allow:
+              methods: [GET]
+              paths: [/v1/projects/*/serviceAccounts, /v1/roles/*]
+```
+
+A service is one of these. A name outside the table is refused when the
+policy loads, and so is a `gcp` route with no service, a service listed
+twice, an `upstream`, and a `request.allow` on the route.
+
+| `name` | Upstream | gcloud endpoint override ends in |
+| --- | --- | --- |
+| `storage` | `https://storage.googleapis.com` | `/storage/v1/` |
+| `cloudresourcemanager` | `https://cloudresourcemanager.googleapis.com` | `/` |
+| `compute` | `https://compute.googleapis.com` | `/compute/v1/` |
+| `logging` | `https://logging.googleapis.com` | `/` |
+| `iam` | `https://iam.googleapis.com` | `/` |
+
+The guest reaches a service at
+`https://brig.internal/<sandbox>/r/gcp/<service>/<rest>`. The broker sends
+`<rest>` to the service's host and matches the service's `request.allow`
+against it. A service with no `request` allows every request to it. For
+`storage` that includes the XML API, `/storage/<bucket>/<object>`, which does
+not look like the JSON paths, so give each service `paths`. A
+service that the list does not name gets a 403. The broker refuses these
+before it reads the credential:
+
+- `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`, and the
+  query parameters `$httpMethod` and `httpMethod`. Google APIs serve a
+  request as the method these name, so a `GET` that `methods` allowed would
+  run as another method.
+- A batch request, `/batch` under a service. It carries many requests in one
+  body, and `request.allow` sees only the outer one.
+
+[Errors](broker.md#errors) lists the audit checks.
+
+`request.allow` matches methods and paths, and `*` also matches a `:verb`
+suffix. A service that allows `POST` has to list paths that name their verb
+exactly, such as `/v2/entries:list`. `methods: [GET, POST]` with
+`/v1/projects/*` also allows `POST /v1/projects/x:setIamPolicy`. See
+[The gcp route](security.md#the-gcp-route).
+
+A sandbox takes one route with `services`. Brig refuses a second one across
+the policies bound to a run, because the guest has one set of gcloud endpoint
+overrides.
+
+The guest gets `BRIG_GCP_URL`, `BRIG_GCP_TOKEN`, one
+`CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>` for each service, and, on the
+`brig.internal` transport, `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE`. Brig writes
+these itself, and refuses a `guest.env` entry that names one, on the gcp
+route or on any other route bound to the run. Another route cannot set a
+`CLOUDSDK_API_ENDPOINT_OVERRIDES_` variable at all, even for a service the
+gcp route does not list. The session token has to
+reach gcloud as its access token, so the guest writes `$BRIG_GCP_TOKEN` to a
+file and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its path.
+
+This version takes a static access token as the secret. Store your own, which
+expires in about an hour:
+
+```bash
+gcloud auth print-access-token | brig secret create gcp-creds
+```
+
+Brig does not yet import a gcloud configuration, refresh the token, deliver
+the token file to the guest, or refuse before boot a guest variable that
+picks another identity, such as `GOOGLE_APPLICATION_CREDENTIALS`. A Cloud
+Storage object whose name holds a `/` cannot be read or written through the
+route: the JSON API sends the name as `o/dir%2Ffile`, and the broker refuses
+an encoded slash in any path. Listing with a prefix works. The
+preset serves HTTP/1.1 REST APIs only. A gRPC client, such as Pub/Sub or
+Firestore, does not work through it.
+
 ### Several policies with routes
 
 Every route of every policy bound to a run applies to that run, as every
-egress rule does. Brig refuses three clashes between routes:
+egress rule does. Brig refuses four clashes between routes:
 
 - Two routes with one name. The name is the path of the route URL.
 - Two routes that set one `guest.env` name. The guest has one variable of
-  that name.
+  that name. The gcloud variables that Brig writes for a route with
+  `services` count as names of that route, so another route cannot set
+  them. Nor can it set any other `CLOUDSDK_API_ENDPOINT_OVERRIDES_`
+  variable while a route with `services` is bound.
 - Two routes that rewrite one `guest.git.insteadOf` prefix. git sends a
   prefix to one URL.
+- Two routes with `services`. The guest has one set of gcloud endpoint
+  overrides, and two sets would leave it two to choose from.
 
 `brig policy check` refuses each of them:
 
@@ -1048,7 +1174,10 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `route x: inject takes headers.set or basicAuth, not both` | a route, or a route and its preset, set both |
 | `route x: credential.lifecycle is set by a preset, and a policy does not name it` | a policy names `credential.lifecycle` |
 | `route x is declared by both a and b; …` | two bound policies declare a route of the same name |
-| `guest.env NAME is set by route x of a and by route y of b; …` | two bound routes set the same `guest.env` name |
+| `guest.env NAME is set by route x of a and by route y of b; …` | two bound routes set the same `guest.env` name, or a route sets a gcloud variable that Brig writes for a route with `services` |
+| `guest.env NAME is set by route x of a; brig writes the gcloud endpoint overrides for route y of b` | a route sets a `CLOUDSDK_API_ENDPOINT_OVERRIDES_` variable while a route with `services` is bound |
+| `guest.env NAME: brig writes the gcloud endpoint overrides itself` | a `gcp` route sets a `CLOUDSDK_API_ENDPOINT_OVERRIDES_` variable in its own `guest.env` |
+| `guest.env CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE: brig writes the gcloud CA variable itself` | a `gcp` route sets the gcloud CA variable in its own `guest.env` |
 | `kind is required, and must be "Policy"` | a document with `kind:` and no value. A document with no `kind:` key is read as [the flat form](#the-flat-form) |
 | `not saved, <path> is unchanged: …` | `edit`'s save did not parse or validate, or renamed a name that is bound to something, without `--force`. The real file is untouched. The error names where your edit still is |
 | ``unknown profile "x". `brig agent ls` lists them`` | `attach`, `detach` or `check` naming a profile that is not there |
