@@ -161,6 +161,8 @@ error of that step, and the upstream is never dialed.
 8. Resolve the credential through the secret broker. A failure is a 502,
    and nothing is cached. A route with no `credential`, such as a
    [certificate-only](policies.md#client-certificates) route, skips this step.
+   On a `gcp` route whose secret is a gcloud pointer, the broker mints the
+   token. See [Minted tokens](#minted-tokens).
 9. Edit the headers and forward the request. The response streams back as
    the upstream sends it, with the credential redacted. A route that vends
    answers with keys instead. See [Routes that vend](#routes-that-vend).
@@ -336,6 +338,11 @@ minute is retried only when another request has renewed the secret since.
 Otherwise it goes back to the guest. A credential close to its expiry is
 renewed ahead of time when it is resolved, without a 401.
 
+A 401 to a [minted token](#minted-tokens) goes back to the guest as it is,
+with no new mint and no retry. `gcloud` hands back the token it has cached
+until that token is close to its expiry, so a new mint returns the same
+token.
+
 The broker reads the request body before the request goes upstream, up to
 8 MiB per request, to scan it for a [session token](#placeholder-detection).
 The same copy is what a retry sends. A body over 8 MiB is not sent again,
@@ -486,7 +493,8 @@ taken from the replay budget, 64 MiB for all requests at once, which
 | 403 | On a route with `services`, the path names no listed service | `request.services` |
 | 403 | On a route with `services`, the request has a header `X-HTTP-Method-Override`, `X-HTTP-Method` or `X-Method-Override`, or a query parameter `$httpMethod` or `httpMethod` in any case. The rule is `spec.routes[<route>]` | `request.method-override` |
 | 403 | On a route with `services`, the first path segment after the service is `batch`, in any case and with or without `;parameters`. A segment such as `batchGet` is not refused. The rule is `spec.routes[<route>].services[<service>]` | `request.batch` |
-| 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open | `credential` |
+| 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open. On a `gcp` route, the token could not be minted. See [Minted tokens](#minted-tokens) | `credential` |
+| 502 | The secret is a gcloud pointer, on a route without `services`. Nothing is sent upstream | `credential.gcponly` |
 | 502 | The upstream cannot be reached, or on a route without `inject.tls` its certificate does not verify | `upstream` |
 | 502 | A route that vends could not fetch keys. See [Routes that vend](#routes-that-vend) | `vend` |
 | 502 | The upstream's certificate does not verify on a route with `inject.tls`, or the TLS handshake with it fails. The upstream refused the client certificate, over HTTP/1.1 or HTTP/2, on a route that presents one | `tls.handshake` |
@@ -674,10 +682,10 @@ underscores. 255 bytes is the longest name of a directory.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
+| `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits
@@ -717,6 +725,10 @@ SSH session can only read an unlocked keychain. A read that fails is a 502.
 A route that vends holds no credential in the store. Its secret points at an
 AWS profile, and the broker fetches keys by running the host's `aws` CLI.
 See [Routes that vend](#routes-that-vend).
+
+A `gcp` route's secret can point at a gcloud configuration in place of
+holding a token. The broker mints the token by running the host's `gcloud`
+CLI. See [Minted tokens](#minted-tokens).
 
 ## Routes that vend
 
@@ -812,6 +824,98 @@ prints one line per route, which `-q` hides:
 brig: route aws: AWS role arn:aws:iam::111122223333:role/brig-coding-agent, assumed from your profile dev
 brig: route aws: AWS as your own identity (profile dev); the sandbox can do what you can
 ```
+
+## Minted tokens
+
+A `gcp` route forwards each request and injects a Google access token, as
+[The gcp preset](policies.md#the-gcp-preset) describes. Its secret is either
+that token, stored as it is, or a pointer at a gcloud configuration on the
+host, which `brig secret import` writes. See
+[A gcloud login behind a route](secrets.md#a-gcloud-login-behind-a-route).
+For a pointer, the broker mints the token itself. The guest never sees the
+token or the pointer.
+
+A pointer is minted on a route with `services` alone. On any other route the
+broker answers 502 with `check=credential.gcponly` and sends nothing
+upstream, since the pointer names your gcloud configuration and service
+account.
+
+### Minting a token
+
+The broker runs the host's `gcloud` CLI, found on its `PATH`:
+
+| Mode | Command |
+| --- | --- |
+| impersonate | `gcloud auth print-access-token --configuration <c> --impersonate-service-account <email> --format=json --no-log-http --verbosity=error` |
+| self | `gcloud auth print-access-token <account> --configuration <c> --format=json --no-log-http --verbosity=error` |
+
+The token comes back on stdout. No token is on a command line, and no error
+repeats stdout. `gcloud` gets the broker's environment without the variables
+that pick an identity or set HTTP logging or the log level, and with prompts
+turned off. Each call has 30 seconds.
+
+`gcloud` does not print when the token expires. The broker POSTs the token
+in a form body to `https://oauth2.googleapis.com/tokeninfo`, from the host,
+and reads `expires_in` and `email`. It does not follow a redirect, and the
+call has 10 seconds. A token with no `expires_in` is refused. In
+impersonate mode, a token whose `email` is another identity is refused. A
+token with no `email` is accepted, since tokeninfo may not report one for an
+impersonated token. In self mode, `<account>` is the account the import
+recorded, and a token whose `email` is missing or is another account is
+refused. A user login's token carries the `userinfo.email` scope, so
+tokeninfo names its account.
+
+The broker holds the tokens in memory, per sandbox and route, and writes none
+to the store, to a file or to a log. A request gets the token held while it
+has at least 2 minutes left. Below that, the broker mints a new one.
+Requests that arrive during a mint wait for it, so a burst of requests is
+one call. A request that gives up does not stop the mint, which fills the
+cache for the next one. `gcloud` hands back its own cached token until that
+token is close to its expiry, so a mint can return one with less than 2
+minutes left. The broker serves it for one minute after the mint while it is
+valid. A failed mint is an error even when an older token is held. After the
+secret is imported again with another configuration, mode or service
+account, the next request mints a new token. A sandbox removed from the
+broker takes its tokens with it.
+
+The token lives as long as `gcloud` makes it, about an hour. Brig does not
+set its lifetime.
+
+A mint that fails is a 502 with `check=credential`:
+
+| Failure | Body |
+| --- | --- |
+| `gcloud` reports that the configuration's login must be done again | names the fix, `gcloud auth login --configuration <c>`, or in self mode `gcloud auth login <account> --configuration <c>` |
+| `gcloud` reports that your account may not impersonate the service account | names the role it needs, `roles/iam.serviceAccountTokenCreator` |
+| No `gcloud` on the broker's `PATH` | names the Google Cloud CLI install page |
+| Anything else | `brig broker: the credential of route <route> could not be minted; see the broker log` |
+
+The error of the last row goes to `broker.log`, with the sandbox and the
+route, and never to the guest or to the audit log. `GET /status` names the
+route in `vending` until a mint works.
+
+An upstream 401 goes back to the guest. See
+[Retry after a 401](#retry-after-a-401).
+
+### Registration of a gcp route
+
+A registration checks every `gcp` route whose secret is a pointer, after the
+routes that vend, also when it is the same registration again. The broker
+resolves the secret and mints a token when the one it holds has less than 2
+minutes left. So a new run on a lapsed gcloud login is refused at its start,
+and not at the agent's first Google call. A `gcp` route whose secret is a
+static token runs no `gcloud`, and a secret that does not resolve is left to
+the request, as on any route.
+
+A check that fails is a 424 with `X-Brig-Refusal: credential` and the body
+`route <name>: <message>`, as for a route that vends. Brig refuses the run
+or the exec with exit `6`. A sandbox that was not registered before leaves
+no tokens behind. One that was keeps its registration, and `GET /status`
+names the route in `vending` until a mint works.
+
+The message goes to `brig` on the host, not to the guest, so it can quote
+`gcloud`'s stderr, clipped, where a request in the guest gets only the
+fixed text of the table above.
 
 ## Route modes
 
