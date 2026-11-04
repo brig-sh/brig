@@ -24,10 +24,11 @@ type VendedCredentials struct {
 	Expiration                          time.Time
 }
 
-// VendError marks a failure that the guest's user can fix on the host, such
-// as an expired login. Its Message is shown to the guest. Any other error
-// from a Vendor is logged by the Vendor and answered with a fixed text, since
-// its text can hold paths or the output of a tool.
+// VendError marks a failure to fetch a credential that the guest's user can
+// fix on the host, such as an expired login. A Vendor or a Minter returns it.
+// Its Message is shown to the guest. Any other error from either is logged by
+// it and answered with a fixed text, since its text can hold paths or the
+// output of a tool.
 type VendError struct{ Message string }
 
 func (e *VendError) Error() string { return e.Message }
