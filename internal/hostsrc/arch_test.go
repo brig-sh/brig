@@ -107,6 +107,22 @@ func TestTheRunPathCannotReachAWS(t *testing.T) {
 	}
 }
 
+// The gcp route mints its token by running the host's gcloud under the
+// host's own login. That is a host source too, so no run-path package links
+// internal/gcpcred: only brig-broker and the verb that imports a pointer do.
+func TestTheRunPathCannotReachGCloud(t *testing.T) {
+	const gcpcred = "github.com/brig-sh/brig/internal/gcpcred"
+	for _, pkg := range runPathPackages {
+		out, err := goList("-deps", pkg)
+		if err != nil {
+			t.Fatalf("go list -deps %s: %v", pkg, err)
+		}
+		if slices.Contains(strings.Split(string(out), "\n"), gcpcred) {
+			t.Errorf("%s depends on %s: a run can now call the host's gcloud", pkg, gcpcred)
+		}
+	}
+}
+
 // brokerBinary is brig-broker, the one process that refreshes a credential
 // and signs session tokens. It is not on the run path, because it links the
 // refresher. It reads brig's own store and no host source.
@@ -160,6 +176,19 @@ func TestTheBrokerLinksAWS(t *testing.T) {
 	}
 	if !slices.Contains(strings.Split(string(out), "\n"), "github.com/brig-sh/brig/internal/awscred") {
 		t.Errorf("%s does not link internal/awscred; the aws route has no vendor", brokerBinary)
+	}
+}
+
+// brig-broker mints the token of a gcp route through internal/gcpcred. This
+// proves TestTheRunPathCannotReachGCloud checks for the package the broker
+// links, as TestTheBrokerLinksAWS does for aws.
+func TestTheBrokerLinksGCloud(t *testing.T) {
+	out, err := goList("-deps", brokerBinary)
+	if err != nil {
+		t.Fatalf("go list -deps %s: %v", brokerBinary, err)
+	}
+	if !slices.Contains(strings.Split(string(out), "\n"), "github.com/brig-sh/brig/internal/gcpcred") {
+		t.Errorf("%s does not link internal/gcpcred; the gcp route has no minter", brokerBinary)
 	}
 }
 
@@ -242,10 +271,12 @@ func TestOnlyTheImportVerbReachesTheHostFromTheCLI(t *testing.T) {
 	}
 }
 
-// The same rule for the code that runs aws. The import verb checks an AWS
-// profile and role before it stores the pointer; nothing else in cmd/brig may
-// reach that code. A run that fetched keys itself would hand the guest keys
-// the broker never vended, outside the route, its cache and its audit line.
+// The same rule for the code that runs aws, and for the code that runs
+// gcloud. The import verb checks an AWS profile and role, or a gcloud login,
+// before it stores the pointer; nothing else in cmd/brig may reach that code.
+// A run that fetched keys or minted a token itself would hand the guest a
+// credential the broker never gave, outside the route, its cache and its
+// audit line.
 func TestOnlyTheImportVerbReachesAWSFromTheCLI(t *testing.T) {
 	const allowed = "secretimport.go"
 	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd", "brig"))
@@ -264,6 +295,9 @@ func TestOnlyTheImportVerbReachesAWSFromTheCLI(t *testing.T) {
 		}
 		if strings.Contains(string(blob), "brig/internal/awscred") {
 			t.Errorf("cmd/brig/%s reaches the code that runs aws; only %s may", name, allowed)
+		}
+		if strings.Contains(string(blob), "brig/internal/gcpcred") {
+			t.Errorf("cmd/brig/%s reaches the code that runs gcloud; only %s may", name, allowed)
 		}
 	}
 }

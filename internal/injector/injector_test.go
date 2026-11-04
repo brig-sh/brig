@@ -959,6 +959,42 @@ func TestAddTimeoutScalesWithVendingRoutes(t *testing.T) {
 	}
 }
 
+// A gcp route with a gcloud pointer is minted before the broker answers: one
+// gcloud run and one tokeninfo call. The injector cannot tell a pointer from a
+// raw token, so every route with services is given that time, or a slow mint
+// comes back as "the broker did not answer" instead of the login to fix.
+func TestAddTimeoutScalesWithGCPRoutes(t *testing.T) {
+	oldCall, oldAdd, oldMint := callTimeout, addTimeout, mintTimeout
+	callTimeout, addTimeout, mintTimeout = 50*time.Millisecond, 100*time.Millisecond, 400*time.Millisecond
+	t.Cleanup(func() { callTimeout, addTimeout, mintTimeout = oldCall, oldAdd, oldMint })
+	dir, err := os.MkdirTemp("", "brk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Longer than the bound with no gcp route, shorter than with one.
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte(`{}`))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	c := Client{Socket: sock}
+	gcp := Route{Policy: "gcp", Route: gcpRoute(t, "storage")}
+	plain := Route{Policy: "github", Route: v1alpha1.Route{Name: "github", Preset: v1alpha1.PresetGitHubToken}}
+	if _, err := c.Add(Sandbox{ID: "brig-a", Routes: []Route{plain, gcp}}); err != nil {
+		t.Errorf("Add with a gcp route: %v", err)
+	}
+	if _, err := c.Add(Sandbox{ID: "brig-b", Routes: []Route{plain}}); err == nil {
+		t.Error("Add with no gcp route waited for a mint")
+	}
+}
+
 func gcpRoute(t *testing.T, services ...string) v1alpha1.Route {
 	r := v1alpha1.Route{Name: "gcp", Preset: v1alpha1.PresetGCP,
 		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "gcp-secret"}}}

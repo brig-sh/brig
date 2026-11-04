@@ -22,6 +22,7 @@ import (
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/broker"
+	"github.com/brig-sh/brig/internal/gcpcred"
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/renew"
@@ -82,7 +83,15 @@ type serverConfig struct {
 	// awsBin is the aws binary the routes that vend run. "" looks up aws on
 	// PATH.
 	awsBin string
-	// now is the clock of the vended credentials. nil is time.Now.
+	// gcloudBin is the gcloud binary that mints the token of a gcp route
+	// whose secret is a pointer. "" looks up gcloud on PATH.
+	gcloudBin string
+	// tokenInfoURL is where the minter asks how long a token lives. "" is
+	// Google's tokeninfo; tests point it at a local server.
+	tokenInfoURL string
+	// now is the clock of the vended credentials and of the cache of minted
+	// tokens. nil is time.Now. A minted token's expiry comes from the host's
+	// clock, not from now.
 	now func() time.Time
 }
 
@@ -115,6 +124,9 @@ type server struct {
 	control net.Listener
 	// aws vends the credentials of the aws routes.
 	aws *awsVendor
+	// gcp mints the tokens of the gcp routes whose secret is a gcloud
+	// pointer.
+	gcp *gcpMinter
 	// internal takes the brig.internal connections of every divert socket,
 	// through TLS, and the link-local ones in plain HTTP, for the route
 	// server that serves them.
@@ -188,6 +200,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	}
 	s.logger = log.New(out, "brig-broker: ", log.LstdFlags)
 	s.aws = newAWSVendor(cfg.awsBin, cfg.now, s.logger)
+	s.gcp = newGCPMinter(cfg.gcloudBin, cfg.tokenInfoURL, cfg.now, s.logger)
 	// A store that does not open fails the routes that read it, not the
 	// broker: a host with no keyring still registers sandboxes and mints
 	// their tokens.
@@ -211,6 +224,8 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		Vendor:       s.aws,
 		VendOnly:     vendOnly,
 		VendDoc:      awsPointerDoc,
+		Minter:       s.gcp,
+		MintDoc:      gcpcred.IsPointer,
 	})
 	clear(hostKey)
 	if err != nil {
@@ -452,15 +467,20 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	// The routes that vend are checked on every registration, the same one
 	// again included, so a run on a lapsed login is refused at its start.
-	// The check runs aws, so s.mu is not held: one slow profile would hold
-	// every control call behind it.
+	// So are the gcp routes whose secret is a pointer. The checks run aws
+	// and gcloud, so s.mu is not held: one slow profile would hold every
+	// control call behind it.
 	vends, err := s.checkVends(r.Context(), sb)
+	if err == nil {
+		err = s.checkMints(r.Context(), sb)
+	}
 	if err != nil {
 		s.mu.Lock()
 		// A sandbox that was never registered leaves nothing behind. One
 		// that is keeps its routes, and status names the route that failed.
 		if _, ok := s.sandboxes[req.ID]; !ok {
 			s.aws.forget(req.ID)
+			s.gcp.forget(req.ID)
 		}
 		s.mu.Unlock()
 		w.Header().Set(injector.RefusalHeader, injector.RefusalCredential)
@@ -485,13 +505,14 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			s.creds.untrack(name)
 		}
 	}
-	// A refusal after the AWS check passed is still a refusal: a sandbox
-	// that was not registered before leaves no keys behind, or a later
-	// sandbox of the same id is served keys fetched for one that never ran.
+	// A refusal after the checks passed is still a refusal: a sandbox that
+	// was not registered before leaves no keys or tokens behind, or a later
+	// sandbox of the same id is served ones fetched for one that never ran.
 	refused := func() {
 		untrack()
 		if _, ok := s.sandboxes[req.ID]; !ok {
 			s.aws.forget(req.ID)
+			s.gcp.forget(req.ID)
 		}
 	}
 	for _, rt := range sb.Routes {
@@ -529,6 +550,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			delete(s.sandboxes, req.ID)
 			delete(s.vends, req.ID)
 			s.aws.forget(req.ID)
+			s.gcp.forget(req.ID)
 			untrack()
 			http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusInternalServerError)
 			return
@@ -636,6 +658,7 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	delete(s.sandboxes, id)
 	delete(s.vends, id)
 	s.aws.forget(id)
+	s.gcp.forget(id)
 	if l := s.diverts[id]; l != nil {
 		l.close()
 		delete(s.diverts, id)
@@ -686,7 +709,9 @@ func (s *server) status(w http.ResponseWriter, _ *http.Request) {
 	if n := s.handler.Placeholders(); len(n) > 0 {
 		st.Placeholder = n
 	}
-	if v := s.aws.report(); len(v) > 0 {
+	// A route that vends and a gcp route that mints are named apart: their
+	// names are the routes of one sandbox, which are unique.
+	if v := slices.Sorted(slices.Values(append(s.aws.report(), s.gcp.report()...))); len(v) > 0 {
 		st.Vending = v
 	}
 	reply(w, st)

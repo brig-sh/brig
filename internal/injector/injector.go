@@ -234,6 +234,7 @@ type Status struct {
 	// Recovering are the secrets with a renewal journal left by a broker
 	// that stopped, or held by another one, not yet settled.
 	Recovering []string `json:"recovering,omitempty"`
-	// Vending lists "<sandbox>/<route>" whose last fetch failed.
+	// Vending lists "<sandbox>/<route>" of a route that vends whose last
+	// fetch failed, and of a gcp route whose last mint failed.
 	Vending []string `json:"vending,omitempty"`
 }

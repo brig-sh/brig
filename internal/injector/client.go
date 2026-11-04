@@ -30,10 +30,16 @@ var callTimeout = 10 * time.Second
 // credential refusal, not as "the broker did not answer". One fixed bound
 // would cut off a run with two aws routes.
 //
+// mintTimeout is what each gcp route (one with services) adds. For a gcloud
+// pointer the broker runs gcloud (bounded at 30s) and tokeninfo (10s) before
+// it answers. The injector cannot tell a pointer from a raw token, and giving
+// a raw-token route the same time only lengthens a wait that ends early.
+//
 // Variables so a test can shorten them.
 var (
 	addTimeout  = 30 * time.Second
 	vendTimeout = 70 * time.Second
+	mintTimeout = 45 * time.Second
 )
 
 // addTimeoutFor is the bound of add-sandbox for s, never below callTimeout.
@@ -42,6 +48,9 @@ func addTimeoutFor(s Sandbox) time.Duration {
 	for _, r := range s.Routes {
 		if r.Route.Vends() {
 			d += vendTimeout
+		}
+		if len(r.Route.Services) > 0 {
+			d += mintTimeout
 		}
 	}
 	return max(d, callTimeout)
