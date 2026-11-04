@@ -3,6 +3,7 @@ package policy
 import (
 	"embed"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -297,6 +298,9 @@ func overlay(base, r v1alpha1.Route) (v1alpha1.Route, error) {
 	if r.Request != nil {
 		out.Request = r.Request
 	}
+	if r.Services != nil {
+		out.Services = r.Services
+	}
 	return out, nil
 }
 
@@ -353,6 +357,7 @@ func Routes(ps []Policy) ([]v1alpha1.Route, error) {
 	routeOwner := map[string]string{}
 	envOwner := map[string]owner{}
 	prefixOwner := map[string]owner{}
+	var servicesRoute owner
 	var out []v1alpha1.Route
 	for _, p := range ps {
 		for _, r := range p.Spec.Routes {
@@ -365,15 +370,37 @@ func Routes(ps []Policy) ([]v1alpha1.Route, error) {
 					"unique across the policies bound to a run", e.Name, prev, p.Metadata.Name)
 			}
 			routeOwner[e.Name] = p.Metadata.Name
-			if e.Guest != nil {
-				for _, name := range sortedKeys(e.Guest.Env) {
-					if prev, ok := envOwner[name]; ok {
-						return nil, fmt.Errorf("guest.env %s is set by route %s of %s and by route %s "+
-							"of %s; a guest.env name is unique across the policies bound to a run",
-							name, prev.route, prev.policy, e.Name, p.Metadata.Name)
-					}
-					envOwner[name] = owner{p.Metadata.Name, e.Name}
+			// The guest finds a service by one BRIG_GCP_URL and a client
+			// library takes one endpoint per service, so a second route
+			// with services would leave the guest with two sets to choose from.
+			if len(e.Services) > 0 {
+				if servicesRoute.route != "" {
+					return nil, fmt.Errorf("only one route with services per sandbox: %s and %s",
+						servicesRoute.route, e.Name)
 				}
+				servicesRoute = owner{p.Metadata.Name, e.Name}
+			}
+			var env []string
+			if e.Guest != nil {
+				env = sortedKeys(e.Guest.Env)
+			}
+			// brig writes the gcloud variables of a route with services
+			// itself, so they are names of the route as much as its
+			// guest.env is. A route of another policy that set one would
+			// leave the guest two values, either of which could point
+			// gcloud away from the broker.
+			if len(e.Services) > 0 {
+				env = append(env, v1alpha1.GCPGuestVars(e.Services)...)
+			}
+			for _, name := range env {
+				if prev, ok := envOwner[name]; ok {
+					return nil, fmt.Errorf("guest.env %s is set by route %s of %s and by route %s "+
+						"of %s; a guest.env name is unique across the policies bound to a run",
+						name, prev.route, prev.policy, e.Name, p.Metadata.Name)
+				}
+				envOwner[name] = owner{p.Metadata.Name, e.Name}
+			}
+			if e.Guest != nil {
 				if e.Guest.Git != nil {
 					for _, prefix := range e.Guest.Git.InsteadOf {
 						if prev, ok := prefixOwner[prefix]; ok {
@@ -386,6 +413,20 @@ func Routes(ps []Policy) ([]v1alpha1.Route, error) {
 				}
 			}
 			out = append(out, e)
+		}
+	}
+	// With a route with services bound, gcloud's endpoint overrides belong
+	// to it, also for a service it does not list: one on another route would
+	// send gcloud's calls to that service past the gcp route, which refuses
+	// an unlisted service.
+	if servicesRoute.route != "" {
+		for _, name := range slices.Sorted(maps.Keys(envOwner)) {
+			o := envOwner[name]
+			if o.route != servicesRoute.route && strings.HasPrefix(name, v1alpha1.GCPEndpointOverridePrefix) {
+				return nil, fmt.Errorf("guest.env %s is set by route %s of %s; brig writes the gcloud "+
+					"endpoint overrides for route %s of %s", name, o.route, o.policy,
+					servicesRoute.route, servicesRoute.policy)
+			}
 		}
 	}
 	return out, nil

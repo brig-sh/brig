@@ -923,3 +923,217 @@ func TestPolicyValidateTLSAsWritten(t *testing.T) {
 		t.Fatalf("Validate = %v", err)
 	}
 }
+
+// gcpRoute is the gcp preset's route as it is after expansion: it forwards to
+// one host per service, so it has no upstream of its own.
+func gcpRoute() Route {
+	return Route{
+		Name:       "gcp",
+		Preset:     PresetGCP,
+		Mode:       ModeEndpoint,
+		Credential: &CredentialRef{SecretRef: SecretRef{Name: "gcp"}},
+		Inject: &Inject{Headers: &HeaderInject{
+			Set:    []Header{{Name: "Authorization", Value: "Bearer {value}"}},
+			Remove: []string{"Authorization"},
+		}},
+		Guest: &Guest{Env: map[string]string{"BRIG_GCP_URL": "{route.url}"}},
+		Services: []Service{
+			{Name: "storage", Request: &RequestPolicy{Allow: &RequestAllow{
+				Methods: []string{"GET"}, Paths: []string{"/storage/v1/b/*"}}}},
+			{Name: "compute"},
+		},
+	}
+}
+
+func TestGCPRouteValidates(t *testing.T) {
+	r := gcpRoute()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a gcp route with services was refused: %v", err)
+	}
+	if r.Vends() {
+		t.Error("a gcp route vends; it forwards")
+	}
+}
+
+func TestGCPRouteNeedsAService(t *testing.T) {
+	r := gcpRoute()
+	r.Services = nil
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "the gcp preset needs at least one service") {
+		t.Fatalf("a gcp route with no services: err = %v", err)
+	}
+}
+
+func TestGCPRouteRefusesAnUpstream(t *testing.T) {
+	r := gcpRoute()
+	r.Upstream = "https://storage.googleapis.com"
+	err := r.Validate()
+	want := "the gcp preset takes no upstream; each service is forwarded to <service>.googleapis.com"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("a gcp route with an upstream: err = %v", err)
+	}
+}
+
+func TestGCPRouteRefusesARouteLevelRequest(t *testing.T) {
+	r := gcpRoute()
+	r.Request = &RequestPolicy{Allow: &RequestAllow{Methods: []string{"GET"}}}
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "request.allow belongs to each service on a gcp route") {
+		t.Fatalf("a gcp route with a route-level request: err = %v", err)
+	}
+}
+
+func TestGCPServiceMustBeKnown(t *testing.T) {
+	r := gcpRoute()
+	r.Services = []Service{{Name: "storagex"}}
+	err := r.Validate()
+	want := `service "storagex" is not one brig wires; known: cloudresourcemanager, compute, iam, logging, storage`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("an unknown service: err = %v", err)
+	}
+}
+
+func TestGCPServicePathTable(t *testing.T) {
+	for name, want := range map[string]string{
+		"storage": "storage/v1/", "cloudresourcemanager": "", "compute": "compute/v1/",
+		"logging": "", "iam": "",
+	} {
+		got, ok := GCPServicePath(name)
+		if !ok || got != want {
+			t.Errorf("GCPServicePath(%q) = %q, %v; want %q, true", name, got, ok, want)
+		}
+	}
+	if p, ok := GCPServicePath("run"); ok || p != "" {
+		t.Errorf("GCPServicePath(run) = %q, %v; want \"\", false", p, ok)
+	}
+	got := strings.Join(GCPServiceNames(), ",")
+	if got != "cloudresourcemanager,compute,iam,logging,storage" {
+		t.Errorf("GCPServiceNames = %s", got)
+	}
+}
+
+func TestGCPServiceNamesAreUnique(t *testing.T) {
+	r := gcpRoute()
+	r.Services = []Service{{Name: "storage"}, {Name: "storage"}}
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), `service "storage" is listed twice`) {
+		t.Fatalf("a service listed twice: err = %v", err)
+	}
+}
+
+// repos is the github-token preset's list; inside a service it would be a
+// filter that matches no gcloud request, and a reader would take it to bind.
+func TestGCPServiceRefusesRepos(t *testing.T) {
+	r := gcpRoute()
+	r.Services = []Service{{Name: "storage", Request: &RequestPolicy{
+		Allow: &RequestAllow{Repos: []string{"brig-sh/brig"}}}}}
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "request.allow.repos") {
+		t.Fatalf("repos inside a service: err = %v", err)
+	}
+}
+
+func TestGCPServiceRefusesAnEmptyAllow(t *testing.T) {
+	r := gcpRoute()
+	r.Services = []Service{{Name: "storage", Request: &RequestPolicy{Allow: &RequestAllow{}}}}
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "request.allow lists nothing") {
+		t.Fatalf("an empty service allow: err = %v", err)
+	}
+}
+
+func TestServicesNeedPresetGCP(t *testing.T) {
+	for _, preset := range []Preset{"", PresetGitHubToken, PresetAWS} {
+		r := customRoute()
+		r.Preset = preset
+		r.Services = []Service{{Name: "storage"}}
+		if preset != "" {
+			r.Upstream = ""
+		}
+		err := r.validateWritten()
+		if err == nil || !strings.Contains(err.Error(), "services needs preset: gcp") {
+			t.Errorf("services on preset %q: err = %v", preset, err)
+		}
+	}
+}
+
+// brig writes the endpoint overrides from the services, so a guest.env entry
+// of that name would be a second, unchecked way to point gcloud at the route.
+func TestGCPGuestEnvRefusesAnOverrideName(t *testing.T) {
+	r := gcpRoute()
+	r.Guest.Env["CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE"] = "{route.url}"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "brig writes the gcloud endpoint overrides itself") {
+		t.Fatalf("an override name in guest.env: err = %v", err)
+	}
+}
+
+// brig writes the gcloud CA variable for a gcp route. One in the route's own
+// guest.env would point gcloud at a second bundle, and Routes would report it
+// as a clash of the route with itself.
+func TestGCPGuestEnvRefusesTheCAVariable(t *testing.T) {
+	r := gcpRoute()
+	r.Guest.Env["CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"] = "{route.url}"
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(),
+		"guest.env CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE: brig writes the gcloud CA variable itself") {
+		t.Fatalf("the CA variable in guest.env: err = %v", err)
+	}
+}
+
+func TestRouteDeepCopyClonesServices(t *testing.T) {
+	r := gcpRoute()
+	c := r.DeepCopy()
+	c.Services[0].Request.Allow.Paths[0] = "/changed"
+	c.Services[0].Name = "changed"
+	if got := r.Services[0].Request.Allow.Paths[0]; got != "/storage/v1/b/*" {
+		t.Errorf("the original path changed to %q", got)
+	}
+	if r.Services[0].Name != "storage" {
+		t.Errorf("the original service name changed to %q", r.Services[0].Name)
+	}
+}
+
+func TestDecodeAcceptsServices(t *testing.T) {
+	doc := `
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: gcp-readonly
+spec:
+  egress:
+    default: deny
+  routes:
+    - name: gcp
+      preset: gcp
+      credential:
+        secretRef: { name: gcp-creds }
+      services:
+        - name: storage
+          request:
+            allow:
+              methods: [GET]
+              paths: [/storage/v1/b, /storage/v1/b/*, /storage/v1/b/*/o, /storage/v1/b/*/o/*]
+        - name: cloudresourcemanager
+          request:
+            allow:
+              methods: [GET]
+              paths: [/v1/projects/*, /v3/projects/*]
+`
+	p, err := Decode([]byte(doc))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	got := p.Spec.Routes[0].Services
+	if len(got) != 2 || got[0].Name != "storage" || got[1].Name != "cloudresourcemanager" {
+		t.Fatalf("services = %+v", got)
+	}
+	if got[0].Request == nil || got[0].Request.Allow == nil {
+		t.Fatalf("storage has no request.allow: %+v", got[0])
+	}
+	if paths := got[0].Request.Allow.Paths; len(paths) != 4 || paths[3] != "/storage/v1/b/*/o/*" {
+		t.Errorf("storage paths = %v", paths)
+	}
+}

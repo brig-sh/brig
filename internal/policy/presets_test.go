@@ -40,18 +40,23 @@ var reviewedBetas = []string{
 }
 
 func withSecret(name v1alpha1.Preset) v1alpha1.Route {
-	return v1alpha1.Route{
+	r := v1alpha1.Route{
 		Name:       "r",
 		Preset:     name,
 		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "s"}},
 	}
+	// The gcp preset has nothing to forward to until a policy names a service.
+	if name == v1alpha1.PresetGCP {
+		r.Services = []v1alpha1.Service{{Name: "storage"}}
+	}
+	return r
 }
 
 func TestShippedPresetsValidate(t *testing.T) {
 	names := PresetNames()
 	want := []v1alpha1.Preset{
 		v1alpha1.PresetAnthropicAPIKey, v1alpha1.PresetAWS, v1alpha1.PresetClaudeCode,
-		v1alpha1.PresetGitHubToken,
+		v1alpha1.PresetGCP, v1alpha1.PresetGitHubToken,
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("PresetNames() = %v, want %v", names, want)
@@ -633,5 +638,141 @@ func TestAWSPresetRefusesAnAlteredInjectOnAnExpandedRoute(t *testing.T) {
 		if _, err := ExpandRoute(r); err == nil || !strings.Contains(err.Error(), "takes no inject") {
 			t.Errorf("%s: err = %v, want the inject refused", name, err)
 		}
+	}
+}
+
+func gcpRoute(name string) v1alpha1.Route {
+	return v1alpha1.Route{
+		Name:       name,
+		Preset:     v1alpha1.PresetGCP,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "gcp-creds"}},
+		Services: []v1alpha1.Service{{
+			Name:    "storage",
+			Request: &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{Methods: []string{"GET"}}},
+		}},
+	}
+}
+
+func TestGCPPresetExpands(t *testing.T) {
+	in := gcpRoute("gcp")
+	r, err := ExpandRoute(in)
+	if err != nil {
+		t.Fatalf("the gcp preset does not expand: %v", err)
+	}
+	if r.Mode != v1alpha1.ModeEndpoint {
+		t.Errorf("mode = %q, want endpoint", r.Mode)
+	}
+	wantInject := &v1alpha1.Inject{Headers: &v1alpha1.HeaderInject{
+		Set:    []v1alpha1.Header{{Name: "Authorization", Value: "Bearer {value}"}},
+		Remove: []string{"Authorization"},
+	}}
+	if !reflect.DeepEqual(r.Inject, wantInject) {
+		t.Errorf("inject = %+v, want %+v", r.Inject, wantInject)
+	}
+	// The expanded route must still carry a guest block.
+	wantEnv := map[string]string{"BRIG_GCP_URL": "{route.url}", "BRIG_GCP_TOKEN": "{session.token}"}
+	if r.Guest == nil || !reflect.DeepEqual(r.Guest.Env, wantEnv) {
+		t.Errorf("guest = %+v, want env %v", r.Guest, wantEnv)
+	}
+	if r.Upstream != "" {
+		t.Errorf("upstream = %q, want none", r.Upstream)
+	}
+	if !reflect.DeepEqual(r.Services, in.Services) {
+		t.Errorf("services = %+v, want %+v", r.Services, in.Services)
+	}
+	// Mutating the input afterwards must not reach the expanded route.
+	in.Services[0].Name = "mutated"
+	in.Services[0].Request.Allow.Methods[0] = "DELETE"
+	if r.Services[0].Name != "storage" || r.Services[0].Request.Allow.Methods[0] != "GET" {
+		t.Errorf("the expanded services alias the input: %+v", r.Services)
+	}
+}
+
+func TestGCPPresetExpandsTwice(t *testing.T) {
+	first, err := ExpandRoute(gcpRoute("gcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent v1alpha1.Route
+	if err := json.Unmarshal(blob, &sent); err != nil {
+		t.Fatal(err)
+	}
+	for name, r := range map[string]v1alpha1.Route{"as expanded": first, "through JSON": sent} {
+		second, err := ExpandRoute(r)
+		if err != nil {
+			t.Fatalf("%s: a second expansion was refused: %v", name, err)
+		}
+		if !reflect.DeepEqual(second, first) {
+			t.Errorf("%s: a second expansion changed the route:\n got %+v\nwant %+v", name, second, first)
+		}
+	}
+}
+
+func TestRoutesRefuseTwoServicesRoutes(t *testing.T) {
+	pol := func(name, route string) Policy {
+		var p Policy
+		p.Metadata.Name = name
+		p.Spec.Routes = []v1alpha1.Route{gcpRoute(route)}
+		return p
+	}
+	_, err := Routes([]Policy{pol("one", "gcp-a"), pol("two", "gcp-b")})
+	if err == nil || !strings.Contains(err.Error(), "only one route with services per sandbox: gcp-a and gcp-b") {
+		t.Errorf("Routes = %v, want the second services route refused", err)
+	}
+}
+
+// brig writes a gcloud endpoint override for each service of a gcp route,
+// and the gcloud CA variable with them. A route of another policy that set
+// one of those names in guest.env would leave the guest two values for one
+// variable, and either could point gcloud away from the broker.
+func TestRoutesRefuseAGuestEnvThatClashesWithAGCPOverride(t *testing.T) {
+	gcp := Policy{}
+	gcp.Metadata.Name = "gcp-read"
+	gcp.Spec.Routes = []v1alpha1.Route{gcpRoute("gcp")}
+	custom := func(name string) Policy {
+		var p Policy
+		p.Metadata.Name = "other"
+		p.Spec.Routes = []v1alpha1.Route{{
+			Name:       "inventory",
+			Upstream:   "https://inventory.example.com",
+			Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "inventory-token"}},
+			Inject: &v1alpha1.Inject{Headers: &v1alpha1.HeaderInject{
+				Set: []v1alpha1.Header{{Name: "X-Api-Key", Value: "{value}"}},
+			}},
+			Guest: &v1alpha1.Guest{Env: map[string]string{name: "{route.url}"}},
+		}}
+		return p
+	}
+	for _, name := range []string{"CLOUDSDK_API_ENDPOINT_OVERRIDES_STORAGE", "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"} {
+		other := custom(name)
+		// The clash is refused whichever policy is bound first.
+		for _, ps := range [][]Policy{{gcp, other}, {other, gcp}} {
+			_, err := Routes(ps)
+			if err == nil || !strings.Contains(err.Error(), "guest.env "+name+" is set by route ") ||
+				!strings.Contains(err.Error(), "route gcp of gcp-read") ||
+				!strings.Contains(err.Error(), "route inventory of other") {
+				t.Errorf("%s, %s first: Routes = %v, want the clash refused", name, ps[0].Metadata.Name, err)
+			}
+		}
+	}
+	// An override of a service the gcp route does not list is refused too:
+	// it would send gcloud's calls to that service to another route, where
+	// the gcp route would refuse them as an unlisted service.
+	other := custom("CLOUDSDK_API_ENDPOINT_OVERRIDES_COMPUTE")
+	for _, ps := range [][]Policy{{gcp, other}, {other, gcp}} {
+		_, err := Routes(ps)
+		want := "guest.env CLOUDSDK_API_ENDPOINT_OVERRIDES_COMPUTE is set by route inventory of other; " +
+			"brig writes the gcloud endpoint overrides for route gcp of gcp-read"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("unlisted service, %s first: Routes = %v, want %q", ps[0].Metadata.Name, err, want)
+		}
+	}
+	// Without a route with services, an override is an ordinary name.
+	if _, err := Routes([]Policy{custom("CLOUDSDK_API_ENDPOINT_OVERRIDES_COMPUTE")}); err != nil {
+		t.Errorf("Routes = %v, want an override allowed when no route has services", err)
 	}
 }

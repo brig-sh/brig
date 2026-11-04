@@ -19,6 +19,9 @@ const (
 	// it with temporary keys, because AWS signs each request with the secret
 	// key and a stand-in cannot be injected on the way out.
 	PresetAWS Preset = "aws"
+	// PresetGCP is the Google Cloud APIs that gcloud and the client
+	// libraries call, one host for each service the route lists.
+	PresetGCP Preset = "gcp"
 )
 
 // RouteMode is how a route reaches the tool in the guest.
@@ -80,6 +83,9 @@ type Route struct {
 	Guest *Guest `json:"guest,omitempty"`
 	// Request is optional. Without it, every request is allowed.
 	Request *RequestPolicy `json:"request,omitempty"`
+	// Services is required for the gcp preset, and only that preset takes it.
+	// Each entry is one Google API with its own request policy.
+	Services []Service `json:"services,omitempty"`
 
 	// lifecycleFromPreset is whether Credential.Lifecycle came from a preset,
 	// through SetLifecycleFromPreset. A decoded document cannot set it.
@@ -158,15 +164,13 @@ func (r *Route) DeepCopy() *Route {
 		out.Guest = &g
 	}
 	if r.Request != nil {
-		req := RequestPolicy{}
-		if a := r.Request.Allow; a != nil {
-			req.Allow = &RequestAllow{
-				Methods: slices.Clone(a.Methods),
-				Paths:   slices.Clone(a.Paths),
-				Repos:   slices.Clone(a.Repos),
-			}
+		out.Request = r.Request.deepCopy()
+	}
+	if r.Services != nil {
+		out.Services = make([]Service, len(r.Services))
+		for i, svc := range r.Services {
+			out.Services[i] = Service{Name: svc.Name, Request: svc.Request.deepCopy()}
 		}
-		out.Request = &req
 	}
 	return &out
 }
@@ -306,6 +310,22 @@ type RequestPolicy struct {
 	// Allow is optional. A request it does not cover is refused with 403
 	// before any credential is fetched.
 	Allow *RequestAllow `json:"allow,omitempty"`
+}
+
+// deepCopy returns a copy of p that shares no slice with it.
+func (p *RequestPolicy) deepCopy() *RequestPolicy {
+	if p == nil {
+		return nil
+	}
+	req := RequestPolicy{}
+	if a := p.Allow; a != nil {
+		req.Allow = &RequestAllow{
+			Methods: slices.Clone(a.Methods),
+			Paths:   slices.Clone(a.Paths),
+			Repos:   slices.Clone(a.Repos),
+		}
+	}
+	return &req
 }
 
 // RequestAllow is the allow list of a route. Each list that is set must
