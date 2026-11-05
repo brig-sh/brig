@@ -1027,8 +1027,9 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
 | `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session) with its routes, and report whether Brig can enforce anything against it at all |
+| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
 
-Complete command lines for all eight:
+Complete command lines for all nine:
 
 ```bash
 brig policy ls
@@ -1040,6 +1041,7 @@ brig policy attach locked-down claude-code
 brig policy detach locked-down claude-code
 brig policy check claude-code
 brig policy rm locked-down --force
+brig policy render-cilium locked-down.yaml --name locked-down
 ```
 
 A policy is bound in one of three ways: an inline entry in the `policy:`
@@ -1200,6 +1202,83 @@ nothing declares:
 $ brig policy edit locked-down
 brig: not saved, /home/you/.config/brig/policies/locked-down.yaml is unchanged: renaming locked-down to totally-new would leave claude-code pointing at a name nothing declares. Detach it first, or pass --force to rename it anyway
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
+```
+
+### render-cilium
+
+A cluster that runs Brig's broker enforces egress at the CNI, not in Brig.
+`brig policy render-cilium` turns the `spec.egress` section of a policy file
+into a CiliumNetworkPolicy and prints it on stdout. It reads the path you
+give it, so the policy does not have to be installed.
+
+```bash
+brig policy render-cilium deny-default.yaml --namespace agents --selector app=claude
+```
+
+The object name defaults to `metadata.name`, and it must be a valid
+Kubernetes name. `--name` replaces it. `--selector` is repeatable and sets
+the pod labels the policy applies to. With none, it applies to every pod in
+the namespace. `--pod-identity` adds a rule to the EKS Pod Identity agent at
+`169.254.170.23/32` on port 80.
+
+The mapping:
+
+| policy | CiliumNetworkPolicy |
+| --- | --- |
+| `default: deny` | `enableDefaultDeny: {egress: true}` and the allow rules |
+| `default: allow` | `enableDefaultDeny: {egress: false}` and the deny rules only. Cilium then allows everything else |
+| allow `host` | `toFQDNs` with `matchName`, or `matchPattern` for a glob. A leading `*.` is written `**.`, because Cilium's `*` does not cross a dot |
+| allow `cidr` | `toCIDR` |
+| deny `cidr` | `egressDeny` with `toCIDR` |
+| deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host |
+| `spec.routes` | a rule to the `host` entity on port 443, where the node broker serves `brig.internal` |
+
+The first rule is always a DNS rule to kube-dns. Cilium's DNS proxy is what
+makes `toFQDNs` work. Only `*` is accepted as a wildcard in a host glob.
+`?`, `[` and `\` are refused, and the error names the rule. A `*` inside a label, as in `a*.example.com`, matches within one label in Cilium, which is narrower than brig. The `**.` form needs a Cilium release that supports it.
+
+This is the output for a deny default with a host, a glob, a CIDR and a
+route:
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-default
+  namespace: agents
+spec:
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: ANY
+      rules:
+        dns:
+        - matchPattern: '*'
+  - toEntities:
+    - host
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+  - toFQDNs:
+    - matchName: api.anthropic.com
+  - toFQDNs:
+    - matchPattern: '**.githubusercontent.com'
+  - toCIDR:
+    - 10.0.0.0/8
+  egressDeny:
+  - toCIDR:
+    - 10.1.0.0/16
+  enableDefaultDeny:
+    egress: true
+  endpointSelector:
+    matchLabels:
+      app: claude
 ```
 
 ## Bind one session
