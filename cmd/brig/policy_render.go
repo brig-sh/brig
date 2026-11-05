@@ -1,0 +1,62 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/brig-sh/brig/internal/policy/cilium"
+)
+
+// renderCiliumPolicy prints the CiliumNetworkPolicy for the egress section of
+// one policy file.
+//
+// The file is read from the path given, not looked up by name, so a policy
+// that is not installed can be rendered. The object name defaults to the
+// policy's metadata.name.
+func renderCiliumPolicy(args []string) error {
+	var o cilium.Options
+	fs := flag.NewFlagSet("render-cilium", flag.ContinueOnError)
+	fs.StringVar(&o.Name, "name", "", "")
+	fs.StringVar(&o.Namespace, "namespace", "", "")
+	fs.BoolVar(&o.PodIdentity, "pod-identity", false, "")
+	sel := map[string]string{}
+	var selErr error
+	fs.Func("selector", "", func(v string) error {
+		k, val, ok := strings.Cut(v, "=")
+		if !ok || k == "" {
+			selErr = usagef("selector %q is not key=value", v)
+			return selErr
+		}
+		sel[k] = val
+		return nil
+	})
+	words, err := parseWords("render-cilium", "--name, --namespace, --selector and --pod-identity", fs, args)
+	if err != nil {
+		if selErr != nil {
+			return selErr
+		}
+		return err
+	}
+	switch {
+	case len(words) == 0:
+		return errors.New("policy render-cilium needs a file, for example `brig policy render-cilium policy.yaml`")
+	case len(words) > 1:
+		return fmt.Errorf("policy render-cilium takes one file, not %q", words[1])
+	}
+	if len(sel) > 0 {
+		o.PodSelector = sel
+	}
+	p, err := readPolicyFile(words[0])
+	if err != nil {
+		return err
+	}
+	out, err := cilium.RenderYAML(&p, o)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(out)
+	return err
+}

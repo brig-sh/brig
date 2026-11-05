@@ -2632,3 +2632,104 @@ func TestCheckRefusesEgressTheRunCannotEnforce(t *testing.T) {
 		})
 	}
 }
+
+const renderDenyBody = `apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: web_only
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.example.com
+      - cidr: 10.0.0.0/8
+`
+
+func writeRenderFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// render-cilium prints a CiliumNetworkPolicy and honors every flag, with the
+// flags on either side of the file.
+func TestRenderCiliumPrintsTheObject(t *testing.T) {
+	path := writeRenderFile(t, strings.Replace(renderDenyBody, "web_only", "web-only", 1))
+	out, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--namespace", "agents",
+			"--selector", "app=claude", "--selector", "tier=agent", "--pod-identity"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"apiVersion: cilium.io/v2", "kind: CiliumNetworkPolicy",
+		"name: web-only", "namespace: agents",
+		"app: claude", "tier: agent",
+		"matchName: api.example.com", "169.254.170.23/32", "enableDefaultDeny",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	out, err = captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", "--name", "custom", path})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "name: custom") || strings.Contains(out, "169.254.170.23") {
+		t.Errorf("--name or the pod identity default is wrong:\n%s", out)
+	}
+}
+
+// A policy whose name is not a Kubernetes name is refused unless --name gives
+// one.
+func TestRenderCiliumRefusesAnUnusableName(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	if _, err := captureStdout(t, func() error { return policyCmd([]string{"render-cilium", path}) }); err == nil {
+		t.Error("an underscore name rendered")
+	}
+	if _, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--name", "web-only"})
+	}); err != nil {
+		t.Errorf("--name did not rescue the name: %v", err)
+	}
+}
+
+// A usage mistake fails before any output.
+func TestRenderCiliumUsageErrors(t *testing.T) {
+	path := writeRenderFile(t, renderDenyBody)
+	for name, args := range map[string][]string{
+		"no file":      {"render-cilium"},
+		"two files":    {"render-cilium", path, path},
+		"bad selector": {"render-cilium", path, "--selector", "app"},
+		"no key":       {"render-cilium", path, "--selector", "=x"},
+		"unknown flag": {"render-cilium", path, "--bogus"},
+		"missing file": {"render-cilium", filepath.Join(t.TempDir(), "none.yaml")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := captureStdout(t, func() error { return policyCmd(args) })
+			if err == nil {
+				t.Fatalf("no error, output:\n%s", out)
+			}
+			if out != "" {
+				t.Errorf("printed before failing: %q", out)
+			}
+		})
+	}
+}
+
+// A refused rule reaches the caller with its error.
+func TestRenderCiliumRefusesAGlobCiliumCannotExpress(t *testing.T) {
+	path := writeRenderFile(t, strings.Replace(renderDenyBody, "api.example.com", "a?.example.com", 1))
+	_, err := captureStdout(t, func() error {
+		return policyCmd([]string{"render-cilium", path, "--name", "x"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "a?.example.com") {
+		t.Errorf("error does not name the rule: %v", err)
+	}
+}
