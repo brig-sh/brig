@@ -16,12 +16,12 @@ func TestUnknownVerbsAndSubcommandsExitTwo(t *testing.T) {
 	for _, args := range [][]string{
 		{"nosuchverb"},
 		// A group named with no subcommand at all.
-		{"agent"}, {"policy"}, {"secret"},
+		{"agent"}, {"policy"}, {"secret"}, {"network"},
 		// A group named with one it does not have.
 		{"agent", "bogus"}, {"policy", "bogus"},
 		{"secret", "bogus"}, {"telemetry", "bogus"},
-		{"completion", "bogus"},
-		// A retired group still answers, but not with a verb it never had.
+		{"completion", "bogus"}, {"network", "bogus"},
+		// A group removed in v0.5.0 is refused by name.
 		{"template", "edit", "mine"},
 	} {
 		assertUsageExit(t, args)
@@ -86,6 +86,9 @@ func TestABadFlagValueExitsTwo(t *testing.T) {
 		{"run", "--offline=maybe", "claude-code"},
 		{"--json=maybe", "ls"},
 		{"run", "--offline", "--network", "open", "claude-code"},
+		{"run", "--network", "bogus", "claude-code"},
+		{"run", "--publish", "abc", "claude-code"},
+		{"run", "--publish", "127.0.0.1:8080", "claude-code"},
 		{"secret", "create", "gh-token", "-f", ""},
 		{"secret", "create", "gh-token", "--stdin", "-f", "key"},
 		{"secret", "import", "claude-code", "--from-command", ""},

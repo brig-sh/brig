@@ -1063,7 +1063,8 @@ did not come up.
 ### Usage mistakes
 
 **A mistake in what you typed exits `2`.** An unknown top-level command, an
-unknown or missing subcommand on `agent`, `policy`, `secret` or `telemetry`,
+unknown or missing subcommand on `agent`, `policy`, `secret`, `network` or
+`telemetry`,
 a run-line verb given no ref, any verb in those groups given no operand, one
 given a word or a flag it has no place for, a flag given no value or one it
 cannot take, and two flags that ask for different things all return the
@@ -1088,6 +1089,10 @@ Naming something that does not exist is a different class and stays `3`:
 there, not a command typed wrong.
 
 A bare `brig telemetry` is not a usage mistake. It runs `status`.
+
+A value that reaches Brig other than on the command line is not a usage
+mistake either. `--network bogus` and `--publish abc` exit `2`, but the same
+bad posture in `BRIG_NETWORK` or in a profile's `network:` exits `1`.
 
 ## Environment variables
 

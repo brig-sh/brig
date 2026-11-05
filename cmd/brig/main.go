@@ -1316,8 +1316,7 @@ A port is 3000, 8080:80, 127.0.0.1:8080:80 or 5353:53/udp. See brig help.
 // the help text instead.
 func networkSub(rest []string) (string, error) {
 	if len(rest) == 0 {
-		fmt.Print(networkUsage)
-		return "", nil
+		return "", usagef("network needs a subcommand: ls, publish or unpublish")
 	}
 	switch rest[0] {
 	case "-h", "--help", "help":
@@ -1569,6 +1568,15 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 				o.load.Network)
 		}
 		o.load.Network = "offline"
+	}
+	// --network and --publish are checked with the other flags, so a bad value
+	// is a usage error. BRIG_NETWORK and the profile's network: are checked by
+	// Load, where a bad value is a general failure.
+	if _, err := wrap.ParseNetworkStrict(o.load.Network, "--network"); err != nil {
+		return options{}, "", nil, usagef("%s", err)
+	}
+	if _, err := runtime.ParsePublications(o.load.Publish); err != nil {
+		return options{}, "", nil, usagef("%s", err)
 	}
 	// The label is the session, and it lands in the session name, the one
 	// path everything downstream reads -- the slug, the workspace, the sandbox
@@ -3713,7 +3721,7 @@ func publishPorts(cfg *wrap.Config, ref string, ports []string, wantJSON bool) e
 	}
 	add, err := runtime.ParsePublications(ports)
 	if err != nil {
-		return err
+		return usagef("%s", err)
 	}
 	// Before the record is written. A backend that cannot open a port must
 	// refuse here, where the port is still on the command line, rather than at
@@ -3775,7 +3783,7 @@ func unpublishPorts(cfg *wrap.Config, ref string, ports []string, all, wantJSON 
 	default:
 		named, err := runtime.ParseHostSides(ports)
 		if err != nil {
-			return err
+			return usagef("%s", err)
 		}
 		// Resolved against the record rather than taken literally. A port
 		// written without an address names whatever is published on it, and
