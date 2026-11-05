@@ -69,6 +69,11 @@ type serverConfig struct {
 	// the mounted Secret of a broker on a Kubernetes node. The directory is
 	// read-only, and a directory that does not open stops the broker.
 	secretDir string
+	// listen, when set, is the host:port the routes are served on, with
+	// TLS, instead of the loopback port. It is the address a pod of a
+	// Kubernetes node reaches the broker at. No port file is read or
+	// written, and the divert sockets keep working beside it.
+	listen string
 	// transport carries the upstream requests. nil is the broker's own,
 	// with the system roots.
 	transport http.RoundTripper
@@ -136,7 +141,9 @@ type server struct {
 	// through TLS, and the link-local ones in plain HTTP, for the route
 	// server that serves them.
 	internal *connListener
-	port     int
+	// port is the loopback port of the routes, or 0 when they are served on
+	// cfg.listen.
+	port int
 	// storeErr is why brig's secret store did not open at start.
 	storeErr error
 
@@ -147,6 +154,11 @@ type server struct {
 	sandboxes map[string]string // id -> the registration, as canonical JSON
 	// diverts are the divert sockets, by sandbox id.
 	diverts map[string]*divertSandbox
+	// addrs are the registered addresses of the sandboxes, by sandbox id,
+	// and byAddr is the same map the other way. A request on the address
+	// listener is bound to the sandbox registered with its peer IP.
+	addrs  map[string]string
+	byAddr map[string]string
 	// vends are the routes that vend of each sandbox, by sandbox id and
 	// route name, as the last registration checked them.
 	vends    map[string]map[string]vendRoute
@@ -164,6 +176,7 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 		return nil, err
 	}
 	s := &server{cfg: cfg, sandboxes: map[string]string{}, diverts: map[string]*divertSandbox{},
+		addrs: map[string]string{}, byAddr: map[string]string{},
 		vends: map[string]map[string]vendRoute{}, stop: make(chan struct{}), internal: newConnListener(),
 		resolve: cfg.resolve, dial: cfg.dial}
 	if s.resolve == nil {
@@ -251,12 +264,20 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	if err != nil {
 		return nil, err
 	}
-	ln, err := listenRoutes(cfg.dir)
-	if err != nil {
-		return nil, err
+	if cfg.listen != "" {
+		// The port file is the loopback listener's. A node broker neither
+		// reads nor writes it, so a stale one stays as it is.
+		if s.routes, err = listenAddress(cfg.listen, s.ca); err != nil {
+			return nil, err
+		}
+	} else {
+		ln, err := listenRoutes(cfg.dir)
+		if err != nil {
+			return nil, err
+		}
+		s.routes = newLimitListener(ln, maxConns)
+		s.port = ln.Addr().(*net.TCPAddr).Port
 	}
-	s.routes = newLimitListener(ln, maxConns)
-	s.port = ln.Addr().(*net.TCPAddr).Port
 	// The lock is held, so a socket file here was left by a broker that did
 	// not exit cleanly.
 	sock := filepath.Join(cfg.dir, injector.SocketName)
@@ -283,9 +304,16 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 // for, then closes both listeners and removes the socket and the pid file.
 func (s *server) serve(ctx context.Context) error {
 	logger := s.logger
+	// The routes are on the loopback port, or on the address listener with
+	// TLS. Each marks its connections, and the handler's clear-text check
+	// reads the mark.
+	connContext, where := loopbackContext, fmt.Sprintf("127.0.0.1:%d", s.port)
+	if s.cfg.listen != "" {
+		connContext, where = addressContext, s.routes.Addr().String()+" with TLS"
+	}
 	routes := &http.Server{
 		Handler:           s.handler,
-		ConnContext:       loopbackContext,
+		ConnContext:       connContext,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
@@ -315,7 +343,7 @@ func (s *server) serve(ctx context.Context) error {
 	go func() { errs <- routes.Serve(s.routes) }()
 	go func() { errs <- internal.Serve(s.internal) }()
 	go func() { errs <- control.Serve(s.control) }()
-	logger.Printf("serving routes on 127.0.0.1:%d, control on %s", s.port, s.control.Addr())
+	logger.Printf("serving routes on %s, control on %s", where, s.control.Addr())
 	if s.storeErr != nil {
 		logger.Printf("brig's secret store did not open, and every route answers 502 until it does: %v", s.storeErr)
 	}
@@ -454,6 +482,11 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
 		return
 	}
+	addr, err := s.sandboxAddr(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+		return
+	}
 	// The settings of each route mode besides endpoint go to that mode's
 	// divert handler, which checks them before anything is registered.
 	for _, m := range slices.Sorted(maps.Keys(req.Modes)) {
@@ -479,8 +512,9 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	key, err := json.Marshal(struct {
 		broker.Sandbox
 		BrigInternal string
+		Address      string
 		Settings     map[v1alpha1.RouteMode]json.RawMessage
-	}{sb, req.BrigInternal, req.Modes})
+	}{sb, req.BrigInternal, addr, req.Modes})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -510,6 +544,13 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.refuseStopping(w) {
+		return
+	}
+	// One address binds the requests of one sandbox. The same sandbox
+	// registered again keeps its own.
+	if other, ok := s.byAddr[addr]; addr != "" && ok && other != req.ID {
+		http.Error(w, fmt.Sprintf("sandbox %s: the address %s is registered by another sandbox", req.ID, addr),
+			http.StatusConflict)
 		return
 	}
 	if s.sandboxes[req.ID] == string(key) {
@@ -569,6 +610,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 			s.handler.RemoveSandbox(req.ID)
 			delete(s.sandboxes, req.ID)
 			delete(s.vends, req.ID)
+			s.setAddress(req.ID, "")
 			s.aws.forget(req.ID)
 			s.gcp.forget(req.ID)
 			untrack()
@@ -578,6 +620,7 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		s.diverts[req.ID] = l
 	}
 	s.sandboxes[req.ID] = string(key)
+	s.setAddress(req.ID, addr)
 	s.setVends(req.ID, vends)
 	for _, name := range tracked {
 		s.creds.recover(name)
@@ -590,6 +633,9 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 // it by, and never its key.
 func (s *server) added(id string) injector.AddResponse {
 	var resp injector.AddResponse
+	if s.addrs[id] != "" {
+		resp.CA = string(s.ca.certPEM())
+	}
 	if l := s.diverts[id]; l != nil {
 		resp.DivertSocket = l.path
 		if l.internal.IsValid() {
@@ -651,6 +697,38 @@ func (s *server) setVends(id string, vends map[string]vendRoute) {
 	s.vends[id] = vends
 }
 
+// sandboxAddr reads the address of a registration: "" for none, or the
+// canonical spelling of one IP. A broker without --listen has no listener a
+// pod could reach, and a sandbox is bound by its address or by a divert
+// socket and not by both, so the registration is refused in those cases.
+func (s *server) sandboxAddr(req injector.Sandbox) (string, error) {
+	addr, err := canonicalAddr(req.Address)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case addr == "":
+	case s.cfg.listen == "":
+		return "", errors.New("it has an address, and this broker runs without --listen, so no pod can reach it")
+	case req.BrigInternal != "" || len(req.Modes) > 0:
+		return "", errors.New("it has an address, and a sandbox on the address listener has no brig.internal " +
+			"address and no route mode besides endpoint")
+	}
+	return addr, nil
+}
+
+// setAddress records the address of sandbox id, or none, and releases the
+// one it had. s.mu is held.
+func (s *server) setAddress(id, addr string) {
+	if old := s.addrs[id]; old != "" {
+		delete(s.byAddr, old)
+	}
+	delete(s.addrs, id)
+	if addr != "" {
+		s.addrs[id], s.byAddr[addr] = addr, id
+	}
+}
+
 // brigInternalAddr reads the brig.internal address of a registration: "" for
 // none, or one IP address in its canonical spelling, never unspecified,
 // loopback or multicast. The broker serves brig.internal on connections to
@@ -676,6 +754,7 @@ func (s *server) removeSandbox(w http.ResponseWriter, r *http.Request) {
 	_, removed := s.sandboxes[id]
 	s.handler.RemoveSandbox(id)
 	delete(s.sandboxes, id)
+	s.setAddress(id, "")
 	delete(s.vends, id)
 	s.aws.forget(id)
 	s.gcp.forget(id)

@@ -10,11 +10,14 @@
 // lifecycle through internal/renew. That refresher is why this is a binary of
 // its own: no package on brig's run path links it.
 //
-// On a Kubernetes node there is no keychain and no Secret Service. With
-// --secret-dir the credentials are the files of a mounted Secret, one file per
-// secret, and the store is read-only: a refreshed credential stays in memory
-// and is logged once as not written back. docs/broker.md ("Running the broker
-// on a node") describes it.
+// On a Kubernetes node there is no keychain and no Secret Service, and a pod
+// reaches the broker over the network. With --secret-dir the credentials are
+// the files of a mounted Secret, one file per secret, and the store is
+// read-only: a refreshed credential stays in memory and is logged once as not
+// written back. With --listen the routes are served on a TCP address with TLS
+// in place of the loopback port, and a request is bound to the sandbox
+// registered with the address it came from. docs/broker.md ("Running the
+// broker on a node") describes both.
 //
 // Nothing it holds goes on a command line. The host key that signs the tokens
 // is a file in its directory that only it reads. docs/broker.md describes it.
@@ -43,13 +46,15 @@ func run(args []string, stderr io.Writer, cfg serverConfig) int {
 	fs := flag.NewFlagSet("brig-broker", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", "", "the broker directory, ~/.brig/host/broker (required)")
+	listen := fs.String("listen", "", "serve the routes on this host:port with TLS instead of on a loopback port; "+
+		"the port file is neither read nor written")
 	secretDir := fs.String("secret-dir", "", "read credentials from the files of this directory, one per secret, "+
 		"instead of brig's secret store; the directory is read-only")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *dir == "" || fs.NArg() > 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: brig-broker --dir <dir> [--secret-dir <dir>]; brig starts it, there is no need to run it by hand")
+		_, _ = fmt.Fprintln(stderr, "usage: brig-broker --dir <dir> [--listen <host:port>] [--secret-dir <dir>]; brig starts it, there is no need to run it by hand")
 		return 2
 	}
 	// Every file the broker creates is its own: the host key, the CA key,
@@ -57,6 +62,7 @@ func run(args []string, stderr io.Writer, cfg serverConfig) int {
 	syscall.Umask(0o077)
 	cfg.dir = *dir
 	cfg.secretDir = *secretDir
+	cfg.listen = *listen
 	srv, err := newServer(cfg)
 	if err == errAlreadyRunning {
 		_, _ = fmt.Fprintln(stderr, "brig-broker: another broker is serving", *dir)
