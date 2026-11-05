@@ -41,6 +41,7 @@ usage:
   brig policy attach <policy> <profile> [-n NAME]   bind it to a profile, or one session
   brig policy detach <policy> <profile> [-n NAME]   reverse an attach
   brig policy check <profile> [-n NAME]             what is bound, and whether it can enforce anything
+  brig policy render-cilium <file> [flags]          print the egress section as a CiliumNetworkPolicy
 
 flags:
   -f, --force   with create: replace a file already there
@@ -48,6 +49,10 @@ flags:
                 with rm: delete one that is bound to something
       --json    with show: render JSON rather than YAML
       --preset  with show: a preset brig ships, not a policy
+      --name, --namespace, --selector k=v, --pod-identity
+                with render-cilium: the object name (default: the policy's),
+                its namespace, a pod label (repeatable), and a rule to the
+                EKS Pod Identity agent
   -n, --name    with attach/detach/check: one session by name, not every run
 
 A policy is a named document declaring what an agent may reach outbound,
@@ -75,7 +80,7 @@ func rejectPolicyTail(tail []string) error {
 // policyCmd groups the policy verbs.
 func policyCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("policy needs a subcommand: ls, create, edit, show, rm, attach, detach or check")
+		return errors.New("policy needs a subcommand: ls, create, edit, show, rm, attach, detach, check or render-cilium")
 	}
 	var err error
 	switch args[0] {
@@ -105,8 +110,10 @@ func policyCmd(args []string) error {
 		err = detachPolicy(args[1:])
 	case "check":
 		err = checkPolicy(args[1:])
+	case "render-cilium":
+		err = renderCiliumPolicy(args[1:])
 	default:
-		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach, check)", args[0])
+		return fmt.Errorf("unknown policy subcommand %q (ls, create, edit, show, rm, attach, detach, check, render-cilium)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how
 	// the flag package says it. Asking for help is not a mistake, so it is
