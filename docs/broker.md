@@ -831,6 +831,27 @@ back, and serves the value it has. `GET /status` does not name the secret in
 and a changed file replaces the held value at the next recheck, within five
 minutes. See [The renewal journal](secrets.md#the-renewal-journal).
 
+### What a node broker refuses
+
+A node has no host `aws` CLI and no AWS profile. A broker started with
+`--listen` or `--secret-dir` refuses a registration that names a route that
+vends, which is a route on the `aws` preset, with 400 at `POST /sandboxes`:
+
+```
+sandbox pod-7f3a: route aws vends AWS keys through the host's aws CLI and profile, and a broker started with --listen has neither. Use the platform's own credential vending for this workload
+```
+
+The error names the route and the flag. The broker runs no `aws`, keeps no
+state for the sandbox, and does not register its other routes. The platform
+gives a workload on a node its AWS keys by its own means, such as a role
+bound to the pod.
+
+The rest of the registration checks are the ones everywhere else. A route
+mode the build does not serve, `splice` for one, is refused with 400 and
+`route mode splice is not part of this build of brig`. A sandbox with
+`address` is refused when it also names `brigInternal` or `modes`, and when
+the broker has no `--listen`. A shared `address` is a 409.
+
 ## Routes that vend
 
 A route on the `aws` preset answers the guest itself, and has no upstream.
@@ -900,6 +921,10 @@ route, and never to the guest or to the audit log. It can name paths of the
 host.
 
 ### Registration
+
+A broker started with `--listen` or `--secret-dir` refuses a route that vends
+at registration, before any of this. See
+[What a node broker refuses](#what-a-node-broker-refuses).
 
 A registration checks every route that vends before the broker answers,
 also when it is the same registration again. The broker resolves the secret,

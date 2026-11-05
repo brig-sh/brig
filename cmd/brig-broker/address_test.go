@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
+	"github.com/brig-sh/brig/internal/routemode"
 )
 
 // inventoryRoute is the route of example 4 of the broker spec

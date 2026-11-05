@@ -509,6 +509,10 @@ func (s *server) addSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		sb.Routes = append(sb.Routes, broker.Route{Policy: rt.Policy, Route: expanded})
 	}
+	if err := s.refuseHostRoutes(sb); err != nil {
+		http.Error(w, fmt.Sprintf("sandbox %s: %v", req.ID, err), http.StatusBadRequest)
+		return
+	}
 	key, err := json.Marshal(struct {
 		broker.Sandbox
 		BrigInternal string
@@ -695,6 +699,32 @@ func (s *server) setVends(id string, vends map[string]vendRoute) {
 		return
 	}
 	s.vends[id] = vends
+}
+
+// refuseHostRoutes refuses a registration whose routes need the host, when
+// the broker runs as a node daemon. A route that vends runs the host's aws
+// CLI against a profile there, and a node has neither. The error names the
+// route and says where the keys come from instead.
+func (s *server) refuseHostRoutes(sb broker.Sandbox) error {
+	var flags string
+	switch {
+	case s.cfg.listen != "" && s.cfg.secretDir != "":
+		flags = "--listen and --secret-dir"
+	case s.cfg.listen != "":
+		flags = "--listen"
+	case s.cfg.secretDir != "":
+		flags = "--secret-dir"
+	default:
+		return nil
+	}
+	for _, rt := range sb.Routes {
+		if rt.Route.Vends() {
+			return fmt.Errorf("route %s vends AWS keys through the host's aws CLI and profile, and a broker "+
+				"started with %s has neither. Use the platform's own credential vending for this workload",
+				rt.Route.Name, flags)
+		}
+	}
+	return nil
 }
 
 // sandboxAddr reads the address of a registration: "" for none, or the
