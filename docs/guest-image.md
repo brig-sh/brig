@@ -55,7 +55,7 @@ Not every profile needs every binary:
 - **`bash`.** `brig sh` is how you look inside a misbehaving sandbox. You
   cannot inspect an image without `bash` that way.
 - **`volumes:` and `files:`.** Three of the nine shipped profiles declare
-  them, `claude-code`, `claude-desktop` and `herd`. They are the three that
+  them, `claude-code`, `claude-desktop` and `herdr`. They are the three that
   deliver a credential as a file. If your profile forwards everything as
   environment variables, most of the table does not apply to it.
 
@@ -135,7 +135,7 @@ last path element: `/home/claude` means the user `claude` (`GuestUser` in
 
 | profiles | `guestHome` | guest user |
 | --- | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `herd`, `opencode` | `/root` | root |
+| `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `opencode` | `/root` | root |
 | `cursor` | `/home/cursor` | `cursor` |
 | `ubuntu` | `/root/work` | The derived name is `work`, which is not an account in that image. Nothing reads it there, because the image already runs as `root` |
 

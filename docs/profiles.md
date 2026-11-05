@@ -108,17 +108,17 @@ be named after the profile inside it. Two files with one name is a mistake:
 | `cursor` |  | agent, example profile | `ghcr.io/brig-sh/cursor:latest` |
 | `gemini` |  | agent, example profile | `ghcr.io/brig-sh/gemini-stock:root` |
 | `grok` |  | agent, example profile | `ghcr.io/brig-sh/grok-stock:root` |
-| `herd` |  | agent | `ghcr.io/brig-sh/herd-stock:latest` |
+| `herdr` | `herd` | agent | `ghcr.io/brig-sh/herdr-stock:latest` |
 | `opencode` |  | agent, example profile | `ghcr.io/brig-sh/opencode-stock:root` |
 | `ubuntu` |  | shell | `docker.io/library/ubuntu:latest` |
 
 - "example profile" is the profile's own `desc:`, and `brig agent ls` prints
-  it. `claude-code`, `codex` and `herd` have no such marker.
+  it. `claude-code`, `codex` and `herdr` have no such marker.
 - `claude-desktop` is the one shipped `kind: gui` profile, and `ubuntu` is the
   one shipped `kind: shell` profile. The other seven are `kind: agent`, the
   default. See [`kind`](#kind).
-- `herd` is `claude-code` with sshd and a herdr server in the image. See
-  [herd.md](herd.md).
+- `herdr` is `claude-code` with sshd and a herdr server in the image. See
+  [herdr.md](herdr.md).
 - The table states what each profile declares. It does not say whether the
   registry serves the image today.
 
@@ -134,7 +134,7 @@ Signature verification depends on the registry
 
 | profiles | registry | signature |
 | --- | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `herd`, `opencode` | `ghcr.io/brig-sh`, Brig's own builds | Brig can verify a signature against this registry |
+| `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `opencode` | `ghcr.io/brig-sh`, Brig's own builds | Brig can verify a signature against this registry |
 | `claude-desktop` | `ghcr.io/nofireai/` | Brig cannot verify the signature and warns on every boot. The image is single-architecture, `aarch64` only |
 | `ubuntu` | Docker Hub | Brig cannot verify the signature and warns on every boot |
 
@@ -367,7 +367,7 @@ one, import a profile of the same name.
 | `runtimeBin` | no | The runtime binary to drive instead of the one on `PATH`, `~` expanded. It describes your machine and not the workload, so it is of no use to a person you share the profile with. Use it to pin a profile to a build you are working on without exporting a variable in every shell. `BRIG_RUNTIME_BIN` wins over it |
 | `rootfsType` | no | How the guest root reaches the microVM: `block`, `virtiofs` or `9pfs`. Left unset or set to `virtiofs`, a `genericBoot` profile boots an overlay root where the host can build one, and the runtime's own root elsewhere. See [the guest root of a generic boot](runtimes.md#the-guest-root-of-a-generic-boot). A profile cannot opt out of the overlay; `BRIG_ROOTFS_MODE=virtiofs` does. Set `block` when the sandbox installs packages and needs a writable disk instead of a share sized to the image |
 | `genericBoot` | no | The image was never built to be a guest: a plain OCI image with no kernel and no urunc metadata. The runtime supplies the kernel and initrd and boots it unmodified, on macOS and Linux alike. See [`genericBoot`](#genericboot) |
-| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the guest home. Brig seeds them only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both must be set for either to take effect. Only `claude-code` and `herd` declare them, so `--skills` does nothing on the other seven |
+| `hostConfigDir`, `projectPaths` | no | Where the user's own agent configuration lives on the host, and which subdirectories of it to seed into the guest home. Brig seeds them only when the run passes `--skills` or sets `BRIG_SKILLS=1`. Both must be set for either to take effect. Only `claude-code` and `herdr` declare them, so `--skills` does nothing on the other seven |
 | `onboarding` | no | A first-run state file to seed. See [`onboarding`](#onboarding) |
 | `reserved` | no | Marks a profile that owns the guest home a session name can otherwise slug onto. See [`reserved`](#reserved) |
 | `unpublished` | no | Brig ships the profile but no image for it. `brig run` says so and stops before the pull, which otherwise fails with a registry 404. Pass `--image` with one you built. `brig agent ls` marks the profile, and `cursor` is the one that carries it |
@@ -741,7 +741,7 @@ Shipped profiles:
 
 | profiles | what they declare | where state lives |
 | --- | --- | --- |
-| `claude-code`, `claude-desktop`, `herd` | `volumes:` | In-guest state can live in memory and stay off host disk |
+| `claude-code`, `claude-desktop`, `herdr` | `volumes:` | In-guest state can live in memory and stay off host disk |
 | `codex`, `cursor`, `gemini`, `grok`, `opencode`, `ubuntu` | No `volumes:` | Everything under `guestHome` persists to host disk, with nothing memory-only |
 
 ### State lost at `brig stop`

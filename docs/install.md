@@ -251,7 +251,7 @@ boot as a guest.
 
 | Profiles | Need `oras` |
 | --- | --- |
-| `claude-code`, `codex`, `gemini`, `grok`, `herd`, `opencode`, `ubuntu` (seven of the nine shipped profiles, all `genericBoot`) | Yes |
+| `claude-code`, `codex`, `gemini`, `grok`, `herdr`, `opencode`, `ubuntu` (seven of the nine shipped profiles, all `genericBoot`) | Yes |
 | `claude-desktop`, `cursor` | No |
 
 Without `oras` on `PATH`, a `genericBoot` run fails. The error names the

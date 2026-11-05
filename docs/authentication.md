@@ -33,7 +33,7 @@ The profile decides where the login is stored:
 
 | profiles | where the login is stored | after a stop |
 | --- | --- | --- |
-| `claude-code`, `claude-desktop`, `herd` | a memory-backed mount | `brig stop claude` discards the mount, so the next `brig run claude` prompts again |
+| `claude-code`, `claude-desktop`, `herdr` | a memory-backed mount | `brig stop claude` discards the mount, so the next `brig run claude` prompts again |
 | `codex`, `cursor`, `gemini`, `grok`, `opencode` | the guest home, which these profiles keep on host disk | the login survives |
 
 For `claude-code`, the login file in the guest is
@@ -81,10 +81,10 @@ The imported login survives a stop.
 
 | profiles | what `import` does |
 | --- | --- |
-| `claude-code`, `claude-desktop`, `herd` | fills `claude-credentials` from the first of two places on your host: the `Claude Code-credentials` generic-password item in the macOS keychain, then the file `~/.claude/.credentials.json` |
+| `claude-code`, `claude-desktop`, `herdr` | fills `claude-credentials` from the first of two places on your host: the `Claude Code-credentials` generic-password item in the macOS keychain, then the file `~/.claude/.credentials.json` |
 | `codex`, `cursor`, `gemini`, `grok`, `opencode`, `ubuntu` | these profiles declare no `secrets:`. The command prints `<profile> declares no secrets, so there is nothing to import` and exits 0, on any host. It does not open the secret store |
 
-`claude-code`, `claude-desktop` and `herd` declare no source for `gh-token`.
+`claude-code`, `claude-desktop` and `herdr` declare no source for `gh-token`.
 Store that secret by hand (`brig secret create gh-token`) or export
 `GH_TOKEN` on each run. See [Git access in the guest](#git-access-in-the-guest).
 
@@ -123,7 +123,7 @@ Four profiles deny a provider key:
 
 | profile | not forwarded from your environment |
 | --- | --- |
-| `claude-code`, `claude-desktop`, `herd` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` |
+| `claude-code`, `claude-desktop`, `herdr` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` |
 | `codex` | `OPENAI_API_KEY` |
 
 A forwarded key moves the sandbox off your subscription and onto metered
@@ -161,7 +161,7 @@ The profile decides how `GH_TOKEN` reaches the guest:
 
 | profiles | source of `GH_TOKEN` |
 | --- | --- |
-| `claude-code`, `claude-desktop`, `herd` | a chain: your exported `GH_TOKEN` wins if you set one, and a stored `gh-token` secret is the fallback |
+| `claude-code`, `claude-desktop`, `herdr` | a chain: your exported `GH_TOKEN` wins if you set one, and a stored `gh-token` secret is the fallback |
 | the other six profiles | your exported `GH_TOKEN` only. A stored `gh-token` secret does not reach them |
 
 [Keeping secrets in your keyring](secrets.md) is the reference for the store

@@ -51,6 +51,7 @@ var registry = map[string]entry{}
 var aliases = map[string]string{
 	"claude":  "claude-code",
 	"desktop": "claude-desktop",
+	"herd":    "herdr", // the profile's name in v0.5.0 and v0.5.1
 }
 
 // reservedBasenames are the files in the profile directory that are not
