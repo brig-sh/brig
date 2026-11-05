@@ -1,29 +1,29 @@
-name: herd
+name: herdr
 desc: Claude Code with a herdr server, managed over SSH
 binary: claude
-# :latest, not :root as the other published profiles say. herd is built on
+# :latest, not :root as the other published profiles say. herdr is built on
 # root only, so its default stock image is already the root one and there is
 # no separate :root tag.
-image: ghcr.io/brig-sh/herd-stock:latest
+image: ghcr.io/brig-sh/herdr-stock:latest
 
-# herd is claude-code plus sshd and a herdr server in the image, so one herdr
+# herdr is claude-code plus sshd and a herdr server in the image, so one herdr
 # client on the host can manage many sandboxes as remote machines, one agent
 # each. Everything below is claude-code's, field for field, and
 # claude-code.yaml carries the reasoning for each. The fields are written out
 # rather than referenced because a spec has no way to inherit another, the
 # same trade claude-desktop makes for its secret.
-# TestHerdHandlesCredentialsLikeClaudeCode fails if the two drift.
+# TestHerdrHandlesCredentialsLikeClaudeCode fails if the two drift.
 #
 # The host reaches the guest with an ssh ProxyCommand that runs the image's
-# herd-sshd through `brig exec`; docs/herd.md has the ssh config. herd-sshd
-# copies the exec's environment to /run/herd/env (guest tmpfs, root-only) so
+# herdr-sshd through `brig exec`; docs/herdr.md has the ssh config. herdr-sshd
+# copies the exec's environment to /run/herdr/env (guest tmpfs, root-only) so
 # herdr panes, which sshd starts with a clean environment, get the same broker
 # token and CA paths a `brig exec` does.
 
 hypervisor: hvi
 network: isolated
 genericBoot: true
-# Root, as claude-code. herd needs it in any case: sshd only starts a
+# Root, as claude-code. herdr needs it in any case: sshd only starts a
 # session as root.
 guestHome: /root
 

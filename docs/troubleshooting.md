@@ -319,7 +319,7 @@ the warning is gone.
 Brig prints no error. The agent shows its login screen on a sandbox that you
 already logged in to.
 
-**Cause:** Only `claude-code`, `claude-desktop` and `herd` keep the in-guest
+**Cause:** Only `claude-code`, `claude-desktop` and `herdr` keep the in-guest
 login in a memory-backed mount that never reaches host disk, and `brig stop`
 removes it with the microVM. The other six profiles keep the whole guest
 home on host disk, so a login written there survives a stop.

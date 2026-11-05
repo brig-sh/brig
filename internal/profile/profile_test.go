@@ -137,9 +137,9 @@ func TestPublishedImagesMatchProfileNames(t *testing.T) {
 		"gemini":      "ghcr.io/brig-sh/gemini-stock:root",
 		"grok":        "ghcr.io/brig-sh/grok-stock:root",
 		"opencode":    "ghcr.io/brig-sh/opencode-stock:root",
-		// herd is built on root only, so its default stock image is the root
+		// herdr is built on root only, so its default stock image is the root
 		// one and there is no separate :root tag.
-		"herd": "ghcr.io/brig-sh/herd-stock:latest",
+		"herdr": "ghcr.io/brig-sh/herdr-stock:latest",
 	}
 	for name, image := range published {
 		tmpl, ok := Lookup(name)
@@ -173,6 +173,7 @@ func TestLookupAliases(t *testing.T) {
 	for alias, want := range map[string]string{
 		"claude":      "claude-code",
 		"desktop":     "claude-desktop",
+		"herd":        "herdr",
 		"claude-code": "claude-code",
 	} {
 		tmpl, ok := Lookup(alias)
@@ -228,27 +229,27 @@ func TestCloneDoesNotSharePolicy(t *testing.T) {
 	}
 }
 
-// herd is claude-code with a different image. Its spec repeats claude-code's
+// herdr is claude-code with a different image. Its spec repeats claude-code's
 // fields because a spec cannot inherit another, so this is what keeps the two
 // from drifting: a change to how claude-code delivers or withholds a
 // credential -- a secret source, the tmpfs, the denylist -- that is not made
-// to herd as well would leave herd handling the same login differently.
+// to herdr as well would leave herdr handling the same login differently.
 //
 // The whole profile is compared, not a list of credential fields, so a field
 // added to one spec and forgotten in the other fails here too.
-func TestHerdHandlesCredentialsLikeClaudeCode(t *testing.T) {
+func TestHerdrHandlesCredentialsLikeClaudeCode(t *testing.T) {
 	reset(t)
 	claude, ok := Lookup("claude-code")
 	if !ok {
 		t.Fatal("claude-code profile is missing")
 	}
-	herd, ok := Lookup("herd")
+	herdr, ok := Lookup("herdr")
 	if !ok {
-		t.Fatal("herd profile is missing")
+		t.Fatal("herdr profile is missing")
 	}
-	// What herd is meant to differ in.
-	herd.Name, herd.Desc, herd.Image = claude.Name, claude.Desc, claude.Image
-	if !reflect.DeepEqual(claude, herd) {
-		t.Errorf("herd differs from claude-code beyond name, desc and image:\nclaude-code: %+v\nherd:        %+v", claude, herd)
+	// What herdr is meant to differ in.
+	herdr.Name, herdr.Desc, herdr.Image = claude.Name, claude.Desc, claude.Image
+	if !reflect.DeepEqual(claude, herdr) {
+		t.Errorf("herdr differs from claude-code beyond name, desc and image:\nclaude-code: %+v\nherdr:       %+v", claude, herdr)
 	}
 }

@@ -16,7 +16,7 @@ func TestBuiltInsLoadFromTheEmbeddedSpecs(t *testing.T) {
 	}
 	want := []string{
 		"claude-code", "claude-desktop", "codex", "cursor",
-		"gemini", "grok", "herd", "opencode", "ubuntu",
+		"gemini", "grok", "herdr", "opencode", "ubuntu",
 	}
 	got := Names()
 	if len(got) != len(want) {

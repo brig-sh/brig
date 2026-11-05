@@ -231,6 +231,28 @@ call. See [Guest image](guest-image.md).
 
 </details>
 
+## Profile names
+
+| Renamed in | Profile | Current |
+| --- | --- | --- |
+| 0.6.0 | `herd` | `herdr` |
+
+The profile that runs Claude Code with a herdr server is named after the
+tool, `herdr`, and so is its image, `ghcr.io/brig-sh/herdr-stock`. `herd`
+stays as an alias, so `brig run herd` starts a `herdr` sandbox and
+`brig policy attach <policy> herd` attaches to `herdr`.
+
+A sandbox made under the old name is not carried over. Its name on the
+runtime starts with `brig-herd-`, which no profile owns any more, so
+`brig ls` prints `-` for its ref and only `brig rm --all` removes it. Run
+`brig rm herd@<label>` for each one before you upgrade, or `brig rm --all`
+after. A policy attached to `herd` in `attachments.yaml` does not apply to
+`herdr` runs: attach it again. A profile made with `--from herd` keeps
+`image: ghcr.io/brig-sh/herd-stock:latest`, which no longer updates; edit
+it to `herdr-stock`. An `~/.ssh/config` block for `Host herd*+*` still
+matches `herdr+<label>`, but its `ProxyCommand` names `herd-sshd`, which
+the new image does not have: [herdr.md](herdr.md) has the current block.
+
 ## Session names
 
 A session is part of the ref, which replaced `--name`:

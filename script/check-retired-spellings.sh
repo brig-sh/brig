@@ -21,12 +21,12 @@
 # the deprecation window, and a changelog is allowed to say what a release
 # retired or removed.
 #
-# docs/herd.md is exempt from one pattern only, the exec one, because it has
+# docs/herdr.md is exempt from one pattern only, the exec one, because it has
 # to teach `brig exec`. Its ssh ProxyCommand carries an SSH stream over the
 # exec, which needs a command with no guest pty and no login shell -- `brig
 # sh` asks for a pty and runs `bash -lc`, whose startup output would corrupt
 # the stream. `brig exec` is the only verb that gives both until #335 lands,
-# so removing it breaks herd, and skips_pattern is where that shows. The
+# so removing it breaks herdr, and skips_pattern is where that shows. The
 # other patterns stay live on the page. The retired-ok marker cannot do this:
 # the ProxyCommand is in a fenced block.
 #
@@ -58,7 +58,7 @@ is_exempt() {
 # skips_pattern <file> <pattern>: one pattern switched off for one file.
 skips_pattern() {
 	case "$1:$2" in
-	"docs/herd.md:brig (exec|shell)\b") return 0 ;;
+	"docs/herdr.md:brig (exec|shell)\b") return 0 ;;
 	esac
 	return 1
 }
