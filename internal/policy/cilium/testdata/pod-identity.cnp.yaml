@@ -1,0 +1,28 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: pod-identity
+spec:
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: ANY
+      rules:
+        dns:
+        - matchPattern: '*'
+  - toCIDR:
+    - 169.254.170.23/32
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+  - toFQDNs:
+    - matchName: sts.amazonaws.com
+  enableDefaultDeny:
+    egress: true
+  endpointSelector: {}

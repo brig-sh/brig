@@ -1,0 +1,13 @@
+# A deny default with a deny host that no allow covers. It is already
+# refused, so it renders as nothing.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: deny-host-dropped
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: api.anthropic.com
+    deny:
+      - host: evil.example.com
