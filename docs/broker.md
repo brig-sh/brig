@@ -669,7 +669,7 @@ underscores. 255 bytes is the longest name of a directory.
 | `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
+| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. A secret on a read-only store, see [Running the broker on a node](#running-the-broker-on-a-node), is never named, because no write is waiting. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
 | `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits
@@ -700,6 +700,9 @@ broker. The cache refreshes it and writes it back, as
 [Renewal on the host](secrets.md#renewal-on-the-host) describes, so two
 sandboxes that share it share one refresh.
 
+A broker on a Kubernetes node reads the files of a mounted Secret instead.
+See [Running the broker on a node](#running-the-broker-on-a-node).
+
 The broker reads the keychain with `security`, from its own session. Measured
 on macOS 26: a process in a new session, whose parent had exited, read a
 keychain item of the login session with no prompt. A broker started from an
@@ -710,6 +713,63 @@ AWS profile, and the broker runs the host's `aws` CLI. A `gcp` route's
 secret can point at a gcloud configuration in place of a token, and the
 broker runs the host's `gcloud` CLI. See [Routes that vend](#routes-that-vend)
 and [Minted tokens](#minted-tokens).
+
+## Running the broker on a node
+
+On a Kubernetes node the broker has no keychain, no Secret Service and no
+host `aws` CLI. `brig-broker` takes flags for that case. They are for a node
+daemon that a shim of the platform starts and registers sandboxes with. Brig
+does not pass them, and nothing here changes how `brig` starts the broker on
+a workstation.
+
+| Flag | What it does |
+| --- | --- |
+| `--secret-dir <path>` | Reads every credential from the files of this directory, one file per secret, instead of from Brig's secret store |
+
+### The secret directory
+
+`--secret-dir` selects a read-only store of files. Each secret is one regular
+file named after the secret, and its bytes are the value, a trailing newline
+included. The shape is a Kubernetes Secret mounted as a volume: one file per
+key. A route's `credential.secretRef.name` names the file.
+
+```yaml
+volumes:
+  - name: brig-secrets
+    secret:
+      secretName: brig-credentials
+      defaultMode: 0440
+```
+
+The broker checks the files and not the directory. The kubelet mounts a
+Secret as a root-owned `0755` directory whose entries are symlinks through
+`..data`, so no rule about the directory's owner or mode could pass. Each
+entry is followed through its links, and these rules apply to what it
+reaches:
+
+| Entry | What the broker does |
+| --- | --- |
+| A regular file that is not world-readable (`mode & 0004 == 0`) | Serves it |
+| A regular file that any user on the node can read | Refuses to start, and the error names the file. Set `defaultMode: 0440` on the volume |
+| A name inside the secret-name grammar whose link dangles, or that cannot be read | Refuses to start, and the error names it |
+| A name outside the grammar, such as `ca.crt` (letters, digits, `-` and `_`, starting with a letter; a dot does not fit) | Skips it, and `broker.log` names it once at start |
+| A directory, or another entry that is not a regular file | Skips it, and `broker.log` names it once at start |
+| A name that starts with a dot, such as `..data` | Ignores it. It is the kubelet's own |
+
+There is no ownership rule. The node broker runs as root, or the Secret's
+`fsGroup` makes the files readable to it. A directory that does not open is
+fatal, and the broker does not start. A secret that has no file is a 502 on
+the route that reads it, with `check=credential`.
+
+The store is read-only. `Create`, `Update` and `Delete` return an error, and
+nothing writes to the directory. A secret with a lifecycle is still renewed,
+as [Renewal on the host](secrets.md#renewal-on-the-host) describes, with one
+difference. The renewed document stays in memory, because there is nowhere to
+write it. The broker logs once per secret that it cannot write the credential
+back, and serves the value it has. `GET /status` does not name the secret in
+`pending`, because no write is waiting. A restart starts from the file again,
+and a changed file replaces the held value at the next recheck, within five
+minutes. See [The renewal journal](secrets.md#the-renewal-journal).
 
 ## Routes that vend
 

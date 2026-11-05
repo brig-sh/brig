@@ -71,6 +71,17 @@ const journalLife = 10 * time.Minute
 // Each renewal is journaled in the store, next to the secret, so a crash
 // between the provider's answer and the write-back does not lose the only
 // valid pair. See journal.go.
+//
+// A store that is read-only (secret.ErrReadOnly), such as a Kubernetes Secret
+// mounted into a pod, is the exception. The journal cannot be written there,
+// so a renewal that would send a single-use refresh token is not made in the
+// ordinary way: the renewed document is held in memory, served, and renewed
+// again when due, and the store keeps the document it had. The cache logs
+// once per secret that the document cannot be written back. A restart loses
+// the held document, and the next one starts from the store. Pending does not
+// name such a secret, because no write is waiting to land. A document the
+// store gets later, a rotated Secret for instance, replaces the held one at
+// the next recheck.
 type Cache struct {
 	broker       secret.Broker
 	store        secret.Store
@@ -81,6 +92,9 @@ type Cache struct {
 	owner journalOwner
 	// alive reports whether the process that wrote a journal still runs.
 	alive func(journalOwner) bool
+	// Logf, when set, takes the one line per secret that says a renewed
+	// document cannot be written back because the store is read-only.
+	Logf func(format string, args ...any)
 
 	mu      sync.Mutex
 	entries map[string]*entry
@@ -129,6 +143,14 @@ type entry struct {
 	suspect bool
 	// adopted is a journal left by another process, until it is cleared.
 	adopted bool
+	// memoryOnly is set while the store refuses writes (secret.ErrReadOnly)
+	// and doc is a renewal the store does not hold. No write is pending for
+	// it, and the journal is not used. reset clears it, because the store
+	// then holds the document in memory.
+	memoryOnly bool
+	// readOnlyLogged is whether the read-only line was logged for this
+	// secret. It outlives reset: the line is once per secret.
+	readOnlyLogged bool
 }
 
 // NewCache returns a cache that reads through b and writes renewed documents
@@ -431,6 +453,9 @@ func (c *Cache) expiredLocked(e *entry) bool {
 // pendingLocked reports whether a store write of the last renewal, or of the
 // journal being cleared, has yet to land.
 func (c *Cache) pendingLocked(e *entry) bool {
+	if e.memoryOnly {
+		return false
+	}
 	return e.journal != journalNone || (e.doc != nil && !bytes.Equal(e.doc, e.stored))
 }
 
@@ -553,6 +578,7 @@ func (e *entry) reset(doc []byte, expires, checkedAt time.Time) {
 	e.doc, e.stored, e.expires, e.issued, e.checkedAt = doc, doc, expires, time.Time{}, checkedAt
 	e.failure, e.failedAt, e.spent, e.writeFailedAt = nil, time.Time{}, false, time.Time{}
 	e.suspect = false
+	e.memoryOnly = false
 }
 
 // flush moves the last renewal on into the store, one durable step per
@@ -671,15 +697,26 @@ func (c *Cache) renew(ctx context.Context, name string, w secret.Workload, e *en
 		return errors.New("the last renewal is not yet in the store")
 	}
 
-	// The create runs on a context the caller cannot cancel, like every
-	// other store write. On macOS it is two security(1) calls, and a
-	// caller that went away between them would leave half a journal.
-	j := journal{V: journalVersion, Phase: phaseRenewing, Owner: c.owner,
-		StartedAt: started.UnixMilli(), DocHash: docHash(current)}
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.storeTimeout)
-	err := writeJournal(secret.WithContext(wctx, c.store), name, j, expires, false)
-	cancel()
+	c.mu.Lock()
+	memoryOnly := e.memoryOnly
+	c.mu.Unlock()
+	var err error
+	if !memoryOnly {
+		// The create runs on a context the caller cannot cancel, like every
+		// other store write. On macOS it is two security(1) calls, and a
+		// caller that went away between them would leave half a journal.
+		j := journal{V: journalVersion, Phase: phaseRenewing, Owner: c.owner,
+			StartedAt: started.UnixMilli(), DocHash: docHash(current)}
+		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.storeTimeout)
+		err = writeJournal(secret.WithContext(wctx, c.store), name, j, expires, false)
+		cancel()
+	}
 	switch {
+	case memoryOnly || errors.Is(err, secret.ErrReadOnly):
+		// The store takes no writes, so there is no journal and no
+		// write-back. The renewal goes ahead, and its result stays in
+		// memory.
+		c.holdInMemory(name, e)
 	case errors.Is(err, secret.ErrExists):
 		// A journal is in the store although the last read found none:
 		// another process journaled a renewal since, or this cache's own
@@ -704,7 +741,9 @@ func (c *Cache) renew(ctx context.Context, name string, w secret.Workload, e *en
 		return err
 	}
 	c.mu.Lock()
-	e.journal, e.startedAt, e.from, e.journalOwner = journalStarted, started, j.DocHash, c.owner
+	if !e.memoryOnly {
+		e.journal, e.startedAt, e.from, e.journalOwner = journalStarted, started, docHash(current), c.owner
+	}
 	c.mu.Unlock()
 
 	next, err := r.Renew(context.WithoutCancel(ctx), current)
@@ -719,8 +758,11 @@ func (c *Cache) renew(ctx context.Context, name string, w secret.Workload, e *en
 			// The provider answered, so a suspect document is settled.
 			e.suspect = false
 		}
-		// Nothing new to keep, so the journal only has to go.
-		e.journal = journalClear
+		// Nothing new to keep, so the journal only has to go. A held
+		// document has no journal.
+		if !e.memoryOnly {
+			e.journal = journalClear
+		}
 		c.mu.Unlock()
 		_ = c.flush(ctx, name, w, e, r)
 		return err
@@ -737,6 +779,20 @@ func (c *Cache) renew(ctx context.Context, name string, w secret.Workload, e *en
 	e.suspect = false
 	c.mu.Unlock()
 	return c.flush(ctx, name, w, e, r)
+}
+
+// holdInMemory marks the entry as renewed in memory only, because the store
+// refused a write with secret.ErrReadOnly, and logs that once per secret.
+func (c *Cache) holdInMemory(name string, e *entry) {
+	c.mu.Lock()
+	e.memoryOnly = true
+	first := !e.readOnlyLogged
+	e.readOnlyLogged = true
+	c.mu.Unlock()
+	if first && c.Logf != nil {
+		c.Logf("the store is read-only, so the renewed credential %s is held in memory and not written back; "+
+			"a restart starts from the stored one", name)
+	}
 }
 
 // writeBack replaces a renewed value and keeps its provenance, with the

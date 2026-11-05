@@ -29,6 +29,11 @@ var (
 	// absence at face value would create beside the damage rather than
 	// replace it; an importer overwrites a damaged secret instead.
 	ErrDamaged = errors.New("secret is damaged")
+	// ErrReadOnly is a write to a store whose values are mounted read-only.
+	// Such a store returns it from Create, Update and Delete, so a caller
+	// that would write hides nothing by writing elsewhere. internal/renew
+	// holds a renewed value in memory when it sees it.
+	ErrReadOnly = errors.New("the secret store is read-only")
 )
 
 // Secret is one entry, without its value. Listing never reads values: the

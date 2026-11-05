@@ -64,6 +64,11 @@ type serverConfig struct {
 	dir string
 	// openStore opens brig's secret store, the keychain on macOS.
 	openStore func() (secret.Store, error)
+	// secretDir, when set, is a directory with one file per secret, and the
+	// broker reads its credentials from it instead of from openStore. It is
+	// the mounted Secret of a broker on a Kubernetes node. The directory is
+	// read-only, and a directory that does not open stops the broker.
+	secretDir string
 	// transport carries the upstream requests. nil is the broker's own,
 	// with the system roots.
 	transport http.RoundTripper
@@ -201,19 +206,34 @@ func newServer(cfg serverConfig) (_ *server, err error) {
 	s.logger = log.New(out, "brig-broker: ", log.LstdFlags)
 	s.aws = newAWSVendor(cfg.awsBin, cfg.now, s.logger)
 	s.gcp = newGCPMinter(cfg.gcloudBin, cfg.tokenInfoURL, cfg.now, s.logger)
-	// A store that does not open fails the routes that read it, not the
-	// broker: a host with no keyring still registers sandboxes and mints
-	// their tokens.
-	store, err := cfg.openStore()
-	if err != nil {
-		s.storeErr = err
-		store = newLazyStore(cfg.openStore)
+	var store secret.Store
+	if cfg.secretDir != "" {
+		// The operator chose this directory, so a file in it that cannot be
+		// served is a mistake to stop on and not a store to retry.
+		files, err := secret.OpenFiles(cfg.secretDir)
+		if err != nil {
+			return nil, err
+		}
+		if skipped := files.Skipped(); len(skipped) > 0 {
+			s.logger.Printf("the secret directory %s holds %q, which are not brig secret names or not files, "+
+				"and brig does not serve them", cfg.secretDir, skipped)
+		}
+		store = files
+	} else {
+		// A store that does not open fails the routes that read it, not the
+		// broker: a host with no keyring still registers sandboxes and mints
+		// their tokens.
+		store, err = cfg.openStore()
+		if err != nil {
+			s.storeErr = err
+			store = newLazyStore(cfg.openStore)
+		}
 	}
 	renewerFor := cfg.renewerFor
 	if renewerFor == nil {
 		renewerFor = lifecycleRenewer
 	}
-	s.creds = newCredentials(store, renewerFor)
+	s.creds = newCredentials(store, renewerFor, s.logger.Printf)
 	s.auditLog = slog.New(slog.NewTextHandler(s.audit, nil))
 	s.handler, err = broker.New(broker.Config{
 		HostKey:      hostKey,
@@ -744,6 +764,9 @@ type credentials struct {
 	store      secret.Store
 	base       secret.Broker
 	renewerFor func(v1alpha1.Lifecycle) (secret.Renewer, error)
+	// logf takes the lines of the caches, such as the one that says a
+	// renewed credential cannot be written back to a read-only store.
+	logf func(format string, args ...any)
 
 	mu     sync.Mutex
 	caches map[string]*renew.Cache
@@ -757,11 +780,13 @@ type credentials struct {
 
 var _ broker.Renewer = (*credentials)(nil)
 
-func newCredentials(store secret.Store, renewerFor func(v1alpha1.Lifecycle) (secret.Renewer, error)) *credentials {
+func newCredentials(store secret.Store, renewerFor func(v1alpha1.Lifecycle) (secret.Renewer, error),
+	logf func(format string, args ...any)) *credentials {
 	return &credentials{
 		store:      store,
 		base:       secret.StoreBroker(store),
 		renewerFor: renewerFor,
+		logf:       logf,
 		caches:     map[string]*renew.Cache{},
 	}
 }
@@ -782,7 +807,9 @@ func (c *credentials) track(name string, l v1alpha1.Lifecycle) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	c.caches[name] = renew.NewCache(c.base, c.store, map[string]secret.Renewer{name: r})
+	cache := renew.NewCache(c.base, c.store, map[string]secret.Renewer{name: r})
+	cache.Logf = c.logf
+	c.caches[name] = cache
 	return true, nil
 }
 

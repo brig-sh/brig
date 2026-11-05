@@ -226,7 +226,9 @@ type Status struct {
 	// Sandboxes are the registered sandbox ids, sorted.
 	Sandboxes []string `json:"sandboxes"`
 	// Pending are the secrets whose refreshed value is held in memory and
-	// not yet written back to the store.
+	// not yet written back to the store. A secret on a read-only store
+	// (--secret-dir) is not named: its refreshed value stays in memory for
+	// good, and no write is waiting.
 	Pending []string `json:"pending,omitempty"`
 	// Failing are the secrets whose last refresh failed.
 	Failing []string `json:"failing,omitempty"`
