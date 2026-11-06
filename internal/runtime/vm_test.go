@@ -154,6 +154,32 @@ func swapCmdline(t *testing.T, fn func(int) ([]string, error)) {
 
 // Seen on Debian 13 with bundle rc21: the container's pid is hvi itself, and
 // its argv carries what the VM booted with.
+// A caller that cancels is told so. Reporting a deadline would make the
+// report call a guest unresponsive when only the caller gave up on it.
+func TestHullOutputSaysTheCallerCancelled(t *testing.T) {
+	h := &hull{bin: scriptBin(t, "hull", "sleep 30")}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := h.Output(ExecSpec{Ctx: ctx, Name: "vm", Cmd: []string{"uptime"}})
+	if !errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Output = %v, want an error wrapping context.Canceled and not DeadlineExceeded", err)
+	}
+}
+
+// A zombie monitor has an empty command line. The backend stays blank rather
+// than reading ".".
+func TestNerdctlVMLeavesAnEmptyCommandLineBlank(t *testing.T) {
+	swapCmdline(t, func(int) ([]string, error) { return []string{""}, nil })
+	n := &nerdctl{bin: scriptBin(t, "nerdctl", `echo '{"State":{"Pid":2004,"Status":"running"}}'`)}
+	vm, err := n.VM(context.Background(), "brig-ubuntu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vm.Backend != "" || vm.MemMiB != 0 {
+		t.Errorf("VM = %+v, want no backend and no memory", vm)
+	}
+}
+
 func TestNerdctlVMReadsTheMonitorCommandLine(t *testing.T) {
 	swapCmdline(t, func(pid int) ([]string, error) {
 		if pid != 2004 {
