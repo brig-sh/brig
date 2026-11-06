@@ -343,6 +343,21 @@ brig run claude
 
 The agent starts logged in and does not show its login screen.
 
+## Browser stays in front of Claude Desktop
+
+Brig prints no error. You sign in to `claude-desktop` in the sandbox, and a
+browser page that says "Finish sign-in in the Claude app" stays on screen.
+Its Open Claude button does not switch to the app.
+
+**Cause:** The sign-in opens a browser in front of the app, and that page
+does not close on its own. The sign-in itself finishes in the app behind it.
+
+**Fix:** Close the browser tab, or the whole browser window with its X. The
+app behind it shows you signed in.
+
+**Confirm:** The Claude Desktop window shows the signed-in app, with no
+sign-in screen.
+
 ## cosign is not installed
 
 ```
