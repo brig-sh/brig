@@ -136,6 +136,7 @@ var verbs = []string{
 	"network",
 	"plan",
 	"policy",
+	"report",
 	"rm",
 	"run",
 	"secret",
@@ -226,6 +227,11 @@ func complete(words []string) (string, []string) {
 			return dirNone, nil
 		}
 		return names(cur, agentNames())
+	case verb == "report":
+		if strings.HasPrefix(cur, "-") {
+			return names(cur, []string{"--tail", "-o"})
+		}
+		return dirNone, nil
 	case verb == "network":
 		return completeNetwork(rest, cur)
 	case groups[verb] != nil:

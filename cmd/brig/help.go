@@ -189,6 +189,27 @@ flags:
 brig help lists every command, every flag and every setting.
 `
 
+const reportUsage = `brig report -- write a diagnostic report for a session
+
+usage:
+  brig report [<ref>] [-o <file>] [--tail N]
+
+Writes one plain-text file with what a maintainer needs to tell why a session
+hung, slowed down or died: brig doctor, the runtime and VMM state, questions
+put to the guest, and the console, gateway and broker logs. Known failures
+are named at the top with the fix. Run it from another shell while the
+session is stuck; it only observes, and every step has a deadline.
+
+Credentials of known shapes are masked. Read the file before you post it.
+
+flags:
+  -o <file>    where to write the report
+               (default: brig-report-<ref>-<time>.txt here)
+      --tail N  keep the last N lines of each log (default: 2000)
+
+brig help lists every command, every flag and every setting.
+`
+
 const versionUsage = `brig version -- print the brig build
 
 usage:
@@ -217,6 +238,7 @@ var verbUsages = map[string]string{
 	"plan":       planUsage,
 	"ls":         lsUsage,
 	"doctor":     doctorUsage,
+	"report":     reportUsage,
 	"version":    versionUsage,
 	"agent":      agentUsage,
 	"secret":     secretUsage,

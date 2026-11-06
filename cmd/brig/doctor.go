@@ -185,6 +185,14 @@ func doctorExit(checks []check) error {
 // verify row, the image check and the trust row all describe the one policy.
 // The verify row reads the mode the run reads for the same reason.
 func runDoctor(agent *profile.Profile, loadErr error) []check {
+	return doctorChecks(agent, loadErr, secretsCheck)
+}
+
+// doctorChecks is runDoctor with the secrets check passed in. brig report
+// passes one that opens nothing: the report reads no secrets, and opening
+// the keychain can prompt and block a command run while something is
+// already stuck.
+func doctorChecks(agent *profile.Profile, loadErr error, secrets func() check) []check {
 	rtCheck, rt := runtimeCheck(agent)
 	runtimeOK := rtCheck.State == statePass
 	name := ""
@@ -243,7 +251,7 @@ func runDoctor(agent *profile.Profile, loadErr error) []check {
 	}
 	return append(checks,
 		profilesCheck(loadErr),
-		secretsCheck(),
+		secrets(),
 		brigdCheck(),
 		imageCheck(agent, runtimeOK, policy),
 	)
