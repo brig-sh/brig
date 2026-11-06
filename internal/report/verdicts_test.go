@@ -103,8 +103,9 @@ func TestVerdictTmpfsFull(t *testing.T) {
 	in := running()
 	in.Tmpfs = []string{"/brig/claude"}
 	r := Collect(context.Background(), answering("", map[string]string{"df -h": df}), in, io.Discard)
-	if v := verdictNamed(t, r, "tmpfs"); !strings.Contains(v.Fix, "/brig/claude") {
-		t.Errorf("fix = %q, want it to name the mount", v.Fix)
+	want := "The tmpfs at /brig/claude is full. Its size is set by the size: of that volume in the profile."
+	if v := verdictNamed(t, r, "tmpfs"); v.Fix != want {
+		t.Errorf("fix = %q, want %q", v.Fix, want)
 	}
 }
 
