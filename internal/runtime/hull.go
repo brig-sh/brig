@@ -875,6 +875,10 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		if expired.Load() {
+			// A caller that cancelled stopped asking; the guest may be fine.
+			if spec.Ctx != nil && errors.Is(spec.Ctx.Err(), context.Canceled) {
+				return "", fmt.Errorf("the guest call was cancelled: %w (%v)", context.Canceled, err)
+			}
 			return "", fmt.Errorf("the guest did not answer: %w (%v)", context.DeadlineExceeded, err)
 		}
 		return "", err

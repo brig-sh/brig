@@ -194,7 +194,9 @@ type ExecSpec struct {
 	User string
 	// Ctx bounds Output when set. A caller that questions a guest it suspects
 	// is wedged sets it, and its deadline wins over any longer one the runtime
-	// keeps of its own. Nil leaves the runtime's own bound, or none.
+	// keeps of its own. Nil leaves the runtime's own bound, or none. hull
+	// applies it to Probe and Feed as well, since they share one agent call;
+	// nerdctl reads it in Output only.
 	Ctx context.Context
 }
 
