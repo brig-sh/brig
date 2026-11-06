@@ -428,3 +428,25 @@ func TestCredentialRefusalExits6(t *testing.T) {
 		t.Errorf("wrapped exitCode = %d, want %d", got, exitCredentials)
 	}
 }
+
+// --isolation microvm refuses a boundary the row does not establish, and a
+// script reads the code to tell that from a usage mistake or a failed boot. 7
+// is pmoust's decision on #300: the isolation refusal reuses the code for a
+// run path that cannot give what the run asks for.
+func TestAnIsolationRefusalExits7(t *testing.T) {
+	refusal := runtime.RequireMicroVM(runtime.Isolation{Boundary: runtime.BoundaryUnknown,
+		Detail: "nerdctl over containerd, io.containerd.kata.v2", Setting: "BRIG_CONTAINERD_RUNTIME"})
+	for name, err := range map[string]error{
+		"bare":    refusal,
+		"wrapped": fmt.Errorf("could not start the sandbox: %w", refusal),
+		"twice":   fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", refusal)),
+	} {
+		if got := exitCode(err); got != 7 {
+			t.Errorf("%s: exitCode = %d, want 7", name, got)
+		}
+	}
+	// The class is the type. A message that reads like the refusal is not one.
+	if got := exitCode(errors.New(refusal.Error())); got != 1 {
+		t.Errorf("the refusal's words without its type exit %d, want 1", got)
+	}
+}

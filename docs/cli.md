@@ -831,7 +831,7 @@ the agent.
 | Position | Flags |
 | --- | --- |
 | Global | `--verbose`, `-q`/`--quiet`, `--json` |
-| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--publish` and `--json` |
+| Run-line | `--image`, `--home`, `--mem`, `--cpus`, `--no-project`, `-d`/`--detach`, `--skills`, `--network`, `--offline`, `--isolation`, `--publish` and `--json` |
 
 The global position takes only those three flags. Brig refuses any other
 flag there by name:
@@ -887,6 +887,7 @@ is a Brig flag and that here it goes to the agent.
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
 | `--network MODE` | `shared`, `isolated` or `offline` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture) | the sandbox's network posture. A sandbox keeps its posture, so a verb without the flag does not change it. If Brig cannot establish the posture of an existing sandbox, name one with this flag or `BRIG_NETWORK`. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox. Refused together with a different `--network` value |
+| `--isolation MODE` | `microvm` | off | require a microVM. The run is refused with exit `7` unless the `ISOLATION` row says `microVM`, so a `container`, an `unknown` boundary and docker are all refused, and the refusal names the setting to change. It has no variable and no profile field, so nothing a run inherits can weaken it. It is refused, not forwarded, when it stands in the agent's arguments, where Brig would not read it. `container` is not a value: a shim that shares the host kernel is refused without being asked. See [Exit 7 cases](#exit-7-cases) |
 | `--publish PORT` | `3000`, `8080:80`, `127.0.0.1:8080:80`, `5353:53/udp` | nothing published | open a guest port on the host. Repeatable. Binds to `127.0.0.1` unless the address says otherwise. There is no `-p`, which stays the agent's flag. See [`brig network`](#brig-network) |
 
 Some values in the table also have an
@@ -1009,7 +1010,7 @@ every success case goes, and the usual error line on stderr. See
 | `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing. The refusal names the setting that caused it |
 | `5` | a boot refused over image verification |
 | `6` | a required secret was not resolved, or the secret store did not open. A declared secret marked `required: false` produces a warning and no failure |
-| `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The refusal names the property, the runtime and the backend. See [Exit 7 cases](#exit-7-cases) |
+| `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do, or a run that required `--isolation microvm` would not get one. The refusal names the property, the runtime and the backend, or the boundary and the setting. See [Exit 7 cases](#exit-7-cases) |
 
 [Stability](stability.md) lists this table as stable enough to script
 against.
@@ -1033,6 +1034,18 @@ retired spelling of `brig sh`, refuse a policy with `7`:
 
 The code is `7` whether a flag, `BRIG_NETWORK` or the profile's `network:`
 chose the posture.
+
+`--isolation microvm` is refused with `7` for every run whose `ISOLATION` row
+is not `microVM`:
+
+- on a shim that shares the host kernel, such as `runc`
+- on a shim that Brig cannot place, which the row calls `unknown`
+- on docker, however a run came to drive it: `BRIG_RUNTIME_BIN`, a profile's
+  `runtimeBin`, or the fallback taken when nerdctl is not on `PATH`
+- with no runtime to ask
+
+The refusal comes before the refusal for a shim that shares the host kernel,
+which exits `1` when the run does not name the flag.
 
 A [route](broker.md#route-modes) is refused with `7` too, where its run path
 cannot serve it: on hull's `vz` or `qemu`, on docker, on nerdctl without
