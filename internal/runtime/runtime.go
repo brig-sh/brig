@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/telemetry"
@@ -191,6 +192,10 @@ type ExecSpec struct {
 	// "root", for the one privileged exec that mounts the tmpfs. Empty leaves
 	// the image's configured user, which is what every other exec wants.
 	User string
+	// Ctx bounds Output when set. A caller that questions a guest it suspects
+	// is wedged sets it, and its deadline wins over any longer one the runtime
+	// keeps of its own. Nil leaves the runtime's own bound, or none.
+	Ctx context.Context
 }
 
 // Egress is a sandbox's outbound rule set as the runtime takes it: a default
@@ -390,6 +395,29 @@ type LogsSpec struct {
 	// must not wait on a runtime that may be the reason for it. Nil is no bound,
 	// which is what a reader following a log wants.
 	Ctx context.Context
+}
+
+// VM is what a runtime reports about the virtual machine behind a sandbox.
+// A field the runtime does not report is left zero.
+type VM struct {
+	// PID is the host process of the VMM, or of whatever the runtime puts in
+	// front of it.
+	PID int
+	// MemMiB and CPUs are what the VM booted with. They are read from the
+	// running VM, since a profile or a run line names what the next boot gets.
+	MemMiB  int
+	CPUs    int
+	Backend string
+	Status  string
+	Started time.Time
+	// LogFile is the host file that holds the guest console, when there is one.
+	LogFile string
+}
+
+// VMInspector is implemented by a runtime that can describe the VM behind a
+// sandbox. It is optional: a caller that finds no inspector says so.
+type VMInspector interface {
+	VM(ctx context.Context, name string) (VM, error)
 }
 
 // Instance is one sandbox as the runtime sees it.
