@@ -5,7 +5,9 @@
 // It runs while something is broken, often while the guest is wedged, so
 // every step that can block has its own deadline, and a step that runs out
 // of time is written down as a finding. It only observes. It never stops,
-// starts or repairs anything.
+// starts or repairs anything. The one step that touches the VMM is the stack
+// sample: eu-stack, gdb and macOS sample pause it while they read its threads,
+// for at most stackTimeout.
 //
 // It never reads a credential. The CLI resolves the session, the profile and
 // the doctor checks, which can reach the secret store, and passes the facts
@@ -62,6 +64,9 @@ type Input struct {
 	// it does not, a missing pid file means no gateway was needed.
 	GatewayPIDFile string
 	GatewayAlways  bool
+	// Tmpfs are the guest paths where the profile mounts its tmpfs volumes.
+	// The df probe asks about each, and a full one is a verdict.
+	Tmpfs []string
 	// Tail caps each log at its last Tail lines.
 	Tail int
 	// ProbeTimeout bounds each question put to the guest.
@@ -98,9 +103,18 @@ type Report struct {
 	// TimedOut counts the steps that ran out of time.
 	TimedOut int
 
-	in      Input
-	vmmCPU  float64
-	haveCPU bool
+	in       Input
+	vmmCPU   float64
+	haveCPU  bool
+	progress io.Writer
+}
+
+// step writes one progress line, so a user watching a step wait out its
+// deadline knows which one it is.
+func (r *Report) step(what string) {
+	if r.progress != nil {
+		fmt.Fprintf(r.progress, "brig report: %s\n", what)
+	}
 }
 
 // Deadlines for the host-side steps. A guest probe uses Input.ProbeTimeout.
@@ -120,11 +134,17 @@ func Collect(ctx context.Context, rt runtime.Runtime, in Input, progress io.Writ
 		rt = noRuntime{}
 		in.Running = false
 	}
-	r := Report{Generated: time.Now().UTC(), in: in}
-	step := func(what string) { fmt.Fprintf(progress, "brig report: %s\n", what) }
+	r := Report{Generated: time.Now().UTC(), in: in, progress: progress}
+	step := r.step
 
 	step("host")
-	r.Host = hostFacts(ctx)
+	hctx, cancel := context.WithTimeout(ctx, hostStepTimeout)
+	r.Host = hostFacts(hctx)
+	if errors.Is(hctx.Err(), context.DeadlineExceeded) {
+		r.TimedOut++
+		r.Host += "host facts timed out after " + hostStepTimeout.String() + "\n"
+	}
+	cancel()
 
 	r.add("brig doctor", "brig doctor, without the secrets check", doctorBody(in.Doctor))
 	r.add("Sessions", "brig ls and the session index", sessionsBody(in))
@@ -276,6 +296,9 @@ func (r *Report) inspect(ctx context.Context, rt runtime.Runtime) {
 	sctx, cancel := context.WithTimeout(ctx, hostStepTimeout)
 	stats, cpu, err := procStats(sctx, vm.PID)
 	cancel()
+	if errors.Is(sctx.Err(), context.DeadlineExceeded) {
+		r.TimedOut++
+	}
 	if err != nil {
 		stats = "failed: " + err.Error()
 	} else {
@@ -284,6 +307,7 @@ func (r *Report) inspect(ctx context.Context, rt runtime.Runtime) {
 	r.add("VMM process", fmt.Sprintf("ps, pid %d", vm.PID), stats)
 
 	sctx, cancel = context.WithTimeout(ctx, stackTimeout)
+	r.step("VMM stacks; this pauses the VMM while its threads are read")
 	tool, stacks := vmmStacks(sctx, vm.PID)
 	if errors.Is(sctx.Err(), context.DeadlineExceeded) {
 		r.TimedOut++
@@ -319,28 +343,31 @@ func (r Report) Render(w io.Writer) error {
 
 	b.WriteString("## Verdict\n\n")
 	for _, v := range r.Verdicts {
-		fmt.Fprintf(&b, "- **%s**: %s\n", v.Name, v.Fix)
+		fmt.Fprintf(&b, "- **%s**: %s\n", v.Name, plain(v.Fix))
 		if v.Evidence != "" {
-			fmt.Fprintf(&b, "  Evidence: `%s`\n", strings.TrimSpace(v.Evidence))
+			fmt.Fprintf(&b, "  Evidence: %s\n", codeSpan(plain(strings.TrimSpace(v.Evidence))))
 		}
 	}
 
 	b.WriteString("\n## Summary\n\n")
-	b.WriteString(fence(r.summary()))
+	b.WriteString(fence(plain(r.summary())))
 
 	for _, s := range r.Sections {
-		fmt.Fprintf(&b, "\n## %s\n\n", s.Title)
+		fmt.Fprintf(&b, "\n## %s\n\n", plain(s.Title))
 		if s.Source != "" {
-			fmt.Fprintf(&b, "Source: %s\n\n", s.Source)
+			fmt.Fprintf(&b, "Source: %s\n\n", plain(s.Source))
 		}
-		b.WriteString(fence(s.Body))
+		b.WriteString(fence(plain(s.Body)))
 	}
-	_, err := io.WriteString(w, redact.String(controlSeq.ReplaceAllString(b.String(), "")))
+	_, err := io.WriteString(w, redact.String(b.String()))
 	return err
 }
 
 // controlSeq matches the terminal control sequences a guest console or a
 // coloured dmesg carries. They mean nothing in a file and garble an issue.
+//
+// Each piece is stripped before it is fenced: stripping afterwards could join
+// two runs of backticks into one long enough to close the fence.
 var controlSeq = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
 
 func (r Report) summary() string {
@@ -365,6 +392,21 @@ func (r Report) summary() string {
 	fmt.Fprintf(&b, "oom kills     %d\n", r.OOMKills)
 	fmt.Fprintf(&b, "timed out     %d steps\n", r.TimedOut)
 	return b.String()
+}
+
+func plain(s string) string { return controlSeq.ReplaceAllString(s, "") }
+
+// codeSpan wraps s in more backticks than any run inside it, padded with
+// spaces, so a backtick in a guest's kernel line cannot end the span early.
+func codeSpan(s string) string {
+	ticks := "`"
+	for strings.Contains(s, ticks) {
+		ticks += "`"
+	}
+	if len(ticks) == 1 {
+		return ticks + s + ticks
+	}
+	return ticks + " " + s + " " + ticks
 }
 
 func orUnknown(s string) string {

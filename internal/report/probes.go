@@ -51,7 +51,8 @@ var probes = []Probe{
 	{Name: "processes by RSS", Script: `ps -eo pid,ppid,rss,etime,args --sort=-rss 2>/dev/null | ` +
 		`awk -v me=$$ 'NR==1 || ($1 != me && $2 != me)' | head -16 | cut -c1-200 | grep . || ` +
 		`awk '/^VmRSS/{print FILENAME, $2, "kB"}' /proc/[0-9]*/status | sort -k2 -nr | head -15`},
-	{Name: "df -h", Script: `df -h / /brig/claude "$HOME" $(ls -d /work/* 2>/dev/null)`},
+	// runProbes adds the profile's tmpfs mount points, which differ by profile.
+	{Name: "df -h", Script: `df -h / "$HOME"`},
 	{Name: "dmesg", Script: `dmesg | tail -200`},
 }
 
@@ -63,6 +64,12 @@ func runProbes(ctx context.Context, rt runtime.Runtime, in Input) []Probe {
 	silent := false
 	for i, p := range probes {
 		p.timeout = in.ProbeTimeout
+		if p.Name == "df -h" {
+			for _, at := range in.Tmpfs {
+				p.Script += " " + shellQuote(at)
+			}
+			p.Script += ` $(ls -d /work/* 2>/dev/null)`
+		}
 		switch {
 		case !in.Running:
 		case silent:
@@ -74,6 +81,11 @@ func runProbes(ctx context.Context, rt runtime.Runtime, in Input) []Probe {
 		out[i] = p
 	}
 	return out
+}
+
+// shellQuote quotes s as one word for sh.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func ask(ctx context.Context, rt runtime.Runtime, in Input, p Probe) Probe {
@@ -112,6 +124,16 @@ func (r *Report) probesBody() string {
 		fmt.Fprintf(&b, "--- %s%s\n%s\n", p.Name, elapsed, body)
 	}
 	return b.String()
+}
+
+// silentProbe returns the probe the guest did not answer, if one timed out.
+func (r *Report) silentProbe() (Probe, bool) {
+	for _, p := range r.Probes {
+		if p.TimedOut {
+			return p, true
+		}
+	}
+	return Probe{}, false
 }
 
 // probe returns the result of the named probe, if it answered.
