@@ -69,29 +69,49 @@ func tailReaderAt(r io.ReaderAt, size int64, n int) (string, error) {
 	return s[start+1:], nil
 }
 
+// maxLine is the longest line tailMatching keeps whole. A longer one is cut,
+// so one runaway line in a log does not cost the report every other line.
+const maxLine = 64 << 10
+
 // tailMatching keeps the last n lines of r that contain grep.
 func tailMatching(r io.Reader, n int, grep string) (string, error) {
 	if n <= 0 {
 		return "", nil
 	}
 	ring := make([]string, 0, n)
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
-		if !strings.Contains(line, grep) {
-			continue
+	br := bufio.NewReaderSize(r, maxLine)
+	for {
+		line, err := readLine(br)
+		if line != "" && strings.Contains(line, grep) {
+			if len(ring) == n {
+				ring = append(ring[:0], ring[1:]...)
+			}
+			ring = append(ring, line)
 		}
-		if len(ring) == n {
-			ring = append(ring[:0], ring[1:]...)
+		if err == io.EOF {
+			break
 		}
-		ring = append(ring, line)
-	}
-	if err := sc.Err(); err != nil {
-		return "", err
+		if err != nil {
+			return "", err
+		}
 	}
 	if len(ring) == 0 {
 		return "", nil
 	}
 	return strings.Join(ring, "\n") + "\n", nil
+}
+
+// readLine returns the next line without its newline. A line longer than the
+// reader's buffer comes back cut at the buffer's size, marked, and the rest of
+// it is skipped.
+func readLine(br *bufio.Reader) (string, error) {
+	part, err := br.ReadSlice('\n')
+	line := strings.TrimSuffix(string(part), "\n")
+	if err != bufio.ErrBufferFull {
+		return line, err
+	}
+	for err == bufio.ErrBufferFull {
+		_, err = br.ReadSlice('\n')
+	}
+	return line + " [line cut]", err
 }

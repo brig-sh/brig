@@ -266,6 +266,50 @@ func TestRenderDropsControlSequences(t *testing.T) {
 	}
 }
 
+// Stripping a control sequence can join two runs of backticks. The fence is
+// measured on the text after stripping, so the log cannot close it.
+func TestRenderFencesTheStrippedText(t *testing.T) {
+	rt := &fakeRuntime{console: "a``\x1b[0m`b\n## not a heading\n",
+		output: func(runtime.ExecSpec) (string, error) { return "", nil }}
+	var out bytes.Buffer
+	if err := Collect(context.Background(), rt, running(), io.Discard).Render(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "````\na```b\n") {
+		t.Errorf("console not fenced with four backticks:\n%s", out.String())
+	}
+}
+
+// A kernel line with a backtick in it stays one code span in the verdict.
+func TestRenderEvidenceWithABacktick(t *testing.T) {
+	console := "[1.0] Out of memory: Killed process 7 (n`de) total-vm:1kB\n"
+	var out bytes.Buffer
+	if err := Collect(context.Background(), answering(console, nil), running(), io.Discard).Render(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Evidence: `` [1.0] Out of memory: Killed process 7 (n`de) total-vm:1kB ``") {
+		t.Errorf("evidence not wrapped in a wider span:\n%s", out.String())
+	}
+}
+
+// One runaway line in the audit log is cut. The section keeps every other
+// line instead of failing.
+func TestTailFileCutsALongLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	blob := "sandbox=a " + strings.Repeat("x", 2<<20) + "\nsandbox=a short\nsandbox=b other\n"
+	if err := os.WriteFile(path, []byte(blob), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tailFile(path, 10, "sandbox=a ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) != 2 || !strings.HasSuffix(lines[0], " [line cut]") || len(lines[0]) > 70<<10 || lines[1] != "sandbox=a short" {
+		t.Errorf("got %d lines (first %d bytes), want the cut line then %q", len(lines), len(lines[0]), "sandbox=a short")
+	}
+}
+
 // A host with no runtime still gets a report, which says so.
 func TestCollectWithoutRuntime(t *testing.T) {
 	var out bytes.Buffer

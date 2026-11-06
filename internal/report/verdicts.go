@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type pattern struct {
 	match func(r *Report) (evidence, fix string, ok bool)
 }
 
+// The order matters: thrash reads the kill count outOfMemory leaves.
 var patterns = []pattern{
 	{"oom", outOfMemory},
 	{"thrash", thrash},
@@ -119,18 +121,20 @@ func (r *Report) memFix() string {
 	}
 	fix := fmt.Sprintf("Stop the sandbox with brig stop %s, then run it with a larger --mem.", ref)
 	if r.HaveVM && r.VM.MemMiB > 0 {
-		fix += fmt.Sprintf(" It has %d MB.", r.VM.MemMiB)
+		fix += fmt.Sprintf(" It has %d MiB.", r.VM.MemMiB)
 	}
 	return fix
 }
 
 // unresponsive says whether the VMM was busy when the guest went silent: a
-// busy VMM points at the guest, an idle one at the VMM.
+// busy VMM points at the guest, an idle one at the VMM. The guest can answer
+// the first probes and go silent on a later one, which counts the same.
 func unresponsive(r *Report) (string, string, bool) {
-	if len(r.Probes) == 0 || !r.Probes[0].TimedOut {
+	p, ok := r.silentProbe()
+	if !ok {
 		return "", "", false
 	}
-	fix := fmt.Sprintf("The guest did not answer within %s.", r.Probes[0].Elapsed.Round(100*time.Millisecond))
+	fix := fmt.Sprintf("The guest did not answer within %s.", p.Elapsed.Round(100*time.Millisecond))
 	vmm := "the VMM"
 	if r.HaveVM && r.VM.Backend != "" {
 		vmm = r.VM.Backend
@@ -142,7 +146,7 @@ func unresponsive(r *Report) (string, string, bool) {
 			fix += fmt.Sprintf(" %s is using %.1f%% CPU.", vmm, r.vmmCPU)
 		}
 	}
-	return "probe " + r.Probes[0].Name + " timed out", fix, true
+	return "probe " + p.Name + " timed out", fix, true
 }
 
 func gatewayDown(r *Report) (string, string, bool) {
@@ -153,8 +157,11 @@ func gatewayDown(r *Report) (string, string, bool) {
 	if errors.Is(err, fs.ErrNotExist) && !r.in.GatewayAlways {
 		return "", "", false
 	}
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return r.in.GatewayPIDFile + ": " + err.Error(), "The network gateway for this sandbox is not running.", true
+	}
+	if err != nil {
+		return r.in.GatewayPIDFile + ": " + err.Error(), "The network gateway's pid file could not be read, so whether it runs is unknown.", true
 	}
 	pid, err := strconv.Atoi(strings.Fields(string(blob) + " 0")[0])
 	if err != nil || pid <= 0 || !alive(pid) {
@@ -171,8 +178,8 @@ func tmpfsFull(r *Report) (string, string, bool) {
 	}
 	for _, line := range strings.Split(df, "\n") {
 		f := strings.Fields(line)
-		if len(f) >= 2 && f[len(f)-1] == "/brig/claude" && f[len(f)-2] == "100%" {
-			return strings.TrimSpace(line), "The agent's config tmpfs is full.", true
+		if len(f) >= 2 && slices.Contains(r.in.Tmpfs, f[len(f)-1]) && f[len(f)-2] == "100%" {
+			return strings.TrimSpace(line), fmt.Sprintf("The tmpfs at %s is full. Its size is the size: of that volume in the profile.", f[len(f)-1]), true
 		}
 	}
 	return "", "", false

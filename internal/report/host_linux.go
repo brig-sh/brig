@@ -89,8 +89,11 @@ func procCPUTime(pid int) (float64, error) {
 	// utime and stime are the 14th and 15th fields of the line, so the 12th
 	// and 13th after it.
 	i := strings.LastIndexByte(string(blob), ')')
+	if i < 0 {
+		return 0, fmt.Errorf("/proc/%d/stat: unexpected shape", pid)
+	}
 	f := strings.Fields(string(blob[i+1:]))
-	if i < 0 || len(f) < 13 {
+	if len(f) < 13 {
 		return 0, fmt.Errorf("/proc/%d/stat: unexpected shape", pid)
 	}
 	utime, err1 := strconv.ParseFloat(f[11], 64)
