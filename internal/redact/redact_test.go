@@ -46,6 +46,11 @@ var shapes = []struct {
 	{"json-secret", `{"token":"[abc]"}`, []string{"[abc]"}},
 	{"json-secret", `{"password":"start\"weird"}`, []string{"start", "weird"}},
 	{"authorization", "Authorization:\tBearer abc.def-ghi_jkl0123456789", []string{"abc.def-ghi_jkl0123456789"}},
+	// A line cut at a buffer boundary, or a value that goes on to the next
+	// line, leaves the quote open.
+	{"env-secret", `API_SECRET="abcdef0123456789`, []string{"abcdef0123456789"}},
+	{"env-secret", "API_SECRET='abcdef0123456789\nnext", []string{"abcdef0123456789"}},
+	{"json-secret", `{"refreshToken":"opaque-value-cut`, []string{"opaque-value-cut"}},
 }
 
 // The names stay so a reader can tell which variable or field held a value.

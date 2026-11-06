@@ -58,10 +58,12 @@ var rules = []rule{
 	// challenge" and a header that says "Authorization: none" survive.
 	{kind: "authorization", re: regexp.MustCompile(`(?i)(authorization:[ \t]*(?:(?:bearer|basic|token)[ \t]+)?)([A-Za-z0-9._~+/=-]{16,})`), keep: 1},
 	{kind: "authorization", re: regexp.MustCompile(`(?i)(\b(?:bearer|basic)[ \t]+)([A-Za-z0-9._~+/=-]{16,})`), keep: 1, skipWords: true},
-	// A JSON string value ends at the first quote that is not escaped.
-	{kind: "json-secret", re: regexp.MustCompile(`("(?:accessToken|refreshToken|idToken|access_token|refresh_token|id_token|client_secret|apiKey|api_key|password|secret|token)"[ \t]*:[ \t]*)("(?:[^"\\\n]|\\.)+")`), keep: 1},
-	// A value may be quoted, as in a .env file or a shell line.
-	{kind: "env-secret", re: regexp.MustCompile(`\b([A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD)=)("[^"\n]+"|'[^'\n]+'|[^\s'"]+)`), keep: 1},
+	// A JSON string value ends at the first quote that is not escaped, or at
+	// the end of a line that was cut before its closing quote.
+	{kind: "json-secret", re: regexp.MustCompile(`("(?:accessToken|refreshToken|idToken|access_token|refresh_token|id_token|client_secret|apiKey|api_key|password|secret|token)"[ \t]*:[ \t]*)("(?:[^"\\\n]|\\.)+"?)`), keep: 1},
+	// A value may be quoted, as in a .env file or a shell line. A quote left
+	// open runs to the end of the line, so a cut line still masks.
+	{kind: "env-secret", re: regexp.MustCompile(`\b([A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD)=)("[^"\n]+"?|'[^'\n]+'?|[^\s'"]+)`), keep: 1},
 }
 
 // String returns s with each credential-shaped value replaced by
