@@ -1330,6 +1330,16 @@ names a change to those files at the next brig command for the sandbox, and
 a git command run before that is not warned about. See
 [What the host runs from the project](#what-the-host-runs-from-the-project).
 
+### Diagnostic reports
+
+`brig report` writes a file that you can attach to a public issue. It masks
+credentials by their shape: Anthropic keys, GitHub tokens, Authorization,
+Bearer and Basic values, JWTs, Brig's own session tokens, secret fields in
+JSON, `*_TOKEN=` style values and AWS key IDs. It does not read the secret
+store, so it cannot mask a value by what the value is. A credential of
+another shape that a log or the guest printed stays in the file. Read the
+report before you post it.
+
 ### The guest home
 
 Brig does not protect the guest home from the agent. Everything in there is

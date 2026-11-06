@@ -103,7 +103,7 @@ func TestCompletePositions(t *testing.T) {
 		name:      "a global flag does not hide the verb after it",
 		words:     []string{"-q", "r"},
 		directive: dirNames,
-		exactly:   []string{"rm", "run"},
+		exactly:   []string{"report", "rm", "run"},
 	}, {
 		name:      "the ref position offers agents and the sessions under them",
 		words:     []string{"run", "claude-code"},
