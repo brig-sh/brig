@@ -65,7 +65,8 @@ func (n *nerdctl) VM(ctx context.Context, name string) (VM, error) {
 	// monitor in place, so the pid is the monitor's and its command line says
 	// what the VM booted with.
 	if vm.PID > 0 {
-		if argv, err := procCmdline(vm.PID); err == nil && len(argv) > 0 {
+		// A zombie's command line is empty.
+		if argv, err := procCmdline(vm.PID); err == nil && len(argv) > 0 && argv[0] != "" {
 			vm.Backend = filepath.Base(argv[0])
 			vm.MemMiB = flagInt(argv, "--mem-mib")
 			vm.CPUs = flagInt(argv, "--cpus")
@@ -89,6 +90,8 @@ type GatewayFiles struct {
 	Log, PID string
 	// Always is whether the runtime runs such a gateway for every isolated
 	// sandbox. Where it does not, missing files mean no gateway was needed.
+	// Neither runtime can tell from the name alone whether the sandbox is
+	// isolated: the caller checks its network posture first.
 	Always bool
 }
 
