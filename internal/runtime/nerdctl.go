@@ -679,11 +679,23 @@ func (n *nerdctl) Output(spec ExecSpec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.Command(n.bin, args...)
+	ctx := spec.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, n.bin, args...)
+	// The same reason as agentCallWaitDelay on hull: a killed exec can leave
+	// a child holding the output pipe, and Run would wait on it.
+	cmd.WaitDelay = agentCallWaitDelay
 	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
+		// Run reports a killed exec as "signal: killed". Say why it was
+		// killed, so a caller can tell a silent guest from a failed command.
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("the guest did not answer: %w (%v)", ctx.Err(), err)
+		}
 		return "", err
 	}
 	return out.String(), nil
