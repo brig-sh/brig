@@ -79,6 +79,7 @@ usage:
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
   brig doctor [<agent>]                          check the host, runtime and, given an agent, its image
+  brig report [<ref>]                            write a diagnostic report to attach to an issue
   brig completion bash|zsh|fish                  a completion script for your shell
   brig version
 
@@ -372,6 +373,8 @@ func dispatch(args []string) error {
 		return telemetryCmd(os.Stdout, rest)
 	case "doctor":
 		return doctorCmd(os.Stdout, rest)
+	case "report":
+		return reportCmd(os.Stdout, os.Stderr, rest)
 	case "completion":
 		return completionCmd(os.Stdout, rest)
 	case "logs":

@@ -61,6 +61,14 @@ runtime and an unreachable secret store set a nonzero status, so the whole
 report matters more than whether the command "passed".
 -->
 
+## `brig report`
+
+<!--
+If a session hung, slowed down or stopped, run `brig report <ref>` from
+another shell and attach the file it writes. Read it first: it masks
+credentials of known shapes only.
+-->
+
 ## Logs and additional context
 
 <!--
