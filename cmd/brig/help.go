@@ -203,8 +203,8 @@ session is stuck; it only observes, and every step has a deadline.
 Credentials of known shapes are masked. Read the file before you post it.
 
 flags:
-  -o <file>    where to write the report
-               (default: brig-report-<ref>-<time>.txt here)
+  -o <file>     where to write the report
+                (default: brig-report-<ref>-<time>.txt here)
       --tail N  keep the last N lines of each log (default: 2000)
 
 brig help lists every command, every flag and every setting.

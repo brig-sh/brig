@@ -1077,11 +1077,14 @@ func helpRequested(verb string, rest []string) bool {
 
 // helpFlagTakesValue reports whether one of brig's own flags consumes the
 // argument after it, for helpRequested's scan. It reads the run line's table,
-// plus --tail, because `brig logs` parses its own line rather than going
-// through split.
+// plus --tail, and -o for `brig report`, because `brig logs` and `brig
+// report` parse their own lines rather than going through split.
 func helpFlagTakesValue(verb, name string) bool {
 	if verb == "logs" {
 		return name == "--tail"
+	}
+	if verb == "report" {
+		return name == "--tail" || name == "-o"
 	}
 	mine, takesValue := ours(name, posRun)
 	return mine && takesValue

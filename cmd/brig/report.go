@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -50,6 +51,14 @@ type reportOptions struct {
 // runtime.
 var reportResolve = resolveSandbox
 
+// reportExecutable is the brig that `brig ls` runs as. A test replaces it:
+// under go test, os.Executable is the test binary, which would run the suite.
+var reportExecutable = os.Executable
+
+// reportDetect finds the runtime when there is no sandbox to resolve. A test
+// replaces it so a report of the host does not list the real runtime.
+var reportDetect = runtime.Detect
+
 // reportCmd is `brig report [<ref>] [-o <file>] [--tail N]`.
 func reportCmd(stdout, stderr io.Writer, args []string) error {
 	o, err := parseReportArgs(args)
@@ -66,7 +75,12 @@ func reportCmd(stdout, stderr io.Writer, args []string) error {
 		ProbeTimeout: reportProbeTimeout,
 		BrigVersion:  brigCheck().Finding,
 	}
-	in.Doctor = reportDoctorRows()
+	// Reloaded for the problems the load reports, as brig doctor does, and
+	// here rather than in the doctor step: that step can be left behind at its
+	// deadline, and a reload there would write the registry while the resolve
+	// below reads it.
+	loadErr := profile.Load(profile.Dir())
+	in.Doctor = reportDoctorRows(loadErr)
 	in.Sessions = reportSessions()
 
 	var rt runtime.Runtime
@@ -77,7 +91,7 @@ func reportCmd(stdout, stderr io.Writer, args []string) error {
 			// is broken, is often why the user is here. Write the host part
 			// and say why the rest is missing.
 			in.Ref, in.ResolveError = o.ref, err.Error()
-			rt, _ = runtime.Detect()
+			rt, _ = reportDetect()
 			return writeReport(stdout, stderr, o.out, rt, in)
 		}
 		cfg.OpenStore = refuseStore
@@ -89,7 +103,8 @@ func reportCmd(stdout, stderr io.Writer, args []string) error {
 		var gw runtime.GatewayFiles
 		in.Logs, gw = reportLogs(cfg, rt, name)
 		in.GatewayPIDFile, in.GatewayAlways = gw.PID, gw.Always
-	} else if r, err := runtime.Detect(); err == nil {
+		in.Tmpfs = reportTmpfs(cfg.Profile)
+	} else if r, err := reportDetect(); err == nil {
 		rt = r
 	}
 
@@ -98,7 +113,9 @@ func reportCmd(stdout, stderr io.Writer, args []string) error {
 
 func writeReport(stdout, stderr io.Writer, path string, rt runtime.Runtime, in report.Input) error {
 	r := report.Collect(context.Background(), rt, in, stderr)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	// 0600: the file holds host logs and whatever the masking missed, and is
+	// for the user to read before anyone else does.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -144,23 +161,29 @@ func parseReportArgs(args []string) (reportOptions, error) {
 }
 
 // reportFileName names the file after the ref and the time, so two reports
-// of one hang do not overwrite each other. The ref's @ would need quoting in
-// a shell, so it becomes a dash.
+// of one hang do not overwrite each other. The ref is not parsed yet and may
+// be wrong, which is often why the user is here, so every character that is
+// not plainly safe in a file name becomes a dash: a / would make it a path.
 func reportFileName(ref string, now time.Time) string {
 	stamp := now.Format("20060102T150405Z")
 	if ref == "" {
 		return "brig-report-" + stamp + ".txt"
 	}
-	return "brig-report-" + strings.ReplaceAll(ref, "@", "-") + "-" + stamp + ".txt"
+	safe := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+			return r
+		}
+		return '-'
+	}, ref)
+	return "brig-report-" + safe + "-" + stamp + ".txt"
 }
 
 // reportDoctorRows runs the doctor checks for the host, with no agent so no
 // registry is contacted, and with the secrets check left out: it opens the
 // keychain, which can prompt and block, and this command reads no secrets.
-func reportDoctorRows() []report.Row {
+func reportDoctorRows(loadErr error) []report.Row {
 	done := make(chan []check, 1)
 	go func() {
-		loadErr := profile.Load(profile.Dir())
 		done <- doctorChecks(nil, loadErr, func() check {
 			return check{Name: "secrets", State: stateInfo, Finding: "not checked by brig report"}
 		})
@@ -186,7 +209,7 @@ func reportDoctorRows() []report.Row {
 // so the listing is the one a user sees and a stuck runtime cannot hold the
 // report past the deadline.
 func reportSessions() string {
-	self, err := os.Executable()
+	self, err := reportExecutable()
 	if err != nil {
 		return "brig ls: " + err.Error()
 	}
@@ -194,6 +217,8 @@ func reportSessions() string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, self, "ls")
 	cmd.WaitDelay = time.Second
+	// The user ran one command. The child is part of it and is not counted.
+	cmd.Env = append(os.Environ(), "DO_NOT_TRACK=1")
 	out, err := cmd.CombinedOutput()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return string(out) + "\nbrig ls timed out after " + reportStepTimeout.String()
@@ -227,20 +252,37 @@ func reportSessionRecord(cfg *wrap.Config) string {
 		cfg.Workspace, cfg.VMName, project, cfg.Profile.Name, cfg.Mem, cfg.CPUs, cfg.Network)
 }
 
+// reportTmpfs is where the guest sees each tmpfs the profile mounts: its at:
+// when it has one, else its path under the guest home.
+func reportTmpfs(p profile.Profile) []string {
+	var out []string
+	for _, v := range p.Tmpfs() {
+		at := v.At
+		if at == "" {
+			at = path.Join(p.GuestHome, v.Path)
+		}
+		out = append(out, at)
+	}
+	return out
+}
+
 // reportLogs lists the gateway and broker logs for the sandbox, and the files
-// of its own gateway when it is isolated.
+// of its own gateway when it is isolated. An offline sandbox has no gateway.
 func reportLogs(cfg *wrap.Config, rt runtime.Runtime, name string) ([]report.LogFile, runtime.GatewayFiles) {
 	var logs []report.LogFile
 	var gw runtime.GatewayFiles
-	if cfg.Network == "isolated" {
+	switch cfg.Network {
+	case wrap.NetIsolated:
 		if gf, ok := rt.(runtime.GatewayFiler); ok {
 			if files, err := gf.GatewayFiles(name); err == nil {
 				gw = files
 				logs = append(logs, report.LogFile{Title: "Gateway log", Path: files.Log})
 			}
 		}
-	} else if path, err := runtime.GatewayLogPath(); err == nil {
-		logs = append(logs, report.LogFile{Title: "Gateway log", Path: path})
+	case wrap.NetShared:
+		if p, err := runtime.GatewayLogPath(); err == nil {
+			logs = append(logs, report.LogFile{Title: "Gateway log", Path: p})
+		}
 	}
 	if dir, err := injector.Dir(); err == nil {
 		logs = append(logs,

@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -47,6 +49,24 @@ func reportHost(t *testing.T, cfg *wrap.Config, rt runtime.Runtime) {
 	swap(t, &reportResolve, func(string) (*wrap.Config, runtime.Runtime, string, error) {
 		return cfg, rt, cfg.VMName, nil
 	})
+	swap(t, &reportDetect, func() (runtime.Runtime, error) {
+		if rt == nil {
+			return nil, errors.New("no runtime")
+		}
+		return rt, nil
+	})
+	stubBrigLs(t, "echo no sessions")
+}
+
+// stubBrigLs stands in for the brig that `brig ls` runs as. The real one
+// under go test is the test binary, which would run the suite again.
+func stubBrigLs(t *testing.T, body string) {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "brig")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	swap(t, &reportExecutable, func() (string, error) { return bin, nil })
 }
 
 func runReport(t *testing.T, args ...string) (stdout string, path string) {
@@ -99,7 +119,7 @@ func TestReportSourceNamesNoSecretRead(t *testing.T) {
 func TestReportDoctorSkipsSecrets(t *testing.T) {
 	cfg := &wrap.Config{VMName: "brig-claude-code"}
 	reportHost(t, cfg, &reportRuntime{})
-	for _, row := range reportDoctorRows() {
+	for _, row := range reportDoctorRows(nil) {
 		if row.Name == "secrets" {
 			if row.Detail != "not checked by brig report" {
 				t.Errorf("secrets row = %+v", row)
@@ -166,5 +186,95 @@ func TestReportWhenTheRefDoesNotResolve(t *testing.T) {
 	}
 	if !strings.Contains(string(blob), `nope, not resolved: unknown profile "nope"`) {
 		t.Errorf("the report does not say why the ref did not resolve:\n%s", blob)
+	}
+}
+
+// The child `brig ls` is part of the command the user ran, so it is not
+// counted as a second one.
+func TestReportListsSessionsWithoutTelemetry(t *testing.T) {
+	stubBrigLs(t, `echo "$1 DO_NOT_TRACK=$DO_NOT_TRACK"`)
+	if got := reportSessions(); !strings.Contains(got, "ls DO_NOT_TRACK=1") {
+		t.Errorf("brig ls ran as %q, want ls with DO_NOT_TRACK=1", got)
+	}
+}
+
+// The file holds host logs and whatever the masking missed. Other local
+// users cannot read it.
+func TestReportFileIsPrivate(t *testing.T) {
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, &reportRuntime{running: true})
+	_, path := runReport(t, "claude")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("report mode %v, want no access for group or others", perm)
+	}
+}
+
+// The ref is not parsed before the file is named, so whatever was typed
+// stays a plain name in the current directory.
+func TestReportFileName(t *testing.T) {
+	now := time.Date(2026, 11, 6, 14, 0, 0, 0, time.UTC)
+	for ref, want := range map[string]string{
+		"":          "brig-report-20261106T140000Z.txt",
+		"claude":    "brig-report-claude-20261106T140000Z.txt",
+		"claude@x":  "brig-report-claude-x-20261106T140000Z.txt",
+		"foo/bar":   "brig-report-foo-bar-20261106T140000Z.txt",
+		"../../etc": "brig-report-..-..-etc-20261106T140000Z.txt",
+	} {
+		if got := reportFileName(ref, now); got != want {
+			t.Errorf("reportFileName(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+// With no ref the report covers the host alone and asks no guest anything.
+func TestReportWithoutRef(t *testing.T) {
+	rt := &reportRuntime{running: true}
+	reportHost(t, &wrap.Config{}, rt)
+	swap(t, &reportResolve, func(string) (*wrap.Config, runtime.Runtime, string, error) {
+		t.Error("a report with no ref resolved one")
+		return nil, nil, "", errors.New("no ref")
+	})
+	_, path := runReport(t)
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.asked != 0 {
+		t.Errorf("a report of the host asked a guest %d questions", rt.asked)
+	}
+	for _, want := range []string{"## brig doctor", "no sessions"} {
+		if !strings.Contains(string(blob), want) {
+			t.Errorf("host report has no %q:\n%s", want, blob)
+		}
+	}
+}
+
+// The df probe and the full-tmpfs verdict ask about the profile's own
+// mounts: its at: where it names one, else the path under the guest home.
+func TestReportTmpfs(t *testing.T) {
+	p := profile.Profile{GuestHome: "/root", Volumes: []profile.Volume{
+		{Kind: profile.VolumeTmpfs, Path: ".claude", At: "/brig/claude"},
+		{Kind: profile.VolumeTmpfs, Path: ".codex"},
+		{Kind: profile.VolumeHostMount, Path: ".claude/projects"},
+	}}
+	got := reportTmpfs(p)
+	if strings.Join(got, " ") != "/brig/claude /root/.codex" {
+		t.Errorf("reportTmpfs = %q, want /brig/claude and /root/.codex", got)
+	}
+}
+
+// A flag's value is its value even when it reads like --help, so the user
+// gets the flag's own error rather than the usage text.
+func TestReportHelpScanSkipsFlagValues(t *testing.T) {
+	for _, args := range [][]string{{"--tail", "--help"}, {"-o", "-h"}} {
+		if helpRequested("report", args) {
+			t.Errorf("helpRequested(report, %q) = true, want the value read as a value", args)
+		}
+	}
+	if !helpRequested("report", []string{"--tail", "5", "--help"}) {
+		t.Error("helpRequested(report, --tail 5 --help) = false")
 	}
 }

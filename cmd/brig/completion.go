@@ -228,10 +228,29 @@ func complete(words []string) (string, []string) {
 		}
 		return names(cur, agentNames())
 	case verb == "report":
+		// -o takes a file and --tail a number; one ref at most.
+		refs := 0
+		for i := 0; i < len(rest); i++ {
+			switch {
+			case rest[i] == "-o" || rest[i] == "--tail":
+				if i == len(rest)-1 {
+					if rest[i] == "-o" {
+						return dirFiles, nil
+					}
+					return dirNone, nil
+				}
+				i++
+			case !strings.HasPrefix(rest[i], "-"):
+				refs++
+			}
+		}
 		if strings.HasPrefix(cur, "-") {
 			return names(cur, []string{"--tail", "-o"})
 		}
-		return dirNone, nil
+		if refs > 0 {
+			return dirNone, nil
+		}
+		return names(cur, refCandidates())
 	case verb == "network":
 		return completeNetwork(rest, cur)
 	case groups[verb] != nil:
