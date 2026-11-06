@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -693,6 +694,9 @@ func (n *nerdctl) Output(spec ExecSpec) (string, error) {
 	if err := cmd.Run(); err != nil {
 		// Run reports a killed exec as "signal: killed". Say why it was
 		// killed, so a caller can tell a silent guest from a failed command.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return "", fmt.Errorf("the guest call was cancelled: %w (%v)", ctx.Err(), err)
+		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("the guest did not answer: %w (%v)", ctx.Err(), err)
 		}

@@ -152,8 +152,6 @@ func swapCmdline(t *testing.T, fn func(int) ([]string, error)) {
 	t.Cleanup(func() { procCmdline = old })
 }
 
-// Seen on Debian 13 with bundle rc21: the container's pid is hvi itself, and
-// its argv carries what the VM booted with.
 // A caller that cancels is told so. Reporting a deadline would make the
 // report call a guest unresponsive when only the caller gave up on it.
 func TestHullOutputSaysTheCallerCancelled(t *testing.T) {
@@ -163,6 +161,18 @@ func TestHullOutputSaysTheCallerCancelled(t *testing.T) {
 	_, err := h.Output(ExecSpec{Ctx: ctx, Name: "vm", Cmd: []string{"uptime"}})
 	if !errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Output = %v, want an error wrapping context.Canceled and not DeadlineExceeded", err)
+	}
+}
+
+// The nerdctl wording follows hull's: a cancel is the caller's, not a silent
+// guest.
+func TestNerdctlOutputSaysTheCallerCancelled(t *testing.T) {
+	n := &nerdctl{bin: scriptBin(t, "nerdctl", "sleep 30")}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := n.Output(ExecSpec{Ctx: ctx, Name: "vm", Cmd: []string{"uptime"}})
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("Output = %v, want a cancel that does not blame the guest", err)
 	}
 }
 
@@ -180,6 +190,8 @@ func TestNerdctlVMLeavesAnEmptyCommandLineBlank(t *testing.T) {
 	}
 }
 
+// Seen on Debian 13 with bundle rc21: the container's pid is hvi itself, and
+// its argv carries what the VM booted with.
 func TestNerdctlVMReadsTheMonitorCommandLine(t *testing.T) {
 	swapCmdline(t, func(pid int) ([]string, error) {
 		if pid != 2004 {
