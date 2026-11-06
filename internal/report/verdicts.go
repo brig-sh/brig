@@ -179,7 +179,7 @@ func tmpfsFull(r *Report) (string, string, bool) {
 	for _, line := range strings.Split(df, "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 2 && slices.Contains(r.in.Tmpfs, f[len(f)-1]) && f[len(f)-2] == "100%" {
-			return strings.TrimSpace(line), fmt.Sprintf("The tmpfs at %s is full. Its size is the size: of that volume in the profile.", f[len(f)-1]), true
+			return strings.TrimSpace(line), fmt.Sprintf("The tmpfs at %s is full. Its size is set by the size: of that volume in the profile.", f[len(f)-1]), true
 		}
 	}
 	return "", "", false
