@@ -173,7 +173,14 @@ func TestNerdctlVMReadsTheMonitorCommandLine(t *testing.T) {
 }
 
 func TestGatewayFiles(t *testing.T) {
-	t.Setenv("BRIG_GATEWAY_DIR", t.TempDir())
+	// A short directory: macOS's per-test temp path is too long for the unix
+	// socket the gateway path is derived from.
+	dir, err := os.MkdirTemp("/tmp", "brig-gw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("BRIG_GATEWAY_DIR", dir)
 	h, err := (&hull{}).GatewayFiles("brig-x")
 	if err != nil || !h.Always || !strings.HasSuffix(h.PID, ".pid") || !strings.HasSuffix(h.Log, ".log") {
 		t.Errorf("hull GatewayFiles = %+v, %v; want an always-present gateway with .pid and .log", h, err)
