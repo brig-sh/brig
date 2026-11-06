@@ -235,7 +235,7 @@ call. See [Guest image](guest-image.md).
 
 | Renamed in | Profile | Current |
 | --- | --- | --- |
-| 0.6.0 | `herd` | `herdr` |
+| 0.5.2 | `herd` | `herdr` |
 
 The profile that runs Claude Code with a herdr server is named after the
 tool, `herdr`, and so is its image, `ghcr.io/brig-sh/herdr-stock`. `herd`
