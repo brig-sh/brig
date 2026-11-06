@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
@@ -831,7 +832,11 @@ func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
+	parent := spec.Ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, agentCallTimeout)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.WaitDelay = agentCallWaitDelay
 	return cmd, cancel, envVals, nil
@@ -856,10 +861,26 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 		return "", err
 	}
 	defer cancel()
+	// The deadline is the agent call's own context, which this function does
+	// not hold. Cancel runs when it fires, so it records that, and a caller
+	// can tell a guest that never answered from a command that failed: Run
+	// itself reports only "signal: killed".
+	var expired atomic.Bool
+	cmd.Cancel = func() error {
+		expired.Store(true)
+		return cmd.Process.Kill()
+	}
 	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
+		if expired.Load() {
+			// A caller that cancelled stopped asking; the guest may be fine.
+			if spec.Ctx != nil && errors.Is(spec.Ctx.Err(), context.Canceled) {
+				return "", fmt.Errorf("the guest call was cancelled: %w (%v)", context.Canceled, err)
+			}
+			return "", fmt.Errorf("the guest did not answer: %w (%v)", context.DeadlineExceeded, err)
+		}
 		return "", err
 	}
 	return out.String(), nil
