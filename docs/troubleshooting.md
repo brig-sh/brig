@@ -724,6 +724,40 @@ brig run claude
 
 The run reaches the agent and does not print "sandbox did not become ready".
 
+## A session hangs
+
+The terminal of a `brig run` or `brig sh` does not answer. You cannot type,
+and Ctrl-C does nothing.
+
+**Cause:** Usually the guest. When the guest runs out of memory, it can stop
+for a long time before the kernel stops a process, and the agent cannot draw
+its screen. Other causes are a VMM or network gateway that stopped.
+
+**Fix:**
+
+1. Open another shell on the host, and keep the stuck terminal open.
+2. Write a report:
+
+   ```bash
+   brig report claude
+   ```
+
+3. Read the verdict at the top of the file. If it names a fix, do it. For a
+   guest that ran out of memory, stop the sandbox and run it with more
+   memory:
+
+   ```bash
+   brig stop claude
+   brig run claude --mem 8192 -- --resume
+   ```
+
+   `brig stop` keeps the guest home, and the conversations of the agent are in
+   it. Do not use `brig rm`, which deletes a guest home that Brig created.
+
+4. If the verdict names no fix, attach the file to a
+   [bug report](https://github.com/brig-sh/brig/issues/new?template=bug_report.md).
+   Read the file first. See [`brig report`](cli.md#brig-report).
+
 ## runtimeBin is not there
 
 ```

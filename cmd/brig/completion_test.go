@@ -103,7 +103,25 @@ func TestCompletePositions(t *testing.T) {
 		name:      "a global flag does not hide the verb after it",
 		words:     []string{"-q", "r"},
 		directive: dirNames,
-		exactly:   []string{"rm", "run"},
+		exactly:   []string{"report", "rm", "run"},
+	}, {
+		name:      "brig report takes a ref like run",
+		words:     []string{"report", "claude-code"},
+		directive: dirNames,
+		exactly:   []string{"claude-code", "claude-code@refactor"},
+	}, {
+		name:      "brig report -o takes a file",
+		words:     []string{"report", "-o", ""},
+		directive: dirFiles,
+	}, {
+		name:      "brig report covers one ref",
+		words:     []string{"report", "claude-code", ""},
+		directive: dirNone,
+	}, {
+		name:      "brig report's ref can follow its flags",
+		words:     []string{"report", "--tail", "50", "-o", "r.txt", "mi"},
+		directive: dirNames,
+		exactly:   []string{"mine"},
 	}, {
 		name:      "the ref position offers agents and the sessions under them",
 		words:     []string{"run", "claude-code"},

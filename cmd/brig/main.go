@@ -79,6 +79,7 @@ usage:
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
   brig doctor [<agent>]                          check the host, runtime and, given an agent, its image
+  brig report [<ref>]                            write a diagnostic report to attach to an issue
   brig completion bash|zsh|fish                  a completion script for your shell
   brig version
 
@@ -372,6 +373,8 @@ func dispatch(args []string) error {
 		return telemetryCmd(os.Stdout, rest)
 	case "doctor":
 		return doctorCmd(os.Stdout, rest)
+	case "report":
+		return reportCmd(os.Stdout, os.Stderr, rest)
 	case "completion":
 		return completionCmd(os.Stdout, rest)
 	case "logs":
@@ -1074,11 +1077,14 @@ func helpRequested(verb string, rest []string) bool {
 
 // helpFlagTakesValue reports whether one of brig's own flags consumes the
 // argument after it, for helpRequested's scan. It reads the run line's table,
-// plus --tail, because `brig logs` parses its own line rather than going
-// through split.
+// plus --tail, and -o for `brig report`, because `brig logs` and `brig
+// report` parse their own lines rather than going through split.
 func helpFlagTakesValue(verb, name string) bool {
 	if verb == "logs" {
 		return name == "--tail"
+	}
+	if verb == "report" {
+		return name == "--tail" || name == "-o"
 	}
 	mine, takesValue := ours(name, posRun)
 	return mine && takesValue

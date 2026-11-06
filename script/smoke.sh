@@ -242,6 +242,11 @@ case "$verb" in
       exit 1
     fi
     ;;
+  logs)
+    # The guest console. Empty unless a case sets STUB_CONSOLE, which the
+    # report case uses to plant a credential the report must not repeat.
+    [ -n "${STUB_CONSOLE:-}" ] && printf '%s\n' "$STUB_CONSOLE"
+    ;;
   stop)
     [ -f "$STUB_STATE" ] && mv "$STUB_STATE" "$STUB_STATE.stopped"
     ;;
@@ -1758,6 +1763,31 @@ grep -q '^argv: logs --tail -1 brig-claude-code' "$STUB_LOG" \
 grep -q '^argv: logs --follow --tail -1 brig-claude-code' "$STUB_LOG" \
   && ok "logs --follow passes --follow to the runtime" \
   || bad "logs --follow passes --follow -- got: $(grep '^argv:' "$STUB_LOG")"
+
+echo "== report =="
+# brig report writes one file, says where, and ends by telling the reader to
+# check it before posting. It goes on public issues, so a credential planted in
+# the console must not reach it. It only observes: the sandbox the logs case
+# booted is neither run, stopped nor removed.
+: > "$STUB_LOG"
+out="$(STUB_CONSOLE='export KEY=sk-ant-api03-SMOKEPLANTED0123456789' \
+  "$WORK/brig" report claude -o "$WORK/report.txt" 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && ok "report exits 0 once the file is written" \
+  || bad "report exited $rc: $out"
+grep -q '^## Verdict' "$WORK/report.txt" 2>/dev/null \
+  && ok "the report opens with its verdict" || bad "the report has no verdict section"
+grep -q 'SMOKEPLANTED' "$WORK/report.txt" 2>/dev/null \
+  && bad "a planted credential reached the report" \
+  || ok "a planted credential does not reach the report"
+grep -q 'masked: ' "$WORK/report.txt" 2>/dev/null \
+  && ok "the planted credential is shown masked" || bad "the report shows no mask"
+case "$out" in
+  *"Read the file before you post it."*) ok "report ends by asking the reader to check the file" ;;
+  *) bad "report does not ask the reader to check the file -- got: $out" ;;
+esac
+grep -Eq '^argv: (run|stop|rm) ' "$STUB_LOG" \
+  && bad "report changed the sandbox: $(grep -E '^argv: (run|stop|rm) ' "$STUB_LOG")" \
+  || ok "report only observes the sandbox"
 
 echo "== lifecycle verbs =="
 : > "$STUB_LOG"

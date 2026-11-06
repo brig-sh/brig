@@ -19,6 +19,7 @@ against.
 | `brig info claude` | prints the execution envelope, without booting anything |
 | `brig stop claude` | stops the sandbox and keeps its state on disk |
 | `brig rm claude` | stops the sandbox and removes it |
+| `brig report claude` | writes a diagnostic report to attach to an issue |
 | `brig network publish claude 3000` | opens the agent's port 3000 on `localhost:3000` |
 
 ## Help
@@ -553,6 +554,51 @@ brig doctor --json
 Only two checks set the exit status. A missing or broken runtime exits `4`,
 and a secret store that does not open exits `6`. Every other finding,
 including one marked `!!`, prints its fix and leaves the exit status at `0`.
+
+### `brig report`
+
+```bash
+brig report claude
+```
+
+`brig report` writes a diagnostic report for a session to one plain-text
+file, then prints the file name. Run it from another shell when a session
+hangs, slows down or stops, before you close the stuck terminal if you can.
+The sandbox outlives the terminal, so the report also works after.
+
+```
+brig report [<ref>] [-o <file>] [--tail N]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-o <file>` | where to write the report. Default: `brig-report-<ref>-<time>.txt` in the current directory |
+| `--tail N` | keep the last `N` lines of each log. Default: `2000` |
+
+The report starts with a verdict: the known failures it found, the line
+that shows each one, and the fix. For example, when the guest ran out of
+memory, the verdict names the kill and tells you to stop the sandbox and run
+it with a larger `--mem`. Then it holds:
+
+- the Brig, runtime and host versions, and the memory and vCPUs of the VM
+- the `brig doctor` lines, with the secret store left unchecked
+- `brig ls` and the session record of the ref
+- the VMM process and its thread stacks
+- answers from the guest: memory pressure, `free`, `uptime`, the largest
+  processes, `df` and `dmesg`
+- the console, gateway and broker logs
+
+Each step has a time limit, so a guest that does not answer cannot stop the
+report. A step that runs out of time is written in the report as a finding.
+`brig report` does not stop, start or repair anything.
+
+The report masks credentials of known shapes and does not read the secret
+store. Read the file before you post it: a value of a shape Brig does not
+know is not masked. Paths, user names and project names stay in the report.
+
+With no ref, the report holds the host, `brig doctor` and `brig ls` only.
+`brig report` exits `0` when it wrote the file, also when steps ran out of
+time.
 
 ### `brig version`
 
