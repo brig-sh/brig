@@ -550,7 +550,7 @@ memory, the verdict names the kill and tells you to stop the sandbox and run
 it with a larger `--mem`. Then it holds:
 
 - the Brig, runtime and host versions, and the memory and vCPUs of the VM
-- the `brig doctor` lines, without the secret store line
+- the `brig doctor` lines, with the secret store left unchecked
 - `brig ls` and the session record of the ref
 - the VMM process and its thread stacks
 - answers from the guest: memory pressure, `free`, `uptime`, the largest
