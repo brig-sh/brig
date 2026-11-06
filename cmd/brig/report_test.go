@@ -278,3 +278,61 @@ func TestReportHelpScanSkipsFlagValues(t *testing.T) {
 		t.Error("helpRequested(report, --tail 5 --help) = false")
 	}
 }
+
+// -o onto a file that is already there, at 0644 from an older brig or a
+// touch, still leaves it private.
+func TestReportFileIsPrivateWhenItExists(t *testing.T) {
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, &reportRuntime{running: true})
+	path := filepath.Join(t.TempDir(), "r.txt")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reportCmd(io.Discard, io.Discard, []string{"claude", "-o", path}); err != nil {
+		t.Fatalf("brig report: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("report mode %v, want no access for group or others", perm)
+	}
+}
+
+type gatewayRuntime struct {
+	reportRuntime
+	log string
+}
+
+func (g *gatewayRuntime) GatewayFiles(string) (runtime.GatewayFiles, error) {
+	return runtime.GatewayFiles{Log: g.log}, nil
+}
+
+// An isolated sandbox has a gateway of its own, a shared one uses the host's
+// shared gateway, and an offline one has no gateway, so no gateway log is
+// read for it.
+func TestReportLogsFollowTheNetwork(t *testing.T) {
+	reportHost(t, &wrap.Config{}, nil)
+	rt := &gatewayRuntime{log: "/own/gateway.log"}
+	for network, want := range map[wrap.Network]string{
+		wrap.NetIsolated: "/own/gateway.log",
+		wrap.NetShared:   "shared",
+		wrap.NetOffline:  "",
+	} {
+		logs, _ := reportLogs(&wrap.Config{Network: network}, rt, "brig-claude-code")
+		var got string
+		for _, l := range logs {
+			if l.Title == "Gateway log" {
+				got = l.Path
+			}
+		}
+		switch {
+		case want == "" && got != "":
+			t.Errorf("%s: gateway log %q, want none", network, got)
+		case want == "shared" && (got == "" || got == rt.log):
+			t.Errorf("%s: gateway log %q, want the shared gateway's", network, got)
+		case want != "" && want != "shared" && got != want:
+			t.Errorf("%s: gateway log %q, want %q", network, got, want)
+		}
+	}
+}

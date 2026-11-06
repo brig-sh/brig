@@ -111,13 +111,22 @@ func reportCmd(stdout, stderr io.Writer, args []string) error {
 	return writeReport(stdout, stderr, o.out, rt, in)
 }
 
-func writeReport(stdout, stderr io.Writer, path string, rt runtime.Runtime, in report.Input) error {
+func writeReport(stdout, stderr io.Writer, file string, rt runtime.Runtime, in report.Input) error {
 	r := report.Collect(context.Background(), rt, in, stderr)
 	// 0600: the file holds host logs and whatever the masking missed, and is
 	// for the user to read before anyone else does.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
+	}
+	// The mode above applies only to a file that open creates. A file that
+	// was already there keeps its own, so it is set here. Only a regular
+	// file: -o /dev/stdout must not change the terminal's mode.
+	if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+		if err := f.Chmod(0o600); err != nil {
+			f.Close()
+			return err
+		}
 	}
 	if err := r.Render(f); err != nil {
 		f.Close()
@@ -126,7 +135,7 @@ func writeReport(stdout, stderr io.Writer, path string, rt runtime.Runtime, in r
 	if err := f.Close(); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "wrote %s\n%s\n", path, reportClosing)
+	fmt.Fprintf(stdout, "wrote %s\n%s\n", file, reportClosing)
 	return nil
 }
 
