@@ -52,7 +52,7 @@ func TestVerdictOOM(t *testing.T) {
 	if !strings.Contains(v.Evidence, "Killed process 21272 (node)") {
 		t.Errorf("evidence = %q", v.Evidence)
 	}
-	for _, want := range []string{"brig stop claude", "4096 MB", "1 kill"} {
+	for _, want := range []string{"brig stop claude", "4096 MiB", "1 kill"} {
 		if !strings.Contains(v.Fix, want) {
 			t.Errorf("fix %q does not say %q", v.Fix, want)
 		}
@@ -68,7 +68,7 @@ func TestVerdictThrash(t *testing.T) {
 		"cpu:\nsome avg10=1.00 avg60=1.00 avg300=1.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
 	r := Collect(context.Background(), answering("", map[string]string{"pressure": psi}), running(), io.Discard)
 	v := verdictNamed(t, r, "thrash")
-	if !strings.Contains(v.Evidence, "full avg10=42.00") || !strings.Contains(v.Fix, "4096 MB") {
+	if !strings.Contains(v.Evidence, "full avg10=42.00") || !strings.Contains(v.Fix, "4096 MiB") {
 		t.Errorf("thrash verdict = %+v", v)
 	}
 }
@@ -100,8 +100,75 @@ func TestVerdictUnresponsiveSaysIdle(t *testing.T) {
 
 func TestVerdictTmpfsFull(t *testing.T) {
 	df := "Filesystem Size Used Avail Use% Mounted on\ntmpfs 512M 512M 0 100% /brig/claude\n"
-	r := Collect(context.Background(), answering("", map[string]string{"df -h": df}), running(), io.Discard)
-	verdictNamed(t, r, "tmpfs")
+	in := running()
+	in.Tmpfs = []string{"/brig/claude"}
+	r := Collect(context.Background(), answering("", map[string]string{"df -h": df}), in, io.Discard)
+	if v := verdictNamed(t, r, "tmpfs"); !strings.Contains(v.Fix, "/brig/claude") {
+		t.Errorf("fix = %q, want it to name the mount", v.Fix)
+	}
+}
+
+// Each profile mounts its tmpfs somewhere of its own. The df probe asks about
+// the ones this profile has, and only those count as full.
+func TestVerdictTmpfsFollowsTheProfile(t *testing.T) {
+	df := "Filesystem Size Used Avail Use% Mounted on\n" +
+		"tmpfs 64M 64M 0 100% /root/.codex\n" +
+		"tmpfs 512M 512M 0 100% /dev/shm\n"
+	var script string
+	rt := answering("", nil)
+	rt.output = func(spec runtime.ExecSpec) (string, error) {
+		if s := spec.Cmd[len(spec.Cmd)-1]; strings.Contains(s, "df -h") {
+			script = s
+			return df, nil
+		}
+		return "", nil
+	}
+	in := running()
+	in.Tmpfs = []string{"/root/.codex", "/brig/it's"}
+	r := Collect(context.Background(), rt, in, io.Discard)
+	for _, want := range []string{"'/root/.codex'", `'/brig/it'\''s'`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("df script %q does not ask about %s", script, want)
+		}
+	}
+	if strings.Contains(script, "/brig/claude") {
+		t.Errorf("df script %q names a mount this profile does not have", script)
+	}
+	v := verdictNamed(t, r, "tmpfs")
+	if !strings.Contains(v.Evidence, "/root/.codex") {
+		t.Errorf("evidence = %q, want the profile's mount, not /dev/shm", v.Evidence)
+	}
+}
+
+// A guest can answer the first probes and stop on a later one. That is the
+// same silent guest, and the verdict names the probe it stopped on.
+func TestVerdictUnresponsiveOnALaterProbe(t *testing.T) {
+	rt := answering("", nil)
+	rt.output = func(spec runtime.ExecSpec) (string, error) {
+		if strings.Contains(spec.Cmd[len(spec.Cmd)-1], "/proc/pressure") {
+			return "memory:\n", nil
+		}
+		<-spec.Ctx.Done()
+		return "", spec.Ctx.Err()
+	}
+	r := Collect(context.Background(), rt, running(), io.Discard)
+	v := verdictNamed(t, r, "unresponsive")
+	if v.Evidence != "probe free -m timed out" {
+		t.Errorf("evidence = %q, want the second probe named", v.Evidence)
+	}
+}
+
+// A pid file that is there but cannot be read says nothing about the
+// gateway, and the verdict does not claim it is down.
+func TestVerdictGatewayPidFileUnreadable(t *testing.T) {
+	in := running()
+	in.GatewayPIDFile = t.TempDir() // a directory: reading it fails
+	in.GatewayAlways = true
+	r := Collect(context.Background(), answering("", nil), in, io.Discard)
+	v := verdictNamed(t, r, "gateway")
+	if strings.Contains(v.Fix, "is not running") || !strings.Contains(v.Fix, "could not be read") {
+		t.Errorf("fix = %q, want it to say the pid file could not be read", v.Fix)
+	}
 }
 
 func TestVerdictNone(t *testing.T) {
