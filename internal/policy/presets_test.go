@@ -252,6 +252,61 @@ func TestExpandRouteSharesNothingWithItsInput(t *testing.T) {
 	if again.Inject.BasicAuth.Username != "x-access-token" {
 		t.Errorf("changing an expanded route changed the preset: %+v", again.Inject.BasicAuth)
 	}
+
+	// request.body rides on the Anthropic presets, and overlay hands the
+	// route's Request on whole, so its lists must be copies too.
+	claude := withSecret(v1alpha1.PresetClaudeCode)
+	claude.Request = &v1alpha1.RequestPolicy{Body: fullBody()}
+	beforeBody := *claude.DeepCopy()
+	out, err = ExpandRoute(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Request.Body.Models[0] = "changed"
+	out.Request.Body.Tools.Allow[0] = "changed"
+	out.Request.Body.Tools.Deny[0] = "changed"
+	out.Request.Body.ToolResultDeny[0] = "changed"
+	out.Request.Body.ToolUse.Deny[0] = "changed"
+	if !reflect.DeepEqual(claude, beforeBody) {
+		t.Errorf("changing the expanded route changed its input's body:\n got %+v\nwant %+v",
+			claude.Request.Body, beforeBody.Request.Body)
+	}
+}
+
+// fullBody sets every rule of request.body.
+func fullBody() *v1alpha1.RequestBody {
+	return &v1alpha1.RequestBody{
+		Models:         []string{"claude-sonnet-4-5*"},
+		Tools:          &v1alpha1.ToolRules{Allow: []string{"Read", "Bash"}, Deny: []string{"WebFetch"}},
+		MaxTokens:      8192,
+		ToolResultDeny: []string{`AKIA[0-9A-Z]{16}`},
+		ToolUse:        &v1alpha1.ToolUseRules{Deny: []string{"Bash"}, Action: v1alpha1.ToolUseDrop},
+	}
+}
+
+// The broker reads request.body from the expanded route, so expansion must
+// keep it, and must refuse it on a preset that does not speak the Messages
+// API.
+func TestExpandRouteKeepsRequestBody(t *testing.T) {
+	for _, preset := range []v1alpha1.Preset{v1alpha1.PresetClaudeCode, v1alpha1.PresetAnthropicAPIKey} {
+		r := withSecret(preset)
+		r.Request = &v1alpha1.RequestPolicy{Body: fullBody()}
+		out, err := ExpandRoute(r)
+		if err != nil {
+			t.Fatalf("%s: ExpandRoute: %v", preset, err)
+		}
+		if out.Request == nil || !reflect.DeepEqual(out.Request.Body, fullBody()) {
+			t.Errorf("%s: the expanded route carries request %+v, want body %+v", preset, out.Request, fullBody())
+		}
+		if out.Request != nil && out.Request.Body == r.Request.Body {
+			t.Errorf("%s: the expanded route shares request.body with its input", preset)
+		}
+	}
+	gh := withSecret(v1alpha1.PresetGitHubToken)
+	gh.Request = &v1alpha1.RequestPolicy{Body: fullBody()}
+	if _, err := ExpandRoute(gh); err == nil || !strings.Contains(err.Error(), "needs preset") {
+		t.Errorf("ExpandRoute of request.body on github-token = %v, want a refusal naming the preset", err)
+	}
 }
 
 // A list the route sets replaces the preset's list whole, so a set that drops

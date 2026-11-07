@@ -331,8 +331,13 @@ type GitGuest struct {
 // RequestPolicy limits the requests a route forwards.
 type RequestPolicy struct {
 	// Allow is optional. A request it does not cover is refused with 403
-	// before any credential is fetched.
+	// before any credential is fetched. Body is checked after it, also
+	// before the credential.
 	Allow *RequestAllow `json:"allow,omitempty"`
+	// Body is optional, and only the claude-code and anthropic-api-key
+	// presets take it. It limits a POST /v1/messages by its body, and the
+	// tool calls of the answer to it.
+	Body *RequestBody `json:"body,omitempty"`
 }
 
 // deepCopy returns a copy of p that shares no slice with it.
@@ -354,6 +359,20 @@ func (p *RequestPolicy) deepCopy() *RequestPolicy {
 				Repos:     slices.Clone(g.Repos),
 			}
 		}
+	}
+	if b := p.Body; b != nil {
+		body := RequestBody{
+			Models:         slices.Clone(b.Models),
+			MaxTokens:      b.MaxTokens,
+			ToolResultDeny: slices.Clone(b.ToolResultDeny),
+		}
+		if b.Tools != nil {
+			body.Tools = &ToolRules{Allow: slices.Clone(b.Tools.Allow), Deny: slices.Clone(b.Tools.Deny)}
+		}
+		if b.ToolUse != nil {
+			body.ToolUse = &ToolUseRules{Deny: slices.Clone(b.ToolUse.Deny), Action: b.ToolUse.Action}
+		}
+		req.Body = &body
 	}
 	return &req
 }
@@ -385,4 +404,69 @@ type GraphQLAllow struct {
 	// repository(owner:, name:) field must match. It limits where a query
 	// starts, not where it goes, and does not limit mutations.
 	Repos []string `json:"repos,omitempty"`
+}
+
+// RequestBody holds the rules that read a POST /v1/messages to the Anthropic
+// Messages API. A request that misses one is refused with 403 in the
+// Anthropic error shape before any credential is fetched. Each list that is
+// set holds at least one entry, and at least one rule is set.
+type RequestBody struct {
+	// Models is optional. It lists the models a request may name, as exact
+	// names or globs where * matches any run of characters, none included.
+	// A request for any other model is refused.
+	Models []string `json:"models,omitempty"`
+	// Tools is optional. It limits the tools a request offers the model, by
+	// tools[].name. A request that offers a refused tool is refused whole.
+	Tools *ToolRules `json:"tools,omitempty"`
+	// MaxTokens is optional, and 0 leaves it unset. A request whose
+	// max_tokens is over it is refused. A request without max_tokens passes.
+	MaxTokens int `json:"maxTokens,omitempty"`
+	// ToolResultDeny is optional. It lists RE2 patterns matched against the
+	// text of every tool_result block and every user text block. A request
+	// with a match is refused, and the matched text is never logged.
+	ToolResultDeny []string `json:"toolResultDeny,omitempty"`
+	// ToolUse is optional. It limits the tool calls of the answer: a
+	// tool_use block that calls a denied tool is replaced by a refusal text,
+	// or dropped, before the guest reads it.
+	ToolUse *ToolUseRules `json:"toolUse,omitempty"`
+}
+
+// ToolRules limits the tools a request offers the model, by exact name. Deny
+// wins over Allow. With Allow empty, a name not in Deny passes. With Allow
+// set, a name in neither list is refused. At least one list is set.
+type ToolRules struct {
+	// Allow is optional. It lists the tools a request may offer.
+	Allow []string `json:"allow,omitempty"`
+	// Deny is optional. It lists the tools a request may not offer.
+	Deny []string `json:"deny,omitempty"`
+}
+
+// ToolUseAction is what the broker does with a denied tool_use block of an
+// answer.
+type ToolUseAction string
+
+// The actions of request.body.toolUse.
+const (
+	// ToolUseRefuse replaces the block with a text block that says the
+	// policy refused the tool. It is the default.
+	ToolUseRefuse ToolUseAction = "refuse"
+	// ToolUseDrop removes the block.
+	ToolUseDrop ToolUseAction = "drop"
+)
+
+// ToolUseRules limits the tool calls of an answer to a POST /v1/messages.
+type ToolUseRules struct {
+	// Deny is required. It lists the exact tool names the model may not
+	// call.
+	Deny []string `json:"deny,omitempty"`
+	// Action is optional, and defaults to refuse. It is refuse or drop.
+	Action ToolUseAction `json:"action,omitempty"`
+}
+
+// Mode returns the action of t, refuse when none is set.
+func (t *ToolUseRules) Mode() ToolUseAction {
+	if t.Action == "" {
+		return ToolUseRefuse
+	}
+	return t.Action
 }
