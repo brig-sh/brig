@@ -357,6 +357,10 @@ response reads by following edges into other repositories, or an issue that
 a closing keyword such as `Fixes other/repo#5` closes on merge. The token's
 scope is the limit there. See [GraphQL requests](broker.md#graphql-requests).
 
+On an Anthropic route, `request.body` also limits the model, the tools and the
+text that goes upstream. The broker rewrites a denied tool call in the answer,
+so the agent never receives a call that the policy forbids.
+
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
 A `claude` started without it, under `sudo -i`, `su -` or `env -i` for
