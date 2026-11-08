@@ -6,9 +6,9 @@ machine, so you watch and drive many agents from one place, one agent per
 sandbox.
 
 herdr reaches a remote machine only over SSH, and a sandbox has no open port.
-The `herdr-stock` image carries `sshd` and a wrapper, `herdr-sshd`. Your ssh runs that
-wrapper through `brig exec` as its `ProxyCommand`, and the wrapper runs `sshd`
-on the exec's input and output. Nothing listens in the guest.
+The `herdr-stock` image carries `sshd` and a wrapper, `herdr-sshd`. Your ssh
+runs that wrapper through `brig exec` as its `ProxyCommand`, and the wrapper
+runs `sshd` on the exec's input and output. Nothing listens in the guest.
 
 The image is `ghcr.io/brig-sh/herdr-stock`, built from
 [images/herdr](https://github.com/brig-sh/community-images/tree/main/images/herdr)
@@ -32,9 +32,9 @@ Host herdr*+*
 A host is `<profile>+<sandbox>`: `herdr+api` is the sandbox `herdr@api`, and
 `herdr-review+api` is `herdr-review@api`. Both commands split at the first `+`,
 and a profile name cannot contain one, so the profile is always what is left
-of it. The block matches any profile whose name starts with
-`herdr`, so a profile made with `brig agent new <name> --from herdr` needs no
-block of its own if you name it `herdr-<something>`.
+of it. The block matches any profile whose name starts with `herdr`. A
+profile made with `brig agent new <name> --from herdr` needs no block of its
+own if you name it `herdr-<something>`.
 
 Until v0.5.1 the profile was `herd` and the wrapper `herd-sshd`. A block
 written then matches the new names, but its `ProxyCommand` runs a wrapper
@@ -79,7 +79,7 @@ Each SSH connection is a new `brig exec`, so it carries a new session token.
 `herdr-sshd` writes what the exec received to `/run/herdr/env`, and
 `/etc/bash.bashrc` reads it in an SSH session, because `sshd` starts every
 session with an empty environment. A `brig sh` does not read it, and keeps
-the token brig gave it. A pane keeps the values it started with. A pane that
+the token Brig gave it. A pane keeps the values it started with. A pane that
 does not start `bash` gets none of them. See
 [What is still exposed](security.md#what-is-still-exposed).
 

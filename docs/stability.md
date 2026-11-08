@@ -14,8 +14,8 @@ was a `v0.1.0` release candidate.
 | Patch | v0.3.0 to v0.3.1 | Fixes only. It is cut from a maintenance branch. It removes nothing and changes no stable surface. |
 | Release candidate | | It is a preview of the minor release it names. |
 
-The main and experimental Homebrew channels publish builds that are not releases.
-Their versions promise nothing. See
+The main and experimental Homebrew channels publish builds that are not
+releases, and their versions promise nothing. See
 [The prerelease channels](releasing.md#the-prerelease-channels) for how they
 are made.
 
@@ -40,18 +40,16 @@ documents. Brig refuses a profile file with a field it does not know, so a
 field that goes away becomes an error you see.
 
 **The `--json` envelope.** Within one `apiVersion`, the JSON only gains
-fields. It never renames or drops one, so a script written against it keeps
-parsing. No field carries a credential value. `--json` works on the read
+fields. It never renames or drops one. No field carries a credential value. `--json` works on the read
 verbs. On `run` and `sh`, it reports the agent's own exit status.
 
 **Exit codes.** `script/smoke.sh` asserts the numbers a script branches on.
 See [docs/cli.md](cli.md#exit-codes) for the table. brigd reports the same
 codes for the same causes.
 
-**The brigd protocol.** Every brigd response carries the protocol version,
-`v`, which is 1 today. Within one version, a field can be added, but none is
-renamed or removed. A change that breaks a client is a new version. brigd
-refuses a request with a version it does not know.
+**The brigd protocol.** Within one protocol version, `v`, a field can be
+added, but none is renamed or removed. A change that breaks a client is a new
+version, and brigd refuses a version it does not know.
 [brigd.md](brigd.md#protocol-version) has the details.
 
 **Where your own files are.**

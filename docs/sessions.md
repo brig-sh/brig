@@ -1,7 +1,24 @@
 # Sessions, homes and projects
 
-Each session of an agent has its own guest home and its own sandbox. For a
-walkthrough, see [Quickstart](quickstart.md).
+Each session of an agent has its own guest home and its own sandbox.
+
+Run a second session of the same agent, next to the default one:
+
+```bash
+brig run claude@refactor ~/code/demo
+brig ls                    # lists claude-code and claude-code@refactor
+brig rm claude@refactor    # removes that session only
+```
+
+Keep the guest home of a session after `brig rm`, by naming it:
+
+```bash
+brig run --home ~/brig-homes/claude claude ~/code/demo
+```
+
+Brig creates the directory if it is missing, and never deletes it. A
+session with a label appends it: `--home ~/brig-homes/claude` on
+`claude@refactor` uses `~/brig-homes/claude-refactor`.
 
 <p align="center">
   <img alt="What the built-in claude-code profile mounts. The project you name, ~/code/demo, is mounted read-write at /work/demo. The guest home, ~/.brig/homes/brig-claude-code, is mounted as the agent's home. Other projects, your documents, your keychain and your SSH agent do not reach the sandbox." src="../assets/sandbox-mounts.svg" width="820">
@@ -13,21 +30,27 @@ Every ref is `<agent>` or `<agent>@<label>`. A ref with no label names the
 default session of the agent. `claude` and `claude@refactor` are two
 independent sessions of one agent.
 
-`claude` and `desktop` are aliases for the built-in agents `claude-code`
-and `claude-desktop`. Brig resolves no other alias. An agent wins over an
-alias. If you create your own profile named `claude`, that name runs your
-profile. The built-in `claude-code` is then reachable only by its full name.
+Brig resolves three aliases:
 
-A label selects the guest home and the sandbox name, for every agent. Brig
-also passes the label to the agent as its display name in one case:
-`brig run` with the resolved profile `claude-code`. `brig sh` does not pass
-it. No other profile receives it, `claude-desktop` included.
+| Alias | Agent | Why it exists |
+| --- | --- | --- |
+| `claude` | `claude-code` | a short name |
+| `desktop` | `claude-desktop` | a short name |
+| `herd` | `herdr` | the name of that profile in v0.5.0 and v0.5.1. See [migration.md](migration.md) |
+
+An agent wins over an alias. If you create your own profile named `claude`,
+that name runs your profile. The built-in `claude-code` is then reachable
+only by its full name.
+
+A label selects the guest home and the sandbox name, for every agent.
+`brig run` of `claude-code` also passes the label to the agent as its
+display name. `brig sh` does not, and no other profile receives it.
 
 ## The guest home
 
 The guest home is a host directory mounted as the agent's home. `brig ls`
-and `brig info` print it as `WORKSPACE`, and the `BRIG_WORKSPACE`
-environment variable sets it. Both are the CLI's names for the guest home.
+and `brig info` print it as `WORKSPACE`, and `BRIG_WORKSPACE` sets it. Both
+names mean the guest home.
 
 To keep the guest home, name it with `--home <dir>` or `BRIG_WORKSPACE`. If
 the run names none, Brig creates one under its own state directory:
@@ -36,8 +59,8 @@ the run names none, Brig creates one under its own state directory:
 ~/.brig/homes/<sandbox name>
 ```
 
-The sandbox name is `brig-<resolved agent name>[-<label>]`. The resolved
-name is the agent's own name. An alias that you typed does not change it.
+The sandbox name is `brig-<resolved agent name>[-<label>]`. An alias that
+you typed does not change it.
 
 | Ref | Guest home |
 | --- | --- |
@@ -54,8 +77,7 @@ starts from an empty home. The first run of a session whose guest home Brig
 created says so on stderr.
 
 Brig also deletes a guest home that it created in two other cases. In both,
-the runtime first confirms that no sandbox of that name exists, stopped or
-running.
+Brig first confirms that no sandbox of that name exists, stopped or running.
 
 - A first run whose boot fails deletes the home it created.
 - A home can remain after a sandbox was removed outside Brig, or after a run
@@ -65,11 +87,10 @@ running.
 <details>
 <summary>Sessions from releases before 0.3.0</summary>
 
-Releases before 0.3.0 created the default guest home in
-`~/brig/<resolved agent name>[-<label>]`, and kept it on `brig rm`. A session
-that one of those releases started keeps that home while its sandbox exists.
-After you remove the sandbox, pass `--home ~/brig/<resolved agent name>` to
-continue to use that home.
+Releases before 0.3.0 kept the default guest home in
+`~/brig/<resolved agent name>[-<label>]`. Such a session keeps that home
+while its sandbox exists. After you remove the sandbox, pass
+`--home ~/brig/<resolved agent name>` to continue to use it.
 
 </details>
 
@@ -91,11 +112,11 @@ there.
 | `--no-project` | None |
 
 Brig refuses `--no-project` together with a project named on the same line.
-Brig also refuses `--no-project` on every verb but `run`.
+Only `run` and `plan` accept `--no-project`. Every other verb refuses it.
 
-A mount cannot be attached to a live guest, so a change of project recreates
-the sandbox. Brig warns you, stops the running sandbox, removes it, and
-starts a new one with the new project mounted. This occurs in three cases:
+A change of project recreates the sandbox. Brig warns you, stops and
+removes the sandbox, and starts a new one with the new project mounted.
+This occurs in three cases:
 
 - You run a session against a different project than it last used.
 - You name a project for the first time on a session that had none.
@@ -109,19 +130,10 @@ project. The restart warning names the missing directory.
 
 ## What survives
 
-Four things can hold state for a session:
-
-- the guest home, on host disk
-- a memory-backed mount inside the guest
-- the sandbox
-- what Brig recorded about the session
-
 Only three of the nine built-in agents, `claude-code`, `claude-desktop` and
-`herdr`, declare a memory-backed mount. For the other six, `codex`, `cursor`,
-`gemini`, `grok`, `opencode` and `ubuntu`, the whole guest home is the
-host-backed share. An in-guest login for those six agents lands on host disk
-and survives every stop. `brig rm` deletes it when Brig created the guest
-home.
+`herdr`, declare a memory-backed mount. For the other six, an in-guest
+login lands on host disk and survives every stop. `brig rm` deletes it when
+Brig created the guest home.
 
 | Event | Guest home | Memory-backed mount (`claude-code`, `claude-desktop`, `herdr`) | The sandbox | What Brig recorded |
 | --- | --- | --- | --- | --- |
@@ -134,16 +146,13 @@ home.
 
 `brig stop` and `brig rm` do not touch a project.
 
-When the runtime reports no sandbox for the ref, `brig rm` forgets the
-session and names the guest home that it leaves.
-
 A host reboot loses everything inside the sandbox, including a `claude-code`
-login held in memory. If the runtime no longer lists the sandbox after the
-reboot, the next `brig ls` or `brig rm` of its ref forgets it. The next run
-then boots a new sandbox.
+login held in memory. If the sandbox is gone after the reboot, the next
+`brig ls` or `brig rm` of its ref forgets it, and the next run boots a new
+sandbox.
 
-Brig keeps its own records, the session index among them, under `~/.brig`.
-That layout is not a stable interface. Do not script against its files.
+Brig keeps its own records under `~/.brig`. That layout is not a stable
+interface. Do not script against its files.
 
 ## What a label can contain
 
@@ -163,11 +172,9 @@ The `<agent>@<label>` form is strict. Brig refuses each of these:
 - a ref that names no agent
 - a trailing `@` with no label
 - a label with no usable characters
-- a label that names the default session of another agent
-
-The `--name` flag that v0.5.0 removed was lenient. It sanitized the name and
-warned which directory it used. For example, `--name "Refactor Sprint"`
-became `refactor-sprint` with a warning.
+- an agent and a label that join, with a dash, into the name of a profile
+  marked `reserved: true`, such as `claude-desktop`. See
+  [`reserved`](profiles.md#reserved)
 
 ## Printing the ref
 

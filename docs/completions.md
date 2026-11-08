@@ -2,11 +2,10 @@
 
 `brig completion bash|zsh|fish` prints a completion script to stdout.
 
-A Homebrew cask install already has completion. The cask installs all three
+A Homebrew cask install already has completion: the cask installs all three
 scripts where each shell reads them. With any other install, add the script
 yourself. `brig completion` installs nothing and does not write to your
-startup files, because the location of a script differs per shell and per
-host.
+startup files.
 
 ## Install the script
 
@@ -34,8 +33,6 @@ changes.
 
 ## What completes where
 
-A `brig` line has three positions, and completion follows them.
-
 | where the cursor is | what is offered |
 | --- | --- |
 | before the verb | the verbs, and the three global flags (`--verbose`, `-q`/`--quiet`, `--json`) |
@@ -58,9 +55,9 @@ there.
 ### Run-line flags
 
 Completion offers a flag wherever Brig reads it, whether or not the verb
-uses the value. For example, Brig reads `brig run claude --mem 4096`. As a
-result, `--mem` completes after the ref and before it, on every verb that
-reads run-line flags.
+uses the value. Brig reads `brig run claude --mem 4096`, so `--mem`
+completes after the ref and before it, on every verb that reads run-line
+flags.
 
 After the first word or flag that Brig does not own, completion offers
 nothing. The rest of the line belongs to the agent.
@@ -99,9 +96,9 @@ subcommands complete, and so do the names they take.
 
 ## Session names can be stale
 
-The labels come from the session index of Brig, which is a file. Completion
-does not ask the runtime, because it must answer in milliseconds and must
-work on a host with no runtime installed.
+The labels come from Brig's session index, a file. Completion does not ask
+the runtime, because it must answer in milliseconds and work on a host with
+no runtime installed.
 
 A sandbox removed outside Brig (with `nerdctl rm`, for example) stays on
 offer until the next `brig ls` prunes it or `brig rm <ref>` forgets it. A
