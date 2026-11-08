@@ -631,11 +631,13 @@ brig: sandbox did not become ready; check 'brig logs claude-code (or the runtime
 
 A Linux host that installed its own urunc (`BRIG_INSTALL_RUNTIME=0`, or Brig
 0.2.0 or earlier) also fails here, and `brig doctor` still reports `ok`.
-Install the runtime bundle:
+Install the runtime bundle for the whole machine:
 
 ```bash
-curl -fsSL https://brig.sh/install | sh
+curl -fsSL https://brig.sh/install | sudo sh
 ```
+
+For a rootless install, see [Rootless installs](install.md#rootless-installs).
 
 </details>
 
