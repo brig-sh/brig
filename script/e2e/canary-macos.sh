@@ -1389,6 +1389,8 @@ check_boot_digests() {
 
 # shellcheck source=script/e2e/broker-checks.sh
 . "$HERE/broker-checks.sh"
+# shellcheck source=script/e2e/v050-checks.sh
+. "$HERE/v050-checks.sh"
 
 BROKER_RUN_ARGS=(--mem 2048)
 KEYCHAIN="$SCRATCH/Library/Keychains/login.keychain-db"
@@ -1500,6 +1502,8 @@ if [ -f "$OUT/setup.ok" ]; then
   block homes check_rm_home
   block failed-boot check_failed_boot
   block shell check_shell_removed
+  block removed check_removed_spellings
+  block project-git check_project_git
   block postures check_postures
   block ports check_ports
   block symlink check_symlink
@@ -1513,6 +1517,8 @@ if [ -f "$OUT/setup.ok" ]; then
   block posture-info check_posture_info
   block policy-docs check_policy_documents
   block broker check_broker_macos
+  block presets check_vend_presets
+  block client-certs check_client_certs
   block gateway check_shared_gateway
   block reach check_reach
   block cosign check_cosign_hang

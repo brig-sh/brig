@@ -370,6 +370,55 @@ check_version() {
   fi
 }
 
+# check_doctor_linux: the rows doctor grew for a Linux host (1251fd1 and the
+# fixes after it: subids, userns, uidmap, devices, cni) are there and say ok
+# on a runner the canary has set up, beside the rows every host has, and
+# the rootfs row says an overlay root is available, since 92c0244 boots one
+# by default. The broker row is informational (-- when no run holds one), so
+# it is not asked for. The generic "brig doctor" check above only asks for no !!;
+# this one asks for each row by name, so a row that disappears is noticed.
+check_doctor_linux() {
+  local G_ROWS="brig doctor names each Linux host prerequisite, and each is ok (1251fd1)"
+  local G_ROOTFS="brig doctor reports an overlay root available, the v0.5 default (92c0244, b2cdf86)"
+  local out rc=0 row missing="" okrows
+  out="$(run 120 brig doctor 2>&1)" || rc=$?
+  okrows="$(echo "$out" | awk '$1 == "ok" { print $2 }' | paste -s -d, -)"
+  for row in brig host virtual runtime subids userns uidmap devices cni boot rootfs verify profiles; do
+    echo "$out" | awk -v r="$row" '$1 == "ok" && $2 == r { found = 1 } END { exit !found }' || missing="$missing $row"
+  done
+  if [ "$rc" = 0 ] && [ -z "$missing" ]; then
+    res check Install "$G_ROWS" pass "ok: $okrows"
+  else
+    res check Install "$G_ROWS" fail "exit $rc; not ok or absent:$missing; ok: $okrows"
+  fi
+  row="$(echo "$out" | awk '$2 == "rootfs"' | head -n 1)"
+  if echo "$row" | grep -q '^ *ok *rootfs *overlay root available'; then
+    res check Install "$G_ROOTFS" pass "$(echo "$row" | one_line 160)"
+  else
+    res check Install "$G_ROOTFS" fail "rootfs row: [$(echo "$row" | one_line 160)]"
+  fi
+}
+
+# check_pin_latest: install.sh pins the release NOFireAI/brig-standalone-linux
+# marks Latest. The workflow used to add a second Linux leg for the newest
+# release whenever the pin lagged; that leg is gone, and this check says when
+# the pin has fallen behind instead. On a leg that installs another version
+# by BRIG_RUNTIME_VERSION, the pin is still the thing compared.
+check_pin_latest() {
+  local G="install.sh pins the newest runtime bundle release"
+  local pin latest
+  pin="$(sed -n 's/^RUNTIME_VERSION=//p' "$REPO/install.sh")"
+  latest="$(GH_TOKEN="${E2E_GH_TOKEN:-}" timeout 60 gh release view -R NOFireAI/brig-standalone-linux --json tagName -q .tagName 2>&1 || true)"
+  echo "install.sh pins $pin; Latest is $latest"
+  if [ -z "$pin" ] || ! printf '%s\n' "$latest" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'; then
+    res check Install "$G" fail "pin [$pin], newest release [$(echo "$latest" | one_line 120)]"
+  elif [ "$pin" = "$latest" ]; then
+    res check Install "$G" pass "$pin is the pin and the newest release"
+  else
+    res check Install "$G" fail "install.sh pins $pin, and the newest release is $latest"
+  fi
+}
+
 # ---------------------------------------------------------------- gates
 
 gate_home() {
@@ -1703,6 +1752,8 @@ check_docker_fallback() {
 
 # shellcheck source=script/e2e/broker-checks.sh
 . "$HERE/broker-checks.sh"
+# shellcheck source=script/e2e/v050-checks.sh
+. "$HERE/v050-checks.sh"
 
 # claude-code boots at the profile's own size here.
 BROKER_RUN_ARGS=()
@@ -1811,6 +1862,8 @@ fi
 block setup setup
 if [ -f "$OUT/setup.ok" ]; then
   block version check_version
+  block doctor-linux check_doctor_linux
+  block pin check_pin_latest
   block home gate_home
   block exec gate_exec
   block claude gate_claude
@@ -1824,6 +1877,8 @@ if [ -f "$OUT/setup.ok" ]; then
   block ports check_ports
   block postures check_postures
   block shell check_shell_removed
+  block removed check_removed_spellings
+  block project-git check_project_git
   block symlink check_symlink
   block hostmount-symlink check_hostmount_symlink
   block brigd-lock check_brigd_lock
@@ -1835,6 +1890,8 @@ if [ -f "$OUT/setup.ok" ]; then
   block policy check_policy_enforced
   block policy-docs check_policy_documents
   block broker check_broker_linux
+  block presets check_vend_presets
+  block client-certs check_client_certs
   block cosign check_cosign_hang
   block record check_record_refusals
   block fallback check_docker_fallback
