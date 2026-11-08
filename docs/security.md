@@ -918,9 +918,9 @@ What `warn` does with the answer:
 | boot assets, signature fails | refuses, with no question |
 
 Bring-your-own images are a supported way to use Brig, so `warn` boots them.
-"Unable to check" is not the same as "failed". The one case with no innocent
-reading is an image sitting under our registry whose signature does not
-verify. That is the case that stops.
+An image under our registry whose signature does not verify stops the boot,
+under `warn` too. An image of ours that Brig cannot check, because the
+registry or cosign does not answer, stops it the same way.
 
 `claude-desktop` points at a `ghcr.io/nofireai/` image, and `ubuntu` at
 `docker.io/library/ubuntu`. Brig has no signing policy for either registry, so
