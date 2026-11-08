@@ -17,20 +17,20 @@ brig secret import claude-code     # carry your host login in, once
 ```
 
 A `claude-code` login made inside the sandbox is gone after `brig stop`. An
-imported login survives a stop. [Logging an agent in](authentication.md) compares the ways
-to log in.
+imported login survives a stop. To choose a login path, see
+[Logging an agent in](authentication.md).
 
 If you keep credentials in 1Password, Vault or `pass`, you have two options:
 
 - Pipe the value in once. Use `op read ... | brig secret create <name>` or
   `brig secret import <profile> <name> --from-command 'op read ...'`.
-- Keep the value in the environment. An `env.<name>` binding reads the
-  environment of Brig on every run. As a result,
+- Keep the value in the environment. An `env.<name>` binding reads Brig's
+  environment on every run, so
   `<your secret manager's run-with-env command> -- brig run claude-code`
   works for the variables that a profile binds that way.
 
-[The secret store](security.md#the-secret-store) describes what the keychain
-protects and what it does not protect.
+[The secret store](security.md#the-secret-store) lists what the keychain
+protects and what it does not.
 
 ## The six verbs
 
@@ -43,8 +43,8 @@ protects and what it does not protect.
 | `brig secret ls` | names, dates and where each value came from. Never values |
 | `brig secret import <profile>` | fill that profile's secrets from your host, once |
 
-`create` and `update` read the value from stdin or from a file. See
-[Getting a value in](#getting-a-value-in).
+`create` and `update` read the value from stdin or from a file
+([Getting a value in](#getting-a-value-in)).
 
 `import` takes a **profile** as its argument. If you give it a secret name,
 the error names the profile that declares the secret:
@@ -54,7 +54,7 @@ $ brig secret import claude-credentials
 brig: "claude-credentials" is a secret, not a profile, and import takes the profile that declares it: brig secret import claude-code claude-credentials
 ```
 
-A mistyped name produces an error. Each refusal names the command to use:
+Each refusal names the command to use:
 
 ```console
 $ printf %s "$TOKEN" | brig secret create gh-token
@@ -67,8 +67,8 @@ brig: no secret named "gh-tokne". To create it: brig secret create gh-tokne
 A successful write prints nothing.
 
 v0.5.0 removed `rm` and `list`, the retired spellings of `delete` and `ls`.
-Brig refuses each as a usage error that names its replacement. See
-[the full mapping](migration.md#subverbs) of the removed spellings.
+Brig refuses each as a usage error that names its replacement
+([the full mapping](migration.md#subverbs)).
 
 ### List secrets
 
@@ -94,18 +94,14 @@ $ brig secret ls --json
 }
 ```
 
-`ls` reads keychain attributes only and never a value, so it raises no access
-prompt. The number of secrets does not change this.
+`ls` reads no value, so it raises no access prompt.
 
 | column | meaning |
 | --- | --- |
-| `UPDATED` | the modification date of the item. If a backend cannot supply a date, the text form prints `-` and the JSON form omits `modified` |
+| `UPDATED` | when the value last changed. If the store cannot supply a date, the text form prints `-` and the JSON form omits `modified` |
 | `FROM` | the provenance: the place that `brig secret import` read the value from |
 | `FROM` is `-`, or the JSON form has no `provenance` field | Brig did not put the value there. You created it by hand |
-| `FROM` is `command` | the value came from `--from-command`. Brig does not record the command line, because it can hold a quote, a pipe or a credential |
-
-`import` records the provenance in the comment attribute of the keychain
-item, so `ls` decrypts nothing.
+| `FROM` is `command` | the value came from `--from-command`. Brig does not record the command line, because it can hold a credential |
 
 An empty store is not an error:
 
@@ -117,8 +113,8 @@ no secrets yet. To add one: brig secret create <name>
 ### Expiry warnings
 
 If the profile declares an `expiryField:`, the provenance also carries the
-expiry of the credential. Before boot, a run uses the expiry to warn that a
-stored copy is expired. The run decrypts nothing to do this:
+credential's expiry. Before boot, a run warns that a stored copy has
+expired:
 
 ```console
 $ brig run claude-code ~/code/demo
@@ -130,24 +126,24 @@ A secret with no `sources:` that you filled with `--from-command` gets a
 different second line, because the profile-wide `import` cannot refill it:
 `renew it, then store it again:  brig secret import <profile> <name> --from-command '<command>'`.
 
-A certificate stored with `--type tls` gets a warning when it is within three
-days of its expiry, and once it has expired. The expiry is the one recorded
-when the certificate was stored, so a plan or a run decrypts nothing to find
-it. Brig prints the warning once per `brig plan`, and once when `brig run` or
-`brig sh` starts a sandbox or attaches to one, whether `brig sh` opens a shell
-or runs a command. The first line reads `the client certificate <name> (route <route>) expires in <time>`, or
+A certificate stored with `--type tls` gets a warning within three days of
+its expiry, and once it has expired. Brig prints it once per `brig plan`,
+and once when `brig run` or `brig sh` starts a sandbox or attaches to one.
+
+The first line reads
+`the client certificate <name> (route <route>) expires in <time>`, or
 `expired <time> ago`. When several routes present the same secret, the line
 names all of them: `(routes <route>, <route>)`. It names the command that
-stores the renewed copy: `brig secret update <name> --type tls`. A certificate
-stored without `--type` gets no warning, because nothing recorded its expiry.
-A plain `brig secret update <name>` without `--type tls` replaces the value and
-clears the recorded expiry, so the warning stops too. Store the renewed copy
-with `--type tls` to keep it.
+stores the renewed copy: `brig secret update <name> --type tls`.
+
+A certificate stored without `--type` gets no warning. A plain
+`brig secret update <name>` without `--type tls` clears the recorded
+expiry, so the warning stops too. Store the renewed copy with `--type tls`.
 
 ### Delete a secret
 
-`delete` asks before it removes a value, because you cannot recover a deleted
-value. Brig keeps no copy, and the keychain keeps no history.
+`delete` asks first, because a deleted value cannot be recovered. Brig
+keeps no copy, and the keychain keeps no history.
 
 ```console
 $ brig secret delete gh-token
@@ -155,11 +151,10 @@ brig: delete "gh-token"? The value cannot be recovered [y/N] y
 deleted gh-token
 ```
 
-If `brig-broker` left a [renewal journal](#the-renewal-journal) for the
-secret, `delete` removes it too. The journal can hold a renewed copy of the
-value. It removes a journal whose secret is already gone as well, and says
-`deleted the renewal journal <name>.journal`, since no other command takes
-the journal's name.
+`delete` also removes the secret's
+[renewal journal](#the-renewal-journal), which can hold a renewed copy of
+the value. It removes a journal whose secret is already gone as well, and
+says `deleted the renewal journal <name>.journal`.
 
 If there is no terminal to ask on, `delete` refuses:
 
@@ -169,8 +164,6 @@ brig: deleting "gh-token" cannot be undone, and there is no terminal to ask on. 
 ```
 
 ## A worked example
-
-This example stores a GitHub token, uses it, rotates it and removes it.
 
 **Store the token.** Send the value on stdin:
 
@@ -189,27 +182,26 @@ $ brig info claude-code
 ...
 brig: forwarding to guest:
 brig:   IS_SANDBOX
+brig:   CLAUDE_CONFIG_DIR
 brig:   GH_TOKEN(secret)
 brig: never forwarded for claude-code: ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN (they would move this sandbox onto metered billing)
 ```
 
-`(secret)` shows that the value comes from the store and not from your shell.
-`brig info` only reports this. `brig run claude-code` forwards the value.
+`(secret)` marks a value from the store, not from your shell. `brig info`
+only reports it. `brig run claude-code` forwards it.
 
-The denylist in the last line covers environment forwarding only. It does not
-check a `files:` binding. It does not stop an agent that reads a credential
-inside the guest from sending it over the network. See
-[What file delivery buys and what it costs](security.md#what-file-delivery-buys-and-what-it-costs)
-for the reason.
+The denylist in the last line covers environment forwarding only. It does
+not check a `files:` binding, and it does not stop an agent that reads a
+credential inside the guest from sending it over the network. See
+[What file delivery buys and what it costs](security.md#what-file-delivery-buys-and-what-it-costs).
 
-An exported `GH_TOKEN` wins over the stored value, because the profile binds
-the name as a chain (`refs: [env.GH_TOKEN, secrets.gh-token]`). As a result,
+An exported `GH_TOKEN` wins over the stored value, so
 `GH_TOKEN=$(gh auth token) brig run claude-code` works. The stored value is
 the fallback for a shell that exports nothing. See
 [Git access in the guest](authentication.md#git-access-in-the-guest).
 
-**Rotate the token.** `update` does not create a secret. A mistyped name
-cannot leave you with two secrets and the old one in use:
+**Rotate the token.** `update` does not create a secret, so a mistyped name
+fails and does not leave the old value in use:
 
 ```console
 $ printf %s 'ghp_9a1FfE0d5B7c4A2e8D3b6C1a0F5e9D8c7B6a' | brig secret update gh-token
@@ -230,8 +222,8 @@ no secrets yet. To add one: brig secret create <name>
 
 ## Import from your host
 
-`brig secret import <profile>` copies the credentials of that profile from
-your host into the store. Every later run reads only the store:
+`brig secret import <profile>` copies that profile's credentials from your
+host into the store:
 
 ```console
 $ brig secret import claude-code
@@ -241,10 +233,10 @@ claude-code: importing 1 secret
 note: claude-desktop also declares claude-credentials, so this fills it there too
 ```
 
-The profile declares where `import` looks. Each secret carries a `sources:`
-list, and the first source that exists wins. `brig agent ls` shows which
-names a profile can import and which names it cannot. See
-[Profiles](profiles.md) to declare sources in a profile of your own.
+Each secret in the profile carries a `sources:` list, and the first source
+that exists wins. `brig agent ls` shows which names a profile can import and
+which it cannot. To declare sources in your own profile, see
+[Profiles](profiles.md).
 
 | flag | what it does |
 | --- | --- |
@@ -264,19 +256,16 @@ To import only some secrets, add their names (`[name...]`) after the profile.
 Four rules apply:
 
 - **`import` reads the credential stores of your host when you run it, and
-  never again.** A later run reads only the keychain item that Brig wrote.
-  That item has the default ACL, so a run raises no approval dialog. Only
-  `import` raises that dialog, one time. The `aws` and `gcloud` sources are
-  the exceptions: `brig-broker` runs the host's `aws` CLI on every fetch, and
-  `aws` reads your AWS profile, its SSO login and the credentials it cached
-  each time. It runs the host's `gcloud` CLI on every mint, and `gcloud` reads
-  your gcloud configuration and its login each time.
+  never again.** A later run reads only Brig's own copy, so only `import`
+  raises an approval dialog. The `aws` and `gcloud` sources are the
+  exceptions. Each time `brig-broker` fetches keys or mints a token, it
+  runs the host's `aws` or `gcloud` CLI, which reads your login.
 - **The copy does not track its source.** If you renew the login on the host,
-  the copy does not change. If you revoke the login on the host, the copy
-  stays valid. To refresh the copy, import it again. `brig secret delete`
+  the copy does not change. If you log out on the host, the copy stays
+  valid. To refresh the copy, import it again. `brig secret delete`
   removes the copy permanently.
 - **`import` does not replace a value that Brig did not write.** A value with
-  no provenance is one that you created by hand. `import` stops, because it
+  no provenance is one you created by hand. `import` stops, because it
   cannot recover that value:
 
   ```console
@@ -295,17 +284,15 @@ Four rules apply:
 | a secret has no source | `import` reports the name. This does not fail the command |
 | the agent never ran on this machine, so there is nothing to import | `import` exits non-zero |
 
-As a result, `brig secret import x && brig run x` works for a profile that
-mixes imported secrets and secrets created by hand.
+So `brig secret import x && brig run x` works for a profile that mixes
+imported secrets and secrets created by hand.
 
 ### Large credential documents
 
-On macOS, a credential document of several kilobytes stores the same way as a
-token. This includes the Claude Code document after plugins add their MCP
-OAuth state to it. It also includes the `~/.codex/auth.json` of `codex`, with
-its two JWTs. The only limit is the 65536-byte limit in
-[Getting a value in](#getting-a-value-in). See
-[Where a value lives](#where-a-value-lives) for the layout.
+A credential document of several kilobytes stores the same way as a token.
+Examples are the Claude Code document after plugins add their MCP OAuth
+state, and the `~/.codex/auth.json` of `codex`. The only limit is 65536
+bytes ([Getting a value in](#getting-a-value-in)).
 
 ## Getting a value in
 
@@ -319,15 +306,13 @@ never an argument, which keeps it out of `ps` and out of your shell history.
 | `-f -` | stdin, spelled out. Same stripping as above |
 | `-f` more than once | the files appended in the order given. A `-` among them is stdin, stripped the same way and refused at a terminal the same way |
 
-Each source has a limit of 65536 bytes. `create` and `update` read no more
-than that, and they refuse a longer value before it reaches the store:
+Each source has a limit of 65536 bytes. `create` and `update` read no more,
+and refuse a longer value before it reaches the store:
 
 ```console
 $ brig secret create x < /dev/zero
 brig: the value on stdin is over 65536 bytes, which is larger than any secret brig can store. If that is a file or a stream rather than a credential, this is the wrong one
 ```
-
-The limit stops a stream. No credential is near that size.
 
 **stdin strips one trailing line ending. `-f` strips nothing.**
 
@@ -341,7 +326,7 @@ $ brig secret read with-echo | xxd
 
 The stored value is three bytes. A stored newline goes into an
 `Authorization:` header, and the failure looks like a bad token. CRLF counts
-as one line ending, because a `\r` that stays fails the same way.
+as one line ending.
 
 Brig stores a file unchanged, because the final newline of a PEM key is part
 of the key:
@@ -371,8 +356,8 @@ brig secret create deploy-key -f ~/.ssh/id_ed25519
 
 ### Certificates and CA bundles
 
-With `--type tls` or `--type ca`, Brig checks the value before it stores it. A
-value that fails the check is refused, and nothing is written. The refusal
+With `--type tls` or `--type ca`, Brig checks the value before it stores it,
+and writes nothing if the check fails. The refusal
 reads `<verb> <name>: the value is not a client certificate: <reason>` for
 `tls`, and `<verb> <name>: the value is not a CA bundle: <reason>` for `ca`,
 where `<verb>` is `create` or `update`. For example,
@@ -395,14 +380,11 @@ The reason is in the right column:
 | a leaf before its `notBefore` | the certificate is not yet valid: it is valid from 2026-11-02T12:00:00Z, with the date of the `notBefore` |
 | a leaf with an extended key usage that holds neither `clientAuth` nor `anyExtendedKeyUsage`, such as a certificate for `serverAuth` alone. A leaf with no extended key usage is accepted | the certificate's extended key usage does not allow client authentication |
 
-The same certificate twice, byte for byte, such as a `fullchain.pem` that
-repeats its leaf, counts as one. Two different certificates for one key do not.
-
-For `--type ca`, the first two rows are the refusals too, because a CA bundle
-needs at least one `CERTIFICATE` block and every block must parse. It also
-needs one certificate that is a CA (basic constraints `CA:TRUE`), and the
-refusal says no CERTIFICATE block is a CA. Only the CA certificates in the
-bundle become roots.
+For `--type ca`, the first two rows apply too: a CA bundle needs at least
+one `CERTIFICATE` block, and every block must parse. It also needs one
+certificate that is a CA (basic constraints `CA:TRUE`), or the refusal says
+no CERTIFICATE block is a CA. Only the CA certificates in the bundle become
+roots.
 
 A PKI hands out a client certificate in one of two layouts, and both work:
 
@@ -417,28 +399,23 @@ cat client.crt intermediate.crt client.key | brig secret create inventory-client
 brig secret create example-root-ca --type ca -f root-ca.pem
 ```
 
-`-f` may be given more than once. The files are appended in the order given,
-with a line break between two when the first does not end in one, and the
-result is stored as given. That is what `cat` of the same files gives, plus
-the line break.
+The files are appended in the order given, with a line break between two
+when the first does not end in one, and the result is stored as given.
 
 A `tls` value holds `CERTIFICATE` blocks and exactly one private key block
-(`PRIVATE KEY`, `RSA PRIVATE KEY` or `EC PRIVATE KEY`), in any order. Those
-three are the only blocks that count as a key. Any other block whose type ends
-in `PRIVATE KEY` is refused by name, not read as a missing key. Text outside
-the blocks, such as the `Bag Attributes` lines that `openssl pkcs12` writes, is
-ignored. Brig reads it in four steps:
+(`PRIVATE KEY`, `RSA PRIVATE KEY` or `EC PRIVATE KEY`), in any order. Any
+other block whose type ends in `PRIVATE KEY` is refused by name, not read as
+a missing key. Text outside the blocks, such as the `Bag Attributes` lines
+that `openssl pkcs12` writes, is ignored. Brig reads it in four steps:
 
 1. The leaf is the one certificate whose public key matches the private key.
-   A certificate that appears twice, byte for byte, counts once. Brig refuses
-   a value with no matching certificate, and a value with two different ones.
+   A certificate that appears twice, byte for byte, counts once. A
+   `fullchain.pem` that repeats its leaf works. Brig refuses a value with no
+   matching certificate, and a value with two different ones.
 2. The chain is built from the leaf up. The next certificate is one that
    signed the one before and is a CA (basic constraints `CA:TRUE`), so a
-   matching name is not enough. A certificate that is not self-signed comes
-   before a self-signed copy, and a matching authority and subject key
-   identifier breaks a tie. A CA that was re-keyed under one name, or an
-   intermediate that was cross-signed, sends the one that signed the leaf. A
-   certificate that does not continue the chain is not sent.
+   matching name is not enough. A certificate that does not continue the
+   chain is not sent.
 3. A self-signed root at the top of the chain is not sent either, because the
    upstream holds its own roots.
 4. The broker sends the leaf and then the chain in the handshake.
@@ -450,15 +427,13 @@ subject of each certificate that will not be sent, and never the key. They
 print it after the value is stored, so a `create` that is refused because the
 name exists prints nothing.
 
-A `ca` value holds one or more `CERTIFICATE` blocks. `inject.tls.ca` may name
+A `ca` value holds one or more `CERTIFICATE` blocks. `inject.tls.ca` can name
 the same secret as `inject.tls.clientCertificate`, for a PKI whose root signs
 both the client certificate and the certificate of the upstream. The roots are
 then the certificates in that bundle that are CAs (basic constraints
 `CA:TRUE`), and the broker does not read the private key in it for that.
 
-The type is not kept beside the value, and `brig secret ls` does not show it.
-The expiry of a `tls` certificate is kept as its provenance, which is what the
-[expiry warning](#expiry-warnings) reads.
+`brig secret ls` does not show the type.
 
 ## Getting a value out
 
@@ -470,8 +445,8 @@ $ brig secret read from-file | xxd
 00000000: 746f 6b0a                                tok.
 ```
 
-On a terminal, `read` adds a trailing newline, so that your prompt starts on
-a new line. It also prints a warning, because the value stays in the
+On a terminal, `read` adds a trailing newline, so your prompt starts on a
+new line. It also warns on stderr, because the value stays in the
 scrollback of a window that outlives the command:
 
 ```console
@@ -481,10 +456,8 @@ brig: gh-token is now in this terminal's scrollback
   → to keep it out, pipe it:  brig secret read gh-token | ...
 ```
 
-The warning goes to stderr, so a pipe gets only the value on stdout.
-
-Command substitution changes the value. The shell strips *all* trailing
-newlines from `$(...)`. That is correct for a token. It is wrong for a value
+Command substitution changes the value: the shell strips *all* trailing
+newlines from `$(...)`. That is correct for a token and wrong for a value
 that needs its trailing newline, such as a PEM key stored with `-f`:
 
 ```console
@@ -515,85 +488,49 @@ $ printf %s v | brig secret create 1password
 brig: a secret name starts with a letter, and "1password" starts with "1"
 ```
 
-Brig uses the name in three places: as the keychain account, as a word in its
-error messages, and as the tail of `ref: secrets.<name>` in a profile. A dot
-makes that reference ambiguous. A leading digit reads as a number, and a
-leading dash reads as a flag.
-
 ## Where a value lives
 
-On macOS, a secret is two items in your login keychain. Both are under the
-service `sh.brig.secret`.
+On macOS, a secret lives in your login keychain, under the service
+`sh.brig.secret`. Brig stores it as two items: `<name>` holds a random key,
+and `<name>.sealed` holds the value, encrypted under that key. The renewal
+journal is a third item, `<name>.journal`. `brig secret ls` lists neither
+the `.sealed` nor the `.journal` item. The value and the key never appear on
+a command line. The ciphertext and the secret's name do, and other processes
+on the host can read them there.
 
-| item | what it holds |
-| --- | --- |
-| `<name>` | a random 32-byte key and nothing else. Every key item is the same size |
-| `<name>.sealed` | the value, encrypted with AES-256-GCM under that key. The name of the secret is bound in, so a sealed item moved under another name does not open |
+The encryption does not change who can read the value. Each item has the
+keychain's default ACL, so anything that can run `/usr/bin/security` as you
+can read it with no dialog. A process that can read Brig's keychain items as
+you can also decrypt the value.
+[The secret store](security.md#the-secret-store) lists what the keychain
+stops and what it does not.
 
-`brig secret ls` never shows the sealed item. The dot puts its name outside
-the name rules, and the listing skips such names. The same holds for
-`<name>.journal`, which exists only while `brig-broker` renews the secret.
-See [The renewal journal](#the-renewal-journal).
-
-Brig uses two items because of a limit in `security -i`. Brig writes a
-keychain item through `security -i`, which reads one command into a 4096-byte
-buffer. It shortens a longer line and gives no message. With the value on
-that line, Brig cannot store a secret over about 3KB. A credential document
-with plugin state or two JWTs is larger than that.
-
-Brig writes the key item through `security -i`. It writes the sealed item
-through the arguments of `security`, which have no such limit. Other
-processes on the host can read a command line. That command line holds only
-ciphertext and the name of the secret. The value is never on a command line,
-and the key reaches `security` only through a pipe.
-
-`update` keeps the key and replaces the sealed item in one step. `delete`
-removes the key item first, and then the sealed item. Without the key, the
-sealed item is unreadable, so a failure between the two steps leaves nothing
-usable.
-
-After a write, Brig reads the value back and compares the bytes. This makes
-sure that both items exist and agree.
-
-| write | if the bytes do not match |
-| --- | --- |
-| `create` | Brig removes the secret, because a caller that gets a failure expects nothing in the store |
-| `update` | Brig only reports the mismatch. It cannot undo the write, because the previous value is already gone |
-
-Sealing does not change what protects the value. A process that can read the
-keychain items of Brig as you can read the key and open the sealed item. A
-process that cannot open the keychain gets ciphertext.
-[The secret store](security.md#the-secret-store) describes what the ACL of
-the keychain item stops and what it does not stop.
-
-Linux stores the value in the keyring item itself, because a Secret Service
-keyring has no such limit. See [Linux](#linux).
+After a write, Brig reads the value back and compares the bytes. If they
+differ, `create` removes the secret. `update` only reports the mismatch,
+because the previous value is already gone.
 
 <details><summary>A secret stored by an older Brig</summary>
 
-A secret stored by an older Brig holds its value in the keychain item itself.
-`read` returns that value. The next `update` or import moves it into the
-two-item layout, so you do not migrate anything by hand. An older Brig that
-reads a key item refuses it as an item it did not write. It never gives the
-key bytes to a guest.
+A secret stored by an older Brig keeps working. The next `update` or import
+moves it into the two-item layout. An older Brig refuses a secret stored in
+this layout, and never gives the key to a guest.
 
 </details>
 
 ## A secret behind a route
 
 A policy's [route](policies.md#routes) names a secret in this store. On a run
-with that route, Brig does not read the secret and does not deliver it.
+with that route, Brig neither reads nor delivers the secret.
 `brig-broker` reads it from the store on each request through the route, and
 adds it on the host. The guest gets a session token. A `files:` or `env:`
 binding of the same secret in the profile is dropped for that run, and
 `brig info` lists it as kept on the host.
 
-Before boot, Brig lists the store and checks that the secret is there. It
-reads no value. A run whose route's secret is missing, or whose store does
-not open, is refused with exit `6`, and the message names the command that
-puts the secret there. A secret removed after the boot makes the route
-answer 502, and the audit line in `~/.brig/host/broker/audit.log` names the
-check. Create or import the secret, and the next request finds it.
+A run whose route's secret is missing, or whose store does not open, is
+refused with exit `6` before boot. The message names the command that puts
+the secret there. A secret removed after the boot makes the route answer
+502, and `~/.brig/host/broker/audit.log` says why. Create or import the
+secret, and the next request finds it.
 
 A `clientCertificate` or `ca` secret of [`inject.tls`](policies.md#client-certificates)
 is read the same way, on each request. The guest never gets it.
@@ -638,49 +575,36 @@ brig secret import <profile> aws-creds --aws-profile dev \
 | role | `--role-arn <arn>` | keys of a session of that role, assumed with your profile for 30 minutes at a time (`--session-duration`). The session is named after the sandbox, so CloudTrail shows which sandbox made a call |
 | self | `--identity self` | keys of your own identity in that profile. The sandbox can do what you can |
 
-`import` refuses a line that names neither mode, or both. Self mode is never
-what a missing flag falls back to. An `aws` flag on a secret whose source is
-not `aws` is refused too. On a profile with other secrets, name the `aws`
-secret on the line. The flags answer for one secret, so a line that selects
-two `aws` secrets is refused: import each on its own line.
+`import` refuses a line that names neither mode, or both, so self mode is
+never a default. An `aws` flag on a secret whose source is not `aws` is
+refused too. On a profile with other secrets, name the `aws` secret on the
+line. The flags answer for one secret, so a line that selects two `aws`
+secrets is refused. Import each on its own line.
 
-In role mode the session carries a source identity. Brig reads it from the
-profile's caller ARN: its last path segment, which for an SSO login is your
+In role mode the session carries a source identity. Brig takes the last
+path segment of the profile's caller ARN, which for an SSO login is your
 user name. `--source-identity` sets another. It is 2 to 64 of the characters
 `A-Za-z0-9+=,.@_-`.
 
-A role session lasts 30 minutes. This bounds how long a leaked key works.
-`--session-duration` sets `25m` to `1h`:
+A role session lasts 30 minutes, which bounds how long a leaked key works.
+`--session-duration` sets `25m` to `1h`. The role cannot enforce the
+length, because IAM has no condition key for it. Brig requests it.
 
-- Upper bound: STS ends a session assumed from an SSO session after an hour.
-- Lower bound: the broker replaces keys with under 20 minutes left.
-
-IAM has no condition key on session length, so the role cannot enforce it.
-Brig requests it.
-
-Before it stores anything, `import` checks the profile with `aws`:
-
-1. `sts get-caller-identity`, for the identity of the profile.
-2. The profile's region. The guest gets it as `AWS_REGION` and
-   `AWS_DEFAULT_REGION`, and a profile with none is refused with the
-   command that sets one.
-3. In role mode, one `sts assume-role` of the role. Its keys are discarded.
-
-Then it stores the pointer: the profile, the mode, the role and the source
-identity. `--dry-run` runs the same checks and stores nothing. In self mode,
-`import` prints the identity the sandbox will get. `brig secret ls` shows
+Before it stores anything, `import` checks with `aws` that the profile
+works, that it has a region, and in role mode that it can assume the role.
+The guest gets the region as `AWS_REGION` and `AWS_DEFAULT_REGION`. A
+profile with no region is refused with the command that sets one.
+`--dry-run` runs the same checks and stores nothing. In self mode, `import`
+prints the identity the sandbox will get. `brig secret ls` shows
 `aws:<profile>` in the `FROM` column.
 
-`aws` runs with every `AWS_` variable removed from its environment, at import
-and in the broker. A profile that works only because your shell exports
-`AWS_PROFILE`, `AWS_CONFIG_FILE` or a key fails at import, and not at the
-first run.
+`aws` runs with every `AWS_` variable removed from its environment. A
+profile that works only because your shell exports `AWS_PROFILE`,
+`AWS_CONFIG_FILE` or a key fails at import, and not at the first run.
 
-At each registration, which every run and exec makes, the broker reads the
-region again and fetches keys when those it holds have less than 15 minutes
-left. When `aws` can get no credentials, because the SSO login lapsed and
-no credentials it cached from it are left, a new run is refused with exit
-`6` and the message names `aws sso login --profile <profile>`.
+When the SSO login lapses and `aws` has no cached credentials left, a new
+run is refused with exit `6`. The message names
+`aws sso login --profile <profile>`.
 [The aws route](security.md#the-aws-route) lists what the guest holds and
 how to revoke it.
 
@@ -710,40 +634,28 @@ brig secret import <profile> gcp-creds --gcloud-configuration default \
 | impersonate | `--impersonate-service-account <email>` | tokens of that service account, minted with your gcloud login. The service account's IAM roles limit what the sandbox can do. Your account needs `roles/iam.serviceAccountTokenCreator` on it |
 | self | `--identity self` | tokens of your own gcloud login, the account the configuration names at import. The sandbox can do what you can |
 
-`import` refuses a line that names neither mode, or both. Self mode is never
-what a missing flag falls back to. `--gcloud-configuration` is required. A
+As for `aws`, `import` refuses a line that names neither mode, or both, so
+self mode is never a default. `--gcloud-configuration` is required. A
 `gcloud` flag on a secret whose source is not `gcloud` is refused, and so is
-a line that selects two `gcloud` secrets. `--identity` is shared with the
-`aws` source. A line with an `aws`-only flag and a `gcloud` flag is refused:
-import each secret on its own line.
+a line that selects two `gcloud` secrets. A line with an `aws`-only flag and
+a `gcloud` flag is refused. Import each secret on its own line.
 
 The configuration name is a lowercase letter followed by up to 62 lowercase
 letters, digits and `-`. The service account is a `*.gserviceaccount.com`
-address. `import` checks both before it runs `gcloud`.
+address.
 
-In self mode, `import` first reads the account of the configuration with
-`gcloud config get-value account --configuration <c>`, and records it. A
-configuration with no account is refused. Every later mint names that
-account, so if you change the configuration's account, with
-`gcloud config set account` or a `gcloud auth login` as another user, mints
-fail until you import the secret again. The sandbox does not get the other
-identity.
+In self mode, `import` records the account that the configuration names. A
+configuration with no account is refused. If you later change the
+configuration's account, with `gcloud config set account` or a
+`gcloud auth login` as another user, mints fail until you import the secret
+again. The sandbox does not get the other identity.
 
-Before it stores anything, `import` mints one token, as the broker will:
-
-1. `gcloud auth print-access-token --configuration <c>`, with
-   `--impersonate-service-account <email>` in impersonate mode and with the
-   recorded account in self mode.
-2. A POST of the token to Google's tokeninfo endpoint,
-   `https://oauth2.googleapis.com/tokeninfo`, for its expiry and the
-   identity it belongs to. A token that tokeninfo says belongs to another
-   identity is refused. In self mode, so is a token for which tokeninfo
-   names no account.
-
-The token is discarded. A lapsed login or a missing
-`serviceAccountTokenCreator` grant is refused here, and not at the guest's
-first Google call. Then `import` stores the pointer: the configuration, the
-mode, and the service account or, in self mode, the account. `--dry-run` runs the same check and stores
+Before it stores anything, `import` mints one token, as the broker will. It
+sends the token to Google's tokeninfo endpoint to check the identity it
+belongs to, and refuses a token for another identity. In self mode, it also
+refuses a token that names no account. A lapsed login or a
+missing `serviceAccountTokenCreator` grant is refused here, and not at the
+guest's first Google call. `--dry-run` runs the same check and stores
 nothing. `import` prints the identity the sandbox will act as:
 
 ```
@@ -755,19 +667,15 @@ gcp: the sandbox will get your own identity you@example.com
 
 `gcloud` runs without `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_CONFIG`,
 `CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, any `CLOUDSDK_AUTH_*`
-variable, and the variables that set HTTP logging or the log level, at
-import and in the broker. A variable in your shell does not decide which
-identity the sandbox gets. Both read your logins from
-`$HOME/.config/gcloud`. `import` refuses while `CLOUDSDK_CONFIG` is set,
-since the broker would not read the logins it names. Unset it, or log in
-under `$HOME/.config/gcloud` with `gcloud auth login --configuration <c>`.
+variable, and the variables that set HTTP logging or the log level. A
+variable in your shell does not decide which identity the sandbox gets.
+`gcloud` reads your logins from `$HOME/.config/gcloud`. `import` refuses
+while `CLOUDSDK_CONFIG` is set. Unset it, or log in under
+`$HOME/.config/gcloud` with `gcloud auth login --configuration <c>`.
 
-At each registration, which every run and exec makes, the broker mints a
-token when the one it holds has less than 2 minutes left. When the login of
-the configuration has lapsed, a new run is refused with exit `6` and the
-message names `gcloud auth login --configuration <c>`, or in self mode
-`gcloud auth login <account> --configuration <c>`, since the pointer mints
-only as its account.
+When the login of the configuration has lapsed, a new run is refused with
+exit `6`. The message names `gcloud auth login --configuration <c>`, or in
+self mode `gcloud auth login <account> --configuration <c>`.
 [The gcp route](security.md#the-gcp-route) lists what the guest holds and
 the limits of this version.
 
@@ -777,15 +685,15 @@ without a `gcloud` source. See [The gcp preset](policies.md#the-gcp-preset).
 ## Renewal on the host
 
 `brig-broker` renews a secret this way for a run whose
-[route](policies.md#routes) serves it, on hull with `hvi` and nerdctl with
-urunc ([Transports](broker.md#transports)). Every other run still delivers
-`claude-credentials` as a file, and
+[route](policies.md#routes) serves it, on macOS with the `hvi` backend and
+on Linux with nerdctl and urunc ([Transports](broker.md#transports)). Every other run delivers
+`claude-credentials` as a file, as
 [What file delivery buys](security.md#what-file-delivery-buys-and-what-it-costs)
-still describes that.
+describes.
 
-A credential type can carry a lifecycle. The lifecycle renews the stored
-value on the host, so the guest never holds what it renews with. The first
-one is `anthropic-oauth`, for the `claude-credentials` document that
+A credential type can carry a lifecycle that renews the stored value on the
+host, so the guest never holds what it renews with. The first one is
+`anthropic-oauth`, for the `claude-credentials` document that
 `brig secret import claude-code` stores.
 
 | | `anthropic-oauth` |
@@ -796,37 +704,23 @@ one is `anthropic-oauth`, for the `claude-credentials` document that
 | What is written back | The same document with the three fields replaced. Every other field is kept. The provenance keeps its `FROM`, and its expiry moves to the new `expiresAt` |
 | What is refused | An answer that is not a 200 with an access token and a refresh token. Brig keeps the old document and writes nothing. For another status it reports the status code. For a 200 it cannot use, it reports a fixed error and nothing from the body |
 
-An answer with both tokens and an expiry outside 60 seconds to 30 days is
-kept, with `expiresAt` set to 0. Brig then renews that pair when the
-provider refuses its access token.
-
-The provider rotates the refresh token single-use. A refresh makes the
-previous document invalid, so one owner on the host refreshes each secret,
-one refresh at a time. Two sandboxes that share the secret wait on the same
-refresh.
+The provider makes each refresh token single-use, so one owner on the host
+refreshes each secret, one refresh at a time. Two sandboxes that share the
+secret wait on the same refresh.
 
 Once a refresh request has reached the provider, Brig does not send that
-refresh token again, whatever fails after it. The provider may already have
-rotated it. Brig serves the old document until its own expiry and reports
-the refresh as failing. A refresh that never reached the provider is tried
-again 30 seconds later at the earliest.
+refresh token again, whatever fails after it. Brig serves the old document
+until its own expiry and reports the refresh as failing.
 
 The new document is written back to the store before its access token is
-used. If that write fails, Brig keeps the new document in memory and retries
-the write 30 seconds later at the earliest. Until the write lands, the secret
-holds a document the provider already refuses, and the new document is in
+used. Until the write lands, the stored secret holds a document the provider
+already refuses, and the new document is in
 [the renewal journal](#the-renewal-journal).
 
-Brig reads the store again before every refresh, before every write-back,
-and at least every 5 minutes. A deleted secret stops being served. A secret
-you import again replaces the document in memory, and a pending write-back
-never overwrites it. A refresh or a write-back whose read fails waits for
-one that succeeds, so Brig never spends a refresh token on a document that
-an import has already replaced. A read cut short because the request that
-made it was canceled, or ran out of time, is not a failed read. A secret deleted, or imported again in a
-form Brig cannot read, while a refresh runs fails the request that waited on
-it. After a failed refresh, log in on the host and run
-`brig secret import claude-code`.
+Brig reads the store again at least every 5 minutes. A deleted secret then
+stops being served. A secret you import again replaces the document in
+memory, and a pending write-back never overwrites it. After a
+failed refresh, log in on the host and run `brig secret import claude-code`.
 
 The import copies the host's own refresh token. Brig and Claude Code on the
 host then hold the same pair, and whichever side refreshes first invalidates
@@ -836,28 +730,23 @@ against the same account during a brokered run.
 
 ### The renewal journal
 
-Between the provider's answer and the write-back, the new refresh token is
-only in the memory of `brig-broker`. A crash there, or a host that loses
-power, would leave the store with a spent token. So the broker journals each
-refresh in the store, next to the secret, as `<name>.journal`. The journal
-is a store item like the secret, with the same provenance, and never a file.
-
-A refresh takes these steps. Each step is one store write.
+A crash of `brig-broker`, or a host that loses power, between the
+provider's answer and the write-back would leave the store with a spent
+token. So the broker journals each refresh as `<name>.journal`, a store
+item next to the secret and never a file.
 
 1. The broker creates the journal in phase `renewing`. It records when the
-   refresh started and the SHA-256 of the document it starts from. The
-   create fails if a journal is already there. If the journal cannot be
-   written, the refresh is not sent, Brig reports it as failing, and the
+   refresh started and a hash of the document it started from. If the journal cannot
+   be written, the refresh is not sent, Brig reports it as failing, and the
    broker tries again 30 seconds later at the earliest.
 2. The broker calls the provider.
 3. The journal moves to phase `renewed`, and now holds the new document.
 4. The secret takes the new document.
 5. The broker deletes the journal.
 
-A write that fails stops at its step. The broker retries it 30 seconds later
-at the earliest, and serves the new document from memory meanwhile. No other
-refresh of the secret starts until the journal is gone. A refused access
-token in that window is not renewed again.
+A write that fails is retried, and the broker serves the new document from
+memory meanwhile. No other refresh of the secret starts until the journal is
+gone. A refused access token in that window is not renewed again.
 
 When the broker next serves the secret, it reads the journal first. It also
 does this when a sandbox registers a route for the secret, without waiting
@@ -865,14 +754,13 @@ for a request.
 
 | state found | what the broker does | what you see |
 | --- | --- | --- |
-| No journal | Nothing | Nothing |
 | `renewed`, and the secret is still the document the refresh started from | Writes the journal's document to the secret, and deletes the journal. It does not call the provider | `brig doctor` reports `refresh recovering` until the write lands. The run goes on with the renewed token |
 | `renewed`, and the secret already holds the journal's document | Deletes the journal | Nothing |
 | `renewing`, and the secret is still the document the refresh started from | Keeps the secret, deletes the journal, and renews once at the next request, whatever the expiry. The refresh may have reached the provider, and the provider may have rotated the stored token | `refresh recovering` until the provider answers. If the provider refuses the token as spent, the secret is reported as failing and is not renewed again. Log in on the host and import again |
 | Any journal, and the secret changed since the refresh started | Deletes the journal. A secret you imported again is newer than the journal | Nothing |
 | A journal of another broker that still runs, younger than 10 minutes | Leaves it alone, does not renew, and serves the stored document until it expires. It reads the journal again every 30 seconds | `refresh recovering` |
 | A journal of another broker, older than 10 minutes or dated in the future | The broker treats it as left by a broker that stopped | As above for its phase |
-| A journal of this broker that it did not know of | Deletes it, and renews 30 seconds later. The journal comes from a create that landed and reported a failure, so no refresh followed it | `refresh failing` until that renewal |
+| A journal of this broker that it did not know of | Deletes it, and renews 30 seconds later | `refresh failing` until that renewal |
 | A journal Brig cannot read: damaged in the store, not one Brig wrote, or a `renewed` document that is not a credential of the secret's kind | Keeps the secret, deletes the journal, and renews once, as for `renewing` | As for `renewing` |
 | The store does not answer | Serves the stored document, and reads the journal again 30 seconds later at the earliest | `refresh recovering` |
 
@@ -881,12 +769,6 @@ process. A broker counts as running when a process of yours has that id and
 that start time. `brig secret delete` removes the journal with the secret.
 `brig secret read` and `delete` refuse a journal's own name, because a
 journal can hold the only valid copy of a renewed credential.
-
-One broker refreshes a secret, one refresh at a time. The broker keeps one
-owner per secret, and its lock keeps one broker per state directory. The
-journal create is a second guard. It fails while another journal is there
-on macOS. On Linux, the Secret Service looks the name up before it creates
-the item, so two creates at once can both succeed.
 
 ## Linux
 
@@ -904,12 +786,9 @@ $ brig secret create gh-token
 brig: no secret store on this platform: a D-Bus session bus is running but no Secret Service answers on it. Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session that starts it, or read the secret once from a command's output with `brig secret import <profile> --from-command '<sh>'`, which stores it like any other import
 ```
 
-This check runs before Brig reads stdin, so you learn about the missing store
-before you fetch a token.
-
-`--from-command` is for a value in an external secret manager. The import
-runs the command once and stores its stdout like any other import. It needs a
-store to write into, so it does not replace a keyring.
+Brig checks for the store before it reads stdin, so you learn of a missing
+store before you fetch a token. `--from-command` also needs a keyring to
+store into.
 
 ## Common errors
 
@@ -918,19 +797,19 @@ store to write into, so it does not replace a keyring.
 | `a secret named "x" already exists. To replace it: brig secret update x` | `create` does not overwrite |
 | `no secret named "x". To create it: brig secret create x` | `update` does not create |
 | ``no secret named "x". `brig secret ls` lists them`` | `read` or `delete` on a name that is not there |
-| `create x was given an empty value, and brig skips empty variables when it forwards them, so it would never reach a sandbox` | the source was empty. Brig skips an empty variable when it forwards, so it refuses to store one |
+| `create x was given an empty value, and brig skips empty variables when it forwards them, so it would never reach a sandbox` | the source was empty |
 | `no value on stdin. Pipe one in, or pass -f <file>: …` (and prints two examples) | `create` at a prompt with nothing piped in. Brig does not wait for input, because a typed value stays in your scrollback |
 | ``-f was given an empty path. Leave it out to read stdin, or pass `-f -` to say so`` | `-f "$KEYFILE"` with the variable unset. Brig does not fall through to stdin, because that stores the stdin of the script under your name and reports success |
-| `--stdin and -f name two different sources; pass one` | both given. Brig does not guess, because a guess can store the wrong value silently |
+| `--stdin and -f name two different sources; pass one` | both given. Brig does not guess which one you meant |
 | `the value on stdin is over 65536 bytes, which is larger than any secret brig can store. If that is a file or a stream rather than a credential, this is the wrong one` | `create` or `update` read more than 65536 bytes. `-f FILE` names the file in place of `stdin` |
 | `"x" secret is damaged: the key is in the keychain, but its sealed value is missing. Store it again: …` | the `x.sealed` item was removed and the key item was not. See [Where a value lives](#where-a-value-lives) |
 | `"x" secret is damaged: the sealed item does not open with the key stored for it, so one of them was changed outside brig. Store it again: …` | something other than Brig replaced one of the two items. Store the value again to replace both |
-| `"x" secret is damaged: the sealed item is not a brig sealed value, so something other than brig put it there. Store it again: …` | the `x.sealed` item is not in the format of Brig. Store the value again to replace both |
-| `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. `-y` gives the answer in advance |
+| `"x" secret is damaged: the sealed item is not a brig sealed value, so something other than brig put it there. Store it again: …` | the `x.sealed` item is not in Brig's format. Store the value again to replace both |
+| `deleting "x" cannot be undone, and there is no terminal to ask on. Pass -y to answer in advance: …` | a cron job or a unit file. Pass `-y` |
 | `a secret name holds letters, digits, - and _, ...` | see [Naming a secret](#naming-a-secret) |
 | `no secret store on this platform: … no Secret Service answers on it …` | Linux with no keyring on the D-Bus session bus. Install `gnome-keyring` or KWallet and log in to a desktop session that starts it |
 | `no secret store on this platform: … a keyring is running but has no default collection …` | Linux with a keyring but no default collection (a headless or freshly provisioned session that did not open one). Open your keyring once from a desktop session, which creates the collection |
-| `"x" is a secret, not a profile, and import takes the profile that declares it: …` | the first argument of `import` is a profile. The message names the profile that declares the secret you typed |
+| `"x" is a secret, not a profile, and import takes the profile that declares it: …` | the first argument of `import` is a profile. The message names the one that declares the secret |
 | `nothing to import for "x": … held no value` | the sources of the profile exist and none of them held a value. Usually: run the agent on the host once to log in |
 | `"x" is already stored and brig did not put it there, so importing would replace a value you supplied` | you created it by hand. Pass `-y` if you want to replace it |
 | `--from-command fills one secret, so it needs one name` | `--from-command` supplies a value, and nothing in the command says which secret the value is for |

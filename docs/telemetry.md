@@ -9,9 +9,8 @@ off.
 brig telemetry off
 ```
 
-Brig records the answer on this machine. The answer holds whether or not
-Brig is the caller: hull, the runtime Brig drives on macOS, reads the same
-answer.
+Brig records the answer on this machine. hull, the runtime Brig drives on
+macOS, reads the same answer, whether or not Brig is the caller.
 
 To turn telemetry off without a recorded answer, set `DO_NOT_TRACK=1` in
 your environment:
@@ -47,8 +46,8 @@ asks it to run:
 | macOS | Brig's events, and hull's events for the sandboxes Brig runs |
 | Linux | Brig's events. `nerdctl` and `docker` send nothing |
 
-Every other call Brig makes to hull is not counted. A reachability probe, a
-`ps` lookup and cleanup work send nothing. hull never sends a command event
+No other call Brig makes to hull is counted: a reachability probe, a `ps`
+lookup and cleanup work send nothing. hull never sends a command event
 of its own for a call Brig makes, so a command counts once.
 
 Some invocations send no command event:
@@ -80,8 +79,7 @@ Enable telemetry? [Y/n]
 
 A single enter or `y` answers yes, and `n` answers no. Ctrl-D is not an
 answer, and the question stays open. Any other command, a script, a pipe, a
-job in the background, CI, `--json` and `-q` never ask, and send nothing
-until there is an answer.
+job in the background, CI, `--json` and `-q` never ask.
 
 A recorded yes stops counting as an answer when Brig or hull widens what it
 collects. The next `brig run` or `brig sh` on a terminal asks again, and
@@ -147,7 +145,7 @@ telemetry: not answered yet
   → to turn it off:  brig telemetry off
 ```
 
-Every event carries the install identifier, so it finds the events this
+Every event carries the install identifier, which finds the events this
 machine sent, for example when you ask for them to be deleted. Asking for the
 report creates no identifier.
 
@@ -172,8 +170,7 @@ tries again.
 A build of Brig with no endpoint, such as one from `go install`, sends
 nothing and queues nothing. `brig telemetry off` empties the queues.
 
-These are hull's files, so one answer covers both tools. On Linux, where hull
-does not run yet, Brig creates `~/.hull` for these files alone. Brig run
+These are hull's files. On Linux, where hull does not run yet, Brig creates `~/.hull` for these files alone. Brig run
 under sudo with your HOME leaves no files there.
 
 ## What an event carries
