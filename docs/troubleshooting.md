@@ -57,7 +57,7 @@ every value of `BRIG_VERIFY`. It does not report the refusal that a
 
 ```
 brig: no runtime found on PATH: brig drives hull on macOS, and none was there.
-See https://github.com/brig-sh/brig#macos, or point BRIG_RUNTIME_BIN at a build
+See https://github.com/brig-sh/brig/blob/main/docs/install.md, or point BRIG_RUNTIME_BIN at a build
 ```
 
 On Linux the runtime is `nerdctl`, and the message names it:

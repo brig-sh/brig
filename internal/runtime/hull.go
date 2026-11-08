@@ -64,7 +64,7 @@ func newHull(bin string) (Runtime, error) {
 		return &hull{bin: p}, nil
 	}
 	return nil, fmt.Errorf("%w: brig drives hull on macOS, and none was there. "+
-		"See https://github.com/brig-sh/brig#macos, "+
+		"See https://github.com/brig-sh/brig/blob/main/docs/install.md, "+
 		"or point BRIG_RUNTIME_BIN at a build", ErrNoRuntime)
 }
 
