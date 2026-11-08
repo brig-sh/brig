@@ -13,11 +13,13 @@ package main
 const runUsage = `brig run -- start a sandbox and run an agent
 
 usage:
-  brig run <ref> [project] [args...]
+  brig run [flags] <ref> [project] [args...]
 
 A project is mounted read-write at /work/<name>, and the agent starts there.
-Brig's own flags come before the ref; everything from the first agent argument
-on is the agent's, and -- ends brig's parsing.
+Brig reads its own flags before the ref, and after the ref and the project up
+to the first agent argument. Everything from the first agent argument on is
+the agent's, and -- ends brig's parsing. Put brig's flags before the ref:
+there brig refuses a flag it does not know, so a typo never reaches the agent.
 
 flags:
       --image IMAGE   guest image to boot
