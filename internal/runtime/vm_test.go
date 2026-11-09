@@ -311,7 +311,14 @@ func TestGatewayFilesOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	if !h.Owns(cmd.Process.Pid) {
+	// Right after Start the child may not have exec'd yet, and on Linux its
+	// /proc command line is still the test binary's. A gateway the check
+	// meets has been running for a while.
+	owned := false
+	for deadline := time.Now().Add(5 * time.Second); !owned && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		owned = h.Owns(cmd.Process.Pid)
+	}
+	if !owned {
 		t.Error("hull's gateway check did not know a process started with the gateway's socket")
 	}
 	n, err := (&nerdctl{}).GatewayFiles("brig-x")
