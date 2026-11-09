@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -319,5 +320,26 @@ func TestGatewayFilesOwns(t *testing.T) {
 	}
 	if n.Owns(os.Getpid()) {
 		t.Error("nerdctl's gateway check took the test binary for the resolver")
+	}
+}
+
+// The guest decides how much a command prints. Past the cap, Output fails
+// rather than hold it all or hand back a cut answer as a whole one.
+func TestOutputIsCapped(t *testing.T) {
+	big := fmt.Sprintf("head -c %d /dev/zero", maxOutput+1)
+	for name, rt := range map[string]interface {
+		Output(ExecSpec) (string, error)
+	}{
+		"hull":    &hull{bin: scriptBin(t, "hull", big)},
+		"nerdctl": &nerdctl{bin: scriptBin(t, "nerdctl", big)},
+	} {
+		out, err := rt.Output(ExecSpec{Ctx: context.Background(), Name: "vm", Cmd: []string{"cat", "f"}})
+		if err == nil || !strings.Contains(err.Error(), "more than 4 MiB") || out != "" {
+			t.Errorf("%s: Output = %d bytes, %v; want an error and no output", name, len(out), err)
+		}
+	}
+	h := &hull{bin: scriptBin(t, "hull", fmt.Sprintf("head -c %d /dev/zero", maxOutput))}
+	if out, err := h.Output(ExecSpec{Ctx: context.Background(), Name: "vm", Cmd: []string{"cat", "f"}}); err != nil || len(out) != maxOutput {
+		t.Errorf("hull: Output of exactly the cap = %d bytes, %v", len(out), err)
 	}
 }
