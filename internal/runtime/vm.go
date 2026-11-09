@@ -31,10 +31,11 @@ func (h *hull) VM(ctx context.Context, name string) (VM, error) {
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return VM{}, fmt.Errorf("%s inspect %s: %w", h.bin, name, err)
 	}
+	mem, cpus := vmSize(doc.CmdLine)
 	return VM{
 		PID:     doc.PID,
-		MemMiB:  flagInt(doc.CmdLine, "--mem-mib"),
-		CPUs:    flagInt(doc.CmdLine, "--cpus"),
+		MemMiB:  mem,
+		CPUs:    cpus,
 		Backend: doc.Backend,
 		Status:  doc.Status,
 		Started: doc.StartTime,
@@ -52,24 +53,31 @@ func (n *nerdctl) VM(ctx context.Context, name string) (VM, error) {
 	}
 	var doc struct {
 		State struct {
-			Pid       int       `json:"Pid"`
-			Status    string    `json:"Status"`
-			StartedAt time.Time `json:"StartedAt"`
+			Pid    int    `json:"Pid"`
+			Status string `json:"Status"`
+			// A string, not a time: nerdctl prints "" for a container
+			// with no running task.
+			StartedAt string `json:"StartedAt"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return VM{}, fmt.Errorf("%s inspect %s: %w", n.bin, name, err)
 	}
-	vm := VM{PID: doc.State.Pid, Status: doc.State.Status, Started: doc.State.StartedAt}
+	vm := VM{PID: doc.State.Pid, Status: doc.State.Status}
+	if doc.State.StartedAt != "" {
+		if t, err := time.Parse(time.RFC3339Nano, doc.State.StartedAt); err == nil {
+			vm.Started = t
+		}
+	}
 	// nerdctl reports no memory or vCPUs for a microVM, but urunc execs the
 	// monitor in place, so the pid is the monitor's and its command line says
-	// what the VM booted with.
-	if vm.PID > 0 {
+	// what the VM booted with. Only while it runs: the pid of an exited task
+	// may since belong to another process.
+	if vm.PID > 0 && vm.Status == "running" {
 		// A zombie's command line is empty.
 		if argv, err := procCmdline(vm.PID); err == nil && len(argv) > 0 && argv[0] != "" {
 			vm.Backend = filepath.Base(argv[0])
-			vm.MemMiB = flagInt(argv, "--mem-mib")
-			vm.CPUs = flagInt(argv, "--cpus")
+			vm.MemMiB, vm.CPUs = vmSize(argv)
 		}
 	}
 	return vm, nil
@@ -138,16 +146,92 @@ func inspectOutput(ctx context.Context, bin string, args ...string) ([]byte, err
 	return out.Bytes(), nil
 }
 
-// flagInt returns the integer after flag in args, or 0 when it is absent or
-// not a number.
-func flagInt(args []string, flag string) int {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == flag {
-			v, err := strconv.Atoi(args[i+1])
-			if err == nil {
-				return v
+// vmSize reads the memory in MiB and the vCPU count from a monitor's command
+// line, 0 for a figure it does not carry. Each monitor spells them its own
+// way:
+//
+//	hvi               --mem-mib 2048 --cpus 2
+//	vz-runner         --mem 2048 --cpus 2
+//	qemu              -m 2048M | -m size=2G   -smp 2 | -smp cpus=2,sockets=1
+//	cloud-hypervisor  --memory size=2048M     --cpus boot=2,max=4
+//
+// A flag may also be written --flag=value.
+func vmSize(argv []string) (memMiB, cpus int) {
+	for i, a := range argv {
+		flag, v, inline := strings.Cut(a, "=")
+		if !inline {
+			if i+1 >= len(argv) {
+				continue
+			}
+			v = argv[i+1]
+		}
+		switch flag {
+		case "--mem-mib", "--mem":
+			if n, err := strconv.Atoi(v); err == nil && memMiB == 0 {
+				memMiB = n
+			}
+		case "-m":
+			if n := sizeMiB(strings.TrimPrefix(firstField(v, "size"), "size="), 1<<20); memMiB == 0 {
+				memMiB = n
+			}
+		case "--memory":
+			if n := sizeMiB(strings.TrimPrefix(firstField(v, "size"), "size="), 1); memMiB == 0 {
+				memMiB = n
+			}
+		case "--cpus", "-smp":
+			if n := countField(v); cpus == 0 {
+				cpus = n
+			}
+		}
+	}
+	return memMiB, cpus
+}
+
+// firstField returns the key=value part of a comma list whose key is key, or
+// the first part when none is keyed.
+func firstField(v, key string) string {
+	parts := strings.Split(v, ",")
+	for _, p := range parts {
+		if strings.HasPrefix(p, key+"=") {
+			return p
+		}
+	}
+	return parts[0]
+}
+
+// countField reads a vCPU count: a bare number, or the cpus= or boot= part
+// of a comma list.
+func countField(v string) int {
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	for _, p := range strings.Split(v, ",") {
+		for _, key := range []string{"cpus=", "boot="} {
+			if after, ok := strings.CutPrefix(p, key); ok {
+				if n, err := strconv.Atoi(after); err == nil && n > 0 {
+					return n
+				}
 			}
 		}
 	}
 	return 0
+}
+
+// sizeMiB reads a size with an optional K, M or G suffix, in MiB. A bare
+// number is in unit bytes: qemu's -m counts MiB, cloud-hypervisor's bytes.
+func sizeMiB(v string, unit int64) int {
+	mult := unit
+	switch {
+	case strings.HasSuffix(v, "G"), strings.HasSuffix(v, "g"):
+		mult, v = 1<<30, v[:len(v)-1]
+	case strings.HasSuffix(v, "M"), strings.HasSuffix(v, "m"):
+		mult, v = 1<<20, v[:len(v)-1]
+	case strings.HasSuffix(v, "K"), strings.HasSuffix(v, "k"):
+		mult, v = 1<<10, v[:len(v)-1]
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return int(n * mult >> 20)
 }

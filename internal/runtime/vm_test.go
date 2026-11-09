@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -226,5 +227,62 @@ func TestGatewayFiles(t *testing.T) {
 	n, err := (&nerdctl{}).GatewayFiles("brig-x")
 	if err != nil || n.Always || !strings.Contains(n.PID, "egress") {
 		t.Errorf("nerdctl GatewayFiles = %+v, %v; want the egress files, not always present", n, err)
+	}
+}
+
+// Each monitor spells memory and vCPUs its own way. hvi's spelling is from
+// the live brig-plum VMM on macOS; vz-runner's from its usage text in the
+// hull repository; qemu's and cloud-hypervisor's from their manuals.
+func TestVMSizeFromEachMonitorsCommandLine(t *testing.T) {
+	for _, c := range []struct {
+		argv      []string
+		mem, cpus int
+	}{
+		{[]string{"/opt/homebrew/bin/hvi", "boot", "--kernel", "k", "--mem-mib", "4096", "--cpus", "4"}, 4096, 4},
+		{[]string{"vz-runner", "--kernel", "k", "--mem", "2048", "--cpus", "2"}, 2048, 2},
+		{[]string{"qemu-system-aarch64", "-m", "2048M", "-smp", "2"}, 2048, 2},
+		{[]string{"qemu-system-x86_64", "-m", "size=4G", "-smp", "cpus=4,sockets=1"}, 4096, 4},
+		{[]string{"qemu-system-x86_64", "-m", "512"}, 512, 0},
+		{[]string{"cloud-hypervisor", "--memory", "size=2048M", "--cpus", "boot=2,max=4"}, 2048, 2},
+		{[]string{"cloud-hypervisor", "--memory=size=1073741824", "--cpus=boot=1"}, 1024, 1},
+		{[]string{"firecracker", "--config-file", "vm.json"}, 0, 0},
+	} {
+		if mem, cpus := vmSize(c.argv); mem != c.mem || cpus != c.cpus {
+			t.Errorf("vmSize(%q) = %d MiB, %d CPUs; want %d, %d", c.argv, mem, cpus, c.mem, c.cpus)
+		}
+	}
+}
+
+// nerdctl prints an empty StartedAt for a container with no running task.
+// The report still needs the status, so the inspect does not fail on it.
+func TestNerdctlVMOfAStoppedContainer(t *testing.T) {
+	swapCmdline(t, func(int) ([]string, error) {
+		t.Error("read the command line of a container that is not running")
+		return nil, os.ErrNotExist
+	})
+	n := &nerdctl{bin: scriptBin(t, "nerdctl", `echo '{"State":{"Pid":4242,"Status":"exited","StartedAt":""}}'`)}
+	vm, err := n.VM(context.Background(), "brig-claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vm.Status != "exited" || !vm.Started.IsZero() || vm.Backend != "" {
+		t.Errorf("VM = %+v, want exited, no start time, no backend", vm)
+	}
+}
+
+// A command that fails on its own is a failed command, even when the
+// deadline passes while brig still waits for its output: here a child keeps
+// the pipe open past it. Only an exec the deadline killed says the guest did
+// not answer.
+func TestNerdctlOutputBlamesTheGuestOnlyForAKill(t *testing.T) {
+	// The deadline falls between the exit and the end of the 1s wait for the
+	// pipe, with room for a slow start on a loaded machine.
+	n := &nerdctl{bin: scriptBin(t, "nerdctl", "sleep 3 &\nexit 1")}
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+	_, err := n.Output(ExecSpec{Ctx: ctx, Name: "vm", Cmd: []string{"uptime"}})
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 1 || errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Output = %v, want exit status 1 and no deadline", err)
 	}
 }
