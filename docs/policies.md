@@ -1027,7 +1027,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
 | `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session) with its routes, and report whether Brig can enforce anything against it at all |
-| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
+| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster] [--broker-address CIDR]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
 
 Complete command lines for all nine:
 
@@ -1235,7 +1235,7 @@ The mapping:
 | allow `cidr` | `toCIDR` |
 | deny `cidr` | `egressDeny` with `toCIDR` |
 | deny `host` | refused, because `egressDeny` has no `toFQDNs`. Under a deny default, a host that no allow host reaches is dropped, because it is already denied. It is refused when the policy has any allow `cidr`, because the renderer cannot tell whether the CIDR contains the host |
-| `spec.routes` | a rule to the `host` entity on port 443, where the node broker serves `brig.internal` |
+| `spec.routes` | a rule to the broker's address (`169.254.171.1/32`, or `--broker-address`) on port 443, where the node broker serves `brig.internal`. A CIDR rule, not the `host` entity: the address has link scope on the node and Cilium does not count it as the host |
 
 The first rule is always a DNS rule to kube-dns. Cilium's DNS proxy is what
 makes `toFQDNs` work. Only `*` is accepted as a wildcard in a host glob.

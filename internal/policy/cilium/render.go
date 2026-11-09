@@ -20,6 +20,10 @@ const DNSPort = "53"
 // brig.internal.
 const BrokerPort = "443"
 
+// BrokerCIDR is the link-local address the node broker listens on, as the
+// urunc installer sets it. Options.BrokerCIDR replaces it.
+const BrokerCIDR = "169.254.171.1/32"
+
 // PodIdentityPort is the port of the EKS Pod Identity agent.
 const PodIdentityPort = "80"
 
@@ -34,6 +38,8 @@ type Options struct {
 	PodSelector map[string]string
 	// PodIdentity adds a rule to the EKS Pod Identity agent.
 	PodIdentity bool
+	// BrokerCIDR is the address of the node broker. Empty means BrokerCIDR.
+	BrokerCIDR string
 	// Cluster adds a rule to the cluster entity: every pod and node of the
 	// cluster, on every port. A brig policy's egress names the hosts a
 	// sandbox reaches outside; a pod also talks to the services beside it,
@@ -53,8 +59,10 @@ type Options struct {
 //   - a rule to kube-dns on port 53, with a DNS rule that sends every lookup
 //     through Cilium's DNS proxy. toFQDNs only works for names the proxy has
 //     seen resolved.
-//   - when p has routes, a rule to the host entity on port 443, for the node
-//     broker at brig.internal.
+//   - when p has routes, a rule to the broker's address on port 443, for the
+//     node broker at brig.internal. The address is a CIDR rule, not the host
+//     entity: it sits on the node with link scope, so Cilium does not count
+//     it as the host identity.
 //   - when o.PodIdentity is set, a rule to PodIdentityCIDR on port 80.
 //   - when o.Cluster is set, a rule to the cluster entity on every port.
 //
@@ -133,11 +141,15 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 		}},
 	})
 	// A route is served by the node broker, which the pod reaches at
-	// brig.internal on the node's own address.
+	// brig.internal on a link-local address of the node.
 	if len(p.Spec.Routes) > 0 {
+		broker := o.BrokerCIDR
+		if broker == "" {
+			broker = BrokerCIDR
+		}
 		np.Spec.Egress = append(np.Spec.Egress, EgressRule{
-			ToEntities: []string{"host"},
-			ToPorts:    []PortRule{{Ports: []PortProtocol{{Port: BrokerPort, Protocol: "TCP"}}}},
+			ToCIDR:  []string{broker},
+			ToPorts: []PortRule{{Ports: []PortProtocol{{Port: BrokerPort, Protocol: "TCP"}}}},
 		})
 	}
 	if o.PodIdentity {
