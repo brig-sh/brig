@@ -162,6 +162,7 @@ the guest has none.
 | "A minted token is sent only on a route with `services`, to its Google APIs." | The gcp route | `go:TestAGCPRouteInjectsTheMintedToken` `go:TestAPointerOnARouteWithoutServicesIsRefused` |
 | "A pointer on any other route is refused with `check=credential.gcponly`." | The gcp route | `go:TestAPointerOnARouteWithoutServicesIsRefused` |
 | "A self-mode pointer also names the account of the login, and a token for any other account is refused." | The gcp route | `go:TestMintSelfRefusesAnotherAccount` `go:TestGCloudImportSelfNeedsAnAccount` |
+| "In impersonate mode, a token that tokeninfo does not name as the service account is refused." | The gcp route | `go:TestMintRefusesAnotherIdentity` `go:TestMintImpersonateNeedsAnEmail` |
 | "The secret holds that pointer and no token." | The gcp route | `go:TestGCloudImportStoresAPointerNotAToken` |
 | "It runs `gcloud` without `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME` and every `CLOUDSDK_AUTH_*` variable, so a variable in its environment does not decide which identity a sandbox gets." | The gcp route | `go:TestEnvironDropsIdentityVariables` `go:TestTheBrokersEnvironmentDoesNotPickTheIdentity` |
 | "The import applies the same rule." | The gcp route | `go:TestDefaultGCloudCLIDropsIdentityVariables` |

@@ -19,8 +19,8 @@ import (
 type Token struct {
 	Value  string
 	Expiry time.Time
-	// Email is the identity tokeninfo reports for the token. It may be "":
-	// tokeninfo is not known to report one for every impersonated token.
+	// Email is the identity tokeninfo reports for the token: the service
+	// account in impersonate mode, the account of the login in self mode.
 	Email string
 }
 
@@ -185,10 +185,15 @@ func (c CLI) Mint(ctx context.Context, p Pointer) (Token, error) {
 		return Token{}, err
 	}
 	// A token for an identity other than the one the pointer names is not
-	// handed on. No email is accepted: tokeninfo may not report one for an
-	// impersonated token.
-	if p.Mode == ModeImpersonate && email != "" && !strings.EqualFold(email, p.ServiceAccount) {
-		return Token{}, fmt.Errorf("gcloud minted a token for %s, not the service account %s", email, p.ServiceAccount)
+	// handed on. gcloud mints an impersonated token with the userinfo.email
+	// scope, so tokeninfo names the service account (checked with gcloud 591);
+	// no email leaves the identity unproved.
+	if p.Mode == ModeImpersonate && (email == "" || !strings.EqualFold(email, p.ServiceAccount)) {
+		got := email
+		if got == "" {
+			got = "no identity"
+		}
+		return Token{}, fmt.Errorf("gcloud minted a token for %s, not the service account %s", got, p.ServiceAccount)
 	}
 	// A self token is the user's whole identity, so it must be proved to be
 	// the recorded account. A user login's token carries the userinfo.email
