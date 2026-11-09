@@ -23,6 +23,7 @@ func renderCiliumPolicy(args []string) error {
 	fs.StringVar(&o.Namespace, "namespace", "", "")
 	fs.BoolVar(&o.PodIdentity, "pod-identity", false, "")
 	fs.BoolVar(&o.Cluster, "cluster", false, "")
+	fs.StringVar(&o.BrokerCIDR, "broker-address", "", "")
 	sel := map[string]string{}
 	var selErr error
 	fs.Func("selector", "", func(v string) error {
@@ -34,7 +35,7 @@ func renderCiliumPolicy(args []string) error {
 		sel[k] = val
 		return nil
 	})
-	words, err := parseWords("render-cilium", "--name, --namespace, --selector, --pod-identity and --cluster", fs, args)
+	words, err := parseWords("render-cilium", "--name, --namespace, --selector, --pod-identity, --cluster and --broker-address", fs, args)
 	if err != nil {
 		if selErr != nil {
 			return selErr

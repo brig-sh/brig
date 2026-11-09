@@ -16,8 +16,8 @@ spec:
       rules:
         dns:
         - matchPattern: '*'
-  - toEntities:
-    - host
+  - toCIDR:
+    - 169.254.171.1/32
     toPorts:
     - ports:
       - port: "443"
