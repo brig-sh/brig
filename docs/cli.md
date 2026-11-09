@@ -568,7 +568,9 @@ It never writes over a file that is already there.
 
 The report masks credentials of known shapes and does not read the secret
 store. Read the file before you post it: a value of a shape Brig does not
-know is not masked. Paths, user names and project names stay in the report.
+know is not masked. After it writes the file, `brig report` lists the lines
+that hold a string that looks random and was not masked, so you can check
+those first. Paths, user names and project names stay in the report.
 
 With no ref, the report holds the host, `brig doctor` and `brig ls` only.
 `brig report` exits `0` when it wrote the file, also when steps ran out of

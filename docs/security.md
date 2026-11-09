@@ -1339,7 +1339,9 @@ JSON, also when the JSON is escaped inside a string, `NAME=value` where the
 name ends in TOKEN, KEY, SECRET or PASSWORD in any case, and AWS key IDs. It
 does not read the secret store, so it cannot mask a value by what the value
 is. A credential of another shape that a log or the guest printed stays in
-the file. Read the report before you post it.
+the file. `brig report` lists the lines that hold a string that looks random
+and was not masked, but it cannot tell a credential from other random text.
+Read the report before you post it.
 
 The file is 0600, in `~/.brig/host/reports` unless `-o` names another
 place. No sandbox mounts that directory. `brig report` creates the file new
