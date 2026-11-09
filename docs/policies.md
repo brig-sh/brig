@@ -1077,7 +1077,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `guest.git.insteadOf PREFIX is rewritten by route x of a and by route y of b; …` | two bound routes rewrite the same git prefix |
 | `policy x (route y) declares a route in mode endpoint, which the guest reaches at brig.internal: …` | a run, `sh` or plan of a profile bound to a policy with routes, on hull on `vz` or `qemu`, on docker, or on a hull whose gateway takes no `--divert`. It exits `7` |
 | `policy x (route y) declares a route in mode endpoint, and brig refuses the run before boot: …` | `check` on a profile bound to such a route |
-| `policy x (route y) declares routes, and this run has no network (BRIG_NETWORK=none) to reach them on; …` | a run with routes and `--offline` |
+| `policy x (route y) declares routes, and --offline asks for the offline posture, which has no network to reach them on; …` | a run with routes on the `offline` posture. The message names where the posture came from: `--offline`, `--network`, `BRIG_NETWORK` or the profile's `network:` |
 | `could not register the routes of brig-x with the credential broker: …` | `brig-broker` is not installed, did not start, or refused the routes. `broker.log` in `~/.brig/host/broker` says why |
 | `policy x (route y) injects a secret that brig's secret store does not hold: missing secret "s" …` | a run or `sh` of a profile bound to a route whose secret is not in the store. It exits `6`. The message names the import or create command |
 | `policy x (route y) injects s, which the broker reads from brig's secret store on the host, and the store is not available: …` | the same, on a host whose store does not open, such as Linux with no Secret Service. It exits `6` |

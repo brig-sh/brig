@@ -338,6 +338,9 @@ type Options struct {
 	// Network is the posture asked for on the command line, and beats both the
 	// setting and the profile. Empty means nothing was asked for.
 	Network string
+	// NetworkFlag is the flag that set Network, named in a message about the
+	// posture: --offline for the shorthand. Empty means --network.
+	NetworkFlag string
 	// Publish are the --publish values on the command line, unparsed. Each opens
 	// a guest port on the host; see runtime.ParsePublication for the grammar.
 	Publish []string
@@ -519,6 +522,9 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// one, so it only applies when nothing was recorded or recovered from the
 	// runtime of a session an older release started.
 	netValue, netSource := o.Network, "--network"
+	if o.NetworkFlag != "" {
+		netSource = o.NetworkFlag
+	}
 	if netValue == "" {
 		netValue, netSource = env.String("NETWORK", ""), env.SettingName("NETWORK")
 	}
