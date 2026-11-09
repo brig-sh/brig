@@ -490,6 +490,31 @@ keeps `CLOUDSDK_CONFIG`, so both read the logins under
 `$HOME/.config/gcloud`, and the import refuses while `CLOUDSDK_CONFIG` is
 set. No package on the run path links the code that runs `gcloud`.
 
+**Identities besides the route's.** A Google login in the guest is an
+identity the run did not name. gcloud uses it whenever the guest has not
+pointed it at the route's token file, and a Google client library, which
+never reads that file, uses it to reach Google directly wherever egress
+allows. A run with a gcp route is refused when the profile or
+`BRIG_FORWARD_ENV` also hands the guest `GOOGLE_APPLICATION_CREDENTIALS`,
+`CLOUDSDK_CONFIG`, `CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, a
+`CLOUDSDK_AUTH_*` variable or a `GCE_METADATA_*` variable. That includes
+`CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`: the guest sets it to the route's token
+itself, and from the profile it could name another token. It is also refused when a gcloud identity would
+be in the guest: a guest home that already holds `credentials.db`,
+`access_tokens.db`, `application_default_credentials.json` or
+`legacy_credentials` under `.config/gcloud` (for example `--home ~`), or a
+`.config/gcloud` that is a link, or a profile volume, `files:` binding or
+host config seed at `.config/gcloud` or `.config`, or a seed copied from
+your own `~/.config/gcloud` or a directory that holds it. The rest of
+`.config/gcloud`, which gcloud in the guest writes itself, is allowed.
+
+These checks cover what the host hands the guest. A guest that gets another
+identity in some other way, such as `gcloud auth login` in the guest, still
+reaches the listed services only through the broker, which takes the
+session token alone. With `egress: default: deny` and no `allow` for Google's
+hosts, it reaches no Google host directly. Brig does not check the image: a
+credential baked into it is not refused.
+
 **Revocation.** `brig stop` revokes the sandbox's session tokens, so its
 requests get no more Google tokens. A secret you import again with another
 configuration, mode or service account takes effect at the next request.
@@ -535,9 +560,7 @@ of them works at import and can fail in the broker.
 parameters `$httpMethod` and `httpMethod`, and batch requests. Each one
 carries a request that `request.allow` does not see.
 
-**Not yet done.** Brig does not refuse before boot a guest variable that
-picks another identity, such as `GOOGLE_APPLICATION_CREDENTIALS`, or a guest
-home that holds `.config/gcloud`. The guest writes the session token to the
+**Not yet done.** The guest writes the session token to the
 file that `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` names itself. A
 `CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>` for a service the route does not
 list is refused on another route's `guest.env`, but not when it comes in

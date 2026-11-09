@@ -654,7 +654,16 @@ refuses a `guest.env` entry on any bound route that names one of these, or
 any other `CLOUDSDK_API_ENDPOINT_OVERRIDES_` variable. gcloud takes the
 session token as its access token from a file. The guest writes
 `$BRIG_GCP_TOKEN` to a file and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its
-path.
+path. The guest sets it, not the profile: a run whose profile sets it is
+refused, as below.
+
+A run is refused when the profile or `BRIG_FORWARD_ENV` hands the guest a
+variable that picks another Google identity, such as
+`GOOGLE_APPLICATION_CREDENTIALS` or `CLOUDSDK_CONFIG`, or when the guest
+home or the profile puts a gcloud login under `~/.config/gcloud`. Bind the
+route with `egress: default: deny`, and no `allow` for Google's hosts, so
+that a guest that logs in to gcloud itself reaches Google only through the
+broker. See [The gcp route](security.md#the-gcp-route).
 
 The secret can also be a static access token, which is quicker to try.
 It is your own identity, and it expires in about an hour, after which you
