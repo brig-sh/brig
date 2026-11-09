@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -26,6 +27,7 @@ type reportRuntime struct {
 	runtime.Runtime
 	running      bool
 	runningErr   error
+	console      string
 	asked        int
 	runningAsked int
 }
@@ -37,7 +39,11 @@ func (r *reportRuntime) Running(string) (bool, error) {
 }
 func (r *reportRuntime) List() ([]runtime.Instance, error) { return nil, nil }
 func (r *reportRuntime) Logs(spec runtime.LogsSpec) error {
-	_, err := io.WriteString(spec.Out, "console\n")
+	console := r.console
+	if console == "" {
+		console = "console\n"
+	}
+	_, err := io.WriteString(spec.Out, console)
 	return err
 }
 func (r *reportRuntime) Output(runtime.ExecSpec) (string, error) { r.asked++; return "ok\n", nil }
@@ -436,5 +442,37 @@ func TestReportLogsFollowTheNetwork(t *testing.T) {
 		case want != "" && want != "shared" && got != want:
 			t.Errorf("%s: gateway log %q, want %q", network, got, want)
 		}
+	}
+}
+
+// A credential of a shape the masking does not know reaches the file. The
+// command points at it by line, and never prints it whole.
+func TestReportPointsAtWhatLooksRandom(t *testing.T) {
+	const planted = "Zx81QmLp4Tq7Rk2Wv9Ns3Hd6Jf0Bc5Yg"
+	rt := &reportRuntime{running: true, console: "session " + planted + " accepted\n"}
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, rt)
+	out, path := runReport(t, "claude")
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := 0
+	for i, l := range strings.Split(string(blob), "\n") {
+		if strings.Contains(l, planted) {
+			line = i + 1
+		}
+	}
+	if line == 0 {
+		t.Fatalf("the planted value is not in the report; the test needs a shape no rule masks")
+	}
+	if want := fmt.Sprintf("line %d: Zx81… (32 characters)", line); !strings.Contains(out, want) {
+		t.Errorf("output does not point at line %d:\n%s", line, out)
+	}
+	if strings.Contains(out, planted) {
+		t.Error("the output printed the value whole")
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if lines[len(lines)-1] != reportClosing {
+		t.Errorf("last line = %q, want the closing line", lines[len(lines)-1])
 	}
 }

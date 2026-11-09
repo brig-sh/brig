@@ -17,6 +17,7 @@ import (
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/profile"
+	"github.com/brig-sh/brig/internal/redact"
 	"github.com/brig-sh/brig/internal/report"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -214,7 +215,8 @@ func realDir(p string) string {
 // whole is removed rather than left half written.
 func writeReport(stdout, stderr io.Writer, f *os.File, rt runtime.Runtime, in report.Input) error {
 	r := report.Collect(context.Background(), rt, in, stderr)
-	err := r.Render(f)
+	var text strings.Builder
+	err := r.Render(io.MultiWriter(f, &text))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -222,8 +224,34 @@ func writeReport(stdout, stderr io.Writer, f *os.File, rt runtime.Runtime, in re
 		_ = os.Remove(f.Name())
 		return err
 	}
-	fmt.Fprintf(stdout, "wrote %s\n%s\n", f.Name(), reportClosing)
+	fmt.Fprintf(stdout, "wrote %s\n", f.Name())
+	printSuspects(stdout, redact.Suspects(text.String()))
+	fmt.Fprintln(stdout, reportClosing)
 	return nil
+}
+
+// reportSuspectsShown is how many suspects are listed by line.
+const reportSuspectsShown = 10
+
+// printSuspects lists the strings left in the report that look random. The
+// masking knows shapes, not values, so these are where a credential of
+// another shape would be. Each is named by line and its first characters,
+// never in full.
+func printSuspects(w io.Writer, s []redact.Suspect) {
+	if len(s) == 0 {
+		return
+	}
+	if len(s) == 1 {
+		fmt.Fprintln(w, "1 string looks random and was not masked. Check it:")
+	} else {
+		fmt.Fprintf(w, "%d strings look random and were not masked. Check them:\n", len(s))
+	}
+	for _, x := range s[:min(len(s), reportSuspectsShown)] {
+		fmt.Fprintf(w, "  line %d: %s… (%d characters)\n", x.Line, x.Start, x.Len)
+	}
+	if len(s) > reportSuspectsShown {
+		fmt.Fprintf(w, "  and %d more\n", len(s)-reportSuspectsShown)
+	}
 }
 
 func parseReportArgs(args []string) (reportOptions, error) {
