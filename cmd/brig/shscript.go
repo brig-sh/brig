@@ -14,7 +14,7 @@ import (
 // script typed as one word gets a hint and still runs.
 func checkShellCommand(tail []string) error {
 	if err := wrap.ShellCommandError(tail); err != nil {
-		return usagef("%s", err)
+		return asUsage(err)
 	}
 	if hint := shellHint(tail); hint != "" {
 		warnf("%s", hint)

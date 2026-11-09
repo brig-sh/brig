@@ -467,3 +467,68 @@ func TestImportSessionDurationNeedsAWSSource(t *testing.T) {
 		t.Errorf("stored %v", store.items)
 	}
 }
+
+// The aws flags are read off the line, so a missing, contradictory or
+// misplaced one is a usage error, and nothing is stored or run.
+func TestImportAWSFlagMistakesExitTwo(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	useHost(t, nil)
+	for _, args := range [][]string{
+		{"devbox", "--aws-profile", "dev"},
+		{"devbox", "--aws-profile", "dev", "--role-arn", roleARN, "--identity", "self"},
+		{"devbox", "--role-arn", roleARN},
+		{"devbox", "--aws-profile", "dev", "--identity", "self", "--source-identity", "me"},
+		{"devbox", "--aws-profile", "dev", "--identity", "self", "--session-duration", "30m"},
+		{"devbox", "--aws-profile", "dev", "--role-arn", roleARN, "--session-duration", "1s"},
+		{"devbox", "--aws-profile", "dev", "--role-arn", roleARN, "--session-duration", "1500ms"},
+		{"claude-code", "--aws-profile", "dev"},
+	} {
+		err := importSecrets(&bytes.Buffer{}, args)
+		if got := exitCode(err); got != exitUsage {
+			t.Errorf("%v: exit %d, want %d: %v", args, got, exitUsage, err)
+		}
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+	if got := calls(t, log); got != "" {
+		t.Errorf("aws ran for a refused import:\n%s", got)
+	}
+}
+
+// With no aws flag on the line, an aws secret that cannot be filled is that
+// secret's failure. The profile's other secrets are imported, so the exit is 1:
+// a usage error would tell a script that nothing was written.
+func TestImportAWSWithoutFlagsFailsOnlyThatSecret(t *testing.T) {
+	loadProfiles(t, `
+name: mixbox
+image: ghcr.io/brig-sh/devbox:latest
+guestHome: /home/devbox
+binary: devbox
+mem: 1024
+cpus: 1
+secrets:
+  - name: tool-token
+    required: false
+    from: keychain
+    service: Mytool-credentials
+  - name: aws-creds
+    required: false
+    from: aws
+`)
+	store := newAnnotating(t)
+	useHost(t, map[string][]byte{"keychain:Mytool-credentials": []byte("tok")})
+	fakeAWS(t, "eu-west-1")
+	err := importSecrets(&bytes.Buffer{}, []string{"mixbox"})
+	if err == nil || !strings.Contains(err.Error(), "say how the sandbox gets AWS") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := exitCode(err); got != exitFailure {
+		t.Errorf("exit %d, want %d", got, exitFailure)
+	}
+	if _, ok := store.items["tool-token"]; !ok {
+		t.Errorf("tool-token was not imported: stored %v", store.items)
+	}
+}

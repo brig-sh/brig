@@ -122,7 +122,7 @@ func resolveSandbox(ref string) (*wrap.Config, runtime.Runtime, string, error) {
 		// Classed as a usage error, the same way split classes the identical
 		// ParseRef failure on the run line: nothing ran, so this is a token in
 		// the wrong place rather than a run that started and failed.
-		return nil, nil, "", usagef("%s", err)
+		return nil, nil, "", asUsage(err)
 	}
 	t, ok := profile.Lookup(r.Agent)
 	if !ok {
