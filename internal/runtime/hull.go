@@ -871,7 +871,7 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 		return cmd.Process.Kill()
 	}
 	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
-	var out bytes.Buffer
+	out := cappedOutput{max: maxOutput}
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		if expired.Load() {
@@ -883,7 +883,7 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 		}
 		return "", err
 	}
-	return out.String(), nil
+	return out.result()
 }
 
 // Feed runs a command with a value on its standard input.
