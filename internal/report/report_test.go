@@ -552,3 +552,25 @@ func (killedInspect) VM(ctx context.Context, _ string) (runtime.VM, error) {
 	<-ctx.Done()
 	return runtime.VM{}, errors.New("signal: killed")
 }
+
+// A runtime that did not say whether the sandbox runs is not a stopped
+// sandbox. The guest is still asked, the gateway still checked, and the
+// summary says the state is unknown.
+func TestCollectWhenRunningIsUnknown(t *testing.T) {
+	in := running()
+	in.Running, in.RunningUnknown, in.TimedOut = false, "the runtime did not answer within 10s", 1
+	in.GatewayPIDFile = filepath.Join(t.TempDir(), "absent.pid")
+	in.GatewayAlways = true
+	rt := answering("", nil)
+	r := Collect(context.Background(), rt, in, io.Discard)
+	if rt.outputs == 0 {
+		t.Error("the guest was not asked")
+	}
+	verdictNamed(t, r, "gateway")
+	if r.TimedOut != 1 {
+		t.Errorf("TimedOut = %d, want the caller's step counted", r.TimedOut)
+	}
+	if !strings.Contains(r.summary(), "running: unknown, the runtime did not answer") {
+		t.Errorf("summary does not say the state is unknown:\n%s", r.summary())
+	}
+}

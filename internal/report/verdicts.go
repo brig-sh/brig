@@ -162,7 +162,7 @@ func stalled(r *Report) (string, string, bool) {
 }
 
 func gatewayDown(r *Report) (string, string, bool) {
-	if r.in.Network != "isolated" || r.in.GatewayPIDFile == "" || !r.in.Running {
+	if r.in.Network != "isolated" || r.in.GatewayPIDFile == "" || !r.in.mayRun() {
 		return "", "", false
 	}
 	blob, err := os.ReadFile(r.in.GatewayPIDFile)

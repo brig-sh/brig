@@ -53,7 +53,15 @@ type Input struct {
 	// Running is whether the runtime lists the sandbox as running. Nothing
 	// is asked of a guest that is not.
 	Running bool
-	Doctor  []Row
+	// RunningUnknown is why the runtime could not say whether the sandbox
+	// runs, when it could not. A wedged runtime is not a stopped sandbox: the
+	// guest is still asked, each question under its own deadline, and the
+	// gateway is still checked.
+	RunningUnknown string
+	// TimedOut counts steps the caller ran before Collect that ran out of
+	// time.
+	TimedOut int
+	Doctor   []Row
 	// Sessions is what `brig ls` prints. SessionRecord is the ref's entry
 	// in the session index.
 	Sessions, SessionRecord string
@@ -79,6 +87,9 @@ type Input struct {
 	// The report is still written, for the host alone.
 	ResolveError string
 }
+
+// mayRun is whether the sandbox runs or may: the guest is worth asking.
+func (in Input) mayRun() bool { return in.Running || in.RunningUnknown != "" }
 
 // Section is one titled part of the report.
 type Section struct {
@@ -135,9 +146,9 @@ const (
 func Collect(ctx context.Context, rt runtime.Runtime, in Input, progress io.Writer) Report {
 	if rt == nil {
 		rt = noRuntime{}
-		in.Running = false
+		in.Running, in.RunningUnknown = false, ""
 	}
-	r := Report{Generated: time.Now().UTC(), in: in, progress: progress}
+	r := Report{Generated: time.Now().UTC(), in: in, progress: progress, TimedOut: in.TimedOut}
 	step := r.step
 
 	step("host")
@@ -158,7 +169,7 @@ func Collect(ctx context.Context, rt runtime.Runtime, in Input, progress io.Writ
 	step("VMM")
 	r.inspect(ctx, rt)
 
-	if in.Running {
+	if in.mayRun() {
 		step("guest")
 	}
 	r.Probes = runProbes(ctx, rt, in)
@@ -418,7 +429,11 @@ func (r Report) summary() string {
 		fmt.Fprintf(&b, "ref           %s, not resolved: %s\n", r.in.Ref, r.in.ResolveError)
 	} else if r.in.Ref != "" {
 		fmt.Fprintf(&b, "ref           %s\n", r.in.Ref)
-		fmt.Fprintf(&b, "sandbox       %s (running: %t)\n", r.in.Sandbox, r.in.Running)
+		running := fmt.Sprint(r.in.Running)
+		if r.in.RunningUnknown != "" {
+			running = "unknown, " + r.in.RunningUnknown
+		}
+		fmt.Fprintf(&b, "sandbox       %s (running: %s)\n", r.in.Sandbox, running)
 		fmt.Fprintf(&b, "network       %s\n", r.in.Network)
 	}
 	if r.HaveVM {
