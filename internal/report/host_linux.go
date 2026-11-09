@@ -126,14 +126,14 @@ func vmmStacks(ctx context.Context, pid int) (string, string) {
 	tool := fmt.Sprintf("/proc/%d/task", pid)
 	switch {
 	case have("eu-stack"):
-		out, err := exec.CommandContext(ctx, "eu-stack", "-p", strconv.Itoa(pid)).CombinedOutput()
+		out, err := stackTool(ctx, pid, "eu-stack", "-p", strconv.Itoa(pid))
 		tool += " and eu-stack"
 		b.WriteString("\n" + string(out))
 		if err != nil {
 			b.WriteString("eu-stack: " + err.Error() + "\n")
 		}
 	case have("gdb"):
-		out, err := exec.CommandContext(ctx, "gdb", "-batch", "-p", strconv.Itoa(pid), "-ex", "thread apply all bt").CombinedOutput()
+		out, err := stackTool(ctx, pid, "gdb", "-batch", "-p", strconv.Itoa(pid), "-ex", "thread apply all bt")
 		tool += " and gdb"
 		b.WriteString("\n" + string(out))
 		if err != nil {

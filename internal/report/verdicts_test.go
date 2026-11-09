@@ -2,7 +2,9 @@ package report
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,7 +148,10 @@ func TestVerdictTmpfsFollowsTheProfile(t *testing.T) {
 func TestVerdictUnresponsiveOnALaterProbe(t *testing.T) {
 	rt := answering("", nil)
 	rt.output = func(spec runtime.ExecSpec) (string, error) {
-		if strings.Contains(spec.Cmd[len(spec.Cmd)-1], "/proc/pressure") {
+		switch s := spec.Cmd[len(spec.Cmd)-1]; {
+		case strings.Contains(s, "dmesg"):
+			return "", nil
+		case strings.Contains(s, "/proc/pressure"):
 			return "memory:\n", nil
 		}
 		<-spec.Ctx.Done()
@@ -155,7 +160,7 @@ func TestVerdictUnresponsiveOnALaterProbe(t *testing.T) {
 	r := Collect(context.Background(), rt, running(), io.Discard)
 	v := verdictNamed(t, r, "unresponsive")
 	if v.Evidence != "probe free -m timed out" {
-		t.Errorf("evidence = %q, want the second probe named", v.Evidence)
+		t.Errorf("evidence = %q, want the third probe named", v.Evidence)
 	}
 }
 
@@ -198,6 +203,55 @@ func TestVerdictGateway(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Errorf("%s: gateway verdict %t, want %t (%+v)", tc.name, got, tc.want, r.Verdicts)
+		}
+	}
+}
+
+// A hung mount makes df wait, not the guest. When the guest answered every
+// other probe, the verdict names the probe and what it waits on, and does
+// not call the guest unresponsive.
+func TestVerdictStalledMountIsNotASilentGuest(t *testing.T) {
+	rt := answering("", map[string]string{"dmesg": "[1.0] booted\n"})
+	inner := rt.output
+	rt.output = func(spec runtime.ExecSpec) (string, error) {
+		if strings.Contains(spec.Cmd[len(spec.Cmd)-1], "df -h") {
+			<-spec.Ctx.Done()
+			return "", spec.Ctx.Err()
+		}
+		return inner(spec)
+	}
+	r := Collect(context.Background(), rt, running(), io.Discard)
+	for _, v := range r.Verdicts {
+		if v.Name == "unresponsive" {
+			t.Errorf("a hung df made the guest unresponsive: %+v", v)
+		}
+	}
+	v := verdictNamed(t, r, "stalled")
+	if v.Evidence != "probe df -h timed out" || !strings.Contains(v.Fix, "/work") {
+		t.Errorf("stalled = %+v, want df named and the workspace mount suggested", v)
+	}
+	if p, _ := r.probe("dmesg"); p == "" {
+		t.Error("dmesg was not asked")
+	}
+}
+
+// A live process at the recorded pid is not the gateway unless the runtime
+// says so: a gateway that died gave its pid back.
+func TestVerdictGatewayPidReused(t *testing.T) {
+	in := running()
+	in.GatewayPIDFile = filepath.Join(t.TempDir(), "gw.pid")
+	writeFile(t, in.GatewayPIDFile, fmt.Sprintf("%d\n", os.Getpid()))
+	in.GatewayAlways = true
+	in.GatewayOwns = func(int) bool { return false }
+	r := Collect(context.Background(), answering("", nil), in, io.Discard)
+	if v := verdictNamed(t, r, "gateway"); !strings.Contains(v.Evidence, "another process") {
+		t.Errorf("gateway verdict = %+v, want the pid named as another process", v)
+	}
+	in.GatewayOwns = func(int) bool { return true }
+	r = Collect(context.Background(), answering("", nil), in, io.Discard)
+	for _, v := range r.Verdicts {
+		if v.Name == "gateway" {
+			t.Errorf("a gateway the runtime owns was reported down: %+v", v)
 		}
 	}
 }

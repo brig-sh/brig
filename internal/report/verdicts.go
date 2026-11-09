@@ -25,6 +25,7 @@ var patterns = []pattern{
 	{"oom", outOfMemory},
 	{"thrash", thrash},
 	{"unresponsive", unresponsive},
+	{"stalled", stalled},
 	{"gateway", gatewayDown},
 	{"tmpfs", tmpfsFull},
 }
@@ -149,6 +150,17 @@ func unresponsive(r *Report) (string, string, bool) {
 	return "probe " + p.Name + " timed out", fix, true
 }
 
+// stalled names a probe that hung on its own while the guest answered the
+// rest: the guest is alive, and the probe says what it was waiting on.
+func stalled(r *Report) (string, string, bool) {
+	p, ok := r.stalledProbe()
+	if !ok {
+		return "", "", false
+	}
+	return "probe " + p.Name + " timed out",
+		fmt.Sprintf("The guest answered, but %s did not finish within %s. %s", p.Name, p.Elapsed.Round(100*time.Millisecond), p.stall), true
+}
+
 func gatewayDown(r *Report) (string, string, bool) {
 	if r.in.Network != "isolated" || r.in.GatewayPIDFile == "" || !r.in.Running {
 		return "", "", false
@@ -166,6 +178,10 @@ func gatewayDown(r *Report) (string, string, bool) {
 	pid, err := strconv.Atoi(strings.Fields(string(blob) + " 0")[0])
 	if err != nil || pid <= 0 || !alive(pid) {
 		return fmt.Sprintf("gateway pid %s is not running", strings.TrimSpace(string(blob))),
+			"The network gateway for this sandbox is not running.", true
+	}
+	if r.in.GatewayOwns != nil && !r.in.GatewayOwns(pid) {
+		return fmt.Sprintf("gateway pid %d is another process", pid),
 			"The network gateway for this sandbox is not running.", true
 	}
 	return "", "", false

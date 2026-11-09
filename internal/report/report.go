@@ -64,6 +64,9 @@ type Input struct {
 	// it does not, a missing pid file means no gateway was needed.
 	GatewayPIDFile string
 	GatewayAlways  bool
+	// GatewayOwns reports whether a live pid is that gateway, from the
+	// runtime. A gateway that died gives its pid back to another process.
+	GatewayOwns func(pid int) bool
 	// Tmpfs are the guest paths where the profile mounts its tmpfs volumes.
 	// The df probe asks about each, and a full one is a verdict.
 	Tmpfs []string
@@ -162,12 +165,15 @@ func Collect(ctx context.Context, rt runtime.Runtime, in Input, progress io.Writ
 	r.add("Guest probes", rt.Kind()+" exec, "+in.ProbeTimeout.String()+" each", r.probesBody())
 
 	step("console log")
-	r.Console = r.console(ctx, rt)
-	r.add("Console log", rt.Kind()+" logs, last "+fmt.Sprint(in.Tail)+" lines", r.Console)
+	var source string
+	r.Console, source = r.console(ctx, rt)
+	r.add("Console log", source+", last "+fmt.Sprint(in.Tail)+" lines", r.Console)
 
 	for _, l := range in.Logs {
 		step(strings.ToLower(l.Title))
-		body, err := tailFile(l.Path, in.Tail, l.Grep)
+		lctx, cancel := context.WithTimeout(ctx, logStepTimeout)
+		body, err := tailFile(lctx, l.Path, in.Tail, l.Grep)
+		cancel()
 		source := l.Path
 		if l.Grep != "" {
 			source += ", lines with " + l.Grep
@@ -175,6 +181,9 @@ func Collect(ctx context.Context, rt runtime.Runtime, in Input, progress io.Writ
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			body = "not present"
+		case errors.Is(err, context.DeadlineExceeded):
+			r.TimedOut++
+			body = "timed out after " + logStepTimeout.String()
 		case err != nil:
 			body = "not read: " + err.Error()
 		}
@@ -278,9 +287,11 @@ func (r *Report) inspect(ctx context.Context, rt runtime.Runtime) {
 	}
 	ictx, cancel := context.WithTimeout(ctx, hostStepTimeout)
 	vm, err := vi.VM(ictx, r.in.Sandbox)
+	expired := errors.Is(ictx.Err(), context.DeadlineExceeded)
 	cancel()
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
+		// A killed inspect reports "signal: killed", not the deadline.
+		if expired || errors.Is(err, context.DeadlineExceeded) {
 			r.TimedOut++
 		}
 		r.add("VMM process", rt.Kind()+" inspect", "failed: "+err.Error())
@@ -317,22 +328,43 @@ func (r *Report) inspect(ctx context.Context, rt runtime.Runtime) {
 	r.add("VMM stacks", tool, stacks)
 }
 
-func (r *Report) console(ctx context.Context, rt runtime.Runtime) string {
+// console returns the guest console's last lines and where they came from.
+// Where the runtime names the console file, it is read here with the tail
+// reader: the runtime's own logs command may fail on one long line, or on a
+// large file, before it prints anything, and the console is where an
+// out-of-memory kill shows.
+func (r *Report) console(ctx context.Context, rt runtime.Runtime) (string, string) {
 	if r.in.Sandbox == "" {
-		return "no sandbox named"
+		return "no sandbox named", rt.Kind() + " logs"
 	}
 	lctx, cancel := context.WithTimeout(ctx, logStepTimeout)
 	defer cancel()
+	if r.HaveVM && r.VM.LogFile != "" {
+		body, err := tailFile(lctx, r.VM.LogFile, r.in.Tail, "")
+		switch {
+		case err == nil:
+			return body, r.VM.LogFile
+		case errors.Is(err, context.DeadlineExceeded):
+			r.TimedOut++
+			return "timed out after " + logStepTimeout.String(), r.VM.LogFile
+		}
+	}
 	var out, errb bytes.Buffer
 	err := rt.Logs(runtime.LogsSpec{Name: r.in.Sandbox, Tail: r.in.Tail, Out: &out, Err: &errb, Ctx: lctx})
+	body := out.String()
+	// A monitor that aborts (qemu, firecracker) says why on stderr, and the
+	// logs command can still exit 0.
+	if e := strings.TrimSpace(errb.String()); e != "" {
+		body += "\nstderr:\n" + e + "\n"
+	}
 	if errors.Is(lctx.Err(), context.DeadlineExceeded) {
 		r.TimedOut++
-		return out.String() + "\ntimed out after " + logStepTimeout.String()
+		return body + "\ntimed out after " + logStepTimeout.String(), rt.Kind() + " logs"
 	}
 	if err != nil {
-		return out.String() + "\nfailed: " + err.Error() + " " + strings.TrimSpace(errb.String())
+		return body + "\nfailed: " + err.Error(), rt.Kind() + " logs"
 	}
-	return out.String()
+	return body, rt.Kind() + " logs"
 }
 
 // Render writes the report. Every body and every verdict passes through
@@ -364,11 +396,19 @@ func (r Report) Render(w io.Writer) error {
 }
 
 // controlSeq matches the terminal control sequences a guest console or a
-// coloured dmesg carries. They mean nothing in a file and garble an issue.
+// coloured dmesg carries: CSI, OSC, and the escapes of an intermediate and a
+// final byte, such as ESC ( B from tput sgr0, or a final byte alone, such as
+// ESC 7 and ESC 8. They mean nothing in a file and garble an issue.
 //
 // Each piece is stripped before it is fenced: stripping afterwards could join
 // two runs of backticks into one long enough to close the fence.
-var controlSeq = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
+var controlSeq = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]+[0-~]|[0-~])`)
+
+// controlChar is every C0 control but newline and tab, DEL, and the C1
+// controls. A guest decides what its console and its kernel log hold: a
+// carriage return there ends a line for a Markdown renderer, so text after
+// it would leave a code span and render as Markdown in the issue.
+var controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f\x{80}-\x{9f}]`)
 
 func (r Report) summary() string {
 	var b strings.Builder
@@ -394,11 +434,15 @@ func (r Report) summary() string {
 	return b.String()
 }
 
-func plain(s string) string { return controlSeq.ReplaceAllString(s, "") }
+func plain(s string) string {
+	return controlChar.ReplaceAllString(controlSeq.ReplaceAllString(s, ""), "")
+}
 
 // codeSpan wraps s in more backticks than any run inside it, padded with
 // spaces, so a backtick in a guest's kernel line cannot end the span early.
 func codeSpan(s string) string {
+	// A code span may run across lines, and a blank one would end it.
+	s = strings.ReplaceAll(s, "\n", " ")
 	ticks := "`"
 	for strings.Contains(s, ticks) {
 		ticks += "`"
