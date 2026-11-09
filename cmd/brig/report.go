@@ -225,9 +225,35 @@ func writeReport(stdout, stderr io.Writer, f *os.File, rt runtime.Runtime, in re
 		return err
 	}
 	fmt.Fprintf(stdout, "wrote %s\n", f.Name())
-	printSuspects(stdout, redact.Suspects(text.String()))
+	printSuspects(stdout, reportSuspects(text.String()))
 	fmt.Fprintln(stdout, reportClosing)
 	return nil
+}
+
+// reportSuspects finds the strings in the rendered report that look random,
+// leaving out the VMM stacks section: mangled symbol names such as Rust's
+// _RNvNtCs… look random and cannot hold a credential, and a real report of
+// a macOS VMM had a dozen. A heading counts only outside a fence, so a guest
+// that prints "## VMM stacks" in its console does not hide what follows.
+func reportSuspects(text string) []redact.Suspect {
+	lines := strings.Split(text, "\n")
+	fence, skip := "", false
+	for i, l := range lines {
+		switch {
+		case fence != "":
+			if l == fence {
+				fence = ""
+			}
+		case strings.HasPrefix(l, "```") && strings.Trim(l, "`") == "":
+			fence = l
+		case strings.HasPrefix(l, "## "):
+			skip = l == "## VMM stacks"
+		}
+		if skip {
+			lines[i] = ""
+		}
+	}
+	return redact.Suspects(strings.Join(lines, "\n"))
 }
 
 // reportSuspectsShown is how many suspects are listed by line.
