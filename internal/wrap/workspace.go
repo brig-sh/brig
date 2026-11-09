@@ -166,6 +166,9 @@ func (c *Config) PrepareWorkspace() error {
 	if err := c.awsWorkspaceRefusal(r); err != nil {
 		return err
 	}
+	if err := c.gcpWorkspaceRefusal(r); err != nil {
+		return err
+	}
 	if err := c.seedHostConfig(r); err != nil {
 		return err
 	}
