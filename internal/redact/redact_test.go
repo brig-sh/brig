@@ -109,8 +109,8 @@ func TestRedactIsIdempotentAcrossLines(t *testing.T) {
 // The character that ends a broker token comes back whole, even when it is
 // more than one byte.
 func TestRedactGivesBackTheCharacterAfterAToken(t *testing.T) {
-	got := String("token=eyJzYW5kYm94IjoiYSJ9." + mac + "état")
-	if want := "token=[masked: brig-token]état"; got != want {
+	got := String("refused eyJzYW5kYm94IjoiYSJ9." + mac + "état")
+	if want := "refused [masked: brig-token]état"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 	if !utf8.ValidString(got) {
