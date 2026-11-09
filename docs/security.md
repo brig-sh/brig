@@ -475,7 +475,9 @@ route is refused with `check=credential.gcponly`. See
 
 **Named, not ambient.** You name the gcloud configuration and the service
 account when you run `brig secret import`. A self-mode pointer also names
-the account of the login, and a token for any other account is refused. The
+the account of the login, and a token for any other account is refused. In
+impersonate mode, a token that tokeninfo does not name as the service account
+is refused. The
 secret holds that pointer and no token. Brig does not read
 `~/.config/gcloud` itself. `brig-broker` runs the host's `gcloud`, which
 does, on every mint. The broker uses the first `gcloud` on its own `PATH`.

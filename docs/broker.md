@@ -833,12 +833,12 @@ turned off. Each call has 30 seconds.
 in a form body to `https://oauth2.googleapis.com/tokeninfo`, from the host,
 and reads `expires_in` and `email`. It does not follow a redirect, and the
 call has 10 seconds. A token with no `expires_in` is refused. In
-impersonate mode, a token whose `email` is another identity is refused. A
-token with no `email` is accepted, since tokeninfo may not report one for an
-impersonated token. In self mode, `<account>` is the account the import
-recorded, and a token whose `email` is missing or is another account is
-refused. A user login's token carries the `userinfo.email` scope, so
-tokeninfo names its account.
+impersonate mode, a token whose `email` is missing or is another identity is
+refused. gcloud mints an impersonated token with the `userinfo.email` scope,
+so tokeninfo names the service account (checked with gcloud 591). In self
+mode, `<account>` is the account the import recorded, and a token whose
+`email` is missing or is another account is refused. A user login's token
+carries the `userinfo.email` scope, so tokeninfo names its account.
 
 The broker holds the tokens in memory, per sandbox and route, and writes none
 to the store, to a file or to a log. A request gets the token held while it

@@ -652,8 +652,8 @@ again. The sandbox does not get the other identity.
 
 Before it stores anything, `import` mints one token, as the broker will. It
 sends the token to Google's tokeninfo endpoint to check the identity it
-belongs to, and refuses a token for another identity. In self mode, it also
-refuses a token that names no account. A lapsed login or a
+belongs to, and refuses a token that names no identity or another one. A
+lapsed login or a
 missing `serviceAccountTokenCreator` grant is refused here, and not at the
 guest's first Google call. `--dry-run` runs the same check and stores
 nothing. `import` prints the identity the sandbox will act as:
@@ -820,6 +820,7 @@ store into.
 | `--impersonate-service-account and --identity self are two answers; pass one` | an import of a `gcloud` source that names both modes |
 | `--gcloud-configuration is required: …` | an import of a `gcloud` source with a mode and no configuration |
 | `the gcloud configuration x has no account; run gcloud auth login --configuration x` | a self-mode import of a configuration that is not logged in |
+| `gcloud minted a token for x, not the service account y` | an impersonate-mode mint returned a token that tokeninfo says belongs to another identity, or to none |
 | `the gcloud configuration x minted a token for y, not z, the account it was imported with; …` | the configuration's account changed after a self-mode import. Import the secret again to use the new account |
 | `the aws and gcloud flags fill different secrets; import each on its own line` | one import line carries an `aws`-only flag and a `gcloud` flag |
 | `the gcloud login of configuration x has expired; …` | the gcloud login lapsed. Run the command on the host, then run again |
