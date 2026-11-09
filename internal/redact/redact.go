@@ -20,10 +20,16 @@ import (
 // mask is the text that replaces a value of the given kind.
 func mask(kind string) string { return "[masked: " + kind + "]" }
 
-// maskedPrefix starts a value an earlier rule already replaced. The rules
-// that keep a name run after it is written and accept almost any value, so
-// they check for it rather than mask a mask.
-const maskedPrefix = "[masked:"
+// maskUnit matches one mask an earlier rule wrote. The value classes of the
+// rules that keep a name take it as one unit, so a value that holds a mask
+// and more, such as AKIA…:secret after the key id is masked, is masked
+// whole rather than stopping at the mask's space.
+const maskUnit = `\[masked: [a-z-]+\]`
+
+// isMask reports whether s is exactly one mask. Only such a value is left
+// alone, so masking twice changes nothing while a crafted value that merely
+// starts like a mask is still masked.
+var isMask = regexp.MustCompile(`^` + maskUnit + `$`).MatchString
 
 // A rule matches a whole credential, or a name followed by its value. In the
 // second form the leading keep submatches are the name, the next one is the
@@ -37,11 +43,37 @@ type rule struct {
 	// "basic responsibilities" puts a long word after "basic"; a credential
 	// has a digit or a symbol in it.
 	skipWords bool
+	// quoted writes the mask inside the quote the value opened with, so
+	// JSON, escaped or not, stays JSON.
+	quoted bool
 }
+
+// Value classes of the rules that keep a name.
+const (
+	// headerValue is the character set of an HTTP credential.
+	headerValue = `(?:` + maskUnit + `|[A-Za-z0-9._~+/=-])`
+	// jsonValue ends at the first quote that is not escaped, or at the end
+	// of a line that was cut before its closing quote.
+	jsonValue = `"(?:[^"\\\n]|\\.)+"?`
+	// escapedJSONValue is a JSON string inside another string, as a logged
+	// request body prints it: its quotes are \".
+	escapedJSONValue = `\\"(?:[^"\\\n]|\\[^"\n])+(?:\\")?`
+	// envValue may be quoted, as in a .env file or a shell line. A double
+	// quote can be escaped inside it, and a quote left open runs to the end
+	// of the line, so a cut line still masks.
+	envValue = `"(?:[^"\\\n]|\\.)+"?|'[^'\n]+'?|(?:` + maskUnit + `|[^\s'"])+`
+	// secretName ends the way the name of a credential does, in any case:
+	// GH_TOKEN, PASSWORD, aws_secret_access_key, SecretAccessKey.
+	secretName = `(?i:[a-z0-9_]*(?:token|key|secret|password|passwd))`
+	// jsonSecretName is narrower: a JSON document names many keys, and a
+	// "key" alone is usually not a credential.
+	jsonSecretName = `(?i:[a-z0-9_]*(?:token|secret|password|passwd|api_?key|access_?key|private_?key))`
+)
 
 // The order matters. The whole-token shapes run first, so a JWT in an
 // Authorization header is reported as a JWT, and the rules that keep a name
-// run last, after every value they could swallow is already masked.
+// run last. A value they find that is or holds an earlier mask is masked
+// whole, unless it is exactly one mask.
 //
 // Separators are spaces and tabs, never a newline: a header printed with no
 // value must not take the start of the next line as its value.
@@ -49,21 +81,23 @@ var rules = []rule{
 	{kind: "jwt", re: regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)},
 	// Brig's broker token: base64url(JSON claims) "." base64url(HMAC-SHA256),
 	// and the signature is always 43 characters. The second group stops the
-	// match from ending inside a longer dotted word.
-	{kind: "brig-token", re: regexp.MustCompile(`(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{43})([^A-Za-z0-9_.-]|$)`)},
+	// match from ending inside a longer word; a period after it, as at the
+	// end of a sentence, is given back.
+	{kind: "brig-token", re: regexp.MustCompile(`(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{43})([^A-Za-z0-9_-]|$)`)},
 	{kind: "anthropic-key", re: regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{10,}`)},
 	{kind: "github-token", re: regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})`)},
 	{kind: "aws-key-id", re: regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`)},
-	// A credential is 16 characters or more, so prose such as "the Basic
-	// challenge" and a header that says "Authorization: none" survive.
-	{kind: "authorization", re: regexp.MustCompile(`(?i)(authorization:[ \t]*(?:(?:bearer|basic|token)[ \t]+)?)([A-Za-z0-9._~+/=-]{16,})`), keep: 1},
-	{kind: "authorization", re: regexp.MustCompile(`(?i)(\b(?:bearer|basic)[ \t]+)([A-Za-z0-9._~+/=-]{16,})`), keep: 1, skipWords: true},
-	// A JSON string value ends at the first quote that is not escaped, or at
-	// the end of a line that was cut before its closing quote.
-	{kind: "json-secret", re: regexp.MustCompile(`("(?:accessToken|refreshToken|idToken|access_token|refresh_token|id_token|client_secret|apiKey|api_key|password|secret|token)"[ \t]*:[ \t]*)("(?:[^"\\\n]|\\.)+"?)`), keep: 1},
-	// A value may be quoted, as in a .env file or a shell line. A quote left
-	// open runs to the end of the line, so a cut line still masks.
-	{kind: "env-secret", re: regexp.MustCompile(`\b([A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD)=)("[^"\n]+"?|'[^'\n]+'?|[^\s'"]+)`), keep: 1},
+	// After an explicit scheme any value is a credential: Basic of a short
+	// user:pass is 12 characters. Without one a credential is 16 characters
+	// or more, so a header that says "Authorization: none" survives. The
+	// optional [ is Go's %v of a header map: map[Authorization:[Bearer …]].
+	{kind: "authorization", re: regexp.MustCompile(`(?i)(authorization:[ \t]*\[?(?:bearer|basic|token)[ \t]+)(` + headerValue + `+)`), keep: 1},
+	{kind: "authorization", re: regexp.MustCompile(`(?i)(authorization:[ \t]*\[?)(` + headerValue + `{16,})`), keep: 1},
+	// Prose says "the Basic challenge"; the floor and skipWords keep it.
+	{kind: "authorization", re: regexp.MustCompile(`(?i)(\b(?:bearer|basic)[ \t]+)(` + headerValue + `{16,})`), keep: 1, skipWords: true},
+	{kind: "json-secret", re: regexp.MustCompile(`("` + jsonSecretName + `"[ \t]*:[ \t]*)(` + jsonValue + `)`), keep: 1, quoted: true},
+	{kind: "json-secret", re: regexp.MustCompile(`(\\"` + jsonSecretName + `\\"[ \t]*:[ \t]*)(` + escapedJSONValue + `)`), keep: 1, quoted: true},
+	{kind: "env-secret", re: regexp.MustCompile(`\b(` + secretName + `[ \t]*=[ \t]*)(` + envValue + `)`), keep: 1},
 }
 
 // String returns s with each credential-shaped value replaced by
@@ -83,17 +117,20 @@ func (r rule) replace(m string) string {
 	if len(sub) > 1 {
 		value, rest = sub[r.keep+1], sub[r.keep+2:]
 	}
-	inner := strings.Trim(value, `"'`)
-	if strings.HasPrefix(inner, maskedPrefix) || r.skipWords && onlyLetters(inner) {
+	inner := strings.Trim(value, `\"'`)
+	if isMask(inner) || r.skipWords && onlyLetters(inner) {
 		return m
 	}
 	var b strings.Builder
 	for _, s := range sub[1 : r.keep+1] {
 		b.WriteString(s)
 	}
-	if r.kind == "json-secret" {
+	switch {
+	case r.quoted && strings.HasPrefix(value, `\"`):
+		b.WriteString(`\"` + mask(r.kind) + `\"`)
+	case r.quoted:
 		b.WriteString(`"` + mask(r.kind) + `"`)
-	} else {
+	default:
 		b.WriteString(mask(r.kind))
 	}
 	for _, s := range rest {
