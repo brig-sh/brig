@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/brig-sh/brig/internal/telemetry"
@@ -689,15 +690,24 @@ func (n *nerdctl) Output(spec ExecSpec) (string, error) {
 	// a child holding the output pipe, and Run would wait on it.
 	cmd.WaitDelay = agentCallWaitDelay
 	cmd.Env = mergeEnv(telemetryEnv(spec.Counted), envVals)
+	// Cancel runs only when the context ends before the exec does, so it
+	// records a kill. Reading ctx.Err() after Run instead would blame the
+	// guest for a command that failed on its own while its output was still
+	// draining past the deadline.
+	var killed atomic.Bool
+	cmd.Cancel = func() error {
+		killed.Store(true)
+		return cmd.Process.Kill()
+	}
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		// Run reports a killed exec as "signal: killed". Say why it was
 		// killed, so a caller can tell a silent guest from a failed command.
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return "", fmt.Errorf("the guest call was cancelled: %w (%v)", ctx.Err(), err)
-		}
-		if ctx.Err() != nil {
+		if killed.Load() {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return "", fmt.Errorf("the guest call was cancelled: %w (%v)", ctx.Err(), err)
+			}
 			return "", fmt.Errorf("the guest did not answer: %w (%v)", ctx.Err(), err)
 		}
 		return "", err
