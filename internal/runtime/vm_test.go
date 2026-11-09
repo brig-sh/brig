@@ -286,3 +286,38 @@ func TestNerdctlOutputBlamesTheGuestOnlyForAKill(t *testing.T) {
 		t.Errorf("Output = %v, want exit status 1 and no deadline", err)
 	}
 }
+
+// A live process at the recorded pid is the gateway only when its command
+// line says so: the test binary is not one, a process started as one is.
+func TestGatewayFilesOwns(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "brig-gw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("BRIG_GATEWAY_DIR", dir)
+	h, err := (&hull{}).GatewayFiles("brig-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Owns(os.Getpid()) {
+		t.Error("hull's gateway check took the test binary for the gateway")
+	}
+	sock := strings.TrimSuffix(h.PID, ".pid") + ".sock"
+	// The shell waits rather than exec sleep, so its own argv stays.
+	cmd := exec.Command("sh", "-c", "sleep 30 & wait", "network-gateway", sock)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	if !h.Owns(cmd.Process.Pid) {
+		t.Error("hull's gateway check did not know a process started with the gateway's socket")
+	}
+	n, err := (&nerdctl{}).GatewayFiles("brig-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Owns(os.Getpid()) {
+		t.Error("nerdctl's gateway check took the test binary for the resolver")
+	}
+}

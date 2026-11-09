@@ -101,6 +101,10 @@ type GatewayFiles struct {
 	// Neither runtime can tell from the name alone whether the sandbox is
 	// isolated: the caller checks its network posture first.
 	Always bool
+	// Owns reports whether pid is this gateway. A gateway that died gives
+	// its pid back, and a live process at the recorded pid may be any
+	// other; the runtime tells its own by the command line.
+	Owns func(pid int) bool
 }
 
 // GatewayFiler is implemented by a runtime that can name those files.
@@ -114,7 +118,12 @@ func (h *hull) GatewayFiles(name string) (GatewayFiles, error) {
 	if err != nil {
 		return GatewayFiles{}, err
 	}
-	return GatewayFiles{Log: gatewayLogPath(sock), PID: gatewayPIDPath(sock), Always: true}, nil
+	return GatewayFiles{
+		Log:    gatewayLogPath(sock),
+		PID:    gatewayPIDPath(sock),
+		Always: true,
+		Owns:   func(pid int) bool { return ownsGateway(pid, sock) },
+	}, nil
 }
 
 // GatewayFiles: on nerdctl the bridge carries an isolated sandbox's traffic,
@@ -128,7 +137,11 @@ func (n *nerdctl) GatewayFiles(name string) (GatewayFiles, error) {
 	if err != nil {
 		return GatewayFiles{}, err
 	}
-	return GatewayFiles{Log: log, PID: pid}, nil
+	owns := func(p int) bool {
+		got, ok := resolverPID(name)
+		return ok && got == p
+	}
+	return GatewayFiles{Log: log, PID: pid, Owns: owns}, nil
 }
 
 func inspectOutput(ctx context.Context, bin string, args ...string) ([]byte, error) {
