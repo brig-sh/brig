@@ -1748,8 +1748,9 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 	}
 	// The one verb that knows what the runtime actually has, so the one place
 	// an entry for a sandbox that went away without going through `brig rm`
-	// can be dropped. See wrap.PruneSessions.
-	pruneSessionIndex(list)
+	// can be dropped. See wrap.PruneSessions. Not under brig report, which
+	// runs ls to show the listing and nothing else.
+	pruneUnlessKept(list)
 	rows := sandboxRows(list, rt)
 	// --json before either text form, so `brig -q --json ls` is JSON and not the
 	// -q refs: the two answer different readers, and asking for both asks for the
@@ -1789,6 +1790,18 @@ func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 		})
 	}
 	return rows
+}
+
+// lsKeepIndexEnv, set, makes `brig ls` list without pruning the session
+// index. brig report sets it on the ls it runs.
+const lsKeepIndexEnv = "BRIG_LS_KEEP_INDEX"
+
+// pruneUnlessKept prunes the session index against list, unless
+// lsKeepIndexEnv is set.
+func pruneUnlessKept(list []runtime.Instance) {
+	if os.Getenv(lsKeepIndexEnv) == "" {
+		pruneSessionIndex(list)
+	}
 }
 
 // pruneSessionIndex hands the session index every instance the runtime has, so

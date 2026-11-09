@@ -661,7 +661,7 @@ its screen. Other causes are a VMM or network gateway that stopped.
 **Fix:**
 
 1. Open another shell on the host, and keep the stuck terminal open.
-2. Write a report:
+2. Write a report. `brig report` prints the path of the file it wrote:
 
    ```bash
    brig report claude

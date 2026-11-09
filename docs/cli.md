@@ -541,7 +541,7 @@ brig report [<ref>] [-o <file>] [--tail N]
 
 | Flag | Meaning |
 | --- | --- |
-| `-o <file>` | where to write the report. Default: `brig-report-<ref>-<time>.txt` in the current directory |
+| `-o <file>` | where to write the report: a new file, or a directory to put it in. Default: `~/.brig/host/reports/brig-report-<ref>-<time>.txt` |
 | `--tail N` | keep the last `N` lines of each log. Default: `2000` |
 
 The report starts with a verdict: the known failures it found, the line
@@ -560,6 +560,11 @@ it with a larger `--mem`. Then it holds:
 Each step has a time limit, so a guest that does not answer cannot stop the
 report. A step that runs out of time is written in the report as a finding.
 `brig report` does not stop, start or repair anything.
+
+The default directory is not mounted into any sandbox. The current
+directory is usually the project, which the agent can read and write, so
+`brig report` warns when `-o` points into the project or the guest home.
+It never writes over a file that is already there.
 
 The report masks credentials of known shapes and does not read the secret
 store. Read the file before you post it: a value of a shape Brig does not
