@@ -1,0 +1,11 @@
+# A deny default with one allow host, rendered with the EKS Pod Identity
+# rule.
+apiVersion: brig.sh/v1alpha1
+kind: Policy
+metadata:
+  name: pod-identity
+spec:
+  egress:
+    default: deny
+    allow:
+      - host: sts.amazonaws.com

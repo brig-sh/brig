@@ -61,6 +61,7 @@ func TestRenderGolden(t *testing.T) {
 		{name: "allow-default"},
 		{name: "deny-host-dropped"},
 		{name: "pod-identity", opts: Options{PodIdentity: true}},
+		{name: "cluster", opts: Options{Cluster: true, PodIdentity: true}},
 		{name: "refused-glob", wantErr: "only '*' is a wildcard"},
 		{name: "refused-host-deny", wantErr: "Cilium egressDeny has no toFQDNs"},
 	}
