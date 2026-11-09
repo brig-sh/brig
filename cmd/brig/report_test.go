@@ -476,3 +476,17 @@ func TestReportPointsAtWhatLooksRandom(t *testing.T) {
 		t.Errorf("last line = %q, want the closing line", lines[len(lines)-1])
 	}
 }
+
+// The VMM stacks section is symbol names, which look random and hold no
+// credential, so it is left out. A heading the guest prints inside a fenced
+// section is not a heading, and hides nothing.
+func TestReportSuspectsSkipTheStacks(t *testing.T) {
+	const planted = "Zx81QmLp4Tq7Rk2Wv9Ns3Hd6Jf0Bc5Yg"
+	text := "## VMM stacks\n\n```\n" +
+		"4384 _RNvNvMs0_NtNtNtCsg55jX0GwzBC_3std3sys6thread4unixNtB7_6Thread3new12thread_start (in hvi)\n" +
+		"```\n\n## Console log\n\n```\n## VMM stacks\nsession " + planted + "\n```\n"
+	got := reportSuspects(text)
+	if len(got) != 1 || got[0].Start != "Zx81" || got[0].Line != 11 {
+		t.Errorf("suspects = %+v, want only the planted value on line 11", got)
+	}
+}
