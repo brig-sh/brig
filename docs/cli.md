@@ -878,7 +878,7 @@ brig policy rm <name> [--force]
 brig policy attach <policy> <agent> [-n <label>]
 brig policy detach <policy> <agent> [-n <label>]
 brig policy check <agent> [-n <label>]
-brig policy render-cilium <file> [--name <name>] [--namespace <ns>] [--selector <k=v>] [--pod-identity]
+brig policy render-cilium <file> [--name <name>] [--namespace <ns>] [--selector <k=v>] [--pod-identity] [--cluster]
 ```
 
 `brig policy render-cilium` prints the `spec.egress` section of a policy file as a

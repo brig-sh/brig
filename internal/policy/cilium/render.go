@@ -34,6 +34,11 @@ type Options struct {
 	PodSelector map[string]string
 	// PodIdentity adds a rule to the EKS Pod Identity agent.
 	PodIdentity bool
+	// Cluster adds a rule to the cluster entity: every pod and node of the
+	// cluster, on every port. A brig policy's egress names the hosts a
+	// sandbox reaches outside; a pod also talks to the services beside it,
+	// which the policy does not name.
+	Cluster bool
 }
 
 // Render returns the CiliumNetworkPolicy for the egress section of p. It
@@ -51,6 +56,7 @@ type Options struct {
 //   - when p has routes, a rule to the host entity on port 443, for the node
 //     broker at brig.internal.
 //   - when o.PodIdentity is set, a rule to PodIdentityCIDR on port 80.
+//   - when o.Cluster is set, a rule to the cluster entity on every port.
 //
 // Under a deny default, enableDefaultDeny.egress is true and each allow rule
 // follows as its own egress entry, in document order, on every port. A host
@@ -139,6 +145,9 @@ func Render(p *v1alpha1.Policy, o Options) (*NetworkPolicy, error) {
 			ToCIDR:  []string{PodIdentityCIDR},
 			ToPorts: []PortRule{{Ports: []PortProtocol{{Port: PodIdentityPort, Protocol: "TCP"}}}},
 		})
+	}
+	if o.Cluster {
+		np.Spec.Egress = append(np.Spec.Egress, EgressRule{ToEntities: []string{"cluster"}})
 	}
 
 	// allowHosts holds the normalized allow hosts and their index, for the

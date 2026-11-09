@@ -1027,7 +1027,7 @@ brig: name "no" reads as false when written unquoted in YAML, not as itself; pic
 | `brig policy attach <policy> <profile> [-n NAME]` | bind it to every run of a profile, or, with `-n`, to one session by name instead |
 | `brig policy detach <policy> <profile> [-n NAME]` | reverse an attach |
 | `brig policy check <profile> [-n NAME]` | list what is effectively bound to a run of the profile (or `-n` session) with its routes, and report whether Brig can enforce anything against it at all |
-| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
+| `brig policy render-cilium <file> [--name N] [--namespace NS] [--selector k=v] [--pod-identity] [--cluster]` | print the `spec.egress` section of a policy file as a CiliumNetworkPolicy. See [render-cilium](#render-cilium) |
 
 Complete command lines for all nine:
 
@@ -1219,7 +1219,11 @@ The object name defaults to `metadata.name`, and it must be a valid
 Kubernetes name. `--name` replaces it. `--selector` is repeatable and sets
 the pod labels the policy applies to. With none, it applies to every pod in
 the namespace. `--pod-identity` adds a rule to the EKS Pod Identity agent at
-`169.254.170.23/32` on port 80.
+`169.254.170.23/32` on port 80. `--cluster` adds a rule to the cluster entity,
+every pod and node of the cluster on every port. A brig policy's egress names
+the hosts a sandbox reaches outside; a pod on a cluster also talks to the
+services beside it, a database or a queue, which the policy does not name.
+Without the flag a deny default cuts those off.
 
 The mapping:
 
