@@ -24,12 +24,17 @@ import (
 // embedded interface.
 type reportRuntime struct {
 	runtime.Runtime
-	running bool
-	asked   int
+	running      bool
+	runningErr   error
+	asked        int
+	runningAsked int
 }
 
-func (r *reportRuntime) Kind() string                      { return "stub" }
-func (r *reportRuntime) Running(string) (bool, error)      { return r.running, nil }
+func (r *reportRuntime) Kind() string { return "stub" }
+func (r *reportRuntime) Running(string) (bool, error) {
+	r.runningAsked++
+	return r.running, r.runningErr
+}
 func (r *reportRuntime) List() ([]runtime.Instance, error) { return nil, nil }
 func (r *reportRuntime) Logs(spec runtime.LogsSpec) error {
 	_, err := io.WriteString(spec.Out, "console\n")
@@ -279,23 +284,120 @@ func TestReportHelpScanSkipsFlagValues(t *testing.T) {
 	}
 }
 
-// -o onto a file that is already there, at 0644 from an older brig or a
-// touch, still leaves it private.
-func TestReportFileIsPrivateWhenItExists(t *testing.T) {
+// -o onto a file that is already there is refused, and the file is left as
+// it was: the report never truncates or rewrites a file it did not create.
+func TestReportRefusesAnExistingFile(t *testing.T) {
 	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, &reportRuntime{running: true})
 	path := filepath.Join(t.TempDir(), "r.txt")
 	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := reportCmd(io.Discard, io.Discard, []string{"claude", "-o", path}); err != nil {
-		t.Fatalf("brig report: %v", err)
+	if err := reportCmd(io.Discard, io.Discard, []string{"claude", "-o", path}); err == nil {
+		t.Fatal("brig report wrote over an existing file")
 	}
-	info, err := os.Stat(path)
+	if blob, _ := os.ReadFile(path); string(blob) != "old\n" {
+		t.Errorf("the existing file now holds %q", blob)
+	}
+}
+
+// The guest can write the project, so it can plant a link where a report
+// would go. The link is refused and what it points at is untouched.
+func TestReportRefusesALink(t *testing.T) {
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, &reportRuntime{running: true})
+	dir := t.TempDir()
+	target := filepath.Join(dir, "zshrc")
+	if err := os.WriteFile(target, []byte("export PATH\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "r.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := reportCmd(io.Discard, io.Discard, []string{"claude", "-o", link}); err == nil {
+		t.Fatal("brig report wrote through a link")
+	}
+	info, err := os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		t.Errorf("report mode %v, want no access for group or others", perm)
+	if blob, _ := os.ReadFile(target); string(blob) != "export PATH\n" || info.Mode().Perm() != 0o644 {
+		t.Errorf("the link's target was changed: %q, mode %v", blob, info.Mode().Perm())
+	}
+}
+
+// With no -o the report goes to brig's own state, which no sandbox mounts,
+// and not to the current directory, which is usually the project.
+func TestReportDefaultsToBrigsState(t *testing.T) {
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, &reportRuntime{running: true})
+	state := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", state)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	var out bytes.Buffer
+	if err := reportCmd(&out, io.Discard, []string{"claude"}); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(state, "host", "reports", "brig-report-claude-*.txt"))
+	if len(files) != 1 || !strings.Contains(out.String(), files[0]) {
+		t.Errorf("reports under the state dir: %q; output:\n%s", files, out.String())
+	}
+	if left, _ := os.ReadDir(cwd); len(left) != 0 {
+		t.Errorf("the current directory got %d entries", len(left))
+	}
+	if info, err := os.Stat(filepath.Join(state, "host", "reports")); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("reports directory: %v, %v; want 0700", info, err)
+	}
+}
+
+// -o into the sandbox's project works, with a warning that the agent can
+// read the file there.
+func TestReportWarnsInsideTheProject(t *testing.T) {
+	project := t.TempDir()
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code", Project: project}, &reportRuntime{running: true})
+	var errb bytes.Buffer
+	if err := reportCmd(io.Discard, &errb, []string{"claude", "-o", filepath.Join(project, "r.txt")}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errb.String(), "the agent can read the report there") {
+		t.Errorf("no warning for a report inside the project:\n%s", errb.String())
+	}
+}
+
+// A mistyped -o fails before any step runs, not after every step has waited
+// on a hung guest.
+func TestReportFailsFastOnABadOutput(t *testing.T) {
+	rt := &reportRuntime{running: true}
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, rt)
+	stubBrigLs(t, "echo ls ran >&2; exit 1")
+	err := reportCmd(io.Discard, io.Discard, []string{"claude", "-o", filepath.Join(t.TempDir(), "no", "such", "r.txt")})
+	if err == nil {
+		t.Fatal("brig report accepted a file in a directory that does not exist")
+	}
+	if rt.asked != 0 || rt.runningAsked != 0 {
+		t.Errorf("the runtime was asked %d questions before the file failed", rt.asked+rt.runningAsked)
+	}
+}
+
+// A runtime that does not say whether the sandbox runs is not a stopped
+// sandbox: the report says the state is unknown.
+func TestReportRunningUnknown(t *testing.T) {
+	reportHost(t, &wrap.Config{VMName: "brig-claude-code"}, &reportRuntime{runningErr: errors.New("hull: socket refused")})
+	_, path := runReport(t, "claude")
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), "running: unknown, the runtime said: hull: socket refused") {
+		t.Errorf("the report does not say the state is unknown:\n%s", blob)
+	}
+}
+
+// The ls the report runs shows the listing and changes nothing: a stuck
+// sandbox missing from the runtime's list must keep its index entry.
+func TestReportListsWithoutPruning(t *testing.T) {
+	stubBrigLs(t, `echo "keep=$`+lsKeepIndexEnv+`"`)
+	if got := reportSessions(); !strings.Contains(got, "keep=1") {
+		t.Errorf("brig ls ran as %q, want %s=1", got, lsKeepIndexEnv)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -66,9 +67,6 @@ func reportCmd(stdout, stderr io.Writer, args []string) error {
 		return err
 	}
 	now := time.Now().UTC()
-	if o.out == "" {
-		o.out = reportFileName(o.ref, now)
-	}
 
 	in := report.Input{
 		Tail:         o.tail,
@@ -80,62 +78,151 @@ func reportCmd(stdout, stderr io.Writer, args []string) error {
 	// deadline, and a reload there would write the registry while the resolve
 	// below reads it.
 	loadErr := profile.Load(profile.Dir())
-	in.Doctor = reportDoctorRows(loadErr)
-	in.Sessions = reportSessions()
 
+	// Resolved before `brig ls` runs, so the listing cannot change what the
+	// resolve reads.
 	var rt runtime.Runtime
+	var cfg *wrap.Config
+	var name string
 	if o.ref != "" {
-		cfg, r, name, err := reportResolve(o.ref)
+		var err error
+		cfg, rt, name, err = reportResolve(o.ref)
 		if err != nil {
 			// A ref that does not resolve, because the runtime or the profile
 			// is broken, is often why the user is here. Write the host part
 			// and say why the rest is missing.
 			in.Ref, in.ResolveError = o.ref, err.Error()
+			cfg = nil
 			rt, _ = reportDetect()
-			return writeReport(stdout, stderr, o.out, rt, in)
 		}
-		cfg.OpenStore = refuseStore
-		rt = r
-		in.Ref, in.Sandbox = o.ref, name
-		in.Network = string(cfg.Network)
-		in.Running = reportRunning(rt, name)
-		in.SessionRecord = reportSessionRecord(cfg)
-		var gw runtime.GatewayFiles
-		in.Logs, gw = reportLogs(cfg, rt, name)
-		in.GatewayPIDFile, in.GatewayAlways = gw.PID, gw.Always
-		in.Tmpfs = reportTmpfs(cfg.Profile)
 	} else if r, err := reportDetect(); err == nil {
 		rt = r
 	}
 
-	return writeReport(stdout, stderr, o.out, rt, in)
-}
-
-func writeReport(stdout, stderr io.Writer, file string, rt runtime.Runtime, in report.Input) error {
-	r := report.Collect(context.Background(), rt, in, stderr)
-	// 0600: the file holds host logs and whatever the masking missed, and is
-	// for the user to read before anyone else does.
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// The file is opened before anything is collected, so a mistyped -o
+	// fails now and not after every step has waited on a hung guest.
+	file, err := reportPath(o.out, o.ref, now)
 	if err != nil {
 		return err
 	}
-	// The mode above applies only to a file that open creates. A file that
-	// was already there keeps its own, so it is set here. Only a regular
-	// file: -o /dev/stdout must not change the terminal's mode.
-	if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
-		if err := f.Chmod(0o600); err != nil {
-			f.Close()
-			return err
+	if cfg != nil {
+		warnIfMounted(stderr, file, cfg)
+	}
+	f, err := openReport(file)
+	if err != nil {
+		return err
+	}
+
+	in.Doctor = reportDoctorRows(loadErr)
+	in.Sessions = reportSessions()
+	if cfg != nil {
+		cfg.OpenStore = refuseStore
+		in.Ref, in.Sandbox = o.ref, name
+		in.Network = string(cfg.Network)
+		var timedOut bool
+		in.Running, in.RunningUnknown, timedOut = reportRunning(rt, name)
+		if timedOut {
+			in.TimedOut++
+		}
+		in.SessionRecord = reportSessionRecord(cfg)
+		var gw runtime.GatewayFiles
+		in.Logs, gw = reportLogs(cfg, rt, name)
+		in.GatewayPIDFile, in.GatewayAlways, in.GatewayOwns = gw.PID, gw.Always, gw.Owns
+		in.Tmpfs = reportTmpfs(cfg.Profile)
+	}
+	return writeReport(stdout, stderr, f, rt, in)
+}
+
+// reportPath is where the report goes. The default is a directory of brig's
+// own state that no sandbox mounts: the current directory is usually the
+// project, which the guest under diagnosis can write, so it could plant a
+// link at the predictable name, and could read the report there. -o naming
+// a directory puts the default name in it.
+func reportPath(out, ref string, now time.Time) (string, error) {
+	name := reportFileName(ref, now)
+	if out == "" {
+		dir, err := reportDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, name), nil
+	}
+	if info, err := os.Stat(out); err == nil && info.IsDir() {
+		return filepath.Join(out, name), nil
+	}
+	return out, nil
+}
+
+// reportDir is <state>/host/reports, made 0700 if it is not there.
+func reportDir() (string, error) {
+	host, err := runtime.HostDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(host, "reports")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("refusing %s: it is not a directory", dir)
+	}
+	return dir, nil
+}
+
+// openReport creates the file, 0600: it holds host logs and whatever the
+// masking missed, and is for the user to read before anyone else does.
+// O_EXCL refuses a file that is already there, and with O_CREATE it also
+// refuses a link at that name, wherever the link points.
+func openReport(file string) (*os.File, error) {
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil, usagef("%s already exists; name a new file or a directory", file)
+	}
+	return f, err
+}
+
+// warnIfMounted warns when the report would land where the sandbox can read
+// it: its project or its home, which the guest mounts.
+func warnIfMounted(w io.Writer, file string, cfg *wrap.Config) {
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return
+	}
+	abs = realDir(abs)
+	for _, dir := range []string{cfg.Project, cfg.Workspace} {
+		if dir == "" {
+			continue
+		}
+		if rel, err := filepath.Rel(realDir(dir), abs); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+			fmt.Fprintf(w, "brig report: warning: %s is inside %s, which the sandbox mounts; "+
+				"the agent can read the report there\n", file, dir)
+			return
 		}
 	}
-	if err := r.Render(f); err != nil {
-		f.Close()
+}
+
+// realDir resolves links in p's directory, so /tmp and /private/tmp on macOS
+// compare equal. The file itself does not exist yet.
+func realDir(p string) string {
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+		return filepath.Join(dir, filepath.Base(p))
+	}
+	return p
+}
+
+// writeReport collects the report into f. A report that could not be written
+// whole is removed rather than left half written.
+func writeReport(stdout, stderr io.Writer, f *os.File, rt runtime.Runtime, in report.Input) error {
+	r := report.Collect(context.Background(), rt, in, stderr)
+	err := r.Render(f)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "wrote %s\n%s\n", file, reportClosing)
+	fmt.Fprintf(stdout, "wrote %s\n%s\n", f.Name(), reportClosing)
 	return nil
 }
 
@@ -227,7 +314,10 @@ func reportSessions() string {
 	cmd := exec.CommandContext(ctx, self, "ls")
 	cmd.WaitDelay = time.Second
 	// The user ran one command. The child is part of it and is not counted.
-	cmd.Env = append(os.Environ(), "DO_NOT_TRACK=1")
+	// It lists without pruning: a stuck sandbox may be missing from the
+	// runtime's list at this moment, and pruning would drop its entry, and
+	// with it the network it booted on, from the index the next run reads.
+	cmd.Env = append(os.Environ(), "DO_NOT_TRACK=1", lsKeepIndexEnv+"=1")
 	out, err := cmd.CombinedOutput()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return string(out) + "\nbrig ls timed out after " + reportStepTimeout.String()
@@ -238,17 +328,27 @@ func reportSessions() string {
 	return string(out)
 }
 
-func reportRunning(rt runtime.Runtime, name string) bool {
-	done := make(chan bool, 1)
+// reportRunning asks the runtime whether the sandbox runs. A runtime that
+// fails or does not answer is not a stopped sandbox: the second value says
+// why the state is unknown, and the third whether that was a timeout.
+func reportRunning(rt runtime.Runtime, name string) (bool, string, bool) {
+	type result struct {
+		ok  bool
+		err error
+	}
+	done := make(chan result, 1)
 	go func() {
 		ok, err := rt.Running(name)
-		done <- err == nil && ok
+		done <- result{ok, err}
 	}()
 	select {
-	case ok := <-done:
-		return ok
+	case res := <-done:
+		if res.err != nil {
+			return false, "the runtime said: " + res.err.Error(), false
+		}
+		return res.ok, "", false
 	case <-time.After(reportStepTimeout):
-		return false
+		return false, "the runtime did not answer within " + reportStepTimeout.String(), true
 	}
 }
 

@@ -1788,6 +1788,14 @@ esac
 grep -Eq '^argv: (run|stop|rm) ' "$STUB_LOG" \
   && bad "report changed the sandbox: $(grep -E '^argv: (run|stop|rm) ' "$STUB_LOG")" \
   || ok "report only observes the sandbox"
+# The report never writes over a file: a second run to the same -o fails and
+# leaves the first report as it was.
+sum_before="$(cksum < "$WORK/report.txt")"
+"$WORK/brig" report claude -o "$WORK/report.txt" >/dev/null 2>&1 \
+  && bad "report wrote over an existing file" \
+  || ok "report refuses a file that is already there"
+[ "$(cksum < "$WORK/report.txt")" = "$sum_before" ] \
+  && ok "the existing report is unchanged" || bad "the existing report changed"
 
 echo "== lifecycle verbs =="
 : > "$STUB_LOG"

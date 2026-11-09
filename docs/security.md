@@ -1335,10 +1335,15 @@ a git command run before that is not warned about. See
 `brig report` writes a file that you can attach to a public issue. It masks
 credentials by their shape: Anthropic keys, GitHub tokens, Authorization,
 Bearer and Basic values, JWTs, Brig's own session tokens, secret fields in
-JSON, `*_TOKEN=` style values and AWS key IDs. It does not read the secret
-store, so it cannot mask a value by what the value is. A credential of
-another shape that a log or the guest printed stays in the file. Read the
-report before you post it.
+JSON, also when the JSON is escaped inside a string, `NAME=value` where the
+name ends in TOKEN, KEY, SECRET or PASSWORD in any case, and AWS key IDs. It
+does not read the secret store, so it cannot mask a value by what the value
+is. A credential of another shape that a log or the guest printed stays in
+the file. Read the report before you post it.
+
+The file is 0600, in `~/.brig/host/reports` unless `-o` names another
+place. No sandbox mounts that directory. `brig report` creates the file new
+each time, so it refuses a file or a link that is already at that name.
 
 ### The guest home
 

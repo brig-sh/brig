@@ -418,6 +418,23 @@ func TestListingPrunesTheSessionsWhoseSandboxIsGone(t *testing.T) {
 	}
 }
 
+// The ls that brig report runs shows the listing and prunes nothing: a stuck
+// sandbox can be missing from the runtime's list at that moment, and its
+// entry holds the home and network the next run reads.
+func TestListingForAReportPrunesNothing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BRIG_STATE_DIR", dir)
+	t.Setenv(lsKeepIndexEnv, "1")
+	body := `{"claude-code@stuck": {"home": "/ws/stuck", "sandbox": "brig-claude-code-stuck"}}`
+	if err := os.WriteFile(filepath.Join(dir, "sessions.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pruneUnlessKept(nil)
+	if got := wrap.WorkspaceOfSandbox("brig-claude-code-stuck"); got != "/ws/stuck" {
+		t.Errorf("the listing for a report pruned the stuck session: %q", got)
+	}
+}
+
 // The two variable-width columns hold what is in them, so each is as wide as
 // its own widest value. A constant was wrong at both ends: brig-claude-desktop
 // plus a ten-character session slug is 30 characters, which ran into the state
