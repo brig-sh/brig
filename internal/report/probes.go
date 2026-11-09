@@ -85,7 +85,7 @@ func runProbes(ctx context.Context, rt runtime.Runtime, in Input) []Probe {
 			p.Script += ` $(ls -d /work/* 2>/dev/null)`
 		}
 		switch {
-		case !in.Running:
+		case !in.mayRun():
 		case silent:
 			p.Skipped = true
 		default:
@@ -119,7 +119,7 @@ func ask(ctx context.Context, rt runtime.Runtime, in Input, p Probe) Probe {
 }
 
 func (r *Report) probesBody() string {
-	if !r.in.Running {
+	if !r.in.mayRun() {
 		return "not running: nothing was asked of the guest"
 	}
 	var b strings.Builder
