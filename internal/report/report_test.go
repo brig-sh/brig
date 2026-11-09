@@ -3,6 +3,7 @@ package report
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,10 @@ type fakeRuntime struct {
 	runtime.Runtime
 	instances []runtime.Instance
 	console   string
+	// consoleErr is what Logs writes to stderr before it returns nil.
+	consoleErr string
+	// logsCalled counts calls to Logs.
+	logsCalled int
 	// output answers Output; nil blocks until the exec's context is done.
 	output  func(spec runtime.ExecSpec) (string, error)
 	outputs int
@@ -32,6 +37,8 @@ func (f *fakeRuntime) Kind() string { return "fake" }
 func (f *fakeRuntime) List() ([]runtime.Instance, error) { return f.instances, nil }
 
 func (f *fakeRuntime) Logs(spec runtime.LogsSpec) error {
+	f.logsCalled++
+	_, _ = io.WriteString(spec.Err, f.consoleErr)
 	_, err := io.WriteString(spec.Out, f.console)
 	return err
 }
@@ -156,7 +163,7 @@ func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // reads the end of it.
 func TestTailReadsOnlyTheEnd(t *testing.T) {
 	r := &countingReaderAt{size: 50 << 20}
-	got, err := tailReaderAt(r, r.size, 3)
+	got, err := tailReaderAt(context.Background(), r, r.size, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +186,7 @@ func TestTailFileGrepKeepsMatchingLines(t *testing.T) {
 		fmt.Fprintf(&b, "route=gh sandbox=brig-a n=%d\nroute=gh sandbox=brig-b n=%d\n", i, i)
 	}
 	writeFile(t, path, b.String())
-	got, err := tailFile(path, 2, "sandbox=brig-b")
+	got, err := tailFile(context.Background(), path, 2, "sandbox=brig-b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +307,7 @@ func TestTailFileCutsALongLine(t *testing.T) {
 	if err := os.WriteFile(path, []byte(blob), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := tailFile(path, 10, "sandbox=a ")
+	got, err := tailFile(context.Background(), path, 10, "sandbox=a ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,4 +389,166 @@ func TestProcStatsMeasuresAStoppedProcessAsIdle(t *testing.T) {
 	if cpu >= 1 {
 		t.Errorf("a stopped process measured at %.1f%% CPU", cpu)
 	}
+}
+
+// The guest decides what its console, its kernel log and its probe answers
+// hold, and the report is posted where Markdown renders. A guest that writes
+// this to /dev/kmsg must not get a heading or an image into the issue: every
+// piece of it stays inside a fence or a code span.
+func TestRenderKeepsGuestTextInert(t *testing.T) {
+	const payload = "Out of memory: Killed process 42 (x)\r\r# Owned\r\r![p](https://evil.example/p.png)" +
+		"\x1b(B\x1b7\x1b8\x00\u009b31m tail"
+	dir := t.TempDir()
+	log := filepath.Join(dir, "gateway.log")
+	writeFile(t, log, payload+"\n")
+	rt := answering(payload+"\n", nil)
+	rt.output = func(runtime.ExecSpec) (string, error) { return payload + "\n", nil }
+	in := running()
+	in.Logs = []LogFile{{Title: "Gateway log", Path: log}}
+	var out bytes.Buffer
+	if err := Collect(context.Background(), rt, in, io.Discard).Render(&out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if i := strings.IndexFunc(text, func(r rune) bool {
+		return r < 0x20 && r != '\n' || r == 0x7f || r >= 0x80 && r <= 0x9f
+	}); i >= 0 {
+		t.Errorf("rendered report holds control character %U at %d", []rune(text[i:])[0], i)
+	}
+	// A Markdown renderer ends a line at a carriage return as well.
+	fence := ""
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", "\n"), "\n") {
+		if fence != "" {
+			if line == fence {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "```") && strings.Trim(line, "`") == "" {
+			fence = line
+			continue
+		}
+		evidence, isEvidence := strings.CutPrefix(line, "  Evidence: ")
+		if isEvidence && inOneCodeSpan(evidence) {
+			continue
+		}
+		if strings.Contains(line, "Owned") || strings.Contains(line, "evil.example") {
+			t.Errorf("guest text rendered outside a fence or code span: %q", line)
+		}
+	}
+	if fence != "" {
+		t.Errorf("fence %s never closed", fence)
+	}
+}
+
+// inOneCodeSpan reports whether s is one code span: a run of backticks, the
+// text, and the same run, with no run as long inside.
+func inOneCodeSpan(s string) bool {
+	n := len(s) - len(strings.TrimLeft(s, "`"))
+	ticks := strings.Repeat("`", n)
+	return n > 0 && len(s) > 2*n && strings.HasSuffix(s, ticks) &&
+		!strings.Contains(s[n:len(s)-n], ticks)
+}
+
+// A progress bar writes carriage returns and no newline, so a log of it has
+// no line to stop at. The tail stops at its byte cap, cuts the one long
+// line, and returns.
+func TestTailReaderAtStopsAtTheCap(t *testing.T) {
+	r := &repeatReaderAt{pattern: "progress 42%\r", size: 64 << 20}
+	got, err := tailReaderAt(context.Background(), r, r.size, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.read > maxTail {
+		t.Errorf("read %d bytes, want at most %d", r.read, maxTail)
+	}
+	if len(got) > maxLine+64 || !strings.Contains(got, "[line cut]") || !strings.HasPrefix(got, "[earlier text cut]") {
+		t.Errorf("tail is %d bytes, starts %q; want one cut line under %d bytes", len(got), got[:min(40, len(got))], maxLine)
+	}
+}
+
+// repeatReaderAt serves size bytes of pattern repeated and counts what was
+// read.
+type repeatReaderAt struct {
+	pattern string
+	size    int64
+	read    int64
+}
+
+func (r *repeatReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n := 0
+	for ; n < len(p) && off+int64(n) < r.size; n++ {
+		p[n] = r.pattern[(off+int64(n))%int64(len(r.pattern))]
+	}
+	r.read += int64(n)
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// Each log step stops when its deadline does.
+func TestTailFileStopsWithItsContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	writeFile(t, path, "sandbox=a x\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, grep := range []string{"", "sandbox=a"} {
+		if _, err := tailFile(ctx, path, 10, grep); !errors.Is(err, context.Canceled) {
+			t.Errorf("tailFile(grep %q) with an ended context = %v, want context.Canceled", grep, err)
+		}
+	}
+}
+
+// hull names its console file. The report reads it with its own tail, so a
+// console line longer than the logs command can take does not lose the
+// section, and the kill after it still makes the verdict.
+func TestCollectReadsTheConsoleFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log")
+	writeFile(t, path, strings.Repeat("x", 200<<10)+"\r\n"+oomConsole)
+	rt := answering("", nil)
+	rt.vm.LogFile = path
+	r := Collect(context.Background(), rt, running(), io.Discard)
+	if rt.logsCalled != 0 {
+		t.Errorf("the runtime's logs command ran %d times with a console file named", rt.logsCalled)
+	}
+	if v := verdictNamed(t, r, "oom"); !strings.Contains(v.Evidence, "Killed process 21272") {
+		t.Errorf("oom evidence = %q", v.Evidence)
+	}
+	if s, _ := r.section("Console log"); !strings.Contains(s.Source, path) {
+		t.Errorf("console source = %q, want the file", s.Source)
+	}
+}
+
+// A monitor that aborts says why on stderr, and the logs command may still
+// exit 0. The report keeps it.
+func TestCollectKeepsTheConsolesStderr(t *testing.T) {
+	rt := answering("booting\n", nil)
+	rt.consoleErr = "qemu-system-aarch64: terminating on signal 6\n"
+	r := Collect(context.Background(), rt, running(), io.Discard)
+	if !strings.Contains(r.Console, "terminating on signal 6") {
+		t.Errorf("console = %q, want the monitor's stderr", r.Console)
+	}
+}
+
+// An inspect the deadline killed reports "signal: killed", not the deadline.
+// It still counts as a step that ran out of time.
+func TestCollectCountsAKilledInspect(t *testing.T) {
+	rt := killedInspect{&fakeRuntime{output: func(runtime.ExecSpec) (string, error) { return "", nil }}}
+	in := running()
+	start := time.Now()
+	r := Collect(context.Background(), rt, in, io.Discard)
+	if time.Since(start) > hostStepTimeout+5*time.Second {
+		t.Fatal("Collect waited past the inspect deadline")
+	}
+	if r.TimedOut < 1 {
+		t.Errorf("TimedOut = %d, want the killed inspect counted", r.TimedOut)
+	}
+}
+
+type killedInspect struct{ *fakeRuntime }
+
+func (killedInspect) VM(ctx context.Context, _ string) (runtime.VM, error) {
+	<-ctx.Done()
+	return runtime.VM{}, errors.New("signal: killed")
 }

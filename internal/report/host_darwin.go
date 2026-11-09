@@ -67,7 +67,7 @@ func vmmStacks(ctx context.Context, pid int) (string, string) {
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "sample.txt")
-	if out, err := exec.CommandContext(ctx, "sample", strconv.Itoa(pid), "5", "-mayDie", "-file", path).CombinedOutput(); err != nil {
+	if out, err := stackTool(ctx, pid, "sample", strconv.Itoa(pid), "5", "-mayDie", "-file", path); err != nil {
 		return "sample", fmt.Sprintf("failed: %v\n%s", err, out)
 	}
 	blob, err := os.ReadFile(path)

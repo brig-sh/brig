@@ -20,6 +20,10 @@ type Probe struct {
 	TimedOut bool
 	Skipped  bool
 	timeout  time.Duration
+	// stall is set on a probe that reads something able to hang on its
+	// own: a mount, or a process stuck in the kernel. Its timeout marks the
+	// probe, not the guest, and stall says what may have hung.
+	stall string
 }
 
 // Body is the text the report shows for the probe.
@@ -39,26 +43,36 @@ func (p Probe) Body() string {
 // prints the environment, and each ends in exit 0 with stderr folded in, so
 // a missing tool shows its own error and does not lose the output before it.
 //
-// Pressure goes first. It is the cheapest read and the one that tells a
-// thrashing guest from an idle one, so if the guest answers only one
-// question this is the one worth having.
+// dmesg goes first: it holds the kernel's account of an out-of-memory kill,
+// the most common reason a guest stops, so if the guest answers only one
+// question this is the one worth having. Pressure follows; it tells a
+// thrashing guest from an idle one.
+//
+// The probes that can stall on their own go last, so a guest that answers
+// the others has said so before one of them hangs.
 var probes = []Probe{
+	{Name: "dmesg", Script: `dmesg | tail -200`},
 	{Name: "pressure", Script: `for f in memory cpu io; do echo "$f:"; cat /proc/pressure/$f; done`},
 	{Name: "free -m", Script: `free -m`},
 	{Name: "uptime", Script: `uptime`},
 	// The probe's own shell and its children are left out by pid: in a quiet
-	// guest they would otherwise top the list.
+	// guest they would otherwise top the list. ps reads each process's
+	// command line, which waits on a process stuck in the kernel.
 	{Name: "processes by RSS", Script: `ps -eo pid,ppid,rss,etime,args --sort=-rss 2>/dev/null | ` +
 		`awk -v me=$$ 'NR==1 || ($1 != me && $2 != me)' | head -16 | cut -c1-200 | grep . || ` +
-		`awk '/^VmRSS/{print FILENAME, $2, "kB"}' /proc/[0-9]*/status | sort -k2 -nr | head -15`},
-	// runProbes adds the profile's tmpfs mount points, which differ by profile.
-	{Name: "df -h", Script: `df -h / "$HOME"`},
-	{Name: "dmesg", Script: `dmesg | tail -200`},
+		`awk '/^VmRSS/{print FILENAME, $2, "kB"}' /proc/[0-9]*/status | sort -k2 -nr | head -15`,
+		stall: "A process may be stuck in the kernel; dmesg above may name it."},
+	// runProbes adds the profile's tmpfs mount points, which differ by
+	// profile. df stats each mount, and waits on one whose host side stalled.
+	{Name: "df -h", Script: `df -h / "$HOME"`,
+		stall: "A mount it reads may be hung: the workspace under /work, $HOME, or a tmpfs."},
 }
 
 // runProbes asks each probe in turn. Once one times out, the guest is taken
 // as not answering, and the rest are skipped: each would only wait out its
-// own deadline.
+// own deadline. A probe that can stall on its own is the exception: its
+// timeout says nothing of the guest, which has answered the probes before
+// it.
 func runProbes(ctx context.Context, rt runtime.Runtime, in Input) []Probe {
 	out := make([]Probe, len(probes))
 	silent := false
@@ -76,7 +90,7 @@ func runProbes(ctx context.Context, rt runtime.Runtime, in Input) []Probe {
 			p.Skipped = true
 		default:
 			p = ask(ctx, rt, in, p)
-			silent = p.TimedOut
+			silent = p.TimedOut && p.stall == ""
 		}
 		out[i] = p
 	}
@@ -126,10 +140,25 @@ func (r *Report) probesBody() string {
 	return b.String()
 }
 
-// silentProbe returns the probe the guest did not answer, if one timed out.
+// silentProbe returns the probe the guest did not answer, if one that cannot
+// stall on its own timed out.
 func (r *Report) silentProbe() (Probe, bool) {
 	for _, p := range r.Probes {
-		if p.TimedOut {
+		if p.TimedOut && p.stall == "" {
+			return p, true
+		}
+	}
+	return Probe{}, false
+}
+
+// stalledProbe returns a probe that timed out on its own while the guest
+// answered the others.
+func (r *Report) stalledProbe() (Probe, bool) {
+	if _, silent := r.silentProbe(); silent {
+		return Probe{}, false
+	}
+	for _, p := range r.Probes {
+		if p.TimedOut && p.stall != "" {
 			return p, true
 		}
 	}
