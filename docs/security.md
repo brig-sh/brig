@@ -516,9 +516,16 @@ of them works at import and can fail in the broker.
 - The broker does not read request bodies, so a method override in a
   form-encoded body is not refused.
 - The broker serves HTTP/1.1 REST APIs. gRPC clients are not supported.
-- A Cloud Storage object whose name holds a `/` is unreachable. The JSON API
-  sends it as `o/dir%2Ffile`, and the broker refuses an encoded slash in any
-  path. The request gets a 400.
+- The broker takes an escaped slash in one place: a Cloud Storage object
+  name in the JSON API, `o/dir%2Ffile`, which that API reads as one name.
+  Another Google API may read `%2F` as a separator after `request.allow`
+  matched it as part of a segment, so the broker refuses it there. A name
+  with a `.`, `..` or empty piece, such as `a/../b`, gets a 400. A name
+  that ends in `/`, such as a folder placeholder, is a name.
+- `request.allow` matches the path only. A rule that limits objects by a
+  name prefix does not limit an upload, which names the object in the query
+  or the body, a compose, which names its sources in the body, or a
+  listing, which returns every name in the bucket.
 
 **Refused outright.** The broker refuses the method-override headers
 `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`, the query

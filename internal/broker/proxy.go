@@ -204,7 +204,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// request.allow matches the path the upstream serves, so a path that
 	// the upstream could resolve to another one is refused first.
 	repos := rt.spec.Request != nil && rt.spec.Request.Allow != nil && len(rt.spec.Request.Allow.Repos) > 0
-	if !vends && !canonical(p.rest, p.escapedRest, repos) {
+	var objects map[int]bool
+	if rt.services != nil {
+		objects = storageObjects(p.escapedRest)
+	}
+	if !vends && !canonical(p.rest, p.escapedRest, repos, objects) {
 		a.check = "path"
 		http.Error(rec, "brig broker: the path has a dot segment, an empty segment or an escaped separator",
 			http.StatusBadRequest)
@@ -221,7 +225,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upstream, out := rt.upstream, p
 	if rt.services != nil {
 		var ok bool
-		if upstream, out, ok = serviceTarget(rec, r, a, rt, p); !ok {
+		if upstream, out, ok = serviceTarget(rec, r, a, rt, p, objects); !ok {
 			return
 		}
 	}
@@ -313,13 +317,14 @@ func queryOverride(rawQuery string) string {
 // serviceTarget applies the checks of a route with services, and returns the
 // origin of the service the path names and the path with the service cut
 // off. It answers the request itself and returns false when a check refuses
-// it. Every check runs before the credential is read.
+// it. Every check runs before the credential is read. objects are the
+// segments of p.escapedRest that name a Cloud Storage object.
 func serviceTarget(w http.ResponseWriter, r *http.Request, a *auditLine, rt *route,
-	p routePath) (*url.URL, routePath, bool) {
+	p routePath, objects map[int]bool) (*url.URL, routePath, bool) {
 	// The service is read from the decoded path and the path is sent as the
 	// guest escaped it, so the two must name the same service. canonical
-	// has refused an escaped slash already; this refuses any other escape in
-	// the service segment.
+	// has refused an escaped slash outside an object name already; this
+	// refuses any other escape in the service segment.
 	name, rest := cutService(p.rest)
 	ename, erest := cutService(p.escapedRest)
 	if name != ename {
@@ -361,7 +366,8 @@ func serviceTarget(w http.ResponseWriter, r *http.Request, a *auditLine, rt *rou
 		return nil, p, false
 	}
 	if svc := serviceSpec(&rt.spec, name); svc != nil && svc.Request != nil {
-		if ref := allow(svc.Request.Allow, r.Method, rest); ref != nil {
+		_, match := cutService(matchPath(p.rest, p.escapedRest, objects))
+		if ref := allow(svc.Request.Allow, r.Method, match); ref != nil {
 			owner := routeRule(p.route) + ".services[" + name + "]"
 			refuseRule(w, a, rt, p, "request.allow."+ref.field, ref.rule(owner), ref.reason)
 			return nil, p, false
@@ -751,12 +757,32 @@ const semicolons = ";\uff1b\ufe54\ufe14\u037e"
 // that decodes twice: %25%32%65 reads as %2e here and as a dot there. On a
 // route with request.allow.repos it refuses any byte outside ASCII as well,
 // since the repository is read from the first two segments.
-func canonical(rest, escapedRest string, repos bool) bool {
-	lower := strings.ToLower(escapedRest)
-	for _, esc := range []string{"%2f", "%5c", "%2e", "%252f", "%255c", "%252e"} {
-		if strings.Contains(lower, esc) {
-			return false
+//
+// An escaped slash is taken in the segments of escapedRest that objects
+// names: a Cloud Storage object name, which the upstream does not split
+// (see storageObjects). The decoded name is still checked as segments, so a
+// name with a dot or empty piece is refused, but for the empty piece a
+// trailing slash leaves: a folder placeholder such as dir/ is a name, and a
+// copy, rewrite or move takes it as a source, before the verb, as well as at
+// the end. The escapes are looked for segment by segment, since no escape
+// spans a slash.
+func canonical(rest, escapedRest string, repos bool, objects map[int]bool) bool {
+	// trailing holds the decoded segments that are the empty last piece of
+	// an object name: each escaped segment decodes to one segment more
+	// than it has %2f.
+	trailing := map[int]bool{}
+	at := 0
+	for i, seg := range strings.Split(strings.TrimPrefix(strings.ToLower(escapedRest), "/"), "/") {
+		for _, esc := range []string{"%2f", "%5c", "%2e", "%252f", "%255c", "%252e"} {
+			if strings.Contains(seg, esc) && (esc != "%2f" || !objects[i]) {
+				return false
+			}
 		}
+		pieces := strings.Count(seg, "%2f") + 1
+		if objects[i] && pieces > 1 && strings.HasSuffix(seg, "%2f") {
+			trailing[at+pieces-1] = true
+		}
+		at += pieces
 	}
 	for i := 0; i < len(rest); i++ {
 		c := rest[i]
@@ -773,7 +799,7 @@ func canonical(rest, escapedRest string, repos bool) bool {
 			seg = seg[:j]
 		}
 		switch {
-		case seg == "" && i != len(segs)-1:
+		case seg == "" && i != len(segs)-1 && !trailing[i]:
 			return false
 		case seg != "" && strings.Trim(seg, dots) == "":
 			return false
