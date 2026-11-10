@@ -241,12 +241,16 @@ func run(args []string) error {
 // argument, a token in a place nothing consumes it. It carries the exit code
 // apart from an ordinary failure, and its message names the token at fault so
 // the reader knows which word to fix.
-type usageError struct{ msg string }
+type usageError struct{ err error }
 
-func (e *usageError) Error() string { return e.msg }
+func (e *usageError) Error() string { return e.err.Error() }
+func (e *usageError) Unwrap() error { return e.err }
 
 // usagef builds a usageError the way fmt.Errorf builds an ordinary one.
-func usagef(format string, a ...any) error { return &usageError{fmt.Sprintf(format, a...)} }
+func usagef(format string, a ...any) error { return &usageError{fmt.Errorf(format, a...)} }
+
+// asUsage marks err as a usageError and keeps it for errors.Is and errors.As.
+func asUsage(err error) error { return &usageError{err} }
 
 // notFoundError is a name that resolves to nothing: a profile brig does not
 // have, or a sandbox that is not there. It carries its own exit code so a
@@ -445,7 +449,7 @@ func dispatch(args []string) error {
 			// ref. The reader typed it where a command goes, and it is a
 			// mistyped verb as readily as a mistyped agent -- so the ref
 			// parser's complaint would answer a question nobody asked.
-			return fmt.Errorf("unknown command %q (try `brig help`)", verb)
+			return usagef("unknown command %q (try `brig help`)", verb)
 		}
 		// A token carrying the separator is a ref that did not work, because
 		// nothing else it could be has an '@' in it. Answering that with the
@@ -459,7 +463,7 @@ func dispatch(args []string) error {
 		// message is refErr's own, untouched, so the two spellings still read
 		// the same word for word -- only the exit code joins them.
 		if refErr != nil {
-			return usagef("%s", refErr)
+			return asUsage(refErr)
 		}
 		// An agent brig does not have falls through to the run line rather
 		// than being reported here, which is where the verbed form reports it
@@ -514,6 +518,11 @@ func dispatch(args []string) error {
 	if opts.all && verb != "network unpublish" {
 		return usagef("--all goes with `brig network unpublish`, not `brig %s`", verb)
 	}
+	if takesPorts(verb) {
+		if err := checkPorts(verb, refDisplay(profileName, opts), tail, opts.all); err != nil {
+			return err
+		}
+	}
 	// --no-project is run's, like the positional it answers, and plan's, which
 	// previews that run. Elsewhere it is a flag that does nothing, which is
 	// worse than one that is refused.
@@ -530,7 +539,7 @@ func dispatch(args []string) error {
 	t, ok := profile.Lookup(profileName)
 	if !ok {
 		if profileName == "" {
-			return fmt.Errorf("%s needs a profile, for example `brig %s claude`. "+
+			return usagef("%s needs a profile, for example `brig %s claude`. "+
 				"`brig agent ls` lists them", verb, verb)
 		}
 		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
@@ -696,7 +705,7 @@ func dispatch(args []string) error {
 		return cfg.Shell(set, tail)
 	case "exec":
 		if len(tail) == 0 {
-			return errors.New("exec needs a command, for example `brig exec claude -- ls`")
+			return usagef("exec needs a command, for example `brig exec claude -- ls`")
 		}
 		if err := cfg.EnsureRunning(set); err != nil {
 			return err
@@ -737,7 +746,7 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 	// A windowed agent owns its own console, so there is nothing to pass
 	// through and nothing to exec into: starting it IS the command.
 	if t.IsGUI() && len(tail) > 0 {
-		return fmt.Errorf("%s is a graphical agent, so it takes no arguments "+
+		return usagef("%s is a graphical agent, so it takes no arguments "+
 			"(use `brig sh %s` or `brig stop %s`)", t.Name, t.Name, t.Name)
 	}
 	if err := cfg.EnsureRunning(set); err != nil {
@@ -1197,7 +1206,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 					// profile to go and look up: reporting it as a missing
 					// profile would name the whole token and say nothing about
 					// the part that is wrong.
-					return nil, session.Ref{}, "", nil, usagef("%s", err)
+					return nil, session.Ref{}, "", nil, asUsage(err)
 				}
 				passed = true
 				continue
@@ -1303,6 +1312,33 @@ func takesPorts(verb string) bool {
 	return false
 }
 
+// checkPorts refuses the ports of a publish or unpublish line that the line
+// alone shows to be wrong. It runs before the runtime is looked for, so the
+// answer does not depend on the host.
+func checkPorts(verb, ref string, ports []string, all bool) error {
+	switch {
+	case verb == "network publish" && len(ports) == 0:
+		return usagef("`brig network publish` needs a port, for example "+
+			"`brig network publish %s 3000`. `brig network ls %s` lists what is open", ref, ref)
+	case verb == "network publish":
+		if _, err := runtime.ParsePublications(ports); err != nil {
+			return asUsage(err)
+		}
+	case all && len(ports) > 0:
+		return usagef("--all withdraws every port, so naming %q as well asks for two "+
+			"different things; drop one", ports[0])
+	case !all && len(ports) == 0:
+		return usagef("`brig network unpublish` needs a port, for example "+
+			"`brig network unpublish %s 8080`, "+
+			"or --all to withdraw every one", ref)
+	case !all:
+		if _, err := runtime.ParseHostSides(ports); err != nil {
+			return asUsage(err)
+		}
+	}
+	return nil
+}
+
 // onPortLine reports whether a verb reads the flags of the publish line. The
 // network verbs do. `brig network ls` takes no ports but shares their flags.
 func onPortLine(verb string) bool {
@@ -1322,8 +1358,7 @@ A port is 3000, 8080:80, 127.0.0.1:8080:80 or 5353:53/udp. See brig help.
 // the help text instead.
 func networkSub(rest []string) (string, error) {
 	if len(rest) == 0 {
-		fmt.Print(networkUsage)
-		return "", nil
+		return "", usagef("network needs a subcommand: ls, publish or unpublish")
 	}
 	switch rest[0] {
 	case "-h", "--help", "help":
@@ -1517,8 +1552,7 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		{"skills", "", func(n string) { fs.BoolVar(&o.load.Skills, n, false, "") }},
 		// Run this session with no project, whatever it ran with last.
 		{"no-project", "", func(n string) { fs.BoolVar(&o.load.NoProject, n, false, "") }},
-		// The posture this run takes: shared or offline. Refused by name later
-		// if it is neither, in the one place every source of it is resolved.
+		// The posture this run takes: shared, isolated or offline.
 		{"network", "", func(n string) { fs.StringVar(&o.load.Network, n, "", "") }},
 		// Sugar for --network offline, which is the word the request is usually
 		// phrased in.
@@ -1560,7 +1594,7 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 			// One message for both, quoting the argument as written: a value
 			// that is not a number and one that is not a useful number are the
 			// same mistake to whoever has to spot their own input in it.
-			return options{}, "", nil, fmt.Errorf("%s needs a positive number, not %q",
+			return options{}, "", nil, usagef("%s needs a positive number, not %q",
 				c.got.as, c.got.raw)
 		}
 		*c.dst = n
@@ -1570,11 +1604,20 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 	// would leave the run with a posture the line does not read like.
 	if o.offline {
 		if o.load.Network != "" && o.load.Network != "offline" {
-			return options{}, "", nil, fmt.Errorf(
+			return options{}, "", nil, usagef(
 				"--offline and --network %s ask for different things; --offline is --network offline",
 				o.load.Network)
 		}
 		o.load.Network = "offline"
+	}
+	// --network and --publish are checked with the other flags, so a bad value
+	// is a usage error. BRIG_NETWORK and the profile's network: are checked by
+	// Load, where a bad value is a general failure.
+	if _, err := wrap.ParseNetworkStrict(o.load.Network, "--network"); err != nil {
+		return options{}, "", nil, asUsage(err)
+	}
+	if _, err := runtime.ParsePublications(o.load.Publish); err != nil {
+		return options{}, "", nil, asUsage(err)
 	}
 	// The label is the session, and it lands in the session name, the one
 	// path everything downstream reads -- the slug, the workspace, the sandbox
@@ -1639,7 +1682,7 @@ func rewriteFlagError(err error) error {
 	msg := err.Error()
 	// "flag needs an argument: -image"
 	if name, ok := strings.CutPrefix(msg, "flag needs an argument: "); ok {
-		return fmt.Errorf("%s needs a value", spell(name))
+		return usagef("%s needs a value", spell(name))
 	}
 	// `invalid boolean value "garbage" for -detach: parse error`. The flags
 	// this can name are the ones written bare, so say that rather than leave
@@ -1653,7 +1696,7 @@ func rewriteFlagError(err error) error {
 			raw, tail = rest[:i], rest[i+len(" for "):]
 		}
 		name, _, _ := strings.Cut(tail, ":")
-		return fmt.Errorf("%s is either given or not, so it takes true or false, not %s",
+		return usagef("%s is either given or not, so it takes true or false, not %s",
 			spell(name), raw)
 	}
 	return err
@@ -2760,7 +2803,7 @@ an image for one is documented at
 // review, and it changes nothing anyone types.
 func agentCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("agent needs a subcommand: ls, show, new, edit, rm, import or export")
+		return usagef("agent needs a subcommand: ls, show, new, edit, rm, import or export")
 	}
 	var err error
 	switch args[0] {
@@ -2795,7 +2838,7 @@ func agentCmd(args []string) error {
 	case "load":
 		return removedf("brig agent load", "brig agent import")
 	default:
-		return fmt.Errorf("unknown agent subcommand %q "+
+		return usagef("unknown agent subcommand %q "+
 			"(ls, show, new, edit, rm, import, export)", args[0])
 	}
 	// A verb's own parser reports --help as an error, because that is how the
@@ -2838,7 +2881,16 @@ func rejectAgentTail(command, takes string, tail []string) error {
 // version and no longer picking up a deny entry added in a later release.
 func editProfile(args []string) error {
 	if len(args) == 0 {
-		return errors.New("edit needs a name, for example `brig agent edit mine`")
+		return usagef("edit needs a name, for example `brig agent edit mine`")
+	}
+	// A profile name starts with a letter or digit, so a leading dash is a
+	// flag, and edit takes none -- except -h and --help, which are a question
+	// agentCmd answers with the usage and a zero exit.
+	if strings.HasPrefix(args[0], "-") {
+		if isHelp(args[0]) {
+			return flag.ErrHelp
+		}
+		return usagef("unknown flag %s (edit takes no flags)", args[0])
 	}
 	if err := rejectAgentTail("brig agent edit", "takes one agent and nothing more", args[1:]); err != nil {
 		return err
@@ -2895,8 +2947,17 @@ func editorCommand() []string {
 // work.
 func importProfile(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("import needs a file, for example `brig agent import mine.yaml` "+
+		return usagef("import needs a file, for example `brig agent import mine.yaml` "+
 			"(or - to read stdin). See %s", profile.BringYourOwnImageDoc)
+	}
+	// A bare - is stdin. Anything else with a leading dash is a flag, and
+	// import takes none; a file of that name is reachable as ./-name. -h and
+	// --help are the exception, as they are for edit.
+	if args[0] != "-" && strings.HasPrefix(args[0], "-") {
+		if isHelp(args[0]) {
+			return flag.ErrHelp
+		}
+		return usagef("unknown flag %s (import takes no flags)", args[0])
 	}
 	// Named before the file is read, so `brig agent import a b` reports b rather
 	// than importing a and dropping it -- one file is imported, never the first
@@ -3004,7 +3065,7 @@ func parseExportLine(verb string, args []string, offers exportFlags) (exportLine
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return line, fmt.Errorf("%s (%s takes %s)", msg, verb, offers.takes)
+			return line, usagef("%s (%s takes %s)", msg, verb, offers.takes)
 		}
 		if fs.NArg() == 0 {
 			return line, nil
@@ -3028,10 +3089,10 @@ func showAgent(args []string) error {
 	}
 	switch len(line.words) {
 	case 0:
-		return errors.New("show needs an agent, for example `brig agent show claude-code`")
+		return usagef("show needs an agent, for example `brig agent show claude-code`")
 	case 1:
 	default:
-		return fmt.Errorf("show prints one agent and writes nothing, so it takes no "+
+		return usagef("show prints one agent and writes nothing, so it takes no "+
 			"destination. To copy one under a name of your own: brig agent new %s --from %s",
 			line.words[1], line.words[0])
 	}
@@ -3058,7 +3119,7 @@ func newAgent(args []string) error {
 	}
 	switch len(line.words) {
 	case 0:
-		return errors.New("new needs a name, for example " +
+		return usagef("new needs a name, for example " +
 			"`brig agent new mine --from claude-code`")
 	case 1:
 	default:
@@ -3066,12 +3127,12 @@ func newAgent(args []string) error {
 		// `new codex mine` are both lines someone types -- the second is the
 		// old `brig export codex mine` order -- and picking one would send half
 		// of them a corrected command with the two words the wrong way round.
-		return fmt.Errorf("new takes one name and takes the agent it copies from --from, "+
+		return usagef("new takes one name and takes the agent it copies from --from, "+
 			"so it cannot have both %q and %q: brig agent new <name> --from <agent>",
 			line.words[0], line.words[1])
 	}
 	if line.from == "" {
-		return fmt.Errorf("new copies an agent, so it needs one: "+
+		return usagef("new copies an agent, so it needs one: "+
 			"brig agent new %s --from claude-code. `brig agent ls` lists them", line.words[0])
 	}
 	return renderProfile(line.from, line.words[0], line.asJSON, line.force)
@@ -3095,11 +3156,11 @@ func exportProfile(args []string) error {
 	case 2:
 		name, dest = line.words[0], line.words[1]
 	default:
-		return fmt.Errorf("export takes an agent and at most one destination, not %q",
+		return usagef("export takes an agent and at most one destination, not %q",
 			line.words[2])
 	}
 	if name == "" {
-		return errors.New("export needs an agent, for example `brig agent export claude-code`")
+		return usagef("export needs an agent, for example `brig agent export claude-code`")
 	}
 	return renderProfile(name, dest, line.asJSON, line.force)
 }
@@ -3708,10 +3769,6 @@ func isTerminal() bool { return wrap.IsTerminal(os.Stdin) }
 // publishPorts is `brig network publish`: open a guest port on the host, and
 // print what the sandbox publishes afterwards.
 func publishPorts(cfg *wrap.Config, ref string, ports []string, wantJSON bool) error {
-	if len(ports) == 0 {
-		return usagef("`brig network publish` needs a port, for example "+
-			"`brig network publish %s 3000`. `brig network ls %s` lists what is open", ref, ref)
-	}
 	add, err := runtime.ParsePublications(ports)
 	if err != nil {
 		return err
@@ -3758,10 +3815,6 @@ func publishPorts(cfg *wrap.Config, ref string, ports []string, wantJSON bool) e
 // can see. `brig network unpublish claude@web 8080` withdraws whatever 8080
 // carries, and the guest port is not asked for.
 func unpublishPorts(cfg *wrap.Config, ref string, ports []string, all, wantJSON bool) error {
-	if all && len(ports) > 0 {
-		return usagef("--all withdraws every port, so naming %q as well asks for two "+
-			"different things; drop one", ports[0])
-	}
 	var drop []runtime.Publication
 	switch {
 	case all:
@@ -3769,10 +3822,6 @@ func unpublishPorts(cfg *wrap.Config, ref string, ports []string, all, wantJSON 
 		if drop, err = runtime.Publications(cfg.VMName); err != nil {
 			return err
 		}
-	case len(ports) == 0:
-		return usagef("`brig network unpublish` needs a port, for example "+
-			"`brig network unpublish %s 8080`, "+
-			"or --all to withdraw every one", ref)
 	default:
 		named, err := runtime.ParseHostSides(ports)
 		if err != nil {

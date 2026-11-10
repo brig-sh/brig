@@ -140,6 +140,10 @@ func TestAgentHelpPrintsUsageAndSucceeds(t *testing.T) {
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
 	for _, args := range [][]string{
 		{"agent", "--help"}, {"agent", "-h"}, {"agent", "help"}, {"agent", "rm", "--help"},
+		// edit and import parse no flags, so they refuse a leading dash by
+		// hand, and that refusal must not catch the one dash that is a question.
+		{"agent", "edit", "--help"}, {"agent", "edit", "-h"},
+		{"agent", "import", "--help"}, {"agent", "import", "-h"},
 	} {
 		out, err := captureStdout(t, func() error { return run(args) })
 		if err != nil {

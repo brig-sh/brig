@@ -65,7 +65,7 @@ func telemetryCmd(out io.Writer, args []string) error {
 		return nil
 	}
 	if len(args) > 1 {
-		return fmt.Errorf("telemetry takes one word: status, on or off")
+		return usagef("telemetry takes one word: status, on or off")
 	}
 	switch verb {
 	case "--help", "-h", "help":
@@ -73,7 +73,7 @@ func telemetryCmd(out io.Writer, args []string) error {
 		return err
 	case "status", "on", "off":
 	default:
-		return fmt.Errorf("unknown telemetry subcommand %q (status, on or off)", verb)
+		return usagef("unknown telemetry subcommand %q (status, on or off)", verb)
 	}
 
 	if verb != "status" {

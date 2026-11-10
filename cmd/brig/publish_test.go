@@ -152,16 +152,20 @@ func TestTheFlatPortVerbsAreGone(t *testing.T) {
 
 func TestNetworkGroupAnswersHelpAndRefusesAStrangeWord(t *testing.T) {
 	jsonRunHost(t, &jsonRuntime{})
-	for _, line := range [][]string{{"network"}, {"network", "--help"}} {
-		out, err := captureStdout(t, func() error { return run(line) })
-		if err != nil {
-			t.Fatalf("brig %s: %v", strings.Join(line, " "), err)
-		}
-		if !strings.Contains(out, "brig network unpublish") {
-			t.Errorf("brig %s printed no usage:\n%s", strings.Join(line, " "), out)
-		}
+	out, err := captureStdout(t, func() error { return run([]string{"network", "--help"}) })
+	if err != nil {
+		t.Fatalf("brig network --help: %v", err)
 	}
-	err := run([]string{"network", "open", "faker", "3000"})
+	if !strings.Contains(out, "brig network unpublish") {
+		t.Errorf("brig network --help printed no usage:\n%s", out)
+	}
+	// The group alone is a missing subcommand, as it is for agent, policy and
+	// secret.
+	err = run([]string{"network"})
+	if exitCode(err) != 2 || !strings.Contains(err.Error(), "needs a subcommand") {
+		t.Errorf("brig network: err = %v, want a usage error asking for a subcommand", err)
+	}
+	err = run([]string{"network", "open", "faker", "3000"})
 	if exitCode(err) != 2 || !strings.Contains(err.Error(), `"open"`) {
 		t.Errorf("an unknown subcommand: err = %v, want a usage error naming it", err)
 	}
@@ -189,6 +193,17 @@ func TestNetworkLsListsAndPublishNeedsAPort(t *testing.T) {
 	err = run([]string{"network", "publish", "faker"})
 	if exitCode(err) != 2 || !strings.Contains(err.Error(), "brig network ls faker") {
 		t.Errorf("publish with no port: err = %v, want a usage error naming network ls", err)
+	}
+}
+
+// A port that does not parse is a mistake on the line, on either verb.
+func TestNetworkPublishAndUnpublishRefuseABadPortAsUsage(t *testing.T) {
+	jsonRunHost(t, &jsonRuntime{})
+	for _, sub := range []string{"publish", "unpublish"} {
+		err := run([]string{"network", sub, "faker", "abc"})
+		if exitCode(err) != 2 || !strings.Contains(err.Error(), `"abc"`) {
+			t.Errorf("brig network %s faker abc: err = %v, want a usage error naming the port", sub, err)
+		}
 	}
 }
 
@@ -293,5 +308,25 @@ func TestAMarkerKeepsThePortsBeforeIt(t *testing.T) {
 	}
 	if got := strings.Join(tail, " "); got != "3000 4000" {
 		t.Fatalf("ports = %q, want both", got)
+	}
+}
+
+// The line is checked before the runtime is looked for, so a host with no
+// runtime gives the same answer as one with a runtime.
+func TestNetworkPortMistakesExitTwoWithNoRuntime(t *testing.T) {
+	jsonRunHost(t, &jsonRuntime{})
+	stubDetectRuntimeFor(t, func(runtime.Preference) (runtime.Runtime, error) {
+		return nil, runtime.ErrNoRuntime
+	})
+	for _, line := range [][]string{
+		{"network", "publish", "faker"},
+		{"network", "publish", "faker", "abc"},
+		{"network", "unpublish", "faker"},
+		{"network", "unpublish", "faker", "abc"},
+		{"network", "unpublish", "faker", "8080", "--all"},
+	} {
+		if err := run(line); exitCode(err) != exitUsage {
+			t.Errorf("brig %s: exit %d, want %d: %v", strings.Join(line, " "), exitCode(err), exitUsage, err)
+		}
 	}
 }

@@ -169,14 +169,14 @@ func importSecrets(out io.Writer, args []string) error {
 	}
 	if o.command {
 		if o.fromCommand == "" {
-			return errors.New("--from-command was given an empty command. Leave it out to read " +
+			return usagef("--from-command was given an empty command. Leave it out to read " +
 				"the sources the profile declares")
 		}
 		// A command supplies ONE secret's value, and nothing in the string says
 		// which. Guessing would store a credential under the wrong name, which
 		// is the one mistake here that is silent afterwards.
 		if len(o.names) != 1 {
-			return fmt.Errorf("--from-command fills one secret, so it needs one name: "+
+			return usagef("--from-command fills one secret, so it needs one name: "+
 				"`brig secret import %s <name> --from-command '...'`", p.Name)
 		}
 	}
@@ -208,7 +208,7 @@ func importSecrets(out io.Writer, args []string) error {
 	// The gcloud flags follow the same rules. The two sets never share a
 	// line: each names one secret, so a line with both names two.
 	if o.awsOnlyFlag() && o.anyGCloudFlag() {
-		return errors.New("the aws and gcloud flags fill different secrets; import each on its own line")
+		return usagef("the aws and gcloud flags fill different secrets; import each on its own line")
 	}
 	if err := checkCloudFlags(p, selected, o); err != nil {
 		return err
@@ -269,20 +269,67 @@ func checkCloudFlags(p profile.Profile, selected []profile.SecretDecl, o importO
 			gcloud++
 		}
 	}
+	var err error
+	mistake := awsFlagsMistake
 	switch {
 	case o.awsOnlyFlag():
-		return checkSourceFlags(p, selected, o.awsFlagName(), "AWS", profile.SourceAWS, aws, hasAWSSource)
+		err = checkSourceFlags(p, selected, o.awsFlagName(), "AWS", profile.SourceAWS, aws, hasAWSSource)
 	case o.anyGCloudFlag():
-		return checkSourceFlags(p, selected, o.gcloudFlagName(), "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+		err = checkSourceFlags(p, selected, o.gcloudFlagName(), "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+		mistake = gcloudFlagsMistake
 	case o.identity == "":
 		return nil
 	case aws > 0 && gcloud > 0:
-		return fmt.Errorf("--identity answers for one secret; name it: "+
+		return usagef("--identity answers for one secret; name it: "+
 			"brig secret import %s <secret> --identity ...", p.Name)
 	case gcloud > 0:
-		return checkSourceFlags(p, selected, "--identity", "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+		err = checkSourceFlags(p, selected, "--identity", "gcloud", profile.SourceGCloud, gcloud, hasGCloudSource)
+		mistake = gcloudFlagsMistake
+	default:
+		err = checkSourceFlags(p, selected, "--identity", "AWS", profile.SourceAWS, aws, hasAWSSource)
 	}
-	return checkSourceFlags(p, selected, "--identity", "AWS", profile.SourceAWS, aws, hasAWSSource)
+	// --from-command fills the secret instead, and reads none of these flags.
+	if err != nil || o.command {
+		return err
+	}
+	return mistake(o)
+}
+
+// awsFlagsMistake is what the aws flags get wrong on their own: a mode left
+// out or given twice, a missing --aws-profile, or a role flag in self mode.
+func awsFlagsMistake(o importOptions) error {
+	switch {
+	case o.roleARN != "" && o.identity != "":
+		return usagef("--role-arn and --identity self are two answers; pass one")
+	case o.roleARN == "" && o.identity == "":
+		// Self mode exports the user's own keys, so it is never what a
+		// forgotten flag falls back to.
+		return usagef("say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self")
+	case o.awsProfile == "":
+		return usagef("--aws-profile is required: name the local AWS profile the sandbox's credentials come from")
+	case o.identity != "" && o.sourceIdentity != "":
+		return usagef("--source-identity goes with --role-arn; self mode keeps no source identity")
+	case o.identity != "" && o.sessionSet:
+		return usagef("--session-duration goes with --role-arn; self mode keys expire when your profile's do")
+	}
+	_, err := sessionSeconds(o)
+	return err
+}
+
+// gcloudFlagsMistake is what the gcloud flags get wrong on their own: a mode
+// left out or given twice, or a missing --gcloud-configuration.
+func gcloudFlagsMistake(o importOptions) error {
+	switch {
+	case o.serviceAccount != "" && o.identity != "":
+		return usagef("--impersonate-service-account and --identity self are two answers; pass one")
+	case o.serviceAccount == "" && o.identity == "":
+		// Self mode hands the sandbox the user's own token, so it is never
+		// what a forgotten flag falls back to.
+		return usagef("say how the sandbox gets GCP: --impersonate-service-account <email> (recommended) or --identity self")
+	case o.gcloudConfiguration == "":
+		return usagef("--gcloud-configuration is required: name the local gcloud configuration the sandbox's tokens come from")
+	}
+	return nil
 }
 
 // checkSourceFlags is the rule for one source's flags: they answer for
@@ -290,12 +337,12 @@ func checkCloudFlags(p profile.Profile, selected []profile.SecretDecl, o importO
 func checkSourceFlags(p profile.Profile, selected []profile.SecretDecl, flagName, kind, source string,
 	n int, has func(profile.SecretDecl) bool) error {
 	if n > 1 {
-		return fmt.Errorf("the %s flags answer for one secret; name it: "+
+		return usagef("the %s flags answer for one secret; name it: "+
 			"brig secret import %s <secret> %s ...", kind, p.Name, flagName)
 	}
 	for _, d := range selected {
 		if !has(d) {
-			return fmt.Errorf("%s is for a secret whose source is %s, and %q has none",
+			return usagef("%s is for a secret whose source is %s, and %q has none",
 				flagName, source, d.Name)
 		}
 	}
@@ -440,19 +487,10 @@ func readFor(reader hostReader, d profile.SecretDecl, o importOptions) (hostsrc.
 // the role; its keys are dropped on the floor and never reach the store, the
 // output or an error.
 func readAWS(o importOptions) (hostsrc.Value, error) {
-	switch {
-	case o.roleARN != "" && o.identity != "":
-		return hostsrc.Value{}, errors.New("--role-arn and --identity self are two answers; pass one")
-	case o.roleARN == "" && o.identity == "":
-		// Self mode exports the user's own keys, so it is never what a
-		// forgotten flag falls back to.
-		return hostsrc.Value{}, errors.New("say how the sandbox gets AWS: --role-arn <arn> (recommended) or --identity self")
-	case o.awsProfile == "":
-		return hostsrc.Value{}, errors.New("--aws-profile is required: name the local AWS profile the sandbox's credentials come from")
-	case o.identity != "" && o.sourceIdentity != "":
-		return hostsrc.Value{}, errors.New("--source-identity goes with --role-arn; self mode keeps no source identity")
-	case o.identity != "" && o.sessionSet:
-		return hostsrc.Value{}, errors.New("--session-duration goes with --role-arn; self mode keys expire when your profile's do")
+	// checkCloudFlags refuses the line when it carries aws flags. With none,
+	// this secret cannot be filled, and that is its own failure, not the line's.
+	if err := awsFlagsMistake(o); err != nil {
+		return hostsrc.Value{}, errors.New(err.Error())
 	}
 	sessionSeconds, err := sessionSeconds(o)
 	if err != nil {
@@ -516,19 +554,15 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 // mints is dropped on the floor and never reaches the store, the output or an
 // error.
 func readGCloud(o importOptions) (hostsrc.Value, error) {
-	switch {
-	case o.serviceAccount != "" && o.identity != "":
-		return hostsrc.Value{}, errors.New("--impersonate-service-account and --identity self are two answers; pass one")
-	case o.serviceAccount == "" && o.identity == "":
-		// Self mode hands the sandbox the user's own token, so it is never
-		// what a forgotten flag falls back to.
-		return hostsrc.Value{}, errors.New("say how the sandbox gets GCP: --impersonate-service-account <email> (recommended) or --identity self")
-	case o.gcloudConfiguration == "":
-		return hostsrc.Value{}, errors.New("--gcloud-configuration is required: name the local gcloud configuration the sandbox's tokens come from")
-	case os.Getenv("CLOUDSDK_CONFIG") != "":
-		// gcpcred.Environ drops it, so the check below would not fail; it
-		// would pass or fail on $HOME/.config/gcloud while the user believes
-		// it read the other directory. Refusing says which one counts.
+	// As in readAWS: with no gcloud flags on the line, this is the secret's
+	// own failure.
+	if err := gcloudFlagsMistake(o); err != nil {
+		return hostsrc.Value{}, errors.New(err.Error())
+	}
+	// gcpcred.Environ drops it, so the check below would not fail; it would
+	// pass or fail on $HOME/.config/gcloud while the user believes it read
+	// the other directory. Refusing says which one counts.
+	if os.Getenv("CLOUDSDK_CONFIG") != "" {
 		return hostsrc.Value{}, errors.New("CLOUDSDK_CONFIG is set; brig-broker reads gcloud logins from $HOME/.config/gcloud, so the import would check a different login than the sandbox gets. Unset it, or log in there with gcloud auth login --configuration <c>")
 	}
 	cli := newGCloudCLI()
@@ -600,10 +634,10 @@ func sessionSeconds(o importOptions) (int, error) {
 	lo := time.Duration(awscred.MinSessionSeconds) * time.Second
 	hi := time.Duration(awscred.MaxSessionSeconds) * time.Second
 	if o.session%time.Second != 0 {
-		return 0, fmt.Errorf("--session-duration %s is not whole seconds", o.session)
+		return 0, usagef("--session-duration %s is not whole seconds", o.session)
 	}
 	if o.session < lo || o.session > hi {
-		return 0, fmt.Errorf("--session-duration must be %s to %s, got %s", lo, hi, o.session)
+		return 0, usagef("--session-duration must be %s to %s, got %s", lo, hi, o.session)
 	}
 	return int(o.session / time.Second), nil
 }
@@ -804,11 +838,11 @@ func importFailure(failures []error, selected int) error {
 func unknownImportTarget(name string) error {
 	for _, p := range profile.All() {
 		if _, ok := p.Secret(name); ok {
-			return fmt.Errorf("%q is a secret, not a profile, and import takes the profile that "+
+			return usagef("%q is a secret, not a profile, and import takes the profile that "+
 				"declares it: brig secret import %s %s", name, p.Name, name)
 		}
 	}
-	return fmt.Errorf("unknown profile %q. `brig agent ls` lists them", name)
+	return notFoundf("unknown profile %q. `brig agent ls` lists them", name)
 }
 
 // describe renders a locator for a person. A command's provenance is the bare
@@ -901,7 +935,7 @@ func parseImport(args []string) (importOptions, error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity and --session-duration, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
+			return o, usagef("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity and --session-duration, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -914,10 +948,10 @@ func parseImport(args []string) (importOptions, error) {
 	// Only "self" is an identity: it is the one non-role answer, and a
 	// misspelling must not fall through to the role path.
 	if o.identity != "" && o.identity != "self" {
-		return o, fmt.Errorf("--identity accepts only self, got %q; for a role use --role-arn, for a service account --impersonate-service-account", o.identity)
+		return o, usagef("--identity accepts only self, got %q; for a role use --role-arn, for a service account --impersonate-service-account", o.identity)
 	}
 	if len(words) == 0 {
-		return o, errors.New("import needs a profile, for example " +
+		return o, usagef("import needs a profile, for example " +
 			"`brig secret import claude-code`")
 	}
 	o.profile, o.names = words[0], words[1:]

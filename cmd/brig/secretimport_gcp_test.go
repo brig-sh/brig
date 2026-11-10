@@ -520,3 +520,44 @@ func TestDefaultGCloudCLIDropsIdentityVariables(t *testing.T) {
 
 // realNewGCloudCLI is the default seam, kept before any test replaces it.
 var realNewGCloudCLI = newGCloudCLI
+
+// The gcloud flags are read off the line, so a missing, contradictory or
+// misplaced one is a usage error, and nothing is stored or run.
+func TestGCloudImportFlagMistakesExitTwo(t *testing.T) {
+	gcloudProfiles(t)
+	store := newAnnotating(t)
+	log := fakeGCloud(t, gcpSA)
+	useHost(t, nil)
+	for _, args := range [][]string{
+		{"gcpbox", "--gcloud-configuration", "default"},
+		{"gcpbox", "--gcloud-configuration", "default", "--impersonate-service-account", gcpSA, "--identity", "self"},
+		{"gcpbox", "--impersonate-service-account", gcpSA},
+		{"envbox", "--gcloud-configuration", "default"},
+		{"cloudbox", "--aws-profile", "dev", "--gcloud-configuration", "default"},
+		{"cloudbox", "--identity", "self"},
+	} {
+		err := importSecrets(&bytes.Buffer{}, args)
+		if got := exitCode(err); got != exitUsage {
+			t.Errorf("%v: exit %d, want %d: %v", args, got, exitUsage, err)
+		}
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+	if got := calls(t, log); got != "" {
+		t.Errorf("gcloud ran for a refused import:\n%s", got)
+	}
+}
+
+// CLOUDSDK_CONFIG is the host's setting, not something on the line, so its
+// refusal is a general failure.
+func TestGCloudImportCloudSDKConfigIsNotAUsageError(t *testing.T) {
+	gcloudProfiles(t)
+	newAnnotating(t)
+	fakeGCloud(t, gcpSA)
+	t.Setenv("CLOUDSDK_CONFIG", t.TempDir())
+	err := importSecrets(&bytes.Buffer{}, []string{"gcpbox", "--gcloud-configuration", "default", "--impersonate-service-account", gcpSA})
+	if got := exitCode(err); got != exitFailure {
+		t.Errorf("exit %d, want %d: %v", got, exitFailure, err)
+	}
+}
