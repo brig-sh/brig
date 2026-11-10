@@ -9,10 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/brig-sh/brig/internal/clirun"
 )
 
 // Token is one Google access token. It is held in memory only.
@@ -39,15 +40,14 @@ type CLI struct {
 	// timeout. Its redirects are refused either way.
 	Client *http.Client
 
-	// run is the seam tests replace; nil means execRun.
-	run func(ctx context.Context, bin string, args, env []string) (stdout, stderr []byte, err error)
+	// run is the seam tests replace; nil means clirun.Exec.
+	run clirun.Runner
 	// now is the clock tests replace; nil means time.Now.
 	now func() time.Time
 }
 
 const (
-	maxOutput        = 64 << 10 // far above any token or tokeninfo response
-	maxStderr        = 400      // what an error repeats of the CLI's stderr
+	maxOutput        = 64 << 10 // far above any tokeninfo response
 	gcloudCommand    = "gcloud"
 	tokenInfoURL     = "https://oauth2.googleapis.com/tokeninfo"
 	tokenInfoTimeout = 10 * time.Second
@@ -172,10 +172,10 @@ func (c CLI) Mint(ctx context.Context, p Pointer) (Token, error) {
 	// The decode error is not wrapped: a malformed document is the one place
 	// a message could quote part of the token.
 	if json.Unmarshal(out, &doc) != nil {
-		return Token{}, fmt.Errorf("%s %s printed output that is not JSON", gcloudCommand, cmdName(args))
+		return Token{}, fmt.Errorf("%s %s printed output that is not JSON", gcloudCommand, clirun.CmdName(args))
 	}
 	if doc.Token == "" {
-		return Token{}, fmt.Errorf("%s %s printed no token", gcloudCommand, cmdName(args))
+		return Token{}, fmt.Errorf("%s %s printed no token", gcloudCommand, clirun.CmdName(args))
 	}
 	// gcloud does not print the expiry (checked with gcloud 591), and the
 	// cache needs it to refresh the token before it lapses. tokeninfo also
@@ -287,26 +287,18 @@ func (c CLI) tokenInfo(ctx context.Context, token string) (time.Duration, string
 // exit status and a clip of stderr, and never stdout, which is where the
 // token is.
 func (c CLI) output(ctx context.Context, p Pointer, args []string) ([]byte, error) {
-	run := c.run
-	if run == nil {
-		run = execRun
-	}
 	bin := c.Bin
 	if bin == "" {
 		bin = gcloudCommand
 	}
-	tctx, cancel := context.WithTimeout(ctx, fetchTimeout)
-	defer cancel()
-	stdout, stderr, err := run(tctx, bin, args, c.Env)
+	// Stderr is ignored on success: gcloud writes notices there, such as that
+	// updates are available.
+	stdout, stderr, err := clirun.Output(ctx, c.run, bin, args, c.Env, fetchTimeout)
 	if err == nil {
-		// Stderr is ignored on success: gcloud writes notices there, such as
-		// that updates are available.
 		return stdout, nil
 	}
-	// Only the bound this function set: a caller that gave up first gets its
-	// own error. Stdout is dropped here as on every failure.
-	if ctx.Err() == nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
-		return nil, fmt.Errorf("%s %s timed out after %v", gcloudCommand, cmdName(args), fetchTimeout)
+	if errors.Is(err, clirun.ErrTimedOut) {
+		return nil, fmt.Errorf("%s %s timed out after %v", gcloudCommand, clirun.CmdName(args), fetchTimeout)
 	}
 	if lapsedLogin(stderr) {
 		return nil, &ErrLoginExpired{Configuration: p.Configuration, Account: p.Account}
@@ -314,59 +306,5 @@ func (c CLI) output(ctx context.Context, p Pointer, args []string) ([]byte, erro
 	if p.Mode == ModeImpersonate && bytes.Contains(stderr, []byte("iam.serviceAccounts.getAccessToken")) {
 		return nil, &ErrCannotImpersonate{ServiceAccount: p.ServiceAccount}
 	}
-	msg := strings.TrimSpace(string(stderr))
-	if len(msg) > maxStderr {
-		msg = msg[:maxStderr] + "..."
-	}
-	return nil, fmt.Errorf("%s %s failed: %v: %s", gcloudCommand, cmdName(args), err, msg)
-}
-
-// cmdName is the gcloud subcommand for an error: "auth print-access-token".
-func cmdName(args []string) string {
-	if len(args) >= 2 {
-		return args[0] + " " + args[1]
-	}
-	return strings.Join(args, " ")
-}
-
-// execRun is the real runner. Both streams are capped so a misbehaving binary
-// cannot fill the broker's memory.
-func execRun(ctx context.Context, bin string, args, env []string) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
-	if env == nil {
-		// A nil Env makes os/exec inherit the parent's.
-		env = []string{}
-	}
-	cmd.Env = env
-	// CommandContext kills gcloud but not what gcloud started. A helper it
-	// runs can keep the output pipes open, and Run waits for them to close,
-	// so the timeout would not release the caller. After the kill, WaitDelay
-	// closes the pipes and Run returns.
-	cmd.WaitDelay = 2 * time.Second
-	out, errb := &capped{limit: maxOutput}, &capped{limit: maxOutput}
-	cmd.Stdout, cmd.Stderr = out, errb
-	err := cmd.Run()
-	if out.over {
-		// The cap first, as the cause: the signal the process died of is
-		// not what the reader needs.
-		return nil, errb.buf.Bytes(), fmt.Errorf("stdout is over %d bytes", maxOutput)
-	}
-	return out.buf.Bytes(), errb.buf.Bytes(), err
-}
-
-// capped is an io.Writer that stops at a limit; the write error tears the
-// command down instead of reading it to the end.
-type capped struct {
-	buf   bytes.Buffer
-	limit int
-	over  bool
-}
-
-func (c *capped) Write(p []byte) (int, error) {
-	if room := c.limit - c.buf.Len(); len(p) > room {
-		c.buf.Write(p[:room])
-		c.over = true
-		return 0, errors.New("output over the limit")
-	}
-	return c.buf.Write(p)
+	return nil, fmt.Errorf("%s %s failed: %v: %s", gcloudCommand, clirun.CmdName(args), err, clirun.Clip(stderr))
 }

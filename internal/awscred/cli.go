@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/brig-sh/brig/internal/clirun"
 )
 
 // Credentials are one set of AWS keys. They are held in memory only.
@@ -28,13 +29,11 @@ type CLI struct {
 	// sandbox gets.
 	Env []string
 
-	// run is the seam tests replace; nil means execRun.
-	run func(ctx context.Context, bin string, args, env []string) (stdout, stderr []byte, err error)
+	// run is the seam tests replace; nil means clirun.Exec.
+	run clirun.Runner
 }
 
 const (
-	maxOutput   = 64 << 10 // far above any STS response
-	maxStderr   = 400      // what an error repeats of the CLI's stderr
 	awsCommand  = "aws"
 	ssoLoginFmt = "aws sso login --profile %s"
 )
@@ -118,23 +117,23 @@ func (c CLI) Fetch(ctx context.Context, p Pointer, sessionName string) (Credenti
 	// The decode error is not wrapped: a malformed document is the one place
 	// a message could quote part of the keys.
 	if json.Unmarshal(out, &doc) != nil {
-		return Credentials{}, fmt.Errorf("%s %s printed output that is not JSON", awsCommand, cmdName(args))
+		return Credentials{}, fmt.Errorf("%s %s printed output that is not JSON", awsCommand, clirun.CmdName(args))
 	}
 	id, secret, token, exp := doc.AccessKeyID, doc.SecretAccessKey, doc.SessionToken, doc.Expiration
 	if p.Mode == ModeRole {
 		if doc.Credentials == nil {
-			return Credentials{}, fmt.Errorf("%s %s printed no Credentials", awsCommand, cmdName(args))
+			return Credentials{}, fmt.Errorf("%s %s printed no Credentials", awsCommand, clirun.CmdName(args))
 		}
 		id, secret, token, exp = doc.Credentials.AccessKeyID, doc.Credentials.SecretAccessKey, doc.Credentials.SessionToken, doc.Credentials.Expiration
 	}
 	if id == "" || secret == "" {
-		return Credentials{}, fmt.Errorf("%s %s printed no access key", awsCommand, cmdName(args))
+		return Credentials{}, fmt.Errorf("%s %s printed no access key", awsCommand, clirun.CmdName(args))
 	}
 	// A key with no expiry cannot be refreshed on a schedule or held to one,
 	// and a long-lived IAM user key is not what a sandbox should be handed.
 	t, err := time.Parse(time.RFC3339, exp)
 	if err != nil {
-		return Credentials{}, fmt.Errorf("%s %s printed no usable Expiration; long-lived keys cannot be brokered", awsCommand, cmdName(args))
+		return Credentials{}, fmt.Errorf("%s %s printed no usable Expiration; long-lived keys cannot be brokered", awsCommand, clirun.CmdName(args))
 	}
 	return Credentials{AccessKeyID: id, SecretAccessKey: secret, SessionToken: token, Expiration: t}, nil
 }
@@ -174,83 +173,21 @@ func (c CLI) CallerARN(ctx context.Context, profile string) (string, error) {
 // exit status and a clip of stderr, and never stdout, which is where the
 // keys are.
 func (c CLI) output(ctx context.Context, profile string, args []string) ([]byte, error) {
-	run := c.run
-	if run == nil {
-		run = execRun
-	}
 	bin := c.Bin
 	if bin == "" {
 		bin = awsCommand
 	}
-	tctx, cancel := context.WithTimeout(ctx, fetchTimeout)
-	defer cancel()
-	stdout, stderr, err := run(tctx, bin, args, c.Env)
+	stdout, stderr, err := clirun.Output(ctx, c.run, bin, args, c.Env, fetchTimeout)
 	if err == nil {
 		return stdout, nil
 	}
-	// Only the bound this function set: a caller that gave up first gets its
-	// own error. Stdout is dropped here as on every failure.
-	if ctx.Err() == nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
-		return nil, fmt.Errorf("%s %s timed out after %v", awsCommand, cmdName(args), fetchTimeout)
+	if errors.Is(err, clirun.ErrTimedOut) {
+		return nil, fmt.Errorf("%s %s timed out after %v", awsCommand, clirun.CmdName(args), fetchTimeout)
 	}
 	for _, m := range ssoMarkers {
 		if bytes.Contains(stderr, []byte(m)) {
 			return nil, &ErrSSOExpired{Profile: profile}
 		}
 	}
-	msg := strings.TrimSpace(string(stderr))
-	if len(msg) > maxStderr {
-		msg = msg[:maxStderr] + "..."
-	}
-	return nil, fmt.Errorf("%s %s failed: %v: %s", awsCommand, cmdName(args), err, msg)
-}
-
-// cmdName is the aws subcommand for an error: "sts assume-role".
-func cmdName(args []string) string {
-	if len(args) >= 2 {
-		return args[0] + " " + args[1]
-	}
-	return strings.Join(args, " ")
-}
-
-// execRun is the real runner. Both streams are capped so a misbehaving binary
-// cannot fill the broker's memory.
-func execRun(ctx context.Context, bin string, args, env []string) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
-	if env == nil {
-		// A nil Env makes os/exec inherit the parent's.
-		env = []string{}
-	}
-	cmd.Env = env
-	// CommandContext kills aws but not what aws started. A credential_process
-	// helper or an SSO browser flow can keep the output pipes open, and Run
-	// waits for them to close, so the timeout would not release the caller.
-	// After the kill, WaitDelay closes the pipes and Run returns.
-	cmd.WaitDelay = 2 * time.Second
-	out, errb := &capped{limit: maxOutput}, &capped{limit: maxOutput}
-	cmd.Stdout, cmd.Stderr = out, errb
-	err := cmd.Run()
-	if out.over {
-		// The cap first, as the cause: the signal the process died of is
-		// not what the reader needs.
-		return nil, errb.buf.Bytes(), fmt.Errorf("stdout is over %d bytes", maxOutput)
-	}
-	return out.buf.Bytes(), errb.buf.Bytes(), err
-}
-
-// capped is an io.Writer that stops at a limit; the write error tears the
-// command down instead of reading it to the end.
-type capped struct {
-	buf   bytes.Buffer
-	limit int
-	over  bool
-}
-
-func (c *capped) Write(p []byte) (int, error) {
-	if room := c.limit - c.buf.Len(); len(p) > room {
-		c.buf.Write(p[:room])
-		c.over = true
-		return 0, errors.New("output over the limit")
-	}
-	return c.buf.Write(p)
+	return nil, fmt.Errorf("%s %s failed: %v: %s", awsCommand, clirun.CmdName(args), err, clirun.Clip(stderr))
 }

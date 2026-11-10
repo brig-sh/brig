@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brig-sh/brig/internal/clirun"
 )
 
 const roleDoc = `{"Credentials":{"AccessKeyId":"ASIAX","SecretAccessKey":"sek","SessionToken":"tok","Expiration":"2026-10-26T15:04:05+00:00"}}`
@@ -104,7 +106,7 @@ func TestFetchEnvIsExactlyCLIEnv(t *testing.T) {
 // os/exec does for a nil slice.
 func TestExecEmptyEnvIsEmpty(t *testing.T) {
 	t.Setenv("AWS_PROFILE", "leak")
-	out, _, err := execRun(context.Background(), "/usr/bin/env", nil, nil)
+	out, _, err := clirun.Exec(context.Background(), "/usr/bin/env", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
