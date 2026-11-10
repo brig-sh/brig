@@ -109,3 +109,20 @@ func TestAVendingRunRefusesAGuestHomeWithAWS(t *testing.T) {
 		t.Errorf("a run with no route that vends was refused for its ~/.aws: %v", err)
 	}
 }
+
+// A .aws that is a regular file holds no identity file, so a vending run on
+// that home is not refused for it.
+func TestAVendingRunAllowsAGuestHomeWhoseAWSIsAFile(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	cfg := routedConfig(t, awsEndpoint, &hullRecorder{})
+	if err := os.MkdirAll(cfg.Workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Workspace, ".aws"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.PrepareWorkspace(); err != nil {
+		t.Errorf("a guest home whose .aws is a file was refused: %v", err)
+	}
+}

@@ -235,3 +235,218 @@ func TestAGCPRunRefusesAGuestHomeWithAGCloudIdentity(t *testing.T) {
 		t.Errorf("a run with no gcp route was refused for its ~/.config/gcloud: %v", err)
 	}
 }
+
+// HOME moves ~/.config/gcloud as CLOUDSDK_CONFIG does, and the checks of the
+// profile and of the workspace look only at the guest home's, so a gcp run
+// whose profile moves HOME is refused. A HOME set to the guest home itself is
+// not, and a run without a gcp route may set any.
+func TestAGCPRunThatMovesHOMEIsRefused(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	for _, b := range []profile.EnvBinding{
+		{Name: "HOME", Value: "/root/alt"},
+		{Name: "HOME", Ref: "env.ALT_HOME"},
+		{Name: "HOME", Refs: []string{"env.ALT_HOME", "secrets.alt-home"}},
+	} {
+		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+		cfg.Env = append(cfg.Env, b)
+		err := cfg.gcpShadowRefusal()
+		if err == nil || !strings.Contains(err.Error(), "HOME moves ~/.config/gcloud") {
+			t.Errorf("%+v: gcpShadowRefusal = %v, want the HOME refusal", b, err)
+		}
+	}
+
+	same := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	same.Env = append(same.Env, profile.EnvBinding{Name: "HOME", Value: same.Profile.GuestHome + "/"})
+	if err := same.gcpShadowRefusal(); err != nil {
+		t.Errorf("a HOME set to the guest home was refused: %v", err)
+	}
+
+	plain := routedConfig(t, claudeEndpoint, &hullRecorder{})
+	plain.Env = append(plain.Env, profile.EnvBinding{Name: "HOME", Value: "/root/alt"})
+	if err := plain.gcpShadowRefusal(); err != nil {
+		t.Errorf("a run with no gcp route was refused for HOME: %v", err)
+	}
+}
+
+// gcloud creates credentials.db and access_tokens.db with their tables and no
+// rows whenever it opens its store, so a kept home where gcloud ran with no
+// login boots again. A store with a row is refused, and so is one that cannot
+// be read as empty: one with a write-ahead log beside it, one that is not
+// SQLite, or one too large to read. A .config that is a regular file holds
+// nothing.
+func TestAGCPRunRefusesOnlyAGCloudStoreWithARow(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	empty, err := os.ReadFile(filepath.Join("testdata", "gcloud-store-empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := os.ReadFile(filepath.Join("testdata", "gcloud-store-row.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := os.ReadFile(filepath.Join("testdata", "gcloud-store-view.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(cfg *Config, rel string, blob []byte) {
+		t.Helper()
+		p := filepath.Join(cfg.Workspace, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, blob, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	kept := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	for _, rel := range gcloudStores {
+		put(kept, rel, empty)
+	}
+	put(kept, gcloudDir+"/empty-but-zero.db", nil)
+	if err := kept.PrepareWorkspace(); err != nil {
+		t.Errorf("a guest home with gcloud's empty stores was refused: %v", err)
+	}
+	zero := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	put(zero, gcloudStores[0], nil)
+	if err := zero.PrepareWorkspace(); err != nil {
+		t.Errorf("a guest home with an empty file as gcloud's store was refused: %v", err)
+	}
+
+	for name, files := range map[string]map[string][]byte{
+		"a row":                    {gcloudStores[0]: row},
+		"a row in the other store": {gcloudStores[0]: empty, gcloudStores[1]: row},
+		"a log":                    {gcloudStores[1]: empty, gcloudStores[1] + "-wal": []byte("x")},
+		"a journal":                {gcloudStores[1]: empty, gcloudStores[1] + "-journal": []byte("x")},
+		"a view":                   {gcloudStores[0]: view},
+		"not sqlite":               {gcloudStores[0]: []byte("x")},
+		"too large":                {gcloudStores[0]: append(append([]byte{}, empty...), make([]byte, maxStoreSize)...)},
+	} {
+		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+		for rel, blob := range files {
+			put(cfg, rel, blob)
+		}
+		err := cfg.PrepareWorkspace()
+		if err == nil || !strings.Contains(err.Error(), ".config/gcloud") || !strings.Contains(err.Error(), "gcp route") {
+			t.Errorf("%s: PrepareWorkspace = %v, want the .config/gcloud refusal", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(cfg.Workspace, markerFile)); !os.IsNotExist(err) {
+			t.Errorf("%s: the refused run wrote its marker: %v", name, err)
+		}
+	}
+
+	file := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	put(file, ".config", []byte("x"))
+	if err := file.PrepareWorkspace(); err != nil {
+		t.Errorf("a guest home whose .config is a file was refused: %v", err)
+	}
+}
+
+// Each check of emptySQLite, against the empty store gcloud writes. A view or
+// a trigger in the schema is refused although every page is empty, since
+// either can answer gcloud's query with a row that no page holds.
+func TestEmptySQLiteReadsPageHeaders(t *testing.T) {
+	read := func(name string) []byte {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	empty := read("gcloud-store-empty.db")
+	if !emptySQLite(empty) {
+		t.Fatal("gcloud's empty store was not read as empty")
+	}
+	for _, name := range []string{"gcloud-store-row.db", "gcloud-store-view.db", "gcloud-store-trigger.db",
+		"gcloud-store-forged.db"} {
+		if emptySQLite(read(name)) {
+			t.Errorf("%s: read as empty", name)
+		}
+	}
+	edit := func(f func(b []byte) []byte) []byte { return f(append([]byte{}, empty...)) }
+	for name, blob := range map[string][]byte{
+		"a cell on the table page":   edit(func(b []byte) []byte { b[4096+4] = 1; return b }),
+		"an interior page":           edit(func(b []byte) []byte { b[4096] = 0x05; return b }),
+		"a free page":                edit(func(b []byte) []byte { b[39] = 1; return b }),
+		"a short last page":          empty[:len(empty)-1],
+		"a bad page size":            edit(func(b []byte) []byte { b[16], b[17] = 0x03, 0x00; return b }),
+		"another header":             edit(func(b []byte) []byte { b[0] = 's'; return b }),
+		"too short":                  empty[:50],
+		"UTF-16 text":                edit(func(b []byte) []byte { b[59] = 2; return b }),
+		"a schema root past the end": edit(func(b []byte) []byte { return b[:len(b)-4096] }),
+	} {
+		if emptySQLite(blob) {
+			t.Errorf("%s: read as empty", name)
+		}
+	}
+}
+
+// A record is guest-written data: a serial type or length near 2^64 is
+// refused, not turned into a slice bound that panics the host.
+func TestSQLiteRecordRefusesHugeLengths(t *testing.T) {
+	huge := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	for name, rec := range map[string][]byte{
+		"a text near 2^63":      append(append([]byte{10}, huge...), 'x'),
+		"a header past the end": {0x7f, 0x01},
+		"a cut varint":          {0x05, 0x81, 0x81},
+	} {
+		if _, ok := sqliteRecord(rec); ok {
+			t.Errorf("%s: decoded", name)
+		}
+	}
+}
+
+// A store that is a link is refused although its target is an empty store
+// inside the home: the target can change after the check reads it.
+func TestAGCPRunRefusesALinkedGCloudStore(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	empty, err := os.ReadFile(filepath.Join("testdata", "gcloud-store-empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	dir := filepath.Join(cfg.Workspace, filepath.FromSlash(gcloudDir))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Workspace, "empty.db"), empty, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../empty.db", filepath.Join(dir, "credentials.db")); err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.PrepareWorkspace()
+	if err == nil || !strings.Contains(err.Error(), "credentials.db") {
+		t.Fatalf("PrepareWorkspace = %v, want the credentials.db refusal", err)
+	}
+}
+
+// The statement SQLite builds an entry from must create what the entry's
+// type claims, and only SQLite's own key index may have none.
+func TestSchemaSQLMatchesTheType(t *testing.T) {
+	text := func(s string) sqliteValue { return sqliteValue{text: []byte(s)} }
+	for _, c := range []struct {
+		kind, name string
+		sql        sqliteValue
+		want       bool
+	}{
+		{"table", "credentials", text(`CREATE TABLE "credentials" (account_id TEXT PRIMARY KEY, value BLOB)`), true},
+		{"index", "i", text("create unique index i on t(a)"), true},
+		{"index", "sqlite_autoindex_credentials_1", sqliteValue{}, true},
+		{"table", "credentials", text("CREATE VIEW credentials AS SELECT 1, 2"), false},
+		{"table", "credentials", text("CREATE VIRTUAL TABLE credentials USING x"), false},
+		{"table", "credentials", text("CREATE /* x */ TABLE credentials (a)"), false},
+		{"index", "i", text("CREATE TRIGGER i AFTER INSERT ON t BEGIN SELECT 1; END"), false},
+		{"index", "i", sqliteValue{}, false},
+		{"table", "credentials", sqliteValue{}, false},
+		{"table", "credentials", sqliteValue{isInt: true}, false},
+	} {
+		if got := schemaSQL(c.kind, c.name, c.sql); got != c.want {
+			t.Errorf("schemaSQL(%s, %s, %q) = %v, want %v", c.kind, c.name, c.sql.text, got, c.want)
+		}
+	}
+}

@@ -1,9 +1,7 @@
 package wrap
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +74,8 @@ var awsIdentityFiles = []string{awsDir + "/credentials", awsDir + "/config"}
 // awsWorkspaceRefusal refuses a run with a route that vends whose guest home
 // already holds an AWS identity file, such as a home named with --home ~. It
 // looks through the workspace root: a link at .aws or at the file is not
-// followed, and is refused like the file.
+// followed, and is refused like the file. A .aws that is not a directory
+// holds nothing.
 func (c *Config) awsWorkspaceRefusal(r *workspaceRoot) error {
 	if !c.vends() {
 		return nil
@@ -87,7 +86,7 @@ func (c *Config) awsWorkspaceRefusal(r *workspaceRoot) error {
 	for _, rel := range awsIdentityFiles {
 		_, err := r.lstat(rel)
 		switch {
-		case errors.Is(err, fs.ErrNotExist):
+		case absent(err):
 			continue
 		case err != nil:
 			return err

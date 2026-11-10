@@ -499,14 +499,19 @@ allows. A run with a gcp route is refused when the profile or
 `CLOUDSDK_CONFIG`, `CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, a
 `CLOUDSDK_AUTH_*` variable or a `GCE_METADATA_*` variable. That includes
 `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`: the guest sets it to the route's token
-itself, and from the profile it could name another token. It is also refused when a gcloud identity would
-be in the guest: a guest home that already holds `credentials.db`,
-`access_tokens.db`, `application_default_credentials.json` or
-`legacy_credentials` under `.config/gcloud` (for example `--home ~`), or a
-`.config/gcloud` that is a link, or a profile volume, `files:` binding or
-host config seed at `.config/gcloud` or `.config`, or a seed copied from
-your own `~/.config/gcloud` or a directory that holds it. The rest of
-`.config/gcloud`, which gcloud in the guest writes itself, is allowed.
+itself, and from the profile it could name another token. A profile that
+sets `HOME` to anything but the guest home is refused too, since `HOME`
+moves `.config/gcloud` as `CLOUDSDK_CONFIG` does. It is also refused when a
+gcloud identity would be in the guest: a guest home that already holds a
+`credentials.db` or `access_tokens.db` with a row in it,
+`application_default_credentials.json` or `legacy_credentials` under
+`.config/gcloud` (for example `--home ~`), or a `.config/gcloud` that is a
+link, or a profile volume, `files:` binding or host config seed at
+`.config/gcloud` or `.config`, or a seed copied from your own
+`~/.config/gcloud` or a directory that holds it. gcloud creates both stores
+with no rows whenever it opens them, and an empty store is allowed; a store
+Brig cannot read as empty is refused. The rest of `.config/gcloud`, which
+gcloud in the guest writes itself, is allowed.
 
 These checks cover what the host hands the guest. A guest that gets another
 identity in some other way, such as `gcloud auth login` in the guest, still
