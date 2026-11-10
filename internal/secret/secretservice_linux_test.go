@@ -93,8 +93,7 @@ func TestNameValidationAgainstMaxName(t *testing.T) {
 
 // open()'s two failure branches, forced through the injectable seams, because
 // the executor has no session bus to reach either of them naturally. Both wrap
-// ErrUnsupported and both name the two ways out, so a caller can tell the
-// platform-unsupported case apart and a reader is told how to fix it.
+// ErrUnsupported and explain how to get a working keyring.
 
 func TestOpenReportsNoBus(t *testing.T) {
 	restore := swapSeams(func() (*dbus.Conn, error) { return nil, errors.New("dial refused") }, nil)
@@ -104,12 +103,12 @@ func TestOpenReportsNoBus(t *testing.T) {
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("open() = %v, want it to wrap ErrUnsupported", err)
 	}
-	for _, want := range []string{"session bus", "gnome-keyring", "--from-command"} {
+	for _, want := range []string{"session bus", "gnome-keyring", "dial refused"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("open() = %v, want it to mention %q", err, want)
 		}
 	}
-	assertFromCommandIsHonest(t, err)
+	assertNoImportHint(t, err)
 }
 
 func TestOpenReportsNoService(t *testing.T) {
@@ -123,25 +122,18 @@ func TestOpenReportsNoService(t *testing.T) {
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("open() = %v, want it to wrap ErrUnsupported", err)
 	}
-	for _, want := range []string{"Secret Service", "gnome-keyring", "--from-command"} {
+	for _, want := range []string{"Secret Service", "gnome-keyring"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("open() = %v, want it to mention %q", err, want)
 		}
 	}
-	assertFromCommandIsHonest(t, err)
+	assertNoImportHint(t, err)
 }
 
-// The way out each refusal offers has to describe what --from-command does:
-// the import runs the command once and stores its output like any other
-// import (cmd/brig/secretimport.go, readFor). An earlier wording promised it
-// "holds no plaintext at rest", which it does not.
-func assertFromCommandIsHonest(t *testing.T, err error) {
+func assertNoImportHint(t *testing.T, err error) {
 	t.Helper()
-	if strings.Contains(err.Error(), "plaintext at rest") {
-		t.Errorf("%v: claims --from-command keeps no plaintext at rest; the import stores the command's output", err)
-	}
-	if !strings.Contains(err.Error(), "stores it like any other import") {
-		t.Errorf("%v: does not say --from-command stores the value", err)
+	if strings.Contains(err.Error(), "--from-command") {
+		t.Errorf("%v: suggests --from-command, which also needs a keyring", err)
 	}
 }
 
@@ -149,7 +141,7 @@ func assertFromCommandIsHonest(t *testing.T, err error) {
 // returns noObject ("/"), which the service means as "there is no default", not
 // "the default is at the well-known path". resolveCollection turns that into a
 // refusal in the shape of the other two -- wrapping ErrUnsupported, naming the
-// missing default collection and both ways out -- rather than letting a write
+// missing default collection and how to create it -- rather than letting a write
 // fall through to a CreateItem that fails halfway with a raw D-Bus string.
 func TestResolveCollectionReportsNoDefaultCollection(t *testing.T) {
 	orig := readDefaultAlias
@@ -161,12 +153,12 @@ func TestResolveCollectionReportsNoDefaultCollection(t *testing.T) {
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("resolveCollection() = %v, want it to wrap ErrUnsupported", err)
 	}
-	for _, want := range []string{"default collection", "desktop session", "--from-command"} {
+	for _, want := range []string{"default collection", "desktop session"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("resolveCollection() = %v, want it to mention %q", err, want)
 		}
 	}
-	assertFromCommandIsHonest(t, err)
+	assertNoImportHint(t, err)
 }
 
 // swapSeams replaces dialBus and hasSecretService for a test and returns a
