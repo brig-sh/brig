@@ -1,15 +1,19 @@
 package wrap
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/profile"
 )
 
 // gcloudDir is the directory gcloud reads its logins from in the guest's
@@ -74,15 +78,18 @@ func (c *Config) gcpList() string {
 }
 
 // gcpShadowRefusal refuses a run with a gcp route when the guest would also
-// get a variable from gcpShadowVars, from the profile or BRIG_FORWARD_ENV.
+// get a variable from gcpShadowVars, from the profile or BRIG_FORWARD_ENV. It
+// refuses HOME too, unless the profile sets it to the guest home itself: HOME
+// moves ~/.config/gcloud as CLOUDSDK_CONFIG does, and the checks of the
+// profile and of the workspace look only at the guest home's.
 func (c *Config) gcpShadowRefusal() error {
 	if !c.gcpRoute() {
 		return nil
 	}
 	var shadow []string
-	for _, name := range bindingNames(c.Env) {
-		if gcpShadow(name) && !slices.Contains(shadow, name) {
-			shadow = append(shadow, name)
+	for _, b := range c.Env {
+		if (gcpShadow(b.Name) || c.movesHome(b)) && !slices.Contains(shadow, b.Name) {
+			shadow = append(shadow, b.Name)
 		}
 	}
 	if len(shadow) == 0 {
@@ -94,7 +101,19 @@ func (c *Config) gcpShadowRefusal() error {
 	if slices.Contains(shadow, gcpTokenFileVar) {
 		msg += ". The guest sets " + gcpTokenFileVar + " itself, to the file it writes $BRIG_GCP_TOKEN to"
 	}
+	if slices.Contains(shadow, "HOME") {
+		msg += ". HOME moves ~/" + gcloudDir + " away from the guest home " + c.Profile.GuestHome + ", which brig checks"
+	}
 	return errors.New(msg)
+}
+
+// movesHome reports whether b sets HOME to anything but the guest home. A
+// value from a ref is not known before the run, so it counts as moving it.
+func (c *Config) movesHome(b profile.EnvBinding) bool {
+	if b.Name != "HOME" {
+		return false
+	}
+	return b.Value == "" || len(b.RefList()) > 0 || slashClean(b.Value) != slashClean(c.Profile.GuestHome)
 }
 
 // onGCloudDir reports whether rel, relative to the guest home, is
@@ -168,18 +187,29 @@ var gcloudIdentityFiles = []string{
 	gcloudDir + "/legacy_credentials",
 }
 
+// gcloudStores are the gcloud identity files that are SQLite databases.
+// gcloud creates both, with their tables and no rows, whenever it opens its
+// store, as `gcloud auth list` does with no account. Such a store holds no
+// identity, so a kept home in which gcloud ran once is not refused for it.
+var gcloudStores = []string{gcloudDir + "/credentials.db", gcloudDir + "/access_tokens.db"}
+
+// maxStoreSize bounds the store read to decide whether it is empty. An empty
+// store is three pages; anything larger than this is refused unread.
+const maxStoreSize = 64 << 10
+
 // gcpWorkspaceRefusal refuses a run with a gcp route whose guest home already
 // holds a gcloud identity file, such as a home named with --home ~. It looks
 // through the workspace root: a link at .config/gcloud or at the file is not
 // followed, and is refused like the file. A .config that leads out of the
-// home is refused by the root.
+// home is refused by the root. A .config or .config/gcloud that is not a
+// directory holds nothing.
 func (c *Config) gcpWorkspaceRefusal(r *workspaceRoot) error {
 	if !c.gcpRoute() {
 		return nil
 	}
 	info, err := r.lstat(gcloudDir)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case absent(err):
 		return nil
 	case err != nil:
 		return err
@@ -187,16 +217,236 @@ func (c *Config) gcpWorkspaceRefusal(r *workspaceRoot) error {
 		return c.gcloudFileRefusal(r, gcloudDir)
 	}
 	for _, rel := range gcloudIdentityFiles {
-		_, err := r.lstat(rel)
+		info, err := r.lstat(rel)
 		switch {
-		case errors.Is(err, fs.ErrNotExist):
+		case absent(err):
 			continue
 		case err != nil:
 			return err
 		}
+		// Only a regular file is read. A link, even one that stays in the
+		// home, is refused as before: its target can change after the read.
+		if slices.Contains(gcloudStores, rel) && info.Mode().IsRegular() {
+			empty, err := emptyStore(r, rel)
+			if err != nil {
+				return err
+			}
+			if empty {
+				continue
+			}
+		}
 		return c.gcloudFileRefusal(r, rel)
 	}
 	return nil
+}
+
+// absent reports whether err from a lookup in the workspace means nothing is
+// there: the entry does not exist, or a directory on its path is a file.
+func absent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// emptyStore reports whether the SQLite database at rel holds no row. It reads
+// the file rather than linking SQLite; see emptySQLite. A rollback journal or
+// write-ahead log beside the store can put rows back when gcloud opens it, so
+// either one counts as a row. Anything it cannot read as empty, a file that is
+// not a store or one over maxStoreSize, counts as a row too, so the check
+// fails closed. The size is checked on the open file and the read is bounded,
+// since the guest can grow the file after a stat.
+func emptyStore(r *workspaceRoot, rel string) (bool, error) {
+	for _, side := range []string{"-journal", "-wal"} {
+		if _, err := r.lstat(rel + side); !absent(err) {
+			return false, nil
+		}
+	}
+	f, err := r.openRegular(rel, os.O_RDONLY)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	blob, err := io.ReadAll(io.LimitReader(f, maxStoreSize+1))
+	if err != nil {
+		return false, r.refuse("read", rel, err)
+	}
+	if len(blob) > maxStoreSize {
+		return false, nil
+	}
+	return len(blob) == 0 || emptySQLite(blob), nil
+}
+
+// emptySQLite reports whether blob is a SQLite database that holds no row:
+// its schema, on page 1, names only tables and indexes, each rooted at a page
+// of the file, and every page after the first is an empty table or index
+// leaf. A view or a trigger is refused, since either can answer a query with
+// a row that no page holds. See https://www.sqlite.org/fileformat.html.
+func emptySQLite(blob []byte) bool {
+	const header = 100
+	if len(blob) < header || string(blob[:16]) != "SQLite format 3\x00" {
+		return false
+	}
+	size := int(binary.BigEndian.Uint16(blob[16:18]))
+	if size == 1 {
+		size = 1 << 16
+	}
+	if size < 512 || size&(size-1) != 0 || len(blob)%size != 0 {
+		return false
+	}
+	pages := len(blob) / size
+	// The count of free pages: a freed page may still hold a deleted row.
+	if binary.BigEndian.Uint32(blob[36:40]) != 0 {
+		return false
+	}
+	// UTF-8 text, the only encoding the schema check below reads.
+	if binary.BigEndian.Uint32(blob[56:60]) != 1 {
+		return false
+	}
+	const tableLeaf, indexLeaf = 0x0d, 0x0a
+	for off := size; off < len(blob); off += size {
+		kind, cells := blob[off], binary.BigEndian.Uint16(blob[off+3:off+5])
+		if (kind != tableLeaf && kind != indexLeaf) || cells != 0 {
+			return false
+		}
+	}
+	return schemaOnlyTables(blob[:size], size-int(blob[20]), pages)
+}
+
+// schemaOnlyTables reports whether page 1, a table leaf of the schema, holds
+// only tables and indexes rooted at pages 2 to pages. A schema that spills
+// past page 1, or that this cannot parse, is refused.
+func schemaOnlyTables(page []byte, usable, pages int) bool {
+	const at = 100
+	if page[at] != 0x0d {
+		return false
+	}
+	cells := int(binary.BigEndian.Uint16(page[at+3 : at+5]))
+	for i := range cells {
+		p := at + 8 + 2*i
+		if p+2 > len(page) {
+			return false
+		}
+		cell := int(binary.BigEndian.Uint16(page[p : p+2]))
+		if cell >= len(page) {
+			return false
+		}
+		payload, n := sqliteVarint(page[cell:])
+		if n == 0 || payload > uint64(usable-35) {
+			return false // on an overflow page, which this does not follow
+		}
+		_, m := sqliteVarint(page[cell+n:])
+		start := cell + n + m
+		if m == 0 || start+int(payload) > len(page) {
+			return false
+		}
+		cols, ok := sqliteRecord(page[start : start+int(payload)])
+		if !ok || len(cols) < 5 {
+			return false
+		}
+		// type, name, tbl_name, rootpage, sql
+		kind, root := string(cols[0].text), cols[3].int
+		if (kind != "table" && kind != "index") || !cols[3].isInt || root < 2 || root > int64(pages) {
+			return false
+		}
+		if !schemaSQL(kind, string(cols[1].text), cols[4]) {
+			return false
+		}
+	}
+	return true
+}
+
+// schemaSQL reports whether sql, the statement SQLite builds a schema entry
+// from, creates the kind the entry claims. SQLite reads the statement, not
+// the type column, so an entry typed table whose statement creates a view is
+// a view. Only SQLite's own index for a key has no statement. Anything else,
+// a comment or VIRTUAL included, is refused.
+func schemaSQL(kind, name string, sql sqliteValue) bool {
+	if sql.text == nil {
+		return kind == "index" && !sql.isInt && strings.HasPrefix(name, "sqlite_autoindex_")
+	}
+	words := strings.Fields(strings.ToUpper(string(sql.text)))
+	if len(words) < 3 || words[0] != "CREATE" {
+		return false
+	}
+	switch kind {
+	case "table":
+		return words[1] == "TABLE"
+	default:
+		return words[1] == "INDEX" || (words[1] == "UNIQUE" && words[2] == "INDEX")
+	}
+}
+
+// sqliteVarint decodes a SQLite varint and returns it with its length, or a
+// length of 0 when b ends inside it.
+func sqliteVarint(b []byte) (uint64, int) {
+	var v uint64
+	for i := 0; i < 9 && i < len(b); i++ {
+		if i == 8 {
+			return v<<8 | uint64(b[i]), 9
+		}
+		v = v<<7 | uint64(b[i]&0x7f)
+		if b[i] < 0x80 {
+			return v, i + 1
+		}
+	}
+	return 0, 0
+}
+
+// sqliteValue is one column of a record: an integer or the bytes of a text
+// or blob.
+type sqliteValue struct {
+	isInt bool
+	int   int64
+	text  []byte
+}
+
+// sqliteRecord decodes a record, the payload of a table row.
+func sqliteRecord(b []byte) ([]sqliteValue, bool) {
+	hlen, n := sqliteVarint(b)
+	if n == 0 || hlen > uint64(len(b)) {
+		return nil, false
+	}
+	var cols []sqliteValue
+	body := int(hlen)
+	for h := n; h < int(hlen); {
+		t, m := sqliteVarint(b[h:int(hlen)])
+		if m == 0 {
+			return nil, false
+		}
+		h += m
+		var n64 uint64
+		v := sqliteValue{}
+		switch {
+		case t == 0:
+		case t >= 1 && t <= 6:
+			n64 = []uint64{1, 2, 3, 4, 6, 8}[t-1]
+			v.isInt = true
+		case t == 7:
+			n64 = 8
+		case t == 8 || t == 9:
+			v.isInt, v.int = true, int64(t-8)
+		case t >= 12:
+			n64 = (t - 12) / 2
+		default:
+			return nil, false
+		}
+		// Compared before it becomes an int: a serial type near 2^64 would
+		// otherwise overflow body+size and pass the bound.
+		if n64 > uint64(len(b)-body) {
+			return nil, false
+		}
+		size := int(n64)
+		if v.isInt && size > 0 {
+			x := int64(int8(b[body])) // big-endian, two's complement
+			for _, c := range b[body+1 : body+size] {
+				x = x<<8 | int64(c)
+			}
+			v.int = x
+		} else if t >= 12 {
+			v.text = b[body : body+size]
+		}
+		body += size
+		cols = append(cols, v)
+	}
+	return cols, true
 }
 
 func (c *Config) gcloudFileRefusal(r *workspaceRoot, rel string) error {
