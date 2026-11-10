@@ -783,7 +783,7 @@ says which one is missing. It does not fall back to a file:
 
 ```console
 $ brig secret create gh-token
-brig: no secret store on this platform: a D-Bus session bus is running but no Secret Service answers on it. Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session that starts it, or read the secret once from a command's output with `brig secret import <profile> --from-command '<sh>'`, which stores it like any other import
+brig: no secret store on this platform: a D-Bus session bus is running but no Secret Service answers on it. Install a keyring (gnome-keyring or KWallet, both speak the Secret Service API) and log in to a session that starts it
 ```
 
 Brig checks for the store before it reads stdin, so you learn of a missing
