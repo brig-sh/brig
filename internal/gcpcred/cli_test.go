@@ -296,7 +296,8 @@ func TestMintNamesTheConfiguration(t *testing.T) {
 	if err == nil {
 		t.Fatal("a failed run succeeded")
 	}
-	if strings.Contains(err.Error(), strings.Repeat("x", maxStderr+1)) {
+	// clirun.Clip repeats at most 400 bytes of stderr.
+	if strings.Contains(err.Error(), strings.Repeat("x", 401)) {
 		t.Errorf("stderr not capped: %d bytes of error", len(err.Error()))
 	}
 }
