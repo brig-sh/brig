@@ -591,7 +591,8 @@ spec:
           request:
             allow:
               methods: [GET]
-              paths: [/storage/v1/b, /storage/v1/b/*, /storage/v1/b/*/o, /storage/v1/b/*/o/*]
+              paths: [/storage/v1/b, /storage/v1/b/*, /storage/v1/b/*/o, /storage/v1/b/*/o/*,
+                      /storage/v1/b/*/storageLayout]
         - name: cloudresourcemanager
           request:
             allow:
@@ -663,10 +664,40 @@ store a new one:
 gcloud auth print-access-token | brig secret create gcp-creds
 ```
 
-A Cloud Storage object whose name holds a `/` cannot be read or written
-through the route, because the broker refuses an encoded slash in any path.
-Listing with a prefix works. The preset serves HTTP/1.1 REST APIs only, so a
-gRPC client, such as Pub/Sub or Firestore, does not work through it.
+The JSON API of `storage` sends an object name as one segment, with its
+slashes escaped: `dir/file` is `o/dir%2Ffile`. `request.allow` matches the
+name that way, so `*` matches the whole name, slashes included, and a
+prefix ends in `%2F`. Write it in upper case: the broker matches `%2f` from
+the guest as `%2F`, so a rule with `%2f` matches nothing.
+
+An existing rule that ends in `o/*` now also covers nested names, such as
+`secrets%2Fkey`, which the broker refused before. To keep such a rule to a
+prefix, end it in `o/<prefix>%2F*`.
+
+```yaml
+paths:
+  - /storage/v1/b/my-bucket/o/*                     # every object
+  - /download/storage/v1/b/my-bucket/o/reports%2F*  # downloads under reports/
+```
+
+A prefix limits only the requests whose path names the object. An upload
+names it in the query or the body (`/upload/storage/v1/b/<bucket>/o?name=`),
+a compose (`o/<object>/compose`) names its sources in the body, and a
+listing (`/storage/v1/b/<bucket>/o`) returns every name in the bucket. A
+rule that allows any of them covers every object in the bucket.
+
+`gcloud storage` reads a bucket's `/storage/v1/b/<bucket>/storageLayout`
+before it reads an object, and fails with a 404 when the list does not
+allow it. `gcloud storage cp` and `cat` do not download through the route
+yet: gcloud downloads from the object's `mediaLink`, on a path without the
+route prefix. A client that builds the download URL from the endpoint, as
+`/download/storage/v1/b/<bucket>/o/<object>?alt=media`, works.
+
+The broker takes an escaped slash only in an object name of the JSON API,
+and refuses a name with a `.`, `..` or empty piece, such as `a/../b` or
+`a//b`. A name that ends in `/`, such as a folder placeholder `dir%2F`, is
+a name. The preset serves HTTP/1.1 REST APIs only, so a gRPC client, such
+as Pub/Sub or Firestore, does not work through it.
 [The gcp route](security.md#the-gcp-route) lists what Brig does not yet do
 for this route.
 

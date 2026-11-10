@@ -173,7 +173,10 @@ The broker refuses a `<rest>` with:
   `../admin` to an upstream that normalizes Unicode
 - an empty segment, except a trailing one
 - a backslash or a control character
-- an escaped `/`, `\` or `.`, also escaped twice, such as `%252e`
+- an escaped `/`, `\` or `.`, also escaped twice, such as `%252e`. On a
+  `gcp` route, an escaped `/` is taken in a Cloud Storage object name of
+  the JSON API, such as `o/dir%2Ffile`. See
+  [The gcp preset](policies.md#the-gcp-preset)
 - an escaped `%`, such as `%25%32%65`: it reads as `%2e` here, and as a dot
   to an upstream that decodes the path twice
 - on a route with `request.allow.repos`, any character outside ASCII

@@ -508,3 +508,118 @@ func TestServicesRouteGuestNeverSeesTheGoogleToken(t *testing.T) {
 		t.Error("the audit line holds the Google token")
 	}
 }
+
+// storageObjectRoute is a gcp route whose storage service reads the objects
+// of bucket bkt, nested ones included, and copies one to another in it.
+func storageObjectRoute(t *testing.T) Route {
+	return gcpRoute(t,
+		gcpService("storage", []string{"GET", "POST"}, []string{
+			"/storage/v1/b/bkt/o/*",
+			"/download/storage/v1/b/bkt/o/*",
+			"/storage/v1/b/bkt/o/*/rewriteTo/b/bkt/o/*",
+			"/storage/v1/b/bkt/o/*/copyTo/b/bkt/o/*",
+			"/storage/v1/b/bkt/o/*/moveTo/o/*",
+		}),
+		gcpService("cloudresourcemanager", []string{"GET"}, nil))
+}
+
+func TestServicesRouteReachesAStorageObjectWithASlash(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := gcpRig(t, up, storageObjectRoute(t))
+	tok := r.mint("brig-a", "gcp")
+	for _, tc := range []struct{ method, path, upstream string }{
+		{"GET", "/storage/storage/v1/b/bkt/o/dir%2Fsub%2Ffile", "/storage/v1/b/bkt/o/dir%2Fsub%2Ffile"},
+		// A client that builds the download URL from the endpoint downloads
+		// from here.
+		{"GET", "/storage/download/storage/v1/b/bkt/o/dir%2Ffile?alt=media", "/download/storage/v1/b/bkt/o/dir%2Ffile"},
+		// The upstream gets the escape as the guest wrote it.
+		{"GET", "/storage/storage/v1/b/bkt/o/dir%2ffile", "/storage/v1/b/bkt/o/dir%2ffile"},
+		{"POST", "/storage/storage/v1/b/bkt/o/a%2Fb/rewriteTo/b/bkt/o/c%2Fd", "/storage/v1/b/bkt/o/a%2Fb/rewriteTo/b/bkt/o/c%2Fd"},
+		{"POST", "/storage/storage/v1/b/bkt/o/a%2Fb/copyTo/b/bkt/o/c%2Fd", "/storage/v1/b/bkt/o/a%2Fb/copyTo/b/bkt/o/c%2Fd"},
+		{"POST", "/storage/storage/v1/b/bkt/o/a%2Fb/moveTo/o/c%2Fd", "/storage/v1/b/bkt/o/a%2Fb/moveTo/o/c%2Fd"},
+		// A folder placeholder, a name that ends in a slash, is a source
+		// as well as a target.
+		{"GET", "/storage/storage/v1/b/bkt/o/dir%2F", "/storage/v1/b/bkt/o/dir%2F"},
+		{"POST", "/storage/storage/v1/b/bkt/o/dir%2F/copyTo/b/bkt/o/new%2F", "/storage/v1/b/bkt/o/dir%2F/copyTo/b/bkt/o/new%2F"},
+		{"POST", "/storage/storage/v1/b/bkt/o/a%2Fdir%2f/rewriteTo/b/bkt/o/c", "/storage/v1/b/bkt/o/a%2Fdir%2f/rewriteTo/b/bkt/o/c"},
+		{"POST", "/storage/storage/v1/b/bkt/o/dir%2F/moveTo/o/new%2F", "/storage/v1/b/bkt/o/dir%2F/moveTo/o/new%2F"},
+	} {
+		resp, _ := r.do(tc.method, "/brig-a/r/gcp"+tc.path, bearer(tok), "")
+		wantStatus(t, resp, http.StatusOK)
+		if got := up.last(t); got.method != tc.method || got.path != tc.upstream {
+			t.Errorf("%s %s: upstream got %s %s, want %s", tc.method, tc.path, got.method, got.path, tc.upstream)
+		}
+	}
+}
+
+func TestServicesRouteRefusesAnEncodedSlashOutsideAStorageObject(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := gcpRig(t, up, storageObjectRoute(t))
+	tok := r.mint("brig-a", "gcp")
+	for _, path := range []string{
+		// A bucket name holds no slash, so an upstream may read one as a
+		// separator.
+		"/storage/storage/v1/b/bk%2Ft/o/x",
+		"/storage/storage/v1/b%2Fbkt/o/x",
+		// The acl entity is not an object name.
+		"/storage/storage/v1/b/bkt/o/x/acl/user%2Fy",
+		// The XML API and other services keep the refusal.
+		"/storage/bkt/dir%2Ffile",
+		"/cloudresourcemanager/v1/projects/x%2Fy",
+		// A segment of the grammar that is escaped is not that segment.
+		"/storage/storage/v1/%62/bkt/o/a%2Fb",
+		"/storage/storage/v1/b/bkt/%6F/a%2Fb",
+		// The decoded name is checked as a path: no escaped escape, and
+		// no dot or empty piece.
+		"/storage/storage/v1/b/bkt/o/a%252Fb",
+		"/storage/storage/v1/b/bkt/o/a%2F..%2Fb",
+		"/storage/storage/v1/b/bkt/o/a%2F.%2Fb",
+		"/storage/storage/v1/b/bkt/o/a%2F%2Fb",
+		"/storage/storage/v1/b/bkt/o/%2Fa",
+		"/storage/storage/v1/b/bkt/o/a%2F%2e%2e%2Fb",
+		// Only the last piece of a name may be empty, and only in a name.
+		"/storage/storage/v1/b/bkt/o/dir%2F%2F/copyTo/b/bkt/o/c",
+		"/storage/storage/v1/b/bkt/o/a%2F%2Fb%2F/copyTo/b/bkt/o/c",
+		"/storage/storage/v1/b/bkt/o/%2F/copyTo/b/bkt/o/c",
+		"/storage/storage/v1/b/bkt/o/dir%2F/acl//x",
+		"/storage/storage/v1/b/bkt/o/dir%2F/copyTo/b//o/c",
+		"/storage/storage/v1/b/bkt/o/a%2F..%2F/copyTo/b/bkt/o/c",
+	} {
+		resp, _ := r.do("GET", "/brig-a/r/gcp"+path, bearer(tok), "")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", path, resp.StatusCode)
+		}
+		wantAudit(t, r.lastAudit(), "status=400", "check=path")
+	}
+	wantRefusedBeforeResolve(t, r, 0)
+}
+
+func TestServicesRouteMatchesAStorageObjectPrefix(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := gcpRig(t, up, gcpRoute(t,
+		gcpService("storage", []string{"GET"}, []string{
+			"/storage/v1/b/bkt/o/reports%2F*",
+			"/download/storage/v1/b/bkt/o/reports%2F*",
+		})))
+	tok := r.mint("brig-a", "gcp")
+	resp, _ := r.do("GET", "/brig-a/r/gcp/storage/storage/v1/b/bkt/o/reports%2Fq1%2Fsales.csv", bearer(tok), "")
+	wantStatus(t, resp, http.StatusOK)
+	// The rule is matched with the slash as %2F, however the guest cased it.
+	resp, _ = r.do("GET", "/brig-a/r/gcp/storage/storage/v1/b/bkt/o/reports%2fq1", bearer(tok), "")
+	wantStatus(t, resp, http.StatusOK)
+	resp, _ = r.do("GET", "/brig-a/r/gcp/storage/download/storage/v1/b/bkt/o/reports%2Fq1?alt=media", bearer(tok), "")
+	wantStatus(t, resp, http.StatusOK)
+	resp, _ = r.do("GET", "/brig-a/r/gcp/storage/download/storage/v1/b/bkt/o/other%2Fx?alt=media", bearer(tok), "")
+	wantStatus(t, resp, http.StatusForbidden)
+	resp, body := r.do("GET", "/brig-a/r/gcp/storage/storage/v1/b/bkt/o/other%2Fx", bearer(tok), "")
+	wantStatus(t, resp, http.StatusForbidden)
+	if want := `reason:  path "/storage/v1/b/bkt/o/other%2Fx" is not in the allow list [/storage/v1/b/bkt/o/reports%2F*, /download/storage/v1/b/bkt/o/reports%2F*]`; !strings.Contains(body, want) {
+		t.Errorf("body\n%s\nwant a line\n%s", body, want)
+	}
+	// A slash outside an object name is a separator, which * does not cross.
+	resp, _ = r.do("GET", "/brig-a/r/gcp/storage/storage/v1/b/bkt/o/reports%2Fx/acl", bearer(tok), "")
+	wantStatus(t, resp, http.StatusForbidden)
+	if n := up.count(); n != 3 {
+		t.Fatalf("the upstream saw %d requests, want 3", n)
+	}
+}
