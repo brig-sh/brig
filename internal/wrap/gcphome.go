@@ -295,8 +295,8 @@ func (c *Config) gcpWorkspaceRefusal(r *workspaceRoot) error {
 // gcloudConfigFiles lists the gcloud configurations under the workspace root
 // whose properties gcloud reads: the legacy properties file and each
 // configurations/config_<name>. A configurations that is a link is listed
-// itself, so it is refused, and so is one that is not the directory the
-// lstat saw by the time it is opened. More than maxGCloudConfigs entries are
+// itself, so it is refused, and so is one that is no longer the directory
+// at that path once it is opened. More than maxGCloudConfigs entries are
 // listed as the directory, refused unread.
 func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
 	rels := []string{gcloudLegacyProperties}
@@ -313,9 +313,12 @@ func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
 	}
 	gcloudConfigBeforeOpen()
 	// The guest is live, so what the lstat saw may be swapped before the
-	// open. O_DIRECTORY fails on a FIFO rather than block brig on the host,
-	// and the open must be the directory the lstat saw: a link swapped in
-	// would list another directory than the one the check named.
+	// open. O_DIRECTORY fails on a FIFO rather than block brig on the host.
+	// os.Root follows a link inside the root even with O_NOFOLLOW, so the
+	// path is looked at again after the open: it must still be a directory,
+	// and the one that was opened. Comparing with the first lstat instead
+	// is not enough, since a directory made after the first is removed can
+	// take its inode number.
 	d, err := r.root.OpenFile(gcloudConfigDir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
 	if absent(err) {
 		return rels, nil
@@ -324,7 +327,11 @@ func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
 		return append(rels, gcloudConfigDir), nil
 	}
 	defer func() { _ = d.Close() }()
-	if opened, err := d.Stat(); err != nil || !os.SameFile(info, opened) {
+	opened, err := d.Stat()
+	if err != nil {
+		return append(rels, gcloudConfigDir), nil
+	}
+	if now, err := r.lstat(gcloudConfigDir); err != nil || !now.IsDir() || !os.SameFile(now, opened) {
 		return append(rels, gcloudConfigDir), nil
 	}
 	entries, err := d.ReadDir(maxGCloudConfigs + 1)
