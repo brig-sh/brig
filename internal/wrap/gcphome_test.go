@@ -513,6 +513,12 @@ func TestAGCPRunRefusesAGCloudConfigurationThatSetsAuth(t *testing.T) {
 		"carriage returns": func(cfg *Config) {
 			put(cfg, cfgDefault, "[core]\rproject = p\r[auth]\rcredential_file_override = /home/x/key.json\r")
 		},
+		"a header behind a separator": func(cfg *Config) {
+			put(cfg, cfgDefault, "[core]\nproject = p\n\x1c[auth]\ncredential_file_override = /home/x/key.json\n")
+		},
+		"a header behind a no-break space": func(cfg *Config) {
+			put(cfg, cfgDefault, "[core]\n\u00a0[auth]\ncredential_file_override = /home/x/key.json\n")
+		},
 		"a DEFAULT section": func(cfg *Config) {
 			put(cfg, cfgDefault, "[DEFAULT]\ncredential_file_override = /home/x/key.json\n[core]\nproject = p\n")
 		},

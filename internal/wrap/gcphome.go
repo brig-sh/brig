@@ -346,7 +346,17 @@ func authFreeConfig(r *workspaceRoot, rel string) bool {
 // configparser, which gcloud reads it with, falls back to DEFAULT for every
 // section. The section name is trimmed and folded, so a spelling gcloud would
 // not read is refused too. A lone CR ends a line, as it does for Python.
+//
+// Python strips more as whitespace than strings.TrimSpace does, such as
+// \x1c-\x1f, so a header could hide behind one. Rather than copy its rules,
+// text with any byte outside printable ASCII, tab, LF and CR counts as setting
+// one; gcloud writes plain ASCII there.
 func setsAuth(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if b := text[i]; (b < 0x20 && b != '\t' && b != '\n' && b != '\r') || b > 0x7e {
+			return true
+		}
+	}
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	auth := false
 	for _, line := range strings.Split(text, "\n") {
