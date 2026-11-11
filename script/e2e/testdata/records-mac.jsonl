@@ -1,0 +1,17 @@
+{"kind": "meta", "key": "host", "value": "mac"}
+{"kind": "meta", "key": "host_os", "value": "macos"}
+{"kind": "meta", "key": "level", "value": "canary"}
+{"kind": "meta", "key": "run_note", "value": "LEVEL=canary: 3 ubuntu and 3 claude-code cycles, every profile once."}
+{"kind": "meta", "key": "run_id", "value": "1000000001"}
+{"kind": "meta", "key": "run_url", "value": "https://github.com/brig-sh/brig/actions/runs/1000000001"}
+{"kind": "meta", "key": "source", "value": "GitHub Actions run 1000000001, attempt 1 (pull_request)"}
+{"kind": "meta", "key": "commit", "value": "3e5ae98b45ee5ecca94bc338ef451b92085dd75e"}
+{"kind": "meta", "key": "target", "value": "brig 3e5ae98 · hull 0.1.0-rc29-main.20260925161254.3448252"}
+{"kind": "fact", "label": "brig version", "value": "v0.2.1-0.20260925234116-3e5ae98b45ee (3e5ae98, 2026-09-25, go1.26.5, darwin/arm64)", "url": ""}
+{"kind": "fact", "label": "hull", "value": "hull v0.1.0-rc29.0.20260925161235-3448252e7992", "url": "https://github.com/brig-sh/hull/releases/tag/channel-main-0.1.0-rc29-main.20260925161254.3448252"}
+{"kind": "meta", "key": "host_detail", "value": "12 CPUs, 32 GB, macOS 26.5, SIP enabled. A scratch HOME, and hull from the hull@main channel on PATH."}
+{"kind": "check", "group": "Install", "name": "brig version names this commit", "status": "pass", "evidence": "v0.2.1-0.20260925234116-3e5ae98b45ee (3e5ae98, 2026-09-25, go1.26.5, darwin/arm64)"}
+{"kind": "gate", "id": "gatekeeper", "status": "skip", "note": "Runs on schedule and dispatch only. A pull request has no notarized channel build."}
+{"kind": "sample", "metric": "ubuntu boot", "seconds": 4.1}
+{"kind": "sample", "metric": "claude-code boot", "seconds": 9.9}
+{"kind": "check", "group": "Network", "name": "The port answers again after stop and run", "status": "warn", "evidence": "first answer after 32.3 s. Known: the guest gets a new MAC and keeps its IP"}
