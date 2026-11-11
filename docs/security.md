@@ -516,6 +516,8 @@ that sets an `[auth]` property is refused, since `credential_file_override`
 or `impersonate_service_account` there points gcloud at an identity
 elsewhere; one Brig cannot read is refused too. A tmpfs at
 `.config/gcloud` or `.config` is allowed: it carries nothing from the host.
+One mounted there with `at:` is refused, since the hostmounts under its
+path are bound back in under it.
 The rest of `.config/gcloud`, which gcloud in the guest writes itself, is
 allowed.
 
