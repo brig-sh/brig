@@ -117,10 +117,29 @@ func (c *Config) movesHome(b profile.EnvBinding) bool {
 }
 
 // onGCloudDir reports whether rel, relative to the guest home, is
-// .config/gcloud, inside it, or .config, which holds it.
+// .config/gcloud, inside it, or .config, which holds it, with the case folded
+// (see foldedUnder).
 func onGCloudDir(rel string) bool {
 	rel = slashClean(filepath.ToSlash(rel))
-	return rel == gcloudDir || strings.HasPrefix(rel, gcloudDir+"/") || rel == filepath.Dir(gcloudDir)
+	return foldedUnder(rel, gcloudDir) || strings.EqualFold(rel, filepath.Dir(gcloudDir))
+}
+
+// foldedUnder reports whether the slash path p is base or inside it,
+// comparing each component with its case folded. The home share is on the
+// host's file system, and on macOS that is case-insensitive: .Config/gcloud
+// is .config/gcloud there, so a byte comparison would let the spelling alone
+// past the check. On Linux the fold refuses a few more paths, never fewer.
+func foldedUnder(p, base string) bool {
+	ps, bs := strings.Split(p, "/"), strings.Split(base, "/")
+	if len(ps) < len(bs) {
+		return false
+	}
+	for i, b := range bs {
+		if !strings.EqualFold(ps[i], b) {
+			return false
+		}
+	}
+	return true
 }
 
 // gcpHomeRefusal refuses a run with a gcp route whose profile would put
@@ -129,24 +148,18 @@ func onGCloudDir(rel string) bool {
 // A seed may not copy the host's own ~/.config/gcloud either, or a directory
 // that holds it. A tmpfs at its own path is allowed: it carries nothing from
 // the host, and over ~/.config/gcloud it keeps a login made in the guest off
-// the home share. One mounted there with at: is not, since the hostmounts
-// under its path are bound back in under it, from wherever that path is in
-// the home. It reads the profile only; PrepareWorkspace checks the workspace
-// itself.
+// the home share. A tmpfs with at: needs no check here: profile validation
+// refuses an at: that is the guest home or overlaps it (tmpfsAt), so one
+// cannot land on ~/.config/gcloud. It reads the profile only;
+// PrepareWorkspace checks the workspace itself.
 func (c *Config) gcpHomeRefusal() error {
 	if !c.gcpRoute() {
 		return nil
 	}
 	var why []string
-	home := slashClean(c.Profile.GuestHome)
 	for _, v := range c.Profile.Volumes {
 		if v.Kind != profile.VolumeTmpfs && v.Path != "" && onGCloudDir(v.Path) {
 			why = append(why, fmt.Sprintf("a %s volume at %s", v.Kind, v.Path))
-		}
-		if v.At != "" {
-			if rel, ok := strings.CutPrefix(slashClean(v.At), home+"/"); ok && onGCloudDir(rel) {
-				why = append(why, fmt.Sprintf("a %s volume at %s", v.Kind, v.At))
-			}
 		}
 	}
 	for _, f := range c.Profile.Files {
@@ -167,7 +180,7 @@ func (c *Config) gcpHomeRefusal() error {
 		switch {
 		case onGCloudDir(s.Rel):
 			why = append(why, fmt.Sprintf("a copy of %s at %s", s.Host, s.Rel))
-		case hostGCloud != "" && overlaps(filepath.Clean(s.Host), hostGCloud):
+		case hostGCloud != "" && overlapsFolded(filepath.Clean(s.Host), hostGCloud):
 			why = append(why, fmt.Sprintf("a copy of your %s", s.Host))
 		}
 	}
@@ -179,11 +192,11 @@ func (c *Config) gcpHomeRefusal() error {
 		"the profile, or detach the policy", c.gcpList(), c.Profile.Name, strings.Join(why, " and "), gcloudDir)
 }
 
-// overlaps reports whether one of the clean host paths a and b is the other
-// or holds it.
-func overlaps(a, b string) bool {
-	sep := string(filepath.Separator)
-	return a == b || strings.HasPrefix(a, b+sep) || strings.HasPrefix(b, a+sep)
+// overlapsFolded reports whether one of the clean host paths a and b is the
+// other or holds it, with the case folded (see foldedUnder).
+func overlapsFolded(a, b string) bool {
+	a, b = filepath.ToSlash(a), filepath.ToSlash(b)
+	return foldedUnder(a, b) || foldedUnder(b, a)
 }
 
 // gcloudIdentityFiles are the files in ~/.config/gcloud that hold an
@@ -282,8 +295,9 @@ func (c *Config) gcpWorkspaceRefusal(r *workspaceRoot) error {
 // gcloudConfigFiles lists the gcloud configurations under the workspace root
 // whose properties gcloud reads: the legacy properties file and each
 // configurations/config_<name>. A configurations that is a link is listed
-// itself, so it is refused. More than maxGCloudConfigs entries are listed as
-// the directory, refused unread.
+// itself, so it is refused, and so is one that is not the directory the
+// lstat saw by the time it is opened. More than maxGCloudConfigs entries are
+// listed as the directory, refused unread.
 func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
 	rels := []string{gcloudLegacyProperties}
 	info, err := r.lstat(gcloudConfigDir)
@@ -297,11 +311,22 @@ func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
 	case !info.IsDir():
 		return rels, nil
 	}
-	d, err := r.root.Open(gcloudConfigDir)
+	gcloudConfigBeforeOpen()
+	// The guest is live, so what the lstat saw may be swapped before the
+	// open. O_DIRECTORY fails on a FIFO rather than block brig on the host,
+	// and the open must be the directory the lstat saw: a link swapped in
+	// would list another directory than the one the check named.
+	d, err := r.root.OpenFile(gcloudConfigDir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
+	if absent(err) {
+		return rels, nil
+	}
 	if err != nil {
-		return nil, r.refuse("read", gcloudConfigDir, err)
+		return append(rels, gcloudConfigDir), nil
 	}
 	defer func() { _ = d.Close() }()
+	if opened, err := d.Stat(); err != nil || !os.SameFile(info, opened) {
+		return append(rels, gcloudConfigDir), nil
+	}
 	entries, err := d.ReadDir(maxGCloudConfigs + 1)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, r.refuse("read", gcloudConfigDir, err)
@@ -316,6 +341,10 @@ func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
 	}
 	return rels, nil
 }
+
+// gcloudConfigBeforeOpen runs between the lstat of configurations and its
+// open. Tests use it to swap the directory in that window.
+var gcloudConfigBeforeOpen = func() {}
 
 // authFreeConfig reports whether the gcloud configuration at rel sets no
 // [auth] property, or is not there. Only a regular file is read, through

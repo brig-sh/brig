@@ -14,10 +14,9 @@ import (
 const awsDir = ".aws"
 
 // underAWSDir reports whether rel, relative to the guest home, is .aws or
-// inside it.
+// inside it, with the case folded (see foldedUnder).
 func underAWSDir(rel string) bool {
-	rel = slashClean(filepath.ToSlash(rel))
-	return rel == awsDir || strings.HasPrefix(rel, awsDir+"/")
+	return foldedUnder(slashClean(filepath.ToSlash(rel)), awsDir)
 }
 
 // awsHomeRefusal refuses a run with a route that vends whose profile would
@@ -60,7 +59,7 @@ func (c *Config) awsHomeRefusal() error {
 		switch {
 		case underAWSDir(s.Rel):
 			why = append(why, fmt.Sprintf("a copy of %s at %s", s.Host, s.Rel))
-		case hostAWS != "" && (host == hostAWS || strings.HasPrefix(host, hostAWS+string(filepath.Separator))):
+		case hostAWS != "" && foldedUnder(filepath.ToSlash(host), filepath.ToSlash(hostAWS)):
 			why = append(why, fmt.Sprintf("a copy of your %s", s.Host))
 		}
 	}
