@@ -115,6 +115,9 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 		"file": func(c *Config) {
 			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.gcp", Path: ".config/gcloud/application_default_credentials.json"})
 		},
+		"tmpfs at": func(c *Config) {
+			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "tmpfs", Path: "x", At: c.Profile.GuestHome + "/.config/gcloud/configurations"})
+		},
 		"onboarding": func(c *Config) {
 			c.Profile.Onboarding = &profile.Onboarding{File: ".config/gcloud/application_default_credentials.json",
 				Seed: map[string]any{"type": "authorized_user"}}
@@ -454,17 +457,17 @@ func TestSchemaSQLMatchesTheType(t *testing.T) {
 }
 
 // A tmpfs carries nothing from the host, and over ~/.config/gcloud it keeps a
-// login made in the guest off the home share, so it is allowed. A files:
-// binding or an onboarding seed under it is still refused on its own path.
+// login made in the guest off the home share, so one at its own path is
+// allowed. A files: binding under it is still refused on its own path. One
+// mounted there with at: stays refused (see
+// TestAGCPRunRefusesGCloudPutInTheGuestHome): the hostmounts under its path
+// are bound back in under it.
 func TestAGCPRunAllowsATmpfsOverGCloud(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
 	shortStateDir(t)
 	for name, v := range map[string]func(c *Config) profile.Volume{
 		"at its path": func(*Config) profile.Volume { return profile.Volume{Kind: "tmpfs", Path: gcloudDir} },
 		"on .config":  func(*Config) profile.Volume { return profile.Volume{Kind: "tmpfs", Path: ".config"} },
-		"mounted at": func(c *Config) profile.Volume {
-			return profile.Volume{Kind: "tmpfs", Path: "x", At: c.Profile.GuestHome + "/" + gcloudDir}
-		},
 	} {
 		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
 		cfg.Profile.Volumes = append(cfg.Profile.Volumes, v(cfg))
@@ -507,6 +510,12 @@ func TestAGCPRunRefusesAGCloudConfigurationThatSetsAuth(t *testing.T) {
 			put(cfg, gcloudConfigDir+"/config_other", "[auth]\nimpersonate_service_account = sa@example.iam.gserviceaccount.com\n")
 		},
 		"another spelling": func(cfg *Config) { put(cfg, cfgDefault, "[ Auth ]\naccess_token_file=/home/x/t\n") },
+		"carriage returns": func(cfg *Config) {
+			put(cfg, cfgDefault, "[core]\rproject = p\r[auth]\rcredential_file_override = /home/x/key.json\r")
+		},
+		"a DEFAULT section": func(cfg *Config) {
+			put(cfg, cfgDefault, "[DEFAULT]\ncredential_file_override = /home/x/key.json\n[core]\nproject = p\n")
+		},
 		"legacy properties": func(cfg *Config) {
 			put(cfg, gcloudLegacyProperties, "[auth]\ncredential_file_override = /home/x/key.json\n")
 		},

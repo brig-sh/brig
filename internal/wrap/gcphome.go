@@ -127,19 +127,26 @@ func onGCloudDir(rel string) bool {
 // something at ~/.config/gcloud in the guest, or at ~/.config, which holds
 // it: a volume, a files: binding, a host config seed, or the onboarding file.
 // A seed may not copy the host's own ~/.config/gcloud either, or a directory
-// that holds it. A tmpfs is allowed: it carries nothing from the host, and
-// over ~/.config/gcloud it keeps a login made in the guest off the home
-// share. It reads the profile only; PrepareWorkspace checks the workspace
+// that holds it. A tmpfs at its own path is allowed: it carries nothing from
+// the host, and over ~/.config/gcloud it keeps a login made in the guest off
+// the home share. One mounted there with at: is not, since the hostmounts
+// under its path are bound back in under it, from wherever that path is in
+// the home. It reads the profile only; PrepareWorkspace checks the workspace
 // itself.
 func (c *Config) gcpHomeRefusal() error {
 	if !c.gcpRoute() {
 		return nil
 	}
 	var why []string
+	home := slashClean(c.Profile.GuestHome)
 	for _, v := range c.Profile.Volumes {
-		// Only a tmpfs takes at:, so a volume elsewhere is at its path.
 		if v.Kind != profile.VolumeTmpfs && v.Path != "" && onGCloudDir(v.Path) {
 			why = append(why, fmt.Sprintf("a %s volume at %s", v.Kind, v.Path))
+		}
+		if v.At != "" {
+			if rel, ok := strings.CutPrefix(slashClean(v.At), home+"/"); ok && onGCloudDir(rel) {
+				why = append(why, fmt.Sprintf("a %s volume at %s", v.Kind, v.At))
+			}
 		}
 	}
 	for _, f := range c.Profile.Files {
@@ -335,9 +342,12 @@ func authFreeConfig(r *workspaceRoot, rel string) bool {
 }
 
 // setsAuth reports whether the INI text of a gcloud configuration has a line
-// that is not blank or a comment in an [auth] section. The section name is
-// trimmed and folded, so a spelling gcloud would not read is refused too.
+// that is not blank or a comment in an [auth] or a [DEFAULT] section: Python's
+// configparser, which gcloud reads it with, falls back to DEFAULT for every
+// section. The section name is trimmed and folded, so a spelling gcloud would
+// not read is refused too. A lone CR ends a line, as it does for Python.
 func setsAuth(text string) bool {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	auth := false
 	for _, line := range strings.Split(text, "\n") {
 		t := strings.TrimSpace(line)
@@ -345,7 +355,8 @@ func setsAuth(text string) bool {
 		case t == "", strings.HasPrefix(t, "#"), strings.HasPrefix(t, ";"):
 		case strings.HasPrefix(t, "["):
 			name, _, _ := strings.Cut(strings.TrimPrefix(t, "["), "]")
-			auth = strings.EqualFold(strings.TrimSpace(name), "auth")
+			name = strings.TrimSpace(name)
+			auth = strings.EqualFold(name, "auth") || strings.EqualFold(name, "default")
 		case auth:
 			return true
 		}
