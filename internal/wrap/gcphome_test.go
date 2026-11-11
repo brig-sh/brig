@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,8 +97,8 @@ func TestAGCPRunThatForwardsGoogleIdentityVariablesIsRefused(t *testing.T) {
 
 // A profile that puts anything at ~/.config/gcloud in the guest, or at
 // ~/.config, which holds it, is refused on a run with a gcp route: a volume,
-// a files: binding, a seed into either, or a seed copied from the host's own
-// ~/.config/gcloud or from a directory that holds it. A name that only starts
+// a files: binding, the onboarding file, a seed into either, or a seed copied
+// from the host's own ~/.config/gcloud or from a directory that holds it. A name that only starts
 // with gcloud is not gcloud, and a run with no gcp route is not refused.
 func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
@@ -111,11 +112,12 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 		"volume on .config": func(c *Config) {
 			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "volume", Path: ".config"})
 		},
-		"tmpfs at": func(c *Config) {
-			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "tmpfs", Path: "x", At: c.Profile.GuestHome + "/.config/gcloud/configurations"})
-		},
 		"file": func(c *Config) {
 			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.gcp", Path: ".config/gcloud/application_default_credentials.json"})
+		},
+		"onboarding": func(c *Config) {
+			c.Profile.Onboarding = &profile.Onboarding{File: ".config/gcloud/application_default_credentials.json",
+				Seed: map[string]any{"type": "authorized_user"}}
 		},
 		"seed into": func(c *Config) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".config/gcloud"})
@@ -448,5 +450,139 @@ func TestSchemaSQLMatchesTheType(t *testing.T) {
 		if got := schemaSQL(c.kind, c.name, c.sql); got != c.want {
 			t.Errorf("schemaSQL(%s, %s, %q) = %v, want %v", c.kind, c.name, c.sql.text, got, c.want)
 		}
+	}
+}
+
+// A tmpfs carries nothing from the host, and over ~/.config/gcloud it keeps a
+// login made in the guest off the home share, so it is allowed. A files:
+// binding or an onboarding seed under it is still refused on its own path.
+func TestAGCPRunAllowsATmpfsOverGCloud(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	for name, v := range map[string]func(c *Config) profile.Volume{
+		"at its path": func(*Config) profile.Volume { return profile.Volume{Kind: "tmpfs", Path: gcloudDir} },
+		"on .config":  func(*Config) profile.Volume { return profile.Volume{Kind: "tmpfs", Path: ".config"} },
+		"mounted at": func(c *Config) profile.Volume {
+			return profile.Volume{Kind: "tmpfs", Path: "x", At: c.Profile.GuestHome + "/" + gcloudDir}
+		},
+	} {
+		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+		cfg.Profile.Volumes = append(cfg.Profile.Volumes, v(cfg))
+		if err := cfg.gcpHomeRefusal(); err != nil {
+			t.Errorf("a tmpfs %s was refused: %v", name, err)
+		}
+		cfg.Profile.Files = append(cfg.Profile.Files, profile.FileBinding{Ref: "secrets.gcp",
+			Path: gcloudDir + "/application_default_credentials.json"})
+		if err := cfg.gcpHomeRefusal(); err == nil || !strings.Contains(err.Error(), "the file "+gcloudDir) {
+			t.Errorf("a files: binding under a tmpfs %s: gcpHomeRefusal = %v, want its refusal", name, err)
+		}
+	}
+}
+
+// A gcloud configuration whose [auth] section sets a property, such as
+// credential_file_override or impersonate_service_account, hands gcloud an
+// identity from elsewhere in the home, so a guest home that holds one is
+// refused, and so is the legacy properties file gcloud turns into one. A
+// configuration that sets other sections, or an [auth] with only comments, is
+// allowed. One brig cannot read, a link or one too large, is refused.
+func TestAGCPRunRefusesAGCloudConfigurationThatSetsAuth(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	put := func(cfg *Config, rel, text string) {
+		t.Helper()
+		p := filepath.Join(cfg.Workspace, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const cfgDefault = gcloudConfigDir + "/config_default"
+	for name, setup := range map[string]func(cfg *Config){
+		"credential_file_override": func(cfg *Config) {
+			put(cfg, cfgDefault, "[core]\naccount = a@example.com\n\n[auth]\ncredential_file_override = /home/x/key.json\n")
+		},
+		"impersonate_service_account": func(cfg *Config) {
+			put(cfg, gcloudConfigDir+"/config_other", "[auth]\nimpersonate_service_account = sa@example.iam.gserviceaccount.com\n")
+		},
+		"another spelling": func(cfg *Config) { put(cfg, cfgDefault, "[ Auth ]\naccess_token_file=/home/x/t\n") },
+		"legacy properties": func(cfg *Config) {
+			put(cfg, gcloudLegacyProperties, "[auth]\ncredential_file_override = /home/x/key.json\n")
+		},
+		"too large": func(cfg *Config) { put(cfg, cfgDefault, "#"+strings.Repeat("x", maxConfigSize)) },
+		"a linked configuration": func(cfg *Config) {
+			put(cfg, "elsewhere/config", "[core]\n")
+			if err := os.MkdirAll(filepath.Join(cfg.Workspace, gcloudConfigDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("../../../elsewhere/config", filepath.Join(cfg.Workspace, cfgDefault)); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a linked configurations": func(cfg *Config) {
+			put(cfg, "elsewhere/config_default", "[core]\n")
+			if err := os.MkdirAll(filepath.Join(cfg.Workspace, gcloudDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("../../elsewhere", filepath.Join(cfg.Workspace, gcloudConfigDir)); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"too many": func(cfg *Config) {
+			for i := range maxGCloudConfigs + 1 {
+				put(cfg, fmt.Sprintf("%s/config_%d", gcloudConfigDir, i), "[core]\n")
+			}
+		},
+	} {
+		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+		setup(cfg)
+		err := cfg.PrepareWorkspace()
+		if err == nil || !strings.Contains(err.Error(), ".config/gcloud") || !strings.Contains(err.Error(), "gcp route") {
+			t.Errorf("%s: PrepareWorkspace = %v, want the .config/gcloud refusal", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(cfg.Workspace, markerFile)); !os.IsNotExist(err) {
+			t.Errorf("%s: the refused run wrote its marker: %v", name, err)
+		}
+	}
+
+	for name, text := range map[string]string{
+		"core only":          "[core]\naccount = a@example.com\nproject = p\n",
+		"auth with comments": "[auth]\n# credential_file_override = /home/x/key.json\n; nothing\n\n[core]\nproject = p\n",
+		"empty":              "",
+	} {
+		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+		put(cfg, cfgDefault, text)
+		put(cfg, gcloudConfigDir+"/not_a_config", "[auth]\nx = y\n")
+		if err := cfg.PrepareWorkspace(); err != nil {
+			t.Errorf("%s: a configuration that sets no auth property was refused: %v", name, err)
+		}
+	}
+}
+
+// The guest is live on the attach path and can remove or replace a store
+// between the check's lstat and its open: gone counts as empty, and one that
+// cannot be opened as a row, never as an error that aborts the run.
+func TestEmptyStoreFoldsAnOpenErrorIntoItsTwoAnswers(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	p := filepath.Join(cfg.Workspace, filepath.FromSlash(gcloudStores[0]))
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := cfg.openWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	if empty, err := emptyStore(r, gcloudStores[0]); err != nil || !empty {
+		t.Errorf("a store that is gone: emptyStore = %v, %v, want empty", empty, err)
+	}
+	if err := os.WriteFile(p, nil, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if empty, err := emptyStore(r, gcloudStores[0]); err != nil || empty {
+		t.Errorf("a store that cannot be opened: emptyStore = %v, %v, want a row", empty, err)
 	}
 }

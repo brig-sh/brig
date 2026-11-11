@@ -660,8 +660,8 @@ refused, as below.
 A run is refused when the profile or `BRIG_FORWARD_ENV` hands the guest a
 variable that picks another Google identity, such as
 `GOOGLE_APPLICATION_CREDENTIALS` or `CLOUDSDK_CONFIG`, or when the guest
-home or the profile puts a gcloud login under `~/.config/gcloud`, or the
-profile moves `HOME`. Bind the route with `egress: default: deny`, and no
+home or the profile puts a gcloud login, or a configuration that points
+gcloud at one, under `~/.config/gcloud`, or the profile moves `HOME`. Bind the route with `egress: default: deny`, and no
 `allow` for Google's hosts, so that a guest that logs in to gcloud itself
 reaches Google only through the broker. See [The gcp route](security.md#the-gcp-route).
 
