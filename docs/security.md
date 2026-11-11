@@ -391,7 +391,8 @@ guest `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `~/.aws` would be in the guest: a guest home that already holds
 `.aws/credentials` or `.aws/config` (for example `--home ~`), or a profile
 volume, `files:` binding, onboarding file or host config seed at `.aws`, or
-a seed copied from your own `~/.aws`. The CLI's own cache in `~/.aws/cli`, which the
+a seed copied from your own `~/.aws`. Brig compares `.aws` with its case
+folded, as a macOS file system compares names. The CLI's own cache in `~/.aws/cli`, which the
 `aws` CLI in the guest writes itself, is allowed. Brig does not check the
 image: an `AWS_*` variable baked into it wins over the route.
 
@@ -516,8 +517,8 @@ that sets an `[auth]` property is refused, since `credential_file_override`
 or `impersonate_service_account` there points gcloud at an identity
 elsewhere; one Brig cannot read is refused too. A tmpfs at
 `.config/gcloud` or `.config` is allowed: it carries nothing from the host.
-One mounted there with `at:` is refused, since the hostmounts under its
-path are bound back in under it.
+Brig compares `.config/gcloud` and `.config` with their case folded, as a
+macOS file system compares names.
 The rest of `.config/gcloud`, which gcloud in the guest writes itself, is
 allowed.
 

@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/brig-sh/brig/internal/profile"
 )
@@ -98,7 +100,8 @@ func TestAGCPRunThatForwardsGoogleIdentityVariablesIsRefused(t *testing.T) {
 // A profile that puts anything at ~/.config/gcloud in the guest, or at
 // ~/.config, which holds it, is refused on a run with a gcp route: a volume,
 // a files: binding, the onboarding file, a seed into either, or a seed copied
-// from the host's own ~/.config/gcloud or from a directory that holds it. A name that only starts
+// from the host's own ~/.config/gcloud or from a directory that holds it, in
+// any case. A name that only starts
 // with gcloud is not gcloud, and a run with no gcp route is not refused.
 func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
@@ -115,8 +118,23 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 		"file": func(c *Config) {
 			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.gcp", Path: ".config/gcloud/application_default_credentials.json"})
 		},
-		"tmpfs at": func(c *Config) {
-			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "tmpfs", Path: "x", At: c.Profile.GuestHome + "/.config/gcloud/configurations"})
+		// macOS file systems are case-insensitive, so these land in
+		// ~/.config/gcloud too.
+		"volume, mixed case": func(c *Config) {
+			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: ".Config/GCloud"})
+		},
+		"file, mixed case": func(c *Config) {
+			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.gcp", Path: ".Config/gcloud/application_default_credentials.json"})
+		},
+		"onboarding, mixed case": func(c *Config) {
+			c.Profile.Onboarding = &profile.Onboarding{File: ".CONFIG/gcloud/application_default_credentials.json",
+				Seed: map[string]any{"type": "authorized_user"}}
+		},
+		"seed into, mixed case": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".config/GCLOUD"})
+		},
+		"host ~/.Config/gcloud": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".Config", "gcloud"), Rel: "cfg"})
 		},
 		"onboarding": func(c *Config) {
 			c.Profile.Onboarding = &profile.Onboarding{File: ".config/gcloud/application_default_credentials.json",
@@ -459,9 +477,8 @@ func TestSchemaSQLMatchesTheType(t *testing.T) {
 // A tmpfs carries nothing from the host, and over ~/.config/gcloud it keeps a
 // login made in the guest off the home share, so one at its own path is
 // allowed. A files: binding under it is still refused on its own path. One
-// mounted there with at: stays refused (see
-// TestAGCPRunRefusesGCloudPutInTheGuestHome): the hostmounts under its path
-// are bound back in under it.
+// mounted there with at: needs no check of the route's: the profile does not
+// validate (see TestATmpfsAtTheGuestGCloudDoesNotValidate).
 func TestAGCPRunAllowsATmpfsOverGCloud(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
 	shortStateDir(t)
@@ -572,6 +589,72 @@ func TestAGCPRunRefusesAGCloudConfigurationThatSetsAuth(t *testing.T) {
 		if err := cfg.PrepareWorkspace(); err != nil {
 			t.Errorf("%s: a configuration that sets no auth property was refused: %v", name, err)
 		}
+	}
+}
+
+// gcpHomeRefusal does not look at a tmpfs's at:, because profile validation
+// refuses an at: in the guest home, ~/.config/gcloud included. If that rule
+// is ever relaxed, the route's check needs an at: arm back.
+func TestATmpfsAtTheGuestGCloudDoesNotValidate(t *testing.T) {
+	p, ok := profile.Lookup("claude-code")
+	if !ok {
+		t.Fatal("no claude-code profile")
+	}
+	p.Volumes = append(p.Volumes, profile.Volume{Kind: "tmpfs", Path: "x", At: p.GuestHome + "/.config/gcloud"})
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "overlaps it") {
+		t.Errorf("Validate = %v, want the at: refusal", err)
+	}
+}
+
+// The guest is live on the attach path and can swap configurations between
+// the check's lstat and its open. A FIFO must not block brig on the host; it
+// holds no configuration gcloud reads, so it passes as a FIFO there from the
+// start does. A link to a directory the guest can fill must not be listed in
+// its place, so it is refused.
+func TestAGCPRunRefusesGCloudConfigurationsSwappedBeforeTheOpen(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	for name, tc := range map[string]struct {
+		swap    func(dir string) error
+		refused bool
+	}{
+		"a fifo": {swap: func(dir string) error { return syscall.Mkfifo(dir, 0o600) }},
+		"a link": {refused: true, swap: func(dir string) error {
+			elsewhere := filepath.Join(filepath.Dir(dir), "elsewhere")
+			if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+				return err
+			}
+			return os.Symlink("elsewhere", dir)
+		}},
+	} {
+		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
+		dir := filepath.Join(cfg.Workspace, filepath.FromSlash(gcloudConfigDir))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		saved := gcloudConfigBeforeOpen
+		gcloudConfigBeforeOpen = func() {
+			if err := os.Remove(dir); err != nil {
+				t.Error(err)
+			}
+			if err := tc.swap(dir); err != nil {
+				t.Error(err)
+			}
+		}
+		done := make(chan error, 1)
+		go func() { done <- cfg.PrepareWorkspace() }()
+		select {
+		case err := <-done:
+			if tc.refused && (err == nil || !strings.Contains(err.Error(), ".config/gcloud")) {
+				t.Errorf("%s swapped in: PrepareWorkspace = %v, want the .config/gcloud refusal", name, err)
+			}
+			if !tc.refused && err != nil {
+				t.Errorf("%s swapped in: PrepareWorkspace = %v, want no refusal", name, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s swapped in: the check blocked", name)
+		}
+		gcloudConfigBeforeOpen = saved
 	}
 }
 

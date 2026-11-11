@@ -11,7 +11,7 @@ import (
 
 // A profile that puts anything at ~/.aws in the guest is refused on a run
 // with a route that vends: a volume, a files: binding, the onboarding file, a
-// seed into .aws, or a seed copied from the host's own ~/.aws. A name that
+// seed into .aws, or a seed copied from the host's own ~/.aws, in any case. A name that
 // only starts with .aws is not .aws, and a run with no route that vends is not
 // refused.
 func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
@@ -35,6 +35,16 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 		"seed into": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".aws"}) },
 		"host ~/.aws": func(c *Config) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".aws", "sso"), Rel: "cfg"})
+		},
+		// macOS file systems are case-insensitive, so these land in ~/.aws too.
+		"file, mixed case": func(c *Config) {
+			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.aws", Path: ".AWS/credentials"})
+		},
+		"onboarding, mixed case": func(c *Config) {
+			c.Profile.Onboarding = &profile.Onboarding{File: ".Aws/credentials", Seed: map[string]any{"x": "y"}}
+		},
+		"host ~/.Aws": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".Aws"), Rel: "cfg"})
 		},
 	}
 	for name, add := range cases {
