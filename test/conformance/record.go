@@ -22,15 +22,50 @@ func versionOf(line string) string {
 	return ""
 }
 
-// recordPath is where the record for a backend and runtime version lives.
-// One file per pair, so a new runtime version gets a new record and the old
-// one stays as the evidence for its release.
-func recordPath(backend, runtimeLine string) string {
-	v := versionOf(runtimeLine)
-	if v == "" {
+// recordPath is where the record for a backend, runtime version and variant
+// lives. One file per triple, so a new runtime version gets a new record and
+// the old one stays as the evidence for its release. The version and the
+// variant are in the file name, so a version that does not read as one, and a
+// variant this runner does not know, get no path.
+//
+// The variant is there because one bundle version ships twice: the rootless
+// bundle and the plain one carry the same tag, and their guests reach the
+// network on different paths, slirp4netns for one and a bridge on the host for
+// the other. Under the version alone a run of one would overwrite the record
+// of the other.
+func recordPath(backend, version, variant string) string {
+	if !versionRE.MatchString(version) {
 		return ""
 	}
-	return fmt.Sprintf("docs/manual-tests/egress-conformance-%s-%s.md", backend, v)
+	switch variant {
+	case "":
+	case "rootless":
+		version += "-" + variant
+	default:
+		return ""
+	}
+	return fmt.Sprintf("docs/manual-tests/egress-conformance-%s-%s.md", backend, version)
+}
+
+// version is what the record is filed and titled under: the runtime bundle's
+// on Linux, since that is what install.sh pins and a release ships, and the
+// runtime's own everywhere else. A nerdctl the bundle did not install falls
+// back to its own version, and the record says there was no bundle.
+func (r *report) version() string {
+	if r.bundle != "" {
+		return r.bundle
+	}
+	return versionOf(r.runtime)
+}
+
+// variant is the build of the runtime bundle that ran, when there are two of
+// one version: "rootless" for the rootless bundle, and nothing for the plain
+// one, for hvi, and for a nerdctl the bundle did not install. See recordPath.
+func (r *report) variant() string {
+	if r.pins["ROOTLESS"] == "true" {
+		return "rootless"
+	}
+	return ""
 }
 
 func (r *report) counts() string {
@@ -58,6 +93,9 @@ func (r *report) scrub(s string) string {
 	}
 	if r.root != "" {
 		s = strings.ReplaceAll(s, r.root, "{root}")
+	}
+	if r.brigCtl != "" {
+		s = strings.ReplaceAll(s, r.brigCtl, "brig-ctl")
 	}
 	if r.svc != "" {
 		s = strings.ReplaceAll(s, r.svc, hostSvc)
@@ -110,22 +148,38 @@ func (r *report) markdown() string {
 	if r.failed() {
 		result = "FAIL"
 	}
-	w("# Egress conformance: %s, %s", r.backend, orNone(versionOf(r.runtime)))
+	if v := r.variant(); v != "" {
+		w("# Egress conformance: %s, %s, %s", r.backend, orNone(r.version()), v)
+	} else {
+		w("# Egress conformance: %s, %s", r.backend, orNone(r.version()))
+	}
 	w("")
 	w("Written by `script/egress-conformance.sh`. To change it, run the suite again.")
 	w("")
 	w("| | |")
 	w("| --- | --- |")
 	w("| backend | `%s` |", r.backend)
-	w("| runtime | `%s` |", orNone(r.runtime))
-	w("| brig | `%s` |", orNone(r.brig))
+	w("| runtime | `%s` |", cell(orNone(r.runtime)))
+	w("| brig | `%s` |", cell(orNone(r.brig)))
 	w("| date | %s |", r.date.UTC().Format("2006-01-02 15:04 UTC"))
-	w("| image | `%s` |", r.image)
+	w("| image | `%s` |", cell(r.image))
 	if d := r.digests(); d != "" {
 		w("| image digest | %s |", d)
 	}
-	w("| hvi | `%s` |", orNone(r.hvi))
-	w("| boot assets | `%s` |", orNone(r.assets))
+	for _, row := range r.stack {
+		w("| %s | `%s` |", row.name, cell(r.scrub(orNone(row.value))))
+	}
+	w("| boot assets | `%s` |", cell(r.scrub(orNone(r.assets))))
+	if r.probe != "" {
+		// brig exec is a retired spelling, and script/check-retired-spellings.sh
+		// fails a doc that teaches it. The record names the verb its probes
+		// ran under rather than teaching it, which is what the marker says.
+		marker := ""
+		if r.probe == "brig exec" {
+			marker = " <!-- retired-ok -->"
+		}
+		w("| probes ran under | `%s`%s |", r.probe, marker)
+	}
 	if c := r.counts(); c != "" {
 		w("| result | **%s**: %s |", result, c)
 	} else {
