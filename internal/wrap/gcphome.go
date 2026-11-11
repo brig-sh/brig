@@ -125,29 +125,32 @@ func onGCloudDir(rel string) bool {
 
 // gcpHomeRefusal refuses a run with a gcp route whose profile would put
 // something at ~/.config/gcloud in the guest, or at ~/.config, which holds
-// it: a volume, a files: binding, or a host config seed. A seed may not copy
-// the host's own ~/.config/gcloud either, or a directory that holds it. It
-// reads the profile only; PrepareWorkspace checks the workspace itself.
+// it: a volume, a files: binding, a host config seed, or the onboarding file.
+// A seed may not copy the host's own ~/.config/gcloud either, or a directory
+// that holds it. A tmpfs is allowed: it carries nothing from the host, and
+// over ~/.config/gcloud it keeps a login made in the guest off the home
+// share. It reads the profile only; PrepareWorkspace checks the workspace
+// itself.
 func (c *Config) gcpHomeRefusal() error {
 	if !c.gcpRoute() {
 		return nil
 	}
 	var why []string
-	home := slashClean(c.Profile.GuestHome)
 	for _, v := range c.Profile.Volumes {
-		if v.Path != "" && onGCloudDir(v.Path) {
+		// Only a tmpfs takes at:, so a volume elsewhere is at its path.
+		if v.Kind != profile.VolumeTmpfs && v.Path != "" && onGCloudDir(v.Path) {
 			why = append(why, fmt.Sprintf("a %s volume at %s", v.Kind, v.Path))
-		}
-		if v.At != "" {
-			if rel, ok := strings.CutPrefix(slashClean(v.At), home+"/"); ok && onGCloudDir(rel) {
-				why = append(why, fmt.Sprintf("a %s volume at %s", v.Kind, v.At))
-			}
 		}
 	}
 	for _, f := range c.Profile.Files {
 		if onGCloudDir(f.Path) {
 			why = append(why, fmt.Sprintf("the file %s from %s", f.Path, f.Ref))
 		}
+	}
+	// seedOnboarding writes the seed after the workspace refusals have run,
+	// so a seed there would boot on a fresh home.
+	if ob := c.Profile.Onboarding; ob != nil && ob.File != "" && onGCloudDir(ob.File) {
+		why = append(why, fmt.Sprintf("the onboarding file %s", ob.File))
 	}
 	hostGCloud := ""
 	if h, err := os.UserHomeDir(); err == nil {
@@ -178,8 +181,9 @@ func overlaps(a, b string) bool {
 
 // gcloudIdentityFiles are the files in ~/.config/gcloud that hold an
 // identity: gcloud's stored logins and tokens, and the application default
-// credentials. The rest is what gcloud in the guest writes there itself on
-// its first run, such as active_config, configurations/ and logs/.
+// credentials. A configuration can point at one elsewhere; see
+// gcloudConfigFiles. The rest is what gcloud in the guest writes there itself
+// on its first run, such as active_config and logs/.
 var gcloudIdentityFiles = []string{
 	gcloudDir + "/credentials.db",
 	gcloudDir + "/access_tokens.db",
@@ -196,6 +200,25 @@ var gcloudStores = []string{gcloudDir + "/credentials.db", gcloudDir + "/access_
 // maxStoreSize bounds the store read to decide whether it is empty. An empty
 // store is three pages; anything larger than this is refused unread.
 const maxStoreSize = 64 << 10
+
+// gcloudConfigDir holds gcloud's named configurations, config_<name>, and
+// gcloudLegacyProperties is the file gcloud turns into config_default when it
+// finds no configuration. An [auth] property in either, such as
+// credential_file_override or impersonate_service_account, hands gcloud an
+// identity from elsewhere in the home, as credential_process does in
+// .aws/config. The CLOUDSDK_AUTH_ variables that set the same properties are
+// refused by gcpShadowRefusal.
+const (
+	gcloudConfigDir        = gcloudDir + "/configurations"
+	gcloudLegacyProperties = gcloudDir + "/properties"
+)
+
+// maxGCloudConfigs bounds the configurations read; a directory with more is
+// refused unread. maxConfigSize bounds each one: gcloud writes a few lines.
+const (
+	maxGCloudConfigs = 64
+	maxConfigSize    = 16 << 10
+)
 
 // gcpWorkspaceRefusal refuses a run with a gcp route whose guest home already
 // holds a gcloud identity file, such as a home named with --home ~. It looks
@@ -237,7 +260,97 @@ func (c *Config) gcpWorkspaceRefusal(r *workspaceRoot) error {
 		}
 		return c.gcloudFileRefusal(r, rel)
 	}
+	rels, err := gcloudConfigFiles(r)
+	if err != nil {
+		return err
+	}
+	for _, rel := range rels {
+		if !authFreeConfig(r, rel) {
+			return c.gcloudFileRefusal(r, rel)
+		}
+	}
 	return nil
+}
+
+// gcloudConfigFiles lists the gcloud configurations under the workspace root
+// whose properties gcloud reads: the legacy properties file and each
+// configurations/config_<name>. A configurations that is a link is listed
+// itself, so it is refused. More than maxGCloudConfigs entries are listed as
+// the directory, refused unread.
+func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
+	rels := []string{gcloudLegacyProperties}
+	info, err := r.lstat(gcloudConfigDir)
+	switch {
+	case absent(err):
+		return rels, nil
+	case err != nil:
+		return nil, err
+	case info.Mode()&os.ModeSymlink != 0:
+		return append(rels, gcloudConfigDir), nil
+	case !info.IsDir():
+		return rels, nil
+	}
+	d, err := r.root.Open(gcloudConfigDir)
+	if err != nil {
+		return nil, r.refuse("read", gcloudConfigDir, err)
+	}
+	defer func() { _ = d.Close() }()
+	entries, err := d.ReadDir(maxGCloudConfigs + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, r.refuse("read", gcloudConfigDir, err)
+	}
+	if len(entries) > maxGCloudConfigs {
+		return append(rels, gcloudConfigDir), nil
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "config_") {
+			rels = append(rels, gcloudConfigDir+"/"+e.Name())
+		}
+	}
+	return rels, nil
+}
+
+// authFreeConfig reports whether the gcloud configuration at rel sets no
+// [auth] property, or is not there. Only a regular file is read, through
+// the root and bounded; anything else, a link or a file over maxConfigSize or
+// that cannot be read, counts as setting one, so the check fails closed.
+func authFreeConfig(r *workspaceRoot, rel string) bool {
+	info, err := r.lstat(rel)
+	switch {
+	case absent(err):
+		return true
+	case err != nil, !info.Mode().IsRegular():
+		return false
+	}
+	f, err := r.openRegular(rel, os.O_RDONLY)
+	if err != nil {
+		return absent(err)
+	}
+	defer func() { _ = f.Close() }()
+	blob, err := io.ReadAll(io.LimitReader(f, maxConfigSize+1))
+	if err != nil || len(blob) > maxConfigSize {
+		return false
+	}
+	return !setsAuth(string(blob))
+}
+
+// setsAuth reports whether the INI text of a gcloud configuration has a line
+// that is not blank or a comment in an [auth] section. The section name is
+// trimmed and folded, so a spelling gcloud would not read is refused too.
+func setsAuth(text string) bool {
+	auth := false
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case t == "", strings.HasPrefix(t, "#"), strings.HasPrefix(t, ";"):
+		case strings.HasPrefix(t, "["):
+			name, _, _ := strings.Cut(strings.TrimPrefix(t, "["), "]")
+			auth = strings.EqualFold(strings.TrimSpace(name), "auth")
+		case auth:
+			return true
+		}
+	}
+	return false
 }
 
 // absent reports whether err from a lookup in the workspace means nothing is
@@ -259,9 +372,11 @@ func emptyStore(r *workspaceRoot, rel string) (bool, error) {
 			return false, nil
 		}
 	}
+	// The guest is live on the attach path and can remove or replace the
+	// store after the lstat: gone counts as empty, anything else as a row.
 	f, err := r.openRegular(rel, os.O_RDONLY)
 	if err != nil {
-		return false, err
+		return absent(err), nil
 	}
 	defer func() { _ = f.Close() }()
 	blob, err := io.ReadAll(io.LimitReader(f, maxStoreSize+1))

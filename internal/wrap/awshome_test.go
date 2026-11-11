@@ -10,9 +10,10 @@ import (
 )
 
 // A profile that puts anything at ~/.aws in the guest is refused on a run
-// with a route that vends: a volume, a files: binding, a seed into .aws, or
-// a seed copied from the host's own ~/.aws. A name that only starts with
-// .aws is not .aws, and a run with no route that vends is not refused.
+// with a route that vends: a volume, a files: binding, the onboarding file, a
+// seed into .aws, or a seed copied from the host's own ~/.aws. A name that
+// only starts with .aws is not .aws, and a run with no route that vends is not
+// refused.
 func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
 	shortStateDir(t)
@@ -27,6 +28,9 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 		},
 		"file": func(c *Config) {
 			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.aws", Path: ".aws/credentials"})
+		},
+		"onboarding": func(c *Config) {
+			c.Profile.Onboarding = &profile.Onboarding{File: ".aws/credentials", Seed: map[string]any{"x": "y"}}
 		},
 		"seed into": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".aws"}) },
 		"host ~/.aws": func(c *Config) {

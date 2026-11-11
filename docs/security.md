@@ -390,8 +390,8 @@ guest `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_ROLE_ARN`, or an `AWS_CONTAINER_*` variable. It is also refused when
 `~/.aws` would be in the guest: a guest home that already holds
 `.aws/credentials` or `.aws/config` (for example `--home ~`), or a profile
-volume, `files:` binding or host config seed at `.aws`, or a seed copied
-from your own `~/.aws`. The CLI's own cache in `~/.aws/cli`, which the
+volume, `files:` binding, onboarding file or host config seed at `.aws`, or
+a seed copied from your own `~/.aws`. The CLI's own cache in `~/.aws/cli`, which the
 `aws` CLI in the guest writes itself, is allowed. Brig does not check the
 image: an `AWS_*` variable baked into it wins over the route.
 
@@ -506,12 +506,18 @@ gcloud identity would be in the guest: a guest home that already holds a
 `credentials.db` or `access_tokens.db` with a row in it,
 `application_default_credentials.json` or `legacy_credentials` under
 `.config/gcloud` (for example `--home ~`), or a `.config/gcloud` that is a
-link, or a profile volume, `files:` binding or host config seed at
-`.config/gcloud` or `.config`, or a seed copied from your own
+link, or a profile volume, `files:` binding, onboarding file or host config
+seed at `.config/gcloud` or `.config`, or a seed copied from your own
 `~/.config/gcloud` or a directory that holds it. gcloud creates both stores
 with no rows whenever it opens them, and an empty store is allowed; a store
-Brig cannot read as empty is refused. The rest of `.config/gcloud`, which
-gcloud in the guest writes itself, is allowed.
+Brig cannot read as empty is refused. A gcloud configuration in
+`.config/gcloud/configurations`, or the legacy `.config/gcloud/properties`,
+that sets an `[auth]` property is refused, since `credential_file_override`
+or `impersonate_service_account` there points gcloud at an identity
+elsewhere; one Brig cannot read is refused too. A tmpfs at
+`.config/gcloud` or `.config` is allowed: it carries nothing from the host.
+The rest of `.config/gcloud`, which gcloud in the guest writes itself, is
+allowed.
 
 These checks cover what the host hands the guest. A guest that gets another
 identity in some other way, such as `gcloud auth login` in the guest, still
