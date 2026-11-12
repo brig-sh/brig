@@ -13,10 +13,12 @@ import (
 // would run as that identity while the run prints the route's.
 const awsDir = ".aws"
 
-// underAWSDir reports whether rel, relative to the guest home, is .aws or
-// inside it, with the case folded (see foldedUnder).
+// underAWSDir reports whether rel, relative to the guest home, is .aws,
+// inside it, or the home itself, which holds it. Names are compared as
+// sameName does.
 func underAWSDir(rel string) bool {
-	return foldedUnder(slashClean(filepath.ToSlash(rel)), awsDir)
+	rel = slashClean(filepath.ToSlash(rel))
+	return rel == "." || foldedUnder(rel, awsDir)
 }
 
 // awsHomeRefusal refuses a run with a route that vends whose profile would

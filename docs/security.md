@@ -390,8 +390,9 @@ guest `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_ROLE_ARN`, or an `AWS_CONTAINER_*` variable. It is also refused when
 `~/.aws` would be in the guest: a guest home that already holds
 `.aws/credentials` or `.aws/config` (for example `--home ~`), or a profile
-volume, `files:` binding, onboarding file or host config seed at `.aws`, or
-a seed copied from your own `~/.aws`. Brig compares `.aws` as a macOS file
+volume, `files:` binding, onboarding file or host config seed at `.aws`, a
+host config seed into the guest home itself, or a seed copied from your own
+`~/.aws`. Brig compares `.aws` as a macOS file
 system can: with the case folded, and with a letter that is not ASCII taken
 for the ASCII letters it could fold into. The CLI's own cache in
 `~/.aws/cli`, which the
@@ -510,8 +511,9 @@ gcloud identity would be in the guest: a guest home that already holds a
 `application_default_credentials.json` or `legacy_credentials` under
 `.config/gcloud` (for example `--home ~`), or a `.config/gcloud` that is a
 link, or a profile volume, `files:` binding, onboarding file or host config
-seed at `.config/gcloud` or `.config`, or a seed copied from your own
-`~/.config/gcloud` or a directory that holds it. gcloud creates both stores
+seed at `.config/gcloud` or `.config`, a host config seed into the guest
+home itself, or a seed copied from your own `~/.config/gcloud` or a
+directory that holds it. gcloud creates both stores
 with no rows whenever it opens them, and an empty store is allowed; a store
 Brig cannot read as empty is refused. A gcloud configuration in
 `.config/gcloud/configurations`, or the legacy `.config/gcloud/properties`,

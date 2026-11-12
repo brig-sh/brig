@@ -46,6 +46,9 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 		"host ~/.Aws": func(c *Config) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".Aws"), Rel: "cfg"})
 		},
+		// A seed into the home itself copies the host directory's .aws
+		// along with the rest.
+		"seed into the home": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: "."}) },
 	}
 	for name, add := range cases {
 		cfg := routedConfig(t, awsEndpoint, &hullRecorder{})

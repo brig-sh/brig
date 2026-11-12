@@ -151,6 +151,20 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 		"host ~/.conﬁg": func(c *Config) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".conﬁg"), Rel: "cfg"})
 		},
+		// A seed into the home itself copies the host directory's
+		// .config/gcloud along with the rest. projectPaths is not checked
+		// for .., so a profile can name one.
+		"seed into the home": func(c *Config) {
+			host := filepath.Join(t.TempDir(), "evil")
+			if err := os.MkdirAll(filepath.Join(host, gcloudDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			seeds := hostProjections(profile.Profile{HostConfigDir: filepath.Join(host, "home"), ProjectPaths: []string{".."}}, true)
+			if len(seeds) != 1 || seeds[0].Rel != "." {
+				t.Fatalf("hostProjections = %+v, want one seed into the home", seeds)
+			}
+			c.HostConfig = append(c.HostConfig, seeds...)
+		},
 		"onboarding": func(c *Config) {
 			c.Profile.Onboarding = &profile.Onboarding{File: ".config/gcloud/application_default_credentials.json",
 				Seed: map[string]any{"type": "authorized_user"}}
