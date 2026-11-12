@@ -117,11 +117,11 @@ func (c *Config) movesHome(b profile.EnvBinding) bool {
 }
 
 // onGCloudDir reports whether rel, relative to the guest home, is
-// .config/gcloud, inside it, or .config, which holds it. Names are compared
-// as sameName does.
+// .config/gcloud, inside it, or holds it: .config or the home itself. Names
+// are compared as sameName does.
 func onGCloudDir(rel string) bool {
 	rel = slashClean(filepath.ToSlash(rel))
-	return foldedUnder(rel, gcloudDir) || foldedUnder(gcloudDir, rel)
+	return rel == "." || foldedUnder(rel, gcloudDir) || foldedUnder(gcloudDir, rel)
 }
 
 // foldedUnder reports whether the slash path p is base or inside it,
@@ -186,8 +186,9 @@ func toLowerASCII(c byte) byte {
 }
 
 // gcpHomeRefusal refuses a run with a gcp route whose profile would put
-// something at ~/.config/gcloud in the guest, or at ~/.config, which holds
-// it: a volume, a files: binding, a host config seed, or the onboarding file.
+// something at ~/.config/gcloud in the guest, or at ~/.config or the home,
+// which hold it: a volume, a files: binding, a host config seed, or the
+// onboarding file.
 // A seed may not copy the host's own ~/.config/gcloud either, or a directory
 // that holds it. A tmpfs at its own path is allowed: it carries nothing from
 // the host, and over ~/.config/gcloud it keeps a login made in the guest off
@@ -221,6 +222,8 @@ func (c *Config) gcpHomeRefusal() error {
 	}
 	for _, s := range c.HostConfig {
 		switch {
+		case slashClean(s.Rel) == ".":
+			why = append(why, fmt.Sprintf("a copy of %s into the guest home", s.Host))
 		case onGCloudDir(s.Rel):
 			why = append(why, fmt.Sprintf("a copy of %s at %s", s.Host, s.Rel))
 		case hostGCloud != "" && overlapsFolded(filepath.Clean(s.Host), hostGCloud):
