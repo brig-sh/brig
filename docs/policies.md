@@ -336,7 +336,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
 | `request.allow.paths` | no | Globs on the path after the route prefix, or on the whole path on a `host` route. Each starts with `/` |
-| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them |
+| `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them, and the `github-api` preset refuses them |
 
 On a `gcp` route `request.allow` belongs to each entry of `services`, and
 Brig refuses one on the route itself.
@@ -448,8 +448,18 @@ names one takes every field it does not set from the preset.
 | `claude-code` | `https://api.anthropic.com` | `Authorization: Bearer {value}` from `claudeAiOauth.accessToken`. Removes `X-Api-Key`. Keeps only the reviewed `Anthropic-Beta` values | `ANTHROPIC_BASE_URL={route.url}`, `CLAUDE_CODE_OAUTH_TOKEN={session.token}` | `anthropic-oauth`: the OAuth pair is refreshed on the host and written back to the store |
 | `anthropic-api-key` | `https://api.anthropic.com` | `x-api-key: {value}`. Keeps only the reviewed `Anthropic-Beta` values, without `oauth-2025-04-20` | `ANTHROPIC_BASE_URL={route.url}`, `ANTHROPIC_API_KEY={session.token}` | none, the key is static |
 | `github-token` | `https://github.com` | `basicAuth` with the username `x-access-token` | git rewrites `https://github.com/` and `git@github.com:` to the route | none, the token is static |
+| `github-api` | `https://api.github.com`. `host` mode only. The broker maps `/api/v3` and `/api/graphql` to the API paths and refuses any other | `Authorization: Bearer {value}` | `GH_HOST={route.host}`, `GH_ENTERPRISE_TOKEN={session.token}` | none, the token is static. See [The github-api preset](broker.md#the-github-api-preset) |
 | `aws` | none. The route answers the guest itself | none. The guest sends its session token as the whole `Authorization` value, as the AWS SDK does | `AWS_CONTAINER_CREDENTIALS_FULL_URI={route.url}`, `AWS_CONTAINER_AUTHORIZATION_TOKEN={session.token}`, `AWS_REGION={route.region}`, `AWS_DEFAULT_REGION={route.region}` | none. The broker fetches temporary keys through the host's `aws` CLI. See [The aws preset](#the-aws-preset) |
 | `gcp` | none. Each service is forwarded to `https://<service>.googleapis.com` | `Authorization: Bearer {value}` | `BRIG_GCP_URL={route.url}`, `BRIG_GCP_TOKEN={session.token}`, and the gcloud variables of [The gcp preset](#the-gcp-preset) | none, the access token is static. See [The gcp preset](#the-gcp-preset) |
+
+A `github-api` route needs only the credential:
+
+```yaml
+- name: github-api
+  preset: github-api
+  credential:
+    secretRef: { name: brig-gh-token }
+```
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,
