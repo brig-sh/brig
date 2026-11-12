@@ -68,12 +68,19 @@ func ParseNetworkStrict(s, source string) (Network, error) {
 // It also answers for info when no runtime is installed. The selected kind
 // follows DetectFor; a Linux run must never inherit the macOS fallback just
 // because its portable profile has no hypervisor field.
+//
+// hull on Linux shares one network whatever the hypervisor, and is named
+// linuxHullBackend rather than vz: told vz, a Linux host was sent to hvi,
+// which it cannot run isolated either.
 func sharedNetworkBackend(rt runtime.Runtime, hypervisor string) string {
 	kind := os.Getenv("BRIG_RUNTIME")
 	if rt != nil {
 		kind = rt.Kind()
 	} else if kind == "" && goruntime.GOOS == "darwin" {
 		kind = "hull"
+	}
+	if runtime.IsLinuxHull(rt) || (rt == nil && kind == "hull" && goruntime.GOOS == "linux") {
+		return linuxHullBackend
 	}
 	if kind == "hull" {
 		switch hypervisor {
@@ -85,6 +92,9 @@ func sharedNetworkBackend(rt runtime.Runtime, hypervisor string) string {
 	}
 	return ""
 }
+
+// linuxHullBackend is what sharedNetworkBackend calls hull on Linux.
+const linuxHullBackend = "hull on Linux"
 
 func networkFromRuntime(word string) (Network, error) {
 	for _, n := range AllNetworks() {
@@ -214,6 +224,11 @@ func (c *Config) profileIsolationOnFallback(hypervisor string) string {
 	backend := sharedNetworkBackend(c.Runtime, hypervisor)
 	if backend == "" {
 		return ""
+	}
+	if backend == linuxHullBackend {
+		return fmt.Sprintf("the %s profile sets network: isolated, and hull on Linux cannot give a "+
+			"sandbox its own network yet. Pass --network shared or set BRIG_NETWORK=shared to run it "+
+			"on the shared network, or use nerdctl (BRIG_RUNTIME=nerdctl)", c.Profile.Name)
 	}
 	// An unset hypervisor on hull is that same fallback. Quoting the empty
 	// string would blame a variable the user did not set.

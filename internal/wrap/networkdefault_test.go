@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -409,3 +410,77 @@ func TestAPolicyRefusalOutranksTheProfileIsolationRefusal(t *testing.T) {
 }
 
 var _ runtime.Runtime = (*networkDefaultRuntime)(nil)
+
+// hull on Linux puts every sandbox on one network, whatever the hypervisor.
+// Most shipped profiles set network: isolated, so a plain `brig run claude`
+// there was refused with the --network isolated refusal, naming a flag the
+// user never typed. With BRIG_HYPERVISOR=vz it said to run on hvi, which
+// cannot run isolated on Linux either. The profile's refusal now names hull
+// on Linux and nerdctl, an unset posture falls back to shared as on vz, and
+// an explicit --network isolated keeps the flag refusal.
+func TestProfileIsolationOnLinuxHullNamesNerdctlNotHvi(t *testing.T) {
+	if goruntime.GOOS != "linux" {
+		t.Skip("brig marks a hull as the Linux one only on a Linux host")
+	}
+	for _, hv := range []string{"", "hvi", "vz"} {
+		t.Run("hypervisor="+hv, func(t *testing.T) {
+			isolateState(t)
+			t.Setenv("BRIG_RUNTIME", "hull")
+			t.Setenv("BRIG_HYPERVISOR", hv)
+			bin := filepath.Join(t.TempDir(), "hull")
+			script := "#!/bin/sh\n[ \"$1\" = --version ] && { echo 'hull dev (go1.26.8, linux/amd64)'; exit 0; }\n" +
+				"echo \"instance not found: $2\" >&2\nexit 1\n"
+			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("BRIG_RUNTIME_BIN", bin)
+			rt, err := runtime.Detect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !runtime.IsLinuxHull(rt) {
+				t.Fatal("the stub was not taken for hull on Linux")
+			}
+
+			c, err := Load(testProfile(t, "network: isolated\n"), Options{Workspace: t.TempDir()}, rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = c.checkBackend(c.hypervisor())
+			if err == nil {
+				t.Fatal("hull on Linux accepted the profile's isolated network")
+			}
+			got := err.Error()
+			for _, want := range []string{"the x profile sets network: isolated", "hull on Linux", "--network shared", "BRIG_RUNTIME=nerdctl"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("refusal missing %q:\n%s", want, got)
+				}
+			}
+			for _, wrong := range []string{"--network isolated gives", "run it on hvi", "vz backend"} {
+				if strings.Contains(got, wrong) {
+					t.Errorf("refusal says %q:\n%s", wrong, got)
+				}
+			}
+
+			unset, err := Load(testProfile(t, ""), Options{Workspace: t.TempDir()}, rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unset.Network != NetShared {
+				t.Errorf("an unset posture is %s, want shared", unset.Network)
+			}
+			if err := unset.checkBackend(unset.hypervisor()); err != nil {
+				t.Errorf("an unset posture was refused: %v", err)
+			}
+
+			explicit, err := Load(testProfile(t, "network: isolated\n"), Options{Workspace: t.TempDir(), Network: "isolated"}, rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = explicit.checkBackend(explicit.hypervisor())
+			if err == nil || !strings.Contains(err.Error(), "--network isolated gives") {
+				t.Errorf("an explicit --network isolated lost the flag refusal: %v", err)
+			}
+		})
+	}
+}

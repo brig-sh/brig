@@ -50,10 +50,10 @@ use a delivered credential, as any holder can, for as long as it holds it.
 
 | Case | Posture |
 | --- | --- |
-| New sandbox on `hvi` or Linux | `isolated` |
+| New sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
 | The graphical `claude-desktop` profile | `shared`, set explicitly in the profile |
-| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on Linux and `hvi`. The backend fallback on `vz` or `qemu` |
-| Custom profile without a network choice, on `vz` or `qemu` | `shared`. `brig info` names that fallback |
+| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on nerdctl and `hvi`. The backend fallback on `vz`, `qemu` or hull on Linux |
+| Custom profile without a network choice, on `vz`, `qemu` or hull on Linux | `shared`. `brig info` names that fallback |
 | Existing sandbox | Its recorded posture |
 | Existing sandbox from an older session with no record | The actual posture, inspected from the runtime |
 
@@ -88,6 +88,7 @@ prints it before the boot:
 ```
 ISOLATION    microVM (hull, hvi backend, rootfs overlay-block)
 ISOLATION    microVM (hull, vz backend, rootfs block)
+ISOLATION    microVM (hull over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
@@ -1183,7 +1184,7 @@ A sandbox with no policy has unrestricted egress, and that is what
 | --- | --- |
 | `hvi` | At the network gateway Brig gives that sandbox |
 | Linux with nerdctl | In nftables on the sandbox's own bridge, with a resolver of Brig's that answers the guest's DNS |
-| `vz`, `qemu`, docker | No policy is available. Outbound traffic is whatever the runtime allows |
+| `vz`, `qemu`, docker, hull on Linux | No policy is available. Outbound traffic is whatever the runtime allows |
 
 Both enforcement points are outside the guest's kernel.
 
@@ -1237,10 +1238,11 @@ reaches only the broker. See [Transports](broker.md#transports).
 ### Sandbox to sandbox
 
 If two agents must not reach each other, run both with `--network isolated`
-on `hvi` or on Linux. On `vz` and on `qemu`, where that posture is refused,
-run them on separate hosts.
+on `hvi` or on Linux with nerdctl. On `vz` and on `qemu`, where that posture
+is refused, run them on separate hosts. hull on Linux refuses it too: use
+nerdctl there.
 
-`isolated` is the guarantee. It is the default for new `hvi` and Linux
+`isolated` is the guarantee. It is the default for new `hvi` and nerdctl
 sandboxes unless another posture is named (see
 [Network posture](#network-posture)). `--network isolated` also moves an
 existing shared sandbox onto it.
@@ -1249,8 +1251,8 @@ existing shared sandbox onto it.
 that network, whatever the backend does with a shared one. A sandbox that
 carries an egress policy is isolated whether or not it asked to be.
 
-`isolated` is **refused** on `vz` and on `qemu`, where Brig owns no network to
-give. A run that asks for it there is stopped and told which backend
+`isolated` is **refused** on `vz`, on `qemu` and on hull on Linux, where Brig
+owns no network to give. A run that asks for it there is stopped and told which backend
 implements it. It is never booted onto the shared network under a row that
 claims otherwise.
 
@@ -1264,7 +1266,7 @@ network. A sandbox gets `shared` in these cases:
 - A flag, a setting or a profile chooses it.
 - An older sandbox keeps it, if it was recorded or recovered from the
   runtime.
-- `vz` and `qemu` use it when no posture is named.
+- `vz`, `qemu` and hull on Linux use it when no posture is named.
 
 Whether the shared network forwards traffic from one guest to another is the
 runtime's behaviour, not Brig's. The measurements are in
