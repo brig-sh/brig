@@ -24,7 +24,7 @@ func underAWSDir(rel string) bool {
 // awsHomeRefusal refuses a run with a route that vends whose profile would
 // put something at ~/.aws in the guest: a volume, a files: binding, the
 // onboarding file, or a host config seed, which also may not copy the host's
-// own ~/.aws. It reads
+// own ~/.aws or a directory that holds it. It reads
 // the profile only; PrepareWorkspace checks the workspace itself.
 func (c *Config) awsHomeRefusal() error {
 	if !c.vends() {
@@ -61,7 +61,7 @@ func (c *Config) awsHomeRefusal() error {
 		switch {
 		case underAWSDir(s.Rel):
 			why = append(why, fmt.Sprintf("a copy of %s at %s", s.Host, s.Rel))
-		case hostAWS != "" && foldedUnder(filepath.ToSlash(host), filepath.ToSlash(hostAWS)):
+		case hostAWS != "" && hostOverlaps(host, hostAWS):
 			why = append(why, fmt.Sprintf("a copy of your %s", s.Host))
 		}
 	}
