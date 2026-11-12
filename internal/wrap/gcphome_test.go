@@ -136,6 +136,21 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 		"host ~/.Config/gcloud": func(c *Config) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".Config", "gcloud"), Rel: "cfg"})
 		},
+		// macOS also folds some letters that are not ASCII: .conﬁg, with
+		// the ligature ﬁ, is .config there.
+		"file, ligature": func(c *Config) {
+			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.gcp", Path: ".conﬁg/gcloud/application_default_credentials.json"})
+		},
+		"onboarding, ligature": func(c *Config) {
+			c.Profile.Onboarding = &profile.Onboarding{File: ".conﬁg/gcloud/application_default_credentials.json",
+				Seed: map[string]any{"type": "authorized_user"}}
+		},
+		"seed into, ligature": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".conﬁg"})
+		},
+		"host ~/.conﬁg": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".conﬁg"), Rel: "cfg"})
+		},
 		"onboarding": func(c *Config) {
 			c.Profile.Onboarding = &profile.Onboarding{File: ".config/gcloud/application_default_credentials.json",
 				Seed: map[string]any{"type": "authorized_user"}}
@@ -169,6 +184,10 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 		},
 		"other .config": func(c *Config) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".config", "gh"), Rel: ".config/gh"})
+		},
+		"a name that is not ASCII": func(c *Config) {
+			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: "café"})
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".config/ghé"})
 		},
 	} {
 		near := routedConfig(t, gcpEndpoint, &hullRecorder{})
@@ -543,6 +562,13 @@ func TestAGCPRunRefusesAGCloudConfigurationThatSetsAuth(t *testing.T) {
 			put(cfg, gcloudLegacyProperties, "[auth]\ncredential_file_override = /home/x/key.json\n")
 		},
 		"too large": func(cfg *Config) { put(cfg, cfgDefault, "#"+strings.Repeat("x", maxConfigSize)) },
+		// On macOS gcloud opens config_default as either of these.
+		"another case": func(cfg *Config) {
+			put(cfg, gcloudConfigDir+"/Config_default", "[auth]\ncredential_file_override = /home/x/key.json\n")
+		},
+		"a ligature": func(cfg *Config) {
+			put(cfg, gcloudConfigDir+"/conﬁg_default", "[auth]\ncredential_file_override = /home/x/key.json\n")
+		},
 		"a linked configuration": func(cfg *Config) {
 			put(cfg, "elsewhere/config", "[core]\n")
 			if err := os.MkdirAll(filepath.Join(cfg.Workspace, gcloudConfigDir), 0o700); err != nil {

@@ -117,29 +117,72 @@ func (c *Config) movesHome(b profile.EnvBinding) bool {
 }
 
 // onGCloudDir reports whether rel, relative to the guest home, is
-// .config/gcloud, inside it, or .config, which holds it, with the case folded
-// (see foldedUnder).
+// .config/gcloud, inside it, or .config, which holds it. Names are compared
+// as sameName does.
 func onGCloudDir(rel string) bool {
 	rel = slashClean(filepath.ToSlash(rel))
-	return foldedUnder(rel, gcloudDir) || strings.EqualFold(rel, filepath.Dir(gcloudDir))
+	return foldedUnder(rel, gcloudDir) || foldedUnder(gcloudDir, rel)
 }
 
 // foldedUnder reports whether the slash path p is base or inside it,
-// comparing each component with its case folded. The home share is on the
-// host's file system, and on macOS that is case-insensitive: .Config/gcloud
-// is .config/gcloud there, so a byte comparison would let the spelling alone
-// past the check. On Linux the fold refuses a few more paths, never fewer.
+// comparing each component with sameName.
 func foldedUnder(p, base string) bool {
 	ps, bs := strings.Split(p, "/"), strings.Split(base, "/")
 	if len(ps) < len(bs) {
 		return false
 	}
 	for i, b := range bs {
-		if !strings.EqualFold(ps[i], b) {
+		if !sameName(ps[i], b) {
 			return false
 		}
 	}
 	return true
+}
+
+// sameName reports whether a macOS file system can take the names a and b
+// for one. It folds case, so .Config is .config, and some letters that are
+// not ASCII into ASCII ones, so .conﬁg, with the ligature ﬁ, is .config too.
+// Rather than copy its tables, a name with such letters is taken for an ASCII
+// name when its own ASCII letters appear there in order: a fold keeps ASCII
+// letters ASCII, so no other name can fold into it. On Linux this refuses a
+// few more paths, never fewer.
+func sameName(a, b string) bool {
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	if isASCII(a) == isASCII(b) {
+		return false
+	}
+	if isASCII(a) {
+		a, b = b, a
+	}
+	rest := strings.ToLower(b)
+	for i := 0; i < len(a); i++ {
+		if c := a[i]; c < 0x80 {
+			j := strings.IndexByte(rest, toLowerASCII(c))
+			if j < 0 {
+				return false
+			}
+			rest = rest[j+1:]
+		}
+	}
+	return true
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+func toLowerASCII(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
 }
 
 // gcpHomeRefusal refuses a run with a gcp route whose profile would put
@@ -342,7 +385,10 @@ func gcloudConfigFiles(r *workspaceRoot) ([]string, error) {
 		return append(rels, gcloudConfigDir), nil
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "config_") {
+		// gcloud opens config_<name>, which a macOS file system also finds
+		// in another case or under a name with letters that are not ASCII
+		// (see sameName), so those are read too.
+		if n := e.Name(); !isASCII(n) || (len(n) >= len("config_") && strings.EqualFold(n[:len("config_")], "config_")) {
 			rels = append(rels, gcloudConfigDir+"/"+e.Name())
 		}
 	}
