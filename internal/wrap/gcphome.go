@@ -448,9 +448,11 @@ func setsAuth(text string) bool {
 		t := strings.TrimSpace(line)
 		switch {
 		case t == "", strings.HasPrefix(t, "#"), strings.HasPrefix(t, ";"):
-		case strings.HasPrefix(t, "["):
-			name, _, _ := strings.Cut(strings.TrimPrefix(t, "["), "]")
-			name = strings.TrimSpace(name)
+		// configparser takes a line for a header only when it matches
+		// \[(.+)\], up to the last ]; any other line is an option of the
+		// section it is in.
+		case strings.HasPrefix(t, "[") && strings.LastIndex(t, "]") > 1:
+			name := strings.TrimSpace(t[1:strings.LastIndex(t, "]")])
 			auth = strings.EqualFold(name, "auth") || strings.EqualFold(name, "default")
 		case auth:
 			return true

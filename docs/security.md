@@ -519,7 +519,11 @@ Brig cannot read as empty is refused. A gcloud configuration in
 `.config/gcloud/configurations`, or the legacy `.config/gcloud/properties`,
 that sets an `[auth]` property is refused, since `credential_file_override`
 or `impersonate_service_account` there points gcloud at an identity
-elsewhere; one Brig cannot read is refused too. A tmpfs at
+elsewhere; one Brig cannot read is refused too. Brig reads only `[auth]` and
+`[DEFAULT]`: a credential in another section, such as `core/api_key` or the
+HMAC keys `storage/gs_xml_access_key_id` and
+`storage/gs_xml_secret_access_key`, or in its `CLOUDSDK_` variable, is not
+refused. A tmpfs at
 `.config/gcloud` or `.config` is allowed: it carries nothing from the host.
 Brig compares `.config/gcloud` and `.config` as a macOS file system can:
 with the case folded, and with a letter that is not ASCII taken for the
