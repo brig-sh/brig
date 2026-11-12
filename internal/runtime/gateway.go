@@ -729,6 +729,9 @@ func (e Egress) divertArgs(gw netip.Addr) []string {
 	}
 	if e.Divert.BrigInternal {
 		args = append(args, "--host", BrigInternalName+"="+gw.String())
+		for _, h := range e.Divert.Hosts {
+			args = append(args, "--host", h+"="+gw.String())
+		}
 	}
 	return args
 }
@@ -883,6 +886,9 @@ func gatewaySpec(index int, e Egress) string {
 	}
 	if e.Divert.BrigInternal {
 		diverts = append(diverts, "host "+BrigInternalName+"="+sandboxGatewayIP(index))
+		for _, h := range e.Divert.Hosts {
+			diverts = append(diverts, "host "+h+"="+sandboxGatewayIP(index))
+		}
 	}
 	slices.Sort(diverts)
 	if !e.Filtered() {

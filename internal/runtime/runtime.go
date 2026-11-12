@@ -232,6 +232,10 @@ type Divert struct {
 	// BrigInternalAddr reports, and to divert that address on
 	// BrigInternalPort to Socket. Every other port of it is refused.
 	BrigInternal bool
+	// Hosts are the names of the host routes, sorted, which the runtime
+	// answers with the same address as brig.internal. Set only with
+	// BrigInternal.
+	Hosts []string
 }
 
 // The name a guest reaches the broker by, and the one port of it that is

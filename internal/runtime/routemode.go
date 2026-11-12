@@ -102,6 +102,17 @@ var modeRecords = []ModeRecord{
 		Remedy: "Use nerdctl (BRIG_RUNTIME_BIN=nerdctl), or detach the policy"},
 }
 
+// A host route is reached at brig.internal as an endpoint route is, so its
+// rows are the endpoint rows.
+func init() {
+	for _, r := range modeRecords {
+		if r.Mode == v1alpha1.ModeEndpoint {
+			r.Mode = v1alpha1.ModeHost
+			modeRecords = append(modeRecords, r)
+		}
+	}
+}
+
 // modeRecordsMu guards modeRecords against RegisterModeRecords.
 var modeRecordsMu sync.RWMutex
 
@@ -178,18 +189,18 @@ func ModeAnswer(m v1alpha1.RouteMode, path RunPath) ModeRecord {
 		}
 	}
 	remedy := endpointGuestRemedy
-	if m != v1alpha1.ModeEndpoint {
+	if !m.AtBrigInternal() {
 		remedy = otherModeRemedy
 	}
 	return ModeRecord{Mode: m, Path: path, State: Unknown, Why: "brig holds no answer for this run path",
 		Remedy: remedy}
 }
 
-// ServedModes lists the route modes the run path serves: endpoint, then the
-// registered modes in name order. It is empty where no mode is served.
+// ServedModes lists the route modes the run path serves: endpoint and host,
+// then the registered modes in name order. It is empty where no mode is served.
 func ServedModes(path RunPath) []v1alpha1.RouteMode {
 	out := []v1alpha1.RouteMode{}
-	for _, m := range append([]v1alpha1.RouteMode{v1alpha1.ModeEndpoint}, routemode.Names()...) {
+	for _, m := range append([]v1alpha1.RouteMode{v1alpha1.ModeEndpoint, v1alpha1.ModeHost}, routemode.Names()...) {
 		if ModeAnswer(m, path).State == Enforced {
 			out = append(out, m)
 		}

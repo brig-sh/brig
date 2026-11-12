@@ -115,7 +115,7 @@ func (c *Config) brokerLine() string {
 }
 
 // servedModes are the route modes this run's path serves, never nil. An
-// endpoint is served only where endpointAnswer says so, and another mode
+// endpoint or host is served only where endpointAnswer says so, and another mode
 // only where its own check holds.
 func (c *Config) servedModes() []string {
 	out := []string{}
@@ -124,7 +124,7 @@ func (c *Config) servedModes() []string {
 	}
 	for _, m := range runtime.ServedModes(c.routePath()) {
 		switch {
-		case m == v1alpha1.ModeEndpoint:
+		case m.AtBrigInternal():
 			if c.endpointAnswer().State != runtime.Enforced {
 				continue
 			}

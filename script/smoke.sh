@@ -1137,7 +1137,7 @@ for missing in absent nostore; do
     || bad "brig plan refuses the run whose secret store answers $missing, and its BROKER row says why -- got: $out"
 done
 out="$(env "${ep_env[@]}" "$WORK/brig-stored" plan claude 2>&1)"
-printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; modes endpoint$' \
+printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; modes endpoint, host$' \
   && ! printf '%s\n' "$out" | grep -q '^REFUSED' \
   && ok "brig plan has a BROKER row for a run with a route" \
   || bad "brig plan has a BROKER row for a run with a route -- got: $out"

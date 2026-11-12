@@ -365,6 +365,9 @@ func egressSpec(e Egress) string {
 		slices.Sort(routes)
 		if e.Divert.BrigInternal {
 			routes = append(routes, "brig.internal")
+			for _, h := range e.Divert.Hosts {
+				routes = append(routes, "host "+h)
+			}
 		}
 		lines = append(append(lines, routes...), "divert-socket "+e.Divert.Socket)
 	}
@@ -387,6 +390,9 @@ func (d Divert) args(gw netip.Addr) []string {
 	}
 	if d.BrigInternal {
 		args = append(args, "--host", BrigInternalName+"="+gw.String())
+		for _, h := range d.Hosts {
+			args = append(args, "--host", h+"="+gw.String())
+		}
 	}
 	return append(args, "--divert-socket", d.Socket)
 }

@@ -6,14 +6,15 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // diverts is the divert of this run, to the sandbox's divert socket: for
-// each route in a mode besides endpoint that this build serves, the host and
+// each route in a mode besides endpoint and host that this build serves, the host and
 // port of its upstream URL, whose connections the mode's divert handler in
-// the broker gets; brig.internal for a guest that reaches an endpoint route
+// the broker gets; brig.internal, and each host route's name under it, for a guest that reaches an endpoint route
 // there; and the link-local address for a run with a route that vends, which
 // the guest reaches there in plain HTTP. The socket path depends on the
 // sandbox alone, so a run that finds the sandbox up compares the same divert
@@ -53,7 +54,14 @@ func (c *Config) diverts() runtime.Divert {
 	if err != nil {
 		return runtime.Divert{}
 	}
-	return runtime.Divert{Routes: routes, Socket: sock, BrigInternal: internal}
+	var hosts []string
+	if internal {
+		for _, r := range c.modeRoutes(v1alpha1.ModeHost) {
+			hosts = append(hosts, v1alpha1.HostName(r.Name))
+		}
+		slices.Sort(hosts)
+	}
+	return runtime.Divert{Routes: routes, Socket: sock, BrigInternal: internal, Hosts: hosts}
 }
 
 // runtimeEgress is the egress the runtime is handed: the rules of the bound
