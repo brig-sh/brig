@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,9 +21,22 @@ import (
 	"github.com/brig-sh/brig/internal/telemetry"
 )
 
-// hull drives the macOS microVM runtime.
+// hull drives the microVM runtime of that name. On macOS it boots the guest on
+// a hypervisor of its own. On Linux it is a containerd client that boots the
+// guest through urunc, and it is to take nerdctl's place there.
 type hull struct {
 	bin string
+	// linux marks a hull built for Linux. Its command line differs from the
+	// macOS one, and the network gateway the macOS backends rely on does not
+	// exist on Linux, so the adapter has to know which hull it drives.
+	//
+	// A field rather than build tags, so that one test binary checks both
+	// command lines. CI runs on Linux alone, and a macOS half behind a darwin
+	// tag would be compiled and tested nowhere. The zero value is the macOS
+	// hull, the only one brig drove before this field existed and the one
+	// every test that builds a hull by hand means. See newHullFor for why
+	// the binary is asked rather than the host.
+	linux bool
 	// pins caches the one question PinsDigest asks the binary, because the
 	// verify path may ask more than once per run and the answer cannot change
 	// while brig is running.
@@ -32,6 +46,7 @@ type hull struct {
 	// telemetry gate both read.
 	versionOnce sync.Once
 	versionOut  string
+	versionErr  error
 }
 
 // version returns what `hull --version` printed, asked once per process.
@@ -41,8 +56,8 @@ func (h *hull) version() string {
 		defer cancel()
 		cmd := exec.CommandContext(ctx, h.bin, "--version")
 		cmd.Env = mergeEnv(telemetryEnv(false))
-		out, _ := cmd.Output()
-		h.versionOut = string(out)
+		out, err := cmd.Output()
+		h.versionOut, h.versionErr = string(out), err
 	})
 	return h.versionOut
 }
@@ -57,16 +72,57 @@ func (h *hull) countedEnv(counted bool) []string {
 	return telemetryEnv(counted && telemetry.Counting() && hullVersionAtLeast(h.version(), 31, false))
 }
 
-func newHull(bin string) (Runtime, error) {
-	if bin != "" {
-		return &hull{bin: bin}, nil
+func newHull(bin string) (Runtime, error) { return newHullFor(bin, goruntime.GOOS) }
+
+// newHullFor finds the hull to drive on a host running goos, and marks one
+// built for Linux.
+//
+// The mark comes from the binary, not from goos alone. brig's CI runs on
+// Linux and checks the macOS paths there, against a stub hull named by
+// BRIG_RUNTIME=hull: a mark taken from the host would send every such test
+// down the Linux path instead. `hull --version` ends with the platform the
+// binary was built for, as in "(go1.26.4, linux/amd64)", so the hull itself
+// says which one it is. Every hull has said so since before the first Linux
+// build.
+//
+// On a Linux host only a hull that says darwin is the macOS hull, and the
+// test stubs say so. A hull that does not say, or whose --version fails or
+// hangs, is the Linux hull. Guessing macOS would read the macOS hvi rows,
+// where a policy is enforced, on a host with no gateway to enforce it. On
+// any other host no hull is asked: only the macOS hull runs there.
+func newHullFor(bin, goos string) (Runtime, error) {
+	if bin == "" {
+		p, err := exec.LookPath("hull")
+		if err != nil {
+			if goos == "linux" {
+				return nil, fmt.Errorf("%w: BRIG_RUNTIME is hull, and no hull is on PATH. "+
+					"Point BRIG_RUNTIME_BIN at a build, or unset BRIG_RUNTIME to use nerdctl", ErrNoRuntime)
+			}
+			return nil, fmt.Errorf("%w: brig drives hull on macOS, and none was there. "+
+				"See https://github.com/brig-sh/brig/blob/main/docs/install.md, "+
+				"or point BRIG_RUNTIME_BIN at a build", ErrNoRuntime)
+		}
+		bin = p
 	}
-	if p, err := exec.LookPath("hull"); err == nil {
-		return &hull{bin: p}, nil
+	h := &hull{bin: bin}
+	h.linux = goos == "linux" && (builtFor(h.version()) != "darwin" || h.versionErr != nil)
+	return h, nil
+}
+
+// builtFor is the operating system `hull --version` says the binary was built
+// for, or "" when it does not say. The platform is the last field in the
+// parentheses, os/arch.
+func builtFor(version string) string {
+	open, end := strings.LastIndexByte(version, '('), strings.LastIndexByte(version, ')')
+	if open < 0 || end < open {
+		return ""
 	}
-	return nil, fmt.Errorf("%w: brig drives hull on macOS, and none was there. "+
-		"See https://github.com/brig-sh/brig/blob/main/docs/install.md, "+
-		"or point BRIG_RUNTIME_BIN at a build", ErrNoRuntime)
+	fields := strings.Split(version[open+1:end], ",")
+	goos, _, ok := strings.Cut(strings.TrimSpace(fields[len(fields)-1]), "/")
+	if !ok {
+		return ""
+	}
+	return goos
 }
 
 func (h *hull) Kind() string { return "hull" }

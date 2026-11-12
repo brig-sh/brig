@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/ttytest"
@@ -27,13 +28,13 @@ import (
 func stubRuntime(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(shortDir(t), "hull")
-	if err := os.WriteFile(bin, []byte(`#!/bin/sh
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(`#!/bin/sh
 if [ "$1" = inspect ]; then
   printf 'instance not found: %s\n' "$2" >&2
   exit 1
 fi
 exit 0
-`), 0o755); err != nil {
+`)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME", "hull")

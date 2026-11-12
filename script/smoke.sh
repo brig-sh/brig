@@ -57,8 +57,14 @@ verb="$1"; shift
 case "$verb" in
   --version)
     # What the real one prints. rc23 is the first that resolves a digest
-    # reference against its store; a case below drives an older one.
-    printf 'hull version %s\n' "${STUB_HULL_VERSION:-0.1.0-rc23}"
+    # reference against its store; a case below drives an older one. It ends
+    # with the platform the build is for, and on a Linux host brig drives a
+    # hull as the macOS one only when that says darwin, as internal/hullstub
+    # has the Go tests' stubs say. A version that names its own platform, as
+    # the hull on Linux section's does, is printed as is.
+    v="${STUB_HULL_VERSION:-0.1.0-rc23}"
+    case "$v" in *'('*) ;; *) v="$v (go1.26.8, darwin/arm64)" ;; esac
+    printf 'hull version %s\n' "$v"
     ;;
   ps)
     # `ps -a` also lists an instance that is merely holding its name.
