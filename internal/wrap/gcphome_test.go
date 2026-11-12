@@ -42,7 +42,7 @@ func TestAGCPRunThatForwardsGoogleIdentityVariablesIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a gcp run that forwards GOOGLE_APPLICATION_CREDENTIALS and CLOUDSDK_CONFIG was not refused")
 	}
-	for _, want := range []string{"GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG", "brokered (route gcp)"} {
+	for _, want := range []string{"GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG", "gcp (policy brokered)"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal does not name %s: %v", want, err)
 		}
@@ -70,12 +70,12 @@ func TestAGCPRunThatForwardsGoogleIdentityVariablesIsRefused(t *testing.T) {
 	// refusal says where to set it instead.
 	file := routedConfig(t, gcpEndpoint, &hullRecorder{})
 	file.Env = append(file.Env, profile.EnvBinding{Name: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE", Value: "/root/tok"})
-	if err := file.gcpShadowRefusal(); err == nil || !strings.Contains(err.Error(), "The guest sets CLOUDSDK_AUTH_ACCESS_TOKEN_FILE itself") {
+	if err := file.gcpShadowRefusal(); err == nil || !strings.Contains(err.Error(), "the guest sets CLOUDSDK_AUTH_ACCESS_TOKEN_FILE itself") {
 		t.Errorf("gcpShadowRefusal = %v, want a refusal that says the guest sets the token file", err)
 	}
 	one := routedConfig(t, gcpEndpoint, &hullRecorder{})
 	one.Env = append(one.Env, profile.EnvBinding{Name: "CLOUDSDK_CONFIG", Value: "/x"})
-	if err := one.gcpShadowRefusal(); err == nil || strings.Contains(err.Error(), "The guest sets") {
+	if err := one.gcpShadowRefusal(); err == nil || strings.Contains(err.Error(), "the guest sets") {
 		t.Errorf("gcpShadowRefusal = %v, want a refusal without the token file note", err)
 	}
 
@@ -327,7 +327,7 @@ func TestAGCPRunThatMovesHOMEIsRefused(t *testing.T) {
 		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
 		cfg.Env = append(cfg.Env, b)
 		err := cfg.gcpShadowRefusal()
-		if err == nil || !strings.Contains(err.Error(), "HOME moves ~/.config/gcloud") {
+		if err == nil || !strings.Contains(err.Error(), "HOME must be the guest home") {
 			t.Errorf("%+v: gcpShadowRefusal = %v, want the HOME refusal", b, err)
 		}
 	}
