@@ -192,3 +192,47 @@ func TestHostRouteForwardsWholePath(t *testing.T) {
 		t.Errorf("the audit path carries a route prefix:\n%s", r.lastAudit())
 	}
 }
+
+// gh sends its token as "Authorization: token <t>". Only the github-api
+// route reads that scheme, and it injects the PAT as a Bearer value.
+func TestTokenSchemeIsReadOnGitHubAPI(t *testing.T) {
+	for _, scheme := range []string{"token", "Token"} {
+		t.Run(scheme, func(t *testing.T) {
+			up := newUpstream(t, nil)
+			r := newRig(t, up, []Route{presetRoute(t, v1alpha1.PresetGitHubAPI, "github-api", "gh-token", up.URL, nil)}, arrivesOn("brig-a"))
+			tok := r.mint("brig-a", "github-api")
+			resp := r.doHost("github-api.brig.internal", "GET", "/api/v3/user", http.Header{"Authorization": {scheme + " " + tok}})
+			wantStatus(t, resp, http.StatusOK)
+			got := up.last(t).header.Get("Authorization")
+			if got != "Bearer "+fakeGHToken {
+				t.Errorf("the upstream saw Authorization %q, want the PAT as a Bearer value", got)
+			}
+			if strings.Contains(got, tok) {
+				t.Errorf("the session token reached the upstream: %q", got)
+			}
+		})
+	}
+}
+
+func TestTokenSchemeIsRefusedElsewhere(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, []Route{presetRoute(t, v1alpha1.PresetGitHubToken, "github", "gh-token", up.URL, nil)})
+	tok := r.mint("brig-a", "github")
+	resp, _ := r.do("GET", "/brig-a/r/github/user", http.Header{"Authorization": {"token " + tok}}, "")
+	wantStatus(t, resp, http.StatusUnauthorized)
+	if n := up.count(); n != 0 {
+		t.Fatalf("the upstream saw %d requests", n)
+	}
+}
+
+func TestTokenSchemeDoesNotHideASecondToken(t *testing.T) {
+	up := newUpstream(t, nil)
+	r := newRig(t, up, []Route{presetRoute(t, v1alpha1.PresetGitHubAPI, "github-api", "gh-token", up.URL, nil)}, arrivesOn("brig-a"))
+	tok := r.mint("brig-a", "github-api")
+	resp := r.doHost("github-api.brig.internal", "GET", "/api/v3/user?t="+tok, http.Header{"Authorization": {"token " + tok}})
+	wantStatus(t, resp, http.StatusForbidden)
+	wantAudit(t, r.lastAudit(), "check=placeholder")
+	if n := up.count(); n != 0 {
+		t.Fatalf("the upstream saw %d requests", n)
+	}
+}
