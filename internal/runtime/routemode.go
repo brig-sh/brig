@@ -92,6 +92,8 @@ var modeRecords = []ModeRecord{
 		Why: fmt.Sprintf(endpointVmnetWhy, "vz"), Remedy: endpointVmnetRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"hull", "qemu"}, State: CannotEnforce,
 		Why: fmt.Sprintf(endpointVmnetWhy, "qemu"), Remedy: endpointVmnetRemedy},
+	{Mode: v1alpha1.ModeEndpoint, Path: linuxHullPath, State: CannotEnforce,
+		Why: linuxHullNoNetworkWhy + ", where brig routes brig.internal", Remedy: linuxHullRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"nerdctl", uruncShim}, State: Enforced, Why: EndpointNerdctlWhy,
 		Transport: transportBrigInternal, Remedy: endpointGuestRemedy},
 	{Mode: v1alpha1.ModeEndpoint, Path: RunPath{"nerdctl", runcBackend}, State: CannotEnforce,
@@ -267,6 +269,11 @@ func CheckBrigInternal(rt Runtime, path RunPath, net string) error {
 func RoutePath(rt Runtime, hypervisor string) RunPath {
 	if n, ok := rt.(*nerdctl); ok {
 		return RunPath{n.driver(), containerdRuntime()}
+	}
+	// hull on Linux boots on urunc whatever monitor it is told. Its path is
+	// never hull on hvi, whose row answers for the macOS gateway.
+	if h, ok := rt.(*hull); ok && h.linux {
+		return linuxHullPath
 	}
 	switch kind := rt.Kind(); kind {
 	case "hull":

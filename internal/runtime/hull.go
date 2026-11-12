@@ -138,14 +138,27 @@ func (h *hull) Bin() string  { return h.bin }
 // the backend that will actually boot rather than the absence of a setting.
 //
 // The rootfs is overlay-block when runArgs hands hull that mode, read from
-// hullRootfsMode, the same call runArgs makes. Otherwise it is the value
-// runArgs hands --rootfs-type. With none, brig passes no flag and hull picks
+// rootfsMode, the same call Run makes. Otherwise it is the value runArgs
+// hands --rootfs-type. With none, brig passes no flag and hull picks
 // per backend. The row says that and names no type, because hull's default is
 // hull's to change.
+//
+// hull on Linux has no backend of its own: its guest boots on containerd and
+// urunc, as nerdctl's does, so its row is the urunc row, built by the same
+// call. The hypervisor is the monitor linuxMonitor picks on a generic boot,
+// which is hvi where the run names none or vz, and urunc's own default on any
+// other boot, where brig names none. The rootfs is the mode brig hands urunc
+// or urunc's default, never a --rootfs-type: hull on Linux passes none, and on
+// Linux how the VM reaches its root is urunc's decision. A boot that brings its
+// own root names none. Otherwise brig plan would show vz on a host that has
+// none, or a hull default root that no Linux boot has.
 func (h *hull) Isolation(spec RunSpec) Isolation {
+	if h.linux {
+		return linuxHullIsolation(spec)
+	}
 	hv := hypervisor(spec)
 	rootfs := orDefault(spec.RootfsType, "hull default")
-	mode, err := hullRootfsMode(spec, hv)
+	mode, err := h.rootfsMode(spec, hv)
 	if err != nil {
 		// CanRun refuses this run. The row names the mode asked for.
 		mode = spec.RootfsMode
@@ -154,6 +167,45 @@ func (h *hull) Isolation(spec RunSpec) Isolation {
 		rootfs = mode
 	}
 	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
+}
+
+// linuxHullIsolation is the ISOLATION row of hull on Linux. See Isolation.
+func linuxHullIsolation(spec RunSpec) Isolation {
+	if !spec.GenericBoot {
+		return containerdIsolation("hull", uruncShim, uruncShim, "", "")
+	}
+	monitor, err := linuxMonitor(spec.Hypervisor)
+	if err != nil {
+		// CanRun refuses this run. The row names the hypervisor asked for.
+		monitor = spec.Hypervisor
+	}
+	mode, err := linuxHullRootfsMode(spec)
+	if err != nil {
+		// CanRun refuses this run. The row names the mode asked for.
+		mode = spec.RootfsMode
+	}
+	return containerdIsolation("hull", uruncShim, uruncShim, monitor, orDefault(mode, "urunc default"))
+}
+
+// Backend names the backend the run boots on, which is what brig plan
+// reports. On macOS it is the hypervisor asked for, as brig plan reported
+// before hull named one. hull on Linux boots on urunc, so there it is the
+// monitor the ISOLATION row names: the one linuxMonitor picks on a generic
+// boot, and "" on any other, where urunc picks. Without it the RUNTIME row
+// said vz, or nothing, where the ISOLATION row said hvi. A name urunc does not
+// run reports as asked, and the run refuses it.
+func (h *hull) Backend(spec RunSpec) string {
+	if !h.linux {
+		return spec.Hypervisor
+	}
+	if !spec.GenericBoot {
+		return ""
+	}
+	monitor, err := linuxMonitor(spec.Hypervisor)
+	if err != nil {
+		return spec.Hypervisor
+	}
+	return monitor
 }
 
 // PinsDigest asks the hull on this machine whether it can boot a digest
@@ -507,7 +559,7 @@ func (h *hull) List() ([]Instance, error) {
 
 func (h *hull) Run(spec RunSpec) error {
 	hv := hypervisor(spec)
-	if err := supports(spec, hv); err != nil {
+	if err := h.CanRun(spec); err != nil {
 		return err
 	}
 	net := orDefault(spec.Net, "shared")
@@ -558,7 +610,7 @@ func (h *hull) Run(spec RunSpec) error {
 			return fmt.Errorf("cannot publish %s's ports: %w", spec.Name, err)
 		}
 	}
-	args, envVals, err := runArgs(spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
+	args, envVals, err := runArgsFor(h.rootfsMode, spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
 	if err != nil {
 		// No guest will boot behind the forwards installed above, and a
 		// sandbox that was never created gives stop and rm nothing to act on.
@@ -640,7 +692,84 @@ func (h *hull) BrigInternalAddr(name string) (netip.Addr, error) {
 // CanRun is supports for a caller that has not started anything yet, so that
 // the refusals below also reach the path that joins a running sandbox instead
 // of booting one. See RunChecker.
-func (h *hull) CanRun(spec RunSpec) error { return supports(spec, hypervisor(spec)) }
+func (h *hull) CanRun(spec RunSpec) error {
+	if h.linux {
+		return linuxSupports(spec)
+	}
+	return supports(spec, hypervisor(spec))
+}
+
+// linuxHullPath is the run path of hull on Linux. Its guest boots on urunc
+// whatever monitor the run names, so the path names the shim, as nerdctl's
+// does, and never reads a row of hull's macOS backends.
+var linuxHullPath = RunPath{"hull", uruncShim}
+
+// IsLinuxHull reports whether rt is hull on Linux. Every sandbox it boots is
+// on one shared network, so wrap defaults an unset posture to shared there,
+// as it does for the macOS hull's vz and qemu, and names nerdctl as the way
+// to an isolated one.
+func IsLinuxHull(rt Runtime) bool {
+	h, ok := rt.(*hull)
+	return ok && h.linux
+}
+
+// The reason and the remedy of the rows of linuxHullPath in the capability
+// and route mode tables.
+const (
+	linuxHullNoNetworkWhy = "hull on Linux gives a sandbox no network of its own yet"
+	linuxHullRemedy       = "Use nerdctl (BRIG_RUNTIME=nerdctl), or detach the policy"
+)
+
+// linuxSupports is supports for hull on Linux. hull there is a containerd
+// client: urunc boots the guest, the monitor is urunc's, and the network is
+// a CNI bridge shared by every sandbox. It has no gateway, so it refuses
+// everything brig hangs on one on macOS. It cannot read macOS's hvi rows: a
+// policy on hull with BRIG_HYPERVISOR=hvi would otherwise read as enforced
+// on a host where nothing enforces it.
+func linuxSupports(spec RunSpec) error {
+	if spec.GUI {
+		return errors.New("this profile opens a graphical window, which hull cannot display on Linux; " +
+			"run it on macOS, where hull's vz backend can show it")
+	}
+	if err := requireEgress(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if err := requireDiverts(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if spec.Egress.Divert.BrigInternal {
+		if err := RequireRouteMode(v1alpha1.ModeEndpoint, linuxHullPath); err != nil {
+			return err
+		}
+	}
+	if err := checkSetup(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if len(spec.Publish) > 0 {
+		if spec.Net == "none" {
+			return offlinePublishError(spec.Publish)
+		}
+		return fmt.Errorf("this sandbox publishes %s, and hull on Linux cannot publish a port yet; "+
+			"withdraw it with `brig network unpublish`, or use nerdctl (BRIG_RUNTIME=nerdctl). "+
+			"A publication outlives the run that made it, so this applies whether or not "+
+			"--publish is on this line", spec.Publish[0])
+	}
+	// The posture is a promise too: the bridge hull attaches a sandbox to is
+	// shared, and two sandboxes on it reach each other.
+	if spec.Net == "isolated" {
+		return errors.New("--network isolated gives the sandbox a network of its own, which hull on Linux " +
+			"cannot do yet; use nerdctl (BRIG_RUNTIME=nerdctl), or run with --network shared")
+	}
+	if spec.GenericBoot {
+		if _, err := linuxMonitor(spec.Hypervisor); err != nil {
+			return err
+		}
+	}
+	if _, err := linuxHullRootfsMode(spec); err != nil {
+		return err
+	}
+	return nil
+}
 
 // supports rejects a spec the chosen backend cannot honour, before anything
 // is started. hull would refuse this too, but only at boot and without
@@ -756,7 +885,26 @@ func isolatedNet(net string, policy Egress) bool {
 	return net == "isolated" || policy.Filtered() || policy.Divert.Requested()
 }
 
-// runArgs is the one place the run command line is built, so that what a test
+// rootfsMode is the rootfs mode this hull hands its guest on hv. hull on
+// Linux hands it to urunc, and asks what urunc builds an overlay root with;
+// the macOS hull asks for its own mke2fs. CanRun, the ISOLATION row and the
+// boot all ask this, and doctor asks the same through OverlayRootFor and
+// OverlayMonitorFor, so none of them can tell a Linux host to install
+// e2fsprogs with brew.
+func (h *hull) rootfsMode(spec RunSpec, hv string) (string, error) {
+	if h.linux {
+		return linuxHullRootfsMode(spec)
+	}
+	return hullRootfsMode(spec, hv)
+}
+
+// runArgs is runArgsFor with the macOS hull's rootfs mode, the command line
+// the tests of the macOS hull build.
+func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
+	return runArgsFor(hullRootfsMode, spec, hv, net, gatewaySock, gatewayCidr, locate, fetch)
+}
+
+// runArgsFor is the one place the run command line is built, so that what a test
 // asserts and what boots a sandbox cannot drift apart. It returns the argv
 // and the environment carrying the guest variables. splitEnv decides which
 // values go in which.
@@ -765,7 +913,11 @@ func isolatedNet(net string, policy Egress) bool {
 // missing. It is a parameter rather than a method so that this stays a pure
 // argv-building function, drivable by a test with no hull on PATH; pass nil to
 // resolve the assets without ever downloading.
-func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
+//
+// rootfsMode decides the layout of the root. Run passes the hull's own, so
+// the boot asks what CanRun and the ISOLATION row asked.
+func runArgsFor(rootfsMode func(RunSpec, string) (string, error), spec RunSpec, hv, net, gatewaySock, gatewayCidr string,
+	locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
 	args = []string{"run", "--detach", "--name", spec.Name,
 		"--hypervisor", hv,
 		"--net", hullNet(net),
@@ -817,7 +969,7 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	}
 	args = append(args, envArgs...)
 	// hull takes the layout of the root from its environment, not a flag.
-	mode, err := hullRootfsMode(spec, hv)
+	mode, err := rootfsMode(spec, hv)
 	if err != nil {
 		return nil, nil, err
 	}
