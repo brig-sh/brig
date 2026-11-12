@@ -55,6 +55,17 @@ func (r *Route) validate(expanded bool) error {
 	if len(r.Services) > 0 && r.Preset != PresetGCP {
 		return fmt.Errorf("services needs preset: %s", PresetGCP)
 	}
+	// The name becomes a DNS label of the host the guest reaches the route at.
+	if r.Mode == ModeHost {
+		if len(r.Name) > 63 {
+			return fmt.Errorf("route name %q is %d characters; a host route name must be 63 or fewer",
+				r.Name, len(r.Name))
+		}
+		if strings.HasSuffix(r.Name, "-") {
+			return fmt.Errorf("route name %q ends with a dash; a host route name must end with a letter or digit",
+				r.Name)
+		}
+	}
 	// Whether this build serves a mode other than endpoint is the run's to
 	// say, so a policy reads the same in every build.
 	if r.Mode != "" && r.Mode != ModeEndpoint {

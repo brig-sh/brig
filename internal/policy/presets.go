@@ -108,8 +108,8 @@ func decodePreset(name v1alpha1.Preset) (presetFile, error) {
 // this build does not serve, or leaves out the mode of the preset's own
 // route.
 func (p presetFile) checkModes() error {
-	if p.Mode != v1alpha1.ModeEndpoint {
-		return fmt.Errorf("mode is %q; a preset's route is %q", p.Mode, v1alpha1.ModeEndpoint)
+	if p.Mode != v1alpha1.ModeEndpoint && p.Mode != v1alpha1.ModeHost {
+		return fmt.Errorf("mode is %q; a preset's route must be endpoint or host", p.Mode)
 	}
 	if len(p.Modes) == 0 {
 		return fmt.Errorf("modes lists nothing")
