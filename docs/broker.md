@@ -340,7 +340,8 @@ body](#holding-the-body) has the limits on what all requests hold at once.
 
 The session token is the guest's handle on its route. The tool in the guest
 sends it in one place, the carrier: `Authorization: Bearer`, the basic-auth
-password on a `basicAuth` route, a header the route sets with `{value}`,
+password on a `basicAuth` route, `Authorization: token` on the
+[`github-api` route](#the-github-api-preset), a header the route sets with `{value}`,
 such as `x-api-key`, or the whole `Authorization` value on a route that
 vends. Anywhere else, the agent is leaking its handle: in a prompt that
 echoes the environment, a path, a query, a header of its own. So after the
@@ -903,7 +904,8 @@ An `endpoint` route can never:
 - leave the tool as it is. The tool is pointed at the route URL, and on
   hull and nerdctl it trusts the brig CA for `brig.internal`.
 - serve a tool that pins the upstream's certificate, or that has no setting
-  for its endpoint.
+  for its endpoint. A `host` route serves a tool of this kind that takes a
+  host name, such as `gh`: see [The github-api preset](#the-github-api-preset).
 - keep one session from the tool to the upstream. There are two: the
   tool's to the broker, and the broker's to the upstream.
 - leave a request untouched. The broker reads and forwards every request.
@@ -1068,8 +1070,41 @@ preset:
 | `claude-code` | `ANTHROPIC_BASE_URL=<route URL>`, `CLAUDE_CODE_OAUTH_TOKEN=<token>` |
 | `anthropic-api-key` | `ANTHROPIC_BASE_URL=<route URL>`, `ANTHROPIC_API_KEY=<token>` |
 | `github-token` | `BRIG_ROUTE_GITHUB_TOKEN=<token>`, and git configuration in `GIT_CONFIG_COUNT` |
+| `github-api` | `GH_HOST=github-api.brig.internal`, `GH_ENTERPRISE_TOKEN=<token>` |
 | `aws` | `AWS_CONTAINER_CREDENTIALS_FULL_URI=<route URL>`, `AWS_CONTAINER_AUTHORIZATION_TOKEN=<token>`, `AWS_REGION` and `AWS_DEFAULT_REGION=<the region of the AWS profile>`. The route URL is `http://169.254.170.2/<sandbox>/r/<route>` |
 | `gcp` | `BRIG_GCP_URL=<route URL>`, `BRIG_GCP_TOKEN=<token>`, `CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>=<route URL>/<service>/<path>` for each service, and, on the `brig.internal` transport, `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` |
+
+### The github-api preset
+
+`github-api` is a `host` route for `gh`. `gh` takes no API URL for
+github.com, so `GH_HOST` names the route and `gh` treats it as a GitHub
+Enterprise host, with the token in `GH_ENTERPRISE_TOKEN`. The broker sends
+the request to `https://api.github.com` with `Authorization: Bearer` and the
+credential. `gh` sends its token as `Authorization: token <token>`. On this
+preset only, the broker reads that scheme, case-insensitively, as the session
+token. On any other route the scheme is not read and the request is a `401`.
+The preset is for `api.github.com`: its path mapping assumes that host, so an
+`upstream` that points at a GitHub Enterprise server does not work through it.
+
+The broker forwards only the paths `gh` sends to an Enterprise host:
+
+| `gh` sends | Forwarded as |
+| --- | --- |
+| `/api/v3` | `/` |
+| `/api/v3/<path>` | `/<path>` |
+| `/api/graphql` | `/graphql` |
+
+Any other path is a `404` with `check=github-api.path`, before the broker reads
+the credential. `request.allow.paths` matches the path `gh` sent, such as
+`/api/v3/repos/*` or `/api/graphql`. `request.allow.repos` is refused on this
+preset. A GraphQL request carries the repository in the query, so a path rule
+cannot limit it by repository. The scope of the token is the limit.
+
+Select a repository with `gh ... -R <route>.brig.internal/<owner>/<repo>`, such
+as `github-api.brig.internal/<owner>/<repo>` for a route named `github-api`,
+because the host `gh` knows is the name of the route. git clone and push keep
+using the `github-token` route. `gh repo clone` and `gh pr checkout` are not
+served by `github-api`, and neither is `uploads.github.com`.
 
 A route with `guest.git` points git at the route through the environment,
 and writes nothing into the guest home:
