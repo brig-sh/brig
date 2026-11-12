@@ -147,8 +147,10 @@ func foldedUnder(p, base string) bool {
 // not ASCII into ASCII ones, so .conﬁg, with the ligature ﬁ, is .config too.
 // Rather than copy its tables, a name with such letters is taken for an ASCII
 // name when its own ASCII letters appear there in order: a fold keeps ASCII
-// letters ASCII, so no other name can fold into it. On Linux this refuses a
-// few more paths, never fewer.
+// letters ASCII, so no other name can fold into it. A name with no ASCII
+// letter is not taken: the folds that give ASCII give only f, i, k, l, s and
+// t, which spell none of the names checked here. On Linux this refuses a few
+// more paths, never fewer.
 func sameName(a, b string) bool {
 	if strings.EqualFold(a, b) {
 		return true
@@ -159,17 +161,17 @@ func sameName(a, b string) bool {
 	if isASCII(a) {
 		a, b = b, a
 	}
-	rest := strings.ToLower(b)
+	rest, seen := strings.ToLower(b), false
 	for i := 0; i < len(a); i++ {
 		if c := a[i]; c < 0x80 {
 			j := strings.IndexByte(rest, toLowerASCII(c))
 			if j < 0 {
 				return false
 			}
-			rest = rest[j+1:]
+			rest, seen = rest[j+1:], true
 		}
 	}
-	return true
+	return seen
 }
 
 func isASCII(s string) bool {
