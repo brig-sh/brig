@@ -15,6 +15,9 @@ const (
 	PresetAnthropicAPIKey Preset = "anthropic-api-key"
 	// PresetGitHubToken is git over HTTPS to github.com with a token.
 	PresetGitHubToken Preset = "github-token"
+	// PresetGitHubAPI is gh against api.github.com with a token, reached as a
+	// host route.
+	PresetGitHubAPI Preset = "github-api"
 	// PresetAWS is the AWS container credential provider. The route answers
 	// it with temporary keys, because AWS signs each request with the secret
 	// key and a stand-in cannot be injected on the way out.
