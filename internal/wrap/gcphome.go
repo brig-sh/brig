@@ -226,7 +226,7 @@ func (c *Config) gcpHomeRefusal() error {
 			why = append(why, fmt.Sprintf("a copy of %s into the guest home", s.Host))
 		case onGCloudDir(s.Rel):
 			why = append(why, fmt.Sprintf("a copy of %s at %s", s.Host, s.Rel))
-		case hostGCloud != "" && overlapsFolded(filepath.Clean(s.Host), hostGCloud):
+		case hostGCloud != "" && hostOverlaps(filepath.Clean(s.Host), hostGCloud):
 			why = append(why, fmt.Sprintf("a copy of your %s", s.Host))
 		}
 	}
@@ -243,6 +243,41 @@ func (c *Config) gcpHomeRefusal() error {
 func overlapsFolded(a, b string) bool {
 	a, b = filepath.ToSlash(a), filepath.ToSlash(b)
 	return foldedUnder(a, b) || foldedUnder(b, a)
+}
+
+// hostOverlaps reports whether the host directories a and b are one or one
+// holds the other, by spelling or by the directory each resolves to: a seed
+// copies through links, and one directory has many spellings, such as /var
+// and /private/var on macOS.
+func hostOverlaps(a, b string) bool {
+	if overlapsFolded(a, b) {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return insideDir(ra, rb) || insideDir(rb, ra)
+}
+
+// insideDir reports whether the resolved path p is the directory dir or
+// inside it, comparing each directory above p with dir by identity.
+func insideDir(p, dir string) bool {
+	d, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	for {
+		if i, err := os.Stat(p); err == nil && os.SameFile(i, d) {
+			return true
+		}
+		up := filepath.Dir(p)
+		if up == p {
+			return false
+		}
+		p = up
+	}
 }
 
 // gcloudIdentityFiles are the files in ~/.config/gcloud that hold an

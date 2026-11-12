@@ -392,7 +392,7 @@ guest `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `.aws/credentials` or `.aws/config` (for example `--home ~`), or a profile
 volume, `files:` binding, onboarding file or host config seed at `.aws`, a
 host config seed into the guest home itself, or a seed copied from your own
-`~/.aws`. Brig compares `.aws` as a macOS file
+`~/.aws` or a directory that holds it. Brig compares `.aws` as a macOS file
 system can: with the case folded, and with a letter that is not ASCII taken
 for the ASCII letters it could fold into. The CLI's own cache in
 `~/.aws/cli`, which the

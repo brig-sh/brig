@@ -108,6 +108,15 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 	shortStateDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	for _, d := range []string{".config/gcloud", ".config/gh"} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]func(c *Config){
 		"volume": func(c *Config) {
 			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: ".config/gcloud"})
@@ -179,6 +188,17 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".config", "gcloud", "configurations"), Rel: "cfg"})
 		},
 		"host ~": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: home, Rel: "copy"}) },
+		// The seed copies through links, so the path it resolves to counts.
+		"host ~/.config/gcloud by its real path": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(realHome, ".config", "gcloud"), Rel: "cfg"})
+		},
+		"host ~/.config/gcloud through a link": func(c *Config) {
+			link := filepath.Join(t.TempDir(), "link")
+			if err := os.Symlink(filepath.Join(home, ".config", "gcloud"), link); err != nil {
+				t.Fatal(err)
+			}
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: link, Rel: "cfg"})
+		},
 	}
 	for name, add := range cases {
 		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})

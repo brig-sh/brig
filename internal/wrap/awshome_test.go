@@ -19,6 +19,13 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 	shortStateDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, awsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]func(c *Config){
 		"volume": func(c *Config) {
 			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: ".aws"})
@@ -49,6 +56,19 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 		// A seed into the home itself copies the host directory's .aws
 		// along with the rest.
 		"seed into the home": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: "."}) },
+		// A seed of a directory that holds ~/.aws copies it along.
+		"host ~": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: home, Rel: "copy"}) },
+		// The seed copies through links, so the path it resolves to counts.
+		"host ~/.aws by its real path": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(realHome, awsDir), Rel: "cfg"})
+		},
+		"host ~/.aws through a link": func(c *Config) {
+			link := filepath.Join(t.TempDir(), "link")
+			if err := os.Symlink(filepath.Join(home, awsDir), link); err != nil {
+				t.Fatal(err)
+			}
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: link, Rel: "cfg"})
+		},
 	}
 	for name, add := range cases {
 		cfg := routedConfig(t, awsEndpoint, &hullRecorder{})
