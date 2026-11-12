@@ -375,11 +375,13 @@ and never the secret key or the session token.
 
 **What the keys can do.** The keys can do what the identity behind them can
 do. In role mode that is the role's policy, so give the sandbox a role with
-a narrow policy. In self mode it is your whole identity in that profile: the
+a narrow policy. Session policies from `brig secret import --policy-arns`
+narrow it further: the keys get what both the role and those policies
+allow. In self mode it is your whole identity in that profile: the
 sandbox can do what you can. Self mode is never a default: `brig secret
 import` refuses an import that names neither mode, or both. Each run and
-exec prints a line that names the role, or says that the sandbox has your
-own identity.
+exec prints a line that names the role and its session policies, or says
+that the sandbox has your own identity.
 
 **Credentials that win over the route.** An AWS SDK reads its environment
 and `~/.aws` before the container credential provider. A run with a route

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -124,6 +125,12 @@ func awsSandbox(id string) injector.Sandbox {
 // that holds a role pointer under the name "aws".
 func startAWSBroker(t *testing.T, cfg serverConfig) (*running, *fakeAWS) {
 	t.Helper()
+	return startAWSBrokerWith(t, cfg, awsPointer)
+}
+
+// startAWSBrokerWith is startAWSBroker with pointer stored under "aws".
+func startAWSBrokerWith(t *testing.T, cfg serverConfig, pointer string) (*running, *fakeAWS) {
+	t.Helper()
 	f := newFakeAWS(t)
 	if cfg.dir == "" {
 		cfg.dir = shortDir(t)
@@ -133,7 +140,7 @@ func startAWSBroker(t *testing.T, cfg serverConfig) (*running, *fakeAWS) {
 	}
 	cfg.now = f.clock
 	r := startBrokerWith(t, cfg, nil)
-	if err := r.store.Create("aws", []byte(awsPointer)); err != nil {
+	if err := r.store.Create("aws", []byte(pointer)); err != nil {
 		t.Fatal(err)
 	}
 	return r, f
@@ -149,6 +156,32 @@ func refusal(t *testing.T, err error) *injector.RefusedError {
 	return ref
 }
 
+// The stored session policies reach the line brig prints and the
+// assume-role call. Without the first, the run line would show the whole role
+// while the keys are narrowed, or the reverse.
+func TestRegisterReportsSessionPolicies(t *testing.T) {
+	const policy = "arn:aws:iam::111122223333:policy/brig-read"
+	pointer := `{"kind":"aws","awsProfile":"dev","mode":"role",` +
+		`"roleArn":"arn:aws:iam::111122223333:role/brig-sandbox","policyArns":["` + policy + `"]}`
+	r, f := startAWSBrokerWith(t, serverConfig{logTo: io.Discard}, pointer)
+	added, err := r.client.Add(awsSandbox("brig-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := injector.VendInfo{Mode: "role", AWSProfile: "dev", RoleARN: "arn:aws:iam::111122223333:role/brig-sandbox",
+		PolicyARNs: []string{policy}}
+	if got := added.Vends["aws"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("Vends[aws] = %+v, want %+v", got, want)
+	}
+	blob, err := os.ReadFile(filepath.Join(f.dir, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), "--policy-arns arn="+policy) {
+		t.Errorf("assume-role did not pass the session policy:\n%s", blob)
+	}
+}
+
 func TestRegisterReturnsRegion(t *testing.T) {
 	r, _ := startAWSBroker(t, serverConfig{logTo: io.Discard})
 	added, err := r.client.Add(awsSandbox("brig-a"))
@@ -159,7 +192,7 @@ func TestRegisterReturnsRegion(t *testing.T) {
 		t.Errorf("Regions[aws] = %q, want us-east-1", got)
 	}
 	want := injector.VendInfo{Mode: "role", AWSProfile: "dev", RoleARN: "arn:aws:iam::111122223333:role/brig-sandbox"}
-	if got := added.Vends["aws"]; got != want {
+	if got := added.Vends["aws"]; !reflect.DeepEqual(got, want) {
 		t.Errorf("Vends[aws] = %+v, want %+v", got, want)
 	}
 	// A sandbox with no route that vends is answered with neither.
@@ -520,10 +553,27 @@ func TestAWSFailureGoesToTheBrokerLog(t *testing.T) {
 // The broker's VendDoc check takes a stored AWS pointer and nothing else, so
 // a route that proxies keeps every other secret.
 func TestAWSPointerDocIsVendOnly(t *testing.T) {
-	if !awsPointerDoc([]byte(`{"kind":"aws","awsProfile":"dev","mode":"self"}`)) {
-		t.Error("an AWS pointer was not taken for one")
+	// A pointer Validate refuses is still a pointer: it must not be forwarded
+	// upstream as a credential value.
+	for _, doc := range []string{
+		`{"kind":"aws","awsProfile":"dev","mode":"self"}`,
+		`{"kind":"aws"}`,
+		`{"kind":"aws","awsProfile":"dev","mode":"role","roleArn":"arn:aws:iam::0:role/r","policyArns":[]}`,
+		`{"kind":"aws","awsProfile":"dev","mode":"role","roleArn":"arn:aws:iam::0:role/r","policyArns":["x"]}`,
+		`{"kind":"aws","awsProfile":"dev","mode":"self","policyArns":[]}`,
+		// Not JSON that ParsePointer or a whole-document unmarshal reads,
+		// but still a profile and a role that must not go upstream.
+		`{"kind":"aws","awsProfile":"dev","mode":"role","roleArn":"arn:aws:iam::0:role/r"`,
+		`{"kind":"aws","awsProfile":"dev","mode":"self"}trailing`,
+		`{"Kind":"aws","awsProfile":"dev","mode":"self"}`,
+		"\ufeff" + `{"kind":"aws","awsProfile":"dev","mode":"self"}`,
+		"\u00a0" + `{"kind":"aws","awsProfile":"dev","mode":"self"}`,
+	} {
+		if !awsPointerDoc([]byte(doc)) {
+			t.Errorf("%s was not taken for an AWS pointer", doc)
+		}
 	}
-	for _, doc := range []string{"ghp_token", `{"accessToken":"x"}`, `{"kind":"aws"}`} {
+	for _, doc := range []string{"ghp_token", `{"accessToken":"x"}`, `{"kind":"gcloud"}`, `["aws"]`} {
 		if awsPointerDoc([]byte(doc)) {
 			t.Errorf("%q was taken for an AWS pointer", doc)
 		}

@@ -365,7 +365,11 @@ func (c *Config) sayVends(vends map[string]injector.VendInfo) {
 	for _, name := range slices.Sorted(maps.Keys(vends)) {
 		v := vends[name]
 		if v.RoleARN != "" {
-			c.warnf("route %s: AWS role %s, assumed from your profile %s", name, v.RoleARN, v.AWSProfile)
+			role := v.RoleARN
+			if len(v.PolicyARNs) > 0 {
+				role += " with session policies " + strings.Join(v.PolicyARNs, ", ")
+			}
+			c.warnf("route %s: AWS role %s, assumed from your profile %s", name, role, v.AWSProfile)
 			continue
 		}
 		c.warnf("route %s: AWS as your own identity (profile %s); the sandbox can do what you can", name,

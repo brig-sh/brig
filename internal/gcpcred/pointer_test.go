@@ -58,12 +58,28 @@ func TestIsPointerMatchesAMalformedGCloudDocument(t *testing.T) {
 	for _, doc := range []string{
 		`{"kind":"gcloud","mode":"bogus"}`,
 		`{"kind":"gcloud","configuration":"default","mode":"self","extra":1}`,
+		`{"kind":"gcloud","configuration":"default","account":"a@example.com"`,
+		`{"kind":"gcloud","configuration":"default","mode":"self"}trailing`,
+		`{"Kind":"gcloud","configuration":"default","mode":"bogus"}`,
+		"\ufeff" + `{"kind":"gcloud","configuration":"default","mode":"self"}`,
 	} {
 		if !IsPointer([]byte(doc)) {
-			t.Errorf("%s: not recognised, so it would be sent as a raw token", doc)
+			t.Errorf("%s: not recognised as a gcloud pointer", doc)
 		}
 		if _, err := ParsePointer([]byte(doc)); err == nil {
 			t.Errorf("%s: accepted", doc)
+		}
+	}
+}
+
+// IsPointer reads a document through pointerkind.Trim, so ParsePointer does
+// too: a pointer an editor saved with a byte order mark or a Unicode space
+// around it is parsed, not held back as a pointer that never decodes.
+func TestParsePointerReadsPastABOMAndUnicodeSpace(t *testing.T) {
+	const ptr = `{"kind":"gcloud","configuration":"default","mode":"self","account":"someone@example.com"}`
+	for _, doc := range []string{"\ufeff" + ptr, "\u00a0" + ptr + "\u00a0"} {
+		if _, err := ParsePointer([]byte(doc)); err != nil {
+			t.Errorf("%q: %v", doc, err)
 		}
 	}
 }

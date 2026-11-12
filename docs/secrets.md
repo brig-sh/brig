@@ -248,6 +248,7 @@ which it cannot. To declare sources in your own profile, see
 | `--identity self` | with `--aws-profile` or `--gcloud-configuration`: the sandbox gets your own identity |
 | `--source-identity <id>` | with `--role-arn`: the source identity of the role session, in place of the one Brig reads from the profile |
 | `--session-duration <d>` | with `--role-arn`: the lifetime of the role session, `25m` to `1h`. Default `30m` |
+| `--policy-arns <arn>[,<arn>...]` | with `--role-arn`: managed policies that narrow the role session; repeat it to add more |
 | `--gcloud-configuration <c>` | for a secret whose source is `gcloud`: the gcloud configuration on your host that the sandbox's tokens come from. See [A gcloud login behind a route](#a-gcloud-login-behind-a-route) |
 | `--impersonate-service-account <email>` | with `--gcloud-configuration`: the sandbox acts as this service account. The recommended answer |
 
@@ -540,7 +541,8 @@ key. The broker reads it on each request and answers with keys it fetches
 through `aws`. See [An AWS profile behind a route](#an-aws-profile-behind-a-route).
 A route that proxies does not send such a pointer upstream: it answers 502
 with `check=credential.vendonly`, since the pointer names your AWS profile
-and role.
+and role. A document of kind `aws` that is not a valid pointer is held back
+the same way.
 
 A secret behind a `gcp` route can hold a pointer to a gcloud configuration
 in place of an access token. The broker reads it on each request and injects
@@ -549,6 +551,12 @@ a token it mints through `gcloud`. See
 without `services` does not send such a pointer upstream: it answers 502 with
 `check=credential.gcponly`, since the pointer names your gcloud configuration
 and service account.
+
+A route that proxies does not send upstream a secret that starts a JSON
+object and does not decode, such as a pointer cut short before its kind: it
+answers 502 with `check=credential.malformed`. Store it again with
+`brig secret update` or `brig secret import`. This also refuses a raw token
+that starts with `{` and is not JSON.
 
 ### An AWS profile behind a route
 
@@ -590,8 +598,26 @@ A role session lasts 30 minutes, which bounds how long a leaked key works.
 `--session-duration` sets `25m` to `1h`. The role cannot enforce the
 length, because IAM has no condition key for it. Brig requests it.
 
+`--policy-arns` narrows the role session with managed policies. The keys get
+only what both the role and the policies allow, never more than the role.
+One role can then serve sandboxes that need different access. The policies
+must be in the role's account, or be AWS managed policies. Each entry must
+be a policy ARN, so a policy whose name holds a comma cannot be passed: the
+list is split on commas. The flag can be given more than once, and each
+occurrence adds to the list. A stored role pointer with an empty `policyArns`
+list or a malformed entry is refused. Self mode
+refuses the flag, and a stored self pointer with `policyArns`, even an empty
+one, is refused: `export-credentials` cannot narrow a session.
+
+```bash
+brig secret import <profile> aws-creds --aws-profile dev \
+  --role-arn arn:aws:iam::111122223333:role/brig-coding-agent \
+  --policy-arns arn:aws:iam::111122223333:policy/brig-read-ec2
+```
+
 Before it stores anything, `import` checks with `aws` that the profile
-works, that it has a region, and in role mode that it can assume the role.
+works, that it has a region, and in role mode that it can assume the role,
+with any session policies, so a policy that does not exist fails at import.
 The guest gets the region as `AWS_REGION` and `AWS_DEFAULT_REGION`. A
 profile with no region is refused with the command that sets one.
 `--dry-run` runs the same checks and stores nothing. In self mode, `import`

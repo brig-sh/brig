@@ -1,6 +1,8 @@
 package awscred
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -88,5 +90,82 @@ func TestPointerSessionBounds(t *testing.T) {
 	self := Pointer{Kind: "aws", AWSProfile: "p", Mode: ModeSelf, SessionSeconds: 2700}
 	if err := self.Validate(); err == nil {
 		t.Error("self mode with a session was accepted")
+	}
+}
+
+// export-credentials cannot narrow a session, so a self pointer that names
+// session policies would vend the profile's full keys while the pointer
+// claims a narrower session. A stored pointer is data and is refused on read.
+func TestPointerSelfRefusesPolicyARNs(t *testing.T) {
+	for _, list := range []string{`["arn:aws:iam::0:policy/p"]`, `[]`} {
+		_, err := ParsePointer([]byte(`{"kind":"aws","awsProfile":"p","mode":"self","policyArns":` + list + `}`))
+		if err == nil || !strings.Contains(err.Error(), "policyArns") {
+			t.Errorf("a self pointer with policyArns %s: err = %v, want a refusal naming policyArns", list, err)
+		}
+	}
+}
+
+// The broker passes --policy-arns only for a non-empty list, so a stored
+// role pointer with an empty one would vend the whole role. A blank or
+// malformed entry would reach STS as an argument. Both are refused on read.
+func TestPointerRoleRefusesAnEmptyOrMalformedPolicyARNs(t *testing.T) {
+	for _, list := range []string{
+		`[]`,
+		`[""]`,
+		`[" "]`,
+		`["arn:aws:iam::0:policy/a",""]`,
+		`["arn:aws:iam::0:role/r"]`,
+		`["-arn:aws:iam::aws:policy/ReadOnlyAccess"]`,
+		`["ReadOnlyAccess"]`,
+		`["arn:aws:iam::0:policy/read,only"]`,
+	} {
+		_, err := ParsePointer([]byte(`{"kind":"aws","awsProfile":"p","mode":"role","roleArn":"arn:aws:iam::0:role/r","policyArns":` + list + `}`))
+		if err == nil || !strings.Contains(err.Error(), "policyArns") {
+			t.Errorf("policyArns %s: err = %v, want a refusal naming policyArns", list, err)
+		}
+	}
+	// An AWS managed policy is a policy ARN too.
+	if _, err := ParsePointer([]byte(`{"kind":"aws","awsProfile":"p","mode":"role","roleArn":"arn:aws:iam::0:role/r","policyArns":["arn:aws:iam::aws:policy/ReadOnlyAccess"]}`)); err != nil {
+		t.Errorf("an AWS managed policy: %v", err)
+	}
+}
+
+// A pointer stored before session policies existed has no policyArns, and
+// must come back as one with none, and marshal as it did, so it fetches as
+// before.
+func TestPointerPolicyARNsRoundTrip(t *testing.T) {
+	old := `{"kind":"aws","awsProfile":"p","mode":"role","roleArn":"arn:aws:iam::0:role/r"}`
+	p, err := ParsePointer([]byte(old))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PolicyARNs != nil {
+		t.Errorf("PolicyARNs = %v, want nil", p.PolicyARNs)
+	}
+	doc, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(doc), "policyArns") {
+		t.Errorf("a pointer with no session policies marshals with the key: %s", doc)
+	}
+	p, err = ParsePointer([]byte(`{"kind":"aws","awsProfile":"p","mode":"role","roleArn":"arn:aws:iam::0:role/r","policyArns":["arn:aws:iam::0:policy/a"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.PolicyARNs, []string{"arn:aws:iam::0:policy/a"}) {
+		t.Errorf("PolicyARNs = %v", p.PolicyARNs)
+	}
+}
+
+// IsPointer reads a document through pointerkind.Trim, so ParsePointer does
+// too: a pointer an editor saved with a byte order mark or a Unicode space
+// around it is parsed, not held back as a pointer that never decodes.
+func TestParsePointerReadsPastABOMAndUnicodeSpace(t *testing.T) {
+	const ptr = `{"kind":"aws","awsProfile":"dev","mode":"self"}`
+	for _, doc := range []string{"\ufeff" + ptr, "\u00a0" + ptr + "\u00a0"} {
+		if _, err := ParsePointer([]byte(doc)); err != nil {
+			t.Errorf("%q: %v", doc, err)
+		}
 	}
 }

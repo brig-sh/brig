@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+
+	"github.com/brig-sh/brig/internal/pointerkind"
 )
 
 // Mode is how a pointer obtains a token.
@@ -58,23 +60,17 @@ var (
 )
 
 // IsPointer reports whether doc is a JSON object whose kind is "gcloud",
-// whether or not it is otherwise valid. A malformed gcloud document must
-// reach ParsePointer and be refused, never be taken for a raw token and sent
-// to the guest.
+// whether or not it is otherwise valid, cut short or followed by other data.
+// A malformed gcloud document must reach ParsePointer and be refused, never
+// be taken for a raw token and sent to the guest.
 func IsPointer(doc []byte) bool {
-	var head struct {
-		Kind string `json:"kind"`
-	}
-	if err := json.Unmarshal(doc, &head); err != nil {
-		return false
-	}
-	return head.Kind == "gcloud"
+	return pointerkind.Is(doc, "gcloud")
 }
 
 // ParsePointer decodes a stored pointer strictly and validates it.
 func ParsePointer(doc []byte) (Pointer, error) {
 	var p Pointer
-	dec := json.NewDecoder(bytes.NewReader(doc))
+	dec := json.NewDecoder(bytes.NewReader(pointerkind.Trim(doc)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
 		return Pointer{}, fmt.Errorf("the gcloud pointer is not valid JSON of the expected shape: %w", err)

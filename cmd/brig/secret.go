@@ -115,6 +115,9 @@ flags:
       --session-duration D
                     with --role-arn: role session lifetime, 25m to 1h
                     (default 30m)
+      --policy-arns ARN[,ARN...]
+                    with --role-arn: managed policies that narrow the role
+                    session. The keys get what both allow
       --gcloud-configuration NAME
                     with import of a from: gcloud secret: the local gcloud
                     configuration to point at. brig stores the pointer, never
