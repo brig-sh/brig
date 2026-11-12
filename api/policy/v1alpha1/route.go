@@ -70,6 +70,9 @@ const (
 	// PlaceholderRouteRegion is the region of a route that vends, in a
 	// guest.env value.
 	PlaceholderRouteRegion = "{route.region}"
+	// PlaceholderRouteHost is the host name of a mode: host route, in a
+	// guest.env value, for a tool such as gh that takes a host and no URL.
+	PlaceholderRouteHost = "{route.host}"
 )
 
 // Route is one brokered endpoint. The guest is pointed at the route, and the

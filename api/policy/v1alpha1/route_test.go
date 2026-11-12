@@ -396,6 +396,9 @@ func TestHeaderRules(t *testing.T) {
 		{"route.region in a header", func(r *Route) {
 			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "X-Region", Value: "{route.region}"})
 		}, "only guest.env takes"},
+		{"route.host in a header", func(r *Route) {
+			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "X-Host", Value: "{route.host}"})
+		}, "only guest.env takes"},
 		{"Host in set", func(r *Route) {
 			r.Inject.Headers.Set = append(r.Inject.Headers.Set, Header{Name: "Host", Value: "evil.example.com"})
 		}, "the broker sets itself"},
@@ -641,7 +644,7 @@ func TestGuestLiteralRefusalNamesEveryPlaceholder(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "never a literal") {
 		t.Fatalf("a literal in guest.env: err = %v", err)
 	}
-	for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion} {
+	for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion, PlaceholderRouteHost} {
 		if !strings.Contains(err.Error(), p) {
 			t.Errorf("the refusal %q does not name %s", err, p)
 		}
@@ -1180,5 +1183,19 @@ func TestHostRouteNameMustBeADNSLabel(t *testing.T) {
 	}
 	if got := HostName("github-api"); got != "github-api.brig.internal" {
 		t.Errorf("HostName = %q", got)
+	}
+}
+
+// gh takes a host name and no URL, so {route.host} is for a host route only.
+func TestRouteHostNeedsModeHost(t *testing.T) {
+	r := customRoute()
+	r.Guest.Env["X"] = "{route.host}"
+	want := "guest.env X: {route.host} requires mode: host"
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("{route.host} on an endpoint route: err = %v, want %q", err, want)
+	}
+	r.Mode = ModeHost
+	if err := r.Validate(); err != nil {
+		t.Fatalf("{route.host} on a host route: %v", err)
 	}
 }

@@ -157,7 +157,7 @@ func (r *Route) validate(expanded bool) error {
 	}
 
 	if r.Guest != nil {
-		if err := r.Guest.validate(complete, r.Preset); err != nil {
+		if err := r.Guest.validate(complete, r.Preset, r.Mode); err != nil {
 			return err
 		}
 	} else if complete {
@@ -389,7 +389,7 @@ func (h *HeaderInject) validate(needsValue bool) error {
 			return fmt.Errorf("inject.headers.set names %s, which inject.headers.remove drops first; "+
 				"name it in one list", hd.Name)
 		}
-		for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion} {
+		for _, p := range []string{PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion, PlaceholderRouteHost} {
 			if strings.Contains(hd.Value, p) {
 				return fmt.Errorf("inject.headers.set %s holds %s, which only guest.env takes", hd.Name, p)
 			}
@@ -440,7 +440,7 @@ func (h *HeaderInject) validate(needsValue bool) error {
 	return nil
 }
 
-func (g *Guest) validate(complete bool, preset Preset) error {
+func (g *Guest) validate(complete bool, preset Preset, mode RouteMode) error {
 	if complete && len(g.Env) == 0 && g.Git == nil {
 		return fmt.Errorf("guest needs env, git or both")
 	}
@@ -465,11 +465,15 @@ func (g *Guest) validate(complete bool, preset Preset) error {
 				return fmt.Errorf("guest.env %s: %s needs preset: %s",
 					name, PlaceholderRouteRegion, PresetAWS)
 			}
+		case PlaceholderRouteHost:
+			if mode != ModeHost {
+				return fmt.Errorf("guest.env %s: %s requires mode: %s", name, PlaceholderRouteHost, ModeHost)
+			}
 		default:
 			// The value is left out: a literal here is most often a pasted
 			// credential, and the error goes to a terminal or a CI log.
-			return fmt.Errorf("guest.env %s is a literal; a value is %s, %s or %s, never a literal",
-				name, PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion)
+			return fmt.Errorf("guest.env %s is a literal; a value is %s, %s, %s or %s, never a literal",
+				name, PlaceholderRouteURL, PlaceholderSessionToken, PlaceholderRouteRegion, PlaceholderRouteHost)
 		}
 	}
 	if g.Git != nil {
