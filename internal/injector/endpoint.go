@@ -161,7 +161,12 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 		if r.Vends() {
 			url = LinkLocalURL(sandbox, r.Name)
 		}
-		endpoint := r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint
+		// A host route is reached at its own name, so {route.url} names that
+		// host and the path carries no sandbox or route.
+		if r.Mode == v1alpha1.ModeHost {
+			url = "https://" + v1alpha1.HostName(r.Name)
+		}
+		endpoint := r.Mode.AtBrigInternal()
 		if endpoint {
 			endpoints++
 		}
