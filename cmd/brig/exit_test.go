@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -89,7 +90,11 @@ func stubRuntime(t *testing.T, kind, name string) runtime.Runtime {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	bin := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+	script := "#!/bin/sh\nexit 1\n"
+	if kind == "hull" {
+		script = hullstub.MacOS(script)
+	}
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME", kind)
@@ -312,7 +317,7 @@ func absentHull(t *testing.T) (runtime.Runtime, string) {
 	log := filepath.Join(t.TempDir(), "argv.log")
 	bin := filepath.Join(t.TempDir(), "hull")
 	script := "#!/bin/sh\necho \"$*\" >> '" + log + "'\necho \"instance not found: $2\" >&2\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME", "hull")

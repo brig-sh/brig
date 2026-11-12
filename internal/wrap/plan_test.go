@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -204,7 +205,7 @@ func loadThroughHull(t *testing.T, p profile.Profile, o Options, script string) 
 	t.Helper()
 	t.Setenv("BRIG_RUNTIME", "hull")
 	bin := filepath.Join(t.TempDir(), "hull")
-	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME_BIN", bin)

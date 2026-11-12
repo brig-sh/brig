@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -339,7 +340,7 @@ func TestDoctorBootAsksTheAgentsHull(t *testing.T) {
 	script := "#!/bin/sh\ncase \"$1 $2\" in\n" +
 		"\"assets dir\") echo '" + store + "' ;;\n" +
 		"*) echo hull version 0.0.0-test ;;\nesac\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	agent := fakeProfile

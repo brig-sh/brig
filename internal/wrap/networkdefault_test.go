@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/verify"
 )
@@ -150,7 +151,7 @@ func TestVZRefusesExplicitIsolationFromEverySource(t *testing.T) {
 			t.Setenv("BRIG_RUNTIME", "hull")
 			t.Setenv("BRIG_HYPERVISOR", "vz")
 			bin := filepath.Join(t.TempDir(), "hull")
-			if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 99\n"), 0o700); err != nil {
+			if err := os.WriteFile(bin, []byte(hullstub.MacOS("#!/bin/sh\nexit 99\n")), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("BRIG_RUNTIME_BIN", bin)
@@ -200,7 +201,7 @@ func TestProfileIsolationOnVZNamesTheProfileNotTheFlag(t *testing.T) {
 	// Absent, not a failed inspect. A failing stub leaves the posture unknown,
 	// and info then has no isolated row to attach the fix to.
 	script := "#!/bin/sh\necho \"instance not found: $2\" >&2\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME_BIN", bin)
@@ -270,7 +271,7 @@ func TestProfileIsolationRefusalDoesNotReadTheSourceWording(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "vz")
 	bin := filepath.Join(t.TempDir(), "hull")
 	script := "#!/bin/sh\necho \"instance not found: $2\" >&2\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME_BIN", bin)
@@ -362,7 +363,7 @@ func TestAPolicyRefusalOutranksTheProfileIsolationRefusal(t *testing.T) {
 			t.Setenv("BRIG_HYPERVISOR", hv)
 			bin := filepath.Join(t.TempDir(), "hull")
 			script := "#!/bin/sh\necho \"instance not found: $2\" >&2\nexit 1\n"
-			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+			if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("BRIG_RUNTIME_BIN", bin)
