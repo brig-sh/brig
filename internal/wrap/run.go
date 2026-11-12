@@ -315,13 +315,18 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		_ = c.Runtime.Remove(c.VMName)
 	}
 	// Clear a stale stopped instance holding the name.
-	_ = c.Runtime.Remove(c.VMName)
+	removeErr := c.Runtime.Remove(c.VMName)
 	// The guest booted below is a new one. The guest before it was stopped
 	// through the runtime, not through Stop, so the broker may still hold its
 	// registration, and the same registration again would keep its tokens
 	// valid. It is removed first, so serveRoutes registers the sandbox with a
 	// new key, or leaves it out when no route is left.
 	c.forgetRoutes()
+	// After the registration goes, so a guest the runtime keeps holds no
+	// valid token either.
+	if err := c.nameStillHeld(removeErr); err != nil {
+		return err
+	}
 	// No sandbox holds the name until the boot below. A run that stops
 	// before it boots one removes the sandbox from the broker, which stops
 	// when it serves no other, rather than leave it registered for nothing.
@@ -944,6 +949,30 @@ func (c *Config) Remove() error {
 	runtime.ForgetPublications(c.VMName)
 	runtime.ForgetBootedNet(c.VMName)
 	return err
+}
+
+// nameStillHeld answers the removal that clears the name before a boot. The
+// removal fails on every first boot, since nothing holds the name, so a
+// failure alone says nothing. A failure that leaves the sandbox there stops
+// the run with the runtime's reason. Ignored, it reached the boot as "instance
+// exists", which names neither: hull on Linux keeps an instance it could not
+// detach from its network, and says that `hull rm` tries again.
+//
+// brig does not force the removal. `hull rm --force` skips the detach, which
+// can leave the network's rule for the sandbox behind on the host.
+//
+// When the runtime cannot say whether the sandbox is there, or has no way to
+// say, the boot goes ahead as it did before: the runtime refuses a name that
+// is taken, so the boot cannot take a second sandbox's name.
+func (c *Config) nameStillHeld(removeErr error) error {
+	if removeErr == nil {
+		return nil
+	}
+	if held, err := sandboxExists(c.Runtime, c.VMName); err != nil || !held {
+		return nil
+	}
+	return fmt.Errorf("could not start the sandbox: %s is left from an earlier run and could not be removed, "+
+		"so its name is taken: %w", c.VMName, removeErr)
 }
 
 // execSpec is the one request Exec and ExecAttached both hand the runtime, so
