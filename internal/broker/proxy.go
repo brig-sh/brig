@@ -234,8 +234,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
-	// request.allow matches the path the upstream serves, so a path that
-	// the upstream could resolve to another one is refused first.
+	// request.allow matches the path the upstream serves (on github-api, the
+	// path gh sent), so a path that the upstream could resolve to another one
+	// is refused first.
 	repos := rt.spec.Request != nil && rt.spec.Request.Allow != nil && len(rt.spec.Request.Allow.Repos) > 0
 	var objects map[int]bool
 	if rt.services != nil {
@@ -256,6 +257,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A route with services forwards to the host of the service its path
 	// names, the path after the service.
 	upstream, out := rt.upstream, p
+	// gh addresses a GitHub Enterprise host; api.github.com serves the same
+	// calls under other paths. Any other path is refused before the
+	// credential is read.
+	if rt.spec.Preset == v1alpha1.PresetGitHubAPI {
+		var ok bool
+		if out, ok = githubAPIPath(p); !ok {
+			a.check = "github-api.path"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+	}
 	if rt.services != nil {
 		var ok bool
 		if upstream, out, ok = serviceTarget(rec, r, a, rt, p, objects); !ok {
@@ -721,6 +733,34 @@ type routePath struct {
 	// rest is the path after the route prefix, decoded, and escapedRest is
 	// the same path as the guest escaped it. Both start with a slash.
 	rest, escapedRest string
+}
+
+// githubAPIPath maps the paths gh sends to a GitHub Enterprise host onto
+// api.github.com: /api/v3/<x> to /<x> and /api/graphql to /graphql. The
+// decoded and the escaped path must cut the same way, so the one that is
+// forwarded is the one that was checked.
+func githubAPIPath(p routePath) (routePath, bool) {
+	cut := func(path string) (string, bool) {
+		switch {
+		case path == "/api/graphql":
+			return "/graphql", true
+		case path == "/api/v3":
+			return "/", true
+		case strings.HasPrefix(path, "/api/v3/"):
+			return strings.TrimPrefix(path, "/api/v3"), true
+		}
+		return "", false
+	}
+	rest, ok := cut(p.rest)
+	if !ok {
+		return p, false
+	}
+	escaped, ok := cut(p.escapedRest)
+	if !ok {
+		return p, false
+	}
+	p.rest, p.escapedRest = rest, escaped
+	return p, true
 }
 
 // hostRoute reads the route out of a Host of the form <route>.brig.internal.
