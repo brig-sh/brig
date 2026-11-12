@@ -389,3 +389,36 @@ func TestTheBrigInternalCertificateIsRenewed(t *testing.T) {
 		t.Errorf("the renewed certificate does not verify: %v", err)
 	}
 }
+
+// A host route is reached at <route>.brig.internal, so the leaf covers one
+// label under brig.internal and nothing beyond it.
+func TestTheLeafServesHostRoutesAndNothingElse(t *testing.T) {
+	a, err := loadOrCreateCA(shortDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(a.cert)
+	tc, err := a.current(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(tc.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, ok := range map[string]bool{
+		"brig.internal":            true,
+		"github-api.brig.internal": true,
+		"api.github.com":           false,
+		"a.b.brig.internal":        false,
+	} {
+		_, err := leaf.Verify(x509.VerifyOptions{DNSName: name, Roots: pool})
+		if ok && err != nil {
+			t.Errorf("the leaf does not verify for %s: %v", name, err)
+		}
+		if !ok && err == nil {
+			t.Errorf("the leaf verifies for %s", name)
+		}
+	}
+}
