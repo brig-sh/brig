@@ -87,6 +87,11 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 	if err := near.awsHomeRefusal(); err != nil {
 		t.Errorf(".awsome was taken for .aws: %v", err)
 	}
+	other := routedConfig(t, awsEndpoint, &hullRecorder{})
+	other.Profile.Volumes = append(other.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: "日本語"})
+	if err := other.awsHomeRefusal(); err != nil {
+		t.Errorf("a name with no ASCII was taken for .aws: %v", err)
+	}
 }
 
 // A guest home that already holds ~/.aws/credentials or ~/.aws/config, such

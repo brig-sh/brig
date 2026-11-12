@@ -223,6 +223,11 @@ func TestAGCPRunRefusesGCloudPutInTheGuestHome(t *testing.T) {
 			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: "café"})
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".config/ghé"})
 		},
+		"a name with no ASCII": func(c *Config) {
+			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.gcp", Path: "日本語"})
+			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: "é/ü/x"})
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, "Проекты"), Rel: "cfg"})
+		},
 	} {
 		near := routedConfig(t, gcpEndpoint, &hullRecorder{})
 		add(near)
