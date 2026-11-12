@@ -71,7 +71,7 @@ func (c *Config) gcpList() string {
 	var names []string
 	for _, r := range c.routes {
 		if isGCPRoute(r) {
-			names = append(names, fmt.Sprintf("%s (route %s)", c.routePolicy[r.Name], r.Name))
+			names = append(names, fmt.Sprintf("%s (policy %s)", r.Name, c.routePolicy[r.Name]))
 		}
 	}
 	return strings.Join(names, ", ")
@@ -95,14 +95,17 @@ func (c *Config) gcpShadowRefusal() error {
 	if len(shadow) == 0 {
 		return nil
 	}
-	msg := fmt.Sprintf("policy %s declares a gcp route, and %s also hands the guest %s, "+
-		"which can give gcloud or a Google client library an identity besides the route's; remove it from the "+
-		"profile and BRIG_FORWARD_ENV, or detach the policy", c.gcpList(), c.Profile.Name, strings.Join(shadow, ", "))
+	it := "it"
+	if len(shadow) > 1 {
+		it = "them"
+	}
+	msg := fmt.Sprintf("gcp route %s: %s hands the guest %s, which can select a Google identity other than "+
+		"the route's; remove %s from the profile and BRIG_FORWARD_ENV", c.gcpList(), c.Profile.Name, strings.Join(shadow, ", "), it)
 	if slices.Contains(shadow, gcpTokenFileVar) {
-		msg += ". The guest sets " + gcpTokenFileVar + " itself, to the file it writes $BRIG_GCP_TOKEN to"
+		msg += "; the guest sets " + gcpTokenFileVar + " itself"
 	}
 	if slices.Contains(shadow, "HOME") {
-		msg += ". HOME moves ~/" + gcloudDir + " away from the guest home " + c.Profile.GuestHome + ", which brig checks"
+		msg += "; HOME must be the guest home, " + c.Profile.GuestHome
 	}
 	return errors.New(msg)
 }
@@ -233,9 +236,8 @@ func (c *Config) gcpHomeRefusal() error {
 	if len(why) == 0 {
 		return nil
 	}
-	return fmt.Errorf("policy %s declares a gcp route, and %s puts %s in the guest's ~/%s, "+
-		"where gcloud and the Google client libraries read an identity besides the route's; remove it from "+
-		"the profile, or detach the policy", c.gcpList(), c.Profile.Name, strings.Join(why, " and "), gcloudDir)
+	return fmt.Errorf("gcp route %s: %s writes to ~/%s, where gcloud reads its identity, with %s; "+
+		"remove it from the profile", c.gcpList(), c.Profile.Name, gcloudDir, strings.Join(why, " and "))
 }
 
 // overlapsFolded reports whether one of the clean host paths a and b is the
@@ -708,7 +710,6 @@ func sqliteRecord(b []byte) ([]sqliteValue, bool) {
 }
 
 func (c *Config) gcloudFileRefusal(r *workspaceRoot, rel string) error {
-	return fmt.Errorf("policy %s declares a gcp route, and the guest home %s holds %s, "+
-		"an identity besides the route's that gcloud and the Google client libraries read; move it out of "+
-		"the guest home, or run with another --home", c.gcpList(), r.dir, rel)
+	return fmt.Errorf("gcp route %s: the guest home %s holds %s, which gives gcloud a Google identity "+
+		"other than the route's; move it out of the guest home, or use another --home", c.gcpList(), r.dir, rel)
 }
