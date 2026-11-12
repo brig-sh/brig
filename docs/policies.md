@@ -321,7 +321,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | --- | --- | --- |
 | `name` | yes | The path segment of the route URL, and unique across the policies bound to a run. Lowercase letters, digits and dashes, starting with a letter: the name also names the guest variable `BRIG_ROUTE_<NAME>_TOKEN`, with `-` read as `_`, so Brig refuses a dot and an underscore |
 | `preset` | no | A route type that Brig ships. See [Presets](#presets) |
-| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
+| `mode` | no | `endpoint`, the default: the tool is pointed at the route URL. `host`: the guest reaches the route at `https://<route>.brig.internal`, so `name` is at most 63 characters and does not end with a dash. This build of Brig refuses a route in any other mode before boot. See [Route modes](broker.md#route-modes) |
 | `upstream` | unless a preset sets it | A bare `https://` origin in canonical form, such as `https://api.example.com:8443`. Brig refuses a path (a lone `/` too), a query, a fragment, a user name, upper case, a wildcard, an IPv6 zone, a trailing dot, a host that is not a DNS name or an IP address, and a port outside 1-65535 |
 | `credential.secretRef.name` | yes, unless the route is certificate-only | A secret in Brig's store. It is never delivered to the guest. On an `aws` route the guest gets temporary keys made from it. See [The aws preset](#the-aws-preset). A route is certificate-only when `inject` sets `tls.clientCertificate` and neither `headers.set` nor `basicAuth` |
 | `credential.field` | no | For a document-shaped secret, the field that is injected |
@@ -335,7 +335,7 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `guest.env` | unless a preset sets it, or `guest.git` is set | `{NAME: value}`. Each value is one of the guest placeholders below |
 | `guest.git.insteadOf` | no | URL prefixes that git in the guest rewrites to the route |
 | `request.allow.methods` | no | HTTP methods, in upper case |
-| `request.allow.paths` | no | Globs on the path after the route prefix. Each starts with `/` |
+| `request.allow.paths` | no | Globs on the path after the route prefix, or on the whole path on a `host` route. Each starts with `/` |
 | `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them |
 
 On a `gcp` route `request.allow` belongs to each entry of `services`, and
@@ -1270,8 +1270,9 @@ A guest of nerdctl reaches its routes at `brig.internal` (see
 sandbox with routes and no policy gets the same resolver and table, which
 then filter nothing else.
 
-The resolver answers `brig.internal` with the bridge address, under any
-policy. The table sends a connection to port 443 of that address to a
+The resolver answers `brig.internal`, and each host route's
+`<route>.brig.internal`, with the bridge address, under any policy.
+The table sends a connection to port 443 of that address to a
 relay of the resolver, which passes it to the broker. On a run with a route
 that vends, it also sends a connection to port 80 of `169.254.170.2` to the
 relay. Under a policy with a default, every other address and port of
