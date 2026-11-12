@@ -138,7 +138,11 @@ func (n *nerdctl) Isolation(spec RunSpec) Isolation {
 		}
 		rootfs = orDefault(mode, "urunc default")
 	}
-	return containerdIsolation(n.driver(), shim, named, monitor, rootfs)
+	iso := containerdIsolation(n.driver(), shim, named, monitor, rootfs)
+	if iso.Boundary != BoundaryVM {
+		iso.Setting = n.boundarySetting()
+	}
+	return iso
 }
 
 // monitor is the hypervisor brig tells urunc to boot with, or "" when brig
@@ -165,12 +169,33 @@ func (n *nerdctl) Backend(spec RunSpec) string {
 	return m
 }
 
+// dockerDriver is what driver names docker as, which the isolation row and its
+// boundary both read.
+const dockerDriver = "docker"
+
 // driver is the binary in hand, by name. newNerdctl takes either.
 func (n *nerdctl) driver() string {
 	if n.isDocker() {
-		return "docker"
+		return dockerDriver
 	}
 	return "nerdctl"
+}
+
+// boundarySetting is what to change to move a boundary short of a microVM, for
+// Isolation.Setting. The shim variable is named only when it is set, as the row
+// does: that is when it decided the boundary, and the default needs nothing
+// undone. docker is a cause of its own, however the run came to drive it, and
+// brig cannot tell from here whether a choice or the fallback put it there.
+func (n *nerdctl) boundarySetting() string {
+	var causes []string
+	if os.Getenv("BRIG_CONTAINERD_RUNTIME") != "" {
+		causes = append(causes, "BRIG_CONTAINERD_RUNTIME")
+	}
+	if n.isDocker() {
+		causes = append(causes, "the docker binary in use (BRIG_RUNTIME_BIN, the profile's "+
+			"runtimeBin, or the fallback taken because nerdctl is not on PATH: install nerdctl)")
+	}
+	return strings.Join(causes, " and ")
 }
 
 // PinsDigest is true here: containerd's store is content-addressed, so a

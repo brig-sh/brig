@@ -55,3 +55,19 @@ func capabilityRefusal(state runtime.Capability) error {
 		Path: runtime.RunPath{Runtime: "nerdctl", Backend: "runc"}, State: state,
 		Why: "the container network is not filtered", Remedy: "Detach the policy"}
 }
+
+// brigd classifies the same numbers brig does, and the two agree by
+// construction, so the isolation refusal is pinned here as it is in cmd/brig.
+func TestAnIsolationRefusalIsClass7(t *testing.T) {
+	refusal := runtime.RequireMicroVM(runtime.Isolation{Boundary: runtime.BoundaryContainer,
+		Detail: "nerdctl over containerd, runc", Setting: "BRIG_CONTAINERD_RUNTIME"})
+	if got := Of(refusal); got != Capability {
+		t.Errorf("Of(refusal) = %d, want %d", got, Capability)
+	}
+	if got := Of(fmt.Errorf("context: %w", refusal)); got != Capability {
+		t.Errorf("a wrapped refusal is %d, want %d", got, Capability)
+	}
+	if got := Of(errors.New(refusal.Error())); got != Failure {
+		t.Errorf("the refusal's words without its type are %d, want %d", got, Failure)
+	}
+}

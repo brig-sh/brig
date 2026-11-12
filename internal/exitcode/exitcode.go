@@ -76,6 +76,12 @@ func Of(err error) int {
 	if errors.As(err, &refusal) {
 		return Capability
 	}
+	// A run that required a microVM and would not get one it can establish.
+	// The same class as above, kept in step with cmd/brig/exit.go.
+	var isolation *runtime.IsolationError
+	if errors.As(err, &isolation) {
+		return Capability
+	}
 	// Missing and broken are one class to a script: both mean "fix the runtime
 	// before this can run", and neither is something the request itself did
 	// wrong.

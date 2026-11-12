@@ -459,6 +459,8 @@ const (
 	opFile
 	// opNetwork is the posture set --network takes.
 	opNetwork
+	// opIsolation is the requirement --isolation takes.
+	opIsolation
 	// opPreset is a route preset brig ships, which --preset takes.
 	opPreset
 	// opType is the kind of value `brig secret create --type` checks.
@@ -481,6 +483,8 @@ func operandCandidates(kind operand, cur string) (string, []string) {
 		return dirFiles, nil
 	case opNetwork:
 		return names(cur, networkModes)
+	case opIsolation:
+		return names(cur, isolationModes)
 	case opPreset:
 		return names(cur, presetNames())
 	case opType:
@@ -738,8 +742,8 @@ func qualify(flag string, directive string, candidates []string) (string, []stri
 	return dirNames, out
 }
 
-// flagValue maps a run-line flag to what its value names. --network is the
-// only closed set; the rest take a host path or a number.
+// flagValue maps a run-line flag to what its value names. --network and
+// --isolation are the closed sets; the rest take a host path or a number.
 func flagValue(flag string) operand {
 	switch flag {
 	case "--home":
@@ -748,6 +752,8 @@ func flagValue(flag string) operand {
 		return opFile
 	case "--network":
 		return opNetwork
+	case "--isolation":
+		return opIsolation
 	}
 	return opNothing
 }
@@ -755,6 +761,10 @@ func flagValue(flag string) operand {
 // networkModes is the value set --network accepts. Duplicated from
 // wrap.ParseNetwork, which maps strings to values without exposing the list.
 var networkModes = []string{"isolated", "offline", "shared"}
+
+// isolationModes is the value set --isolation accepts, which is the one value
+// checkIsolation does.
+var isolationModes = []string{wrap.IsolationMicroVM}
 
 // flagSpellings returns brig's own flags legal at one position, as typed.
 //

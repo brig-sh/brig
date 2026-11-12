@@ -77,6 +77,12 @@ func exitCode(err error) int {
 	if errors.As(err, &refusal) {
 		return exitCapability
 	}
+	// A run that required a microVM and would not get one it can establish.
+	// The same class: the run path cannot give what the run asks for.
+	var isolation *runtime.IsolationError
+	if errors.As(err, &isolation) {
+		return exitCapability
+	}
 	// Missing and broken are one class to a script: both mean "fix the runtime
 	// before this can run", and neither is something the command itself did
 	// wrong.

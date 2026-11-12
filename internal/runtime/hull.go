@@ -97,7 +97,7 @@ func (h *hull) Isolation(spec RunSpec) Isolation {
 	if mode != "" {
 		rootfs = mode
 	}
-	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
+	return Isolation{Boundary: BoundaryVM, Detail: fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
 }
 
 // PinsDigest asks the hull on this machine whether it can boot a digest
