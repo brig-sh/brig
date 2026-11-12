@@ -32,6 +32,23 @@ type RouteMode string
 // internal/routemode).
 const ModeEndpoint RouteMode = "endpoint"
 
+// ModeHost is an endpoint route that the guest reaches at its own name,
+// <route>.brig.internal. A tool that takes a host name and no URL, such as
+// gh, needs it.
+const ModeHost RouteMode = "host"
+
+// AtBrigInternal reports whether a route in mode m is served by the broker at
+// brig.internal: mode endpoint, which an empty mode defaults to, and mode host.
+func (m RouteMode) AtBrigInternal() bool {
+	return m == "" || m == ModeEndpoint || m == ModeHost
+}
+
+// HostName is the name under brig.internal at which the guest reaches the
+// host route of that name.
+func HostName(route string) string {
+	return route + ".brig.internal"
+}
+
 // Lifecycle names how the broker keeps a credential valid.
 type Lifecycle string
 
