@@ -562,7 +562,7 @@ func carrierRests(spec *v1alpha1.Route, h http.Header, tok string) map[string]st
 	in := spec.Inject
 	rests := map[string]string{}
 	auth := h.Get("Authorization")
-	if scheme, t, ok := strings.Cut(auth, " "); ok && strings.EqualFold(scheme, "Bearer") && strings.TrimSpace(t) == tok {
+	if scheme, t, ok := strings.Cut(auth, " "); ok && carrierScheme(spec, scheme) && strings.TrimSpace(t) == tok {
 		rests["Authorization"] = strings.Replace(auth, tok, "", 1)
 	} else if in.BasicAuth != nil {
 		r := http.Request{Header: http.Header{"Authorization": {auth}}}
