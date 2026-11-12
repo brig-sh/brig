@@ -576,6 +576,17 @@ func TestAGCPRunRefusesAGCloudConfigurationThatSetsAuth(t *testing.T) {
 			put(cfg, gcloudLegacyProperties, "[auth]\ncredential_file_override = /home/x/key.json\n")
 		},
 		"too large": func(cfg *Config) { put(cfg, cfgDefault, "#"+strings.Repeat("x", maxConfigSize)) },
+		// configparser takes a line for a header only when it matches
+		// \[(.+)\], so these lines are options and [auth] goes on.
+		"a [ line with no ]": func(cfg *Config) {
+			put(cfg, cfgDefault, "[auth]\n[x = 1\nimpersonate_service_account = sa@example.iam.gserviceaccount.com\n")
+		},
+		"an empty header": func(cfg *Config) {
+			put(cfg, cfgDefault, "[auth]\n[]=1\ncredential_file_override = /home/x/key.json\n")
+		},
+		"DEFAULT behind a [ line": func(cfg *Config) {
+			put(cfg, cfgDefault, "[DEFAULT]\n[y: 2\ncredential_file_override = /home/x/key.json\n[core]\nproject = p\n")
+		},
 		// On macOS gcloud opens config_default as either of these.
 		"another case": func(cfg *Config) {
 			put(cfg, gcloudConfigDir+"/Config_default", "[auth]\ncredential_file_override = /home/x/key.json\n")
@@ -622,6 +633,7 @@ func TestAGCPRunRefusesAGCloudConfigurationThatSetsAuth(t *testing.T) {
 		"core only":          "[core]\naccount = a@example.com\nproject = p\n",
 		"auth with comments": "[auth]\n# credential_file_override = /home/x/key.json\n; nothing\n\n[core]\nproject = p\n",
 		"empty":              "",
+		"a [ line in core":   "[core]\n[x = 1\nproject = p\n",
 	} {
 		cfg := routedConfig(t, gcpEndpoint, &hullRecorder{})
 		put(cfg, cfgDefault, text)
