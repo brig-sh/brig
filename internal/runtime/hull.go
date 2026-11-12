@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
@@ -1020,7 +1021,9 @@ func (h *hull) execArgs(spec ExecSpec) (args, env []string, err error) {
 // Generous on purpose. This is not how long the guest may take to come up --
 // that is ReadyTimeout, across many probes -- only how long one probe waits
 // before deciding this attempt landed too early and another one is due.
-const agentCallTimeout = 5 * time.Second
+//
+// A var for tests.
+var agentCallTimeout = 5 * time.Second
 
 // agentCallWaitDelay is how long Run may keep waiting once the deadline has
 // already killed the command.
@@ -1035,6 +1038,28 @@ const agentCallTimeout = 5 * time.Second
 const agentCallWaitDelay = time.Second
 
 // agentCall builds a command to the guest agent that is guaranteed to return.
+//
+// On Linux a timed-out call ends hull with SIGTERM, not the SIGKILL
+// CommandContext sends by default (#575). There the shim's `urunc exec` holds
+// the guest connection, not hull. A hull killed outright leaves the command
+// running in the guest, its exec process in the shim and its FIFOs on the
+// host, until `hull stop` or `hull rm` ends them. hull catches SIGTERM
+// (brig-sh/hull#155), and once the exec has started it ends the command and
+// deletes what it made. agentCallWaitDelay is the backstop: a hull still
+// running when it runs out is killed.
+//
+// That does not yet cover the call that times out most, a probe during a
+// slow boot. There the shim's start of the exec waits for the guest's agent,
+// for up to 30 seconds, and hull passes a signal on only once the start
+// returns, so the backstop kills it first and the exec still leaks. Closing
+// that needs a backstop that outlasts the agent wait, and brig-sh/hull#156
+// on hull's side.
+//
+// On macOS hull holds the connection itself, and the guest ends a session
+// whose connection drops, so SIGKILL leaks nothing. SIGTERM would cost time
+// there: hull passes it to the guest command, and in the window this timeout
+// exists for no agent is listening, so hull would stay up until the backstop
+// killed it, a second later on every probe.
 func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string, error) {
 	args, envVals, err := h.execArgs(spec)
 	if err != nil {
@@ -1047,6 +1072,9 @@ func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string
 	ctx, cancel := context.WithTimeout(parent, agentCallTimeout)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.WaitDelay = agentCallWaitDelay
+	if h.linux {
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	}
 	return cmd, cancel, envVals, nil
 }
 
@@ -1072,10 +1100,16 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 	// The deadline is the agent call's own context, which this function does
 	// not hold. Cancel runs when it fires, so it records that, and a caller
 	// can tell a guest that never answered from a command that failed: Run
-	// itself reports only "signal: killed".
+	// itself reports only that hull died of a signal. It keeps the signal
+	// agentCall chose: hull on Linux must get SIGTERM, or the exec leaks in
+	// the guest and the shim (#575).
 	var expired atomic.Bool
+	stop := cmd.Cancel
 	cmd.Cancel = func() error {
 		expired.Store(true)
+		if stop != nil {
+			return stop()
+		}
 		return cmd.Process.Kill()
 	}
 	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
