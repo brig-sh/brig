@@ -75,6 +75,21 @@ func TestFetchAsksForThePointersSession(t *testing.T) {
 	}
 }
 
+func TestFetchPassesSessionPolicies(t *testing.T) {
+	var calls []call
+	cli := CLI{run: seam(&calls, roleDoc, "", nil)}
+	p := Pointer{Kind: "aws", AWSProfile: "dev", Mode: ModeRole, RoleARN: "arn:aws:iam::000000000000:role/r",
+		PolicyARNs: []string{"arn:aws:iam::0:policy/a", "arn:aws:iam::0:policy/b"}}
+	if _, err := cli.Fetch(context.Background(), p, "brig-x"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--policy-arns", "arn=arn:aws:iam::0:policy/a", "arn=arn:aws:iam::0:policy/b"}
+	i := slices.Index(calls[0].args, "--policy-arns")
+	if i < 0 || i+len(want) > len(calls[0].args) || !slices.Equal(calls[0].args[i:i+len(want)], want) {
+		t.Errorf("argv does not pass the session policies as %v: %v", want, calls[0].args)
+	}
+}
+
 func TestFetchSelfArgv(t *testing.T) {
 	var calls []call
 	cli := CLI{run: seam(&calls, selfDoc, "", nil)}

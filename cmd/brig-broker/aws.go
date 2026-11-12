@@ -42,10 +42,11 @@ func newAWSVendor(bin string, now func() time.Time, logger *log.Logger) *awsVend
 }
 
 // awsPointerDoc is the handler's VendDoc check: a secret that holds an AWS
-// pointer is served on a route that vends alone.
+// pointer is served on a route that vends alone. It asks for the kind, not
+// for a valid pointer: one that Validate refuses must not fall through and be
+// forwarded upstream as a credential value.
 func awsPointerDoc(doc []byte) bool {
-	_, err := awscred.ParsePointer(doc)
-	return err == nil
+	return awscred.IsPointer(doc)
 }
 
 // Vend answers the guest's request on route with keys that have at least 20
@@ -81,7 +82,8 @@ func (v *awsVendor) check(ctx context.Context, sandbox, route string, doc []byte
 		return "", injector.VendInfo{}, v.failed(sandbox, route, err, true)
 	}
 	v.succeeded(sandbox, route)
-	return region, injector.VendInfo{Mode: string(p.Mode), AWSProfile: p.AWSProfile, RoleARN: p.RoleARN}, nil
+	return region, injector.VendInfo{Mode: string(p.Mode), AWSProfile: p.AWSProfile, RoleARN: p.RoleARN,
+		PolicyARNs: p.PolicyARNs}, nil
 }
 
 // failed records the failure and returns the error to answer with. ranAWS

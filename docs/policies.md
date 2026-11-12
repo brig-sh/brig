@@ -536,7 +536,8 @@ The guest calls AWS directly, so a `default: deny` policy needs an `allow`
 rule for the AWS endpoints the agent uses. A host rule does not make the
 access read-only. `*.amazonaws.com` lets the guest make every call the keys
 allow, writes included, and reach resources in other accounts, such as an
-S3 bucket that someone else owns. The role's policy limits the calls.
+S3 bucket that someone else owns. The role's policy limits the calls, and
+the secret's session policies, if it names any, limit them further.
 
 The route itself needs no `allow` rule. The guest fetches keys from
 `169.254.170.2`, which Brig sends to the broker. The rest of

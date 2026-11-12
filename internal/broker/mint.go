@@ -64,6 +64,10 @@ func credentialRefusal(w http.ResponseWriter, a *auditLine, p routePath, err err
 	case errors.Is(err, errGCPOnly):
 		a.check = "credential.gcponly"
 		msg = "brig broker: the credential of route " + p.route + " is a gcloud pointer, which only a gcp route takes"
+	case errors.Is(err, errCredentialMalformed):
+		a.check = "credential.malformed"
+		msg = "brig broker: route " + p.route + ": the secret is not valid JSON. " +
+			"Store it again with brig secret update or brig secret import"
 	case errors.As(err, &ve):
 		msg = "brig broker: route " + p.route + ": " + ve.Message
 	case errors.As(err, &mf):

@@ -87,12 +87,19 @@ type importOptions struct {
 	// `--session-duration 0` is a mistake to refuse, not the default.
 	session    time.Duration
 	sessionSet bool
+	// policyARNs is each --policy-arns as typed, and policyARNsSet whether
+	// it was given: an empty value is a mistake to refuse, not "no policies".
+	// The flag is a set, not a setting: a second occurrence adds to the
+	// list, where replacing it would store fewer policies than were typed
+	// and so a wider session.
+	policyARNs    []string
+	policyARNsSet bool
 }
 
 // awsOnlyFlag is whether the line carried a flag that only an aws source
 // takes: --identity is the gcloud source's too.
 func (o importOptions) awsOnlyFlag() bool {
-	return o.awsProfile != "" || o.roleARN != "" || o.sourceIdentity != "" || o.sessionSet
+	return o.awsProfile != "" || o.roleARN != "" || o.sourceIdentity != "" || o.sessionSet || o.policyARNsSet
 }
 
 // anyGCloudFlag is whether the line carried a flag only a gcloud source
@@ -124,6 +131,8 @@ func (o importOptions) awsFlagName() string {
 		return "--identity"
 	case o.sourceIdentity != "":
 		return "--source-identity"
+	case o.policyARNsSet:
+		return "--policy-arns"
 	}
 	return "--session-duration"
 }
@@ -453,8 +462,14 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 		return hostsrc.Value{}, errors.New("--source-identity goes with --role-arn; self mode keeps no source identity")
 	case o.identity != "" && o.sessionSet:
 		return hostsrc.Value{}, errors.New("--session-duration goes with --role-arn; self mode keys expire when your profile's do")
+	case o.identity != "" && o.policyARNsSet:
+		return hostsrc.Value{}, errors.New("--policy-arns requires --role-arn. Self mode exports your own keys, which cannot be narrowed")
 	}
 	sessionSeconds, err := sessionSeconds(o)
+	if err != nil {
+		return hostsrc.Value{}, err
+	}
+	policies, err := policyARNs(o)
 	if err != nil {
 		return hostsrc.Value{}, err
 	}
@@ -480,6 +495,7 @@ func readAWS(o importOptions) (hostsrc.Value, error) {
 	if o.roleARN != "" {
 		ptr.Mode, ptr.RoleARN = awscred.ModeRole, o.roleARN
 		ptr.SessionSeconds = sessionSeconds
+		ptr.PolicyARNs = policies
 		ptr.SourceIdentity = o.sourceIdentity
 		if ptr.SourceIdentity == "" {
 			if ptr.SourceIdentity, err = awscred.SourceIdentityFrom(caller); err != nil {
@@ -588,6 +604,37 @@ func readGCloud(o importOptions) (hostsrc.Value, error) {
 		return hostsrc.Value{}, err
 	}
 	return hostsrc.Value{Bytes: doc, From: "gcloud:" + o.gcloudConfiguration}, nil
+}
+
+// policyARNs is the list every --policy-arns names, in order, or nil when
+// none was given.
+// An empty entry is refused rather than skipped: a list that came out empty
+// would store no policies, and the sandbox would get the whole role.
+// Each entry must be a policy ARN. IAM allows a comma in a policy name, and
+// the split cuts such a name in two; the check refuses the piece here, where
+// the error can name the flag, instead of sending STS a value never typed.
+func policyARNs(o importOptions) ([]string, error) {
+	if !o.policyARNsSet {
+		return nil, nil
+	}
+	var list []string
+	for _, v := range o.policyARNs {
+		if strings.TrimSpace(v) == "" {
+			return nil, errors.New("--policy-arns is empty. Give one or more policy ARNs, separated by commas")
+		}
+		for _, a := range strings.Split(v, ",") {
+			a = strings.TrimSpace(a)
+			if a == "" {
+				return nil, fmt.Errorf("--policy-arns %q has an empty entry. Separate policy ARNs with single commas", v)
+			}
+			if !awscred.ValidPolicyARN(a) {
+				return nil, fmt.Errorf("--policy-arns entry %q is not a managed policy ARN. "+
+					"Use arn:aws:iam::<account>:policy/<name>, with no comma in the name", a)
+			}
+			list = append(list, a)
+		}
+	}
+	return list, nil
 }
 
 // sessionSeconds is the session --session-duration asks for, or 0 for the
@@ -888,6 +935,7 @@ func parseImport(args []string) (importOptions, error) {
 	fs.DurationVar(&o.session, "session-duration", 0, "")
 	fs.StringVar(&o.gcloudConfiguration, "gcloud-configuration", "", "")
 	fs.StringVar(&o.serviceAccount, "impersonate-service-account", "", "")
+	fs.Var(repeated{&o.policyARNs}, "policy-arns", "")
 
 	var words []string
 	for rest := args; ; {
@@ -901,7 +949,7 @@ func parseImport(args []string) (importOptions, error) {
 			} else {
 				msg = rewriteFlagError(err).Error()
 			}
-			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity and --session-duration, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
+			return o, fmt.Errorf("%s (import takes --dry-run, --from-command, -y, and for an aws source --aws-profile, --role-arn, --identity, --source-identity, --session-duration and --policy-arns, and for a gcloud source --gcloud-configuration, --impersonate-service-account and --identity)", msg)
 		}
 		if fs.NArg() == 0 {
 			break
@@ -911,6 +959,7 @@ func parseImport(args []string) (importOptions, error) {
 	}
 	o.command = seen(fs, "from-command")
 	o.sessionSet = seen(fs, "session-duration")
+	o.policyARNsSet = seen(fs, "policy-arns")
 	// Only "self" is an identity: it is the one non-role answer, and a
 	// misspelling must not fall through to the role path.
 	if o.identity != "" && o.identity != "self" {

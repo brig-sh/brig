@@ -320,3 +320,40 @@ func TestAVendOnlySecretIsNotSentUpstream(t *testing.T) {
 		t.Errorf("the refusal quotes the pointer: %q", body)
 	}
 }
+
+// A secret that opens a JSON object and does not decode is refused with its
+// own check, not sent upstream as a header. It may be a pointer cut short
+// before its kind field, which no VendDoc or MintDoc check can recognise, and
+// it is never a usable credential either way. The check names the fault so
+// the user fixes the secret instead of the route.
+func TestAMalformedJSONSecretIsNotSentUpstream(t *testing.T) {
+	for _, doc := range []string{
+		`{"awsProfile":"dev","mode":"role","roleArn":"arn:aws:iam::0:role/dev"`,
+		`{"configuration":"dev","account":"dev@example.com"`,
+		`{"token":"dev"}trailing`,
+		"  {\"policyArns\":[\"dev\"",
+		// Bytes the JSON decoder refuses before the object must not hide it.
+		"\ufeff{\"awsProfile\":\"dev\"",
+		"\u00a0{\"awsProfile\":\"dev\"",
+		"\u200b{\"awsProfile\":\"dev\",",
+	} {
+		up := newUpstream(t, nil)
+		routes := []Route{presetRoute(t, v1alpha1.PresetGitHubToken, "github", "gh-token", up.URL, nil)}
+		r := newRig(t, up, routes, func(c *Config) {
+			c.VendDoc = func(doc []byte) bool { return strings.Contains(string(doc), `"kind":"aws"`) }
+		})
+		r.creds.docs["gh-token"] = []byte(doc)
+		resp, body := r.do("GET", "/brig-a/r/github/user", bearer(r.mint("brig-a", "github")), "")
+		wantStatus(t, resp, http.StatusBadGateway)
+		wantAudit(t, r.lastAudit(), "check=credential.malformed")
+		if up.count() != 0 {
+			t.Errorf("%s: reached the upstream %d times", doc, up.count())
+		}
+		if strings.Contains(body, "dev") {
+			t.Errorf("%s: the refusal quotes the secret: %q", doc, body)
+		}
+		if !strings.Contains(body, "the secret is not valid JSON") {
+			t.Errorf("%s: the refusal does not say the secret is broken: %q", doc, body)
+		}
+	}
+}
