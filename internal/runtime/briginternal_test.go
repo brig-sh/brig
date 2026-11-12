@@ -126,3 +126,29 @@ func TestNerdctlProbeBrigInternal(t *testing.T) {
 		t.Errorf("no nft: %v", err)
 	}
 }
+
+// A host route is a name under brig.internal at the gateway's own address, so
+// it adds a record and no divert.
+func TestGatewayArgsAddAHostRecordPerHostRoute(t *testing.T) {
+	gw := netip.MustParseAddr(sandboxGatewayIP(3))
+	e := Egress{Divert: Divert{Socket: "/b/divert/x.sock", BrigInternal: true,
+		Hosts: []string{"github-api.brig.internal"}}}
+	want := "--divert " + gw.String() + ":443=/b/divert/x.sock --host brig.internal=" + gw.String() +
+		" --host github-api.brig.internal=" + gw.String()
+	if got := strings.Join(e.divertArgs(gw), " "); got != want {
+		t.Errorf("divertArgs = %q, want %q", got, want)
+	}
+}
+
+// A gateway running without the record of a host route is restarted.
+func TestGatewaySpecChangesWithHosts(t *testing.T) {
+	base := Egress{Divert: Divert{Socket: "/b/divert/x.sock", BrigInternal: true}}
+	with := base
+	with.Divert.Hosts = []string{"github-api.brig.internal"}
+	if gatewaySpec(3, base) == gatewaySpec(3, with) {
+		t.Error("a gateway without the host record would be reused")
+	}
+	if spec := gatewaySpec(3, with); !strings.Contains(spec, "\nhost github-api.brig.internal="+sandboxGatewayIP(3)) {
+		t.Errorf("the gateway spec does not hold the host record: %q", spec)
+	}
+}
