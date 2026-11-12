@@ -211,6 +211,8 @@ func (e HostEndpoint) GuestEnv(sandbox string, routes []v1alpha1.Route, tokens m
 					return nil, fmt.Errorf("route %s: the credential broker named no AWS region", r.Name)
 				}
 				vars = append(vars, runtime.Var{Name: name, Value: regions[r.Name]})
+			case v1alpha1.PlaceholderRouteHost:
+				vars = append(vars, runtime.Var{Name: name, Value: v1alpha1.HostName(r.Name)})
 			default:
 				// Validate refuses a literal; one here was not expanded.
 				return nil, fmt.Errorf("route %s: guest.env %s is %q, not a placeholder", r.Name, name, v)
