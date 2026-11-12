@@ -45,10 +45,10 @@ func (r *Route) validate(expanded bool) error {
 		return err
 	}
 	switch r.Preset {
-	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS, PresetGCP:
+	case "", PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetGitHubAPI, PresetAWS, PresetGCP:
 	default:
-		return fmt.Errorf("preset %q is not one of %s, %s, %s, %s or %s",
-			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetAWS, PresetGCP)
+		return fmt.Errorf("preset %q is not one of %s, %s, %s, %s, %s or %s",
+			r.Preset, PresetClaudeCode, PresetAnthropicAPIKey, PresetGitHubToken, PresetGitHubAPI, PresetAWS, PresetGCP)
 	}
 	// Services are what the gcp preset forwards to. On another route they
 	// would read as a restriction that nothing enforces.
