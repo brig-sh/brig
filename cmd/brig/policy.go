@@ -730,19 +730,16 @@ func howToUnbind(b []string) string {
 // printRoutes prints one indented row on stderr for each route of p, after
 // the policy name check has just printed on stdout. stdout stays one policy
 // name per line. A route as written can leave out its mode, so the row prints
-// the default. Each route gets a row per run path under it, from the route
-// mode table: where its mode is served, and the transport the guest reaches
-// the broker by there.
+// the mode of its preset, else the default. Each route gets a row per run
+// path under it, from the route mode table: where its mode is served, and the
+// transport the guest reaches the broker by there.
 func printRoutes(p policy.Policy) {
 	for _, r := range p.Spec.Routes {
 		preset := string(r.Preset)
 		if preset == "" {
 			preset = "(none)"
 		}
-		mode := r.Mode
-		if mode == "" {
-			mode = v1alpha1.ModeEndpoint
-		}
+		mode := routeMode(r)
 		fmt.Fprintf(os.Stderr, "  route %s  preset %s  mode %s\n", r.Name, preset, mode)
 		// The row names the secrets so a reader can check the store holds
 		// them; it never reads a value.
@@ -762,6 +759,20 @@ func printRoutes(p policy.Policy) {
 	}
 }
 
+// routeMode is the mode of r as a run serves it. A route that names a preset
+// and no mode takes the preset's, so check agrees with show and the run.
+func routeMode(r v1alpha1.Route) v1alpha1.RouteMode {
+	if r.Mode != "" {
+		return r.Mode
+	}
+	if r.Preset != "" {
+		if pr, err := policy.PresetRoute(r.Preset); err == nil && pr.Mode != "" {
+			return pr.Mode
+		}
+	}
+	return v1alpha1.ModeEndpoint
+}
+
 // routeModes lists the modes of the routes of ps in the order a boot checks
 // them: the modes besides endpoint in name order, then endpoint. Each comes
 // with the routes that name it, the way a refusal names them.
@@ -769,10 +780,7 @@ func routeModes(ps []policy.Policy) ([]v1alpha1.RouteMode, map[v1alpha1.RouteMod
 	byMode := map[v1alpha1.RouteMode][]string{}
 	for _, p := range ps {
 		for _, r := range p.Spec.Routes {
-			m := r.Mode
-			if m == "" {
-				m = v1alpha1.ModeEndpoint
-			}
+			m := routeMode(r)
 			byMode[m] = append(byMode[m], fmt.Sprintf("%s (route %s)", p.Metadata.Name, r.Name))
 		}
 	}
