@@ -1,6 +1,7 @@
 package wrap
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
@@ -25,5 +26,21 @@ func TestHostRouteIsNotDiverted(t *testing.T) {
 	}
 	if !d.BrigInternal {
 		t.Errorf("Divert = %+v, want brig.internal diverted", d)
+	}
+}
+
+// Each host route is named in the divert, so the runtime answers it.
+func TestDivertsNameEachHostRoute(t *testing.T) {
+	shortStateDir(t)
+	c := &Config{
+		Runtime: &hullRecorder{},
+		VMName:  "brig-host-names",
+		routes: []v1alpha1.Route{
+			{Name: "github", Mode: v1alpha1.ModeEndpoint},
+			{Name: "github-api", Mode: v1alpha1.ModeHost, Upstream: "https://api.github.com"},
+		},
+	}
+	if got := c.diverts().Hosts; !slices.Equal(got, []string{"github-api.brig.internal"}) {
+		t.Errorf("Hosts = %q, want only the host route", got)
 	}
 }

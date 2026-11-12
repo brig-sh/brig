@@ -196,7 +196,7 @@ func TestARegisteredRouteModeRunsThroughItsHooks(t *testing.T) {
 		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN = %+v", v)
 	}
 	if got := cfg.brokerLine(); !strings.HasPrefix(got, "transport divert, routes anthropic") ||
-		!strings.Contains(got, "; modes endpoint, relay") {
+		!strings.Contains(got, "; modes endpoint, host, relay") {
 		t.Errorf("BROKER row: %q", got)
 	}
 	// The stub does not boot, and a run that does not boot forgets its
@@ -219,7 +219,7 @@ func TestARegisteredRouteModeRunsThroughItsHooks(t *testing.T) {
 	if err := cfg.routeRefusal(); err == nil || !strings.Contains(err.Error(), "relay is off") {
 		t.Errorf("routeRefusal = %v", err)
 	}
-	if got := cfg.brokerLine(); !strings.Contains(got, "modes endpoint; relay unavailable") {
+	if got := cfg.brokerLine(); !strings.Contains(got, "modes endpoint, host; relay unavailable") {
 		t.Errorf("BROKER row of a refused relay: %q", got)
 	}
 	if u := cfg.unavailableModes(); !strings.Contains(u["relay"], "relay is off") {

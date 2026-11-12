@@ -261,16 +261,16 @@ func TestEnvelopeHasABrokerRow(t *testing.T) {
 }
 
 // The BROKER row and info --json name the route modes the run path serves.
-// hull on hvi serves endpoint routes, and hull on vz serves none.
+// hull on hvi serves endpoint and host routes, and hull on vz serves none.
 func TestTheBrokerRowNamesTheModes(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
 	c := routedConfig(t, claudeAndGitHub, &hullRecorder{})
 	c.broker = &fakeBroker{running: true}
-	if got := c.brokerLine(); !strings.Contains(got, "; modes endpoint") {
+	if got := c.brokerLine(); !strings.Contains(got, "; modes endpoint, host") {
 		t.Errorf("the BROKER row on hvi is %q", got)
 	}
 	d := c.InfoData(creds.Set{})
-	if d.Broker == nil || !slices.Equal(d.Broker.Modes, []string{"endpoint"}) {
+	if d.Broker == nil || !slices.Equal(d.Broker.Modes, []string{"endpoint", "host"}) {
 		t.Errorf("info --json broker on hvi = %+v", d.Broker)
 	}
 

@@ -154,7 +154,8 @@ func TestARunOfAProfileHandsTheRuntimeWhatItDid(t *testing.T) {
     "Divert": {
      "Routes": null,
      "Socket": "",
-     "BrigInternal": false
+     "BrigInternal": false,
+     "Hosts": null
     }
    },
    "Setup": null,
