@@ -2363,6 +2363,80 @@ else
   echo "  --   not Linux, skipping the runc shim refusal"
 fi
 
+echo "== hull on Linux: refusals =="
+# A hull built for Linux ends its --version with linux/<arch>, and brig drives
+# that one as the Linux hull. The stub says so through STUB_HULL_VERSION. That
+# hull has no network gateway yet, so a policy and --network isolated are
+# refused before the runtime is asked to boot. So is a policy with
+# BRIG_HYPERVISOR=hvi: the hvi row is the macOS gateway's, and reading it here
+# called the policy enforced. The unit tests hold each refusal; this holds that
+# the binary reaches them from the version string alone, and a control run
+# shows the log would show a boot if brig made one. brig asks the binary only
+# on Linux, so on a Mac the stub is the macOS hull and the section is skipped.
+if [ "$(uname -s)" = Linux ]; then
+  lh="$WORK/lh"
+  mkdir -p "$lh/ws" "$lh/state" "$lh/gw" "$lh/policies"
+  lh_brig() {
+    STUB_HULL_VERSION='dev (go1.26.8, linux/amd64)' STUB_LOG="$lh/argv.log" STUB_STATE="$lh/sandbox" \
+      BRIG_WORKSPACE="$lh/ws" BRIG_STATE_DIR="$lh/state" BRIG_GATEWAY_DIR="$lh/gw" \
+      BRIG_POLICY_DIR="$lh/policies" "$WORK/brig" "$@"
+  }
+
+  : > "$lh/argv.log"
+  lh_brig run claude --network isolated -d > "$lh/iso.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'hull on Linux cannot do yet' "$lh/iso.out" \
+    && ok "hull on Linux refuses --network isolated" \
+    || bad "hull on Linux refuses --network isolated -- got $rc: $(cat "$lh/iso.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot --network isolated" \
+    || ok "nothing reached hull on Linux for --network isolated"
+
+  cat > "$lh/policies/lh-deny.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: lh-deny
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+  lh_brig policy attach lh-deny claude-code > /dev/null 2>&1
+  for hv in hvi vz; do
+    : > "$lh/argv.log"
+    BRIG_HYPERVISOR=$hv lh_brig run claude -d > "$lh/pol.out" 2>&1; rc=$?
+    [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/pol.out" \
+      && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/pol.out" \
+      && ok "hull on Linux refuses a policy on $hv with exit 7, naming its path and nerdctl" \
+      || bad "hull on Linux refuses a policy on $hv with exit 7 -- got $rc: $(cat "$lh/pol.out")"
+    grep -q '^argv: run ' "$lh/argv.log" \
+      && bad "hull on Linux was asked to boot a policy on $hv it cannot enforce" \
+      || ok "nothing reached hull on Linux for a policy on $hv"
+  done
+  lh_brig policy detach lh-deny claude-code > /dev/null 2>&1
+
+  # The shipped profile sets network: isolated, which this section otherwise
+  # never reads, since BRIG_NETWORK=shared is set for the whole run. The
+  # refusal names the profile and nerdctl, not a flag nobody typed or hvi.
+  : > "$lh/argv.log"
+  BRIG_NETWORK= lh_brig run claude -d > "$lh/prof.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'profile sets network: isolated, and hull on Linux' "$lh/prof.out" \
+    && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/prof.out" \
+    && ! grep -q -e '--network isolated gives' -e 'run it on hvi' "$lh/prof.out" \
+    && ok "hull on Linux refuses the profile's isolated network, naming the profile and nerdctl" \
+    || bad "hull on Linux refuses the profile's isolated network -- got $rc: $(cat "$lh/prof.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot the profile's isolated network" \
+    || ok "nothing reached hull on Linux for the profile's isolated network"
+
+  : > "$lh/argv.log"
+  lh_brig run claude -d > "$lh/plain.out" 2>&1
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "a plain run on hull on Linux does reach run, so the log can show one" \
+    || bad "a plain run on hull on Linux reaches run -- got: $(cat "$lh/plain.out")"
+  lh_brig rm --all -y > /dev/null 2>&1
+else
+  echo "  --   not Linux, skipping hull on Linux"
+fi
+
 echo "== exit codes =="
 # The documented set, checked end to end so the numbers a script keys on cannot
 # drift from the README. Each verb here fails in a different way and the status
