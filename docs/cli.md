@@ -90,6 +90,47 @@ to the agent:
 brig run claude ~/code/demo -- --version
 ```
 
+#### Run a Brigfile target
+
+```bash
+brig run --target dev
+brig run --target dev --session fix -- --continue
+brig run --target ci -f ci/Brigfile.ci --approve sha256:<digest>
+brig run
+```
+
+```
+brig run --target <name> [--session <name>] [-f <path>] [flags] [-- args...]
+```
+
+- The project is the directory that holds the [Brigfile](brigfile.md). The
+  line takes no ref and no project.
+- The arguments after `--` replace the target's `args`. With no `--`, the
+  agent gets the target's `args`.
+- A word before `--` that is not one of Brig's flags is a usage error.
+- With no ref and no `--target`, `brig run` runs the Brigfile's
+  `defaultTarget`. A Brigfile with no `defaultTarget` lists its targets and
+  exits `2`. With no Brigfile, `brig run` says that it needs a profile, as
+  before.
+
+The run boots only what you approved. Brig shows the plan of the run and
+asks. A yes is stored, and the next run with the same configuration asks
+nothing. With no terminal, or with `--json`, the run boots nothing, exits
+`8`, and prints the digest of the approval. See
+[The approval](brigfile.md#the-approval).
+
+| Flag | What it does |
+| --- | --- |
+| `--target <name>` | The target to run |
+| `--session <name>` | A session of the target, with its own sandbox and guest home |
+| `-f <path>` | Read this Brigfile. Its directory is the project |
+| `--approve <digest>` | Approve this run without a question. The digest must be the digest of this run |
+| `--recreate` | Boot the session's sandbox again on the same guest home, when its configuration changed |
+
+The target line also takes `--image`, `--mem`, `--cpus`, `--network`,
+`--offline`, `--publish`, `--skills`, `-d` and `--json`. It refuses `--home`
+and `--no-project`.
+
 ### `brig sh`
 
 ```bash
@@ -211,8 +252,9 @@ brig rm --target dev [--session <name>] [-f <path>] [--dry-run]
 ```
 
 With `--target`, `rm` removes a session of a target of the repository's
-[Brigfile](brigfile.md#stop-and-remove-a-session), with its guest home. It
-does not read the Brigfile. The cases in the table above apply to it too.
+[Brigfile](brigfile.md#stop-and-remove-a-session), with its guest home and
+its approval. It does not read the Brigfile. The cases in the table above
+apply to it too.
 `brig rm --all` removes the sandboxes of targets with the rest.
 
 `rm` and `stop` each take a single ref.
@@ -339,9 +381,13 @@ The plan of a target adds these rows to the plan of a profile:
 - `POLICY`: one row for each policy, with where it comes from
 - `BROKER`: one row for each route, with its upstream and the secrets in
   your store that it uses
+- `ARGS`: the arguments the agent gets
 - `NOTE`: for example, that a file of yours that overrides a built-in does
   not apply, or that the session's sandbox was started with a different
   configuration
+
+When two policies of the target cannot apply together, the `BROKER` rows
+list the routes of each policy, so you can see the conflict.
 
 With no Brigfile, or no target of that name, the command exits `3`.
 
@@ -481,6 +527,7 @@ route, sorted by name.
 | `imagePinned` | `true` when the image is named by digest |
 | `policies` | each policy, with `name` and `from`: `brigfile <alias> (<source>)`, `builtin profile <name>` or `attachment to <name>` |
 | `notes` | notes about the target, omitted when there are none |
+| `args` | the arguments the agent gets |
 
 A mount has `host`, `guest` and `mode`. `mode` is `read-write` for the home
 and the project, and `copy` for a skills directory. Each credential has these
@@ -1072,6 +1119,11 @@ brig run claude -p hi --quiet
 
 This runs the agent with `-p hi --quiet`, with a warning about `--quiet`.
 
+On a run line with no ref, `--target`, `--session`, `-f`, `--approve` and
+`--recreate` are Brig's too. After a ref they are the agent's, so
+`brig run claude -f notes.md` hands `-f notes.md` to the agent. See
+[Run a Brigfile target](#run-a-brigfile-target).
+
 ### Run-line flags
 
 | Flag | Value | Default | Notes |
@@ -1204,6 +1256,7 @@ on success, and the usual error line on stderr. See
 | `5` | a boot refused over image verification |
 | `6` | a required secret was not resolved, or the secret store did not open. A declared secret marked `required: false` produces a warning and no failure |
 | `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The refusal names the property, the runtime and the backend. See [Exit 7 cases](#exit-7-cases) |
+| `8` | a run of a Brigfile target that no approval covers. Nothing booted. The refusal names the digest that approves the run. See [The approval](brigfile.md#the-approval) |
 
 [Stability](stability.md) lists this table as stable to script against.
 

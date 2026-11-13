@@ -2,7 +2,8 @@
 
 Brig runs an agent in a microVM. On the host, the agent can reach its guest
 home, the credentials you deliver to it, and any project you name on the run
-line. No other host directory is mounted.
+line, or the project of a Brigfile target you approved. No other host
+directory is mounted.
 
 A run reads no host credential source. See [Credentials](#credentials).
 
@@ -19,7 +20,9 @@ that defend them. To report a flaw in a boundary privately, see
 The guest can reach:
 
 - its guest home, read-write
-- the project you name on the run line, read-write at `/work/<name>`
+- the project you name on the run line, read-write at `/work/<name>`. For a
+  [Brigfile target](#brigfile-targets), the project is the directory that
+  holds the Brigfile
 - the credentials you deliver to it
 - the internet, on either `isolated` or `shared` (see
   [Network egress](#network-egress) and [Host services](#host-services))
@@ -887,6 +890,73 @@ The warning is a look between two brig commands, not a guard:
   `/private/var` for `/var` on macOS, is not recognized as inside it and is
   not watched.
 
+## Brigfile targets
+
+A [Brigfile](brigfile.md) is in the repository, and so is every profile and
+policy file it names. The agent in a sandbox can change all of them. So
+reading a Brigfile allows nothing. `brig run --target` boots a target only
+when an approval you gave covers the run.
+
+### What a Brigfile can ask for
+
+A target can ask for:
+
+- its project: the directory that holds the Brigfile, mounted read-write at
+  `/work/<name>`
+- a profile Brig ships, or a profile the repository wrote, with its image,
+  its size and the credential bindings it names
+- policies: egress rules, and routes that send requests to an upstream the
+  repository names, with a secret from your store that the repository names
+- the arguments the agent gets
+
+A profile the repository wrote cannot name a host path, a host program, the
+source of a secret, a variable from your environment, the shared network or a
+hypervisor. See
+[What a repository profile may not set](brigfile.md#what-a-repository-profile-may-not-set).
+
+### What the approval authorizes
+
+**A run of a target boots only a configuration you approved.** The run shows
+the plan and asks. With no terminal it boots nothing and exits `8`.
+
+**The approval covers what the run may do.**
+[What an approval covers](brigfile.md#what-an-approval-covers) lists each
+part. A change to any part asks again.
+
+**What boots is what was approved.** The run reads the Brigfile and the
+files it names once, and builds both the approval and the boot from that
+read. A file changed while Brig asks does not reach the boot.
+
+**Brig reads no secret value before the approval.** Before it asks, the run
+lists the names in your store. It reads a value only after you approve.
+
+**Brig keeps each approval in its state directory, outside the project.** A
+project that holds the state directory, or lies inside it, is refused before
+Brig asks.
+
+**Only `brig run --target` starts the sandbox of a target.** brigd, and every
+other path that boots a sandbox, refuses one.
+
+### Limits of the approval
+
+- **A secret in your store can go to an upstream the repository names.** The
+  plan shows each route with its upstream and its secrets, and the approval
+  covers each pair. Read those rows before you approve.
+- **An image named by a tag can change after you approve.** The approval
+  covers the reference, not the bytes. The prompt says so when the image is a
+  tag. [Image verification](#guest-images) runs at every boot, as for any
+  other run. To fix the bytes, name the image by digest.
+- **An approval given with `--approve` is only as safe as the place the
+  digest comes from.** If the repository holds the digest, whoever changes the
+  repository can change the Brigfile and the digest together. Keep the digest
+  outside the repository.
+- **The policies of a built-in profile, and the ones you attached to it,
+  apply to a target on it.** The plan and the approval include them.
+- **An approval does not limit what the agent does once it runs.** The rest
+  of this page applies to it, as to a run of a profile.
+- **Two Brig processes that write approvals at the same moment can lose
+  one.** The next run asks again.
+
 ## Guest images
 
 An image is code that runs with your credentials, so Brig checks where it
@@ -1388,7 +1458,9 @@ that runs with your credentials.
 
 **The profile author.** A profile names the image, the volumes it hostmounts,
 and any `files:` binding, the one channel the `deny` list does not cover. A
-profile is only as careful as its author.
+profile is only as careful as its author. For a Brigfile target, that author
+is whoever wrote the repository, and the [approval](#brigfile-targets) is
+where you accept what they ask for.
 
 **hull or nerdctl.** The kernel boundary, whether the shared network
 forwards traffic between guests, and every device and namespace decision
