@@ -916,8 +916,9 @@ hypervisor. See
 
 ### What the approval authorizes
 
-**A run of a target boots only a configuration you approved.** The run shows
-the plan and asks. With no terminal it boots nothing and exits `8`.
+**A run of a target boots only a configuration you approved.** A run with
+a stored approval for the same configuration boots. Any other run shows the
+plan and asks. With no terminal to ask on, it boots nothing and exits `8`.
 
 **The approval covers what the run may do.**
 [What an approval covers](brigfile.md#what-an-approval-covers) lists each

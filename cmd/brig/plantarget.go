@@ -104,9 +104,6 @@ type targetRun struct {
 	// bytes, and a second read would boot what the guest wrote since.
 	loaded   *brigfile.Loaded
 	resolved brigfile.ResolvedTarget
-	// profile is the target's profile with its overrides applied.
-	profile  profile.Profile
-	policies wrap.PolicySet
 	target   *wrap.Target
 	cfg      *wrap.Config
 	ref      projectRef
@@ -231,8 +228,6 @@ func loadTarget(verb string, opts options, l *brigfile.Loaded) (*targetRun, erro
 	return &targetRun{
 		loaded:   l,
 		resolved: rt,
-		profile:  p,
-		policies: set,
 		target:   target,
 		cfg:      cfg,
 		ref:      projectRef{root: l.Root, target: rt.Name, session: opts.session, file: opts.file},
