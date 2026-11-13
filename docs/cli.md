@@ -489,8 +489,8 @@ A `bundle` line appears when `brig` runs from the bin directory of the runtime
 bundle without its launcher. See
 [Started without the launcher](troubleshooting.md#started-without-the-launcher).
 
-On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run
-needs from the host: `subids`, `userns` and `uidmap` for a user other than
+On Linux with nerdctl or hull, or with no runtime yet, `doctor` adds what a
+run needs from the host: `subids`, `userns` and `uidmap` for a user other than
 root, and `devices` (`/dev/vhost-vsock`) and `cni` for every user. These
 lines do not change the exit status.
 
@@ -500,11 +500,13 @@ lines do not change the exit status.
   for this user, or be open to everyone.
 - Where AppArmor restricts user namespaces, as on Ubuntu 24.04 and later,
   `userns` looks for a loaded profile that allows a rootless run.
-- For a `nerdctl` from outside the runtime bundle, or when no runtime is
-  found, `doctor` adds `tools`: the hypervisor a run boots on, and `oras`
-  when the boot assets are missing. For such a `nerdctl`, the `runtime`
-  line ends with `(not the runtime bundle; see install.sh)`. `doctor`
-  cannot tell whether that runtime boots a sandbox.
+- For a `nerdctl` or `hull` from outside the runtime bundle, or when no
+  runtime is found, `doctor` adds `tools`: the hypervisor a run boots on,
+  and `oras` when the boot assets are missing. For such a `nerdctl`, the
+  `runtime` line ends with `(not the runtime bundle; see install.sh)`.
+  `doctor` cannot tell whether that runtime boots a sandbox.
+- With hull, `cni` looks where hull does: `CNI_PATH`, then the runtime
+  bundle's plugins, then `/opt/cni/bin`.
 
 Doctor checks the image against the trust policy a run of that agent uses,
 with the `BRIG_VERIFY_*` variables applied, per-agent spelling first. The
