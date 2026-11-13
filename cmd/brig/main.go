@@ -78,6 +78,11 @@ usage:
                                                  your host, once
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
+  brig target ls [-f PATH]                       the targets of this repository's
+                                                 Brigfile
+  brig config [--target NAME] [-f PATH]          what the Brigfile declares, and
+                                                 where each part comes from
+  brig init [-f PATH]                            write a starter Brigfile
   brig doctor [<agent>]                          check the host, runtime and, given an agent, its image
   brig report [<ref>]                            write a diagnostic report to attach to an issue
   brig completion bash|zsh|fish                  a completion script for your shell
@@ -98,9 +103,9 @@ global flags (left of the command, as in: brig -q run claude):
                          line. A verification that did not hold is printed
                          even here
       --json             machine-readable output, for the read verbs: ls, info,
-                         plan, agent ls, secret ls, doctor, version and the
-                         network verbs. Also accepted after the verb (brig ls
-                         --json). Every other verb refuses it
+                         plan, agent ls, secret ls, target ls, config, doctor,
+                         version and the network verbs. Also accepted after
+                         the verb (brig ls --json). Every other verb refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
                          JSON line with its exit status, so a script can tell
                          "brig refused" from "the agent failed"
@@ -379,6 +384,12 @@ func dispatch(args []string) error {
 		return completionCmd(os.Stdout, rest)
 	case "logs":
 		return logsCmd(rest)
+	case "target":
+		return targetCmd(rest)
+	case "config":
+		return configCmd(rest)
+	case "init":
+		return initCmd(rest)
 	case "ls":
 		// The global -q reaches ls as its own meaning: refs and nothing else.
 		// The two readings agree -- bare refs ARE identifiers only -- and ls
@@ -3535,9 +3546,9 @@ var globalJSON bool
 // --json left of it is a usage error rather than a flag dropped on the floor.
 func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
-	case "ls", "info", "plan", "doctor", "version", "--version", "run", "sh":
+	case "ls", "info", "plan", "doctor", "version", "--version", "run", "sh", "config":
 		return true
-	case "agent", "secret":
+	case "agent", "secret", "target":
 		return len(rest) > 0 && rest[0] == "ls"
 	case "network":
 		return len(rest) > 0 && onPortLine("network "+rest[0])
@@ -3550,8 +3561,8 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // moves the flag rather than guessing which command it belongs on.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, plan, agent ls, secret ls, doctor, version and the network verbs, "+
-		"and for run and sh", verb)
+		"ls, info, plan, agent ls, secret ls, target ls, config, doctor, version and the "+
+		"network verbs, and for run and sh", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run

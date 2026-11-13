@@ -320,6 +320,11 @@ func checkRef(ref string) error {
 		return fmt.Errorf("%q holds a backslash; separate a path with /", ref)
 	case strings.HasPrefix(ref, "~"):
 		return fmt.Errorf("%q starts with ~; a path is relative to the directory that holds the Brigfile", ref)
+	// A path is printed by the commands that show a Brigfile, and in the
+	// error when its file is missing. A control character in it would reach
+	// the reader's terminal as an escape sequence.
+	case strings.IndexFunc(ref, unicode.IsControl) >= 0:
+		return fmt.Errorf("%q holds a control character", ref)
 	}
 	for _, part := range strings.Split(ref, "/") {
 		if part == ".." {

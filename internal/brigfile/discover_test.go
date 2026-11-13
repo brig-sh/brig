@@ -117,6 +117,31 @@ func TestDiscoverWalksTheResolvedStartDirectory(t *testing.T) {
 	}
 }
 
+// Root is the directory Discover looks in, whether or not a Brigfile is
+// there, so that brig init writes where the other verbs will look.
+func TestRootIsWhereDiscoverLooks(t *testing.T) {
+	dir := project(t, map[string]string{".git/HEAD": "", "a/b/keep": ""})
+	for _, start := range []string{"", "a", "a/b"} {
+		got, err := Root(filepath.Join(dir, start))
+		if err != nil || got != dir {
+			t.Errorf("Root(%q) = %q, %v; want %q", start, got, err, dir)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(minimal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found, err := Discover(filepath.Join(dir, "a", "b"))
+	if err != nil || filepath.Dir(found) != dir {
+		t.Errorf("Discover = %q, %v; want a Brigfile in %s", found, err, dir)
+	}
+
+	outside := project(t, map[string]string{"sub/keep": ""})
+	insideGit(t, outside)
+	if got, err := Root(filepath.Join(outside, "sub")); err != nil || got != filepath.Join(outside, "sub") {
+		t.Errorf("Root outside Git = %q, %v; want the start directory", got, err)
+	}
+}
+
 // Discover and Load together: the path Discover returns loads.
 func TestDiscoverThenLoad(t *testing.T) {
 	dir := project(t, map[string]string{".git/HEAD": "", FileName: minimal, "agent.yaml": agentPolicy, "x/keep": ""})

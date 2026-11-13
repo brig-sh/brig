@@ -42,10 +42,10 @@
       "pattern": "^[a-z0-9][a-z0-9._-]*$"
     },
     "path": {
-      "description": "A path relative to the directory that holds the Brigfile, separated by /, with no . or .. component.",
+      "description": "A path relative to the directory that holds the Brigfile, separated by /, with no . or .. component and no control character.",
       "type": "string",
       "minLength": 1,
-      "pattern": "^[^/~\\\\][^\\\\]*$",
+      "pattern": "^[^/~\\\\\\u0000-\\u001f\\u007f-\\u009f][^\\\\\\u0000-\\u001f\\u007f-\\u009f]*$",
       "not": { "pattern": "(^|/)(\\.|\\.\\.)?(/|$)" }
     },
     "profileAlias": {

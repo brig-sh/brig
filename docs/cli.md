@@ -744,6 +744,92 @@ brig policy check claude
 [Policies](policies.md) covers the document format and what each network
 posture means.
 
+### `brig target`
+
+```bash
+brig target ls
+```
+
+`brig target ls` lists the targets of the repository's
+[Brigfile](brigfile.md). `*` marks the default target. Each row names the
+target's profile alias, where that profile comes from, and its policies:
+the target's own, then those its profile lists.
+
+```
+  TARGET  PROFILE  SOURCE                POLICIES
+  ci      tool     file:.brig/tool.yaml  -
+* dev     claude   builtin:claude-code   anthropic
+
+* the default target
+read from /home/you/code/demo/Brigfile
+```
+
+```
+brig target ls [-f <path>] [--json]
+```
+
+`-f` (or `--file`) reads that Brigfile instead of looking for one.
+`--json` prints the rows as `kind: TargetList`.
+
+### `brig config`
+
+```bash
+brig config --target dev
+```
+
+`brig config` shows what the repository's [Brigfile](brigfile.md) declares
+and where each part comes from. With no flag it shows the project: the
+Brigfile, the project root, the default target, and every profile, policy
+and target with its source.
+
+With `--target <name>` it shows that one target resolved:
+
+```
+target    dev (default)
+brigfile  /home/you/code/demo/Brigfile
+profile   claude  builtin:claude-code
+cpus      2                                       from target dev
+mem       4096                                    from profile claude
+image     ghcr.io/brig-sh/claude-code-stock:root  from profile claude
+policies  anthropic  file:.brig/anthropic.yaml
+args      "--continue"
+```
+
+`config` does not apply `BRIG_*` settings or run-line flags.
+
+When the Brigfile uses `builtin:<name>` and your profile directory has a file
+that overrides that built-in, `config` prints a note. The Brigfile does not
+read your file.
+
+```
+brig config [--target <name>] [-f <path>] [--json]
+```
+
+`-f` (or `--file`) reads that Brigfile instead of looking for one. `--json`
+prints `kind: Config`. With `--target` the payload also has a `target`
+object, whose `cpus`, `mem` and `image` each carry a `value` and a `from`
+(`target` or `profile`). A name that is not a target exits `3` and lists the
+targets there are.
+
+### `brig init`
+
+```bash
+brig init
+```
+
+`brig init` writes a starter [Brigfile](brigfile.md) at the top of the Git
+worktree, or in the current directory outside Git. The starter has one
+target, `dev`, on the `claude-code` profile Brig ships. Then it prints the
+next commands to try.
+
+```
+brig init [-f <path>]
+```
+
+`-f` (or `--file`) writes the file at that path instead. `init` never
+replaces a file or a link that is already at the path. It exits `1` and
+names the path.
+
 ### `brig secret`
 
 ```bash
@@ -935,6 +1021,8 @@ Which verbs accept `--json` depends on its position.
 | `run`, `sh` | global, or local on the run line | one compact line, see below |
 | `agent ls` | global, or local after `ls` | envelope |
 | `secret ls` | global, or local after `ls` | envelope |
+| `target ls` | global, or local after `ls` | envelope, `kind: TargetList` |
+| `config` | global, or local after `config` | envelope, `kind: Config` |
 | `agent show`, `agent export`, `agent new` | local only, after the subcommand | bare document, no envelope |
 | `policy show` | local only, after the subcommand | bare document, no envelope |
 
@@ -951,8 +1039,8 @@ refuses them:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, plan, agent ls, secret ls, doctor, version and the network verbs, and
-for run and sh
+info, plan, agent ls, secret ls, target ls, config, doctor, version and the
+network verbs, and for run and sh
 ```
 
 Put the flag after the subcommand instead.
@@ -1024,7 +1112,7 @@ on success, and the usual error line on stderr. See
 | `0` | success |
 | `1` | a general failure |
 | `2` | a usage error: an unknown flag, a stray argument, or a value in the wrong place, as reported by the verb's own parser |
-| `3` | no such thing: an unknown agent, or a sandbox that is not there |
+| `3` | no such thing: an unknown agent, a sandbox that is not there, no Brigfile, or a target the Brigfile does not have |
 | `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing. The refusal names the setting that caused it |
 | `5` | a boot refused over image verification |
 | `6` | a required secret was not resolved, or the secret store did not open. A declared secret marked `required: false` produces a warning and no failure |

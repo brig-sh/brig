@@ -76,6 +76,8 @@ These can change without a deprecation cycle:
 - The wording of any human-readable output. Parse `--json` output and do not
   parse prose.
 - Anything marked "example profile" in `brig agent ls`.
+- The [Brigfile](brigfile.md) format, `brig.sh/v1alpha1`. It is alpha, and
+  a field can be added, renamed or removed in any release.
 - The Go package `github.com/brig-sh/brig/api/policy/v1alpha1`, which holds
   the policy document types and their validation. It is alpha, and it carries
   no compatibility promise. A field can be added, renamed or removed in any
