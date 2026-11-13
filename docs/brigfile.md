@@ -188,7 +188,7 @@ can give the agent more access. Plan the target again after you change its
 policies.
 
 A policy with an egress default or a route never leaves the run on the
-shared network, even when the profile asks for `shared`. When two policies cannot apply
+shared network, even when you ask for `--network shared`. When two policies cannot apply
 together, for example two routes with the same name, the plan opens with a
 `REFUSED` row.
 
