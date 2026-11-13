@@ -3442,7 +3442,10 @@ esac
 # the same before and after. A target on a profile the repository wrote with a
 # route names the route's upstream and secret, and its sandbox is the
 # project's own, not brig-claude-code.
-cat > "$WORK/bf-plan" <<'BF'
+# In a directory of its own: the directory of a Brigfile is its project, and
+# a project that holds brig's state directory is refused.
+mkdir -p "$WORK/bf-plan"
+cat > "$WORK/bf-plan/Brigfile" <<'BF'
 apiVersion: brig.sh/v1alpha1
 profiles:
   tool: {inline: {name: claude-code, binary: x, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}
@@ -3459,7 +3462,7 @@ targets:
   ci: {profile: tool, policies: [gh], overrides: {cpus: 2}}
 BF
 state_before="$(cd "$BRIG_STATE_DIR" && find . | sort)"
-out="$(cd "$proj" && "$WORK/brig" plan --target ci -f "$WORK/bf-plan" 2>&1)"; rc=$?
+out="$(cd "$proj" && "$WORK/brig" plan --target ci -f "$WORK/bf-plan/Brigfile" 2>&1)"; rc=$?
 case "$rc:$out" in
   "0:"*"TARGET       ci, from "*"/bf-plan"*"SANDBOX      brig--ci-"*"route collector to https://collector.example with your secret prod-db"*"2 vCPUs from target ci"*)
     ok "plan --target names the target, its own sandbox and each route's upstream and secret" ;;
@@ -3477,6 +3480,71 @@ out="$(cd "$proj" && "$WORK/brig" plan --target dev claude 2>&1)"; rc=$?
 case "$rc:$out" in
   "2:"*"takes no profile"*) ok "plan --target with a profile is a usage error" ;;
   *) bad "plan --target with a profile is a usage error -- got $rc: $out" ;;
+esac
+# stop and rm --target reach a session from the project root, the target
+# and the session name alone. Nothing boots a target yet, so the project index
+# is seeded by hand, with the sandbox the plan names. The Brigfile is moved
+# away first: a session outlives the file that named it. The stub keeps this
+# sandbox in a state file of its own.
+sb="$(cd "$proj" && "$WORK/brig" --json plan --target dev 2>/dev/null |
+  sed -n 's/.*"sandbox": "\(brig--dev-[^"]*\)".*/\1/p' | head -n 1)"
+bf_home="$BRIG_STATE_DIR/homes/$sb"
+bf_inst="$WORK/bf-instance"
+mkdir -p "$bf_home" && : > "$bf_home/agent-state"
+printf '{"version": 1, "sessions": {"%s": {"root": "%s", "target": "dev", "home": "%s"}}}\n' \
+  "$sb" "$proj" "$bf_home" > "$BRIG_STATE_DIR/projects.json"
+printf '%s' "$sb" > "$bf_inst"
+mv "$proj/Brigfile" "$WORK/bf-moved"
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" ls 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"TARGET"*"dev "*"$sb"*"running"*"$proj"*) ok "ls lists a target's session with its target and project" ;;
+  *) bad "ls lists a target's session with its target and project -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" -q ls 2>&1)"
+case "$out" in
+  *brig--*) bad "ls -q prints a target's session, which has no ref: $out" ;;
+  *) ok "ls -q prints no line for a target's session" ;;
+esac
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" stop --target dev 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q "^argv: stop $sb\$" "$STUB_LOG" \
+  && ok "stop --target stops the session with its Brigfile gone" \
+  || bad "stop --target stops the session with its Brigfile gone -- got $rc: $out"
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" rm --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"removed target dev and its guest home $bf_home"*) ok "rm --target removes the session and its home" ;;
+  *) bad "rm --target removes the session and its home -- got $rc: $out" ;;
+esac
+grep -q "^argv: rm $sb\$" "$STUB_LOG" && [ ! -e "$bf_home" ] && ! grep -q "$sb" "$BRIG_STATE_DIR/projects.json" \
+  && ok "rm --target took the sandbox, the home and the entry" \
+  || bad "rm --target took the sandbox, the home and the entry -- $(cat "$BRIG_STATE_DIR/projects.json")"
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" rm --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "3:"*"no target dev in the project $proj"*) ok "rm --target of a session brig does not know exits 3 and names the project" ;;
+  *) bad "rm --target of a session brig does not know exits 3 and names the project -- got $rc: $out" ;;
+esac
+mv "$WORK/bf-moved" "$proj/Brigfile"
+# A run of a profile in the checkout runs as before and says once that it
+# does not read the Brigfile, even one that does not load. It says nothing
+# under --json. It runs on a state and a sandbox of its own.
+bf_run=(env BRIG_STATE_DIR="$WORK/bf-run" STUB_STATE="$WORK/bf-run-instance" BRIG_GATEWAY_DIR="$WORK/bg"
+  CLAUDE_CODE_OAUTH_TOKEN=bf-token GH_TOKEN=bf-gh "$WORK/brig")
+printf 'not: [a Brigfile\n' > "$proj/Brigfile"
+out="$(cd "$proj/sub" && "${bf_run[@]}" run claude -p hi 2>&1 >/dev/null)"; rc=$?
+hint="has a Brigfile, and \`brig run <profile>\` does not read it"
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c "$hint")" = 1 ] \
+  && ok "a run of a profile beside a broken Brigfile runs and says once that it does not read it" \
+  || bad "a run of a profile beside a broken Brigfile runs and says once that it does not read it -- got $rc: $out"
+out="$(cd "$proj/sub" && "${bf_run[@]}" --json run claude -p hi 2>&1 >/dev/null)"; rc=$?
+case "$out" in
+  *"$hint"*) bad "a --json run says it does not read the Brigfile: $out" ;;
+  *) ok "a --json run says nothing about the Brigfile" ;;
+esac
+mv "$proj/Brigfile" "$WORK/bf-broken"
+out="$(cd "$proj/sub" && "${bf_run[@]}" run claude -p hi 2>&1 >/dev/null)"; rc=$?
+case "$rc:$out" in
+  "0:"*"$hint"*) bad "a run with no Brigfile names one: $out" ;;
+  "0:"*) ok "a run with no Brigfile says nothing about one" ;;
+  *) bad "a run with no Brigfile says nothing about one -- got $rc: $out" ;;
 esac
 
 echo "== completion =="
