@@ -360,6 +360,34 @@ func Embedded(name string) bool {
 	return err == nil
 }
 
+// BuiltIn returns the profile brig ships under name, parsed from the embedded
+// spec, with the spec's bytes. It never reads the registry, so a file in the
+// profile directory that overrides the name does not change the answer, and
+// it works whether or not Load has run.
+//
+// A repository's Brigfile asks for builtin:<name>, and that has to mean the
+// same profile on every machine that checks the repository out. Lookup would
+// return the reader's own override where one exists, and run an image the
+// repository never named.
+//
+// name is a canonical name only. An alias such as claude is a spelling of the
+// registry, which this does not consult, and the safeName check keeps
+// anything shaped like a path away from the embedded FS.
+func BuiltIn(name string) (Profile, []byte, bool) {
+	if !safeName(name) {
+		return Profile{}, nil, false
+	}
+	blob, err := builtinFS.ReadFile("specs/" + name + ".yaml")
+	if err != nil {
+		return Profile{}, nil, false
+	}
+	p, err := Parse(blob)
+	if err != nil || p.Name != name {
+		return Profile{}, nil, false
+	}
+	return p, blob, true
+}
+
 // BuiltInDeny is the denylist brig ships for a name, whatever a file of the
 // same name currently says.
 //
