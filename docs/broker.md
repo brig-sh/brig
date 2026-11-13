@@ -479,6 +479,7 @@ changes:
 | 403 | On a route with `services`, the first path segment after the service is `batch`, in any case and with or without `;parameters`. A segment such as `batchGet` is not refused. The rule is `spec.routes[<route>].services[<service>]` | `request.batch` |
 | 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open. On a `gcp` route, the token could not be minted. See [Minted tokens](#minted-tokens) | `credential` |
 | 502 | The secret is a gcloud pointer, on a route without `services`. Nothing is sent upstream | `credential.gcponly` |
+| 502 | The secret is an aws pointer, on a route that does not vend. Nothing is sent upstream | `credential.vendonly` |
 | 502 | The secret starts a JSON object and does not decode, such as a pointer cut short before its kind field. Nothing is sent upstream | `credential.malformed` |
 | 502 | The upstream cannot be reached, or on a route without `inject.tls` its certificate does not verify | `upstream` |
 | 502 | A route that vends could not fetch keys. See [Routes that vend](#routes-that-vend) | `vend` |
