@@ -322,8 +322,9 @@ and says so when it cannot store an approval.
 
 ### Approve ahead of time
 
-With no terminal, and with `--json`, the run asks nothing. It shows the plan
-on stderr, boots nothing, exits `8` and prints the digest:
+With no terminal, and with `--json`, the run asks nothing. A run that a
+stored approval covers boots. Any other run shows the plan on stderr, boots
+nothing, exits `8` and prints the digest:
 
 ```
 brig: target ci is not approved to run as shown above, and there is no
