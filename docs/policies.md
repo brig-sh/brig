@@ -833,6 +833,10 @@ brig policy rm locked-down --force
 A policy is bound in one of three ways: an inline entry in the `policy:`
 list of a profile, an attach to a profile, or an attach to one session.
 
+A target of a repository's [Brigfile](brigfile.md#which-policies-apply) can
+also name policies. Brig reads those from the repository, not from your
+policy directory.
+
 ### ls
 
 `brig policy ls` prints what binds a policy under the policy. A session

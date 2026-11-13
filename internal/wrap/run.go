@@ -858,7 +858,7 @@ func (c *Config) shares(home, project string, volumes []runtime.Share) []runtime
 // line today -- there is no flag for it -- which is a gap and not this branch's
 // job to fill.
 func (c *Config) projectShareStale() string {
-	was := rememberedProject(sessionKey(c.Profile.Name, c.Slug), c.VMName)
+	was := rememberedProject(c.sessionRef(), c.VMName)
 	switch {
 	case was == c.Project:
 		return ""

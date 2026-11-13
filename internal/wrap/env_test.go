@@ -162,3 +162,21 @@ func TestEnvStrictBoolPrecedence(t *testing.T) {
 		t.Errorf("the refusal did not quote the per-agent setting the user actually set: %v", err)
 	}
 }
+
+// An Env with no agent reads the global setting alone. It asks for no
+// per-agent name at all, so no variable of any agent can answer it.
+func TestEnvWithNoAgentReadsOnlyTheGlobalSetting(t *testing.T) {
+	var asked []string
+	e := NewEnv("", func(name string) (string, bool) {
+		asked = append(asked, name)
+		return "v", name == "BRIG_IMAGE"
+	})
+	if got := e.String("IMAGE", ""); got != "v" || e.SettingName("IMAGE") != "BRIG_IMAGE" {
+		t.Errorf("IMAGE = %q from %s", got, e.SettingName("IMAGE"))
+	}
+	for _, name := range asked {
+		if name != "BRIG_IMAGE" {
+			t.Errorf("asked for %s", name)
+		}
+	}
+}

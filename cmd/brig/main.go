@@ -63,6 +63,8 @@ usage:
                                                  and credentials by name that a
                                                  run gets. Opens no secret, and
                                                  marks a missing one unresolved
+  brig plan --target NAME [-f PATH]              the same for a target of this
+                                                 repository's Brigfile
   brig network ls        <ref>                   the ports a sandbox publishes
   brig network publish   <ref> PORT...           open a guest port on the host
   brig network unpublish <ref> PORT...|--all     close one again
@@ -490,6 +492,14 @@ func dispatch(args []string) error {
 			jsonRun = &jsonRunContext{ref: operand}
 		}
 	}
+	// plan --target names what it plans with the flag, so a bare word on the
+	// line is a second answer to the same question. Refused before parse,
+	// which would read the word as a ref and refuse it as one.
+	if verb == "plan" {
+		if err := checkPlanTargetLine(rest); err != nil {
+			return err
+		}
+	}
 	opts, profileName, tail, err := parse(verb, rest)
 	if err != nil {
 		return err
@@ -535,9 +545,18 @@ func dispatch(args []string) error {
 	if err := rejectTail(verb, tail); err != nil {
 		return err
 	}
+	// -f names the Brigfile a target is read from. With no target there is
+	// nothing to read it for, and a plan of a profile that ignored it would
+	// look like a plan of the file.
+	if opts.fileGiven && !opts.targetGiven {
+		return usagef("-f names the Brigfile of --target; `brig plan -f <path>` needs --target <name> too")
+	}
 	// The run line is read, and nothing has booted: the question, when
 	// there is one, comes now.
 	askTelemetry(wantJSON)
+	if opts.targetGiven {
+		return planTarget(opts, wantJSON)
+	}
 	t, ok := profile.Lookup(profileName)
 	if !ok {
 		if profileName == "" {
@@ -819,6 +838,12 @@ type options struct {
 	// all is `brig network unpublish --all`, which withdraws every port this
 	// sandbox offers.
 	all bool
+	// target and file are `brig plan --target <name> [-f <path>]`, and
+	// targetGiven says --target was on the line, whatever its value.
+	target      string
+	file        string
+	targetGiven bool
+	fileGiven   bool
 }
 
 // repeated collects a flag written more than once, in the order it was
@@ -875,6 +900,12 @@ const (
 	// position brig would otherwise read it in, so what matters there is that
 	// the token is brig's at all, not where.
 	posAny
+	// posTarget is --target and -f on the line of `brig plan`, which plans a
+	// target of the Brigfile instead of a profile. A position of its own
+	// rather than posRun, so the line of every other verb reads them as it
+	// did before: -f after the ref of `brig run` is still the agent's, and
+	// brig says nothing about it. See oursFor.
+	posTarget
 )
 
 // brigFlags is what brig owns, and where. Everything else on a run line
@@ -963,6 +994,10 @@ var brigFlags = []struct {
 	// And on the publish line, where the ports are bare words: without this
 	// the flag falls into the tail and is read as a port.
 	{long: "json", position: posPublish},
+	// brig plan --target names a target of the Brigfile in place of a ref,
+	// and -f names the Brigfile. Only plan reads them, until run does.
+	{long: "target", value: true, position: posTarget},
+	{long: "file", short: "f", value: true, position: posTarget},
 }
 
 // removedFlags are the run-line spellings brig no longer reads, each with what
@@ -1001,6 +1036,15 @@ var removedFlags = map[string]struct{ was, now string }{
 func ours(arg string, at position) (mine bool, takesValue bool) {
 	mine, takesValue, _ = oursAt(arg, at)
 	return mine, takesValue
+}
+
+// oursFor is ours on the line of verb: plan reads the flags of posTarget as
+// well as those of the run line.
+func oursFor(verb, arg string, at position) (mine bool, takesValue bool) {
+	if mine, takesValue = ours(arg, at); mine || verb != "plan" {
+		return mine, takesValue
+	}
+	return ours(arg, posTarget)
 }
 
 // oursAt is ours with the position the match was found in, which only matters
@@ -1097,7 +1141,7 @@ func helpFlagTakesValue(verb, name string) bool {
 	if verb == "report" {
 		return name == "--tail" || name == "-o"
 	}
-	mine, takesValue := ours(name, posRun)
+	mine, takesValue := oursFor(verb, name, posRun)
 	return mine && takesValue
 }
 
@@ -1242,7 +1286,7 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 					return nil, session.Ref{}, "", nil, removedf(r.was, r.now)
 				}
 			}
-			isOurs, takesValue := ours(a, at)
+			isOurs, takesValue := oursFor(verb, a, at)
 			if !isOurs {
 				// An unknown flag once the ref is named is the agent's:
 				// `brig run claude --resume` runs the agent with --resume, and
@@ -1381,8 +1425,9 @@ func agentTail(verb string, tail []string) []string {
 			continue
 		}
 		// A flag brig reads only on the publish line stands nowhere on this
-		// one, so the agent's own --all is the agent's.
-		if found == posPublish && !takesPorts(verb) {
+		// one, so the agent's own --all is the agent's. The same holds for
+		// plan's --target and -f: -f is an agent's flag as often as not.
+		if (found == posPublish && !takesPorts(verb)) || found == posTarget {
 			continue
 		}
 		name, _, _ := strings.Cut(a, "=")
@@ -1543,6 +1588,9 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		{"publish", "", func(n string) { fs.Var(repeated{&o.load.Publish}, n, "") }},
 		// Only unpublish reads it, and split only lets it through there.
 		{"all", "", func(n string) { fs.BoolVar(&o.all, n, false, "") }},
+		// Only plan reads these, and split only lets them through there.
+		{"target", "", func(n string) { fs.StringVar(&o.target, n, "", "") }},
+		{"file", "f", func(n string) { fs.StringVar(&o.file, n, "", "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
 		// lands in one place and the last one on the line wins.
@@ -1553,8 +1601,15 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 	}
 
 	if err := fs.Parse(mine); err != nil {
+		// A missing target or Brigfile is a word left off the line, and
+		// `brig config --target` calls it a usage error, so plan does too.
+		if name, ok := strings.CutPrefix(err.Error(), "flag needs an argument: "); ok &&
+			(name == "-target" || name == "-file" || name == "-f") {
+			return options{}, "", nil, usagef("%s", rewriteFlagError(err))
+		}
 		return options{}, "", nil, rewriteFlagError(err)
 	}
+	o.targetGiven, o.fileGiven = seen(fs, "target"), seen(fs, "file", "f")
 	// Positive, not merely numeric: a guest with zero CPUs is a boot failure
 	// several layers down, where the number no longer appears in the message.
 	// Decimal, too: --memory 010 asks for ten, and a guest a fifth of the size

@@ -434,7 +434,7 @@ func PruneSessions(live []string) {
 // worth saying out loud where the reason is still visible.
 func (c *Config) rememberSession() {
 	dropLegacyWorkspaceIndex()
-	key := sessionKey(c.Profile.Name, c.Slug)
+	key := c.sessionRef()
 	entry := sessionEntry{
 		Home:      c.Workspace,
 		Sandbox:   c.VMName,

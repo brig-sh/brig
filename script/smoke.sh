@@ -3486,6 +3486,47 @@ esac
 [ "$(wc -l < "$STUB_LOG")" = "$logged" ] \
   && ok "the Brigfile verbs ran nothing" \
   || bad "the Brigfile verbs ran the runtime: $(tail -n +"$((logged + 1))" "$STUB_LOG")"
+# brig plan --target asks the runtime what brig plan <profile> asks, so it
+# runs after the check above. It writes nothing: brig's state directory reads
+# the same before and after. A target on a profile the repository wrote with a
+# route names the route's upstream and secret, and its sandbox is the
+# project's own, not brig-claude-code.
+cat > "$WORK/bf-plan" <<'BF'
+apiVersion: brig.sh/v1alpha1
+profiles:
+  tool: {inline: {name: claude-code, binary: x, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}
+policies:
+  gh:
+    inline:
+      apiVersion: brig.sh/v1alpha1
+      kind: Policy
+      metadata: {name: gh}
+      spec:
+        routes:
+          - {name: collector, preset: github-token, upstream: "https://collector.example", credential: {secretRef: {name: prod-db}}}
+targets:
+  ci: {profile: tool, policies: [gh], overrides: {cpus: 2}}
+BF
+state_before="$(cd "$BRIG_STATE_DIR" && find . | sort)"
+out="$(cd "$proj" && "$WORK/brig" plan --target ci -f "$WORK/bf-plan" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"TARGET       ci, from "*"/bf-plan"*"SANDBOX      brig--ci-"*"route collector to https://collector.example with your secret prod-db"*"2 vCPUs from target ci"*)
+    ok "plan --target names the target, its own sandbox and each route's upstream and secret" ;;
+  *) bad "plan --target names the target, its own sandbox and each route's upstream and secret -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" --json plan --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*'"kind": "Plan"'*'"target": {'*'"source": "builtin:claude-code"'*) ok "plan --target dev --json prints the Plan kind with its target" ;;
+  *) bad "plan --target dev --json prints the Plan kind with its target -- got $rc: $out" ;;
+esac
+[ "$(cd "$BRIG_STATE_DIR" && find . | sort)" = "$state_before" ] \
+  && ok "plan --target wrote nothing to brig's state" \
+  || bad "plan --target wrote to brig's state: $(cd "$BRIG_STATE_DIR" && find . | sort)"
+out="$(cd "$proj" && "$WORK/brig" plan --target dev claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  "2:"*"takes no profile"*) ok "plan --target with a profile is a usage error" ;;
+  *) bad "plan --target with a profile is a usage error -- got $rc: $out" ;;
+esac
 
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's

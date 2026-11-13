@@ -102,6 +102,9 @@ func (l *Loaded) resolve(root *os.Root) error {
 			}
 			doc = blob
 		}
+		if err := noControl(doc); err != nil {
+			return fmt.Errorf("policies.%s: %s: %w", alias, src, err)
+		}
 		pol, err := policy.Parse(doc)
 		if err != nil {
 			return fmt.Errorf("policies.%s: %s: %w", alias, src, err)
@@ -192,6 +195,9 @@ func repository(alias string, src Source, doc []byte) (ResolvedProfile, error) {
 // decoded struct before profile.Parse validates it, so a refusal says which
 // field it was and not whatever Validate trips on first.
 func parseRepositoryProfile(doc []byte) (profile.Profile, error) {
+	if err := noControl(doc); err != nil {
+		return profile.Profile{}, err
+	}
 	var probe profile.Profile
 	if err := v1alpha1.UnmarshalStrict(doc, &probe); err != nil {
 		return profile.Profile{}, err
