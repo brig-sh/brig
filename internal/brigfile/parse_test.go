@@ -78,7 +78,6 @@ func TestParseTheDecidedFormat(t *testing.T) {
 	}
 }
 
-// JSON is a subset of YAML, so a Brigfile written as JSON reads the same.
 // An editor's modeline is the first line of the file, and it is a comment.
 func TestParseAcceptsALeadingModelineComment(t *testing.T) {
 	doc := "# yaml-language-server: $schema=https://example.com/brigfile.schema.json\n" + minimal
@@ -87,6 +86,7 @@ func TestParseAcceptsALeadingModelineComment(t *testing.T) {
 	}
 }
 
+// JSON is a subset of YAML, so a Brigfile written as JSON reads the same.
 func TestParseJSON(t *testing.T) {
 	doc := `{"apiVersion": "brig.sh/v1alpha1",
 		"profiles": {"c": {"from": "builtin:codex"}},

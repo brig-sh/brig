@@ -3686,8 +3686,11 @@ printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  tool: {inline: {name: tool, b
 out="$(cd "$c2" && "${bf_c[@]}" run --target dev < /dev/null 2>&1)"; rc=$?
 case "$rc:$out" in
   "1:"*"policies.gone.file"*"gone.yaml"*)
-    if grep -q '^argv: run' "$STUB_LOG" || [ -e "$WORK/bf-c-state/approvals.json" ] &&
-       grep -q 'brig--dev-' "$WORK/bf-c-state/approvals.json" 2>/dev/null && grep -q "$c2" "$WORK/bf-c-state/approvals.json"; then
+    # The braces matter: || and && bind alike in the shell, left to right,
+    # so without them a boot alone would not fail this.
+    if grep -q '^argv: run' "$STUB_LOG" ||
+       { grep -q 'brig--dev-' "$WORK/bf-c-state/approvals.json" 2>/dev/null &&
+         grep -q "$c2" "$WORK/bf-c-state/approvals.json" 2>/dev/null; }; then
       bad "a Brigfile with a missing policy file went past the loader: $(cat "$STUB_LOG")"
     else
       ok "a Brigfile that names a missing policy file stops with the loader's error and nothing boots"
@@ -3724,7 +3727,7 @@ sb1="$(printf '%s\n' "$first" | sed -n 's/^SANDBOX  *//p')"
 sb2="$(printf '%s\n' "$second" | sed -n 's/^SANDBOX  *//p')"
 h1="$(printf '%s\n' "$first" | sed -n 's/^HOME  *\([^ ]*\).*/\1/p')"
 h2="$(printf '%s\n' "$second" | sed -n 's/^HOME  *\([^ ]*\).*/\1/p')"
-if [ -n "$sb1" ] && [ -n "$h1" ] && [ "$sb1" != "$sb2" ] && [ "$h1" != "$h2" ]; then
+if [ -n "$sb1" ] && [ -n "$h1" ] && [ -n "$sb2" ] && [ -n "$h2" ] && [ "$sb1" != "$sb2" ] && [ "$h1" != "$h2" ]; then
   ok "two checkouts of one Brigfile get different sandbox names and homes"
 else
   bad "two checkouts of one Brigfile get different sandbox names and homes -- $sb1 $h1 / $sb2 $h2"
