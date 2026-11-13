@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"os"
 	"path/filepath"
 
@@ -99,6 +100,11 @@ func projectLifecycle(verb string, opts options, dryRun bool) error {
 	switch {
 	case opts.target == "":
 		return usagef("--target needs a target name")
+	case v1alpha1.CheckName(opts.target) != nil:
+		// The Brigfile is not read here, so this is the one check on the
+		// name: a word no Brigfile accepts as a target names no session.
+		return usagef("--target %q is not a target name. Target names use lowercase letters, digits, "+
+			"dot, dash and underscore, and start with a letter or digit", opts.target)
 	case opts.load.Workspace != "":
 		return usagef("--home and --target ask for different things: a target's guest home is " +
 			"brig's own, named after the project and the target")

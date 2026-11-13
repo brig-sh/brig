@@ -15,7 +15,7 @@ import (
 
 // Two roots and two targets are four sandboxes, four homes and four index
 // keys. The name starts brig--, which no profile run's name can, and stays
-// within 63 bytes however long the target name is.
+// within 47 bytes however long the target name is.
 func TestProjectIdentityIsOnePerRootAndTarget(t *testing.T) {
 	sandboxes, keys := map[string]bool{}, map[string]bool{}
 	for _, root := range []string{"/src/a", "/src/b"} {
@@ -35,11 +35,11 @@ func TestProjectIdentityIsOnePerRootAndTarget(t *testing.T) {
 		t.Errorf("a named session of dev: %+v", named)
 	}
 	long := ProjectIdentity("/src/a", strings.Repeat("t", 80), "", "")
-	if len(long.Sandbox) > 63 {
+	if len(long.Sandbox) > 47 {
 		t.Errorf("a long target gives a %d-byte name: %s", len(long.Sandbox), long.Sandbox)
 	}
 	if long == ProjectIdentity("/src/a", strings.Repeat("t", 81), "", "") {
-		t.Error("two target names that share their first 36 bytes share a sandbox")
+		t.Error("two target names that share their first bytes share a sandbox")
 	}
 }
 
