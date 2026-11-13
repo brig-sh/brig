@@ -281,6 +281,20 @@ type Config struct {
 	// KeptProject.
 	refusedProject string
 
+	// identity is the session's own name when it is not its profile's. See
+	// Identity and sessionRef.
+	identity *Identity
+	// target is the Brigfile target this run was resolved from, or nil. Only
+	// the plan reads it.
+	target *Target
+	// origins says where Image, Mem, CPUs and Network came from.
+	origins Origins
+	// policyOrigins says where each policy in Policies came from, at the same
+	// index, when the caller resolved them. routeOrigin is the same for each
+	// route, by route name. Both are nil when Load read the policy directory.
+	policyOrigins []string
+	routeOrigin   map[string]string
+
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
 	// from a shell its stdin is a terminal, but it is the daemon's terminal and
@@ -346,11 +360,25 @@ type Options struct {
 	// level, so a caller with no opinion -- brigd, and every test that builds
 	// Options by hand -- gets what a person reads.
 	Verbosity Verbosity
+	// Policies, when set, are the policies of this run, and Load reads no
+	// policy directory. See PolicySet.
+	Policies *PolicySet
+	// Identity, when set, names the sandbox, the home, the index entry and
+	// the settings prefix in place of the profile's name. BRIG_NAME and
+	// BRIG_WORKSPACE do not apply to it, and Workspace must be empty. See
+	// Identity.
+	Identity *Identity
+	// Target is the Brigfile target the run was resolved from, for the plan.
+	Target *Target
 }
 
 // Load resolves the configuration for one invocation.
 func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
-	env := NewEnv(t.Name, os.LookupEnv)
+	envAgent := t.Name
+	if o.Identity != nil {
+		envAgent = o.Identity.EnvAgent
+	}
+	env := NewEnv(envAgent, os.LookupEnv)
 
 	// BRIG_CREDENTIALS_CMD is gone, and a run that still sets it fails here
 	// rather than proceeding. The variable named a command brig ran on every
@@ -364,6 +392,12 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// profile that leaned on this variable has no secrets: list for that name
 	// to be in. Say both, in order.
 	if cmd, ok := env.Get("CREDENTIALS_CMD"); ok && cmd != "" {
+		// A target's profile name is the repository's word, so the advice
+		// would name a profile of yours that is not the one this run reads.
+		if o.Identity != nil {
+			return nil, fmt.Errorf("BRIG_CREDENTIALS_CMD has been removed. Name the credential " +
+				"under secrets: in the profile, then store it once with brig secret create")
+		}
 		return nil, fmt.Errorf("BRIG_CREDENTIALS_CMD has been removed. Declare the "+
 			"credential under secrets: in %s, then store it once: brig secret import "+
 			"%s <name> --from-command '<command>'", t.Name, t.Name)
@@ -384,9 +418,24 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, fmt.Errorf("cannot determine the current directory: %w", err)
 	}
 
+	if o.Identity != nil && o.Workspace != "" {
+		return nil, errors.New("a Brigfile target's guest home is brig's own; it takes no --home")
+	}
+	// The key every lookup in the session index uses below. A target's is
+	// its own, never one built from the profile name the repository chose.
+	key := sessionKey(t.Name, slug)
+	if o.Identity != nil {
+		key = o.Identity.Key
+	}
+
 	// The sandbox name is settled first because the entry read back below is
 	// only good for the sandbox it was recorded against. See index.go.
 	vmName := env.String("NAME", NamePrefix+t.Name)
+	// A target's sandbox name is part of its identity, so BRIG_NAME does not
+	// replace it. The slug is already in it.
+	if o.Identity != nil {
+		vmName = o.Identity.Sandbox
+	}
 	// BRIG_NAME replaces the whole sandbox name, and brig finds its own
 	// sandboxes by the brig- prefix: ls lists what carries it and reset removes
 	// what carries it. A name set through BRIG_NAME without the prefix boots and
@@ -400,10 +449,17 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		return nil, fmt.Errorf("BRIG_NAME is %q, but a brig sandbox name must begin with %q so that "+
 			"`brig ls` and `brig rm --all` can find it; use %q instead", vmName, NamePrefix, NamePrefix+vmName)
 	}
+	// The sandboxes of Brigfile targets start with brig--, and no profile
+	// name starts with a dash. A BRIG_NAME that took that prefix could name
+	// the sandbox and the home of a repository's target.
+	if o.Identity == nil && strings.HasPrefix(vmName, projectPrefix) {
+		return nil, fmt.Errorf("%s is %q, but a name that begins with %q belongs to a Brigfile target",
+			env.SettingName("NAME"), vmName, projectPrefix)
+	}
 	// Kept before the suffix goes on, for the migration notice below: it has
 	// to name the sandbox an older release derived from this same profile.
 	vmBase := vmName
-	if slug != "" {
+	if slug != "" && o.Identity == nil {
 		vmName += "-" + slug
 	}
 
@@ -412,7 +468,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// derived one is what lets the remembered path beat the second and not the
 	// first.
 	base, given := "", false
-	if v, ok := env.Get("WORKSPACE"); ok && v != "" {
+	if v, ok := env.Get("WORKSPACE"); ok && v != "" && o.Identity == nil {
 		base, given = v, true
 	}
 	if o.Workspace != "" {
@@ -464,7 +520,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	ephemeral := !given
 	remembered := false
 	if !given {
-		if home, eph := rememberedWorkspace(sessionKey(t.Name, slug), vmName); home != "" {
+		if home, eph := rememberedWorkspace(key, vmName); home != "" {
 			workspace, ephemeral, remembered = home, eph, true
 		}
 	}
@@ -473,8 +529,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// new default would read as a stale share and restart the sandbox onto an
 	// empty home. Otherwise the first run on a new ephemeral home names it, so
 	// work kept there is not taken for lost. See ephemeralNotice.
+	//
+	// A target has no such directory: no older release ran one, and the path
+	// is built from the profile name, which is the repository's to choose.
 	legacyHome := ""
-	if !given && !remembered {
+	if !given && !remembered && o.Identity == nil {
 		dir := legacyDefaultWorkspace(t, slug)
 		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
 			if exists, err := sandboxExists(rt, vmName); err == nil && exists {
@@ -518,12 +577,18 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// profile's network: is a default for a new sandbox, not a request to move
 	// one, so it only applies when nothing was recorded or recovered from the
 	// runtime of a session an older release started.
+	base0 := Origins{Image: "profile", Mem: "profile", CPUs: "profile", Network: "profile"}
+	if o.Target != nil {
+		base0 = o.Target.Base
+	}
 	netValue, netSource := o.Network, "--network"
+	netOrigin := "flag"
 	if netValue == "" {
 		netValue, netSource = env.String("NETWORK", ""), env.SettingName("NETWORK")
+		netOrigin = "env " + netSource
 	}
 	netExplicit := netValue != ""
-	recordedNet, knownSandbox, err := rememberedNetwork(sessionKey(t.Name, slug), vmName)
+	recordedNet, knownSandbox, err := rememberedNetwork(key, vmName)
 	if err != nil && strictErr == nil {
 		strictErr = err
 	}
@@ -562,14 +627,17 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	}
 	if netValue == "" && recordedNet != "" {
 		netValue, netSource = string(recordedNet), "the posture this sandbox was started with"
+		netOrigin = netSource
 	}
 	netFromProfile := false
 	if netValue == "" && t.Network != "" {
 		netValue, netSource, netFromProfile = t.Network, "the profile's network:", true
+		netOrigin = base0.Network
 	}
 	netFallback := ""
 	if netValue == "" {
 		netSource = "the default network posture"
+		netOrigin = "default"
 		netFallback = sharedNetworkBackend(rt, env.String("HYPERVISOR", t.Hypervisor))
 		if netFallback != "" {
 			netValue, netSource = string(NetShared), "the "+netFallback+" backend's shared default"
@@ -606,9 +674,21 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// Keyed by the slug, the one identity a session has: vmName and the
 	// workspace above are built from it, the index keys on it, and `attach -n`
 	// writes no other spelling, so the rules follow the same key as the rest.
-	bound, policies, err := policy.ResolvePolicies(t, slug, policy.Dir())
-	if err != nil && strictErr == nil {
-		strictErr = err
+	//
+	// A caller that resolved the policies itself hands them over, and the
+	// directory is not read: see PolicySet.
+	var bound []policy.Policy
+	var policies []string
+	if o.Policies != nil {
+		bound = o.Policies.Docs
+		for _, p := range bound {
+			policies = append(policies, p.Metadata.Name)
+		}
+	} else {
+		bound, policies, err = policy.ResolvePolicies(t, slug, policy.Dir())
+		if err != nil && strictErr == nil {
+			strictErr = err
+		}
 	}
 	egress := policy.Merge(bound)
 	askedNet := network
@@ -620,6 +700,19 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// secret a route injects stays on the host, so the profile delivering it
 	// is changed here, before anything resolves or reports it.
 	routes, routePolicy, routesErr := routesOf(bound)
+	// By index, not by metadata.name: two documents from two places can
+	// carry one name, and the plan has to say which one a route came from.
+	var routeOrigin map[string]string
+	if o.Policies != nil {
+		routeOrigin = map[string]string{}
+		for i, p := range bound {
+			for _, r := range p.Spec.Routes {
+				if i < len(o.Policies.Origins) {
+					routeOrigin[r.Name] = o.Policies.Origins[i]
+				}
+			}
+		}
+	}
 	var routeSkipped []string
 	var routeDecls []profile.SecretDecl
 	if routesErr == nil && len(routes) > 0 {
@@ -634,6 +727,33 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// the guest does not get. See projectVar.
 	bindings, routes, projectWarnings := withoutProjectVar(bindings, routes)
 	envWarnings = append(envWarnings, projectWarnings...)
+
+	origins := Origins{Image: base0.Image, Mem: base0.Mem, CPUs: base0.CPUs, Network: netOrigin}
+	switch {
+	case o.Image != "":
+		origins.Image = "flag"
+	case env.String("IMAGE", "") != "":
+		origins.Image = "env " + env.SettingName("IMAGE")
+	}
+	switch {
+	case o.Mem > 0:
+		origins.Mem = "flag"
+	case env.Int("MEM", 0) > 0:
+		origins.Mem = "env " + env.SettingName("MEM")
+	}
+	switch {
+	case o.CPUs > 0:
+		origins.CPUs = "flag"
+	case env.Int("CPUS", 0) > 0:
+		origins.CPUs = "env " + env.SettingName("CPUS")
+	}
+	if network != askedNet {
+		origins.NetworkAsked = string(askedNet)
+	}
+	var policyOrigins []string
+	if o.Policies != nil {
+		policyOrigins = o.Policies.Origins
+	}
 
 	c := &Config{
 		Profile:        t,
@@ -689,6 +809,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		Progress:       os.Stderr,
 		Verbosity:      o.Verbosity,
 		env:            env,
+		identity:       o.Identity,
+		target:         o.Target,
+		origins:        origins,
+		policyOrigins:  policyOrigins,
+		routeOrigin:    routeOrigin,
 	}
 	if strictErr != nil {
 		return nil, strictErr
@@ -723,7 +848,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 			return nil, err
 		}
 	default:
-		remembered := rememberedProject(sessionKey(t.Name, slug), vmName)
+		remembered := rememberedProject(key, vmName)
 		if remembered == "" {
 			break
 		}
@@ -753,11 +878,15 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// resolved to and reports it against the pair the old one had.
 	// A session old enough to have a legacy slug was started under ~/brig, so
 	// that is where its home is when nothing named a directory.
-	noticeBase := base
-	if !given {
-		noticeBase = legacyDefaultWorkspace(t, "")
+	//
+	// A target has no older slug: its name is new with the Brigfile.
+	if o.Identity == nil {
+		noticeBase := base
+		if !given {
+			noticeBase = legacyDefaultWorkspace(t, "")
+		}
+		c.slugMigration = c.slugMigrationNotice(noticeBase, vmBase)
 	}
-	c.slugMigration = c.slugMigrationNotice(noticeBase, vmBase)
 	if err := c.resolveGitIdentity(); err != nil {
 		return nil, err
 	}
