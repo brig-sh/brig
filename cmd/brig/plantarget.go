@@ -95,32 +95,49 @@ func refuseTarget(verb string, args []string) error {
 	return nil
 }
 
-// planTarget prints the plan of the target the line names. It looks for the
-// runtime, lists the store and asks the runtime what `brig plan <profile>`
-// asks it, and nothing more. It writes nothing.
-func planTarget(opts options, wantJSON bool) error {
+// targetRun is one target of the Brigfile resolved into the Config a run of
+// it boots, with the snapshot it was resolved from. plan and run build it the
+// same way, so the plan a reader approves is the run that boots.
+type targetRun struct {
+	// loaded is the one read of the Brigfile and the files it names. Nothing
+	// after loadTarget reads the repository again: the approval covers these
+	// bytes, and a second read would boot what the guest wrote since.
+	loaded   *brigfile.Loaded
+	resolved brigfile.ResolvedTarget
+	target   *wrap.Target
+	cfg      *wrap.Config
+	ref      projectRef
+}
+
+// loadTarget resolves the target the line names into the Config a run of it
+// boots. It looks for the runtime, lists the store and asks the runtime what
+// `brig plan <profile>` asks it, and writes nothing. l is the Brigfile when
+// the caller has read it already, so that one read is all there is.
+func loadTarget(verb string, opts options, l *brigfile.Loaded) (*targetRun, error) {
 	switch {
 	case opts.target == "":
-		return usagef("--target needs a target name")
+		return nil, usagef("--target needs a target name")
 	case opts.load.Workspace != "":
-		return usagef("--home and --target ask for different things: a target's guest home is " +
+		return nil, usagef("--home and --target ask for different things: a target's guest home is " +
 			"brig's own, named after the project and the target")
 	case opts.load.NoProject:
-		return usagef("--no-project and --target ask for different things: a target's project is " +
+		return nil, usagef("--no-project and --target ask for different things: a target's project is " +
 			"the directory that holds its Brigfile")
 	}
-	l, err := loadBrigfile(opts.file)
-	if err != nil {
-		return err
+	if l == nil {
+		var err error
+		if l, err = loadBrigfile(opts.file); err != nil {
+			return nil, err
+		}
 	}
 	rt, err := resolveTarget(l, opts.target)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	p, base := applyOverrides(rt)
 	set, err := targetPolicies(rt)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// A policy on a shell or a gui profile is never enforced. The loader
 	// checks a target's own policies; this holds the whole set to the same
@@ -128,7 +145,7 @@ func planTarget(opts options, wantJSON bool) error {
 	// included.
 	if len(set.Docs) > 0 {
 		if err := policy.CheckCoverage(p); err != nil {
-			return fmt.Errorf("target %s: %w, so it cannot carry policies", rt.Name, err)
+			return nil, fmt.Errorf("target %s: %w, so it cannot carry policies", rt.Name, err)
 		}
 	}
 	// Resolved once, here. Leaving the names on the profile would have Load
@@ -140,7 +157,7 @@ func planTarget(opts options, wantJSON bool) error {
 	// registry: a repository profile may call itself claude-code.
 	telemetry.SetAgent(p.Name, builtIn)
 	if p.Unpublished && opts.load.Image == "" {
-		return fmt.Errorf("we do not publish an image for %q, so there is nothing to boot. Set "+
+		return nil, fmt.Errorf("we do not publish an image for %q, so there is nothing to boot. Set "+
 			"overrides.image on target %s, or name one with --image", p.Name, rt.Name)
 	}
 
@@ -160,7 +177,9 @@ func planTarget(opts options, wantJSON bool) error {
 		Root:          l.Root,
 		ProfileAlias:  rt.Profile.Alias,
 		ProfileSource: rt.Profile.Source.String(),
+		BuiltIn:       builtIn,
 		Base:          base,
+		RmCommand:     projectRef{target: rt.Name, session: opts.session, file: opts.file}.command("rm"),
 	}
 	if file := ignoredUserFile(rt.Profile); file != "" {
 		name := rt.Profile.Source.Ref
@@ -187,8 +206,9 @@ func planTarget(opts options, wantJSON bool) error {
 	if err != nil {
 		// As `brig plan <profile>`: a runtime that is not on PATH is a row
 		// marked unavailable, and any other failure is the reader's to fix.
-		if !errors.Is(err, runtime.ErrNoRuntime) {
-			return err
+		// A run needs the runtime, so it stops here either way.
+		if verb != "plan" || !errors.Is(err, runtime.ErrNoRuntime) {
+			return nil, err
 		}
 		runner = nil
 	}
@@ -202,18 +222,34 @@ func planTarget(opts options, wantJSON bool) error {
 	o.Verbosity = verbosity
 	cfg, err := wrap.Load(p, o, runner)
 	if err != nil {
+		return nil, err
+	}
+	cfg.OpenStore = func() (creds.SecretReader, error) { return openStore() }
+	return &targetRun{
+		loaded:   l,
+		resolved: rt,
+		target:   target,
+		cfg:      cfg,
+		ref:      projectRef{root: l.Root, target: rt.Name, session: opts.session, file: opts.file},
+	}, nil
+}
+
+// planTarget prints the plan of the target the line names. It writes
+// nothing.
+func planTarget(opts options, wantJSON bool) error {
+	tr, err := loadTarget("plan", opts, nil)
+	if err != nil {
 		return err
 	}
+	cfg := tr.cfg
 	// A sandbox keeps what it was booted with. When the Brigfile has changed
 	// what this target boots since, the plan says that this is not what the
 	// running sandbox has.
 	if changed, _ := cfg.ConfigChanged(); changed {
-		ref := projectRef{target: rt.Name, session: opts.session, file: opts.file}
-		target.Notes = append(target.Notes, "This session's sandbox was booted with a different "+
-			"configuration, so it does not run what this plan shows.\n`"+ref.command("rm")+
+		tr.target.Notes = append(tr.target.Notes, "This session's sandbox was booted with a different "+
+			"configuration, so it does not run what this plan shows.\n`"+tr.ref.command("rm")+
 			"` removes it and its guest home.")
 	}
-	cfg.OpenStore = func() (creds.SecretReader, error) { return openStore() }
 	d := cfg.Plan()
 	if wantJSON {
 		return writeJSONDocument(cfg.Out, "Plan", d)

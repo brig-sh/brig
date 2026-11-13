@@ -206,6 +206,7 @@ func removeProject(cfg *wrap.Config, ref projectRef, dryRun bool) error {
 		_, _ = wrap.ForgetSandbox(cfg.VMName)
 		runtime.ForgetBootedNet(cfg.VMName)
 		wrap.ForgetSlugClaim(cfg.VMName)
+		_, _ = wrap.Revoke(cfg.VMName)
 		for _, n := range stays {
 			warnf("%s", n)
 		}
@@ -257,7 +258,8 @@ func projectLabel(name string) string {
 }
 
 // brigfileHint says, once, that a run of a profile in a project with a
-// Brigfile does not read it, and names the commands that do. A reader who
+// Brigfile does not read it, and names the commands that do, the run of a
+// target first. A reader who
 // added a Brigfile and then ran a profile would otherwise take the run for
 // one of its targets.
 //
@@ -282,6 +284,7 @@ func brigfileHint(project string) {
 	if _, err := os.Lstat(filepath.Join(root, brigfile.FileName)); err != nil {
 		return
 	}
-	warnf("%s has a Brigfile, and `brig run <profile>` does not read it. `brig target ls` lists "+
-		"its targets, and `brig plan --target <name>` shows what one gets", root)
+	warnf("%s has a Brigfile, and `brig run <profile>` does not read it. `brig run --target <name>` "+
+		"runs one of its targets, `brig target ls` lists them, and `brig plan --target <name>` shows "+
+		"what one gets", root)
 }

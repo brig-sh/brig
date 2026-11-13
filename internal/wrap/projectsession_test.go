@@ -57,6 +57,12 @@ func TestASessionOfATargetLeavesYourProfileSessionAlone(t *testing.T) {
 	if refs := SessionRefs(); len(refs) != 1 || refs[0] != "claude-code" {
 		t.Errorf("SessionRefs = %q, want only your claude-code: no @p/ key is a ref", refs)
 	}
+	if ref := RefOfSandbox(c.VMName); ref != "" {
+		t.Errorf("RefOfSandbox(%s) = %q: the key of a target is not a ref", c.VMName, ref)
+	}
+	if ref := RefOfSandbox(yours.VMName); ref != "claude-code" {
+		t.Errorf("RefOfSandbox(%s) = %q", yours.VMName, ref)
+	}
 	if _, ok := LookupProject(yours.VMName); ok {
 		t.Error("your session is in the project index")
 	}

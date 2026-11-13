@@ -249,6 +249,17 @@ func (c *Config) ephemeralNotice() {
 	if _, err := os.Lstat(c.Workspace); err == nil {
 		return
 	}
+	// A target has no ref, and its profile's name is the repository's word:
+	// `brig rm <that name>` would remove your own session of that profile.
+	// Its project is always the Brigfile's directory, and its home is
+	// always brig's own, so there is no other way to keep work to offer.
+	if c.target != nil {
+		rows := notice.New("the guest home of "+c.subject()+" is temporary").
+			Note("`%s` deletes it and every file in it", c.target.RmCommand).
+			Note("only %s is shared with it", c.Project)
+		c.warnf("%s", rows)
+		return
+	}
 	ref := sessionKey(c.Profile.Name, c.Slug)
 	rows := notice.New("the guest home of "+ref+" is temporary").
 		Note("`brig rm %s` deletes it and every file in it", ref)

@@ -38,6 +38,7 @@ func TestExitCode(t *testing.T) {
 		}, 6},
 		{"a run path that cannot enforce a property", capabilityRefusal(runtime.CannotEnforce), 7},
 		{"a run path whose answer is unknown", capabilityRefusal(runtime.Unknown), 7},
+		{"a run of a target with no approval", &wrap.ApprovalRequiredError{Err: errors.New("approve it")}, 8},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -66,6 +67,7 @@ func TestExitCodeThroughWrapping(t *testing.T) {
 		{"wrapped credentials", fmt.Errorf("context: %w", &creds.MissingSecretsError{Missing: []creds.Missing{{Name: "T"}}}), 6},
 		// The boot path hands a refusal up as "could not start the sandbox: %w".
 		{"wrapped capability", fmt.Errorf("could not start the sandbox: %w", capabilityRefusal(runtime.CannotEnforce)), 7},
+		{"wrapped approval", fmt.Errorf("context: %w", &wrap.ApprovalRequiredError{Err: errors.New("no")}), 8},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

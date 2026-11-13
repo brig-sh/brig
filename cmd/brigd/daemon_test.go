@@ -870,3 +870,46 @@ func TestTheDaemonSaysNothingWhenNerdctlIsThere(t *testing.T) {
 		t.Errorf("nerdctl was found, yet the client is warned: %q", got)
 	}
 }
+
+// brigd boots no session of a Brigfile target. Its requests name a profile,
+// and a sandbox name that is a target's is refused before the runtime is
+// asked to start anything: only `brig run --target` starts one, after you
+// approve what it runs. The guard inside EnsureRunning that holds for any
+// path that skips the gate is tested in internal/wrap.
+func TestBrigdStartsNoSessionOfABrigfileTarget(t *testing.T) {
+	dir := shortDir(t)
+	log := filepath.Join(dir, "argv.log")
+	bin := filepath.Join(dir, "hull")
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(`#!/bin/sh
+echo "$@" >> `+log+`
+if [ "$1" = inspect ]; then
+  printf 'instance not found: %s\n' "$2" >&2
+  exit 1
+fi
+exit 0
+`)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIG_RUNTIME", "hull")
+	t.Setenv("BRIG_RUNTIME_BIN", bin)
+	t.Setenv("BRIG_VERIFY", "off")
+	t.Setenv("BRIG_STATE_DIR", filepath.Join(dir, "state"))
+	agent := testProfile(t, "targetcheck")
+	t.Setenv("BRIG_NAME", "brig--dev-0123456789abcdef0123")
+	socket := filepath.Join(shortDir(t), "brigd.sock")
+	startDaemon(t, socket)
+
+	resp := ask(t, socket, `{"op":"ensure","agent":"`+agent+`"}`)
+	if resp.OK {
+		t.Fatalf("brigd started a target's sandbox: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "Brigfile target") {
+		t.Errorf("the refusal does not say why: %q", resp.Error)
+	}
+	argv, _ := os.ReadFile(log)
+	for _, line := range strings.Split(string(argv), "\n") {
+		if strings.HasPrefix(line, "run") || strings.HasPrefix(line, "create") {
+			t.Errorf("the runtime was asked to boot: %s", line)
+		}
+	}
+}

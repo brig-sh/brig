@@ -24,9 +24,9 @@ import (
 // against either keeps working. The rest name the failure shapes brig's own
 // paths already produce -- a profile that does not exist, a runtime that is
 // missing or broken, a boot refused over verification, a credential that could
-// not be resolved, a run path that cannot enforce a property the run asks for
-// -- and nothing else, because a code no path returns is worse than no code at
-// all.
+// not be resolved, a run path that cannot enforce a property the run asks
+// for, a run of a Brigfile target that no approval covers -- and nothing
+// else, because a code no path returns is worse than no code at all.
 const (
 	exitOK          = 0
 	exitFailure     = 1
@@ -36,6 +36,7 @@ const (
 	exitVerify      = 5
 	exitCredentials = 6
 	exitCapability  = 7
+	exitApproval    = 8
 )
 
 // agentExit carries the agent's own exit status up to main, so brig returns
@@ -86,6 +87,12 @@ func exitCode(err error) int {
 	var vr *wrap.VerifyRefusedError
 	if errors.As(err, &vr) {
 		return exitVerify
+	}
+	// A run of a Brigfile target that no approval covers: nothing booted, and
+	// the message carries the digest a script would approve.
+	var ar *wrap.ApprovalRequiredError
+	if errors.As(err, &ar) {
+		return exitApproval
 	}
 	// Both credential-failure shapes -- a required secret the store did not have
 	// and a store that could not be opened -- are one class here.

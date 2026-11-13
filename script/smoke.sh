@@ -3595,6 +3595,65 @@ case "$rc:$out" in
   "0:"*) ok "a run with no Brigfile says nothing about one" ;;
   *) bad "a run with no Brigfile says nothing about one -- got $rc: $out" ;;
 esac
+# brig run --target boots only what you approved, outside the repository.
+# With nobody to ask it boots nothing and names the digest. --approve with
+# that digest boots, the next run asks nothing, and an edit to a policy the
+# Brigfile names is a run the approval no longer covers. On hvi, where the
+# stub answers as the gateway that enforces the policy, on a state of its own.
+mkdir -p "$WORK/bf-runproj/.git" "$WORK/bf-runproj/.brig"
+rproj="$(cd "$WORK/bf-runproj" && pwd -P)"
+cat > "$rproj/Brigfile" <<'BF'
+apiVersion: brig.sh/v1alpha1
+defaultTarget: dev
+profiles:
+  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}
+policies:
+  net: {file: .brig/net.yaml}
+targets:
+  dev: {profile: tool, policies: [net], args: ["--from-brigfile"]}
+BF
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: net}\nspec:\n  egress:\n    default: deny\n    allow: [{host: api.example.com}]\n' \
+  > "$rproj/.brig/net.yaml"
+bf_tgt=(env BRIG_STATE_DIR="$WORK/bf-tgt" STUB_STATE="$WORK/bf-tgt-instance" BRIG_GATEWAY_DIR="$WORK/bg-tgt"
+  BRIG_HYPERVISOR=hvi "$WORK/brig")
+: > "$STUB_LOG"
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev < /dev/null 2>&1)"; rc=$?
+digest="$(printf '%s\n' "$out" | sed -n 's/.*--approve \(sha256:[0-9a-f]*\).*/\1/p' | head -n 1)"
+if [ "$rc" = 8 ] && [ -n "$digest" ] && ! grep -q '^argv: run' "$STUB_LOG" && [ ! -e "$WORK/bf-tgt/approvals.json" ]; then
+  ok "run --target with no approval and no terminal boots nothing, exits 8 and names the digest"
+else
+  bad "run --target with no approval and no terminal boots nothing, exits 8 and names the digest -- got $rc: $out"
+fi
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev -d --approve "$digest" < /dev/null 2>&1)"; rc=$?
+if [ "$rc" = 0 ] && grep -q '^argv: run.*brig--dev-' "$STUB_LOG" && [ -f "$WORK/bf-tgt/approvals.json" ] &&
+   grep -q -- '--egress-allow host=api.example.com' "$STUB_LOG"; then
+  ok "run --target --approve with the digest boots the target under its policy and stores the approval"
+else
+  bad "run --target --approve with the digest boots the target under its policy -- got $rc: $out"
+fi
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev -d < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  *APPROVAL*) bad "a run of an approved target showed the approval again: $out" ;;
+  "0:"*) ok "the next run of the approved target asks nothing" ;;
+  *) bad "the next run of the approved target asks nothing -- got $rc: $out" ;;
+esac
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: net}\nspec:\n  egress:\n    default: allow\n' \
+  > "$rproj/.brig/net.yaml"
+: > "$STUB_LOG"
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev -d --recreate < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  "8:"*"the file .brig/net.yaml (policy net) changed"*)
+    if grep -q '^argv: \(run\|rm\)' "$STUB_LOG"; then
+      bad "a run the approval no longer covers touched the sandbox: $(cat "$STUB_LOG")"
+    else
+      ok "an edit to a policy the Brigfile names is a run the approval does not cover, and the refusal names it"
+    fi ;;
+  *) bad "an edit to a policy the Brigfile names is a run the approval does not cover -- got $rc: $out" ;;
+esac
+"${bf_tgt[@]}" rm --target dev -f "$rproj/Brigfile" > /dev/null 2>&1
+grep -q 'brig--dev-' "$WORK/bf-tgt/approvals.json" 2>/dev/null \
+  && bad "rm --target left the approval: $(cat "$WORK/bf-tgt/approvals.json")" \
+  || ok "rm --target drops the approval of the session"
 
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's

@@ -100,15 +100,21 @@ type Target struct {
 	Root          string
 	ProfileAlias  string
 	ProfileSource string
+	// BuiltIn says the profile is one brig ships, by the Brigfile's builtin:
+	// source. A profile's name cannot say so: a repository can call its own
+	// profile claude-code.
+	BuiltIn bool
 	// Base names where each of the image, the memory, the vCPUs and the
 	// network came from before any flag or setting: the target's overrides,
 	// or its profile. NetworkAsked is not read.
 	Base Origins
 	// Notes are what the plan should say about the target beside its rows.
 	Notes []string
-	// Args are the target's default guest arguments. Only the configuration
-	// digest reads them.
+	// Args are the target's default guest arguments. The configuration
+	// digest and the plan read them.
 	Args []string
+	// RmCommand is the line that removes this session, for a notice to name.
+	RmCommand string
 }
 
 // ProjectConfig is the Config of a recorded session of a Brigfile target, for
@@ -165,4 +171,15 @@ func (c *Config) profileNoun() string {
 		return "the profile of target " + c.target.Name
 	}
 	return "the " + c.Profile.Name + " profile"
+}
+
+// brokerProfile is the profile name the broker registers a sandbox under,
+// which names its workload on the broker's audit line. A target's profile
+// name is the repository's to choose, so a target registers under its
+// sandbox's name, which no profile of yours can have.
+func (c *Config) brokerProfile() string {
+	if c.target != nil {
+		return c.VMName
+	}
+	return c.Profile.Name
 }

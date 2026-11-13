@@ -6,9 +6,8 @@ one or more targets. A target pairs one profile with its policies, a size
 and default arguments.
 
 You can write a Brigfile, check it, see what each target resolves to, plan
-a run of a target, and stop or remove a session of a target. `brig run` does
-not read a Brigfile yet. A run still uses the agent and the flags on its own
-command line.
+a run of a target, run it once you approve it, and stop or remove a session
+of a target.
 
 ## Start one
 
@@ -17,6 +16,7 @@ brig init                  # writes a Brigfile at the top of the worktree
 brig target ls             # lists its targets
 brig config --target dev   # shows what dev resolves to
 brig plan --target dev     # shows what a run of dev would get
+brig run --target dev      # asks you to approve that run, then runs it
 ```
 
 `brig init` writes a starter with one target, `dev`, that runs the
@@ -64,7 +64,7 @@ A target has these fields:
 | `profile` | yes | A profile alias |
 | `policies` | no | Policy aliases, each at most once |
 | `overrides` | no | `cpus`, `mem` (in MB) or `image`, in place of the profile's value |
-| `args` | no | The arguments the agent gets when the run gives none |
+| `args` | no | The arguments the agent gets. Arguments after `--` on the run line replace them |
 
 An alias or a target name uses lowercase letters, digits, `.`, `-` and `_`,
 and starts with a letter or a digit.
@@ -199,10 +199,156 @@ shared network, even when you ask for `--network shared`. When two policies cann
 together, for example two routes with the same name, the plan opens with a
 `REFUSED` row.
 
-## Sessions of a target
+## Run a target
 
-`brig run` does not start a target yet. This section describes the sessions
-of a target for the commands that already take one.
+```bash
+brig run --target dev
+brig run --target dev -- --continue
+brig run --target ci -f ci/Brigfile.ci
+brig run
+```
+
+`brig run --target <name>` starts the sandbox of the target and runs its
+agent. The project is the directory that holds the Brigfile. Brig mounts it
+read-write at `/work/<name>`, and the agent starts there.
+
+- The agent gets the target's `args`.
+- Arguments after `--` replace the target's `args`, all of them.
+  `brig run --target dev --` runs the agent with no arguments.
+- `brig run` with no profile and no `--target` runs the Brigfile's
+  `defaultTarget`. If the Brigfile names none, Brig lists the targets and
+  exits `2`.
+- In a directory with no Brigfile, `brig run` with no profile fails as it
+  did before.
+
+The line takes no profile and no project. A word before `--` that is not one
+of Brig's flags is a usage error. The line takes `--session`, `-f`,
+`--image`, `--mem`, `--cpus`, `--network`, `--offline`, `--publish`,
+`--skills`, `-d`, `--json`, `--approve` and `--recreate`. It refuses `--home`
+and `--no-project`.
+
+Before the run boots anything, it asks for your approval.
+
+## The approval
+
+A Brigfile is the repository's. An agent in a sandbox can change the
+Brigfile and every file it names. So reading a Brigfile allows nothing. A run
+of a target boots only a configuration that you approved.
+
+### What Brig asks
+
+The first run of a target shows the plan of the run and asks. The plan has
+the rows of `brig plan --target`, the arguments the agent gets, and the
+digest of the approval:
+
+```
+brig: target dev in /Users/alex/code/demo asks to run with this configuration
+brig:   ↳ the Brigfile and the files it names are the repository's, and the agent can change them
+brig:   ↳ nothing runs until you approve it
+brig:   ↳ the image is named by a tag, which can point at other bytes after you approve
+TARGET       dev, from /Users/alex/code/demo/Brigfile
+...
+ARGS         "--continue"
+APPROVAL     sha256:b8fce0d5...
+brig: run target dev as shown above? [y/N]
+```
+
+Only `y` or `yes` approves. Any other answer, an empty line and a closed
+input refuse. Brig stores a yes, and the next run with the same
+configuration boots with no question.
+
+When something changed since you approved, the run shows the plan again and
+names each change:
+
+```
+brig: this differs from what you approved on 2026-11-13 17:01:32
+brig:   ↳ the file .brig/egress.yaml (policy egress) changed
+brig:   ↳ the arguments: "--resume", and were "--continue"
+```
+
+Brig refuses some runs before it asks, and you cannot approve them. Two
+examples are two policies with routes of the same name, and a secret the run
+needs that is not in your store.
+
+### What an approval covers
+
+- the Brigfile, and the profile and policy files of the target, by their
+  sha256
+- the profile, after the target's `overrides` and your settings
+- each policy, with where it came from, the ones you attached to a built-in
+  profile included
+- the egress rules
+- each route: where it sends requests, which secrets in your store it uses,
+  and whether it hands the guest cloud keys
+- the image reference, and whether a digest pins it
+- the memory and the vCPUs
+- the network that a flag or a setting asked for, and the network the
+  sandbox gets
+- the guest home, the project, and the directories that `--skills` copies
+- the `BRIG_*` settings that take effect, by name and value, such as
+  `BRIG_FORWARD_ENV`, `BRIG_IMAGE` and `BRIG_ENV_ARGV`
+- each credential binding, and each host variable the run reads into the
+  guest, by name
+- the published ports
+- the runtime and its backend
+- the program the guest starts, and its arguments
+
+A change to any of these asks again. A change to another file in the
+project, such as your source code, does not.
+
+The approval holds names, paths and digests. It holds no secret value.
+
+### What an approval does not cover
+
+- **An image named by a tag.** The tag can point at other bytes after you
+  approve, and the prompt says so. To fix the bytes, name the image by digest
+  in `overrides.image`. [Image verification](security.md#guest-images) still
+  runs at every boot.
+- **The value of a secret.** The plan names each secret that a route or a
+  binding uses, and where each route sends it. If the secret is in your
+  store, the run uses it. Read the route rows before you approve.
+- **What the agent does** once it runs.
+
+### Where approvals are kept
+
+Brig keeps approvals in `approvals.json` in its state directory, `~/.brig`.
+There is one approval for each session: one checkout, one target, one
+session name. An approval of `dev` does not approve `review`, another session
+of `dev`, or `dev` in another checkout of the same repository.
+
+`brig rm --target` deletes the approval with the session. If Brig cannot read
+`approvals.json`, nothing is approved. Brig does not write over that file,
+and says so when it cannot store an approval.
+
+### Approve ahead of time
+
+With no terminal, and with `--json`, the run asks nothing. A run that a
+stored approval covers boots. Any other run shows the plan on stderr, boots
+nothing, exits `8` and prints the digest:
+
+```
+brig: target ci is not approved to run as shown above, and there is no
+terminal to ask on. To approve it, run the same line with --approve sha256:...
+```
+
+Read the plan. Then run the same line with `--approve <digest>`:
+
+```bash
+brig run --target ci --approve sha256:<digest>
+```
+
+Brig boots only when the digest is the digest of this run, and it stores the
+approval. A digest of another run refuses with exit `8` and prints the
+digest of this one.
+
+The digest covers the path of the checkout, the flags and arguments on the
+line, and your settings. Take it from a run on the same machine and in the
+same directory, such as the first refused run in CI. Keep the digest out of
+the repository, for example in a CI variable that only maintainers can
+change. If the repository holds the digest, whoever changes the repository
+can change the Brigfile and the digest together.
+
+## Sessions of a target
 
 Each target has a default session. `--session <name>` names another one:
 
@@ -219,7 +365,8 @@ Each session has its own sandbox and its own guest home. Both are named after
 the project root, the target and the session, so two checkouts of one
 repository never share a session. The guest home is
 `~/.brig/homes/<sandbox name>`. Brig creates it and deletes it with the
-sandbox.
+sandbox. The sandbox keeps running after the agent exits, so the next run is
+quick.
 
 `brig run <profile>` in the same checkout is not a session of a target. It
 keeps its own sandbox and guest home, and it does not read the Brigfile. It
@@ -270,16 +417,26 @@ A session of a target has no ref, so `brig ls -q` prints no line for it. In
 
 A sandbox keeps the configuration it was started with. When the Brigfile
 changes what a target gets, the sandbox of a session that is already there
-does not change. `brig plan --target` then says so in a `NOTE` row, and names
-the `brig rm --target` command that removes the session.
+does not change. `brig plan --target` then says so in a `NOTE` row.
+
+`brig run --target` does not start the new configuration on that sandbox. It
+refuses, names what changed since your approval, and names two ways on:
+
+```bash
+brig run --target dev --recreate   # boots the new configuration on the same guest home
+brig rm --target dev               # removes the session and its guest home
+```
+
+`--recreate` asks for your approval of the new configuration first. Then it
+removes the sandbox and boots a new one. The guest home stays.
 
 ### The state directory
 
-Brig keeps its record of the sessions of targets in its state directory,
-`~/.brig`. The project of a target is mounted read-write in the guest. So
-`plan`, `stop` and `rm --target` refuse a project that holds the state
-directory, and a project inside it. Set `BRIG_STATE_DIR` to a directory
-outside the project.
+Brig keeps its record of the sessions of targets, and your approvals, in its
+state directory, `~/.brig`. The project of a target is mounted read-write in
+the guest. So `run`, `plan`, `stop` and `rm --target` refuse a project that
+holds the state directory, and a project inside it, before they ask
+anything. Set `BRIG_STATE_DIR` to a directory outside the project.
 
 ## What a repository profile may not set
 
@@ -326,6 +483,7 @@ brig target ls -f ci/Brigfile.ci
 | [`brig config`](cli.md#brig-config) | Shows the project, or one target resolved with `--target <name>` |
 | [`brig init`](cli.md#brig-init) | Writes a starter Brigfile |
 | [`brig plan --target`](cli.md#brig-plan) | Shows the permissions that a run of one target would get |
+| [`brig run --target`](cli.md#run-a-brigfile-target) | Runs a target, once you approve it |
 | [`brig stop --target`](cli.md#brig-stop) | Stops a session of a target |
 | [`brig rm --target`](cli.md#brig-rm) | Removes a session of a target, with its guest home |
 
@@ -337,6 +495,10 @@ runtime. `target ls` and `config` take `--json`.
 `brig plan <profile>`, it looks for a runtime, asks the runtime about the
 sandbox, and lists the names in your secret store. `brig stop --target` and
 `brig rm --target` need a runtime, and do not read the Brigfile.
+
+`brig run --target` reads the Brigfile and the files it names once. What it
+boots comes from that one read, so a change made while it asks is not what
+boots. It reads your secrets only after you approve.
 
 With no Brigfile, `target ls`, `config` and `plan --target` exit `3` and say
 where they looked. A Brigfile that does not load exits `1`. See

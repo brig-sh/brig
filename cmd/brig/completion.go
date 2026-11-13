@@ -326,7 +326,7 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		// plan, stop and rm name a target of the Brigfile in place of a
 		// ref, so they offer --target, --session and -f until a ref is named.
 		if readsTarget(verb) && !line.refGiven {
-			flags = append(flags, flagSpellings(posTarget, "")...)
+			flags = append(flags, flagSpellings(posTarget, verb)...)
 			sort.Strings(flags)
 		}
 		if verb == "rm" {
@@ -823,6 +823,11 @@ func flagSpellings(at position, verb string) []string {
 			continue
 		}
 		if f.long == "all" && at == posPublish && verb != "network unpublish" {
+			continue
+		}
+		// --approve and --recreate are run's alone, on a line that names a
+		// target.
+		if at == posTarget && f.runOnly && verb != "run" {
 			continue
 		}
 		out = append(out, "--"+f.long)
