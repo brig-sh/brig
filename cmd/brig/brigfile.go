@@ -570,6 +570,10 @@ func printIgnoredNote(w io.Writer, p sourceJSON) {
 		p.IgnoredUserFile, name, name, p.Source, p.Alias)
 }
 
+// starterSchemaURL is where an editor finds the Brigfile schema. It resolves
+// once the schema is on the default branch.
+const starterSchemaURL = "https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json"
+
 // starterBrigfile is the Brigfile init writes. It must itself load: a starter
 // that brig refuses is the worst first impression the command could make, and
 // a test holds it to that.
@@ -580,6 +584,10 @@ func printIgnoredNote(w io.Writer, p sourceJSON) {
 // one the loader refuses, so it is left out.
 func starterBrigfile(name string) []byte {
 	var b strings.Builder
+	// The modeline is the first line because yaml-language-server reads it
+	// from there, and the file is named Brigfile, which no editor maps to
+	// YAML or to this schema by itself.
+	b.WriteString("# yaml-language-server: $schema=" + starterSchemaURL + "\n")
 	b.WriteString("# How this repository runs under brig. Each field is described at\n" +
 		"# https://github.com/brig-sh/brig/blob/main/docs/brigfile.md\n")
 	b.WriteString("apiVersion: " + brigfile.APIVersion + "\n")
