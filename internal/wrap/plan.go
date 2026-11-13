@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -314,6 +315,10 @@ type PlanTarget struct {
 	ImagePinned bool               `json:"imagePinned"`
 	Policies    []PlanPolicyOrigin `json:"policies"`
 	Notes       []string           `json:"notes,omitempty"`
+	// Args are the arguments the agent gets: the target's own, or on a run
+	// the ones after --. They are part of what a run of the target is
+	// approved for, so the plan shows them.
+	Args []string `json:"args"`
 }
 
 // PlanTargetProfile is the profile alias of a target and where it was
@@ -343,6 +348,7 @@ func (c *Config) planTarget() *PlanTarget {
 		ImagePinned: strings.Contains(c.Image, "@sha256:"),
 		Policies:    []PlanPolicyOrigin{},
 		Notes:       append([]string(nil), c.target.Notes...),
+		Args:        append([]string{}, c.target.Args...),
 	}
 	for i, name := range c.Policies {
 		from := ""
@@ -363,15 +369,43 @@ func (c *Config) planTarget() *PlanTarget {
 
 // planRoutes is every route of this run in full, sorted by name.
 func (c *Config) planRoutes() []PlanRoute {
+	return planRoutesOf(c.routes, func(name string) string { return c.routeOrigin[name] })
+}
+
+// conflictRoutes is every route of every policy of this run, each policy's
+// routes expanded alone, for a run whose policies cannot apply together. The
+// refusal names the conflict, and without these rows a reader could not see
+// what each policy asked for.
+func (c *Config) conflictRoutes() []PlanRoute {
 	out := []PlanRoute{}
-	for _, r := range c.routes {
+	for i, doc := range c.policyDocs {
+		from := doc.Metadata.Name
+		if i < len(c.policyOrigins) {
+			from = c.policyOrigins[i]
+		}
+		routes, err := policy.Routes([]policy.Policy{doc})
+		if err != nil {
+			// One policy that does not apply even alone is shown as written.
+			routes = doc.Spec.Routes
+		}
+		out = append(out, planRoutesOf(routes, func(string) string { return from })...)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// planRoutesOf is routes in full, sorted by name, each with the policy
+// origin names.
+func planRoutesOf(routes []v1alpha1.Route, origin func(name string) string) []PlanRoute {
+	out := []PlanRoute{}
+	for _, r := range routes {
 		mode := string(r.Mode)
 		if mode == "" {
 			mode = string(v1alpha1.ModeEndpoint)
 		}
 		pr := PlanRoute{
 			Name:     r.Name,
-			Policy:   c.routeOrigin[r.Name],
+			Policy:   origin(r.Name),
 			Preset:   string(r.Preset),
 			Mode:     mode,
 			Upstream: r.Upstream,
@@ -411,6 +445,9 @@ func (c *Config) planBroker(st routeStore) *PlanBroker {
 	}
 	if c.target != nil {
 		b.Detail = c.planRoutes()
+		if c.routesErr != nil {
+			b.Detail = c.conflictRoutes()
+		}
 	}
 	return b
 }
@@ -483,6 +520,22 @@ func planDigest(d PlanDocument) string {
 
 // PrintPlan writes the plan as aligned rows to Out, the form a person reads.
 func (c *Config) PrintPlan(d PlanDocument) {
+	rows := c.planRows(d)
+	rows = append(rows, envelopeRow{"DIGEST", d.Digest})
+	writeRows(c.Out, rows)
+}
+
+// PrintApproval writes to w what a run of a target asks you to approve: the
+// rows of its plan, and the digest of the approval in place of the plan's
+// own, so the one digest on screen is the one --approve takes.
+func (c *Config) PrintApproval(w io.Writer, d PlanDocument, digest string) {
+	rows := c.planRows(d)
+	rows = append(rows, envelopeRow{"APPROVAL", digest})
+	writeRows(w, rows)
+}
+
+// planRows are the rows of the plan, less its digest.
+func (c *Config) planRows(d PlanDocument) []envelopeRow {
 	var rows []envelopeRow
 	// First, because it changes how every row under it reads: they describe a
 	// run that does not happen until the reason is dealt with. A reason runs
@@ -601,6 +654,9 @@ func (c *Config) PrintPlan(d PlanDocument) {
 	}
 	rows = append(rows, envelopeRow{"LIMITS", limitsRow})
 	if d.Target != nil {
+		rows = append(rows, envelopeRow{"ARGS", argsWords(d.Target.Args)})
+	}
+	if d.Target != nil {
 		n := 0
 		for _, note := range d.Target.Notes {
 			for _, line := range strings.Split(note, "\n") {
@@ -609,8 +665,7 @@ func (c *Config) PrintPlan(d PlanDocument) {
 			}
 		}
 	}
-	rows = append(rows, envelopeRow{"DIGEST", d.Digest})
-	writeRows(c.Out, rows)
+	return rows
 }
 
 // labelOnce is the label on the first row of a group and blank on the rest,

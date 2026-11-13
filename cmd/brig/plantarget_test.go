@@ -74,6 +74,7 @@ type targetPlanDoc struct {
 				From string `json:"from"`
 			} `json:"policies"`
 			Notes []string `json:"notes"`
+			Args  []string `json:"args"`
 		} `json:"target"`
 		Digest string `json:"digest"`
 	} `json:"data"`
@@ -637,5 +638,39 @@ func TestPlanTargetNotesARepositoryImageOnABuiltIn(t *testing.T) {
 	}
 	if d := planTargetJSON(t, "--target", "shipped").Data; strings.Contains(strings.Join(d.Target.Notes, "\n"), "repository's choice") {
 		t.Errorf("a target on the shipped image is noted: %q", d.Target.Notes)
+	}
+}
+
+// The plan of a target shows the arguments the agent gets, which a run of
+// it is approved for. When two policies cannot apply together, it shows
+// what each one routes, so the refusal can be read.
+func TestPlanTargetShowsTheArgsAndEachConflictingRoute(t *testing.T) {
+	route := func(policy, upstream string) string {
+		return "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: " + policy + "}\nspec:\n  routes:\n" +
+			"    - {name: api, preset: github-token, upstream: \"" + upstream + "\", " +
+			"credential: {secretRef: {name: tok}}}\n"
+	}
+	targetHost(t, map[string]string{
+		brigfile.FileName: "apiVersion: brig.sh/v1alpha1\nprofiles:\n  mine: {file: .brig/claude.yaml}\n" +
+			"policies:\n  one: {file: .brig/one.yaml}\n  two: {file: .brig/two.yaml}\n" +
+			"targets:\n  dev: {profile: mine, args: [\"--continue\", \"two words\"]}\n" +
+			"  both: {profile: mine, policies: [one, two]}\n",
+		".brig/claude.yaml": repoClaudeProfile,
+		".brig/one.yaml":    route("one", "https://one.example"),
+		".brig/two.yaml":    route("two", "https://two.example"),
+	})
+	if got := planTargetJSON(t, "--target", "dev").Data.Target.Args; strings.Join(got, "|") != "--continue|two words" {
+		t.Errorf("args %q", got)
+	}
+	if out := planTargetText(t, "--target", "dev"); !strings.Contains(out, `ARGS         "--continue" "two words"`) {
+		t.Errorf("the plan shows no ARGS row:\n%s", out)
+	}
+	out := planTargetText(t, "--target", "both")
+	for _, want := range []string{"REFUSED", "ARGS         none",
+		"route api to https://one.example with your secret tok, from brigfile one (file:.brig/one.yaml)",
+		"route api to https://two.example with your secret tok, from brigfile two (file:.brig/two.yaml)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the plan of a route conflict does not show %q:\n%s", want, out)
+		}
 	}
 }
