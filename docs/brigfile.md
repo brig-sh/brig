@@ -112,7 +112,7 @@ enforce a policy on those profiles, so it refuses the target.
 ## What a repository profile may not set
 
 A profile from `file:` or `inline:` comes from whoever wrote the repository.
-It may describe the guest. It may not reach your host:
+It may describe the guest. It may not reach your host or weaken the sandbox:
 
 | Field | Why it is refused |
 | --- | --- |
@@ -122,6 +122,9 @@ It may describe the guest. It may not reach your host:
 | `sources`, `from`, `service`, `path`, `var`, `hint`, `field` or `expiryField` on a secret | It says where on your host a secret's value comes from. A repository may name a secret, but not its source |
 | `ref: env.<name>` | It reads a variable from your environment into the guest |
 | a `hostmount` volume | It shares a host directory with the guest. A repository profile may declare `tmpfs` volumes |
+| `network: shared` | It puts the sandbox on a network it shares with other sandboxes. A repository profile may ask for `isolated` or `offline` |
+| `hypervisor` | It names a hypervisor on your host, and that decides which network the sandbox can get |
+| an `image` that starts with `-` | The runtime would read it as a flag |
 
 A profile Brig ships through `builtin:` is not limited this way.
 
