@@ -50,7 +50,7 @@ New to Brig? Read [the README](../README.md), then follow the
 | --- | --- |
 | [cli.md](cli.md) | Every verb and flag, the environment variables, the JSON output and the exit codes |
 | [profiles.md](profiles.md) | Every profile field |
-| [brigfile.md](brigfile.md) | The Brigfile format, and where Brig looks for one |
+| [brigfile.md](brigfile.md) | The Brigfile format, where Brig looks for one, and the approval of a run of a target |
 | [policies.md](policies.md) | Every policy field, route and preset, and where a policy is enforced |
 | [broker.md](broker.md) | How the credential broker handles a request, and how it is hosted |
 | [secrets.md](secrets.md) | The secret store, imports, renewal on the host |
