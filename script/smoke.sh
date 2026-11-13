@@ -3385,6 +3385,59 @@ build="$("$WORK/brig" version | sed 's/^brig //')"
   && ok "doctor opens with the brig build" \
   || bad "doctor opens with the brig build -- want '$build', got: $(head -1 "$WORK/doctor.out")"
 
+echo "== brigfile =="
+# The Brigfile verbs read one file and write at most one. They run nothing, so
+# the stub's log must not gain a line while they work. Each runs in a project
+# of its own: this script runs inside brig's own checkout, and discovery would
+# otherwise find that worktree's root.
+mkdir -p "$WORK/bf-proj/.git" "$WORK/bf-proj/sub"
+# Resolved, as brig resolves it: on macOS the temporary directory is reached
+# through the /var link.
+proj="$(cd "$WORK/bf-proj" && pwd -P)"
+logged="$(wc -l < "$STUB_LOG")"
+out="$(cd "$proj/sub" && "$WORK/brig" target ls 2>&1)"; rc=$?
+case "$rc:$out" in
+  "3:"*"no Brigfile in $proj"*"brig init"*) ok "with no Brigfile, target ls exits 3 and names brig init" ;;
+  *) bad "with no Brigfile, target ls exits 3 and names brig init -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && "$WORK/brig" init 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:wrote $proj/Brigfile"*"brig target ls"*) ok "init writes a Brigfile at the worktree root" ;;
+  *) bad "init writes a Brigfile at the worktree root -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && "$WORK/brig" init 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"already there"*) ok "a second init refuses to replace the Brigfile" ;;
+  *) bad "a second init refuses to replace the Brigfile -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && "$WORK/brig" target ls 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"* dev"*"builtin:claude-code"*) ok "target ls lists the starter's dev target as the default" ;;
+  *) bad "target ls lists the starter's dev target as the default -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" config --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"cpus "*"from profile claude"*"image "*"from profile claude"*) ok "config --target dev resolves the starter" ;;
+  *) bad "config --target dev resolves the starter -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" --json config --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*'"kind": "Config"'*'"from": "profile"'*) ok "config --target dev --json prints the Config kind" ;;
+  *) bad "config --target dev --json prints the Config kind -- got $rc: $out" ;;
+esac
+# A Brigfile that is refused: a repository profile may not name a program on
+# the host for brig to run. The loader's error is printed as it is.
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  x: {inline: {name: x, binary: x, image: x, guestHome: /root, mem: 1, cpus: 1, runtimeBin: /tmp/evil}}\ntargets:\n  dev: {profile: x}\n' \
+  > "$WORK/bf-refused"
+out="$(cd "$proj" && "$WORK/brig" config -f "$WORK/bf-refused" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"$WORK/bf-refused"*"runtimeBin"*) ok "a refused Brigfile exits 1 and names the file and the field" ;;
+  *) bad "a refused Brigfile exits 1 and names the file and the field -- got $rc: $out" ;;
+esac
+[ "$(wc -l < "$STUB_LOG")" = "$logged" ] \
+  && ok "the Brigfile verbs ran nothing" \
+  || bad "the Brigfile verbs ran the runtime: $(tail -n +"$((logged + 1))" "$STUB_LOG")"
+
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's
 # replies; these cover the scripts that render them.
