@@ -156,10 +156,12 @@ interface. Do not script against its files.
 
 ## Sessions of a Brigfile target
 
-A target of a [Brigfile](brigfile.md) has sessions of its own. Their sandbox
-names start with `brig--`, and no ref names them. `brig run claude` in a
-checkout with a Brigfile is a session of the profile, with its own guest
-home, and not a session of a target. See
+A target of a [Brigfile](brigfile.md) has sessions of its own.
+`brig run --target <name>` starts one, once you
+[approve](brigfile.md#the-approval) what it runs. Their sandbox names start
+with `brig--`, and no ref names them. `brig run claude` in a checkout with a
+Brigfile is a session of the profile, with its own guest home, and not a
+session of a target. See
 [Sessions of a target](brigfile.md#sessions-of-a-target).
 
 ## What a label can contain
