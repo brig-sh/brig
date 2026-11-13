@@ -3,8 +3,10 @@ package wrap
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 
 	"github.com/brig-sh/brig/internal/policy"
+	"github.com/brig-sh/brig/internal/runtime"
 )
 
 // Identity names a session apart from its profile. Load derives the sandbox
@@ -28,9 +30,20 @@ type Identity struct {
 // with it, and Load refuses a BRIG_NAME that does.
 const projectPrefix = NamePrefix + "-"
 
+// projectKeyPrefix starts the session index key of a Brigfile target. No ref
+// starts with it: a ref starts with its agent's name.
+const projectKeyPrefix = "@p/"
+
 // projectLabelMax bounds the readable part of a project sandbox name, so the
-// whole name stays at 63 bytes: the prefix, the label, a dash and the id.
-const projectLabelMax = 36
+// whole name stays at 47 bytes: the prefix, the label, a dash and the id.
+//
+// The limit that binds is a socket path, not a name rule. hull keeps a
+// sandbox's agent socket at <store>/instances/<name>/agent.sock, and macOS
+// takes a socket path of at most 103 bytes. With the store in a home
+// directory that leaves a name a little over 50 bytes, and a longer one
+// would plan and then fail at boot. The id carries the identity; the label
+// is only there for a person to read, so it is what gives way.
+const projectLabelMax = 20
 
 // ProjectIdentity is the identity of one target of the Brigfile at root,
 // with slug the session's path-safe name or "". envAgent is passed through
@@ -50,7 +63,7 @@ func ProjectIdentity(root, target, slug, envAgent string) Identity {
 	if len(label) > projectLabelMax {
 		label = label[:projectLabelMax]
 	}
-	return Identity{Sandbox: projectPrefix + label + "-" + id, Key: "@p/" + id, EnvAgent: envAgent}
+	return Identity{Sandbox: projectPrefix + label + "-" + id, Key: projectKeyPrefix + id, EnvAgent: envAgent}
 }
 
 // PolicySet is every policy bound to a run, resolved by the caller. When
@@ -80,7 +93,9 @@ type Origins struct {
 // Target is the Brigfile target a run was resolved from, as the plan shows
 // it. Load reads nothing from it but Base.
 type Target struct {
-	Name          string
+	Name string
+	// Session is the session's name, or "" for the target's default session.
+	Session       string
 	Brigfile      string
 	Root          string
 	ProfileAlias  string
@@ -91,6 +106,38 @@ type Target struct {
 	Base Origins
 	// Notes are what the plan should say about the target beside its rows.
 	Notes []string
+	// Args are the target's default guest arguments. Only the configuration
+	// digest reads them.
+	Args []string
+}
+
+// ProjectConfig is the Config of a recorded session of a Brigfile target, for
+// the verbs that stop or remove its sandbox. It names the sandbox, the
+// runtime, the guest home and the project, and nothing a boot needs: those
+// verbs must reach a session whose Brigfile is gone or has lost the target.
+func ProjectConfig(ps ProjectSession, rt runtime.Runtime, v Verbosity) *Config {
+	id := ProjectIdentity(ps.Root, ps.Target, ps.Session, "")
+	id.Sandbox = ps.Sandbox
+	// The home is the sandbox's own, whether or not an entry names it.
+	home, err := defaultWorkspace(ps.Sandbox)
+	if err != nil {
+		home = ps.Home
+	}
+	return &Config{
+		Runtime:       rt,
+		Slug:          ps.Session,
+		VMName:        ps.Sandbox,
+		Workspace:     home,
+		EphemeralHome: true,
+		Project:       ps.Root,
+		ProjectReal:   ps.Root,
+		identity:      &id,
+		target:        &Target{Name: ps.Target, Session: ps.Session, Root: ps.Root, Brigfile: ps.Brigfile},
+		Out:           os.Stdout,
+		Err:           os.Stderr,
+		Progress:      os.Stderr,
+		Verbosity:     v,
+	}
 }
 
 // sessionRef is the key this session's entry in the session index is filed

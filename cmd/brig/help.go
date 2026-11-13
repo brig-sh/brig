@@ -71,9 +71,20 @@ const stopUsage = `brig stop -- stop the sandbox and keep it
 
 usage:
   brig stop <ref>
+  brig stop --target NAME [--session NAME] [-f PATH]
 
 Stopping a sandbox that is not running is not an error: that is already the
 state stop asks for. The name, the workspace and the guest home survive.
+
+With --target it stops a session of a target of this repository's Brigfile.
+It finds the session from the project and the target, so it works after the
+Brigfile is deleted or the target is gone from it. A session brig has no
+record of, and no sandbox for, exits 3.
+
+flags:
+      --target NAME   stop a session of this target
+      --session NAME  with --target: the named session, not the default one
+  -f, --file PATH     with --target: the project is the directory of PATH
 
 brig help lists every command, every flag and every setting.
 `
@@ -82,6 +93,7 @@ const rmUsage = `brig rm -- stop and remove the sandbox
 
 usage:
   brig rm <ref> [--dry-run]
+  brig rm --target NAME [--session NAME] [-f PATH] [--dry-run]
   brig rm --all [--dry-run] [-y]
 
 One ref removes that sandbox. --all lists every brig sandbox, asks, then stops
@@ -89,9 +101,16 @@ and removes them. When brig created the guest home, rm deletes it too and prints
 its path; a guest home you named and your project are host directories, and are
 left alone.
 
+With --target it removes a session of a target of this repository's Brigfile,
+with its guest home. It works after the Brigfile is deleted or the target is
+gone from it.
+
 flags:
-      --dry-run  report what would be removed, and stop
-  -y, --yes      with --all: the answer, given in advance
+      --target NAME   remove a session of this target
+      --session NAME  with --target: the named session, not the default one
+  -f, --file PATH     with --target: the project is the directory of PATH
+      --dry-run       report what would be removed, and stop
+  -y, --yes           with --all: the answer, given in advance
 
 brig help lists every command, every flag and every setting.
 `
@@ -140,7 +159,7 @@ const planUsage = `brig plan -- print the permissions a run would get
 
 usage:
   brig plan <ref> [project]
-  brig plan --target NAME [-f PATH]
+  brig plan --target NAME [--session NAME] [-f PATH]
 
 Prints the mounts, the network, the policies, the limits, the image, the
 runtime and the credentials of a run, by name. It boots nothing and opens no
@@ -156,6 +175,7 @@ secrets of every route. brig run does not read a Brigfile yet.
 
 flags:
       --target NAME   plan this target of the Brigfile
+      --session NAME  with --target: plan the named session, not the default one
   -f, --file PATH     with --target: read this Brigfile instead of looking for one
       --image IMAGE   guest image to boot
       --home PATH     host directory to mount as the guest home
@@ -176,7 +196,9 @@ const lsUsage = `brig ls -- list sandboxes
 usage:
   brig ls [-q] [--json]
 
-Lists every sandbox brig has, with its ref, state and guest home.
+Lists every sandbox brig has, with its ref, state and guest home. The
+sessions of Brigfile targets follow in a table of their own, with the target,
+the session and the project. They have no ref, so -q leaves them out.
 
 flags:
   -q, --quiet  print the refs only, one per line, for a script

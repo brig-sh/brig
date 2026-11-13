@@ -791,6 +791,12 @@ of a directory brig is checking
 A link you made yourself is refused too. Brig cannot tell it from a planted
 link.
 
+The project of a [Brigfile target](brigfile.md#the-state-directory) may not
+hold Brig's state directory, and may not be inside it. Brig keeps its record
+of sessions and their guest homes there, and the guest could change them.
+Brig does not check this for a project that you name on the run line of a
+profile.
+
 The `PROJECT` row in the run envelope reports the directory the path resolved
 to, not the path as typed. On macOS a project under `/tmp` prints as
 `/private/tmp`, the directory the sandbox gets.

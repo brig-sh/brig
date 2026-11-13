@@ -2,10 +2,13 @@ package wrap
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -165,12 +168,8 @@ func indexPath(name string) (string, error) {
 // the failure this tolerance exists to avoid.
 func readIndex[V any](name string) map[string]V {
 	index := map[string]V{}
-	path, err := indexPath(name)
-	if err != nil {
-		return index
-	}
-	blob, err := os.ReadFile(path)
-	if err != nil {
+	blob, err := readStateFile(name)
+	if err != nil || blob == nil {
 		return index
 	}
 	if err := json.Unmarshal(blob, &index); err != nil || index == nil {
@@ -179,8 +178,28 @@ func readIndex[V any](name string) map[string]V {
 	return index
 }
 
+// readStateFile returns the bytes of the file named name in the state
+// directory, and nil with no error when there is no such file.
+func readStateFile(name string) ([]byte, error) {
+	path, err := indexPath(name)
+	if err != nil {
+		return nil, err
+	}
+	blob, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return blob, err
+}
+
 // writeIndex replaces the file named name with the map it is given.
 func writeIndex[V any](name string, index map[string]V) error {
+	return writeStateFile(name, index)
+}
+
+// writeStateFile replaces the file named name in the state directory with v
+// as indented JSON.
+func writeStateFile(name string, v any) error {
 	path, err := indexPath(name)
 	if err != nil {
 		return err
@@ -190,7 +209,7 @@ func writeIndex[V any](name string, index map[string]V) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	blob, err := json.MarshalIndent(index, "", "  ")
+	blob, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -364,6 +383,12 @@ func RefOfSandbox(vmName string) string {
 // that rm does.
 func ForgetSandbox(vmName string) (bool, error) {
 	forgetGitWatch(func(name string) bool { return name != vmName })
+	return dropSessionEntries(vmName)
+}
+
+// dropSessionEntries is ForgetSandbox without the look at the project's .git,
+// for a recreate, which removes the sandbox and keeps the session.
+func dropSessionEntries(vmName string) (bool, error) {
 	index := readSessionIndex()
 	dropped := false
 	for key, entry := range index {
@@ -463,10 +488,16 @@ func (c *Config) rememberSession() {
 // a sandbox removed outside brig stays listed until the next `brig ls` prunes
 // it or `brig rm <ref>` forgets it -- and a stale candidate is a name that
 // fails when run, not a wrong action.
+//
+// The key of a session of a Brigfile target is not a ref. No verb takes it,
+// so it is left out.
 func SessionRefs() []string {
 	index := readSessionIndex()
 	refs := make([]string, 0, len(index))
 	for ref := range index {
+		if strings.HasPrefix(ref, projectKeyPrefix) {
+			continue
+		}
 		refs = append(refs, ref)
 	}
 	sort.Strings(refs)

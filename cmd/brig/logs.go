@@ -64,6 +64,12 @@ func logsCmd(args []string) error {
 				return usagef("--tail needs a number, not %q", raw)
 			}
 			o.tail = n
+		case a == "--target" || strings.HasPrefix(a, "--target=") ||
+			a == "--session" || strings.HasPrefix(a, "--session="):
+			// Named rather than called unknown: --target is a flag of stop
+			// and rm, and a reader reaching for it here wants a target's log.
+			return usagef("`brig logs` takes a ref and does not read a Brigfile target. " +
+				"`brig ls` names the sandbox of a target's session")
 		case strings.HasPrefix(a, "-"):
 			return usagef("unknown flag %q for `brig logs`", a)
 		default:

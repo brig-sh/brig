@@ -294,6 +294,9 @@ type Config struct {
 	// route, by route name. Both are nil when Load read the policy directory.
 	policyOrigins []string
 	routeOrigin   map[string]string
+	// policyDocs are the policy documents bound to this run, for the
+	// configuration digest.
+	policyDocs []policy.Policy
 
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
@@ -420,6 +423,13 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 
 	if o.Identity != nil && o.Workspace != "" {
 		return nil, errors.New("a Brigfile target's guest home is brig's own; it takes no --home")
+	}
+	// Before anything reads the state directory for this session: a project
+	// that holds it, or lies inside it, could have written what is read.
+	if o.Identity != nil && o.Target != nil && o.Target.Root != "" {
+		if err := CheckProjectState(o.Target.Root); err != nil {
+			return nil, err
+		}
 	}
 	// The key every lookup in the session index uses below. A target's is
 	// its own, never one built from the profile name the repository chose.
@@ -816,6 +826,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		origins:        origins,
 		policyOrigins:  policyOrigins,
 		routeOrigin:    routeOrigin,
+		policyDocs:     bound,
 	}
 	if strictErr != nil {
 		return nil, strictErr
