@@ -925,10 +925,12 @@ part. A change to any part asks again.
 
 **What boots is what was approved.** The run reads the Brigfile and the
 files it names once, and builds both the approval and the boot from that
-read. A file changed while Brig asks does not reach the boot.
+read. A change to the Brigfile or to a file it names while Brig asks does not
+reach the boot.
 
-**Brig reads no secret value before the approval.** Before it asks, the run
-lists the names in your store. It reads a value only after you approve.
+**Brig reads no value from your secret store before the approval.** Before
+it asks, the run lists the names in your store. It reads a value from the
+store only after you approve.
 
 **Brig keeps each approval in its state directory, outside the project.** A
 project that holds the state directory, or lies inside it, is refused before
@@ -954,6 +956,12 @@ other path that boots a sandbox, refuses one.
   apply to a target on it.** The plan and the approval include them.
 - **An approval does not limit what the agent does once it runs.** The rest
   of this page applies to it, as to a run of a profile.
+- **The git identity is not part of the approval.** Brig reads `user.name`,
+  `user.email` and `github.user` with `git config` in the directory you run
+  it from, as for any run (see [Credentials](#credentials)). In the project
+  of a target, the repository's `.git/config` can set them. They reach the
+  guest as the commit identity and the user name of the git helper. They do
+  not decide which host gets a token.
 - **Two Brig processes that write approvals at the same moment can lose
   one.** The next run asks again.
 
