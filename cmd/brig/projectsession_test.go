@@ -592,3 +592,31 @@ func TestPlanTargetSession(t *testing.T) {
 	_, err := captureStdout(t, func() error { return run([]string{"plan", "--target", "ci", "--session", "../x"}) })
 	exitOf(t, err, exitUsage)
 }
+
+// The plan of a target says when the session's sandbox was booted with a
+// configuration other than the one it plans, and says nothing when there is
+// no record to compare.
+func TestPlanTargetSaysTheConfigurationChanged(t *testing.T) {
+	root, _ := targetHost(t, map[string]string{brigfile.FileName: projectBrigfile,
+		".brig/tool.yaml": projectTool, ".brig/agent.yaml": projectAgentPolicy})
+	if notes := planTargetJSON(t, "--target", "ci").Data.Target.Notes; len(notes) != 0 {
+		t.Errorf("with no record the plan notes %q", notes)
+	}
+	id := wrap.ProjectIdentity(root, "ci", "", "")
+	ps := wrap.ProjectSession{Sandbox: id.Sandbox, Root: root, Target: "ci",
+		Home: filepath.Join(os.Getenv("BRIG_STATE_DIR"), "homes", id.Sandbox), ConfigDigest: "an older digest"}
+	if err := wrap.RecordProject(ps); err != nil {
+		t.Fatal(err)
+	}
+	notes := planTargetJSON(t, "--target", "ci").Data.Target.Notes
+	if len(notes) != 1 || !strings.Contains(notes[0], "different configuration") ||
+		!strings.Contains(notes[0], "brig rm --target ci") {
+		t.Errorf("the plan notes %q", notes)
+	}
+	if text := planTargetText(t, "--target", "ci"); !strings.Contains(text, "different configuration") {
+		t.Errorf("the text says nothing:\n%s", text)
+	}
+	if notes := planTargetJSON(t, "--target", "ci", "--session", "fix").Data.Target.Notes; len(notes) != 0 {
+		t.Errorf("another session of the target is noted: %q", notes)
+	}
+}
