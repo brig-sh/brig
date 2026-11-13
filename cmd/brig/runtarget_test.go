@@ -729,3 +729,24 @@ func TestRunTargetAMissingSecretIsRefusedBeforeAsking(t *testing.T) {
 		t.Errorf("asked %d, booted %d, stored %v", *asked, len(rt.runs), there(approvalsPath()))
 	}
 }
+
+// A policy you attach to the claude-code brig ships applies to a target on
+// it, so attaching one changes what the run may do, and the approval given
+// before it no longer covers the run.
+func TestRunTargetApprovalIsInvalidatedByAnAttachment(t *testing.T) {
+	runHost(t, map[string]string{brigfile.FileName: "apiVersion: brig.sh/v1alpha1\nprofiles:\n" +
+		"  shipped: {from: builtin:claude-code}\ntargets:\n  dev: {profile: shipped}\n"})
+	answer(t, strings.NewReader("y\n"))
+	// Whether the boot on the recording runtime gets all the way through is
+	// not this test's business: the approval is stored before the boot.
+	_, _, _ = runQuiet(t, "run", "--target", "dev", "-d")
+	noTerminal(t)
+	if !there(approvalsPath()) {
+		t.Fatal("no approval was stored")
+	}
+	writePolicyFile(t, os.Getenv("BRIG_POLICY_DIR"), "no-net", noNetBody)
+	attach(t, "no-net", "claude-code")
+	if got := changedAfter(t, "-d"); !strings.Contains(got, "policy no-net, from attachment to claude-code is new") {
+		t.Errorf("the change list does not name the attachment:\n%s", got)
+	}
+}
