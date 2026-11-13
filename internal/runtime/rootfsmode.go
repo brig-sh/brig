@@ -244,8 +244,9 @@ func isUruncShim(shim string) bool {
 // containerdSnapshotter is the snapshotter nerdctl unpacks into, and where
 // that answer came from. nerdctl takes it from CONTAINERD_SNAPSHOTTER, then
 // from the snapshotter key of its nerdctl.toml, and uses overlayfs when
-// neither names one. brig passes no --snapshotter. The runtime bundle sets
-// both the variable and the file, to overlayfs unless the user switched.
+// neither names one. brig passes nerdctl no --snapshotter, and passes hull on
+// Linux this answer, which hull would not find for itself. The runtime bundle
+// sets both the variable and the file, to overlayfs unless the user switched.
 func containerdSnapshotter() (snapshotter, from string) {
 	if v := os.Getenv("CONTAINERD_SNAPSHOTTER"); v != "" {
 		return v, "CONTAINERD_SNAPSHOTTER"
