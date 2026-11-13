@@ -228,3 +228,26 @@ func writeEgressPolicy(t *testing.T, dir, name, def, allow string) {
 		t.Fatal(err)
 	}
 }
+
+// LoadNamed loads what it is given, in that order, from the directory, and
+// refuses a name that does not load with the owner it was asked for.
+func TestLoadNamedLoadsInOrderAndNamesTheOwner(t *testing.T) {
+	dir := t.TempDir()
+	writeEgressPolicy(t, dir, "one", "deny", "a.example")
+	writeEgressPolicy(t, dir, "two", "allow", "b.example")
+	got, names, err := LoadNamed([]string{"two", "one"}, "claude-code", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Metadata.Name != "two" || got[1].Metadata.Name != "one" ||
+		strings.Join(names, ",") != "two,one" {
+		t.Errorf("LoadNamed = %v %v", got, names)
+	}
+	if got, names, err := LoadNamed(nil, "claude-code", dir); err != nil || got != nil || names != nil {
+		t.Errorf("LoadNamed of nothing = %v %v %v", got, names, err)
+	}
+	_, _, err = LoadNamed([]string{"one", "gone"}, "claude-code", dir)
+	if err == nil || !strings.Contains(err.Error(), "[gone] is attached to claude-code") {
+		t.Errorf("a missing name: %v", err)
+	}
+}
