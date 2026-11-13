@@ -54,6 +54,8 @@ Some invocations send no command event:
 
 - `brig telemetry`, which is how you answer, and the shell completion
   script, which runs in every new shell
+- `brig target`, `brig config` and `brig init`, which write nothing and
+  start nothing
 - a bare `brig`, a mistyped global flag, and a spelling Brig has removed
 - a command stopped by Ctrl-C or a signal before it hands your terminal to
   the agent. A panic sends its crash report instead
