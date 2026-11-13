@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -481,10 +482,16 @@ func (c *Config) rememberSession() {
 // a sandbox removed outside brig stays listed until the next `brig ls` prunes
 // it or `brig rm <ref>` forgets it -- and a stale candidate is a name that
 // fails when run, not a wrong action.
+//
+// The key of a session of a Brigfile target is not a ref. No verb takes it,
+// so it is left out.
 func SessionRefs() []string {
 	index := readSessionIndex()
 	refs := make([]string, 0, len(index))
 	for ref := range index {
+		if strings.HasPrefix(ref, projectKeyPrefix) {
+			continue
+		}
 		refs = append(refs, ref)
 	}
 	sort.Strings(refs)

@@ -103,10 +103,20 @@ func removeHome(home string) (bool, error) {
 
 // ephemeralEntry returns the index entry of the session carrying vmName when
 // its home is one brig created, and false otherwise.
+//
+// A session of a Brigfile target is also found through the project index,
+// whose entry `brig ls` never prunes: its home is always one brig created.
+// Only a project sandbox is looked up there, so a profile's sandbox reads
+// sessions.json alone, as it always has.
 func ephemeralEntry(vmName string) (sessionEntry, bool) {
 	for _, entry := range readSessionIndex() {
 		if entry.Sandbox == vmName && entry.Ephemeral {
 			return entry, true
+		}
+	}
+	if IsProjectSandbox(vmName) {
+		if ps, ok := LookupProject(vmName); ok {
+			return sessionEntry{Home: ps.Home, Sandbox: vmName, Ephemeral: true}, true
 		}
 	}
 	return sessionEntry{}, false
@@ -130,7 +140,23 @@ func EphemeralHomeOf(vmName string) string {
 //
 // Call it only after the runtime has removed the sandbox, and before
 // ForgetSandbox drops the record it reads.
+//
+// For a session of a Brigfile target it also drops the project entry, and
+// does that first. A home whose delete fails is then a home no session owns,
+// which the next run deletes. The other order could leave an entry naming a
+// home that is gone. An entry that cannot be dropped keeps its home.
 func DropEphemeralHome(vmName string) (string, error) {
+	if IsProjectSandbox(vmName) {
+		if ps, ok := LookupProject(vmName); ok {
+			if _, err := ForgetProject(vmName); err != nil {
+				return "", err
+			}
+			if removed, err := removeHome(ps.Home); err != nil || !removed {
+				return "", err
+			}
+			return ps.Home, nil
+		}
+	}
 	entry, ok := ephemeralEntry(vmName)
 	if !ok {
 		return "", nil
@@ -156,6 +182,15 @@ func DropEphemeralHome(vmName string) (string, error) {
 func (c *Config) reapOrphanHome() {
 	if !c.EphemeralHome || c.homeRemembered || c.homeGiven {
 		return
+	}
+	// A session of a Brigfile target owns its home while the project index
+	// has its entry. hull says "instance not found" for a sandbox whose
+	// metadata it cannot read, and a recreate removes the sandbox on purpose
+	// and keeps the home for the next boot.
+	if IsProjectSandbox(c.VMName) {
+		if _, owned := LookupProject(c.VMName); owned {
+			return
+		}
 	}
 	if _, err := os.Lstat(c.Workspace); err != nil {
 		return

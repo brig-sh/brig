@@ -607,6 +607,11 @@ func majorVersion(v string) (int, bool) {
 // session not in the index falls back to the bare agent, which is still a ref
 // every verb takes.
 func (c *Config) logHint() string {
+	// No ref names a session of a Brigfile target, and `brig logs` takes
+	// only a ref, so the runtime's own command is the one to give.
+	if IsProjectSandbox(c.VMName) {
+		return "the runtime's own log, " + c.Runtime.LogsHint(c.VMName)
+	}
 	ref := RefOfSandbox(c.VMName)
 	if ref == "" {
 		ref = c.Profile.Name
