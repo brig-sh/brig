@@ -205,3 +205,38 @@ func TestARepositoryProfileMayNotWeakenTheNetwork(t *testing.T) {
 		}
 	}
 }
+
+// The strings of a repository profile reach the reader's terminal in the
+// plan, so none may hold a control character: not an escape sequence that
+// clears the rows above it, and not a newline that prints a row of its own.
+// The error names where the character is.
+func TestARepositoryProfileHoldsNoControlCharacter(t *testing.T) {
+	for name, c := range map[string]struct{ body, where string }{
+		"an env name": {repoProfileBase + "secrets: [s]\nenv: [{name: \"A\\e[2J\", ref: secrets.s}]\n", "env[0].name"},
+		"a file path": {repoProfileBase + "secrets: [s]\nvolumes: [{kind: tmpfs, path: d}]\n" +
+			"files: [{ref: secrets.s, path: \"d/\\e[2J\"}]\n", "files[0].path"},
+		"the guest home": {strings.Replace(repoProfileBase, "guestHome: /root", "guestHome: \"/r\\e[2J\"", 1), "guestHome"},
+		"a newline":      {repoProfileBase + "env: [{name: MODE, value: \"ci\\nPOLICY  none\"}]\n", "env[0].value"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadRepoProfile(t, c.body)
+			if err == nil || !strings.Contains(err.Error(), "control character") || !strings.Contains(err.Error(), c.where) {
+				t.Errorf("err = %v, want a refusal naming %s", err, c.where)
+			}
+		})
+	}
+}
+
+// A repository policy is held to the same rule.
+func TestARepositoryPolicyHoldsNoControlCharacter(t *testing.T) {
+	dir := project(t, map[string]string{
+		FileName: "apiVersion: brig.sh/v1alpha1\nprofiles:\n  c: {from: builtin:claude-code}\n" +
+			"policies:\n  p: {file: p.yaml}\ntargets:\n  dev: {profile: c, policies: [p]}\n",
+		"p.yaml": "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: p, description: \"a\\e[2J\"}\n" +
+			"spec: {egress: {default: deny}}\n",
+	})
+	_, err := Load(filepath.Join(dir, FileName))
+	if err == nil || !strings.Contains(err.Error(), "metadata.description") || !strings.Contains(err.Error(), "policies.p") {
+		t.Errorf("err = %v", err)
+	}
+}
