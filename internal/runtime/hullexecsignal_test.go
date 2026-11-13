@@ -8,19 +8,66 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// shortAgentCalls shortens agentCallTimeout for one test, so a call that
-// hangs times out in half a second: long enough for the stand-in to set its
-// trap on a loaded runner, short enough not to slow the suite.
-func shortAgentCalls(t *testing.T) {
+// expireWhenReady makes the deadline of every agent call in this test fall
+// as soon as the file ready exists, which the stand-in for hull writes once
+// it has set its trap.
+//
+// The tests used to shorten agentCallTimeout to half a second instead. On a
+// loaded machine the shell had not reached its trap by then, the signal
+// killed it before it could record anything, and the test failed for a
+// reason that had nothing to do with which signal brig sends. Waiting for
+// the stand-in rather than for a time removes the race: the call always
+// expires, and never before the stand-in can tell one signal from another.
+func expireWhenReady(t *testing.T, ready string) {
 	t.Helper()
-	old := agentCallTimeout
-	agentCallTimeout = 500 * time.Millisecond
-	t.Cleanup(func() { agentCallTimeout = old })
+	old := agentCallDeadline
+	agentCallDeadline = func(parent context.Context) (context.Context, context.CancelFunc) {
+		d := &readyDeadline{Context: parent, done: make(chan struct{}), stop: make(chan struct{})}
+		go func() {
+			tick := time.NewTicker(2 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				if _, err := os.Stat(ready); err == nil {
+					close(d.done)
+					return
+				}
+				select {
+				case <-d.stop:
+					return
+				case <-tick.C:
+				}
+			}
+		}()
+		var once sync.Once
+		return d, func() { once.Do(func() { close(d.stop) }) }
+	}
+	t.Cleanup(func() { agentCallDeadline = old })
+}
+
+// readyDeadline is a context whose deadline passes when done is closed. To
+// the command it bounds it is a deadline like any other: Done closes and Err
+// reports context.DeadlineExceeded.
+type readyDeadline struct {
+	context.Context
+	done chan struct{}
+	stop chan struct{}
+}
+
+func (d *readyDeadline) Done() <-chan struct{} { return d.done }
+
+func (d *readyDeadline) Err() error {
+	select {
+	case <-d.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
 }
 
 // signalHull writes a stand-in for hull that hangs in exec, the way a real
@@ -77,8 +124,8 @@ func trapWasSet(t *testing.T, ready string) {
 // brig sends, not what hull does with it while it waits for the guest's
 // agent. Probe, Output and Feed all build their command in agentCall.
 func TestLinuxHullEndsATimedOutCallWithSIGTERM(t *testing.T) {
-	shortAgentCalls(t)
 	bin, termed, ready := signalHull(t)
+	expireWhenReady(t, ready)
 	h := &hull{bin: bin, linux: true}
 
 	if h.Probe(ExecSpec{Name: "vm", Cmd: []string{"/bin/true"}}) {
@@ -94,8 +141,8 @@ func TestLinuxHullEndsATimedOutCallWithSIGTERM(t *testing.T) {
 // command that failed. It must keep the SIGTERM agentCall chose for hull on
 // Linux, and still report the timeout as one.
 func TestLinuxHullOutputEndsATimedOutCallWithSIGTERM(t *testing.T) {
-	shortAgentCalls(t)
 	bin, termed, ready := signalHull(t)
+	expireWhenReady(t, ready)
 	h := &hull{bin: bin, linux: true}
 
 	_, err := h.Output(ExecSpec{Name: "vm", Cmd: []string{"/bin/true"}})
@@ -113,8 +160,8 @@ func TestLinuxHullOutputEndsATimedOutCallWithSIGTERM(t *testing.T) {
 // second on every probe that times out: hull passes it to the guest command,
 // and with no agent listening yet it stays up until the backstop kills it.
 func TestMacOSHullKillsATimedOutCall(t *testing.T) {
-	shortAgentCalls(t)
 	bin, termed, ready := signalHull(t)
+	expireWhenReady(t, ready)
 	h := &hull{bin: bin}
 
 	if h.Probe(ExecSpec{Name: "vm", Cmd: []string{"/bin/true"}}) {
@@ -136,12 +183,17 @@ func TestLinuxHullCallReturnsWhenHullIgnoresSIGTERM(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stand-in is not portable to windows")
 	}
-	shortAgentCalls(t)
-	bin := filepath.Join(t.TempDir(), "hull")
-	// exec keeps the ignored SIGTERM, and leaves nothing behind once killed.
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntrap '' TERM\nexec sleep 300\n"), 0o755); err != nil {
+	dir := t.TempDir()
+	bin, ready := filepath.Join(dir, "hull"), filepath.Join(dir, "ready")
+	// The deadline waits for ready, written once SIGTERM is ignored. A
+	// signal that came before that would end the shell, and the call would
+	// return without the backstop this test is about. exec keeps the
+	// ignored SIGTERM, and leaves nothing behind once killed.
+	script := "#!/bin/sh\ntrap '' TERM\n: > '" + ready + "'\nexec sleep 300\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	expireWhenReady(t, ready)
 	h := &hull{bin: bin, linux: true}
 
 	done := make(chan bool, 1)

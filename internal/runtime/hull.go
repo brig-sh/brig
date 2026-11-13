@@ -1025,6 +1025,14 @@ func (h *hull) execArgs(spec ExecSpec) (args, env []string, err error) {
 // A var for tests.
 var agentCallTimeout = 5 * time.Second
 
+// agentCallDeadline gives one agent call its deadline. It is a var so a test
+// can make the deadline fall when its stand-in for hull is ready for it, and
+// not after a time that a loaded machine may not have given the stand-in to
+// start in.
+var agentCallDeadline = func(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, agentCallTimeout)
+}
+
 // agentCallWaitDelay is how long Run may keep waiting once the deadline has
 // already killed the command.
 //
@@ -1069,7 +1077,7 @@ func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, agentCallTimeout)
+	ctx, cancel := agentCallDeadline(parent)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.WaitDelay = agentCallWaitDelay
 	if h.linux {
