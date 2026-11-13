@@ -110,7 +110,7 @@
       "properties": {
         "cpus": { "type": "integer", "minimum": 1 },
         "mem": { "description": "Guest memory in MB.", "type": "integer", "minimum": 1 },
-        "image": { "type": "string", "minLength": 1, "pattern": "^\\S+$" }
+        "image": { "type": "string", "minLength": 1, "pattern": "^[^-\\s]\\S*$" }
       }
     }
   }
