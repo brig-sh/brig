@@ -750,7 +750,8 @@ type credentials struct {
 
 	// spawn starts background work. It is nil outside tests, which means a
 	// goroutine. A test sets it to hold the work back and run it at a moment
-	// of its choosing, since nothing else can say when a goroutine runs.
+	// of its choosing, since nothing else can say when a goroutine runs. It
+	// is read without mu, so a test sets it before the first registration.
 	spawn func(func())
 }
 
