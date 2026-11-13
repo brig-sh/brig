@@ -362,9 +362,15 @@ func WorkspaceOfSandbox(vmName string) string {
 //
 // Read on the same terms as WorkspaceOfSandbox: a sandbox carries one session,
 // so the first entry naming it is the only one.
+//
+// The key of a session of a Brigfile target is not a ref, and a caller that
+// printed it would hand the reader a word no verb takes, so it is "".
 func RefOfSandbox(vmName string) string {
 	for ref, entry := range readSessionIndex() {
 		if entry.Sandbox == vmName {
+			if strings.HasPrefix(ref, projectKeyPrefix) {
+				return ""
+			}
 			return ref
 		}
 	}
