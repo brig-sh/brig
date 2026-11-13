@@ -1864,7 +1864,10 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 		return nil
 	}
 	printSandboxes(os.Stdout, rows)
-	if len(rows) == 0 {
+	// Counted without the sessions of Brigfile targets, which have a table
+	// of their own below: a host with only those would otherwise show the
+	// header of this table and nothing under it.
+	if !slices.ContainsFunc(rows, func(r sandboxRow) bool { return !r.projectSandbox }) {
 		fmt.Println("(none -- `brig run claude` starts one)")
 	}
 	printProjects(os.Stdout, rows)
