@@ -143,7 +143,7 @@ func TestParseNetworkAndOffline(t *testing.T) {
 func TestBrigFlagsDeclareAPosition(t *testing.T) {
 	for _, f := range brigFlags {
 		switch f.position {
-		case posGlobal, posRun, posPublish:
+		case posGlobal, posRun, posPublish, posTarget:
 		default:
 			t.Errorf("brig flag --%s has no position", f.long)
 		}
@@ -330,6 +330,13 @@ func TestBrigFlagsOverlapWithShippedAgentsOnlyWhereKnown(t *testing.T) {
 				// `brig network unpublish` hand nothing to an agent, so no word on
 				// one of those lines was ever going to reach one.
 				if f.position == posPublish {
+					continue
+				}
+				// Nor can plan's --target and -f. plan hands nothing to an
+				// agent, and every other line reads them in no position, so
+				// `brig run opencode -f x` still reaches opencode
+				// (TestRunForwardsDashFQuietly).
+				if f.position == posTarget {
 					continue
 				}
 				spellings := []string{"--" + f.long}
