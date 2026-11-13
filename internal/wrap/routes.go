@@ -265,7 +265,7 @@ func (c *Config) serveRoutes(set creds.Set) error {
 		return nil
 	}
 	b := c.routeBroker()
-	s := injector.Sandbox{ID: c.VMName, Profile: c.Profile.Name}
+	s := injector.Sandbox{ID: c.VMName, Profile: c.brokerProfile()}
 	for _, r := range c.routes {
 		s.Routes = append(s.Routes, injector.Route{Policy: c.routePolicy[r.Name], Route: r})
 	}

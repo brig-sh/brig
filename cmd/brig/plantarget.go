@@ -114,8 +114,9 @@ type targetRun struct {
 
 // loadTarget resolves the target the line names into the Config a run of it
 // boots. It looks for the runtime, lists the store and asks the runtime what
-// `brig plan <profile>` asks it, and writes nothing.
-func loadTarget(verb string, opts options) (*targetRun, error) {
+// `brig plan <profile>` asks it, and writes nothing. l is the Brigfile when
+// the caller has read it already, so that one read is all there is.
+func loadTarget(verb string, opts options, l *brigfile.Loaded) (*targetRun, error) {
 	switch {
 	case opts.target == "":
 		return nil, usagef("--target needs a target name")
@@ -126,9 +127,11 @@ func loadTarget(verb string, opts options) (*targetRun, error) {
 		return nil, usagef("--no-project and --target ask for different things: a target's project is " +
 			"the directory that holds its Brigfile")
 	}
-	l, err := loadBrigfile(opts.file)
-	if err != nil {
-		return nil, err
+	if l == nil {
+		var err error
+		if l, err = loadBrigfile(opts.file); err != nil {
+			return nil, err
+		}
 	}
 	rt, err := resolveTarget(l, opts.target)
 	if err != nil {
@@ -179,6 +182,7 @@ func loadTarget(verb string, opts options) (*targetRun, error) {
 		ProfileSource: rt.Profile.Source.String(),
 		BuiltIn:       builtIn,
 		Base:          base,
+		RmCommand:     projectRef{target: rt.Name, session: opts.session, file: opts.file}.command("rm"),
 	}
 	if file := ignoredUserFile(rt.Profile); file != "" {
 		name := rt.Profile.Source.Ref
@@ -238,7 +242,7 @@ func loadTarget(verb string, opts options) (*targetRun, error) {
 // planTarget prints the plan of the target the line names. It writes
 // nothing.
 func planTarget(opts options, wantJSON bool) error {
-	tr, err := loadTarget("plan", opts)
+	tr, err := loadTarget("plan", opts, nil)
 	if err != nil {
 		return err
 	}

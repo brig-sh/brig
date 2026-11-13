@@ -45,16 +45,21 @@ func (c *Config) warnExpiredSecrets() {
 		// the host is only half the fix: the stored copy is what a run reads,
 		// and nothing re-reads the host until an import says so.
 		heading := notice.Newf("the imported credential %s (%s) expired %s",
-			s.Name, c.Profile.Name, ago(now-s.Provenance.ExpiresAt))
+			s.Name, c.subject(), ago(now-s.Provenance.ExpiresAt))
 		// The profile-wide import only fills declarations that carry
 		// sources:. A secret stored with --from-command records an expiry
 		// just the same -- Extract reads expiryField whatever the source was
 		// -- so sending its owner to `brig secret import <profile>` is
 		// sending them to a command that reports importing nothing and
 		// leaves the credential expired.
-		if decl.Importable() {
+		switch {
+		case c.target != nil && !c.target.BuiltIn:
+			// A repository profile's name is its own word, and import would
+			// read your profile of that name. Store the one secret instead.
+			heading.Do("renew it, then store it again", "brig secret create "+s.Name)
+		case decl.Importable():
 			heading.Do("renew it on the host, then", "brig secret import "+c.Profile.Name)
-		} else {
+		default:
 			heading.Do("renew it, then store it again",
 				"brig secret import "+c.Profile.Name+" "+s.Name+" --from-command '<command>'")
 		}
