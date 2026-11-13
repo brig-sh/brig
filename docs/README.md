@@ -17,6 +17,7 @@ New to Brig? Read [the README](../README.md), then follow the
 | Keep a login on the host, and give the guest a session token for it | [The credential broker](broker.md#use-it) |
 | Open a port in the sandbox to the host | [`brig network`](cli.md#brig-network) |
 | Run my own agent or my own image | [Writing an agent profile](profiles.md) and [Guest images](guest-image.md) |
+| Describe how a repository runs under Brig | [The Brigfile](brigfile.md) |
 | Run many sandboxes from one herdr client | [herdr](herdr.md) |
 | Fix an error | [Troubleshooting](troubleshooting.md) |
 | Turn on shell completion | [Completions](completions.md) |
@@ -49,6 +50,7 @@ New to Brig? Read [the README](../README.md), then follow the
 | --- | --- |
 | [cli.md](cli.md) | Every verb and flag, the environment variables, the JSON output and the exit codes |
 | [profiles.md](profiles.md) | Every profile field |
+| [brigfile.md](brigfile.md) | The Brigfile format, and where Brig looks for one |
 | [policies.md](policies.md) | Every policy field, route and preset, and where a policy is enforced |
 | [broker.md](broker.md) | How the credential broker handles a request, and how it is hosted |
 | [secrets.md](secrets.md) | The secret store, imports, renewal on the host |
