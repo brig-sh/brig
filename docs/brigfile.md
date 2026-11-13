@@ -103,6 +103,11 @@ A value in a target's `overrides` replaces the profile's value. A field the
 target does not override comes from the profile. `brig config --target`
 shows the origin of each value.
 
+An `image` override on a `builtin:` profile keeps what that profile binds.
+The image the repository names then receives the credentials Brig binds for
+the built-in. `brig plan --target` says so in a `NOTE` row and names each
+one.
+
 A target's policies come in this order: the target's own `policies`, then
 the ones a repository profile lists under `policy:`. Each alias appears
 once.

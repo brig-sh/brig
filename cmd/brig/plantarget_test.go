@@ -615,3 +615,27 @@ func TestPlanTargetPrintsNoEscapeSequence(t *testing.T) {
 	_, err := captureStdout(t, func() error { return run([]string{"plan", "--target", "dev"}) })
 	exitOf(t, err, exitFailure)
 }
+
+// A target that keeps a built-in and names its own image sends that image
+// what the built-in binds: your stored credentials, and for claude-code a
+// variable read from your environment. The plan says whose image it is and
+// names each source, and says nothing of the kind without the override.
+func TestPlanTargetNotesARepositoryImageOnABuiltIn(t *testing.T) {
+	targetHost(t, map[string]string{
+		brigfile.FileName: "apiVersion: brig.sh/v1alpha1\nprofiles:\n  c: {from: builtin:claude-code}\n" +
+			"targets:\n  theirs: {profile: c, overrides: {image: example.com/theirs:1}}\n  shipped: {profile: c}\n",
+	})
+	d := planTargetJSON(t, "--target", "theirs").Data
+	notes := strings.Join(d.Target.Notes, "\n")
+	for _, want := range []string{"example.com/theirs:1", "this repository's choice", "secrets.claude-credentials", "env.GH_TOKEN"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("the notes do not say %q: %q", want, notes)
+		}
+	}
+	if text := planTargetText(t, "--target", "theirs"); !strings.Contains(text, "this repository's choice") {
+		t.Errorf("the text has no note:\n%s", text)
+	}
+	if d := planTargetJSON(t, "--target", "shipped").Data; strings.Contains(strings.Join(d.Target.Notes, "\n"), "repository's choice") {
+		t.Errorf("a target on the shipped image is noted: %q", d.Target.Notes)
+	}
+}
