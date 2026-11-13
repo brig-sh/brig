@@ -100,6 +100,10 @@ type Target struct {
 	Root          string
 	ProfileAlias  string
 	ProfileSource string
+	// BuiltIn says the profile is one brig ships, by the Brigfile's builtin:
+	// source. A profile's name cannot say so: a repository can call its own
+	// profile claude-code.
+	BuiltIn bool
 	// Base names where each of the image, the memory, the vCPUs and the
 	// network came from before any flag or setting: the target's overrides,
 	// or its profile. NetworkAsked is not read.
