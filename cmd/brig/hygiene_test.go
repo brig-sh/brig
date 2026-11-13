@@ -127,6 +127,10 @@ func TestParseNetworkAndOffline(t *testing.T) {
 	if o.load.Network != "offline" {
 		t.Errorf("--offline gave network %q, want offline", o.load.Network)
 	}
+	// A message about the posture names the flag that was typed.
+	if o.load.NetworkFlag != "--offline" {
+		t.Errorf("--offline gave network flag %q, want --offline", o.load.NetworkFlag)
+	}
 
 	// Saying both, and disagreeing, is a mistake worth naming rather than a
 	// silent precedence puzzle.

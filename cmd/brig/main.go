@@ -1574,7 +1574,7 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 				"--offline and --network %s ask for different things; --offline is --network offline",
 				o.load.Network)
 		}
-		o.load.Network = "offline"
+		o.load.Network, o.load.NetworkFlag = "offline", "--offline"
 	}
 	// The label is the session, and it lands in the session name, the one
 	// path everything downstream reads -- the slug, the workspace, the sandbox
