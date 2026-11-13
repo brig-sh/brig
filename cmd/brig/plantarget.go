@@ -133,6 +133,20 @@ func planTarget(opts options, wantJSON bool) error {
 			rt.Profile.Source))
 	}
 
+	// A built-in binds your credentials for the image brig ships with it. A
+	// target that keeps the built-in and names another image hands the same
+	// bindings to an image the repository chose, including a variable read
+	// from your environment, which a profile the repository wrote may not
+	// ask for at all. The override is allowed, so the plan says it outright.
+	if rt.Profile.Source.Kind == brigfile.SourceBuiltin && rt.Overrides.Image != nil {
+		note := fmt.Sprintf("The image %s is this repository's choice, not the one brig ships for %s.",
+			*rt.Overrides.Image, rt.Profile.Source.Ref)
+		if refs := bindingRefs(rt.Profile.Profile); len(refs) > 0 {
+			note += fmt.Sprintf("\nIt receives what %s binds: %s.", rt.Profile.Source.Ref, strings.Join(refs, ", "))
+		}
+		target.Notes = append(target.Notes, note)
+	}
+
 	runner, err := detectRuntimeFor(runtime.Preference{Bin: p.RuntimeBin})
 	if err != nil {
 		// As `brig plan <profile>`: a runtime that is not on PATH is a row
@@ -184,6 +198,26 @@ func applyOverrides(rt brigfile.ResolvedTarget) (profile.Profile, wrap.Origins) 
 		p.CPUs, base.CPUs = *o.CPUs, byTarget
 	}
 	return p, base
+}
+
+// bindingRefs is every source a profile's env and file bindings read, each
+// once, in the profile's order: secrets.<name> and env.<NAME>.
+func bindingRefs(p profile.Profile) []string {
+	var out []string
+	add := func(ref string) {
+		if ref != "" && !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	for _, b := range p.Env {
+		for _, ref := range b.RefList() {
+			add(ref)
+		}
+	}
+	for _, f := range p.Files {
+		add(f.Ref)
+	}
+	return out
 }
 
 // targetPolicies is every policy a target's run is bound to, each with where
