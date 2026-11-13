@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -50,24 +50,6 @@ func (r *linkLocalRig) add(t *testing.T, id, internal string) injector.AddRespon
 	}
 	r.settle(t)
 	return added
-}
-
-// settle waits until the broker has settled the renewal journal of every
-// credential it tracks. Registration starts that in the background and it
-// reads the store, so a test that counts reads from the moment add returns
-// would count that one too whenever the goroutine ran late. Recover takes the
-// same turn the background call does: once it returns here, the journal is
-// settled and the background call, whenever it runs, reads nothing.
-func (r *linkLocalRig) settle(t *testing.T) {
-	t.Helper()
-	r.srv.creds.mu.Lock()
-	caches := maps.Clone(r.srv.creds.caches)
-	r.srv.creds.mu.Unlock()
-	for name, cache := range caches {
-		if err := cache.Recover(context.Background(), name); err != nil {
-			t.Fatalf("settle the journal of %s: %v", name, err)
-		}
-	}
 }
 
 // reads is how many times the store was read.
@@ -334,5 +316,35 @@ func TestVendOnlyReadsTheConnectionMarker(t *testing.T) {
 	ll := &arrivedConn{remote: arrivalAddr{prefix: linkLocalArrival, sandbox: "brig-a"}}
 	if !vendOnly(req(divertContext(bg, ll))) {
 		t.Error("a link-local request was not treated as clear text")
+	}
+}
+
+// The read count the tests above rely on does not depend on when the broker
+// gets round to settling a journal. Here that work is held back past the
+// point a test takes its starting count, then run: it reads nothing, because
+// add settled the journal first. Without that, this is the one stray read
+// that failed TestLinkLocalRefusesARouteThatDoesNotVend now and then.
+func TestALateJournalRecoveryReadsNothingAfterAdd(t *testing.T) {
+	rig := newLinkLocalRig(t)
+	var mu sync.Mutex
+	var held []func()
+	rig.srv.creds.spawn = func(work func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		held = append(held, work)
+	}
+	rig.add(t, "brig-a", internalA)
+	mu.Lock()
+	late := held
+	mu.Unlock()
+	if len(late) == 0 {
+		t.Fatal("registration started no journal recovery, so this test holds nothing back")
+	}
+	before := rig.reads()
+	for _, work := range late {
+		work()
+	}
+	if n := rig.reads() - before; n != 0 {
+		t.Errorf("recovery that ran late read the store %d times", n)
 	}
 }

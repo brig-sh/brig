@@ -747,6 +747,11 @@ type credentials struct {
 
 	mu     sync.Mutex
 	caches map[string]*renew.Cache
+
+	// spawn starts background work. It is nil outside tests, which means a
+	// goroutine. A test sets it to hold the work back and run it at a moment
+	// of its choosing, since nothing else can say when a goroutine runs.
+	spawn func(func())
 }
 
 var _ broker.Renewer = (*credentials)(nil)
@@ -787,7 +792,12 @@ func (c *credentials) track(name string, l v1alpha1.Lifecycle) (bool, error) {
 // it, for as long.
 func (c *credentials) recover(name string) {
 	if cache := c.cache(name); cache != nil {
-		go func() { _ = cache.Recover(context.Background(), name) }()
+		work := func() { _ = cache.Recover(context.Background(), name) }
+		if c.spawn != nil {
+			c.spawn(work)
+			return
+		}
+		go work()
 	}
 }
 

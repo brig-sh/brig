@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -194,6 +195,26 @@ type running struct {
 	store  *memStore
 	done   chan error
 	cancel context.CancelFunc
+}
+
+// settle waits until the broker has settled the renewal journal of every
+// credential it tracks. Registration starts that in the background and it
+// reads the store, so a test that counts store reads from the moment a
+// sandbox is added would count that read too whenever the goroutine ran
+// late. Recover takes the same turn the background call does: once it
+// returns here the journal is settled, and the background call, whenever it
+// runs, reads nothing. Any test that counts what the broker did after a
+// registration calls this first.
+func (r *running) settle(t *testing.T) {
+	t.Helper()
+	r.srv.creds.mu.Lock()
+	caches := maps.Clone(r.srv.creds.caches)
+	r.srv.creds.mu.Unlock()
+	for name, cache := range caches {
+		if err := cache.Recover(context.Background(), name); err != nil {
+			t.Fatalf("settle the journal of %s: %v", name, err)
+		}
+	}
 }
 
 // startBroker serves a broker on dir with a memory store and upstream u.
