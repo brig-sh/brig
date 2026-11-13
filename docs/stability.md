@@ -69,8 +69,8 @@ How one secret is laid out in that store is Brig's own. See
 These can change without a deprecation cycle:
 
 - The layout of `~/.brig`, Brig's state directory, its session index, its
-  record of the sessions of Brigfile targets, and the approvals of their
-  runs.
+  record of the sessions of Brigfile targets (`projects.json`), and the
+  approvals of their runs (`approvals.json`).
   This includes the default guest home under `~/.brig/homes`, which Brig
   creates and deletes for you.
 - Profile file fields other than those the current `brig agent export`
@@ -78,8 +78,9 @@ These can change without a deprecation cycle:
 - The wording of any human-readable output. Parse `--json` output and do not
   parse prose.
 - Anything marked "example profile" in `brig agent ls`.
-- The [Brigfile](brigfile.md) format, `brig.sh/v1alpha1`. It is alpha, and
-  a field can be added, renamed or removed in any release.
+- The [Brigfile](brigfile.md) format, `brig.sh/v1alpha1`, and its JSON
+  Schema. It is alpha, and a field can be added, renamed or removed in any
+  release.
 - The Go package `github.com/brig-sh/brig/api/policy/v1alpha1`, which holds
   the policy document types and their validation. It is alpha, and it carries
   no compatibility promise. A field can be added, renamed or removed in any

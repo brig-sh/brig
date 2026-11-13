@@ -195,9 +195,9 @@ can give the agent more access. Plan the target again after you change its
 policies.
 
 A policy with an egress default or a route never leaves the run on the
-shared network, even when you ask for `--network shared`. When two policies cannot apply
-together, for example two routes with the same name, the plan opens with a
-`REFUSED` row.
+shared network, even when you ask for `--network shared`. When two policies
+cannot apply together, for example two routes with the same name, the plan
+opens with a `REFUSED` row.
 
 ## Run a target
 
@@ -218,8 +218,8 @@ read-write at `/work/<name>`, and the agent starts there.
 - `brig run` with no profile and no `--target` runs the Brigfile's
   `defaultTarget`. If the Brigfile names none, Brig lists the targets and
   exits `2`.
-- In a directory with no Brigfile, `brig run` with no profile fails as it
-  did before.
+- In a directory with no Brigfile, `brig run` with no profile exits `1` and
+  asks for a profile.
 
 The line takes no profile and no project. A word before `--` that is not one
 of Brig's flags is a usage error. The line takes `--session`, `-f`,
@@ -503,6 +503,33 @@ boots. It reads your secrets only after you approve.
 With no Brigfile, `target ls`, `config` and `plan --target` exit `3` and say
 where they looked. A Brigfile that does not load exits `1`. See
 [Exit codes](cli.md#exit-codes).
+
+## Check a Brigfile in your editor
+
+The [JSON Schema](../api/project/v1alpha1/brigfile.schema.json) of the
+Brigfile gives your editor validation and completion. `brig init` writes
+this line first in the file, so a starter needs nothing more:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json
+```
+
+The URL resolves once the schema is on the default branch.
+
+To get the same check for every file named `Brigfile` in VS Code, install the
+YAML extension and add this to your settings:
+
+```json
+{
+  "files.associations": { "Brigfile": "yaml" },
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json": "Brigfile"
+  }
+}
+```
+
+The schema checks the shape of the file. Brig applies the other rules when
+it loads the file, so run `brig config` to check the rest.
 
 ## Stability
 
