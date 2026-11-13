@@ -68,7 +68,8 @@ How one secret is laid out in that store is Brig's own. See
 
 These can change without a deprecation cycle:
 
-- The layout of `~/.brig`, Brig's state directory, and its session index.
+- The layout of `~/.brig`, Brig's state directory, its session index and its
+  record of the sessions of Brigfile targets.
   This includes the default guest home under `~/.brig/homes`, which Brig
   creates and deletes for you.
 - Profile file fields other than those the current `brig agent export`
