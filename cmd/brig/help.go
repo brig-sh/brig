@@ -14,12 +14,25 @@ const runUsage = `brig run -- start a sandbox and run an agent
 
 usage:
   brig run [flags] <ref> [project] [args...]
+  brig run --target NAME [--session NAME] [-f PATH] [flags] [-- args...]
+  brig run [flags] [-- args...]
 
 A project is mounted read-write at /work/<name>, and the agent starts there.
 Brig reads its own flags before the ref, and after the ref and the project up
 to the first agent argument. Everything from the first agent argument on is
 the agent's, and -- ends brig's parsing. Put brig's flags before the ref:
 there brig refuses a flag it does not know, so a typo never reaches the agent.
+
+With --target it runs a target of this repository's Brigfile. The directory
+of the Brigfile is the project, so the line takes no ref and no project. The
+agent's arguments go after --, and replace the target's args. With no ref and
+no --target, brig runs the Brigfile's default target.
+
+A run of a target boots only what you approved. Brig shows the plan and asks.
+With no terminal it boots nothing, exits 8 and prints the digest of the
+approval. --approve DIGEST approves that run without a question, for CI. A
+change to the Brigfile, to a file it names, to a setting or to this line asks
+again.
 
 flags:
       --image IMAGE   guest image to boot
@@ -33,6 +46,14 @@ flags:
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable
       --json          run the agent as a child and print one JSON line after it
+
+flags of a run of a target:
+      --target NAME     the target to run
+      --session NAME    a session of the target, with its own sandbox and home
+  -f, --file PATH       read this Brigfile instead of looking for one
+      --approve DIGEST  approve this run by its digest, without a question
+      --recreate        boot the session's sandbox again, on the same guest home,
+                        when its configuration changed
 
 brig help lists every command, every flag and every setting.
 `
@@ -171,7 +192,8 @@ exits 0.
 With --target it plans a target of this repository's Brigfile instead. The
 project is the directory that holds the Brigfile. The plan says where each
 value comes from, where each policy comes from, and the upstream and the
-secrets of every route. brig run does not read a Brigfile yet.
+secrets of every route, and the arguments the agent gets. brig run --target
+shows these rows before it asks you to approve a run.
 
 flags:
       --target NAME   plan this target of the Brigfile

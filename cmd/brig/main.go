@@ -45,6 +45,10 @@ usage:
                                                  project is mounted at
                                                  /work/<name>, and the agent
                                                  starts there
+  brig run  --target NAME [-f PATH] [-- args...]  run a target of this repository's
+                                                 Brigfile, once you approve what
+                                                 it runs. A bare brig run runs
+                                                 its default target
   brig sh   <ref> [command...]                   a login shell inside the sandbox,
                                                  or one command in it
   brig sh   <ref> -c '<script>'                  a script, run by the login shell
