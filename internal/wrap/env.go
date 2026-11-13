@@ -47,8 +47,9 @@ func (e Env) Get(key string) (string, bool) {
 // user reads after setting BRIG_CLAUDE_CODE_ALLOW_DENIED=false is two lies in
 // one line: wrong name and wrong value.
 func (e Env) getNamed(key string) (name, value string, ok bool) {
-	for _, n := range []string{e.prefix + "_" + key, "BRIG_" + key} {
-		if n == "_"+key {
+	for i, n := range []string{e.prefix + "_" + key, "BRIG_" + key} {
+		// No agent, no per-agent name: only the global one is asked for.
+		if i == 0 && e.prefix == "" {
 			continue
 		}
 		if v, ok := e.get(n); ok {

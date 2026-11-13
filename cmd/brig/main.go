@@ -1038,9 +1038,6 @@ func ours(arg string, at position) (mine bool, takesValue bool) {
 	return mine, takesValue
 }
 
-// oursAt is ours with the position the match was found in, which only matters
-// when the search was posAny: a flag brig read nowhere on this line still has a
-// place it belongs, and that is what the tail notice has to name.
 // oursFor is ours on the line of verb: plan reads the flags of posTarget as
 // well as those of the run line.
 func oursFor(verb, arg string, at position) (mine bool, takesValue bool) {
@@ -1050,6 +1047,9 @@ func oursFor(verb, arg string, at position) (mine bool, takesValue bool) {
 	return ours(arg, posTarget)
 }
 
+// oursAt is ours with the position the match was found in, which only matters
+// when the search was posAny: a flag brig read nowhere on this line still has a
+// place it belongs, and that is what the tail notice has to name.
 func oursAt(arg string, at position) (mine bool, takesValue bool, found position) {
 	name, _, inline := strings.Cut(arg, "=")
 	for _, f := range brigFlags {
