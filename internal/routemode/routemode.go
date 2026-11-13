@@ -84,7 +84,7 @@ func Names() []v1alpha1.RouteMode {
 // Served returns whether this build serves mode name. A route that leaves
 // its mode out is in mode endpoint.
 func Served(name v1alpha1.RouteMode) bool {
-	if name == "" || name == v1alpha1.ModeEndpoint {
+	if name == "" || name == v1alpha1.ModeEndpoint || name == v1alpha1.ModeHost {
 		return true
 	}
 	_, ok := Lookup(name)

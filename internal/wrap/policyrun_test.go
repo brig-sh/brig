@@ -399,6 +399,41 @@ func TestARunBoundToARouteIsRefusedBeforeBoot(t *testing.T) {
 	}
 }
 
+// A route in mode host is reached at brig.internal too, so a run whose only
+// route is in mode host is refused on a path that cannot serve it, and the
+// refusal names mode host.
+func TestAHostRouteRunIsRefusedBeforeBootWhereBrigInternalCannotBeServed(t *testing.T) {
+	dir := t.TempDir()
+	doc := "apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: hostonly}\nspec:\n" +
+		"  routes:\n    - name: github-api\n      mode: host\n      upstream: https://api.github.com\n" +
+		"      credential: {secretRef: {name: gh-token}}\n      inject:\n        headers:\n" +
+		"          set: [{name: Authorization, value: \"Bearer {value}\"}]\n" +
+		"      guest:\n        env: {GH_API_URL: \"{route.url}\"}\n"
+	if err := os.WriteFile(filepath.Join(dir, "hostonly.yaml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIG_POLICY_DIR", dir)
+	t.Setenv("BRIG_HYPERVISOR", "vz")
+	t.Setenv("BRIG_NETWORK", "")
+
+	cfg := loadWithPolicy(t, "hostonly")
+	rec := &kindRecorder{kind: "hull"}
+	cfg.Runtime = rec
+	cfg.broker = &fakeBroker{}
+	err := cfg.EnsureRunning(creds.Set{})
+	if err == nil {
+		t.Fatal("a run with only a host route went ahead")
+	}
+	for _, want := range []string{"a route in mode endpoint or host", "vz takes its network from vmnet"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	if len(rec.asked) != 0 {
+		t.Errorf("the runtime was asked %v before the refusal", rec.asked)
+	}
+}
+
 // A policy with routes and no egress block sets no default, so the POLICY row
 // names it and stops there.
 func TestEnvelopeOmitsAnEmptyEgressDefault(t *testing.T) {

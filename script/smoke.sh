@@ -823,7 +823,7 @@ rc=$?
 if [ "$rc" = 0 ]; then
   bad "a run bound to a route was booted on vz, which has no gateway to answer brig.internal"
 else
-  [ "$rc" = 7 ] && grep -q 'declares a route in mode endpoint, which the guest reaches at brig.internal: .*vz takes its network from vmnet' "$WORK/routes-run.out" \
+  [ "$rc" = 7 ] && grep -q 'declares a route in mode endpoint or host, which the guest reaches at brig.internal: .*vz takes its network from vmnet' "$WORK/routes-run.out" \
     && ok "a run bound to a route on vz is refused with exit 7, naming why" \
     || bad "the route refusal on vz does not say why -- got $rc: $(cat "$WORK/routes-run.out")"
 fi
@@ -1143,7 +1143,7 @@ for missing in absent nostore; do
     || bad "brig plan refuses the run whose secret store answers $missing, and its BROKER row says why -- got: $out"
 done
 out="$(env "${ep_env[@]}" "$WORK/brig-stored" plan claude 2>&1)"
-printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; modes endpoint$' \
+printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthropic; kept on the host: claude-credentials; modes endpoint, host$' \
   && ! printf '%s\n' "$out" | grep -q '^REFUSED' \
   && ok "brig plan has a BROKER row for a run with a route" \
   || bad "brig plan has a BROKER row for a run with a route -- got: $out"

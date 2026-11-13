@@ -3,6 +3,7 @@ package broker
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -78,5 +79,23 @@ func TestServeHTTPRefusesARouteInAnotherMode(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("a route in another mode over the endpoint path got %d, want 404", rec.Code)
+	}
+}
+
+// A host route is reached at its own name under brig.internal, so its
+// upstream is not diverted and two of them may share one.
+func TestCheckDivertedRoutesSkipsHostRoutes(t *testing.T) {
+	routes := map[string]*route{}
+	for _, name := range []string{"a", "b"} {
+		r := customRoute(t, name, "https://api.github.com", nil)
+		r.Route.Mode = v1alpha1.ModeHost
+		u, err := url.Parse("https://api.github.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		routes[name] = &route{spec: r.Route, upstream: u}
+	}
+	if err := checkDivertedRoutes(routes); err != nil {
+		t.Errorf("checkDivertedRoutes = %v, want nil", err)
 	}
 }

@@ -1137,3 +1137,48 @@ spec:
 		t.Errorf("storage paths = %v", paths)
 	}
 }
+
+func TestAtBrigInternal(t *testing.T) {
+	for _, c := range []struct {
+		mode RouteMode
+		want bool
+	}{
+		{"", true},
+		{ModeEndpoint, true},
+		{ModeHost, true},
+		{"aws-imds", false},
+	} {
+		if got := c.mode.AtBrigInternal(); got != c.want {
+			t.Errorf("RouteMode(%q).AtBrigInternal() = %v, want %v", c.mode, got, c.want)
+		}
+	}
+}
+
+func TestHostRouteNameMustBeADNSLabel(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		want string
+	}{
+		{"github-", "ends with a dash; a host route name must end with a letter or digit"},
+		{strings.Repeat("a", 64), "is 64 characters; a host route name must be 63 or fewer"},
+		{"github-api", ""},
+	} {
+		for _, mode := range []RouteMode{ModeHost, ModeEndpoint} {
+			r := customRoute()
+			r.Name, r.Mode = c.name, mode
+			err := r.Validate()
+			if mode == ModeEndpoint || c.want == "" {
+				if err != nil {
+					t.Errorf("%s route %q: %v", mode, c.name, err)
+				}
+				continue
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("host route %q: Validate = %v, want %q", c.name, err, c.want)
+			}
+		}
+	}
+	if got := HostName("github-api"); got != "github-api.brig.internal" {
+		t.Errorf("HostName = %q", got)
+	}
+}

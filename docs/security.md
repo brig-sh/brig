@@ -322,7 +322,8 @@ proxy (see
 A [route](policies.md#routes) is the exception. There the sandbox sees a
 session token, which works through its route until it expires or the
 sandbox is stopped. On a run with a route, the guest also trusts the brig
-CA, for `brig.internal` alone. The `aws` route is not such an exception: its
+CA, for `brig.internal` and its subdomains. The CA's name constraint already
+allowed subdomains, so the trust boundary does not move. The `aws` route is not such an exception: its
 guest holds temporary AWS keys. See [The aws route](#the-aws-route).
 
 A route with a client certificate gives the token the certificate's

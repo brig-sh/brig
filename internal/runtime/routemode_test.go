@@ -130,3 +130,17 @@ type kindOnly struct {
 }
 
 func (k kindOnly) Kind() string { return k.kind }
+
+// Host is served wherever endpoint is: both are reached at brig.internal.
+func TestHostModeIsServedWhereEndpointIs(t *testing.T) {
+	n := 0
+	for _, r := range ModeRecords(v1alpha1.ModeEndpoint) {
+		n++
+		if got := ModeAnswer(v1alpha1.ModeHost, r.Path).State; got != r.State {
+			t.Errorf("%v: host is %v, endpoint is %v", r.Path, got, r.State)
+		}
+	}
+	if n == 0 {
+		t.Fatal("the table has no endpoint row")
+	}
+}

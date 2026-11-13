@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/http/httputil"
@@ -30,7 +31,8 @@ import (
 // goes back to the guest.
 const maxReplay = 8 << 20
 
-// ServeHTTP serves /<sandbox-id>/r/<route>/<rest>. The checks run in the order
+// ServeHTTP serves /<sandbox-id>/r/<route>/<rest>, and /<rest> at a host
+// route's own name <route>.brig.internal. The checks run in the order
 // of docs/broker.md, and a request that fails one never reaches the upstream.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := h.now()
@@ -70,21 +72,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, ok := splitRoutePath(r.URL)
-	if !ok {
-		a.check = "path"
-		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
-		return
-	}
-	// A request is served only for a sandbox that reaches the broker where it
-	// arrived. Any other sandbox's path gets the answer of one that does not
-	// exist, before a lookup or a token check could tell the two apart.
-	arrived, ok := h.arrival(p.sandbox, r.RemoteAddr)
-	a.arrived = arrived
-	if !ok {
-		a.check = "arrival"
-		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
-		return
+	// A request that names a host route by its Host is served for the sandbox
+	// whose divert socket it arrived on, and never for one it names itself.
+	var (
+		p        routePath
+		ok       bool
+		hostName string
+	)
+	if name, isHost := hostRoute(r.Host); isHost {
+		hostName = name
+		id, _ := h.arrival("", r.RemoteAddr)
+		a.arrived = id
+		// Loopback names no sandbox, and a clear-text arrival would expose the token.
+		if id == "" || (h.vendOnly != nil && h.vendOnly(r)) {
+			a.check = "arrival"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+		p = routePath{sandbox: id, route: name, rest: r.URL.Path, escapedRest: r.URL.EscapedPath()}
+		if p.rest == "" {
+			p.rest, p.escapedRest = "/", "/"
+		}
+		// OPTIONS * has no slash, and rest must start with one.
+		if !strings.HasPrefix(p.rest, "/") {
+			a.check = "path"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+	} else {
+		p, ok = splitRoutePath(r.URL)
+		if !ok {
+			a.check = "path"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+		// A request is served only for a sandbox that reaches the broker where it
+		// arrived. Any other sandbox's path gets the answer of one that does not
+		// exist, before a lookup or a token check could tell the two apart.
+		var arrived string
+		arrived, ok = h.arrival(p.sandbox, r.RemoteAddr)
+		a.arrived = arrived
+		if !ok {
+			a.check = "arrival"
+			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
 	}
 	a.sandbox, a.route, a.path = p.sandbox, p.route, p.rest
 	sb := h.sandbox(p.sandbox)
@@ -107,9 +139,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
 	}
-	// A route in another mode is not served here. Its policy did not ask for
-	// an endpoint, so its token opens none.
-	if rt.spec.Mode != "" && rt.spec.Mode != v1alpha1.ModeEndpoint {
+	// A route is served only the way its mode asks: a host route by its name,
+	// an endpoint by its path, and a route in any other mode not here.
+	if (hostName != "" && rt.spec.Mode != v1alpha1.ModeHost) ||
+		(hostName == "" && rt.spec.Mode != "" && rt.spec.Mode != v1alpha1.ModeEndpoint) {
 		a.check = "route.mode"
 		http.Error(rec, "brig broker: no such route", http.StatusNotFound)
 		return
@@ -688,6 +721,21 @@ type routePath struct {
 	// rest is the path after the route prefix, decoded, and escapedRest is
 	// the same path as the guest escaped it. Both start with a slash.
 	rest, escapedRest string
+}
+
+// hostRoute reads the route out of a Host of the form <route>.brig.internal.
+// A port, case and one trailing dot are dropped; bare brig.internal and a
+// name with more than one label are not a host route.
+func hostRoute(host string) (string, bool) {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	name, ok := strings.CutSuffix(host, v1alpha1.HostName(""))
+	if !ok || strings.Contains(name, ".") || v1alpha1.CheckRouteName(name) != nil {
+		return "", false
+	}
+	return name, true
 }
 
 // splitRoutePath splits /<sandbox>/r/<route>/<rest>. A sandbox id and a route

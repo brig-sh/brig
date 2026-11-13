@@ -110,7 +110,7 @@ transport where the mode is served.
 | docker | `cannot enforce`: docker manages its own bridges and firewall |
 | hull on a backend, or nerdctl on a shim, that the table does not name | `unknown` |
 
-This build of Brig serves the `endpoint` mode alone. A route in any other
+This build of Brig serves the `endpoint` and `host` modes alone. A route in any other
 mode is refused on every run path, with exit `7`.
 
 A route that vends is also reached at the link-local address
@@ -195,6 +195,7 @@ hull network-gateway --socket <path> --qemu-socket <path>.qemu
      [--egress-allow <rule>]... [--egress-deny <rule>]...   # carrying a policy
      [--divert <gateway-ip>:443=<divert socket>           # a guest that reaches
       --host brig.internal=<gateway-ip>]                   # brig.internal
+     [--host <route>.brig.internal=<gateway-ip>]...       # each host route
      [--divert 169.254.170.2:80=<divert socket>]          # a route that vends
 ```
 

@@ -118,13 +118,13 @@ func loadOrCreateCA(dir string) (*authority, error) {
 	return a, nil
 }
 
-// current returns the brig.internal certificate, signing a new one when the
-// one held expires within leafRenew.
+// current returns the certificate for brig.internal and its subdomains,
+// signing a new one when the one held expires within leafRenew.
 func (a *authority) current(now time.Time) (*tls.Certificate, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.leaf.Certificate == nil || now.Add(leafRenew).After(a.leafEnd) {
-		leaf, err := a.sign(injector.BrigInternal, now)
+		leaf, err := a.sign([]string{injector.BrigInternal, "*." + injector.BrigInternal}, now)
 		if err != nil {
 			return nil, err
 		}
@@ -231,17 +231,17 @@ func createCA(certPath, keyPath string) (*authority, error) {
 	return &authority{cert: cert, key: key}, nil
 }
 
-// sign issues a server certificate for name, with a key that stays in
-// memory.
-func (a *authority) sign(name string, now time.Time) (tls.Certificate, error) {
+// sign issues a server certificate for names, the first of them its common
+// name, with a key that stays in memory.
+func (a *authority) sign(names []string, now time.Time) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial(),
-		Subject:      pkix.Name{CommonName: name},
-		DNSNames:     []string{name},
+		Subject:      pkix.Name{CommonName: names[0]},
+		DNSNames:     names,
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.Add(leafLifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

@@ -125,7 +125,7 @@ func (c *Config) routeRefusal() error {
 	}
 	if c.brigInternal() {
 		if err := c.endpointCheck(); err != nil {
-			return fmt.Errorf("policy %s declares a route in mode endpoint, which the guest reaches at %s: %w",
+			return fmt.Errorf("policy %s declares a route in mode endpoint or host, which the guest reaches at %s: %w",
 				c.endpointList(), injector.BrigInternal, err)
 		}
 	}
@@ -206,11 +206,11 @@ func (c *Config) vendList() string {
 	return strings.Join(names, ", ")
 }
 
-// endpointRoutes are this run's routes in mode endpoint.
+// endpointRoutes are this run's routes in mode endpoint or host.
 func (c *Config) endpointRoutes() []v1alpha1.Route {
 	var out []v1alpha1.Route
 	for _, r := range c.routes {
-		if r.Mode == "" || r.Mode == v1alpha1.ModeEndpoint {
+		if r.Mode.AtBrigInternal() {
 			out = append(out, r)
 		}
 	}

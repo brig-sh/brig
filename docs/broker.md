@@ -69,7 +69,7 @@ brig run claude-code ~/code/demo
 `brig info claude-code` names the broker in its `BROKER` row:
 
 ```
-BROKER  transport brig.internal, routes anthropic; brig-broker pid 4242 on 127.0.0.1:52546; kept on the host: claude-credentials; modes endpoint
+BROKER  transport brig.internal, routes anthropic; brig-broker pid 4242 on 127.0.0.1:52546; kept on the host: claude-credentials; modes endpoint, host
 ```
 
 If the secret store does not hold `claude-credentials`, or does not open,
@@ -903,20 +903,31 @@ An `endpoint` route can never:
 - leave the tool as it is. The tool is pointed at the route URL, and on
   hull and nerdctl it trusts the brig CA for `brig.internal`.
 - serve a tool that pins the upstream's certificate, or that has no setting
-  for its endpoint, such as `gh` for github.com.
+  for its endpoint.
 - keep one session from the tool to the upstream. There are two: the
   tool's to the broker, and the broker's to the upstream.
 - leave a request untouched. The broker reads and forwards every request.
 
-This build of Brig serves the `endpoint` mode alone. A policy that names
-another mode still parses. `brig policy check` refuses the route, and a run
+`host` is an `endpoint` route that the guest reaches at its own name,
+`https://<route>.brig.internal`, for a tool that takes a host name and no
+path. The name of a `host` route is a DNS label: at most 63
+characters, and it does not end with a dash. The broker takes the route from
+the host label and the sandbox from the divert socket, and forwards the whole
+request path. A `host` route is reached at its name only: the path form
+`https://brig.internal/<sandbox-id>/r/<route>` is a `404` with
+`check=route.mode`, and so is a host name that names an `endpoint` route. The
+runtime answers the name with the `brig.internal` address, and the upstream
+of a `host` route is not diverted. `host` runs where `endpoint` runs.
+
+This build of Brig serves the `endpoint` and `host` modes alone. A policy
+that names another mode still parses. `brig policy check` refuses the route, and a run
 refuses it before boot with exit `7`:
 
 ```
 brig: policy claude-relay (route anthropic) declares a route in mode relay: a policy applies to this sandbox, and hull on hvi cannot enforce the route mode relay: route mode relay is not part of this build of brig. Use mode: endpoint, or detach the policy. brig will not boot a sandbox under a policy nothing enforces
 ```
 
-A route in mode `endpoint` is refused where its run path cannot reach the
+A route in mode `endpoint` or `host` is refused where its run path cannot reach the
 broker:
 
 | Where | What is refused |
@@ -932,15 +943,15 @@ broker:
 
 | Transport | Runtime | Route URL |
 | --- | --- | --- |
-| `brig.internal` | hull on `hvi`, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>` |
+| `brig.internal` | hull on `hvi`, nerdctl with urunc | `https://brig.internal/<sandbox-id>/r/<route>`, or `https://<route>.brig.internal` for a `host` route |
 | link-local | hull on `hvi`, nerdctl with urunc, for a route that vends | `http://169.254.170.2/<sandbox-id>/r/<route>` |
 
 **brig.internal.** TLS to a name only Brig serves, with the brig CA trusted
 in the guest. At first start the broker creates the CA, an ECDSA P-256 key in
 `ca.key`. Its name constraints permit `brig.internal` and exclude every IP
 address, so a guest that trusts it trusts no other site. The broker signs a
-certificate for `brig.internal` at every start, and that key stays in
-memory. A broker that runs for 23 days signs a new one.
+certificate for `brig.internal` and `*.brig.internal` at every start, and
+that key stays in memory. A broker that runs for 23 days signs a new one.
 
 The name resolves to the sandbox's own gateway, and its port 443 reaches the
 broker through the sandbox's divert socket:

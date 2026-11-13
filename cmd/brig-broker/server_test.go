@@ -583,7 +583,7 @@ func TestTheBrigCASignsOnlyBrigInternal(t *testing.T) {
 		t.Errorf("the brig.internal certificate does not verify: %v", err)
 	}
 	for _, name := range []string{"api.anthropic.com", "github.com", "evil.brig.internal.example.com"} {
-		forged, err := a.sign(name, time.Now())
+		forged, err := a.sign([]string{name}, time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
