@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brig.sh/schemas/project/v1alpha1/brigfile.schema.json",
+  "title": "Brigfile",
+  "description": "A repository's description of how it runs under brig: profile and policy aliases, and named targets. internal/brigfile is the reader; this schema is for editors.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "targets"],
+  "properties": {
+    "apiVersion": {
+      "const": "brig.sh/v1alpha1"
+    },
+    "name": {
+      "description": "A label for display. Nothing is keyed on it.",
+      "type": "string"
+    },
+    "defaultTarget": {
+      "description": "The target a run uses when it names none. Must name a target.",
+      "$ref": "#/$defs/name"
+    },
+    "profiles": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/profileAlias" }
+    },
+    "policies": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/policyAlias" }
+    },
+    "targets": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/target" }
+    }
+  },
+  "$defs": {
+    "name": {
+      "description": "Lowercase letters, digits, dot, dash and underscore, starting with a letter or digit.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "path": {
+      "description": "A path relative to the directory that holds the Brigfile, separated by /, with no . or .. component.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/~\\\\][^\\\\]*$",
+      "not": { "pattern": "(^|/)(\\.|\\.\\.)?(/|$)" }
+    },
+    "profileAlias": {
+      "description": "Exactly one of from, file or inline.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "from": {
+          "description": "A profile brig ships, as builtin:<name>.",
+          "type": "string",
+          "pattern": "^builtin:[a-z0-9][a-z0-9._-]*$"
+        },
+        "file": { "$ref": "#/$defs/path" },
+        "inline": {
+          "description": "A complete profile document.",
+          "type": "object"
+        }
+      }
+    },
+    "policyAlias": {
+      "description": "Exactly one of file or inline.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "file": { "$ref": "#/$defs/path" },
+        "inline": {
+          "description": "A complete policy document.",
+          "type": "object"
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": {
+          "description": "A profile alias.",
+          "$ref": "#/$defs/name"
+        },
+        "policies": {
+          "description": "Policy aliases, each at most once.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/name" }
+        },
+        "overrides": { "$ref": "#/$defs/overrides" },
+        "args": {
+          "description": "The arguments the guest command gets when the run gives none.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpus": { "type": "integer", "minimum": 1 },
+        "mem": { "description": "Guest memory in MB.", "type": "integer", "minimum": 1 },
+        "image": { "type": "string", "minLength": 1, "pattern": "^\\S+$" }
+      }
+    }
+  }
+}
