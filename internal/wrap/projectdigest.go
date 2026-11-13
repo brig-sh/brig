@@ -51,16 +51,9 @@ type configDigestInput struct {
 // the start, and the worst a new prose field costs is a session reported as
 // changed when it is not.
 func (c *Config) ConfigDigest() string {
-	p := c.Profile
-	// The repository's word for its profile, and the line `brig agent ls`
-	// prints. Neither reaches the sandbox.
-	p.Name, p.Desc = "", ""
-	// Covered below, as resolved.
-	p.Image, p.Mem, p.CPUs = "", 0, 0
-	p.Secrets = append([]profile.SecretDecl(nil), p.Secrets...)
-	for i := range p.Secrets {
-		p.Secrets[i].Hint = ""
-	}
+	// Without its prose, and with the image and the size covered below as
+	// resolved. See digestProfile.
+	p := digestProfile(c.Profile)
 	in := configDigestInput{
 		Version:  configDigestVersion,
 		Profile:  p,
