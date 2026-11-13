@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/graphql"
 	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/tlspem"
 )
@@ -248,7 +249,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
-	if rt.spec.Request != nil {
+	// With request.allow.graphql, only that rule governs /api/graphql, and
+	// the rest of the API is read-only under methods and paths.
+	gq := graphQLRules(rt)
+	isGraphQL := false
+	if gq != nil {
+		var reason string
+		isGraphQL, reason = graphQLEndpoint(r, p)
+		if reason != "" {
+			refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql", reason)
+			return
+		}
+	}
+	if rt.spec.Request != nil && !isGraphQL {
 		if ref := allow(rt.spec.Request.Allow, r.Method, p.rest); ref != nil {
 			refuseRule(rec, a, rt, p, "request.allow."+ref.field, ref.rule(routeRule(p.route)), ref.reason)
 			return
@@ -265,6 +278,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if out, ok = githubAPIPath(p); !ok {
 			a.check = "github-api.path"
 			http.Error(rec, "brig broker: no such route", http.StatusNotFound)
+			return
+		}
+	}
+	var gqRepos []graphql.Repo
+	if isGraphQL {
+		var reason string
+		if gqRepos, reason = checkGraphQL(r, held, gq); reason != "" {
+			refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql", reason)
 			return
 		}
 	}
@@ -310,6 +331,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			credentialRefusal(rec, a, p, err)
 			return
 		}
+	}
+	if reason := h.confirmRepos(r, rt, upstream, value, gqRepos); reason != "" {
+		refuseRule(rec, a, rt, p, "request.allow.graphql", routeRule(p.route)+".request.allow.graphql.repos", reason)
+		return
 	}
 	h.forward(rec, r, a, out, rt, upstream, token, wl, doc, value, held)
 }

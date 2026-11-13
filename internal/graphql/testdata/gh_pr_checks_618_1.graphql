@@ -1,0 +1,5 @@
+query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr_number) {number,headRefName,id}
+    }
+  }
