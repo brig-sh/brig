@@ -411,7 +411,7 @@ user presents that certificate. Brig does not choose between certificates.
 
 ### Placeholders
 
-A route names values that the guest never holds through four placeholders:
+A route names values that the guest never holds through five placeholders:
 
 | Placeholder | Where | What it stands for |
 | --- | --- | --- |
@@ -419,15 +419,17 @@ A route names values that the guest never holds through four placeholders:
 | `{route.url}` | a `guest.env` value | the URL of the route |
 | `{session.token}` | a `guest.env` value | the session token of the route |
 | `{route.region}` | a `guest.env` value of a route on the `aws` preset | the region of the route's AWS profile |
+| `{route.host}` | a `guest.env` value of a route in `mode: host` | the host name of the route, `<route>.brig.internal` |
 
-A `guest.env` value is one of the last three placeholders, and nothing else.
-Brig refuses `{route.region}` on a route that is not on the `aws` preset.
+A `guest.env` value is one of the last four placeholders, and nothing else.
+Brig refuses `{route.region}` on a route that is not on the `aws` preset, and
+`{route.host}` on a route that is not in `mode: host`.
 Brig refuses a literal, so a route cannot put a value of its own into the
 guest's environment:
 
 ```console
 $ brig policy edit claude-only
-brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal
+brig: not saved, /home/you/.config/brig/policies/claude-only.yaml is unchanged: route anthropic: guest.env ANTHROPIC_API_KEY is a literal; a value is {route.url}, {session.token}, {route.region} or {route.host}, never a literal
 your edit is still at /tmp/brig-policy-edit-2427992151.yaml
 ```
 
@@ -1100,7 +1102,7 @@ removed /home/you/.config/brig/policies/locked-down.yaml
 | `the file holds more than one YAML document; one file is one document` | a second document after `---` |
 | `route x: mode: name "…" may use only lowercase letters, …` | a route's `mode` is not a name |
 | `policy x (route y) declares a route in mode m, and brig refuses the run before boot: … route mode m is not part of this build of brig. …` | `check` on a profile bound to a route in a mode this build does not serve. A run, `sh` or plan refuses it the same way, and exits `7` |
-| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token} or {route.region}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
+| `route x: guest.env NAME is a literal; a value is {route.url}, {session.token}, {route.region} or {route.host}, never a literal` | a `guest.env` value that is not one of the placeholders. The error leaves the value out |
 | `route x: upstream "…" has a path; write the bare origin, https://host[:port]` | an `upstream` with a path, a query or a fragment, or not in canonical form |
 | `route x: inject.headers.set names NAME, which inject.headers.remove drops first; …` | a header named in both `set` and `remove` |
 | `route x: … names Host, which the broker sets itself` | a header list names a header that the broker owns |

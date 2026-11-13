@@ -1058,8 +1058,8 @@ once, and 512 of every sandbox together. A connection over either is closed.
 ## What the guest gets
 
 Brig mints a token per route on every exec and hands the guest the route's
-`guest.env`, with `{route.url}`, `{session.token}` and `{route.region}`
-filled in. A token is never on a command line. A guest that reaches
+`guest.env`, with `{route.url}`, `{session.token}`, `{route.region}` and
+`{route.host}` filled in. A token is never on a command line. A guest that reaches
 `brig.internal` also gets the CA variables of [Transports](#transports). Per
 preset:
 
