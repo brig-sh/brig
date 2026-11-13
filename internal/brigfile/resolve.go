@@ -234,7 +234,7 @@ func refuseHostFields(p profile.Profile) error {
 		return fmt.Errorf("projectPaths names directories on your host that brig copies into " +
 			"the guest; a repository profile may not set it")
 	}
-	// The network a sandbox gets is isolated unless something asks for less.
+	// The network a sandbox gets is isolated where the backend can give one.
 	// A repository may ask for more isolation, never for less: shared puts
 	// the guest on a network with other sandboxes and the host's own
 	// services, and that is the reader's to choose, with --network.
