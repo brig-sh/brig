@@ -1,0 +1,15 @@
+# The github-api preset: gh against api.github.com. gh takes no API URL for
+# github.com, so GH_HOST names the route and gh calls it as an Enterprise
+# host; the broker maps those paths to api.github.com.
+name: github-api
+mode: host
+modes: [host]
+upstream: https://api.github.com
+inject:
+  headers:
+    set:
+      - { name: Authorization, value: "Bearer {value}" }
+guest:
+  env:
+    GH_HOST: "{route.host}"
+    GH_ENTERPRISE_TOKEN: "{session.token}"

@@ -2491,3 +2491,35 @@ func TestShowPolicyCommentsTheRouteNotLookalikeMetadata(t *testing.T) {
 		t.Errorf("annotation round trip = %q, want %q", got, note)
 	}
 }
+
+// githubAPIPolicy writes the github-api route as a policy does: a preset and
+// no mode, which the preset file supplies.
+func githubAPIPolicy() policy.Policy {
+	var p policy.Policy
+	p.Metadata.Name = "gh"
+	p.Spec.Routes = []v1alpha1.Route{{Name: "github-api", Preset: "github-api"}}
+	return p
+}
+
+// A route that names a preset and no mode prints the preset's mode, not the
+// endpoint default, so check agrees with show and the run.
+func TestPolicyCheckPrintsThePresetsMode(t *testing.T) {
+	stderr := captureStderr(t, func() { printRoutes(githubAPIPolicy()) })
+	want := "  route github-api  preset github-api  mode host\n"
+	for _, rec := range runtime.ModeRecords(v1alpha1.ModeHost) {
+		want += "    " + rec.Path.String() + "  " + rec.Line() + "\n"
+	}
+	if stderr != want {
+		t.Errorf("stderr printed:\n%s\nwant:\n%s", stderr, want)
+	}
+}
+
+func TestRouteModesGroupsAPresetRouteByItsMode(t *testing.T) {
+	_, byMode := routeModes([]policy.Policy{githubAPIPolicy()})
+	if got := byMode[v1alpha1.ModeHost]; len(got) != 1 || got[0] != "gh (route github-api)" {
+		t.Errorf("host routes = %v, want [gh (route github-api)]", got)
+	}
+	if got := byMode[v1alpha1.ModeEndpoint]; len(got) != 0 {
+		t.Errorf("endpoint routes = %v, want none", got)
+	}
+}

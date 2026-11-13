@@ -136,10 +136,12 @@ func collect(node any, name string, found *[]any) {
 // vends, an Authorization value of one word is the token too: the AWS SDK
 // sends the container authorization token as it is, with no scheme. No other
 // route reads it, so a token sent that way to a proxying route is refused.
+// On the github-api route, Authorization: token is read too, since gh sends
+// its token with that scheme.
 func sessionToken(spec *v1alpha1.Route, h http.Header) string {
 	in, vends := spec.Inject, spec.Vends()
 	auth := h.Get("Authorization")
-	if scheme, tok, ok := strings.Cut(auth, " "); ok && strings.EqualFold(scheme, "Bearer") {
+	if scheme, tok, ok := strings.Cut(auth, " "); ok && carrierScheme(spec, scheme) {
 		return strings.TrimSpace(tok)
 	}
 	if in.BasicAuth != nil {
@@ -169,6 +171,13 @@ func sessionToken(spec *v1alpha1.Route, h http.Header) string {
 		}
 	}
 	return ""
+}
+
+// carrierScheme reports whether scheme, in an Authorization value, carries the
+// session token on this route: Bearer, and on github-api also gh's token.
+func carrierScheme(spec *v1alpha1.Route, scheme string) bool {
+	return strings.EqualFold(scheme, "Bearer") ||
+		spec.Preset == v1alpha1.PresetGitHubAPI && strings.EqualFold(scheme, "token")
 }
 
 // droppedNames are guest headers that never reach the upstream. Each one

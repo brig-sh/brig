@@ -56,7 +56,7 @@ func TestShippedPresetsValidate(t *testing.T) {
 	names := PresetNames()
 	want := []v1alpha1.Preset{
 		v1alpha1.PresetAnthropicAPIKey, v1alpha1.PresetAWS, v1alpha1.PresetClaudeCode,
-		v1alpha1.PresetGCP, v1alpha1.PresetGitHubToken,
+		v1alpha1.PresetGCP, v1alpha1.PresetGitHubAPI, v1alpha1.PresetGitHubToken,
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("PresetNames() = %v, want %v", names, want)
@@ -441,13 +441,18 @@ func relayMode(t *testing.T, check func(base, written, expanded v1alpha1.Route) 
 		Presets: []v1alpha1.Preset{v1alpha1.PresetClaudeCode}, Check: check}))
 }
 
-// Every preset brig ships lists endpoint first, and a registered mode adds
-// itself to the presets it names and to no other.
+// Every preset brig ships lists endpoint first, except github-api, which is
+// reached by host alone, and a registered mode adds itself to the presets it
+// names and to no other.
 func TestPresetsListTheirModes(t *testing.T) {
 	for _, name := range PresetNames() {
 		got, err := PresetModes(name)
-		if err != nil || len(got) == 0 || got[0] != v1alpha1.ModeEndpoint || slices.Contains(got, "relay") {
-			t.Errorf("PresetModes(%s) = %v, %v, want endpoint first", name, got, err)
+		first := v1alpha1.ModeEndpoint
+		if name == v1alpha1.PresetGitHubAPI {
+			first = v1alpha1.ModeHost
+		}
+		if err != nil || len(got) == 0 || got[0] != first || slices.Contains(got, "relay") {
+			t.Errorf("PresetModes(%s) = %v, %v, want %s first", name, got, err, first)
 		}
 	}
 	if _, err := PresetModes("openai"); err == nil {
@@ -774,5 +779,43 @@ func TestRoutesRefuseAGuestEnvThatClashesWithAGCPOverride(t *testing.T) {
 	// Without a route with services, an override is an ordinary name.
 	if _, err := Routes([]Policy{custom("CLOUDSDK_API_ENDPOINT_OVERRIDES_COMPUTE")}); err != nil {
 		t.Errorf("Routes = %v, want an override allowed when no route has services", err)
+	}
+}
+
+func TestGitHubAPIPresetExpands(t *testing.T) {
+	got, err := ExpandRoute(v1alpha1.Route{
+		Name: "github-api", Preset: v1alpha1.PresetGitHubAPI,
+		Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "brig-gh-token"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != v1alpha1.ModeHost || got.Upstream != "https://api.github.com" {
+		t.Errorf("mode %q, upstream %q", got.Mode, got.Upstream)
+	}
+	if got.Guest == nil || got.Guest.Env["GH_HOST"] != v1alpha1.PlaceholderRouteHost ||
+		got.Guest.Env["GH_ENTERPRISE_TOKEN"] != "{session.token}" {
+		t.Errorf("guest env = %+v", got.Guest)
+	}
+	if got.Inject == nil || got.Inject.Headers == nil || len(got.Inject.Headers.Set) != 1 ||
+		got.Inject.Headers.Set[0].Name != "Authorization" || got.Inject.Headers.Set[0].Value != "Bearer {value}" {
+		t.Errorf("inject = %+v", got.Inject)
+	}
+}
+
+// request.allow.repos is the github-token preset's alone.
+func TestGitHubAPIPresetRefusesRepos(t *testing.T) {
+	r := withSecret(v1alpha1.PresetGitHubAPI)
+	r.Request = &v1alpha1.RequestPolicy{Allow: &v1alpha1.RequestAllow{Repos: []string{"o/r"}}}
+	if _, err := ExpandRoute(r); err == nil || !strings.Contains(err.Error(), "repos") {
+		t.Errorf("repos on github-api: %v", err)
+	}
+}
+
+func TestGitHubAPIPresetRefusesEndpointMode(t *testing.T) {
+	r := withSecret(v1alpha1.PresetGitHubAPI)
+	r.Mode = v1alpha1.ModeEndpoint
+	if _, err := ExpandRoute(r); err == nil || !strings.Contains(err.Error(), "supports mode host") {
+		t.Errorf("endpoint on github-api: %v", err)
 	}
 }
