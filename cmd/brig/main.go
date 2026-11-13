@@ -554,16 +554,28 @@ func dispatch(args []string) error {
 	// -f names the Brigfile a target is read from. With no target there is
 	// nothing to read it for, and a plan of a profile that ignored it would
 	// look like a plan of the file. --session names a session of a target.
-	if opts.fileGiven && !opts.targetGiven {
+	// --approve and --recreate decide whether a run of a target boots, and
+	// on what. Anywhere else they would do nothing, which is worse than a
+	// refusal.
+	if (opts.approveGiven || opts.recreate) && !(verb == "run" && opts.targetLine) {
+		return usagef("--approve and --recreate go with `brig run --target <name>`, not `brig %s`", verb)
+	}
+	// A run line that names no ref reads the Brigfile's default target, so
+	// -f and --session stand without --target there. See runTarget.
+	runsTarget := verb == "run" && opts.targetLine
+	if opts.fileGiven && !opts.targetGiven && !runsTarget {
 		return usagef("-f names the Brigfile of --target; `brig %s -f <path>` needs --target <name> too", verb)
 	}
-	if opts.sessionGiven && !opts.targetGiven {
+	if opts.sessionGiven && !opts.targetGiven && !runsTarget {
 		return usagef("--session names a session of a Brigfile target; `brig %s --session <name>` "+
 			"needs --target <name> too. A session of a profile is <profile>@<name>", verb)
 	}
 	// The run line is read, and nothing has booted: the question, when
 	// there is one, comes now.
 	askTelemetry(wantJSON)
+	if runsTarget {
+		return runTarget(opts, tail, wantJSON)
+	}
 	if opts.targetGiven {
 		if verb == "plan" {
 			return planTarget(opts, wantJSON)
@@ -789,6 +801,12 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 	if err := cfg.EnsureRunning(set); err != nil {
 		return err
 	}
+	return handOver(cfg, set, t, tail, detach, wantJSON)
+}
+
+// handOver is what a run does once its sandbox is up: leave it, show its
+// window, or hand the terminal to the agent or the shell.
+func handOver(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string, detach, wantJSON bool) error {
 	// Each branch below has a --json form: the object stands in for the text it
 	// would otherwise print, because a script asked for one machine-readable line
 	// and a bare name or a warning beside it would be the noise --json exists to
@@ -837,7 +855,18 @@ func runAgent(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 
 // agentArgs adds the agent's own session-name flag, so the name you typed
 // travels in unchanged as the display name while only the paths use the slug.
+//
+// A target has no ref to name, and its profile's name is the repository's
+// word: a profile it calls claude-code may run anything, and --name means
+// what that program says. So a target gets the flag only when the Brigfile
+// runs the claude-code brig ships, and only for a session with a name.
 func agentArgs(cfg *wrap.Config, t profile.Profile, tail []string) []string {
+	if target, ok := cfg.TargetOf(); ok {
+		if target.Session != "" && target.ProfileSource == "builtin:claude-code" {
+			return append([]string{"--name", target.Session}, tail...)
+		}
+		return tail
+	}
 	if cfg.RawName != "" && t.Name == "claude-code" {
 		return append([]string{"--name", cfg.RawName}, tail...)
 	}
@@ -863,6 +892,16 @@ type options struct {
 	targetGiven  bool
 	fileGiven    bool
 	sessionGiven bool
+	// targetLine is a run line that names no ref: `brig run --target <name>`,
+	// or a bare `brig run`. argsGiven says it had a --, after which the
+	// agent's arguments replace the target's own, even when there are none.
+	targetLine bool
+	argsGiven  bool
+	// approve is the digest --approve gave, and recreate is --recreate. Only
+	// a run of a target reads them.
+	approve      string
+	approveGiven bool
+	recreate     bool
 }
 
 // repeated collects a flag written more than once, in the order it was
@@ -948,7 +987,9 @@ var brigFlags = []struct {
 	// continue a session rather than shape a fresh run, so they read such a
 	// flag in no position at all. On the row rather than in a list beside the
 	// table, so a new run-only flag declares itself where its position is
-	// declared and honorsRunLine cannot fall behind it.
+	// declared and honorsRunLine cannot fall behind it. On a posTarget row it
+	// marks a flag that only `brig run --target` reads, and plan, stop and rm
+	// do not offer it.
 	runOnly bool
 }{
 	{long: "image", value: true, position: posRun},
@@ -1015,11 +1056,18 @@ var brigFlags = []struct {
 	// the flag falls into the tail and is read as a port.
 	{long: "json", position: posPublish},
 	// --target names a target of the Brigfile in place of a ref, --session
-	// one of its sessions, and -f the Brigfile. plan, stop and rm read them,
-	// and run does not yet.
+	// one of its sessions, and -f the Brigfile. plan, stop and rm read them.
+	// run reads them only on a line that names no ref: after a ref they are
+	// the agent's, as -f is to many agents. See runTargetLine.
 	{long: "target", value: true, position: posTarget},
 	{long: "session", value: true, position: posTarget},
 	{long: "file", short: "f", value: true, position: posTarget},
+	// --approve gives the approval of a target's run on the line, by its
+	// digest, for a run with nobody to ask. --recreate boots a session whose
+	// configuration changed on a new sandbox. Both are run's, on a target
+	// line only, so after the ref of a profile they stay the agent's.
+	{long: "approve", value: true, position: posTarget, runOnly: true},
+	{long: "recreate", position: posTarget, runOnly: true},
 }
 
 // removedFlags are the run-line spellings brig no longer reads, each with what
@@ -1071,8 +1119,42 @@ func oursFor(verb, arg string, at position) (mine bool, takesValue bool) {
 
 // readsTarget reports whether verb reads --target, --session and -f: plan,
 // which plans a target, and stop and rm, which reach a session of one. run
-// does not, so `brig run <agent> -f x` still hands -f to the agent.
+// reads them only on a line that names no ref, which runTargetLine decides,
+// so `brig run <agent> -f x` still hands -f to the agent.
 func readsTarget(verb string) bool { return verb == "plan" || verb == "stop" || verb == "rm" }
+
+// runTargetLine reports whether a run line names a target of the Brigfile
+// rather than a ref: --target stands before the first bare word, or there is
+// no bare word before --. Only the flags before the first bare word count.
+// After the ref every word is the agent's, so `brig run claude --target x`
+// stays a run of claude that hands --target x to the agent.
+//
+// It walks the line the way split does, so a flag's value is never read as
+// a bare word or as --target: `brig run --image --target claude` is a run of
+// claude with an image called --target.
+func runTargetLine(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return true
+		}
+		if !strings.HasPrefix(a, "-") {
+			return false
+		}
+		name, _, inline := strings.Cut(a, "=")
+		if name == "--target" {
+			return true
+		}
+		mine, takesValue := ours(a, posRun)
+		if !mine {
+			mine, takesValue = ours(a, posTarget)
+		}
+		if mine && takesValue && !inline {
+			i++
+		}
+	}
+	return true
+}
 
 // oursAt is ours with the position the match was found in, which only matters
 // when the search was posAny: a flag brig read nowhere on this line still has a
@@ -1258,6 +1340,9 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 		at = posPublish
 	}
 	passed := false
+	// A run line that names a target has no ref, no project and no tail
+	// before --. See runTargetLine.
+	target := verb == "run" && runTargetLine(args)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -1273,6 +1358,11 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 			// holds for ports read before it.
 			return mine, ref, word, append(tail, args[i+1:]...), nil
 		case !strings.HasPrefix(a, "-"):
+			if target {
+				return nil, session.Ref{}, "", nil, usagef("unexpected argument %q; `brig run --target` runs a "+
+					"target of the Brigfile, whose directory is the project, so it takes no profile and no "+
+					"project. The agent's arguments go after --, or drop --target to run a profile", a)
+			}
 			if !passed {
 				if ref, err = session.ParseRef(a); err != nil {
 					// A ref brig cannot read is a mistyped command, not a
@@ -1314,6 +1404,13 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				}
 			}
 			isOurs, takesValue := oursFor(verb, a, at)
+			if !isOurs && target {
+				isOurs, takesValue = ours(a, posTarget)
+			}
+			if !isOurs && target {
+				return nil, session.Ref{}, "", nil, usagef("unknown flag %q; `brig run --target` reads brig's "+
+					"own flags, and the agent's arguments go after --", a)
+			}
 			if !isOurs {
 				// An unknown flag once the ref is named is the agent's:
 				// `brig run claude --resume` runs the agent with --resume, and
@@ -1620,6 +1717,10 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		{"target", "", func(n string) { fs.StringVar(&o.target, n, "", "") }},
 		{"session", "", func(n string) { fs.StringVar(&o.session, n, "", "") }},
 		{"file", "f", func(n string) { fs.StringVar(&o.file, n, "", "") }},
+		// Only a run of a target reads these, and split only lets them
+		// through on a line that names one.
+		{"approve", "", func(n string) { fs.StringVar(&o.approve, n, "", "") }},
+		{"recreate", "", func(n string) { fs.BoolVar(&o.recreate, n, false, "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
 		// lands in one place and the last one on the line wins.
@@ -1633,13 +1734,17 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// A missing target or Brigfile is a word left off the line, and
 		// `brig config --target` calls it a usage error, so plan does too.
 		if name, ok := strings.CutPrefix(err.Error(), "flag needs an argument: "); ok &&
-			(name == "-target" || name == "-session" || name == "-file" || name == "-f") {
+			(name == "-target" || name == "-session" || name == "-file" || name == "-f" || name == "-approve") {
 			return options{}, "", nil, usagef("%s", rewriteFlagError(err))
 		}
 		return options{}, "", nil, rewriteFlagError(err)
 	}
 	o.targetGiven, o.fileGiven = seen(fs, "target"), seen(fs, "file", "f")
 	o.sessionGiven = seen(fs, "session")
+	o.approveGiven = seen(fs, "approve")
+	if verb == "run" && runTargetLine(args) {
+		o.targetLine, o.argsGiven = true, hasArgsMarker(args)
+	}
 	if o.sessionGiven {
 		if err := checkTargetSession(o.session); err != nil {
 			return options{}, "", nil, err
@@ -1684,6 +1789,27 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		o.load.Name, o.nameGiven = ref.Label, true
 	}
 	return o, ref.Agent, tail, nil
+}
+
+// hasArgsMarker reports whether a run line that names a target has a -- where
+// brig reads flags. It walks the line as runTargetLine does, so a -- that is
+// a flag's value is not the marker.
+func hasArgsMarker(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return true
+		}
+		_, _, inline := strings.Cut(a, "=")
+		mine, takesValue := ours(a, posRun)
+		if !mine {
+			mine, takesValue = ours(a, posTarget)
+		}
+		if mine && takesValue && !inline {
+			i++
+		}
+	}
+	return false
 }
 
 // number is one of brig's numeric flags as it was given: the text typed, and
