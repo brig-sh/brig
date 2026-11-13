@@ -5,8 +5,9 @@
 // general failure, 2 a usage error, 3 no such profile or sandbox, 4 a runtime
 // that is missing or broken, 5 a boot verification refused, 6 a credential that
 // could not be resolved, 7 a run path that cannot enforce a property the run
-// asks for. A caller that only checked "zero or not" keeps working;
-// one that wants to branch on the reason now can.
+// asks for, 8 a run of a Brigfile target that no approval covers. A caller
+// that only checked "zero or not" keeps working; one that wants to branch on
+// the reason now can.
 //
 // cmd/brig/exit.go is the other producer of these numbers -- it classifies the
 // same internal error types for the CLI. It is package main and cannot be
@@ -35,6 +36,7 @@ const (
 	Verify      = 5
 	Credentials = 6
 	Capability  = 7
+	Approval    = 8
 )
 
 // UsageError marks a request brigd refused as malformed: an unknown op, an
@@ -85,6 +87,12 @@ func Of(err error) int {
 	var vr *wrap.VerifyRefusedError
 	if errors.As(err, &vr) {
 		return Verify
+	}
+	// A session of a Brigfile target that the gate did not admit. brigd never
+	// admits one: only `brig run --target` asks.
+	var ar *wrap.ApprovalRequiredError
+	if errors.As(err, &ar) {
+		return Approval
 	}
 	// Both credential-failure shapes -- a required secret the store did not have
 	// and a store that could not be opened -- are one class here.
