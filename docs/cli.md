@@ -115,8 +115,8 @@ brig run --target <name> [--session <name>] [-f <path>] [flags] [-- args...]
 
 The run boots only what you approved. Brig shows the plan of the run and
 asks. A yes is stored, and the next run with the same configuration asks
-nothing. With no terminal, or with `--json`, the run boots nothing, exits
-`8`, and prints the digest of the approval. See
+nothing. With no terminal, or with `--json`, a run that no stored approval
+covers boots nothing, exits `8`, and prints the digest of the approval. See
 [The approval](brigfile.md#the-approval).
 
 | Flag | What it does |
