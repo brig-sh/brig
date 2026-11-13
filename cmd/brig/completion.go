@@ -291,6 +291,12 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	}
 
 	if line.pending != "" && !strings.HasPrefix(cur, "-") {
+		switch line.pending {
+		case "--target":
+			return names(cur, brigfileTargets(fileOnLine(rest)))
+		case "-f", "--file":
+			return dirFiles, nil
+		}
 		return operandCandidates(flagValue(line.pending), cur)
 	}
 
@@ -298,9 +304,13 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	// "=", so in zsh and fish the whole thing is the current word and would
 	// otherwise be matched against flag names, which it cannot match.
 	if flag, prefix, ok := inlineValue(cur); ok {
-		mine, takesValue := ours(flag, verbPosition(verb))
+		mine, takesValue := oursFor(verb, flag, verbPosition(verb))
 		if !mine || !takesValue {
 			return dirNone, nil
+		}
+		if flag == "--target" {
+			directive, candidates := names(prefix, brigfileTargets(fileOnLine(rest)))
+			return qualify(flag, directive, candidates)
 		}
 		directive, candidates := operandCandidates(flagValue(flag), prefix)
 		return qualify(flag, directive, candidates)
@@ -311,6 +321,12 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		// only at a flag brig does not own, so offer them on both sides too.
 		// `brig run claude --mem 4096` is a line brig parses.
 		flags := flagSpellings(verbPosition(verb), verb)
+		// plan names a target of the Brigfile in place of a ref, so it
+		// offers --target and -f until a ref is named.
+		if verb == "plan" && !line.refGiven {
+			flags = append(flags, flagSpellings(posTarget, "")...)
+			sort.Strings(flags)
+		}
 		if verb == "rm" {
 			// rm's own flags are not in brigFlags: they are read before the run
 			// line. --dry-run goes on either side of the ref; --all replaces the
@@ -325,6 +341,10 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	}
 
 	if !line.refGiven {
+		// A plan of a target takes no ref, and no project.
+		if verb == "plan" && hasTargetFlag(rest) {
+			return dirNone, nil
+		}
 		return names(cur, refsFor(verb))
 	}
 	// On run and plan the first bare word after the ref is the project
@@ -378,7 +398,7 @@ func walkRunLine(verb string, args []string) runLine {
 			line.tailBegun = true
 			return line
 		default:
-			mine, takesValue := ours(a, at)
+			mine, takesValue := oursFor(verb, a, at)
 			if !mine {
 				if line.refGiven {
 					line.tailBegun = true
@@ -401,14 +421,14 @@ func walkRunLine(verb string, args []string) runLine {
 			}
 		}
 	}
-	line.pending = pendingFlag(args)
+	line.pending = pendingFlag(verb, args)
 	return line
 }
 
 // pendingFlag returns the flag whose value the cursor is on: the last token,
 // when it is a brig flag that takes a value. A trailing "=" is skipped, so
 // `--network=<cursor>` completes like `--network <cursor>`.
-func pendingFlag(args []string) string {
+func pendingFlag(verb string, args []string) string {
 	if len(args) == 0 {
 		return ""
 	}
@@ -416,11 +436,25 @@ func pendingFlag(args []string) string {
 	if last == "=" && len(args) > 1 {
 		last = args[len(args)-2]
 	}
-	mine, takesValue := ours(last, posRun)
+	mine, takesValue := oursFor(verb, last, posRun)
 	if !mine || !takesValue || strings.Contains(last, "=") {
 		return ""
 	}
 	return last
+}
+
+// hasTargetFlag reports whether a plan line names a target, as --target or
+// --target=<name>.
+func hasTargetFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--target" || strings.HasPrefix(a, "--target=") {
+			return true
+		}
+	}
+	return false
 }
 
 // hasSpelling reports whether args contains this exact token.

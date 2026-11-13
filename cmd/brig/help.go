@@ -140,6 +140,7 @@ const planUsage = `brig plan -- print the permissions a run would get
 
 usage:
   brig plan <ref> [project]
+  brig plan --target NAME [-f PATH]
 
 Prints the mounts, the network, the policies, the limits, the image, the
 runtime and the credentials of a run, by name. It boots nothing and opens no
@@ -148,7 +149,14 @@ brig run does, so brig plan claude ~/src/demo previews that first run, and a
 run brig would refuse opens the plan with a REFUSED row while plan still
 exits 0.
 
+With --target it plans a target of this repository's Brigfile instead. The
+project is the directory that holds the Brigfile. The plan says where each
+value comes from, where each policy comes from, and the upstream and the
+secrets of every route. brig run does not read a Brigfile yet.
+
 flags:
+      --target NAME   plan this target of the Brigfile
+  -f, --file PATH     with --target: read this Brigfile instead of looking for one
       --image IMAGE   guest image to boot
       --home PATH     host directory to mount as the guest home
       --no-project    plan with no project, even one the session ran with last
