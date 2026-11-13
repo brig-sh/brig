@@ -13,6 +13,7 @@ import (
 	"github.com/brig-sh/brig/internal/brigfile"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
+	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/wrap"
 )
 
@@ -748,5 +749,30 @@ func TestRunTargetApprovalIsInvalidatedByAnAttachment(t *testing.T) {
 	attach(t, "no-net", "claude-code")
 	if got := changedAfter(t, "-d"); !strings.Contains(got, "policy no-net, from attachment to claude-code is new") {
 		t.Errorf("the change list does not name the attachment:\n%s", got)
+	}
+}
+
+// No secret value is read before the approval: not when the run is refused
+// with no terminal, and not when you answer no. The store is listed, by
+// name, so the plan can say what is there. After a yes the value is read.
+func TestRunTargetReadsNoSecretBeforeTheApproval(t *testing.T) {
+	runHost(t, nil)
+	f := &readCountingFake{fakeStore: newFake(t)}
+	f.seed("tok", plantedValue)
+	swap(t, &openStore, func() (secret.Store, error) { return f, nil })
+	_, _, err := runQuiet(t, "run", "--target", "dev")
+	exitOf(t, err, 8)
+	answer(t, strings.NewReader("n\n"))
+	_, _, err = runQuiet(t, "run", "--target", "dev")
+	exitOf(t, err, 8)
+	if f.reads != 0 {
+		t.Errorf("%d secret values were read before an approval", f.reads)
+	}
+	answer(t, strings.NewReader("y\n"))
+	if _, stderr, err := runQuiet(t, "run", "--target", "dev"); err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr)
+	}
+	if f.reads == 0 {
+		t.Error("the approved run read no value, so this test proves nothing")
 	}
 }
