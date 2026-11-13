@@ -962,6 +962,30 @@ source of a secret, a variable from your environment, the shared network or a
 hypervisor. See
 [What a repository profile may not set](brigfile.md#what-a-repository-profile-may-not-set).
 
+### What reading a Brigfile does
+
+**A file that a Brigfile names must lie inside the project.** A path that is
+absolute or climbs out with `..` is refused. A link that leaves the project
+is refused, and the file it points to is not loaded. A link that stays inside
+the project is accepted.
+
+**`builtin:` takes the profile Brig ships.** It ignores a profile file of the
+same name in your profile directory.
+
+**Your attachments and your settings for a profile name do not follow a
+name the repository chose.** The policies you attached to a built-in profile
+apply to a target on that profile only. A profile the repository wrote gets
+none of them, and reads none of the settings you keep for a profile of the
+same name.
+
+**Each session of a target has its own sandbox and its own guest home.** Two
+checkouts of one repository, and two targets of one checkout, never share
+either.
+
+**`brig target ls` and `brig config` write nothing, and `brig init` writes
+only the Brigfile.** None of them looks for a runtime, opens your secret
+store or starts a sandbox.
+
 ### What the approval authorizes
 
 **A run of a target boots only a configuration you approved.** A run with

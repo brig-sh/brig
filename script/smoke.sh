@@ -3655,6 +3655,133 @@ grep -q 'brig--dev-' "$WORK/bf-tgt/approvals.json" 2>/dev/null \
   && bad "rm --target left the approval: $(cat "$WORK/bf-tgt/approvals.json")" \
   || ok "rm --target drops the approval of the session"
 
+# What a Brigfile promises, one case each, on a state of its own and with
+# empty profile and policy directories: a checkout has to carry everything its
+# targets need, so nothing of the reader's may be needed or written.
+mkdir -p "$WORK/bf-c1/.git" "$WORK/bf-c1/.brig" "$WORK/bf-c-prof" "$WORK/bf-c-pol"
+c1="$(cd "$WORK/bf-c1" && pwd -P)"
+cat > "$c1/Brigfile" <<'BF'
+apiVersion: brig.sh/v1alpha1
+defaultTarget: dev
+profiles:
+  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}
+policies:
+  net: {file: .brig/net.yaml}
+  audit: {file: .brig/audit.yaml}
+targets:
+  dev: {profile: tool, policies: [net], overrides: {cpus: 2, mem: 2048}}
+  review: {profile: tool, policies: [net, audit], overrides: {cpus: 3, mem: 3072}}
+BF
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: net}\nspec:\n  egress:\n    default: deny\n    allow: [{host: api.example.com}]\n' > "$c1/.brig/net.yaml"
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: audit}\nspec:\n  egress:\n    default: deny\n    allow: [{host: audit.example.com}]\n' > "$c1/.brig/audit.yaml"
+bf_c=(env BRIG_STATE_DIR="$WORK/bf-c-state" STUB_STATE="$WORK/bf-c-instance" BRIG_GATEWAY_DIR="$WORK/bg-c"
+  BRIG_PROFILE_DIR="$WORK/bf-c-prof" BRIG_POLICY_DIR="$WORK/bf-c-pol" BRIG_HYPERVISOR=hvi "$WORK/brig")
+: > "$STUB_LOG"
+out="$(cd "$c1" && "${bf_c[@]}" plan --target dev 2>&1)"; rc=$?
+[ "$rc" = 0 ] \
+  && ok "a clean checkout plans a target with empty profile and policy directories" \
+  || bad "a clean checkout plans a target with empty profile and policy directories -- got $rc: $out"
+case "$out" in
+  *"2048 MB from target dev"*"2 vCPUs from target dev"*) ok "plan --target dev gives dev's own size" ;;
+  *) bad "plan --target dev gives dev's own size -- got: $out" ;;
+esac
+case "$out" in
+  *audit*) bad "plan --target dev names the policy of review: $out" ;;
+  *) ok "plan --target dev leaves out the policies of review" ;;
+esac
+out="$(cd "$c1" && "${bf_c[@]}" plan --target review 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"3072 MB from target review"*"3 vCPUs from target review"*)
+    case "$out" in
+      *"audit.example.com"*"api.example.com"*|*"api.example.com"*"audit.example.com"*)
+        ok "plan --target review gives review's own size and policies" ;;
+      *) bad "plan --target review allows both of its policies -- got: $out" ;;
+    esac ;;
+  *) bad "plan --target review gives review's own size and policies -- got $rc: $out" ;;
+esac
+out="$(cd "$c1" && "${bf_c[@]}" run --target dev < /dev/null 2>&1)"; rc=$?
+digest="$(printf '%s\n' "$out" | sed -n 's/.*--approve \(sha256:[0-9a-f]*\).*/\1/p' | head -n 1)"
+out="$(cd "$c1" && "${bf_c[@]}" run --target dev -d --approve "$digest" < /dev/null 2>&1)"; rc=$?
+if [ "$rc" = 0 ] && grep -q '^argv: run.*brig--dev-' "$STUB_LOG"; then
+  ok "a clean checkout runs a target with empty profile and policy directories"
+else
+  bad "a clean checkout runs a target with empty profile and policy directories -- got $rc: $out"
+fi
+[ -z "$(find "$WORK/bf-c-prof" "$WORK/bf-c-pol" -mindepth 1)" ] \
+  && ok "the profile and policy directories are still empty after the plan and the run" \
+  || bad "a Brigfile plan or run wrote to the profile or policy directory: $(find "$WORK/bf-c-prof" "$WORK/bf-c-pol" -mindepth 1)"
+
+# An edit between the digest and the run is not what was approved.
+: > "$STUB_LOG"
+out="$(cd "$c1" && "${bf_c[@]}" run --target review < /dev/null 2>&1)"
+digest="$(printf '%s\n' "$out" | sed -n 's/.*--approve \(sha256:[0-9a-f]*\).*/\1/p' | head -n 1)"
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: audit}\nspec:\n  egress:\n    default: deny\n    allow: [{host: evil.example.com}]\n' > "$c1/.brig/audit.yaml"
+out="$(cd "$c1" && "${bf_c[@]}" run --target review -d --approve "$digest" < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  "8:"*"is not the approval of this run"*)
+    if grep -q '^argv: run.*brig--review-' "$STUB_LOG"; then
+      bad "an edit after the digest was printed still booted: $(cat "$STUB_LOG")"
+    else
+      ok "an edit between the printed digest and the run is refused, and nothing boots"
+    fi ;;
+  *) bad "an edit between the printed digest and the run is refused -- got $rc: $out" ;;
+esac
+
+# A Brigfile that names a policy file that is not there stops at the loader.
+mkdir -p "$WORK/bf-c2/.git"
+c2="$(cd "$WORK/bf-c2" && pwd -P)"
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}\npolicies:\n  gone: {file: .brig/gone.yaml}\ntargets:\n  dev: {profile: tool, policies: [gone]}\n' > "$c2/Brigfile"
+: > "$STUB_LOG"
+out="$(cd "$c2" && "${bf_c[@]}" run --target dev < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"policies.gone.file"*"gone.yaml"*)
+    # The braces matter: || and && bind alike in the shell, left to right,
+    # so without them a boot alone would not fail this.
+    if grep -q '^argv: run' "$STUB_LOG" ||
+       { grep -q 'brig--dev-' "$WORK/bf-c-state/approvals.json" 2>/dev/null &&
+         grep -q "$c2" "$WORK/bf-c-state/approvals.json" 2>/dev/null; }; then
+      bad "a Brigfile with a missing policy file went past the loader: $(cat "$STUB_LOG")"
+    else
+      ok "a Brigfile that names a missing policy file stops with the loader's error and nothing boots"
+    fi ;;
+  *) bad "a Brigfile that names a missing policy file stops with the loader's error -- got $rc: $out" ;;
+esac
+
+# Two routes that cannot apply together stop the run before the question.
+mkdir -p "$WORK/bf-c3/.git"
+c3="$(cd "$WORK/bf-c3" && pwd -P)"
+gh() { printf '{apiVersion: brig.sh/v1alpha1, kind: Policy, metadata: {name: %s}, spec: {routes: [{name: %s, preset: github-token, credential: {secretRef: {name: t}}}]}}' "$1" "$1"; }
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}\npolicies:\n  one: {inline: %s}\n  two: {inline: %s}\ntargets:\n  both: {profile: tool, policies: [one, two]}\n' "$(gh one)" "$(gh two)" > "$c3/Brigfile"
+: > "$STUB_LOG"
+out="$(cd "$c3" && "${bf_c[@]}" run --target both < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  *"run as shown above"*|*"--approve"*|*"APPROVAL"*) bad "two routes in conflict reached the approval -- got $rc: $out" ;;
+  "0:"*) bad "two routes in conflict ran -- got $rc: $out" ;;
+  *"cannot apply together"*)
+    if grep -q '^argv: run' "$STUB_LOG"; then
+      bad "two routes in conflict booted: $(cat "$STUB_LOG")"
+    else
+      ok "two routes that conflict stop the run before anything is asked"
+    fi ;;
+  *) bad "two routes that conflict stop the run before anything is asked -- got $rc: $out" ;;
+esac
+
+# Two checkouts of one Brigfile are two projects: two sandboxes, two homes.
+mkdir -p "$WORK/bf-c4/.git" "$WORK/bf-c4/.brig"
+c4="$(cd "$WORK/bf-c4" && pwd -P)"
+cp "$c1/Brigfile" "$c4/Brigfile"; cp "$c1/.brig/"*.yaml "$c4/.brig/"
+first="$(cd "$c1" && "${bf_c[@]}" plan --target dev 2>&1)"
+second="$(cd "$c4" && "${bf_c[@]}" plan --target dev 2>&1)"
+sb1="$(printf '%s\n' "$first" | sed -n 's/^SANDBOX  *//p')"
+sb2="$(printf '%s\n' "$second" | sed -n 's/^SANDBOX  *//p')"
+h1="$(printf '%s\n' "$first" | sed -n 's/^HOME  *\([^ ]*\).*/\1/p')"
+h2="$(printf '%s\n' "$second" | sed -n 's/^HOME  *\([^ ]*\).*/\1/p')"
+if [ -n "$sb1" ] && [ -n "$h1" ] && [ -n "$sb2" ] && [ -n "$h2" ] && [ "$sb1" != "$sb2" ] && [ "$h1" != "$h2" ]; then
+  ok "two checkouts of one Brigfile get different sandbox names and homes"
+else
+  bad "two checkouts of one Brigfile get different sandbox names and homes -- $sb1 $h1 / $sb2 $h2"
+fi
+
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's
 # replies; these cover the scripts that render them.
