@@ -298,8 +298,7 @@ func (p Project) validateTarget(name string, t Target) error {
 		if o.Mem != nil && *o.Mem <= 0 {
 			return fmt.Errorf("%s.overrides.mem: %d is not greater than zero", where, *o.Mem)
 		}
-		if o.Image != nil && (*o.Image == "" || strings.IndexFunc(*o.Image, unicode.IsSpace) >= 0 ||
-			strings.IndexFunc(*o.Image, unicode.IsControl) >= 0) {
+		if o.Image != nil && !imageRef(*o.Image) {
 			return fmt.Errorf("%s.overrides.image: %q is not an image reference", where, *o.Image)
 		}
 	}
@@ -340,4 +339,17 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// imageRef reports whether s can be an image reference a repository names.
+//
+// The runtime takes the image as a word on its command line, after its
+// flags and with no "--" before it. A value that starts with "-" would be
+// read there as a flag, so a repository could pass the runtime an option of
+// its choosing. Nothing else about the reference is judged here: the
+// registry it names and its digest are checked where the image is resolved.
+func imageRef(s string) bool {
+	return s != "" && !strings.HasPrefix(s, "-") &&
+		strings.IndexFunc(s, unicode.IsSpace) < 0 &&
+		strings.IndexFunc(s, unicode.IsControl) < 0
 }

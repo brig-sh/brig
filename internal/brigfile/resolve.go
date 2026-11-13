@@ -231,6 +231,11 @@ func refuseHostFields(p profile.Profile) error {
 		return fmt.Errorf("projectPaths names directories on your host that brig copies into " +
 			"the guest; a repository profile may not set it")
 	}
+	// Not a host field, but refused for what it would do on the host: see
+	// imageRef. profile.Parse only asks that an image is set.
+	if !imageRef(p.Image) {
+		return fmt.Errorf("image: %q is not an image reference", p.Image)
+	}
 	for i, s := range p.Secrets {
 		for _, f := range []struct {
 			field string

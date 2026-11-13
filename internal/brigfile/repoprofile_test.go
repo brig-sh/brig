@@ -174,3 +174,16 @@ func TestABuiltinProfileKeepsItsHostFields(t *testing.T) {
 		t.Error("builtin:claude-code lost its secret sources")
 	}
 }
+
+// The runtime takes the image as a word after its flags, so one that starts
+// with a dash would reach it as an option the repository chose.
+func TestARepositoryProfileImageMayNotBeAFlag(t *testing.T) {
+	doc := strings.Replace(repoProfileBase, "image: example.com/tool:1", `image: "--privileged"`, 1)
+	if doc == repoProfileBase {
+		t.Fatal("the base profile no longer has the image line this test replaces")
+	}
+	_, err := loadRepoProfile(t, doc)
+	if err == nil || !strings.Contains(err.Error(), "profiles.tool") || !strings.Contains(err.Error(), "image") {
+		t.Fatalf("Load: %v", err)
+	}
+}

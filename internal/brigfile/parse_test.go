@@ -176,6 +176,8 @@ func TestParseRefuses(t *testing.T) {
 			[]string{"targets.dev.overrides.mem"}},
 		{"an empty image", strings.Replace(minimal, "profile: claude", "profile: claude\n    overrides: {image: \"\"}", 1),
 			[]string{"targets.dev.overrides.image"}},
+		{"an image the runtime would read as a flag", strings.Replace(minimal, "profile: claude", "profile: claude\n    overrides: {image: \"--privileged\"}", 1),
+			[]string{"targets.dev.overrides.image"}},
 		{"an image with a space", strings.Replace(minimal, "profile: claude", "profile: claude\n    overrides: {image: \"a b\"}", 1),
 			[]string{"targets.dev.overrides.image"}},
 		// YAML reads an unquoted 0600 as the number 384, and the decoder would
