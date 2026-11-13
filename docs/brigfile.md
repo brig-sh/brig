@@ -209,6 +209,10 @@ It may describe the guest. It may not reach your host or weaken the sandbox:
 | `hypervisor` | It names a hypervisor on your host, and that decides which network the sandbox can get |
 | an `image` that starts with `-` | The runtime would read it as a flag |
 
+A profile or a policy from `file:` or `inline:` also may not hold a control
+character in any string, a newline and a tab included. Its strings appear in
+the plan, and a control character could change what your terminal shows.
+
 A profile Brig ships through `builtin:` is not limited this way.
 
 ## Where Brig looks
