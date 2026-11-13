@@ -421,6 +421,13 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	if o.Identity != nil && o.Workspace != "" {
 		return nil, errors.New("a Brigfile target's guest home is brig's own; it takes no --home")
 	}
+	// Before anything reads the state directory for this session: a project
+	// that holds it, or lies inside it, could have written what is read.
+	if o.Identity != nil && o.Target != nil && o.Target.Root != "" {
+		if err := CheckProjectState(o.Target.Root); err != nil {
+			return nil, err
+		}
+	}
 	// The key every lookup in the session index uses below. A target's is
 	// its own, never one built from the profile name the repository chose.
 	key := sessionKey(t.Name, slug)
