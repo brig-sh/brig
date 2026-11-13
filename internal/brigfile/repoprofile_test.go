@@ -187,3 +187,21 @@ func TestARepositoryProfileImageMayNotBeAFlag(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 }
+
+// A repository may ask for more isolation than the default and never for
+// less. shared puts the guest on a network with other sandboxes, and a
+// hypervisor other than the default falls back to a shared network.
+func TestARepositoryProfileMayNotWeakenTheNetwork(t *testing.T) {
+	for _, extra := range []string{"network: shared\n", "hypervisor: vz\n", "hypervisor: qemu\n", "hypervisor: hvi\n"} {
+		_, err := loadRepoProfile(t, repoProfileBase+extra)
+		field := strings.SplitN(extra, ":", 2)[0]
+		if err == nil || !strings.Contains(err.Error(), "profiles.tool") || !strings.Contains(err.Error(), field) {
+			t.Errorf("%q: Load: %v", strings.TrimSpace(extra), err)
+		}
+	}
+	for _, extra := range []string{"network: isolated\n", "network: offline\n"} {
+		if _, err := loadRepoProfile(t, repoProfileBase+extra); err != nil {
+			t.Errorf("%q is refused: %v", strings.TrimSpace(extra), err)
+		}
+	}
+}
