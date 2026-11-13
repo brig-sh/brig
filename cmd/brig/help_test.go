@@ -9,7 +9,8 @@ import (
 
 // The top-level verbs the issue lists. Before this change, each refused --help
 // and -h with a usage error and printed nothing to stdout.
-var topLevelVerbs = []string{"run", "sh", "info", "plan", "rm", "stop", "ls", "logs", "doctor", "report", "version"}
+var topLevelVerbs = []string{"run", "sh", "info", "plan", "rm", "stop", "ls", "logs", "doctor", "report", "version",
+	"config", "init"}
 
 // Asking a verb for help is a question, not a mistake: it is answered with that
 // verb's usage, on stdout, and the exit status is 0.
@@ -40,7 +41,7 @@ func TestEveryTopLevelVerbAnswersHelp(t *testing.T) {
 // usage, the text `brig agent --help` prints, which is unchanged.
 func TestHelpVerbPrintsTheTextTheFlagDoes(t *testing.T) {
 	t.Setenv("BRIG_PROFILE_DIR", t.TempDir())
-	verbs := append([]string{"agent", "secret", "policy", "network", "telemetry", "completion"}, topLevelVerbs...)
+	verbs := append([]string{"agent", "secret", "policy", "network", "telemetry", "completion", "target"}, topLevelVerbs...)
 	for _, verb := range verbs {
 		byFlag, err := captureStdout(t, func() error { return run([]string{verb, "--help"}) })
 		if err != nil {
