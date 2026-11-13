@@ -772,30 +772,38 @@ func TestBrigfileVerbsAnswerHelp(t *testing.T) {
 // One holding a control character is printed quoted, so it cannot move the
 // cursor or recolour the screen.
 func TestConfigQuotesControlCharacters(t *testing.T) {
-	// A file name may hold an escape character, and the loader takes it as a
-	// plain path, so it reaches the source column as well as the arguments.
-	brigHost(t, map[string]string{
-		brigfile.FileName: `apiVersion: brig.sh/v1alpha1
+	brigHost(t, map[string]string{brigfile.FileName: `apiVersion: brig.sh/v1alpha1
 profiles:
   claude: {from: builtin:claude-code}
-  tool: {file: "\e[2Jtool.yaml"}
 targets:
   dev:
     profile: claude
     args: ["\e[2Jgone"]
-  ci:
-    profile: tool
-`,
-		"\x1b[2Jtool.yaml": projectTool,
-	})
-	for _, args := range [][]string{{"config"}, {"config", "--target", "dev"}, {"config", "--target", "ci"},
-		{"target", "ls"}} {
+`})
+	for _, args := range [][]string{{"config", "--target", "dev"}, {"config", "--target", "dev", "--json"}} {
 		out, err := captureStdout(t, func() error { return run(args) })
 		if err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
 		if strings.ContainsRune(out, '\x1b') {
 			t.Errorf("%v: an escape character reached the output: %q", args, out)
+		}
+	}
+
+	// A file path is printed too, in the source column and in the error for
+	// a file that is missing. The loader refuses one with a control character,
+	// and its error quotes the path.
+	brigHost(t, map[string]string{brigfile.FileName: `apiVersion: brig.sh/v1alpha1
+profiles:
+  tool: {file: "\e[2Jtool.yaml"}
+targets:
+  dev: {profile: tool}
+`})
+	for _, args := range [][]string{{"config"}, {"target", "ls"}} {
+		out, err := captureStdout(t, func() error { return run(args) })
+		exitOf(t, err, exitFailure)
+		if err == nil || strings.ContainsRune(err.Error()+out, '\x1b') || !strings.Contains(err.Error(), "control character") {
+			t.Errorf("%v: err %q, out %q", args, err, out)
 		}
 	}
 }
