@@ -68,6 +68,10 @@ func credentialRefusal(w http.ResponseWriter, a *auditLine, p routePath, err err
 		a.check = "credential.malformed"
 		msg = "brig broker: route " + p.route + ": the secret is not valid JSON. " +
 			"Store it again with brig secret update or brig secret import"
+	case errors.Is(err, errCredentialDocument):
+		a.check = "credential.document"
+		msg = "brig broker: route " + p.route + ": the secret is a JSON document, not a header value. " +
+			"Name the field to send with credential.field"
 	case errors.As(err, &ve):
 		msg = "brig broker: route " + p.route + ": " + ve.Message
 	case errors.As(err, &mf):
