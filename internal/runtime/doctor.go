@@ -89,10 +89,11 @@ func BootAssetNames() (kernel, initrd string) { return bootKernelName(), bootIni
 var doctorAssetDirTimeout = 5 * time.Second
 
 // assetLocatorFor is the question a run with rt would ask, with doctor's
-// deadline on it: hull's `assets dir` for a hull, and none for anything else,
-// the same as nerdctl's run path passes.
+// deadline on it: hull's `assets dir` for a hull on macOS, and none for
+// anything else, the same as nerdctl's run path passes. hull on Linux
+// resolves as nerdctl does; see hull's ResolveBootAssets.
 func assetLocatorFor(rt Runtime) assetLocator {
-	if h, ok := rt.(*hull); ok {
+	if h, ok := rt.(*hull); ok && !h.linux {
 		return func() (string, error) { return h.assetDirWithin(doctorAssetDirTimeout) }
 	}
 	return nil

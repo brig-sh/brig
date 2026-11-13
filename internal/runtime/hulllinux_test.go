@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -94,7 +96,6 @@ func TestHullOnLinuxBootsTheRootfsModeDoctorReports(t *testing.T) {
 		t.Fatalf("doctor: %+v, want available", got)
 	}
 	given := BootAssets{Kernel: "/given/" + bootKernelName(), Initrd: "/given/" + bootInitrdName}
-	locate := func() (string, error) { return t.TempDir(), nil }
 	// Asked for, and the default where the host can build it.
 	for _, asked := range []string{RootfsModeOverlayBlock, ""} {
 		spec := RunSpec{Name: "brig-s", Image: "img", GenericBoot: true, BootAssets: given,
@@ -105,13 +106,13 @@ func TestHullOnLinuxBootsTheRootfsModeDoctorReports(t *testing.T) {
 		if row := h.Isolation(spec).Detail; !strings.Contains(row, "rootfs "+RootfsModeOverlayBlock) {
 			t.Errorf("%q: the ISOLATION row is %q, want the overlay root", asked, row)
 		}
-		_, env, err := runArgsFor(h.rootfsMode, spec, "hvi", "shared", "", "", locate, nil)
+		args, _, err := linuxRunArgs(spec, nil)
 		if err != nil {
 			t.Errorf("%q: the boot refused what doctor reports available: %v", asked, err)
 			continue
 		}
-		if !slices.Contains(env, "HULL_ROOTFS_MODE="+RootfsModeOverlayBlock) {
-			t.Errorf("%q: the boot hands no overlay root: %q", asked, env)
+		if !slices.Contains(args, annotationRootfsMode+"="+RootfsModeOverlayBlock) {
+			t.Errorf("%q: the boot hands urunc no overlay root: %q", asked, args)
 		}
 	}
 }
@@ -269,5 +270,220 @@ func TestDoctorAsksHullOnLinuxTheUruncMonitor(t *testing.T) {
 		if (mode == RootfsModeOverlayBlock) != ok {
 			t.Errorf("%q: doctor says %v and the run picks %q", c.hv, ok, mode)
 		}
+	}
+}
+
+// linuxBootSpec is a generic boot as wrap hands it to hull on Linux, with its
+// boot assets already resolved, a writable home, a read-only share, a value
+// the runtime reads for itself and a stored secret.
+func linuxBootSpec() RunSpec {
+	return RunSpec{Name: "brig-s", Image: "ghcr.io/x/img:1", Digest: "sha256:abc", Net: "shared",
+		Mem: 2048, CPUs: 2, GenericBoot: true,
+		BootAssets: BootAssets{Kernel: "/assets/vmlinux", Initrd: "/assets/initrd"},
+		Shares: []Share{
+			{Host: "/host/home", Guest: "/home/agent"},
+			{Host: "/host/ref", Guest: "/ref", ReadOnly: true},
+		},
+		Env: []Var{
+			{Name: "HOME", Value: "/home/agent"},
+			{Name: "API_KEY", Value: "s3cret-value", Secret: true},
+		},
+	}
+}
+
+// The whole command line of a generic boot on hull on Linux, pinned, so a
+// test and a boot cannot drift apart. The secret goes as a bare name, its
+// value in the environment only; the read-only share keeps its :ro.
+func TestLinuxHullRunArgs(t *testing.T) {
+	overlayHost(t)
+	args, env, err := linuxRunArgs(linuxBootSpec(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"run", "--detach", "--name", "brig-s",
+		"--net", "shared", "--pull", "missing", "--mem", "2048", "--cpus", "2",
+		"--hypervisor", "hvi",
+		"--annotation", annotationBootKernel + "=/assets/vmlinux",
+		"--annotation", annotationBootInitrd + "=/assets/initrd",
+		"--annotation", annotationRootfsMode + "=" + RootfsModeOverlayBlock,
+		"--snapshotter", "overlayfs",
+		"--shared-dir", "/host/home:/home/agent",
+		"--shared-dir", "/host/ref:/ref:ro",
+		"--env", "HOME=/home/agent", "--env", "API_KEY",
+		"ghcr.io/x/img@sha256:abc", "sleep", "infinity"}
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Errorf("run line\n got: %s\nwant: %s", strings.Join(args, " "), strings.Join(want, " "))
+	}
+	if strings.Contains(strings.Join(args, " "), "s3cret-value") {
+		t.Errorf("the secret's value is on the command line: %s", strings.Join(args, " "))
+	}
+	if !slices.Contains(env, "API_KEY=s3cret-value") {
+		t.Errorf("the secret's value is not in the runtime's environment: %q", env)
+	}
+}
+
+// Nothing of the macOS command line reaches the Linux hull: it has no gateway,
+// no rootfs type, no window and no HULL_ROOTFS_MODE. vz, a macOS backend, boots
+// on the bundle's hvi.
+func TestLinuxHullRunArgsLeaveOutTheMacOSFlags(t *testing.T) {
+	overlayHost(t)
+	spec := linuxBootSpec()
+	spec.Hypervisor, spec.RootfsType, spec.GUI, spec.GUITitle = "vz", "virtiofs", true, "title"
+	args, env, err := linuxRunArgs(spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Join(args, " ")
+	for _, flag := range []string{"--gateway-sock", "--gateway-cidr", "--rootfs-type", "--gui", "--gui-title"} {
+		if slices.Contains(args, flag) {
+			t.Errorf("the Linux run line carries %s: %s", flag, line)
+		}
+	}
+	if !strings.Contains(line, "--hypervisor hvi ") {
+		t.Errorf("vz did not boot on hvi: %s", line)
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HULL_ROOTFS_MODE=") {
+			t.Errorf("the Linux hull is handed %s", kv)
+		}
+	}
+}
+
+// An image that carries its own kernel boots it: no monitor or kernel of brig's
+// is named, and hull is told not to boot the bundle's in its place.
+func TestLinuxHullRunArgsOfAnImageWithItsOwnKernel(t *testing.T) {
+	spec := linuxBootSpec()
+	spec.GenericBoot = false
+	args, _, err := linuxRunArgs(spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Join(args, " ")
+	if !slices.Contains(args, "--no-boot-assets") {
+		t.Errorf("the bundle's kernel may boot in the image's place: %s", line)
+	}
+	if slices.Contains(args, "--hypervisor") || slices.Contains(args, "--annotation") {
+		t.Errorf("a monitor or a kernel of brig's is named: %s", line)
+	}
+}
+
+// Offline is --net none. An isolated run never becomes a shared one on the
+// command line, even for a caller that skipped CanRun.
+func TestLinuxHullRunArgsNetwork(t *testing.T) {
+	spec := linuxBootSpec()
+	spec.Net = "none"
+	args, _, err := linuxRunArgs(spec, nil)
+	if err != nil || !strings.Contains(strings.Join(args, " "), "--net none ") {
+		t.Errorf("offline: %v: %s", err, strings.Join(args, " "))
+	}
+	spec.Net = "isolated"
+	if args, _, err := linuxRunArgs(spec, nil); err == nil {
+		t.Errorf("an isolated run reached the command line: %s", strings.Join(args, " "))
+	}
+}
+
+// Run on hull on Linux runs one command, `hull run` with the Linux command
+// line. It starts no network gateway, which the Linux hull does not have.
+func TestLinuxHullRunBootsTheLinuxCommandLine(t *testing.T) {
+	overlayHost(t)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "argv.log")
+	bin := filepath.Join(dir, "hull")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> "+log+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := &hull{bin: bin, linux: true}
+	if err := h.Run(linuxBootSpec()); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(blob)), "\n")
+	if len(calls) != 1 {
+		t.Fatalf("hull was run %d times, want once: %q", len(calls), calls)
+	}
+	if !strings.HasPrefix(calls[0], "run --detach --name brig-s --net shared ") ||
+		!strings.HasSuffix(calls[0], " sleep infinity") {
+		t.Errorf("hull was run as: %s", calls[0])
+	}
+}
+
+// hull on Linux shares a host directory only on a monitor with a shared
+// filesystem, and brig shares at least the workspace on every run. A share on
+// firecracker is refused before hull is run, naming the share and the way
+// back to hvi. So is the same run without a share, which is the spec brig
+// plan and the early check hold: refused on the shares alone, plan accepted
+// a run that Run then refused. A share on each monitor that takes one goes
+// through.
+func TestLinuxHullRefusesAShareOnAMonitorWithoutOne(t *testing.T) {
+	share := []Share{{Host: "/host/work", Guest: "/work"}}
+	spec := RunSpec{Name: "brig-s", Image: "img", GenericBoot: true, Hypervisor: "firecracker", Shares: share}
+	err := linuxHull().CanRun(spec)
+	if err == nil || !strings.Contains(err.Error(), "/host/work on firecracker") || !strings.Contains(err.Error(), "BRIG_HYPERVISOR") {
+		t.Errorf("a share on firecracker: %v, want a refusal naming the share and BRIG_HYPERVISOR", err)
+	}
+	spec.Shares = nil
+	if err := linuxHull().CanRun(spec); err == nil || !strings.Contains(err.Error(), "its workspace on firecracker") {
+		t.Errorf("firecracker as brig plan asks: %v, want the refusal Run gives", err)
+	}
+	for _, hv := range []string{"", "vz", "hvi", "cloud-hypervisor", "qemu"} {
+		spec := RunSpec{Name: "brig-s", Image: "img", GenericBoot: true, Hypervisor: hv, Shares: share}
+		if err := linuxHull().CanRun(spec); err != nil {
+			t.Errorf("a share on %q: %v", hv, err)
+		}
+	}
+}
+
+// hull on Linux resolves the boot assets as nerdctl does: brig's own
+// directory, filled by oras with the pinned reference, and a refetch over
+// what is there goes to oras too. hull is never asked, neither `assets dir`
+// nor `assets pull`, and doctor checks the directory the run fills. With
+// BRIG_BOOT_ASSETS unset, which smoke and the bundle never leave it.
+func TestLinuxHullResolvesBootAssetsThroughOras(t *testing.T) {
+	emptyAssetHome(t)
+	dir := t.TempDir()
+	hullLog, orasLog := filepath.Join(dir, "hull.log"), filepath.Join(dir, "oras.log")
+	hullBin, oras := filepath.Join(dir, "hull"), filepath.Join(dir, "oras")
+	if err := os.WriteFile(hullBin, []byte("#!/bin/sh\necho \"$*\" >> '"+hullLog+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// pull <ref> --output <dir>, writing the two files the boot needs.
+	script := "#!/bin/sh\necho \"$*\" >> '" + orasLog + "'\n" +
+		"echo k > \"$4/" + bootKernelName() + "\"\necho i > \"$4/" + bootInitrdName + "\"\n"
+	if err := os.WriteFile(oras, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	was := lookPath
+	lookPath = func(string) (string, error) { return oras, nil }
+	t.Cleanup(func() { lookPath = was })
+
+	want, err := defaultBootAssetsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &hull{bin: hullBin, linux: true}
+	ref := "ghcr.io/nofireai/hull-assets@sha256:" + strings.Repeat("a", 64)
+	for _, replace := range []bool{false, true} {
+		got, err := h.ResolveBootAssets(BootFetch{Ref: ref, Replace: replace}, nil, nil)
+		if err != nil {
+			t.Fatalf("replace %v: %v", replace, err)
+		}
+		if got.Kernel != filepath.Join(want, bootKernelName()) || got.Initrd != filepath.Join(want, bootInitrdName) || got.Named {
+			t.Errorf("replace %v: resolved %+v, want the pair in brig's own %s", replace, got, want)
+		}
+	}
+	pulls, _ := os.ReadFile(orasLog)
+	if wantPull := "pull " + ref + " --output " + want + "\n"; string(pulls) != wantPull+wantPull {
+		t.Errorf("oras ran %q, want the pinned pull into %s, once and once more to replace", pulls, want)
+	}
+
+	got, present, _, err := BootAssetsDir(h)
+	if err != nil || got != want || !present {
+		t.Errorf("doctor checks %s (present %v, %v), want %s, where the run fetched", got, present, err, want)
+	}
+	if asked, err := os.ReadFile(hullLog); err == nil {
+		t.Errorf("hull was asked about the boot assets: %q", asked)
 	}
 }
