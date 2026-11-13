@@ -101,3 +101,21 @@ func (c *Config) sessionRef() string {
 	}
 	return sessionKey(c.Profile.Name, c.Slug)
 }
+
+// subject names what this run is of in a refusal: the profile, or the
+// Brigfile target. A target's profile name is the repository's word, and a
+// refusal that said "claude-code" would point you at your own profile.
+func (c *Config) subject() string {
+	if c.target != nil {
+		return "target " + c.target.Name
+	}
+	return c.Profile.Name
+}
+
+// profileNoun is the profile this run reads, as a refusal names it.
+func (c *Config) profileNoun() string {
+	if c.target != nil {
+		return "the profile of target " + c.target.Name
+	}
+	return "the " + c.Profile.Name + " profile"
+}

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -104,6 +105,7 @@ func (c *Config) Plan() PlanDocument {
 		}
 	}
 	d.Broker = c.planBroker(routeStore)
+	d.Target = c.planTarget()
 	d.Credentials = []PlanCredential{}
 	for _, p := range creds.Preview(c.Profile, c.Env, stored, os.LookupEnv, creds.Options{
 		AllowRefs:   c.AllowRefs,
@@ -180,6 +182,9 @@ type PlanDocument struct {
 	Session string `json:"session,omitempty"`
 	Profile string `json:"profile"`
 	Sandbox string `json:"sandbox"`
+	// Target is the Brigfile target this run was resolved from, and absent on
+	// a run of a profile. See PlanTarget.
+	Target *PlanTarget `json:"target,omitempty"`
 	// Refused is why `brig run` refuses this run, from the checks it makes
 	// before it prepares anything that a plan can ask without writing (see
 	// Plan), and absent when none of them refuses. The plan still describes
@@ -265,6 +270,126 @@ type PlanBroker struct {
 	Refused     string            `json:"refused,omitempty"`
 	Modes       []string          `json:"modes"`
 	Unavailable map[string]string `json:"unavailable,omitempty"`
+	// Detail is each route in full, on the plan of a Brigfile target only. A
+	// policy the repository wrote can pair any https upstream with any secret
+	// name in your store, so the plan of a target names both for every route.
+	// The plan of a profile leaves it out, so its bytes and its digest stay
+	// what they were.
+	Detail []PlanRoute `json:"detail,omitempty"`
+}
+
+// PlanRoute is one route of the broker: where it sends what, with which of
+// your secrets, and from which policy.
+type PlanRoute struct {
+	Name string `json:"name"`
+	// Policy is where the policy that declares the route came from.
+	Policy string `json:"policy"`
+	Preset string `json:"preset,omitempty"`
+	Mode   string `json:"mode"`
+	// Upstream is the origin the broker forwards to. A gcp route has none,
+	// and forwards each of Services to that Google API instead.
+	Upstream string   `json:"upstream,omitempty"`
+	Services []string `json:"services,omitempty"`
+	// Secrets are the names of the secrets in your store the broker reads for
+	// the route: its credential, and the certificates of inject.tls.
+	Secrets []string `json:"secrets"`
+	// Vends is set on a route that answers the guest with cloud keys of its
+	// own instead of forwarding a request: the aws preset.
+	Vends bool `json:"vends"`
+}
+
+// PlanTarget is the Brigfile target a plan is of: which file, which profile
+// from where, where the image, the size and the network came from, and
+// where each policy came from.
+type PlanTarget struct {
+	Name     string            `json:"name"`
+	Brigfile string            `json:"brigfile"`
+	Root     string            `json:"root"`
+	Profile  PlanTargetProfile `json:"profile"`
+	// Origins says where each value came from: flag, env BRIG_<KEY>, target
+	// <name>, or profile <alias> (<source>).
+	Origins Origins `json:"origins"`
+	// ImagePinned says the image is named by digest, so the bytes that boot
+	// cannot change under the same name.
+	ImagePinned bool               `json:"imagePinned"`
+	Policies    []PlanPolicyOrigin `json:"policies"`
+	Notes       []string           `json:"notes,omitempty"`
+}
+
+// PlanTargetProfile is the profile alias of a target and where it was
+// declared.
+type PlanTargetProfile struct {
+	Alias  string `json:"alias"`
+	Source string `json:"source"`
+}
+
+// PlanPolicyOrigin is one policy of a target and where it came from.
+type PlanPolicyOrigin struct {
+	Name string `json:"name"`
+	From string `json:"from"`
+}
+
+// planTarget is the PlanTarget of this run, or nil when it names no target.
+func (c *Config) planTarget() *PlanTarget {
+	if c.target == nil {
+		return nil
+	}
+	t := &PlanTarget{
+		Name:        c.target.Name,
+		Brigfile:    c.target.Brigfile,
+		Root:        c.target.Root,
+		Profile:     PlanTargetProfile{Alias: c.target.ProfileAlias, Source: c.target.ProfileSource},
+		Origins:     c.origins,
+		ImagePinned: strings.Contains(c.Image, "@sha256:"),
+		Policies:    []PlanPolicyOrigin{},
+		Notes:       append([]string(nil), c.target.Notes...),
+	}
+	for i, name := range c.Policies {
+		from := ""
+		if i < len(c.policyOrigins) {
+			from = c.policyOrigins[i]
+		}
+		t.Policies = append(t.Policies, PlanPolicyOrigin{Name: name, From: from})
+	}
+	sort.Slice(t.Policies, func(i, j int) bool {
+		if t.Policies[i].Name != t.Policies[j].Name {
+			return t.Policies[i].Name < t.Policies[j].Name
+		}
+		return t.Policies[i].From < t.Policies[j].From
+	})
+	sort.Strings(t.Notes)
+	return t
+}
+
+// planRoutes is every route of this run in full, sorted by name.
+func (c *Config) planRoutes() []PlanRoute {
+	out := []PlanRoute{}
+	for _, r := range c.routes {
+		mode := string(r.Mode)
+		if mode == "" {
+			mode = string(v1alpha1.ModeEndpoint)
+		}
+		pr := PlanRoute{
+			Name:     r.Name,
+			Policy:   c.routeOrigin[r.Name],
+			Preset:   string(r.Preset),
+			Mode:     mode,
+			Upstream: r.Upstream,
+			Secrets:  routeSecretNames(r),
+			Vends:    r.Vends(),
+		}
+		if pr.Secrets == nil {
+			pr.Secrets = []string{}
+		}
+		for _, svc := range r.Services {
+			pr.Services = append(pr.Services, svc.Name)
+		}
+		sort.Strings(pr.Secrets)
+		sort.Strings(pr.Services)
+		out = append(out, pr)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // planBroker is the PlanBroker of this run, or nil for a run with no route.
@@ -283,6 +408,9 @@ func (c *Config) planBroker(st routeStore) *PlanBroker {
 	b.Missing, b.StoreError, b.Refused = c.routeStoreFacts(st)
 	if err := c.routeRefusal(); err != nil {
 		b.Refused = err.Error()
+	}
+	if c.target != nil {
+		b.Detail = c.planRoutes()
 	}
 	return b
 }
@@ -368,6 +496,9 @@ func (c *Config) PrintPlan(d PlanDocument) {
 	if d.Session != "" {
 		rows = append(rows, envelopeRow{"SESSION", d.Session})
 	}
+	if d.Target != nil {
+		rows = append(rows, envelopeRow{"TARGET", d.Target.Name + ", from " + d.Target.Brigfile})
+	}
 	runtimeLine := "unavailable (no runtime on PATH)"
 	if d.Runtime.Available {
 		runtimeLine = d.Runtime.Kind + " (" + d.Runtime.Bin + ")"
@@ -375,8 +506,14 @@ func (c *Config) PrintPlan(d PlanDocument) {
 			runtimeLine += ", backend " + d.Runtime.Backend
 		}
 	}
+	profileRow := d.Profile
+	if d.Target != nil {
+		// The name is the profile document's, and a repository can call its
+		// profile claude-code. The alias and the source say which one it is.
+		profileRow += " (alias " + d.Target.Profile.Alias + ", " + d.Target.Profile.Source + ")"
+	}
 	rows = append(rows,
-		envelopeRow{"PROFILE", d.Profile},
+		envelopeRow{"PROFILE", profileRow},
 		envelopeRow{"SANDBOX", d.Sandbox},
 		envelopeRow{"RUNTIME", runtimeLine},
 		envelopeRow{"ISOLATION", d.Isolation},
@@ -394,17 +531,35 @@ func (c *Config) PrintPlan(d PlanDocument) {
 	for i, s := range d.Skills {
 		rows = append(rows, envelopeRow{labelOnce(i, "SKILLS"), fmt.Sprintf("%s (copied to %s)", s.Host, s.Guest)})
 	}
+	imageRow := fmt.Sprintf("%s (pull %s)", d.Image.Ref, d.Image.Pull)
+	networkRow := d.Network
+	if t := d.Target; t != nil {
+		pinned := "not pinned by digest"
+		if t.ImagePinned {
+			pinned = "pinned by digest"
+		}
+		imageRow = fmt.Sprintf("%s (pull %s; from %s; %s)", d.Image.Ref, d.Image.Pull, t.Origins.Image, pinned)
+		networkRow += "; from " + t.Origins.Network
+		if t.Origins.NetworkAsked != "" {
+			networkRow += fmt.Sprintf("; %s was asked for, and the policies make it %s", t.Origins.NetworkAsked, d.Posture)
+		}
+	}
 	rows = append(rows,
-		envelopeRow{"IMAGE", fmt.Sprintf("%s (pull %s)", d.Image.Ref, d.Image.Pull)},
+		envelopeRow{"IMAGE", imageRow},
 		envelopeRow{"VERIFY", c.verifyLine()},
-		envelopeRow{"NETWORK", d.Network},
+		envelopeRow{"NETWORK", networkRow},
 	)
 	for i, p := range d.Ports {
 		rows = append(rows, envelopeRow{labelOnce(i, "PORTS"), p})
 	}
-	if d.NoPolicy {
+	switch {
+	case d.NoPolicy:
 		rows = append(rows, envelopeRow{"POLICY", "(none)"})
-	} else {
+	case d.Target != nil:
+		for i, p := range d.Target.Policies {
+			rows = append(rows, envelopeRow{labelOnce(i, "POLICY"), p.Name + ", from " + p.From})
+		}
+	default:
 		rows = append(rows, envelopeRow{"POLICY", strings.Join(d.Policies, ", ")})
 	}
 	if d.Egress != nil {
@@ -418,6 +573,9 @@ func (c *Config) PrintPlan(d PlanDocument) {
 	}
 	if d.Broker != nil {
 		rows = append(rows, envelopeRow{"BROKER", c.planBrokerLine(d.Broker)})
+		for _, r := range d.Broker.Detail {
+			rows = append(rows, envelopeRow{"", routeText(r)})
+		}
 	}
 	if len(d.Credentials) == 0 {
 		rows = append(rows, envelopeRow{"CREDENTIALS", "(none)"})
@@ -436,10 +594,22 @@ func (c *Config) PrintPlan(d PlanDocument) {
 		rows = append(rows, envelopeRow{"ARGV", "BRIG_ENV_ARGV=1, so these values go on the runtime's " +
 			"command line, where `ps` can read them: " + strings.Join(d.ArgvExposed, " ")})
 	}
-	rows = append(rows,
-		envelopeRow{"LIMITS", fmt.Sprintf("%d MB, %d vCPUs", d.Limits.Mem, d.Limits.CPUs)},
-		envelopeRow{"DIGEST", d.Digest},
-	)
+	limitsRow := fmt.Sprintf("%d MB, %d vCPUs", d.Limits.Mem, d.Limits.CPUs)
+	if t := d.Target; t != nil {
+		limitsRow = fmt.Sprintf("%d MB from %s, %d vCPUs from %s", d.Limits.Mem, t.Origins.Mem,
+			d.Limits.CPUs, t.Origins.CPUs)
+	}
+	rows = append(rows, envelopeRow{"LIMITS", limitsRow})
+	if d.Target != nil {
+		n := 0
+		for _, note := range d.Target.Notes {
+			for _, line := range strings.Split(note, "\n") {
+				rows = append(rows, envelopeRow{labelOnce(n, "NOTE"), line})
+				n++
+			}
+		}
+	}
+	rows = append(rows, envelopeRow{"DIGEST", d.Digest})
 	writeRows(c.Out, rows)
 }
 
@@ -450,6 +620,25 @@ func labelOnce(i int, label string) string {
 		return label
 	}
 	return ""
+}
+
+// routeText is one route of the BROKER rows: where it sends what, with which
+// secrets, and from which policy.
+func routeText(r PlanRoute) string {
+	dest := "to " + r.Upstream
+	if r.Upstream == "" && len(r.Services) > 0 {
+		dest = "to the Google APIs " + strings.Join(r.Services, ", ")
+	}
+	secrets := "no secret"
+	if len(r.Secrets) > 0 {
+		secrets = "your secret " + strings.Join(r.Secrets, ", ")
+	}
+	line := fmt.Sprintf("route %s %s with %s", r.Name, dest, secrets)
+	if r.Vends {
+		line = fmt.Sprintf("route %s hands the guest AWS keys made from your secret %s", r.Name,
+			strings.Join(r.Secrets, ", "))
+	}
+	return line + ", from " + r.Policy
 }
 
 func ruleText(r policy.Rule) string {

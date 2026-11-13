@@ -70,7 +70,7 @@ func (c *Config) awsHomeRefusal() error {
 	}
 	return fmt.Errorf("policy %s declares a route that vends AWS keys, and %s puts %s in the guest's "+
 		"~/%s, which the AWS SDKs read before the route; remove it from the profile, or detach the policy",
-		c.vendList(), c.Profile.Name, strings.Join(why, " and "), awsDir)
+		c.vendList(), c.subject(), strings.Join(why, " and "), awsDir)
 }
 
 // awsIdentityFiles are the files in ~/.aws an AWS SDK reads an identity
