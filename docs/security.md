@@ -1126,8 +1126,8 @@ put the files back, reinstall the bundle with `install.sh`.
 The first two checks need no network, so a changed file refuses even where
 the signature cannot be checked.
 
-Only a nerdctl run reads the record. On macOS a `SHA256SUMS` in a named
-directory is ignored.
+Only a run through nerdctl, or through hull on Linux, reads the record. On
+hull on macOS a `SHA256SUMS` in a named directory is ignored.
 
 #### After the check
 
