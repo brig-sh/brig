@@ -204,6 +204,15 @@ func planTarget(opts options, wantJSON bool) error {
 	if err != nil {
 		return err
 	}
+	// A sandbox keeps what it was booted with. When the Brigfile has changed
+	// what this target boots since, the plan says that this is not what the
+	// running sandbox has.
+	if changed, _ := cfg.ConfigChanged(); changed {
+		ref := projectRef{target: rt.Name, session: opts.session, file: opts.file}
+		target.Notes = append(target.Notes, "This session's sandbox was booted with a different "+
+			"configuration, so it does not run what this plan shows.\n`"+ref.command("rm")+
+			"` removes it and its guest home.")
+	}
 	cfg.OpenStore = func() (creds.SecretReader, error) { return openStore() }
 	d := cfg.Plan()
 	if wantJSON {
