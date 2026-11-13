@@ -175,8 +175,10 @@ func TestLoadRefusesAMissingBrigfile(t *testing.T) {
 // result. The repository is the attacker here, and the file outside is
 // whatever on the host they would like brig to parse and hand to a sandbox.
 func TestLoadRefusesASymlinkThatLeavesTheRoot(t *testing.T) {
+	// The outside file is a valid policy, so a loader that followed the link
+	// would load it and succeed: only the refusal makes this test pass.
 	const marker = "outside-marker-4d1f"
-	outside := project(t, map[string]string{"secret.yaml": "name: " + marker + "\n"})
+	outside := project(t, map[string]string{"secret.yaml": strings.Replace(agentPolicy, "claude-api", marker, 1)})
 	for _, target := range []string{
 		filepath.Join(outside, "secret.yaml"), // absolute
 		"",                                    // relative, set below
@@ -202,8 +204,8 @@ func TestLoadRefusesASymlinkThatLeavesTheRoot(t *testing.T) {
 		if strings.Contains(err.Error(), marker) {
 			t.Errorf("the outside file's content is in the error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "policies.agent.file") {
-			t.Errorf("error %q does not name the field", err)
+		if !strings.Contains(err.Error(), "policies.agent.file") || !strings.Contains(err.Error(), "escapes") {
+			t.Errorf("error %q does not name the field and the escape", err)
 		}
 	}
 }
@@ -211,13 +213,22 @@ func TestLoadRefusesASymlinkThatLeavesTheRoot(t *testing.T) {
 // The Brigfile itself is read through the root too, so a Brigfile that is a
 // link out of the project is refused the same way.
 func TestLoadRefusesABrigfileThatLeavesTheRoot(t *testing.T) {
-	outside := project(t, map[string]string{"Brigfile": minimal})
+	// Declared inline only, so it would load cleanly if the link were followed.
+	inline := "apiVersion: brig.sh/v1alpha1\nprofiles:\n  c: {from: builtin:codex}\ntargets:\n  t: {profile: c}\n"
+	outside := project(t, map[string]string{FileName: inline})
+	if _, err := Load(filepath.Join(outside, FileName)); err != nil {
+		t.Fatalf("the outside Brigfile does not load on its own, so this test proves nothing: %v", err)
+	}
 	dir := project(t, nil)
 	if err := os.Symlink(filepath.Join(outside, FileName), filepath.Join(dir, FileName)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(filepath.Join(dir, FileName)); err == nil {
+	_, err := Load(filepath.Join(dir, FileName))
+	if err == nil {
 		t.Fatal("a Brigfile linked out of the project was loaded")
+	}
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Errorf("error %q is not the escape refusal", err)
 	}
 }
 
