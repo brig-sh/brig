@@ -1,6 +1,7 @@
 package brigfile
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"slices"
@@ -136,7 +137,9 @@ func (l *Loaded) resolve(root *os.Root) error {
 	for _, name := range sortedKeys(l.Project.Targets) {
 		t := l.Project.Targets[name]
 		p := l.Profiles[t.Profile]
-		if len(t.Policies) == 0 {
+		// A repository profile's own policy: list counts too. Both lists end
+		// up in the target's policies, so both are held to the one check.
+		if len(t.Policies) == 0 && len(p.Policies) == 0 {
 			continue
 		}
 		// The rule `brig policy attach` holds a profile to. A policy on a
@@ -231,6 +234,20 @@ func refuseHostFields(p profile.Profile) error {
 		return fmt.Errorf("projectPaths names directories on your host that brig copies into " +
 			"the guest; a repository profile may not set it")
 	}
+	// The network a sandbox gets is isolated unless something asks for less.
+	// A repository may ask for more isolation, never for less: shared puts
+	// the guest on a network with other sandboxes and the host's own
+	// services, and that is the reader's to choose, with --network.
+	if p.Network == "shared" {
+		return fmt.Errorf("network: shared puts the sandbox on a network it shares with others; " +
+			"a repository profile may ask for isolated or offline, and shared is yours to choose with --network")
+	}
+	// Which hypervisor exists is a fact about the reader's machine, and vz
+	// and qemu fall back to a shared network where hvi gives an isolated one.
+	if p.Hypervisor != "" {
+		return fmt.Errorf("hypervisor names the hypervisor on your host, and decides which network " +
+			"the sandbox can get; a repository profile may not set it")
+	}
 	// Not a host field, but refused for what it would do on the host: see
 	// imageRef. profile.Parse only asks that an image is set.
 	if !imageRef(p.Image) {
@@ -285,6 +302,9 @@ func (l *Loaded) Target(name string) (ResolvedTarget, error) {
 	if err != nil {
 		return ResolvedTarget{}, err
 	}
+	// The bytes too: Doc would otherwise still be the array Load read, and a
+	// caller that wrote into it would change what the next Target parses.
+	p.Doc = bytes.Clone(p.Doc)
 	out := ResolvedTarget{
 		Name:      name,
 		Profile:   p,
@@ -303,6 +323,7 @@ func (l *Loaded) Target(name string) (ResolvedTarget, error) {
 			return ResolvedTarget{}, fmt.Errorf("policies.%s: %w", alias, err)
 		}
 		rp.Policy = pol
+		rp.Doc = bytes.Clone(rp.Doc)
 		out.Policies = append(out.Policies, rp)
 	}
 	return out, nil
