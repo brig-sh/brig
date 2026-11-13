@@ -39,6 +39,7 @@ changes.
 | a flag, either side of the ref | the run-line flags that verb accepts (Brig reads those on both sides) |
 | a ref | every agent, and every session under one: `claude`, `claude@refactor` |
 | `brig run <ref> …` or `brig plan <ref> …` | the project directory, for the first word only |
+| `brig config --target …` | the targets of the Brigfile the line would read. Nothing when there is none, or it does not load |
 | once the agent's arguments have begun | nothing |
 
 ### Global flags
