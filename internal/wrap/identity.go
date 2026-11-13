@@ -110,9 +110,11 @@ type Target struct {
 	Base Origins
 	// Notes are what the plan should say about the target beside its rows.
 	Notes []string
-	// Args are the target's default guest arguments. Only the configuration
-	// digest reads them.
+	// Args are the target's default guest arguments. The configuration
+	// digest and the plan read them.
 	Args []string
+	// RmCommand is the line that removes this session, for a notice to name.
+	RmCommand string
 }
 
 // ProjectConfig is the Config of a recorded session of a Brigfile target, for
@@ -169,4 +171,15 @@ func (c *Config) profileNoun() string {
 		return "the profile of target " + c.target.Name
 	}
 	return "the " + c.Profile.Name + " profile"
+}
+
+// brokerProfile is the profile name the broker registers a sandbox under,
+// which names its workload on the broker's audit line. A target's profile
+// name is the repository's to choose, so a target registers under its
+// sandbox's name, which no profile of yours can have.
+func (c *Config) brokerProfile() string {
+	if c.target != nil {
+		return c.VMName
+	}
+	return c.Profile.Name
 }

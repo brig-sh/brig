@@ -97,8 +97,13 @@ func (c *Config) routeStoreRefusal(st routeStore) error {
 	var missing []creds.Missing
 	for _, name := range st.missing {
 		d := c.routeDecl(name)
-		missing = append(missing, creds.Missing{Name: name, Required: true, Importable: d.Importable(),
-			Reason: secret.ErrNotFound, Hint: d.HintText(), Create: c.routeCreateCommand(name)})
+		// Never import for a target. import fills your own profile of that
+		// name, and a route the repository wrote decides where the secret
+		// goes: advice to import your login there is the repository's to
+		// give. Create names the one secret, and the plan names the route.
+		missing = append(missing, creds.Missing{Name: name, Required: true,
+			Importable: d.Importable() && c.target == nil,
+			Reason:     secret.ErrNotFound, Hint: d.HintText(), Create: c.routeCreateCommand(name)})
 	}
 	return fmt.Errorf("policy %s injects a secret that brig's secret store does not hold: %w",
 		c.routedBy(st.missing), &creds.MissingSecretsError{Sandbox: c.VMName, Profile: c.Profile.Name, Missing: missing})
