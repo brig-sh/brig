@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 // example is the document the format was decided on, with an inline policy
@@ -241,6 +242,23 @@ func TestParseRefusesAFilePathThatIsNotPlain(t *testing.T) {
 			if !strings.Contains(err.Error(), form+".") || (path != `""` && !strings.Contains(err.Error(), ".file")) {
 				t.Errorf("%s: file %s: error %q does not name the field", form, path, err)
 			}
+		}
+	}
+}
+
+// A path with a control character is refused, and the error quotes it. The
+// error reaches the reader's terminal, and a raw escape sequence there could
+// clear the screen or rewrite what it says.
+func TestParseRefusesAFilePathWithAControlCharacter(t *testing.T) {
+	for _, path := range []string{`"\e[2Jagent.yaml"`, `"a\tb.yaml"`, `"a\x7fb.yaml"`} {
+		doc := strings.Replace(minimal, "{file: agent.yaml}", "{file: "+path+"}", 1)
+		_, err := Parse([]byte(doc))
+		if err == nil {
+			t.Errorf("file %q was accepted", path)
+			continue
+		}
+		if strings.IndexFunc(err.Error(), unicode.IsControl) >= 0 || !strings.Contains(err.Error(), "policies.agent.file") {
+			t.Errorf("file %q: error %q", path, err)
 		}
 	}
 }

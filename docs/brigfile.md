@@ -88,9 +88,9 @@ directory has a file that overrides that built-in, the Brigfile does not
 read it. `brig config` prints a note when that happens.
 
 A `file:` path is relative to the directory that holds the Brigfile. Write
-it with `/`, and with no `..`, no leading `/` and no leading `~`. Brig reads
-only regular files below that directory, and refuses a link that leads out
-of it.
+it with `/`, and with no `..`, no leading `/`, no leading `~` and no control
+character. Brig reads only regular files below that directory, and refuses a
+link that leads out of it.
 
 A profile document is the same format as your own profiles. See
 [Writing an agent profile](profiles.md). A policy document is described in
