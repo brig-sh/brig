@@ -111,11 +111,16 @@ type Target struct {
 func ProjectConfig(ps ProjectSession, rt runtime.Runtime, v Verbosity) *Config {
 	id := ProjectIdentity(ps.Root, ps.Target, ps.Session, "")
 	id.Sandbox = ps.Sandbox
+	// The home is the sandbox's own, whether or not an entry names it.
+	home, err := defaultWorkspace(ps.Sandbox)
+	if err != nil {
+		home = ps.Home
+	}
 	return &Config{
 		Runtime:       rt,
 		Slug:          ps.Session,
 		VMName:        ps.Sandbox,
-		Workspace:     ps.Home,
+		Workspace:     home,
 		EphemeralHome: true,
 		Project:       ps.Root,
 		ProjectReal:   ps.Root,

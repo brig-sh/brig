@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -492,13 +493,18 @@ func dispatch(args []string) error {
 			jsonRun = &jsonRunContext{ref: operand}
 		}
 	}
-	// plan --target names what it plans with the flag, so a bare word on the
-	// line is a second answer to the same question. Refused before parse,
-	// which would read the word as a ref and refuse it as one.
-	if verb == "plan" {
-		if err := checkPlanTargetLine(rest); err != nil {
+	// plan, stop and rm --target name a target with the flag, so a bare word
+	// on the line is a second answer to the same question. Refused before
+	// parse, which would read the word as a ref and refuse it as one.
+	if readsTarget(verb) {
+		if err := checkTargetLine(verb, rest); err != nil {
 			return err
 		}
+	}
+	// The verbs that reach a session by ref alone say so, rather than call
+	// --target a flag that does not exist.
+	if err := refuseTarget(verb, rest); err != nil {
+		return err
 	}
 	opts, profileName, tail, err := parse(verb, rest)
 	if err != nil {
@@ -547,15 +553,22 @@ func dispatch(args []string) error {
 	}
 	// -f names the Brigfile a target is read from. With no target there is
 	// nothing to read it for, and a plan of a profile that ignored it would
-	// look like a plan of the file.
+	// look like a plan of the file. --session names a session of a target.
 	if opts.fileGiven && !opts.targetGiven {
-		return usagef("-f names the Brigfile of --target; `brig plan -f <path>` needs --target <name> too")
+		return usagef("-f names the Brigfile of --target; `brig %s -f <path>` needs --target <name> too", verb)
+	}
+	if opts.sessionGiven && !opts.targetGiven {
+		return usagef("--session names a session of a Brigfile target; `brig %s --session <name>` "+
+			"needs --target <name> too. A session of a profile is <profile>@<name>", verb)
 	}
 	// The run line is read, and nothing has booted: the question, when
 	// there is one, comes now.
 	askTelemetry(wantJSON)
 	if opts.targetGiven {
-		return planTarget(opts, wantJSON)
+		if verb == "plan" {
+			return planTarget(opts, wantJSON)
+		}
+		return projectLifecycle(verb, opts, rmDryRun)
 	}
 	t, ok := profile.Lookup(profileName)
 	if !ok {
@@ -838,12 +851,15 @@ type options struct {
 	// all is `brig network unpublish --all`, which withdraws every port this
 	// sandbox offers.
 	all bool
-	// target and file are `brig plan --target <name> [-f <path>]`, and
-	// targetGiven says --target was on the line, whatever its value.
-	target      string
-	file        string
-	targetGiven bool
-	fileGiven   bool
+	// target, session and file are `--target <name> [--session <name>]
+	// [-f <path>]` on plan, stop and rm, and targetGiven says --target was on
+	// the line, whatever its value.
+	target       string
+	session      string
+	file         string
+	targetGiven  bool
+	fileGiven    bool
+	sessionGiven bool
 }
 
 // repeated collects a flag written more than once, in the order it was
@@ -900,10 +916,11 @@ const (
 	// position brig would otherwise read it in, so what matters there is that
 	// the token is brig's at all, not where.
 	posAny
-	// posTarget is --target and -f on the line of `brig plan`, which plans a
-	// target of the Brigfile instead of a profile. A position of its own
-	// rather than posRun, so the line of every other verb reads them as it
-	// did before: -f after the ref of `brig run` is still the agent's, and
+	// posTarget is --target, --session and -f on the line of `brig plan`,
+	// which plans a target of the Brigfile instead of a profile, and of `brig
+	// stop` and `brig rm`, which reach a session of one. A position of its
+	// own rather than posRun, so the line of every other verb reads them as
+	// it did before: -f after the ref of `brig run` is still the agent's, and
 	// brig says nothing about it. See oursFor.
 	posTarget
 )
@@ -994,9 +1011,11 @@ var brigFlags = []struct {
 	// And on the publish line, where the ports are bare words: without this
 	// the flag falls into the tail and is read as a port.
 	{long: "json", position: posPublish},
-	// brig plan --target names a target of the Brigfile in place of a ref,
-	// and -f names the Brigfile. Only plan reads them, until run does.
+	// --target names a target of the Brigfile in place of a ref, --session
+	// one of its sessions, and -f the Brigfile. plan, stop and rm read them,
+	// and run does not yet.
 	{long: "target", value: true, position: posTarget},
+	{long: "session", value: true, position: posTarget},
 	{long: "file", short: "f", value: true, position: posTarget},
 }
 
@@ -1038,14 +1057,19 @@ func ours(arg string, at position) (mine bool, takesValue bool) {
 	return mine, takesValue
 }
 
-// oursFor is ours on the line of verb: plan reads the flags of posTarget as
-// well as those of the run line.
+// oursFor is ours on the line of verb: plan, stop and rm read the flags of
+// posTarget as well as those of the run line.
 func oursFor(verb, arg string, at position) (mine bool, takesValue bool) {
-	if mine, takesValue = ours(arg, at); mine || verb != "plan" {
+	if mine, takesValue = ours(arg, at); mine || !readsTarget(verb) {
 		return mine, takesValue
 	}
 	return ours(arg, posTarget)
 }
+
+// readsTarget reports whether verb reads --target, --session and -f: plan,
+// which plans a target, and stop and rm, which reach a session of one. run
+// does not, so `brig run <agent> -f x` still hands -f to the agent.
+func readsTarget(verb string) bool { return verb == "plan" || verb == "stop" || verb == "rm" }
 
 // oursAt is ours with the position the match was found in, which only matters
 // when the search was posAny: a flag brig read nowhere on this line still has a
@@ -1588,8 +1612,10 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		{"publish", "", func(n string) { fs.Var(repeated{&o.load.Publish}, n, "") }},
 		// Only unpublish reads it, and split only lets it through there.
 		{"all", "", func(n string) { fs.BoolVar(&o.all, n, false, "") }},
-		// Only plan reads these, and split only lets them through there.
+		// Only plan, stop and rm read these, and split only lets them
+		// through there.
 		{"target", "", func(n string) { fs.StringVar(&o.target, n, "", "") }},
+		{"session", "", func(n string) { fs.StringVar(&o.session, n, "", "") }},
 		{"file", "f", func(n string) { fs.StringVar(&o.file, n, "", "") }},
 	} {
 		// Both spellings write the same variable, so whichever the user typed
@@ -1604,12 +1630,18 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// A missing target or Brigfile is a word left off the line, and
 		// `brig config --target` calls it a usage error, so plan does too.
 		if name, ok := strings.CutPrefix(err.Error(), "flag needs an argument: "); ok &&
-			(name == "-target" || name == "-file" || name == "-f") {
+			(name == "-target" || name == "-session" || name == "-file" || name == "-f") {
 			return options{}, "", nil, usagef("%s", rewriteFlagError(err))
 		}
 		return options{}, "", nil, rewriteFlagError(err)
 	}
 	o.targetGiven, o.fileGiven = seen(fs, "target"), seen(fs, "file", "f")
+	o.sessionGiven = seen(fs, "session")
+	if o.sessionGiven {
+		if err := checkTargetSession(o.session); err != nil {
+			return options{}, "", nil, err
+		}
+	}
 	// Positive, not merely numeric: a guest with zero CPUs is a boot failure
 	// several layers down, where the number no longer appears in the message.
 	// Decimal, too: --memory 010 asks for ten, and a guest a fifth of the size
@@ -1832,6 +1864,7 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 	if len(rows) == 0 {
 		fmt.Println("(none -- `brig run claude` starts one)")
 	}
+	printProjects(os.Stdout, rows)
 	return nil
 }
 
@@ -1841,11 +1874,31 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 // Separate from listSandboxes because it is the whole of what the listing
 // decides, and the only part of it a test can drive without a runtime: what the
 // two printers below are handed is exactly this.
+//
+// A session of a Brigfile target is a row too, with what the project index
+// records about it and no ref, since no verb takes one for it. A sandbox of
+// a target that the index has no record of is listed all the same, as one
+// brig cannot place. A session the index records and the runtime did not
+// list is listed as unlisted: it still owns a guest home, and `brig rm
+// --target` is how to be rid of it.
 func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	rows := make([]sandboxRow, 0, len(list))
+	projects := map[string]wrap.ProjectSession{}
+	for _, ps := range wrap.ProjectSessions() {
+		projects[ps.Sandbox] = ps
+	}
 	for _, inst := range list {
 		if !strings.HasPrefix(inst.Name, sandboxPrefix) {
+			continue
+		}
+		if wrap.IsProjectSandbox(inst.Name) {
+			row := sandboxRow{name: inst.Name, state: inst.State, projectSandbox: true}
+			if ps, ok := projects[inst.Name]; ok {
+				row.project, row.workspace = &ps, ps.Home
+				delete(projects, inst.Name)
+			}
+			rows = append(rows, row)
 			continue
 		}
 		rows = append(rows, sandboxRow{
@@ -1855,8 +1908,18 @@ func sandboxRows(list []runtime.Instance, rt runtime.Runtime) []sandboxRow {
 			workspace: workspaceOf(inst.Name, rt),
 		})
 	}
-	return rows
+	unlisted := make([]sandboxRow, 0, len(projects))
+	for _, ps := range projects {
+		unlisted = append(unlisted, sandboxRow{name: ps.Sandbox, state: stateUnlisted,
+			workspace: ps.Home, projectSandbox: true, project: &ps})
+	}
+	sort.Slice(unlisted, func(i, j int) bool { return unlisted[i].name < unlisted[j].name })
+	return append(rows, unlisted...)
 }
+
+// stateUnlisted is the state of a session of a target that the project index
+// records and the runtime did not list.
+const stateUnlisted = "unlisted"
 
 // lsKeepIndexEnv, set, makes `brig ls` list without pruning the session
 // index. brig report sets it on the ls it runs.
@@ -1899,6 +1962,10 @@ type sandboxRow struct {
 	name      string
 	state     string
 	workspace string
+	// projectSandbox marks the sandbox of a Brigfile target, and project is
+	// what the project index records about it, or nil when it has no record.
+	projectSandbox bool
+	project        *wrap.ProjectSession
 }
 
 // sandboxListJSON is `brig ls` as data, the SandboxList payload. The runtime
@@ -1924,13 +1991,28 @@ type sandboxRuntimeJSON struct {
 // consumer need not split it; both are omitted, with ref, for a sandbox brig has
 // no ref to print -- and sandbox is set even then, so the JSON shows the sandbox
 // exists the way the table's placeholder row does.
+//
+// project is set only for the sandbox of a Brigfile target, so a sandbox of a
+// profile is the same object it always was.
 type sandboxJSON struct {
-	Ref       string `json:"ref,omitempty"`
-	Agent     string `json:"agent,omitempty"`
-	Label     string `json:"label,omitempty"`
-	Sandbox   string `json:"sandbox"`
-	State     string `json:"state"`
-	Workspace string `json:"workspace,omitempty"`
+	Ref       string              `json:"ref,omitempty"`
+	Agent     string              `json:"agent,omitempty"`
+	Label     string              `json:"label,omitempty"`
+	Sandbox   string              `json:"sandbox"`
+	State     string              `json:"state"`
+	Workspace string              `json:"workspace,omitempty"`
+	Project   *sandboxProjectJSON `json:"project,omitempty"`
+}
+
+// sandboxProjectJSON is the session of a Brigfile target a sandbox carries.
+// recorded is false for a sandbox of a target that the project index has no
+// record of, and then nothing else is known.
+type sandboxProjectJSON struct {
+	Recorded bool   `json:"recorded"`
+	Target   string `json:"target,omitempty"`
+	Session  string `json:"session,omitempty"`
+	Root     string `json:"root,omitempty"`
+	Brigfile string `json:"brigfile,omitempty"`
 }
 
 // sandboxListData turns the rows the table prints into the SandboxList payload.
@@ -1944,6 +2026,13 @@ func sandboxListData(rows []sandboxRow, rt runtime.Runtime) sandboxListJSON {
 	}
 	for _, r := range rows {
 		s := sandboxJSON{Sandbox: r.name, State: r.state, Workspace: r.workspace}
+		if r.projectSandbox {
+			s.Project = &sandboxProjectJSON{}
+			if ps := r.project; ps != nil {
+				*s.Project = sandboxProjectJSON{Recorded: true, Target: ps.Target, Session: ps.Session,
+					Root: ps.Root, Brigfile: ps.Brigfile}
+			}
+		}
 		// A ref brig has for the sandbox carries its agent and label, split here so
 		// the consumer does not. A row with none is included ref-less: the sandbox
 		// is real, and the table shows it too.
@@ -1989,7 +2078,11 @@ func refCell(ref string) string {
 // profile read from a file can be called anything, so a wider constant only
 // moves where it breaks. Measuring the values costs a pass over a list brig has
 // in hand and cannot be outgrown.
+//
+// Sessions of Brigfile targets are not in this table. They have no ref, and
+// printProjects lists them below it.
 func printSandboxes(w io.Writer, rows []sandboxRow) {
+	rows = slices.DeleteFunc(slices.Clone(rows), func(r sandboxRow) bool { return r.projectSandbox })
 	ref, name := len("REF"), len("SANDBOX")
 	for _, r := range rows {
 		if n := len(refCell(r.ref)); n > ref {
@@ -2003,6 +2096,45 @@ func printSandboxes(w io.Writer, rows []sandboxRow) {
 	for _, r := range rows {
 		fmt.Fprintf(w, "%-*s %-*s %-10s %s\n",
 			ref, refCell(r.ref), name, r.name, r.state, r.workspace)
+	}
+}
+
+// printProjects writes the sessions of Brigfile targets, after a blank line,
+// with a header of their own: the target, the session, the sandbox, its state
+// and the project. It writes nothing when there are none, so a host with no
+// such session lists what it always listed.
+//
+// A sandbox of a target that the project index has no record of has no
+// target, session or project to show, and says so.
+func printProjects(w io.Writer, rows []sandboxRow) {
+	type line struct{ target, session, name, state, project string }
+	var lines []line
+	widths := [4]int{len("TARGET"), len("SESSION"), len("SANDBOX"), len("STATE")}
+	for _, r := range rows {
+		if !r.projectSandbox {
+			continue
+		}
+		l := line{target: noRef, session: noRef, name: r.name, state: r.state,
+			project: "unknown: brig has no record of this session"}
+		if ps := r.project; ps != nil {
+			l.target, l.project = shown(ps.Target), shown(ps.Root)
+			if ps.Session != "" {
+				l.session = ps.Session
+			}
+		}
+		for i, v := range []string{l.target, l.session, l.name, l.state} {
+			widths[i] = max(widths[i], len(v))
+		}
+		lines = append(lines, l)
+	}
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	format := fmt.Sprintf("%%-%ds %%-%ds %%-%ds %%-%ds %%s\n", widths[0], widths[1], widths[2], widths[3])
+	fmt.Fprintf(w, format, "TARGET", "SESSION", "SANDBOX", "STATE", "PROJECT")
+	for _, l := range lines {
+		fmt.Fprintf(w, format, l.target, l.session, l.name, l.state, l.project)
 	}
 }
 
@@ -2050,6 +2182,12 @@ func printRefs(w io.Writer, rows []sandboxRow) {
 // so neither is printed, and the check is what makes that structural instead of
 // something to remember.
 func refOf(vmName string) string {
+	// The sandbox of a Brigfile target carries no ref. Its key in the session
+	// index is not one, and no profile name starts with the dash after the
+	// prefix, so the name decomposes into none either.
+	if wrap.IsProjectSandbox(vmName) {
+		return ""
+	}
 	ref := wrap.RefOfSandbox(vmName)
 	if ref == "" {
 		agent, slug, ok := splitSandboxName(vmName)
@@ -2532,7 +2670,13 @@ func removalList(list []runtime.Instance) string {
 	}
 	var b strings.Builder
 	for i, inst := range list {
-		fmt.Fprintf(&b, "%-*s  %-*s  %s\n", ref, refs[i], name, inst.Name, inst.State)
+		fmt.Fprintf(&b, "%-*s  %-*s  %s", ref, refs[i], name, inst.Name, inst.State)
+		// A session of a Brigfile target has no ref, so the line names what
+		// it is instead: the reader is about to agree to remove it.
+		if wrap.IsProjectSandbox(inst.Name) {
+			b.WriteString("  " + projectLabel(inst.Name))
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }

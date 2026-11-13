@@ -27,13 +27,14 @@ import (
 // identity, a set of policies and what the plan shows. Everything that knows
 // what a Brigfile is stays on this side of that line.
 
-// checkPlanTargetLine refuses a bare word on a plan line that names a target.
-// The target says what to plan and the Brigfile's directory is the project,
-// so a profile or a project on the same line is a second answer to each.
+// checkTargetLine refuses a bare word on a line of plan, stop or rm that
+// names a target. The target says which session and the Brigfile's directory
+// is the project, so a profile or a project on the same line is a second
+// answer to each.
 //
 // It walks the line the way split does, so a flag's value is never read as
 // the word.
-func checkPlanTargetLine(args []string) error {
+func checkTargetLine(verb string, args []string) error {
 	target := false
 	var words []string
 	for i := 0; i < len(args); i++ {
@@ -49,14 +50,47 @@ func checkPlanTargetLine(args []string) error {
 		if name == "--target" {
 			target = true
 		}
-		if mine, takesValue := oursFor("plan", a, posRun); mine && takesValue && !inline {
+		if mine, takesValue := oursFor(verb, a, posRun); mine && takesValue && !inline {
 			i++
 		}
 	}
-	if target && len(words) > 0 {
+	if !target || len(words) == 0 {
+		return nil
+	}
+	if verb == "plan" {
 		return usagef("unexpected argument %q; `brig plan --target` plans a target of the Brigfile, "+
 			"whose directory is the project, so it takes no profile and no project. "+
 			"Drop --target to plan a profile", words[0])
+	}
+	return usagef("unexpected argument %q; `brig %s --target` %s a session of a target of the "+
+		"Brigfile, so it takes no profile. Drop --target to %s a profile's session",
+		words[0], verb, lifecycleVerbs[verb], verb)
+}
+
+// lifecycleVerbs is what stop and rm do to a session, as a message says it.
+var lifecycleVerbs = map[string]string{"stop": "stops", "rm": "removes"}
+
+// refuseTarget refuses --target and --session on a verb that reaches a
+// session by its ref alone. Only the flags before the first bare word are
+// read: after the ref of sh they are the guest command's.
+func refuseTarget(verb string, args []string) error {
+	var advice string
+	switch verb {
+	case "info":
+		advice = "`brig plan --target <name>` shows what a run of a target gets"
+	case "sh", "exec", "network ls", "network publish", "network unpublish":
+		advice = "`brig stop --target` and `brig rm --target` reach a session of a target"
+	default:
+		return nil
+	}
+	for _, a := range args {
+		if a == "--" || !strings.HasPrefix(a, "-") {
+			return nil
+		}
+		name, _, _ := strings.Cut(a, "=")
+		if name == "--target" || name == "--session" {
+			return usagef("`brig %s` takes a ref and does not read a Brigfile target. %s", verb, advice)
+		}
 	}
 	return nil
 }
@@ -117,9 +151,11 @@ func planTarget(opts options, wantJSON bool) error {
 	if builtIn {
 		envAgent = rt.Profile.Source.Ref
 	}
-	id := wrap.ProjectIdentity(l.Root, rt.Name, "", envAgent)
+	id := wrap.ProjectIdentity(l.Root, rt.Name, opts.session, envAgent)
 	target := &wrap.Target{
 		Name:          rt.Name,
+		Session:       opts.session,
+		Args:          rt.Args,
 		Brigfile:      l.Path,
 		Root:          l.Root,
 		ProfileAlias:  rt.Profile.Alias,
