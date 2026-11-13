@@ -5,9 +5,10 @@ repository under Brig. It names profiles and policies by alias, and declares
 one or more targets. A target pairs one profile with its policies, a size
 and default arguments.
 
-You can write a Brigfile, check it, see what each target resolves to, and
-plan a run of a target. `brig run` does not read a Brigfile yet. A run still
-uses the agent and the flags on its own command line.
+You can write a Brigfile, check it, see what each target resolves to, plan
+a run of a target, and stop or remove a session of a target. `brig run` does
+not read a Brigfile yet. A run still uses the agent and the flags on its own
+command line.
 
 ## Start one
 
@@ -137,9 +138,9 @@ repository. Read the plan before you run a target. The plan shows:
 - for each route, where it sends requests and which secrets in your store it
   uses
 
-`brig plan --target` takes the flags `--image`, `--mem`, `--cpus`,
-`--network`, `--offline`, `--publish`, `--skills` and `--json`. It takes no
-profile and no project, and it refuses `--home` and `--no-project`.
+`brig plan --target` takes the flags `--session`, `--image`, `--mem`,
+`--cpus`, `--network`, `--offline`, `--publish`, `--skills` and `--json`. It
+takes no profile and no project, and it refuses `--home` and `--no-project`.
 [`brig plan`](cli.md#brig-plan) describes each row and field.
 
 ### Where each value comes from
@@ -165,9 +166,10 @@ For a target on a `file:` or `inline:` profile, only the global settings
 apply. A repository profile named `claude-code` does not read
 `BRIG_CLAUDE_CODE_IMAGE` or any other `BRIG_CLAUDE_CODE_*` setting.
 
-`BRIG_NAME` and `BRIG_WORKSPACE` do not apply to a target. Each target has
-its own sandbox and its own guest home, named after the project and the
-target. The sandbox name of a target starts with `brig--`.
+`BRIG_NAME` and `BRIG_WORKSPACE` do not apply to a target. Each session of a
+target has its own sandbox and its own guest home, named after the project,
+the target and the session. The sandbox name of a target starts with
+`brig--`. See [Sessions of a target](#sessions-of-a-target).
 
 ### Which policies apply
 
@@ -196,6 +198,88 @@ A policy with an egress default or a route never leaves the run on the
 shared network, even when you ask for `--network shared`. When two policies cannot apply
 together, for example two routes with the same name, the plan opens with a
 `REFUSED` row.
+
+## Sessions of a target
+
+`brig run` does not start a target yet. This section describes the sessions
+of a target for the commands that already take one.
+
+Each target has a default session. `--session <name>` names another one:
+
+```bash
+brig plan --target dev                  # the default session of dev
+brig plan --target dev --session fix    # the session fix of dev
+```
+
+A session name follows the rules of a label in a ref. It must already be its
+own slug: lowercase letters, digits, `.`, `-` and `_`. See
+[What a label can contain](sessions.md#what-a-label-can-contain).
+
+Each session has its own sandbox and its own guest home. Both are named after
+the project root, the target and the session, so two checkouts of one
+repository never share a session. The guest home is
+`~/.brig/homes/<sandbox name>`. Brig creates it and deletes it with the
+sandbox.
+
+`brig run <profile>` in the same checkout is not a session of a target. It
+keeps its own sandbox and guest home, and it does not read the Brigfile. It
+says so in one line on stderr, except under `-q` and `--json`.
+
+### Stop and remove a session
+
+```bash
+brig stop --target dev
+brig rm --target dev --session fix
+brig rm --target ci -f ci/Brigfile.ci --dry-run
+```
+
+These commands do not read the Brigfile. They find the session from the
+project root, the target and the session name. So they work after the
+Brigfile is deleted, and after the target is gone from it.
+
+- `-f <path>` names the project: the directory of the path. The file does not
+  have to exist.
+- `brig rm --target` removes the sandbox and its guest home, as
+  `brig rm <ref>` does for a guest home that Brig created. `--dry-run` works
+  as it does there.
+- If Brig has no record of the session and the runtime has no sandbox for
+  it, the command exits `3`. The error names the project and the target.
+- `brig rm --all` removes the sandboxes of targets too, with their guest
+  homes.
+
+`brig info`, `brig sh` and `brig logs` take a ref only. They refuse
+`--target`.
+
+### What `brig ls` shows
+
+`brig ls` lists the sessions of targets in a second table, below the
+sessions of profiles. Its columns are `TARGET`, `SESSION`, `SANDBOX`,
+`STATE` and `PROJECT`.
+
+| Row | Meaning | To remove it |
+| --- | --- | --- |
+| A target and a project | A session that Brig has a record of | `brig rm --target <name>` in that project |
+| `STATE` is `unlisted` | Brig has a record of the session, and the runtime did not list its sandbox | `brig rm --target <name>` |
+| `TARGET` is `-` and `PROJECT` is `unknown` | The runtime has a sandbox of a target that Brig has no record of | `brig rm --all` |
+
+A session of a target has no ref, so `brig ls -q` prints no line for it. In
+`brig ls --json`, each one has a `project` object. See
+[`brig ls`](cli.md#brig-ls).
+
+### A changed configuration
+
+A sandbox keeps the configuration it was started with. When the Brigfile
+changes what a target gets, the sandbox of a session that is already there
+does not change. `brig plan --target` then says so in a `NOTE` row, and names
+the `brig rm --target` command that removes the session.
+
+### The state directory
+
+Brig keeps its record of the sessions of targets in its state directory,
+`~/.brig`. The project of a target is mounted read-write in the guest. So
+`plan`, `stop` and `rm --target` refuse a project that holds the state
+directory, and a project inside it. Set `BRIG_STATE_DIR` to a directory
+outside the project.
 
 ## What a repository profile may not set
 
@@ -242,6 +326,8 @@ brig target ls -f ci/Brigfile.ci
 | [`brig config`](cli.md#brig-config) | Shows the project, or one target resolved with `--target <name>` |
 | [`brig init`](cli.md#brig-init) | Writes a starter Brigfile |
 | [`brig plan --target`](cli.md#brig-plan) | Shows the permissions that a run of one target would get |
+| [`brig stop --target`](cli.md#brig-stop) | Stops a session of a target |
+| [`brig rm --target`](cli.md#brig-rm) | Removes a session of a target, with its guest home |
 
 The first three commands read files and write nothing, except the one file
 `brig init` creates. They start no sandbox, open no secret and need no
@@ -249,7 +335,8 @@ runtime. `target ls` and `config` take `--json`.
 
 `brig plan --target` also writes nothing and opens no secret. Like
 `brig plan <profile>`, it looks for a runtime, asks the runtime about the
-sandbox, and lists the names in your secret store.
+sandbox, and lists the names in your secret store. `brig stop --target` and
+`brig rm --target` need a runtime, and do not read the Brigfile.
 
 With no Brigfile, `target ls`, `config` and `plan --target` exit `3` and say
 where they looked. A Brigfile that does not load exits `1`. See

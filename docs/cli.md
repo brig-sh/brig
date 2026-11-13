@@ -146,6 +146,15 @@ brig stop claude
 Stops the sandbox and keeps its name and state on disk. Stopping a sandbox
 that is not running is not an error.
 
+```bash
+brig stop --target dev [--session <name>] [-f <path>]
+```
+
+With `--target`, `stop` stops a session of a target of the repository's
+[Brigfile](brigfile.md#stop-and-remove-a-session). It does not read the
+Brigfile. It exits `3` when Brig has no record of the session and the runtime
+has no sandbox for it.
+
 ### `brig rm`
 
 ```bash
@@ -197,6 +206,15 @@ brig rm claude --dry-run
 
 `brig rm <ref>` asks no question, so it refuses `-y`.
 
+```bash
+brig rm --target dev [--session <name>] [-f <path>] [--dry-run]
+```
+
+With `--target`, `rm` removes a session of a target of the repository's
+[Brigfile](brigfile.md#stop-and-remove-a-session), with its guest home. It
+does not read the Brigfile. The cases in the table above apply to it too.
+`brig rm --all` removes the sandboxes of targets with the rest.
+
 `rm` and `stop` each take a single ref.
 
 ### `brig ls`
@@ -215,6 +233,24 @@ brig ls -q
 
 `-q` prints refs only, one per line, and skips a row with no derivable ref.
 Every line it prints works as a ref for another verb.
+
+The sessions of [Brigfile targets](brigfile.md#what-brig-ls-shows) follow
+in a second table, with the columns `TARGET`, `SESSION`, `SANDBOX`, `STATE`
+and `PROJECT`. The table is printed only when there is such a session. A
+session of a target has no ref, so `-q` leaves it out.
+
+In `brig --json ls`, a sandbox of a target has a `project` object and no
+`ref`:
+
+| Field | Meaning |
+| --- | --- |
+| `recorded` | `false` when Brig has no record of the session. The other fields are then omitted |
+| `target` | the target |
+| `session` | the session name, omitted for the default session |
+| `root` | the project root |
+| `brigfile` | the Brigfile the session was started from |
+
+A sandbox of a profile has no `project` object.
 
 ### `brig logs`
 
@@ -288,10 +324,11 @@ With no policy bound, `POLICY` reads `(none)` and `noPolicy` is `true`.
 
 #### Plan a Brigfile target
 
-`brig plan --target <name> [-f <path>]` plans a target of the repository's
-[Brigfile](brigfile.md#plan-a-target). The project is the directory that
-holds the Brigfile. The command takes no ref and no project, and it refuses
-`--home` and `--no-project`.
+`brig plan --target <name> [--session <name>] [-f <path>]` plans a target of
+the repository's [Brigfile](brigfile.md#plan-a-target). The project is the
+directory that holds the Brigfile. `--session` plans a named
+[session](brigfile.md#sessions-of-a-target) of the target. The command takes
+no ref and no project, and it refuses `--home` and `--no-project`.
 
 The plan of a target adds these rows to the plan of a profile:
 
@@ -303,7 +340,8 @@ The plan of a target adds these rows to the plan of a profile:
 - `BROKER`: one row for each route, with its upstream and the secrets in
   your store that it uses
 - `NOTE`: for example, that a file of yours that overrides a built-in does
-  not apply
+  not apply, or that the session's sandbox was started with a different
+  configuration
 
 With no Brigfile, or no target of that name, the command exits `3`.
 
