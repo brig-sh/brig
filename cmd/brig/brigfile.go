@@ -40,7 +40,7 @@ flags:
       --json       print the listing as JSON
 
 brig looks for the Brigfile at the top of the Git worktree, or in the current
-directory outside Git. brig run does not read a Brigfile yet.
+directory outside Git. brig run --target runs a target, once you approve it.
 `
 
 const configUsage = `brig config -- what a repository's Brigfile declares, and where each part comes from
