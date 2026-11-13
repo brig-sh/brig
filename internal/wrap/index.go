@@ -2,7 +2,9 @@ package wrap
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -165,12 +167,8 @@ func indexPath(name string) (string, error) {
 // the failure this tolerance exists to avoid.
 func readIndex[V any](name string) map[string]V {
 	index := map[string]V{}
-	path, err := indexPath(name)
-	if err != nil {
-		return index
-	}
-	blob, err := os.ReadFile(path)
-	if err != nil {
+	blob, err := readStateFile(name)
+	if err != nil || blob == nil {
 		return index
 	}
 	if err := json.Unmarshal(blob, &index); err != nil || index == nil {
@@ -179,8 +177,28 @@ func readIndex[V any](name string) map[string]V {
 	return index
 }
 
+// readStateFile returns the bytes of the file named name in the state
+// directory, and nil with no error when there is no such file.
+func readStateFile(name string) ([]byte, error) {
+	path, err := indexPath(name)
+	if err != nil {
+		return nil, err
+	}
+	blob, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return blob, err
+}
+
 // writeIndex replaces the file named name with the map it is given.
 func writeIndex[V any](name string, index map[string]V) error {
+	return writeStateFile(name, index)
+}
+
+// writeStateFile replaces the file named name in the state directory with v
+// as indented JSON.
+func writeStateFile(name string, v any) error {
 	path, err := indexPath(name)
 	if err != nil {
 		return err
@@ -190,7 +208,7 @@ func writeIndex[V any](name string, index map[string]V) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	blob, err := json.MarshalIndent(index, "", "  ")
+	blob, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
