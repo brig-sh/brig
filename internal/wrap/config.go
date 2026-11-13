@@ -577,9 +577,11 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	// profile's network: is a default for a new sandbox, not a request to move
 	// one, so it only applies when nothing was recorded or recovered from the
 	// runtime of a session an older release started.
-	base0 := Origins{Image: "profile", Mem: "profile", CPUs: "profile", Network: "profile"}
+	// Where each value came from when no flag or setting chose it: the
+	// profile, or for a target, its overrides or its profile by name.
+	baseFrom := Origins{Image: "profile", Mem: "profile", CPUs: "profile", Network: "profile"}
 	if o.Target != nil {
-		base0 = o.Target.Base
+		baseFrom = o.Target.Base
 	}
 	netValue, netSource := o.Network, "--network"
 	netOrigin := "flag"
@@ -632,7 +634,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	netFromProfile := false
 	if netValue == "" && t.Network != "" {
 		netValue, netSource, netFromProfile = t.Network, "the profile's network:", true
-		netOrigin = base0.Network
+		netOrigin = baseFrom.Network
 	}
 	netFallback := ""
 	if netValue == "" {
@@ -728,7 +730,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 	bindings, routes, projectWarnings := withoutProjectVar(bindings, routes)
 	envWarnings = append(envWarnings, projectWarnings...)
 
-	origins := Origins{Image: base0.Image, Mem: base0.Mem, CPUs: base0.CPUs, Network: netOrigin}
+	origins := Origins{Image: baseFrom.Image, Mem: baseFrom.Mem, CPUs: baseFrom.CPUs, Network: netOrigin}
 	switch {
 	case o.Image != "":
 		origins.Image = "flag"
