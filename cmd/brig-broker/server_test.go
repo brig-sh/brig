@@ -197,8 +197,8 @@ type running struct {
 	cancel context.CancelFunc
 }
 
-// settle waits until the broker has settled the renewal journal of every
-// credential it tracks. Registration starts that in the background and it
+// settle settles the renewal journal of every credential the broker tracks,
+// and returns once that is done. Registration starts that in the background and it
 // reads the store, so a test that counts store reads from the moment a
 // sandbox is added would count that read too whenever the goroutine ran
 // late. Recover takes the same turn the background call does: once it
@@ -210,8 +210,12 @@ func (r *running) settle(t *testing.T) {
 	r.srv.creds.mu.Lock()
 	caches := maps.Clone(r.srv.creds.caches)
 	r.srv.creds.mu.Unlock()
+	// Bounded, so a store that never answers fails this test by the name of
+	// the credential and not the whole package by its timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	for name, cache := range caches {
-		if err := cache.Recover(context.Background(), name); err != nil {
+		if err := cache.Recover(ctx, name); err != nil {
 			t.Fatalf("settle the journal of %s: %v", name, err)
 		}
 	}
