@@ -5,9 +5,9 @@ repository under Brig. It names profiles and policies by alias, and declares
 one or more targets. A target pairs one profile with its policies, a size
 and default arguments.
 
-You can write a Brigfile, check it, and see what each target resolves to.
-`brig run` does not read a Brigfile yet. A run still uses the agent and the
-flags on its own command line.
+You can write a Brigfile, check it, see what each target resolves to, and
+plan a run of a target. `brig run` does not read a Brigfile yet. A run still
+uses the agent and the flags on its own command line.
 
 ## Start one
 
@@ -15,6 +15,7 @@ flags on its own command line.
 brig init                  # writes a Brigfile at the top of the worktree
 brig target ls             # lists its targets
 brig config --target dev   # shows what dev resolves to
+brig plan --target dev     # shows what a run of dev would get
 ```
 
 `brig init` writes a starter with one target, `dev`, that runs the
@@ -109,6 +110,88 @@ once.
 A target on a `shell` or `gui` profile cannot list policies. Brig does not
 enforce a policy on those profiles, so it refuses the target.
 
+## Plan a target
+
+```bash
+brig plan --target dev
+brig plan --target dev --json
+brig plan --target ci -f ci/Brigfile.ci
+```
+
+`brig plan --target <name>` prints the permissions that a run of the target
+would get. It boots nothing, opens no secret and writes nothing. The project
+is the directory that holds the Brigfile.
+
+A repository can change its Brigfile, and so can an agent that runs in the
+repository. Read the plan before you run a target. The plan shows:
+
+- the target, its Brigfile, and the profile with its source
+- where the image, the memory, the vCPUs and the network come from
+- whether the image is pinned by digest
+- each policy, and where it comes from
+- for each route, where it sends requests and which secrets in your store it
+  uses
+
+`brig plan --target` takes the flags `--image`, `--mem`, `--cpus`,
+`--network`, `--offline`, `--publish`, `--skills` and `--json`. It takes no
+profile and no project, and it refuses `--home` and `--no-project`.
+[`brig plan`](cli.md#brig-plan) describes each row and field.
+
+### Where each value comes from
+
+The image, the memory and the vCPUs come from the first of these that sets
+them:
+
+1. a flag on the command line
+2. a `BRIG_*` setting
+3. the target's `overrides`
+4. the profile
+
+The network follows the same order, without step 3. The plan names the
+source of each value.
+
+### Which settings apply
+
+For a target on a `builtin:` profile, the settings of that profile apply,
+such as `BRIG_CLAUDE_CODE_IMAGE`. The global settings, such as `BRIG_IMAGE`,
+also apply.
+
+For a target on a `file:` or `inline:` profile, only the global settings
+apply. A repository profile named `claude-code` does not read
+`BRIG_CLAUDE_CODE_IMAGE` or any other `BRIG_CLAUDE_CODE_*` setting.
+
+`BRIG_NAME` and `BRIG_WORKSPACE` do not apply to a target. Each target has
+its own sandbox and its own guest home, named after the project and the
+target. The sandbox name of a target starts with `brig--`.
+
+### Which policies apply
+
+A target gets these policies:
+
+1. the target's own `policies`
+2. the policies that a repository profile lists under `policy:`
+3. for a `builtin:` profile only, the policies in that profile's own
+   `policy:` list and the policies you attached to that profile with
+   `brig policy attach`
+
+Brig reads the Brigfile's policies from the repository. It does not look in
+your policy directory for them, even when one of yours has the same name.
+
+A repository profile gets none of your attachments, whatever its name. A
+policy that you attached to one session with `-n` does not apply to a
+target.
+
+All the policies of a target apply together, by the rules in
+[Policies](policies.md). An allow rule in any one of them is a rule of the
+run, and every route of every one of them applies. So a policy that you add
+can give the agent more access. Plan the target again after you change its
+policies.
+
+A policy with an egress default or a route never leaves the run on the
+shared network, even when the profile asks for `shared`. When two policies cannot apply
+together, for example two routes with the same name, the plan opens with a
+`REFUSED` row.
+
 ## What a repository profile may not set
 
 A profile from `file:` or `inline:` comes from whoever wrote the repository.
@@ -149,13 +232,18 @@ brig target ls -f ci/Brigfile.ci
 | [`brig target ls`](cli.md#brig-target) | Lists the targets, marks the default, and names each profile and its source |
 | [`brig config`](cli.md#brig-config) | Shows the project, or one target resolved with `--target <name>` |
 | [`brig init`](cli.md#brig-init) | Writes a starter Brigfile |
+| [`brig plan --target`](cli.md#brig-plan) | Shows the permissions that a run of one target would get |
 
-The three commands read files and write nothing, except the one file
+The first three commands read files and write nothing, except the one file
 `brig init` creates. They start no sandbox, open no secret and need no
 runtime. `target ls` and `config` take `--json`.
 
-With no Brigfile, `target ls` and `config` exit `3` and say where they
-looked. A Brigfile that does not load exits `1`. See
+`brig plan --target` also writes nothing and opens no secret. Like
+`brig plan <profile>`, it looks for a runtime, asks the runtime about the
+sandbox, and lists the names in your secret store.
+
+With no Brigfile, `target ls`, `config` and `plan --target` exit `3` and say
+where they looked. A Brigfile that does not load exits `1`. See
 [Exit codes](cli.md#exit-codes).
 
 ## Stability

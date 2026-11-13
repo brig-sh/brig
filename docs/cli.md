@@ -272,6 +272,7 @@ set exits `0`.
 brig plan claude
 brig plan claude ~/src/demo
 brig plan claude@refactor --json
+brig plan --target dev
 ```
 
 `brig plan` prints the permissions of a run: the mounts, the network, the
@@ -284,6 +285,27 @@ before you start it. If `brig run` refuses to mount a project directory, the
 plan fails the same way.
 
 With no policy bound, `POLICY` reads `(none)` and `noPolicy` is `true`.
+
+#### Plan a Brigfile target
+
+`brig plan --target <name> [-f <path>]` plans a target of the repository's
+[Brigfile](brigfile.md#plan-a-target). The project is the directory that
+holds the Brigfile. The command takes no ref and no project, and it refuses
+`--home` and `--no-project`.
+
+The plan of a target adds these rows to the plan of a profile:
+
+- `TARGET`: the target and its Brigfile
+- `PROFILE`: also the profile's alias and source
+- `IMAGE`, `NETWORK` and `LIMITS`: where each value comes from, and whether
+  the image is pinned by digest
+- `POLICY`: one row for each policy, with where it comes from
+- `BROKER`: one row for each route, with its upstream and the secrets in
+  your store that it uses
+- `NOTE`: for example, that a file of yours that overrides a built-in does
+  not apply
+
+With no Brigfile, or no target of that name, the command exits `3`.
 
 #### Refusals in the plan
 
@@ -373,6 +395,7 @@ changed.
 | `session` | string, omitted for an unnamed run | the session name, as typed |
 | `profile` | string | the profile the ref resolved to |
 | `sandbox` | string | the sandbox name |
+| `target` | object, omitted for a plan of a profile | the Brigfile target, [below](#the-target-object) |
 | `refused` | object, omitted when nothing refuses the run | `reason`: the message `brig run` prints when it refuses this run |
 | `runtime` | object | `kind`, `bin` and `available`, as in `brig info --json`, and `backend`: the hypervisor the profile or `BRIG_HYPERVISOR` names, omitted for the runtime's own default |
 | `isolation` | string | what the sandbox stands on, as a sentence |
@@ -393,6 +416,33 @@ changed.
 | `argvExposed` | list of strings, omitted when empty | the variables whose values `BRIG_ENV_ARGV=1` puts on the runtime's command line, by name, sorted |
 | `limits` | object | `mem` in MB and `cpus` |
 | `digest` | string | `sha256:` and 64 hex digits |
+
+On the plan of a target, `broker` also has `detail`: one entry for each
+route, sorted by name.
+
+| Field | Meaning |
+| --- | --- |
+| `name` | the route name |
+| `policy` | where the policy that declares the route comes from |
+| `preset` | the preset, omitted when the route has none |
+| `mode` | the route mode |
+| `upstream` | where the broker sends requests, omitted for a `gcp` route |
+| `services` | for a `gcp` route, the Google APIs it reaches |
+| `secrets` | the names of the secrets in your store that the broker reads for the route |
+| `vends` | `true` when the route gives the guest AWS keys |
+
+#### The target object
+
+| Field | Meaning |
+| --- | --- |
+| `name` | the target |
+| `brigfile` | the Brigfile |
+| `root` | the project root, which is also the project |
+| `profile` | `alias` and `source`, such as `builtin:claude-code` |
+| `origins` | where `image`, `mem`, `cpus` and `network` come from: `flag`, `env BRIG_<KEY>`, `target <name>`, or `profile <alias> (<source>)`. `networkAsked` is the posture before a policy changed it, omitted when no policy did |
+| `imagePinned` | `true` when the image is named by digest |
+| `policies` | each policy, with `name` and `from`: `brigfile <alias> (<source>)`, `builtin profile <name>` or `attachment to <name>` |
+| `notes` | notes about the target, omitted when there are none |
 
 A mount has `host`, `guest` and `mode`. `mode` is `read-write` for the home
 and the project, and `copy` for a skills directory. Each credential has these
@@ -794,6 +844,7 @@ args      "--continue"
 ```
 
 `config` does not apply `BRIG_*` settings or run-line flags.
+[`brig plan --target`](#brig-plan) does.
 
 When the Brigfile uses `builtin:<name>` and your profile directory has a file
 that overrides that built-in, `config` prints a note. The Brigfile does not
