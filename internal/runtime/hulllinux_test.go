@@ -410,6 +410,26 @@ func TestLinuxHullRunBootsTheLinuxCommandLine(t *testing.T) {
 	}
 }
 
+// Which runtimes boot the Linux runtime bundle's files: nerdctl and hull on
+// Linux do, docker and hull on macOS do not. wrap checks the bundle's files
+// against the bundle's own record on the first two.
+func TestBootsLinuxBundle(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		rt   Runtime
+		want bool
+	}{
+		{"nerdctl", &nerdctl{bin: "/usr/bin/nerdctl"}, true},
+		{"docker", &nerdctl{bin: "/usr/bin/docker"}, false},
+		{"hull on Linux", linuxHull(), true},
+		{"hull on macOS", &hull{bin: "hull"}, false},
+	} {
+		if got := BootsLinuxBundle(tt.rt); got != tt.want {
+			t.Errorf("%s: BootsLinuxBundle = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 // hull on Linux shares a host directory only on a monitor with a shared
 // filesystem, and brig shares at least the workspace on every run. A share on
 // firecracker is refused before hull is run, naming the share and the way

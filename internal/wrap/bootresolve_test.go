@@ -20,6 +20,9 @@ type resolvingRuntime struct {
 	err    error
 	// kind stands in for Runtime.Kind. Empty is hull, as verifyRuntime says.
 	kind string
+	// linuxHull marks a hull built for Linux, which boots the Linux runtime
+	// bundle's files. Unset is the macOS hull.
+	linuxHull bool
 
 	said      *bytes.Buffer
 	asked     int
@@ -40,6 +43,12 @@ func (r *resolvingRuntime) Kind() string {
 		return r.kind
 	}
 	return r.verifyRuntime.Kind()
+}
+
+// BootsLinuxBundle answers as the real adapters do: nerdctl boots the Linux
+// runtime bundle's files, and hull does only on Linux, which linuxHull marks.
+func (r *resolvingRuntime) BootsLinuxBundle() bool {
+	return r.Kind() == "nerdctl" || (r.Kind() == "hull" && r.linuxHull)
 }
 
 func (r *resolvingRuntime) ResolveBootAssets(fetch runtime.BootFetch, _, _ io.Writer) (runtime.BootAssets, error) {

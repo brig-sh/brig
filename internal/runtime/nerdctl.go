@@ -165,6 +165,11 @@ func (n *nerdctl) Backend(spec RunSpec) string {
 	return m
 }
 
+// BootsLinuxBundle is true on nerdctl, which boots the runtime bundle's files
+// through urunc, and false on docker, which refuses a generic boot. See
+// LinuxBundleBooter.
+func (n *nerdctl) BootsLinuxBundle() bool { return !n.isDocker() }
+
 // driver is the binary in hand, by name. newNerdctl takes either.
 func (n *nerdctl) driver() string {
 	if n.isDocker() {

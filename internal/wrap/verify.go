@@ -372,9 +372,11 @@ func (c *Config) verifyBootAssets() error {
 	// bundle in the registry lists neither. Its release's signed record does,
 	// and checkBootDigests checks that once the files are resolved, so a
 	// signature on the boot bundle has nothing to say here.
-	// The bundle runs on Linux alone. On another runtime, a SHA256SUMS in a
-	// named directory is somebody's build and gets the boot bundle's check.
-	if dir := os.Getenv("BRIG_BOOT_ASSETS"); dir != "" && c.Runtime.Kind() == "nerdctl" {
+	// The bundle runs on Linux alone, under nerdctl or under hull on Linux. On
+	// any other runtime, hull on macOS among them, a SHA256SUMS in a named
+	// directory is somebody's build and gets the boot bundle's check. The
+	// runtime says which it is: the name hull covers both.
+	if dir := os.Getenv("BRIG_BOOT_ASSETS"); dir != "" && runtime.BootsLinuxBundle(c.Runtime) {
 		// The runtime resolves the files from the absolute path, so the
 		// record's directory is kept in the same form.
 		if abs, err := filepath.Abs(dir); err == nil && verify.HasBundleRecord(abs) {
@@ -691,10 +693,11 @@ func (c *Config) bootDigestsUnread(assets runtime.BootAssets, bundle string, cau
 //
 // brig cannot tell that launcher's directory from anyone else's once it keeps
 // no record, so the note is about the launcher, and only a named directory on
-// nerdctl gets it. On hull the bundle plays no part, and a note about it sent
-// a Mac user who named a build of their own looking in the wrong place.
+// a runtime that boots the bundle's files gets it: nerdctl, or hull on Linux.
+// On hull on macOS the bundle plays no part, and a note about it sent a Mac
+// user who named a build of their own looking in the wrong place.
 func (c *Config) linuxBundleNote(assets runtime.BootAssets) string {
-	if !assets.Named || c.Runtime.Kind() != "nerdctl" {
+	if !assets.Named || !runtime.BootsLinuxBundle(c.Runtime) {
 		return ""
 	}
 	return " " + notice.Sentence(linuxBundleOld) + ". Re-run brig's install.sh to install one that does."

@@ -126,6 +126,11 @@ func builtFor(version string) string {
 	return goos
 }
 
+// BootsLinuxBundle is true on hull on Linux, which boots the runtime bundle's
+// files through urunc as nerdctl does. On macOS the bundle plays no part. See
+// LinuxBundleBooter.
+func (h *hull) BootsLinuxBundle() bool { return h.linux }
+
 func (h *hull) Kind() string { return "hull" }
 func (h *hull) Bin() string  { return h.bin }
 
