@@ -164,6 +164,11 @@ func (c *Config) backendRefusal(hypervisor string) error {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) (err error) {
+	// First, ahead of every other refusal, warning and question: the sandbox
+	// of a target boots only what you approved. See Admit.
+	if err := c.admission(); err != nil {
+		return err
+	}
 	// Before every refusal below, and before the runtime is asked anything: a
 	// nerdctl with no configuration of the bundle's cannot reach its containerd,
 	// and that failure stops the run without naming the launcher.
@@ -953,6 +958,13 @@ func (c *Config) Remove() error {
 	// the one place the sandbox itself goes away.
 	runtime.ForgetPublications(c.VMName)
 	runtime.ForgetBootedNet(c.VMName)
+	// And the approval of a target's session. A session removed and run again
+	// is a new session, and you approve it again. Dropped whether or not the
+	// runtime removed the sandbox: an approval is never worth keeping by
+	// accident, and the next run asks for one.
+	if IsProjectSandbox(c.VMName) {
+		_, _ = Revoke(c.VMName)
+	}
 	return err
 }
 

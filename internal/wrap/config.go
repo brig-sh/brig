@@ -297,6 +297,9 @@ type Config struct {
 	// policyDocs are the policy documents bound to this run, for the
 	// configuration digest.
 	policyDocs []policy.Policy
+	// admitted is the digest of the approval the gate admitted this run of a
+	// target under, or "". See Admit.
+	admitted string
 
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
