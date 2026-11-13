@@ -294,6 +294,9 @@ type Config struct {
 	// route, by route name. Both are nil when Load read the policy directory.
 	policyOrigins []string
 	routeOrigin   map[string]string
+	// policyDocs are the policy documents bound to this run, for the
+	// configuration digest.
+	policyDocs []policy.Policy
 
 	// NoTerminal declares that this run has no terminal to put a question to,
 	// whatever this process's own stdin happens to be. brigd sets it: started
@@ -823,6 +826,7 @@ func Load(t profile.Profile, o Options, rt runtime.Runtime) (*Config, error) {
 		origins:        origins,
 		policyOrigins:  policyOrigins,
 		routeOrigin:    routeOrigin,
+		policyDocs:     bound,
 	}
 	if strictErr != nil {
 		return nil, strictErr
