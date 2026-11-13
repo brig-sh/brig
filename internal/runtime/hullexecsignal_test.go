@@ -32,12 +32,23 @@ func expireWhenReady(t *testing.T, ready string) {
 		go func() {
 			tick := time.NewTicker(2 * time.Millisecond)
 			defer tick.Stop()
+			// A stand-in that never gets to ready must not hang the package.
+			// When the wait runs out the deadline falls anyway, and
+			// trapWasSet then fails the test by name.
+			giveUp := time.NewTimer(readyWait)
+			defer giveUp.Stop()
 			for {
 				if _, err := os.Stat(ready); err == nil {
-					close(d.done)
+					d.expire(context.DeadlineExceeded)
 					return
 				}
 				select {
+				case <-parent.Done():
+					d.expire(parent.Err())
+					return
+				case <-giveUp.C:
+					d.expire(context.DeadlineExceeded)
+					return
 				case <-d.stop:
 					return
 				case <-tick.C:
@@ -50,24 +61,39 @@ func expireWhenReady(t *testing.T, ready string) {
 	t.Cleanup(func() { agentCallDeadline = old })
 }
 
-// readyDeadline is a context whose deadline passes when done is closed. To
+// readyWait is how long expireWhenReady waits for the stand-in before it
+// lets the deadline fall regardless. A var so a test of the wait itself need
+// not take this long.
+var readyWait = 30 * time.Second
+
+// readyDeadline is a context whose deadline passes when expire is called. To
 // the command it bounds it is a deadline like any other: Done closes and Err
-// reports context.DeadlineExceeded.
+// reports context.DeadlineExceeded. A parent that is cancelled first ends it
+// with the parent's error, as a context made by WithTimeout would.
 type readyDeadline struct {
 	context.Context
 	done chan struct{}
 	stop chan struct{}
+
+	mu  sync.Mutex
+	err error
+}
+
+func (d *readyDeadline) expire(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.err == nil {
+		d.err = err
+		close(d.done)
+	}
 }
 
 func (d *readyDeadline) Done() <-chan struct{} { return d.done }
 
 func (d *readyDeadline) Err() error {
-	select {
-	case <-d.done:
-		return context.DeadlineExceeded
-	default:
-		return nil
-	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.err
 }
 
 // signalHull writes a stand-in for hull that hangs in exec, the way a real
@@ -109,6 +135,8 @@ func signalHull(t *testing.T) (bin, termed, ready string) {
 
 // trapWasSet fails the test unless signalHull's stand-in had set its trap
 // before the call ended it, so what termed says is about the signal sent.
+// The deadline waits for the trap, so this fails only when the stand-in
+// never got that far and expireWhenReady gave up on it.
 func trapWasSet(t *testing.T, ready string) {
 	t.Helper()
 	if _, err := os.Stat(ready); err != nil {
@@ -206,5 +234,34 @@ func TestLinuxHullCallReturnsWhenHullIgnoresSIGTERM(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("Probe never returned from a hull that ignores SIGTERM")
+	}
+}
+
+// A stand-in that never writes ready does not hang the test: the wait runs
+// out, the deadline falls, and the call returns.
+func TestExpireWhenReadyGivesUpOnAStandInThatNeverStarts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in is not portable to windows")
+	}
+	old := readyWait
+	readyWait = 200 * time.Millisecond
+	t.Cleanup(func() { readyWait = old })
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "hull")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expireWhenReady(t, filepath.Join(dir, "never-written"))
+	h := &hull{bin: bin}
+
+	done := make(chan bool, 1)
+	go func() { done <- h.Probe(ExecSpec{Name: "vm", Cmd: []string{"/bin/true"}}) }()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("a guest that never answered was reported ready")
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the call never returned: the wait for the stand-in has no ceiling")
 	}
 }
