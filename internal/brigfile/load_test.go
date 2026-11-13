@@ -495,7 +495,19 @@ func TestTargetReturnsAFreshCopy(t *testing.T) {
 	*a.Overrides.CPUs = 99
 	a.Profile.Profile.Deny = append(a.Profile.Profile.Deny[:0], "CHANGED")
 	a.Policies[0].Policy.Spec.Egress.Default = "allow"
-	b, _ := l.Target("dev")
+	for i := range a.Policies[0].Doc {
+		a.Policies[0].Doc[i] = '#'
+	}
+	for i := range a.Profile.Doc {
+		a.Profile.Doc[i] = '#'
+	}
+	b, err := l.Target("dev")
+	if err != nil {
+		t.Fatalf("an edit to one result's Doc broke the next Target: %v", err)
+	}
+	if len(b.Policies[0].Doc) == 0 || b.Policies[0].Doc[0] == '#' || len(b.Profile.Doc) == 0 || b.Profile.Doc[0] == '#' {
+		t.Error("an edit to one result's Doc reached the next result")
+	}
 	if b.Args[0] == "CHANGED" || *b.Overrides.CPUs == 99 || b.Profile.Profile.Deny[0] == "CHANGED" ||
 		b.Policies[0].Policy.Spec.Egress.Default == "allow" {
 		t.Errorf("an edit to one Target result reached the next: %+v", b)
