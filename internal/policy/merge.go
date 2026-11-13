@@ -35,6 +35,15 @@ func ResolvePolicies(p profile.Profile, session, dir string) ([]Policy, []string
 	if len(names) == 0 {
 		return nil, nil, nil
 	}
+	return LoadNamed(names, p.Name, dir)
+}
+
+// LoadNamed loads each of names from dir, in order. owner is what the names
+// are bound to, for the refusal when one does not load.
+func LoadNamed(names []string, owner, dir string) ([]Policy, []string, error) {
+	if len(names) == 0 {
+		return nil, nil, nil
+	}
 	// LoadAll returns what it could read alongside its error: a file that does
 	// not parse, or two files claiming one name, is reported without stopping
 	// the rest from loading. So the map is read either way, and only a name
@@ -67,7 +76,7 @@ func ResolvePolicies(p profile.Profile, session, dir string) ([]Policy, []string
 		}
 		return nil, nil, fmt.Errorf("policy %v is attached to %s but no document of that "+
 			"name loads from %s; `brig policy check %s` says which, and `brig policy ls` what "+
-			"is there%s", missing, p.Name, dir, p.Name, because)
+			"is there%s", missing, owner, dir, owner, because)
 	}
 	return policies, names, nil
 }

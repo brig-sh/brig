@@ -128,3 +128,31 @@ func TestEffectivePoliciesSessionDoesNotCrossProfiles(t *testing.T) {
 			"binding must not apply to codex's own \"work\" session", got, want)
 	}
 }
+
+// The attachments a run gets are the ones under the key it asks with, and no
+// other. A Brigfile target asks with the name of a profile brig ships, so a
+// repository profile that calls itself claude-code is never handed what you
+// attached to claude-code.
+func TestNamesForReadsOnlyTheKeyItIsGiven(t *testing.T) {
+	dir := t.TempDir()
+	var a Attachments
+	a.AttachToProfile("staging", "claude-code")
+	a.AttachToSession("work-only", "claude-code", "work")
+	if err := a.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NamesFor([]string{"own"}, "other", "work", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"own"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("NamesFor under another key = %v, want %v", got, want)
+	}
+	got, err = NamesFor(nil, "claude-code", "", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"staging"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("NamesFor with no session = %v, want %v", got, want)
+	}
+}
