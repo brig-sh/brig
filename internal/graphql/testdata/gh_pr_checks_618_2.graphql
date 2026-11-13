@@ -1,0 +1,7 @@
+query PullRequestStatusChecks($id: ID!, $endCursor: String) {
+    node(id: $id) {
+      ...on PullRequest {
+        statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100,after:$endCursor) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description,isRequired(pullRequestId: $id)},...on CheckRun {name,checkSuite{workflowRun{event,workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl,isRequired(pullRequestId: $id)}},pageInfo{hasNextPage,endCursor}}}}}}
+      }
+    }
+  }

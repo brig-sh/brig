@@ -1,0 +1,35 @@
+fragment pr on PullRequest {number,title,state,url,isDraft,isCrossRepository,headRefName,headRepositoryOwner{id,login,...on User{name}},mergeStateStatus,baseRef{branchProtectionRule{requiresStrictStatusChecks}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts {checkRunCount,checkRunCountsByState {state,count},statusContextCount,statusContextCountsByState {state,count}}}}}}}
+  fragment prWithReviews on PullRequest {...pr,reviewDecision,latestReviews(first: 100) {nodes {author{login},authorAssociation,submittedAt,body,state}}}
+  
+  query PullRequestStatus($owner: String!, $repo: String!, $headRefName: String!, $viewerQuery: String!, $reviewerQuery: String!, $per_page: Int = 10) {
+    repository(owner: $owner, name: $repo) {
+      defaultBranchRef {
+        name
+      }
+      pullRequests(headRefName: $headRefName, first: $per_page, orderBy: { field: CREATED_AT, direction: DESC }) {
+        totalCount
+        edges {
+          node {
+            ...prWithReviews
+          }
+        }
+      }
+    }
+  
+      viewerCreated: search(query: $viewerQuery, type: ISSUE, first: $per_page) {
+        totalCount: issueCount
+        edges {
+          node {
+          ...prWithReviews
+          }
+        }
+      }
+      reviewRequested: search(query: $reviewerQuery, type: ISSUE, first: $per_page) {
+        totalCount: issueCount
+        edges {
+          node {
+          ...pr
+          }
+        }
+      }
+    }
