@@ -558,6 +558,11 @@ answers 502 with `check=credential.malformed`. Store it again with
 `brig secret update` or `brig secret import`. This also refuses a raw token
 that starts with `{` and is not JSON.
 
+A route without `credential.field` does not send upstream a secret that is a
+whole JSON object, such as a pointer with no `kind` field: it answers 502
+with `check=credential.document`. Name the field to send with
+`credential.field`.
+
 ### An AWS profile behind a route
 
 The [aws preset](policies.md#the-aws-preset) hands the guest temporary AWS
