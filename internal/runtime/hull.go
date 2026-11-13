@@ -1021,8 +1021,6 @@ func (h *hull) execArgs(spec ExecSpec) (args, env []string, err error) {
 // Generous on purpose. This is not how long the guest may take to come up --
 // that is ReadyTimeout, across many probes -- only how long one probe waits
 // before deciding this attempt landed too early and another one is due.
-//
-// A var for tests.
 var agentCallTimeout = 5 * time.Second
 
 // agentCallDeadline gives one agent call its deadline. It is a var so a test
