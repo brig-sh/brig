@@ -35,8 +35,15 @@ const projectPrefix = NamePrefix + "-"
 const projectKeyPrefix = "@p/"
 
 // projectLabelMax bounds the readable part of a project sandbox name, so the
-// whole name stays at 63 bytes: the prefix, the label, a dash and the id.
-const projectLabelMax = 36
+// whole name stays at 47 bytes: the prefix, the label, a dash and the id.
+//
+// The limit that binds is a socket path, not a name rule. hull keeps a
+// sandbox's agent socket at <store>/instances/<name>/agent.sock, and macOS
+// takes a socket path of at most 103 bytes. With the store in a home
+// directory that leaves a name a little over 50 bytes, and a longer one
+// would plan and then fail at boot. The id carries the identity; the label
+// is only there for a person to read, so it is what gives way.
+const projectLabelMax = 20
 
 // ProjectIdentity is the identity of one target of the Brigfile at root,
 // with slug the session's path-safe name or "". envAgent is passed through

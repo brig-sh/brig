@@ -369,3 +369,21 @@ func TestATargetPlanSaysWhereEachValueCameFrom(t *testing.T) {
 		}
 	}
 }
+
+// A long target and session name must not make a sandbox name that plans
+// and then fails at boot: hull's agent socket path holds the name, and macOS
+// caps a socket path at 103 bytes. The id is kept whole and the label gives
+// way, so two long names that share their first bytes still differ.
+func TestProjectSandboxNameStaysShort(t *testing.T) {
+	long := strings.Repeat("integration-", 6)
+	a := ProjectIdentity("/src/a", long+"one", "nightly", "")
+	b := ProjectIdentity("/src/a", long+"two", "nightly", "")
+	for _, id := range []Identity{a, b} {
+		if n := len(id.Sandbox); n > 47 {
+			t.Errorf("sandbox name %q is %d bytes, want at most 47", id.Sandbox, n)
+		}
+	}
+	if a.Sandbox == b.Sandbox || a.Key == b.Key {
+		t.Errorf("two targets share an identity: %q and %q", a.Sandbox, b.Sandbox)
+	}
+}
