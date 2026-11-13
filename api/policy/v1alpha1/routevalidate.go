@@ -500,7 +500,7 @@ func (a *RequestAllow) validate(preset Preset) error {
 			return fmt.Errorf("request.allow.%s is empty; list at least one, or leave the key out", l.field)
 		}
 	}
-	if len(a.Methods) == 0 && len(a.Paths) == 0 && len(a.Repos) == 0 {
+	if len(a.Methods) == 0 && len(a.Paths) == 0 && len(a.Repos) == 0 && a.GraphQL == nil {
 		return fmt.Errorf("request.allow lists nothing; leave it out to allow every request")
 	}
 	for _, m := range a.Methods {
@@ -523,7 +523,60 @@ func (a *RequestAllow) validate(preset Preset) error {
 			return fmt.Errorf("request.allow.repos %q is not owner/name", repo)
 		}
 	}
+	if g := a.GraphQL; g != nil {
+		if preset != PresetGitHubAPI {
+			return fmt.Errorf("request.allow.graphql needs preset: %s", PresetGitHubAPI)
+		}
+		if len(g.Queries) == 0 && len(g.Mutations) == 0 {
+			return fmt.Errorf("request.allow.graphql lists no queries and no mutations; list at least one")
+		}
+		for _, l := range []struct {
+			field string
+			list  []string
+		}{{"queries", g.Queries}, {"mutations", g.Mutations}} {
+			for _, f := range l.list {
+				if f != "*" && !isGraphQLName(f) {
+					return fmt.Errorf("request.allow.graphql.%s %q is not a GraphQL field name; use a name such as addComment, or *", l.field, f)
+				}
+			}
+		}
+		for _, repo := range g.Repos {
+			owner, name, ok := strings.Cut(repo, "/")
+			if !ok || owner == "" || name == "" || strings.Contains(name, "/") || !isASCIIPrint(repo) {
+				return fmt.Errorf("request.allow.graphql.repos %q must be owner/name in ASCII", repo)
+			}
+		}
+		// Any other root field reaches a repository by a node ID, a search,
+		// a URL or an owner, which repos cannot check.
+		if len(g.Repos) > 0 {
+			for _, f := range g.Queries {
+				if f != "repository" && f != "rateLimit" {
+					return fmt.Errorf("request.allow.graphql.queries %q bypasses repos; with repos, list only repository and rateLimit", f)
+				}
+			}
+		}
+	}
 	return nil
+}
+
+// isASCIIPrint reports whether s is printable ASCII with no space.
+func isASCIIPrint(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] <= ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// isGraphQLName reports whether s is a GraphQL name.
+func isGraphQLName(s string) bool {
+	for i, c := range s {
+		if c != '_' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (i == 0 || c < '0' || c > '9') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // checkHeaderName refuses a name that is not an HTTP header name, and a header
