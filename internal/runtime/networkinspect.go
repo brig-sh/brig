@@ -25,6 +25,9 @@ func (h *hull) SandboxNetwork(name string) (string, error) {
 		// recover. See hull.Exists.
 		return "", fmt.Errorf("inspect network of %s: %w: %s", name, err, firstLines(stderr, 3))
 	}
+	if h.linux {
+		return linuxHullSandboxNetwork(name, out)
+	}
 	var state struct {
 		ID      string   `json:"id"`
 		Backend string   `json:"backend"`
@@ -112,6 +115,36 @@ func (h *hull) SandboxNetwork(name string) (string, error) {
 		}
 	}
 	return "", unknown
+}
+
+// linuxHullSandboxNetwork reads the network of a sandbox on hull on Linux.
+// There is no VMM command line there: urunc boots the guest, and hull inspect
+// prints cmdLine empty. hull labels the container with the network its run
+// attached instead, and prints the label as network, for a stopped instance
+// too. none and shared are the postures of the same names: shared is the CNI
+// bridge every sandbox joins. gateway is a hull network gateway, which brig
+// does not boot on Linux yet and whose socket inspect does not name, so it
+// cannot say whether the gateway was the sandbox's own. A container with no
+// label, from another client or an older hull, is unknown, as is anything
+// else: neither is evidence of a shared network.
+func linuxHullSandboxNetwork(name string, out []byte) (string, error) {
+	var state struct {
+		ID      string `json:"id"`
+		Network string `json:"network"`
+	}
+	if err := json.Unmarshal(out, &state); err != nil {
+		return "", fmt.Errorf("inspect network of %s: invalid hull response: %w", name, err)
+	}
+	if state.ID != name {
+		return "", fmt.Errorf("inspect network of %s: hull returned another instance", name)
+	}
+	switch state.Network {
+	case "none", "shared":
+		return state.Network, nil
+	case "":
+		return "", fmt.Errorf("inspect network of %s: hull recorded no network for it", name)
+	}
+	return "", fmt.Errorf("inspect network of %s: unrecognised hull on Linux network %q", name, state.Network)
 }
 
 // nerdctl's Docker-compatible inspect records NetworkMode from its persisted
