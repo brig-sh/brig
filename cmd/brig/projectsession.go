@@ -249,3 +249,33 @@ func projectLabel(name string) string {
 	}
 	return label + " in " + ps.Root
 }
+
+// brigfileHint says, once, that a run of a profile in a project with a
+// Brigfile does not read it, and names the commands that do. A reader who
+// added a Brigfile and then ran a profile would otherwise take the run for
+// one of its targets.
+//
+// The project is the one the run mounts, or the working directory's when it
+// names none. The hint looks only for the file: a Brigfile is the
+// repository's to break, and a broken one must not break a run that never
+// reads it. Every error is dropped. warnf keeps it off -q, and a run under
+// --json does not call it, since a script reads that output.
+func brigfileHint(project string) {
+	dir := project
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return
+		}
+		dir = wd
+	}
+	root, err := brigfile.Root(dir)
+	if err != nil {
+		return
+	}
+	if _, err := os.Lstat(filepath.Join(root, brigfile.FileName)); err != nil {
+		return
+	}
+	warnf("%s has a Brigfile, and `brig run <profile>` does not read it. `brig target ls` lists "+
+		"its targets, and `brig plan --target <name>` shows what one gets", root)
+}

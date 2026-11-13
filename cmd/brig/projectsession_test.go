@@ -620,3 +620,72 @@ func TestPlanTargetSaysTheConfigurationChanged(t *testing.T) {
 		t.Errorf("another session of the target is noted: %q", notes)
 	}
 }
+
+// A run of a profile in a project with a Brigfile runs as it always did and
+// says once that it does not read the Brigfile. It says nothing without one,
+// nothing under --json or -q, and a Brigfile that does not load breaks
+// nothing: the hint looks only for the file.
+func TestARunOfAProfileNotesTheBrigfile(t *testing.T) {
+	rt := &jsonRuntime{}
+	jsonRunHost(t, rt)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(filepath.Join(dir, "sub"))
+	const hint = "has a Brigfile, and `brig run <profile>` does not read it"
+
+	runFaker := func(args ...string) string {
+		t.Helper()
+		before := rt.replaced + rt.attached
+		var err error
+		stderr := captureStderr(t, func() {
+			_, err = captureStdout(t, func() error { return run(args) })
+		})
+		// A --json run reports the agent's exit status as its error.
+		if exitCode(err) != 0 {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if rt.replaced+rt.attached != before+1 {
+			t.Fatalf("%v did not reach the agent", args)
+		}
+		return stderr
+	}
+	if stderr := runFaker("run", "faker"); strings.Contains(stderr, "Brigfile") {
+		t.Errorf("with no Brigfile the run said:\n%s", stderr)
+	}
+
+	// Not a Brigfile brig could load: the run never reads it.
+	if err := os.WriteFile(filepath.Join(dir, brigfile.FileName), []byte("{{ not yaml\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stderr := runFaker("run", "faker")
+	if strings.Count(stderr, hint) != 1 || !strings.Contains(stderr, dir) ||
+		!strings.Contains(stderr, "brig target ls") || !strings.Contains(stderr, "brig plan --target <name>") {
+		t.Errorf("the run said:\n%s", stderr)
+	}
+	if stderr := runFaker("faker"); strings.Count(stderr, hint) != 1 {
+		t.Errorf("the bare ref said:\n%s", stderr)
+	}
+	for _, args := range [][]string{{"--json", "run", "faker"}, {"run", "faker", "--json"}, {"-q", "run", "faker"}} {
+		if stderr := runFaker(args...); strings.Contains(stderr, hint) {
+			t.Errorf("%v said:\n%s", args, stderr)
+		}
+	}
+
+	// The project the run names is the one looked at.
+	other := t.TempDir()
+	if stderr := runFaker("run", "faker", other); strings.Contains(stderr, hint) {
+		t.Errorf("a run on another project said:\n%s", stderr)
+	}
+	t.Chdir(other)
+	if stderr := runFaker("run", "faker", dir); strings.Count(stderr, hint) != 1 {
+		t.Errorf("a run on the project said:\n%s", stderr)
+	}
+}

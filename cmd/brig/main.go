@@ -579,6 +579,9 @@ func dispatch(args []string) error {
 		return notFoundf("unknown profile %q. `brig agent ls` lists them", profileName)
 	}
 	telemetry.SetAgent(t.Name, profile.Embedded(t.Name))
+	if verb == "run" && !wantJSON {
+		brigfileHint(opts.load.Project)
+	}
 	// sh, and run on a shell profile, hand their words to the login shell.
 	// Read them before anything boots, so a -c missing its script is a usage
 	// error and a script typed as one word gets its hint up front. run -d
