@@ -376,9 +376,9 @@ func TestPlanTargetNamesEveryRoute(t *testing.T) {
 	}
 }
 
-// A repository profile may ask for the shared network, and the plan says so
-// and where it came from. A policy with an egress default or a route takes it
-// to a network of its own, never shared.
+// The reader may ask for the shared network, and the plan says so and where
+// it came from. A policy with an egress default or a route takes the run to
+// a network of its own, never shared, whoever asked.
 func TestPlanTargetNetwork(t *testing.T) {
 	targetHost(t, map[string]string{
 		brigfile.FileName: `apiVersion: brig.sh/v1alpha1
@@ -394,18 +394,20 @@ targets:
   locked: {profile: mine, policies: [locked]}
   routed: {profile: mine, policies: [routed]}
 `,
-		".brig/tool.yaml": "name: tool\nbinary: x\nimage: example.com/repo:1\nguestHome: /root\nmem: 1024\ncpus: 1\n" +
-			"network: shared\n",
+		".brig/tool.yaml": "name: tool\nbinary: x\nimage: example.com/repo:1\nguestHome: /root\nmem: 1024\ncpus: 1\n",
 	})
-	open := planTargetJSON(t, "--target", "open").Data
-	if open.Posture != "shared" || open.Target.Origins.Network != "profile mine (file:.brig/tool.yaml)" {
+	// A repository profile cannot ask for shared: the loader refuses it. The
+	// reader can, with the flag, and the plan says the flag is where it came
+	// from.
+	open := planTargetJSON(t, "--target", "open", "--network", "shared").Data
+	if open.Posture != "shared" || !strings.Contains(open.Target.Origins.Network, "flag") {
 		t.Errorf("open: posture %s from %q", open.Posture, open.Target.Origins.Network)
 	}
-	if text := planTargetText(t, "--target", "open"); !strings.Contains(text, "from profile mine (file:.brig/tool.yaml)") {
+	if text := planTargetText(t, "--target", "open", "--network", "shared"); !strings.Contains(text, "from flag") {
 		t.Errorf("the text does not say where shared came from:\n%s", text)
 	}
 	for _, target := range []string{"locked", "routed"} {
-		d := planTargetJSON(t, "--target", target).Data
+		d := planTargetJSON(t, "--target", target, "--network", "shared").Data
 		if d.Posture == "shared" || (d.Posture != "isolated" && d.Refused == nil) ||
 			d.Target.Origins.NetworkAsked != "shared" {
 			t.Errorf("%s: posture %s, refused %+v, origins %+v", target, d.Posture, d.Refused, d.Target.Origins)
