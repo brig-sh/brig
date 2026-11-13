@@ -296,6 +296,8 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 			return names(cur, brigfileTargets(fileOnLine(rest)))
 		case "-f", "--file":
 			return dirFiles, nil
+		case "--session":
+			return dirNone, nil
 		}
 		return operandCandidates(flagValue(line.pending), cur)
 	}
@@ -321,9 +323,9 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		// only at a flag brig does not own, so offer them on both sides too.
 		// `brig run claude --mem 4096` is a line brig parses.
 		flags := flagSpellings(verbPosition(verb), verb)
-		// plan names a target of the Brigfile in place of a ref, so it
-		// offers --target and -f until a ref is named.
-		if verb == "plan" && !line.refGiven {
+		// plan, stop and rm name a target of the Brigfile in place of a
+		// ref, so they offer --target, --session and -f until a ref is named.
+		if readsTarget(verb) && !line.refGiven {
 			flags = append(flags, flagSpellings(posTarget, "")...)
 			sort.Strings(flags)
 		}
@@ -341,8 +343,8 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	}
 
 	if !line.refGiven {
-		// A plan of a target takes no ref, and no project.
-		if verb == "plan" && hasTargetFlag(rest) {
+		// A line that names a target takes no ref, and no project.
+		if readsTarget(verb) && hasTargetFlag(rest) {
 			return dirNone, nil
 		}
 		return names(cur, refsFor(verb))
@@ -443,7 +445,7 @@ func pendingFlag(verb string, args []string) string {
 	return last
 }
 
-// hasTargetFlag reports whether a plan line names a target, as --target or
+// hasTargetFlag reports whether a line names a target, as --target or
 // --target=<name>.
 func hasTargetFlag(args []string) bool {
 	for _, a := range args {
