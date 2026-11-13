@@ -246,6 +246,12 @@ type route struct {
 	tlsMu  sync.Mutex
 	cur    *tlsTransport
 	closed bool
+
+	// repoOK is when each owner/name, in lower case, was last confirmed to
+	// exist under that name, for request.allow.graphql.repos. repoMu guards
+	// it.
+	repoMu sync.Mutex
+	repoOK map[string]time.Time
 }
 
 // New returns a Handler built from cfg.
