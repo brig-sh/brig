@@ -614,6 +614,8 @@ func TestGroupsTableCoversEveryGroupFlag(t *testing.T) {
 	// today.
 	elsewhere := map[string]string{
 		"parseGlobal": "the global position, left of the verb; see brigFlags",
+		"parseBrigfileLine": "config and init take flags and no subcommand, so they are not " +
+			"groups; complete answers them in completeBrigfileLine",
 	}
 	seen := map[string]bool{}
 

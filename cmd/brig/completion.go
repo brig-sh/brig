@@ -4,9 +4,11 @@ import (
 	"embed"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/brigfile"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -130,8 +132,10 @@ func completeCmd(out io.Writer, words []string) {
 var verbs = []string{
 	"agent",
 	"completion",
+	"config",
 	"doctor",
 	"info",
+	"init",
 	"ls",
 	"network",
 	"plan",
@@ -142,6 +146,7 @@ var verbs = []string{
 	"secret",
 	"sh",
 	"stop",
+	"target",
 	"telemetry",
 	"version",
 }
@@ -253,6 +258,10 @@ func complete(words []string) (string, []string) {
 		return names(cur, refCandidates())
 	case verb == "network":
 		return completeNetwork(rest, cur)
+	case verb == "config":
+		return completeBrigfileLine(rest, cur, true)
+	case verb == "init":
+		return completeBrigfileLine(rest, cur, false)
 	case groups[verb] != nil:
 		return completeGroup(verb, rest, cur)
 	case refVerbs[verb]:
@@ -591,6 +600,13 @@ var groups = map[string][]sub{
 		{name: "on"},
 		{name: "off"},
 	},
+	"target": {
+		{
+			name:   "ls",
+			flags:  []string{"--json"},
+			values: map[string]operand{"--file": opFile, "-f": opFile},
+		},
+	},
 }
 
 // completeGroup answers under a noun command: the subcommand, then whatever
@@ -901,6 +917,82 @@ func policyNames() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// completeBrigfileLine answers for config and init, which take flags and no
+// operand. config's --target completes the names of the targets in the
+// Brigfile the line would read.
+func completeBrigfileLine(rest []string, cur string, config bool) (string, []string) {
+	if len(rest) > 0 && !strings.HasPrefix(cur, "-") {
+		switch lastFlag(rest) {
+		case "-f", "--file":
+			return dirFiles, nil
+		case "--target":
+			if config {
+				return names(cur, brigfileTargets(fileOnLine(rest)))
+			}
+		}
+	}
+	if flag, prefix, ok := inlineValue(cur); ok {
+		switch {
+		case config && flag == "--target":
+			directive, candidates := names(prefix, brigfileTargets(fileOnLine(rest)))
+			return qualify(flag, directive, candidates)
+		}
+		return dirNone, nil
+	}
+	if strings.HasPrefix(cur, "-") {
+		flags := []string{"--file", "-f"}
+		if config {
+			flags = append(flags, "--json", "--target")
+		}
+		sort.Strings(flags)
+		return names(cur, flags)
+	}
+	return dirNone, nil
+}
+
+// fileOnLine is the path -f or --file names on a line, or "".
+func fileOnLine(rest []string) string {
+	file := ""
+	for i := 0; i < len(rest); i++ {
+		switch a := rest[i]; {
+		case a == "-f" || a == "--file":
+			if i+1 < len(rest) {
+				i++
+				if rest[i] == "=" && i+1 < len(rest) {
+					i++
+				}
+				file = rest[i]
+			}
+		case strings.HasPrefix(a, "-f=") || strings.HasPrefix(a, "--file="):
+			_, file, _ = strings.Cut(a, "=")
+		}
+	}
+	return file
+}
+
+// brigfileTargets returns the target names of the Brigfile file names, or of
+// the one for the working directory's project. A keystroke must never print,
+// so a Brigfile that is missing or does not load completes nothing. It is read
+// through brigfile.Load, which opens no FIFO or device that could hang the
+// shell, runs nothing and writes nothing.
+func brigfileTargets(file string) []string {
+	path := file
+	if path == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil
+		}
+		if path, err = brigfile.Discover(wd); err != nil {
+			return nil
+		}
+	}
+	l, err := brigfile.Load(path)
+	if err != nil {
+		return nil
+	}
+	return targetNamesOf(l)
 }
 
 // names filters candidates by the word being typed.
