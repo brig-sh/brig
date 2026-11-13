@@ -318,6 +318,11 @@ export BRIG_HYPERVISOR=vz
 export BRIG_NETWORK=shared
 # Your own profiles go in a scratch directory, never the caller's own.
 export BRIG_PROFILE_DIR="$WORK/profiles"
+# So are policies and their attachments. One the caller attached to
+# claude-code would refuse or reshape every run below. The policy cases point
+# BRIG_POLICY_DIR at their own directory, and come back to this empty one when
+# they are done.
+export BRIG_POLICY_DIR="$WORK/no-policies"
 # Brig's own secret store is read here: it is the login keychain, so on a
 # developer's Mac a stored secret (an imported claude credential, say) reaches
 # these runs, and on CI's Linux host there is none. That is why the stub's
@@ -882,7 +887,7 @@ grep -q '^argv: run' "$STUB_LOG" \
 "$WORK/brig" policy detach claude-relay claude-code > /dev/null 2>&1
 rm -f "$WORK/policies/claude-relay.yaml"
 
-unset BRIG_POLICY_DIR
+export BRIG_POLICY_DIR="$WORK/no-policies"
 "$WORK/brig" rm --all -y > /dev/null 2>&1
 
 # And the other half of it: on a backend that can enforce a policy, the rules
@@ -1374,7 +1379,7 @@ rm -rf "$mtls_state"
 
 # Whatever a failed case above left behind outlives this script otherwise.
 pkill -f "$BRIG_GATEWAY_DIR/" > /dev/null 2>&1
-unset BRIG_POLICY_DIR
+export BRIG_POLICY_DIR="$WORK/no-policies"
 fi
 
 # A posture brig does not know must stop the run rather than pick one.
@@ -2524,7 +2529,7 @@ grep -q '^argv: run' "$STUB_LOG" \
   && bad "a run refused with exit 7 reached the runtime" \
   || ok "a run refused with exit 7 reached no runtime"
 "$WORK/brig" policy detach no-net claude-code > /dev/null 2>&1
-unset BRIG_POLICY_DIR
+export BRIG_POLICY_DIR="$WORK/no-policies"
 # With no policy, the isolated network vz cannot give is a separate refusal,
 # and it stays a 1: no policy is involved, and 7 would send a script looking
 # for one.

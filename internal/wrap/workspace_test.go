@@ -41,6 +41,14 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
+	// Load reads which policies bind a profile from the policy directory.
+	// Without this a policy that whoever runs the tests attached to
+	// claude-code forces the network or refuses the run in cases that have
+	// nothing to do with policies. A case that needs policies of its own
+	// still sets one.
+	if err := os.Setenv("BRIG_POLICY_DIR", filepath.Join(gw, "policies")); err != nil {
+		panic(err)
+	}
 	// The boot-asset digest check reads the bundle's manifest from a registry.
 	// No unit test reaches one: a case that wants an answer stands one in.
 	registryDigests = func(string, string) (verify.BootDigests, error) {
