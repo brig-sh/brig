@@ -511,6 +511,20 @@ func TestInitWritesAStarterThatLoads(t *testing.T) {
 	}
 }
 
+// An editor reads the schema from the first line of the file, so the starter
+// begins with the modeline, and the loader accepts a file that does.
+func TestInitStarterBeginsWithTheSchemaModeline(t *testing.T) {
+	blob := starterBrigfile("demo")
+	first, _, _ := strings.Cut(string(blob), "\n")
+	want := "# yaml-language-server: $schema=https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json"
+	if first != want {
+		t.Errorf("first line %q, want %q", first, want)
+	}
+	if _, err := brigfile.Parse(blob); err != nil {
+		t.Errorf("the starter does not parse: %v", err)
+	}
+}
+
 // The starter carries the directory's name. A name YAML would read as a
 // number or a boolean, or that needs quoting, still loads as written.
 func TestInitStarterLoadsWhateverTheDirectoryIsCalled(t *testing.T) {
