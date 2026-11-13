@@ -383,6 +383,12 @@ func RefOfSandbox(vmName string) string {
 // that rm does.
 func ForgetSandbox(vmName string) (bool, error) {
 	forgetGitWatch(func(name string) bool { return name != vmName })
+	return dropSessionEntries(vmName)
+}
+
+// dropSessionEntries is ForgetSandbox without the look at the project's .git,
+// for a recreate, which removes the sandbox and keeps the session.
+func dropSessionEntries(vmName string) (bool, error) {
 	index := readSessionIndex()
 	dropped := false
 	for key, entry := range index {
