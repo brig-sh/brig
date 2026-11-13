@@ -337,6 +337,9 @@ A policy needs `spec.egress`, `spec.routes`, or both.
 | `request.allow.methods` | no | HTTP methods, in upper case |
 | `request.allow.paths` | no | Globs on the path after the route prefix, or on the whole path on a `host` route. Each starts with `/` |
 | `request.allow.repos` | no | `owner/name` globs. Only the `github-token` preset takes them, and the `github-api` preset refuses them |
+| `request.allow.graphql.queries` | no | Top-level fields a GraphQL query may select, such as `repository`. `*` allows any. Only the `github-api` preset takes `graphql` |
+| `request.allow.graphql.mutations` | no | Mutations a GraphQL request may call, such as `addComment`. `*` allows any |
+| `request.allow.graphql.repos` | no | `owner/name` globs that each root `repository` field must match. With it, `queries` may list only `repository` and `rateLimit` |
 
 On a `gcp` route `request.allow` belongs to each entry of `services`, and
 Brig refuses one on the route itself.
@@ -460,6 +463,27 @@ A `github-api` route needs only the credential:
   credential:
     secretRef: { name: brig-gh-token }
 ```
+
+To limit what `gh` may do, add `request.allow.graphql`. This route reads pull
+requests and issues in one repository and comments on them, and nothing
+else:
+
+```yaml
+- name: github-api
+  preset: github-api
+  credential:
+    secretRef: { name: brig-gh-token }
+  request:
+    allow:
+      graphql:
+        queries: [repository]
+        mutations: [addComment]
+        repos: [brig-sh/brig]
+```
+
+On a route with `request.allow.graphql`, the REST API is read-only. See
+[GraphQL requests](broker.md#graphql-requests) for what the broker checks,
+which `gh` commands work, and the limits.
 
 The reviewed `Anthropic-Beta` values are `oauth-2025-04-20`,
 `claude-code-20250219`, `interleaved-thinking-2025-05-14`,

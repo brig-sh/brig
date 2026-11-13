@@ -499,7 +499,7 @@ A 502 body does not carry the error of the secret backend.
 
 ## `request.allow`
 
-The broker enforces the three lists of `request.allow`. Every list that is
+The broker enforces the four lists of `request.allow`. Every list that is
 set must match.
 
 | List | Matched against |
@@ -507,10 +507,11 @@ set must match.
 | `methods` | The request method |
 | `paths` | `<rest>`, without the query. `*` does not match a `/` |
 | `repos` | The `owner/name` that the first two segments of `<rest>` name, with a `.git` suffix removed. A path with fewer than two segments is refused |
+| `graphql` | The GraphQL operation in the body of a request to `/api/graphql`, on the `github-api` preset alone. See [GraphQL requests](#graphql-requests) |
 
 On a route with `services` each service has its own lists, and the route has
-none. The broker does not read request bodies for this, so a method override
-in a form-encoded body is not refused.
+none. Apart from `graphql`, the broker does not read request bodies for
+this, so a method override in a form-encoded body is not refused.
 
 The `models` and `tools` lists that the Anthropic presets will take read the
 request body. The policy type does not carry them yet, so the broker does not
@@ -1097,14 +1098,114 @@ The broker forwards only the paths `gh` sends to an Enterprise host:
 Any other path is a `404` with `check=github-api.path`, before the broker reads
 the credential. `request.allow.paths` matches the path `gh` sent, such as
 `/api/v3/repos/*` or `/api/graphql`. `request.allow.repos` is refused on this
-preset. A GraphQL request carries the repository in the query, so a path rule
-cannot limit it by repository. The scope of the token is the limit.
+preset. A path rule cannot tell one GraphQL request from another; to limit
+them, use `request.allow.graphql` (see [GraphQL requests](#graphql-requests)).
 
 Select a repository with `gh ... -R <route>.brig.internal/<owner>/<repo>`, such
 as `github-api.brig.internal/<owner>/<repo>` for a route named `github-api`,
 because the host `gh` knows is the name of the route. git clone and push keep
 using the `github-token` route. `gh repo clone` and `gh pr checkout` are not
 served by `github-api`, and neither is `uploads.github.com`.
+
+#### GraphQL requests
+
+Most `gh pr` and `gh issue` commands send GraphQL: one `POST /api/graphql`
+that can read or change anything the token reaches. `request.allow.graphql`
+limits the operation that request carries:
+
+```yaml
+request:
+  allow:
+    graphql:
+      queries: [repository]
+      mutations: [addComment]
+      repos: [brig-sh/brig]
+```
+
+| List | Matched against |
+| --- | --- |
+| `queries` | Each top-level field of a query, through fragments, by field name and not alias. `*` allows any |
+| `mutations` | Each mutation of a mutation, the same way. `*` allows any |
+| `repos` | The `owner` and `name` of each `repository` field at the root of a query, without ASCII case |
+
+A list that is left out allows nothing, so a route without `mutations` is
+read-only. `__typename` is always allowed. The broker refuses subscriptions. With
+`repos`, `queries` may list only `repository` and `rateLimit`, because every
+other root field reaches repositories by a node ID, a search, a URL or an
+owner, which `repos` cannot check.
+
+**On a route with `request.allow.graphql`:**
+
+- Only `graphql` governs `/api/graphql`. `methods` and `paths` do not apply
+  to it.
+- Every other path is the REST API. The broker allows only `GET` and `HEAD`
+  there, narrowed by `methods` and `paths`. This stops `gh api -X PUT
+  .../merge` from merging a pull request that GraphQL refuses to merge.
+- The broker refuses a path that differs from `/api/graphql` only in case, a
+  slash, or a segment after it, such as `/api/v3/GraphQL`.
+
+**What the broker reads.** The broker checks the request before it reads
+the credential, and refuses a request that it cannot read whole:
+
+- a `POST` of `application/json`, not compressed, with no query string, and
+  at most 8 MiB
+- one JSON object with only `query`, `operationName` and `variables`, no key
+  twice at any depth, nested at most 64 deep, in UTF-8
+- a query in the GraphQL specification of October 2021, at most 64 deep and
+  50,000 tokens, with no name of an operation, fragment, variable, argument
+  or input field twice, no undefined fragment, and no fragment cycle
+
+The broker picks the operation as GitHub does: the one `operationName`
+names, or the only one. A repository name must be ASCII, from a string or a
+variable, and not a block string.
+
+**Renamed and moved repositories.** GitHub resolves the old name of a
+renamed or transferred repository to its new one, so a name that matches
+`repos` can reach a repository it never listed. With `repos`, the broker
+asks GitHub, with the route's credential, whether each repository exists
+under exactly that name (`followRenames: false`) before it forwards the
+request. It keeps each confirmation for five minutes for each route. The
+audit line does not record this lookup.
+
+A refusal is a `403` that names the rule:
+
+```
+brig broker refused this request
+policy:  gh-pr-comment
+route:   github-api
+rule:    spec.routes[github-api].request.allow.graphql
+reason:  mutation field "mergePullRequest" is not in the allow list [addComment]
+sandbox: brig-7f3a
+```
+
+**Which `gh` commands work.** With the example policy and `gh` 2.103:
+
+| Command | Result |
+| --- | --- |
+| `gh pr list`, `gh pr view`, `gh issue list`, `gh issue view` | Allowed |
+| `gh pr comment`, `gh issue comment` | Allowed: `addComment` |
+| `gh pr checks` | Refused: its second query selects `node` |
+| `gh pr status` | Refused: it selects `search` |
+| `gh pr merge`, `gh pr create`, `gh issue close` and other changes | Refused, until their mutations are listed |
+| `gh api` on a REST path | `GET` alone |
+
+`gh pr checks` and `gh pr status` work without `repos`, with `node` and
+`search` in `queries`. To find the fields and mutations a command needs,
+run it on the host with `GH_DEBUG=api`, which prints each query.
+
+**What `graphql` does not limit.**
+
+- A mutation names its target by node ID, such as `subjectId: "PR_kw..."`,
+  and not by repository. `repos` does not limit mutations: `addComment` can
+  comment on any pull request or issue the token reaches.
+- `repos` limits where a query starts, not where it goes. A query that
+  starts at a listed repository can follow an edge, such as an issue's
+  `parent`, a pull request's `headRepository`, or a cross-reference, into
+  another repository. `gh pr view` and `gh issue view` select such edges.
+- The REST API stays readable on every path that `paths` allows.
+
+For each of these, the token's scope is the only limit. Use a fine-grained
+token that covers only the repositories and permissions the agent needs.
 
 A route with `guest.git` points git at the route through the environment,
 and writes nothing into the guest home:

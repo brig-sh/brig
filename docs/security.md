@@ -331,6 +331,13 @@ session token can send requests that the upstream sees as the certificate
 holder's. Only the route's `request.allow` limits them, so make it as narrow
 as the certificate's purpose.
 
+A `github-api` route with `request.allow.graphql` limits the GraphQL
+operations the session token can run, and makes the REST API read-only. It
+does not limit a mutation by repository, because a mutation names its
+target by node ID, and `repos` limits only the repository a query starts
+at. The token's scope is the limit there. See
+[GraphQL requests](broker.md#graphql-requests).
+
 The `claude-code` credential stays off host disk only while the agent has
 `CLAUDE_CONFIG_DIR`. Brig hands it to every process it starts in the sandbox.
 A `claude` started without it, under `sudo -i`, `su -` or `env -i` for
