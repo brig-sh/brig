@@ -31,29 +31,9 @@ var ErrNotFound = errors.New("no Brigfile found")
 // directories it is really in, as git's does. The lookups here read no file:
 // Load opens what Discover returns through a root, and checks it there.
 func Discover(startDir string) (string, error) {
-	abs, err := filepath.Abs(startDir)
+	root, err := Root(startDir)
 	if err != nil {
 		return "", err
-	}
-	start, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", err
-	}
-	root := start
-	for dir := start; ; {
-		_, err := os.Lstat(filepath.Join(dir, ".git"))
-		if err == nil {
-			root = dir
-			break
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
 	}
 	path := filepath.Join(root, FileName)
 	if _, err := os.Lstat(path); err != nil {
@@ -63,6 +43,34 @@ func Discover(startDir string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// Root returns the project root for startDir: the directory Discover looks
+// in for a Brigfile, whether or not one is there. It is apart from Discover so
+// that a caller which writes a Brigfile writes it where Discover will find it.
+func Root(startDir string) (string, error) {
+	abs, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", err
+	}
+	start, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	for dir := start; ; {
+		_, err := os.Lstat(filepath.Join(dir, ".git"))
+		if err == nil {
+			return dir, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return start, nil
+		}
+		dir = parent
+	}
 }
 
 // Loaded is a Brigfile with every alias resolved, and the bytes it was
