@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -427,6 +428,39 @@ func TestBootsLinuxBundle(t *testing.T) {
 		if got := BootsLinuxBundle(tt.rt); got != tt.want {
 			t.Errorf("%s: BootsLinuxBundle = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+// hull on Linux has no VMM command line to read a network from: inspect
+// prints cmdLine empty and the network the run attached as network, also for
+// a stopped instance. none and shared are read as such. A gateway, whose
+// socket inspect does not name, a missing label and anything else are
+// unknown, never shared, and so is the record of another instance.
+func TestLinuxHullSandboxNetworkReadsTheNetworkLabel(t *testing.T) {
+	const name = "brig-legacy"
+	record := func(id, network string) string {
+		fixture, _ := json.Marshal(map[string]any{"id": id, "status": "stopped", "cmdLine": nil,
+			"containerId": "hull-0123abcd", "network": network})
+		return string(fixture)
+	}
+	for _, tt := range []struct {
+		name, fixture, want string
+	}{
+		{"offline", record(name, "none"), "none"},
+		{"shared bridge", record(name, "shared"), "shared"},
+		{"a gateway of unknown ownership", record(name, "gateway"), ""},
+		{"no label", record(name, ""), ""},
+		{"a network this brig does not know", record(name, "isolated"), ""},
+		{"another instance", record("brig-other", "shared"), ""},
+		{"not json", "{", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &hull{bin: networkInspectFixture(t, tt.fixture, "", 0, "", 0), linux: true}
+			got, err := h.SandboxNetwork(name)
+			if got != tt.want || (err != nil) != (tt.want == "") {
+				t.Fatalf("SandboxNetwork = %q, %v; want %q", got, err, tt.want)
+			}
+		})
 	}
 }
 
