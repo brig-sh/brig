@@ -50,10 +50,10 @@ use a delivered credential, as any holder can, for as long as it holds it.
 
 | Case | Posture |
 | --- | --- |
-| New sandbox on `hvi` or Linux | `isolated` |
+| New sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
 | The graphical `claude-desktop` profile | `shared`, set explicitly in the profile |
-| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on Linux and `hvi`. The backend fallback on `vz` or `qemu` |
-| Custom profile without a network choice, on `vz` or `qemu` | `shared`. `brig info` names that fallback |
+| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on nerdctl and `hvi`. The backend fallback on `vz`, `qemu` or hull on Linux |
+| Custom profile without a network choice, on `vz`, `qemu` or hull on Linux | `shared`. `brig info` names that fallback |
 | Existing sandbox | Its recorded posture |
 | Existing sandbox from an older session with no record | The actual posture, inspected from the runtime |
 
@@ -88,6 +88,7 @@ prints it before the boot:
 ```
 ISOLATION    microVM (hull, hvi backend, rootfs overlay-block)
 ISOLATION    microVM (hull, vz backend, rootfs block)
+ISOLATION    microVM (hull over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
@@ -391,8 +392,12 @@ guest `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_ROLE_ARN`, or an `AWS_CONTAINER_*` variable. It is also refused when
 `~/.aws` would be in the guest: a guest home that already holds
 `.aws/credentials` or `.aws/config` (for example `--home ~`), or a profile
-volume, `files:` binding or host config seed at `.aws`, or a seed copied
-from your own `~/.aws`. The CLI's own cache in `~/.aws/cli`, which the
+volume, `files:` binding, onboarding file or host config seed at `.aws`, a
+host config seed into the guest home itself, or a seed copied from your own
+`~/.aws` or a directory that holds it. Brig compares `.aws` as a macOS file
+system can: with the case folded, and with a letter that is not ASCII taken
+for the ASCII letters it could fold into. The CLI's own cache in
+`~/.aws/cli`, which the
 `aws` CLI in the guest writes itself, is allowed. Brig does not check the
 image: an `AWS_*` variable baked into it wins over the route.
 
@@ -491,6 +496,50 @@ keeps `CLOUDSDK_CONFIG`, so both read the logins under
 `$HOME/.config/gcloud`, and the import refuses while `CLOUDSDK_CONFIG` is
 set. No package on the run path links the code that runs `gcloud`.
 
+**Identities besides the route's.** A Google login in the guest is an
+identity the run did not name. gcloud uses it whenever the guest has not
+pointed it at the route's token file, and a Google client library, which
+never reads that file, uses it to reach Google directly wherever egress
+allows. A run with a gcp route is refused when the profile or
+`BRIG_FORWARD_ENV` also hands the guest `GOOGLE_APPLICATION_CREDENTIALS`,
+`CLOUDSDK_CONFIG`, `CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, a
+`CLOUDSDK_AUTH_*` variable or a `GCE_METADATA_*` variable. That includes
+`CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`: the guest sets it to the route's token
+itself, and from the profile it could name another token. A profile that
+sets `HOME` to anything but the guest home is refused too, since `HOME`
+moves `.config/gcloud` as `CLOUDSDK_CONFIG` does. It is also refused when a
+gcloud identity would be in the guest: a guest home that already holds a
+`credentials.db` or `access_tokens.db` with a row in it,
+`application_default_credentials.json` or `legacy_credentials` under
+`.config/gcloud` (for example `--home ~`), or a `.config/gcloud` that is a
+link, or a profile volume, `files:` binding, onboarding file or host config
+seed at `.config/gcloud` or `.config`, a host config seed into the guest
+home itself, or a seed copied from your own `~/.config/gcloud` or a
+directory that holds it. gcloud creates both stores
+with no rows whenever it opens them, and an empty store is allowed; a store
+Brig cannot read as empty is refused. A gcloud configuration in
+`.config/gcloud/configurations`, or the legacy `.config/gcloud/properties`,
+that sets an `[auth]` property is refused, since `credential_file_override`
+or `impersonate_service_account` there points gcloud at an identity
+elsewhere; one Brig cannot read is refused too. Brig reads only `[auth]` and
+`[DEFAULT]`: a credential in another section, such as `core/api_key` or the
+HMAC keys `storage/gs_xml_access_key_id` and
+`storage/gs_xml_secret_access_key`, or in its `CLOUDSDK_` variable, is not
+refused. A tmpfs at
+`.config/gcloud` or `.config` is allowed: it carries nothing from the host.
+Brig compares `.config/gcloud` and `.config` as a macOS file system can:
+with the case folded, and with a letter that is not ASCII taken for the
+ASCII letters it could fold into.
+The rest of `.config/gcloud`, which gcloud in the guest writes itself, is
+allowed.
+
+These checks cover what the host hands the guest. A guest that gets another
+identity in some other way, such as `gcloud auth login` in the guest, still
+reaches the listed services only through the broker, which takes the
+session token alone. With `egress: default: deny` and no `allow` for Google's
+hosts, it reaches no Google host directly. Brig does not check the image: a
+credential baked into it is not refused.
+
 **Revocation.** `brig stop` revokes the sandbox's session tokens, so its
 requests get no more Google tokens. A secret you import again with another
 configuration, mode or service account takes effect at the next request.
@@ -536,9 +585,7 @@ of them works at import and can fail in the broker.
 parameters `$httpMethod` and `httpMethod`, and batch requests. Each one
 carries a request that `request.allow` does not see.
 
-**Not yet done.** Brig does not refuse before boot a guest variable that
-picks another identity, such as `GOOGLE_APPLICATION_CREDENTIALS`, or a guest
-home that holds `.config/gcloud`. The guest writes the session token to the
+**Not yet done.** The guest writes the session token to the
 file that `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` names itself. A
 `CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>` for a service the route does not
 list is refused on another route's `guest.env`, but not when it comes in
@@ -1081,8 +1128,8 @@ put the files back, reinstall the bundle with `install.sh`.
 The first two checks need no network, so a changed file refuses even where
 the signature cannot be checked.
 
-Only a nerdctl run reads the record. On macOS a `SHA256SUMS` in a named
-directory is ignored.
+Only a run through nerdctl, or through hull on Linux, reads the record. On
+hull on macOS a `SHA256SUMS` in a named directory is ignored.
 
 #### After the check
 
@@ -1185,7 +1232,7 @@ A sandbox with no policy has unrestricted egress, and that is what
 | --- | --- |
 | `hvi` | At the network gateway Brig gives that sandbox |
 | Linux with nerdctl | In nftables on the sandbox's own bridge, with a resolver of Brig's that answers the guest's DNS |
-| `vz`, `qemu`, docker | No policy is available. Outbound traffic is whatever the runtime allows |
+| `vz`, `qemu`, docker, hull on Linux | No policy is available. Outbound traffic is whatever the runtime allows |
 
 Both enforcement points are outside the guest's kernel.
 
@@ -1239,10 +1286,11 @@ reaches only the broker. See [Transports](broker.md#transports).
 ### Sandbox to sandbox
 
 If two agents must not reach each other, run both with `--network isolated`
-on `hvi` or on Linux. On `vz` and on `qemu`, where that posture is refused,
-run them on separate hosts.
+on `hvi` or on Linux with nerdctl. On `vz` and on `qemu`, where that posture
+is refused, run them on separate hosts. hull on Linux refuses it too: use
+nerdctl there.
 
-`isolated` is the guarantee. It is the default for new `hvi` and Linux
+`isolated` is the guarantee. It is the default for new `hvi` and nerdctl
 sandboxes unless another posture is named (see
 [Network posture](#network-posture)). `--network isolated` also moves an
 existing shared sandbox onto it.
@@ -1251,8 +1299,8 @@ existing shared sandbox onto it.
 that network, whatever the backend does with a shared one. A sandbox that
 carries an egress policy is isolated whether or not it asked to be.
 
-`isolated` is **refused** on `vz` and on `qemu`, where Brig owns no network to
-give. A run that asks for it there is stopped and told which backend
+`isolated` is **refused** on `vz`, on `qemu` and on hull on Linux, where Brig
+owns no network to give. A run that asks for it there is stopped and told which backend
 implements it. It is never booted onto the shared network under a row that
 claims otherwise.
 
@@ -1266,7 +1314,7 @@ network. A sandbox gets `shared` in these cases:
 - A flag, a setting or a profile chooses it.
 - An older sandbox keeps it, if it was recorded or recovered from the
   runtime.
-- `vz` and `qemu` use it when no posture is named.
+- `vz`, `qemu` and hull on Linux use it when no posture is named.
 
 Whether the shared network forwards traffic from one guest to another is the
 runtime's behaviour, not Brig's. The measurements are in

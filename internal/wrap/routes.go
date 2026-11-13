@@ -135,6 +135,12 @@ func (c *Config) routeRefusal() error {
 	if err := c.awsHomeRefusal(); err != nil {
 		return err
 	}
+	if err := c.gcpShadowRefusal(); err != nil {
+		return err
+	}
+	if err := c.gcpHomeRefusal(); err != nil {
+		return err
+	}
 	if c.Network == NetOffline {
 		return fmt.Errorf("policy %s declares routes, and this run has no network (BRIG_NETWORK=none) to "+
 			"reach them on; refusing the run rather than booting without them", c.routeList())

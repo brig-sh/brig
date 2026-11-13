@@ -57,8 +57,14 @@ verb="$1"; shift
 case "$verb" in
   --version)
     # What the real one prints. rc23 is the first that resolves a digest
-    # reference against its store; a case below drives an older one.
-    printf 'hull version %s\n' "${STUB_HULL_VERSION:-0.1.0-rc23}"
+    # reference against its store; a case below drives an older one. It ends
+    # with the platform the build is for, and on a Linux host brig drives a
+    # hull as the macOS one only when that says darwin, as internal/hullstub
+    # has the Go tests' stubs say. A version that names its own platform, as
+    # the hull on Linux section's does, is printed as is.
+    v="${STUB_HULL_VERSION:-0.1.0-rc23}"
+    case "$v" in *'('*) ;; *) v="$v (go1.26.8, darwin/arm64)" ;; esac
+    printf 'hull version %s\n' "$v"
     ;;
   ps)
     # `ps -a` also lists an instance that is merely holding its name.
@@ -2355,6 +2361,129 @@ STUB
     || bad "the urunc shim reaches run -- got: $(cat "$nrc/argv.log")"
 else
   echo "  --   not Linux, skipping the runc shim refusal"
+fi
+
+echo "== hull on Linux: refusals and run line =="
+# A hull built for Linux ends its --version with linux/<arch>, and brig drives
+# that one as the Linux hull. The stub says so through STUB_HULL_VERSION. That
+# hull has no network gateway yet, so a policy and --network isolated are
+# refused before the runtime is asked to boot. So is a policy with
+# BRIG_HYPERVISOR=hvi: the hvi row is the macOS gateway's, and reading it here
+# called the policy enforced. The unit tests hold each refusal; this holds that
+# the binary reaches them from the version string alone, and a control run
+# shows the log would show a boot if brig made one. brig asks the binary only
+# on Linux, so on a Mac the stub is the macOS hull and the section is skipped.
+if [ "$(uname -s)" = Linux ]; then
+  lh="$WORK/lh"
+  mkdir -p "$lh/ws" "$lh/state" "$lh/gw" "$lh/policies"
+  lh_brig() {
+    STUB_HULL_VERSION='dev (go1.26.8, linux/amd64)' STUB_LOG="$lh/argv.log" STUB_STATE="$lh/sandbox" \
+      BRIG_WORKSPACE="$lh/ws" BRIG_STATE_DIR="$lh/state" BRIG_GATEWAY_DIR="$lh/gw" \
+      BRIG_POLICY_DIR="$lh/policies" "$WORK/brig" "$@"
+  }
+
+  : > "$lh/argv.log"
+  lh_brig run claude --network isolated -d > "$lh/iso.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'hull on Linux cannot do yet' "$lh/iso.out" \
+    && ok "hull on Linux refuses --network isolated" \
+    || bad "hull on Linux refuses --network isolated -- got $rc: $(cat "$lh/iso.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot --network isolated" \
+    || ok "nothing reached hull on Linux for --network isolated"
+
+  cat > "$lh/policies/lh-deny.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: lh-deny
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+  lh_brig policy attach lh-deny claude-code > /dev/null 2>&1
+  for hv in hvi vz; do
+    : > "$lh/argv.log"
+    BRIG_HYPERVISOR=$hv lh_brig run claude -d > "$lh/pol.out" 2>&1; rc=$?
+    [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/pol.out" \
+      && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/pol.out" \
+      && ok "hull on Linux refuses a policy on $hv with exit 7, naming its path and nerdctl" \
+      || bad "hull on Linux refuses a policy on $hv with exit 7 -- got $rc: $(cat "$lh/pol.out")"
+    grep -q '^argv: run ' "$lh/argv.log" \
+      && bad "hull on Linux was asked to boot a policy on $hv it cannot enforce" \
+      || ok "nothing reached hull on Linux for a policy on $hv"
+  done
+  lh_brig policy detach lh-deny claude-code > /dev/null 2>&1
+
+  # The shipped profile sets network: isolated, which this section otherwise
+  # never reads, since BRIG_NETWORK=shared is set for the whole run. The
+  # refusal names the profile and nerdctl, not a flag nobody typed or hvi.
+  : > "$lh/argv.log"
+  BRIG_NETWORK= lh_brig run claude -d > "$lh/prof.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'profile sets network: isolated, and hull on Linux' "$lh/prof.out" \
+    && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/prof.out" \
+    && ! grep -q -e '--network isolated gives' -e 'run it on hvi' "$lh/prof.out" \
+    && ok "hull on Linux refuses the profile's isolated network, naming the profile and nerdctl" \
+    || bad "hull on Linux refuses the profile's isolated network -- got $rc: $(cat "$lh/prof.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot the profile's isolated network" \
+    || ok "nothing reached hull on Linux for the profile's isolated network"
+
+  # firecracker has no shared filesystem, and every run shares its workspace,
+  # so brig plan refuses it as the run does, and nothing reaches `hull run`.
+  : > "$lh/argv.log"
+  BRIG_HYPERVISOR=firecracker lh_brig plan claude > "$lh/fc-plan.out" 2>&1
+  grep -q '^REFUSED .*on firecracker' "$lh/fc-plan.out" \
+    && ok "brig plan says the run on firecracker is refused, as the run is" \
+    || bad "brig plan says the run on firecracker is refused -- got: $(cat "$lh/fc-plan.out")"
+  BRIG_HYPERVISOR=firecracker lh_brig run claude -d > "$lh/fc.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'on firecracker' "$lh/fc.out" \
+    && ok "hull on Linux refuses firecracker, naming the share" \
+    || bad "hull on Linux refuses firecracker -- got $rc: $(cat "$lh/fc.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot on firecracker" \
+    || ok "nothing reached hull on Linux for firecracker"
+
+  : > "$lh/argv.log"
+  GH_TOKEN=lh-gh-secret lh_brig run claude -d > "$lh/plain.out" 2>&1
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "a plain run on hull on Linux does reach run, so the log can show one" \
+    || bad "a plain run on hull on Linux reaches run -- got: $(cat "$lh/plain.out")"
+
+  # The command line of that run, as hull on Linux takes it: the network
+  # is named, vz (a macOS backend) boots on the bundle's hvi, the kernel and
+  # initrd go as urunc annotations, the workspace is a share, and the guest
+  # stays up on sleep infinity. Nothing of the macOS line reaches it: no
+  # gateway, rootfs type or window. A forwarded credential goes by name, and
+  # its value only through the environment, which is the second promise.
+  # Read from the words: line, so each argument is matched whole.
+  words="$(grep '^words:\[run\]' "$lh/argv.log" | tail -1)"
+  for want in '[--net][shared]' '[--hypervisor][hvi]' '[--snapshotter][' \
+      "[--shared-dir][$lh/ws:" '[--env][GH_TOKEN]'; do
+    case "$words" in
+      *"$want"*) ok "hull on Linux's run line carries $want" ;;
+      *) bad "hull on Linux's run line carries $want -- got: $words" ;;
+    esac
+  done
+  [ "$(printf '%s' "$words" | grep -o '\[--annotation\]' | wc -l)" -ge 2 ] \
+    && ok "hull on Linux's run line hands the kernel and initrd as annotations" \
+    || bad "hull on Linux's run line hands the kernel and initrd as annotations -- got: $words"
+  case "$words" in
+    *'[sleep][infinity]') ok "hull on Linux's run line ends on sleep infinity" ;;
+    *) bad "hull on Linux's run line ends on sleep infinity -- got: $words" ;;
+  esac
+  case "$words" in
+    *'[--gateway'*|*'[--rootfs-type]'*|*'[--gui]'*|*'[--net-gateway]'*)
+      bad "hull on Linux's run line carries a macOS flag -- got: $words" ;;
+    *) ok "hull on Linux's run line carries no macOS flag" ;;
+  esac
+  grep '^argv: run ' "$lh/argv.log" | grep -q 'lh-gh-secret' \
+    && bad "a forwarded value reached hull on Linux's argv" \
+    || ok "no forwarded value reaches hull on Linux's argv"
+  grep -q '^env-gh:lh-gh-secret$' "$lh/argv.log" \
+    && ok "the forwarded value reaches hull on Linux through its environment" \
+    || bad "the forwarded value reaches hull on Linux through its environment -- got: $(grep '^env-gh:' "$lh/argv.log")"
+  lh_brig rm --all -y > /dev/null 2>&1
+else
+  echo "  --   not Linux, skipping hull on Linux"
 fi
 
 echo "== exit codes =="

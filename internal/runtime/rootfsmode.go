@@ -90,10 +90,15 @@ func rootfsModeFor(spec RunSpec, monitor bool, host OverlayRoot) (string, error)
 }
 
 // OverlayRootFor reports whether rt can build an overlay root on this host,
-// for brig doctor. A runtime brig does not drive itself builds none.
+// for brig doctor. A runtime brig does not drive itself builds none. hull on
+// Linux is asked what its run asks, urunc's host check, and not the macOS
+// mke2fs from Homebrew: doctor would otherwise tell a Linux host to run brew.
 func OverlayRootFor(rt Runtime) OverlayRoot {
 	switch r := rt.(type) {
 	case *hull:
+		if r.linux {
+			return uruncHostOverlayRoot()
+		}
 		return hullOverlayRoot()
 	case *nerdctl:
 		return r.overlayRoot()
@@ -122,6 +127,9 @@ func hullOverlayRoot() OverlayRoot {
 func OverlayMonitorFor(rt Runtime, hv string) (bool, string) {
 	switch r := rt.(type) {
 	case *hull:
+		if r.linux {
+			return linuxHullOverlayMonitor(hv)
+		}
 		return hullOverlayMonitor(hypervisorOrDefault(hv))
 	case *nerdctl:
 		return r.overlayMonitor(RunSpec{GenericBoot: true, Hypervisor: hv})
@@ -166,6 +174,13 @@ func (n *nerdctl) overlayRoot() OverlayRoot {
 	if shim := containerdRuntime(); !isUruncShim(shim) {
 		return OverlayRoot{Why: fmt.Sprintf("BRIG_CONTAINERD_RUNTIME=%s is not urunc, which builds the overlay root", shim)}
 	}
+	return uruncHostOverlayRoot()
+}
+
+// uruncHostOverlayRoot is whether this host has what urunc builds an overlay
+// root with, whichever client hands it the container: an overlayfs snapshot,
+// and mke2fs to format the disks.
+func uruncHostOverlayRoot() OverlayRoot {
 	if snap, from := containerdSnapshotter(); snap != "overlayfs" {
 		return OverlayRoot{Why: fmt.Sprintf("the containerd snapshotter is %s (%s), and urunc builds the overlay root from overlayfs only", snap, from)}
 	}
@@ -181,6 +196,30 @@ func (n *nerdctl) overlayRoot() OverlayRoot {
 func (n *nerdctl) rootfsMode(spec RunSpec) (string, error) {
 	monitor, _ := n.overlayMonitor(spec)
 	return rootfsModeFor(spec, monitor, n.overlayRoot())
+}
+
+// linuxHullRootfsMode is the rootfs mode brig hands urunc through hull on
+// Linux, or "" for urunc's own root. It is nerdctl's decision less the two
+// questions only nerdctl raises, docker and another shim: hull boots urunc
+// alone and carries annotations. A monitor urunc does not run is CanRun's
+// to refuse, and takes no overlay here.
+func linuxHullRootfsMode(spec RunSpec) (string, error) {
+	monitor, _ := linuxHullOverlayMonitor(spec.Hypervisor)
+	return rootfsModeFor(spec, monitor, uruncHostOverlayRoot())
+}
+
+// linuxHullOverlayMonitor is whether the urunc monitor hull on Linux boots
+// for hv takes the overlay root, and why not when it does not. The run and
+// brig doctor both ask it, so the two cannot disagree.
+func linuxHullOverlayMonitor(hv string) (bool, string) {
+	m, err := linuxMonitor(hv)
+	switch {
+	case err != nil:
+		return false, err.Error()
+	case !uruncOverlayMonitors[m]:
+		return false, "urunc's " + m + " monitor takes no overlay root"
+	}
+	return true, ""
 }
 
 // overlayMonitor is whether the urunc monitor spec runs on takes the overlay
@@ -205,8 +244,9 @@ func isUruncShim(shim string) bool {
 // containerdSnapshotter is the snapshotter nerdctl unpacks into, and where
 // that answer came from. nerdctl takes it from CONTAINERD_SNAPSHOTTER, then
 // from the snapshotter key of its nerdctl.toml, and uses overlayfs when
-// neither names one. brig passes no --snapshotter. The runtime bundle sets
-// both the variable and the file, to overlayfs unless the user switched.
+// neither names one. brig passes nerdctl no --snapshotter, and passes hull on
+// Linux this answer, which hull would not find for itself. The runtime bundle
+// sets both the variable and the file, to overlayfs unless the user switched.
 func containerdSnapshotter() (snapshotter, from string) {
 	if v := os.Getenv("CONTAINERD_SNAPSHOTTER"); v != "" {
 		return v, "CONTAINERD_SNAPSHOTTER"

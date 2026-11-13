@@ -10,6 +10,28 @@ import (
 // tests.
 var nodeWidePrefix = "/var/lib/brig/data"
 
+// LinuxBundleBooter is a runtime that can say whether it boots the Linux
+// runtime bundle's kernel and initrd: the files the bundle's launcher names in
+// BRIG_BOOT_ASSETS, which the bundle's own signed record lists, not the boot
+// bundle in the registry. wrap checks those files against that record on such
+// a runtime, and against the boot bundle on any other.
+//
+// Asked rather than read off Kind, because hull is both: on macOS the bundle
+// plays no part, and on Linux it boots the bundle's files as nerdctl does.
+// Optional, and a runtime without it boots no bundle files: wrap gives its
+// directory the boot bundle's check, which does not list them and so refuses
+// rather than waves them through.
+type LinuxBundleBooter interface {
+	BootsLinuxBundle() bool
+}
+
+// BootsLinuxBundle reports whether rt boots the Linux runtime bundle's kernel
+// and initrd. See LinuxBundleBooter.
+func BootsLinuxBundle(rt Runtime) bool {
+	b, ok := rt.(LinuxBundleBooter)
+	return ok && b.BootsLinuxBundle()
+}
+
 // BundleEnv is the environment of a runtime bundle's tree, and where the
 // launchers that load it are.
 type BundleEnv struct {

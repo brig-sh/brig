@@ -10,19 +10,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
 	"github.com/brig-sh/brig/internal/telemetry"
 )
 
-// hull drives the macOS microVM runtime.
+// hull drives the microVM runtime of that name. On macOS it boots the guest on
+// a hypervisor of its own. On Linux it is a containerd client that boots the
+// guest through urunc, and it is to take nerdctl's place there.
 type hull struct {
 	bin string
+	// linux marks a hull built for Linux. Its command line differs from the
+	// macOS one, and the network gateway the macOS backends rely on does not
+	// exist on Linux, so the adapter has to know which hull it drives.
+	//
+	// A field rather than build tags, so that one test binary checks both
+	// command lines. CI runs on Linux alone, and a macOS half behind a darwin
+	// tag would be compiled and tested nowhere. The zero value is the macOS
+	// hull, the only one brig drove before this field existed and the one
+	// every test that builds a hull by hand means. See newHullFor for why
+	// the binary is asked rather than the host.
+	linux bool
 	// pins caches the one question PinsDigest asks the binary, because the
 	// verify path may ask more than once per run and the answer cannot change
 	// while brig is running.
@@ -32,6 +47,7 @@ type hull struct {
 	// telemetry gate both read.
 	versionOnce sync.Once
 	versionOut  string
+	versionErr  error
 }
 
 // version returns what `hull --version` printed, asked once per process.
@@ -41,8 +57,8 @@ func (h *hull) version() string {
 		defer cancel()
 		cmd := exec.CommandContext(ctx, h.bin, "--version")
 		cmd.Env = mergeEnv(telemetryEnv(false))
-		out, _ := cmd.Output()
-		h.versionOut = string(out)
+		out, err := cmd.Output()
+		h.versionOut, h.versionErr = string(out), err
 	})
 	return h.versionOut
 }
@@ -57,17 +73,63 @@ func (h *hull) countedEnv(counted bool) []string {
 	return telemetryEnv(counted && telemetry.Counting() && hullVersionAtLeast(h.version(), 31, false))
 }
 
-func newHull(bin string) (Runtime, error) {
-	if bin != "" {
-		return &hull{bin: bin}, nil
+func newHull(bin string) (Runtime, error) { return newHullFor(bin, goruntime.GOOS) }
+
+// newHullFor finds the hull to drive on a host running goos, and marks one
+// built for Linux.
+//
+// The mark comes from the binary, not from goos alone. brig's CI runs on
+// Linux and checks the macOS paths there, against a stub hull named by
+// BRIG_RUNTIME=hull: a mark taken from the host would send every such test
+// down the Linux path instead. `hull --version` ends with the platform the
+// binary was built for, as in "(go1.26.4, linux/amd64)", so the hull itself
+// says which one it is. Every hull has said so since before the first Linux
+// build.
+//
+// On a Linux host only a hull that says darwin is the macOS hull, and the
+// test stubs say so. A hull that does not say, or whose --version fails or
+// hangs, is the Linux hull. Guessing macOS would read the macOS hvi rows,
+// where a policy is enforced, on a host with no gateway to enforce it. On
+// any other host no hull is asked: only the macOS hull runs there.
+func newHullFor(bin, goos string) (Runtime, error) {
+	if bin == "" {
+		p, err := exec.LookPath("hull")
+		if err != nil {
+			if goos == "linux" {
+				return nil, fmt.Errorf("%w: BRIG_RUNTIME is hull, and no hull is on PATH. "+
+					"Point BRIG_RUNTIME_BIN at a build, or unset BRIG_RUNTIME to use nerdctl", ErrNoRuntime)
+			}
+			return nil, fmt.Errorf("%w: brig drives hull on macOS, and none was there. "+
+				"See https://github.com/brig-sh/brig/blob/main/docs/install.md, "+
+				"or point BRIG_RUNTIME_BIN at a build", ErrNoRuntime)
+		}
+		bin = p
 	}
-	if p, err := exec.LookPath("hull"); err == nil {
-		return &hull{bin: p}, nil
-	}
-	return nil, fmt.Errorf("%w: brig drives hull on macOS, and none was there. "+
-		"See https://github.com/brig-sh/brig/blob/main/docs/install.md, "+
-		"or point BRIG_RUNTIME_BIN at a build", ErrNoRuntime)
+	h := &hull{bin: bin}
+	h.linux = goos == "linux" && (builtFor(h.version()) != "darwin" || h.versionErr != nil)
+	return h, nil
 }
+
+// builtFor is the operating system `hull --version` says the binary was built
+// for, or "" when it does not say. The platform is the last field in the
+// parentheses, os/arch.
+func builtFor(version string) string {
+	open, end := strings.LastIndexByte(version, '('), strings.LastIndexByte(version, ')')
+	if open < 0 || end < open {
+		return ""
+	}
+	fields := strings.Split(version[open+1:end], ",")
+	goos, _, ok := strings.Cut(strings.TrimSpace(fields[len(fields)-1]), "/")
+	if !ok {
+		return ""
+	}
+	return goos
+}
+
+// BootsLinuxBundle is true on hull on Linux, which boots the runtime bundle's
+// files through urunc as nerdctl does. On macOS the bundle plays no part. See
+// LinuxBundleBooter.
+func (h *hull) BootsLinuxBundle() bool { return h.linux }
 
 func (h *hull) Kind() string { return "hull" }
 func (h *hull) Bin() string  { return h.bin }
@@ -82,14 +144,27 @@ func (h *hull) Bin() string  { return h.bin }
 // the backend that will actually boot rather than the absence of a setting.
 //
 // The rootfs is overlay-block when runArgs hands hull that mode, read from
-// hullRootfsMode, the same call runArgs makes. Otherwise it is the value
-// runArgs hands --rootfs-type. With none, brig passes no flag and hull picks
+// rootfsMode, the same call Run makes. Otherwise it is the value runArgs
+// hands --rootfs-type. With none, brig passes no flag and hull picks
 // per backend. The row says that and names no type, because hull's default is
 // hull's to change.
+//
+// hull on Linux has no backend of its own: its guest boots on containerd and
+// urunc, as nerdctl's does, so its row is the urunc row, built by the same
+// call. The hypervisor is the monitor linuxMonitor picks on a generic boot,
+// which is hvi where the run names none or vz, and urunc's own default on any
+// other boot, where brig names none. The rootfs is the mode brig hands urunc
+// or urunc's default, never a --rootfs-type: hull on Linux passes none, and on
+// Linux how the VM reaches its root is urunc's decision. A boot that brings its
+// own root names none. Otherwise brig plan would show vz on a host that has
+// none, or a hull default root that no Linux boot has.
 func (h *hull) Isolation(spec RunSpec) Isolation {
+	if h.linux {
+		return linuxHullIsolation(spec)
+	}
 	hv := hypervisor(spec)
 	rootfs := orDefault(spec.RootfsType, "hull default")
-	mode, err := hullRootfsMode(spec, hv)
+	mode, err := h.rootfsMode(spec, hv)
 	if err != nil {
 		// CanRun refuses this run. The row names the mode asked for.
 		mode = spec.RootfsMode
@@ -98,6 +173,45 @@ func (h *hull) Isolation(spec RunSpec) Isolation {
 		rootfs = mode
 	}
 	return Isolation{BoundaryVM, fmt.Sprintf("hull, %s backend, rootfs %s", hv, rootfs)}
+}
+
+// linuxHullIsolation is the ISOLATION row of hull on Linux. See Isolation.
+func linuxHullIsolation(spec RunSpec) Isolation {
+	if !spec.GenericBoot {
+		return containerdIsolation("hull", uruncShim, uruncShim, "", "")
+	}
+	monitor, err := linuxMonitor(spec.Hypervisor)
+	if err != nil {
+		// CanRun refuses this run. The row names the hypervisor asked for.
+		monitor = spec.Hypervisor
+	}
+	mode, err := linuxHullRootfsMode(spec)
+	if err != nil {
+		// CanRun refuses this run. The row names the mode asked for.
+		mode = spec.RootfsMode
+	}
+	return containerdIsolation("hull", uruncShim, uruncShim, monitor, orDefault(mode, "urunc default"))
+}
+
+// Backend names the backend the run boots on, which is what brig plan
+// reports. On macOS it is the hypervisor asked for, as brig plan reported
+// before hull named one. hull on Linux boots on urunc, so there it is the
+// monitor the ISOLATION row names: the one linuxMonitor picks on a generic
+// boot, and "" on any other, where urunc picks. Without it the RUNTIME row
+// said vz, or nothing, where the ISOLATION row said hvi. A name urunc does not
+// run reports as asked, and the run refuses it.
+func (h *hull) Backend(spec RunSpec) string {
+	if !h.linux {
+		return spec.Hypervisor
+	}
+	if !spec.GenericBoot {
+		return ""
+	}
+	monitor, err := linuxMonitor(spec.Hypervisor)
+	if err != nil {
+		return spec.Hypervisor
+	}
+	return monitor
 }
 
 // PinsDigest asks the hull on this machine whether it can boot a digest
@@ -299,7 +413,18 @@ func (h *hull) assetFetcher(spec RunSpec) assetFetcher {
 // ResolveBootAssets is the resolve runArgs makes for a spec with no
 // BootAssets, made ahead of Run. It asks hull where the assets live with no
 // deadline, as a run does. See BootResolver.
+//
+// hull on Linux resolves as nerdctl does: brig's own asset directory, filled
+// by oras, and hull's `assets dir` and `assets pull` are not asked. wrap
+// resolves before Run, so this is the fetch a Linux run gets. Asking hull here
+// while runLinux and doctor go to oras would fetch through one tool and check
+// through another.
 func (h *hull) ResolveBootAssets(fetch BootFetch, notice, progress io.Writer) (BootAssets, error) {
+	if h.linux {
+		return resolveBootAssets(nil, func(dir string) error {
+			return orasPull(dir, fetch, notice, progress)
+		}, fetch.Replace)
+	}
 	return resolveBootAssets(h.assetDir, func(dir string) error {
 		return h.fetchAssets(dir, fetch, notice, progress)
 	}, fetch.Replace)
@@ -450,8 +575,11 @@ func (h *hull) List() ([]Instance, error) {
 }
 
 func (h *hull) Run(spec RunSpec) error {
+	if h.linux {
+		return h.runLinux(spec)
+	}
 	hv := hypervisor(spec)
-	if err := supports(spec, hv); err != nil {
+	if err := h.CanRun(spec); err != nil {
 		return err
 	}
 	net := orDefault(spec.Net, "shared")
@@ -502,7 +630,7 @@ func (h *hull) Run(spec RunSpec) error {
 			return fmt.Errorf("cannot publish %s's ports: %w", spec.Name, err)
 		}
 	}
-	args, envVals, err := runArgs(spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
+	args, envVals, err := runArgsFor(h.rootfsMode, spec, hv, net, gatewaySock, gatewayCidr, h.assetDir, h.assetFetcher(spec))
 	if err != nil {
 		// No guest will boot behind the forwards installed above, and a
 		// sandbox that was never created gives stop and rm nothing to act on.
@@ -510,6 +638,29 @@ func (h *hull) Run(spec RunSpec) error {
 		return err
 	}
 
+	if err := h.boot(spec, args, envVals); err != nil {
+		// The forwards were installed for a guest that did not boot. On the
+		// shared gateway they would hold the host ports until it restarts.
+		withdrawPublications(spec.Name)
+		return err
+	}
+	// A guest that is not behind this sandbox's isolated gateway leaves nothing
+	// for that gateway to serve. One still up here outlived an earlier
+	// instance whose stop or removal failed, and NetworkStale would read it as
+	// the posture of this guest, so brig info named `isolated` for a sandbox
+	// with no isolation. After the boot rather than before: a `hull run` that
+	// fails can be one refused because the old instance still holds the name,
+	// and that guest is still behind the gateway.
+	if !usedIsolated {
+		shutDownGateway(spec.Name)
+	}
+	return nil
+}
+
+// boot runs `hull run` with args, the command line of either hull, and envVals
+// in its environment. Both hulls boot through here, so they report a boot the
+// same way.
+func (h *hull) boot(spec RunSpec, args, envVals []string) error {
 	cmd := exec.Command(h.bin, args...)
 	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)
 	cmd.Stdout = nil // the instance id is not interesting; failures explain themselves
@@ -527,25 +678,29 @@ func (h *hull) Run(spec RunSpec) error {
 		pull = &pullWatch{notice: spec.Notice, ref: spec.Image}
 		cmd.Stderr = io.MultiWriter(said, pull)
 	}
-	err = cmd.Run()
+	err := cmd.Run()
 	pull.finish(err == nil)
 	if err != nil {
-		// The forwards were installed for a guest that did not boot. On the
-		// shared gateway they would hold the host ports until it restarts.
-		withdrawPublications(spec.Name)
 		return said.explain(fmt.Errorf("%s run: %w", h.bin, err))
 	}
-	// A guest that is not behind this sandbox's isolated gateway leaves nothing
-	// for that gateway to serve. One still up here outlived an earlier
-	// instance whose stop or removal failed, and NetworkStale would read it as
-	// the posture of this guest, so brig info named `isolated` for a sandbox
-	// with no isolation. After the boot rather than before: a `hull run` that
-	// fails can be one refused because the old instance still holds the name,
-	// and that guest is still behind the gateway.
-	if !usedIsolated {
-		shutDownGateway(spec.Name)
-	}
 	return nil
+}
+
+// runLinux boots a sandbox on hull on Linux. There is no gateway to start
+// and no publication to install: linuxSupports refuses every run that would
+// need one, so what is left is the command line.
+func (h *hull) runLinux(spec RunSpec) error {
+	if err := linuxSupports(spec); err != nil {
+		return err
+	}
+	// oras rather than `hull assets pull`, as on nerdctl and in
+	// ResolveBootAssets. A run wrap drives arrives with BootAssets resolved,
+	// so this fetches only for a caller that resolved none.
+	args, envVals, err := linuxRunArgs(spec, orasFetcher(spec))
+	if err != nil {
+		return err
+	}
+	return h.boot(spec, args, envVals)
 }
 
 // brigInternalProbes holds the answer of ProbeBrigInternal per hull binary.
@@ -584,7 +739,106 @@ func (h *hull) BrigInternalAddr(name string) (netip.Addr, error) {
 // CanRun is supports for a caller that has not started anything yet, so that
 // the refusals below also reach the path that joins a running sandbox instead
 // of booting one. See RunChecker.
-func (h *hull) CanRun(spec RunSpec) error { return supports(spec, hypervisor(spec)) }
+func (h *hull) CanRun(spec RunSpec) error {
+	if h.linux {
+		return linuxSupports(spec)
+	}
+	return supports(spec, hypervisor(spec))
+}
+
+// linuxHullPath is the run path of hull on Linux. Its guest boots on urunc
+// whatever monitor the run names, so the path names the shim, as nerdctl's
+// does, and never reads a row of hull's macOS backends.
+var linuxHullPath = RunPath{"hull", uruncShim}
+
+// IsLinuxHull reports whether rt is hull on Linux. Every sandbox it boots is
+// on one shared network, so wrap defaults an unset posture to shared there,
+// as it does for the macOS hull's vz and qemu, and names nerdctl as the way
+// to an isolated one.
+func IsLinuxHull(rt Runtime) bool {
+	h, ok := rt.(*hull)
+	return ok && h.linux
+}
+
+// The reason and the remedy of the rows of linuxHullPath in the capability
+// and route mode tables.
+const (
+	linuxHullNoNetworkWhy = "hull on Linux gives a sandbox no network of its own yet"
+	linuxHullRemedy       = "Use nerdctl (BRIG_RUNTIME=nerdctl), or detach the policy"
+)
+
+// linuxSupports is supports for hull on Linux. hull there is a containerd
+// client: urunc boots the guest, the monitor is urunc's, and the network is
+// a CNI bridge shared by every sandbox. It has no gateway, so it refuses
+// everything brig hangs on one on macOS. It cannot read macOS's hvi rows: a
+// policy on hull with BRIG_HYPERVISOR=hvi would otherwise read as enforced
+// on a host where nothing enforces it.
+func linuxSupports(spec RunSpec) error {
+	if spec.GUI {
+		return errors.New("this profile opens a graphical window, which hull cannot display on Linux; " +
+			"run it on macOS, where hull's vz backend can show it")
+	}
+	if err := requireEgress(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if err := requireDiverts(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if spec.Egress.Divert.BrigInternal {
+		if err := RequireRouteMode(v1alpha1.ModeEndpoint, linuxHullPath); err != nil {
+			return err
+		}
+	}
+	if err := checkSetup(spec, linuxHullPath); err != nil {
+		return err
+	}
+	if len(spec.Publish) > 0 {
+		if spec.Net == "none" {
+			return offlinePublishError(spec.Publish)
+		}
+		return fmt.Errorf("this sandbox publishes %s, and hull on Linux cannot publish a port yet; "+
+			"withdraw it with `brig network unpublish`, or use nerdctl (BRIG_RUNTIME=nerdctl). "+
+			"A publication outlives the run that made it, so this applies whether or not "+
+			"--publish is on this line", spec.Publish[0])
+	}
+	// The posture is a promise too: the bridge hull attaches a sandbox to is
+	// shared, and two sandboxes on it reach each other.
+	if spec.Net == "isolated" {
+		return errors.New("--network isolated gives the sandbox a network of its own, which hull on Linux " +
+			"cannot do yet; use nerdctl (BRIG_RUNTIME=nerdctl), or run with --network shared")
+	}
+	if spec.GenericBoot {
+		monitor, err := linuxMonitor(spec.Hypervisor)
+		if err != nil {
+			return err
+		}
+		if !linuxHullShareMonitors[monitor] {
+			shared := "its workspace"
+			if len(spec.Shares) > 0 {
+				shared = spec.Shares[0].Host
+			}
+			return fmt.Errorf("hull on Linux shares a host directory with the guest only on hvi, cloud-hypervisor "+
+				"or qemu, and this run shares %s on %s; unset BRIG_HYPERVISOR to boot on hvi, or name one of those",
+				shared, monitor)
+		}
+	}
+	if _, err := linuxHullRootfsMode(spec); err != nil {
+		return err
+	}
+	return nil
+}
+
+// linuxHullShareMonitors are the urunc monitors hull on Linux takes a
+// --shared-dir on, as sharedFSMonitors in brig-sh/hull's
+// internal/containerd/urunc.go lists them. firecracker has no shared
+// filesystem, and hull refuses the share there only after pulling the image;
+// brig refuses it before `hull run`, so nothing is pulled and the reader gets
+// the remedy rather than hull's error. The refusal does not wait for the
+// shares: every brig run shares at least its workspace, and the spec brig
+// plan and the early check read carries none, so a check on the shares alone
+// let plan accept a run that Run then refused, after the verify and the
+// boot-asset fetch.
+var linuxHullShareMonitors = map[string]bool{"hvi": true, "cloud-hypervisor": true, "qemu": true}
 
 // supports rejects a spec the chosen backend cannot honour, before anything
 // is started. hull would refuse this too, but only at boot and without
@@ -700,7 +954,26 @@ func isolatedNet(net string, policy Egress) bool {
 	return net == "isolated" || policy.Filtered() || policy.Divert.Requested()
 }
 
-// runArgs is the one place the run command line is built, so that what a test
+// rootfsMode is the rootfs mode this hull hands its guest on hv. hull on
+// Linux hands it to urunc, and asks what urunc builds an overlay root with;
+// the macOS hull asks for its own mke2fs. CanRun, the ISOLATION row and the
+// boot all ask this, and doctor asks the same through OverlayRootFor and
+// OverlayMonitorFor, so none of them can tell a Linux host to install
+// e2fsprogs with brew.
+func (h *hull) rootfsMode(spec RunSpec, hv string) (string, error) {
+	if h.linux {
+		return linuxHullRootfsMode(spec)
+	}
+	return hullRootfsMode(spec, hv)
+}
+
+// runArgs is runArgsFor with the macOS hull's rootfs mode, the command line
+// the tests of the macOS hull build.
+func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
+	return runArgsFor(hullRootfsMode, spec, hv, net, gatewaySock, gatewayCidr, locate, fetch)
+}
+
+// runArgsFor is the one place the run command line is built, so that what a test
 // asserts and what boots a sandbox cannot drift apart. It returns the argv
 // and the environment carrying the guest variables. splitEnv decides which
 // values go in which.
@@ -709,7 +982,11 @@ func isolatedNet(net string, policy Egress) bool {
 // missing. It is a parameter rather than a method so that this stays a pure
 // argv-building function, drivable by a test with no hull on PATH; pass nil to
 // resolve the assets without ever downloading.
-func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
+//
+// rootfsMode decides the layout of the root. Run passes the hull's own, so
+// the boot asks what CanRun and the ISOLATION row asked.
+func runArgsFor(rootfsMode func(RunSpec, string) (string, error), spec RunSpec, hv, net, gatewaySock, gatewayCidr string,
+	locate assetLocator, fetch assetFetcher) (args, env []string, err error) {
 	args = []string{"run", "--detach", "--name", spec.Name,
 		"--hypervisor", hv,
 		"--net", hullNet(net),
@@ -761,7 +1038,7 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	}
 	args = append(args, envArgs...)
 	// hull takes the layout of the root from its environment, not a flag.
-	mode, err := hullRootfsMode(spec, hv)
+	mode, err := rootfsMode(spec, hv)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -771,6 +1048,98 @@ func runArgs(spec RunSpec, hv, net, gatewaySock, gatewayCidr string, locate asse
 	// The verified digest when one was resolved, so the bytes that boot are the
 	// bytes cosign checked; hull resolves it against its store from rc23.
 	args = append(args, withDigest(spec.Image, spec.Digest))
+	return args, envVals, nil
+}
+
+// linuxRunArgs is runArgs for hull on Linux, which takes a different command
+// line: urunc boots the guest there, from a containerd snapshot, on a CNI
+// bridge. Pure, as runArgs is, so a test reads exactly what boots. It returns
+// the argv and the environment carrying the guest variables, which splitEnv
+// divides as on macOS.
+//
+// What it leaves out is as deliberate as what it adds. There is no gateway,
+// so no --gateway-sock or --gateway-cidr; no --rootfs-type, which hull on
+// Linux has no flag for, since urunc decides how the root reaches the VM; no
+// --gui, which linuxSupports refuses; and no HULL_ROOTFS_MODE, which the
+// Linux hull does not read.
+func linuxRunArgs(spec RunSpec, fetch assetFetcher) (args, env []string, err error) {
+	// Said explicitly, rather than through hullNet, which reads every posture
+	// but none as shared: on Linux the bridge is shared by every sandbox, so
+	// an isolated run must never reach this line as a shared one.
+	// linuxSupports refuses it first; this refuses it again for a caller
+	// that did not ask.
+	var net string
+	switch spec.Net {
+	case "none":
+		net = "none"
+	case "", "shared":
+		net = "shared"
+	default:
+		return nil, nil, fmt.Errorf("hull on Linux has no %s network", spec.Net)
+	}
+	args = []string{"run", "--detach", "--name", spec.Name,
+		"--net", net,
+		"--pull", orDefault(spec.Pull, "missing"),
+		"--mem", strconv.Itoa(spec.Mem),
+		"--cpus", strconv.Itoa(spec.CPUs),
+	}
+	if spec.GenericBoot {
+		// The monitor is named, as on nerdctl, because the bundle ships the
+		// one brig boots on and urunc's own default may not be there. See
+		// linuxMonitor.
+		monitor, err := linuxMonitor(spec.Hypervisor)
+		if err != nil {
+			return nil, nil, err
+		}
+		args = append(args, "--hypervisor", monitor)
+		annotations, err := bootAnnotations(spec.BootAssets, nil, fetch)
+		if err != nil {
+			return nil, nil, err
+		}
+		mode, err := linuxHullRootfsMode(spec)
+		if err != nil {
+			return nil, nil, err
+		}
+		if mode != "" {
+			annotations = append(annotations, annotationRootfsMode+"="+mode)
+		}
+		for _, kv := range annotations {
+			args = append(args, "--annotation", kv)
+		}
+	} else {
+		// An image that carries its own kernel boots that kernel. hull on
+		// Linux would otherwise boot the bundle's for an image that names
+		// none, a kernel brig neither chose nor verified for this run: brig
+		// checks the boot assets of a generic boot alone.
+		args = append(args, "--no-boot-assets")
+	}
+	// The snapshotter brig decided the rootfs mode by, so the snapshot urunc
+	// builds the overlay from is the one brig checked. hull on Linux would
+	// otherwise take its namespace's default, which nerdctl's configuration
+	// does not reach.
+	snapshotter, _ := containerdSnapshotter()
+	args = append(args, "--snapshotter", snapshotter)
+	for _, s := range spec.Shares {
+		share := s.Host + ":" + s.Guest
+		if s.ReadOnly {
+			share += ":ro"
+		}
+		args = append(args, "--shared-dir", share)
+	}
+	setup, err := setupArgs(spec, linuxHullPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	args = append(args, setup...)
+	envArgs, envVals, err := splitEnv("--env", spec.Env)
+	if err != nil {
+		return nil, nil, err
+	}
+	args = append(args, envArgs...)
+	// The container's command is what keeps it up, as on nerdctl: a
+	// container exits when its command does, and the sandbox has to outlive
+	// every exec in it. The image's own command would end it at once.
+	args = append(args, withDigest(spec.Image, spec.Digest), "sleep", "infinity")
 	return args, envVals, nil
 }
 
@@ -812,7 +1181,9 @@ func (h *hull) execArgs(spec ExecSpec) (args, env []string, err error) {
 // Generous on purpose. This is not how long the guest may take to come up --
 // that is ReadyTimeout, across many probes -- only how long one probe waits
 // before deciding this attempt landed too early and another one is due.
-const agentCallTimeout = 5 * time.Second
+//
+// A var for tests.
+var agentCallTimeout = 5 * time.Second
 
 // agentCallWaitDelay is how long Run may keep waiting once the deadline has
 // already killed the command.
@@ -827,6 +1198,28 @@ const agentCallTimeout = 5 * time.Second
 const agentCallWaitDelay = time.Second
 
 // agentCall builds a command to the guest agent that is guaranteed to return.
+//
+// On Linux a timed-out call ends hull with SIGTERM, not the SIGKILL
+// CommandContext sends by default (#575). There the shim's `urunc exec` holds
+// the guest connection, not hull. A hull killed outright leaves the command
+// running in the guest, its exec process in the shim and its FIFOs on the
+// host, until `hull stop` or `hull rm` ends them. hull catches SIGTERM
+// (brig-sh/hull#155), and once the exec has started it ends the command and
+// deletes what it made. agentCallWaitDelay is the backstop: a hull still
+// running when it runs out is killed.
+//
+// That does not yet cover the call that times out most, a probe during a
+// slow boot. There the shim's start of the exec waits for the guest's agent,
+// for up to 30 seconds, and hull passes a signal on only once the start
+// returns, so the backstop kills it first and the exec still leaks. Closing
+// that needs a backstop that outlasts the agent wait, and brig-sh/hull#156
+// on hull's side.
+//
+// On macOS hull holds the connection itself, and the guest ends a session
+// whose connection drops, so SIGKILL leaks nothing. SIGTERM would cost time
+// there: hull passes it to the guest command, and in the window this timeout
+// exists for no agent is listening, so hull would stay up until the backstop
+// killed it, a second later on every probe.
 func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string, error) {
 	args, envVals, err := h.execArgs(spec)
 	if err != nil {
@@ -839,6 +1232,9 @@ func (h *hull) agentCall(spec ExecSpec) (*exec.Cmd, context.CancelFunc, []string
 	ctx, cancel := context.WithTimeout(parent, agentCallTimeout)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.WaitDelay = agentCallWaitDelay
+	if h.linux {
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	}
 	return cmd, cancel, envVals, nil
 }
 
@@ -864,10 +1260,16 @@ func (h *hull) Output(spec ExecSpec) (string, error) {
 	// The deadline is the agent call's own context, which this function does
 	// not hold. Cancel runs when it fires, so it records that, and a caller
 	// can tell a guest that never answered from a command that failed: Run
-	// itself reports only "signal: killed".
+	// itself reports only that hull died of a signal. It keeps the signal
+	// agentCall chose: hull on Linux must get SIGTERM, or the exec leaks in
+	// the guest and the shim (#575).
 	var expired atomic.Bool
+	stop := cmd.Cancel
 	cmd.Cancel = func() error {
 		expired.Store(true)
+		if stop != nil {
+			return stop()
+		}
 		return cmd.Process.Kill()
 	}
 	cmd.Env = mergeEnv(h.countedEnv(spec.Counted), envVals)

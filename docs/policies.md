@@ -63,7 +63,7 @@ Every sandbox runs under one of three postures:
 | posture | what it permits |
 | --- | --- |
 | `shared` | one network for every sandbox using this posture on the host. Opt-in, except for the `vz` profiles and retained older sessions |
-| `isolated` | a network of this sandbox's own. The default for new `hvi` and Linux sandboxes |
+| `isolated` | a network of this sandbox's own. The default for new `hvi` and nerdctl sandboxes |
 | `offline` | no route out. The agent runs, the guest home is mounted, nothing leaves |
 
 ```bash
@@ -100,17 +100,17 @@ brig: BRIG_NETWORK "bogus" is not a posture: use shared, isolated or offline
 
 ### Posture by backend and profile
 
-On macOS, `isolated` needs the `hvi` backend.
+On macOS, `isolated` needs the `hvi` backend. On Linux it needs nerdctl: hull on Linux cannot give a sandbox its own network yet.
 
 | Case | Posture |
 | --- | --- |
-| A new sandbox on `hvi` or Linux | `isolated` |
+| A new sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
 | The seven built-in `hvi` profiles | `isolated`. Each profile names that posture |
 | `claude-desktop` | `shared`. The profile names that posture, because its GUI requires `vz`, where Brig cannot give a sandbox its own network |
-| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on Linux and `hvi`, and the `shared` fallback on `vz` and `qemu` |
-| A custom profile with no `network:` field, on `vz` or `qemu` | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
-| An explicit `isolated`, such as `--network isolated`, on `vz` or `qemu` | Refused |
-| A built-in `hvi` profile overridden to `vz` or `qemu` | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
+| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on nerdctl and `hvi`, and the `shared` fallback on `vz`, `qemu` and hull on Linux |
+| A custom profile with no `network:` field, on `vz`, `qemu` or hull on Linux | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
+| An explicit `isolated`, such as `--network isolated`, on `vz`, `qemu` or hull on Linux | Refused |
+| A built-in `hvi` profile overridden to `vz` or `qemu`, or run on hull on Linux | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
 
 On `hvi`, the network of each isolated sandbox used about 28.7 MB of memory
 in the measurement recorded in
@@ -655,7 +655,16 @@ refuses a `guest.env` entry on any bound route that names one of these, or
 any other `CLOUDSDK_API_ENDPOINT_OVERRIDES_` variable. gcloud takes the
 session token as its access token from a file. The guest writes
 `$BRIG_GCP_TOKEN` to a file and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its
-path.
+path. The guest sets it, not the profile: a run whose profile sets it is
+refused, as below.
+
+A run is refused when the profile or `BRIG_FORWARD_ENV` hands the guest a
+variable that picks another Google identity, such as
+`GOOGLE_APPLICATION_CREDENTIALS` or `CLOUDSDK_CONFIG`, or when the guest
+home or the profile puts a gcloud login, or a configuration that points
+gcloud at one, under `~/.config/gcloud`, or the profile moves `HOME`. Bind the route with `egress: default: deny`, and no
+`allow` for Google's hosts, so that a guest that logs in to gcloud itself
+reaches Google only through the broker. See [The gcp route](security.md#the-gcp-route).
 
 The secret can also be a static access token, which is quicker to try.
 It is your own identity, and it expires in about an hour, after which you
@@ -1171,6 +1180,7 @@ and on nerdctl, a check at boot confirms the answer or overturns it.
 | nerdctl (Linux), on any shim | `enforced` | Brig applies the rules on the sandbox's own network, and answers its DNS | `nft` (the nftables package) and `nsenter` (util-linux) |
 | hull on `vz` | `cannot enforce` | Brig does not filter the network of `vz` | |
 | hull on `qemu` | `cannot enforce` | Brig does not filter the network of `qemu` | |
+| hull on Linux, on any monitor | `cannot enforce` | hull on Linux gives a sandbox no network of its own yet. `BRIG_HYPERVISOR=hvi` does not change this: the `hvi` row is the macOS gateway | |
 | docker, on any shim | `cannot enforce` | Brig does not filter docker's network | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 
@@ -1182,7 +1192,7 @@ What Brig does with a run:
 | Run | Result |
 | --- | --- |
 | A policy, on an `enforced` run path | Brig boots the sandbox |
-| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu` and docker also name the backend that does enforce |
+| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu`, docker and hull on Linux also name the backend that does enforce |
 | A policy, with `--network offline`, on any run path | Brig does not refuse the run. A sandbox with no route out reaches no network, so it satisfies every rule set |
 | No policy | Brig asks nothing of the run path |
 
