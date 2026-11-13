@@ -151,7 +151,9 @@ func (c *Config) routeSecretFix(names []string) string {
 	imported := false
 	for _, name := range names {
 		switch {
-		case !c.routeDecl(name).Importable():
+		// import reads your own profile of that name, which for a target is
+		// not the profile this run reads.
+		case c.target != nil || !c.routeDecl(name).Importable():
 			cmds = append(cmds, c.routeCreateCommand(name))
 		case !imported:
 			imported = true

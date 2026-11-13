@@ -226,9 +226,9 @@ func (c *Config) profileIsolationOnFallback(hypervisor string) string {
 		return ""
 	}
 	if backend == linuxHullBackend {
-		return fmt.Sprintf("the %s profile sets network: isolated, and hull on Linux cannot give a "+
+		return fmt.Sprintf("%s sets network: isolated, and hull on Linux cannot give a "+
 			"sandbox its own network yet. Pass --network shared or set BRIG_NETWORK=shared to run it "+
-			"on the shared network, or use nerdctl (BRIG_RUNTIME=nerdctl)", c.Profile.Name)
+			"on the shared network, or use nerdctl (BRIG_RUNTIME=nerdctl)", c.profileNoun())
 	}
 	// An unset hypervisor on hull is that same fallback. Quoting the empty
 	// string would blame a variable the user did not set.
@@ -236,10 +236,10 @@ func (c *Config) profileIsolationOnFallback(hypervisor string) string {
 	if shown == "" {
 		shown = backend
 	}
-	return fmt.Sprintf("the %s profile sets network: isolated, and the %s backend cannot "+
+	return fmt.Sprintf("%s sets network: isolated, and the %s backend cannot "+
 		"give a sandbox its own network (BRIG_HYPERVISOR is %q). Pass --network shared "+
 		"or set BRIG_NETWORK=shared to run it on the shared network, or run it on hvi",
-		c.Profile.Name, backend, shown)
+		c.profileNoun(), backend, shown)
 }
 
 // CanPublish reports what this backend cannot honour about opening these ports
