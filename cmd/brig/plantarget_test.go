@@ -583,3 +583,33 @@ func TestCompletionKnowsPlanTarget(t *testing.T) {
 		t.Errorf("run offers --target: %v", got)
 	}
 }
+
+// A string the repository wrote reaches the plan's text. One with an escape
+// sequence is refused when the Brigfile loads, so no escape reaches the
+// terminal, wherever the repository put it.
+func TestPlanTargetPrintsNoEscapeSequence(t *testing.T) {
+	for name, profile := range map[string]string{
+		"an env name": `{name: x, binary: x, image: i, guestHome: /root, mem: 1, cpus: 1, secrets: [s], ` +
+			`env: [{name: "A\e[2J", ref: secrets.s}]}`,
+		"a file path": `{name: x, binary: x, image: i, guestHome: /root, mem: 1, cpus: 1, secrets: [s], ` +
+			`volumes: [{kind: tmpfs, path: d}], files: [{ref: secrets.s, path: "d/\e[2J"}]}`,
+		"the guest home": `{name: x, binary: x, image: i, guestHome: "/r\e[2J", mem: 1, cpus: 1}`,
+		"a secret name":  `{name: x, binary: x, image: i, guestHome: /root, mem: 1, cpus: 1, secrets: ["s\e[2J"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			targetHost(t, map[string]string{brigfile.FileName: "apiVersion: brig.sh/v1alpha1\nprofiles:\n" +
+				"  t: {inline: " + profile + "}\ntargets:\n  dev: {profile: t}\n"})
+			out, err := captureStdout(t, func() error { return run([]string{"plan", "--target", "dev"}) })
+			exitOf(t, err, exitFailure)
+			if strings.ContainsRune(out, '\x1b') || (err != nil && strings.ContainsRune(err.Error(), '\x1b')) {
+				t.Errorf("an escape reached the output: %q, %v", out, err)
+			}
+		})
+	}
+	targetHost(t, map[string]string{brigfile.FileName: "apiVersion: brig.sh/v1alpha1\nprofiles:\n" +
+		"  c: {from: builtin:claude-code}\npolicies:\n  p: {inline: {apiVersion: brig.sh/v1alpha1, kind: Policy, " +
+		"metadata: {name: p}, spec: {routes: [{name: r, preset: github-token, " +
+		"credential: {secretRef: {name: \"s\\e[2J\"}}}]}}}\ntargets:\n  dev: {profile: c, policies: [p]}\n"})
+	_, err := captureStdout(t, func() error { return run([]string{"plan", "--target", "dev"}) })
+	exitOf(t, err, exitFailure)
+}
