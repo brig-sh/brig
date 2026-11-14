@@ -92,7 +92,8 @@ func reservedName(name string) bool {
 // overriding a built-in -- how you pin your own image for a profile brig
 // already knows about -- costs no special case. Materialising the built-ins to
 // disk instead of embedding them would be a change to the list, not to this
-// function; OverridesBuiltIn is the one place that also reads builtinFS.
+// function; the accessors below that answer for what brig ships read
+// builtinFS too.
 //
 // A directory that does not exist is not an error: most installs have none.
 //
@@ -343,10 +344,10 @@ func ReservedFor(slug, agent string) (string, bool) {
 // brig's own. Listings say so, because "the image is not what I expected" and
 // "there is a file I forgot about" are the same question.
 //
-// This is the one accessor that reads builtinFS directly rather than through
-// the registry, so it stays here rather than beside the other provenance
-// accessors in file.go: nothing outside this file is meant to touch that
-// variable, per the note on it.
+// It asks Embedded, which reads builtinFS directly rather than through the
+// registry, as BuiltIn and BuiltInDeny do. So all four stay here rather than
+// beside the other provenance accessors in file.go: nothing outside this
+// file is meant to touch that variable, per the note on it.
 func OverridesBuiltIn(name string) bool {
 	return IsCustom(name) && Embedded(name)
 }
