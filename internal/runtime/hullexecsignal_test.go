@@ -56,7 +56,14 @@ func expireWhenReady(t *testing.T, ready string) {
 			}
 		}()
 		var once sync.Once
-		return d, func() { once.Do(func() { close(d.stop) }) }
+		// cancel ends the context too, as WithTimeout's does, so a caller
+		// that cancels a call still in flight ends the command.
+		return d, func() {
+			once.Do(func() {
+				d.expire(context.Canceled)
+				close(d.stop)
+			})
+		}
 	}
 	t.Cleanup(func() { agentCallDeadline = old })
 }
@@ -69,7 +76,9 @@ var readyWait = 30 * time.Second
 // readyDeadline is a context whose deadline passes when expire is called. To
 // the command it bounds it is a deadline like any other: Done closes and Err
 // reports context.DeadlineExceeded. A parent that is cancelled first ends it
-// with the parent's error, as a context made by WithTimeout would.
+// with the parent's error, and its own cancel ends it with context.Canceled,
+// as with a context made by WithTimeout. Deadline is the parent's: no time
+// is known ahead for this one.
 type readyDeadline struct {
 	context.Context
 	done chan struct{}
