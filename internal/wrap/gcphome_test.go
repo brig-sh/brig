@@ -761,3 +761,35 @@ func TestEmptyStoreFoldsAnOpenErrorIntoItsTwoAnswers(t *testing.T) {
 		t.Errorf("a store that cannot be opened: emptyStore = %v, %v, want a row", empty, err)
 	}
 }
+
+// For a Brigfile target, both gcp refusals name the target. The profile's
+// name is the repository's word, and a refusal that used it would send you
+// to a profile of your own that the run does not read.
+func TestAGCPRefusalNamesTheTargetNotTheRepositoryProfile(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	t.Setenv("HOME", t.TempDir())
+
+	shadow := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	shadow.target = &Target{Name: "dev"}
+	shadow.Env = append(shadow.Env, profile.EnvBinding{Name: "CLOUDSDK_CONFIG", Value: "/elsewhere"})
+	home := routedConfig(t, gcpEndpoint, &hullRecorder{})
+	home.target = &Target{Name: "dev"}
+	home.Profile.Volumes = append(home.Profile.Volumes, profile.Volume{Kind: "volume", Path: ".config"})
+
+	for name, err := range map[string]error{
+		"gcpShadowRefusal": shadow.gcpShadowRefusal(),
+		"gcpHomeRefusal":   home.gcpHomeRefusal(),
+	} {
+		if err == nil {
+			t.Errorf("%s did not refuse", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "target dev") {
+			t.Errorf("%s does not name the target: %v", name, err)
+		}
+		if strings.Contains(err.Error(), shadow.Profile.Name+" ") {
+			t.Errorf("%s names the repository's profile %q: %v", name, shadow.Profile.Name, err)
+		}
+	}
+}
