@@ -523,6 +523,15 @@ func TestInitStarterBeginsWithTheSchemaModeline(t *testing.T) {
 	if _, err := brigfile.Parse(blob); err != nil {
 		t.Errorf("the starter does not parse: %v", err)
 	}
+	// The path after the branch is a file in this repository. A schema that
+	// moved would leave every starter pointing an editor at nothing.
+	_, rel, ok := strings.Cut(starterSchemaURL, "/brig-sh/brig/main/")
+	if !ok {
+		t.Fatalf("starterSchemaURL %q is not a file on main of this repository", starterSchemaURL)
+	}
+	if _, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(rel))); err != nil {
+		t.Errorf("the schema the starter names is not in the repository: %v", err)
+	}
 }
 
 // The starter carries the directory's name. A name YAML would read as a

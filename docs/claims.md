@@ -232,9 +232,11 @@ the guest has none.
 | "A file that a Brigfile names must lie inside the project." | Brigfile targets | `go:TestParseRefusesAFilePathThatIsNotPlain` `go:TestLoadRefusesASymlinkThatLeavesTheRoot` `go:TestLoadRefusesABrigfileThatLeavesTheRoot` |
 | "A link that leaves the project is refused, and the file it points to is not loaded." | Brigfile targets | `go:TestLoadRefusesASymlinkThatLeavesTheRoot` `go:TestLoadRefusesABrigfileThatLeavesTheRoot` |
 | "A link that stays inside the project is accepted." | Brigfile targets | `go:TestLoadAcceptsASymlinkInsideTheRoot` |
+| "`builtin:` takes the profile Brig ships." | Brigfile targets | `go:TestLoadBuiltinIgnoresAUserOverride` |
 | "It ignores a profile file of the same name in your profile directory." (`builtin:`) | Brigfile targets | `go:TestLoadBuiltinIgnoresAUserOverride` `go:TestConfigNotesAnIgnoredUserOverride` |
 | "The policies you attached to a built-in profile apply to a target on that profile only." | Brigfile targets | `go:TestPlanTargetAppliesAttachmentsOnlyToABuiltIn` |
 | "A profile the repository wrote gets none of them, and reads none of the settings you keep for a profile of the same name." | Brigfile targets | `go:TestPlanTargetAppliesAttachmentsOnlyToABuiltIn` `go:TestPlanTargetReadsNoSettingOfTheProfileNameItChose` |
-| "Two checkouts of one repository, and two targets of one checkout, never share either." | Brigfile targets | `go:TestPlanTargetSandboxesAreTheirOwn` `go:TestBRIGNameMayNotTakeATargetsName` `go:TestARepositoryClaudeCodeNeverReachesYourSession` |
+| "Each session of a target has its own sandbox and its own guest home." | Brigfile targets | `go:TestPlanTargetSession` |
+| "Two checkouts of one repository, and two targets of one checkout, never share either." | Brigfile targets | `go:TestPlanTargetSandboxesAreTheirOwn` `go:TestBRIGNameMayNotTakeATargetsName` `go:TestARepositoryClaudeCodeNeverReachesYourSession` `smoke:two checkouts of one Brigfile get different sandbox names and homes` |
 | "`brig target ls` and `brig config` write nothing, and `brig init` writes only the Brigfile." | Brigfile targets | `go:TestBrigfileVerbsTouchNothing` |
 | "None of them looks for a runtime, opens your secret store or starts a sandbox." | Brigfile targets | `go:TestBrigfileVerbsTouchNothing` `smoke:the Brigfile verbs ran nothing` |
