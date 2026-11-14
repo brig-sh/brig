@@ -167,6 +167,17 @@ func LookupProject(sandbox string) (ProjectSession, bool) {
 	return ps, ok
 }
 
+// ProjectIndexProblem returns why the index cannot be read, naming the file,
+// and nil when it can or is not there. LookupProject and ProjectSessions
+// answer as an empty index would in that case, so a listing built on them
+// asks this to tell the two apart.
+func ProjectIndexProblem() error {
+	if _, err := readProjects(); err != nil {
+		return projectIndexError(err)
+	}
+	return nil
+}
+
 // ProjectSessions returns every entry, sorted by sandbox name. An index that
 // cannot be read lists nothing.
 func ProjectSessions() []ProjectSession {

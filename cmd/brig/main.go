@@ -1863,15 +1863,29 @@ func listSandboxes(args []string, quiet, jsonOut bool) error {
 		printRefs(os.Stdout, rows)
 		return nil
 	}
-	printSandboxes(os.Stdout, rows)
+	printListing(os.Stdout, os.Stderr, rows)
+	return nil
+}
+
+// printListing writes what `brig ls` shows a reader: your own sandboxes, the
+// sessions of Brigfile targets, and a line on errw when the project index
+// could not be read. Separate from listSandboxes so a test can drive it
+// with rows and no runtime.
+func printListing(w, errw io.Writer, rows []sandboxRow) {
+	printSandboxes(w, rows)
 	// Counted without the sessions of Brigfile targets, which have a table
 	// of their own below: a host with only those would otherwise show the
 	// header of this table and nothing under it.
 	if !slices.ContainsFunc(rows, func(r sandboxRow) bool { return !r.projectSandbox }) {
-		fmt.Println("(none -- `brig run claude` starts one)")
+		fmt.Fprintln(w, "(none -- `brig run claude` starts one)")
 	}
-	printProjects(os.Stdout, rows)
-	return nil
+	printProjects(w, rows)
+	// Without the index every session of a target reads as one brig has no
+	// record of, and the fix for that row is to remove it. Saying which file
+	// could not be read points at the cause instead.
+	if err := wrap.ProjectIndexProblem(); err != nil {
+		fmt.Fprintf(errw, "brig: %v\n", err)
+	}
 }
 
 // sandboxRows turns what the runtime has into the listing: brig's own
