@@ -591,6 +591,29 @@ func TestRunTargetRecreatesOnlyWhenAsked(t *testing.T) {
 	}
 }
 
+// --recreate on a sandbox that is up with no entry in the project index is
+// refused. Passing it over would run the agent in the old sandbox, on the
+// configuration it was booted with, after you approved a new one.
+func TestRunTargetRecreateRefusesASandboxWithNoRecord(t *testing.T) {
+	rt := runHost(t, nil)
+	root, _ := os.Getwd()
+	approveDev(t, "-d")
+	id := wrap.ProjectIdentity(root, "dev", "", "")
+	if _, err := wrap.ForgetProject(id.Sandbox); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, ".brig/egress.yaml", egressPolicy("api.example.org"))
+
+	answer(t, strings.NewReader("y\n"))
+	_, _, err := runQuiet(t, "run", "--target", "dev", "-d", "--recreate")
+	if err == nil || !strings.Contains(err.Error(), "no record") {
+		t.Fatalf("--recreate with no entry: %v", err)
+	}
+	if len(rt.runs) != 1 {
+		t.Errorf("booted %d times, want the first boot alone", len(rt.runs))
+	}
+}
+
 // rm --target removes the approval with the session.
 func TestRmTargetRemovesTheApproval(t *testing.T) {
 	runHost(t, nil)
