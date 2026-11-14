@@ -12,6 +12,7 @@ import (
 	"github.com/brig-sh/brig/internal/brigfile"
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/notice"
+	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/wrap"
 )
@@ -151,7 +152,20 @@ func runTarget(opts options, tail []string, wantJSON bool) error {
 	// taken now, and the recreate removes a sandbox.
 	cfg.CheckProjectGit()
 	if opts.recreate {
-		if _, recorded := wrap.LookupProject(cfg.VMName); recorded {
+		// Asked of the runtime as well as of the index. A sandbox that is up
+		// with no entry would otherwise be reused as it is, with the
+		// configuration it was booted on and not the one just approved;
+		// Recreate refuses that case and says why. Only a first run, with
+		// neither, has nothing to recreate.
+		_, recorded := wrap.LookupProject(cfg.VMName)
+		up := false
+		if ex, ok := cfg.Runtime.(runtime.Exister); ok {
+			var err error
+			if up, err = ex.Exists(cfg.VMName); err != nil {
+				return fmt.Errorf("could not ask the runtime for the sandbox of %s: %w", tr.ref, err)
+			}
+		}
+		if recorded || up {
 			if err := cfg.Recreate(); err != nil {
 				return err
 			}
