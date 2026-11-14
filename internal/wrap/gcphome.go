@@ -100,7 +100,7 @@ func (c *Config) gcpShadowRefusal() error {
 		it = "them"
 	}
 	msg := fmt.Sprintf("gcp route %s: %s hands the guest %s, which can select a Google identity other than "+
-		"the route's; remove %s from the profile and BRIG_FORWARD_ENV", c.gcpList(), c.Profile.Name, strings.Join(shadow, ", "), it)
+		"the route's; remove %s from the profile and BRIG_FORWARD_ENV", c.gcpList(), c.subject(), strings.Join(shadow, ", "), it)
 	if slices.Contains(shadow, gcpTokenFileVar) {
 		msg += "; the guest sets " + gcpTokenFileVar + " itself"
 	}
@@ -239,7 +239,7 @@ func (c *Config) gcpHomeRefusal() error {
 		return nil
 	}
 	return fmt.Errorf("gcp route %s: %s writes to ~/%s, where gcloud reads its identity, with %s; "+
-		"remove it from the profile", c.gcpList(), c.Profile.Name, gcloudDir, strings.Join(why, " and "))
+		"remove it from the profile", c.gcpList(), c.subject(), gcloudDir, strings.Join(why, " and "))
 }
 
 // overlapsFolded reports whether one of the clean host paths a and b is the
