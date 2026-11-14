@@ -1023,7 +1023,7 @@ address, which needs hull
 [v0.1.0](https://github.com/brig-sh/hull/releases/tag/v0.1.0) or later.
 `install.sh` installs the newest hull release unless `HULL_VERSION` pins
 another. An older gateway refuses the divert only when it starts, so Brig
-asks the gateway whether it takes the divert before it boots a run with a
+asks hull whether its gateway takes the divert before it boots a run with a
 route that vends. It refuses an older hull with exit `7` and the remedy
 "Upgrade hull, or detach the policy", and a probe with any other answer as
 `unknown`. See [Every command Brig
