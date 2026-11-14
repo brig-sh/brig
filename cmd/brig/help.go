@@ -29,10 +29,11 @@ agent's arguments go after --, and replace the target's args. With no ref and
 no --target, brig runs the Brigfile's default target.
 
 A run of a target boots only what you approved. Brig shows the plan and asks.
-With no terminal it boots nothing, exits 8 and prints the digest of the
-approval. --approve DIGEST approves that run without a question, for CI. A
-change to the Brigfile, to a file it names, to a setting or to this line asks
-again.
+A yes is stored, and the next run with the same configuration asks nothing.
+With no terminal, a run that no stored approval covers boots nothing, exits 8
+and prints the digest of the approval. --approve DIGEST approves that run
+without a question, for CI. A change to the Brigfile, to a file it names, to
+a setting or to this line asks again.
 
 flags:
       --image IMAGE   guest image to boot
