@@ -66,6 +66,16 @@ case "$verb" in
     case "$v" in *'('*) ;; *) v="$v (go1.26.8, darwin/arm64)" ;; esac
     printf 'hull version %s\n' "$v"
     ;;
+  version)
+    # `version --json`. A hull new enough says what its gateway can do, and
+    # brig then starts no probe. Off by default, so every other case drives
+    # brig the way an older hull does: by the probes below.
+    if [ -n "${STUB_HULL_REPORT:-}" ]; then
+      printf '{"version": "v0.2.0", "capabilities": {"gateway": {"api": true, "egressDefault": true, "divert": true, "divertLinkLocal": true}}}\n'
+    else
+      printf '{"version": "v0.1.0"}\n'
+    fi
+    ;;
   ps)
     # `ps -a` also lists an instance that is merely holding its name.
     [ -f "$STUB_STATE" ] && printf '%s running\n' "$(cat "$STUB_STATE")"
@@ -978,6 +988,29 @@ else
     || bad "rules missing from the gateway command line:$missing -- got: $(cat "$WORK/gw-on.argv")"
 fi
 
+# That run met a hull with no capability report, so it asked the gateway's
+# help. A hull that has the report is asked that, and a run of the same
+# policy starts no probe: the only gateway in the log is the sandbox's.
+grep -q '^argv: network-gateway --help' "$STUB_LOG" \
+  && ok "a hull with no capability report is asked through its gateway's help" \
+  || bad "a hull with no capability report was not probed: $(grep '^argv: network-gateway\|^argv: version' "$STUB_LOG")"
+"$WORK/brig" rm --all -y > /dev/null 2>&1
+: > "$STUB_LOG"
+env BRIG_HYPERVISOR=hvi STUB_HULL_REPORT=1 "$WORK/brig" run claude -d > "$WORK/pol-report.out" 2>&1
+rc=$?
+if [ "$rc" != 0 ]; then
+  bad "the run carrying a policy on a hull with a capability report failed: $(cat "$WORK/pol-report.out")"
+elif grep -q '^argv: network-gateway --help' "$STUB_LOG" || [ "$(grep -c '^argv: network-gateway' "$STUB_LOG")" != 1 ]; then
+  bad "a run on a hull with a capability report probed the gateway: $(grep '^argv: network-gateway' "$STUB_LOG")"
+elif ! grep -q '^argv: version --json' "$STUB_LOG"; then
+  bad "a run on a hull with a capability report never asked for the report: $(cat "$STUB_LOG")"
+elif ! grep -q '^argv: network-gateway --socket.*--egress-default deny' "$STUB_LOG"; then
+  bad "the rules did not reach the gateway on a hull with a capability report: $(grep '^argv: network-gateway' "$STUB_LOG")"
+else
+  ok "a run on a hull with a capability report starts the sandbox's gateway and no probe"
+fi
+grep '^argv: network-gateway --socket' "$STUB_LOG" > "$WORK/gw-on.argv"
+
 # A rule set is only enforceable if the guest is behind the gateway carrying
 # it, so the boot has to name that gateway -- this exact socket, not merely
 # some gateway. hull is passed --gateway-sock and --gateway-cidr for every
@@ -1147,6 +1180,25 @@ printf '%s\n' "$out" | grep -q '^BROKER  *transport brig.internal, routes anthro
   && ! printf '%s\n' "$out" | grep -q '^REFUSED' \
   && ok "brig plan has a BROKER row for a run with a route" \
   || bad "brig plan has a BROKER row for a run with a route -- got: $out"
+# A plan of a route asks whether the gateway can divert, before anything is
+# approved or booted. A hull with a capability report is asked for the report
+# and the gateway is not started; one without is asked through its help.
+: > "$STUB_LOG"
+out="$(env "${ep_env[@]}" STUB_HULL_REPORT=1 "$WORK/brig-stored" plan claude 2>&1)"; rc=$?
+if [ "$rc" != 0 ] || printf '%s\n' "$out" | grep -q '^REFUSED'; then
+  bad "plan of a route on a hull with a capability report -- got $rc: $out"
+elif grep -q '^argv: network-gateway' "$STUB_LOG"; then
+  bad "a plan on a hull with a capability report started the gateway: $(grep '^argv: network-gateway' "$STUB_LOG")"
+elif ! grep -q '^argv: version --json' "$STUB_LOG"; then
+  bad "a plan on a hull with a capability report never asked for the report: $(cat "$STUB_LOG")"
+else
+  ok "a plan on a hull with a capability report asks for the report and starts no gateway"
+fi
+: > "$STUB_LOG"
+env "${ep_env[@]}" "$WORK/brig-stored" plan claude > /dev/null 2>&1
+grep -q '^argv: network-gateway --help' "$STUB_LOG" \
+  && ok "a plan on a hull with no capability report asks the gateway's help" \
+  || bad "a plan on a hull with no capability report did not probe: $(cat "$STUB_LOG")"
 : > "$STUB_LOG"
 rm -f "$STUB_STATE".fed.*
 env "${ep_env[@]}" "$WORK/brig-stored" run claude -d > "$WORK/ep-on.out" 2>&1
@@ -3427,6 +3479,16 @@ rc=$?
 grep -q '^  ok  runtime .*0.1.0-rc23' "$WORK/doctor.out" \
   && ok "doctor names the runtime version" \
   || bad "doctor names the runtime version -- got: $(grep runtime "$WORK/doctor.out")"
+# The runtime row says how brig learns what the gateway can do: by the
+# capability report of a hull that has one, and by probes otherwise.
+grep -q '^  ok  runtime .*, gateway asked by probe' "$WORK/doctor.out" \
+  && ok "doctor says a hull with no capability report is asked by probe" \
+  || bad "doctor says a hull with no capability report is asked by probe -- got: $(grep runtime "$WORK/doctor.out")"
+out="$(STUB_HULL_REPORT=1 "$WORK/brig" doctor 2>/dev/null | grep '^  ok  runtime ')"
+case "$out" in
+  *", gateway asked by report"*) ok "doctor says a hull with a capability report is asked by report" ;;
+  *) bad "doctor says a hull with a capability report is asked by report -- got: $out" ;;
+esac
 # The first row is the build that produced the report, the same line
 # `brig version` prints after the word brig.
 build="$("$WORK/brig" version | sed 's/^brig //')"
