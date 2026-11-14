@@ -375,6 +375,8 @@ func TestTheTargetLineOfStopAndRemove(t *testing.T) {
 		{"rm", "-f", "Brigfile", "claude"},
 		{"stop", "--target"},
 		{"stop", "--target", ""},
+		{"stop", "--target", "Dev"},
+		{"rm", "--target", "my target"},
 		{"rm", "--target", "dev", "--session", "Fix!"},
 		{"rm", "--target", "dev", "--session", ""},
 		{"rm", "--all", "--target", "dev"},
@@ -687,5 +689,59 @@ func TestARunOfAProfileNotesTheBrigfile(t *testing.T) {
 	t.Chdir(other)
 	if stderr := runFaker("run", "faker", dir); strings.Count(stderr, hint) != 1 {
 		t.Errorf("a run on the project said:\n%s", stderr)
+	}
+}
+
+// lsOutput prints what `brig ls` shows for the sandboxes rt has.
+func lsOutput(t *testing.T, rt *projectRuntime) (out, errOut string) {
+	t.Helper()
+	list, err := rt.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w, errw strings.Builder
+	printListing(&w, &errw, sandboxRows(list, rt))
+	return w.String(), errw.String()
+}
+
+// A host with sessions of targets and none of your own profiles says so
+// under the first table, where the header alone would read as a listing cut
+// short.
+func TestListSaysNoneWhenOnlyTargetSessionsExist(t *testing.T) {
+	rt := &projectRuntime{have: map[string]string{}}
+	root := projectsHost(t, rt)
+	ps := seedProject(t, rt, root, "dev", "")
+	out, stderr := lsOutput(t, rt)
+	if !strings.Contains(out, "(none --") {
+		t.Errorf("ls with only a target's session does not say none:\n%s", out)
+	}
+	if !strings.Contains(out, ps.Sandbox) {
+		t.Errorf("ls does not list the target's session:\n%s", out)
+	}
+	if stderr != "" {
+		t.Errorf("ls with a readable index wrote to stderr: %s", stderr)
+	}
+}
+
+// An index this release cannot read is named on stderr. Without that line
+// each session reads as one brig has no record of, and the reader is sent to
+// remove sandboxes whose homes the index still accounts for.
+func TestListNamesAProjectIndexItCannotRead(t *testing.T) {
+	rt := &projectRuntime{have: map[string]string{}}
+	root := projectsHost(t, rt)
+	ps := seedProject(t, rt, root, "dev", "")
+	index := filepath.Join(os.Getenv("BRIG_STATE_DIR"), "projects.json")
+	if _, err := os.Stat(index); err != nil {
+		t.Fatalf("the index is not where this test writes it: %v", err)
+	}
+	if err := os.WriteFile(index, []byte(`{"version": 2, "sessions": {}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, stderr := lsOutput(t, rt)
+	if !strings.Contains(out, ps.Sandbox) {
+		t.Errorf("ls dropped a sandbox the runtime has:\n%s", out)
+	}
+	if !strings.Contains(stderr, index) || !strings.Contains(stderr, "version 2") {
+		t.Errorf("ls does not name the index it could not read: %q", stderr)
 	}
 }
