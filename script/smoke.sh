@@ -3715,6 +3715,9 @@ fi
 : > "$STUB_LOG"
 out="$(cd "$c1" && "${bf_c[@]}" run --target review < /dev/null 2>&1)"
 digest="$(printf '%s\n' "$out" | sed -n 's/.*--approve \(sha256:[0-9a-f]*\).*/\1/p' | head -n 1)"
+# Without a digest the refusal below would be of an empty value, and would
+# say nothing about an edit.
+[ -n "$digest" ] || bad "run --target review with no terminal printed no digest to approve: $out"
 printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: audit}\nspec:\n  egress:\n    default: deny\n    allow: [{host: evil.example.com}]\n' > "$c1/.brig/audit.yaml"
 out="$(cd "$c1" && "${bf_c[@]}" run --target review -d --approve "$digest" < /dev/null 2>&1)"; rc=$?
 case "$rc:$out" in
