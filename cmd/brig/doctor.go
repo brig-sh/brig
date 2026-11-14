@@ -445,7 +445,23 @@ func runtimeCheck(agent *profile.Profile) (check, runtime.Runtime) {
 	if v, verr := runtime.Version(bin); verr == nil && v != "" {
 		finding = fmt.Sprintf("%s %s at %s", rt.Kind(), shortVersion(v), bin)
 	}
-	return check{Name: "runtime", State: statePass, Finding: finding + notTheBundle(rt)}, rt
+	return check{Name: "runtime", State: statePass, Finding: finding + gatewayNote(rt) + notTheBundle(rt)}, rt
+}
+
+// gatewayNote says how brig learns what this runtime's gateway can do, when
+// a policy needs the answer. A hull with a capability report is asked and
+// nothing is started. One without is probed, and a plan with a policy runs
+// those probes, so the row says which this host gets. It says how, not
+// that: with no policy, or on a hypervisor with no gateway of brig's,
+// nothing is asked either way.
+func gatewayNote(rt runtime.Runtime) string {
+	switch runtime.GatewayAnswers(rt) {
+	case runtime.GatewayByReport:
+		return ", gateway asked by report"
+	case runtime.GatewayByProbe:
+		return ", gateway asked by probe"
+	}
+	return ""
 }
 
 // shortVersion is the version out of a `--version` line, read the way
