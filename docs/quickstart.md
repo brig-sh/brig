@@ -41,7 +41,7 @@ versions and paths differ on your host:
   ok  brig      v0.5.2 (<commit>, <date>, <go version>, darwin/arm64)
   ok  host      macOS 26.7 on arm64
   ok  virtual   Hypervisor.framework available
-  ok  runtime   hull <version> at /opt/homebrew/bin/hull
+  ok  runtime   hull <version> at /opt/homebrew/bin/hull, gateway asked by <report or probe>
   --  broker    not started; brig starts /opt/homebrew/bin/brig-broker on the first run with a route
   !!  boot      assets missing at /Users/you/.hull/store/assets
           run any agent once to fetch them, or set BRIG_BOOT_ASSETS to a directory that has them

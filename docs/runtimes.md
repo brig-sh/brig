@@ -79,9 +79,11 @@ comes from one table, shown in
 
 | run path | answer | condition |
 | --- | --- | --- |
-| hull on `hvi` | `enforced` | `network-gateway --help` exits zero within 30 seconds and lists `--egress-default` |
-| hull on `hvi` | `cannot enforce` | the gateway does not take `--egress-default`, so it cannot apply the rules |
-| hull on `hvi` | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
+| hull on `hvi`, with a capability report | `enforced` | `hull version --json` says `capabilities.gateway.egressDefault` is true |
+| hull on `hvi`, with a capability report | `cannot enforce` | the report says false, or has no such key |
+| hull on `hvi`, with no report | `enforced` | `network-gateway --help` exits zero within 30 seconds and lists `--egress-default` |
+| hull on `hvi`, with no report | `cannot enforce` | the gateway does not take `--egress-default`, so it cannot apply the rules |
+| hull on `hvi`, with no report | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
 | nerdctl on any shim | `enforced` | `nft list tables` runs in the network namespace that holds its bridges. Brig enters that namespace with `nsenter` when nerdctl is rootless |
 | hull on `vz` or `qemu` | `cannot enforce` | no probe runs |
 | hull on Linux, on any monitor | `cannot enforce` | no probe runs. hull on Linux gives a sandbox no network of its own yet |
@@ -91,6 +93,14 @@ comes from one table, shown in
 Brig boots a policy-bound run only on `enforced`. The refusal names the
 property, the runtime and the backend, and Brig exits `7`. A sandbox with no
 policy runs no probe.
+
+A hull that has a capability report is asked for it, and Brig starts no
+probe: `hull version --json` reads nothing but the binary and starts no
+gateway. Brig believes the report when it holds `capabilities.gateway`. A
+hull whose `version --json` fails, prints something else, or has no
+`capabilities.gateway` is an older hull, and Brig probes it as before. `brig
+doctor` ends its `runtime` row with `gateway asked by report` or `gateway
+asked by probe`, for a hull on macOS.
 
 ### Route mode answers
 
@@ -181,6 +191,9 @@ hull exec [-t] [--cwd <dir>] [-u <user>] [--env <NAME>|<NAME>=<value>]... <name>
 hull logs [--follow] [--tail <n>] <name>
 hull stop <name>
 hull rm <name>
+hull version --json                     # what can this hull's gateway do? Asked first.
+                                        # A hull whose answer holds capabilities.gateway
+                                        # gets none of the next three.
 hull network-gateway --help             # does this hull enforce a policy? (--egress-default)
                                         # does it route brig.internal? (--divert)
 hull network-gateway --socket <tmp>/p.sock      # does it divert 169.254.170.2? Asked
@@ -325,8 +338,8 @@ Brig asks the runtime few questions about itself:
 | which sandboxes exist, and in what state? | `ps`, on either runtime |
 | which network does a sandbox have? | `inspect`, on either runtime |
 | can this hull pin a digest? | `hull --version` |
-| does this hull enforce a policy? | `network-gateway --help`. See [Egress policy answers](#egress-policy-answers) |
-| does this hull route `brig.internal`? | `network-gateway --help` lists `--divert`. See [Route mode answers](#route-mode-answers) |
+| does this hull enforce a policy? | `version --json`, and `network-gateway --help` on a hull with no capability report. See [Egress policy answers](#egress-policy-answers) |
+| does this hull route `brig.internal`? | `version --json`, and on a hull with no capability report whether `network-gateway --help` lists `--divert`. See [Route mode answers](#route-mode-answers) |
 
 On an old build, Brig drops one feature at a time:
 
