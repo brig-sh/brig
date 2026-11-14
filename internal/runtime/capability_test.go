@@ -73,7 +73,8 @@ func TestRunPathWithNoBackendNamesTheRuntimeAlone(t *testing.T) {
 
 // Each backend booted through its adapter, against a runtime double that logs
 // every call. A policy boots only where the contract answers enforced, and a
-// refusal reaches no runtime command beyond the probe.
+// refusal reaches no runtime command beyond the capability question and the
+// probe.
 func TestEgressContractDecidesTheBootOnEveryBackend(t *testing.T) {
 	policy := Egress{Default: "deny", Allow: []Rule{{Host: "example.com"}}}
 	for _, tt := range []struct {
@@ -125,11 +126,13 @@ func TestEgressContractDecidesTheBootOnEveryBackend(t *testing.T) {
 					t.Errorf("the refusal does not name %q: %v", want, err)
 				}
 			}
-			// Exactly the probe, or nothing at all. A check for the boot alone
-			// passes a refusal that started some other command first.
+			// Exactly the question and the probe, or nothing at all. A check
+			// for the boot alone passes a refusal that started some other
+			// command first. The double has no capability report, so brig
+			// asks for one, gets none, and probes.
 			want := ""
 			if tt.probe {
-				want = "network-gateway --help\n"
+				want = "version --json\nnetwork-gateway --help\n"
 			}
 			if calls != want {
 				t.Errorf("a refused run reached the runtime: %q, want %q", calls, want)

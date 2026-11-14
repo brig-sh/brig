@@ -666,10 +666,19 @@ var gatewayProbeTimeout = 30 * time.Second
 // behaviour, and it booted a sandbox under a policy nothing had confirmed
 // (#171).
 func gatewayEnforces(bin string) error {
+	// A hull that reports what its gateway can do is asked that, and no
+	// probe runs. See gatewayReportOf.
+	if r, ok := gatewayReportOf(bin); ok {
+		if r.EgressDefault {
+			return nil
+		}
+		return noEgressDefault(bin)
+	}
 	probe := bin + " network-gateway --help"
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "network-gateway", "--help")
+	cmd.Env = mergeEnv(telemetryEnv(false))
 	// Without WaitDelay a child the runtime left behind holds the output
 	// pipe open past the kill, and the probe hangs anyway. See
 	// agentCallWaitDelay.
@@ -692,7 +701,13 @@ func gatewayEnforces(bin string) error {
 	if strings.Contains(string(out), "--egress-default") {
 		return nil
 	}
-	return &CapabilityError{Property: EgressPolicy, Path: hvi, State: CannotEnforce,
+	return noEgressDefault(bin)
+}
+
+// noEgressDefault is the refusal of a gateway that takes no egress rules,
+// whether its help or its report said so.
+func noEgressDefault(bin string) error {
+	return &CapabilityError{Property: EgressPolicy, Path: RunPath{"hull", "hvi"}, State: CannotEnforce,
 		Why:    fmt.Sprintf("the network-gateway of %s has no --egress-default", bin),
 		Remedy: "Upgrade the runtime, or detach the policy"}
 }
@@ -743,6 +758,12 @@ func gatewayDivert(r DivertRoute, socket string) string {
 // run is refused before the gateway is asked. A probe that fails refuses too,
 // for the reason gatewayEnforces gives.
 func gatewayDiverts(bin string) error {
+	if r, ok := gatewayReportOf(bin); ok {
+		if r.Divert {
+			return nil
+		}
+		return helpLacks(bin, "--divert", "network-gateway")
+	}
 	return helpLists(bin, "--divert", "network-gateway")
 }
 
@@ -757,6 +778,12 @@ func probeLinkLocal(bin string) error {
 	if err, ok := linkLocalProbes.Load(bin); ok {
 		err, _ := err.(error)
 		return err
+	}
+	if r, ok := gatewayReportOf(bin); ok {
+		if r.DivertLinkLocal {
+			return nil
+		}
+		return noLinkLocalDivert(bin)
 	}
 	err := gatewayDivertsLinkLocal(bin)
 	var ce *CapabilityError
@@ -794,6 +821,8 @@ func gatewayDivertsLinkLocal(bin string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
+	// Plumbing, as every probe here is: hull sends no event for it.
+	c.Env = mergeEnv(telemetryEnv(false))
 	c.WaitDelay = time.Second
 	out, err := c.CombinedOutput()
 	var exit *exec.ExitError
@@ -803,10 +832,7 @@ func gatewayDivertsLinkLocal(bin string) error {
 	case errors.As(err, &exit) && strings.Contains(string(out), "diverted twice"):
 		return nil
 	case errors.As(err, &exit) && strings.Contains(string(out), "link-local"):
-		return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: CannotEnforce,
-			Why: fmt.Sprintf("a route that vends needs a hull whose gateway can divert %s, and the gateway of %s "+
-				"refuses it", LinkLocalDivert.Host, bin),
-			Remedy: "Upgrade hull, or detach the policy"}
+		return noLinkLocalDivert(bin)
 	case err == nil:
 		err = errors.New("the gateway took two identical diverts")
 	default:
@@ -817,6 +843,16 @@ func gatewayDivertsLinkLocal(bin string) error {
 		Remedy: "Fix the runtime, or detach the policy", Err: err}
 }
 
+// noLinkLocalDivert is the refusal of a gateway that cannot divert a
+// link-local address, whether the probe or the report said so.
+func noLinkLocalDivert(bin string) error {
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: RunPath{"hull", "hvi"},
+		State: CannotEnforce,
+		Why: fmt.Sprintf("a route that vends needs a hull whose gateway can divert %s, and the gateway of %s "+
+			"refuses it", LinkLocalDivert.Host, bin),
+		Remedy: "Upgrade hull, or detach the policy"}
+}
+
 // helpLists runs `bin <cmd...> --help` and refuses, as a capability of the
 // endpoint mode on hvi, a binary whose help does not list flag.
 func helpLists(bin, flag string, cmd ...string) error {
@@ -825,6 +861,8 @@ func helpLists(bin, flag string, cmd ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayProbeTimeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
+	// Plumbing, as every probe here is: hull sends no event for it.
+	c.Env = mergeEnv(telemetryEnv(false))
 	c.WaitDelay = time.Second
 	out, err := c.CombinedOutput()
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
@@ -839,7 +877,14 @@ func helpLists(bin, flag string, cmd ...string) error {
 	if listsFlag(string(out), flag) {
 		return nil
 	}
-	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: hvi, State: CannotEnforce,
+	return helpLacks(bin, flag, cmd...)
+}
+
+// helpLacks is the refusal of a hull whose cmd has no flag, as a capability
+// of the endpoint mode on hvi.
+func helpLacks(bin, flag string, cmd ...string) error {
+	return &CapabilityError{Property: RouteModeProperty(v1alpha1.ModeEndpoint), Path: RunPath{"hull", "hvi"},
+		State:  CannotEnforce,
 		Why:    fmt.Sprintf("`%s` of %s has no %s", strings.Join(cmd, " "), bin, flag),
 		Remedy: "Upgrade hull, or detach the policy"}
 }
