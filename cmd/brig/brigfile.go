@@ -9,12 +9,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/brig-sh/brig/internal/brigfile"
+	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/profile"
 )
@@ -570,9 +572,34 @@ func printIgnoredNote(w io.Writer, p sourceJSON) {
 		p.IgnoredUserFile, name, name, p.Source, p.Alias)
 }
 
-// starterSchemaURL is where an editor finds the Brigfile schema. It resolves
-// once the schema is on the default branch.
-const starterSchemaURL = "https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json"
+// The schema's place in this repository. A URL of it is the two joined by a
+// branch or a tag.
+const (
+	schemaURLBase = "https://raw.githubusercontent.com/brig-sh/brig/"
+	schemaURLPath = "/api/project/v1alpha1/brigfile.schema.json"
+)
+
+// releaseVersionRE is the version of a build made from a release tag. A
+// pseudo-version, a prerelease and a +dirty build all carry more than this.
+// A prerelease is left out with the others because a pseudo-version has the
+// same shape, and because the tag of a channel build is deleted when newer
+// builds replace it.
+var releaseVersionRE = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+// starterSchemaURL is where an editor finds the Brigfile schema for a build
+// of the given version. A release names its own tag: the format can still
+// change between releases, and an editor that read the schema on main would
+// flag a field this binary accepts, or offer one it refuses. Any other build
+// has no tag it can count on to hold its schema, so it names main, the
+// nearest there is. That includes a build with no version at all, such as
+// one from a source archive.
+func starterSchemaURL(version string) string {
+	ref := "main"
+	if releaseVersionRE.MatchString(version) {
+		ref = version
+	}
+	return schemaURLBase + ref + schemaURLPath
+}
 
 // starterBrigfile is the Brigfile init writes. It must itself load: a starter
 // that brig refuses is the worst first impression the command could make, and
@@ -587,7 +614,7 @@ func starterBrigfile(name string) []byte {
 	// The modeline is the first line because yaml-language-server reads it
 	// from there, and the file is named Brigfile, which no editor maps to
 	// YAML or to this schema by itself.
-	b.WriteString("# yaml-language-server: $schema=" + starterSchemaURL + "\n")
+	b.WriteString("# yaml-language-server: $schema=" + starterSchemaURL(buildinfo.Read().Version) + "\n")
 	b.WriteString("# How this repository runs under brig. Each field is described at\n" +
 		"# https://github.com/brig-sh/brig/blob/main/docs/brigfile.md\n")
 	b.WriteString("apiVersion: " + brigfile.APIVersion + "\n")

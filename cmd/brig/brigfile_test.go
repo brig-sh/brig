@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/brigfile"
+	"github.com/brig-sh/brig/internal/buildinfo"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/secret"
 )
@@ -516,7 +517,7 @@ func TestInitWritesAStarterThatLoads(t *testing.T) {
 func TestInitStarterBeginsWithTheSchemaModeline(t *testing.T) {
 	blob := starterBrigfile("demo")
 	first, _, _ := strings.Cut(string(blob), "\n")
-	want := "# yaml-language-server: $schema=https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json"
+	want := "# yaml-language-server: $schema=" + starterSchemaURL(buildinfo.Read().Version)
 	if first != want {
 		t.Errorf("first line %q, want %q", first, want)
 	}
@@ -525,12 +526,49 @@ func TestInitStarterBeginsWithTheSchemaModeline(t *testing.T) {
 	}
 	// The path after the branch is a file in this repository. A schema that
 	// moved would leave every starter pointing an editor at nothing.
-	_, rel, ok := strings.Cut(starterSchemaURL, "/brig-sh/brig/main/")
-	if !ok {
-		t.Fatalf("starterSchemaURL %q is not a file on main of this repository", starterSchemaURL)
-	}
-	if _, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(rel))); err != nil {
+	if _, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(schemaURLPath))); err != nil {
 		t.Errorf("the schema the starter names is not in the repository: %v", err)
+	}
+}
+
+// A release points an editor at the schema of its own tag, so the editor
+// checks a Brigfile against the fields that binary reads. Every other build
+// has no tag of its own, and names main.
+func TestTheStarterSchemaURLIsTheReleasesOwn(t *testing.T) {
+	const onMain = "https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json"
+	for version, want := range map[string]string{
+		"v0.6.0":  "https://raw.githubusercontent.com/brig-sh/brig/v0.6.0/api/project/v1alpha1/brigfile.schema.json",
+		"v1.12.3": "https://raw.githubusercontent.com/brig-sh/brig/v1.12.3/api/project/v1alpha1/brigfile.schema.json",
+		// None of these is a tag brig can count on to hold a schema.
+		"dev":                                  onMain,
+		"":                                     onMain,
+		"v0.6.0+dirty":                         onMain,
+		"v0.6.0-rc.1":                          onMain,
+		"v0.5.3-0.20261114120000-b2b2b2b2b2b2": onMain,
+		"v0.6.0/../../../evil/repo/main":       onMain,
+		"0.6.0":                                onMain,
+		"v0.6":                                 onMain,
+	} {
+		if got := starterSchemaURL(version); got != want {
+			t.Errorf("starterSchemaURL(%q) = %q, want %q", version, got, want)
+		}
+	}
+}
+
+// The guide shows the modeline and the VS Code setting with the URL on main,
+// and says how a release's differs. Both copies are the URL this binary
+// builds, so a schema that moves cannot leave the guide behind.
+func TestTheGuideShowsTheSchemaURLBrigWrites(t *testing.T) {
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "brigfile.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := starterSchemaURL("")
+	if n := strings.Count(string(guide), url); n != 2 {
+		t.Errorf("docs/brigfile.md shows %s %d times, want the modeline and the editor setting", url, n)
+	}
+	if n := strings.Count(string(guide), schemaURLBase); n != 2 {
+		t.Errorf("docs/brigfile.md has %d URLs under %s, want only the two on main", n, schemaURLBase)
 	}
 }
 
