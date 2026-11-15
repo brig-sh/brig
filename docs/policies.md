@@ -490,6 +490,16 @@ A field that the route sets overrides the value of the preset:
 that names it. Brig refuses a route that changes the `upstream` or the
 `credential.field` of a preset with a lifecycle, such as `claude-code`.
 
+The git rewrites of a preset follow its upstream. `github-token` with
+`upstream: https://ghe.example.com` rewrites `https://ghe.example.com/` and
+`git@ghe.example.com:`, and no longer the two `github.com` forms. That is
+all a GitHub Enterprise host needs. To keep the `github.com` forms on a
+route with another upstream, such as a mirror, write `guest.git.insteadOf`
+out.
+
+A policy that a Brigfile holds is limited further. See
+[What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
+
 `brig policy show` leaves `credential.lifecycle` out, and names it in a
 comment under `credential:`. Its output is a policy that Brig reads back:
 
