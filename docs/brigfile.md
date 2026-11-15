@@ -519,14 +519,14 @@ A release writes the URL of its own tag, with the tag in place of `main`, so
 your editor checks the file against the fields that release reads.
 
 To get the same check for every file named `Brigfile` in VS Code, install the
-YAML extension and add this to your settings. Put the tag of the release you
-run in place of `main`:
+YAML extension and add this to your settings. The URL is the schema of the
+newest release, and it follows each release with no change from you:
 
 ```json
 {
   "files.associations": { "Brigfile": "yaml" },
   "yaml.schemas": {
-    "https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json": "Brigfile"
+    "https://github.com/brig-sh/brig/releases/latest/download/brigfile.schema.json": "Brigfile"
   }
 }
 ```
