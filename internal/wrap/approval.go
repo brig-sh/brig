@@ -443,6 +443,9 @@ func ApprovalChanges(was, now ApprovalSubject) []string {
 			if a.Policy != b.Policy || a.Preset != b.Preset || a.Mode != b.Mode || a.Vends != b.Vends {
 				add("%s changed its policy, preset or mode", k)
 			}
+			if !slices.Equal(a.GitInsteadOf, b.GitInsteadOf) || !slices.Equal(a.GuestEnv, b.GuestEnv) {
+				add("%s changed the git URLs it takes over or the variables it sets in the guest", k)
+			}
 		})
 	if !slices.Equal(was.KeptOnHost, now.KeptOnHost) {
 		add("the secrets kept on the host: %s, and were %s", listOr(now.KeptOnHost), listOr(was.KeptOnHost))

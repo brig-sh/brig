@@ -72,6 +72,28 @@ func TestTheApprovalSubjectNamesARouteChange(t *testing.T) {
 	}
 }
 
+// The git URLs a route takes over in the guest decide which traffic carries
+// the secret, so a change to them alone is a new digest and a named change.
+func TestTheApprovalSubjectNamesAChangeToWhatARouteTakesOver(t *testing.T) {
+	digestHost(t)
+	forge := func(prefix string) policy.Policy {
+		return policy.Policy{Metadata: v1alpha1.ObjectMeta{Name: "forge"}, Spec: v1alpha1.PolicySpec{
+			Routes: []v1alpha1.Route{{Name: "forge", Upstream: "https://git.example.com",
+				Credential: &v1alpha1.CredentialRef{SecretRef: v1alpha1.SecretRef{Name: "forge-token"}},
+				Inject:     &v1alpha1.Inject{BasicAuth: &v1alpha1.BasicAuth{Username: "x-access-token"}},
+				Guest:      &v1alpha1.Guest{Git: &v1alpha1.GitGuest{InsteadOf: []string{prefix}}}}}}}
+	}
+	base := subjectOf(t, approvalConfig(t, forge("https://git.example.com/")))
+	now := subjectOf(t, approvalConfig(t, forge("https://github.com/")))
+	if ApprovalDigest(now) == ApprovalDigest(base) {
+		t.Error("the digest did not change")
+	}
+	const want = "route forge changed the git URLs it takes over or the variables it sets in the guest"
+	if got := strings.Join(ApprovalChanges(base, now), "\n"); !strings.Contains(got, want) {
+		t.Errorf("the changes do not name %q:\n%s", want, got)
+	}
+}
+
 // The subject holds names and hashes. A value forwarded from the host and a
 // literal in the profile reach it as names alone.
 func TestTheApprovalSubjectHoldsNoValue(t *testing.T) {

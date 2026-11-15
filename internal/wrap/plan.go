@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -297,6 +298,12 @@ type PlanRoute struct {
 	// Vends is set on a route that answers the guest with cloud keys of its
 	// own instead of forwarding a request: the aws preset.
 	Vends bool `json:"vends"`
+	// GitInsteadOf are the URL prefixes git in the guest rewrites to the
+	// route, and GuestEnv the names of the variables the route sets there.
+	// Together they say which of the guest's requests go through the route,
+	// which its name alone does not.
+	GitInsteadOf []string `json:"gitInsteadOf,omitempty"`
+	GuestEnv     []string `json:"guestEnv,omitempty"`
 }
 
 // PlanTarget is the Brigfile target a plan is of: which file, which profile
@@ -417,6 +424,15 @@ func planRoutesOf(routes []v1alpha1.Route, origin func(name string) string) []Pl
 		}
 		for _, svc := range r.Services {
 			pr.Services = append(pr.Services, svc.Name)
+		}
+		if r.Guest != nil {
+			if r.Guest.Git != nil {
+				pr.GitInsteadOf = slices.Clone(r.Guest.Git.InsteadOf)
+			}
+			for name := range r.Guest.Env {
+				pr.GuestEnv = append(pr.GuestEnv, name)
+			}
+			sort.Strings(pr.GuestEnv)
 		}
 		sort.Strings(pr.Secrets)
 		sort.Strings(pr.Services)
@@ -693,7 +709,26 @@ func routeText(r PlanRoute) string {
 		line = fmt.Sprintf("route %s hands the guest AWS keys made from your secret %s", r.Name,
 			strings.Join(r.Secrets, ", "))
 	}
-	return line + ", from " + r.Policy
+	line += ", from " + r.Policy
+	// What follows is added only where it applies, so a route with none of
+	// it reads as it always did.
+	if r.Preset != "" {
+		line += "; preset " + r.Preset
+		// A preset can be pointed at another upstream. The row says so,
+		// because the preset's name still says the usual one. A route shown
+		// as written, before its preset filled it in, has no upstream yet.
+		if base, err := policy.PresetRoute(v1alpha1.Preset(r.Preset)); err == nil &&
+			r.Upstream != "" && base.Upstream != "" && base.Upstream != r.Upstream {
+			line += ", in place of its own upstream " + base.Upstream
+		}
+	}
+	if len(r.GitInsteadOf) > 0 {
+		line += "; git in the guest uses it for " + strings.Join(r.GitInsteadOf, ", ")
+	}
+	if len(r.GuestEnv) > 0 {
+		line += "; it sets " + strings.Join(r.GuestEnv, ", ") + " in the guest"
+	}
+	return line
 }
 
 func ruleText(r policy.Rule) string {
