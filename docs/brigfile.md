@@ -287,6 +287,8 @@ needs that is not in your store.
 - the network that a flag or a setting asked for, and the network the
   sandbox gets
 - the guest home, the project, and the directories that `--skills` copies
+- the agent memory store, from `--agent-memory` or `BRIG_MEMORY`. The plan
+  and the prompt show it in a `MEMORY` row
 - the `BRIG_*` settings that take effect, by name and value, such as
   `BRIG_FORWARD_ENV`, `BRIG_IMAGE` and `BRIG_ENV_ARGV`
 - each credential binding, and each host variable the run reads into the
@@ -297,6 +299,11 @@ needs that is not in your store.
 
 A change to any of these asks again. A change to another file in the
 project, such as your source code, does not.
+
+A repository cannot turn agent memory on. Brig refuses a target whose
+profile in the Brigfile sets `memory:`, and asks you to pass
+`--agent-memory` yourself. Only a target that runs `builtin:claude-code`
+can have memory. See [Agent memory](sessions.md#agent-memory).
 
 The approval holds names, paths and digests. It holds no secret value.
 

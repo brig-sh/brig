@@ -1507,6 +1507,98 @@ The `hvi` answer changed between two measurements, and nothing in Brig
 noticed at the time. Do not treat any answer about `shared` in the table as a
 property of Brig.
 
+### Agent memory
+
+Agent memory is off unless you turn it on with `--agent-memory`,
+`BRIG_MEMORY` or the `memory:` of a profile of your own. A repository
+cannot turn it on: Brig refuses a target whose Brigfile profile sets
+`memory:`. Brig wires memory only to the `claude-code` profile it ships,
+and refuses it for any other agent. When it is on, a store of notes lives
+on the host and the agent reads and writes it through four tools. The plan,
+and the approval prompt of a target, name the store in a `MEMORY` row. See
+[Agent memory in sessions](sessions.md#agent-memory).
+
+What reaches host disk, and where:
+
+- One Markdown file per memory, and an index `MEMORY.md`, in
+  `~/.brig/memory/<store>` (`memory/` under `BRIG_STATE_DIR`). Files are
+  `0600` and directories `0700`. The bodies are what the agent wrote, in
+  plaintext, credentials included if it wrote one. They stay on host disk,
+  and in its backups, until `brig memory rm` removes the store. `brig rm`
+  does not.
+- A project store is `project-<16 hex digits>`, from the host path of the
+  project folder. A `project` file in it records that path for
+  `brig memory ls`. The store follows the path, not the repository: two
+  repositories checked out at one path in turn, such as a reused temporary
+  checkout, share one store.
+- Nothing else. The store is not in the guest home, and no host directory is
+  added to the sandbox.
+
+The guest never names a store. Brig picks the store key on the host, from
+your flag, your setting or your own profile, and gives it to the broker
+when it registers the sandbox. A request carries a memory token, and the
+token names the sandbox, not a store. The broker looks up the store of that
+sandbox, so a guest cannot ask for another one. The guest chooses only the
+names of memories inside its store, and the store opens them through an
+`os.Root`.
+
+A store that more than one sandbox uses is a channel between them. So is a
+store that one project reuses across sandboxes that you remove and create
+again. The channel carries whatever an agent writes, credentials included,
+to every sandbox that shares the store. A sandbox given `GITHUB_TOKEN` can
+save it in a memory, and a sandbox that was never given it can read it. A
+prompt-injected agent can write a memory, and a later agent reads it: by
+name, and in the index that Brig puts in the instructions of its session,
+before you have typed anything. By opting in, you accept this. Brig does
+not remove the channel.
+
+What Brig does about it:
+
+- The index shows names and descriptions only. A description must be one
+  line of visible text of at most 256 bytes: letters, combining marks (so
+  Thai, Devanagari, Khmer and Hebrew with niqqud pass), numbers,
+  punctuation, symbols and spaces, without the characters among them that
+  render as nothing. Brig refuses control and format characters, which
+  include zero-width joiners and spaces, bidi overrides and tags. It refuses
+  the emoji and Mongolian variation selectors too, so `⚠️` is refused where
+  `⚠` is accepted. It refuses the combining grapheme joiner, the Hangul
+  fillers, the Khmer inherent vowels, the Braille blank and the line and
+  paragraph separators. Brig refuses any other description when the memory
+  is saved.
+- The index is framed as notes the agent took, not as instructions, and is
+  cut under the 3,500 characters that Claude Code keeps of a server's
+  instructions.
+- A memory is at most 64 KiB, a store holds at most 500, and a request is at
+  most 388 KiB. This bounds what one store holds, about 33 MB. It does not
+  bound the stores on a host: each named store is another 33 MB.
+
+These measures make the channel harder to abuse. They do not remove it. A
+memory body still reaches the agent when it calls `memory_read`, and the
+agent may follow it. Give two sandboxes the same store only when you would
+let each of them steer the other. `brig memory rm` removes a store that
+went wrong.
+
+Memory needs `brig.internal`. It runs on hull with the `hvi` backend, on
+macOS and on Linux, and on nerdctl with urunc. Brig refuses it on `vz`, on
+`qemu`, on hull on Linux with another hypervisor and on Docker, and refuses
+it with `--offline`. A run with memory is isolated, as a run with a route is.
+See [Network posture](#network-posture).
+
+What memory does to the two promises:
+
+- No host directory is added to the guest. The store is reached over HTTPS
+  at `brig.internal`, and the broker opens it, not the guest.
+- No credential reaches the guest. The memory token is a capability for one
+  store. It is signed with a key of its own, `memorykey`, which is not the
+  key of the route tokens, so a memory token is no route token and the
+  reverse. It lasts at most 12 hours, travels in the environment of one exec
+  and never in argv, and `brig stop`, `brig rm` and a fresh boot of the
+  sandbox revoke it. See [the broker](broker.md#memory).
+- Promise 2 holds for what Brig delivers: Brig puts no credential in a
+  store. A shared store is a path that you open by opting in, and a
+  credential that one agent writes into it reaches every sandbox that
+  shares it.
+
 ### Terminal output
 
 What the agent writes to your terminal can do more than draw. A few escape

@@ -577,7 +577,7 @@ itself and asks `brig-broker`.
 
 ### Lifecycle
 
-Brig starts `brig-broker` on the first run that has a route. It runs in a
+Brig starts `brig-broker` on the first run that has a route or memory. It runs in a
 session of its own, so it outlives the `brig` that started it and does not
 take the terminal's signals. Every later run reuses it while its pid file
 names a live process with the start time it recorded, since a pid alone can
@@ -593,6 +593,8 @@ since. A run registers its sandbox after the checks before boot, image
 verification included. A run that fails before its sandbox boots removes it
 from the broker again, which stops the broker when no sandbox is left. A run
 whose registration the broker refuses stops the broker it started for it.
+A sandbox with memory and no route counts as registered, so the broker
+stays up for it and stops when neither is left.
 A run that boots a guest, a restart included, removes the sandbox from the
 broker first, so the tokens of the guest before it are refused even when
 the routes are the same. An exec into a running sandbox whose policies no
@@ -647,6 +649,7 @@ file is created `0600`.
 | File | What it holds |
 | --- | --- |
 | `hostkey` | 32 random bytes, drawn at first start. Each sandbox key is derived from it. Only the broker reads it. It is never on a command line or in a log |
+| `memorykey` | 32 random bytes, drawn at first start. Each sandbox's memory key is derived from it. It is not `hostkey`, so a memory token is signed with a key that no route token shares. Only the broker reads it |
 | `ca.pem`, `ca.key` | The brig CA of this host. See [Transports](#transports). A `ca.key` that is not the key of `ca.pem` is refused at start. Remove both, and the next start creates a new pair |
 | `control.sock` | The control socket |
 | `broker.pid` | The pid of the running broker and its start time |
@@ -669,8 +672,11 @@ underscores. 255 bytes is the longest name of a directory.
 | `POST /sandboxes` | `{id, profile, routes: [{policy, route}], brigInternal}` | `{divertSocket, ca, regions, vends}`. The broker expands each route again, so a credential lifecycle comes only from a preset. `regions` and `vends` name, for each route that vends, the region of its AWS profile and the identity it hands out. A check of such a route that fails is a 424. See [Routes that vend](#routes-that-vend). So is a mint that fails for a `gcp` route whose secret is a gcloud pointer. See [Minted tokens](#minted-tokens). The same registration again changes nothing, so the tokens of a running agent stay valid. Other routes under the same id are a new registration with a new key. `brigInternal` is the address the guest resolves `brig.internal` to. The answer then names the divert socket and the CA certificate. See [Transports](#transports) |
 | `DELETE /sandboxes/<id>` | | `{removed, remaining}`. The divert socket of the sandbox is closed and removed |
 | `POST /tokens` | `{sandbox, session, route, ttlSeconds}` | `{token}`. At most 12 hours |
-| `GET /status` | | `{pid, port, sandboxes, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
-| `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered |
+| `GET /status` | | `{pid, port, sandboxes, memory, pending, failing, recovering, placeholder, vending}`. Names, and in `placeholder` the number of [placeholder](#placeholder-detection) refusals per sandbox that has one. `pending` is a refreshed secret whose store writes have not all landed. `failing` is one whose last refresh failed. `recovering` is one with a [renewal journal](secrets.md#the-renewal-journal) that a stopped broker left, that another broker holds, or that the broker could not read. `memory` is the id of each sandbox registered for memory. `vending` is each `<sandbox>/<route>` of a route that vends whose last fetch or check failed, and of a `gcp` route whose last mint failed |
+| `POST /memory/sandboxes` | `{id, session, key, project, brigInternal}` | `{divertSocket, ca}`. Registers the memory of a sandbox, apart from its routes. `key` is a store name or a `project-` key, and the broker refuses anything else. `project` is the host path of the project folder, required with a `project-` key and checked against it, and absent with a store name. The broker records it in the store for `brig memory ls`. The broker opens the store, so a store that cannot open fails the run at its start. The same registration again changes nothing, so the token of a running agent stays valid. Another store under the same id is a 409 |
+| `DELETE /memory/sandboxes/<id>` | | `{removed, remaining}`. The memory tokens of the sandbox are refused from the next request on. The divert socket stays while the sandbox has routes |
+| `POST /memory/tokens` | `{sandbox, session, ttlSeconds}` | `{token}`. At most 12 hours. A 404 when the sandbox has no memory registered |
+| `POST /stop` | `{ifIdle}` | `{stopping}`. With `ifIdle`, only when no sandbox is registered for routes or for memory |
 
 A broker on its way out answers 503 to a registration or a mint. Brig waits
 for it to exit and starts another. It does the same when the broker it found
@@ -1309,6 +1315,44 @@ would keep it on the host.
 A run with a route runs isolated. A run with a route and the `offline`
 posture is refused.
 
+## Memory
+
+The broker also serves the agent memory of a sandbox. The guest reaches it
+at `https://brig.internal/<sandbox-id>/memory`, an MCP server over HTTP, on
+the same per-sandbox divert socket as its routes. One socket serves both,
+and it stays open while either is registered. Memory is not served on the
+loopback port or at `169.254.170.2`. For what memory is and what it risks,
+see [Agent memory](security.md#agent-memory).
+
+Memory has its own registration, separate from the routes. It has its own
+key file, `memorykey`, its own sandbox keys and its own endpoints in the
+[control protocol](#control-protocol).
+
+| Part | What it is |
+| --- | --- |
+| Store key | From the registration, which Brig sends from the host. The guest never names it |
+| Token | `typ` is `brig-memory`. A route checks for `brig-route`, so each refuses the other's token. The sandbox key is derived by HKDF from `memorykey`, with the info `brig-memory:<id>:<nonce>`. The nonce is drawn at registration |
+| Revocation | `brig stop`, `brig rm` and a fresh boot remove the registration, and the next registration draws another nonce, so earlier tokens fail |
+| Delivery | `BRIG_MEMORY_TOKEN`, in the environment of the exec only, passed to the runtime by name. It is not in argv and not in the guest home |
+
+A request is checked in this order, and each refusal is one line with no
+host path:
+
+1. It arrived over `brig.internal`, on the divert socket of the sandbox in
+   its path. If not, 404.
+2. The sandbox is registered for memory. If not, 404.
+3. It carries a valid memory token of that sandbox. If not, 401.
+
+The tools are `memory_save`, `memory_search`, `memory_read` and
+`memory_delete`. The `initialize` answer carries the index of the store as
+the server instructions. A request body is at most 388 KiB, six times the
+largest memory, because JSON escaping can grow a body that much.
+
+The broker serves at most 4 memory requests of one sandbox at once, and 16
+in all. Past either bound it answers 503 with `Retry-After: 1`, and the
+routes keep serving. It reads a request body before it counts the request,
+and cuts off a body that takes more than 10 seconds.
+
 ## Audit line
 
 The broker writes one line per request:
@@ -1335,6 +1379,20 @@ msg=broker workload=spiffe://brig.local/brig/profile/claude-code/session/refacto
 | `where`, `encoding` | Where a [placeholder](#placeholder-detection) was found and how it was spelled. The `path` field of that line is `[redacted]`, and so is `method` when the token was in it |
 | `placeholder` | `partial` when only the start of the body was scanned |
 | `vended` | The access key id a route that vends answered with. Never the secret key or the session token |
+
+A memory request writes `kind=memory` in place of `route`, with these fields:
+
+| Field | What it is |
+| --- | --- |
+| `sandbox` | The sandbox whose divert socket the request arrived on. Empty for a request that did not arrive on one |
+| `path` | The sandbox that the request path names, cut to 64 bytes. It differs from `sandbox` only on a request that is refused with `check=arrival` |
+| `method` | The JSON-RPC method, cut to 64 bytes |
+| `tool` | For `tools/call`, the tool, cut to 64 bytes |
+| `name` | For `tools/call`, the memory name, only when it is a valid one |
+| `status`, `dur` | As above |
+| `check` | `arrival`, `sandbox`, `token` or `busy`, the check that refused the request. `busy` is the 503 of a sandbox past its bound of requests at once |
+
+A memory line never holds the body, a description, a query or the token.
 
 The line never holds a credential, a token, a header value or a body.
 

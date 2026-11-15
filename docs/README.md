@@ -15,6 +15,7 @@ New to Brig? Read [the README](../README.md), then follow the
 | Store a token or a certificate for an agent | [Secrets](secrets.md) |
 | Limit what the sandbox can reach on the network | [Networking and egress policy](policies.md#quick-example) |
 | Keep a login on the host, and give the guest a session token for it | [The credential broker](broker.md#use-it) |
+| Keep what an agent learned, across sandboxes | [Agent memory](sessions.md#agent-memory) |
 | Open a port in the sandbox to the host | [`brig network`](cli.md#brig-network) |
 | Run my own agent or my own image | [Writing an agent profile](profiles.md) and [Guest images](guest-image.md) |
 | Describe how a repository runs under Brig | [The Brigfile](brigfile.md) |

@@ -1051,6 +1051,37 @@ The value is never a command-line argument, so it never appears in `ps` or
 in your shell history. See [Secrets](secrets.md) for the store, provenance
 and the sources a profile can declare.
 
+### `brig memory`
+
+```bash
+brig memory ls
+```
+
+`brig memory` lists and removes the agent memory stores on this host. A store
+holds what an agent remembers between sessions. It lives under
+`~/.brig/memory`, outlives its sandbox, and `brig rm` never removes it. See
+[Agent memory](sessions.md#agent-memory).
+
+```
+brig memory ls [--json]
+brig memory rm <store>
+brig memory rm --project <dir>
+```
+
+`ls` prints one row per store: its name, the project folder of a project
+store, the number of memories, and the sandboxes that use it. A host with no
+store prints nothing. With `--json`, it prints `kind: MemoryList` and the
+rows `store`, `project`, `memories` and `inUse`.
+
+A verb takes precedence over a profile of the same name, so `brig memory`
+never runs a profile of your own called `memory`. Run that profile with
+`brig run memory`.
+
+`rm` takes the name of a named store, or the `project-<hex>` key that `ls`
+prints. `--project <dir>` names the folder of a project store instead.
+`rm` refuses a store that a sandbox was started with until you remove that
+sandbox with `brig rm`.
+
 ### `brig telemetry`
 
 ```bash
@@ -1182,6 +1213,8 @@ On a run line with no ref, `--target`, `--session`, `-f`, `--approve` and
 | `--no-project` | (none) | off | mount no project this run, even one this session ran with before. On any verb but `run` and `plan`, refused by name as a usage error |
 | `-d`, `--detach` | (none) | off | start the sandbox, print its name and exit, without attaching. Only `run` acts on it. `sh`, `stop`, `rm`, `info` and `plan` accept it and ignore it |
 | `--skills` | (none) | off | copy your own `~/.claude` skills and plugins into the guest home. The host copy is never written. Same as `BRIG_SKILLS=1` |
+| `--agent-memory[=NAME]` | (none) or a store name | off | keep the agent's memory on the host. Alone, it is the store of the project folder. With `=NAME`, it is a named store that sandboxes share. `--agent-memory=false` is off. A running sandbox keeps the store it was started with, and a run that asks for another is refused. Needs `brig.internal`. Only for the `claude-code` profile, or a target that runs `builtin:claude-code`: Brig refuses it for any other agent. Brig reads it only before the profile; after the profile, it goes to the agent. See [Agent memory](sessions.md#agent-memory) |
+| `--no-agent-memory` | (none) | off | turn memory off when `BRIG_MEMORY` or the profile turned it on. Wins over `--agent-memory`. Brig reads it only before the profile |
 | `--network MODE` | `shared`, `isolated` or `offline` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture) | the sandbox's network posture. A verb without the flag does not change the posture of a sandbox. If Brig cannot establish the posture of an existing sandbox, name one with this flag or `BRIG_NETWORK`. See [policies.md](policies.md) |
 | `--offline` | (none) | off | shorthand for `--network offline`: the agent runs with its guest home, and nothing leaves the sandbox. Refused together with a different `--network` value |
 | `--isolation MODE` | `microvm` | off | require a microVM. The run is refused with exit `7` unless the `ISOLATION` row says `microVM`, so a `container`, an `unknown` boundary and docker are all refused, and the refusal names the setting to change. It has no variable and no profile field, so nothing a run inherits can weaken it. It is refused, not forwarded, when it stands in the agent's arguments, where Brig would not read it; after `--` and in a `brig sh` command it is the agent's or the guest's own. `container` is not a value: a shim that shares the host kernel is refused without being asked. See [Exit 7 cases](#exit-7-cases) |
@@ -1209,6 +1242,7 @@ Which verbs accept `--json` depends on its position.
 | `agent ls` | global, or local after `ls` | envelope |
 | `secret ls` | global, or local after `ls` | envelope |
 | `target ls` | global, or local after `ls` | envelope, `kind: TargetList` |
+| `memory ls` | global, or local after `ls` | envelope, `kind: MemoryList` |
 | `config` | global, or local after `config` | envelope, `kind: Config` |
 | `agent show`, `agent export`, `agent new` | local only, after the subcommand | bare document, no envelope |
 | `policy show` | local only, after the subcommand | bare document, no envelope |
@@ -1427,6 +1461,7 @@ them "global only".
 | `BRIG_READY_TIMEOUT` | `30` | seconds to wait for the in-guest agent once the runtime reports the sandbox running |
 | `BRIG_NETWORK` | the posture an existing sandbox was started with, then the profile's `network:`, then `isolated` (`shared` on `vz` or `qemu` when nothing names a posture, which `brig info` reports) | `shared`, `isolated` or `offline`. Wins over the posture an existing sandbox was started with. An unrecognized value refuses the run. See [policies.md](policies.md) |
 | `BRIG_SKILLS` | `0` | `1` copies your own `~/.claude` skills and plugins into the guest home. Same as `--skills` |
+| `BRIG_MEMORY` | (unset) | `project` for the store of the project folder, or the name of a store that sandboxes share. `0`, `off` or `false` turns memory off. Wins over the profile's `memory:`, and `--agent-memory` wins over it. Same as `--agent-memory`, except for an agent that Brig does not wire to memory: there it is ignored, with a warning, rather than refused |
 | `BRIG_FORWARD_ENV` | (unset) | a space-separated list of environment variable names to carry into the guest, read live on every run |
 | `BRIG_TITLE` | the agent's own | window title for a graphical agent |
 
