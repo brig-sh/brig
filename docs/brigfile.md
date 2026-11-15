@@ -514,10 +514,13 @@ this line first in the file, so a starter needs nothing more:
 # yaml-language-server: $schema=https://raw.githubusercontent.com/brig-sh/brig/main/api/project/v1alpha1/brigfile.schema.json
 ```
 
-The URL resolves once the schema is on the default branch.
+That URL is the schema on `main`, which a build with no release tag writes.
+A release writes the URL of its own tag, with the tag in place of `main`, so
+your editor checks the file against the fields that release reads.
 
 To get the same check for every file named `Brigfile` in VS Code, install the
-YAML extension and add this to your settings:
+YAML extension and add this to your settings. Put the tag of the release you
+run in place of `main`:
 
 ```json
 {
