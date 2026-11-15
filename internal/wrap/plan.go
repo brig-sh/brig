@@ -107,6 +107,9 @@ func (c *Config) Plan() PlanDocument {
 		}
 	}
 	d.Broker = c.planBroker(routeStore)
+	if c.memoryKey != "" {
+		d.Memory = &PlanMemory{Store: c.memoryLabel, Key: c.memoryKey, Mode: c.memoryMode, From: c.memorySource}
+	}
 	d.Target = c.planTarget()
 	d.Credentials = []PlanCredential{}
 	for _, p := range creds.Preview(c.Profile, c.Env, stored, os.LookupEnv, creds.Options{
@@ -212,10 +215,13 @@ type PlanDocument struct {
 	Ports   []string `json:"ports"`
 	// Policies names every policy bound to this run. NoPolicy says none is,
 	// so a reader does not have to infer it from an empty list.
-	Policies    []string         `json:"policies"`
-	NoPolicy    bool             `json:"noPolicy"`
-	Egress      *PlanEgress      `json:"egress,omitempty"`
-	Broker      *PlanBroker      `json:"broker,omitempty"`
+	Policies []string    `json:"policies"`
+	NoPolicy bool        `json:"noPolicy"`
+	Egress   *PlanEgress `json:"egress,omitempty"`
+	Broker   *PlanBroker `json:"broker,omitempty"`
+	// Memory is the agent memory store the run attaches, and absent when
+	// memory is off, so the plan of a run without it is unchanged.
+	Memory      *PlanMemory      `json:"memory,omitempty"`
 	Credentials []PlanCredential `json:"credentials"`
 	// ArgvExposed names what the Info payload's field of the same name
 	// names: the values BRIG_ENV_ARGV would put on the runtime's command
@@ -227,6 +233,21 @@ type PlanDocument struct {
 	// Digest is sha256 over the compact encoding of this document with
 	// Digest empty. See planDigest.
 	Digest string `json:"digest"`
+}
+
+// PlanMemory is the agent memory store of a run. A store outlives the
+// sandbox, and a named one is shared by every sandbox that names it, so it
+// is a permission the plan and the approval of a target name.
+type PlanMemory struct {
+	// Store is the store as the user names it: "project (<folder>)" or the
+	// name. Key is its key on the host, which for a project is a hash.
+	Store string `json:"store"`
+	Key   string `json:"key"`
+	// Mode is project or named.
+	Mode string `json:"mode"`
+	// From is where the ask came from: --agent-memory, the setting, the
+	// profile, or the boot of the sandbox for a run that asked nothing.
+	From string `json:"from"`
 }
 
 // PlanRefusal is a refusal `brig run` makes before it starts anything. It is
@@ -645,6 +666,13 @@ func (c *Config) planRows(d PlanDocument) []envelopeRow {
 		for _, r := range d.Broker.Detail {
 			rows = append(rows, envelopeRow{"", routeText(r)})
 		}
+	}
+	if m := d.Memory; m != nil {
+		line := m.Store
+		if m.Mode == memoryNamed {
+			line += " (a named store, shared by every sandbox that names it)"
+		}
+		rows = append(rows, envelopeRow{"MEMORY", line + "; from " + m.From})
 	}
 	if len(d.Credentials) == 0 {
 		rows = append(rows, envelopeRow{"CREDENTIALS", "(none)"})

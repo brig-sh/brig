@@ -25,9 +25,18 @@ type routeServer interface {
 	Register(s injector.Sandbox) (int, injector.AddResponse, error)
 	// Mint returns a session token for one route of a registered sandbox.
 	Mint(r injector.MintRequest) (string, error)
-	// Forget removes a sandbox, which refuses its tokens from then on, and
-	// stops the broker when no sandbox is left. It starts nothing.
+	// Forget removes a sandbox, its routes and its memory, which refuses
+	// its tokens from then on, and stops the broker when no sandbox is left.
+	// It starts nothing.
 	Forget(id string) error
+	// ForgetRoutes removes the routes of a sandbox and keeps its memory
+	// registered, as Forget does otherwise.
+	ForgetRoutes(id string) error
+	// RegisterMemory registers the memory of s, starting the broker when
+	// none is running, and returns its answer.
+	RegisterMemory(s injector.MemorySandbox) (injector.AddResponse, error)
+	// MintMemory returns a memory token for a sandbox registered for memory.
+	MintMemory(r injector.MemoryMintRequest) (string, error)
 	// Status is what a running broker reports, and false when none answers.
 	// A broker whose process is alive and does not answer reports its PID
 	// alone, with false. It starts nothing.
@@ -66,6 +75,34 @@ func (b *brokerProcess) Forget(id string) error {
 		return err
 	}
 	return injector.Forget(dir, id)
+}
+
+func (b *brokerProcess) ForgetRoutes(id string) error {
+	dir, err := injector.Dir()
+	if err != nil {
+		return err
+	}
+	return injector.ForgetRoutes(dir, id)
+}
+
+func (b *brokerProcess) RegisterMemory(s injector.MemorySandbox) (injector.AddResponse, error) {
+	dir, err := injector.Dir()
+	if err != nil {
+		return injector.AddResponse{}, err
+	}
+	running, added, err := injector.RegisterMemory(dir, s)
+	if err != nil {
+		return injector.AddResponse{}, err
+	}
+	b.client = &running.Client
+	return added, nil
+}
+
+func (b *brokerProcess) MintMemory(r injector.MemoryMintRequest) (string, error) {
+	if b.client == nil {
+		return "", injector.ErrNotRunning
+	}
+	return b.client.MintMemory(r)
 }
 
 func (b *brokerProcess) Status() (injector.Status, bool) {
@@ -123,7 +160,9 @@ func (c *Config) routeRefusal() error {
 	if len(c.routes) == 0 || c.Runtime == nil {
 		return nil
 	}
-	if c.brigInternal() {
+	// The endpoint routes alone: memory reaches brig.internal too, and
+	// memoryRefusal answers for it in its own words.
+	if len(c.endpointRoutes()) > 0 {
 		if err := c.endpointCheck(); err != nil {
 			return fmt.Errorf("policy %s declares a route in mode endpoint or host, which the guest reaches at %s: %w",
 				c.endpointList(), injector.BrigInternal, err)
@@ -159,9 +198,12 @@ func (c *Config) routeRefusal() error {
 }
 
 // brigInternal reports whether this run's guest reaches the broker at
-// brig.internal: a run with a route in mode endpoint.
+// brig.internal: a run with a route in mode endpoint, or with memory. A run
+// with memory and no route gets brig.internal alone: the divert of its
+// address and the CA, and no link-local address or route variable, which
+// follow from routes.
 func (c *Config) brigInternal() bool {
-	return c.Runtime != nil && len(c.endpointRoutes()) > 0
+	return c.Runtime != nil && (len(c.endpointRoutes()) > 0 || c.memoryKey != "")
 }
 
 // awsShadowVars are the variables an AWS SDK reads before the container
@@ -377,11 +419,22 @@ func (c *Config) sayVends(vends map[string]injector.VendInfo) {
 	}
 }
 
-// forgetRoutes revokes this sandbox's session tokens: the broker stops
-// serving it, and stops itself when no sandbox is left. A failure is said
-// and does not fail the stop.
+// forgetRoutes revokes this sandbox's session tokens, of its routes and of
+// its memory: the broker stops serving it, and stops itself when no sandbox
+// is left. A failure is said and does not fail the stop.
 func (c *Config) forgetRoutes() {
 	if err := c.routeBroker().Forget(c.VMName); err != nil {
+		c.warnf("the credential broker could not revoke the session tokens of %s: %v", c.VMName, err)
+	}
+	if err := forgetModes(c.VMName); err != nil {
+		c.warnf("could not remove what the routes of %s left on the host: %v", c.VMName, err)
+	}
+}
+
+// forgetRoutesOnly revokes the session tokens of this sandbox's routes and
+// keeps its memory registered. A failure is said and does not fail the exec.
+func (c *Config) forgetRoutesOnly() {
+	if err := c.routeBroker().ForgetRoutes(c.VMName); err != nil {
 		c.warnf("the credential broker could not revoke the session tokens of %s: %v", c.VMName, err)
 	}
 	if err := forgetModes(c.VMName); err != nil {

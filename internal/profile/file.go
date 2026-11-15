@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"sigs.k8s.io/yaml"
+
+	"github.com/brig-sh/brig/internal/memory/memkey"
 )
 
 // Custom profiles.
@@ -204,6 +206,13 @@ func (p Profile) Validate() error {
 	case "", "shared", "isolated", "offline":
 	default:
 		return fmt.Errorf("network %q is not one of shared, isolated or offline", p.Network)
+	}
+	// The name becomes a directory under the store root, so it is checked
+	// here rather than at the first run that reaches it.
+	if p.Memory != "" {
+		if _, err := memkey.ParseSetting(p.Memory); err != nil {
+			return fmt.Errorf("memory %q is not off, on, \"project\" or a store name: %w", p.Memory, err)
+		}
 	}
 	switch p.RootfsType {
 	case "", "block", "virtiofs", "9pfs":

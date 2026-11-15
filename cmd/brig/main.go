@@ -24,6 +24,7 @@ import (
 
 	"github.com/brig-sh/brig/internal/creds"
 	"github.com/brig-sh/brig/internal/egress"
+	"github.com/brig-sh/brig/internal/memory"
 	"github.com/brig-sh/brig/internal/notice"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
@@ -133,6 +134,9 @@ flags (before the agent's own arguments; -- ends brig's parsing):
       --skills           copy your own ~/.claude skills and plugins into the
                          guest home; the host copy is never written
                          (or BRIG_SKILLS=1)
+      --agent-memory     keep the agent's memory in the project's store on the
+                         host; --agent-memory=NAME names a store that sandboxes
+                         share, --no-agent-memory turns it off (or BRIG_MEMORY)
       --network MODE     shared, isolated or offline (or BRIG_NETWORK)
       --offline          shorthand for --network offline: the agent runs, the
                          workspace is there, nothing leaves
@@ -174,6 +178,7 @@ settings (BRIG_<AGENT>_<KEY> wins over BRIG_<KEY>; docs/cli.md has them all):
   BRIG_IMAGE           guest image
   BRIG_PULL            missing (default) | always | never
   BRIG_SKILLS          1 to copy your ~/.claude skills and plugins into the guest
+  BRIG_MEMORY          project or a store name for the agent's memory; 0 or off
   BRIG_FORWARD_ENV     replaces the env-sourced bindings, space-separated
   BRIG_GIT_CONFIG      1 to write the guest git-over-HTTPS files
   BRIG_VERIFY          warn (default) | require | off: guest image signature
@@ -889,17 +894,29 @@ func handOver(cfg *wrap.Config, set creds.Set, t profile.Profile, tail []string,
 // word: a profile it calls claude-code may run anything, and --name means
 // what that program says. So a target gets the flag only when the Brigfile
 // runs the claude-code brig ships, and only for a session with a name.
+//
+// For a run with memory it adds --mcp-config with the path of the file that
+// points Claude Code at its store, under the same rule. The flag adds the
+// file's servers to the user's own. The file names the token's variable, so
+// the token stays in the environment. The flag and path are one argument
+// because --mcp-config reads every later word as a file until the next flag,
+// prompt included.
 func agentArgs(cfg *wrap.Config, t profile.Profile, tail []string) []string {
+	claude, name := t.Name == "claude-code", cfg.RawName
 	if target, ok := cfg.TargetOf(); ok {
-		if target.Session != "" && target.ProfileSource == "builtin:claude-code" {
-			return append([]string{"--name", target.Session}, tail...)
-		}
+		claude, name = target.ProfileSource == "builtin:claude-code", target.Session
+	}
+	if !claude {
 		return tail
 	}
-	if cfg.RawName != "" && t.Name == "claude-code" {
-		return append([]string{"--name", cfg.RawName}, tail...)
+	var head []string
+	if path := cfg.MemoryMCPConfig(); path != "" {
+		head = append(head, "--mcp-config="+path)
 	}
-	return tail
+	if name != "" {
+		head = append(head, "--name", name)
+	}
+	return append(head, tail...)
 }
 
 // options are brig's own flags for one invocation.
@@ -1020,6 +1037,10 @@ var brigFlags = []struct {
 	// marks a flag that only `brig run --target` reads, and plan, stop and rm
 	// do not offer it.
 	runOnly bool
+	// leftOfRef marks a run-line flag that run, sh and exec read only left of
+	// the ref. After the ref it goes to the agent, so an agent flag of the
+	// same name keeps working.
+	leftOfRef bool
 }{
 	{long: "image", value: true, position: posRun},
 	// --home is the guest home. The home and the project are two directories
@@ -1038,6 +1059,13 @@ var brigFlags = []struct {
 	{long: "no-project", position: posRun, runOnly: true},
 	{long: "detach", short: "d", position: posRun, runOnly: true},
 	{long: "skills", position: posRun},
+	// --agent-memory takes no separate value, so in `brig run --agent-memory
+	// claude dir` claude stays the ref; a named store is --agent-memory=NAME.
+	// --memory is taken: it is --mem's older spelling. Read left of the ref
+	// only, so `brig run claude --agent-memory=x hello` still hands both
+	// words to the agent.
+	{long: "agent-memory", position: posRun, leftOfRef: true},
+	{long: "no-agent-memory", position: posRun, leftOfRef: true},
 	{long: "network", value: true, position: posRun},
 	{long: "offline", position: posRun},
 	// --isolation microvm requires a boundary brig can establish, and refuses
@@ -1449,6 +1477,12 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 				return nil, session.Ref{}, "", nil, usagef("unknown flag %q; `brig run --target` reads brig's "+
 					"own flags, and the agent's arguments go after --", a)
 			}
+			// A flag brig reads only left of the ref is the agent's after it,
+			// on a verb with an agent to hand it to. plan ends brig's flags
+			// there too, so rejectTail refuses the line run would hand on.
+			if isOurs && passed && (forwardsTail(verb) || verb == "plan") && leftOfRef(a) {
+				return mine, ref, word, agentTail(verb, args[i:]), nil
+			}
 			if !isOurs {
 				// An unknown flag once the ref is named is the agent's:
 				// `brig run claude --resume` runs the agent with --resume, and
@@ -1487,6 +1521,17 @@ func split(verb string, args []string) (mine []string, ref session.Ref, word str
 		}
 	}
 	return mine, ref, word, tail, nil
+}
+
+// leftOfRef reports whether arg is a flag brig reads only left of the ref.
+func leftOfRef(arg string) bool {
+	name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+	for _, f := range brigFlags {
+		if f.long == name && f.leftOfRef {
+			return true
+		}
+	}
+	return false
 }
 
 // forwardsTail reports whether a verb hands what follows the ref to the agent.
@@ -1713,6 +1758,11 @@ func honorsRunLine(verb, long string) bool {
 	if long == "no-project" && readsProject(verb) {
 		return true
 	}
+	// The memory flags choose the store a sandbox runs with. stop and rm
+	// choose none, and --agent-memory there would share rm's --all prefix.
+	if (long == "agent-memory" || long == "no-agent-memory") && (verb == "stop" || verb == "rm") {
+		return false
+	}
 	for _, f := range brigFlags {
 		if f.long == long && f.position == posRun && f.runOnly {
 			return false
@@ -1771,6 +1821,7 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		set   bool
 		value string
 	}
+	memoryEmpty, memoryOff := false, false
 	for _, f := range []struct {
 		long, short string
 		fn          func(name string)
@@ -1788,6 +1839,10 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		// Opt-in, and only ever opt-in: this hands the guest the user's real
 		// skills and plugins, read-only.
 		{"skills", "", func(n string) { fs.BoolVar(&o.load.Skills, n, false, "") }},
+		// Opt-in too: a store outlives the sandbox, and one that several
+		// sandboxes share is a channel between them.
+		{"agent-memory", "", func(n string) { fs.Var(agentMemoryFlag{&o.load, &memoryEmpty}, n, "") }},
+		{"no-agent-memory", "", func(n string) { fs.BoolVar(&memoryOff, n, false, "") }},
 		// Run this session with no project, whatever it ran with last.
 		{"no-project", "", func(n string) { fs.BoolVar(&o.load.NoProject, n, false, "") }},
 		// The posture this run takes: shared or offline. Refused by name later
@@ -1849,6 +1904,14 @@ func parse(verb string, args []string) (o options, profileName string, tail []st
 		if err := checkTargetSession(o.session); err != nil {
 			return options{}, "", nil, err
 		}
+	}
+	// --no-agent-memory beats every --agent-memory, wherever it stands.
+	if memoryOff {
+		o.load.Memory, o.load.NoMemory = "", true
+	}
+	if memoryEmpty {
+		return options{}, "", nil, errors.New("--agent-memory= names no store; use --agent-memory alone " +
+			"for the project's store, or --agent-memory=<name>")
 	}
 	// Positive, not merely numeric: a guest with zero CPUs is a boot failure
 	// several layers down, where the number no longer appears in the message.
@@ -1916,6 +1979,48 @@ func hasArgsMarker(args []string) bool {
 		}
 	}
 	return false
+}
+
+// agentMemoryFlag is --agent-memory. It is a boolean flag, so alone it means
+// the project's store, and --agent-memory=NAME names a store. A switch word
+// reads as it does in BRIG_MEMORY and the profile (see memory.ParseSetting):
+// =false is off, as --skills=false is, and no switch word names a store.
+//
+// Set records an empty name in empty for parse to refuse: an error from Set
+// on a boolean flag would read as a bad true or false.
+type agentMemoryFlag struct {
+	dst   *wrap.Options
+	empty *bool
+}
+
+func (f agentMemoryFlag) IsBoolFlag() bool { return true }
+
+func (f agentMemoryFlag) String() string {
+	if f.dst == nil {
+		return ""
+	}
+	return f.dst.Memory
+}
+
+func (f agentMemoryFlag) Set(v string) error {
+	if v == "" {
+		*f.empty = true
+		return nil
+	}
+	// A value that is not a setting is kept as typed: resolveMemory refuses
+	// it naming the flag, which an error from here could not.
+	switch m, err := memory.ParseSetting(v); {
+	case err != nil:
+		f.dst.Memory, f.dst.NoMemory = v, false
+	case m == "":
+		f.dst.Memory, f.dst.NoMemory = "", true
+	default:
+		// The last --agent-memory on the line wins, so a store named after
+		// an off word is the store. --no-agent-memory is its own flag and
+		// still beats this one.
+		f.dst.Memory, f.dst.NoMemory = m, false
+	}
+	return nil
 }
 
 // number is one of brig's numeric flags as it was given: the text typed, and

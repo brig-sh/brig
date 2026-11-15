@@ -14,6 +14,7 @@ import (
 // reads from your environment.
 var notSettings = map[string]string{
 	"PROJECT":       "the guest variable brig sets to where the project is mounted",
+	"MEMORY_TOKEN":  "the guest variable brig sets to the run's memory token",
 	"ROUTE_":        "the prefix of the guest variables a route sets",
 	"LS_KEEP_INDEX": "a setting of brig ls, which boots nothing",
 }

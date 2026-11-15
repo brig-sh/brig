@@ -127,6 +127,8 @@ case "$verb" in
     printf 'env-home:%s\n' "${HOME:-<unset>}" >> "$STUB_LOG"
     printf 'env-inventory-token:%s\n' "${INVENTORY_TOKEN:-<unset>}" >> "$STUB_LOG"
     printf 'env-nocert-token:%s\n' "${NOCERT_TOKEN:-<unset>}" >> "$STUB_LOG"
+    printf 'env-memory-token:%s\n' "${BRIG_MEMORY_TOKEN:-<unset>}" >> "$STUB_LOG"
+    printf 'env-auto-memory:%s\n' "${CLAUDE_CODE_DISABLE_AUTO_MEMORY:-<unset>}" >> "$STUB_LOG"
     ;;
   exec)
     # Everything after -- is the guest command. /bin/true is the readiness
@@ -1268,6 +1270,128 @@ done
 "$WORK/brig" policy detach claude-only claude-code > /dev/null 2>&1
 rm -f "$WORK/policies/claude-only.yaml"
 rm -rf "$ep_state"
+
+# Agent memory on hvi, with no route. The gateway answers brig.internal and
+# diverts its port 443 to the broker's socket, and nothing else: no
+# link-local address. The guest gets its memory token in the environment,
+# never on a command line, and an MCP configuration at /brig/memory/mcp.json
+# that names the token's variable and holds no token. The broker serves the
+# store to that token over the socket and refuses another with 401. brig rm
+# --all removes the sandbox and its socket, and keeps the store.
+mem_state="$(mktemp -d "${TMPDIR:-/tmp}/bs.XXXXXX")"
+mem_env=(BRIG_STATE_DIR="$mem_state" BRIG_HYPERVISOR=hvi BRIG_BROKER_BIN="$WORK/brig-broker-helper"
+  BRIG_TEST_SECRETS=claude-credentials)
+# A memory run that cannot reach its store, or an agent brig does not wire to
+# one, is refused before the boot: the runtime is not asked for a sandbox and
+# no broker starts, so no token is minted. Each case names its refusal, so a
+# run that fails for another reason does not pass.
+for mem_refused in "--agent-memory=team --offline claude|an offline run cannot reach" \
+  "--agent-memory=team codex|brig serves only to claude-code"; do
+  mem_line="${mem_refused%%|*}"
+  : > "$STUB_LOG"
+  # shellcheck disable=SC2086 # the run line is split into its words on purpose
+  env "${mem_env[@]}" "$WORK/brig-stored" run $mem_line -d > "$WORK/mem-refused.out" 2>&1
+  rc=$?
+  if [ "$rc" = 0 ] || ! grep -q -- "${mem_refused#*|}" "$WORK/mem-refused.out"; then
+    bad "brig run $mem_line was not refused for its memory -- got $rc: $(cat "$WORK/mem-refused.out")"
+  elif grep -q '^argv: run' "$STUB_LOG"; then
+    bad "brig run $mem_line was refused after the runtime was asked to boot it"
+  elif [ -e "$mem_state/host/broker/broker.pid" ]; then
+    bad "brig run $mem_line was refused after it started the credential broker"
+  else
+    ok "brig run $mem_line is refused before the boot and starts no broker"
+  fi
+done
+: > "$STUB_LOG"
+rm -f "$STUB_STATE".fed.*
+env "${mem_env[@]}" "$WORK/brig-stored" run --agent-memory=team claude -d > "$WORK/mem-on.out" 2>&1
+memrc=$?
+memgw="$(grep '^argv: network-gateway --socket' "$STUB_LOG")"
+memaddr="$(printf '%s' "$memgw" | sed -n 's/.*--host brig\.internal=\([0-9.]*\).*/\1/p')"
+memsock="$(printf '%s' "$memgw" | sed -n "s/.*--divert ${memaddr}:443=\\([^ ]*\\).*/\\1/p")"
+memcfg="$STUB_STATE.fed._brig_memory_mcp.json"
+memtoken="$(sed -n 's/^env-memory-token://p' "$STUB_LOG" | head -1)"
+memwant='{"mcpServers":{"brig-memory":{"type":"http","url":"https://brig.internal/brig-claude-code/memory","headers":{"Authorization":"Bearer ${BRIG_MEMORY_TOKEN}"}}}}'
+if [ "$memrc" != 0 ]; then
+  bad "a run with agent memory on hvi failed: $(cat "$WORK/mem-on.out")"
+elif [ -z "$memaddr" ] || [ -z "$memsock" ] || [ ! -S "$memsock" ]; then
+  bad "the gateway of a memory run was not handed brig.internal and a divert socket the broker listens on: $memgw"
+elif printf '%s' "$memgw" | grep -q -- "--divert 169.254.170.2\\|--divert ${memaddr}:80"; then
+  bad "the gateway of a memory run diverts more than port 443 of brig.internal: $memgw"
+elif [ -z "$memtoken" ] || [ "$memtoken" = "<unset>" ]; then
+  bad "the guest of a memory run got no BRIG_MEMORY_TOKEN: $(grep '^env-memory' "$STUB_LOG")"
+elif grep '^argv:' "$STUB_LOG" | grep -qF -- "$memtoken" || grep -qF -- "$memtoken" "$WORK/mem-on.out"; then
+  bad "the memory token was on a command line or in the run's output"
+elif [ "$(cat "$memcfg" 2>/dev/null)" != "$memwant" ]; then
+  bad "the guest did not get the MCP configuration at /brig/memory/mcp.json: $(cat "$memcfg" 2>&1)"
+elif ! grep -q '^env-auto-memory:1$' "$STUB_LOG" || ! grep -q '^env-node-ca:/brig/ca/brig.pem$' "$STUB_LOG"; then
+  bad "the guest of a memory run is missing CLAUDE_CODE_DISABLE_AUTO_MEMORY or the CA: $(grep '^env-auto-memory\|^env-node-ca' "$STUB_LOG")"
+elif ! grep -q '^brig: memory: team$' "$WORK/mem-on.out"; then
+  bad "a memory run did not name its store: $(cat "$WORK/mem-on.out")"
+else
+  ok "a memory run on hvi routes brig.internal alone and hands the guest its token in the environment and an MCP configuration without it"
+fi
+# mem_rpc prints the status line of one MCP request, tools/list unless a fifth
+# argument names the method. With that argument it prints the body too.
+mem_rpc='import socket, ssl, sys
+sock, addr, ca, token = sys.argv[1:5]
+method = sys.argv[5] if len(sys.argv) > 5 else "tools/list"
+s = socket.socket(socket.AF_UNIX); s.connect(sock)
+s.sendall(("BRIG-DIVERT/1 %s 443 198.18.1.2 40000\n" % addr).encode())
+t = ssl.create_default_context(cafile=ca).wrap_socket(s, server_hostname="brig.internal")
+body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"%s\",\"params\":{\"protocolVersion\":\"2025-11-25\"}}" % method
+t.sendall(("POST /brig-claude-code/memory HTTP/1.1\r\nHost: brig.internal\r\nAuthorization: Bearer %s\r\n"
+           "Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n"
+           "Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (token, len(body), body)).encode())
+resp = b""
+while True:
+    try:
+        chunk = t.recv(65536)
+    except ssl.SSLError:
+        break
+    if not chunk:
+        break
+    resp += chunk
+head, _, rest = resp.decode(errors="replace").partition("\r\n\r\n")
+print(head.split("\r\n")[0])
+if len(sys.argv) > 5:
+    print(rest)'
+if [ -S "$memsock" ] && [ -n "$memtoken" ]; then
+  own="$(python3 -c "$mem_rpc" "$memsock" "$memaddr" "$STUB_STATE.fed._brig_ca_brig.pem" "$memtoken" 2>&1)"
+  forged="$(python3 -c "$mem_rpc" "$memsock" "$memaddr" "$STUB_STATE.fed._brig_ca_brig.pem" "not-a-minted-token" 2>&1)"
+  case "$own|$forged" in
+    "HTTP/1.1 200 "*"|HTTP/1.1 401 "*) ok "brig.internal serves the store to the guest's memory token and refuses another with 401" ;;
+    *) bad "the memory store over the divert socket -- own: $own; forged: $forged" ;;
+  esac
+  # Claude Code checks the initialize result against the MCP schema and drops
+  # a server whose serverInfo has no version, so the agent starts with no
+  # memory tools. The stub runtime runs no Claude Code; this checks the shape
+  # it needs.
+  init="$(python3 -c "$mem_rpc" "$memsock" "$memaddr" "$STUB_STATE.fed._brig_ca_brig.pem" "$memtoken" initialize 2>&1)"
+  if printf '%s' "$init" | python3 -c 'import json, sys
+text = sys.stdin.read()
+r = json.loads(text[text.index("{"):text.rindex("}") + 1])["result"]
+info = r["serverInfo"]
+ok = r["protocolVersion"] == "2025-11-25" and info["name"] == "brig-memory"
+sys.exit(0 if ok and isinstance(info.get("version"), str) and info["version"] else 1)' 2>/dev/null; then
+    ok "the memory server answers initialize with a protocol version and a named, versioned serverInfo"
+  else
+    bad "the memory server's initialize lacks what MCP requires: $init"
+  fi
+fi
+env "${mem_env[@]}" "$WORK/brig" rm --all -y > /dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -e "$mem_state/host/broker/broker.pid" ] || break
+  sleep 0.3
+done
+if [ -n "$memsock" ] && [ -e "$memsock" ]; then
+  bad "rm --all left the divert socket of a memory run ($memsock)"
+elif [ ! -d "$mem_state/memory/team" ]; then
+  bad "rm --all took the memory store with the sandbox: $(ls -la "$mem_state/memory" 2>&1)"
+else
+  ok "rm --all removes a memory sandbox and its socket, and keeps its store"
+fi
+rm -rf "$mem_state"
 
 # A route with a client certificate. The broker presents inventory-client to
 # an upstream that requires one, and the upstream logs its subject. A route

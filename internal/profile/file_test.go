@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brig-sh/brig/internal/memory"
 )
 
 // reset gives a test the built-ins and nothing else, and puts the registry
@@ -275,5 +277,50 @@ func TestValidateChecksTheNetworkEnum(t *testing.T) {
 	p.Network = "airgapped"
 	if err := p.Validate(); err == nil {
 		t.Error("network \"airgapped\" was accepted")
+	}
+}
+
+// memory: is "project" or a store name, checked at load: a typo would
+// otherwise reach the run as a store nobody meant, and project- is the
+// project stores' own prefix.
+func TestProfileMemoryField(t *testing.T) {
+	base := Profile{Name: "x", Image: "i", GuestHome: "/home/x", Binary: "x", Mem: 1, CPUs: 1}
+	for _, ok := range []string{"", "project", "go-services"} {
+		p := base
+		p.Memory = ok
+		if err := p.Validate(); err != nil {
+			t.Errorf("memory %q was rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"project-x", "../x", "Team", "a/b"} {
+		p := base
+		p.Memory = bad
+		err := p.Validate()
+		if err == nil || !strings.Contains(err.Error(), "memory") {
+			t.Errorf("memory %q was accepted or refused without naming the field: %v", bad, err)
+		}
+	}
+	p, err := Parse([]byte("name: x\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\nmemory: team\n"))
+	if err != nil || p.Memory != "team" {
+		t.Errorf("memory: team parsed as %q, %v", p.Memory, err)
+	}
+}
+
+// YAML 1.1 reads memory: off, no and false as the string "false", and on,
+// yes and true as "true". Each loads, and means off or the project's store:
+// none is a store of that name.
+func TestProfileMemorySwitchWords(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"off", ""}, {"no", ""}, {"false", ""}, {"none", ""}, {"0", ""},
+		{"on", "project"}, {"yes", "project"}, {"true", "project"}, {"1", "project"},
+	} {
+		p, err := Parse([]byte("name: x\nimage: i\nguestHome: /home/x\nbinary: x\nmem: 1\ncpus: 1\nmemory: " + tc.in + "\n"))
+		if err != nil {
+			t.Errorf("memory: %s was refused: %v", tc.in, err)
+			continue
+		}
+		if got, err := memory.ParseSetting(p.Memory); err != nil || got != tc.want {
+			t.Errorf("memory: %s parsed as %q, which means %q (%v), want %q", tc.in, p.Memory, got, err, tc.want)
+		}
 	}
 }
