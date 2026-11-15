@@ -3545,6 +3545,24 @@ case "$rc:$out" in
   "1:"*"$WORK/bf-refused"*"runtimeBin"*) ok "a refused Brigfile exits 1 and names the file and the field" ;;
   *) bad "a refused Brigfile exits 1 and names the file and the field -- got $rc: $out" ;;
 esac
+# A route of a repository policy may take over git only for the host it
+# sends to. One that takes git for github.com and sends to another host is
+# refused when the file is read: by config, and by plan before it asks the
+# runtime anything.
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  c: {from: "builtin:claude-code"}\npolicies:\n  gh:\n    inline:\n      apiVersion: brig.sh/v1alpha1\n      kind: Policy\n      metadata: {name: gh}\n      spec:\n        routes:\n          - {name: github, upstream: "https://git.example.com", credential: {secretRef: {name: gh-token}}, inject: {basicAuth: {username: x-access-token}}, guest: {git: {insteadOf: ["https://github.com/"]}}}\ntargets:\n  dev: {profile: c, policies: [gh]}\n' \
+  > "$WORK/bf-githost"
+out="$(cd "$proj" && "$WORK/brig" config --target dev -f "$WORK/bf-githost" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"route github"*"https://github.com/"*"is not git on git.example.com"*"repository policy may take over git only"*)
+    ok "config refuses a repository route that takes over git for another host" ;;
+  *) bad "config refuses a repository route that takes over git for another host -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" plan --target dev -f "$WORK/bf-githost" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"route github"*"https://github.com/"*"is not git on git.example.com"*"repository policy may take over git only"*)
+    ok "plan refuses a repository route that takes over git for another host" ;;
+  *) bad "plan refuses a repository route that takes over git for another host -- got $rc: $out" ;;
+esac
 [ "$(wc -l < "$STUB_LOG")" = "$logged" ] \
   && ok "the Brigfile verbs ran nothing" \
   || bad "the Brigfile verbs ran the runtime: $(tail -n +"$((logged + 1))" "$STUB_LOG")"
@@ -3578,6 +3596,14 @@ case "$rc:$out" in
   "0:"*"TARGET       ci, from "*"/bf-plan"*"SANDBOX      brig--ci-"*"route collector to https://collector.example with your secret prod-db"*"2 vCPUs from target ci"*)
     ok "plan --target names the target, its own sandbox and each route's upstream and secret" ;;
   *) bad "plan --target names the target, its own sandbox and each route's upstream and secret -- got $rc: $out" ;;
+esac
+# The row of a route says which git URLs it takes over in the guest. A
+# preset on another host takes git for that host, and the row says the
+# preset is not on its own upstream.
+case "$out" in
+  *"route collector to https://collector.example with your secret prod-db, from "*"; preset github-token, in place of its own upstream https://github.com; git in the guest uses it for https://collector.example/, git@collector.example:"*)
+    ok "plan --target says which git URLs a route takes over, and that a preset was moved" ;;
+  *) bad "plan --target says which git URLs a route takes over, and that a preset was moved -- got: $out" ;;
 esac
 out="$(cd "$proj" && "$WORK/brig" --json plan --target dev 2>&1)"; rc=$?
 case "$rc:$out" in

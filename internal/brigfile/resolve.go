@@ -3,7 +3,9 @@ package brigfile
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -109,6 +111,9 @@ func (l *Loaded) resolve(root *os.Root) error {
 		if err != nil {
 			return fmt.Errorf("policies.%s: %s: %w", alias, src, err)
 		}
+		if err := refuseRepositoryRoutes(pol.Spec.Routes); err != nil {
+			return fmt.Errorf("policies.%s: %s: %w", alias, src, err)
+		}
 		l.Policies[alias] = ResolvedPolicy{Alias: alias, Source: src, Policy: pol, Doc: doc}
 	}
 	for _, alias := range sortedKeys(l.Project.Profiles) {
@@ -183,6 +188,131 @@ func repository(alias string, src Source, doc []byte) (ResolvedProfile, error) {
 	own := p.Policy
 	p.Policy = nil
 	return ResolvedProfile{Alias: alias, Source: src, Profile: p, Policies: own, Doc: doc}, nil
+}
+
+// refuseRepositoryRoutes holds the routes of a repository policy to two
+// rules that a policy the reader wrote is not held to.
+//
+// A route may take over git in the guest only for its own upstream's host.
+// The rewrites decide which of the guest's git requests go through the
+// route, with the route's secret, and a repository has no business taking
+// the requests meant for another host. The reader can: a mirror in front of
+// a public host is theirs to set up.
+//
+// A preset stays what brig ships. A repository policy may name the secret,
+// and may move the upstream of a preset whose git rewrites move with it,
+// which is how it reaches a GitHub Enterprise host. It may not move the
+// upstream of a preset the guest finds through a variable, because a
+// variable names no host to hold it to. It may not change how the preset
+// sends the secret, or a request rule the preset ships.
+//
+// The routes are the policy's as written. Each is compared after its preset
+// fills it in, so writing out what the preset already says is not refused.
+func refuseRepositoryRoutes(routes []v1alpha1.Route) error {
+	for _, r := range routes {
+		got, err := policy.ExpandRoute(r)
+		if err != nil {
+			return err
+		}
+		if got.Guest != nil && got.Guest.Git != nil {
+			for _, prefix := range got.Guest.Git.InsteadOf {
+				if err := gitPrefixNames(prefix, got.Upstream); err != nil {
+					return fmt.Errorf("route %s: guest.git.insteadOf: %w", r.Name, err)
+				}
+			}
+		}
+		if r.Preset == "" {
+			continue
+		}
+		base, err := policy.PresetRoute(r.Preset)
+		if err != nil {
+			return fmt.Errorf("route %s: %w", r.Name, err)
+		}
+		if got.Upstream != base.Upstream && (base.Guest == nil || base.Guest.Git == nil) {
+			return fmt.Errorf("route %s: upstream: preset %s sends to %s, and a repository policy may not "+
+				"send it to %s; write the route in full, with no preset, to name another upstream",
+				r.Name, r.Preset, presetUpstream(base), got.Upstream)
+		}
+		if !reflect.DeepEqual(got.Inject, base.Inject) {
+			return fmt.Errorf("route %s: inject: preset %s says how the secret is sent, and a repository "+
+				"policy may not change it; write the route in full, with no preset, to send it another way",
+				r.Name, r.Preset)
+		}
+		if base.Request != nil && !reflect.DeepEqual(got.Request, base.Request) {
+			return fmt.Errorf("route %s: request: preset %s says which requests it takes, and a repository "+
+				"policy may not change that", r.Name, r.Preset)
+		}
+	}
+	return nil
+}
+
+// gitPrefixNames refuses a git prefix that is not a URL on the host of
+// upstream. It reads the two forms git takes: a URL with a scheme, and
+// user@host:path. An https prefix is held to the upstream's port as well. The
+// other forms are held to the host name, since SSH and plain http have
+// ports of their own.
+//
+// A URL prefix has to end its host with a slash. https://git.example.com
+// alone is also the start of https://git.example.com.elsewhere.net/, and git
+// would rewrite that too.
+func gitPrefixNames(prefix, upstream string) error {
+	up, err := url.Parse(upstream)
+	if err != nil || up.Hostname() == "" {
+		return fmt.Errorf("%q takes over git for a host, and the route has no upstream to hold it to", prefix)
+	}
+	refused := fmt.Errorf("%q is not git on %s, the route's upstream; a repository policy may take over "+
+		"git only for the host its route sends to", prefix, up.Host)
+	if scheme, rest, ok := strings.Cut(prefix, "://"); ok {
+		// git matches a prefix as written, but a scheme has no case, and
+		// HTTPS:// must not be how a prefix avoids the port rule.
+		scheme = strings.ToLower(scheme)
+		u, err := url.Parse(prefix)
+		if err != nil || !strings.Contains(rest, "/") {
+			return refused
+		}
+		// A password has no place in a prefix, and a user name only in the
+		// SSH form, where git@ is how the URL is written.
+		if _, has := u.User.Password(); has || (u.User != nil && scheme != "ssh") {
+			return refused
+		}
+		if !strings.EqualFold(u.Hostname(), up.Hostname()) {
+			return refused
+		}
+		if scheme == "https" && portOf(u) != portOf(up) {
+			return refused
+		}
+		return nil
+	}
+	// user@host:path, the form git reads as SSH.
+	host, _, ok := strings.Cut(prefix, ":")
+	if !ok {
+		return refused
+	}
+	if _, after, has := strings.Cut(host, "@"); has {
+		host = after
+	}
+	if host == "" || strings.ContainsAny(host, "/@") || !strings.EqualFold(host, up.Hostname()) {
+		return refused
+	}
+	return nil
+}
+
+// portOf is the port of an https URL, with the default written out.
+func portOf(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	return "443"
+}
+
+// presetUpstream names where a preset sends for an error. A preset that
+// forwards to no single origin, such as one that hands out cloud keys, has
+// no upstream to name.
+func presetUpstream(base v1alpha1.Route) string {
+	if base.Upstream == "" {
+		return "no upstream of its own"
+	}
+	return base.Upstream
 }
 
 // parseRepositoryProfile parses a profile a repository wrote, and refuses
