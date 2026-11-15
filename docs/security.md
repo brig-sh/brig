@@ -974,6 +974,17 @@ source of a secret, a variable from your environment, the shared network or a
 hypervisor. See
 [What a repository profile may not set](brigfile.md#what-a-repository-profile-may-not-set).
 
+**A route of a repository policy may take over git only for the host it
+sends to.** A prefix under `guest.git.insteadOf` that names another host is
+refused, so git that the agent addresses to one host does not go, with the
+route's secret, to another.
+
+**A repository policy may not change how a preset sends its secret.** It
+names the secret. It may move `github-token` to another host, and the
+preset's git rewrites move with it. It may not move a preset that the guest
+finds through a variable. See
+[What a repository policy may not set](brigfile.md#what-a-repository-policy-may-not-set).
+
 ### What reading a Brigfile does
 
 **A file that a Brigfile names must lie inside the project.** A path that is
@@ -1029,6 +1040,11 @@ other path that boots a sandbox, refuses one.
 - **A secret in your store can go to an upstream the repository names.** The
   plan shows each route with its upstream and its secrets, and the approval
   covers each pair. Read those rows before you approve.
+- **A route sets variables in the guest, and Brig does not judge what they
+  mean.** A route can give the guest a variable that an agent reads as the
+  address of a service. The row lists the git URLs that the route takes over
+  and the guest variables that it sets. Brig holds the git URLs of a
+  repository's route to its upstream. It cannot do the same for a variable.
 - **An image named by a tag can change after you approve.** The approval
   covers the reference, not the bytes. The prompt says so when the image is a
   tag. [Image verification](#guest-images) runs at every boot, as for any
@@ -1526,6 +1542,14 @@ Read the report before you post it.
 The file is 0600, in `~/.brig/host/reports` unless `-o` names another
 place. No sandbox mounts that directory. `brig report` creates the file new
 each time, so it refuses a file or a link that is already at that name.
+
+### Where a Brigfile sends a secret
+
+Brig does not choose the upstream of a route that a repository wrote, and
+does not check that the upstream is the service the route's name or its
+guest variables suggest. The plan shows the upstream, the secret and the
+variables, and your approval is the control. See
+[Limits of the approval](#limits-of-the-approval).
 
 ### The guest home
 

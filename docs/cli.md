@@ -380,7 +380,9 @@ The plan of a target adds these rows to the plan of a profile:
   the image is pinned by digest
 - `POLICY`: one row for each policy, with where it comes from
 - `BROKER`: one row for each route, with its upstream and the secrets in
-  your store that it uses
+  your store that it uses. The row also names the route's preset, the git
+  URLs that the route takes over in the guest, and the guest variables that
+  it sets
 - `ARGS`: the arguments the agent gets
 - `NOTE`: for example, that a file of yours that overrides a built-in does
   not apply, or that the session's sandbox was started with a different
@@ -514,6 +516,8 @@ route, sorted by name.
 | `services` | for a `gcp` route, the Google APIs it reaches |
 | `secrets` | the names of the secrets in your store that the broker reads for the route |
 | `vends` | `true` when the route gives the guest AWS keys |
+| `gitInsteadOf` | the URL prefixes that git in the guest rewrites to the route. Omitted when there are none |
+| `guestEnv` | the names of the guest variables that the route sets. Omitted when there are none |
 
 #### The target object
 

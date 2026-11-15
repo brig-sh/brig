@@ -416,6 +416,34 @@ policy in the flat form, its output is a valid policy file.
 The flat form outlives the spellings v0.5.0 removed by one release, because
 v0.5.0 is the first release that prints its notice.
 
+### A preset on another upstream
+
+Up to v0.5.2, a route that moved `github-token` to another `upstream` kept
+the preset's git rewrites, `https://github.com/` and `git@github.com:`. From
+the next release, the rewrites follow the upstream:
+
+| The route writes | Up to v0.5.2, git is rewritten for | Now |
+| --- | --- | --- |
+| `preset: github-token` | `github.com` | `github.com` |
+| `preset: github-token` and `upstream: https://ghe.example.com` | `github.com` | `ghe.example.com` |
+| the same, with `guest.git.insteadOf` written out | what the route lists | what the route lists |
+
+If a policy of yours moves the preset and relies on the `github.com`
+rewrites, for a mirror in front of `github.com`, write them out:
+
+```yaml
+routes:
+  - name: github
+    preset: github-token
+    upstream: https://mirror.example.com
+    credential: {secretRef: {name: gh-token}}
+    guest:
+      git:
+        insteadOf: ["https://github.com/", "git@github.com:"]
+```
+
+`brig policy show <name>` prints the rewrites that a policy gets.
+
 ## Settings
 
 | Removed in | Setting | Current |
