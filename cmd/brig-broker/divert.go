@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -112,6 +113,12 @@ func ownedByMe(info os.FileInfo) bool {
 }
 
 // divertSandbox is the divert socket of one sandbox and what serves it.
+//
+// One socket serves a sandbox's routes and its memory. The routes hold it
+// when they reach brig.internal or have a route mode besides endpoint; the
+// memory holds it when memory reaches brig.internal. It opens with the first
+// holder and closes with the last, so a change of routes keeps the guest's
+// memory connections open.
 type divertSandbox struct {
 	srv  *server
 	id   string
@@ -120,6 +127,15 @@ type divertSandbox struct {
 	// internal is the address the sandbox's guest resolves brig.internal
 	// to, or the zero Addr for a sandbox that does not reach it.
 	internal netip.Addr
+	// memory reports that the sandbox's memory holds the socket. s.mu
+	// guards it.
+	memory bool
+	// mu guards routes and handlers, which a registration of routes changes
+	// while connections are served.
+	mu sync.Mutex
+	// routes reports that the sandbox's routes hold the socket. Only then is
+	// the link-local address served.
+	routes bool
 	// handlers serve the sandbox's route modes besides endpoint, in mode
 	// order.
 	handlers []divertHandler
@@ -130,9 +146,9 @@ type divertSandbox struct {
 
 // openDivert listens on the divert socket of sandbox id, and opens the
 // divert handler of each of modes with its settings. internal is the
-// sandbox's brig.internal address, or the zero Addr. The socket is 0600 in a
-// 0700 directory.
-func (s *server) openDivert(id string, internal netip.Addr, modes []v1alpha1.RouteMode,
+// sandbox's brig.internal address, or the zero Addr. routes reports that the
+// sandbox's routes hold the socket. The socket is 0600 in a 0700 directory.
+func (s *server) openDivert(id string, internal netip.Addr, routes bool, modes []v1alpha1.RouteMode,
 	settings map[v1alpha1.RouteMode]json.RawMessage) (*divertSandbox, error) {
 	sock, err := injector.DivertSocket(s.cfg.dir, id)
 	if err != nil {
@@ -153,20 +169,11 @@ func (s *server) openDivert(id string, internal netip.Addr, modes []v1alpha1.Rou
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	var handlers []divertHandler
-	closeHandlers := func() {
-		for _, h := range handlers {
-			h.close()
-		}
+	handlers, err := s.openHandlers(id, modes, settings)
+	if err != nil {
+		return nil, err
 	}
-	for _, m := range modes {
-		h, err := divertModes[m].open(s, id, settings[m])
-		if err != nil {
-			closeHandlers()
-			return nil, err
-		}
-		handlers = append(handlers, h)
-	}
+	closeHandlers := func() { closeAll(handlers) }
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		closeHandlers()
@@ -178,10 +185,50 @@ func (s *server) openDivert(id string, internal netip.Addr, modes []v1alpha1.Rou
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &divertSandbox{srv: s, id: id, path: sock, ln: ln, internal: internal, handlers: handlers,
-		sem: make(chan struct{}, maxDivertConns), ctx: ctx, cancel: cancel}
+	l := &divertSandbox{srv: s, id: id, path: sock, ln: ln, internal: internal, routes: routes,
+		handlers: handlers, sem: make(chan struct{}, maxDivertConns), ctx: ctx, cancel: cancel}
 	go l.serve()
 	return l, nil
+}
+
+// openHandlers opens the divert handler of each of modes with its settings,
+// and closes those it opened when one fails.
+func (s *server) openHandlers(id string, modes []v1alpha1.RouteMode,
+	settings map[v1alpha1.RouteMode]json.RawMessage) ([]divertHandler, error) {
+	var handlers []divertHandler
+	for _, m := range modes {
+		h, err := divertModes[m].open(s, id, settings[m])
+		if err != nil {
+			closeAll(handlers)
+			return nil, err
+		}
+		handlers = append(handlers, h)
+	}
+	return handlers, nil
+}
+
+func closeAll(handlers []divertHandler) {
+	for _, h := range handlers {
+		h.close()
+	}
+}
+
+// setRoutes replaces what the sandbox's routes serve on the socket, and
+// closes the handlers it replaces. The listener and the connections open on
+// it stay.
+func (l *divertSandbox) setRoutes(routes bool, handlers []divertHandler) {
+	l.mu.Lock()
+	old := l.handlers
+	l.routes, l.handlers = routes, handlers
+	l.mu.Unlock()
+	closeAll(old)
+}
+
+// servesRoutes reports whether the sandbox's routes hold the socket.
+func (l *divertSandbox) servesRoutes() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.routes
 }
 
 // close stops the listener, closes every connection of the sandbox, removes
@@ -190,9 +237,7 @@ func (l *divertSandbox) close() {
 	l.cancel()
 	_ = l.ln.Close()
 	_ = os.Remove(l.path)
-	for _, h := range l.handlers {
-		h.close()
-	}
+	l.setRoutes(false, nil)
 }
 
 func (l *divertSandbox) serve() {
@@ -252,13 +297,22 @@ func (l *divertSandbox) handle(client net.Conn) {
 		l.serveInternal(client, pre, a)
 		return
 	}
+	l.mu.Lock()
+	routes, handlers := l.routes, l.handlers
+	l.mu.Unlock()
 	// The link-local address is the broker's own for the routes that vend,
-	// never an upstream, on every port: a divert handler never claims it.
+	// never an upstream, on every port: a divert handler never claims it. A
+	// socket that memory alone holds serves no route there, and closes it.
 	if pre.dst.Addr().Unmap() == linkLocal.Addr() {
+		if !routes {
+			a.check = "port"
+			_ = client.Close()
+			return
+		}
 		l.serveLinkLocal(client, pre, a)
 		return
 	}
-	for _, h := range l.handlers {
+	for _, h := range handlers {
 		if h.claims(pre.dst) {
 			h.serve(l.ctx, client, pre.dst, a)
 			return

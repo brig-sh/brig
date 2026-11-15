@@ -50,6 +50,10 @@ const (
 	// HostKeyName is the host key, 32 random bytes the tokens are signed
 	// with. Only the broker reads it.
 	HostKeyName = "hostkey"
+	// MemoryKeyName is the memory key, 32 random bytes the memory tokens are
+	// signed with. It is separate from the host key, so memory can move to
+	// its own process without the route key. Only the broker reads it.
+	MemoryKeyName = "memorykey"
 	// CACertName and CAKeyName are the brig CA, which signs only
 	// brig.internal. Only the broker reads the key.
 	CACertName = "ca.pem"
@@ -67,6 +71,20 @@ func Dir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(host, runtime.HostBrokerDir), nil
+}
+
+// MemoryDirName is the directory of the memory stores, under brig's state
+// directory.
+const MemoryDirName = "memory"
+
+// MemoryDir returns the root of the memory stores: memory under ~/.brig, or
+// under BRIG_STATE_DIR.
+func MemoryDir() (string, error) {
+	state, err := runtime.StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(state, MemoryDirName), nil
 }
 
 // CheckDir refuses a broker directory that is a link, not a directory, not
@@ -202,14 +220,42 @@ type MintResponse struct {
 type RemoveResponse struct {
 	// Removed is whether the sandbox was registered.
 	Removed bool `json:"removed"`
-	// Remaining is the number of sandboxes still registered.
+	// Remaining is the number of sandboxes still registered, with routes,
+	// memory or both.
 	Remaining int `json:"remaining"`
+}
+
+// MemorySandbox is a sandbox's memory, the body of add-memory. It is a
+// registration of its own, apart from the sandbox's routes, so a sandbox can
+// have memory and no route.
+type MemorySandbox struct {
+	ID      string `json:"id"`
+	Session string `json:"session,omitempty"`
+	// Key is the store the sandbox reads and writes: a store name, or the
+	// project- key of internal/memory.ProjectKey.
+	Key string `json:"key"`
+	// Project is the absolute host folder a project- key was made from, so
+	// the broker can record it for `brig memory ls`. Empty for a named
+	// store.
+	Project string `json:"project,omitempty"`
+	// BrigInternal is the address the sandbox's guest resolves
+	// brig.internal to, as in Sandbox.
+	BrigInternal string `json:"brigInternal,omitempty"`
+}
+
+// MemoryMintRequest is the body of mint-memory.
+type MemoryMintRequest struct {
+	Sandbox string `json:"sandbox"`
+	Session string `json:"session,omitempty"`
+	// TTLSeconds is the token's lifetime. The broker caps it at TokenTTL.
+	TTLSeconds int64 `json:"ttlSeconds"`
 }
 
 // StopRequest is the body of stop.
 type StopRequest struct {
-	// IfIdle stops the broker only when no sandbox is registered, so a
-	// sandbox registered since the caller looked keeps its routes.
+	// IfIdle stops the broker only when no sandbox is registered, for
+	// routes or for memory, so a sandbox registered since the caller
+	// looked keeps its routes.
 	IfIdle bool `json:"ifIdle"`
 }
 
@@ -240,4 +286,6 @@ type Status struct {
 	// Vending lists "<sandbox>/<route>" of a route that vends whose last
 	// fetch failed, and of a gcp route whose last mint failed.
 	Vending []string `json:"vending,omitempty"`
+	// Memory are the ids of the sandboxes registered for memory, sorted.
+	Memory []string `json:"memory,omitempty"`
 }

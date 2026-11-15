@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -66,16 +68,33 @@ var beforeAdd = func() {}
 // the start lock, so another brig can stop an idle broker after ensure found
 // it.
 func Register(dir string, s Sandbox) (*Broker, error) {
+	b, added, err := register(dir, func(c Client) (AddResponse, error) { return c.Add(s) })
+	if err != nil {
+		return nil, err
+	}
+	b.Added = added
+	return b, nil
+}
+
+// RegisterMemory registers the memory of s with the broker serving dir, and
+// starts that broker when none is running, as Register does for routes.
+func RegisterMemory(dir string, s MemorySandbox) (*Broker, AddResponse, error) {
+	return register(dir, func(c Client) (AddResponse, error) { return c.AddMemory(s) })
+}
+
+// register runs add against the broker serving dir, starting one when none
+// is running, and replacing one that was stopping or gone by then.
+func register(dir string, add func(Client) (AddResponse, error)) (*Broker, AddResponse, error) {
 	var last error
 	for attempt := 0; attempt < 3; attempt++ {
 		b, started, err := ensure(dir)
 		if err != nil {
-			return nil, err
+			return nil, AddResponse{}, err
 		}
 		beforeAdd()
-		b.Added, err = b.Client.Add(s)
+		added, err := add(b.Client)
 		if err == nil {
-			return b, nil
+			return b, added, nil
 		}
 		if !stopping(err) && !errors.Is(err, ErrNotRunning) {
 			// Nothing forgets a sandbox that was never registered, so a
@@ -85,24 +104,53 @@ func Register(dir string, s Sandbox) (*Broker, error) {
 			if started {
 				_, _ = b.Client.Stop(true)
 			}
-			return nil, err
+			return nil, AddResponse{}, err
 		}
 		last = err
 		waitExit(dir)
 	}
-	return nil, last
+	return nil, AddResponse{}, last
 }
 
-// Forget removes the sandbox id from the broker serving dir, which refuses
-// its tokens from the next request on, and stops that broker when no sandbox
-// is left. It starts nothing: with no broker running there is nothing to
-// revoke.
+// Forget removes the sandbox id, its routes and its memory, from the broker
+// serving dir, which refuses its tokens from the next request on, and stops
+// that broker when no sandbox is left. It starts nothing: with no broker
+// running there is nothing to revoke.
 //
 // It asks the control socket whatever the pid file says. A revocation that
 // trusted a pid check it got wrong would leave every token working, so only
 // a socket nobody listens on means no broker, and any other failure is
 // returned.
+//
+// Both removals are attempted whatever the other answers: a refused route
+// removal must not leave the memory token valid until the broker exits.
 func Forget(dir, id string) error {
+	c, ok := controlClient(dir)
+	if !ok {
+		return nil
+	}
+	routes, routesErr := c.RemoveSandbox(id)
+	if errors.Is(routesErr, ErrNotRunning) {
+		return nil
+	}
+	// The second answer counts both kinds of registration, after both
+	// removals.
+	r, err := removeMemory(c, id, routes)
+	if errors.Is(err, ErrNotRunning) {
+		return routesErr
+	}
+	if err == nil && r.Remaining == 0 {
+		err = stopIfIdle(c)
+	}
+	return errors.Join(routesErr, err)
+}
+
+// ForgetRoutes removes the routes of sandbox id from the broker serving dir
+// and keeps its memory registered. An exec of a running sandbox whose policy
+// was detached calls it: its route tokens are refused, and the memory token
+// of another exec's agent stays valid. It starts nothing, and stops the
+// broker when no sandbox is left, as Forget does.
+func ForgetRoutes(dir, id string) error {
 	c, ok := controlClient(dir)
 	if !ok {
 		return nil
@@ -120,9 +168,22 @@ func Forget(dir, id string) error {
 	return nil
 }
 
-// ForgetAll removes every sandbox the broker serving dir has registered,
-// and stops it. It returns the ids it removed. brig rm --all calls it after
-// its own removals, for the sandboxes no runtime lists any more.
+// removeMemory removes the memory of sandbox id. A broker from a brig without
+// memory answers 404: it has no memory to revoke, so the count from the route
+// removal, routes, is returned and brig stop still stops it.
+func removeMemory(c Client, id string, routes RemoveResponse) (RemoveResponse, error) {
+	r, err := c.RemoveMemory(id)
+	var ref *RefusedError
+	if errors.As(err, &ref) && ref.Status == http.StatusNotFound {
+		return RemoveResponse{Remaining: routes.Remaining}, nil
+	}
+	return r, err
+}
+
+// ForgetAll removes every sandbox the broker serving dir has registered, its
+// routes and its memory, and stops it. It returns the ids it removed. brig
+// rm --all calls it after its own removals, for the sandboxes no runtime
+// lists any more.
 func ForgetAll(dir string) ([]string, error) {
 	c, ok := controlClient(dir)
 	if !ok {
@@ -135,20 +196,44 @@ func ForgetAll(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Every removal is attempted whatever another answers, as in Forget,
+	// so a refused route removal leaves no memory token valid.
 	var removed []string
+	var errs []error
 	for _, id := range st.Sandboxes {
 		r, err := c.RemoveSandbox(id)
 		if errors.Is(err, ErrNotRunning) {
-			return removed, nil
+			return removed, errors.Join(errs...)
 		}
 		if err != nil {
-			return removed, err
+			errs = append(errs, err)
+			continue
 		}
 		if r.Removed {
 			removed = append(removed, id)
 		}
 	}
-	return removed, stopIfIdle(c)
+	for _, id := range st.Memory {
+		r, err := c.RemoveMemory(id)
+		if errors.Is(err, ErrNotRunning) {
+			return sortedUnique(removed), errors.Join(errs...)
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if r.Removed {
+			removed = append(removed, id)
+		}
+	}
+	return sortedUnique(removed), errors.Join(append(errs, stopIfIdle(c))...)
+}
+
+// sortedUnique sorts ids and drops repeats: a sandbox with routes and memory
+// is one sandbox removed.
+func sortedUnique(ids []string) []string {
+	slices.Sort(ids)
+	return slices.Compact(ids)
 }
 
 // controlClient is the client of the control socket of dir, and false when
@@ -342,7 +427,9 @@ func recordedPort(dir string) (int, error) {
 // Secret Service on the session bus, which DBUS_SESSION_BUS_ADDRESS and
 // XDG_RUNTIME_DIR name.
 func brokerEnv() []string {
-	names := []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG"}
+	// BRIG_STATE_DIR places the memory stores, which the broker must find
+	// where brig does. It names a directory, not a credential.
+	names := []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "BRIG_STATE_DIR"}
 	if goruntime.GOOS == "linux" {
 		names = append(names, "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR")
 	}

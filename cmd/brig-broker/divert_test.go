@@ -12,8 +12,10 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -276,5 +278,109 @@ func TestADivertHandlerServesWhatItClaims(t *testing.T) {
 	defer h.mu.Unlock()
 	if len(h.served) != 1 || !h.closed {
 		t.Errorf("the handler served %v and closed %v", h.served, h.closed)
+	}
+}
+
+// countDials wraps the dialer of a guestClient, and counts the connections
+// it opens.
+func countDials(c *http.Client) *atomic.Int32 {
+	n := &atomic.Int32{}
+	tr := c.Transport.(*http.Transport)
+	dial := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		n.Add(1)
+		return dial(ctx, network, addr)
+	}
+	return n
+}
+
+// Routes and memory share one divert socket. A change of routes leaves the
+// socket and the guest's open connection to its memory as they are, removing
+// the routes leaves them too, and the socket goes with the last of the two.
+func TestRouteChangeKeepsMemoryDivert(t *testing.T) {
+	rig := newMemoryRig(t)
+	added, err := rig.client.Add(injector.Sandbox{ID: "brig-a", Profile: "claude-code",
+		Routes: []injector.Route{claudeRoute()}, BrigInternal: internalA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := rig.addMemory(t, "brig-a", "notes-a", internalA)
+	if mem.DivertSocket != added.DivertSocket || mem.CA != added.CA {
+		t.Fatalf("memory was handed %+v, routes %+v: want one socket and one CA", mem, added)
+	}
+	tok := rig.memoryToken(t, "brig-a")
+	c := guestClient(added.DivertSocket, internalA+":443", caPool(t, added))
+	dials := countDials(c)
+	if got, _, err := rpc(c, "/brig-a/memory", tok, rpcInitialize); err != nil || got != http.StatusOK {
+		t.Fatalf("initialize: %d %v", got, err)
+	}
+	if err := rig.store.Update("gh-token", []byte("real-gh-token")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client.Add(injector.Sandbox{ID: "brig-a", Profile: "claude-code",
+		Routes: []injector.Route{claudeRoute(), githubRoute()}, BrigInternal: internalA}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := rpc(c, "/brig-a/memory", tok, rpcToolsList); err != nil || got != http.StatusOK {
+		t.Errorf("tools/list after a change of routes: %d %v", got, err)
+	}
+	gh := rig.mint(t, "brig-a", "github")
+	if got, err := post(c, "/brig-a/r/github/user", gh); err != nil || got != http.StatusOK {
+		t.Errorf("the new route on the shared socket: %d %v", got, err)
+	}
+	if _, err := rig.client.RemoveSandbox("brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := rpc(c, "/brig-a/memory", tok, rpcToolsList); err != nil || got != http.StatusOK {
+		t.Errorf("tools/list after the routes went: %d %v", got, err)
+	}
+	if got, err := post(c, "/brig-a/r/github/user", gh); err != nil || got == http.StatusOK {
+		t.Errorf("a removed route on the shared socket: %d %v", got, err)
+	}
+	if n := dials.Load(); n != 1 {
+		t.Errorf("the guest dialed %d connections, want its first kept open", n)
+	}
+	if _, err := rig.client.RemoveMemory("brig-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(added.DivertSocket); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the divert socket outlived routes and memory: %v", err)
+	}
+	if conn, err := net.Dial("unix", added.DivertSocket); err == nil {
+		_ = conn.Close()
+		t.Error("the divert socket still answers")
+	}
+}
+
+// Routes and memory of one sandbox share its brig.internal address. A
+// registration of either that names another address than the other holds is
+// refused, and the other keeps its socket.
+func TestMemoryDivertAddressConflict409(t *testing.T) {
+	rig := newMemoryRig(t)
+	added, err := rig.client.Add(injector.Sandbox{ID: "brig-a", Profile: "claude-code",
+		Routes: []injector.Route{claudeRoute()}, BrigInternal: internalA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rig.client.AddMemory(injector.MemorySandbox{ID: "brig-a", Key: "notes-a", BrigInternal: internalB})
+	if refusedStatus(err) != http.StatusConflict || !strings.Contains(err.Error(), internalA) ||
+		!strings.Contains(err.Error(), internalB) {
+		t.Errorf("memory at another address than the routes = %v, want 409 naming both", err)
+	}
+	rig.addMemory(t, "brig-b", "notes-b", internalB)
+	_, err = rig.client.Add(injector.Sandbox{ID: "brig-b", Profile: "claude-code",
+		Routes: []injector.Route{claudeRoute()}, BrigInternal: internalA})
+	if refusedStatus(err) != http.StatusConflict || !strings.Contains(err.Error(), internalA) ||
+		!strings.Contains(err.Error(), internalB) {
+		t.Errorf("routes at another address than memory = %v, want 409 naming both", err)
+	}
+	if st, err := rig.client.Status(); err != nil || !slices.Equal(st.Sandboxes, []string{"brig-a"}) ||
+		!slices.Equal(st.Memory, []string{"brig-b"}) {
+		t.Errorf("after the refusals status = %+v, %v", st, err)
+	}
+	tok := rig.mint(t, "brig-a", "anthropic")
+	if got, err := post(guestClient(added.DivertSocket, internalA+":443", caPool(t, added)),
+		"/brig-a/r/anthropic/v1/messages", tok); err != nil || got != http.StatusOK {
+		t.Errorf("brig-a's route after the refusal: %d %v", got, err)
 	}
 }
