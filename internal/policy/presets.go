@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"maps"
+	"net/url"
 	"reflect"
 	"slices"
 	"sort"
@@ -301,7 +302,49 @@ func overlay(base, r v1alpha1.Route) (v1alpha1.Route, error) {
 	if r.Services != nil {
 		out.Services = r.Services
 	}
+	// A preset's git rewrites name its upstream: github-token rewrites the
+	// two forms of a github.com URL. A route that moves the upstream and
+	// says nothing about git gets the same two forms for the new host, so
+	// that git to that host is what goes through the route. Leaving the
+	// preset's own would send git for github.com to the other host, which
+	// nobody who names a GitHub Enterprise host means. A route that wants
+	// that, to put a mirror in front of github.com, writes the rewrites out.
+	if out.Upstream != base.Upstream && base.Guest != nil && base.Guest.Git != nil &&
+		(r.Guest == nil || r.Guest.Git == nil) {
+		g := *out.Guest
+		g.Git = &v1alpha1.GitGuest{InsteadOf: followUpstream(base.Guest.Git.InsteadOf, base.Upstream, out.Upstream)}
+		out.Guest = &g
+	}
 	return out, nil
+}
+
+// followUpstream returns the git prefixes of a preset with the preset's own
+// host replaced by the host of another upstream: the https form by origin,
+// port included, and the git@host: form by host name alone, since SSH has a
+// port of its own. A prefix that names neither is kept as it is. Both
+// upstreams are bare https origins, which Route.Validate holds them to.
+func followUpstream(prefixes []string, from, to string) []string {
+	fromHost, toHost := hostName(from), hostName(to)
+	out := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		switch {
+		case p == from+"/":
+			p = to + "/"
+		case p == "git@"+fromHost+":":
+			p = "git@" + toHost + ":"
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// hostName is the host of a bare https origin, without its port.
+func hostName(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // setDefaults fills the fields that a route may leave out: mode, which is
