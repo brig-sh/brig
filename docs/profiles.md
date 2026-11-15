@@ -338,6 +338,7 @@ one, import a profile of the same name.
 | `onboarding` | no | A first-run state file to seed. See [`onboarding`](#onboarding) |
 | `reserved` | no | Marks a profile that owns the guest home a session name can otherwise slug onto. See [`reserved`](#reserved) |
 | `unpublished` | no | Brig ships the profile but no image for it. `brig run` says so and stops before the pull. Pass `--image` with one you built. `cursor` is the one that carries it |
+| `memory` | no | Turns agent memory on for every run: `project` for the store of the run's project folder, or the name of a store that sandboxes share. `--no-agent-memory`, `--agent-memory` and `BRIG_MEMORY` win over it. No shipped profile sets it, because a store is a channel between the sandboxes that share it. Brig refuses it on a profile other than `claude-code`, and on a profile that a repository's Brigfile declares. See [Agent memory](sessions.md#agent-memory) |
 | `policy` | no | Names of policies attached to this profile inline: every run carries all of them, unioned with whatever is attached separately by name |
 
 Brig refuses a misspelled field, such as `volume:` in place of `volumes:`.

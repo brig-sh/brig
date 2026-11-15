@@ -86,6 +86,8 @@ usage:
   brig secret create|read|update|delete|ls       keep secrets in your keyring
   brig secret import <profile>                   fill a profile's secrets from
                                                  your host, once
+  brig memory ls [--json]                        the agent memory stores on this host
+  brig memory rm <store>|--project <dir>         remove one; a store in use is refused
   brig telemetry status|on|off                   report what is counted, or
                                                  turn the counting on or off
   brig target ls [-f PATH]                       the targets of this repository's
@@ -113,9 +115,10 @@ global flags (left of the command, as in: brig -q run claude):
                          line. A verification that did not hold is printed
                          even here
       --json             machine-readable output, for the read verbs: ls, info,
-                         plan, agent ls, secret ls, target ls, config, doctor,
-                         version and the network verbs. Also accepted after
-                         the verb (brig ls --json). Every other verb refuses it
+                         plan, agent ls, secret ls, target ls, memory ls,
+                         config, doctor, version and the network verbs. Also
+                         accepted after the verb (brig ls --json). Every other
+                         verb refuses it
       --json (with run)  run the agent as a child and, after it exits, print one
                          JSON line with its exit status, so a script can tell
                          "brig refused" from "the agent failed"
@@ -392,6 +395,8 @@ func dispatch(args []string) error {
 		return policyCmd(rest)
 	case "secret":
 		return secretCmd(os.Stdout, rest)
+	case "memory":
+		return memoryCmd(os.Stdout, rest)
 	case "telemetry":
 		return telemetryCmd(os.Stdout, rest)
 	case "doctor":
@@ -4220,7 +4225,7 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 	switch verb {
 	case "ls", "info", "plan", "doctor", "version", "--version", "run", "sh", "config":
 		return true
-	case "agent", "secret", "target":
+	case "agent", "secret", "target", "memory":
 		return len(rest) > 0 && rest[0] == "ls"
 	case "network":
 		return len(rest) > 0 && onPortLine("network "+rest[0])
@@ -4233,8 +4238,8 @@ func verbTakesGlobalJSON(verb string, rest []string) bool {
 // moves the flag rather than guessing which command it belongs on.
 func jsonUnsupportedf(verb string) error {
 	return usagef("`brig %s` has no --json output. --json is for the read verbs: "+
-		"ls, info, plan, agent ls, secret ls, target ls, config, doctor, version and the "+
-		"network verbs, and for run and sh", verb)
+		"ls, info, plan, agent ls, secret ls, target ls, memory ls, config, doctor, version "+
+		"and the network verbs, and for run and sh", verb)
 }
 
 // jsonRun is the state the --json run/sh path needs to print its one-line Run

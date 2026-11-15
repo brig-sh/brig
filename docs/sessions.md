@@ -128,6 +128,62 @@ login held in memory is lost.
 If a remembered project no longer exists on disk, the run continues with no
 project. The restart warning names the missing directory.
 
+## Agent memory
+
+With `--agent-memory`, an agent keeps notes on the host between sessions. The
+agent saves, searches, reads and deletes them through four tools, and Claude
+Code's own memory is turned off. Only Claude Code is wired to them: the
+`claude-code` profile, or a target that runs `builtin:claude-code`. Brig
+refuses `--agent-memory` and a profile's `memory:` for any other agent,
+before it boots. It ignores `BRIG_MEMORY` there, with a warning, so a
+setting that you export for Claude Code does not stop your other agents.
+
+```bash
+brig run --agent-memory claude ~/code/demo
+brig run --agent-memory=team claude ~/code/demo
+```
+
+The first line uses the store of the project folder. The key is the folder's
+host path, so a different folder is a different store, and a folder that you
+move or rename leaves its memory under the old path. The store follows the
+path, not the repository: a path that you reuse, such as a temporary
+checkout, gives the next repository there the same memory. The second line
+uses a named store that any sandbox can share. When it starts the sandbox,
+the run prints `memory: project (<folder>)` for a project store, and
+`memory: <store>` for a named one. `brig plan` names the store, and where
+the ask came from, in a `MEMORY` row.
+
+Brig reads `--agent-memory` and `--no-agent-memory` only before the
+profile. After the profile, it passes them to the agent:
+`brig run claude --agent-memory=x` hands `--agent-memory=x` to `claude`.
+
+Brig picks the store in this order: `--no-agent-memory`, `--agent-memory`,
+`BRIG_MEMORY`, then the profile's `memory:`. See the
+[run-line flags](cli.md#run-line-flags).
+
+A sandbox keeps the store it was started with. A later run that asks for
+nothing inherits it. A project store, inherited or asked for again, follows
+the project that run mounts: a run on another folder restarts the sandbox on
+that folder's store. A run that asks for another store, or turns memory on
+or off, on a running sandbox is refused. So is a run on a sandbox whose
+record of its store Brig cannot read, or has lost while the broker still
+serves it memory. In both cases, remove the sandbox with `brig rm` and run
+again.
+
+Memory needs `brig.internal`: hull with `hvi`, or nerdctl with urunc. Brig
+refuses it on other backends and with `--offline`, and a run with memory is
+isolated.
+
+Stores live in `~/.brig/memory`, or `memory/` under `BRIG_STATE_DIR`. They
+outlive `brig stop` and `brig rm`. List them and remove them with
+[`brig memory`](cli.md#brig-memory).
+
+Brig starts `claude` with `--mcp-config=/brig/memory/mcp.json`, and the
+sandbox receives a token in `BRIG_MEMORY_TOKEN`. A `claude` that you start by
+hand in a shell from `brig sh` has the token and no MCP entry, so it has no
+memory. A store shared by several sandboxes is a channel between them. See
+[Agent memory](security.md#agent-memory).
+
 ## What survives
 
 Only three of the nine built-in agents, `claude-code`, `claude-desktop` and

@@ -314,6 +314,7 @@ var verbUsages = map[string]string{
 	"version":    versionUsage,
 	"agent":      agentUsage,
 	"secret":     secretUsage,
+	"memory":     memoryUsage,
 	"policy":     policyUsage,
 	"network":    networkUsage,
 	"telemetry":  telemetryUsage,
