@@ -29,7 +29,16 @@ const hostKeySize = 32
 // start. The key signs every session token, so the file is 0600, is never a
 // link, and is read by this process alone. It never goes on a command line
 // or into a log.
-func loadOrCreateHostKey(path string) ([]byte, error) {
+func loadOrCreateHostKey(path string) ([]byte, error) { return loadOrCreateKey(path, "host key") }
+
+// loadOrCreateMemoryKey reads the memory key at path, and draws one at first
+// start, as loadOrCreateHostKey does the host key. It signs the memory
+// tokens alone.
+func loadOrCreateMemoryKey(path string) ([]byte, error) { return loadOrCreateKey(path, "memory key") }
+
+// loadOrCreateKey reads the key at path, named what in errors, and draws
+// one at first start.
+func loadOrCreateKey(path, what string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		key := make([]byte, hostKeySize)
@@ -42,7 +51,7 @@ func loadOrCreateHostKey(path string) ([]byte, error) {
 		return key, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot read the host key %s: %w", path, err)
+		return nil, fmt.Errorf("cannot read the %s %s: %w", what, path, err)
 	}
 	defer func() { _ = f.Close() }()
 	if err := checkPrivate(f, path); err != nil {
@@ -53,8 +62,8 @@ func loadOrCreateHostKey(path string) ([]byte, error) {
 		return nil, err
 	}
 	if len(key) != hostKeySize {
-		return nil, fmt.Errorf("refusing the host key %s: it is %d bytes, not %d. Remove it, and the "+
-			"next start draws a new one", path, len(key), hostKeySize)
+		return nil, fmt.Errorf("refusing the %s %s: it is %d bytes, not %d. Remove it, and the "+
+			"next start draws a new one", what, path, len(key), hostKeySize)
 	}
 	return key, nil
 }

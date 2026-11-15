@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/secret"
 	"github.com/brig-sh/brig/internal/testpki"
 )
@@ -85,9 +86,13 @@ func TestBrokerHelperProcess(t *testing.T) {
 			os.Exit(1)
 		}
 	}
+	// The memory stores under the state directory of the brig that started
+	// it, as main serves them, so smoke runs a store against it.
+	memoryDir, _ := injector.MemoryDir()
 	os.Exit(run(args, os.Stderr, serverConfig{
 		openStore: func() (secret.Store, error) { return store, nil },
 		transport: tr,
+		memoryDir: memoryDir,
 		renewerFor: func(v1alpha1.Lifecycle) (secret.Renewer, error) {
 			return renewerFunc(func(context.Context, []byte) ([]byte, error) {
 				return nil, errors.New("the helper broker never refreshes: its credential is not due")

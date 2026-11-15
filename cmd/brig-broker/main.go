@@ -5,7 +5,8 @@
 // It serves internal/broker on a loopback port, the one recorded in its
 // directory, and takes its orders from
 // brig over a unix socket in its directory: add a sandbox's routes, mint a
-// session token, remove a sandbox, report, stop. It reads the credentials a
+// session token, remove a sandbox, register a sandbox's memory and mint its
+// memory token, report, stop. It reads the credentials a
 // route injects from brig's secret store, and refreshes the ones with a
 // lifecycle through internal/renew. That refresher is why this is a binary of
 // its own: no package on brig's run path links it.
@@ -24,10 +25,17 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/brig-sh/brig/internal/injector"
 	"github.com/brig-sh/brig/internal/secret"
 )
 
-func main() { os.Exit(run(os.Args[1:], os.Stderr, serverConfig{openStore: secret.Open})) }
+func main() {
+	cfg := serverConfig{openStore: secret.Open}
+	// A host with no state directory serves no memory, and its routes still
+	// work: a memory registration is refused with the reason.
+	cfg.memoryDir, _ = injector.MemoryDir()
+	os.Exit(run(os.Args[1:], os.Stderr, cfg))
+}
 
 // run parses the command line and serves cfg on the directory it names until
 // stopped. It returns the exit status. cfg carries everything but the
