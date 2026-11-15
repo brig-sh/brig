@@ -115,7 +115,7 @@ func routesOf(bound []policy.Policy) ([]v1alpha1.Route, map[string]string, error
 // Read-only, like sessionRefusal, which returns it.
 func (c *Config) routeRefusal() error {
 	if c.routesErr != nil {
-		return fmt.Errorf("the policies bound to %s cannot apply together: %w", c.Profile.Name, c.routesErr)
+		return fmt.Errorf("the policies bound to %s cannot apply together: %w", c.subject(), c.routesErr)
 	}
 	if err := c.modeRefusal(); err != nil {
 		return err
@@ -133,6 +133,12 @@ func (c *Config) routeRefusal() error {
 		return err
 	}
 	if err := c.awsHomeRefusal(); err != nil {
+		return err
+	}
+	if err := c.gcpShadowRefusal(); err != nil {
+		return err
+	}
+	if err := c.gcpHomeRefusal(); err != nil {
 		return err
 	}
 	if c.Network == NetOffline {
@@ -187,7 +193,7 @@ func (c *Config) awsShadowRefusal() error {
 	}
 	return fmt.Errorf("policy %s declares a route that vends AWS keys, and %s also hands the guest %s, "+
 		"which the AWS SDKs read before the route; remove it from the profile and BRIG_FORWARD_ENV, "+
-		"or detach the policy", c.vendList(), c.Profile.Name, strings.Join(shadow, ", "))
+		"or detach the policy", c.vendList(), c.subject(), strings.Join(shadow, ", "))
 }
 
 // vends reports whether this run has a route that vends.
@@ -265,7 +271,7 @@ func (c *Config) serveRoutes(set creds.Set) error {
 		return nil
 	}
 	b := c.routeBroker()
-	s := injector.Sandbox{ID: c.VMName, Profile: c.Profile.Name}
+	s := injector.Sandbox{ID: c.VMName, Profile: c.brokerProfile()}
 	for _, r := range c.routes {
 		s.Routes = append(s.Routes, injector.Route{Policy: c.routePolicy[r.Name], Route: r})
 	}
@@ -359,7 +365,11 @@ func (c *Config) sayVends(vends map[string]injector.VendInfo) {
 	for _, name := range slices.Sorted(maps.Keys(vends)) {
 		v := vends[name]
 		if v.RoleARN != "" {
-			c.warnf("route %s: AWS role %s, assumed from your profile %s", name, v.RoleARN, v.AWSProfile)
+			role := v.RoleARN
+			if len(v.PolicyARNs) > 0 {
+				role += " with session policies " + strings.Join(v.PolicyARNs, ", ")
+			}
+			c.warnf("route %s: AWS role %s, assumed from your profile %s", name, role, v.AWSProfile)
 			continue
 		}
 		c.warnf("route %s: AWS as your own identity (profile %s); the sandbox can do what you can", name,

@@ -4,9 +4,11 @@ import (
 	"embed"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
+	"github.com/brig-sh/brig/internal/brigfile"
 	"github.com/brig-sh/brig/internal/policy"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -130,8 +132,10 @@ func completeCmd(out io.Writer, words []string) {
 var verbs = []string{
 	"agent",
 	"completion",
+	"config",
 	"doctor",
 	"info",
+	"init",
 	"ls",
 	"network",
 	"plan",
@@ -142,6 +146,7 @@ var verbs = []string{
 	"secret",
 	"sh",
 	"stop",
+	"target",
 	"telemetry",
 	"version",
 }
@@ -253,6 +258,10 @@ func complete(words []string) (string, []string) {
 		return names(cur, refCandidates())
 	case verb == "network":
 		return completeNetwork(rest, cur)
+	case verb == "config":
+		return completeBrigfileLine(rest, cur, true)
+	case verb == "init":
+		return completeBrigfileLine(rest, cur, false)
 	case groups[verb] != nil:
 		return completeGroup(verb, rest, cur)
 	case refVerbs[verb]:
@@ -282,6 +291,14 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	}
 
 	if line.pending != "" && !strings.HasPrefix(cur, "-") {
+		switch line.pending {
+		case "--target":
+			return names(cur, brigfileTargets(fileOnLine(rest)))
+		case "-f", "--file":
+			return dirFiles, nil
+		case "--session":
+			return dirNone, nil
+		}
 		return operandCandidates(flagValue(line.pending), cur)
 	}
 
@@ -289,9 +306,13 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	// "=", so in zsh and fish the whole thing is the current word and would
 	// otherwise be matched against flag names, which it cannot match.
 	if flag, prefix, ok := inlineValue(cur); ok {
-		mine, takesValue := ours(flag, verbPosition(verb))
+		mine, takesValue := oursFor(verb, flag, verbPosition(verb))
 		if !mine || !takesValue {
 			return dirNone, nil
+		}
+		if flag == "--target" {
+			directive, candidates := names(prefix, brigfileTargets(fileOnLine(rest)))
+			return qualify(flag, directive, candidates)
 		}
 		directive, candidates := operandCandidates(flagValue(flag), prefix)
 		return qualify(flag, directive, candidates)
@@ -302,6 +323,12 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 		// only at a flag brig does not own, so offer them on both sides too.
 		// `brig run claude --mem 4096` is a line brig parses.
 		flags := flagSpellings(verbPosition(verb), verb)
+		// plan, stop and rm name a target of the Brigfile in place of a
+		// ref, so they offer --target, --session and -f until a ref is named.
+		if readsTarget(verb) && !line.refGiven {
+			flags = append(flags, flagSpellings(posTarget, verb)...)
+			sort.Strings(flags)
+		}
 		if verb == "rm" {
 			// rm's own flags are not in brigFlags: they are read before the run
 			// line. --dry-run goes on either side of the ref; --all replaces the
@@ -316,6 +343,10 @@ func completeRunLine(verb string, rest []string, cur string) (string, []string) 
 	}
 
 	if !line.refGiven {
+		// A line that names a target takes no ref, and no project.
+		if readsTarget(verb) && hasTargetFlag(rest) {
+			return dirNone, nil
+		}
 		return names(cur, refsFor(verb))
 	}
 	// On run and plan the first bare word after the ref is the project
@@ -369,7 +400,7 @@ func walkRunLine(verb string, args []string) runLine {
 			line.tailBegun = true
 			return line
 		default:
-			mine, takesValue := ours(a, at)
+			mine, takesValue := oursFor(verb, a, at)
 			if !mine {
 				if line.refGiven {
 					line.tailBegun = true
@@ -392,14 +423,14 @@ func walkRunLine(verb string, args []string) runLine {
 			}
 		}
 	}
-	line.pending = pendingFlag(args)
+	line.pending = pendingFlag(verb, args)
 	return line
 }
 
 // pendingFlag returns the flag whose value the cursor is on: the last token,
 // when it is a brig flag that takes a value. A trailing "=" is skipped, so
 // `--network=<cursor>` completes like `--network <cursor>`.
-func pendingFlag(args []string) string {
+func pendingFlag(verb string, args []string) string {
 	if len(args) == 0 {
 		return ""
 	}
@@ -407,11 +438,25 @@ func pendingFlag(args []string) string {
 	if last == "=" && len(args) > 1 {
 		last = args[len(args)-2]
 	}
-	mine, takesValue := ours(last, posRun)
+	mine, takesValue := oursFor(verb, last, posRun)
 	if !mine || !takesValue || strings.Contains(last, "=") {
 		return ""
 	}
 	return last
+}
+
+// hasTargetFlag reports whether a line names a target, as --target or
+// --target=<name>.
+func hasTargetFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--target" || strings.HasPrefix(a, "--target=") {
+			return true
+		}
+	}
+	return false
 }
 
 // hasSpelling reports whether args contains this exact token.
@@ -582,6 +627,7 @@ var groups = map[string][]sub{
 				"--from-command": opNothing, "--aws-profile": opNothing, "--role-arn": opNothing,
 				"--identity": opNothing, "--source-identity": opNothing, "--session-duration": opNothing,
 				"--gcloud-configuration": opNothing, "--impersonate-service-account": opNothing,
+				"--policy-arns": opNothing,
 			},
 			operands: []operand{opAgent},
 		},
@@ -590,6 +636,13 @@ var groups = map[string][]sub{
 		{name: "status"},
 		{name: "on"},
 		{name: "off"},
+	},
+	"target": {
+		{
+			name:   "ls",
+			flags:  []string{"--json"},
+			values: map[string]operand{"--file": opFile, "-f": opFile},
+		},
 	},
 }
 
@@ -772,6 +825,11 @@ func flagSpellings(at position, verb string) []string {
 		if f.long == "all" && at == posPublish && verb != "network unpublish" {
 			continue
 		}
+		// --approve and --recreate are run's alone, on a line that names a
+		// target.
+		if at == posTarget && f.runOnly && verb != "run" {
+			continue
+		}
 		out = append(out, "--"+f.long)
 		if f.short != "" {
 			out = append(out, "-"+f.short)
@@ -901,6 +959,82 @@ func policyNames() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// completeBrigfileLine answers for config and init, which take flags and no
+// operand. config's --target completes the names of the targets in the
+// Brigfile the line would read.
+func completeBrigfileLine(rest []string, cur string, config bool) (string, []string) {
+	if len(rest) > 0 && !strings.HasPrefix(cur, "-") {
+		switch lastFlag(rest) {
+		case "-f", "--file":
+			return dirFiles, nil
+		case "--target":
+			if config {
+				return names(cur, brigfileTargets(fileOnLine(rest)))
+			}
+		}
+	}
+	if flag, prefix, ok := inlineValue(cur); ok {
+		switch {
+		case config && flag == "--target":
+			directive, candidates := names(prefix, brigfileTargets(fileOnLine(rest)))
+			return qualify(flag, directive, candidates)
+		}
+		return dirNone, nil
+	}
+	if strings.HasPrefix(cur, "-") {
+		flags := []string{"--file", "-f"}
+		if config {
+			flags = append(flags, "--json", "--target")
+		}
+		sort.Strings(flags)
+		return names(cur, flags)
+	}
+	return dirNone, nil
+}
+
+// fileOnLine is the path -f or --file names on a line, or "".
+func fileOnLine(rest []string) string {
+	file := ""
+	for i := 0; i < len(rest); i++ {
+		switch a := rest[i]; {
+		case a == "-f" || a == "--file":
+			if i+1 < len(rest) {
+				i++
+				if rest[i] == "=" && i+1 < len(rest) {
+					i++
+				}
+				file = rest[i]
+			}
+		case strings.HasPrefix(a, "-f=") || strings.HasPrefix(a, "--file="):
+			_, file, _ = strings.Cut(a, "=")
+		}
+	}
+	return file
+}
+
+// brigfileTargets returns the target names of the Brigfile file names, or of
+// the one for the working directory's project. A keystroke must never print,
+// so a Brigfile that is missing or does not load completes nothing. It is read
+// through brigfile.Load, which opens no FIFO or device that could hang the
+// shell, runs nothing and writes nothing.
+func brigfileTargets(file string) []string {
+	path := file
+	if path == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil
+		}
+		if path, err = brigfile.Discover(wd); err != nil {
+			return nil
+		}
+	}
+	l, err := brigfile.Load(path)
+	if err != nil {
+		return nil
+	}
+	return targetNamesOf(l)
 }
 
 // names filters candidates by the word being typed.

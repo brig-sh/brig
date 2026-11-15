@@ -2,7 +2,8 @@
 
 Brig runs an agent in a microVM. On the host, the agent can reach its guest
 home, the credentials you deliver to it, and any project you name on the run
-line. No other host directory is mounted.
+line, or the project of a Brigfile target you approved. No other host
+directory is mounted.
 
 A run reads no host credential source. See [Credentials](#credentials).
 
@@ -19,7 +20,9 @@ that defend them. To report a flaw in a boundary privately, see
 The guest can reach:
 
 - its guest home, read-write
-- the project you name on the run line, read-write at `/work/<name>`
+- the project you name on the run line, read-write at `/work/<name>`. For a
+  [Brigfile target](#brigfile-targets), the project is the directory that
+  holds the Brigfile
 - the credentials you deliver to it
 - the internet, on either `isolated` or `shared` (see
   [Network egress](#network-egress) and [Host services](#host-services))
@@ -50,10 +53,10 @@ use a delivered credential, as any holder can, for as long as it holds it.
 
 | Case | Posture |
 | --- | --- |
-| New sandbox on `hvi` or Linux | `isolated` |
+| New sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
 | The graphical `claude-desktop` profile | `shared`, set explicitly in the profile |
-| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on Linux and `hvi`. The backend fallback on `vz` or `qemu` |
-| Custom profile without a network choice, on `vz` or `qemu` | `shared`. `brig info` names that fallback |
+| The unpublished `cursor` profile, which leaves its posture unset | `isolated` on nerdctl and `hvi`. The backend fallback on `vz`, `qemu` or hull on Linux |
+| Custom profile without a network choice, on `vz`, `qemu` or hull on Linux | `shared`. `brig info` names that fallback |
 | Existing sandbox | Its recorded posture |
 | Existing sandbox from an older session with no record | The actual posture, inspected from the runtime |
 
@@ -88,6 +91,7 @@ prints it before the boot:
 ```
 ISOLATION    microVM (hull, hvi backend, rootfs overlay-block)
 ISOLATION    microVM (hull, vz backend, rootfs block)
+ISOLATION    microVM (hull over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor urunc default)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs overlay-block)
 ISOLATION    microVM (nerdctl over containerd, io.containerd.urunc.v2, hypervisor hvi, rootfs urunc default)
@@ -374,11 +378,13 @@ and never the secret key or the session token.
 
 **What the keys can do.** The keys can do what the identity behind them can
 do. In role mode that is the role's policy, so give the sandbox a role with
-a narrow policy. In self mode it is your whole identity in that profile: the
+a narrow policy. Session policies from `brig secret import --policy-arns`
+narrow it further: the keys get what both the role and those policies
+allow. In self mode it is your whole identity in that profile: the
 sandbox can do what you can. Self mode is never a default: `brig secret
 import` refuses an import that names neither mode, or both. Each run and
-exec prints a line that names the role, or says that the sandbox has your
-own identity.
+exec prints a line that names the role and its session policies, or says
+that the sandbox has your own identity.
 
 **Credentials that win over the route.** An AWS SDK reads its environment
 and `~/.aws` before the container credential provider. A run with a route
@@ -389,8 +395,12 @@ guest `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_ROLE_ARN`, or an `AWS_CONTAINER_*` variable. It is also refused when
 `~/.aws` would be in the guest: a guest home that already holds
 `.aws/credentials` or `.aws/config` (for example `--home ~`), or a profile
-volume, `files:` binding or host config seed at `.aws`, or a seed copied
-from your own `~/.aws`. The CLI's own cache in `~/.aws/cli`, which the
+volume, `files:` binding, onboarding file or host config seed at `.aws`, a
+host config seed into the guest home itself, or a seed copied from your own
+`~/.aws` or a directory that holds it. Brig compares `.aws` as a macOS file
+system can: with the case folded, and with a letter that is not ASCII taken
+for the ASCII letters it could fold into. The CLI's own cache in
+`~/.aws/cli`, which the
 `aws` CLI in the guest writes itself, is allowed. Brig does not check the
 image: an `AWS_*` variable baked into it wins over the route.
 
@@ -475,7 +485,9 @@ route is refused with `check=credential.gcponly`. See
 
 **Named, not ambient.** You name the gcloud configuration and the service
 account when you run `brig secret import`. A self-mode pointer also names
-the account of the login, and a token for any other account is refused. The
+the account of the login, and a token for any other account is refused. In
+impersonate mode, a token that tokeninfo does not name as the service account
+is refused. The
 secret holds that pointer and no token. Brig does not read
 `~/.config/gcloud` itself. `brig-broker` runs the host's `gcloud`, which
 does, on every mint. The broker uses the first `gcloud` on its own `PATH`.
@@ -486,6 +498,50 @@ which identity a sandbox gets. The import applies the same rule. Neither
 keeps `CLOUDSDK_CONFIG`, so both read the logins under
 `$HOME/.config/gcloud`, and the import refuses while `CLOUDSDK_CONFIG` is
 set. No package on the run path links the code that runs `gcloud`.
+
+**Identities besides the route's.** A Google login in the guest is an
+identity the run did not name. gcloud uses it whenever the guest has not
+pointed it at the route's token file, and a Google client library, which
+never reads that file, uses it to reach Google directly wherever egress
+allows. A run with a gcp route is refused when the profile or
+`BRIG_FORWARD_ENV` also hands the guest `GOOGLE_APPLICATION_CREDENTIALS`,
+`CLOUDSDK_CONFIG`, `CLOUDSDK_CORE_ACCOUNT`, `CLOUDSDK_ACTIVE_CONFIG_NAME`, a
+`CLOUDSDK_AUTH_*` variable or a `GCE_METADATA_*` variable. That includes
+`CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`: the guest sets it to the route's token
+itself, and from the profile it could name another token. A profile that
+sets `HOME` to anything but the guest home is refused too, since `HOME`
+moves `.config/gcloud` as `CLOUDSDK_CONFIG` does. It is also refused when a
+gcloud identity would be in the guest: a guest home that already holds a
+`credentials.db` or `access_tokens.db` with a row in it,
+`application_default_credentials.json` or `legacy_credentials` under
+`.config/gcloud` (for example `--home ~`), or a `.config/gcloud` that is a
+link, or a profile volume, `files:` binding, onboarding file or host config
+seed at `.config/gcloud` or `.config`, a host config seed into the guest
+home itself, or a seed copied from your own `~/.config/gcloud` or a
+directory that holds it. gcloud creates both stores
+with no rows whenever it opens them, and an empty store is allowed; a store
+Brig cannot read as empty is refused. A gcloud configuration in
+`.config/gcloud/configurations`, or the legacy `.config/gcloud/properties`,
+that sets an `[auth]` property is refused, since `credential_file_override`
+or `impersonate_service_account` there points gcloud at an identity
+elsewhere; one Brig cannot read is refused too. Brig reads only `[auth]` and
+`[DEFAULT]`: a credential in another section, such as `core/api_key` or the
+HMAC keys `storage/gs_xml_access_key_id` and
+`storage/gs_xml_secret_access_key`, or in its `CLOUDSDK_` variable, is not
+refused. A tmpfs at
+`.config/gcloud` or `.config` is allowed: it carries nothing from the host.
+Brig compares `.config/gcloud` and `.config` as a macOS file system can:
+with the case folded, and with a letter that is not ASCII taken for the
+ASCII letters it could fold into.
+The rest of `.config/gcloud`, which gcloud in the guest writes itself, is
+allowed.
+
+These checks cover what the host hands the guest. A guest that gets another
+identity in some other way, such as `gcloud auth login` in the guest, still
+reaches the listed services only through the broker, which takes the
+session token alone. With `egress: default: deny` and no `allow` for Google's
+hosts, it reaches no Google host directly. Brig does not check the image: a
+credential baked into it is not refused.
 
 **Revocation.** `brig stop` revokes the sandbox's session tokens, so its
 requests get no more Google tokens. A secret you import again with another
@@ -516,18 +572,23 @@ of them works at import and can fail in the broker.
 - The broker does not read request bodies, so a method override in a
   form-encoded body is not refused.
 - The broker serves HTTP/1.1 REST APIs. gRPC clients are not supported.
-- A Cloud Storage object whose name holds a `/` is unreachable. The JSON API
-  sends it as `o/dir%2Ffile`, and the broker refuses an encoded slash in any
-  path. The request gets a 400.
+- The broker takes an escaped slash in one place: a Cloud Storage object
+  name in the JSON API, `o/dir%2Ffile`, which that API reads as one name.
+  Another Google API may read `%2F` as a separator after `request.allow`
+  matched it as part of a segment, so the broker refuses it there. A name
+  with a `.`, `..` or empty piece, such as `a/../b`, gets a 400. A name
+  that ends in `/`, such as a folder placeholder, is a name.
+- `request.allow` matches the path only. A rule that limits objects by a
+  name prefix does not limit an upload, which names the object in the query
+  or the body, a compose, which names its sources in the body, or a
+  listing, which returns every name in the bucket.
 
 **Refused outright.** The broker refuses the method-override headers
 `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`, the query
 parameters `$httpMethod` and `httpMethod`, and batch requests. Each one
 carries a request that `request.allow` does not see.
 
-**Not yet done.** Brig does not refuse before boot a guest variable that
-picks another identity, such as `GOOGLE_APPLICATION_CREDENTIALS`, or a guest
-home that holds `.config/gcloud`. The guest writes the session token to the
+**Not yet done.** The guest writes the session token to the
 file that `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` names itself. A
 `CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>` for a service the route does not
 list is refused on another route's `guest.env`, but not when it comes in
@@ -733,6 +794,12 @@ of a directory brig is checking
 A link you made yourself is refused too. Brig cannot tell it from a planted
 link.
 
+The project of a [Brigfile target](brigfile.md#the-state-directory) may not
+hold Brig's state directory, and may not be inside it. Brig keeps its record
+of sessions and their guest homes there, and the guest could change them.
+Brig does not check this for a project that you name on the run line of a
+profile.
+
 The `PROJECT` row in the run envelope reports the directory the path resolved
 to, not the path as typed. On macOS a project under `/tmp` prints as
 `/private/tmp`, the directory the sandbox gets.
@@ -870,6 +937,106 @@ The warning is a look between two brig commands, not a guard:
   one that reaches the project by another name than the one Brig holds,
   `/private/var` for `/var` on macOS, is not recognized as inside it and is
   not watched.
+
+## Brigfile targets
+
+A [Brigfile](brigfile.md) is in the repository, and so is every profile and
+policy file it names. The agent in a sandbox can change all of them. So
+reading a Brigfile allows nothing. `brig run --target` boots a target only
+when an approval you gave covers the run.
+
+### What a Brigfile can ask for
+
+A target can ask for:
+
+- its project: the directory that holds the Brigfile, mounted read-write at
+  `/work/<name>`
+- a profile Brig ships, or a profile the repository wrote, with its image,
+  its size and the credential bindings it names
+- policies: egress rules, and routes that send requests to an upstream the
+  repository names, with a secret from your store that the repository names
+- the arguments the agent gets
+
+A profile the repository wrote cannot name a host path, a host program, the
+source of a secret, a variable from your environment, the shared network or a
+hypervisor. See
+[What a repository profile may not set](brigfile.md#what-a-repository-profile-may-not-set).
+
+### What reading a Brigfile does
+
+**A file that a Brigfile names must lie inside the project.** A path that is
+absolute or climbs out with `..` is refused. A link that leaves the project
+is refused, and the file it points to is not loaded. A link that stays inside
+the project is accepted.
+
+**`builtin:` takes the profile Brig ships.** It ignores a profile file of the
+same name in your profile directory.
+
+**Your attachments and your settings for a profile name do not follow a
+name the repository chose.** The policies you attached to a built-in profile
+apply to a target on that profile only. A profile the repository wrote gets
+none of them, and reads none of the settings you keep for a profile of the
+same name.
+
+**Each session of a target has its own sandbox and its own guest home.** Two
+checkouts of one repository, and two targets of one checkout, never share
+either.
+
+**`brig target ls` and `brig config` write nothing, and `brig init` writes
+only the Brigfile.** None of them looks for a runtime, opens your secret
+store or starts a sandbox.
+
+### What the approval authorizes
+
+**A run of a target boots only a configuration you approved.** A run with
+a stored approval for the same configuration boots. Any other run shows the
+plan and asks. With no terminal to ask on, it boots nothing and exits `8`.
+
+**The approval covers what the run may do.**
+[What an approval covers](brigfile.md#what-an-approval-covers) lists each
+part. A change to any part asks again.
+
+**What boots is what was approved.** The run reads the Brigfile and the
+files it names once, and builds both the approval and the boot from that
+read. A change to the Brigfile or to a file it names while Brig asks does not
+reach the boot.
+
+**Brig reads no value from your secret store before the approval.** Before
+it asks, the run lists the names in your store. It reads a value from the
+store only after you approve.
+
+**Brig keeps each approval in its state directory, outside the project.** A
+project that holds the state directory, or lies inside it, is refused before
+Brig asks.
+
+**Only `brig run --target` starts the sandbox of a target.** brigd, and every
+other path that boots a sandbox, refuses one.
+
+### Limits of the approval
+
+- **A secret in your store can go to an upstream the repository names.** The
+  plan shows each route with its upstream and its secrets, and the approval
+  covers each pair. Read those rows before you approve.
+- **An image named by a tag can change after you approve.** The approval
+  covers the reference, not the bytes. The prompt says so when the image is a
+  tag. [Image verification](#guest-images) runs at every boot, as for any
+  other run. To fix the bytes, name the image by digest.
+- **An approval given with `--approve` is only as safe as the place the
+  digest comes from.** If the repository holds the digest, whoever changes the
+  repository can change the Brigfile and the digest together. Keep the digest
+  outside the repository.
+- **The policies of a built-in profile, and the ones you attached to it,
+  apply to a target on it.** The plan and the approval include them.
+- **An approval does not limit what the agent does once it runs.** The rest
+  of this page applies to it, as to a run of a profile.
+- **The git identity is not part of the approval.** Brig reads `user.name`,
+  `user.email` and `github.user` with `git config` in the directory you run
+  it from, as for any run (see [Credentials](#credentials)). In the project
+  of a target, the repository's `.git/config` can set them. They reach the
+  guest as the commit identity and the user name of the git helper. They do
+  not decide which host gets a token.
+- **Two Brig processes that write approvals at the same moment can lose
+  one.** The next run asks again.
 
 ## Guest images
 
@@ -1070,8 +1237,8 @@ put the files back, reinstall the bundle with `install.sh`.
 The first two checks need no network, so a changed file refuses even where
 the signature cannot be checked.
 
-Only a nerdctl run reads the record. On macOS a `SHA256SUMS` in a named
-directory is ignored.
+Only a run through nerdctl, or through hull on Linux, reads the record. On
+hull on macOS a `SHA256SUMS` in a named directory is ignored.
 
 #### After the check
 
@@ -1174,7 +1341,7 @@ A sandbox with no policy has unrestricted egress, and that is what
 | --- | --- |
 | `hvi` | At the network gateway Brig gives that sandbox |
 | Linux with nerdctl | In nftables on the sandbox's own bridge, with a resolver of Brig's that answers the guest's DNS |
-| `vz`, `qemu`, docker | No policy is available. Outbound traffic is whatever the runtime allows |
+| `vz`, `qemu`, docker, hull on Linux | No policy is available. Outbound traffic is whatever the runtime allows |
 
 Both enforcement points are outside the guest's kernel.
 
@@ -1228,10 +1395,11 @@ reaches only the broker. See [Transports](broker.md#transports).
 ### Sandbox to sandbox
 
 If two agents must not reach each other, run both with `--network isolated`
-on `hvi` or on Linux. On `vz` and on `qemu`, where that posture is refused,
-run them on separate hosts.
+on `hvi` or on Linux with nerdctl. On `vz` and on `qemu`, where that posture
+is refused, run them on separate hosts. hull on Linux refuses it too: use
+nerdctl there.
 
-`isolated` is the guarantee. It is the default for new `hvi` and Linux
+`isolated` is the guarantee. It is the default for new `hvi` and nerdctl
 sandboxes unless another posture is named (see
 [Network posture](#network-posture)). `--network isolated` also moves an
 existing shared sandbox onto it.
@@ -1240,8 +1408,8 @@ existing shared sandbox onto it.
 that network, whatever the backend does with a shared one. A sandbox that
 carries an egress policy is isolated whether or not it asked to be.
 
-`isolated` is **refused** on `vz` and on `qemu`, where Brig owns no network to
-give. A run that asks for it there is stopped and told which backend
+`isolated` is **refused** on `vz`, on `qemu` and on hull on Linux, where Brig
+owns no network to give. A run that asks for it there is stopped and told which backend
 implements it. It is never booted onto the shared network under a row that
 claims otherwise.
 
@@ -1255,7 +1423,7 @@ network. A sandbox gets `shared` in these cases:
 - A flag, a setting or a profile chooses it.
 - An older sandbox keeps it, if it was recorded or recovered from the
   runtime.
-- `vz` and `qemu` use it when no posture is named.
+- `vz`, `qemu` and hull on Linux use it when no posture is named.
 
 Whether the shared network forwards traffic from one guest to another is the
 runtime's behaviour, not Brig's. The measurements are in
@@ -1371,7 +1539,9 @@ that runs with your credentials.
 
 **The profile author.** A profile names the image, the volumes it hostmounts,
 and any `files:` binding, the one channel the `deny` list does not cover. A
-profile is only as careful as its author.
+profile is only as careful as its author. For a Brigfile target, that author
+is whoever wrote the repository, and the [approval](#brigfile-targets) is
+where you accept what they ask for.
 
 **hull or nerdctl.** The kernel boundary, whether the shared network
 forwards traffic between guests, and every device and namespace decision

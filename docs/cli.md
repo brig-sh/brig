@@ -90,6 +90,47 @@ to the agent:
 brig run claude ~/code/demo -- --version
 ```
 
+#### Run a Brigfile target
+
+```bash
+brig run --target dev
+brig run --target dev --session fix -- --continue
+brig run --target ci -f ci/Brigfile.ci --approve sha256:<digest>
+brig run
+```
+
+```
+brig run --target <name> [--session <name>] [-f <path>] [flags] [-- args...]
+```
+
+- The project is the directory that holds the [Brigfile](brigfile.md). The
+  line takes no ref and no project.
+- The arguments after `--` replace the target's `args`. With no `--`, the
+  agent gets the target's `args`.
+- A word before `--` that is not one of Brig's flags is a usage error.
+- With no ref and no `--target`, `brig run` runs the Brigfile's
+  `defaultTarget`. A Brigfile with no `defaultTarget` lists its targets and
+  exits `2`. With no Brigfile, `brig run` says that it needs a profile, as
+  before.
+
+The run boots only what you approved. Brig shows the plan of the run and
+asks. A yes is stored, and the next run with the same configuration asks
+nothing. With no terminal, or with `--json`, a run that no stored approval
+covers boots nothing, exits `8`, and prints the digest of the approval. See
+[The approval](brigfile.md#the-approval).
+
+| Flag | What it does |
+| --- | --- |
+| `--target <name>` | The target to run |
+| `--session <name>` | A session of the target, with its own sandbox and guest home |
+| `-f <path>` | Read this Brigfile. Its directory is the project |
+| `--approve <digest>` | Approve this run without a question. The digest must be the digest of this run |
+| `--recreate` | Boot the session's sandbox again on the same guest home, when its configuration changed |
+
+The target line also takes `--image`, `--mem`, `--cpus`, `--network`,
+`--offline`, `--publish`, `--skills`, `-d` and `--json`. It refuses `--home`
+and `--no-project`.
+
 ### `brig sh`
 
 ```bash
@@ -146,6 +187,15 @@ brig stop claude
 Stops the sandbox and keeps its name and state on disk. Stopping a sandbox
 that is not running is not an error.
 
+```bash
+brig stop --target dev [--session <name>] [-f <path>]
+```
+
+With `--target`, `stop` stops a session of a target of the repository's
+[Brigfile](brigfile.md#stop-and-remove-a-session). It does not read the
+Brigfile. It exits `3` when Brig has no record of the session and the runtime
+has no sandbox for it.
+
 ### `brig rm`
 
 ```bash
@@ -197,6 +247,16 @@ brig rm claude --dry-run
 
 `brig rm <ref>` asks no question, so it refuses `-y`.
 
+```bash
+brig rm --target dev [--session <name>] [-f <path>] [--dry-run]
+```
+
+With `--target`, `rm` removes a session of a target of the repository's
+[Brigfile](brigfile.md#stop-and-remove-a-session), with its guest home and
+its approval. It does not read the Brigfile. The cases in the table above
+apply to it too.
+`brig rm --all` removes the sandboxes of targets with the rest.
+
 `rm` and `stop` each take a single ref.
 
 ### `brig ls`
@@ -215,6 +275,24 @@ brig ls -q
 
 `-q` prints refs only, one per line, and skips a row with no derivable ref.
 Every line it prints works as a ref for another verb.
+
+The sessions of [Brigfile targets](brigfile.md#what-brig-ls-shows) follow
+in a second table, with the columns `TARGET`, `SESSION`, `SANDBOX`, `STATE`
+and `PROJECT`. The table is printed only when there is such a session. A
+session of a target has no ref, so `-q` leaves it out.
+
+In `brig --json ls`, a sandbox of a target has a `project` object and no
+`ref`:
+
+| Field | Meaning |
+| --- | --- |
+| `recorded` | `false` when Brig has no record of the session. The other fields are then omitted |
+| `target` | the target |
+| `session` | the session name, omitted for the default session |
+| `root` | the project root |
+| `brigfile` | the Brigfile the session was started from |
+
+A sandbox of a profile has no `project` object.
 
 ### `brig logs`
 
@@ -272,6 +350,7 @@ set exits `0`.
 brig plan claude
 brig plan claude ~/src/demo
 brig plan claude@refactor --json
+brig plan --target dev
 ```
 
 `brig plan` prints the permissions of a run: the mounts, the network, the
@@ -284,6 +363,33 @@ before you start it. If `brig run` refuses to mount a project directory, the
 plan fails the same way.
 
 With no policy bound, `POLICY` reads `(none)` and `noPolicy` is `true`.
+
+#### Plan a Brigfile target
+
+`brig plan --target <name> [--session <name>] [-f <path>]` plans a target of
+the repository's [Brigfile](brigfile.md#plan-a-target). The project is the
+directory that holds the Brigfile. `--session` plans a named
+[session](brigfile.md#sessions-of-a-target) of the target. The command takes
+no ref and no project, and it refuses `--home` and `--no-project`.
+
+The plan of a target adds these rows to the plan of a profile:
+
+- `TARGET`: the target and its Brigfile
+- `PROFILE`: also the profile's alias and source
+- `IMAGE`, `NETWORK` and `LIMITS`: where each value comes from, and whether
+  the image is pinned by digest
+- `POLICY`: one row for each policy, with where it comes from
+- `BROKER`: one row for each route, with its upstream and the secrets in
+  your store that it uses
+- `ARGS`: the arguments the agent gets
+- `NOTE`: for example, that a file of yours that overrides a built-in does
+  not apply, or that the session's sandbox was started with a different
+  configuration
+
+When two policies of the target cannot apply together, the `BROKER` rows
+list the routes of each policy, so you can see the conflict.
+
+With no Brigfile, or no target of that name, the command exits `3`.
 
 #### Refusals in the plan
 
@@ -373,6 +479,7 @@ changed.
 | `session` | string, omitted for an unnamed run | the session name, as typed |
 | `profile` | string | the profile the ref resolved to |
 | `sandbox` | string | the sandbox name |
+| `target` | object, omitted for a plan of a profile | the Brigfile target, [below](#the-target-object) |
 | `refused` | object, omitted when nothing refuses the run | `reason`: the message `brig run` prints when it refuses this run |
 | `runtime` | object | `kind`, `bin` and `available`, as in `brig info --json`, and `backend`: the hypervisor the profile or `BRIG_HYPERVISOR` names, omitted for the runtime's own default |
 | `isolation` | string | what the sandbox stands on, as a sentence |
@@ -393,6 +500,34 @@ changed.
 | `argvExposed` | list of strings, omitted when empty | the variables whose values `BRIG_ENV_ARGV=1` puts on the runtime's command line, by name, sorted |
 | `limits` | object | `mem` in MB and `cpus` |
 | `digest` | string | `sha256:` and 64 hex digits |
+
+On the plan of a target, `broker` also has `detail`: one entry for each
+route, sorted by name.
+
+| Field | Meaning |
+| --- | --- |
+| `name` | the route name |
+| `policy` | where the policy that declares the route comes from |
+| `preset` | the preset, omitted when the route has none |
+| `mode` | the route mode |
+| `upstream` | where the broker sends requests, omitted for a `gcp` route |
+| `services` | for a `gcp` route, the Google APIs it reaches |
+| `secrets` | the names of the secrets in your store that the broker reads for the route |
+| `vends` | `true` when the route gives the guest AWS keys |
+
+#### The target object
+
+| Field | Meaning |
+| --- | --- |
+| `name` | the target |
+| `brigfile` | the Brigfile |
+| `root` | the project root, which is also the project |
+| `profile` | `alias` and `source`, such as `builtin:claude-code` |
+| `origins` | where `image`, `mem`, `cpus` and `network` come from: `flag`, `env BRIG_<KEY>`, `target <name>`, or `profile <alias> (<source>)`. `networkAsked` is the posture before a policy changed it, omitted when no policy did |
+| `imagePinned` | `true` when the image is named by digest |
+| `policies` | each policy, with `name` and `from`: `brigfile <alias> (<source>)`, `builtin profile <name>` or `attachment to <name>` |
+| `notes` | notes about the target, omitted when there are none |
+| `args` | the arguments the agent gets |
 
 A mount has `host`, `guest` and `mode`. `mode` is `read-write` for the home
 and the project, and `copy` for a skills directory. Each credential has these
@@ -489,8 +624,8 @@ A `bundle` line appears when `brig` runs from the bin directory of the runtime
 bundle without its launcher. See
 [Started without the launcher](troubleshooting.md#started-without-the-launcher).
 
-On Linux with nerdctl, or with no runtime yet, `doctor` adds what a run
-needs from the host: `subids`, `userns` and `uidmap` for a user other than
+On Linux with nerdctl or hull, or with no runtime yet, `doctor` adds what a
+run needs from the host: `subids`, `userns` and `uidmap` for a user other than
 root, and `devices` (`/dev/vhost-vsock`) and `cni` for every user. These
 lines do not change the exit status.
 
@@ -500,11 +635,13 @@ lines do not change the exit status.
   for this user, or be open to everyone.
 - Where AppArmor restricts user namespaces, as on Ubuntu 24.04 and later,
   `userns` looks for a loaded profile that allows a rootless run.
-- For a `nerdctl` from outside the runtime bundle, or when no runtime is
-  found, `doctor` adds `tools`: the hypervisor a run boots on, and `oras`
-  when the boot assets are missing. For such a `nerdctl`, the `runtime`
-  line ends with `(not the runtime bundle; see install.sh)`. `doctor`
-  cannot tell whether that runtime boots a sandbox.
+- For a `nerdctl` or `hull` from outside the runtime bundle, or when no
+  runtime is found, `doctor` adds `tools`: the hypervisor a run boots on,
+  and `oras` when the boot assets are missing. For such a `nerdctl`, the
+  `runtime` line ends with `(not the runtime bundle; see install.sh)`.
+  `doctor` cannot tell whether that runtime boots a sandbox.
+- With hull, `cni` looks where hull does: `CNI_PATH`, then the runtime
+  bundle's plugins, then `/opt/cni/bin`.
 
 Doctor checks the image against the trust policy a run of that agent uses,
 with the `BRIG_VERIFY_*` variables applied, per-agent spelling first. The
@@ -742,6 +879,93 @@ brig policy check claude
 [Policies](policies.md) covers the document format and what each network
 posture means.
 
+### `brig target`
+
+```bash
+brig target ls
+```
+
+`brig target ls` lists the targets of the repository's
+[Brigfile](brigfile.md). `*` marks the default target. Each row names the
+target's profile alias, where that profile comes from, and its policies:
+the target's own, then those its profile lists.
+
+```
+  TARGET  PROFILE  SOURCE                POLICIES
+  ci      tool     file:.brig/tool.yaml  -
+* dev     claude   builtin:claude-code   anthropic
+
+* the default target
+read from /home/you/code/demo/Brigfile
+```
+
+```
+brig target ls [-f <path>] [--json]
+```
+
+`-f` (or `--file`) reads that Brigfile instead of looking for one.
+`--json` prints the rows as `kind: TargetList`.
+
+### `brig config`
+
+```bash
+brig config --target dev
+```
+
+`brig config` shows what the repository's [Brigfile](brigfile.md) declares
+and where each part comes from. With no flag it shows the project: the
+Brigfile, the project root, the default target, and every profile, policy
+and target with its source.
+
+With `--target <name>` it shows that one target resolved:
+
+```
+target    dev (default)
+brigfile  /home/you/code/demo/Brigfile
+profile   claude  builtin:claude-code
+cpus      2                                       from target dev
+mem       4096                                    from profile claude
+image     ghcr.io/brig-sh/claude-code-stock:root  from profile claude
+policies  anthropic  file:.brig/anthropic.yaml
+args      "--continue"
+```
+
+`config` does not apply `BRIG_*` settings or run-line flags.
+[`brig plan --target`](#brig-plan) does.
+
+When the Brigfile uses `builtin:<name>` and your profile directory has a file
+that overrides that built-in, `config` prints a note. The Brigfile does not
+read your file.
+
+```
+brig config [--target <name>] [-f <path>] [--json]
+```
+
+`-f` (or `--file`) reads that Brigfile instead of looking for one. `--json`
+prints `kind: Config`. With `--target` the payload also has a `target`
+object, whose `cpus`, `mem` and `image` each carry a `value` and a `from`
+(`target` or `profile`). A name that is not a target exits `3` and lists the
+targets there are.
+
+### `brig init`
+
+```bash
+brig init
+```
+
+`brig init` writes a starter [Brigfile](brigfile.md) at the top of the Git
+worktree, or in the current directory outside Git. The starter has one
+target, `dev`, on the `claude-code` profile Brig ships. Then it prints the
+next commands to try.
+
+```
+brig init [-f <path>]
+```
+
+`-f` (or `--file`) writes the file at that path instead. `init` never
+replaces a file or a link that is already at the path. It exits `1` and
+names the path.
+
 ### `brig secret`
 
 ```bash
@@ -897,6 +1121,11 @@ brig run claude -p hi --quiet
 
 This runs the agent with `-p hi --quiet`, with a warning about `--quiet`.
 
+On a run line with no ref, `--target`, `--session`, `-f`, `--approve` and
+`--recreate` are Brig's too. After a ref they are the agent's, so
+`brig run claude -f notes.md` hands `-f notes.md` to the agent. See
+[Run a Brigfile target](#run-a-brigfile-target).
+
 ### Run-line flags
 
 | Flag | Value | Default | Notes |
@@ -933,6 +1162,8 @@ Which verbs accept `--json` depends on its position.
 | `run`, `sh` | global, or local on the run line | one compact line, see below |
 | `agent ls` | global, or local after `ls` | envelope |
 | `secret ls` | global, or local after `ls` | envelope |
+| `target ls` | global, or local after `ls` | envelope, `kind: TargetList` |
+| `config` | global, or local after `config` | envelope, `kind: Config` |
 | `agent show`, `agent export`, `agent new` | local only, after the subcommand | bare document, no envelope |
 | `policy show` | local only, after the subcommand | bare document, no envelope |
 
@@ -949,8 +1180,8 @@ refuses them:
 ```
 brig --json agent show claude-code
 brig: `brig agent` has no --json output. --json is for the read verbs: ls,
-info, plan, agent ls, secret ls, doctor, version and the network verbs, and
-for run and sh
+info, plan, agent ls, secret ls, target ls, config, doctor, version and the
+network verbs, and for run and sh
 ```
 
 Put the flag after the subcommand instead.
@@ -1022,11 +1253,12 @@ on success, and the usual error line on stderr. See
 | `0` | success |
 | `1` | a general failure |
 | `2` | a usage error: an unknown flag, a stray argument, or a value in the wrong place, as reported by the verb's own parser |
-| `3` | no such thing: an unknown agent, or a sandbox that is not there |
+| `3` | no such thing: an unknown agent, a sandbox that is not there, no Brigfile, or a target the Brigfile does not have |
 | `4` | no usable runtime: none installed, an unknown `BRIG_RUNTIME`, or `BRIG_RUNTIME_BIN` (or a profile's own `runtimeBin`) pointing at nothing. The refusal names the setting that caused it |
 | `5` | a boot refused over image verification |
 | `6` | a required secret was not resolved, or the secret store did not open. A declared secret marked `required: false` produces a warning and no failure |
 | `7` | the runtime and backend cannot enforce a property bound to the sandbox, or cannot confirm they do. The refusal names the property, the runtime and the backend. See [Exit 7 cases](#exit-7-cases) |
+| `8` | a run of a Brigfile target that no approval covers. Nothing booted. The refusal names the digest that approves the run. See [The approval](brigfile.md#the-approval) |
 
 [Stability](stability.md) lists this table as stable to script against.
 
@@ -1106,7 +1338,7 @@ them "global only".
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BRIG_WORKSPACE` | `~/.brig/homes/<sandbox>` | host directory mounted as the guest home. A named session appends `-<slug>` to one you set. Brig deletes the default one on `brig rm`, and never deletes one you set. A sandbox that a release before 0.3.0 started on `~/brig/<agent>` keeps that home, and Brig does not delete it |
-| `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A named session appends `-<slug>` |
+| `BRIG_NAME` | `brig-<agent>` | the sandbox's own name. Must begin with `brig-`, or `brig ls` and `brig rm --all` cannot find it. A name that begins with `brig--` is refused: those names belong to [Brigfile](brigfile.md) targets. A named session appends `-<slug>` |
 | `BRIG_PROFILE_DIR` (global only) | `$XDG_CONFIG_HOME/brig`, which is `~/.config/brig` when that is unset | where your own agent files live. Brig refuses to start while `BRIG_TEMPLATE_DIR`, removed in v0.5.0, is set and this is not |
 | `BRIG_POLICY_DIR` (global only) | `$XDG_CONFIG_HOME/brig/policies` | where policy files live |
 | `BRIG_STATE_DIR` (global only) | `~/.brig` | where Brig keeps what has to outlive one command, including the project each sandbox last ran with |

@@ -63,7 +63,7 @@ Every sandbox runs under one of three postures:
 | posture | what it permits |
 | --- | --- |
 | `shared` | one network for every sandbox using this posture on the host. Opt-in, except for the `vz` profiles and retained older sessions |
-| `isolated` | a network of this sandbox's own. The default for new `hvi` and Linux sandboxes |
+| `isolated` | a network of this sandbox's own. The default for new `hvi` and nerdctl sandboxes |
 | `offline` | no route out. The agent runs, the guest home is mounted, nothing leaves |
 
 ```bash
@@ -100,17 +100,17 @@ brig: BRIG_NETWORK "bogus" is not a posture: use shared, isolated or offline
 
 ### Posture by backend and profile
 
-On macOS, `isolated` needs the `hvi` backend.
+On macOS, `isolated` needs the `hvi` backend. On Linux it needs nerdctl: hull on Linux cannot give a sandbox its own network yet.
 
 | Case | Posture |
 | --- | --- |
-| A new sandbox on `hvi` or Linux | `isolated` |
+| A new sandbox on `hvi`, or on Linux with nerdctl | `isolated` |
 | The seven built-in `hvi` profiles | `isolated`. Each profile names that posture |
 | `claude-desktop` | `shared`. The profile names that posture, because its GUI requires `vz`, where Brig cannot give a sandbox its own network |
-| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on Linux and `hvi`, and the `shared` fallback on `vz` and `qemu` |
-| A custom profile with no `network:` field, on `vz` or `qemu` | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
-| An explicit `isolated`, such as `--network isolated`, on `vz` or `qemu` | Refused |
-| A built-in `hvi` profile overridden to `vz` or `qemu` | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
+| The unpublished `cursor` profile | The profile names no posture. It gets `isolated` on nerdctl and `hvi`, and the `shared` fallback on `vz`, `qemu` and hull on Linux |
+| A custom profile with no `network:` field, on `vz`, `qemu` or hull on Linux | `shared`, only when no flag, environment setting or retained posture names a network. The `NETWORK` row in `brig info` names that backend fallback |
+| An explicit `isolated`, such as `--network isolated`, on `vz`, `qemu` or hull on Linux | Refused |
+| A built-in `hvi` profile overridden to `vz` or `qemu`, or run on hull on Linux | Needs `--network shared` or `BRIG_NETWORK=shared`, because the profile asks for isolation |
 
 On `hvi`, the network of each isolated sandbox used about 28.7 MB of memory
 in the measurement recorded in
@@ -536,7 +536,8 @@ The guest calls AWS directly, so a `default: deny` policy needs an `allow`
 rule for the AWS endpoints the agent uses. A host rule does not make the
 access read-only. `*.amazonaws.com` lets the guest make every call the keys
 allow, writes included, and reach resources in other accounts, such as an
-S3 bucket that someone else owns. The role's policy limits the calls.
+S3 bucket that someone else owns. The role's policy limits the calls, and
+the secret's session policies, if it names any, limit them further.
 
 The route itself needs no `allow` rule. The guest fetches keys from
 `169.254.170.2`, which Brig sends to the broker. The rest of
@@ -591,7 +592,8 @@ spec:
           request:
             allow:
               methods: [GET]
-              paths: [/storage/v1/b, /storage/v1/b/*, /storage/v1/b/*/o, /storage/v1/b/*/o/*]
+              paths: [/storage/v1/b, /storage/v1/b/*, /storage/v1/b/*/o, /storage/v1/b/*/o/*,
+                      /storage/v1/b/*/storageLayout]
         - name: cloudresourcemanager
           request:
             allow:
@@ -653,7 +655,16 @@ refuses a `guest.env` entry on any bound route that names one of these, or
 any other `CLOUDSDK_API_ENDPOINT_OVERRIDES_` variable. gcloud takes the
 session token as its access token from a file. The guest writes
 `$BRIG_GCP_TOKEN` to a file and sets `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE` to its
-path.
+path. The guest sets it, not the profile: a run whose profile sets it is
+refused, as below.
+
+A run is refused when the profile or `BRIG_FORWARD_ENV` hands the guest a
+variable that picks another Google identity, such as
+`GOOGLE_APPLICATION_CREDENTIALS` or `CLOUDSDK_CONFIG`, or when the guest
+home or the profile puts a gcloud login, or a configuration that points
+gcloud at one, under `~/.config/gcloud`, or the profile moves `HOME`. Bind the route with `egress: default: deny`, and no
+`allow` for Google's hosts, so that a guest that logs in to gcloud itself
+reaches Google only through the broker. See [The gcp route](security.md#the-gcp-route).
 
 The secret can also be a static access token, which is quicker to try.
 It is your own identity, and it expires in about an hour, after which you
@@ -663,10 +674,40 @@ store a new one:
 gcloud auth print-access-token | brig secret create gcp-creds
 ```
 
-A Cloud Storage object whose name holds a `/` cannot be read or written
-through the route, because the broker refuses an encoded slash in any path.
-Listing with a prefix works. The preset serves HTTP/1.1 REST APIs only, so a
-gRPC client, such as Pub/Sub or Firestore, does not work through it.
+The JSON API of `storage` sends an object name as one segment, with its
+slashes escaped: `dir/file` is `o/dir%2Ffile`. `request.allow` matches the
+name that way, so `*` matches the whole name, slashes included, and a
+prefix ends in `%2F`. Write it in upper case: the broker matches `%2f` from
+the guest as `%2F`, so a rule with `%2f` matches nothing.
+
+An existing rule that ends in `o/*` now also covers nested names, such as
+`secrets%2Fkey`, which the broker refused before. To keep such a rule to a
+prefix, end it in `o/<prefix>%2F*`.
+
+```yaml
+paths:
+  - /storage/v1/b/my-bucket/o/*                     # every object
+  - /download/storage/v1/b/my-bucket/o/reports%2F*  # downloads under reports/
+```
+
+A prefix limits only the requests whose path names the object. An upload
+names it in the query or the body (`/upload/storage/v1/b/<bucket>/o?name=`),
+a compose (`o/<object>/compose`) names its sources in the body, and a
+listing (`/storage/v1/b/<bucket>/o`) returns every name in the bucket. A
+rule that allows any of them covers every object in the bucket.
+
+`gcloud storage` reads a bucket's `/storage/v1/b/<bucket>/storageLayout`
+before it reads an object, and fails with a 404 when the list does not
+allow it. `gcloud storage cp` and `cat` do not download through the route
+yet: gcloud downloads from the object's `mediaLink`, on a path without the
+route prefix. A client that builds the download URL from the endpoint, as
+`/download/storage/v1/b/<bucket>/o/<object>?alt=media`, works.
+
+The broker takes an escaped slash only in an object name of the JSON API,
+and refuses a name with a `.`, `..` or empty piece, such as `a/../b` or
+`a//b`. A name that ends in `/`, such as a folder placeholder `dir%2F`, is
+a name. The preset serves HTTP/1.1 REST APIs only, so a gRPC client, such
+as Pub/Sub or Firestore, does not work through it.
 [The gcp route](security.md#the-gcp-route) lists what Brig does not yet do
 for this route.
 
@@ -791,6 +832,10 @@ brig policy rm locked-down --force
 
 A policy is bound in one of three ways: an inline entry in the `policy:`
 list of a profile, an attach to a profile, or an attach to one session.
+
+A target of a repository's [Brigfile](brigfile.md#which-policies-apply) can
+also name policies. Brig reads those from the repository, not from your
+policy directory.
 
 ### ls
 
@@ -1139,6 +1184,7 @@ and on nerdctl, a check at boot confirms the answer or overturns it.
 | nerdctl (Linux), on any shim | `enforced` | Brig applies the rules on the sandbox's own network, and answers its DNS | `nft` (the nftables package) and `nsenter` (util-linux) |
 | hull on `vz` | `cannot enforce` | Brig does not filter the network of `vz` | |
 | hull on `qemu` | `cannot enforce` | Brig does not filter the network of `qemu` | |
+| hull on Linux, on any monitor | `cannot enforce` | hull on Linux gives a sandbox no network of its own yet. `BRIG_HYPERVISOR=hvi` does not change this: the `hvi` row is the macOS gateway | |
 | docker, on any shim | `cannot enforce` | Brig does not filter docker's network | |
 | hull on any other backend | `unknown` | Brig holds no answer for it | |
 
@@ -1150,7 +1196,7 @@ What Brig does with a run:
 | Run | Result |
 | --- | --- |
 | A policy, on an `enforced` run path | Brig boots the sandbox |
-| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu` and docker also name the backend that does enforce |
+| A policy, on a `cannot enforce` or `unknown` run path | Brig refuses the boot with exit code `7`. The refusal names the property, the runtime and the backend. `vz`, `qemu`, docker and hull on Linux also name the backend that does enforce |
 | A policy, with `--network offline`, on any run path | Brig does not refuse the run. A sandbox with no route out reaches no network, so it satisfies every rule set |
 | No policy | Brig asks nothing of the run path |
 

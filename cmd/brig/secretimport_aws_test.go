@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -119,7 +120,7 @@ func TestImportAWSRole(t *testing.T) {
 		t.Fatalf("stored doc: %v", err)
 	}
 	want := awscred.Pointer{Kind: "aws", AWSProfile: "dev", Mode: awscred.ModeRole, RoleARN: roleARN, SourceIdentity: "someone@example.com"}
-	if p != want {
+	if !p.Equal(want) {
 		t.Errorf("pointer = %+v, want %+v", p, want)
 	}
 	got := calls(t, log)
@@ -461,6 +462,146 @@ func TestImportSessionDurationNeedsAWSSource(t *testing.T) {
 	useHost(t, nil)
 	err := importSecrets(&bytes.Buffer{}, []string{"claude-code", "--session-duration", "30m"})
 	if err == nil || !strings.Contains(err.Error(), "--session-duration is for a secret whose source is aws") {
+		t.Errorf("err = %v", err)
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+}
+
+const (
+	policyA = "arn:aws:iam::111122223333:policy/a"
+	policyB = "arn:aws:iam::111122223333:policy/b"
+)
+
+// The list is stored in the order given, and the import's own assume-role
+// passes it, so a policy STS refuses fails here and not at the first run.
+func TestImportAWSPolicyARNs(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--role-arn", roleARN,
+		"--policy-arns", policyA + ", " + policyB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := awscred.ParsePointer(store.items["aws-creds"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.PolicyARNs, []string{policyA, policyB}) {
+		t.Errorf("PolicyARNs = %v", p.PolicyARNs)
+	}
+	if want := "--policy-arns arn=" + policyA + " arn=" + policyB; !strings.Contains(calls(t, log), want) {
+		t.Errorf("the check did not pass %q:\n%s", want, calls(t, log))
+	}
+}
+
+// The flag is a set: each occurrence adds to the list, and a comma list
+// within one still splits. Keeping only the last occurrence would store
+// fewer policies than were typed, and so a wider session.
+func TestImportAWSPolicyARNsAccumulate(t *testing.T) {
+	const policyC = "arn:aws:iam::111122223333:policy/c"
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--role-arn", roleARN,
+		"--policy-arns", policyA + "," + policyB, "--policy-arns", policyC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := awscred.ParsePointer(store.items["aws-creds"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{policyA, policyB, policyC}; !slices.Equal(p.PolicyARNs, want) {
+		t.Errorf("PolicyARNs = %v, want %v", p.PolicyARNs, want)
+	}
+	if want := "--policy-arns arn=" + policyA + " arn=" + policyB + " arn=" + policyC; !strings.Contains(calls(t, log), want) {
+		t.Errorf("the check did not pass %q:\n%s", want, calls(t, log))
+	}
+}
+
+// Self mode exports the user's own keys and cannot narrow them. Dropping the
+// flag would leave the user believing the session is narrowed.
+func TestImportAWSRefusesPolicyARNsInSelfMode(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	log := fakeAWS(t, "eu-west-1")
+	err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--identity", "self", "--policy-arns", policyA})
+	if err == nil || !strings.Contains(err.Error(), "--policy-arns requires --role-arn") {
+		t.Errorf("err = %v", err)
+	}
+	if len(store.items) != 0 {
+		t.Errorf("stored %v", store.items)
+	}
+	if got := calls(t, log); got != "" {
+		t.Errorf("aws ran for a refused import:\n%s", got)
+	}
+}
+
+// An empty entry is refused, not skipped. An empty list stored as "no
+// policies" would give the sandbox the whole role when the user asked to
+// narrow it.
+func TestImportAWSRefusesAnEmptyPolicyARN(t *testing.T) {
+	for v, want := range map[string]string{
+		"":                       "--policy-arns is empty",
+		" ":                      "--policy-arns is empty",
+		policyA + ",," + policyB: "--policy-arns \"" + policyA + ",," + policyB + "\" has an empty entry",
+		policyA + ",":            "--policy-arns \"" + policyA + ",\" has an empty entry",
+	} {
+		t.Run(v, func(t *testing.T) {
+			awsProfiles(t)
+			store := newAnnotating(t)
+			log := fakeAWS(t, "eu-west-1")
+			err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--role-arn", roleARN, "--policy-arns", v})
+			if err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("err = %v", err)
+			}
+			if len(store.items) != 0 {
+				t.Errorf("stored %v", store.items)
+			}
+			if got := calls(t, log); got != "" {
+				t.Errorf("aws ran for a refused import:\n%s", got)
+			}
+		})
+	}
+}
+
+// Each entry must be a policy ARN. A policy name that holds a comma is cut
+// in two by the split, and the piece after the comma is refused with the flag
+// named, where it would otherwise reach STS as a value the user never typed.
+func TestImportAWSRefusesAPolicyARNOfAnotherShape(t *testing.T) {
+	for _, v := range []string{
+		"arn:aws:iam::111122223333:policy/read,only",
+		"arn:aws:iam::111122223333:role/brig-sandbox",
+		"ReadOnlyAccess",
+		"-arn:aws:iam::aws:policy/ReadOnlyAccess",
+	} {
+		t.Run(v, func(t *testing.T) {
+			awsProfiles(t)
+			store := newAnnotating(t)
+			log := fakeAWS(t, "eu-west-1")
+			err := importSecrets(&bytes.Buffer{}, []string{"devbox", "--aws-profile", "dev", "--role-arn", roleARN, "--policy-arns", v})
+			if err == nil || !strings.Contains(err.Error(), "is not a managed policy ARN") {
+				t.Errorf("err = %v", err)
+			}
+			if len(store.items) != 0 {
+				t.Errorf("stored %v", store.items)
+			}
+			if got := calls(t, log); got != "" {
+				t.Errorf("aws ran for a refused import:\n%s", got)
+			}
+		})
+	}
+}
+
+func TestImportAWSPolicyARNsNeedAnAWSSecret(t *testing.T) {
+	awsProfiles(t)
+	store := newAnnotating(t)
+	useHost(t, nil)
+	err := importSecrets(&bytes.Buffer{}, []string{"claude-code", "--policy-arns", policyA})
+	if err == nil || !strings.Contains(err.Error(), "--policy-arns is for a secret whose source is aws") {
 		t.Errorf("err = %v", err)
 	}
 	if len(store.items) != 0 {

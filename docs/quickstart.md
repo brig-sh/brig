@@ -182,4 +182,6 @@ Then continue with `cat ~/code/demo/hello.txt`, and with
 - [Sessions, homes and projects](sessions.md): run several sessions, and keep
   a guest home.
 - [Policies](policies.md): restrict what the sandbox can reach.
+- [The Brigfile](brigfile.md): write down how a repository runs, and run it
+  with `brig run --target`.
 - [What Brig protects](security.md): the limits of the sandbox.

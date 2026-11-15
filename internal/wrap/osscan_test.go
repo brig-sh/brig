@@ -490,14 +490,16 @@ var osPathAllowlist = []osPathAllow{
 
 	// brig's own state under ~/.brig. The guest home is a child of homes/ and
 	// the guest sees nothing above it.
-	{"index.go", "readIndex", "os.ReadFile", "path", "an index file in brig's state directory"},
-	{"index.go", "writeIndex", "os.MkdirAll", "filepath.Dir(path)", "brig's state directory"},
-	{"index.go", "writeIndex", "os.CreateTemp", "filepath.Dir(path)", "brig's state directory"},
-	{"index.go", "writeIndex", "os.Remove", "tmp.Name()", "the temporary file writeIndex just made"},
-	{"index.go", "writeIndex", "os.Rename", "tmp.Name(), path", "an index file in brig's state directory"},
+	{"index.go", "readStateFile", "os.ReadFile", "path", "an index file in brig's state directory"},
+	{"index.go", "writeStateFile", "os.MkdirAll", "filepath.Dir(path)", "brig's state directory"},
+	{"index.go", "writeStateFile", "os.CreateTemp", "filepath.Dir(path)", "brig's state directory"},
+	{"index.go", "writeStateFile", "os.Remove", "tmp.Name()", "the temporary file writeStateFile just made"},
+	{"index.go", "writeStateFile", "os.Rename", "tmp.Name(), path", "an index file in brig's state directory"},
 	{"index.go", "dropLegacyWorkspaceIndex", "os.Remove", "path", "an index file in brig's state directory"},
 	{"slugclaim.go", "migrateSlugClaims", "os.Stat", "path", "an index file in brig's state directory"},
 	{"slugclaim.go", "migrateSlugClaims", "os.Remove", "old", "an index file in brig's state directory"},
+	{"projects.go", "resolvedPath", "filepath.EvalSymlinks", "dir",
+		"a project root or brig's state directory, compared and never opened"},
 	{"home.go", "removeHome", "os.OpenRoot", "dir",
 		"the homes directory, the parent of every guest home and out of every guest's reach"},
 
@@ -507,6 +509,10 @@ var osPathAllowlist = []osPathAllow{
 		"the host's gh hosts.yml, refused unless the open descriptor is a regular file"},
 	{"config.go", "hostProjections", "os.Stat", "hostPath", "a directory under the host's own agent config"},
 	{"workspace.go", "Config.seedHostConfig", "os.ReadDir", "seed.Host", "the host's own agent config"},
+	{"gcphome.go", "hostOverlaps", "filepath.EvalSymlinks", "a", "a host seed source or a host cloud dir; resolving only adds a refusal to the spelling check"},
+	{"gcphome.go", "hostOverlaps", "filepath.EvalSymlinks", "b", "a host seed source or a host cloud dir; resolving only adds a refusal to the spelling check"},
+	{"gcphome.go", "insideDir", "os.Stat", "dir", "a resolved host path from hostOverlaps; a match only refuses"},
+	{"gcphome.go", "insideDir", "os.Stat", "p", "a resolved host path from hostOverlaps; a match only refuses"},
 	{"workspace.go", "copyTree", "os.Lstat", "src", "a host source, and a link there is copied as a link"},
 	{"workspace.go", "copyTree", "os.Readlink", "src", "a host source, copied as a link and never followed"},
 	{"workspace.go", "copyTree", "os.ReadDir", "src", "a host source directory"},

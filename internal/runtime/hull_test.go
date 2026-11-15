@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -316,5 +319,47 @@ func TestHullCanRunRefusesAnUnknownRootfsMode(t *testing.T) {
 	spec.GenericBoot = false
 	if err := h.CanRun(spec); err == nil {
 		t.Error("CanRun must refuse the mode on a profile that is not a generic boot")
+	}
+}
+
+// TestNewHullMarksLinuxHost checks that the hull brig finds on a Linux host is
+// marked as a Linux hull unless the binary says it was built for macOS. The
+// two hulls take different command lines, and the macOS one reads rows that
+// call a policy enforced. So a hull that names no platform, or whose
+// --version fails, is the Linux hull: guessing macOS there fails open. The
+// tests that drive the macOS paths on Linux give their stubs a darwin
+// version. On macOS the binary is not asked at all.
+func TestNewHullMarksLinuxHost(t *testing.T) {
+	for _, tt := range []struct {
+		name, goos, says string
+		exit             int
+		want, asked      bool
+	}{
+		{"a Linux build on Linux", "linux", "hull version 0.2.0 (abc1234, 2026-11-05, go1.26.4, linux/amd64)", 0, true, true},
+		{"a macOS build on Linux", "linux", "hull 0.1.0-rc31 (go1.26.4, darwin/arm64)", 0, false, true},
+		{"no platform on Linux", "linux", "hull 0.1.0-rc31 (stub)", 0, true, true},
+		{"silence on Linux", "linux", "", 0, true, true},
+		{"a failed --version on Linux", "linux", "hull 0.1.0-rc31 (go1.26.4, darwin/arm64)", 1, true, true},
+		{"a Linux build on macOS", "darwin", "hull version 0.2.0 (go1.26.4, linux/amd64)", 0, false, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "asked")
+			bin := filepath.Join(dir, "hull")
+			script := fmt.Sprintf("#!/bin/sh\ntouch %q\nprintf '%%s\\n' %q\nexit %d\n", marker, tt.says, tt.exit)
+			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			rt, err := newHullFor(bin, tt.goos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.(*hull).linux; got != tt.want {
+				t.Errorf("linux = %v, want %v", got, tt.want)
+			}
+			if _, err := os.Stat(marker); (err == nil) != tt.asked {
+				t.Errorf("the binary was asked: %v, want %v", err == nil, tt.asked)
+			}
+		})
 	}
 }

@@ -173,7 +173,10 @@ The broker refuses a `<rest>` with:
   `../admin` to an upstream that normalizes Unicode
 - an empty segment, except a trailing one
 - a backslash or a control character
-- an escaped `/`, `\` or `.`, also escaped twice, such as `%252e`
+- an escaped `/`, `\` or `.`, also escaped twice, such as `%252e`. On a
+  `gcp` route, an escaped `/` is taken in a Cloud Storage object name of
+  the JSON API, such as `o/dir%2Ffile`. See
+  [The gcp preset](policies.md#the-gcp-preset)
 - an escaped `%`, such as `%25%32%65`: it reads as `%2e` here, and as a dot
   to an upstream that decodes the path twice
 - on a route with `request.allow.repos`, any character outside ASCII
@@ -475,6 +478,7 @@ changes:
 | 403 | On a route with `services`, the first path segment after the service is `batch`, in any case and with or without `;parameters`. A segment such as `batchGet` is not refused. The rule is `spec.routes[<route>].services[<service>]` | `request.batch` |
 | 502 | The credential cannot be resolved, or the field it names is missing, ambiguous or not a header value. The body ends in "brig's secret store is not available on this host" when the store did not open. On a `gcp` route, the token could not be minted. See [Minted tokens](#minted-tokens) | `credential` |
 | 502 | The secret is a gcloud pointer, on a route without `services`. Nothing is sent upstream | `credential.gcponly` |
+| 502 | The secret starts a JSON object and does not decode, such as a pointer cut short before its kind field. Nothing is sent upstream | `credential.malformed` |
 | 502 | The upstream cannot be reached, or on a route without `inject.tls` its certificate does not verify | `upstream` |
 | 502 | A route that vends could not fetch keys. See [Routes that vend](#routes-that-vend) | `vend` |
 | 502 | The upstream's certificate does not verify on a route with `inject.tls`, or the TLS handshake with it fails. The upstream refused the client certificate, over HTTP/1.1 or HTTP/2, on a route that presents one | `tls.handshake` |
@@ -736,7 +740,7 @@ The broker runs the host's `aws` CLI, found on its `PATH`:
 
 | Mode | Command |
 | --- | --- |
-| role | `aws sts assume-role --profile <p> --role-arn <arn> --role-session-name <sandbox-id> [--source-identity <id>] --duration-seconds <s> --output json` |
+| role | `aws sts assume-role --profile <p> --role-arn <arn> --role-session-name <sandbox-id> [--source-identity <id>] --duration-seconds <s> [--policy-arns arn=<policy>...] --output json` |
 | self | `aws configure export-credentials --profile <p> --format process` |
 
 The session name is the sandbox id, cut to 64 bytes, with each character
@@ -744,7 +748,8 @@ outside `A-Za-z0-9+=,.@_-` replaced by `-`. The keys come back on stdout. No
 key is on a command line, and no error repeats stdout. `aws` gets the
 broker's environment with every `AWS_` variable removed. Each call has 30
 seconds. A credential with no `Expiration` is refused. `<s>` is the secret's
-`--session-duration` in seconds, 1800 by default.
+`--session-duration` in seconds, 1800 by default. `--policy-arns` is passed
+only when the secret names session policies, one `arn=<policy>` for each.
 
 The broker holds the keys in memory, per sandbox and route. A request gets
 the keys held while they have at least 20 minutes left. Below that, the
@@ -754,8 +759,9 @@ them. Self mode can return keys with less than 20 minutes left. The broker
 serves those for one minute after the fetch while they are valid, so it runs
 `aws` at most once a minute per route. A failed fetch is an error even when
 older keys are held, since those are about to expire. After the secret is
-imported again with another profile, mode or role, the next request fetches
-new keys. A sandbox removed from the broker takes its keys with it.
+imported again with another profile, mode, role, session length or list of
+session policies, the next request fetches new keys. A sandbox removed from
+the broker takes its keys with it.
 
 A fetch that fails is a 502 with `check=vend`:
 
@@ -794,6 +800,7 @@ prints one line per route, which `-q` hides:
 
 ```
 brig: route aws: AWS role arn:aws:iam::111122223333:role/brig-coding-agent, assumed from your profile dev
+brig: route aws: AWS role arn:aws:iam::111122223333:role/brig-coding-agent with session policies arn:aws:iam::111122223333:policy/brig-read-ec2, assumed from your profile dev
 brig: route aws: AWS as your own identity (profile dev); the sandbox can do what you can
 ```
 
@@ -830,12 +837,12 @@ turned off. Each call has 30 seconds.
 in a form body to `https://oauth2.googleapis.com/tokeninfo`, from the host,
 and reads `expires_in` and `email`. It does not follow a redirect, and the
 call has 10 seconds. A token with no `expires_in` is refused. In
-impersonate mode, a token whose `email` is another identity is refused. A
-token with no `email` is accepted, since tokeninfo may not report one for an
-impersonated token. In self mode, `<account>` is the account the import
-recorded, and a token whose `email` is missing or is another account is
-refused. A user login's token carries the `userinfo.email` scope, so
-tokeninfo names its account.
+impersonate mode, a token whose `email` is missing or is another identity is
+refused. gcloud mints an impersonated token with the `userinfo.email` scope,
+so tokeninfo names the service account (checked with gcloud 591). In self
+mode, `<account>` is the account the import recorded, and a token whose
+`email` is missing or is another account is refused. A user login's token
+carries the `userinfo.email` scope, so tokeninfo names its account.
 
 The broker holds the tokens in memory, per sandbox and route, and writes none
 to the store, to a file or to a log. A request gets the token held while it

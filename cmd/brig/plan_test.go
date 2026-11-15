@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/secret"
 )
 
@@ -230,7 +231,7 @@ func bareHost(t *testing.T) {
 		"binary: b\nmem: 1024\ncpus: 2\n"))
 	bin := filepath.Join(t.TempDir(), "hull")
 	stub := "#!/bin/sh\ncase \"$1\" in\n  inspect) echo \"instance not found: $2\" >&2; exit 1 ;;\nesac\nexit 0\n"
-	if err := os.WriteFile(bin, []byte(stub), 0o700); err != nil {
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(stub)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME", "hull")

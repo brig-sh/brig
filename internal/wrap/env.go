@@ -19,10 +19,16 @@ type Env struct {
 	prefix string // BRIG_CLAUDE_CODE
 }
 
-// NewEnv builds the lookup for a profile.
+// NewEnv builds the lookup for a profile. An empty name reads the global
+// settings alone: a Brigfile target on a profile the repository wrote has no
+// agent of yours to carry settings for, and reading BRIG_<NAME>_* under the
+// name it chose would hand it settings you set for another agent.
 func NewEnv(profileName string, get func(string) (string, bool)) Env {
 	if get == nil {
 		get = os.LookupEnv
+	}
+	if profileName == "" {
+		return Env{get: get}
 	}
 	upper := strings.ToUpper(strings.ReplaceAll(profileName, "-", "_"))
 	return Env{get: get, prefix: "BRIG_" + upper}
@@ -41,7 +47,11 @@ func (e Env) Get(key string) (string, bool) {
 // user reads after setting BRIG_CLAUDE_CODE_ALLOW_DENIED=false is two lies in
 // one line: wrong name and wrong value.
 func (e Env) getNamed(key string) (name, value string, ok bool) {
-	for _, n := range []string{e.prefix + "_" + key, "BRIG_" + key} {
+	for i, n := range []string{e.prefix + "_" + key, "BRIG_" + key} {
+		// No agent, no per-agent name: only the global one is asked for.
+		if i == 0 && e.prefix == "" {
+			continue
+		}
 		if v, ok := e.get(n); ok {
 			return n, v, true
 		}

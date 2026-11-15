@@ -15,6 +15,21 @@ import "github.com/brig-sh/brig/internal/profile"
 // only answers "what is bound here," the question attach, detach and
 // check all need the same answer to.
 func EffectivePolicies(p profile.Profile, session string, dir string) ([]string, error) {
+	return NamesFor(p.Policy, p.Name, session, dir)
+}
+
+// NamesFor is EffectivePolicies with its three sources named apart: own, a
+// profile's inline list; what attach bound in dir under the profile name
+// attachKey; and, when session is non-empty, what attach bound to that
+// session of attachKey.
+//
+// It is apart from EffectivePolicies because the key is not always the
+// name of the profile that runs. A repository's Brigfile can name its
+// profile anything, claude-code included, and attachments are the reader's:
+// a run of a Brigfile target asks for the attachments of a profile brig
+// ships only, under that profile's own name, and never under a name the
+// repository chose.
+func NamesFor(own []string, attachKey, session, dir string) ([]string, error) {
 	a, err := LoadAttachments(dir)
 	if err != nil {
 		return nil, err
@@ -30,10 +45,10 @@ func EffectivePolicies(p profile.Profile, session string, dir string) ([]string,
 			}
 		}
 	}
-	add(p.Policy)
-	add(a.Profiles[p.Name])
+	add(own)
+	add(a.Profiles[attachKey])
 	if session != "" {
-		add(a.Sessions[p.Name][session])
+		add(a.Sessions[attachKey][session])
 	}
 	return names, nil
 }

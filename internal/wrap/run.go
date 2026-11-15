@@ -164,6 +164,11 @@ func (c *Config) backendRefusal(hypervisor string) error {
 // EnsureRunning brings the sandbox up if it is not already, and makes sure
 // the one that is up is mounting this workspace.
 func (c *Config) EnsureRunning(set creds.Set) (err error) {
+	// First, ahead of every other refusal, warning and question: the sandbox
+	// of a target boots only what you approved. See Admit.
+	if err := c.admission(); err != nil {
+		return err
+	}
 	// Before every refusal below, and before the runtime is asked anything: a
 	// nerdctl with no configuration of the bundle's cannot reach its containerd,
 	// and that failure stops the run without naming the launcher.
@@ -315,13 +320,18 @@ func (c *Config) EnsureRunning(set creds.Set) (err error) {
 		_ = c.Runtime.Remove(c.VMName)
 	}
 	// Clear a stale stopped instance holding the name.
-	_ = c.Runtime.Remove(c.VMName)
+	removeErr := c.Runtime.Remove(c.VMName)
 	// The guest booted below is a new one. The guest before it was stopped
 	// through the runtime, not through Stop, so the broker may still hold its
 	// registration, and the same registration again would keep its tokens
 	// valid. It is removed first, so serveRoutes registers the sandbox with a
 	// new key, or leaves it out when no route is left.
 	c.forgetRoutes()
+	// After the registration goes, so a guest the runtime keeps holds no
+	// valid token either.
+	if err := c.nameStillHeld(removeErr); err != nil {
+		return err
+	}
 	// No sandbox holds the name until the boot below. A run that stops
 	// before it boots one removes the sandbox from the broker, which stops
 	// when it serves no other, rather than leave it registered for nothing.
@@ -602,6 +612,11 @@ func majorVersion(v string) (int, bool) {
 // session not in the index falls back to the bare agent, which is still a ref
 // every verb takes.
 func (c *Config) logHint() string {
+	// No ref names a session of a Brigfile target, and `brig logs` takes
+	// only a ref, so the runtime's own command is the one to give.
+	if IsProjectSandbox(c.VMName) {
+		return "the runtime's own log, " + c.Runtime.LogsHint(c.VMName)
+	}
 	ref := RefOfSandbox(c.VMName)
 	if ref == "" {
 		ref = c.Profile.Name
@@ -853,7 +868,7 @@ func (c *Config) shares(home, project string, volumes []runtime.Share) []runtime
 // line today -- there is no flag for it -- which is a gap and not this branch's
 // job to fill.
 func (c *Config) projectShareStale() string {
-	was := rememberedProject(sessionKey(c.Profile.Name, c.Slug), c.VMName)
+	was := rememberedProject(c.sessionRef(), c.VMName)
 	switch {
 	case was == c.Project:
 		return ""
@@ -943,7 +958,38 @@ func (c *Config) Remove() error {
 	// the one place the sandbox itself goes away.
 	runtime.ForgetPublications(c.VMName)
 	runtime.ForgetBootedNet(c.VMName)
+	// And the approval of a target's session. A session removed and run again
+	// is a new session, and you approve it again. Dropped whether or not the
+	// runtime removed the sandbox: an approval is never worth keeping by
+	// accident, and the next run asks for one.
+	if IsProjectSandbox(c.VMName) {
+		_, _ = Revoke(c.VMName)
+	}
 	return err
+}
+
+// nameStillHeld answers the removal that clears the name before a boot. The
+// removal fails on every first boot, since nothing holds the name, so a
+// failure alone says nothing. A failure that leaves the sandbox there stops
+// the run with the runtime's reason. Ignored, it reached the boot as "instance
+// exists", which names neither: hull on Linux keeps an instance it could not
+// detach from its network, and says that `hull rm` tries again.
+//
+// brig does not force the removal. `hull rm --force` skips the detach, which
+// can leave the network's rule for the sandbox behind on the host.
+//
+// When the runtime cannot say whether the sandbox is there, or has no way to
+// say, the boot goes ahead as it did before: the runtime refuses a name that
+// is taken, so the boot cannot take a second sandbox's name.
+func (c *Config) nameStillHeld(removeErr error) error {
+	if removeErr == nil {
+		return nil
+	}
+	if held, err := sandboxExists(c.Runtime, c.VMName); err != nil || !held {
+		return nil
+	}
+	return fmt.Errorf("could not start the sandbox: %s is left from an earlier run and could not be removed, "+
+		"so its name is taken: %w", c.VMName, removeErr)
 }
 
 // execSpec is the one request Exec and ExecAttached both hand the runtime, so

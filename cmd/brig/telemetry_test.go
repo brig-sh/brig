@@ -171,6 +171,11 @@ func TestTelemetryCommandNeverSendsAStrayWord(t *testing.T) {
 		{"rnu", unknownCommand, false},
 		{"telemetry", "", false},
 		{"completion", "", false},
+		// The Brigfile verbs promise to write nothing and start nothing, and
+		// a command event is a queued file and an uploader process.
+		{"target", "", false},
+		{"config", "", false},
+		{"init", "", false},
 	}
 	for _, tc := range cases {
 		command, asks := telemetryCommand(tc.word)

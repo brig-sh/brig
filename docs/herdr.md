@@ -24,9 +24,9 @@ Host herdr*+*
   ForwardAgent no
   StrictHostKeyChecking yes
   UserKnownHostsFile /dev/null
-  KnownHostsCommand /bin/sh -c 'r=$(echo "$1" | sed "s/+/@/") && k=$(brig -q exec "$r" -- cat /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null) && [ -n "$k" ] && echo "$1 $k"' sh %n
+  KnownHostsCommand /bin/sh -c 'r=$(echo "$1" | sed "s/+/@/") && k=$(brig -q exec "$r" -- cat /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null) && [ -n "$k" ] && echo "$1 $k"' sh '%n'
   LogLevel ERROR
-  ProxyCommand sh -c 'exec brig -q exec "${1%%+*}@${1#*+}" -- /usr/local/sbin/herdr-sshd 2>/dev/null' sh %n
+  ProxyCommand /bin/sh -c 'exec brig -q exec "${1%%%%+*}@${1#*+}" -- /usr/local/sbin/herdr-sshd 2>/dev/null' sh '%n'
 ```
 
 A host is `<profile>+<sandbox>`: `herdr+api` is the sandbox `herdr@api`, and
@@ -41,6 +41,9 @@ written then matches the new names, but its `ProxyCommand` runs a wrapper
 the `herdr-stock` image does not have: replace the block with the one above.
 [migration.md](migration.md#profile-names) lists the rest.
 
+A block whose `ProxyCommand` ends in `sh %n`, without quotes, predates the
+quoting fix described below. It works for ordinary names, but replace it too.
+
 - `brig exec`, not `brig sh`. `brig sh` always asks for a terminal in the
   guest, and a terminal in the middle of the SSH stream hangs it.
 - The host key is read through `brig exec`, not from a known_hosts file. The
@@ -50,6 +53,12 @@ the `herdr-stock` image does not have: replace the block with the one above.
   boot. An empty key fails the check rather than passing a malformed line.
   `KnownHostsCommand` cannot use `${...}`, which ssh expands itself, so it
   splits the host name with `sed`.
+- `'%n'` is quoted, and `%%` is written `%%%%`. ssh substitutes `%n` into
+  a command line the host shell parses, so an unquoted host name is glob
+  expanded first: `herdr+api*` would connect to `herdr@api-other` if a file
+  by that name is in the current directory. ssh also turns `%%` into `%`
+  before the shell runs, so `%%%%` is what reaches the shell as `%%`, the
+  longest-match form that splits at the first `+`.
 - No key. The image accepts root with an empty password. Whoever can run
   `brig exec` on your host is already root in the guest, and the guest has
   no open port, so a key would guard nothing that `brig exec` does not.

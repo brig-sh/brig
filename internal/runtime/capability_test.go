@@ -21,6 +21,8 @@ func TestEgressContractAnswersEveryRunPath(t *testing.T) {
 		{RunPath{"hull", "hvi"}, Enforced},
 		{RunPath{"hull", "vz"}, CannotEnforce},
 		{RunPath{"hull", "qemu"}, CannotEnforce},
+		// hull on Linux, which has no network of a sandbox's own yet.
+		{RunPath{"hull", "io.containerd.urunc.v2"}, CannotEnforce},
 		{RunPath{"nerdctl", "io.containerd.urunc.v2"}, Enforced},
 		{RunPath{"nerdctl", "io.containerd.kata.v2"}, Enforced},
 		{RunPath{"docker", "io.containerd.urunc.v2"}, CannotEnforce},
@@ -45,7 +47,7 @@ func TestEgressContractAnswersEveryRunPath(t *testing.T) {
 	for _, r := range Records(EgressPolicy) {
 		have = append(have, r.Path.String())
 	}
-	want := []string{"hull on hvi", "hull on vz", "hull on qemu", "nerdctl", "docker"}
+	want := []string{"hull on hvi", "hull on vz", "hull on qemu", "hull on io.containerd.urunc.v2", "nerdctl", "docker"}
 	if strings.Join(have, ",") != strings.Join(want, ",") {
 		t.Errorf("the egress records cover %q, want %q", have, want)
 	}

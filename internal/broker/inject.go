@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/brig-sh/brig/api/policy/v1alpha1"
+	"github.com/brig-sh/brig/internal/pointerkind"
 )
 
 // errCredentialShape is a resolved secret the route cannot inject: the field
@@ -16,10 +17,23 @@ import (
 // break the header it goes in.
 var errCredentialShape = errors.New("the credential is not a header value")
 
+// errCredentialMalformed is a resolved secret that opens a JSON object and
+// does not decode, such as one cut short or with data after the object. It
+// is kept apart from errCredentialShape so that the refusal names a broken
+// secret, which the user fixes in the store and not in the policy.
+var errCredentialMalformed = errors.New("the credential is not valid JSON")
+
 // credentialValue returns what the route injects from doc: the field that
 // credential.field names, or the whole document, without one trailing "\n"
 // or "\r\n".
 func credentialValue(c *v1alpha1.CredentialRef, doc []byte) (string, error) {
+	// Such a document is never a header value, and it may be a pointer cut
+	// short before its kind field, which neither VendDoc nor MintDoc can
+	// recognise. Sent as a header, it would name the user's AWS profile and
+	// role, or gcloud account.
+	if t := pointerkind.Trim(doc); len(t) > 0 && t[0] == '{' && !json.Valid(t) {
+		return "", errCredentialMalformed
+	}
 	v := string(doc)
 	if c.Field != "" {
 		var root any

@@ -98,7 +98,7 @@ func (c *Cache) get(ctx context.Context, sandboxID, route string, p Pointer, mar
 
 	for {
 		e.mu.Lock()
-		if e.flight == nil && e.have && e.ptr == p && e.servable(c.now(), margin) {
+		if e.flight == nil && e.have && e.ptr.Equal(p) && e.servable(c.now(), margin) {
 			creds := e.creds
 			e.mu.Unlock()
 			return creds, nil
@@ -119,7 +119,7 @@ func (c *Cache) get(ctx context.Context, sandboxID, route string, p Pointer, mar
 			// The fetch goes on without this caller and fills the cache.
 			return Credentials{}, ctx.Err()
 		}
-		if f.ptr == p {
+		if f.ptr.Equal(p) {
 			return f.creds, f.err
 		}
 		// The fetch was for another pointer: look again.

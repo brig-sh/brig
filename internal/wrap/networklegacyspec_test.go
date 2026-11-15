@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/verify"
@@ -71,7 +72,7 @@ func legacySpecSession(t *testing.T) (profile.Profile, *legacySpecRuntime, strin
 	script := "#!/bin/sh\ncase \"$1\" in\ninspect) cat <<'STATE'\n" + string(state) +
 		"\nSTATE\n;;\nstop) exit 0;;\ntelemetry) echo disabled;;\n*) exit 97;;\nesac\n"
 	for path, content := range map[string]string{
-		bin:                                     script,
+		bin:                                     hullstub.MacOS(script),
 		filepath.Join(dir, "sandbox-nets.json"): `{"brig-ubuntu":0}`,
 		filepath.Join(dir, "sandbox-brig-ubuntu.spec"): "subnet=198.18.1.0/30\ngateway=198.18.1.1\nunfiltered\n",
 	} {

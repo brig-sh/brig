@@ -62,10 +62,15 @@ const bundleCarriesThem = "the runtime bundle carries them; see the bundle line 
 //
 // A run as root uses the node-wide install and maps no subordinate IDs.
 //
+// They are asked of every runtime that boots the bundle's urunc on Linux:
+// nerdctl, and hull on Linux, which needs the same vsock device, subordinate
+// IDs and monitor, and CNI plugins where it looks for them. Docker and the
+// macOS hull get none. So does the rootless /dev/kvm question.
+//
 // hypervisor is what a run would ask for: BRIG_HYPERVISOR, or the agent's own
 // field. The tools row looks for the monitor it picks.
 func linuxHostRows(rt runtime.Runtime, hypervisor string) []check {
-	if hostOS != "linux" || (rt != nil && rt.Kind() != "nerdctl") {
+	if hostOS != "linux" || (rt != nil && !runtime.BootsLinuxBundle(rt)) {
 		return nil
 	}
 	var rows []check
@@ -73,7 +78,12 @@ func linuxHostRows(rt runtime.Runtime, hypervisor string) []check {
 		rows = append(rows, subIDCheck("/etc/subuid", "/etc/subgid"), userNSCheck(rt), uidmapCheck())
 	}
 	// /dev/kvm has the virtual line already, which asks what a rootless run keeps.
-	rows = append(rows, devicesCheck("/dev/vhost-vsock"), cniCheck())
+	// Past the gate above, a hull is hull on Linux.
+	cni := cniCheck
+	if rt != nil && rt.Kind() == "hull" {
+		cni = hullCNICheck
+	}
+	rows = append(rows, devicesCheck("/dev/vhost-vsock"), cni())
 	// The bundle carries these tools. Its tree is the evidence and not a variable:
 	// a host can name its own kernel or its own nerdctl and still lack them.
 	if rt == nil || !runtime.InBundleTree(rt.Bin()) {
@@ -290,7 +300,7 @@ func devicesCheck(dev string) check {
 // Opening /dev/kvm from here passes through the kvm group, which the run
 // drops, so a pass is asked again about what the run keeps.
 func rootlessKVM(virtual check, rt runtime.Runtime) check {
-	if virtual.State != statePass || hostOS != "linux" || geteuid() == 0 || (rt != nil && rt.Kind() != "nerdctl") {
+	if virtual.State != statePass || hostOS != "linux" || geteuid() == 0 || (rt != nil && !runtime.BootsLinuxBundle(rt)) {
 		return virtual
 	}
 	if why := rootlessDeviceDenied("/dev/kvm"); why != "" {
@@ -355,13 +365,55 @@ func defaultCNIDir() string {
 	return "/opt/cni/bin"
 }
 
+// hullSystemBundle is where the runtime bundle's install.sh puts the tree it
+// installs as root. A variable, so tests can point it at their own.
+var hullSystemBundle = "/var/lib/brig/data"
+
+// hullCNIDirs is where hull on Linux looks for CNI plugins, which is not
+// where nerdctl looks: CNI_PATH, or the libexec/cni of the first installed
+// runtime bundle that has a network configuration, or /opt/cni/bin, and no
+// nerdctl.toml and no distro directory (cniConfig in brig-sh/hull's
+// cmd/hull/net_linux.go). A user's own tree, under XDG_DATA_HOME or
+// ~/.local/share, comes before the one installed as root.
+func hullCNIDirs() []string {
+	if v := os.Getenv("CNI_PATH"); v != "" {
+		return filepath.SplitList(v)
+	}
+	var bundles []string
+	if geteuid() != 0 {
+		share := os.Getenv("XDG_DATA_HOME")
+		if !filepath.IsAbs(share) {
+			share = ""
+			if home, err := os.UserHomeDir(); err == nil {
+				share = filepath.Join(home, ".local", "share")
+			}
+		}
+		if share != "" {
+			bundles = append(bundles, filepath.Join(share, "brig", "data"))
+		}
+	}
+	for _, dir := range append(bundles, hullSystemBundle) {
+		if _, err := os.Stat(filepath.Join(dir, "etc", "cni", "net.d")); err == nil {
+			return []string{filepath.Join(dir, "libexec", "cni")}
+		}
+	}
+	return []string{"/opt/cni/bin"}
+}
+
 // cniPlugins are what a nerdctl bridge network calls: the chain of a brig sandbox
 // network, its IPAM and the loopback. A directory with some of them passes
 // nerdctl's own check on bridge and fails later.
 var cniPlugins = []string{"bridge", "firewall", "host-local", "loopback", "portmap", "tuning"}
 
-func cniCheck() check {
-	dirs := cniDirs()
+// cniCheck is the cni row for nerdctl, which needs the plugins for every
+// isolated run.
+func cniCheck() check { return cniCheckIn(cniDirs(), "every isolated run") }
+
+// hullCNICheck is the cni row for hull on Linux, which looks in other places
+// and needs the plugins for a run on the shared network.
+func hullCNICheck() check { return cniCheckIn(hullCNIDirs(), "a run on the shared network") }
+
+func cniCheckIn(dirs []string, needs string) check {
 	var missing []string
 	for _, plugin := range cniPlugins {
 		found := false
@@ -378,7 +430,7 @@ func cniCheck() check {
 	joined := strings.Join(dirs, ":")
 	if len(missing) > 0 {
 		return check{Name: "cni", State: stateFail,
-			Finding: "no " + strings.Join(missing, ", ") + " plugin in " + joined + ", and every isolated run needs them",
+			Finding: "no " + strings.Join(missing, ", ") + " plugin in " + joined + ", and " + needs + " needs them",
 			Fix:     "run install.sh for the runtime bundle, or install the distro's CNI plugins",
 		}
 	}
@@ -419,8 +471,12 @@ func toolsCheck(needOras bool, hypervisor string) check {
 
 // notTheBundle says when the runtime is not the bundle's, which is what a host
 // that took the release archive alone has.
+//
+// Not for hull on Linux yet: no released runtime bundle ships hull, so every
+// hull is outside one, and running install.sh, which the note sends the
+// reader to, would not change that.
 func notTheBundle(rt runtime.Runtime) string {
-	if hostOS != "linux" || rt == nil || rt.Kind() != "nerdctl" || runtime.InBundleTree(rt.Bin()) {
+	if hostOS != "linux" || rt == nil || !runtime.BootsLinuxBundle(rt) || rt.Kind() == "hull" || runtime.InBundleTree(rt.Bin()) {
 		return ""
 	}
 	return " (not the runtime bundle; see install.sh)"

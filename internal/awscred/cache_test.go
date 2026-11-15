@@ -217,6 +217,39 @@ func TestCacheRefetchesOnPointerChange(t *testing.T) {
 	}
 }
 
+// Re-importing with another list of session policies changes what the keys
+// may do. Keys of the wider session must not be served for the narrower
+// pointer, and the same list in a new slice is the same pointer.
+func TestCacheRefetchesOnPolicyChange(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	var n int
+	cli := CLI{run: func(_ context.Context, _ string, _, _ []string) ([]byte, []byte, error) {
+		n++
+		exp := clk.now().Add(time.Hour).Format(time.RFC3339)
+		return []byte(fmt.Sprintf(`{"Credentials":{"AccessKeyId":"K%d","SecretAccessKey":"S","SessionToken":"T","Expiration":%q}}`, n, exp)), nil, nil
+	}}
+	c := NewCache(cli, clk.now)
+	if _, err := c.Get(context.Background(), "a", "aws", rolePtr); err != nil {
+		t.Fatal(err)
+	}
+	narrow := rolePtr
+	narrow.PolicyARNs = []string{"arn:aws:iam::0:policy/a"}
+	if _, err := c.Get(context.Background(), "a", "aws", narrow); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("fetches after the session policies changed = %d, want 2", n)
+	}
+	same := rolePtr
+	same.PolicyARNs = []string{"arn:aws:iam::0:policy/a"}
+	if _, err := c.Get(context.Background(), "a", "aws", same); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("fetches for the same session policies in a new slice = %d, want 2", n)
+	}
+}
+
 // The guest's SDK gives up on the endpoint after a second or two, and an
 // assume-role through SSO can take longer. If the guest's hang-up killed the
 // fetch, every retry would start it again and the guest would never get keys.

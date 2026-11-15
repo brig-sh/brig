@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brig-sh/brig/internal/creds"
+	"github.com/brig-sh/brig/internal/hullstub"
 	"github.com/brig-sh/brig/internal/profile"
 	"github.com/brig-sh/brig/internal/runtime"
 	"github.com/brig-sh/brig/internal/wrap"
@@ -37,6 +38,7 @@ func TestExitCode(t *testing.T) {
 		}, 6},
 		{"a run path that cannot enforce a property", capabilityRefusal(runtime.CannotEnforce), 7},
 		{"a run path whose answer is unknown", capabilityRefusal(runtime.Unknown), 7},
+		{"a run of a target with no approval", &wrap.ApprovalRequiredError{Err: errors.New("approve it")}, 8},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -65,6 +67,7 @@ func TestExitCodeThroughWrapping(t *testing.T) {
 		{"wrapped credentials", fmt.Errorf("context: %w", &creds.MissingSecretsError{Missing: []creds.Missing{{Name: "T"}}}), 6},
 		// The boot path hands a refusal up as "could not start the sandbox: %w".
 		{"wrapped capability", fmt.Errorf("could not start the sandbox: %w", capabilityRefusal(runtime.CannotEnforce)), 7},
+		{"wrapped approval", fmt.Errorf("context: %w", &wrap.ApprovalRequiredError{Err: errors.New("no")}), 8},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -89,7 +92,11 @@ func stubRuntime(t *testing.T, kind, name string) runtime.Runtime {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	bin := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+	script := "#!/bin/sh\nexit 1\n"
+	if kind == "hull" {
+		script = hullstub.MacOS(script)
+	}
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME", kind)
@@ -312,7 +319,7 @@ func absentHull(t *testing.T) (runtime.Runtime, string) {
 	log := filepath.Join(t.TempDir(), "argv.log")
 	bin := filepath.Join(t.TempDir(), "hull")
 	script := "#!/bin/sh\necho \"$*\" >> '" + log + "'\necho \"instance not found: $2\" >&2\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(hullstub.MacOS(script)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIG_RUNTIME", "hull")

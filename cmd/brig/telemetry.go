@@ -211,8 +211,13 @@ var atForegroundTerminal = func() bool {
 // telemetryCommand returns the command an event names for the word in the
 // verb position, and whether it may ask. A bare ref is a run. It returns ""
 // for a verb that is not counted.
+//
+// The Brigfile verbs are not counted. They promise to write nothing
+// and to start nothing, and a command event is a file queued under the state
+// directory and an uploader process started to send it.
 func telemetryCommand(verb string) (command string, asks bool) {
-	if verb == "telemetry" || verb == "completion" {
+	switch verb {
+	case "telemetry", "completion", "target", "config", "init":
 		return "", false
 	}
 	if v, ok := countedVerbs[verb]; ok {

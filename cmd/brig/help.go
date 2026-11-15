@@ -14,12 +14,26 @@ const runUsage = `brig run -- start a sandbox and run an agent
 
 usage:
   brig run [flags] <ref> [project] [args...]
+  brig run --target NAME [--session NAME] [-f PATH] [flags] [-- args...]
+  brig run [flags] [-- args...]
 
 A project is mounted read-write at /work/<name>, and the agent starts there.
 Brig reads its own flags before the ref, and after the ref and the project up
 to the first agent argument. Everything from the first agent argument on is
 the agent's, and -- ends brig's parsing. Put brig's flags before the ref:
 there brig refuses a flag it does not know, so a typo never reaches the agent.
+
+With --target it runs a target of this repository's Brigfile. The directory
+of the Brigfile is the project, so the line takes no ref and no project. The
+agent's arguments go after --, and replace the target's args. With no ref and
+no --target, brig runs the Brigfile's default target.
+
+A run of a target boots only what you approved. Brig shows the plan and asks.
+A yes is stored, and the next run with the same configuration asks nothing.
+With no terminal, a run that no stored approval covers boots nothing, exits 8
+and prints the digest of the approval. --approve DIGEST approves that run
+without a question, for CI. A change to the Brigfile, to a file it names, to
+a setting or to this line asks again.
 
 flags:
       --image IMAGE   guest image to boot
@@ -33,6 +47,14 @@ flags:
       --offline       shorthand for --network offline
       --publish PORT  open a guest port on the host; repeatable
       --json          run the agent as a child and print one JSON line after it
+
+flags of a run of a target:
+      --target NAME     the target to run
+      --session NAME    a session of the target, with its own sandbox and home
+  -f, --file PATH       read this Brigfile instead of looking for one
+      --approve DIGEST  approve this run by its digest, without a question
+      --recreate        boot the session's sandbox again, on the same guest home,
+                        when its configuration changed
 
 brig help lists every command, every flag and every setting.
 `
@@ -71,9 +93,20 @@ const stopUsage = `brig stop -- stop the sandbox and keep it
 
 usage:
   brig stop <ref>
+  brig stop --target NAME [--session NAME] [-f PATH]
 
 Stopping a sandbox that is not running is not an error: that is already the
 state stop asks for. The name, the workspace and the guest home survive.
+
+With --target it stops a session of a target of this repository's Brigfile.
+It finds the session from the project and the target, so it works after the
+Brigfile is deleted or the target is gone from it. A session brig has no
+record of, and no sandbox for, exits 3.
+
+flags:
+      --target NAME   stop a session of this target
+      --session NAME  with --target: the named session, not the default one
+  -f, --file PATH     with --target: the project is the directory of PATH
 
 brig help lists every command, every flag and every setting.
 `
@@ -82,6 +115,7 @@ const rmUsage = `brig rm -- stop and remove the sandbox
 
 usage:
   brig rm <ref> [--dry-run]
+  brig rm --target NAME [--session NAME] [-f PATH] [--dry-run]
   brig rm --all [--dry-run] [-y]
 
 One ref removes that sandbox. --all lists every brig sandbox, asks, then stops
@@ -89,9 +123,16 @@ and removes them. When brig created the guest home, rm deletes it too and prints
 its path; a guest home you named and your project are host directories, and are
 left alone.
 
+With --target it removes a session of a target of this repository's Brigfile,
+with its guest home. It works after the Brigfile is deleted or the target is
+gone from it.
+
 flags:
-      --dry-run  report what would be removed, and stop
-  -y, --yes      with --all: the answer, given in advance
+      --target NAME   remove a session of this target
+      --session NAME  with --target: the named session, not the default one
+  -f, --file PATH     with --target: the project is the directory of PATH
+      --dry-run       report what would be removed, and stop
+  -y, --yes           with --all: the answer, given in advance
 
 brig help lists every command, every flag and every setting.
 `
@@ -140,6 +181,7 @@ const planUsage = `brig plan -- print the permissions a run would get
 
 usage:
   brig plan <ref> [project]
+  brig plan --target NAME [--session NAME] [-f PATH]
 
 Prints the mounts, the network, the policies, the limits, the image, the
 runtime and the credentials of a run, by name. It boots nothing and opens no
@@ -148,7 +190,16 @@ brig run does, so brig plan claude ~/src/demo previews that first run, and a
 run brig would refuse opens the plan with a REFUSED row while plan still
 exits 0.
 
+With --target it plans a target of this repository's Brigfile instead. The
+project is the directory that holds the Brigfile. The plan says where each
+value comes from, where each policy comes from, and the upstream and the
+secrets of every route, and the arguments the agent gets. brig run --target
+shows these rows before it asks you to approve a run.
+
 flags:
+      --target NAME   plan this target of the Brigfile
+      --session NAME  with --target: plan the named session, not the default one
+  -f, --file PATH     with --target: read this Brigfile instead of looking for one
       --image IMAGE   guest image to boot
       --home PATH     host directory to mount as the guest home
       --no-project    plan with no project, even one the session ran with last
@@ -168,7 +219,9 @@ const lsUsage = `brig ls -- list sandboxes
 usage:
   brig ls [-q] [--json]
 
-Lists every sandbox brig has, with its ref, state and guest home.
+Lists every sandbox brig has, with its ref, state and guest home. The
+sessions of Brigfile targets follow in a table of their own, with the target,
+the session and the project. They have no ref, so -q leaves them out.
 
 flags:
   -q, --quiet  print the refs only, one per line, for a script
@@ -248,4 +301,7 @@ var verbUsages = map[string]string{
 	"network":    networkUsage,
 	"telemetry":  telemetryUsage,
 	"completion": completionUsage,
+	"target":     targetUsage,
+	"config":     configUsage,
+	"init":       initUsage,
 }

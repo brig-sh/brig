@@ -92,7 +92,8 @@ func reservedName(name string) bool {
 // overriding a built-in -- how you pin your own image for a profile brig
 // already knows about -- costs no special case. Materialising the built-ins to
 // disk instead of embedding them would be a change to the list, not to this
-// function; OverridesBuiltIn is the one place that also reads builtinFS.
+// function; the accessors below that answer for what brig ships read
+// builtinFS too.
 //
 // A directory that does not exist is not an error: most installs have none.
 //
@@ -343,10 +344,10 @@ func ReservedFor(slug, agent string) (string, bool) {
 // brig's own. Listings say so, because "the image is not what I expected" and
 // "there is a file I forgot about" are the same question.
 //
-// This is the one accessor that reads builtinFS directly rather than through
-// the registry, so it stays here rather than beside the other provenance
-// accessors in file.go: nothing outside this file is meant to touch that
-// variable, per the note on it.
+// It asks Embedded, which reads builtinFS directly rather than through the
+// registry, as BuiltIn and BuiltInDeny do. So all four stay here rather than
+// beside the other provenance accessors in file.go: nothing outside this
+// file is meant to touch that variable, per the note on it.
 func OverridesBuiltIn(name string) bool {
 	return IsCustom(name) && Embedded(name)
 }
@@ -358,6 +359,34 @@ func OverridesBuiltIn(name string) bool {
 func Embedded(name string) bool {
 	_, err := builtinFS.ReadFile("specs/" + name + ".yaml")
 	return err == nil
+}
+
+// BuiltIn returns the profile brig ships under name, parsed from the embedded
+// spec, with the spec's bytes. It never reads the registry, so a file in the
+// profile directory that overrides the name does not change the answer, and
+// it works whether or not Load has run.
+//
+// A repository's Brigfile asks for builtin:<name>, and that has to mean the
+// same profile on every machine that checks the repository out. Lookup would
+// return the reader's own override where one exists, and run an image the
+// repository never named.
+//
+// name is a canonical name only. An alias such as claude is a spelling of the
+// registry, which this does not consult, and the safeName check keeps
+// anything shaped like a path away from the embedded FS.
+func BuiltIn(name string) (Profile, []byte, bool) {
+	if !safeName(name) {
+		return Profile{}, nil, false
+	}
+	blob, err := builtinFS.ReadFile("specs/" + name + ".yaml")
+	if err != nil {
+		return Profile{}, nil, false
+	}
+	p, err := Parse(blob)
+	if err != nil || p.Name != name {
+		return Profile{}, nil, false
+	}
+	return p, blob, true
 }
 
 // BuiltInDeny is the denylist brig ships for a name, whatever a file of the

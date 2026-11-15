@@ -84,6 +84,7 @@ comes from one table, shown in
 | hull on `hvi` | `unknown` | the probe fails: the binary does not run, it exits non-zero, or it gives no answer within 30 seconds |
 | nerdctl on any shim | `enforced` | `nft list tables` runs in the network namespace that holds its bridges. Brig enters that namespace with `nsenter` when nerdctl is rootless |
 | hull on `vz` or `qemu` | `cannot enforce` | no probe runs |
+| hull on Linux, on any monitor | `cannot enforce` | no probe runs. hull on Linux gives a sandbox no network of its own yet |
 | docker on any shim | `cannot enforce` | no probe runs |
 | hull on a backend that the policies table does not name | `unknown` | |
 
@@ -103,6 +104,7 @@ transport where the mode is served.
 | hull on `hvi` | `enforced` over `brig.internal`, when its gateway takes `--divert` and the run has a network |
 | hull on `vz` | `cannot enforce`: vz takes its network from vmnet, and Brig routes `brig.internal` at the gateway only `hvi` uses |
 | hull on `qemu` | `cannot enforce`, as on `vz` |
+| hull on Linux, on any monitor | `cannot enforce`: hull on Linux gives a sandbox no network of its own yet, where Brig routes `brig.internal` |
 | nerdctl on urunc | `enforced` over `brig.internal`, when `nft` is installed. A run with a route takes the `isolated` posture |
 | nerdctl on runc | `cannot enforce`: Brig boots no shim that gives the guest the host's own kernel |
 | docker | `cannot enforce`: docker manages its own bridges and firewall |

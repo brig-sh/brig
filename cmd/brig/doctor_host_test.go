@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -527,8 +528,52 @@ func TestLinuxHostRowsStayOffElsewhere(t *testing.T) {
 		t.Errorf("rows on macOS: %+v", rows)
 	}
 	swap(t, &hostOS, "linux")
+	// doctorRuntime is a hull that boots no bundle: the macOS one.
 	if rows := linuxHostRows(doctorRuntime{}, ""); rows != nil {
-		t.Errorf("rows for hull: %+v", rows)
+		t.Errorf("rows for the macOS hull: %+v", rows)
+	}
+	if rows := linuxHostRows(dockerDoctorRuntime{}, ""); rows != nil {
+		t.Errorf("rows for docker: %+v", rows)
+	}
+}
+
+// hull on Linux boots the bundle's urunc as nerdctl does, so it gets the
+// same host rows and the rootless /dev/kvm question. Gated on the runtime's
+// name, `BRIG_RUNTIME=hull brig doctor` said nothing about a host with no CNI
+// plugins, no vsock device and no subordinate IDs, and the run then failed
+// inside hull. It does not get the not-the-bundle note: no released bundle
+// ships hull, so install.sh, which the note names, cannot make it the
+// bundle's.
+func TestLinuxHostRowsAskHullOnLinuxToo(t *testing.T) {
+	swap(t, &hostOS, "linux")
+	swap(t, &geteuid, func() int { return 1000 })
+	swap(t, &userNamespaces, func() error { return nil })
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("BRIG_BOOT_ASSETS", "")
+	hull := linuxHullDoctorRuntime{doctorRuntime{bin: filepath.Join(t.TempDir(), "hull")}}
+
+	got := map[string]bool{}
+	for _, c := range linuxHostRows(hull, "") {
+		got[c.Name] = true
+	}
+	for _, name := range []string{"subids", "userns", "uidmap", "devices", "cni", "tools"} {
+		if !got[name] {
+			t.Errorf("no %s row for hull on Linux: %v", name, got)
+		}
+	}
+
+	asked := ""
+	swap(t, &rootlessDeviceDenied, func(dev string) string {
+		asked = dev
+		return dev + " opens for this user only through a group"
+	})
+	pass := check{Name: "virtual", State: statePass, Finding: "/dev/kvm is present and openable"}
+	if c := rootlessKVM(pass, hull); c.State != stateFail || asked != "/dev/kvm" {
+		t.Errorf("a group-only /dev/kvm under a rootless hull run: %+v", c)
+	}
+
+	if note := notTheBundle(hull); note != "" {
+		t.Errorf("a hull outside the bundle: notTheBundle = %q, a remedy install.sh cannot carry out", note)
 	}
 }
 
@@ -542,10 +587,23 @@ func TestLinuxHostRowsLeaveTheExitStatusAlone(t *testing.T) {
 	}
 }
 
-// nerdctlDoctorRuntime is doctorRuntime under the name a Linux host detects.
+// nerdctlDoctorRuntime is doctorRuntime under the name a Linux host detects,
+// and boots the runtime bundle's files, as the real nerdctl does.
 type nerdctlDoctorRuntime struct{ doctorRuntime }
 
-func (nerdctlDoctorRuntime) Kind() string { return "nerdctl" }
+func (nerdctlDoctorRuntime) Kind() string           { return "nerdctl" }
+func (nerdctlDoctorRuntime) BootsLinuxBundle() bool { return true }
+
+// linuxHullDoctorRuntime is hull on Linux: a hull that boots the runtime
+// bundle's files.
+type linuxHullDoctorRuntime struct{ doctorRuntime }
+
+func (linuxHullDoctorRuntime) BootsLinuxBundle() bool { return true }
+
+// dockerDoctorRuntime is the nerdctl adapter driving docker, which boots none.
+type dockerDoctorRuntime struct{ doctorRuntime }
+
+func (dockerDoctorRuntime) Kind() string { return "docker" }
 
 func TestRuntimeRowSaysWhenItIsNotTheBundle(t *testing.T) {
 	swap(t, &hostOS, "linux")
@@ -566,5 +624,76 @@ func TestRuntimeRowDefersToTheBundleLine(t *testing.T) {
 	swap(t, &hostOS, "linux")
 	if got := notTheBundle(bundleNerdctl(t)); got != "" {
 		t.Errorf("the bundle's runtime was called foreign: %q", got)
+	}
+}
+
+// hull on Linux does not look where nerdctl does: CNI_PATH, then the
+// libexec/cni of an installed bundle that has a network configuration, the
+// user's own before root's, then /opt/cni/bin, and never nerdctl.toml or a
+// distro directory. A cni row that read nerdctl's order passed a host whose
+// plugins hull never finds.
+func TestCNICheckForHullOnLinuxLooksWhereHullDoes(t *testing.T) {
+	swap(t, &hostOS, "linux")
+	swap(t, &geteuid, func() int { return 1000 })
+	t.Setenv("CNI_PATH", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "share"))
+	system := t.TempDir()
+	swap(t, &hullSystemBundle, system)
+	plugins := func(dir string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, plugin := range cniPlugins {
+			if err := os.WriteFile(filepath.Join(dir, plugin), nil, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	netConf := func(bundle string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(bundle, "etc", "cni", "net.d"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The plugins a distro nerdctl would use, which hull never reads.
+	distro := filepath.Join(t.TempDir(), "usr", "lib", "cni")
+	plugins(distro)
+	t.Setenv("NERDCTL_TOML", writeFile(t, "cni_path = \""+distro+"\"\n"))
+	if got := hullCNIDirs(); !slices.Equal(got, []string{"/opt/cni/bin"}) {
+		t.Errorf("with no bundle, hull looks in %v, want /opt/cni/bin alone", got)
+	}
+	if c := hullCNICheck(); strings.Contains(c.Finding, distro) {
+		t.Errorf("hull's cni row read nerdctl's cni_path: %+v", c)
+	}
+
+	// root's tree, then the user's own ahead of it. A tree with plugins but
+	// no network configuration is passed over, as hull passes it over.
+	plugins(filepath.Join(system, "libexec", "cni"))
+	netConf(system)
+	user := filepath.Join(home, "share", "brig", "data")
+	plugins(filepath.Join(user, "libexec", "cni"))
+	if got := hullCNIDirs(); !slices.Equal(got, []string{filepath.Join(system, "libexec", "cni")}) {
+		t.Errorf("hull looks in %v, want root's tree: the user's has no network configuration", got)
+	}
+	netConf(user)
+	if c := hullCNICheck(); c.State != statePass || !strings.Contains(c.Finding, filepath.Join(user, "libexec", "cni")) {
+		t.Errorf("the user's own tree: %+v", c)
+	}
+	rt := linuxHullDoctorRuntime{doctorRuntime{bin: filepath.Join(t.TempDir(), "hull")}}
+	swap(t, &userNamespaces, func() error { return nil })
+	for _, c := range linuxHostRows(rt, "") {
+		if c.Name == "cni" && !strings.Contains(c.Finding, filepath.Join(user, "libexec", "cni")) {
+			t.Errorf("doctor's cni row for hull on Linux: %+v", c)
+		}
+	}
+
+	empty := t.TempDir()
+	t.Setenv("CNI_PATH", empty)
+	if c := hullCNICheck(); c.State != stateFail || !strings.Contains(c.Finding, empty) {
+		t.Errorf("CNI_PATH comes first: %+v", c)
 	}
 }

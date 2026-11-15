@@ -16,9 +16,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/brig-sh/brig/internal/pointerkind"
 )
 
 // Mode is how a pointer obtains credentials.
@@ -44,6 +47,17 @@ type Pointer struct {
 	// SessionSeconds is the role session lifetime, or 0 for
 	// DefaultSessionSeconds. Pointers stored before this field get 0.
 	SessionSeconds int `json:"sessionSeconds,omitempty"`
+	// PolicyARNs are managed policies passed as session policies. The keys
+	// get only what both the role and these policies allow, so the list can
+	// narrow the session and never widen it.
+	PolicyARNs []string `json:"policyArns,omitempty"`
+}
+
+// Equal is whether p and q name the same credentials. Pointer holds a slice,
+// so == does not compile. DeepEqual covers every field, so a field added
+// later cannot be left out of the comparison the cache relies on.
+func (p Pointer) Equal(q Pointer) bool {
+	return reflect.DeepEqual(p, q)
 }
 
 // Role session bounds. A leaked key works until its session ends. IAM cannot
@@ -77,12 +91,32 @@ var (
 	roleARNRE  = regexp.MustCompile(`^arn:aws[A-Za-z-]*:iam::[0-9]*:role/[A-Za-z0-9/_+=,.@-]+$`)
 	sessionRE  = regexp.MustCompile(`[^A-Za-z0-9+=,.@_-]`)
 	identityRE = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{2,64}$`)
+	// policyARNRE is a managed policy: the account's own or an AWS one.
+	// IAM allows a comma in a policy name, but the aws shorthand the broker
+	// passes splits on it, so such an entry would fail every vend. It is
+	// refused here as the import refuses it.
+	policyARNRE = regexp.MustCompile(`^arn:aws[A-Za-z-]*:iam::([0-9]+|aws):policy/[A-Za-z0-9/_+=.@-]+$`)
 )
+
+// ValidPolicyARN is whether s is a managed policy ARN, the only kind
+// --policy-arns passes to STS.
+func ValidPolicyARN(s string) bool {
+	return policyARNRE.MatchString(s)
+}
+
+// IsPointer reports whether doc is a JSON object whose kind is "aws",
+// whether or not it is otherwise valid, cut short or followed by other data.
+// A malformed aws document must be refused as a pointer, never be taken for
+// a raw credential and sent upstream: it names the user's AWS profile and
+// role.
+func IsPointer(doc []byte) bool {
+	return pointerkind.Is(doc, "aws")
+}
 
 // ParsePointer decodes a stored pointer strictly and validates it.
 func ParsePointer(doc []byte) (Pointer, error) {
 	var p Pointer
-	dec := json.NewDecoder(bytes.NewReader(doc))
+	dec := json.NewDecoder(bytes.NewReader(pointerkind.Trim(doc)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
 		return Pointer{}, fmt.Errorf("the aws pointer is not valid JSON of the expected shape: %w", err)
@@ -109,6 +143,18 @@ func (p Pointer) Validate() error {
 		if !roleARNRE.MatchString(p.RoleARN) {
 			return fmt.Errorf("mode role needs a roleArn that is an IAM role ARN, got %q", p.RoleARN)
 		}
+		// The broker passes --policy-arns only for a non-empty list, so an
+		// empty one would vend the whole role where the import refuses it.
+		// Refusing it also keeps nil the one form of "no policies", so two
+		// equal pointers never take two cache identities.
+		if p.PolicyARNs != nil && len(p.PolicyARNs) == 0 {
+			return errors.New("policyArns is empty. Import the pointer again with brig secret import")
+		}
+		for _, a := range p.PolicyARNs {
+			if !policyARNRE.MatchString(a) {
+				return fmt.Errorf("the policyArns entry %q is not a managed policy ARN", a)
+			}
+		}
 	case ModeSelf:
 		if p.RoleARN != "" {
 			return errors.New("mode self takes no roleArn")
@@ -119,6 +165,12 @@ func (p Pointer) Validate() error {
 		// Self keys expire when the profile's do; aws takes no duration.
 		if p.SessionSeconds != 0 {
 			return errors.New("mode self takes no sessionSeconds")
+		}
+		// export-credentials cannot narrow a session: the list would be
+		// dropped and the profile's full keys vended. Refused on presence,
+		// as the fields above are, so an empty list is refused too.
+		if p.PolicyARNs != nil {
+			return errors.New("mode self takes no policyArns")
 		}
 	default:
 		return fmt.Errorf("the pointer mode %q is not role or self", p.Mode)

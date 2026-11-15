@@ -57,8 +57,14 @@ verb="$1"; shift
 case "$verb" in
   --version)
     # What the real one prints. rc23 is the first that resolves a digest
-    # reference against its store; a case below drives an older one.
-    printf 'hull version %s\n' "${STUB_HULL_VERSION:-0.1.0-rc23}"
+    # reference against its store; a case below drives an older one. It ends
+    # with the platform the build is for, and on a Linux host brig drives a
+    # hull as the macOS one only when that says darwin, as internal/hullstub
+    # has the Go tests' stubs say. A version that names its own platform, as
+    # the hull on Linux section's does, is printed as is.
+    v="${STUB_HULL_VERSION:-0.1.0-rc23}"
+    case "$v" in *'('*) ;; *) v="$v (go1.26.8, darwin/arm64)" ;; esac
+    printf 'hull version %s\n' "$v"
     ;;
   ps)
     # `ps -a` also lists an instance that is merely holding its name.
@@ -2357,6 +2363,129 @@ else
   echo "  --   not Linux, skipping the runc shim refusal"
 fi
 
+echo "== hull on Linux: refusals and run line =="
+# A hull built for Linux ends its --version with linux/<arch>, and brig drives
+# that one as the Linux hull. The stub says so through STUB_HULL_VERSION. That
+# hull has no network gateway yet, so a policy and --network isolated are
+# refused before the runtime is asked to boot. So is a policy with
+# BRIG_HYPERVISOR=hvi: the hvi row is the macOS gateway's, and reading it here
+# called the policy enforced. The unit tests hold each refusal; this holds that
+# the binary reaches them from the version string alone, and a control run
+# shows the log would show a boot if brig made one. brig asks the binary only
+# on Linux, so on a Mac the stub is the macOS hull and the section is skipped.
+if [ "$(uname -s)" = Linux ]; then
+  lh="$WORK/lh"
+  mkdir -p "$lh/ws" "$lh/state" "$lh/gw" "$lh/policies"
+  lh_brig() {
+    STUB_HULL_VERSION='dev (go1.26.8, linux/amd64)' STUB_LOG="$lh/argv.log" STUB_STATE="$lh/sandbox" \
+      BRIG_WORKSPACE="$lh/ws" BRIG_STATE_DIR="$lh/state" BRIG_GATEWAY_DIR="$lh/gw" \
+      BRIG_POLICY_DIR="$lh/policies" "$WORK/brig" "$@"
+  }
+
+  : > "$lh/argv.log"
+  lh_brig run claude --network isolated -d > "$lh/iso.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'hull on Linux cannot do yet' "$lh/iso.out" \
+    && ok "hull on Linux refuses --network isolated" \
+    || bad "hull on Linux refuses --network isolated -- got $rc: $(cat "$lh/iso.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot --network isolated" \
+    || ok "nothing reached hull on Linux for --network isolated"
+
+  cat > "$lh/policies/lh-deny.yaml" <<'YAML'
+apiVersion: brig.sh/v1alpha1
+name: lh-deny
+egress:
+  default: deny
+  allow:
+    - host: api.anthropic.com
+YAML
+  lh_brig policy attach lh-deny claude-code > /dev/null 2>&1
+  for hv in hvi vz; do
+    : > "$lh/argv.log"
+    BRIG_HYPERVISOR=$hv lh_brig run claude -d > "$lh/pol.out" 2>&1; rc=$?
+    [ "$rc" = 7 ] && grep -q 'hull on io.containerd.urunc.v2' "$lh/pol.out" \
+      && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/pol.out" \
+      && ok "hull on Linux refuses a policy on $hv with exit 7, naming its path and nerdctl" \
+      || bad "hull on Linux refuses a policy on $hv with exit 7 -- got $rc: $(cat "$lh/pol.out")"
+    grep -q '^argv: run ' "$lh/argv.log" \
+      && bad "hull on Linux was asked to boot a policy on $hv it cannot enforce" \
+      || ok "nothing reached hull on Linux for a policy on $hv"
+  done
+  lh_brig policy detach lh-deny claude-code > /dev/null 2>&1
+
+  # The shipped profile sets network: isolated, which this section otherwise
+  # never reads, since BRIG_NETWORK=shared is set for the whole run. The
+  # refusal names the profile and nerdctl, not a flag nobody typed or hvi.
+  : > "$lh/argv.log"
+  BRIG_NETWORK= lh_brig run claude -d > "$lh/prof.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'profile sets network: isolated, and hull on Linux' "$lh/prof.out" \
+    && grep -q 'BRIG_RUNTIME=nerdctl' "$lh/prof.out" \
+    && ! grep -q -e '--network isolated gives' -e 'run it on hvi' "$lh/prof.out" \
+    && ok "hull on Linux refuses the profile's isolated network, naming the profile and nerdctl" \
+    || bad "hull on Linux refuses the profile's isolated network -- got $rc: $(cat "$lh/prof.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot the profile's isolated network" \
+    || ok "nothing reached hull on Linux for the profile's isolated network"
+
+  # firecracker has no shared filesystem, and every run shares its workspace,
+  # so brig plan refuses it as the run does, and nothing reaches `hull run`.
+  : > "$lh/argv.log"
+  BRIG_HYPERVISOR=firecracker lh_brig plan claude > "$lh/fc-plan.out" 2>&1
+  grep -q '^REFUSED .*on firecracker' "$lh/fc-plan.out" \
+    && ok "brig plan says the run on firecracker is refused, as the run is" \
+    || bad "brig plan says the run on firecracker is refused -- got: $(cat "$lh/fc-plan.out")"
+  BRIG_HYPERVISOR=firecracker lh_brig run claude -d > "$lh/fc.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] && grep -q 'on firecracker' "$lh/fc.out" \
+    && ok "hull on Linux refuses firecracker, naming the share" \
+    || bad "hull on Linux refuses firecracker -- got $rc: $(cat "$lh/fc.out")"
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && bad "hull on Linux was asked to boot on firecracker" \
+    || ok "nothing reached hull on Linux for firecracker"
+
+  : > "$lh/argv.log"
+  GH_TOKEN=lh-gh-secret lh_brig run claude -d > "$lh/plain.out" 2>&1
+  grep -q '^argv: run ' "$lh/argv.log" \
+    && ok "a plain run on hull on Linux does reach run, so the log can show one" \
+    || bad "a plain run on hull on Linux reaches run -- got: $(cat "$lh/plain.out")"
+
+  # The command line of that run, as hull on Linux takes it: the network
+  # is named, vz (a macOS backend) boots on the bundle's hvi, the kernel and
+  # initrd go as urunc annotations, the workspace is a share, and the guest
+  # stays up on sleep infinity. Nothing of the macOS line reaches it: no
+  # gateway, rootfs type or window. A forwarded credential goes by name, and
+  # its value only through the environment, which is the second promise.
+  # Read from the words: line, so each argument is matched whole.
+  words="$(grep '^words:\[run\]' "$lh/argv.log" | tail -1)"
+  for want in '[--net][shared]' '[--hypervisor][hvi]' '[--snapshotter][' \
+      "[--shared-dir][$lh/ws:" '[--env][GH_TOKEN]'; do
+    case "$words" in
+      *"$want"*) ok "hull on Linux's run line carries $want" ;;
+      *) bad "hull on Linux's run line carries $want -- got: $words" ;;
+    esac
+  done
+  [ "$(printf '%s' "$words" | grep -o '\[--annotation\]' | wc -l)" -ge 2 ] \
+    && ok "hull on Linux's run line hands the kernel and initrd as annotations" \
+    || bad "hull on Linux's run line hands the kernel and initrd as annotations -- got: $words"
+  case "$words" in
+    *'[sleep][infinity]') ok "hull on Linux's run line ends on sleep infinity" ;;
+    *) bad "hull on Linux's run line ends on sleep infinity -- got: $words" ;;
+  esac
+  case "$words" in
+    *'[--gateway'*|*'[--rootfs-type]'*|*'[--gui]'*|*'[--net-gateway]'*)
+      bad "hull on Linux's run line carries a macOS flag -- got: $words" ;;
+    *) ok "hull on Linux's run line carries no macOS flag" ;;
+  esac
+  grep '^argv: run ' "$lh/argv.log" | grep -q 'lh-gh-secret' \
+    && bad "a forwarded value reached hull on Linux's argv" \
+    || ok "no forwarded value reaches hull on Linux's argv"
+  grep -q '^env-gh:lh-gh-secret$' "$lh/argv.log" \
+    && ok "the forwarded value reaches hull on Linux through its environment" \
+    || bad "the forwarded value reaches hull on Linux through its environment -- got: $(grep '^env-gh:' "$lh/argv.log")"
+  lh_brig rm --all -y > /dev/null 2>&1
+else
+  echo "  --   not Linux, skipping hull on Linux"
+fi
+
 echo "== exit codes =="
 # The documented set, checked end to end so the numbers a script keys on cannot
 # drift from the README. Each verb here fails in a different way and the status
@@ -3304,6 +3433,357 @@ build="$("$WORK/brig" version | sed 's/^brig //')"
 [ "$(head -1 "$WORK/doctor.out")" = "  ok  brig      $build" ] \
   && ok "doctor opens with the brig build" \
   || bad "doctor opens with the brig build -- want '$build', got: $(head -1 "$WORK/doctor.out")"
+
+echo "== brigfile =="
+# The Brigfile verbs read one file and write at most one. They run nothing, so
+# the stub's log must not gain a line while they work. Each runs in a project
+# of its own: this script runs inside brig's own checkout, and discovery would
+# otherwise find that worktree's root.
+mkdir -p "$WORK/bf-proj/.git" "$WORK/bf-proj/sub"
+# Resolved, as brig resolves it: on macOS the temporary directory is reached
+# through the /var link.
+proj="$(cd "$WORK/bf-proj" && pwd -P)"
+logged="$(wc -l < "$STUB_LOG")"
+out="$(cd "$proj/sub" && "$WORK/brig" target ls 2>&1)"; rc=$?
+case "$rc:$out" in
+  "3:"*"no Brigfile in $proj"*"brig init"*) ok "with no Brigfile, target ls exits 3 and names brig init" ;;
+  *) bad "with no Brigfile, target ls exits 3 and names brig init -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && "$WORK/brig" init 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:wrote $proj/Brigfile"*"brig target ls"*) ok "init writes a Brigfile at the worktree root" ;;
+  *) bad "init writes a Brigfile at the worktree root -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && "$WORK/brig" init 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"already there"*) ok "a second init refuses to replace the Brigfile" ;;
+  *) bad "a second init refuses to replace the Brigfile -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && "$WORK/brig" target ls 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"* dev"*"builtin:claude-code"*) ok "target ls lists the starter's dev target as the default" ;;
+  *) bad "target ls lists the starter's dev target as the default -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" config --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"cpus "*"from profile claude"*"image "*"from profile claude"*) ok "config --target dev resolves the starter" ;;
+  *) bad "config --target dev resolves the starter -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" --json config --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*'"kind": "Config"'*'"from": "profile"'*) ok "config --target dev --json prints the Config kind" ;;
+  *) bad "config --target dev --json prints the Config kind -- got $rc: $out" ;;
+esac
+# A Brigfile that is refused: a repository profile may not name a program on
+# the host for brig to run. The loader's error is printed as it is.
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  x: {inline: {name: x, binary: x, image: x, guestHome: /root, mem: 1, cpus: 1, runtimeBin: /tmp/evil}}\ntargets:\n  dev: {profile: x}\n' \
+  > "$WORK/bf-refused"
+out="$(cd "$proj" && "$WORK/brig" config -f "$WORK/bf-refused" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"$WORK/bf-refused"*"runtimeBin"*) ok "a refused Brigfile exits 1 and names the file and the field" ;;
+  *) bad "a refused Brigfile exits 1 and names the file and the field -- got $rc: $out" ;;
+esac
+[ "$(wc -l < "$STUB_LOG")" = "$logged" ] \
+  && ok "the Brigfile verbs ran nothing" \
+  || bad "the Brigfile verbs ran the runtime: $(tail -n +"$((logged + 1))" "$STUB_LOG")"
+# brig plan --target asks the runtime what brig plan <profile> asks, so it
+# runs after the check above. It writes nothing: brig's state directory reads
+# the same before and after. A target on a profile the repository wrote with a
+# route names the route's upstream and secret, and its sandbox is the
+# project's own, not brig-claude-code.
+# In a directory of its own: the directory of a Brigfile is its project, and
+# a project that holds brig's state directory is refused.
+mkdir -p "$WORK/bf-plan"
+cat > "$WORK/bf-plan/Brigfile" <<'BF'
+apiVersion: brig.sh/v1alpha1
+profiles:
+  tool: {inline: {name: claude-code, binary: x, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}
+policies:
+  gh:
+    inline:
+      apiVersion: brig.sh/v1alpha1
+      kind: Policy
+      metadata: {name: gh}
+      spec:
+        routes:
+          - {name: collector, preset: github-token, upstream: "https://collector.example", credential: {secretRef: {name: prod-db}}}
+targets:
+  ci: {profile: tool, policies: [gh], overrides: {cpus: 2}}
+BF
+state_before="$(cd "$BRIG_STATE_DIR" && find . | sort)"
+out="$(cd "$proj" && "$WORK/brig" plan --target ci -f "$WORK/bf-plan/Brigfile" 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"TARGET       ci, from "*"/bf-plan"*"SANDBOX      brig--ci-"*"route collector to https://collector.example with your secret prod-db"*"2 vCPUs from target ci"*)
+    ok "plan --target names the target, its own sandbox and each route's upstream and secret" ;;
+  *) bad "plan --target names the target, its own sandbox and each route's upstream and secret -- got $rc: $out" ;;
+esac
+out="$(cd "$proj" && "$WORK/brig" --json plan --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*'"kind": "Plan"'*'"target": {'*'"source": "builtin:claude-code"'*) ok "plan --target dev --json prints the Plan kind with its target" ;;
+  *) bad "plan --target dev --json prints the Plan kind with its target -- got $rc: $out" ;;
+esac
+[ "$(cd "$BRIG_STATE_DIR" && find . | sort)" = "$state_before" ] \
+  && ok "plan --target wrote nothing to brig's state" \
+  || bad "plan --target wrote to brig's state: $(cd "$BRIG_STATE_DIR" && find . | sort)"
+out="$(cd "$proj" && "$WORK/brig" plan --target dev claude 2>&1)"; rc=$?
+case "$rc:$out" in
+  "2:"*"takes no profile"*) ok "plan --target with a profile is a usage error" ;;
+  *) bad "plan --target with a profile is a usage error -- got $rc: $out" ;;
+esac
+# stop and rm --target reach a session from the project root, the target
+# and the session name alone. Nothing boots a target yet, so the project index
+# is seeded by hand, with the sandbox the plan names. The Brigfile is moved
+# away first: a session outlives the file that named it. The stub keeps this
+# sandbox in a state file of its own.
+sb="$(cd "$proj" && "$WORK/brig" --json plan --target dev 2>/dev/null |
+  sed -n 's/.*"sandbox": "\(brig--dev-[^"]*\)".*/\1/p' | head -n 1)"
+bf_home="$BRIG_STATE_DIR/homes/$sb"
+bf_inst="$WORK/bf-instance"
+mkdir -p "$bf_home" && : > "$bf_home/agent-state"
+printf '{"version": 1, "sessions": {"%s": {"root": "%s", "target": "dev", "home": "%s"}}}\n' \
+  "$sb" "$proj" "$bf_home" > "$BRIG_STATE_DIR/projects.json"
+printf '%s' "$sb" > "$bf_inst"
+mv "$proj/Brigfile" "$WORK/bf-moved"
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" ls 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"TARGET"*"dev "*"$sb"*"running"*"$proj"*) ok "ls lists a target's session with its target and project" ;;
+  *) bad "ls lists a target's session with its target and project -- got $rc: $out" ;;
+esac
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" -q ls 2>&1)"
+case "$out" in
+  *brig--*) bad "ls -q prints a target's session, which has no ref: $out" ;;
+  *) ok "ls -q prints no line for a target's session" ;;
+esac
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" stop --target dev 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q "^argv: stop $sb\$" "$STUB_LOG" \
+  && ok "stop --target stops the session with its Brigfile gone" \
+  || bad "stop --target stops the session with its Brigfile gone -- got $rc: $out"
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" rm --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"removed target dev and its guest home $bf_home"*) ok "rm --target removes the session and its home" ;;
+  *) bad "rm --target removes the session and its home -- got $rc: $out" ;;
+esac
+grep -q "^argv: rm $sb\$" "$STUB_LOG" && [ ! -e "$bf_home" ] && ! grep -q "$sb" "$BRIG_STATE_DIR/projects.json" \
+  && ok "rm --target took the sandbox, the home and the entry" \
+  || bad "rm --target took the sandbox, the home and the entry -- $(cat "$BRIG_STATE_DIR/projects.json")"
+out="$(cd "$proj/sub" && STUB_STATE="$bf_inst" "$WORK/brig" rm --target dev 2>&1)"; rc=$?
+case "$rc:$out" in
+  "3:"*"no target dev in the project $proj"*) ok "rm --target of a session brig does not know exits 3 and names the project" ;;
+  *) bad "rm --target of a session brig does not know exits 3 and names the project -- got $rc: $out" ;;
+esac
+mv "$WORK/bf-moved" "$proj/Brigfile"
+# A run of a profile in the checkout runs as before and says once that it
+# does not read the Brigfile, even one that does not load. It says nothing
+# under --json. It runs on a state and a sandbox of its own.
+bf_run=(env BRIG_STATE_DIR="$WORK/bf-run" STUB_STATE="$WORK/bf-run-instance" BRIG_GATEWAY_DIR="$WORK/bg"
+  CLAUDE_CODE_OAUTH_TOKEN=bf-token GH_TOKEN=bf-gh "$WORK/brig")
+printf 'not: [a Brigfile\n' > "$proj/Brigfile"
+out="$(cd "$proj/sub" && "${bf_run[@]}" run claude -p hi 2>&1 >/dev/null)"; rc=$?
+hint="has a Brigfile, and \`brig run <profile>\` does not read it"
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c "$hint")" = 1 ] \
+  && ok "a run of a profile beside a broken Brigfile runs and says once that it does not read it" \
+  || bad "a run of a profile beside a broken Brigfile runs and says once that it does not read it -- got $rc: $out"
+out="$(cd "$proj/sub" && "${bf_run[@]}" --json run claude -p hi 2>&1 >/dev/null)"; rc=$?
+case "$out" in
+  *"$hint"*) bad "a --json run says it does not read the Brigfile: $out" ;;
+  *) ok "a --json run says nothing about the Brigfile" ;;
+esac
+mv "$proj/Brigfile" "$WORK/bf-broken"
+out="$(cd "$proj/sub" && "${bf_run[@]}" run claude -p hi 2>&1 >/dev/null)"; rc=$?
+case "$rc:$out" in
+  "0:"*"$hint"*) bad "a run with no Brigfile names one: $out" ;;
+  "0:"*) ok "a run with no Brigfile says nothing about one" ;;
+  *) bad "a run with no Brigfile says nothing about one -- got $rc: $out" ;;
+esac
+# brig run --target boots only what you approved, outside the repository.
+# With nobody to ask it boots nothing and names the digest. --approve with
+# that digest boots, the next run asks nothing, and an edit to a policy the
+# Brigfile names is a run the approval no longer covers. On hvi, where the
+# stub answers as the gateway that enforces the policy, on a state of its own.
+mkdir -p "$WORK/bf-runproj/.git" "$WORK/bf-runproj/.brig"
+rproj="$(cd "$WORK/bf-runproj" && pwd -P)"
+cat > "$rproj/Brigfile" <<'BF'
+apiVersion: brig.sh/v1alpha1
+defaultTarget: dev
+profiles:
+  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}
+policies:
+  net: {file: .brig/net.yaml}
+targets:
+  dev: {profile: tool, policies: [net], args: ["--from-brigfile"]}
+BF
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: net}\nspec:\n  egress:\n    default: deny\n    allow: [{host: api.example.com}]\n' \
+  > "$rproj/.brig/net.yaml"
+bf_tgt=(env BRIG_STATE_DIR="$WORK/bf-tgt" STUB_STATE="$WORK/bf-tgt-instance" BRIG_GATEWAY_DIR="$WORK/bg-tgt"
+  BRIG_HYPERVISOR=hvi "$WORK/brig")
+: > "$STUB_LOG"
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev < /dev/null 2>&1)"; rc=$?
+digest="$(printf '%s\n' "$out" | sed -n 's/.*--approve \(sha256:[0-9a-f]*\).*/\1/p' | head -n 1)"
+if [ "$rc" = 8 ] && [ -n "$digest" ] && ! grep -q '^argv: run' "$STUB_LOG" && [ ! -e "$WORK/bf-tgt/approvals.json" ]; then
+  ok "run --target with no approval and no terminal boots nothing, exits 8 and names the digest"
+else
+  bad "run --target with no approval and no terminal boots nothing, exits 8 and names the digest -- got $rc: $out"
+fi
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev -d --approve "$digest" < /dev/null 2>&1)"; rc=$?
+if [ "$rc" = 0 ] && grep -q '^argv: run.*brig--dev-' "$STUB_LOG" && [ -f "$WORK/bf-tgt/approvals.json" ] &&
+   grep -q -- '--egress-allow host=api.example.com' "$STUB_LOG"; then
+  ok "run --target --approve with the digest boots the target under its policy and stores the approval"
+else
+  bad "run --target --approve with the digest boots the target under its policy -- got $rc: $out"
+fi
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev -d < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  *APPROVAL*) bad "a run of an approved target showed the approval again: $out" ;;
+  "0:"*) ok "the next run of the approved target asks nothing" ;;
+  *) bad "the next run of the approved target asks nothing -- got $rc: $out" ;;
+esac
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: net}\nspec:\n  egress:\n    default: allow\n' \
+  > "$rproj/.brig/net.yaml"
+: > "$STUB_LOG"
+out="$(cd "$rproj" && "${bf_tgt[@]}" run --target dev -d --recreate < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  "8:"*"the file .brig/net.yaml (policy net) changed"*)
+    if grep -q '^argv: \(run\|rm\)' "$STUB_LOG"; then
+      bad "a run the approval no longer covers touched the sandbox: $(cat "$STUB_LOG")"
+    else
+      ok "an edit to a policy the Brigfile names is a run the approval does not cover, and the refusal names it"
+    fi ;;
+  *) bad "an edit to a policy the Brigfile names is a run the approval does not cover -- got $rc: $out" ;;
+esac
+"${bf_tgt[@]}" rm --target dev -f "$rproj/Brigfile" > /dev/null 2>&1
+grep -q 'brig--dev-' "$WORK/bf-tgt/approvals.json" 2>/dev/null \
+  && bad "rm --target left the approval: $(cat "$WORK/bf-tgt/approvals.json")" \
+  || ok "rm --target drops the approval of the session"
+
+# What a Brigfile promises, one case each, on a state of its own and with
+# empty profile and policy directories: a checkout has to carry everything its
+# targets need, so nothing of the reader's may be needed or written.
+mkdir -p "$WORK/bf-c1/.git" "$WORK/bf-c1/.brig" "$WORK/bf-c-prof" "$WORK/bf-c-pol"
+c1="$(cd "$WORK/bf-c1" && pwd -P)"
+cat > "$c1/Brigfile" <<'BF'
+apiVersion: brig.sh/v1alpha1
+defaultTarget: dev
+profiles:
+  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}
+policies:
+  net: {file: .brig/net.yaml}
+  audit: {file: .brig/audit.yaml}
+targets:
+  dev: {profile: tool, policies: [net], overrides: {cpus: 2, mem: 2048}}
+  review: {profile: tool, policies: [net, audit], overrides: {cpus: 3, mem: 3072}}
+BF
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: net}\nspec:\n  egress:\n    default: deny\n    allow: [{host: api.example.com}]\n' > "$c1/.brig/net.yaml"
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: audit}\nspec:\n  egress:\n    default: deny\n    allow: [{host: audit.example.com}]\n' > "$c1/.brig/audit.yaml"
+bf_c=(env BRIG_STATE_DIR="$WORK/bf-c-state" STUB_STATE="$WORK/bf-c-instance" BRIG_GATEWAY_DIR="$WORK/bg-c"
+  BRIG_PROFILE_DIR="$WORK/bf-c-prof" BRIG_POLICY_DIR="$WORK/bf-c-pol" BRIG_HYPERVISOR=hvi "$WORK/brig")
+: > "$STUB_LOG"
+out="$(cd "$c1" && "${bf_c[@]}" plan --target dev 2>&1)"; rc=$?
+[ "$rc" = 0 ] \
+  && ok "a clean checkout plans a target with empty profile and policy directories" \
+  || bad "a clean checkout plans a target with empty profile and policy directories -- got $rc: $out"
+case "$out" in
+  *"2048 MB from target dev"*"2 vCPUs from target dev"*) ok "plan --target dev gives dev's own size" ;;
+  *) bad "plan --target dev gives dev's own size -- got: $out" ;;
+esac
+case "$out" in
+  *audit*) bad "plan --target dev names the policy of review: $out" ;;
+  *) ok "plan --target dev leaves out the policies of review" ;;
+esac
+out="$(cd "$c1" && "${bf_c[@]}" plan --target review 2>&1)"; rc=$?
+case "$rc:$out" in
+  "0:"*"3072 MB from target review"*"3 vCPUs from target review"*)
+    case "$out" in
+      *"audit.example.com"*"api.example.com"*|*"api.example.com"*"audit.example.com"*)
+        ok "plan --target review gives review's own size and policies" ;;
+      *) bad "plan --target review allows both of its policies -- got: $out" ;;
+    esac ;;
+  *) bad "plan --target review gives review's own size and policies -- got $rc: $out" ;;
+esac
+out="$(cd "$c1" && "${bf_c[@]}" run --target dev < /dev/null 2>&1)"; rc=$?
+digest="$(printf '%s\n' "$out" | sed -n 's/.*--approve \(sha256:[0-9a-f]*\).*/\1/p' | head -n 1)"
+out="$(cd "$c1" && "${bf_c[@]}" run --target dev -d --approve "$digest" < /dev/null 2>&1)"; rc=$?
+if [ "$rc" = 0 ] && grep -q '^argv: run.*brig--dev-' "$STUB_LOG"; then
+  ok "a clean checkout runs a target with empty profile and policy directories"
+else
+  bad "a clean checkout runs a target with empty profile and policy directories -- got $rc: $out"
+fi
+[ -z "$(find "$WORK/bf-c-prof" "$WORK/bf-c-pol" -mindepth 1)" ] \
+  && ok "the profile and policy directories are still empty after the plan and the run" \
+  || bad "a Brigfile plan or run wrote to the profile or policy directory: $(find "$WORK/bf-c-prof" "$WORK/bf-c-pol" -mindepth 1)"
+
+# An edit between the digest and the run is not what was approved.
+: > "$STUB_LOG"
+out="$(cd "$c1" && "${bf_c[@]}" run --target review < /dev/null 2>&1)"
+digest="$(printf '%s\n' "$out" | sed -n 's/.*--approve \(sha256:[0-9a-f]*\).*/\1/p' | head -n 1)"
+# Without a digest the refusal below would be of an empty value, and would
+# say nothing about an edit.
+[ -n "$digest" ] || bad "run --target review with no terminal printed no digest to approve: $out"
+printf 'apiVersion: brig.sh/v1alpha1\nkind: Policy\nmetadata: {name: audit}\nspec:\n  egress:\n    default: deny\n    allow: [{host: evil.example.com}]\n' > "$c1/.brig/audit.yaml"
+out="$(cd "$c1" && "${bf_c[@]}" run --target review -d --approve "$digest" < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  "8:"*"is not the approval of this run"*)
+    if grep -q '^argv: run.*brig--review-' "$STUB_LOG"; then
+      bad "an edit after the digest was printed still booted: $(cat "$STUB_LOG")"
+    else
+      ok "an edit between the printed digest and the run is refused, and nothing boots"
+    fi ;;
+  *) bad "an edit between the printed digest and the run is refused -- got $rc: $out" ;;
+esac
+
+# A Brigfile that names a policy file that is not there stops at the loader.
+mkdir -p "$WORK/bf-c2/.git"
+c2="$(cd "$WORK/bf-c2" && pwd -P)"
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}\npolicies:\n  gone: {file: .brig/gone.yaml}\ntargets:\n  dev: {profile: tool, policies: [gone]}\n' > "$c2/Brigfile"
+: > "$STUB_LOG"
+out="$(cd "$c2" && "${bf_c[@]}" run --target dev < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  "1:"*"policies.gone.file"*"gone.yaml"*)
+    # The braces matter: || and && bind alike in the shell, left to right,
+    # so without them a boot alone would not fail this.
+    if grep -q '^argv: run' "$STUB_LOG" ||
+       { grep -q 'brig--dev-' "$WORK/bf-c-state/approvals.json" 2>/dev/null &&
+         grep -q "$c2" "$WORK/bf-c-state/approvals.json" 2>/dev/null; }; then
+      bad "a Brigfile with a missing policy file went past the loader: $(cat "$STUB_LOG")"
+    else
+      ok "a Brigfile that names a missing policy file stops with the loader's error and nothing boots"
+    fi ;;
+  *) bad "a Brigfile that names a missing policy file stops with the loader's error -- got $rc: $out" ;;
+esac
+
+# Two routes that cannot apply together stop the run before the question.
+mkdir -p "$WORK/bf-c3/.git"
+c3="$(cd "$WORK/bf-c3" && pwd -P)"
+gh() { printf '{apiVersion: brig.sh/v1alpha1, kind: Policy, metadata: {name: %s}, spec: {routes: [{name: %s, preset: github-token, credential: {secretRef: {name: t}}}]}}' "$1" "$1"; }
+printf 'apiVersion: brig.sh/v1alpha1\nprofiles:\n  tool: {inline: {name: tool, binary: tool, image: example.com/tool:1, guestHome: /root, mem: 1024, cpus: 1}}\npolicies:\n  one: {inline: %s}\n  two: {inline: %s}\ntargets:\n  both: {profile: tool, policies: [one, two]}\n' "$(gh one)" "$(gh two)" > "$c3/Brigfile"
+: > "$STUB_LOG"
+out="$(cd "$c3" && "${bf_c[@]}" run --target both < /dev/null 2>&1)"; rc=$?
+case "$rc:$out" in
+  *"run as shown above"*|*"--approve"*|*"APPROVAL"*) bad "two routes in conflict reached the approval -- got $rc: $out" ;;
+  "0:"*) bad "two routes in conflict ran -- got $rc: $out" ;;
+  *"cannot apply together"*)
+    if grep -q '^argv: run' "$STUB_LOG"; then
+      bad "two routes in conflict booted: $(cat "$STUB_LOG")"
+    else
+      ok "two routes that conflict stop the run before anything is asked"
+    fi ;;
+  *) bad "two routes that conflict stop the run before anything is asked -- got $rc: $out" ;;
+esac
+
+# Two checkouts of one Brigfile are two projects: two sandboxes, two homes.
+mkdir -p "$WORK/bf-c4/.git" "$WORK/bf-c4/.brig"
+c4="$(cd "$WORK/bf-c4" && pwd -P)"
+cp "$c1/Brigfile" "$c4/Brigfile"; cp "$c1/.brig/"*.yaml "$c4/.brig/"
+first="$(cd "$c1" && "${bf_c[@]}" plan --target dev 2>&1)"
+second="$(cd "$c4" && "${bf_c[@]}" plan --target dev 2>&1)"
+sb1="$(printf '%s\n' "$first" | sed -n 's/^SANDBOX  *//p')"
+sb2="$(printf '%s\n' "$second" | sed -n 's/^SANDBOX  *//p')"
+h1="$(printf '%s\n' "$first" | sed -n 's/^HOME  *\([^ ]*\).*/\1/p')"
+h2="$(printf '%s\n' "$second" | sed -n 's/^HOME  *\([^ ]*\).*/\1/p')"
+if [ -n "$sb1" ] && [ -n "$h1" ] && [ -n "$sb2" ] && [ -n "$h2" ] && [ "$sb1" != "$sb2" ] && [ "$h1" != "$h2" ]; then
+  ok "two checkouts of one Brigfile get different sandbox names and homes"
+else
+  bad "two checkouts of one Brigfile get different sandbox names and homes -- $sb1 $h1 / $sb2 $h2"
+fi
 
 echo "== completion =="
 # The completion scripts are shell code. The unit tests cover the engine's

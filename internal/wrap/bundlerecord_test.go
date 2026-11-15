@@ -313,6 +313,61 @@ func TestASHA256SUMSOnHullIsNotTheRuntimeBundle(t *testing.T) {
 	}
 }
 
+// hull on Linux boots the runtime bundle's files as nerdctl does, so the
+// record the bundle's release signed vouches for them there too, and the boot
+// bundle in the registry is not asked about. Its name is hull's, which is why
+// the runtime is asked rather than its name: the name alone took this run to
+// the boot bundle's check, which lists neither file and refused every boot.
+func TestTheRuntimeBundleRecordVouchesOnALinuxHull(t *testing.T) {
+	for _, mode := range []verify.Mode{verify.Warn, verify.Require} {
+		c, rr, log := bundleRecordRun(t, mode, runtimeBundleDir(t, publishedKernel), "ok")
+		rr.kind, rr.linuxHull = "hull", true
+
+		_ = c.EnsureRunning(creds.Set{})
+
+		reachedRun(t, string(mode), rr)
+		if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "image and boot assets verified") {
+			t.Errorf("%s: the summary does not name the boot assets:\n%s", mode, said)
+		}
+		calls := cosignCalls(t, log)
+		if strings.Contains(calls, "hull-assets") {
+			t.Errorf("%s: cosign was asked about the boot bundle:\n%s", mode, calls)
+		}
+		if !strings.Contains(calls, "verify-blob") || !strings.Contains(calls, "brig-standalone-linux") {
+			t.Errorf("%s: cosign did not check the release's checksums.txt:\n%s", mode, calls)
+		}
+	}
+}
+
+// The record refuses on hull on Linux what it refuses on nerdctl: a kernel it
+// does not list, in every mode but off.
+func TestAKernelTheRuntimeBundleRecordDoesNotListRefusesOnALinuxHull(t *testing.T) {
+	for _, mode := range []verify.Mode{verify.Warn, verify.Require} {
+		c, rr, _ := bundleRecordRun(t, mode, runtimeBundleDir(t, modifiedKernel), "ok")
+		rr.kind, rr.linuxHull = "hull", true
+
+		err := c.EnsureRunning(creds.Set{})
+
+		refused(t, string(mode), err, rr)
+		if !strings.Contains(err.Error(), "bzImage is sha256:"+hexDigest(modifiedKernel)) {
+			t.Errorf("%s: the refusal does not name the file and its digest: %v", mode, err)
+		}
+	}
+}
+
+// An older runtime bundle, with no record, is named on hull on Linux as on
+// nerdctl: its launcher is what put the directory in BRIG_BOOT_ASSETS.
+func TestAnOlderRuntimeBundleIsNamedOnALinuxHull(t *testing.T) {
+	registryServes(t, published())
+	c, rr := digestRun(t, verify.Warn, writeBootAssets(t, modifiedKernel, publishedInitrd, true))
+	rr.kind, rr.linuxHull = "hull", true
+	_ = c.EnsureRunning(creds.Set{})
+	reachedRun(t, "warn", rr)
+	if said := c.Err.(*bytes.Buffer).String(); !strings.Contains(said, "re-run brig's install.sh") {
+		t.Errorf("warn does not say an older runtime bundle keeps no record:\n%s", said)
+	}
+}
+
 // A runtime bundle from before the record reaches the boot bundle's check,
 // which lists neither of its files. The warning says so, not only the
 // refusal under require.

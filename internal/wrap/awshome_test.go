@@ -10,14 +10,22 @@ import (
 )
 
 // A profile that puts anything at ~/.aws in the guest is refused on a run
-// with a route that vends: a volume, a files: binding, a seed into .aws, or
-// a seed copied from the host's own ~/.aws. A name that only starts with
-// .aws is not .aws, and a run with no route that vends is not refused.
+// with a route that vends: a volume, a files: binding, the onboarding file, a
+// seed into .aws, or a seed copied from the host's own ~/.aws, in any case. A name that
+// only starts with .aws is not .aws, and a run with no route that vends is not
+// refused.
 func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 	t.Setenv("BRIG_HYPERVISOR", "hvi")
 	shortStateDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, awsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]func(c *Config){
 		"volume": func(c *Config) {
 			c.Profile.Volumes = append(c.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: ".aws"})
@@ -28,9 +36,38 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 		"file": func(c *Config) {
 			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.aws", Path: ".aws/credentials"})
 		},
+		"onboarding": func(c *Config) {
+			c.Profile.Onboarding = &profile.Onboarding{File: ".aws/credentials", Seed: map[string]any{"x": "y"}}
+		},
 		"seed into": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: ".aws"}) },
 		"host ~/.aws": func(c *Config) {
 			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".aws", "sso"), Rel: "cfg"})
+		},
+		// macOS file systems are case-insensitive, so these land in ~/.aws too.
+		"file, mixed case": func(c *Config) {
+			c.Profile.Files = append(c.Profile.Files, profile.FileBinding{Ref: "secrets.aws", Path: ".AWS/credentials"})
+		},
+		"onboarding, mixed case": func(c *Config) {
+			c.Profile.Onboarding = &profile.Onboarding{File: ".Aws/credentials", Seed: map[string]any{"x": "y"}}
+		},
+		"host ~/.Aws": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(home, ".Aws"), Rel: "cfg"})
+		},
+		// A seed into the home itself copies the host directory's .aws
+		// along with the rest.
+		"seed into the home": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: "/elsewhere", Rel: "."}) },
+		// A seed of a directory that holds ~/.aws copies it along.
+		"host ~": func(c *Config) { c.HostConfig = append(c.HostConfig, hostSeed{Host: home, Rel: "copy"}) },
+		// The seed copies through links, so the path it resolves to counts.
+		"host ~/.aws by its real path": func(c *Config) {
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: filepath.Join(realHome, awsDir), Rel: "cfg"})
+		},
+		"host ~/.aws through a link": func(c *Config) {
+			link := filepath.Join(t.TempDir(), "link")
+			if err := os.Symlink(filepath.Join(home, awsDir), link); err != nil {
+				t.Fatal(err)
+			}
+			c.HostConfig = append(c.HostConfig, hostSeed{Host: link, Rel: "cfg"})
 		},
 	}
 	for name, add := range cases {
@@ -49,6 +86,11 @@ func TestAVendingRunRefusesAWSPutInTheGuestHome(t *testing.T) {
 	near.Profile.Volumes = append(near.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: ".awsome"})
 	if err := near.awsHomeRefusal(); err != nil {
 		t.Errorf(".awsome was taken for .aws: %v", err)
+	}
+	other := routedConfig(t, awsEndpoint, &hullRecorder{})
+	other.Profile.Volumes = append(other.Profile.Volumes, profile.Volume{Kind: "hostmount", Path: "日本語"})
+	if err := other.awsHomeRefusal(); err != nil {
+		t.Errorf("a name with no ASCII was taken for .aws: %v", err)
 	}
 }
 
@@ -107,5 +149,22 @@ func TestAVendingRunRefusesAGuestHomeWithAWS(t *testing.T) {
 	}
 	if err := plain.PrepareWorkspace(); err != nil {
 		t.Errorf("a run with no route that vends was refused for its ~/.aws: %v", err)
+	}
+}
+
+// A .aws that is a regular file holds no identity file, so a vending run on
+// that home is not refused for it.
+func TestAVendingRunAllowsAGuestHomeWhoseAWSIsAFile(t *testing.T) {
+	t.Setenv("BRIG_HYPERVISOR", "hvi")
+	shortStateDir(t)
+	cfg := routedConfig(t, awsEndpoint, &hullRecorder{})
+	if err := os.MkdirAll(cfg.Workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Workspace, ".aws"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.PrepareWorkspace(); err != nil {
+		t.Errorf("a guest home whose .aws is a file was refused: %v", err)
 	}
 }

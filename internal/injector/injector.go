@@ -179,6 +179,9 @@ type VendInfo struct {
 	Mode       string `json:"mode"`
 	AWSProfile string `json:"awsProfile"`
 	RoleARN    string `json:"roleArn,omitempty"`
+	// PolicyARNs are the session policies that narrow the role. The run
+	// names them, or its line would claim more than the sandbox can do.
+	PolicyARNs []string `json:"policyArns,omitempty"`
 }
 
 // MintRequest is the body of mint.
